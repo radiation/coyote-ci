@@ -11,15 +11,17 @@ import (
 type Service struct {
 	mu     sync.Mutex
 	builds map[string]*Build
+	steps  map[string][]*Step
 }
 
 func NewService() *Service {
 	return &Service{
 		builds: make(map[string]*Build),
+		steps:  make(map[string][]*Step),
 	}
 }
 
-func (s *Service) CreateBuild(repo, sha, command string) *Build {
+func (s *Service) CreateBuild(repo, sha string, stepSpecs []StepSpec) *Build {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -27,12 +29,29 @@ func (s *Service) CreateBuild(repo, sha, command string) *Build {
 		ID:        uuid.NewString(),
 		Repo:      repo,
 		CommitSHA: sha,
-		Command:   command,
 		Status:    StatusPending,
 		CreatedAt: time.Now(),
 	}
 
 	s.builds[b.ID] = b
+
+	var steps []*Step
+
+	for _, spec := range stepSpecs {
+		step := &Step{
+			ID:        uuid.NewString(),
+			BuildID:   b.ID,
+			Name:      spec.Name,
+			Command:   spec.Command,
+			Status:    StatusPending,
+			CreatedAt: time.Now(),
+		}
+
+		steps = append(steps, step)
+	}
+
+	s.steps[b.ID] = steps
+
 	return b
 }
 
@@ -69,21 +88,33 @@ func (s *Service) runNextBuild() {
 }
 
 func (s *Service) executeBuild(b *Build) {
-	cmd := exec.Command("sh", "-c", b.Command)
-
-	output, err := cmd.CombinedOutput()
-
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	steps := s.steps[b.ID]
+	s.mu.Unlock()
 
-	if err != nil {
-		b.Status = StatusFailed
-	} else {
-		b.Status = StatusSuccess
+	for _, step := range steps {
+		s.mu.Lock()
+		step.Status = StatusRunning
+		s.mu.Unlock()
+
+		cmd := exec.Command("sh", "-c", step.Command)
+		output, err := cmd.CombinedOutput()
+
+		s.mu.Lock()
+		step.Output = string(output)
+		if err != nil {
+			step.Status = StatusFailed
+			b.Status = StatusFailed
+			s.mu.Unlock()
+			return
+		}
+		step.Status = StatusSuccess
+		s.mu.Unlock()
 	}
 
-	// Stub: I'll add logging and artifact storage later
-	_ = output
+	s.mu.Lock()
+	b.Status = StatusSuccess
+	s.mu.Unlock()
 }
 
 func (s *Service) RunWorker() {
@@ -91,4 +122,11 @@ func (s *Service) RunWorker() {
 		s.runNextBuild()
 		time.Sleep(1 * time.Second)
 	}
+}
+
+func (s *Service) ListSteps(buildID string) []*Step {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.steps[buildID]
 }
