@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/radiation/coyote-ci/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
 
 type BuildRepository interface {

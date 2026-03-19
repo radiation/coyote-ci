@@ -6,7 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/radiation/coyote-ci/internal/http/handler"
+	"github.com/radiation/coyote-ci/backend/internal/http/handler"
 )
 
 func NewRouter(buildHandler *handler.BuildHandler) nethttp.Handler {

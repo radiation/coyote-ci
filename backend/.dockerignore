@@ -1,0 +1,8 @@
+.git
+.idea
+.vscode
+tmp
+dist
+bin
+coverage
+*.log

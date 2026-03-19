@@ -5,8 +5,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/radiation/coyote-ci/internal/domain"
-	"github.com/radiation/coyote-ci/internal/repository"
+	"github.com/google/uuid"
+
+	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
 var ErrProjectIDRequired = errors.New("project_id is required")
@@ -31,6 +33,7 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 	}
 
 	build := domain.Build{
+		ID:        uuid.NewString(),
 		ProjectID: input.ProjectID,
 		Status:    domain.BuildStatusPending,
 		CreatedAt: time.Now().UTC(),

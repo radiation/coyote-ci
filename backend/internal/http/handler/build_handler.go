@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/radiation/coyote-ci/internal/service"
+	postgresrepo "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
+	"github.com/radiation/coyote-ci/backend/internal/service"
 )
 
 type BuildHandler struct {
@@ -62,7 +64,7 @@ func (h *BuildHandler) CreateBuild(w http.ResponseWriter, r *http.Request) {
 		ID:        build.ID,
 		ProjectID: build.ProjectID,
 		Status:    string(build.Status),
-		CreatedAt: build.CreatedAt.Format(http.TimeFormat),
+		CreatedAt: build.CreatedAt.Format(time.RFC3339),
 	}
 
 	writeJSON(w, http.StatusCreated, resp)
@@ -79,8 +81,16 @@ func (h *BuildHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 
 	build, err := h.buildService.GetBuild(r.Context(), id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error": "build not found",
+		status := http.StatusInternalServerError
+		msg := "internal server error"
+
+		if errors.Is(err, postgresrepo.ErrBuildNotFound) {
+			status = http.StatusNotFound
+			msg = "build not found"
+		}
+
+		writeJSON(w, status, map[string]string{
+			"error": msg,
 		})
 		return
 	}
@@ -89,7 +99,7 @@ func (h *BuildHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 		ID:        build.ID,
 		ProjectID: build.ProjectID,
 		Status:    string(build.Status),
-		CreatedAt: build.CreatedAt.Format(http.TimeFormat),
+		CreatedAt: build.CreatedAt.Format(time.RFC3339),
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -98,6 +108,5 @@ func (h *BuildHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-
 	_ = json.NewEncoder(w).Encode(payload)
 }
