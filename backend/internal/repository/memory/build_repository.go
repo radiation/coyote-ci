@@ -2,15 +2,13 @@ package memory
 
 import (
 	"context"
-	"errors"
 	"sync"
 
 	"github.com/google/uuid"
 
-	"github.com/radiation/coyote-ci/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
-
-var ErrBuildNotFound = errors.New("build not found")
 
 type BuildRepository struct {
 	mu     sync.RWMutex
@@ -41,8 +39,23 @@ func (r *BuildRepository) GetByID(_ context.Context, id string) (domain.Build, e
 
 	build, ok := r.builds[id]
 	if !ok {
-		return domain.Build{}, ErrBuildNotFound
+		return domain.Build{}, repository.ErrBuildNotFound
 	}
+
+	return build, nil
+}
+
+func (r *BuildRepository) UpdateStatus(_ context.Context, id string, status domain.BuildStatus) (domain.Build, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	build, ok := r.builds[id]
+	if !ok {
+		return domain.Build{}, repository.ErrBuildNotFound
+	}
+
+	build.Status = status
+	r.builds[id] = build
 
 	return build, nil
 }

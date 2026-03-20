@@ -25,6 +25,10 @@ func NewRouter(buildHandler *handler.BuildHandler) nethttp.Handler {
 	r.Route("/builds", func(r chi.Router) {
 		r.Post("/", buildHandler.CreateBuild)
 		r.Get("/{buildID}", buildHandler.GetBuild)
+		r.Post("/{buildID}/queue", buildHandler.QueueBuild)
+		r.Post("/{buildID}/start", buildHandler.StartBuild)
+		r.Post("/{buildID}/complete", buildHandler.CompleteBuild)
+		r.Post("/{buildID}/fail", buildHandler.FailBuild)
 	})
 
 	return r

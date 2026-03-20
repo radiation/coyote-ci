@@ -6,9 +6,8 @@ import (
 	"errors"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
-
-var ErrBuildNotFound = errors.New("build not found")
 
 type BuildRepository struct {
 	db *sql.DB
@@ -57,11 +56,39 @@ func (r *BuildRepository) GetByID(ctx context.Context, id string) (domain.Build,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return domain.Build{}, ErrBuildNotFound
+			return domain.Build{}, repository.ErrBuildNotFound
 		}
 		return domain.Build{}, err
 	}
 
 	build.Status = domain.BuildStatus(status)
+	return build, nil
+}
+
+func (r *BuildRepository) UpdateStatus(ctx context.Context, id string, status domain.BuildStatus) (domain.Build, error) {
+	const query = `
+		UPDATE builds
+		SET status = $2
+		WHERE id = $1
+		RETURNING id, project_id, status, created_at
+	`
+
+	var build domain.Build
+	var dbStatus string
+
+	err := r.db.QueryRowContext(ctx, query, id, string(status)).Scan(
+		&build.ID,
+		&build.ProjectID,
+		&dbStatus,
+		&build.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.Build{}, repository.ErrBuildNotFound
+		}
+		return domain.Build{}, err
+	}
+
+	build.Status = domain.BuildStatus(dbStatus)
 	return build, nil
 }
