@@ -5,8 +5,11 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/execution"
+	"github.com/radiation/coyote-ci/backend/internal/runner"
 	"github.com/radiation/coyote-ci/backend/pkg/contracts"
 )
+
+var _ runner.Runner = (*Runner)(nil)
 
 type Runner struct {
 	executor execution.Executor

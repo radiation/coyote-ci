@@ -4,6 +4,8 @@ import "context"
 
 type NoopSink struct{}
 
+var _ LogSink = (*NoopSink)(nil)
+
 func NewNoopSink() *NoopSink {
 	return &NoopSink{}
 }
