@@ -1,16 +1,19 @@
 version: "2"
 
 run:
-  timeout: 5m
+  tests: true
 
 linters:
+  default: none
   enable:
-    - govet
-    - staticcheck
     - errcheck
+    - govet
     - ineffassign
+    - staticcheck
 
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-    
+  settings:
+    errcheck:
+      check-type-assertions: true
+    govet:
+      enable:
+        - shadow
