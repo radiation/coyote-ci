@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"github.com/google/uuid"
@@ -31,6 +32,25 @@ func (r *BuildRepository) Create(_ context.Context, build domain.Build) (domain.
 
 	r.builds[build.ID] = build
 	return build, nil
+}
+
+func (r *BuildRepository) List(_ context.Context) ([]domain.Build, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	builds := make([]domain.Build, 0, len(r.builds))
+	for _, build := range r.builds {
+		builds = append(builds, build)
+	}
+
+	sort.Slice(builds, func(i, j int) bool {
+		if builds[i].CreatedAt.Equal(builds[j].CreatedAt) {
+			return builds[i].ID < builds[j].ID
+		}
+		return builds[i].CreatedAt.After(builds[j].CreatedAt)
+	})
+
+	return builds, nil
 }
 
 func (r *BuildRepository) GetByID(_ context.Context, id string) (domain.Build, error) {

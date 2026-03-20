@@ -61,6 +61,26 @@ func (o *BuildOrchestrator) GetBuild(ctx context.Context, id string) (domain.Bui
 	return o.buildStore.GetByID(ctx, id)
 }
 
+func (o *BuildOrchestrator) ListBuilds(ctx context.Context) ([]domain.Build, error) {
+	return o.buildStore.List(ctx)
+}
+
+func (o *BuildOrchestrator) GetBuildSteps(ctx context.Context, id string) ([]contracts.BuildStep, error) {
+	if _, err := o.buildStore.GetByID(ctx, id); err != nil {
+		return nil, err
+	}
+
+	return []contracts.BuildStep{}, nil
+}
+
+func (o *BuildOrchestrator) GetBuildLogs(ctx context.Context, id string) ([]contracts.BuildLogLine, error) {
+	if _, err := o.buildStore.GetByID(ctx, id); err != nil {
+		return nil, err
+	}
+
+	return []contracts.BuildLogLine{}, nil
+}
+
 func (o *BuildOrchestrator) QueueBuild(ctx context.Context, id string) (domain.Build, error) {
 	return o.transitionBuildStatus(ctx, id, domain.BuildStatusQueued)
 }

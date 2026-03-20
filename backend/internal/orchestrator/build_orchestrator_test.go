@@ -30,6 +30,14 @@ func (s *fakeBuildStore) Create(_ context.Context, build domain.Build) (domain.B
 	return build, nil
 }
 
+func (s *fakeBuildStore) List(_ context.Context) ([]domain.Build, error) {
+	if s.build.ID == "" {
+		return []domain.Build{}, nil
+	}
+
+	return []domain.Build{s.build}, nil
+}
+
 func (s *fakeBuildStore) GetByID(_ context.Context, _ string) (domain.Build, error) {
 	if s.getErr != nil {
 		return domain.Build{}, s.getErr
@@ -182,6 +190,42 @@ func TestBuildOrchestrator_TransitionNotFound(t *testing.T) {
 
 	if store.updateCalls != 0 {
 		t.Fatalf("expected no update call, got %d", store.updateCalls)
+	}
+}
+
+func TestBuildOrchestrator_ListBuilds(t *testing.T) {
+	store := &fakeBuildStore{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending}}
+	o := NewBuildOrchestrator(store, nil, nil)
+
+	builds, err := o.ListBuilds(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(builds) != 1 {
+		t.Fatalf("expected one build, got %d", len(builds))
+	}
+	if builds[0].ID != "build-1" {
+		t.Fatalf("expected build-1 id, got %q", builds[0].ID)
+	}
+}
+
+func TestBuildOrchestrator_GetBuildSteps_NotFound(t *testing.T) {
+	store := &fakeBuildStore{getErr: repository.ErrBuildNotFound}
+	o := NewBuildOrchestrator(store, nil, nil)
+
+	_, err := o.GetBuildSteps(context.Background(), "missing")
+	if !errors.Is(err, repository.ErrBuildNotFound) {
+		t.Fatalf("expected not found, got %v", err)
+	}
+}
+
+func TestBuildOrchestrator_GetBuildLogs_NotFound(t *testing.T) {
+	store := &fakeBuildStore{getErr: repository.ErrBuildNotFound}
+	o := NewBuildOrchestrator(store, nil, nil)
+
+	_, err := o.GetBuildLogs(context.Background(), "missing")
+	if !errors.Is(err, repository.ErrBuildNotFound) {
+		t.Fatalf("expected not found, got %v", err)
 	}
 }
 

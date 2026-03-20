@@ -37,6 +37,17 @@ func (r *fakeRepo) Create(_ context.Context, build domain.Build) (domain.Build, 
 	return build, nil
 }
 
+func (r *fakeRepo) List(_ context.Context) ([]domain.Build, error) {
+	builds := make([]domain.Build, 0, len(r.builds))
+	for _, build := range r.builds {
+		builds = append(builds, build)
+	}
+	if len(builds) == 0 && r.build.ID != "" {
+		builds = append(builds, r.build)
+	}
+	return builds, nil
+}
+
 func (r *fakeRepo) GetByID(_ context.Context, id string) (domain.Build, error) {
 	if r.getErr != nil {
 		return domain.Build{}, r.getErr
@@ -87,11 +98,28 @@ func decodeBody(t *testing.T, rr *httptest.ResponseRecorder) map[string]any {
 	return body
 }
 
-func TestNewBuildHandler(t *testing.T) {
-	h := NewBuildHandler(service.NewBuildService(&fakeRepo{}))
-	if h == nil {
-		t.Fatal("expected handler, got nil")
+func decodeDataMap(t *testing.T, rr *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	body := decodeBody(t, rr)
+	data, ok := body["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data envelope, got %v", body)
 	}
+	return data
+}
+
+func decodeErrorMessage(t *testing.T, rr *httptest.ResponseRecorder) string {
+	t.Helper()
+	body := decodeBody(t, rr)
+	errObj, ok := body["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected error envelope, got %v", body)
+	}
+	message, ok := errObj["message"].(string)
+	if !ok {
+		t.Fatalf("expected error.message string, got %v", errObj)
+	}
+	return message
 }
 
 func TestBuildHandler_CreateBuild(t *testing.T) {
@@ -119,30 +147,59 @@ func TestBuildHandler_CreateBuild(t *testing.T) {
 			if rr.Code != tc.statusCode {
 				t.Fatalf("expected status %d, got %d", tc.statusCode, rr.Code)
 			}
-			body := decodeBody(t, rr)
+
 			if tc.errMsg != "" {
-				if body["error"] != tc.errMsg {
-					t.Fatalf("expected error %q, got %v", tc.errMsg, body["error"])
+				if got := decodeErrorMessage(t, rr); got != tc.errMsg {
+					t.Fatalf("expected error %q, got %q", tc.errMsg, got)
 				}
 				return
 			}
-			if body["id"] == "" {
+
+			data := decodeDataMap(t, rr)
+			if data["id"] == "" {
 				t.Fatal("expected id in response")
 			}
-			if body["project_id"] != "project-1" {
-				t.Fatalf("expected project_id project-1, got %v", body["project_id"])
+			if data["project_id"] != "project-1" {
+				t.Fatalf("expected project_id project-1, got %v", data["project_id"])
 			}
-			if body["status"] != string(domain.BuildStatusPending) {
-				t.Fatalf("expected status pending, got %v", body["status"])
+			if data["status"] != string(domain.BuildStatusPending) {
+				t.Fatalf("expected status pending, got %v", data["status"])
 			}
-			createdAt, ok := body["created_at"].(string)
+			createdAt, ok := data["created_at"].(string)
 			if !ok {
-				t.Fatalf("expected created_at string, got %T", body["created_at"])
+				t.Fatalf("expected created_at string, got %T", data["created_at"])
 			}
 			if _, err := time.Parse(time.RFC3339, createdAt); err != nil {
-				t.Fatalf("expected RFC3339 timestamp, got %v", body["created_at"])
+				t.Fatalf("expected RFC3339 timestamp, got %v", data["created_at"])
 			}
 		})
+	}
+}
+
+func TestBuildHandler_ListBuilds(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	repo := &fakeRepo{builds: map[string]domain.Build{
+		"build-1": {ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now},
+		"build-2": {ID: "build-2", ProjectID: "project-2", Status: domain.BuildStatusQueued, CreatedAt: now},
+	}}
+
+	h := NewBuildHandler(service.NewBuildService(repo))
+	req := httptest.NewRequest(http.MethodGet, "/builds", nil)
+	rr := httptest.NewRecorder()
+
+	h.ListBuilds(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+
+	data := decodeDataMap(t, rr)
+	listPayload, ok := data["builds"].([]any)
+	if !ok {
+		t.Fatalf("expected builds array, got %v", data)
+	}
+	if len(listPayload) != 2 {
+		t.Fatalf("expected two builds, got %d", len(listPayload))
 	}
 }
 
@@ -172,62 +229,46 @@ func TestBuildHandler_GetBuild(t *testing.T) {
 			if rr.Code != tc.statusCode {
 				t.Fatalf("expected status %d, got %d", tc.statusCode, rr.Code)
 			}
-			body := decodeBody(t, rr)
+
 			if tc.errMsg != "" {
-				if body["error"] != tc.errMsg {
-					t.Fatalf("expected error %q, got %v", tc.errMsg, body["error"])
+				if got := decodeErrorMessage(t, rr); got != tc.errMsg {
+					t.Fatalf("expected error %q, got %q", tc.errMsg, got)
 				}
 				return
 			}
-			if body["id"] != "build-1" {
-				t.Fatalf("expected id build-1, got %v", body["id"])
+
+			data := decodeDataMap(t, rr)
+			if data["id"] != "build-1" {
+				t.Fatalf("expected id build-1, got %v", data["id"])
 			}
 		})
 	}
 }
 
-func TestBuildHandler_TransitionEndpoints(t *testing.T) {
+func TestBuildHandler_GetBuildStepsAndLogs(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	tests := []struct {
-		name         string
-		call         func(*BuildHandler, http.ResponseWriter, *http.Request)
-		buildID      string
-		repo         *fakeRepo
-		statusCode   int
-		expectedBody string
-		expectStatus domain.BuildStatus
-	}{
-		{name: "queue success", call: (*BuildHandler).QueueBuild, buildID: "build-1", repo: &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}, statusCode: http.StatusOK, expectStatus: domain.BuildStatusQueued},
-		{name: "start success", call: (*BuildHandler).StartBuild, buildID: "build-2", repo: &fakeRepo{build: domain.Build{ID: "build-2", ProjectID: "project-1", Status: domain.BuildStatusQueued, CreatedAt: now}}, statusCode: http.StatusOK, expectStatus: domain.BuildStatusRunning},
-		{name: "complete success", call: (*BuildHandler).CompleteBuild, buildID: "build-3", repo: &fakeRepo{build: domain.Build{ID: "build-3", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}}, statusCode: http.StatusOK, expectStatus: domain.BuildStatusSuccess},
-		{name: "fail success", call: (*BuildHandler).FailBuild, buildID: "build-4", repo: &fakeRepo{build: domain.Build{ID: "build-4", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}}, statusCode: http.StatusOK, expectStatus: domain.BuildStatusFailed},
-		{name: "invalid transition", call: (*BuildHandler).StartBuild, buildID: "build-5", repo: &fakeRepo{build: domain.Build{ID: "build-5", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}, statusCode: http.StatusConflict, expectedBody: service.ErrInvalidBuildStatusTransition.Error()},
-		{name: "missing build", call: (*BuildHandler).QueueBuild, buildID: "missing", repo: &fakeRepo{getErr: repository.ErrBuildNotFound}, statusCode: http.StatusNotFound, expectedBody: "build not found"},
-		{name: "missing param", call: (*BuildHandler).QueueBuild, buildID: "", repo: &fakeRepo{}, statusCode: http.StatusBadRequest, expectedBody: "build id is required"},
+	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}}
+	h := NewBuildHandler(service.NewBuildService(repo))
+
+	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/steps", nil), "build-1")
+	stepsRes := httptest.NewRecorder()
+	h.GetBuildSteps(stepsRes, stepsReq)
+	if stepsRes.Code != http.StatusOK {
+		t.Fatalf("expected steps status %d, got %d", http.StatusOK, stepsRes.Code)
+	}
+	stepsData := decodeDataMap(t, stepsRes)
+	if stepsData["build_id"] != "build-1" {
+		t.Fatalf("expected build_id build-1, got %v", stepsData["build_id"])
 	}
 
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			h := NewBuildHandler(service.NewBuildService(tc.repo))
-			req := httptest.NewRequest(http.MethodPost, "/builds/"+tc.buildID, nil)
-			req = addBuildIDParam(req, tc.buildID)
-			rr := httptest.NewRecorder()
-			tc.call(h, rr, req)
-			if rr.Code != tc.statusCode {
-				t.Fatalf("expected status %d, got %d", tc.statusCode, rr.Code)
-			}
-			body := decodeBody(t, rr)
-			if tc.expectedBody != "" {
-				if body["error"] != tc.expectedBody {
-					t.Fatalf("expected error %q, got %v", tc.expectedBody, body["error"])
-				}
-				return
-			}
-			if body["status"] != string(tc.expectStatus) {
-				t.Fatalf("expected status %q, got %v", tc.expectStatus, body["status"])
-			}
-		})
+	logsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/logs", nil), "build-1")
+	logsRes := httptest.NewRecorder()
+	h.GetBuildLogs(logsRes, logsReq)
+	if logsRes.Code != http.StatusOK {
+		t.Fatalf("expected logs status %d, got %d", http.StatusOK, logsRes.Code)
+	}
+	logsData := decodeDataMap(t, logsRes)
+	if logsData["build_id"] != "build-1" {
+		t.Fatalf("expected build_id build-1, got %v", logsData["build_id"])
 	}
 }

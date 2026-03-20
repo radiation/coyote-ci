@@ -29,6 +29,14 @@ func (r *fakeBuildRepository) Create(_ context.Context, build domain.Build) (dom
 	return build, nil
 }
 
+func (r *fakeBuildRepository) List(_ context.Context) ([]domain.Build, error) {
+	if r.build.ID == "" {
+		return []domain.Build{}, nil
+	}
+
+	return []domain.Build{r.build}, nil
+}
+
 func (r *fakeBuildRepository) GetByID(_ context.Context, _ string) (domain.Build, error) {
 	if r.getErr != nil {
 		return domain.Build{}, r.getErr
