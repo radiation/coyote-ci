@@ -2,25 +2,22 @@ package service
 
 import (
 	"context"
-	"errors"
-	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
-	"github.com/radiation/coyote-ci/backend/internal/repository"
+	"github.com/radiation/coyote-ci/backend/internal/orchestrator"
+	"github.com/radiation/coyote-ci/backend/internal/store"
 )
 
-var ErrProjectIDRequired = errors.New("project_id is required")
-var ErrInvalidBuildStatusTransition = errors.New("invalid build status transition")
+var ErrProjectIDRequired = orchestrator.ErrProjectIDRequired
+var ErrInvalidBuildStatusTransition = orchestrator.ErrInvalidBuildStatusTransition
 
 type BuildService struct {
-	buildRepo repository.BuildRepository
+	orchestrator *orchestrator.BuildOrchestrator
 }
 
-func NewBuildService(buildRepo repository.BuildRepository) *BuildService {
+func NewBuildService(buildStore store.BuildStore) *BuildService {
 	return &BuildService{
-		buildRepo: buildRepo,
+		orchestrator: orchestrator.NewBuildOrchestrator(buildStore, nil, nil),
 	}
 }
 
@@ -29,62 +26,27 @@ type CreateBuildInput struct {
 }
 
 func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) (domain.Build, error) {
-	if input.ProjectID == "" {
-		return domain.Build{}, ErrProjectIDRequired
-	}
-
-	build := domain.Build{
-		ID:        uuid.NewString(),
+	return s.orchestrator.CreateBuild(ctx, orchestrator.CreateBuildInput{
 		ProjectID: input.ProjectID,
-		Status:    domain.BuildStatusPending,
-		CreatedAt: time.Now().UTC(),
-	}
-
-	return s.buildRepo.Create(ctx, build)
+	})
 }
 
 func (s *BuildService) GetBuild(ctx context.Context, id string) (domain.Build, error) {
-	return s.buildRepo.GetByID(ctx, id)
+	return s.orchestrator.GetBuild(ctx, id)
 }
 
 func (s *BuildService) QueueBuild(ctx context.Context, id string) (domain.Build, error) {
-	return s.transitionBuildStatus(ctx, id, domain.BuildStatusQueued)
+	return s.orchestrator.QueueBuild(ctx, id)
 }
 
 func (s *BuildService) StartBuild(ctx context.Context, id string) (domain.Build, error) {
-	return s.transitionBuildStatus(ctx, id, domain.BuildStatusRunning)
+	return s.orchestrator.StartBuild(ctx, id)
 }
 
 func (s *BuildService) CompleteBuild(ctx context.Context, id string) (domain.Build, error) {
-	return s.transitionBuildStatus(ctx, id, domain.BuildStatusSuccess)
+	return s.orchestrator.CompleteBuild(ctx, id)
 }
 
 func (s *BuildService) FailBuild(ctx context.Context, id string) (domain.Build, error) {
-	return s.transitionBuildStatus(ctx, id, domain.BuildStatusFailed)
-}
-
-func (s *BuildService) transitionBuildStatus(ctx context.Context, id string, toStatus domain.BuildStatus) (domain.Build, error) {
-	build, err := s.buildRepo.GetByID(ctx, id)
-	if err != nil {
-		return domain.Build{}, err
-	}
-
-	if !isValidBuildTransition(build.Status, toStatus) {
-		return domain.Build{}, ErrInvalidBuildStatusTransition
-	}
-
-	return s.buildRepo.UpdateStatus(ctx, id, toStatus)
-}
-
-func isValidBuildTransition(fromStatus, toStatus domain.BuildStatus) bool {
-	switch fromStatus {
-	case domain.BuildStatusPending:
-		return toStatus == domain.BuildStatusQueued
-	case domain.BuildStatusQueued:
-		return toStatus == domain.BuildStatusRunning
-	case domain.BuildStatusRunning:
-		return toStatus == domain.BuildStatusSuccess || toStatus == domain.BuildStatusFailed
-	default:
-		return false
-	}
+	return s.orchestrator.FailBuild(ctx, id)
 }

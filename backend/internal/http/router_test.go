@@ -8,12 +8,12 @@ import (
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
-	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	"github.com/radiation/coyote-ci/backend/internal/store/memory"
 )
 
 func TestNewRouter_HealthzAndNotFound(t *testing.T) {
-	h := handler.NewBuildHandler(service.NewBuildService(memory.NewBuildRepository()))
+	h := handler.NewBuildHandler(service.NewBuildService(memory.NewBuildStore()))
 	r := NewRouter(h)
 
 	tests := []struct {
@@ -45,7 +45,7 @@ func TestNewRouter_HealthzAndNotFound(t *testing.T) {
 }
 
 func TestNewRouter_BuildRoutes(t *testing.T) {
-	h := handler.NewBuildHandler(service.NewBuildService(memory.NewBuildRepository()))
+	h := handler.NewBuildHandler(service.NewBuildService(memory.NewBuildStore()))
 	r := NewRouter(h)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))

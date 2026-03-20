@@ -58,8 +58,8 @@ func TestNewBuildService(t *testing.T) {
 		t.Fatal("expected service instance, got nil")
 	}
 
-	if svc.buildRepo != repo {
-		t.Fatal("expected service to keep provided repository")
+	if svc.orchestrator == nil {
+		t.Fatal("expected service to initialize orchestrator")
 	}
 }
 
