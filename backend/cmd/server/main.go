@@ -8,8 +8,8 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
-	postgresrepo "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	storepostgres "github.com/radiation/coyote-ci/backend/internal/store/postgres"
 )
 
 func main() {
@@ -25,7 +25,7 @@ func main() {
 		}
 	}()
 
-	buildRepo := postgresrepo.NewBuildRepository(db)
+	buildRepo := storepostgres.NewBuildStore(db)
 	buildService := service.NewBuildService(buildRepo)
 	buildHandler := handler.NewBuildHandler(buildService)
 
