@@ -4,7 +4,10 @@ import (
 	"database/sql"
 
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
+	"github.com/radiation/coyote-ci/backend/internal/store"
 )
+
+var _ store.BuildStore = (*BuildStore)(nil)
 
 type BuildStore = repositorypostgres.BuildRepository
 
