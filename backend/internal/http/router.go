@@ -17,13 +17,8 @@ func NewRouter(buildHandler *handler.BuildHandler) nethttp.Handler {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
-	healthHandler := func(w nethttp.ResponseWriter, _ *nethttp.Request) {
-		w.WriteHeader(nethttp.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	}
-
-	r.Get("/health", healthHandler)
-	r.Get("/healthz", healthHandler)
+	r.Get("/health", handler.Health)
+	r.Get("/healthz", handler.Health)
 
 	r.Route("/builds", func(r chi.Router) {
 		r.Post("/", buildHandler.CreateBuild)

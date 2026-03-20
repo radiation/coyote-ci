@@ -26,12 +26,19 @@ func NewBuildHandler(buildService *service.BuildService) *BuildHandler {
 	}
 }
 
-type createBuildRequest struct {
-	ProjectID string `json:"project_id"`
-}
-
+// CreateBuild godoc
+// @Summary Create build
+// @Description Creates a new build in pending status.
+// @Tags builds
+// @Accept json
+// @Produce json
+// @Param request body api.CreateBuildRequest true "Build create request"
+// @Success 201 {object} api.BuildEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds [post]
 func (h *BuildHandler) CreateBuild(w http.ResponseWriter, r *http.Request) {
-	var req createBuildRequest
+	var req api.CreateBuildRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
@@ -53,6 +60,14 @@ func (h *BuildHandler) CreateBuild(w http.ResponseWriter, r *http.Request) {
 	writeDataJSON(w, http.StatusCreated, toBuildResponse(build))
 }
 
+// ListBuilds godoc
+// @Summary List builds
+// @Description Lists all builds sorted by newest first.
+// @Tags builds
+// @Produce json
+// @Success 200 {object} api.BuildListEnvelope
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds [get]
 func (h *BuildHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
 	builds, err := h.buildService.ListBuilds(r.Context())
 	if err != nil {
@@ -68,6 +83,17 @@ func (h *BuildHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
 	writeDataJSON(w, http.StatusOK, api.BuildListResponse{Builds: responses})
 }
 
+// GetBuild godoc
+// @Summary Get build
+// @Description Returns build details by id.
+// @Tags builds
+// @Produce json
+// @Param buildID path string true "Build ID"
+// @Success 200 {object} api.BuildEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/{buildID} [get]
 func (h *BuildHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "buildID")
 	if id == "" {
@@ -84,6 +110,17 @@ func (h *BuildHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 	writeDataJSON(w, http.StatusOK, toBuildResponse(build))
 }
 
+// GetBuildSteps godoc
+// @Summary Get build steps
+// @Description Returns steps for a build.
+// @Tags builds
+// @Produce json
+// @Param buildID path string true "Build ID"
+// @Success 200 {object} api.BuildStepsEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/{buildID}/steps [get]
 func (h *BuildHandler) GetBuildSteps(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "buildID")
 	if id == "" {
@@ -108,6 +145,17 @@ func (h *BuildHandler) GetBuildSteps(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetBuildLogs godoc
+// @Summary Get build logs
+// @Description Returns log lines for a build.
+// @Tags builds
+// @Produce json
+// @Param buildID path string true "Build ID"
+// @Success 200 {object} api.BuildLogsEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/{buildID}/logs [get]
 func (h *BuildHandler) GetBuildLogs(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "buildID")
 	if id == "" {
@@ -135,18 +183,66 @@ func (h *BuildHandler) GetBuildLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// QueueBuild godoc
+// @Summary Queue build
+// @Description Transitions build status from pending to queued.
+// @Tags builds
+// @Produce json
+// @Param buildID path string true "Build ID"
+// @Success 200 {object} api.BuildEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/{buildID}/queue [post]
 func (h *BuildHandler) QueueBuild(w http.ResponseWriter, r *http.Request) {
 	h.transitionBuild(w, r, h.buildService.QueueBuild)
 }
 
+// StartBuild godoc
+// @Summary Start build
+// @Description Transitions build status from queued to running.
+// @Tags builds
+// @Produce json
+// @Param buildID path string true "Build ID"
+// @Success 200 {object} api.BuildEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/{buildID}/start [post]
 func (h *BuildHandler) StartBuild(w http.ResponseWriter, r *http.Request) {
 	h.transitionBuild(w, r, h.buildService.StartBuild)
 }
 
+// CompleteBuild godoc
+// @Summary Complete build
+// @Description Transitions build status from running to success.
+// @Tags builds
+// @Produce json
+// @Param buildID path string true "Build ID"
+// @Success 200 {object} api.BuildEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/{buildID}/complete [post]
 func (h *BuildHandler) CompleteBuild(w http.ResponseWriter, r *http.Request) {
 	h.transitionBuild(w, r, h.buildService.CompleteBuild)
 }
 
+// FailBuild godoc
+// @Summary Fail build
+// @Description Transitions build status from running to failed.
+// @Tags builds
+// @Produce json
+// @Param buildID path string true "Build ID"
+// @Success 200 {object} api.BuildEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/{buildID}/fail [post]
 func (h *BuildHandler) FailBuild(w http.ResponseWriter, r *http.Request) {
 	h.transitionBuild(w, r, h.buildService.FailBuild)
 }
