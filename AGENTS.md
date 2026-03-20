@@ -275,6 +275,27 @@ APIs should be:
 
 ---
 
+## Service communication expectations
+
+Use different transport styles for external and internal boundaries.
+
+Prefer:
+* REST/JSON for external APIs exposed to users, CLIs, and UIs
+* gRPC with Protocol Buffers for internal service-to-service communication once multiple services exist
+
+Guidelines:
+* keep transport concerns separate from business logic
+* define internal service contracts in `.proto` files
+* do not manually edit generated code
+* HTTP handlers should remain thin adapters over service logic
+* do not introduce gRPC transport before a real service boundary exists
+
+For the current milestone:
+* it is acceptable to structure service boundaries with future gRPC in mind
+* do not add gRPC transport until a second service or remote worker boundary actually requires it
+
+---
+
 ## Database expectations
 
 Prefer:
