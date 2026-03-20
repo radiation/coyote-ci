@@ -6,6 +6,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/orchestrator"
 	"github.com/radiation/coyote-ci/backend/internal/store"
+	"github.com/radiation/coyote-ci/backend/pkg/contracts"
 )
 
 var ErrProjectIDRequired = orchestrator.ErrProjectIDRequired
@@ -33,6 +34,18 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 
 func (s *BuildService) GetBuild(ctx context.Context, id string) (domain.Build, error) {
 	return s.orchestrator.GetBuild(ctx, id)
+}
+
+func (s *BuildService) ListBuilds(ctx context.Context) ([]domain.Build, error) {
+	return s.orchestrator.ListBuilds(ctx)
+}
+
+func (s *BuildService) GetBuildSteps(ctx context.Context, id string) ([]contracts.BuildStep, error) {
+	return s.orchestrator.GetBuildSteps(ctx, id)
+}
+
+func (s *BuildService) GetBuildLogs(ctx context.Context, id string) ([]contracts.BuildLogLine, error) {
+	return s.orchestrator.GetBuildLogs(ctx, id)
 }
 
 func (s *BuildService) QueueBuild(ctx context.Context, id string) (domain.Build, error) {

@@ -12,7 +12,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/store/memory"
 )
 
-func TestNewRouter_HealthzAndNotFound(t *testing.T) {
+func TestNewRouter_HealthAndNotFound(t *testing.T) {
 	h := handler.NewBuildHandler(service.NewBuildService(memory.NewBuildStore()))
 	r := NewRouter(h)
 
@@ -23,6 +23,7 @@ func TestNewRouter_HealthzAndNotFound(t *testing.T) {
 		statusCode int
 		body       string
 	}{
+		{name: "health", method: http.MethodGet, path: "/health", statusCode: http.StatusOK, body: "ok"},
 		{name: "healthz", method: http.MethodGet, path: "/healthz", statusCode: http.StatusOK, body: "ok"},
 		{name: "not found", method: http.MethodGet, path: "/missing", statusCode: http.StatusNotFound},
 	}
@@ -59,9 +60,13 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 	if err := json.Unmarshal(createRes.Body.Bytes(), &createBody); err != nil {
 		t.Fatalf("failed to parse create response: %v", err)
 	}
-	id, ok := createBody["id"].(string)
+	createData, ok := createBody["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected create data envelope, got %v", createBody)
+	}
+	id, ok := createData["id"].(string)
 	if !ok || id == "" {
-		t.Fatalf("expected create response id, got %v", createBody["id"])
+		t.Fatalf("expected create response id, got %v", createData["id"])
 	}
 
 	tests := []struct {
@@ -70,7 +75,10 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 		path       string
 		statusCode int
 	}{
+		{name: "list builds", method: http.MethodGet, path: "/builds/", statusCode: http.StatusOK},
 		{name: "get build", method: http.MethodGet, path: "/builds/" + id, statusCode: http.StatusOK},
+		{name: "build steps", method: http.MethodGet, path: "/builds/" + id + "/steps", statusCode: http.StatusOK},
+		{name: "build logs", method: http.MethodGet, path: "/builds/" + id + "/logs", statusCode: http.StatusOK},
 		{name: "queue build", method: http.MethodPost, path: "/builds/" + id + "/queue", statusCode: http.StatusOK},
 		{name: "start build", method: http.MethodPost, path: "/builds/" + id + "/start", statusCode: http.StatusOK},
 		{name: "complete build", method: http.MethodPost, path: "/builds/" + id + "/complete", statusCode: http.StatusOK},
