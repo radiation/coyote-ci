@@ -211,6 +211,22 @@ If building APIs:
 - use explicit request/response types
 - make status fields and timestamps easy for a UI to consume
 
+## Internal service communication guidance
+
+For external client-facing APIs:
+- prefer REST/JSON unless told otherwise
+
+For internal service-to-service communication:
+- prefer gRPC with Protocol Buffers once multiple services exist
+- define service contracts in `.proto` files
+- keep generated protobuf code separate from handwritten business logic
+- do not manually edit generated files
+- keep transport adapters thin and push behavior into services
+
+Until there is a real multi-service boundary:
+- do not introduce gRPC transport prematurely
+- instead, design service interfaces and request/response shapes so they can later be exposed cleanly via gRPC
+
 ## Database guidance
 
 If adding database access:

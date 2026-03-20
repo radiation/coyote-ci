@@ -12,6 +12,7 @@ import (
 
 type fakeBuildRepository struct {
 	build         domain.Build
+	createErr     error
 	getErr        error
 	updateErr     error
 	updateCalls   int
@@ -20,6 +21,10 @@ type fakeBuildRepository struct {
 }
 
 func (r *fakeBuildRepository) Create(_ context.Context, build domain.Build) (domain.Build, error) {
+	if r.createErr != nil {
+		return domain.Build{}, r.createErr
+	}
+
 	r.build = build
 	return build, nil
 }
@@ -43,6 +48,148 @@ func (r *fakeBuildRepository) UpdateStatus(_ context.Context, id string, status 
 
 	r.build.Status = status
 	return r.build, nil
+}
+
+func TestNewBuildService(t *testing.T) {
+	repo := &fakeBuildRepository{}
+	svc := NewBuildService(repo)
+
+	if svc == nil {
+		t.Fatal("expected service instance, got nil")
+	}
+
+	if svc.buildRepo != repo {
+		t.Fatal("expected service to keep provided repository")
+	}
+}
+
+func TestBuildService_CreateBuild(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       CreateBuildInput
+		repo        *fakeBuildRepository
+		expectErr   error
+		errContains string
+	}{
+		{
+			name:      "missing project id",
+			input:     CreateBuildInput{},
+			repo:      &fakeBuildRepository{},
+			expectErr: ErrProjectIDRequired,
+		},
+		{
+			name:        "repository create fails",
+			input:       CreateBuildInput{ProjectID: "project-1"},
+			repo:        &fakeBuildRepository{createErr: errors.New("create failed")},
+			errContains: "create failed",
+		},
+		{
+			name:  "success",
+			input: CreateBuildInput{ProjectID: "project-1"},
+			repo:  &fakeBuildRepository{},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc := NewBuildService(tc.repo)
+
+			build, err := svc.CreateBuild(context.Background(), tc.input)
+			if tc.expectErr != nil {
+				if !errors.Is(err, tc.expectErr) {
+					t.Fatalf("expected error %v, got %v", tc.expectErr, err)
+				}
+				return
+			}
+
+			if tc.errContains != "" {
+				if err == nil || err.Error() != tc.errContains {
+					t.Fatalf("expected error %q, got %v", tc.errContains, err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+
+			if build.ID == "" {
+				t.Fatal("expected generated build id")
+			}
+
+			if build.ProjectID != tc.input.ProjectID {
+				t.Fatalf("expected project id %q, got %q", tc.input.ProjectID, build.ProjectID)
+			}
+
+			if build.Status != domain.BuildStatusPending {
+				t.Fatalf("expected status %q, got %q", domain.BuildStatusPending, build.Status)
+			}
+
+			if build.CreatedAt.IsZero() {
+				t.Fatal("expected created_at to be set")
+			}
+
+			if build.CreatedAt.Location() != time.UTC {
+				t.Fatal("expected created_at to be UTC")
+			}
+		})
+	}
+}
+
+func TestBuildService_GetBuild(t *testing.T) {
+	now := time.Now().UTC()
+
+	tests := []struct {
+		name      string
+		repo      *fakeBuildRepository
+		buildID   string
+		expectErr error
+	}{
+		{
+			name: "success",
+			repo: &fakeBuildRepository{build: domain.Build{
+				ID:        "build-1",
+				ProjectID: "project-1",
+				Status:    domain.BuildStatusQueued,
+				CreatedAt: now,
+			}},
+			buildID: "build-1",
+		},
+		{
+			name:      "not found",
+			repo:      &fakeBuildRepository{getErr: repository.ErrBuildNotFound},
+			buildID:   "missing",
+			expectErr: repository.ErrBuildNotFound,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc := NewBuildService(tc.repo)
+			build, err := svc.GetBuild(context.Background(), tc.buildID)
+
+			if tc.expectErr != nil {
+				if !errors.Is(err, tc.expectErr) {
+					t.Fatalf("expected error %v, got %v", tc.expectErr, err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+
+			if build.ID != tc.repo.build.ID {
+				t.Fatalf("expected build id %q, got %q", tc.repo.build.ID, build.ID)
+			}
+		})
+	}
 }
 
 func TestBuildService_ValidTransitions(t *testing.T) {
