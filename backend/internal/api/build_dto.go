@@ -1,5 +1,9 @@
 package api
 
+type CreateBuildRequest struct {
+	ProjectID string `json:"project_id"`
+}
+
 type ErrorBody struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -11,6 +15,22 @@ type ErrorResponse struct {
 
 type DataResponse struct {
 	Data any `json:"data"`
+}
+
+type BuildEnvelope struct {
+	Data BuildResponse `json:"data"`
+}
+
+type BuildListEnvelope struct {
+	Data BuildListResponse `json:"data"`
+}
+
+type BuildStepsEnvelope struct {
+	Data BuildStepsResponse `json:"data"`
+}
+
+type BuildLogsEnvelope struct {
+	Data BuildLogsResponse `json:"data"`
 }
 
 type BuildResponse struct {

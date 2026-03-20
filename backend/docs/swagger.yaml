@@ -1,0 +1,394 @@
+basePath: /
+definitions:
+  api.BuildEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.BuildResponse'
+    type: object
+  api.BuildListEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.BuildListResponse'
+    type: object
+  api.BuildListResponse:
+    properties:
+      builds:
+        items:
+          $ref: '#/definitions/api.BuildResponse'
+        type: array
+    type: object
+  api.BuildLogResponse:
+    properties:
+      message:
+        type: string
+      timestamp:
+        type: string
+    type: object
+  api.BuildLogsEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.BuildLogsResponse'
+    type: object
+  api.BuildLogsResponse:
+    properties:
+      build_id:
+        type: string
+      logs:
+        items:
+          $ref: '#/definitions/api.BuildLogResponse'
+        type: array
+    type: object
+  api.BuildResponse:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      project_id:
+        type: string
+      status:
+        type: string
+    type: object
+  api.BuildStepResponse:
+    properties:
+      ended_at:
+        type: string
+      name:
+        type: string
+      started_at:
+        type: string
+      status:
+        type: string
+    type: object
+  api.BuildStepsEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.BuildStepsResponse'
+    type: object
+  api.BuildStepsResponse:
+    properties:
+      build_id:
+        type: string
+      steps:
+        items:
+          $ref: '#/definitions/api.BuildStepResponse'
+        type: array
+    type: object
+  api.CreateBuildRequest:
+    properties:
+      project_id:
+        type: string
+    type: object
+  api.ErrorBody:
+    properties:
+      code:
+        type: string
+      message:
+        type: string
+    type: object
+  api.ErrorResponse:
+    properties:
+      error:
+        $ref: '#/definitions/api.ErrorBody'
+    type: object
+info:
+  contact: {}
+  description: HTTP API for Coyote CI control-plane workflows.
+  title: Coyote CI API
+  version: "0.1"
+paths:
+  /builds:
+    get:
+      description: Lists all builds sorted by newest first.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuildListEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List builds
+      tags:
+      - builds
+    post:
+      consumes:
+      - application/json
+      description: Creates a new build in pending status.
+      parameters:
+      - description: Build create request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.CreateBuildRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.BuildEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Create build
+      tags:
+      - builds
+  /builds/{buildID}:
+    get:
+      description: Returns build details by id.
+      parameters:
+      - description: Build ID
+        in: path
+        name: buildID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuildEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get build
+      tags:
+      - builds
+  /builds/{buildID}/complete:
+    post:
+      description: Transitions build status from running to success.
+      parameters:
+      - description: Build ID
+        in: path
+        name: buildID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuildEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Complete build
+      tags:
+      - builds
+  /builds/{buildID}/fail:
+    post:
+      description: Transitions build status from running to failed.
+      parameters:
+      - description: Build ID
+        in: path
+        name: buildID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuildEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Fail build
+      tags:
+      - builds
+  /builds/{buildID}/logs:
+    get:
+      description: Returns log lines for a build.
+      parameters:
+      - description: Build ID
+        in: path
+        name: buildID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuildLogsEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get build logs
+      tags:
+      - builds
+  /builds/{buildID}/queue:
+    post:
+      description: Transitions build status from pending to queued.
+      parameters:
+      - description: Build ID
+        in: path
+        name: buildID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuildEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Queue build
+      tags:
+      - builds
+  /builds/{buildID}/start:
+    post:
+      description: Transitions build status from queued to running.
+      parameters:
+      - description: Build ID
+        in: path
+        name: buildID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuildEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Start build
+      tags:
+      - builds
+  /builds/{buildID}/steps:
+    get:
+      description: Returns steps for a build.
+      parameters:
+      - description: Build ID
+        in: path
+        name: buildID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuildStepsEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get build steps
+      tags:
+      - builds
+  /health:
+    get:
+      description: Returns a simple liveness response.
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: ok
+          schema:
+            type: string
+      summary: Health check
+      tags:
+      - health
+schemes:
+- http
+swagger: "2.0"
