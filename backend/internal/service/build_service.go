@@ -48,6 +48,10 @@ func (s *BuildService) GetBuildLogs(ctx context.Context, id string) ([]contracts
 	return s.orchestrator.GetBuildLogs(ctx, id)
 }
 
+func (s *BuildService) RunStep(ctx context.Context, request contracts.RunStepRequest) (contracts.RunStepResult, error) {
+	return s.orchestrator.RunStep(ctx, request)
+}
+
 func (s *BuildService) QueueBuild(ctx context.Context, id string) (domain.Build, error) {
 	return s.orchestrator.QueueBuild(ctx, id)
 }
