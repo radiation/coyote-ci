@@ -19,6 +19,7 @@ type BuildStep struct {
 }
 
 type BuildLogLine struct {
+	StepName  string
 	Timestamp time.Time
 	Message   string
 }

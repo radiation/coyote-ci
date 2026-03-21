@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/pkg/contracts"
 )
@@ -264,5 +265,65 @@ func TestBuildOrchestrator_RunStep_RunnerError(t *testing.T) {
 	_, err := orchestrator.RunStep(context.Background(), contracts.RunStepRequest{Command: "echo"})
 	if err == nil || err.Error() != "runner failed" {
 		t.Fatalf("expected runner error, got %v", err)
+	}
+}
+
+func TestBuildOrchestrator_RunStep_PersistsLogsForSuccessAndFailedResults(t *testing.T) {
+	tests := []struct {
+		name          string
+		runnerResult  contracts.RunStepResult
+		expectedLines []string
+	}{
+		{
+			name: "success output logs",
+			runnerResult: contracts.RunStepResult{
+				Status: contracts.RunStepStatusSuccess,
+				Stdout: "line-1\nline-2\n",
+				Stderr: "",
+			},
+			expectedLines: []string{"line-1", "line-2"},
+		},
+		{
+			name: "failed output logs",
+			runnerResult: contracts.RunStepResult{
+				Status: contracts.RunStepStatusFailed,
+				Stdout: "",
+				Stderr: "err-1\nerr-2\n",
+			},
+			expectedLines: []string{"err-1", "err-2"},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &fakeBuildStore{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}}
+			runner := &fakeRunner{result: tc.runnerResult}
+			logStore := logs.NewMemorySink()
+			o := NewBuildOrchestrator(store, runner, logStore)
+
+			if _, err := o.RunStep(context.Background(), contracts.RunStepRequest{BuildID: "build-1", StepName: "step-1", Command: "echo"}); err != nil {
+				t.Fatalf("run step failed: %v", err)
+			}
+
+			buildLogs, err := o.GetBuildLogs(context.Background(), "build-1")
+			if err != nil {
+				t.Fatalf("get build logs failed: %v", err)
+			}
+			if len(buildLogs) != len(tc.expectedLines) {
+				t.Fatalf("expected %d logs, got %d", len(tc.expectedLines), len(buildLogs))
+			}
+
+			for i := range tc.expectedLines {
+				if buildLogs[i].Message != tc.expectedLines[i] {
+					t.Fatalf("expected log line %q at index %d, got %q", tc.expectedLines[i], i, buildLogs[i].Message)
+				}
+				if buildLogs[i].StepName != "step-1" {
+					t.Fatalf("expected step name step-1, got %q", buildLogs[i].StepName)
+				}
+			}
+		})
 	}
 }
