@@ -3,6 +3,7 @@ package inprocess
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +59,28 @@ func TestRunner_RunStep_FailedExitCode(t *testing.T) {
 	}
 	if res.Status != contracts.RunStepStatusFailed {
 		t.Fatalf("expected failed status, got %q", res.Status)
+	}
+	if exec.lastRequest.Timeout != 0 {
+		t.Fatalf("expected default timeout 0, got %v", exec.lastRequest.Timeout)
+	}
+}
+
+func TestRunner_RunStep_TimeoutMarkedFailedWithReason(t *testing.T) {
+	exec := &fakeExecutor{result: execution.CommandResult{ExitCode: -1, Stderr: "step execution timed out after 2s"}}
+	r := New(exec)
+
+	res, err := r.RunStep(context.Background(), contracts.RunStepRequest{Command: "sh", Args: []string{"-c", "sleep 5"}, TimeoutSeconds: 2})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if res.Status != contracts.RunStepStatusFailed {
+		t.Fatalf("expected failed status, got %q", res.Status)
+	}
+	if res.ExitCode != -1 {
+		t.Fatalf("expected timeout exit code -1, got %d", res.ExitCode)
+	}
+	if !strings.Contains(res.Stderr, "timed out") {
+		t.Fatalf("expected timeout reason, got %q", res.Stderr)
 	}
 }
 

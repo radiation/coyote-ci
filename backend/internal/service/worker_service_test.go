@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,5 +121,35 @@ func TestWorkerService_ExecuteRunnableStep_RunStepError(t *testing.T) {
 	}
 	if report.Step.Status != contracts.BuildStepStatusFailed {
 		t.Fatalf("expected step status failed, got %q", report.Step.Status)
+	}
+}
+
+func TestWorkerService_ExecuteRunnableStep_TimeoutMarkedFailedWithReason(t *testing.T) {
+	boundary := &fakeBuildExecutionBoundary{
+		runStepResp: contracts.RunStepResult{
+			Status:     contracts.RunStepStatusFailed,
+			ExitCode:   -1,
+			Stderr:     "step execution timed out after 1s",
+			StartedAt:  time.Now().UTC(),
+			FinishedAt: time.Now().UTC(),
+		},
+	}
+	worker := NewWorkerService(boundary)
+
+	report, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{BuildID: "build-timeout", StepName: "test", Command: "sleep", TimeoutSeconds: 1})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if report.Step.Status != contracts.BuildStepStatusFailed {
+		t.Fatalf("expected step status failed, got %q", report.Step.Status)
+	}
+	if report.Result.ExitCode != -1 {
+		t.Fatalf("expected timeout exit code -1, got %d", report.Result.ExitCode)
+	}
+	if !strings.Contains(report.Result.Stderr, "timed out") {
+		t.Fatalf("expected timeout reason, got %q", report.Result.Stderr)
+	}
+	if boundary.failCalls != 1 {
+		t.Fatalf("expected fail build to be called once, got %d", boundary.failCalls)
 	}
 }

@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -68,8 +69,34 @@ func TestLocalExecutor_Execute_Timeout(t *testing.T) {
 	if result.Status != CommandStatusFailed {
 		t.Fatalf("expected status %q, got %q", CommandStatusFailed, result.Status)
 	}
-	if result.Stderr != "command timed out" {
-		t.Fatalf("expected timeout stderr, got %q", result.Stderr)
+	if !strings.Contains(result.Stderr, "step execution timed out after") {
+		t.Fatalf("expected timeout reason in stderr, got %q", result.Stderr)
+	}
+	if !strings.Contains(result.Stderr, "100ms") {
+		t.Fatalf("expected timeout duration in stderr, got %q", result.Stderr)
+	}
+}
+
+func TestLocalExecutor_Execute_ContextDeadlineExceeded(t *testing.T) {
+	executor := NewLocalExecutor()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	result, err := executor.Execute(ctx, CommandRequest{
+		Command: "sh",
+		Args:    []string{"-c", "sleep 2"},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.Status != CommandStatusFailed {
+		t.Fatalf("expected status %q, got %q", CommandStatusFailed, result.Status)
+	}
+	if result.ExitCode != -1 {
+		t.Fatalf("expected timeout exit code -1, got %d", result.ExitCode)
+	}
+	if !strings.Contains(result.Stderr, "step execution timed out") {
+		t.Fatalf("expected timeout reason in stderr, got %q", result.Stderr)
 	}
 }
 
