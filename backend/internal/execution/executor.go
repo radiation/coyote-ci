@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -100,7 +102,12 @@ func (e *LocalExecutor) Execute(ctx context.Context, request CommandRequest) (Co
 	if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
 		result.ExitCode = -1
 		result.Status = CommandStatusFailed
-		result.Stderr = "command timed out"
+		reason := timeoutFailureReason(request.Timeout)
+		if strings.TrimSpace(result.Stderr) == "" {
+			result.Stderr = reason
+		} else {
+			result.Stderr = strings.TrimRight(result.Stderr, "\n") + "\n" + reason
+		}
 		return result, nil
 	}
 
@@ -114,6 +121,14 @@ func (e *LocalExecutor) Execute(ctx context.Context, request CommandRequest) (Co
 	result.Status = CommandStatusError
 	result.Error = err.Error()
 	return result, err
+}
+
+func timeoutFailureReason(timeout time.Duration) string {
+	if timeout > 0 {
+		return fmt.Sprintf("step execution timed out after %s", timeout)
+	}
+
+	return "step execution timed out"
 }
 
 func mergeEnvironment(extra map[string]string) []string {
