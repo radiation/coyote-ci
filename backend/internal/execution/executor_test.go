@@ -91,7 +91,7 @@ func TestLocalExecutor_Execute_CommandValidationError(t *testing.T) {
 	}
 }
 
-func TestLocalExecutor_Execute_RuntimeErrorHasResultError(t *testing.T) {
+func TestLocalExecutor_Execute_CommandNotFound_ReturnsExecutionError(t *testing.T) {
 	executor := NewLocalExecutor()
 
 	result, err := executor.Execute(context.Background(), CommandRequest{
@@ -105,6 +105,9 @@ func TestLocalExecutor_Execute_RuntimeErrorHasResultError(t *testing.T) {
 	}
 	if result.Error == "" {
 		t.Fatal("expected result error message to be set")
+	}
+	if result.Error != err.Error() {
+		t.Fatalf("expected result error %q to match returned error %q", result.Error, err.Error())
 	}
 	if result.StartedAt.IsZero() || result.CompletedAt.IsZero() {
 		t.Fatal("expected started/completed timestamps on runtime error")

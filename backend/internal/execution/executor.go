@@ -44,6 +44,8 @@ type Executor interface {
 
 type LocalExecutor struct{}
 
+var _ Executor = (*LocalExecutor)(nil)
+
 func NewLocalExecutor() *LocalExecutor {
 	return &LocalExecutor{}
 }
