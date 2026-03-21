@@ -11,6 +11,8 @@ import (
 )
 
 type CommandRequest struct {
+	BuildID    string
+	StepName   string
 	Command    string
 	Args       []string
 	Env        map[string]string
@@ -18,12 +20,22 @@ type CommandRequest struct {
 	Timeout    time.Duration
 }
 
+type CommandStatus string
+
+const (
+	CommandStatusSuccess CommandStatus = "success"
+	CommandStatusFailed  CommandStatus = "failed"
+	CommandStatusError   CommandStatus = "error"
+)
+
 type CommandResult struct {
-	ExitCode   int
-	Stdout     string
-	Stderr     string
-	StartedAt  time.Time
-	FinishedAt time.Time
+	Status      CommandStatus
+	ExitCode    int
+	Stdout      string
+	Stderr      string
+	Error       string
+	StartedAt   time.Time
+	CompletedAt time.Time
 }
 
 type Executor interface {
@@ -38,7 +50,14 @@ func NewLocalExecutor() *LocalExecutor {
 
 func (e *LocalExecutor) Execute(ctx context.Context, request CommandRequest) (CommandResult, error) {
 	if request.Command == "" {
-		return CommandResult{}, errors.New("command is required")
+		err := errors.New("command is required")
+		now := time.Now().UTC()
+		return CommandResult{
+			Status:      CommandStatusError,
+			Error:       err.Error(),
+			StartedAt:   now,
+			CompletedAt: now,
+		}, err
 	}
 
 	execCtx := ctx
@@ -61,22 +80,24 @@ func (e *LocalExecutor) Execute(ctx context.Context, request CommandRequest) (Co
 
 	startedAt := time.Now().UTC()
 	err := cmd.Run()
-	finishedAt := time.Now().UTC()
+	completedAt := time.Now().UTC()
 
 	result := CommandResult{
-		ExitCode:   0,
-		Stdout:     stdout.String(),
-		Stderr:     stderr.String(),
-		StartedAt:  startedAt,
-		FinishedAt: finishedAt,
+		ExitCode:    0,
+		Stdout:      stdout.String(),
+		Stderr:      stderr.String(),
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
 	}
 
 	if err == nil {
+		result.Status = CommandStatusSuccess
 		return result, nil
 	}
 
 	if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
 		result.ExitCode = -1
+		result.Status = CommandStatusFailed
 		result.Stderr = "command timed out"
 		return result, nil
 	}
@@ -84,10 +105,13 @@ func (e *LocalExecutor) Execute(ctx context.Context, request CommandRequest) (Co
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		result.ExitCode = exitCode(exitErr)
+		result.Status = CommandStatusFailed
 		return result, nil
 	}
 
-	return CommandResult{}, err
+	result.Status = CommandStatusError
+	result.Error = err.Error()
+	return result, err
 }
 
 func mergeEnvironment(extra map[string]string) []string {
