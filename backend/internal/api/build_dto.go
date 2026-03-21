@@ -57,6 +57,7 @@ type BuildStepsResponse struct {
 }
 
 type BuildLogResponse struct {
+	StepName  string `json:"step_name"`
 	Timestamp string `json:"timestamp"`
 	Message   string `json:"message"`
 }

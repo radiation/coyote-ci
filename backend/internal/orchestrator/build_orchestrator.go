@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -78,7 +79,12 @@ func (o *BuildOrchestrator) GetBuildLogs(ctx context.Context, id string) ([]cont
 		return nil, err
 	}
 
-	return []contracts.BuildLogLine{}, nil
+	reader, ok := o.logSink.(logs.LogReader)
+	if !ok {
+		return []contracts.BuildLogLine{}, nil
+	}
+
+	return reader.GetBuildLogs(ctx, id)
 }
 
 func (o *BuildOrchestrator) QueueBuild(ctx context.Context, id string) (domain.Build, error) {
@@ -107,19 +113,35 @@ func (o *BuildOrchestrator) RunStep(ctx context.Context, request contracts.RunSt
 		return contracts.RunStepResult{}, err
 	}
 
-	if result.Stdout != "" {
-		if err := o.logSink.WriteStepLog(ctx, request.BuildID, request.StepName, strings.TrimRight(result.Stdout, "\n")); err != nil {
-			return contracts.RunStepResult{}, err
-		}
+	if err := writeOutputLogs(ctx, o.logSink, request.BuildID, request.StepName, result.Stdout); err != nil {
+		return contracts.RunStepResult{}, err
 	}
-
-	if result.Stderr != "" {
-		if err := o.logSink.WriteStepLog(ctx, request.BuildID, request.StepName, strings.TrimRight(result.Stderr, "\n")); err != nil {
-			return contracts.RunStepResult{}, err
-		}
+	if err := writeOutputLogs(ctx, o.logSink, request.BuildID, request.StepName, result.Stderr); err != nil {
+		return contracts.RunStepResult{}, err
 	}
 
 	return result, nil
+}
+
+func writeOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, stepName string, output string) error {
+	for _, line := range splitLogLines(output) {
+		if err := sink.WriteStepLog(ctx, buildID, stepName, line); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+var lineBreakSplitter = regexp.MustCompile(`\r?\n`)
+
+func splitLogLines(output string) []string {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return nil
+	}
+
+	return lineBreakSplitter.Split(trimmed, -1)
 }
 
 func (o *BuildOrchestrator) transitionBuildStatus(ctx context.Context, id string, toStatus domain.BuildStatus) (domain.Build, error) {

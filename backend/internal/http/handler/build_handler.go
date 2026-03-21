@@ -172,6 +172,7 @@ func (h *BuildHandler) GetBuildLogs(w http.ResponseWriter, r *http.Request) {
 	respLogs := make([]api.BuildLogResponse, 0, len(logs))
 	for _, logLine := range logs {
 		respLogs = append(respLogs, api.BuildLogResponse{
+			StepName:  logLine.StepName,
 			Timestamp: logLine.Timestamp.Format(time.RFC3339),
 			Message:   logLine.Message,
 		})
