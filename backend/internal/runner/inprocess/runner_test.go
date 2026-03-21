@@ -27,7 +27,7 @@ func (e *fakeExecutor) Execute(_ context.Context, request execution.CommandReque
 }
 
 func TestRunner_RunStep_Success(t *testing.T) {
-	exec := &fakeExecutor{result: execution.CommandResult{ExitCode: 0, Stdout: "ok", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()}}
+	exec := &fakeExecutor{result: execution.CommandResult{ExitCode: 0, Stdout: "ok", StartedAt: time.Now().UTC(), CompletedAt: time.Now().UTC()}}
 	r := New(exec)
 
 	res, err := r.RunStep(context.Background(), contracts.RunStepRequest{Command: "echo", Args: []string{"ok"}, TimeoutSeconds: 5})

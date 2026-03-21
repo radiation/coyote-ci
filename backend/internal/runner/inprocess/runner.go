@@ -48,6 +48,6 @@ func (r *Runner) RunStep(ctx context.Context, request contracts.RunStepRequest) 
 		Stdout:     execResult.Stdout,
 		Stderr:     execResult.Stderr,
 		StartedAt:  execResult.StartedAt,
-		FinishedAt: execResult.FinishedAt,
+		FinishedAt: execResult.CompletedAt,
 	}, nil
 }
