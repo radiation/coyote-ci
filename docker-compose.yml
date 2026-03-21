@@ -35,6 +35,22 @@ services:
       DB_SSLMODE: disable
     ports:
       - "8080:8080"
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: coyote-ci-worker
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: coyote
+      DB_PASSWORD: coyote
+      DB_NAME: coyote_ci
+      DB_SSLMODE: disable
+    entrypoint: ["/app/worker"]
 
 volumes:
   postgres_data:
