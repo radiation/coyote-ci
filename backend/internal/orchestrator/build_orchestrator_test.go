@@ -32,6 +32,18 @@ func (s *fakeBuildStore) Create(_ context.Context, build domain.Build) (domain.B
 	return build, nil
 }
 
+func (s *fakeBuildStore) CreateQueuedBuild(_ context.Context, build domain.Build, steps []domain.BuildStep) (domain.Build, error) {
+	if s.createErr != nil {
+		return domain.Build{}, s.createErr
+	}
+
+	build.Status = domain.BuildStatusQueued
+	s.build = build
+	s.steps = append([]domain.BuildStep(nil), steps...)
+
+	return build, nil
+}
+
 func (s *fakeBuildStore) List(_ context.Context) ([]domain.Build, error) {
 	if s.build.ID == "" {
 		return []domain.Build{}, nil

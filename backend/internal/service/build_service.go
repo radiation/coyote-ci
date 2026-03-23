@@ -35,12 +35,27 @@ func NewBuildServiceWithExecution(buildStore store.BuildStore, stepRunner runner
 
 type CreateBuildInput struct {
 	ProjectID string
+	Steps     []CreateBuildStepInput
+}
+
+type CreateBuildStepInput struct {
+	Name string
 }
 
 func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) (domain.Build, error) {
 	return s.orchestrator.CreateBuild(ctx, orchestrator.CreateBuildInput{
 		ProjectID: input.ProjectID,
+		Steps:     toOrchestratorStepInputs(input.Steps),
 	})
+}
+
+func toOrchestratorStepInputs(steps []CreateBuildStepInput) []orchestrator.CreateBuildStepInput {
+	out := make([]orchestrator.CreateBuildStepInput, 0, len(steps))
+	for _, step := range steps {
+		out = append(out, orchestrator.CreateBuildStepInput{Name: step.Name})
+	}
+
+	return out
 }
 
 func (s *BuildService) GetBuild(ctx context.Context, id string) (domain.Build, error) {

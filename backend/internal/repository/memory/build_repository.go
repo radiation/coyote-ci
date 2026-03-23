@@ -37,6 +37,42 @@ func (r *BuildRepository) Create(_ context.Context, build domain.Build) (domain.
 	return build, nil
 }
 
+func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Build, steps []domain.BuildStep) (domain.Build, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if build.ID == "" {
+		build.ID = uuid.NewString()
+	}
+
+	now := time.Now().UTC()
+	build.Status = domain.BuildStatusQueued
+	build.CurrentStepIndex = 0
+	build.ErrorMessage = nil
+	if build.QueuedAt == nil {
+		build.QueuedAt = &now
+	}
+
+	r.builds[build.ID] = build
+
+	cloned := make([]domain.BuildStep, 0, len(steps))
+	for _, step := range steps {
+		if step.ID == "" {
+			step.ID = uuid.NewString()
+		}
+		step.BuildID = build.ID
+		cloned = append(cloned, step)
+	}
+
+	sort.Slice(cloned, func(i, j int) bool {
+		return cloned[i].StepIndex < cloned[j].StepIndex
+	})
+
+	r.buildSteps[build.ID] = cloned
+
+	return build, nil
+}
+
 func (r *BuildRepository) List(_ context.Context) ([]domain.Build, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

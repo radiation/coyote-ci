@@ -44,6 +44,72 @@ func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domai
 	return build, nil
 }
 
+func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Build, steps []domain.BuildStep) (domain.Build, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	const createQuery = `
+		INSERT INTO builds (id, project_id, status, created_at, queued_at, current_step_index, error_message)
+		VALUES ($1, $2, 'queued', $3, COALESCE($4, NOW()), 0, NULL)
+		RETURNING id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message
+	`
+
+	build, err = scanBuild(tx.QueryRowContext(ctx, createQuery, build.ID, build.ProjectID, build.CreatedAt, build.QueuedAt))
+	if err != nil {
+		return domain.Build{}, err
+	}
+
+	if len(steps) > 0 {
+		const insertStepQuery = `
+			INSERT INTO build_steps (
+				id,
+				build_id,
+				step_index,
+				name,
+				status,
+				worker_id,
+				started_at,
+				finished_at,
+				exit_code,
+				error_message
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`
+
+		for _, step := range steps {
+			if _, err = tx.ExecContext(
+				ctx,
+				insertStepQuery,
+				step.ID,
+				build.ID,
+				step.StepIndex,
+				step.Name,
+				string(step.Status),
+				step.WorkerID,
+				step.StartedAt,
+				step.FinishedAt,
+				step.ExitCode,
+				step.ErrorMessage,
+			); err != nil {
+				return domain.Build{}, err
+			}
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return domain.Build{}, err
+	}
+
+	return build, nil
+}
+
 func (r *BuildRepository) List(ctx context.Context) (builds []domain.Build, err error) {
 	const query = `
 		SELECT id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message

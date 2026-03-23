@@ -303,3 +303,33 @@ func TestBuildRepository_ClaimStepIfPending(t *testing.T) {
 		t.Fatal("expected second claim to fail for non-pending step")
 	}
 }
+
+func TestBuildRepository_CreateQueuedBuild(t *testing.T) {
+	repo := NewBuildRepository()
+	build, err := repo.CreateQueuedBuild(context.Background(), domain.Build{
+		ID:        "build-queued",
+		ProjectID: "project-1",
+		Status:    domain.BuildStatusPending,
+		CreatedAt: time.Now().UTC(),
+	}, []domain.BuildStep{
+		{ID: "step-1", StepIndex: 0, Name: "checkout", Status: domain.BuildStepStatusPending},
+		{ID: "step-2", StepIndex: 1, Name: "test", Status: domain.BuildStepStatusPending},
+	})
+	if err != nil {
+		t.Fatalf("create queued build failed: %v", err)
+	}
+	if build.Status != domain.BuildStatusQueued {
+		t.Fatalf("expected queued status, got %q", build.Status)
+	}
+
+	steps, err := repo.GetStepsByBuildID(context.Background(), build.ID)
+	if err != nil {
+		t.Fatalf("get steps failed: %v", err)
+	}
+	if len(steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(steps))
+	}
+	if steps[0].Name != "checkout" || steps[1].Name != "test" {
+		t.Fatalf("unexpected step ordering: %+v", steps)
+	}
+}

@@ -38,6 +38,25 @@ func (r *fakeRepo) Create(_ context.Context, build domain.Build) (domain.Build, 
 	return build, nil
 }
 
+func (r *fakeRepo) CreateQueuedBuild(_ context.Context, build domain.Build, steps []domain.BuildStep) (domain.Build, error) {
+	if r.createErr != nil {
+		return domain.Build{}, r.createErr
+	}
+	if r.builds == nil {
+		r.builds = map[string]domain.Build{}
+	}
+	if r.steps == nil {
+		r.steps = map[string][]domain.BuildStep{}
+	}
+
+	build.Status = domain.BuildStatusQueued
+	r.builds[build.ID] = build
+	r.steps[build.ID] = append([]domain.BuildStep(nil), steps...)
+	r.build = build
+
+	return build, nil
+}
+
 func (r *fakeRepo) List(_ context.Context) ([]domain.Build, error) {
 	builds := make([]domain.Build, 0, len(r.builds))
 	for _, build := range r.builds {
@@ -211,6 +230,7 @@ func TestBuildHandler_CreateBuild(t *testing.T) {
 		{name: "missing project id", body: `{"project_id":""}`, repo: &fakeRepo{}, statusCode: http.StatusBadRequest, errMsg: service.ErrProjectIDRequired.Error()},
 		{name: "repository error", body: `{"project_id":"project-1"}`, repo: &fakeRepo{createErr: errors.New("create failed")}, statusCode: http.StatusInternalServerError, errMsg: "internal server error"},
 		{name: "success", body: `{"project_id":"project-1"}`, repo: &fakeRepo{}, statusCode: http.StatusCreated},
+		{name: "success with steps auto queues", body: `{"project_id":"project-1","steps":[{"name":"checkout"}]}`, repo: &fakeRepo{}, statusCode: http.StatusCreated},
 	}
 
 	for _, tc := range tests {
@@ -239,8 +259,12 @@ func TestBuildHandler_CreateBuild(t *testing.T) {
 			if data["project_id"] != "project-1" {
 				t.Fatalf("expected project_id project-1, got %v", data["project_id"])
 			}
-			if data["status"] != string(domain.BuildStatusPending) {
-				t.Fatalf("expected status pending, got %v", data["status"])
+			expectedStatus := string(domain.BuildStatusPending)
+			if tc.name == "success with steps auto queues" {
+				expectedStatus = string(domain.BuildStatusQueued)
+			}
+			if data["status"] != expectedStatus {
+				t.Fatalf("expected status %s, got %v", expectedStatus, data["status"])
 			}
 			createdAt, ok := data["created_at"].(string)
 			if !ok {

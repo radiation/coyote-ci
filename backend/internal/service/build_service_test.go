@@ -30,6 +30,18 @@ func (r *fakeBuildRepository) Create(_ context.Context, build domain.Build) (dom
 	return build, nil
 }
 
+func (r *fakeBuildRepository) CreateQueuedBuild(_ context.Context, build domain.Build, steps []domain.BuildStep) (domain.Build, error) {
+	if r.createErr != nil {
+		return domain.Build{}, r.createErr
+	}
+
+	r.steps = append([]domain.BuildStep(nil), steps...)
+	build.Status = domain.BuildStatusQueued
+	r.build = build
+
+	return build, nil
+}
+
 func (r *fakeBuildRepository) List(_ context.Context) ([]domain.Build, error) {
 	if r.build.ID == "" {
 		return []domain.Build{}, nil
@@ -203,6 +215,32 @@ func TestBuildService_CreateBuild(t *testing.T) {
 				t.Fatal("expected created_at to be UTC")
 			}
 		})
+	}
+}
+
+func TestBuildService_CreateBuild_WithStepsAutoQueues(t *testing.T) {
+	repo := &fakeBuildRepository{}
+	svc := NewBuildService(repo)
+
+	build, err := svc.CreateBuild(context.Background(), CreateBuildInput{
+		ProjectID: "project-1",
+		Steps: []CreateBuildStepInput{
+			{Name: "checkout"},
+			{Name: "test"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if build.Status != domain.BuildStatusQueued {
+		t.Fatalf("expected queued status, got %q", build.Status)
+	}
+	if len(repo.steps) != 2 {
+		t.Fatalf("expected 2 persisted steps, got %d", len(repo.steps))
+	}
+	if repo.steps[0].StepIndex != 0 || repo.steps[0].Name != "checkout" {
+		t.Fatalf("expected first step checkout@0, got %s@%d", repo.steps[0].Name, repo.steps[0].StepIndex)
 	}
 }
 

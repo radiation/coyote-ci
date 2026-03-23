@@ -349,3 +349,42 @@ func TestBuildRepository_ClaimStepIfPending(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildRepository_CreateQueuedBuild(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewBuildRepository(db)
+	now := time.Now().UTC()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("INSERT INTO builds").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "project_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "error_message"}).
+			AddRow("build-1", "project-1", "queued", now, now, nil, nil, 0, nil),
+	)
+	mock.ExpectExec("INSERT INTO build_steps").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO build_steps").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	build, err := repo.CreateQueuedBuild(context.Background(), domain.Build{
+		ID:        "build-1",
+		ProjectID: "project-1",
+		Status:    domain.BuildStatusPending,
+		CreatedAt: now,
+	}, []domain.BuildStep{
+		{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "checkout", Status: domain.BuildStepStatusPending},
+		{ID: "step-2", BuildID: "build-1", StepIndex: 1, Name: "test", Status: domain.BuildStepStatusPending},
+	})
+	if err != nil {
+		t.Fatalf("create queued build failed: %v", err)
+	}
+	if build.Status != domain.BuildStatusQueued {
+		t.Fatalf("expected queued status, got %q", build.Status)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}

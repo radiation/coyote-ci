@@ -46,6 +46,7 @@ func (h *BuildHandler) CreateBuild(w http.ResponseWriter, r *http.Request) {
 
 	build, err := h.buildService.CreateBuild(r.Context(), service.CreateBuildInput{
 		ProjectID: req.ProjectID,
+		Steps:     toCreateBuildStepInputs(req.Steps),
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrProjectIDRequired) {
@@ -58,6 +59,15 @@ func (h *BuildHandler) CreateBuild(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeDataJSON(w, http.StatusCreated, toBuildResponse(build))
+}
+
+func toCreateBuildStepInputs(steps []api.CreateBuildStepInput) []service.CreateBuildStepInput {
+	out := make([]service.CreateBuildStepInput, 0, len(steps))
+	for _, step := range steps {
+		out = append(out, service.CreateBuildStepInput{Name: step.Name})
+	}
+
+	return out
 }
 
 // ListBuilds godoc

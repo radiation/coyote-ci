@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +42,11 @@ func NewBuildOrchestrator(buildStore store.BuildStore, stepRunner runner.Runner,
 
 type CreateBuildInput struct {
 	ProjectID string
+	Steps     []CreateBuildStepInput
+}
+
+type CreateBuildStepInput struct {
+	Name string
 }
 
 func (o *BuildOrchestrator) CreateBuild(ctx context.Context, input CreateBuildInput) (domain.Build, error) {
@@ -54,6 +60,26 @@ func (o *BuildOrchestrator) CreateBuild(ctx context.Context, input CreateBuildIn
 		Status:           domain.BuildStatusPending,
 		CreatedAt:        time.Now().UTC(),
 		CurrentStepIndex: 0,
+	}
+
+	if len(input.Steps) > 0 {
+		steps := make([]domain.BuildStep, 0, len(input.Steps))
+		for idx, step := range input.Steps {
+			name := strings.TrimSpace(step.Name)
+			if name == "" {
+				name = "step-" + strconv.Itoa(idx+1)
+			}
+
+			steps = append(steps, domain.BuildStep{
+				ID:        uuid.NewString(),
+				BuildID:   build.ID,
+				StepIndex: idx,
+				Name:      name,
+				Status:    domain.BuildStepStatusPending,
+			})
+		}
+
+		return o.buildStore.CreateQueuedBuild(ctx, build, steps)
 	}
 
 	return o.buildStore.Create(ctx, build)
