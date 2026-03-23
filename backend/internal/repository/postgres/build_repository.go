@@ -270,7 +270,11 @@ func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string,
 			started_at = COALESCE($5, started_at),
 			finished_at = COALESCE($6, finished_at),
 			exit_code = COALESCE($7, exit_code),
-			error_message = CASE WHEN $3 = 'failed' THEN COALESCE($8, error_message) WHEN $8 IS NOT NULL THEN $8 ELSE error_message END
+			error_message = CASE
+				WHEN $3 = 'failed' THEN COALESCE($8, error_message)
+				WHEN $8 IS NOT NULL THEN $8
+				ELSE NULL
+			END
 		WHERE build_id = $1 AND step_index = $2
 		RETURNING id, build_id, step_index, name, status, worker_id, started_at, finished_at, exit_code, error_message
 	`

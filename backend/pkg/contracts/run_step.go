@@ -4,6 +4,7 @@ import "time"
 
 type RunStepRequest struct {
 	BuildID        string
+	StepIndex      int
 	StepName       string
 	Command        string
 	Args           []string
