@@ -11,7 +11,6 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
-	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	"github.com/radiation/coyote-ci/backend/internal/store"
 	"github.com/radiation/coyote-ci/backend/pkg/contracts"
@@ -151,7 +150,7 @@ func (o *BuildOrchestrator) RunStep(ctx context.Context, request contracts.RunSt
 	}
 
 	startedAt := time.Now().UTC()
-	if _, err := o.persistStepResult(ctx, request.BuildID, request.StepName, domain.BuildStepStatusRunning, nil, nil, &startedAt, nil); err != nil {
+	if _, err := o.persistStepResult(ctx, request.BuildID, request.StepIndex, domain.BuildStepStatusRunning, nil, nil, &startedAt, nil); err != nil {
 		return contracts.RunStepResult{}, err
 	}
 
@@ -159,7 +158,9 @@ func (o *BuildOrchestrator) RunStep(ctx context.Context, request contracts.RunSt
 	if err != nil {
 		finishedAt := time.Now().UTC()
 		message := err.Error()
-		_, _ = o.persistStepResult(ctx, request.BuildID, request.StepName, domain.BuildStepStatusFailed, nil, &message, nil, &finishedAt)
+		if _, persistErr := o.persistStepResult(ctx, request.BuildID, request.StepIndex, domain.BuildStepStatusFailed, nil, &message, nil, &finishedAt); persistErr != nil {
+			return contracts.RunStepResult{}, errors.Join(err, persistErr)
+		}
 		return contracts.RunStepResult{}, err
 	}
 
@@ -184,7 +185,7 @@ func (o *BuildOrchestrator) RunStep(ctx context.Context, request contracts.RunSt
 	}
 
 	exitCode := result.ExitCode
-	if _, err := o.persistStepResult(ctx, request.BuildID, request.StepName, stepStatus, &exitCode, stepError, &result.StartedAt, &result.FinishedAt); err != nil {
+	if _, err := o.persistStepResult(ctx, request.BuildID, request.StepIndex, stepStatus, &exitCode, stepError, &result.StartedAt, &result.FinishedAt); err != nil {
 		return contracts.RunStepResult{}, err
 	}
 
@@ -250,53 +251,25 @@ func defaultBuildSteps(buildID string) []domain.BuildStep {
 	}
 }
 
-func (o *BuildOrchestrator) persistStepResult(ctx context.Context, buildID string, stepName string, stepStatus domain.BuildStepStatus, exitCode *int, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
-	build, err := o.buildStore.GetByID(ctx, buildID)
+func (o *BuildOrchestrator) persistStepResult(ctx context.Context, buildID string, stepIndex int, stepStatus domain.BuildStepStatus, exitCode *int, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
+	persistedStep, err := o.buildStore.UpdateStepByIndex(ctx, buildID, stepIndex, stepStatus, nil, exitCode, errorMessage, startedAt, finishedAt)
 	if err != nil {
 		return domain.BuildStep{}, err
 	}
 
-	steps, err := o.buildStore.GetStepsByBuildID(ctx, buildID)
-	if err != nil {
-		return domain.BuildStep{}, err
-	}
-
-	for _, step := range steps {
-		if step.Name != stepName {
-			continue
-		}
-
-		persistedStep, err := o.buildStore.UpdateStepByIndex(ctx, buildID, step.StepIndex, stepStatus, nil, exitCode, errorMessage, startedAt, finishedAt)
+	if stepStatus == domain.BuildStepStatusSuccess {
+		build, err := o.buildStore.GetByID(ctx, buildID)
 		if err != nil {
 			return domain.BuildStep{}, err
 		}
 
-		if stepStatus == domain.BuildStepStatusSuccess && step.StepIndex == build.CurrentStepIndex {
+		if stepIndex == build.CurrentStepIndex {
 			_, err = o.buildStore.UpdateCurrentStepIndex(ctx, buildID, build.CurrentStepIndex+1)
 			if err != nil {
 				return domain.BuildStep{}, err
 			}
 		}
-
-		return persistedStep, nil
 	}
 
-	if build.CurrentStepIndex >= 0 && build.CurrentStepIndex < len(steps) {
-		step := steps[build.CurrentStepIndex]
-		persistedStep, err := o.buildStore.UpdateStepByIndex(ctx, buildID, step.StepIndex, stepStatus, nil, exitCode, errorMessage, startedAt, finishedAt)
-		if err != nil {
-			return domain.BuildStep{}, err
-		}
-
-		if stepStatus == domain.BuildStepStatusSuccess {
-			_, err = o.buildStore.UpdateCurrentStepIndex(ctx, buildID, build.CurrentStepIndex+1)
-			if err != nil {
-				return domain.BuildStep{}, err
-			}
-		}
-
-		return persistedStep, nil
-	}
-
-	return domain.BuildStep{}, repository.ErrBuildNotFound
+	return persistedStep, nil
 }

@@ -138,6 +138,7 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 
 	result, err := w.builds.RunStep(ctx, contracts.RunStepRequest{
 		BuildID:        step.BuildID,
+		StepIndex:      step.StepIndex,
 		StepName:       step.StepName,
 		Command:        step.Command,
 		Args:           step.Args,
