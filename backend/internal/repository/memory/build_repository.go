@@ -61,7 +61,7 @@ func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Buil
 			step.ID = uuid.NewString()
 		}
 		step.BuildID = build.ID
-		cloned = append(cloned, step)
+		cloned = append(cloned, cloneStep(step))
 	}
 
 	sort.Slice(cloned, func(i, j int) bool {
@@ -159,7 +159,7 @@ func (r *BuildRepository) QueueBuild(_ context.Context, id string, steps []domai
 			step.ID = uuid.NewString()
 		}
 		step.BuildID = id
-		cloned = append(cloned, step)
+		cloned = append(cloned, cloneStep(step))
 	}
 
 	sort.Slice(cloned, func(i, j int) bool {
@@ -181,7 +181,9 @@ func (r *BuildRepository) GetStepsByBuildID(_ context.Context, buildID string) (
 
 	steps := r.buildSteps[buildID]
 	out := make([]domain.BuildStep, len(steps))
-	copy(out, steps)
+	for i := range steps {
+		out[i] = cloneStep(steps[i])
+	}
 
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].StepIndex < out[j].StepIndex
@@ -215,7 +217,7 @@ func (r *BuildRepository) ClaimStepIfPending(_ context.Context, buildID string, 
 		steps[idx].StartedAt = &startedAt
 		r.buildSteps[buildID] = steps
 
-		return steps[idx], true, nil
+		return cloneStep(steps[idx]), true, nil
 	}
 
 	return domain.BuildStep{}, false, nil
@@ -255,7 +257,7 @@ func (r *BuildRepository) UpdateStepByIndex(_ context.Context, buildID string, s
 		}
 
 		r.buildSteps[buildID] = steps
-		return steps[idx], nil
+		return cloneStep(steps[idx]), nil
 	}
 
 	return domain.BuildStep{}, repository.ErrBuildNotFound
@@ -274,4 +276,19 @@ func (r *BuildRepository) UpdateCurrentStepIndex(_ context.Context, id string, c
 	r.builds[id] = build
 
 	return build, nil
+}
+
+func cloneStep(step domain.BuildStep) domain.BuildStep {
+	if step.Args != nil {
+		step.Args = append([]string(nil), step.Args...)
+	}
+	if step.Env != nil {
+		env := make(map[string]string, len(step.Env))
+		for key, value := range step.Env {
+			env[key] = value
+		}
+		step.Env = env
+	}
+
+	return step
 }

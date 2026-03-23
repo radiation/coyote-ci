@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -73,6 +74,11 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 				build_id,
 				step_index,
 				name,
+				command,
+				args,
+				env,
+				working_dir,
+				timeout_seconds,
 				status,
 				worker_id,
 				started_at,
@@ -80,10 +86,19 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 				exit_code,
 				error_message
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15)
 		`
 
 		for _, step := range steps {
+			argsJSON, marshalErr := json.Marshal(step.Args)
+			if marshalErr != nil {
+				return domain.Build{}, marshalErr
+			}
+			envJSON, marshalErr := json.Marshal(step.Env)
+			if marshalErr != nil {
+				return domain.Build{}, marshalErr
+			}
+
 			if _, err = tx.ExecContext(
 				ctx,
 				insertStepQuery,
@@ -91,6 +106,11 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 				build.ID,
 				step.StepIndex,
 				step.Name,
+				step.Command,
+				string(argsJSON),
+				string(envJSON),
+				step.WorkingDir,
+				step.TimeoutSeconds,
 				string(step.Status),
 				step.WorkerID,
 				step.StartedAt,
@@ -228,6 +248,11 @@ func (r *BuildRepository) QueueBuild(ctx context.Context, id string, steps []dom
 				build_id,
 				step_index,
 				name,
+				command,
+				args,
+				env,
+				working_dir,
+				timeout_seconds,
 				status,
 				worker_id,
 				started_at,
@@ -235,10 +260,19 @@ func (r *BuildRepository) QueueBuild(ctx context.Context, id string, steps []dom
 				exit_code,
 				error_message
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15)
 		`
 
 		for _, step := range steps {
+			argsJSON, marshalErr := json.Marshal(step.Args)
+			if marshalErr != nil {
+				return domain.Build{}, marshalErr
+			}
+			envJSON, marshalErr := json.Marshal(step.Env)
+			if marshalErr != nil {
+				return domain.Build{}, marshalErr
+			}
+
 			if _, err = tx.ExecContext(
 				ctx,
 				insertStepQuery,
@@ -246,6 +280,11 @@ func (r *BuildRepository) QueueBuild(ctx context.Context, id string, steps []dom
 				id,
 				step.StepIndex,
 				step.Name,
+				step.Command,
+				string(argsJSON),
+				string(envJSON),
+				step.WorkingDir,
+				step.TimeoutSeconds,
 				string(step.Status),
 				step.WorkerID,
 				step.StartedAt,
@@ -267,7 +306,7 @@ func (r *BuildRepository) QueueBuild(ctx context.Context, id string, steps []dom
 
 func (r *BuildRepository) GetStepsByBuildID(ctx context.Context, buildID string) (steps []domain.BuildStep, err error) {
 	const query = `
-		SELECT id, build_id, step_index, name, status, worker_id, started_at, finished_at, exit_code, error_message
+		SELECT id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, started_at, finished_at, exit_code, error_message
 		FROM build_steps
 		WHERE build_id = $1
 		ORDER BY step_index ASC
@@ -314,7 +353,7 @@ func (r *BuildRepository) ClaimStepIfPending(ctx context.Context, buildID string
 		WHERE build_id = $1
 		  AND step_index = $2
 		  AND status = 'pending'
-		RETURNING id, build_id, step_index, name, status, worker_id, started_at, finished_at, exit_code, error_message
+		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, started_at, finished_at, exit_code, error_message
 	`
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, workerID, startedAt))
@@ -342,7 +381,7 @@ func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string,
 				ELSE NULL
 			END
 		WHERE build_id = $1 AND step_index = $2
-		RETURNING id, build_id, step_index, name, status, worker_id, started_at, finished_at, exit_code, error_message
+		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, started_at, finished_at, exit_code, error_message
 	`
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, string(status), workerID, startedAt, finishedAt, exitCode, errorMessage))
@@ -426,6 +465,11 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 	var step domain.BuildStep
 	var status string
+	var command string
+	var argsRaw []byte
+	var envRaw []byte
+	var workingDir string
+	var timeoutSeconds int
 	var workerID sql.NullString
 	var startedAt sql.NullTime
 	var finishedAt sql.NullTime
@@ -437,6 +481,11 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 		&step.BuildID,
 		&step.StepIndex,
 		&step.Name,
+		&command,
+		&argsRaw,
+		&envRaw,
+		&workingDir,
+		&timeoutSeconds,
 		&status,
 		&workerID,
 		&startedAt,
@@ -448,6 +497,23 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 		return domain.BuildStep{}, err
 	}
 
+	step.Command = command
+	if len(argsRaw) > 0 {
+		if err := json.Unmarshal(argsRaw, &step.Args); err != nil {
+			return domain.BuildStep{}, err
+		}
+	} else {
+		step.Args = []string{}
+	}
+	if len(envRaw) > 0 {
+		if err := json.Unmarshal(envRaw, &step.Env); err != nil {
+			return domain.BuildStep{}, err
+		}
+	} else {
+		step.Env = map[string]string{}
+	}
+	step.WorkingDir = workingDir
+	step.TimeoutSeconds = timeoutSeconds
 	step.Status = domain.BuildStepStatus(status)
 	if workerID.Valid {
 		worker := workerID.String

@@ -64,7 +64,14 @@ func (h *BuildHandler) CreateBuild(w http.ResponseWriter, r *http.Request) {
 func toCreateBuildStepInputs(steps []api.CreateBuildStepInput) []service.CreateBuildStepInput {
 	out := make([]service.CreateBuildStepInput, 0, len(steps))
 	for _, step := range steps {
-		out = append(out, service.CreateBuildStepInput{Name: step.Name})
+		out = append(out, service.CreateBuildStepInput{
+			Name:           step.Name,
+			Command:        step.Command,
+			Args:           step.Args,
+			Env:            step.Env,
+			WorkingDir:     step.WorkingDir,
+			TimeoutSeconds: step.TimeoutSeconds,
+		})
 	}
 
 	return out

@@ -74,10 +74,33 @@ definitions:
           $ref: '#/definitions/api.BuildStepResponse'
         type: array
     type: object
+  api.CreateBuildStepInput:
+    properties:
+      args:
+        items:
+          type: string
+        type: array
+      command:
+        type: string
+      env:
+        additionalProperties:
+          type: string
+        type: object
+      name:
+        type: string
+      timeout_seconds:
+        type: integer
+      working_dir:
+        type: string
+    type: object
   api.CreateBuildRequest:
     properties:
       project_id:
         type: string
+      steps:
+        items:
+          $ref: '#/definitions/api.CreateBuildStepInput'
+        type: array
     type: object
   api.ErrorBody:
     properties:

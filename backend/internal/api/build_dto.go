@@ -6,7 +6,12 @@ type CreateBuildRequest struct {
 }
 
 type CreateBuildStepInput struct {
-	Name string `json:"name"`
+	Name           string            `json:"name"`
+	Command        string            `json:"command,omitempty"`
+	Args           []string          `json:"args,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	WorkingDir     string            `json:"working_dir,omitempty"`
+	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
 }
 
 type ErrorBody struct {

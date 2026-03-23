@@ -46,7 +46,12 @@ type CreateBuildInput struct {
 }
 
 type CreateBuildStepInput struct {
-	Name string
+	Name           string
+	Command        string
+	Args           []string
+	Env            map[string]string
+	WorkingDir     string
+	TimeoutSeconds int
 }
 
 func (o *BuildOrchestrator) CreateBuild(ctx context.Context, input CreateBuildInput) (domain.Build, error) {
@@ -65,17 +70,23 @@ func (o *BuildOrchestrator) CreateBuild(ctx context.Context, input CreateBuildIn
 	if len(input.Steps) > 0 {
 		steps := make([]domain.BuildStep, 0, len(input.Steps))
 		for idx, step := range input.Steps {
-			name := strings.TrimSpace(step.Name)
+			normalized := normalizeCreateStepInput(step)
+			name := strings.TrimSpace(normalized.Name)
 			if name == "" {
 				name = "step-" + strconv.Itoa(idx+1)
 			}
 
 			steps = append(steps, domain.BuildStep{
-				ID:        uuid.NewString(),
-				BuildID:   build.ID,
-				StepIndex: idx,
-				Name:      name,
-				Status:    domain.BuildStepStatusPending,
+				ID:             uuid.NewString(),
+				BuildID:        build.ID,
+				StepIndex:      idx,
+				Name:           name,
+				Command:        normalized.Command,
+				Args:           normalized.Args,
+				Env:            normalized.Env,
+				WorkingDir:     normalized.WorkingDir,
+				TimeoutSeconds: normalized.TimeoutSeconds,
+				Status:         domain.BuildStepStatusPending,
 			})
 		}
 
@@ -102,11 +113,16 @@ func (o *BuildOrchestrator) GetBuildSteps(ctx context.Context, id string) ([]con
 	result := make([]contracts.BuildStep, 0, len(steps))
 	for _, step := range steps {
 		result = append(result, contracts.BuildStep{
-			StepIndex: step.StepIndex,
-			Name:      step.Name,
-			Status:    contracts.BuildStepStatus(step.Status),
-			StartedAt: step.StartedAt,
-			EndedAt:   step.FinishedAt,
+			StepIndex:      step.StepIndex,
+			Name:           step.Name,
+			Command:        step.Command,
+			Args:           step.Args,
+			Env:            step.Env,
+			WorkingDir:     step.WorkingDir,
+			TimeoutSeconds: step.TimeoutSeconds,
+			Status:         contracts.BuildStepStatus(step.Status),
+			StartedAt:      step.StartedAt,
+			EndedAt:        step.FinishedAt,
 		})
 	}
 
@@ -136,11 +152,16 @@ func (o *BuildOrchestrator) ClaimStepIfPending(ctx context.Context, buildID stri
 	}
 
 	return contracts.BuildStep{
-		StepIndex: step.StepIndex,
-		Name:      step.Name,
-		Status:    contracts.BuildStepStatus(step.Status),
-		StartedAt: step.StartedAt,
-		EndedAt:   step.FinishedAt,
+		StepIndex:      step.StepIndex,
+		Name:           step.Name,
+		Command:        step.Command,
+		Args:           step.Args,
+		Env:            step.Env,
+		WorkingDir:     step.WorkingDir,
+		TimeoutSeconds: step.TimeoutSeconds,
+		Status:         contracts.BuildStepStatus(step.Status),
+		StartedAt:      step.StartedAt,
+		EndedAt:        step.FinishedAt,
 	}, true, nil
 }
 
@@ -268,13 +289,40 @@ func isValidBuildTransition(fromStatus, toStatus domain.BuildStatus) bool {
 func defaultBuildSteps(buildID string) []domain.BuildStep {
 	return []domain.BuildStep{
 		{
-			ID:        uuid.NewString(),
-			BuildID:   buildID,
-			StepIndex: 0,
-			Name:      "default",
-			Status:    domain.BuildStepStatusPending,
+			ID:             uuid.NewString(),
+			BuildID:        buildID,
+			StepIndex:      0,
+			Name:           "default",
+			Command:        "sh",
+			Args:           []string{"-c", "echo coyote-ci worker default step"},
+			Env:            map[string]string{},
+			WorkingDir:     ".",
+			TimeoutSeconds: 0,
+			Status:         domain.BuildStepStatusPending,
 		},
 	}
+}
+
+func normalizeCreateStepInput(in CreateBuildStepInput) CreateBuildStepInput {
+	out := in
+
+	if strings.TrimSpace(out.Command) == "" {
+		out.Command = "sh"
+	}
+	if len(out.Args) == 0 {
+		out.Args = []string{"-c", "echo coyote-ci worker default step"}
+	}
+	if out.Env == nil {
+		out.Env = map[string]string{}
+	}
+	if strings.TrimSpace(out.WorkingDir) == "" {
+		out.WorkingDir = "."
+	}
+	if out.TimeoutSeconds < 0 {
+		out.TimeoutSeconds = 0
+	}
+
+	return out
 }
 
 func (o *BuildOrchestrator) persistStepResult(ctx context.Context, buildID string, stepIndex int, stepStatus domain.BuildStepStatus, exitCode *int, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {

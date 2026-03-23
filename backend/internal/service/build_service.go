@@ -39,7 +39,12 @@ type CreateBuildInput struct {
 }
 
 type CreateBuildStepInput struct {
-	Name string
+	Name           string
+	Command        string
+	Args           []string
+	Env            map[string]string
+	WorkingDir     string
+	TimeoutSeconds int
 }
 
 func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) (domain.Build, error) {
@@ -52,7 +57,14 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 func toOrchestratorStepInputs(steps []CreateBuildStepInput) []orchestrator.CreateBuildStepInput {
 	out := make([]orchestrator.CreateBuildStepInput, 0, len(steps))
 	for _, step := range steps {
-		out = append(out, orchestrator.CreateBuildStepInput{Name: step.Name})
+		out = append(out, orchestrator.CreateBuildStepInput{
+			Name:           step.Name,
+			Command:        step.Command,
+			Args:           step.Args,
+			Env:            step.Env,
+			WorkingDir:     step.WorkingDir,
+			TimeoutSeconds: step.TimeoutSeconds,
+		})
 	}
 
 	return out

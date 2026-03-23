@@ -225,7 +225,7 @@ func TestBuildService_CreateBuild_WithStepsAutoQueues(t *testing.T) {
 	build, err := svc.CreateBuild(context.Background(), CreateBuildInput{
 		ProjectID: "project-1",
 		Steps: []CreateBuildStepInput{
-			{Name: "checkout"},
+			{Name: "checkout", Command: "git", Args: []string{"checkout", "."}, Env: map[string]string{"A": "1"}, WorkingDir: "/workspace", TimeoutSeconds: 120},
 			{Name: "test"},
 		},
 	})
@@ -241,6 +241,18 @@ func TestBuildService_CreateBuild_WithStepsAutoQueues(t *testing.T) {
 	}
 	if repo.steps[0].StepIndex != 0 || repo.steps[0].Name != "checkout" {
 		t.Fatalf("expected first step checkout@0, got %s@%d", repo.steps[0].Name, repo.steps[0].StepIndex)
+	}
+	if repo.steps[0].Command != "git" {
+		t.Fatalf("expected first step command git, got %q", repo.steps[0].Command)
+	}
+	if len(repo.steps[0].Args) != 2 || repo.steps[0].Args[0] != "checkout" {
+		t.Fatalf("expected first step args to be persisted, got %+v", repo.steps[0].Args)
+	}
+	if repo.steps[0].WorkingDir != "/workspace" {
+		t.Fatalf("expected first step working dir /workspace, got %q", repo.steps[0].WorkingDir)
+	}
+	if repo.steps[0].TimeoutSeconds != 120 {
+		t.Fatalf("expected first step timeout 120, got %d", repo.steps[0].TimeoutSeconds)
 	}
 }
 

@@ -302,6 +302,41 @@ func TestWorkerService_ClaimRunnableStep_UsesPersistedStepIndex(t *testing.T) {
 	}
 }
 
+func TestWorkerService_ClaimRunnableStep_UsesPersistedExecutionConfig(t *testing.T) {
+	boundary := &fakeBuildExecutionBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
+		stepsByBuildID: map[string][]contracts.BuildStep{
+			"build-1": {
+				{StepIndex: 0, Name: "lint", Command: "go", Args: []string{"test", "./..."}, Env: map[string]string{"CGO_ENABLED": "0"}, WorkingDir: "/workspace", TimeoutSeconds: 300, Status: contracts.BuildStepStatusPending},
+			},
+		},
+	}
+
+	worker := NewWorkerService(boundary)
+	runnable, found, err := worker.ClaimRunnableStep(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !found {
+		t.Fatal("expected runnable step to be found")
+	}
+	if runnable.Command != "go" {
+		t.Fatalf("expected command go, got %q", runnable.Command)
+	}
+	if len(runnable.Args) != 2 || runnable.Args[0] != "test" {
+		t.Fatalf("expected args [test ./...], got %+v", runnable.Args)
+	}
+	if runnable.Env["CGO_ENABLED"] != "0" {
+		t.Fatalf("expected env CGO_ENABLED=0, got %+v", runnable.Env)
+	}
+	if runnable.WorkingDir != "/workspace" {
+		t.Fatalf("expected working dir /workspace, got %q", runnable.WorkingDir)
+	}
+	if runnable.TimeoutSeconds != 300 {
+		t.Fatalf("expected timeout 300, got %d", runnable.TimeoutSeconds)
+	}
+}
+
 func TestWorkerService_ClaimRunnableStep_OnlyFirstSequentialPendingIsRunnable(t *testing.T) {
 	boundary := &fakeBuildExecutionBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},

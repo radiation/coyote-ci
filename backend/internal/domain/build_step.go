@@ -12,14 +12,19 @@ const (
 )
 
 type BuildStep struct {
-	ID           string
-	BuildID      string
-	StepIndex    int
-	Name         string
-	Status       BuildStepStatus
-	WorkerID     *string
-	StartedAt    *time.Time
-	FinishedAt   *time.Time
-	ExitCode     *int
-	ErrorMessage *string
+	ID             string
+	BuildID        string
+	StepIndex      int
+	Name           string
+	Command        string
+	Args           []string
+	Env            map[string]string
+	WorkingDir     string
+	TimeoutSeconds int
+	Status         BuildStepStatus
+	WorkerID       *string
+	StartedAt      *time.Time
+	FinishedAt     *time.Time
+	ExitCode       *int
+	ErrorMessage   *string
 }

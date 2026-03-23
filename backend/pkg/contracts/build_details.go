@@ -12,11 +12,16 @@ const (
 )
 
 type BuildStep struct {
-	StepIndex int
-	Name      string
-	Status    BuildStepStatus
-	StartedAt *time.Time
-	EndedAt   *time.Time
+	StepIndex      int
+	Name           string
+	Command        string
+	Args           []string
+	Env            map[string]string
+	WorkingDir     string
+	TimeoutSeconds int
+	Status         BuildStepStatus
+	StartedAt      *time.Time
+	EndedAt        *time.Time
 }
 
 type BuildLogLine struct {

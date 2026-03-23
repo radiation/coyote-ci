@@ -11,6 +11,7 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 	files := []string{
 		"../../../db/init/001_init.sql",
 		"../../../db/init/002_build_lifecycle_and_steps.sql",
+		"../../../db/init/003_build_step_execution_config.sql",
 	}
 
 	var builder strings.Builder
@@ -28,6 +29,9 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"current_step_index",
 		"CREATE TABLE IF NOT EXISTS build_steps",
 		"step_index",
+		"command",
+		"working_dir",
+		"timeout_seconds",
 		"queued_at",
 		"started_at",
 		"finished_at",

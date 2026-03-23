@@ -576,11 +576,46 @@ const docTemplate = `{
                 }
             }
         },
+        "api.CreateBuildStepInput": {
+            "type": "object",
+            "properties": {
+                "args": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "command": {
+                    "type": "string"
+                },
+                "env": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "timeout_seconds": {
+                    "type": "integer"
+                },
+                "working_dir": {
+                    "type": "string"
+                }
+            }
+        },
         "api.CreateBuildRequest": {
             "type": "object",
             "properties": {
                 "project_id": {
                     "type": "string"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.CreateBuildStepInput"
+                    }
                 }
             }
         },

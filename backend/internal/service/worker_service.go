@@ -105,12 +105,14 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 		}
 
 		return RunnableStep{
-			BuildID:    build.ID,
-			StepIndex:  claimedStep.StepIndex,
-			StepName:   claimedStep.Name,
-			Command:    "sh",
-			Args:       []string{"-c", "echo coyote-ci worker default step"},
-			WorkingDir: ".",
+			BuildID:        build.ID,
+			StepIndex:      claimedStep.StepIndex,
+			StepName:       claimedStep.Name,
+			Command:        defaultString(claimedStep.Command, "sh"),
+			Args:           defaultArgs(claimedStep.Args),
+			Env:            defaultEnv(claimedStep.Env),
+			WorkingDir:     defaultString(claimedStep.WorkingDir, "."),
+			TimeoutSeconds: maxInt(claimedStep.TimeoutSeconds, 0),
 		}, true, nil
 	}
 
@@ -137,6 +139,38 @@ func firstRunnableStep(steps []contracts.BuildStep) (contracts.BuildStep, bool) 
 	}
 
 	return contracts.BuildStep{}, false
+}
+
+func defaultString(value string, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+
+	return value
+}
+
+func defaultArgs(args []string) []string {
+	if len(args) == 0 {
+		return []string{"-c", "echo coyote-ci worker default step"}
+	}
+
+	return args
+}
+
+func defaultEnv(env map[string]string) map[string]string {
+	if env == nil {
+		return map[string]string{}
+	}
+
+	return env
+}
+
+func maxInt(value int, minimum int) int {
+	if value < minimum {
+		return minimum
+	}
+
+	return value
 }
 
 func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableStep) (StepExecutionReport, error) {
