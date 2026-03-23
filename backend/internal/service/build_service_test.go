@@ -161,7 +161,7 @@ func TestBuildService_GetBuild(t *testing.T) {
 			repo: &fakeBuildRepository{build: domain.Build{
 				ID:        "build-1",
 				ProjectID: "project-1",
-				Status:    domain.BuildStatusQueued,
+				Status:    domain.BuildStatusRunning,
 				CreatedAt: now,
 			}},
 			buildID: "build-1",
@@ -210,14 +210,8 @@ func TestBuildService_ValidTransitions(t *testing.T) {
 		expectedStatus domain.BuildStatus
 	}{
 		{
-			name:           "pending to queued",
+			name:           "pending to running",
 			initialStatus:  domain.BuildStatusPending,
-			action:         (*BuildService).QueueBuild,
-			expectedStatus: domain.BuildStatusQueued,
-		},
-		{
-			name:           "queued to running",
-			initialStatus:  domain.BuildStatusQueued,
 			action:         (*BuildService).StartBuild,
 			expectedStatus: domain.BuildStatusRunning,
 		},
@@ -282,13 +276,13 @@ func TestBuildService_InvalidTransitions(t *testing.T) {
 		action        func(*BuildService, context.Context, string) (domain.Build, error)
 	}{
 		{
-			name:          "pending to running is invalid",
+			name:          "pending to queued is invalid",
 			initialStatus: domain.BuildStatusPending,
-			action:        (*BuildService).StartBuild,
+			action:        (*BuildService).QueueBuild,
 		},
 		{
-			name:          "queued to success is invalid",
-			initialStatus: domain.BuildStatusQueued,
+			name:          "pending to success is invalid",
+			initialStatus: domain.BuildStatusPending,
 			action:        (*BuildService).CompleteBuild,
 		},
 		{
@@ -329,7 +323,7 @@ func TestBuildService_TransitionBuildStatus_NotFound(t *testing.T) {
 	repo := &fakeBuildRepository{getErr: repository.ErrBuildNotFound}
 	svc := NewBuildService(repo)
 
-	_, err := svc.QueueBuild(context.Background(), "missing-build")
+	_, err := svc.StartBuild(context.Background(), "missing-build")
 	if !errors.Is(err, repository.ErrBuildNotFound) {
 		t.Fatalf("expected ErrBuildNotFound, got %v", err)
 	}
@@ -344,7 +338,7 @@ func TestBuildService_TransitionBuildStatus_UpdateError(t *testing.T) {
 		build: domain.Build{
 			ID:        "build-1",
 			ProjectID: "project-1",
-			Status:    domain.BuildStatusQueued,
+			Status:    domain.BuildStatusPending,
 		},
 		updateErr: errors.New("update failed"),
 	}

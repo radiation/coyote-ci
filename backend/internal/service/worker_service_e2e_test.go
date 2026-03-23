@@ -26,10 +26,6 @@ func TestWorkerExecutionVerticalSlice_Success(t *testing.T) {
 		t.Fatalf("create build failed: %v", err)
 	}
 
-	if _, err = buildService.QueueBuild(ctx, build.ID); err != nil {
-		t.Fatalf("queue build failed: %v", err)
-	}
-
 	// Worker claiming is represented by taking a runnable step and executing it.
 	report, err := worker.ExecuteRunnableStep(ctx, RunnableStep{
 		BuildID:    build.ID,
@@ -89,10 +85,6 @@ func TestWorkerExecutionVerticalSlice_FailedCommand(t *testing.T) {
 	build, err := buildService.CreateBuild(ctx, CreateBuildInput{ProjectID: "project-1"})
 	if err != nil {
 		t.Fatalf("create build failed: %v", err)
-	}
-
-	if _, err = buildService.QueueBuild(ctx, build.ID); err != nil {
-		t.Fatalf("queue build failed: %v", err)
 	}
 
 	report, err := worker.ExecuteRunnableStep(ctx, RunnableStep{
@@ -156,10 +148,6 @@ func TestWorkerExecutionVerticalSlice_Timeout(t *testing.T) {
 	build, err := buildService.CreateBuild(ctx, CreateBuildInput{ProjectID: "project-1"})
 	if err != nil {
 		t.Fatalf("create build failed: %v", err)
-	}
-
-	if _, err = buildService.QueueBuild(ctx, build.ID); err != nil {
-		t.Fatalf("queue build failed: %v", err)
 	}
 
 	report, err := worker.ExecuteRunnableStep(ctx, RunnableStep{

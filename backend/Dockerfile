@@ -7,11 +7,13 @@ RUN go mod download
 
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -o worker ./cmd/worker
 
-FROM gcr.io/distroless/base-debian12
+FROM debian:bookworm-slim
 
 WORKDIR /app
 COPY --from=builder /app/server /app/server
+COPY --from=builder /app/worker /app/worker
 
 EXPOSE 8080
 

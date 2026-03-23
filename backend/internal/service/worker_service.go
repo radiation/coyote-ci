@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -9,6 +10,7 @@ import (
 )
 
 type buildExecutionBoundary interface {
+	ListBuilds(ctx context.Context) ([]domain.Build, error)
 	StartBuild(ctx context.Context, id string) (domain.Build, error)
 	CompleteBuild(ctx context.Context, id string) (domain.Build, error)
 	FailBuild(ctx context.Context, id string) (domain.Build, error)
@@ -39,7 +41,33 @@ func NewWorkerService(builds buildExecutionBoundary) *WorkerService {
 	return &WorkerService{builds: builds}
 }
 
+func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bool, error) {
+	builds, err := w.builds.ListBuilds(ctx)
+	if err != nil {
+		return RunnableStep{}, false, err
+	}
+
+	for _, build := range builds {
+		if build.Status != domain.BuildStatusPending {
+			continue
+		}
+
+		return RunnableStep{
+			BuildID:    build.ID,
+			StepName:   "default",
+			Command:    "sh",
+			Args:       []string{"-c", "echo coyote-ci worker default step"},
+			WorkingDir: ".",
+		}, true, nil
+	}
+
+	return RunnableStep{}, false, nil
+}
+
 func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableStep) (StepExecutionReport, error) {
+	log.Printf("claimed runnable work: build_id=%s step=%s", step.BuildID, step.StepName)
+	log.Printf("starting execution: build_id=%s step=%s", step.BuildID, step.StepName)
+
 	report := StepExecutionReport{
 		BuildID: step.BuildID,
 		Step: contracts.BuildStep{
@@ -49,6 +77,7 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 	}
 
 	if _, err := w.builds.StartBuild(ctx, step.BuildID); err != nil {
+		log.Printf("claiming error: build_id=%s step=%s error=%v", step.BuildID, step.StepName, err)
 		return report, err
 	}
 
@@ -71,10 +100,13 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 	report.Step.EndedAt = &completedAt
 
 	if err != nil {
+		log.Printf("execution completed: build_id=%s step=%s status=%s exit_code=%d", step.BuildID, step.StepName, contracts.RunStepStatusFailed, result.ExitCode)
 		report.Step.Status = contracts.BuildStepStatusFailed
 		_, _ = w.builds.FailBuild(ctx, step.BuildID)
 		return report, err
 	}
+
+	log.Printf("execution completed: build_id=%s step=%s status=%s exit_code=%d", step.BuildID, step.StepName, result.Status, result.ExitCode)
 
 	if result.Status == contracts.RunStepStatusSuccess {
 		report.Step.Status = contracts.BuildStepStatusSuccess

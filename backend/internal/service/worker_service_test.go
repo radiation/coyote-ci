@@ -12,6 +12,9 @@ import (
 )
 
 type fakeBuildExecutionBoundary struct {
+	listBuildsResp []domain.Build
+	listBuildsErr  error
+
 	startCalls    int
 	completeCalls int
 	failCalls     int
@@ -25,6 +28,18 @@ type fakeBuildExecutionBoundary struct {
 
 	lastBuildID string
 	lastRequest contracts.RunStepRequest
+}
+
+func (f *fakeBuildExecutionBoundary) ListBuilds(_ context.Context) ([]domain.Build, error) {
+	if f.listBuildsErr != nil {
+		return nil, f.listBuildsErr
+	}
+
+	if f.listBuildsResp == nil {
+		return []domain.Build{}, nil
+	}
+
+	return f.listBuildsResp, nil
 }
 
 func (f *fakeBuildExecutionBoundary) StartBuild(_ context.Context, id string) (domain.Build, error) {
