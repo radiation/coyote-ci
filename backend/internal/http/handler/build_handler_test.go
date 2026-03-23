@@ -20,6 +20,7 @@ import (
 type fakeRepo struct {
 	build     domain.Build
 	builds    map[string]domain.Build
+	steps     map[string][]domain.BuildStep
 	createErr error
 	getErr    error
 	updateErr error
@@ -65,7 +66,7 @@ func (r *fakeRepo) GetByID(_ context.Context, id string) (domain.Build, error) {
 	return r.build, nil
 }
 
-func (r *fakeRepo) UpdateStatus(_ context.Context, id string, status domain.BuildStatus) (domain.Build, error) {
+func (r *fakeRepo) UpdateStatus(_ context.Context, id string, status domain.BuildStatus, errorMessage *string) (domain.Build, error) {
 	if r.updateErr != nil {
 		return domain.Build{}, r.updateErr
 	}
@@ -74,6 +75,82 @@ func (r *fakeRepo) UpdateStatus(_ context.Context, id string, status domain.Buil
 		return domain.Build{}, err
 	}
 	b.Status = status
+	b.ErrorMessage = errorMessage
+	if r.builds == nil {
+		r.build = b
+	} else {
+		r.builds[id] = b
+	}
+	return b, nil
+}
+
+func (r *fakeRepo) QueueBuild(ctx context.Context, id string, steps []domain.BuildStep) (domain.Build, error) {
+	if r.steps == nil {
+		r.steps = map[string][]domain.BuildStep{}
+	}
+	r.steps[id] = append([]domain.BuildStep(nil), steps...)
+	return r.UpdateStatus(ctx, id, domain.BuildStatusQueued, nil)
+}
+
+func (r *fakeRepo) GetStepsByBuildID(_ context.Context, buildID string) ([]domain.BuildStep, error) {
+	if _, err := r.GetByID(context.Background(), buildID); err != nil {
+		return nil, err
+	}
+
+	steps := r.steps[buildID]
+	out := make([]domain.BuildStep, len(steps))
+	copy(out, steps)
+	return out, nil
+}
+
+func (r *fakeRepo) ClaimStepIfPending(_ context.Context, buildID string, stepIndex int, _ *string, startedAt time.Time) (domain.BuildStep, bool, error) {
+	steps := r.steps[buildID]
+	for idx := range steps {
+		if steps[idx].StepIndex != stepIndex {
+			continue
+		}
+		if steps[idx].Status != domain.BuildStepStatusPending {
+			return domain.BuildStep{}, false, nil
+		}
+		steps[idx].Status = domain.BuildStepStatusRunning
+		steps[idx].StartedAt = &startedAt
+		r.steps[buildID] = steps
+		return steps[idx], true, nil
+	}
+
+	return domain.BuildStep{}, false, repository.ErrBuildNotFound
+}
+
+func (r *fakeRepo) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, status domain.BuildStepStatus, _ *string, _ *int, _ *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
+	if r.steps == nil {
+		return domain.BuildStep{}, repository.ErrBuildNotFound
+	}
+
+	steps := r.steps[buildID]
+	for i := range steps {
+		if steps[i].StepIndex != stepIndex {
+			continue
+		}
+		steps[i].Status = status
+		if startedAt != nil {
+			steps[i].StartedAt = startedAt
+		}
+		if finishedAt != nil {
+			steps[i].FinishedAt = finishedAt
+		}
+		r.steps[buildID] = steps
+		return steps[i], nil
+	}
+
+	return domain.BuildStep{}, repository.ErrBuildNotFound
+}
+
+func (r *fakeRepo) UpdateCurrentStepIndex(_ context.Context, id string, currentStepIndex int) (domain.Build, error) {
+	b, err := r.GetByID(context.Background(), id)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	b.CurrentStepIndex = currentStepIndex
 	if r.builds == nil {
 		r.build = b
 	} else {

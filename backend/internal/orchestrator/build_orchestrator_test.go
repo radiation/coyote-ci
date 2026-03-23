@@ -14,6 +14,7 @@ import (
 
 type fakeBuildStore struct {
 	build         domain.Build
+	steps         []domain.BuildStep
 	createErr     error
 	getErr        error
 	updateErr     error
@@ -47,7 +48,7 @@ func (s *fakeBuildStore) GetByID(_ context.Context, _ string) (domain.Build, err
 	return s.build, nil
 }
 
-func (s *fakeBuildStore) UpdateStatus(_ context.Context, id string, status domain.BuildStatus) (domain.Build, error) {
+func (s *fakeBuildStore) UpdateStatus(_ context.Context, id string, status domain.BuildStatus, errorMessage *string) (domain.Build, error) {
 	s.updateCalls++
 	s.updatedID = id
 	s.updatedStatus = status
@@ -57,6 +58,84 @@ func (s *fakeBuildStore) UpdateStatus(_ context.Context, id string, status domai
 	}
 
 	s.build.Status = status
+	s.build.ErrorMessage = errorMessage
+	return s.build, nil
+}
+
+func (s *fakeBuildStore) QueueBuild(_ context.Context, id string, steps []domain.BuildStep) (domain.Build, error) {
+	s.updateCalls++
+	s.updatedID = id
+	s.updatedStatus = domain.BuildStatusQueued
+
+	if s.updateErr != nil {
+		return domain.Build{}, s.updateErr
+	}
+
+	s.build.Status = domain.BuildStatusQueued
+	s.steps = append([]domain.BuildStep(nil), steps...)
+
+	return s.build, nil
+}
+
+func (s *fakeBuildStore) GetStepsByBuildID(_ context.Context, _ string) ([]domain.BuildStep, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+
+	steps := make([]domain.BuildStep, len(s.steps))
+	copy(steps, s.steps)
+	return steps, nil
+}
+
+func (s *fakeBuildStore) ClaimStepIfPending(_ context.Context, _ string, stepIndex int, _ *string, startedAt time.Time) (domain.BuildStep, bool, error) {
+	if s.updateErr != nil {
+		return domain.BuildStep{}, false, s.updateErr
+	}
+
+	for i := range s.steps {
+		if s.steps[i].StepIndex != stepIndex {
+			continue
+		}
+		if s.steps[i].Status != domain.BuildStepStatusPending {
+			return domain.BuildStep{}, false, nil
+		}
+		s.steps[i].Status = domain.BuildStepStatusRunning
+		s.steps[i].StartedAt = &startedAt
+		return s.steps[i], true, nil
+	}
+
+	return domain.BuildStep{}, false, repository.ErrBuildNotFound
+}
+
+func (s *fakeBuildStore) UpdateStepByIndex(_ context.Context, _ string, stepIndex int, status domain.BuildStepStatus, _ *string, _ *int, _ *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
+	if s.updateErr != nil {
+		return domain.BuildStep{}, s.updateErr
+	}
+
+	for i := range s.steps {
+		if s.steps[i].StepIndex != stepIndex {
+			continue
+		}
+
+		s.steps[i].Status = status
+		if startedAt != nil {
+			s.steps[i].StartedAt = startedAt
+		}
+		if finishedAt != nil {
+			s.steps[i].FinishedAt = finishedAt
+		}
+		return s.steps[i], nil
+	}
+
+	return domain.BuildStep{}, repository.ErrBuildNotFound
+}
+
+func (s *fakeBuildStore) UpdateCurrentStepIndex(_ context.Context, _ string, currentStepIndex int) (domain.Build, error) {
+	if s.updateErr != nil {
+		return domain.Build{}, s.updateErr
+	}
+
+	s.build.CurrentStepIndex = currentStepIndex
 	return s.build, nil
 }
 
@@ -154,6 +233,13 @@ func TestBuildOrchestrator_Transitions(t *testing.T) {
 	store := &fakeBuildStore{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
 	o := NewBuildOrchestrator(store, nil, nil)
 
+	if _, err := o.QueueBuild(context.Background(), "build-1"); err != nil {
+		t.Fatalf("queue build returned error: %v", err)
+	}
+	if store.build.Status != domain.BuildStatusQueued {
+		t.Fatalf("expected queued status, got %q", store.build.Status)
+	}
+
 	if _, err := o.StartBuild(context.Background(), "build-1"); err != nil {
 		t.Fatalf("start build returned error: %v", err)
 	}
@@ -170,11 +256,6 @@ func TestBuildOrchestrator_Transitions(t *testing.T) {
 
 	if _, err := o.FailBuild(context.Background(), "build-1"); !errors.Is(err, ErrInvalidBuildStatusTransition) {
 		t.Fatalf("expected invalid transition error, got %v", err)
-	}
-
-	store.build.Status = domain.BuildStatusPending
-	if _, err := o.QueueBuild(context.Background(), "build-1"); !errors.Is(err, ErrInvalidBuildStatusTransition) {
-		t.Fatalf("expected pending->queued invalid transition, got %v", err)
 	}
 }
 
@@ -231,7 +312,7 @@ func TestBuildOrchestrator_GetBuildLogs_NotFound(t *testing.T) {
 func TestBuildOrchestrator_RunStep_DelegatesToRunner(t *testing.T) {
 	runner := &fakeRunner{result: contracts.RunStepResult{Status: contracts.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", Stderr: ""}}
 	logs := &fakeLogSink{}
-	orchestrator := NewBuildOrchestrator(&fakeBuildStore{}, runner, logs)
+	orchestrator := NewBuildOrchestrator(&fakeBuildStore{build: domain.Build{ID: "build-1", CurrentStepIndex: 0}, steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusPending}}}, runner, logs)
 
 	request := contracts.RunStepRequest{BuildID: "build-1", StepName: "test", Command: "echo", Args: []string{"ok"}}
 	result, err := orchestrator.RunStep(context.Background(), request)
@@ -258,9 +339,9 @@ func TestBuildOrchestrator_RunStep_DelegatesToRunner(t *testing.T) {
 
 func TestBuildOrchestrator_RunStep_RunnerError(t *testing.T) {
 	runner := &fakeRunner{err: errors.New("runner failed")}
-	orchestrator := NewBuildOrchestrator(&fakeBuildStore{}, runner, &fakeLogSink{})
+	orchestrator := NewBuildOrchestrator(&fakeBuildStore{build: domain.Build{ID: "build-1", CurrentStepIndex: 0}, steps: []domain.BuildStep{{StepIndex: 0, Name: "echo", Status: domain.BuildStepStatusPending}}}, runner, &fakeLogSink{})
 
-	_, err := orchestrator.RunStep(context.Background(), contracts.RunStepRequest{Command: "echo"})
+	_, err := orchestrator.RunStep(context.Background(), contracts.RunStepRequest{BuildID: "build-1", StepName: "echo", Command: "echo"})
 	if err == nil || err.Error() != "runner failed" {
 		t.Fatalf("expected runner error, got %v", err)
 	}
@@ -297,7 +378,7 @@ func TestBuildOrchestrator_RunStep_PersistsLogsForSuccessAndFailedResults(t *tes
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			store := &fakeBuildStore{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}}
+			store := &fakeBuildStore{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}, steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusPending}}}
 			runner := &fakeRunner{result: tc.runnerResult}
 			logStore := logs.NewMemorySink()
 			o := NewBuildOrchestrator(store, runner, logStore)

@@ -25,15 +25,24 @@ func TestWorkerExecutionVerticalSlice_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create build failed: %v", err)
 	}
+	_, err = buildService.QueueBuild(ctx, build.ID)
+	if err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
+
+	runnable, found, err := worker.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("claim runnable step failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected runnable step to be found")
+	}
+	runnable.Command = "sh"
+	runnable.Args = []string{"-c", "printf 'ok-line\\n'"}
+	runnable.WorkingDir = "."
 
 	// Worker claiming is represented by taking a runnable step and executing it.
-	report, err := worker.ExecuteRunnableStep(ctx, RunnableStep{
-		BuildID:    build.ID,
-		StepName:   "unit-test",
-		Command:    "sh",
-		Args:       []string{"-c", "printf 'ok-line\\n'"},
-		WorkingDir: ".",
-	})
+	report, err := worker.ExecuteRunnableStep(ctx, runnable)
 	if err != nil {
 		t.Fatalf("execute runnable step failed: %v", err)
 	}
@@ -58,8 +67,8 @@ func TestWorkerExecutionVerticalSlice_Success(t *testing.T) {
 	if len(buildLogs) == 0 {
 		t.Fatal("expected captured logs for successful command")
 	}
-	if buildLogs[0].StepName != "unit-test" {
-		t.Fatalf("expected step name unit-test, got %q", buildLogs[0].StepName)
+	if buildLogs[0].StepName != "default" {
+		t.Fatalf("expected step name default, got %q", buildLogs[0].StepName)
 	}
 	if buildLogs[0].Message != "ok-line" {
 		t.Fatalf("expected log line ok-line, got %q", buildLogs[0].Message)
@@ -86,14 +95,23 @@ func TestWorkerExecutionVerticalSlice_FailedCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create build failed: %v", err)
 	}
+	_, err = buildService.QueueBuild(ctx, build.ID)
+	if err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
 
-	report, err := worker.ExecuteRunnableStep(ctx, RunnableStep{
-		BuildID:    build.ID,
-		StepName:   "unit-test-fail",
-		Command:    "sh",
-		Args:       []string{"-c", "echo fail-line 1>&2; exit 7"},
-		WorkingDir: ".",
-	})
+	runnable, found, err := worker.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("claim runnable step failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected runnable step to be found")
+	}
+	runnable.Command = "sh"
+	runnable.Args = []string{"-c", "echo fail-line 1>&2; exit 7"}
+	runnable.WorkingDir = "."
+
+	report, err := worker.ExecuteRunnableStep(ctx, runnable)
 	if err != nil {
 		t.Fatalf("execute runnable step failed: %v", err)
 	}
@@ -121,8 +139,8 @@ func TestWorkerExecutionVerticalSlice_FailedCommand(t *testing.T) {
 	if len(buildLogs) == 0 {
 		t.Fatal("expected captured logs for failed command")
 	}
-	if buildLogs[0].StepName != "unit-test-fail" {
-		t.Fatalf("expected step name unit-test-fail, got %q", buildLogs[0].StepName)
+	if buildLogs[0].StepName != "default" {
+		t.Fatalf("expected step name default, got %q", buildLogs[0].StepName)
 	}
 	if buildLogs[0].Message != "fail-line" {
 		t.Fatalf("expected log line fail-line, got %q", buildLogs[0].Message)
@@ -149,15 +167,24 @@ func TestWorkerExecutionVerticalSlice_Timeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create build failed: %v", err)
 	}
+	_, err = buildService.QueueBuild(ctx, build.ID)
+	if err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
 
-	report, err := worker.ExecuteRunnableStep(ctx, RunnableStep{
-		BuildID:        build.ID,
-		StepName:       "unit-test-timeout",
-		Command:        "sh",
-		Args:           []string{"-c", "sleep 2"},
-		WorkingDir:     ".",
-		TimeoutSeconds: 1,
-	})
+	runnable, found, err := worker.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("claim runnable step failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected runnable step to be found")
+	}
+	runnable.Command = "sh"
+	runnable.Args = []string{"-c", "sleep 2"}
+	runnable.WorkingDir = "."
+	runnable.TimeoutSeconds = 1
+
+	report, err := worker.ExecuteRunnableStep(ctx, runnable)
 	if err != nil {
 		t.Fatalf("execute runnable step failed: %v", err)
 	}
@@ -185,8 +212,8 @@ func TestWorkerExecutionVerticalSlice_Timeout(t *testing.T) {
 	if len(buildLogs) == 0 {
 		t.Fatal("expected captured logs for timed out command")
 	}
-	if buildLogs[0].StepName != "unit-test-timeout" {
-		t.Fatalf("expected step name unit-test-timeout, got %q", buildLogs[0].StepName)
+	if buildLogs[0].StepName != "default" {
+		t.Fatalf("expected step name default, got %q", buildLogs[0].StepName)
 	}
 	if !strings.Contains(buildLogs[0].Message, "timed out") {
 		t.Fatalf("expected timeout log line, got %q", buildLogs[0].Message)

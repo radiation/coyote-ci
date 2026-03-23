@@ -1,17 +1,9 @@
-CREATE TABLE IF NOT EXISTS builds (
-    id UUID PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    status TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL,
-    queued_at TIMESTAMPTZ,
-    started_at TIMESTAMPTZ,
-    finished_at TIMESTAMPTZ,
-    current_step_index INTEGER NOT NULL DEFAULT 0,
-    error_message TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_builds_project_id ON builds (project_id);
-CREATE INDEX IF NOT EXISTS idx_builds_created_at ON builds (created_at DESC);
+ALTER TABLE builds
+    ADD COLUMN IF NOT EXISTS queued_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS current_step_index INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS error_message TEXT;
 
 CREATE TABLE IF NOT EXISTS build_steps (
     id UUID PRIMARY KEY,

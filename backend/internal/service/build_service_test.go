@@ -12,6 +12,7 @@ import (
 
 type fakeBuildRepository struct {
 	build         domain.Build
+	steps         []domain.BuildStep
 	createErr     error
 	getErr        error
 	updateErr     error
@@ -45,7 +46,7 @@ func (r *fakeBuildRepository) GetByID(_ context.Context, _ string) (domain.Build
 	return r.build, nil
 }
 
-func (r *fakeBuildRepository) UpdateStatus(_ context.Context, id string, status domain.BuildStatus) (domain.Build, error) {
+func (r *fakeBuildRepository) UpdateStatus(_ context.Context, id string, status domain.BuildStatus, errorMessage *string) (domain.Build, error) {
 	r.updateCalls++
 	r.updatedID = id
 	r.updatedStatus = status
@@ -55,6 +56,64 @@ func (r *fakeBuildRepository) UpdateStatus(_ context.Context, id string, status 
 	}
 
 	r.build.Status = status
+	r.build.ErrorMessage = errorMessage
+	return r.build, nil
+}
+
+func (r *fakeBuildRepository) QueueBuild(_ context.Context, id string, steps []domain.BuildStep) (domain.Build, error) {
+	r.updateCalls++
+	r.updatedID = id
+	r.updatedStatus = domain.BuildStatusQueued
+
+	if r.updateErr != nil {
+		return domain.Build{}, r.updateErr
+	}
+
+	r.steps = append([]domain.BuildStep(nil), steps...)
+	r.build.Status = domain.BuildStatusQueued
+	return r.build, nil
+}
+
+func (r *fakeBuildRepository) GetStepsByBuildID(_ context.Context, _ string) ([]domain.BuildStep, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+
+	steps := make([]domain.BuildStep, len(r.steps))
+	copy(steps, r.steps)
+	return steps, nil
+}
+
+func (r *fakeBuildRepository) ClaimStepIfPending(_ context.Context, _ string, _ int, _ *string, _ time.Time) (domain.BuildStep, bool, error) {
+	if r.updateErr != nil {
+		return domain.BuildStep{}, false, r.updateErr
+	}
+
+	if len(r.steps) == 0 {
+		return domain.BuildStep{}, false, repository.ErrBuildNotFound
+	}
+
+	return r.steps[0], true, nil
+}
+
+func (r *fakeBuildRepository) UpdateStepByIndex(_ context.Context, _ string, _ int, _ domain.BuildStepStatus, _ *string, _ *int, _ *string, _ *time.Time, _ *time.Time) (domain.BuildStep, error) {
+	if r.updateErr != nil {
+		return domain.BuildStep{}, r.updateErr
+	}
+
+	if len(r.steps) == 0 {
+		return domain.BuildStep{}, repository.ErrBuildNotFound
+	}
+
+	return r.steps[0], nil
+}
+
+func (r *fakeBuildRepository) UpdateCurrentStepIndex(_ context.Context, _ string, currentStepIndex int) (domain.Build, error) {
+	if r.updateErr != nil {
+		return domain.Build{}, r.updateErr
+	}
+
+	r.build.CurrentStepIndex = currentStepIndex
 	return r.build, nil
 }
 
@@ -276,8 +335,8 @@ func TestBuildService_InvalidTransitions(t *testing.T) {
 		action        func(*BuildService, context.Context, string) (domain.Build, error)
 	}{
 		{
-			name:          "pending to queued is invalid",
-			initialStatus: domain.BuildStatusPending,
+			name:          "running to queued is invalid",
+			initialStatus: domain.BuildStatusRunning,
 			action:        (*BuildService).QueueBuild,
 		},
 		{

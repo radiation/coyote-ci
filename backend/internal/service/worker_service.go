@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 
 type buildExecutionBoundary interface {
 	ListBuilds(ctx context.Context) ([]domain.Build, error)
+	GetBuildSteps(ctx context.Context, id string) ([]contracts.BuildStep, error)
+	ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (contracts.BuildStep, bool, error)
 	StartBuild(ctx context.Context, id string) (domain.Build, error)
 	CompleteBuild(ctx context.Context, id string) (domain.Build, error)
 	FailBuild(ctx context.Context, id string) (domain.Build, error)
@@ -19,6 +22,7 @@ type buildExecutionBoundary interface {
 
 type RunnableStep struct {
 	BuildID        string
+	StepIndex      int
 	StepName       string
 	Command        string
 	Args           []string
@@ -48,13 +52,43 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 	}
 
 	for _, build := range builds {
-		if build.Status != domain.BuildStatusPending {
+		if build.Status != domain.BuildStatusQueued && build.Status != domain.BuildStatusRunning && build.Status != domain.BuildStatusPending {
 			continue
+		}
+
+		steps, err := w.builds.GetBuildSteps(ctx, build.ID)
+		if err != nil {
+			return RunnableStep{}, false, err
+		}
+
+		if len(steps) == 0 {
+			continue
+		}
+
+		nextStep, runnable := firstRunnableStep(steps)
+		if !runnable {
+			continue
+		}
+
+		startedAt := time.Now().UTC()
+		claimedStep, claimed, err := w.builds.ClaimStepIfPending(ctx, build.ID, nextStep.StepIndex, nil, startedAt)
+		if err != nil {
+			return RunnableStep{}, false, err
+		}
+		if !claimed {
+			continue
+		}
+
+		if build.Status == domain.BuildStatusPending || build.Status == domain.BuildStatusQueued {
+			if _, err := w.builds.StartBuild(ctx, build.ID); err != nil && !errors.Is(err, ErrInvalidBuildStatusTransition) {
+				return RunnableStep{}, false, err
+			}
 		}
 
 		return RunnableStep{
 			BuildID:    build.ID,
-			StepName:   "default",
+			StepIndex:  claimedStep.StepIndex,
+			StepName:   claimedStep.Name,
 			Command:    "sh",
 			Args:       []string{"-c", "echo coyote-ci worker default step"},
 			WorkingDir: ".",
@@ -62,6 +96,28 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 	}
 
 	return RunnableStep{}, false, nil
+}
+
+func firstRunnableStep(steps []contracts.BuildStep) (contracts.BuildStep, bool) {
+	allPreviousSucceeded := true
+
+	for _, step := range steps {
+		switch step.Status {
+		case contracts.BuildStepStatusSuccess:
+			continue
+		case contracts.BuildStepStatusPending:
+			if !allPreviousSucceeded {
+				return contracts.BuildStep{}, false
+			}
+			return step, true
+		case contracts.BuildStepStatusRunning, contracts.BuildStepStatusFailed:
+			allPreviousSucceeded = false
+		default:
+			allPreviousSucceeded = false
+		}
+	}
+
+	return contracts.BuildStep{}, false
 }
 
 func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableStep) (StepExecutionReport, error) {
@@ -74,11 +130,6 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 			Name:   step.StepName,
 			Status: contracts.BuildStepStatusPending,
 		},
-	}
-
-	if _, err := w.builds.StartBuild(ctx, step.BuildID); err != nil {
-		log.Printf("claiming error: build_id=%s step=%s error=%v", step.BuildID, step.StepName, err)
-		return report, err
 	}
 
 	startedAt := time.Now().UTC()
@@ -110,6 +161,24 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 
 	if result.Status == contracts.RunStepStatusSuccess {
 		report.Step.Status = contracts.BuildStepStatusSuccess
+
+		remaining, err := w.builds.GetBuildSteps(ctx, step.BuildID)
+		if err != nil {
+			return report, err
+		}
+
+		hasPending := false
+		for idx := range remaining {
+			if remaining[idx].Status == contracts.BuildStepStatusPending {
+				hasPending = true
+				break
+			}
+		}
+
+		if hasPending {
+			return report, nil
+		}
+
 		if _, err := w.builds.CompleteBuild(ctx, step.BuildID); err != nil {
 			return report, err
 		}

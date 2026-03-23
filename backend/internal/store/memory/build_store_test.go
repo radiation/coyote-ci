@@ -34,7 +34,7 @@ func TestNewBuildStore_Behavior(t *testing.T) {
 		t.Fatalf("expected id %q, got %q", created.ID, fetched.ID)
 	}
 
-	updated, err := store.UpdateStatus(context.Background(), created.ID, domain.BuildStatusRunning)
+	updated, err := store.UpdateStatus(context.Background(), created.ID, domain.BuildStatusRunning, nil)
 	if err != nil {
 		t.Fatalf("expected update status to succeed, got %v", err)
 	}
@@ -64,7 +64,7 @@ func TestBuildStore_MissingBuildCases(t *testing.T) {
 		t.Fatalf("expected not found for missing id, got %v", err)
 	}
 
-	_, err = store.UpdateStatus(context.Background(), "missing", domain.BuildStatusFailed)
+	_, err = store.UpdateStatus(context.Background(), "missing", domain.BuildStatusFailed, nil)
 	if !errors.Is(err, repository.ErrBuildNotFound) {
 		t.Fatalf("expected not found when updating missing build, got %v", err)
 	}
