@@ -79,7 +79,7 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 		{name: "get build", method: http.MethodGet, path: "/builds/" + id, statusCode: http.StatusOK},
 		{name: "build steps", method: http.MethodGet, path: "/builds/" + id + "/steps", statusCode: http.StatusOK},
 		{name: "build logs", method: http.MethodGet, path: "/builds/" + id + "/logs", statusCode: http.StatusOK},
-		{name: "queue build", method: http.MethodPost, path: "/builds/" + id + "/queue", statusCode: http.StatusOK},
+		{name: "queue build from pending is invalid", method: http.MethodPost, path: "/builds/" + id + "/queue", statusCode: http.StatusConflict},
 		{name: "start build", method: http.MethodPost, path: "/builds/" + id + "/start", statusCode: http.StatusOK},
 		{name: "complete build", method: http.MethodPost, path: "/builds/" + id + "/complete", statusCode: http.StatusOK},
 	}

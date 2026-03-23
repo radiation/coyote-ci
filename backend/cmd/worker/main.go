@@ -14,7 +14,12 @@ import (
 	storepostgres "github.com/radiation/coyote-ci/backend/internal/store/postgres"
 )
 
-const defaultPollInterval = 2 * time.Second
+const defaultPollInterval = 10 * time.Second
+
+type workerIterationService interface {
+	ClaimRunnableStep(ctx context.Context) (service.RunnableStep, bool, error)
+	ExecuteRunnableStep(ctx context.Context, step service.RunnableStep) (service.StepExecutionReport, error)
+}
 
 func main() {
 	cfg := config.Load()
@@ -43,7 +48,7 @@ func main() {
 	log.Printf("worker stopped")
 }
 
-func runWorkerLoop(ctx context.Context, worker *service.WorkerService, pollInterval time.Duration) error {
+func runWorkerLoop(ctx context.Context, worker workerIterationService, pollInterval time.Duration) error {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
@@ -53,13 +58,28 @@ func runWorkerLoop(ctx context.Context, worker *service.WorkerService, pollInter
 			return ctx.Err()
 		case <-ticker.C:
 			if err := runWorkerIteration(ctx, worker); err != nil {
-				log.Printf("worker iteration failed: %v", err)
+				log.Printf("worker polling/claiming error: %v", err)
 			}
 		}
 	}
 }
 
-func runWorkerIteration(_ context.Context, _ *service.WorkerService) error {
-	// Worker claim/dequeue flow is not implemented yet; keep loop wiring minimal and runnable.
+func runWorkerIteration(ctx context.Context, worker workerIterationService) error {
+	log.Printf("polling for runnable work")
+
+	step, found, err := worker.ClaimRunnableStep(ctx)
+	if err != nil {
+		return err
+	}
+	if !found {
+		log.Printf("no runnable work found")
+		return nil
+	}
+
+	if _, err := worker.ExecuteRunnableStep(ctx, step); err != nil {
+		return err
+	}
+	log.Printf("worker iteration completed for claimed work: build_id=%s step=%s", step.BuildID, step.StepName)
+
 	return nil
 }

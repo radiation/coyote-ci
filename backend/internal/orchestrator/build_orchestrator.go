@@ -160,8 +160,6 @@ func (o *BuildOrchestrator) transitionBuildStatus(ctx context.Context, id string
 func isValidBuildTransition(fromStatus, toStatus domain.BuildStatus) bool {
 	switch fromStatus {
 	case domain.BuildStatusPending:
-		return toStatus == domain.BuildStatusQueued
-	case domain.BuildStatusQueued:
 		return toStatus == domain.BuildStatusRunning
 	case domain.BuildStatusRunning:
 		return toStatus == domain.BuildStatusSuccess || toStatus == domain.BuildStatusFailed

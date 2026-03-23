@@ -154,13 +154,6 @@ func TestBuildOrchestrator_Transitions(t *testing.T) {
 	store := &fakeBuildStore{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
 	o := NewBuildOrchestrator(store, nil, nil)
 
-	if _, err := o.QueueBuild(context.Background(), "build-1"); err != nil {
-		t.Fatalf("queue build returned error: %v", err)
-	}
-	if store.build.Status != domain.BuildStatusQueued {
-		t.Fatalf("expected queued status, got %q", store.build.Status)
-	}
-
 	if _, err := o.StartBuild(context.Background(), "build-1"); err != nil {
 		t.Fatalf("start build returned error: %v", err)
 	}
@@ -178,13 +171,18 @@ func TestBuildOrchestrator_Transitions(t *testing.T) {
 	if _, err := o.FailBuild(context.Background(), "build-1"); !errors.Is(err, ErrInvalidBuildStatusTransition) {
 		t.Fatalf("expected invalid transition error, got %v", err)
 	}
+
+	store.build.Status = domain.BuildStatusPending
+	if _, err := o.QueueBuild(context.Background(), "build-1"); !errors.Is(err, ErrInvalidBuildStatusTransition) {
+		t.Fatalf("expected pending->queued invalid transition, got %v", err)
+	}
 }
 
 func TestBuildOrchestrator_TransitionNotFound(t *testing.T) {
 	store := &fakeBuildStore{getErr: repository.ErrBuildNotFound}
 	o := NewBuildOrchestrator(store, nil, nil)
 
-	_, err := o.QueueBuild(context.Background(), "missing")
+	_, err := o.StartBuild(context.Background(), "missing")
 	if !errors.Is(err, repository.ErrBuildNotFound) {
 		t.Fatalf("expected not found, got %v", err)
 	}
