@@ -14,6 +14,7 @@ type buildExecutionBoundary interface {
 	ListBuilds(ctx context.Context) ([]domain.Build, error)
 	GetBuildSteps(ctx context.Context, id string) ([]contracts.BuildStep, error)
 	ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (contracts.BuildStep, bool, error)
+	QueueBuild(ctx context.Context, id string) (domain.Build, error)
 	StartBuild(ctx context.Context, id string) (domain.Build, error)
 	CompleteBuild(ctx context.Context, id string) (domain.Build, error)
 	FailBuild(ctx context.Context, id string) (domain.Build, error)
@@ -62,7 +63,25 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 		}
 
 		if len(steps) == 0 {
-			continue
+			if build.Status == domain.BuildStatusPending {
+				_, err = w.builds.QueueBuild(ctx, build.ID)
+				if err != nil {
+					if !errors.Is(err, ErrInvalidBuildStatusTransition) {
+						return RunnableStep{}, false, err
+					}
+					continue
+				}
+
+				steps, err = w.builds.GetBuildSteps(ctx, build.ID)
+				if err != nil {
+					return RunnableStep{}, false, err
+				}
+				if len(steps) == 0 {
+					continue
+				}
+			} else {
+				continue
+			}
 		}
 
 		nextStep, runnable := firstRunnableStep(steps)

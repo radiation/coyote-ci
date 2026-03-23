@@ -20,6 +20,7 @@ type fakeBuildExecutionBoundary struct {
 	claimErr       error
 	claimMap       map[string]bool
 	claimCalls     int
+	queueCalls     int
 
 	startCalls    int
 	completeCalls int
@@ -94,6 +95,23 @@ func (f *fakeBuildExecutionBoundary) ClaimStepIfPending(_ context.Context, build
 	}
 
 	return contracts.BuildStep{}, false, nil
+}
+
+func (f *fakeBuildExecutionBoundary) QueueBuild(_ context.Context, id string) (domain.Build, error) {
+	f.queueCalls++
+
+	if f.stepsByBuildID == nil {
+		f.stepsByBuildID = map[string][]contracts.BuildStep{}
+	}
+	if len(f.stepsByBuildID[id]) == 0 {
+		f.stepsByBuildID[id] = []contracts.BuildStep{{
+			StepIndex: 0,
+			Name:      "default",
+			Status:    contracts.BuildStepStatusPending,
+		}}
+	}
+
+	return domain.Build{ID: id, Status: domain.BuildStatusQueued}, nil
 }
 
 func (f *fakeBuildExecutionBoundary) StartBuild(_ context.Context, id string) (domain.Build, error) {
@@ -379,5 +397,30 @@ func TestWorkerService_ClaimRunnableStep_PendingBuildTransitionsToRunning(t *tes
 	}
 	if boundary.startCalls != 1 {
 		t.Fatalf("expected pending build to transition to running once, got %d", boundary.startCalls)
+	}
+}
+
+func TestWorkerService_ClaimRunnableStep_PendingBuildWithoutStepsBootstrapsQueue(t *testing.T) {
+	boundary := &fakeBuildExecutionBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusPending}},
+		stepsByBuildID: map[string][]contracts.BuildStep{},
+	}
+
+	worker := NewWorkerService(boundary)
+	runnable, found, err := worker.ClaimRunnableStep(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !found {
+		t.Fatal("expected runnable step to be found")
+	}
+	if runnable.StepIndex != 0 || runnable.StepName != "default" {
+		t.Fatalf("expected claimed default step at index 0, got %q at %d", runnable.StepName, runnable.StepIndex)
+	}
+	if boundary.queueCalls != 1 {
+		t.Fatalf("expected queue bootstrap once, got %d", boundary.queueCalls)
+	}
+	if boundary.startCalls != 1 {
+		t.Fatalf("expected build start after claim, got %d", boundary.startCalls)
 	}
 }
