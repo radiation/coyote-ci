@@ -13,8 +13,13 @@ const (
 )
 
 type Build struct {
-	ID        string
-	ProjectID string
-	Status    BuildStatus
-	CreatedAt time.Time
+	ID               string
+	ProjectID        string
+	Status           BuildStatus
+	CreatedAt        time.Time
+	QueuedAt         *time.Time
+	StartedAt        *time.Time
+	FinishedAt       *time.Time
+	CurrentStepIndex int
+	ErrorMessage     *string
 }

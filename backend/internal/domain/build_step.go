@@ -1,4 +1,4 @@
-package contracts
+package domain
 
 import "time"
 
@@ -12,6 +12,8 @@ const (
 )
 
 type BuildStep struct {
+	ID             string
+	BuildID        string
 	StepIndex      int
 	Name           string
 	Command        string
@@ -20,12 +22,9 @@ type BuildStep struct {
 	WorkingDir     string
 	TimeoutSeconds int
 	Status         BuildStepStatus
+	WorkerID       *string
 	StartedAt      *time.Time
-	EndedAt        *time.Time
-}
-
-type BuildLogLine struct {
-	StepName  string
-	Timestamp time.Time
-	Message   string
+	FinishedAt     *time.Time
+	ExitCode       *int
+	ErrorMessage   *string
 }

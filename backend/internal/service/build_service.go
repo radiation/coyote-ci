@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
@@ -34,12 +35,39 @@ func NewBuildServiceWithExecution(buildStore store.BuildStore, stepRunner runner
 
 type CreateBuildInput struct {
 	ProjectID string
+	Steps     []CreateBuildStepInput
+}
+
+type CreateBuildStepInput struct {
+	Name           string
+	Command        string
+	Args           []string
+	Env            map[string]string
+	WorkingDir     string
+	TimeoutSeconds int
 }
 
 func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) (domain.Build, error) {
 	return s.orchestrator.CreateBuild(ctx, orchestrator.CreateBuildInput{
 		ProjectID: input.ProjectID,
+		Steps:     toOrchestratorStepInputs(input.Steps),
 	})
+}
+
+func toOrchestratorStepInputs(steps []CreateBuildStepInput) []orchestrator.CreateBuildStepInput {
+	out := make([]orchestrator.CreateBuildStepInput, 0, len(steps))
+	for _, step := range steps {
+		out = append(out, orchestrator.CreateBuildStepInput{
+			Name:           step.Name,
+			Command:        step.Command,
+			Args:           step.Args,
+			Env:            step.Env,
+			WorkingDir:     step.WorkingDir,
+			TimeoutSeconds: step.TimeoutSeconds,
+		})
+	}
+
+	return out
 }
 
 func (s *BuildService) GetBuild(ctx context.Context, id string) (domain.Build, error) {
@@ -56,6 +84,10 @@ func (s *BuildService) GetBuildSteps(ctx context.Context, id string) ([]contract
 
 func (s *BuildService) GetBuildLogs(ctx context.Context, id string) ([]contracts.BuildLogLine, error) {
 	return s.orchestrator.GetBuildLogs(ctx, id)
+}
+
+func (s *BuildService) ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (contracts.BuildStep, bool, error) {
+	return s.orchestrator.ClaimStepIfPending(ctx, buildID, stepIndex, workerID, startedAt)
 }
 
 func (s *BuildService) RunStep(ctx context.Context, request contracts.RunStepRequest) (contracts.RunStepResult, error) {

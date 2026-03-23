@@ -1,7 +1,17 @@
 package api
 
 type CreateBuildRequest struct {
-	ProjectID string `json:"project_id"`
+	ProjectID string                 `json:"project_id"`
+	Steps     []CreateBuildStepInput `json:"steps,omitempty"`
+}
+
+type CreateBuildStepInput struct {
+	Name           string            `json:"name"`
+	Command        string            `json:"command,omitempty"`
+	Args           []string          `json:"args,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	WorkingDir     string            `json:"working_dir,omitempty"`
+	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
 }
 
 type ErrorBody struct {
