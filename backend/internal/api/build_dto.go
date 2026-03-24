@@ -53,7 +53,6 @@ type BuildResponse struct {
 	FinishedAt       *string `json:"finished_at"`
 	CurrentStepIndex int     `json:"current_step_index"`
 	ErrorMessage     *string `json:"error_message"`
-	StepCount        *int    `json:"step_count,omitempty"`
 }
 
 type BuildListResponse struct {

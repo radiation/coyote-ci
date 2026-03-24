@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"sort"
 	"testing"
 	"time"
 
@@ -120,9 +119,6 @@ func (r *fakeRepo) GetStepsByBuildID(_ context.Context, buildID string) ([]domai
 	steps := r.steps[buildID]
 	out := make([]domain.BuildStep, len(steps))
 	copy(out, steps)
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].StepIndex < out[j].StepIndex
-	})
 	return out, nil
 }
 

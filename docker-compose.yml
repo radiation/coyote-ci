@@ -33,7 +33,7 @@ services:
       - ./backend/db/init:/migrations:ro
     entrypoint: ["/bin/sh", "-ec"]
     command:
-      - 'for f in /migrations/*.sql; do echo "applying migration: $$f"; psql "postgresql://$${DB_USER}:$${DB_PASSWORD}@$${DB_HOST}:$${DB_PORT}/$${DB_NAME}?sslmode=$${DB_SSLMODE}" -v ON_ERROR_STOP=1 -f "$$f"; done'
+      - 'for f in /migrations/*.sql; do echo "applying migration: $$f"; PGPASSWORD="$${DB_PASSWORD}" psql "postgresql://$${DB_USER}@$${DB_HOST}:$${DB_PORT}/$${DB_NAME}?sslmode=$${DB_SSLMODE}" -v ON_ERROR_STOP=1 -f "$$f"; done'
     restart: "no"
 
   backend:
