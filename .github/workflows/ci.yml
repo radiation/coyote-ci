@@ -27,9 +27,6 @@ jobs:
               - 'backend/**'
               - '.github/workflows/ci.yml'
               - '.github/workflows/codeql.yml'
-            web:
-              - 'web/**'
-              - '.github/workflows/ci.yml'
             mcp:
               - 'mcp/**'
               - '.github/workflows/ci.yml'
