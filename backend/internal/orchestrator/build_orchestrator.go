@@ -21,6 +21,12 @@ var ErrProjectIDRequired = errors.New("project_id is required")
 var ErrInvalidBuildStatusTransition = errors.New("invalid build status transition")
 var ErrRunnerNotConfigured = errors.New("runner not configured")
 
+const (
+	BuildTemplateDefault = "default"
+	BuildTemplateTest    = "test"
+	BuildTemplateBuild   = "build"
+)
+
 // BuildOrchestrator coordinates build lifecycle state transitions and delegates step execution to a runner.
 type BuildOrchestrator struct {
 	buildStore store.BuildStore
@@ -176,6 +182,10 @@ func (o *BuildOrchestrator) ClaimStepIfPending(ctx context.Context, buildID stri
 }
 
 func (o *BuildOrchestrator) QueueBuild(ctx context.Context, id string) (domain.Build, error) {
+	return o.QueueBuildWithTemplate(ctx, id, "")
+}
+
+func (o *BuildOrchestrator) QueueBuildWithTemplate(ctx context.Context, id string, template string) (domain.Build, error) {
 	build, err := o.buildStore.GetByID(ctx, id)
 	if err != nil {
 		return domain.Build{}, err
@@ -185,7 +195,7 @@ func (o *BuildOrchestrator) QueueBuild(ctx context.Context, id string) (domain.B
 		return domain.Build{}, ErrInvalidBuildStatusTransition
 	}
 
-	steps := defaultBuildSteps(id)
+	steps := buildStepsForTemplate(id, template)
 	return o.buildStore.QueueBuild(ctx, id, steps)
 }
 
@@ -311,6 +321,93 @@ func defaultBuildSteps(buildID string) []domain.BuildStep {
 			Status:         domain.BuildStepStatusPending,
 		},
 	}
+}
+
+func buildStepsForTemplate(buildID string, template string) []domain.BuildStep {
+	normalizedTemplate := strings.ToLower(strings.TrimSpace(template))
+
+	stepInputs := []CreateBuildStepInput{
+		{
+			Name:       "default",
+			Command:    "sh",
+			Args:       []string{"-c", "echo coyote-ci worker default step"},
+			Env:        map[string]string{},
+			WorkingDir: ".",
+		},
+	}
+
+	switch normalizedTemplate {
+	case "", BuildTemplateDefault:
+		stepInputs = []CreateBuildStepInput{
+			{
+				Name:       "default",
+				Command:    "sh",
+				Args:       []string{"-c", "echo coyote-ci worker default step"},
+				Env:        map[string]string{},
+				WorkingDir: ".",
+			},
+		}
+	case BuildTemplateTest:
+		stepInputs = []CreateBuildStepInput{
+			{
+				Name:       "setup",
+				Command:    "sh",
+				Args:       []string{"-c", "echo running setup"},
+				Env:        map[string]string{},
+				WorkingDir: ".",
+			},
+			{
+				Name:       "test",
+				Command:    "sh",
+				Args:       []string{"-c", "echo running tests"},
+				Env:        map[string]string{},
+				WorkingDir: ".",
+			},
+			{
+				Name:       "teardown",
+				Command:    "sh",
+				Args:       []string{"-c", "echo running teardown"},
+				Env:        map[string]string{},
+				WorkingDir: ".",
+			},
+		}
+	case BuildTemplateBuild:
+		stepInputs = []CreateBuildStepInput{
+			{
+				Name:       "install",
+				Command:    "sh",
+				Args:       []string{"-c", "echo installing dependencies"},
+				Env:        map[string]string{},
+				WorkingDir: ".",
+			},
+			{
+				Name:       "compile",
+				Command:    "sh",
+				Args:       []string{"-c", "echo compiling project"},
+				Env:        map[string]string{},
+				WorkingDir: ".",
+			},
+		}
+	}
+
+	steps := make([]domain.BuildStep, 0, len(stepInputs))
+	for idx, input := range stepInputs {
+		normalized := normalizeCreateStepInput(input)
+		steps = append(steps, domain.BuildStep{
+			ID:             uuid.NewString(),
+			BuildID:        buildID,
+			StepIndex:      idx,
+			Name:           normalized.Name,
+			Command:        normalized.Command,
+			Args:           normalized.Args,
+			Env:            normalized.Env,
+			WorkingDir:     normalized.WorkingDir,
+			TimeoutSeconds: normalized.TimeoutSeconds,
+			Status:         domain.BuildStepStatusPending,
+		})
+	}
+
+	return steps
 }
 
 func normalizeCreateStepInput(in CreateBuildStepInput) CreateBuildStepInput {

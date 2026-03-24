@@ -98,6 +98,10 @@ func (s *BuildService) QueueBuild(ctx context.Context, id string) (domain.Build,
 	return s.orchestrator.QueueBuild(ctx, id)
 }
 
+func (s *BuildService) QueueBuildWithTemplate(ctx context.Context, id string, template string) (domain.Build, error) {
+	return s.orchestrator.QueueBuildWithTemplate(ctx, id, template)
+}
+
 func (s *BuildService) StartBuild(ctx context.Context, id string) (domain.Build, error) {
 	return s.orchestrator.StartBuild(ctx, id)
 }

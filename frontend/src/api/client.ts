@@ -1,5 +1,6 @@
 import type {
   Build,
+  BuildTemplate,
   BuildListResponse,
   BuildStep,
   BuildStepsResponse,
@@ -62,9 +63,10 @@ export async function createBuild(input: CreateBuildRequest): Promise<Build> {
   return envelope.data;
 }
 
-export async function queueBuild(id: string): Promise<Build> {
-  const envelope = await postNoBodyJSON<DataEnvelope<Build>>(
-    `/builds/${encodeURIComponent(id)}/queue`,
-  );
+export async function queueBuild(id: string, template?: BuildTemplate): Promise<Build> {
+  const path = `/builds/${encodeURIComponent(id)}/queue`;
+  const envelope = template
+    ? await postJSON<DataEnvelope<Build>, { template: BuildTemplate }>(path, { template })
+    : await postNoBodyJSON<DataEnvelope<Build>>(path);
   return envelope.data;
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"time"
@@ -210,8 +211,10 @@ func (h *BuildHandler) GetBuildLogs(w http.ResponseWriter, r *http.Request) {
 // @Summary Queue build
 // @Description Transitions build status from pending to queued.
 // @Tags builds
+// @Accept json
 // @Produce json
 // @Param buildID path string true "Build ID"
+// @Param request body api.QueueBuildRequest false "Queue build request"
 // @Success 200 {object} api.BuildEnvelope
 // @Failure 400 {object} api.ErrorResponse
 // @Failure 404 {object} api.ErrorResponse
@@ -219,7 +222,15 @@ func (h *BuildHandler) GetBuildLogs(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} api.ErrorResponse
 // @Router /builds/{buildID}/queue [post]
 func (h *BuildHandler) QueueBuild(w http.ResponseWriter, r *http.Request) {
-	h.transitionBuild(w, r, h.buildService.QueueBuild)
+	var req api.QueueBuildRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+
+	h.transitionBuild(w, r, func(ctx context.Context, id string) (domain.Build, error) {
+		return h.buildService.QueueBuildWithTemplate(ctx, id, req.Template)
+	})
 }
 
 // StartBuild godoc

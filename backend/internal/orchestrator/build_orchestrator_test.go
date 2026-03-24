@@ -271,6 +271,49 @@ func TestBuildOrchestrator_Transitions(t *testing.T) {
 	}
 }
 
+func TestBuildOrchestrator_QueueBuildWithTemplate(t *testing.T) {
+	tests := []struct {
+		name          string
+		template      string
+		expectedNames []string
+	}{
+		{name: "default when omitted", template: "", expectedNames: []string{"default"}},
+		{name: "default explicit", template: BuildTemplateDefault, expectedNames: []string{"default"}},
+		{name: "test template", template: BuildTemplateTest, expectedNames: []string{"setup", "test", "teardown"}},
+		{name: "build template", template: BuildTemplateBuild, expectedNames: []string{"install", "compile"}},
+		{name: "unknown falls back", template: "unknown", expectedNames: []string{"default"}},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &fakeBuildStore{
+				build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC()},
+			}
+			o := NewBuildOrchestrator(store, nil, nil)
+
+			if _, err := o.QueueBuildWithTemplate(context.Background(), "build-1", tc.template); err != nil {
+				t.Fatalf("queue with template returned error: %v", err)
+			}
+
+			if len(store.steps) != len(tc.expectedNames) {
+				t.Fatalf("expected %d steps, got %d", len(tc.expectedNames), len(store.steps))
+			}
+
+			for idx, expectedName := range tc.expectedNames {
+				if store.steps[idx].StepIndex != idx {
+					t.Fatalf("expected step index %d, got %d", idx, store.steps[idx].StepIndex)
+				}
+				if store.steps[idx].Name != expectedName {
+					t.Fatalf("expected step name %q at index %d, got %q", expectedName, idx, store.steps[idx].Name)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildOrchestrator_TransitionNotFound(t *testing.T) {
 	store := &fakeBuildStore{getErr: repository.ErrBuildNotFound}
 	o := NewBuildOrchestrator(store, nil, nil)

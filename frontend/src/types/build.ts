@@ -42,8 +42,11 @@ export interface CreateBuildStepInput {
 /** Matches the backend api.CreateBuildRequest JSON shape. */
 export interface CreateBuildRequest {
   project_id: string;
+  template?: BuildTemplate;
   steps?: CreateBuildStepInput[];
 }
+
+export type BuildTemplate = 'default' | 'test' | 'build';
 
 /** Envelope: { data: { builds: Build[] } } */
 export interface BuildListResponse {

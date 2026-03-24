@@ -103,3 +103,139 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 		t.Fatalf("expected fail status %d after completion, got %d", http.StatusConflict, failRes.Code)
 	}
 }
+
+func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
+	h := handler.NewBuildHandler(service.NewBuildService(memory.NewBuildStore()))
+	r := NewRouter(h)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
+	createRes := httptest.NewRecorder()
+	r.ServeHTTP(createRes, createReq)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d", http.StatusCreated, createRes.Code)
+	}
+
+	var createBody map[string]any
+	if err := json.Unmarshal(createRes.Body.Bytes(), &createBody); err != nil {
+		t.Fatalf("failed to parse create response: %v", err)
+	}
+	createData, ok := createBody["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected create data envelope, got %v", createBody)
+	}
+	buildID, ok := createData["id"].(string)
+	if !ok || buildID == "" {
+		t.Fatalf("expected create response id, got %v", createData["id"])
+	}
+
+	queueReq := httptest.NewRequest(http.MethodPost, "/builds/"+buildID+"/queue", bytes.NewBufferString(`{"template":"test"}`))
+	queueRes := httptest.NewRecorder()
+	r.ServeHTTP(queueRes, queueReq)
+	if queueRes.Code != http.StatusOK {
+		t.Fatalf("expected queue status %d, got %d", http.StatusOK, queueRes.Code)
+	}
+
+	stepsReq := httptest.NewRequest(http.MethodGet, "/builds/"+buildID+"/steps", nil)
+	stepsRes := httptest.NewRecorder()
+	r.ServeHTTP(stepsRes, stepsReq)
+	if stepsRes.Code != http.StatusOK {
+		t.Fatalf("expected steps status %d, got %d", http.StatusOK, stepsRes.Code)
+	}
+
+	var stepsBody map[string]any
+	if err := json.Unmarshal(stepsRes.Body.Bytes(), &stepsBody); err != nil {
+		t.Fatalf("failed to parse steps response: %v", err)
+	}
+	stepsData, ok := stepsBody["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected steps data envelope, got %v", stepsBody)
+	}
+	steps, ok := stepsData["steps"].([]any)
+	if !ok {
+		t.Fatalf("expected steps array, got %T", stepsData["steps"])
+	}
+
+	expectedNames := []string{"setup", "test", "teardown"}
+	if len(steps) != len(expectedNames) {
+		t.Fatalf("expected %d steps, got %d", len(expectedNames), len(steps))
+	}
+
+	for idx, expectedName := range expectedNames {
+		step, ok := steps[idx].(map[string]any)
+		if !ok {
+			t.Fatalf("expected step object at index %d, got %T", idx, steps[idx])
+		}
+		if step["step_index"] != float64(idx) {
+			t.Fatalf("expected step_index %d, got %v", idx, step["step_index"])
+		}
+		if step["name"] != expectedName {
+			t.Fatalf("expected step name %q, got %v", expectedName, step["name"])
+		}
+	}
+}
+
+func TestNewRouter_QueueBuild_UnknownTemplate_FallsBackToDefaultStep(t *testing.T) {
+	h := handler.NewBuildHandler(service.NewBuildService(memory.NewBuildStore()))
+	r := NewRouter(h)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
+	createRes := httptest.NewRecorder()
+	r.ServeHTTP(createRes, createReq)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d", http.StatusCreated, createRes.Code)
+	}
+
+	var createBody map[string]any
+	if err := json.Unmarshal(createRes.Body.Bytes(), &createBody); err != nil {
+		t.Fatalf("failed to parse create response: %v", err)
+	}
+	createData, ok := createBody["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected create data envelope, got %v", createBody)
+	}
+	buildID, ok := createData["id"].(string)
+	if !ok || buildID == "" {
+		t.Fatalf("expected create response id, got %v", createData["id"])
+	}
+
+	queueReq := httptest.NewRequest(http.MethodPost, "/builds/"+buildID+"/queue", bytes.NewBufferString(`{"template":"not-a-template"}`))
+	queueRes := httptest.NewRecorder()
+	r.ServeHTTP(queueRes, queueReq)
+	if queueRes.Code != http.StatusOK {
+		t.Fatalf("expected queue status %d, got %d", http.StatusOK, queueRes.Code)
+	}
+
+	stepsReq := httptest.NewRequest(http.MethodGet, "/builds/"+buildID+"/steps", nil)
+	stepsRes := httptest.NewRecorder()
+	r.ServeHTTP(stepsRes, stepsReq)
+	if stepsRes.Code != http.StatusOK {
+		t.Fatalf("expected steps status %d, got %d", http.StatusOK, stepsRes.Code)
+	}
+
+	var stepsBody map[string]any
+	if err := json.Unmarshal(stepsRes.Body.Bytes(), &stepsBody); err != nil {
+		t.Fatalf("failed to parse steps response: %v", err)
+	}
+	stepsData, ok := stepsBody["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected steps data envelope, got %v", stepsBody)
+	}
+	steps, ok := stepsData["steps"].([]any)
+	if !ok {
+		t.Fatalf("expected steps array, got %T", stepsData["steps"])
+	}
+	if len(steps) != 1 {
+		t.Fatalf("expected 1 default step, got %d", len(steps))
+	}
+
+	step, ok := steps[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected step object, got %T", steps[0])
+	}
+	if step["step_index"] != float64(0) {
+		t.Fatalf("expected step_index 0, got %v", step["step_index"])
+	}
+	if step["name"] != "default" {
+		t.Fatalf("expected default step name, got %v", step["name"])
+	}
+}

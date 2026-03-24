@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { createBuild, listBuilds, queueBuild } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 import { formatTime } from '../components/TimeDisplay';
+import type { BuildTemplate } from '../types';
 
 const POLL_INTERVAL = 5000;
 
@@ -12,6 +13,7 @@ export function BuildsListPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [projectID, setProjectID] = useState('project-1');
+  const [template, setTemplate] = useState<BuildTemplate>('default');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -22,9 +24,9 @@ export function BuildsListPage() {
   });
 
   const queueBuildMutation = useMutation({
-    mutationFn: async (targetProjectID: string) => {
+    mutationFn: async ({ targetProjectID, targetTemplate }: { targetProjectID: string; targetTemplate: BuildTemplate }) => {
       const createdBuild = await createBuild({ project_id: targetProjectID });
-      return queueBuild(createdBuild.id);
+      return queueBuild(createdBuild.id, targetTemplate);
     },
     onMutate: () => {
       setSuccessMessage(null);
@@ -53,7 +55,7 @@ export function BuildsListPage() {
       return;
     }
 
-    queueBuildMutation.mutate(trimmedProjectID);
+    queueBuildMutation.mutate({ targetProjectID: trimmedProjectID, targetTemplate: template });
   };
 
   return (
@@ -69,6 +71,17 @@ export function BuildsListPage() {
           disabled={queueBuildMutation.isPending}
           placeholder="project-1"
         />
+        <label htmlFor="pipeline-template">Template</label>
+        <select
+          id="pipeline-template"
+          value={template}
+          onChange={(event) => setTemplate(event.target.value as BuildTemplate)}
+          disabled={queueBuildMutation.isPending}
+        >
+          <option value="default">default</option>
+          <option value="test">test</option>
+          <option value="build">build</option>
+        </select>
         <button type="submit" disabled={queueBuildMutation.isPending}>
           {queueBuildMutation.isPending ? 'Queueing…' : 'Queue Build'}
         </button>

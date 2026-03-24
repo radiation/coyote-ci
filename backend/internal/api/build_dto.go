@@ -2,7 +2,12 @@ package api
 
 type CreateBuildRequest struct {
 	ProjectID string                 `json:"project_id"`
+	Template  string                 `json:"template,omitempty"`
 	Steps     []CreateBuildStepInput `json:"steps,omitempty"`
+}
+
+type QueueBuildRequest struct {
+	Template string `json:"template,omitempty"`
 }
 
 type CreateBuildStepInput struct {
