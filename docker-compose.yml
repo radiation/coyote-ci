@@ -35,6 +35,32 @@ services:
       DB_SSLMODE: disable
     ports:
       - "8080:8080"
+
+  backend-dev:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: dev
+    container_name: coyote-ci-backend-dev
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_PORT: "8080"
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: coyote
+      DB_PASSWORD: coyote
+      DB_NAME: coyote_ci
+      DB_SSLMODE: disable
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./backend:/app
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    profiles:
+      - dev
   worker:
     build:
       context: ./backend
@@ -54,3 +80,5 @@ services:
 
 volumes:
   postgres_data:
+  go_mod_cache:
+  go_build_cache:
