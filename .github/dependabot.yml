@@ -6,7 +6,7 @@ updates:
       interval: "weekly"
 
   - package-ecosystem: "npm"
-    directory: "/web"
+    directory: "/frontend"
     schedule:
       interval: "weekly"
 
