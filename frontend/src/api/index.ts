@@ -1,1 +1,1 @@
-export { listBuilds, getBuild, getBuildSteps } from './client';
+export { listBuilds, getBuild, getBuildSteps, createBuild, queueBuild } from './client';

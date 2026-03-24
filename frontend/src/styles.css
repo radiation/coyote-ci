@@ -51,6 +51,40 @@ a:hover {
   padding: 24px;
 }
 
+.queue-build-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}
+
+.queue-build-form label {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.queue-build-form input {
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  padding: 6px 8px;
+  min-width: 220px;
+}
+
+.queue-build-form button {
+  border: 1px solid #1a1a2e;
+  background: #1a1a2e;
+  color: #fff;
+  border-radius: 4px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.queue-build-form button:disabled,
+.queue-build-form input:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 /* Tables */
 .table {
   width: 100%;
@@ -110,6 +144,10 @@ a:hover {
 /* Utility */
 .error-text {
   color: #d32f2f;
+}
+
+.success-text {
+  color: #2e7d32;
 }
 
 .empty {

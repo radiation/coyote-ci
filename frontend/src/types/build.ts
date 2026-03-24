@@ -29,6 +29,22 @@ export interface BuildStep {
 
 export type BuildStepStatus = 'pending' | 'running' | 'success' | 'failed';
 
+/** Matches the backend api.CreateBuildStepInput JSON shape. */
+export interface CreateBuildStepInput {
+  name: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  working_dir?: string;
+  timeout_seconds?: number;
+}
+
+/** Matches the backend api.CreateBuildRequest JSON shape. */
+export interface CreateBuildRequest {
+  project_id: string;
+  steps?: CreateBuildStepInput[];
+}
+
 /** Envelope: { data: { builds: Build[] } } */
 export interface BuildListResponse {
   builds: Build[];

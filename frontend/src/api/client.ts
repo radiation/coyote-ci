@@ -3,6 +3,7 @@ import type {
   BuildListResponse,
   BuildStep,
   BuildStepsResponse,
+  CreateBuildRequest,
   DataEnvelope,
 } from '../types/build';
 
@@ -14,13 +15,29 @@ import type {
  */
 const BASE = '/api';
 
-async function fetchJSON<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
+async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, init);
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`API ${res.status}: ${body}`);
   }
   return res.json() as Promise<T>;
+}
+
+async function postJSON<TResponse, TRequest>(path: string, body: TRequest): Promise<TResponse> {
+  return fetchJSON<TResponse>(path, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+async function postNoBodyJSON<TResponse>(path: string): Promise<TResponse> {
+  return fetchJSON<TResponse>(path, {
+    method: 'POST',
+  });
 }
 
 export async function listBuilds(): Promise<Build[]> {
@@ -38,4 +55,16 @@ export async function getBuildSteps(id: string): Promise<BuildStep[]> {
     `/builds/${encodeURIComponent(id)}/steps`,
   );
   return envelope.data.steps;
+}
+
+export async function createBuild(input: CreateBuildRequest): Promise<Build> {
+  const envelope = await postJSON<DataEnvelope<Build>, CreateBuildRequest>('/builds', input);
+  return envelope.data;
+}
+
+export async function queueBuild(id: string): Promise<Build> {
+  const envelope = await postNoBodyJSON<DataEnvelope<Build>>(
+    `/builds/${encodeURIComponent(id)}/queue`,
+  );
+  return envelope.data;
 }
