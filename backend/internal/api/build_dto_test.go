@@ -10,7 +10,6 @@ func TestBuildEnvelope_JSONShape(t *testing.T) {
 	queuedAt := "2026-03-20T12:01:00Z"
 	startedAt := "2026-03-20T12:02:00Z"
 	finishedAt := "2026-03-20T12:03:00Z"
-	stepCount := 3
 	payload := BuildEnvelope{Data: BuildResponse{
 		ID:               "build-1",
 		ProjectID:        "project-1",
@@ -21,7 +20,6 @@ func TestBuildEnvelope_JSONShape(t *testing.T) {
 		FinishedAt:       &finishedAt,
 		CurrentStepIndex: 2,
 		ErrorMessage:     &errMsg,
-		StepCount:        &stepCount,
 	}}
 
 	raw, err := json.Marshal(payload)
@@ -44,7 +42,7 @@ func TestBuildEnvelope_JSONShape(t *testing.T) {
 	if _, ok := data["created_at"]; !ok {
 		t.Fatalf("expected created_at field in payload: %v", data)
 	}
-	for _, field := range []string{"queued_at", "started_at", "finished_at", "current_step_index", "error_message", "step_count"} {
+	for _, field := range []string{"queued_at", "started_at", "finished_at", "current_step_index", "error_message"} {
 		if _, ok := data[field]; !ok {
 			t.Fatalf("expected %s field in payload: %v", field, data)
 		}
