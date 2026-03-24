@@ -182,7 +182,7 @@ func TestWorkerService_ExecuteRunnableStep_Success(t *testing.T) {
 	if report.Step.Status != contracts.BuildStepStatusSuccess {
 		t.Fatalf("expected step status success, got %q", report.Step.Status)
 	}
-	if report.Step.StartedAt == nil || report.Step.EndedAt == nil {
+	if report.Step.StartedAt == nil || report.Step.FinishedAt == nil {
 		t.Fatal("expected step started/ended timestamps")
 	}
 }

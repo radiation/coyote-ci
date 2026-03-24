@@ -113,6 +113,8 @@ func (o *BuildOrchestrator) GetBuildSteps(ctx context.Context, id string) ([]con
 	result := make([]contracts.BuildStep, 0, len(steps))
 	for _, step := range steps {
 		result = append(result, contracts.BuildStep{
+			ID:             step.ID,
+			BuildID:        step.BuildID,
 			StepIndex:      step.StepIndex,
 			Name:           step.Name,
 			Command:        step.Command,
@@ -121,8 +123,11 @@ func (o *BuildOrchestrator) GetBuildSteps(ctx context.Context, id string) ([]con
 			WorkingDir:     step.WorkingDir,
 			TimeoutSeconds: step.TimeoutSeconds,
 			Status:         contracts.BuildStepStatus(step.Status),
+			WorkerID:       step.WorkerID,
 			StartedAt:      step.StartedAt,
-			EndedAt:        step.FinishedAt,
+			FinishedAt:     step.FinishedAt,
+			ExitCode:       step.ExitCode,
+			ErrorMessage:   step.ErrorMessage,
 		})
 	}
 
@@ -152,6 +157,8 @@ func (o *BuildOrchestrator) ClaimStepIfPending(ctx context.Context, buildID stri
 	}
 
 	return contracts.BuildStep{
+		ID:             step.ID,
+		BuildID:        step.BuildID,
 		StepIndex:      step.StepIndex,
 		Name:           step.Name,
 		Command:        step.Command,
@@ -160,8 +167,11 @@ func (o *BuildOrchestrator) ClaimStepIfPending(ctx context.Context, buildID stri
 		WorkingDir:     step.WorkingDir,
 		TimeoutSeconds: step.TimeoutSeconds,
 		Status:         contracts.BuildStepStatus(step.Status),
+		WorkerID:       step.WorkerID,
 		StartedAt:      step.StartedAt,
-		EndedAt:        step.FinishedAt,
+		FinishedAt:     step.FinishedAt,
+		ExitCode:       step.ExitCode,
+		ErrorMessage:   step.ErrorMessage,
 	}, true, nil
 }
 

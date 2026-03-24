@@ -12,6 +12,8 @@ const (
 )
 
 type BuildStep struct {
+	ID             string
+	BuildID        string
 	StepIndex      int
 	Name           string
 	Command        string
@@ -20,8 +22,11 @@ type BuildStep struct {
 	WorkingDir     string
 	TimeoutSeconds int
 	Status         BuildStepStatus
+	WorkerID       *string
 	StartedAt      *time.Time
-	EndedAt        *time.Time
+	FinishedAt     *time.Time
+	ExitCode       *int
+	ErrorMessage   *string
 }
 
 type BuildLogLine struct {
