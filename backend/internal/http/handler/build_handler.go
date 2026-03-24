@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -156,6 +157,10 @@ func (h *BuildHandler) GetBuildSteps(w http.ResponseWriter, r *http.Request) {
 		respSteps = append(respSteps, toBuildStepResponse(step))
 	}
 
+	sort.Slice(respSteps, func(i, j int) bool {
+		return respSteps[i].StepIndex < respSteps[j].StepIndex
+	})
+
 	writeDataJSON(w, http.StatusOK, api.BuildStepsResponse{
 		BuildID: id,
 		Steps:   respSteps,
@@ -297,17 +302,28 @@ func (h *BuildHandler) writeServiceError(w http.ResponseWriter, err error) {
 
 func toBuildResponse(build domain.Build) api.BuildResponse {
 	return api.BuildResponse{
-		ID:        build.ID,
-		ProjectID: build.ProjectID,
-		Status:    string(build.Status),
-		CreatedAt: build.CreatedAt.Format(time.RFC3339),
+		ID:               build.ID,
+		ProjectID:        build.ProjectID,
+		Status:           string(build.Status),
+		CreatedAt:        build.CreatedAt.Format(time.RFC3339),
+		QueuedAt:         formatOptionalTime(build.QueuedAt),
+		StartedAt:        formatOptionalTime(build.StartedAt),
+		FinishedAt:       formatOptionalTime(build.FinishedAt),
+		CurrentStepIndex: build.CurrentStepIndex,
+		ErrorMessage:     build.ErrorMessage,
 	}
 }
 
 func toBuildStepResponse(step contracts.BuildStep) api.BuildStepResponse {
 	resp := api.BuildStepResponse{
-		Name:   step.Name,
-		Status: string(step.Status),
+		ID:           step.ID,
+		BuildID:      step.BuildID,
+		StepIndex:    step.StepIndex,
+		Name:         step.Name,
+		Status:       string(step.Status),
+		WorkerID:     step.WorkerID,
+		ExitCode:     step.ExitCode,
+		ErrorMessage: step.ErrorMessage,
 	}
 
 	if step.StartedAt != nil {
@@ -315,12 +331,21 @@ func toBuildStepResponse(step contracts.BuildStep) api.BuildStepResponse {
 		resp.StartedAt = &startedAt
 	}
 
-	if step.EndedAt != nil {
-		endedAt := step.EndedAt.Format(time.RFC3339)
-		resp.EndedAt = &endedAt
+	if step.FinishedAt != nil {
+		finishedAt := step.FinishedAt.Format(time.RFC3339)
+		resp.FinishedAt = &finishedAt
 	}
 
 	return resp
+}
+
+func formatOptionalTime(value *time.Time) *string {
+	if value == nil {
+		return nil
+	}
+
+	formatted := value.Format(time.RFC3339)
+	return &formatted
 }
 
 func writeDataJSON(w http.ResponseWriter, status int, payload any) {

@@ -279,9 +279,29 @@ func TestBuildHandler_CreateBuild(t *testing.T) {
 
 func TestBuildHandler_ListBuilds(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
+	queuedAt := now.Add(10 * time.Second)
+	startedAt := now.Add(20 * time.Second)
+	finishedAt := now.Add(30 * time.Second)
+	errMsg := "build failed"
 	repo := &fakeRepo{builds: map[string]domain.Build{
-		"build-1": {ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now},
-		"build-2": {ID: "build-2", ProjectID: "project-2", Status: domain.BuildStatusQueued, CreatedAt: now},
+		"build-1": {
+			ID:               "build-1",
+			ProjectID:        "project-1",
+			Status:           domain.BuildStatusPending,
+			CreatedAt:        now,
+			CurrentStepIndex: 1,
+		},
+		"build-2": {
+			ID:               "build-2",
+			ProjectID:        "project-2",
+			Status:           domain.BuildStatusFailed,
+			CreatedAt:        now,
+			QueuedAt:         &queuedAt,
+			StartedAt:        &startedAt,
+			FinishedAt:       &finishedAt,
+			CurrentStepIndex: 3,
+			ErrorMessage:     &errMsg,
+		},
 	}}
 
 	h := NewBuildHandler(service.NewBuildService(repo))
@@ -302,6 +322,18 @@ func TestBuildHandler_ListBuilds(t *testing.T) {
 	if len(listPayload) != 2 {
 		t.Fatalf("expected two builds, got %d", len(listPayload))
 	}
+
+	for _, buildAny := range listPayload {
+		buildMap, ok := buildAny.(map[string]any)
+		if !ok {
+			t.Fatalf("expected build object, got %T", buildAny)
+		}
+		for _, field := range []string{"id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "error_message"} {
+			if _, ok := buildMap[field]; !ok {
+				t.Fatalf("expected build field %q, got %v", field, buildMap)
+			}
+		}
+	}
 }
 
 func TestBuildHandler_GetBuild(t *testing.T) {
@@ -315,7 +347,7 @@ func TestBuildHandler_GetBuild(t *testing.T) {
 	}{
 		{name: "missing build id", buildID: "", repo: &fakeRepo{}, statusCode: http.StatusBadRequest, errMsg: "build id is required"},
 		{name: "build not found", buildID: "missing", repo: &fakeRepo{getErr: repository.ErrBuildNotFound}, statusCode: http.StatusNotFound, errMsg: "build not found"},
-		{name: "success", buildID: "build-1", repo: &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusQueued, CreatedAt: now}}, statusCode: http.StatusOK},
+		{name: "success", buildID: "build-1", repo: &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusQueued, CreatedAt: now, CurrentStepIndex: 2}}, statusCode: http.StatusOK},
 	}
 
 	for _, tc := range tests {
@@ -342,13 +374,28 @@ func TestBuildHandler_GetBuild(t *testing.T) {
 			if data["id"] != "build-1" {
 				t.Fatalf("expected id build-1, got %v", data["id"])
 			}
+			for _, field := range []string{"status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "error_message"} {
+				if _, ok := data[field]; !ok {
+					t.Fatalf("expected build detail field %q, got %v", field, data)
+				}
+			}
 		})
 	}
 }
 
-func TestBuildHandler_GetBuildStepsAndLogs(t *testing.T) {
+func TestBuildHandler_GetBuildSteps_HappyPathOrdered(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}}
+	workerID := "worker-1"
+	exitCode := 0
+	repo := &fakeRepo{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now},
+		steps: map[string][]domain.BuildStep{
+			"build-1": {
+				{ID: "step-2", BuildID: "build-1", StepIndex: 1, Name: "test", Status: domain.BuildStepStatusPending},
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "checkout", Status: domain.BuildStepStatusSuccess, WorkerID: &workerID, StartedAt: &now, FinishedAt: &now, ExitCode: &exitCode},
+			},
+		},
+	}
 	h := NewBuildHandler(service.NewBuildService(repo))
 
 	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/steps", nil), "build-1")
@@ -361,6 +408,73 @@ func TestBuildHandler_GetBuildStepsAndLogs(t *testing.T) {
 	if stepsData["build_id"] != "build-1" {
 		t.Fatalf("expected build_id build-1, got %v", stepsData["build_id"])
 	}
+	steps, ok := stepsData["steps"].([]any)
+	if !ok {
+		t.Fatalf("expected steps array, got %T", stepsData["steps"])
+	}
+	if len(steps) != 2 {
+		t.Fatalf("expected two steps, got %d", len(steps))
+	}
+	first, ok := steps[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first step object, got %T", steps[0])
+	}
+	second, ok := steps[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected second step object, got %T", steps[1])
+	}
+	if first["step_index"] != float64(0) || second["step_index"] != float64(1) {
+		t.Fatalf("expected steps ordered by step_index asc, got first=%v second=%v", first["step_index"], second["step_index"])
+	}
+	for _, field := range []string{"id", "build_id", "step_index", "name", "status", "worker_id", "started_at", "finished_at", "exit_code", "error_message"} {
+		if _, ok := first[field]; !ok {
+			t.Fatalf("expected step field %q, got %v", field, first)
+		}
+	}
+}
+
+func TestBuildHandler_GetBuildSteps_NotFound(t *testing.T) {
+	h := NewBuildHandler(service.NewBuildService(&fakeRepo{getErr: repository.ErrBuildNotFound}))
+	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/missing/steps", nil), "missing")
+	stepsRes := httptest.NewRecorder()
+
+	h.GetBuildSteps(stepsRes, stepsReq)
+
+	if stepsRes.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, stepsRes.Code)
+	}
+	if got := decodeErrorMessage(t, stepsRes); got != "build not found" {
+		t.Fatalf("expected build not found error, got %q", got)
+	}
+}
+
+func TestBuildHandler_GetBuildSteps_EmptyForExistingBuild(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusQueued, CreatedAt: now}}
+	h := NewBuildHandler(service.NewBuildService(repo))
+
+	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/steps", nil), "build-1")
+	stepsRes := httptest.NewRecorder()
+
+	h.GetBuildSteps(stepsRes, stepsReq)
+
+	if stepsRes.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, stepsRes.Code)
+	}
+	stepsData := decodeDataMap(t, stepsRes)
+	steps, ok := stepsData["steps"].([]any)
+	if !ok {
+		t.Fatalf("expected steps array, got %T", stepsData["steps"])
+	}
+	if len(steps) != 0 {
+		t.Fatalf("expected empty steps array, got %d", len(steps))
+	}
+}
+
+func TestBuildHandler_GetBuildLogs(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}}
+	h := NewBuildHandler(service.NewBuildService(repo))
 
 	logsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/logs", nil), "build-1")
 	logsRes := httptest.NewRecorder()

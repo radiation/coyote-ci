@@ -10,12 +10,31 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backend/db/init:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U coyote -d coyote_ci"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  migrate:
+    image: postgres:17
+    container_name: coyote-ci-migrate
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: coyote
+      DB_PASSWORD: coyote
+      DB_NAME: coyote_ci
+      DB_SSLMODE: disable
+    volumes:
+      - ./backend/db/init:/migrations:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'for f in /migrations/*.sql; do echo "applying migration: $$f"; PGPASSWORD="$${DB_PASSWORD}" psql "postgresql://$${DB_USER}@$${DB_HOST}:$${DB_PORT}/$${DB_NAME}?sslmode=$${DB_SSLMODE}" -v ON_ERROR_STOP=1 -f "$$f"; done'
+    restart: "no"
 
   backend:
     build:
@@ -25,6 +44,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       APP_PORT: "8080"
       DB_HOST: db
@@ -45,6 +66,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       APP_PORT: "8080"
       DB_HOST: db
@@ -69,6 +92,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       DB_HOST: db
       DB_PORT: "5432"

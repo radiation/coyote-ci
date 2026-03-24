@@ -6,11 +6,20 @@ import (
 )
 
 func TestBuildEnvelope_JSONShape(t *testing.T) {
+	errMsg := "failed"
+	queuedAt := "2026-03-20T12:01:00Z"
+	startedAt := "2026-03-20T12:02:00Z"
+	finishedAt := "2026-03-20T12:03:00Z"
 	payload := BuildEnvelope{Data: BuildResponse{
-		ID:        "build-1",
-		ProjectID: "project-1",
-		Status:    "running",
-		CreatedAt: "2026-03-20T12:00:00Z",
+		ID:               "build-1",
+		ProjectID:        "project-1",
+		Status:           "running",
+		CreatedAt:        "2026-03-20T12:00:00Z",
+		QueuedAt:         &queuedAt,
+		StartedAt:        &startedAt,
+		FinishedAt:       &finishedAt,
+		CurrentStepIndex: 2,
+		ErrorMessage:     &errMsg,
 	}}
 
 	raw, err := json.Marshal(payload)
@@ -33,13 +42,18 @@ func TestBuildEnvelope_JSONShape(t *testing.T) {
 	if _, ok := data["created_at"]; !ok {
 		t.Fatalf("expected created_at field in payload: %v", data)
 	}
+	for _, field := range []string{"queued_at", "started_at", "finished_at", "current_step_index", "error_message"} {
+		if _, ok := data[field]; !ok {
+			t.Fatalf("expected %s field in payload: %v", field, data)
+		}
+	}
 }
 
 func TestBuildStepsEnvelope_JSONOptionalAndEmptyCollections(t *testing.T) {
 	payload := BuildStepsEnvelope{Data: BuildStepsResponse{
 		BuildID: "build-1",
 		Steps: []BuildStepResponse{
-			{Name: "checkout", Status: "success", StartedAt: nil, EndedAt: nil},
+			{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "checkout", Status: "success", WorkerID: nil, StartedAt: nil, FinishedAt: nil, ExitCode: nil, ErrorMessage: nil},
 		},
 	}}
 
@@ -76,8 +90,13 @@ func TestBuildStepsEnvelope_JSONOptionalAndEmptyCollections(t *testing.T) {
 	if first["started_at"] != nil {
 		t.Fatalf("expected started_at null, got %v", first["started_at"])
 	}
-	if first["ended_at"] != nil {
-		t.Fatalf("expected ended_at null, got %v", first["ended_at"])
+	if first["finished_at"] != nil {
+		t.Fatalf("expected finished_at null, got %v", first["finished_at"])
+	}
+	for _, field := range []string{"id", "build_id", "step_index", "name", "status", "worker_id", "exit_code", "error_message"} {
+		if _, ok := first[field]; !ok {
+			t.Fatalf("expected %s field to be present: %v", field, first)
+		}
 	}
 }
 

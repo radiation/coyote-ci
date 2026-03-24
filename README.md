@@ -34,6 +34,14 @@ docker compose up --build
 
 Backend API is exposed on http://localhost:8080.
 
+Migrations are applied automatically during `docker compose up` by a one-shot `migrate` service before backend and worker start. The Postgres container itself does not run schema SQL directly.
+
+To run migrations manually:
+
+```bash
+docker compose run --rm migrate
+```
+
 ## Local dev with live reload (Go)
 
 Go binaries are compiled, so source file changes are not automatically picked up by a running binary. For development, this repo includes a hot-reload profile using Air.

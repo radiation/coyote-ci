@@ -44,10 +44,15 @@ type BuildLogsEnvelope struct {
 }
 
 type BuildResponse struct {
-	ID        string `json:"id"`
-	ProjectID string `json:"project_id"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"created_at"`
+	ID               string  `json:"id"`
+	ProjectID        string  `json:"project_id"`
+	Status           string  `json:"status"`
+	CreatedAt        string  `json:"created_at"`
+	QueuedAt         *string `json:"queued_at"`
+	StartedAt        *string `json:"started_at"`
+	FinishedAt       *string `json:"finished_at"`
+	CurrentStepIndex int     `json:"current_step_index"`
+	ErrorMessage     *string `json:"error_message"`
 }
 
 type BuildListResponse struct {
@@ -55,10 +60,16 @@ type BuildListResponse struct {
 }
 
 type BuildStepResponse struct {
-	Name      string  `json:"name"`
-	Status    string  `json:"status"`
-	StartedAt *string `json:"started_at"`
-	EndedAt   *string `json:"ended_at"`
+	ID           string  `json:"id"`
+	BuildID      string  `json:"build_id"`
+	StepIndex    int     `json:"step_index"`
+	Name         string  `json:"name"`
+	Status       string  `json:"status"`
+	WorkerID     *string `json:"worker_id"`
+	StartedAt    *string `json:"started_at"`
+	FinishedAt   *string `json:"finished_at"`
+	ExitCode     *int    `json:"exit_code"`
+	ErrorMessage *string `json:"error_message"`
 }
 
 type BuildStepsResponse struct {

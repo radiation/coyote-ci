@@ -202,7 +202,7 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 	report.Result = result
 
 	completedAt := time.Now().UTC()
-	report.Step.EndedAt = &completedAt
+	report.Step.FinishedAt = &completedAt
 
 	if err != nil {
 		log.Printf("execution completed: build_id=%s step=%s status=%s exit_code=%d", step.BuildID, step.StepName, contracts.RunStepStatusFailed, result.ExitCode)
