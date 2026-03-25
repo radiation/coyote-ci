@@ -10,7 +10,6 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	"github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
-	"github.com/radiation/coyote-ci/backend/pkg/contracts"
 )
 
 var ErrProjectIDRequired = orchestrator.ErrProjectIDRequired
@@ -85,19 +84,19 @@ func (s *BuildService) ListBuilds(ctx context.Context) ([]domain.Build, error) {
 	return s.orchestrator.ListBuilds(ctx)
 }
 
-func (s *BuildService) GetBuildSteps(ctx context.Context, id string) ([]contracts.BuildStep, error) {
+func (s *BuildService) GetBuildSteps(ctx context.Context, id string) ([]domain.BuildStep, error) {
 	return s.orchestrator.GetBuildSteps(ctx, id)
 }
 
-func (s *BuildService) GetBuildLogs(ctx context.Context, id string) ([]contracts.BuildLogLine, error) {
+func (s *BuildService) GetBuildLogs(ctx context.Context, id string) ([]logs.BuildLogLine, error) {
 	return s.orchestrator.GetBuildLogs(ctx, id)
 }
 
-func (s *BuildService) ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (contracts.BuildStep, bool, error) {
+func (s *BuildService) ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error) {
 	return s.orchestrator.ClaimStepIfPending(ctx, buildID, stepIndex, workerID, startedAt)
 }
 
-func (s *BuildService) RunStep(ctx context.Context, request contracts.RunStepRequest) (contracts.RunStepResult, error) {
+func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, error) {
 	return s.orchestrator.RunStep(ctx, request)
 }
 

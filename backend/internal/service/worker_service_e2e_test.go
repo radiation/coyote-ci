@@ -9,8 +9,8 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/execution"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
+	"github.com/radiation/coyote-ci/backend/internal/runner"
 	inprocessrunner "github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
-	"github.com/radiation/coyote-ci/backend/pkg/contracts"
 )
 
 func TestWorkerExecutionVerticalSlice_Success(t *testing.T) {
@@ -47,13 +47,13 @@ func TestWorkerExecutionVerticalSlice_Success(t *testing.T) {
 		t.Fatalf("execute runnable step failed: %v", err)
 	}
 
-	if report.Step.Status != contracts.BuildStepStatusSuccess {
+	if report.Step.Status != domain.BuildStepStatusSuccess {
 		t.Fatalf("expected step status success, got %q", report.Step.Status)
 	}
 	if report.Step.StartedAt == nil || report.Step.FinishedAt == nil {
 		t.Fatal("expected step timestamps")
 	}
-	if report.Result.Status != contracts.RunStepStatusSuccess {
+	if report.Result.Status != runner.RunStepStatusSuccess {
 		t.Fatalf("expected run step status success, got %q", report.Result.Status)
 	}
 	if report.Result.ExitCode != 0 {
@@ -116,13 +116,13 @@ func TestWorkerExecutionVerticalSlice_FailedCommand(t *testing.T) {
 		t.Fatalf("execute runnable step failed: %v", err)
 	}
 
-	if report.Step.Status != contracts.BuildStepStatusFailed {
+	if report.Step.Status != domain.BuildStepStatusFailed {
 		t.Fatalf("expected step status failed, got %q", report.Step.Status)
 	}
 	if report.Step.StartedAt == nil || report.Step.FinishedAt == nil {
 		t.Fatal("expected step timestamps")
 	}
-	if report.Result.Status != contracts.RunStepStatusFailed {
+	if report.Result.Status != runner.RunStepStatusFailed {
 		t.Fatalf("expected run step status failed, got %q", report.Result.Status)
 	}
 	if report.Result.ExitCode != 7 {
@@ -189,13 +189,13 @@ func TestWorkerExecutionVerticalSlice_Timeout(t *testing.T) {
 		t.Fatalf("execute runnable step failed: %v", err)
 	}
 
-	if report.Step.Status != contracts.BuildStepStatusFailed {
+	if report.Step.Status != domain.BuildStepStatusFailed {
 		t.Fatalf("expected step status failed, got %q", report.Step.Status)
 	}
 	if report.Step.StartedAt == nil || report.Step.FinishedAt == nil {
 		t.Fatal("expected step timestamps")
 	}
-	if report.Result.Status != contracts.RunStepStatusFailed {
+	if report.Result.Status != runner.RunStepStatusFailed {
 		t.Fatalf("expected run step status failed, got %q", report.Result.Status)
 	}
 	if report.Result.ExitCode != -1 {
@@ -262,7 +262,7 @@ func TestWorkerExecutionVerticalSlice_ExitZeroStepSucceeds(t *testing.T) {
 	if report.Result.ExitCode != 0 {
 		t.Fatalf("expected exit code 0, got %d", report.Result.ExitCode)
 	}
-	if report.Result.Status != contracts.RunStepStatusSuccess {
+	if report.Result.Status != runner.RunStepStatusSuccess {
 		t.Fatalf("expected run step success, got %q", report.Result.Status)
 	}
 
@@ -273,7 +273,7 @@ func TestWorkerExecutionVerticalSlice_ExitZeroStepSucceeds(t *testing.T) {
 	if len(steps) != 1 {
 		t.Fatalf("expected one step, got %d", len(steps))
 	}
-	if steps[0].Status != contracts.BuildStepStatusSuccess {
+	if steps[0].Status != domain.BuildStepStatusSuccess {
 		t.Fatalf("expected step success, got %q", steps[0].Status)
 	}
 	if steps[0].Stdout == nil || !strings.Contains(*steps[0].Stdout, "success") {
@@ -323,7 +323,7 @@ func TestWorkerExecutionVerticalSlice_MultiStepSuccessThenFailure(t *testing.T) 
 	if err != nil {
 		t.Fatalf("execute first step failed: %v", err)
 	}
-	if firstReport.Result.Status != contracts.RunStepStatusSuccess {
+	if firstReport.Result.Status != runner.RunStepStatusSuccess {
 		t.Fatalf("expected first step success, got %q", firstReport.Result.Status)
 	}
 
@@ -342,7 +342,7 @@ func TestWorkerExecutionVerticalSlice_MultiStepSuccessThenFailure(t *testing.T) 
 	if err != nil {
 		t.Fatalf("execute second step failed: %v", err)
 	}
-	if secondReport.Result.Status != contracts.RunStepStatusFailed {
+	if secondReport.Result.Status != runner.RunStepStatusFailed {
 		t.Fatalf("expected second step failed, got %q", secondReport.Result.Status)
 	}
 	if secondReport.Result.ExitCode != 1 {
@@ -356,10 +356,10 @@ func TestWorkerExecutionVerticalSlice_MultiStepSuccessThenFailure(t *testing.T) 
 	if len(steps) != 2 {
 		t.Fatalf("expected two steps, got %d", len(steps))
 	}
-	if steps[0].Status != contracts.BuildStepStatusSuccess {
+	if steps[0].Status != domain.BuildStepStatusSuccess {
 		t.Fatalf("expected first step success, got %q", steps[0].Status)
 	}
-	if steps[1].Status != contracts.BuildStepStatusFailed {
+	if steps[1].Status != domain.BuildStepStatusFailed {
 		t.Fatalf("expected second step failed, got %q", steps[1].Status)
 	}
 	if steps[0].Stdout == nil || !strings.Contains(*steps[0].Stdout, "success") {

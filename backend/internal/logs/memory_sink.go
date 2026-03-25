@@ -4,8 +4,6 @@ import (
 	"context"
 	"sync"
 	"time"
-
-	"github.com/radiation/coyote-ci/backend/pkg/contracts"
 )
 
 type memoryLogEntry struct {
@@ -40,16 +38,16 @@ func (s *MemorySink) WriteStepLog(_ context.Context, buildID string, stepName st
 	return nil
 }
 
-func (s *MemorySink) GetBuildLogs(_ context.Context, buildID string) ([]contracts.BuildLogLine, error) {
+func (s *MemorySink) GetBuildLogs(_ context.Context, buildID string) ([]BuildLogLine, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	logs := make([]contracts.BuildLogLine, 0)
+	logs := make([]BuildLogLine, 0)
 	for _, entry := range s.entries {
 		if entry.buildID != buildID {
 			continue
 		}
-		logs = append(logs, contracts.BuildLogLine{
+		logs = append(logs, BuildLogLine{
 			StepName:  entry.stepName,
 			Message:   entry.message,
 			Timestamp: entry.timestamp,

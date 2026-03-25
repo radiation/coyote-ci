@@ -6,7 +6,6 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/execution"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
-	"github.com/radiation/coyote-ci/backend/pkg/contracts"
 )
 
 var _ runner.Runner = (*Runner)(nil)
@@ -23,7 +22,7 @@ func New(executor execution.Executor) *Runner {
 	return &Runner{executor: executor}
 }
 
-func (r *Runner) RunStep(ctx context.Context, request contracts.RunStepRequest) (contracts.RunStepResult, error) {
+func (r *Runner) RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, error) {
 	timeout := time.Duration(request.TimeoutSeconds) * time.Second
 
 	execResult, err := r.executor.Execute(ctx, execution.CommandRequest{
@@ -34,15 +33,15 @@ func (r *Runner) RunStep(ctx context.Context, request contracts.RunStepRequest) 
 		Timeout:    timeout,
 	})
 	if err != nil {
-		return contracts.RunStepResult{}, err
+		return runner.RunStepResult{}, err
 	}
 
-	status := contracts.RunStepStatusSuccess
+	status := runner.RunStepStatusSuccess
 	if execResult.ExitCode != 0 {
-		status = contracts.RunStepStatusFailed
+		status = runner.RunStepStatusFailed
 	}
 
-	return contracts.RunStepResult{
+	return runner.RunStepResult{
 		Status:     status,
 		ExitCode:   execResult.ExitCode,
 		Stdout:     execResult.Stdout,

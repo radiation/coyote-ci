@@ -15,7 +15,6 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
-	"github.com/radiation/coyote-ci/backend/pkg/contracts"
 )
 
 type BuildHandler struct {
@@ -338,7 +337,7 @@ func toBuildResponse(build domain.Build) api.BuildResponse {
 	}
 }
 
-func toBuildStepResponse(step contracts.BuildStep) api.BuildStepResponse {
+func toBuildStepResponse(step domain.BuildStep) api.BuildStepResponse {
 	resp := api.BuildStepResponse{
 		ID:           step.ID,
 		BuildID:      step.BuildID,

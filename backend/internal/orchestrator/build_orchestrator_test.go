@@ -10,7 +10,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
-	"github.com/radiation/coyote-ci/backend/pkg/contracts"
+	steprunner "github.com/radiation/coyote-ci/backend/internal/runner"
 )
 
 type fakeBuildStore struct {
@@ -162,17 +162,17 @@ func (s *fakeBuildStore) UpdateCurrentStepIndex(_ context.Context, _ string, cur
 }
 
 type fakeRunner struct {
-	result      contracts.RunStepResult
+	result      steprunner.RunStepResult
 	err         error
 	called      bool
-	lastRequest contracts.RunStepRequest
+	lastRequest steprunner.RunStepRequest
 }
 
-func (r *fakeRunner) RunStep(_ context.Context, request contracts.RunStepRequest) (contracts.RunStepResult, error) {
+func (r *fakeRunner) RunStep(_ context.Context, request steprunner.RunStepRequest) (steprunner.RunStepResult, error) {
 	r.called = true
 	r.lastRequest = request
 	if r.err != nil {
-		return contracts.RunStepResult{}, r.err
+		return steprunner.RunStepResult{}, r.err
 	}
 	return r.result, nil
 }
@@ -444,11 +444,11 @@ func TestBuildOrchestrator_GetBuildLogs_NotFound(t *testing.T) {
 }
 
 func TestBuildOrchestrator_RunStep_DelegatesToRunner(t *testing.T) {
-	runner := &fakeRunner{result: contracts.RunStepResult{Status: contracts.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", Stderr: ""}}
+	runner := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", Stderr: ""}}
 	logs := &fakeLogSink{}
 	orchestrator := NewBuildOrchestrator(&fakeBuildStore{build: domain.Build{ID: "build-1", CurrentStepIndex: 0}, steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusPending}}}, runner, logs)
 
-	request := contracts.RunStepRequest{BuildID: "build-1", StepName: "test", Command: "echo", Args: []string{"ok"}}
+	request := steprunner.RunStepRequest{BuildID: "build-1", StepName: "test", Command: "echo", Args: []string{"ok"}}
 	result, err := orchestrator.RunStep(context.Background(), request)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -460,7 +460,7 @@ func TestBuildOrchestrator_RunStep_DelegatesToRunner(t *testing.T) {
 	if runner.lastRequest.Command != "echo" {
 		t.Fatalf("expected command echo, got %q", runner.lastRequest.Command)
 	}
-	if result.Status != contracts.RunStepStatusSuccess {
+	if result.Status != steprunner.RunStepStatusSuccess {
 		t.Fatalf("expected success status, got %q", result.Status)
 	}
 	store, ok := orchestrator.buildRepo.(*fakeBuildStore)
@@ -485,7 +485,7 @@ func TestBuildOrchestrator_RunStep_RunnerError(t *testing.T) {
 	runner := &fakeRunner{err: errors.New("runner failed")}
 	orchestrator := NewBuildOrchestrator(&fakeBuildStore{build: domain.Build{ID: "build-1", CurrentStepIndex: 0}, steps: []domain.BuildStep{{StepIndex: 0, Name: "echo", Status: domain.BuildStepStatusPending}}}, runner, &fakeLogSink{})
 
-	_, err := orchestrator.RunStep(context.Background(), contracts.RunStepRequest{BuildID: "build-1", StepName: "echo", Command: "echo"})
+	_, err := orchestrator.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepName: "echo", Command: "echo"})
 	if err == nil || err.Error() != "runner failed" {
 		t.Fatalf("expected runner error, got %v", err)
 	}
@@ -494,13 +494,13 @@ func TestBuildOrchestrator_RunStep_RunnerError(t *testing.T) {
 func TestBuildOrchestrator_RunStep_PersistsLogsForSuccessAndFailedResults(t *testing.T) {
 	tests := []struct {
 		name          string
-		runnerResult  contracts.RunStepResult
+		runnerResult  steprunner.RunStepResult
 		expectedLines []string
 	}{
 		{
 			name: "success output logs",
-			runnerResult: contracts.RunStepResult{
-				Status: contracts.RunStepStatusSuccess,
+			runnerResult: steprunner.RunStepResult{
+				Status: steprunner.RunStepStatusSuccess,
 				Stdout: "line-1\nline-2\n",
 				Stderr: "",
 			},
@@ -508,8 +508,8 @@ func TestBuildOrchestrator_RunStep_PersistsLogsForSuccessAndFailedResults(t *tes
 		},
 		{
 			name: "failed output logs",
-			runnerResult: contracts.RunStepResult{
-				Status: contracts.RunStepStatusFailed,
+			runnerResult: steprunner.RunStepResult{
+				Status: steprunner.RunStepStatusFailed,
 				Stdout: "",
 				Stderr: "err-1\nerr-2\n",
 			},
@@ -527,7 +527,7 @@ func TestBuildOrchestrator_RunStep_PersistsLogsForSuccessAndFailedResults(t *tes
 			logStore := logs.NewMemorySink()
 			o := NewBuildOrchestrator(store, runner, logStore)
 
-			if _, err := o.RunStep(context.Background(), contracts.RunStepRequest{BuildID: "build-1", StepName: "step-1", Command: "echo"}); err != nil {
+			if _, err := o.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepName: "step-1", Command: "echo"}); err != nil {
 				t.Fatalf("run step failed: %v", err)
 			}
 

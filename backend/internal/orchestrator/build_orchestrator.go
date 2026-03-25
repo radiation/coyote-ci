@@ -14,7 +14,6 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
-	"github.com/radiation/coyote-ci/backend/pkg/contracts"
 )
 
 var ErrProjectIDRequired = errors.New("project_id is required")
@@ -119,79 +118,25 @@ func (o *BuildOrchestrator) ListBuilds(ctx context.Context) ([]domain.Build, err
 	return o.buildRepo.List(ctx)
 }
 
-func (o *BuildOrchestrator) GetBuildSteps(ctx context.Context, id string) ([]contracts.BuildStep, error) {
-	steps, err := o.buildRepo.GetStepsByBuildID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	result := make([]contracts.BuildStep, 0, len(steps))
-	for _, step := range steps {
-		result = append(result, contracts.BuildStep{
-			ID:             step.ID,
-			BuildID:        step.BuildID,
-			StepIndex:      step.StepIndex,
-			Name:           step.Name,
-			Command:        step.Command,
-			Args:           step.Args,
-			Env:            step.Env,
-			WorkingDir:     step.WorkingDir,
-			TimeoutSeconds: step.TimeoutSeconds,
-			Status:         contracts.BuildStepStatus(step.Status),
-			WorkerID:       step.WorkerID,
-			StartedAt:      step.StartedAt,
-			FinishedAt:     step.FinishedAt,
-			ExitCode:       step.ExitCode,
-			Stdout:         step.Stdout,
-			Stderr:         step.Stderr,
-			ErrorMessage:   step.ErrorMessage,
-		})
-	}
-
-	return result, nil
+func (o *BuildOrchestrator) GetBuildSteps(ctx context.Context, id string) ([]domain.BuildStep, error) {
+	return o.buildRepo.GetStepsByBuildID(ctx, id)
 }
 
-func (o *BuildOrchestrator) GetBuildLogs(ctx context.Context, id string) ([]contracts.BuildLogLine, error) {
+func (o *BuildOrchestrator) GetBuildLogs(ctx context.Context, id string) ([]logs.BuildLogLine, error) {
 	if _, err := o.buildRepo.GetByID(ctx, id); err != nil {
 		return nil, err
 	}
 
 	reader, ok := o.logSink.(logs.LogReader)
 	if !ok {
-		return []contracts.BuildLogLine{}, nil
+		return []logs.BuildLogLine{}, nil
 	}
 
 	return reader.GetBuildLogs(ctx, id)
 }
 
-func (o *BuildOrchestrator) ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (contracts.BuildStep, bool, error) {
-	step, claimed, err := o.buildRepo.ClaimStepIfPending(ctx, buildID, stepIndex, workerID, startedAt)
-	if err != nil {
-		return contracts.BuildStep{}, false, err
-	}
-	if !claimed {
-		return contracts.BuildStep{}, false, nil
-	}
-
-	return contracts.BuildStep{
-		ID:             step.ID,
-		BuildID:        step.BuildID,
-		StepIndex:      step.StepIndex,
-		Name:           step.Name,
-		Command:        step.Command,
-		Args:           step.Args,
-		Env:            step.Env,
-		WorkingDir:     step.WorkingDir,
-		TimeoutSeconds: step.TimeoutSeconds,
-		Status:         contracts.BuildStepStatus(step.Status),
-		WorkerID:       step.WorkerID,
-		StartedAt:      step.StartedAt,
-		FinishedAt:     step.FinishedAt,
-		ExitCode:       step.ExitCode,
-		Stdout:         step.Stdout,
-		Stderr:         step.Stderr,
-		ErrorMessage:   step.ErrorMessage,
-	}, true, nil
+func (o *BuildOrchestrator) ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error) {
+	return o.buildRepo.ClaimStepIfPending(ctx, buildID, stepIndex, workerID, startedAt)
 }
 
 func (o *BuildOrchestrator) QueueBuild(ctx context.Context, id string) (domain.Build, error) {
@@ -238,14 +183,14 @@ func (o *BuildOrchestrator) FailBuild(ctx context.Context, id string) (domain.Bu
 	return o.transitionBuildStatus(ctx, id, domain.BuildStatusFailed, nil)
 }
 
-func (o *BuildOrchestrator) RunStep(ctx context.Context, request contracts.RunStepRequest) (contracts.RunStepResult, error) {
+func (o *BuildOrchestrator) RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, error) {
 	if o.runner == nil {
-		return contracts.RunStepResult{}, ErrRunnerNotConfigured
+		return runner.RunStepResult{}, ErrRunnerNotConfigured
 	}
 
 	startedAt := time.Now().UTC()
 	if _, err := o.persistStepResult(ctx, request.BuildID, request.StepIndex, domain.BuildStepStatusRunning, nil, nil, nil, nil, &startedAt, nil); err != nil {
-		return contracts.RunStepResult{}, err
+		return runner.RunStepResult{}, err
 	}
 
 	result, err := o.runner.RunStep(ctx, request)
@@ -253,20 +198,20 @@ func (o *BuildOrchestrator) RunStep(ctx context.Context, request contracts.RunSt
 		finishedAt := time.Now().UTC()
 		message := err.Error()
 		if _, persistErr := o.persistStepResult(ctx, request.BuildID, request.StepIndex, domain.BuildStepStatusFailed, nil, nil, nil, &message, nil, &finishedAt); persistErr != nil {
-			return contracts.RunStepResult{}, errors.Join(err, persistErr)
+			return runner.RunStepResult{}, errors.Join(err, persistErr)
 		}
-		return contracts.RunStepResult{}, err
+		return runner.RunStepResult{}, err
 	}
 
 	if err := writeOutputLogs(ctx, o.logSink, request.BuildID, request.StepName, result.Stdout); err != nil {
-		return contracts.RunStepResult{}, err
+		return runner.RunStepResult{}, err
 	}
 	if err := writeOutputLogs(ctx, o.logSink, request.BuildID, request.StepName, result.Stderr); err != nil {
-		return contracts.RunStepResult{}, err
+		return runner.RunStepResult{}, err
 	}
 
 	stepStatus := domain.BuildStepStatusSuccess
-	if result.Status == contracts.RunStepStatusFailed {
+	if result.Status == runner.RunStepStatusFailed {
 		stepStatus = domain.BuildStepStatusFailed
 	}
 
@@ -292,7 +237,7 @@ func (o *BuildOrchestrator) RunStep(ctx context.Context, request contracts.RunSt
 
 	exitCode := result.ExitCode
 	if _, err := o.persistStepResult(ctx, request.BuildID, request.StepIndex, stepStatus, &exitCode, stdout, stderr, stepError, &result.StartedAt, &result.FinishedAt); err != nil {
-		return contracts.RunStepResult{}, err
+		return runner.RunStepResult{}, err
 	}
 
 	return result, nil
