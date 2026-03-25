@@ -37,7 +37,7 @@ func main() {
 	}()
 
 	buildRepo := repositorypostgres.NewBuildRepository(db)
-	stepRunner := inprocess.New(nil)
+	stepRunner := inprocess.New()
 	logSink := logs.NewMemorySink()
 	buildService := service.NewBuildService(buildRepo, stepRunner, logSink)
 	workerService := service.NewWorkerService(buildService)

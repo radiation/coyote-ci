@@ -2,74 +2,66 @@ package inprocess
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/radiation/coyote-ci/backend/internal/execution"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 )
 
-type fakeExecutor struct {
-	result      execution.CommandResult
-	err         error
-	called      bool
-	lastRequest execution.CommandRequest
-}
-
-func (e *fakeExecutor) Execute(_ context.Context, request execution.CommandRequest) (execution.CommandResult, error) {
-	e.called = true
-	e.lastRequest = request
-	if e.err != nil {
-		return execution.CommandResult{}, e.err
-	}
-	return e.result, nil
-}
-
 func TestRunner_RunStep_Success(t *testing.T) {
-	exec := &fakeExecutor{result: execution.CommandResult{ExitCode: 0, Stdout: "ok", StartedAt: time.Now().UTC(), CompletedAt: time.Now().UTC()}}
-	r := New(exec)
+	r := New()
 
-	res, err := r.RunStep(context.Background(), runner.RunStepRequest{Command: "echo", Args: []string{"ok"}, TimeoutSeconds: 5})
+	res, err := r.RunStep(context.Background(), runner.RunStepRequest{
+		Command: "sh",
+		Args:    []string{"-c", "echo hello"},
+	})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
-	}
-	if !exec.called {
-		t.Fatal("expected executor to be called")
-	}
-	if exec.lastRequest.Command != "echo" {
-		t.Fatalf("expected command echo, got %q", exec.lastRequest.Command)
-	}
-	if exec.lastRequest.Timeout != 5*time.Second {
-		t.Fatalf("expected 5s timeout, got %v", exec.lastRequest.Timeout)
 	}
 	if res.Status != runner.RunStepStatusSuccess {
 		t.Fatalf("expected success status, got %q", res.Status)
 	}
+	if res.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", res.ExitCode)
+	}
+	if res.Stdout != "hello\n" {
+		t.Fatalf("expected stdout hello, got %q", res.Stdout)
+	}
+	if res.StartedAt.IsZero() || res.FinishedAt.IsZero() {
+		t.Fatal("expected started/finished timestamps to be set")
+	}
 }
 
-func TestRunner_RunStep_FailedExitCode(t *testing.T) {
-	exec := &fakeExecutor{result: execution.CommandResult{ExitCode: 2}}
-	r := New(exec)
+func TestRunner_RunStep_NonZeroExit(t *testing.T) {
+	r := New()
 
-	res, err := r.RunStep(context.Background(), runner.RunStepRequest{Command: "false"})
+	res, err := r.RunStep(context.Background(), runner.RunStepRequest{
+		Command: "sh",
+		Args:    []string{"-c", "echo boom 1>&2; exit 3"},
+	})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 	if res.Status != runner.RunStepStatusFailed {
 		t.Fatalf("expected failed status, got %q", res.Status)
 	}
-	if exec.lastRequest.Timeout != 0 {
-		t.Fatalf("expected default timeout 0, got %v", exec.lastRequest.Timeout)
+	if res.ExitCode != 3 {
+		t.Fatalf("expected exit code 3, got %d", res.ExitCode)
+	}
+	if res.Stderr != "boom\n" {
+		t.Fatalf("expected stderr boom, got %q", res.Stderr)
 	}
 }
 
-func TestRunner_RunStep_TimeoutMarkedFailedWithReason(t *testing.T) {
-	exec := &fakeExecutor{result: execution.CommandResult{ExitCode: -1, Stderr: "step execution timed out after 2s"}}
-	r := New(exec)
+func TestRunner_RunStep_Timeout(t *testing.T) {
+	r := New()
 
-	res, err := r.RunStep(context.Background(), runner.RunStepRequest{Command: "sh", Args: []string{"-c", "sleep 5"}, TimeoutSeconds: 2})
+	res, err := r.RunStep(context.Background(), runner.RunStepRequest{
+		Command:        "sh",
+		Args:           []string{"-c", "sleep 2"},
+		TimeoutSeconds: 1,
+	})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -79,17 +71,50 @@ func TestRunner_RunStep_TimeoutMarkedFailedWithReason(t *testing.T) {
 	if res.ExitCode != -1 {
 		t.Fatalf("expected timeout exit code -1, got %d", res.ExitCode)
 	}
-	if !strings.Contains(res.Stderr, "timed out") {
-		t.Fatalf("expected timeout reason, got %q", res.Stderr)
+	if !strings.Contains(res.Stderr, "step execution timed out after") {
+		t.Fatalf("expected timeout reason in stderr, got %q", res.Stderr)
 	}
 }
 
-func TestRunner_RunStep_ExecutorError(t *testing.T) {
-	exec := &fakeExecutor{err: errors.New("exec failed")}
-	r := New(exec)
+func TestRunner_RunStep_ContextDeadlineExceeded(t *testing.T) {
+	r := New()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
 
-	_, err := r.RunStep(context.Background(), runner.RunStepRequest{Command: "echo"})
-	if err == nil || err.Error() != "exec failed" {
-		t.Fatalf("expected exec error, got %v", err)
+	res, err := r.RunStep(ctx, runner.RunStepRequest{
+		Command: "sh",
+		Args:    []string{"-c", "sleep 2"},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if res.Status != runner.RunStepStatusFailed {
+		t.Fatalf("expected failed status, got %q", res.Status)
+	}
+	if res.ExitCode != -1 {
+		t.Fatalf("expected timeout exit code -1, got %d", res.ExitCode)
+	}
+	if !strings.Contains(res.Stderr, "step execution timed out") {
+		t.Fatalf("expected timeout reason in stderr, got %q", res.Stderr)
+	}
+}
+
+func TestRunner_RunStep_EmptyCommand(t *testing.T) {
+	r := New()
+
+	_, err := r.RunStep(context.Background(), runner.RunStepRequest{})
+	if err == nil {
+		t.Fatal("expected error for empty command, got nil")
+	}
+}
+
+func TestRunner_RunStep_CommandNotFound(t *testing.T) {
+	r := New()
+
+	_, err := r.RunStep(context.Background(), runner.RunStepRequest{
+		Command: "definitely-not-a-real-command",
+	})
+	if err == nil {
+		t.Fatal("expected runtime error, got nil")
 	}
 }
