@@ -223,7 +223,7 @@ func (r *BuildRepository) ClaimStepIfPending(_ context.Context, buildID string, 
 	return domain.BuildStep{}, false, nil
 }
 
-func (r *BuildRepository) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, status domain.BuildStepStatus, workerID *string, exitCode *int, stdout *string, stderr *string, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
+func (r *BuildRepository) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -237,29 +237,29 @@ func (r *BuildRepository) UpdateStepByIndex(_ context.Context, buildID string, s
 			continue
 		}
 
-		steps[idx].Status = status
-		if workerID != nil {
-			steps[idx].WorkerID = workerID
+		steps[idx].Status = update.Status
+		if update.WorkerID != nil {
+			steps[idx].WorkerID = update.WorkerID
 		}
-		if exitCode != nil {
-			steps[idx].ExitCode = exitCode
+		if update.ExitCode != nil {
+			steps[idx].ExitCode = update.ExitCode
 		}
-		if stdout != nil {
-			steps[idx].Stdout = stdout
+		if update.Stdout != nil {
+			steps[idx].Stdout = update.Stdout
 		}
-		if stderr != nil {
-			steps[idx].Stderr = stderr
+		if update.Stderr != nil {
+			steps[idx].Stderr = update.Stderr
 		}
-		if status == domain.BuildStepStatusFailed {
-			steps[idx].ErrorMessage = errorMessage
+		if update.Status == domain.BuildStepStatusFailed {
+			steps[idx].ErrorMessage = update.ErrorMessage
 		} else {
 			steps[idx].ErrorMessage = nil
 		}
-		if startedAt != nil {
-			steps[idx].StartedAt = startedAt
+		if update.StartedAt != nil {
+			steps[idx].StartedAt = update.StartedAt
 		}
-		if finishedAt != nil {
-			steps[idx].FinishedAt = finishedAt
+		if update.FinishedAt != nil {
+			steps[idx].FinishedAt = update.FinishedAt
 		}
 
 		r.buildSteps[buildID] = steps

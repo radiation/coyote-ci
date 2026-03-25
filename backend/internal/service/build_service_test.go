@@ -3,11 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
+	steprunner "github.com/radiation/coyote-ci/backend/internal/runner"
 )
 
 type fakeBuildRepository struct {
@@ -35,9 +38,9 @@ func (r *fakeBuildRepository) CreateQueuedBuild(_ context.Context, build domain.
 		return domain.Build{}, r.createErr
 	}
 
-	r.steps = append([]domain.BuildStep(nil), steps...)
 	build.Status = domain.BuildStatusQueued
 	r.build = build
+	r.steps = append([]domain.BuildStep(nil), steps...)
 
 	return build, nil
 }
@@ -81,8 +84,9 @@ func (r *fakeBuildRepository) QueueBuild(_ context.Context, id string, steps []d
 		return domain.Build{}, r.updateErr
 	}
 
-	r.steps = append([]domain.BuildStep(nil), steps...)
 	r.build.Status = domain.BuildStatusQueued
+	r.steps = append([]domain.BuildStep(nil), steps...)
+
 	return r.build, nil
 }
 
@@ -96,28 +100,56 @@ func (r *fakeBuildRepository) GetStepsByBuildID(_ context.Context, _ string) ([]
 	return steps, nil
 }
 
-func (r *fakeBuildRepository) ClaimStepIfPending(_ context.Context, _ string, _ int, _ *string, _ time.Time) (domain.BuildStep, bool, error) {
+func (r *fakeBuildRepository) ClaimStepIfPending(_ context.Context, _ string, stepIndex int, _ *string, startedAt time.Time) (domain.BuildStep, bool, error) {
 	if r.updateErr != nil {
 		return domain.BuildStep{}, false, r.updateErr
 	}
 
-	if len(r.steps) == 0 {
-		return domain.BuildStep{}, false, repository.ErrBuildNotFound
+	for i := range r.steps {
+		if r.steps[i].StepIndex != stepIndex {
+			continue
+		}
+		if r.steps[i].Status != domain.BuildStepStatusPending {
+			return domain.BuildStep{}, false, nil
+		}
+		r.steps[i].Status = domain.BuildStepStatusRunning
+		r.steps[i].StartedAt = &startedAt
+		return r.steps[i], true, nil
 	}
 
-	return r.steps[0], true, nil
+	return domain.BuildStep{}, false, repository.ErrBuildNotFound
 }
 
-func (r *fakeBuildRepository) UpdateStepByIndex(_ context.Context, _ string, _ int, _ domain.BuildStepStatus, _ *string, _ *int, _ *string, _ *string, _ *string, _ *time.Time, _ *time.Time) (domain.BuildStep, error) {
+func (r *fakeBuildRepository) UpdateStepByIndex(_ context.Context, _ string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, error) {
 	if r.updateErr != nil {
 		return domain.BuildStep{}, r.updateErr
 	}
 
-	if len(r.steps) == 0 {
-		return domain.BuildStep{}, repository.ErrBuildNotFound
+	for i := range r.steps {
+		if r.steps[i].StepIndex != stepIndex {
+			continue
+		}
+
+		r.steps[i].Status = update.Status
+		if update.ExitCode != nil {
+			r.steps[i].ExitCode = update.ExitCode
+		}
+		if update.Stdout != nil {
+			r.steps[i].Stdout = update.Stdout
+		}
+		if update.Stderr != nil {
+			r.steps[i].Stderr = update.Stderr
+		}
+		if update.StartedAt != nil {
+			r.steps[i].StartedAt = update.StartedAt
+		}
+		if update.FinishedAt != nil {
+			r.steps[i].FinishedAt = update.FinishedAt
+		}
+		return r.steps[i], nil
 	}
 
-	return r.steps[0], nil
+	return domain.BuildStep{}, repository.ErrBuildNotFound
 }
 
 func (r *fakeBuildRepository) UpdateCurrentStepIndex(_ context.Context, _ string, currentStepIndex int) (domain.Build, error) {
@@ -129,16 +161,47 @@ func (r *fakeBuildRepository) UpdateCurrentStepIndex(_ context.Context, _ string
 	return r.build, nil
 }
 
+type fakeRunner struct {
+	result      steprunner.RunStepResult
+	err         error
+	called      bool
+	lastRequest steprunner.RunStepRequest
+}
+
+func (r *fakeRunner) RunStep(_ context.Context, request steprunner.RunStepRequest) (steprunner.RunStepResult, error) {
+	r.called = true
+	r.lastRequest = request
+	if r.err != nil {
+		return steprunner.RunStepResult{}, r.err
+	}
+	return r.result, nil
+}
+
+type fakeLogSink struct {
+	err    error
+	calls  int
+	lines  []string
+	builds []string
+	steps  []string
+}
+
+func (s *fakeLogSink) WriteStepLog(_ context.Context, buildID string, stepName string, line string) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.calls++
+	s.builds = append(s.builds, buildID)
+	s.steps = append(s.steps, stepName)
+	s.lines = append(s.lines, line)
+	return nil
+}
+
 func TestNewBuildService(t *testing.T) {
 	repo := &fakeBuildRepository{}
-	svc := NewBuildService(repo)
+	svc := NewBuildService(repo, nil, nil)
 
 	if svc == nil {
 		t.Fatal("expected service instance, got nil")
-	}
-
-	if svc.orchestrator == nil {
-		t.Fatal("expected service to initialize orchestrator")
 	}
 }
 
@@ -174,7 +237,7 @@ func TestBuildService_CreateBuild(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			svc := NewBuildService(tc.repo)
+			svc := NewBuildService(tc.repo, nil, nil)
 
 			build, err := svc.CreateBuild(context.Background(), tc.input)
 			if tc.expectErr != nil {
@@ -220,7 +283,7 @@ func TestBuildService_CreateBuild(t *testing.T) {
 
 func TestBuildService_CreateBuild_WithStepsAutoQueues(t *testing.T) {
 	repo := &fakeBuildRepository{}
-	svc := NewBuildService(repo)
+	svc := NewBuildService(repo, nil, nil)
 
 	build, err := svc.CreateBuild(context.Background(), CreateBuildInput{
 		ProjectID: "project-1",
@@ -279,7 +342,7 @@ func TestBuildService_GetBuild(t *testing.T) {
 			name:      "not found",
 			repo:      &fakeBuildRepository{getErr: repository.ErrBuildNotFound},
 			buildID:   "missing",
-			expectErr: repository.ErrBuildNotFound,
+			expectErr: ErrBuildNotFound,
 		},
 	}
 
@@ -288,7 +351,7 @@ func TestBuildService_GetBuild(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			svc := NewBuildService(tc.repo)
+			svc := NewBuildService(tc.repo, nil, nil)
 			build, err := svc.GetBuild(context.Background(), tc.buildID)
 
 			if tc.expectErr != nil {
@@ -309,6 +372,22 @@ func TestBuildService_GetBuild(t *testing.T) {
 	}
 }
 
+func TestBuildService_ListBuilds(t *testing.T) {
+	repo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending}}
+	svc := NewBuildService(repo, nil, nil)
+
+	builds, err := svc.ListBuilds(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(builds) != 1 {
+		t.Fatalf("expected one build, got %d", len(builds))
+	}
+	if builds[0].ID != "build-1" {
+		t.Fatalf("expected build-1 id, got %q", builds[0].ID)
+	}
+}
+
 func TestBuildService_ValidTransitions(t *testing.T) {
 	now := time.Now().UTC()
 
@@ -319,8 +398,20 @@ func TestBuildService_ValidTransitions(t *testing.T) {
 		expectedStatus domain.BuildStatus
 	}{
 		{
+			name:           "pending to queued",
+			initialStatus:  domain.BuildStatusPending,
+			action:         (*BuildService).QueueBuild,
+			expectedStatus: domain.BuildStatusQueued,
+		},
+		{
 			name:           "pending to running",
 			initialStatus:  domain.BuildStatusPending,
+			action:         (*BuildService).StartBuild,
+			expectedStatus: domain.BuildStatusRunning,
+		},
+		{
+			name:           "queued to running",
+			initialStatus:  domain.BuildStatusQueued,
 			action:         (*BuildService).StartBuild,
 			expectedStatus: domain.BuildStatusRunning,
 		},
@@ -352,7 +443,7 @@ func TestBuildService_ValidTransitions(t *testing.T) {
 				},
 			}
 
-			svc := NewBuildService(repo)
+			svc := NewBuildService(repo, nil, nil)
 
 			updated, err := tc.action(svc, context.Background(), "build-1")
 			if err != nil {
@@ -414,7 +505,7 @@ func TestBuildService_InvalidTransitions(t *testing.T) {
 				},
 			}
 
-			svc := NewBuildService(repo)
+			svc := NewBuildService(repo, nil, nil)
 
 			_, err := tc.action(svc, context.Background(), "build-1")
 			if !errors.Is(err, ErrInvalidBuildStatusTransition) {
@@ -430,10 +521,10 @@ func TestBuildService_InvalidTransitions(t *testing.T) {
 
 func TestBuildService_TransitionBuildStatus_NotFound(t *testing.T) {
 	repo := &fakeBuildRepository{getErr: repository.ErrBuildNotFound}
-	svc := NewBuildService(repo)
+	svc := NewBuildService(repo, nil, nil)
 
 	_, err := svc.StartBuild(context.Background(), "missing-build")
-	if !errors.Is(err, repository.ErrBuildNotFound) {
+	if !errors.Is(err, ErrBuildNotFound) {
 		t.Fatalf("expected ErrBuildNotFound, got %v", err)
 	}
 
@@ -452,7 +543,7 @@ func TestBuildService_TransitionBuildStatus_UpdateError(t *testing.T) {
 		updateErr: errors.New("update failed"),
 	}
 
-	svc := NewBuildService(repo)
+	svc := NewBuildService(repo, nil, nil)
 
 	_, err := svc.StartBuild(context.Background(), "build-1")
 	if err == nil || err.Error() != "update failed" {
@@ -461,5 +552,243 @@ func TestBuildService_TransitionBuildStatus_UpdateError(t *testing.T) {
 
 	if repo.updateCalls != 1 {
 		t.Fatalf("expected UpdateStatus to be called once, got %d", repo.updateCalls)
+	}
+}
+
+func TestBuildService_QueueBuildWithTemplate(t *testing.T) {
+	tests := []struct {
+		name          string
+		template      string
+		expectedNames []string
+	}{
+		{name: "default when omitted", template: "", expectedNames: []string{"default"}},
+		{name: "default explicit", template: BuildTemplateDefault, expectedNames: []string{"default"}},
+		{name: "test template", template: BuildTemplateTest, expectedNames: []string{"setup", "test", "teardown"}},
+		{name: "build template", template: BuildTemplateBuild, expectedNames: []string{"install", "compile"}},
+		{name: "fail template", template: BuildTemplateFail, expectedNames: []string{"setup", "verify"}},
+		{name: "unknown falls back", template: "unknown", expectedNames: []string{"default"}},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			repo := &fakeBuildRepository{
+				build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC()},
+			}
+			svc := NewBuildService(repo, nil, nil)
+
+			if _, err := svc.QueueBuildWithTemplate(context.Background(), "build-1", tc.template); err != nil {
+				t.Fatalf("queue with template returned error: %v", err)
+			}
+
+			if len(repo.steps) != len(tc.expectedNames) {
+				t.Fatalf("expected %d steps, got %d", len(tc.expectedNames), len(repo.steps))
+			}
+
+			for idx, expectedName := range tc.expectedNames {
+				if repo.steps[idx].StepIndex != idx {
+					t.Fatalf("expected step index %d, got %d", idx, repo.steps[idx].StepIndex)
+				}
+				if repo.steps[idx].Name != expectedName {
+					t.Fatalf("expected step name %q at index %d, got %q", expectedName, idx, repo.steps[idx].Name)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildService_QueueBuildWithTemplate_FailTemplateCommands(t *testing.T) {
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC()},
+	}
+	svc := NewBuildService(repo, nil, nil)
+
+	if _, err := svc.QueueBuildWithTemplate(context.Background(), "build-1", BuildTemplateFail); err != nil {
+		t.Fatalf("queue with fail template returned error: %v", err)
+	}
+
+	if len(repo.steps) != 2 {
+		t.Fatalf("expected 2 fail-template steps, got %d", len(repo.steps))
+	}
+	if len(repo.steps[0].Args) < 2 || !strings.Contains(repo.steps[0].Args[1], "exit 0") {
+		t.Fatalf("expected first step script to include exit 0, got %+v", repo.steps[0].Args)
+	}
+	if len(repo.steps[1].Args) < 2 || !strings.Contains(repo.steps[1].Args[1], "exit 1") {
+		t.Fatalf("expected second step script to include exit 1, got %+v", repo.steps[1].Args)
+	}
+}
+
+func TestBuildService_QueueBuildWithTemplate_CustomTemplateCommands(t *testing.T) {
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC()},
+	}
+	svc := NewBuildService(repo, nil, nil)
+
+	customSteps := []QueueBuildCustomStepInput{
+		{Command: "echo ok && exit 0"},
+		{Name: "failure", Command: "echo fail && exit 1"},
+	}
+
+	if _, err := svc.QueueBuildWithTemplateAndCustomSteps(context.Background(), "build-1", BuildTemplateCustom, customSteps); err != nil {
+		t.Fatalf("queue with custom template returned error: %v", err)
+	}
+
+	if len(repo.steps) != 2 {
+		t.Fatalf("expected 2 custom steps, got %d", len(repo.steps))
+	}
+	if repo.steps[0].Name != "step-1" {
+		t.Fatalf("expected generated first step name step-1, got %q", repo.steps[0].Name)
+	}
+	if len(repo.steps[0].Args) < 2 || repo.steps[0].Args[0] != "-c" || repo.steps[0].Args[1] != "echo ok && exit 0" {
+		t.Fatalf("expected first step to run via sh -c with command, got %+v", repo.steps[0].Args)
+	}
+	if repo.steps[1].Name != "failure" {
+		t.Fatalf("expected explicit step name to persist, got %q", repo.steps[1].Name)
+	}
+	if len(repo.steps[1].Args) < 2 || repo.steps[1].Args[1] != "echo fail && exit 1" {
+		t.Fatalf("expected second step command to persist, got %+v", repo.steps[1].Args)
+	}
+}
+
+func TestBuildService_QueueBuildWithTemplate_CustomTemplateValidation(t *testing.T) {
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC()},
+	}
+	svc := NewBuildService(repo, nil, nil)
+
+	if _, err := svc.QueueBuildWithTemplateAndCustomSteps(context.Background(), "build-1", BuildTemplateCustom, nil); !errors.Is(err, ErrCustomTemplateStepsRequired) {
+		t.Fatalf("expected ErrCustomTemplateStepsRequired, got %v", err)
+	}
+
+	if _, err := svc.QueueBuildWithTemplateAndCustomSteps(context.Background(), "build-1", BuildTemplateCustom, []QueueBuildCustomStepInput{{Name: "bad", Command: "  "}}); !errors.Is(err, ErrCustomTemplateStepCommandRequired) {
+		t.Fatalf("expected ErrCustomTemplateStepCommandRequired, got %v", err)
+	}
+}
+
+func TestBuildService_GetBuildSteps_NotFound(t *testing.T) {
+	repo := &fakeBuildRepository{getErr: repository.ErrBuildNotFound}
+	svc := NewBuildService(repo, nil, nil)
+
+	_, err := svc.GetBuildSteps(context.Background(), "missing")
+	if !errors.Is(err, ErrBuildNotFound) {
+		t.Fatalf("expected not found, got %v", err)
+	}
+}
+
+func TestBuildService_GetBuildLogs_NotFound(t *testing.T) {
+	repo := &fakeBuildRepository{getErr: repository.ErrBuildNotFound}
+	svc := NewBuildService(repo, nil, nil)
+
+	_, err := svc.GetBuildLogs(context.Background(), "missing")
+	if !errors.Is(err, ErrBuildNotFound) {
+		t.Fatalf("expected not found, got %v", err)
+	}
+}
+
+func TestBuildService_RunStep_DelegatesToRunner(t *testing.T) {
+	runner := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", Stderr: ""}}
+	logSink := &fakeLogSink{}
+	repo := &fakeBuildRepository{build: domain.Build{ID: "build-1", CurrentStepIndex: 0}, steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusPending}}}
+	svc := NewBuildService(repo, runner, logSink)
+
+	request := steprunner.RunStepRequest{BuildID: "build-1", StepName: "test", Command: "echo", Args: []string{"ok"}}
+	result, err := svc.RunStep(context.Background(), request)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if !runner.called {
+		t.Fatal("expected runner to be called")
+	}
+	if runner.lastRequest.Command != "echo" {
+		t.Fatalf("expected command echo, got %q", runner.lastRequest.Command)
+	}
+	if result.Status != steprunner.RunStepStatusSuccess {
+		t.Fatalf("expected success status, got %q", result.Status)
+	}
+	if repo.steps[0].ExitCode == nil || *repo.steps[0].ExitCode != 0 {
+		t.Fatalf("expected persisted exit code 0, got %v", repo.steps[0].ExitCode)
+	}
+	if repo.steps[0].Stdout == nil || *repo.steps[0].Stdout != "ok\n" {
+		t.Fatalf("expected persisted stdout ok, got %v", repo.steps[0].Stdout)
+	}
+	if logSink.calls != 1 {
+		t.Fatalf("expected one log write, got %d", logSink.calls)
+	}
+	if logSink.lines[0] != "ok" {
+		t.Fatalf("expected trimmed log line, got %q", logSink.lines[0])
+	}
+}
+
+func TestBuildService_RunStep_RunnerError(t *testing.T) {
+	runner := &fakeRunner{err: errors.New("runner failed")}
+	repo := &fakeBuildRepository{build: domain.Build{ID: "build-1", CurrentStepIndex: 0}, steps: []domain.BuildStep{{StepIndex: 0, Name: "echo", Status: domain.BuildStepStatusPending}}}
+	svc := NewBuildService(repo, runner, &fakeLogSink{})
+
+	_, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepName: "echo", Command: "echo"})
+	if err == nil || err.Error() != "runner failed" {
+		t.Fatalf("expected runner error, got %v", err)
+	}
+}
+
+func TestBuildService_RunStep_PersistsLogsForSuccessAndFailedResults(t *testing.T) {
+	tests := []struct {
+		name          string
+		runnerResult  steprunner.RunStepResult
+		expectedLines []string
+	}{
+		{
+			name: "success output logs",
+			runnerResult: steprunner.RunStepResult{
+				Status: steprunner.RunStepStatusSuccess,
+				Stdout: "line-1\nline-2\n",
+				Stderr: "",
+			},
+			expectedLines: []string{"line-1", "line-2"},
+		},
+		{
+			name: "failed output logs",
+			runnerResult: steprunner.RunStepResult{
+				Status: steprunner.RunStepStatusFailed,
+				Stdout: "",
+				Stderr: "err-1\nerr-2\n",
+			},
+			expectedLines: []string{"err-1", "err-2"},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			repo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}, steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusPending}}}
+			runner := &fakeRunner{result: tc.runnerResult}
+			logStore := logs.NewMemorySink()
+			svc := NewBuildService(repo, runner, logStore)
+
+			if _, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepName: "step-1", Command: "echo"}); err != nil {
+				t.Fatalf("run step failed: %v", err)
+			}
+
+			buildLogs, err := svc.GetBuildLogs(context.Background(), "build-1")
+			if err != nil {
+				t.Fatalf("get build logs failed: %v", err)
+			}
+			if len(buildLogs) != len(tc.expectedLines) {
+				t.Fatalf("expected %d logs, got %d", len(tc.expectedLines), len(buildLogs))
+			}
+
+			for i := range tc.expectedLines {
+				if buildLogs[i].Message != tc.expectedLines[i] {
+					t.Fatalf("expected log line %q at index %d, got %q", tc.expectedLines[i], i, buildLogs[i].Message)
+				}
+				if buildLogs[i].StepName != "step-1" {
+					t.Fatalf("expected step name step-1, got %q", buildLogs[i].StepName)
+				}
+			}
+		})
 	}
 }

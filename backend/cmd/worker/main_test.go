@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/runner"
 	"github.com/radiation/coyote-ci/backend/internal/service"
-	"github.com/radiation/coyote-ci/backend/pkg/contracts"
 )
 
 type fakeWorkerIterationService struct {
@@ -36,12 +37,12 @@ func TestRunWorkerIteration_Success(t *testing.T) {
 		claimOK:   true,
 		executeReport: service.StepExecutionReport{
 			BuildID: "build-1",
-			Step: contracts.BuildStep{
+			Step: domain.BuildStep{
 				Name:   "default",
-				Status: contracts.BuildStepStatusSuccess,
+				Status: domain.BuildStepStatusSuccess,
 			},
-			Result: contracts.RunStepResult{
-				Status:     contracts.RunStepStatusSuccess,
+			Result: runner.RunStepResult{
+				Status:     runner.RunStepStatusSuccess,
 				ExitCode:   0,
 				StartedAt:  time.Now().UTC(),
 				FinishedAt: time.Now().UTC(),

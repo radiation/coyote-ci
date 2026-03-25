@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
-	"github.com/radiation/coyote-ci/backend/pkg/contracts"
+	"github.com/radiation/coyote-ci/backend/internal/runner"
 )
 
 type fakeBuildExecutionBoundary struct {
 	listBuildsResp []domain.Build
 	listBuildsErr  error
-	stepsByBuildID map[string][]contracts.BuildStep
+	stepsByBuildID map[string][]domain.BuildStep
 	getStepsErr    error
 	claimErr       error
 	claimMap       map[string]bool
@@ -31,10 +31,10 @@ type fakeBuildExecutionBoundary struct {
 	completeErr error
 	failErr     error
 	runStepErr  error
-	runStepResp contracts.RunStepResult
+	runStepResp runner.RunStepResult
 
 	lastBuildID string
-	lastRequest contracts.RunStepRequest
+	lastRequest runner.RunStepRequest
 }
 
 func claimKey(buildID string, stepIndex int) string {
@@ -53,21 +53,21 @@ func (f *fakeBuildExecutionBoundary) ListBuilds(_ context.Context) ([]domain.Bui
 	return f.listBuildsResp, nil
 }
 
-func (f *fakeBuildExecutionBoundary) GetBuildSteps(_ context.Context, id string) ([]contracts.BuildStep, error) {
+func (f *fakeBuildExecutionBoundary) GetBuildSteps(_ context.Context, id string) ([]domain.BuildStep, error) {
 	if f.getStepsErr != nil {
 		return nil, f.getStepsErr
 	}
 
 	steps := f.stepsByBuildID[id]
-	out := make([]contracts.BuildStep, len(steps))
+	out := make([]domain.BuildStep, len(steps))
 	copy(out, steps)
 	return out, nil
 }
 
-func (f *fakeBuildExecutionBoundary) ClaimStepIfPending(_ context.Context, buildID string, stepIndex int, _ *string, startedAt time.Time) (contracts.BuildStep, bool, error) {
+func (f *fakeBuildExecutionBoundary) ClaimStepIfPending(_ context.Context, buildID string, stepIndex int, _ *string, startedAt time.Time) (domain.BuildStep, bool, error) {
 	f.claimCalls++
 	if f.claimErr != nil {
-		return contracts.BuildStep{}, false, f.claimErr
+		return domain.BuildStep{}, false, f.claimErr
 	}
 
 	steps := f.stepsByBuildID[buildID]
@@ -80,34 +80,34 @@ func (f *fakeBuildExecutionBoundary) ClaimStepIfPending(_ context.Context, build
 		if f.claimMap != nil {
 			allowed, ok := f.claimMap[key]
 			if ok && !allowed {
-				return contracts.BuildStep{}, false, nil
+				return domain.BuildStep{}, false, nil
 			}
 		}
 
-		if steps[idx].Status != contracts.BuildStepStatusPending {
-			return contracts.BuildStep{}, false, nil
+		if steps[idx].Status != domain.BuildStepStatusPending {
+			return domain.BuildStep{}, false, nil
 		}
 
-		steps[idx].Status = contracts.BuildStepStatusRunning
+		steps[idx].Status = domain.BuildStepStatusRunning
 		steps[idx].StartedAt = &startedAt
 		f.stepsByBuildID[buildID] = steps
 		return steps[idx], true, nil
 	}
 
-	return contracts.BuildStep{}, false, nil
+	return domain.BuildStep{}, false, nil
 }
 
 func (f *fakeBuildExecutionBoundary) QueueBuild(_ context.Context, id string) (domain.Build, error) {
 	f.queueCalls++
 
 	if f.stepsByBuildID == nil {
-		f.stepsByBuildID = map[string][]contracts.BuildStep{}
+		f.stepsByBuildID = map[string][]domain.BuildStep{}
 	}
 	if len(f.stepsByBuildID[id]) == 0 {
-		f.stepsByBuildID[id] = []contracts.BuildStep{{
+		f.stepsByBuildID[id] = []domain.BuildStep{{
 			StepIndex: 0,
 			Name:      "default",
-			Status:    contracts.BuildStepStatusPending,
+			Status:    domain.BuildStepStatusPending,
 		}}
 	}
 
@@ -141,21 +141,21 @@ func (f *fakeBuildExecutionBoundary) FailBuild(_ context.Context, id string) (do
 	return domain.Build{ID: id, Status: domain.BuildStatusFailed}, nil
 }
 
-func (f *fakeBuildExecutionBoundary) RunStep(_ context.Context, request contracts.RunStepRequest) (contracts.RunStepResult, error) {
+func (f *fakeBuildExecutionBoundary) RunStep(_ context.Context, request runner.RunStepRequest) (runner.RunStepResult, error) {
 	f.runStepCalls++
 	f.lastRequest = request
 	if f.runStepErr != nil {
-		return contracts.RunStepResult{}, f.runStepErr
+		return runner.RunStepResult{}, f.runStepErr
 	}
 	return f.runStepResp, nil
 }
 
 func TestWorkerService_ExecuteRunnableStep_Success(t *testing.T) {
 	boundary := &fakeBuildExecutionBoundary{
-		runStepResp: contracts.RunStepResult{Status: contracts.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()},
-		stepsByBuildID: map[string][]contracts.BuildStep{
+		runStepResp: runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()},
+		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
-				{Name: "test", Status: contracts.BuildStepStatusSuccess},
+				{Name: "test", Status: domain.BuildStepStatusSuccess},
 			},
 		},
 	}
@@ -179,7 +179,7 @@ func TestWorkerService_ExecuteRunnableStep_Success(t *testing.T) {
 	if boundary.lastRequest.Command != "echo" || boundary.lastRequest.StepName != "test" || boundary.lastRequest.BuildID != "build-1" {
 		t.Fatalf("unexpected run step request: %+v", boundary.lastRequest)
 	}
-	if report.Step.Status != contracts.BuildStepStatusSuccess {
+	if report.Step.Status != domain.BuildStepStatusSuccess {
 		t.Fatalf("expected step status success, got %q", report.Step.Status)
 	}
 	if report.Step.StartedAt == nil || report.Step.FinishedAt == nil {
@@ -188,7 +188,7 @@ func TestWorkerService_ExecuteRunnableStep_Success(t *testing.T) {
 }
 
 func TestWorkerService_ExecuteRunnableStep_CommandFailed(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{runStepResp: contracts.RunStepResult{Status: contracts.RunStepStatusFailed, ExitCode: 2, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()}}
+	boundary := &fakeBuildExecutionBoundary{runStepResp: runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: 2, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()}}
 	worker := NewWorkerService(boundary)
 
 	report, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{BuildID: "build-2", StepIndex: 0, StepName: "test", Command: "false"})
@@ -198,7 +198,7 @@ func TestWorkerService_ExecuteRunnableStep_CommandFailed(t *testing.T) {
 	if boundary.completeCalls != 0 || boundary.failCalls != 1 {
 		t.Fatalf("expected fail path only, got complete=%d fail=%d", boundary.completeCalls, boundary.failCalls)
 	}
-	if report.Step.Status != contracts.BuildStepStatusFailed {
+	if report.Step.Status != domain.BuildStepStatusFailed {
 		t.Fatalf("expected step status failed, got %q", report.Step.Status)
 	}
 }
@@ -214,15 +214,15 @@ func TestWorkerService_ExecuteRunnableStep_RunStepError(t *testing.T) {
 	if boundary.failCalls != 1 {
 		t.Fatalf("expected fail build to be called once, got %d", boundary.failCalls)
 	}
-	if report.Step.Status != contracts.BuildStepStatusFailed {
+	if report.Step.Status != domain.BuildStepStatusFailed {
 		t.Fatalf("expected step status failed, got %q", report.Step.Status)
 	}
 }
 
 func TestWorkerService_ExecuteRunnableStep_TimeoutMarkedFailedWithReason(t *testing.T) {
 	boundary := &fakeBuildExecutionBoundary{
-		runStepResp: contracts.RunStepResult{
-			Status:     contracts.RunStepStatusFailed,
+		runStepResp: runner.RunStepResult{
+			Status:     runner.RunStepStatusFailed,
 			ExitCode:   -1,
 			Stderr:     "step execution timed out after 1s",
 			StartedAt:  time.Now().UTC(),
@@ -235,7 +235,7 @@ func TestWorkerService_ExecuteRunnableStep_TimeoutMarkedFailedWithReason(t *test
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if report.Step.Status != contracts.BuildStepStatusFailed {
+	if report.Step.Status != domain.BuildStepStatusFailed {
 		t.Fatalf("expected step status failed, got %q", report.Step.Status)
 	}
 	if report.Result.ExitCode != -1 {
@@ -252,10 +252,10 @@ func TestWorkerService_ExecuteRunnableStep_TimeoutMarkedFailedWithReason(t *test
 func TestWorkerService_ClaimRunnableStep_ClaimsFirstPendingStep(t *testing.T) {
 	boundary := &fakeBuildExecutionBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
-		stepsByBuildID: map[string][]contracts.BuildStep{
+		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
-				{StepIndex: 0, Name: "lint", Status: contracts.BuildStepStatusPending},
-				{StepIndex: 1, Name: "test", Status: contracts.BuildStepStatusPending},
+				{StepIndex: 0, Name: "lint", Status: domain.BuildStepStatusPending},
+				{StepIndex: 1, Name: "test", Status: domain.BuildStepStatusPending},
 			},
 		},
 	}
@@ -282,9 +282,9 @@ func TestWorkerService_ClaimRunnableStep_ClaimsFirstPendingStep(t *testing.T) {
 func TestWorkerService_ClaimRunnableStep_UsesPersistedStepIndex(t *testing.T) {
 	boundary := &fakeBuildExecutionBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
-		stepsByBuildID: map[string][]contracts.BuildStep{
+		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
-				{StepIndex: 5, Name: "lint", Status: contracts.BuildStepStatusPending},
+				{StepIndex: 5, Name: "lint", Status: domain.BuildStepStatusPending},
 			},
 		},
 	}
@@ -305,9 +305,9 @@ func TestWorkerService_ClaimRunnableStep_UsesPersistedStepIndex(t *testing.T) {
 func TestWorkerService_ClaimRunnableStep_UsesPersistedExecutionConfig(t *testing.T) {
 	boundary := &fakeBuildExecutionBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
-		stepsByBuildID: map[string][]contracts.BuildStep{
+		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
-				{StepIndex: 0, Name: "lint", Command: "go", Args: []string{"test", "./..."}, Env: map[string]string{"CGO_ENABLED": "0"}, WorkingDir: "/workspace", TimeoutSeconds: 300, Status: contracts.BuildStepStatusPending},
+				{StepIndex: 0, Name: "lint", Command: "go", Args: []string{"test", "./..."}, Env: map[string]string{"CGO_ENABLED": "0"}, WorkingDir: "/workspace", TimeoutSeconds: 300, Status: domain.BuildStepStatusPending},
 			},
 		},
 	}
@@ -340,11 +340,11 @@ func TestWorkerService_ClaimRunnableStep_UsesPersistedExecutionConfig(t *testing
 func TestWorkerService_ClaimRunnableStep_OnlyFirstSequentialPendingIsRunnable(t *testing.T) {
 	boundary := &fakeBuildExecutionBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
-		stepsByBuildID: map[string][]contracts.BuildStep{
+		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
-				{StepIndex: 0, Name: "lint", Status: contracts.BuildStepStatusSuccess},
-				{StepIndex: 1, Name: "test", Status: contracts.BuildStepStatusPending},
-				{StepIndex: 2, Name: "package", Status: contracts.BuildStepStatusPending},
+				{StepIndex: 0, Name: "lint", Status: domain.BuildStepStatusSuccess},
+				{StepIndex: 1, Name: "test", Status: domain.BuildStepStatusPending},
+				{StepIndex: 2, Name: "package", Status: domain.BuildStepStatusPending},
 			},
 		},
 	}
@@ -368,10 +368,10 @@ func TestWorkerService_ClaimRunnableStep_OnlyFirstSequentialPendingIsRunnable(t 
 func TestWorkerService_ClaimRunnableStep_DoesNotReclaimRunningOrFinishedSteps(t *testing.T) {
 	boundary := &fakeBuildExecutionBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusRunning}},
-		stepsByBuildID: map[string][]contracts.BuildStep{
+		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
-				{StepIndex: 0, Name: "lint", Status: contracts.BuildStepStatusRunning},
-				{StepIndex: 1, Name: "test", Status: contracts.BuildStepStatusPending},
+				{StepIndex: 0, Name: "lint", Status: domain.BuildStepStatusRunning},
+				{StepIndex: 1, Name: "test", Status: domain.BuildStepStatusPending},
 			},
 		},
 	}
@@ -389,9 +389,9 @@ func TestWorkerService_ClaimRunnableStep_DoesNotReclaimRunningOrFinishedSteps(t 
 func TestWorkerService_ClaimRunnableStep_ConditionalClaimFailureIsClean(t *testing.T) {
 	boundary := &fakeBuildExecutionBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
-		stepsByBuildID: map[string][]contracts.BuildStep{
+		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
-				{StepIndex: 0, Name: "lint", Status: contracts.BuildStepStatusPending},
+				{StepIndex: 0, Name: "lint", Status: domain.BuildStepStatusPending},
 			},
 		},
 		claimMap: map[string]bool{
@@ -415,9 +415,9 @@ func TestWorkerService_ClaimRunnableStep_ConditionalClaimFailureIsClean(t *testi
 func TestWorkerService_ClaimRunnableStep_PendingBuildTransitionsToRunning(t *testing.T) {
 	boundary := &fakeBuildExecutionBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusPending}},
-		stepsByBuildID: map[string][]contracts.BuildStep{
+		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
-				{StepIndex: 0, Name: "lint", Status: contracts.BuildStepStatusPending},
+				{StepIndex: 0, Name: "lint", Status: domain.BuildStepStatusPending},
 			},
 		},
 	}
@@ -438,7 +438,7 @@ func TestWorkerService_ClaimRunnableStep_PendingBuildTransitionsToRunning(t *tes
 func TestWorkerService_ClaimRunnableStep_PendingBuildWithoutStepsBootstrapsQueue(t *testing.T) {
 	boundary := &fakeBuildExecutionBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusPending}},
-		stepsByBuildID: map[string][]contracts.BuildStep{},
+		stepsByBuildID: map[string][]domain.BuildStep{},
 	}
 
 	worker := NewWorkerService(boundary)

@@ -7,18 +7,18 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
-	"github.com/radiation/coyote-ci/backend/pkg/contracts"
+	"github.com/radiation/coyote-ci/backend/internal/runner"
 )
 
 type buildExecutionBoundary interface {
 	ListBuilds(ctx context.Context) ([]domain.Build, error)
-	GetBuildSteps(ctx context.Context, id string) ([]contracts.BuildStep, error)
-	ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (contracts.BuildStep, bool, error)
+	GetBuildSteps(ctx context.Context, id string) ([]domain.BuildStep, error)
+	ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error)
 	QueueBuild(ctx context.Context, id string) (domain.Build, error)
 	StartBuild(ctx context.Context, id string) (domain.Build, error)
 	CompleteBuild(ctx context.Context, id string) (domain.Build, error)
 	FailBuild(ctx context.Context, id string) (domain.Build, error)
-	RunStep(ctx context.Context, request contracts.RunStepRequest) (contracts.RunStepResult, error)
+	RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, error)
 }
 
 type RunnableStep struct {
@@ -34,8 +34,8 @@ type RunnableStep struct {
 
 type StepExecutionReport struct {
 	BuildID string
-	Step    contracts.BuildStep
-	Result  contracts.RunStepResult
+	Step    domain.BuildStep
+	Result  runner.RunStepResult
 }
 
 type WorkerService struct {
@@ -119,26 +119,26 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 	return RunnableStep{}, false, nil
 }
 
-func firstRunnableStep(steps []contracts.BuildStep) (contracts.BuildStep, bool) {
+func firstRunnableStep(steps []domain.BuildStep) (domain.BuildStep, bool) {
 	allPreviousSucceeded := true
 
 	for _, step := range steps {
 		switch step.Status {
-		case contracts.BuildStepStatusSuccess:
+		case domain.BuildStepStatusSuccess:
 			continue
-		case contracts.BuildStepStatusPending:
+		case domain.BuildStepStatusPending:
 			if !allPreviousSucceeded {
-				return contracts.BuildStep{}, false
+				return domain.BuildStep{}, false
 			}
 			return step, true
-		case contracts.BuildStepStatusRunning, contracts.BuildStepStatusFailed:
+		case domain.BuildStepStatusRunning, domain.BuildStepStatusFailed:
 			allPreviousSucceeded = false
 		default:
 			allPreviousSucceeded = false
 		}
 	}
 
-	return contracts.BuildStep{}, false
+	return domain.BuildStep{}, false
 }
 
 func defaultString(value string, fallback string) string {
@@ -179,17 +179,17 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 
 	report := StepExecutionReport{
 		BuildID: step.BuildID,
-		Step: contracts.BuildStep{
+		Step: domain.BuildStep{
 			Name:   step.StepName,
-			Status: contracts.BuildStepStatusPending,
+			Status: domain.BuildStepStatusPending,
 		},
 	}
 
 	startedAt := time.Now().UTC()
-	report.Step.Status = contracts.BuildStepStatusRunning
+	report.Step.Status = domain.BuildStepStatusRunning
 	report.Step.StartedAt = &startedAt
 
-	result, err := w.builds.RunStep(ctx, contracts.RunStepRequest{
+	result, err := w.builds.RunStep(ctx, runner.RunStepRequest{
 		BuildID:        step.BuildID,
 		StepIndex:      step.StepIndex,
 		StepName:       step.StepName,
@@ -205,16 +205,16 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 	report.Step.FinishedAt = &completedAt
 
 	if err != nil {
-		log.Printf("execution completed: build_id=%s step=%s status=%s exit_code=%d", step.BuildID, step.StepName, contracts.RunStepStatusFailed, result.ExitCode)
-		report.Step.Status = contracts.BuildStepStatusFailed
+		log.Printf("execution completed: build_id=%s step=%s status=%s exit_code=%d", step.BuildID, step.StepName, runner.RunStepStatusFailed, result.ExitCode)
+		report.Step.Status = domain.BuildStepStatusFailed
 		_, _ = w.builds.FailBuild(ctx, step.BuildID)
 		return report, err
 	}
 
 	log.Printf("execution completed: build_id=%s step=%s status=%s exit_code=%d", step.BuildID, step.StepName, result.Status, result.ExitCode)
 
-	if result.Status == contracts.RunStepStatusSuccess {
-		report.Step.Status = contracts.BuildStepStatusSuccess
+	if result.Status == runner.RunStepStatusSuccess {
+		report.Step.Status = domain.BuildStepStatusSuccess
 
 		remaining, err := w.builds.GetBuildSteps(ctx, step.BuildID)
 		if err != nil {
@@ -223,7 +223,7 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 
 		hasPending := false
 		for idx := range remaining {
-			if remaining[idx].Status == contracts.BuildStepStatusPending {
+			if remaining[idx].Status == domain.BuildStepStatusPending {
 				hasPending = true
 				break
 			}
@@ -239,7 +239,7 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 		return report, nil
 	}
 
-	report.Step.Status = contracts.BuildStepStatusFailed
+	report.Step.Status = domain.BuildStepStatusFailed
 	if _, err := w.builds.FailBuild(ctx, step.BuildID); err != nil {
 		return report, err
 	}

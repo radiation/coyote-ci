@@ -13,9 +13,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
-	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
-	"github.com/radiation/coyote-ci/backend/pkg/contracts"
 )
 
 type BuildHandler struct {
@@ -306,7 +304,7 @@ func (h *BuildHandler) transitionBuild(w http.ResponseWriter, r *http.Request, t
 }
 
 func (h *BuildHandler) writeServiceError(w http.ResponseWriter, err error) {
-	if errors.Is(err, repository.ErrBuildNotFound) {
+	if errors.Is(err, service.ErrBuildNotFound) {
 		writeErrorJSON(w, http.StatusNotFound, "build_not_found", "build not found")
 		return
 	}
@@ -338,7 +336,7 @@ func toBuildResponse(build domain.Build) api.BuildResponse {
 	}
 }
 
-func toBuildStepResponse(step contracts.BuildStep) api.BuildStepResponse {
+func toBuildStepResponse(step domain.BuildStep) api.BuildStepResponse {
 	resp := api.BuildStepResponse{
 		ID:           step.ID,
 		BuildID:      step.BuildID,

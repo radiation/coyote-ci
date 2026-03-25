@@ -140,7 +140,7 @@ func (r *fakeRepo) ClaimStepIfPending(_ context.Context, buildID string, stepInd
 	return domain.BuildStep{}, false, repository.ErrBuildNotFound
 }
 
-func (r *fakeRepo) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, status domain.BuildStepStatus, _ *string, _ *int, _ *string, _ *string, _ *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
+func (r *fakeRepo) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, error) {
 	if r.steps == nil {
 		return domain.BuildStep{}, repository.ErrBuildNotFound
 	}
@@ -150,12 +150,12 @@ func (r *fakeRepo) UpdateStepByIndex(_ context.Context, buildID string, stepInde
 		if steps[i].StepIndex != stepIndex {
 			continue
 		}
-		steps[i].Status = status
-		if startedAt != nil {
-			steps[i].StartedAt = startedAt
+		steps[i].Status = update.Status
+		if update.StartedAt != nil {
+			steps[i].StartedAt = update.StartedAt
 		}
-		if finishedAt != nil {
-			steps[i].FinishedAt = finishedAt
+		if update.FinishedAt != nil {
+			steps[i].FinishedAt = update.FinishedAt
 		}
 		r.steps[buildID] = steps
 		return steps[i], nil
@@ -237,7 +237,7 @@ func TestBuildHandler_CreateBuild(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			h := NewBuildHandler(service.NewBuildService(tc.repo))
+			h := NewBuildHandler(service.NewBuildService(tc.repo, nil, nil))
 			req := httptest.NewRequest(http.MethodPost, "/builds", bytes.NewBufferString(tc.body))
 			rr := httptest.NewRecorder()
 			h.CreateBuild(rr, req)
@@ -304,7 +304,7 @@ func TestBuildHandler_ListBuilds(t *testing.T) {
 		},
 	}}
 
-	h := NewBuildHandler(service.NewBuildService(repo))
+	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
 	req := httptest.NewRequest(http.MethodGet, "/builds", nil)
 	rr := httptest.NewRecorder()
 
@@ -354,7 +354,7 @@ func TestBuildHandler_GetBuild(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			h := NewBuildHandler(service.NewBuildService(tc.repo))
+			h := NewBuildHandler(service.NewBuildService(tc.repo, nil, nil))
 			req := httptest.NewRequest(http.MethodGet, "/builds/"+tc.buildID, nil)
 			req = addBuildIDParam(req, tc.buildID)
 			rr := httptest.NewRecorder()
@@ -398,7 +398,7 @@ func TestBuildHandler_GetBuildSteps_HappyPathOrdered(t *testing.T) {
 			},
 		},
 	}
-	h := NewBuildHandler(service.NewBuildService(repo))
+	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
 
 	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/steps", nil), "build-1")
 	stepsRes := httptest.NewRecorder()
@@ -442,7 +442,7 @@ func TestBuildHandler_GetBuildSteps_HappyPathOrdered(t *testing.T) {
 }
 
 func TestBuildHandler_GetBuildSteps_NotFound(t *testing.T) {
-	h := NewBuildHandler(service.NewBuildService(&fakeRepo{getErr: repository.ErrBuildNotFound}))
+	h := NewBuildHandler(service.NewBuildService(&fakeRepo{getErr: repository.ErrBuildNotFound}, nil, nil))
 	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/missing/steps", nil), "missing")
 	stepsRes := httptest.NewRecorder()
 
@@ -459,7 +459,7 @@ func TestBuildHandler_GetBuildSteps_NotFound(t *testing.T) {
 func TestBuildHandler_GetBuildSteps_EmptyForExistingBuild(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusQueued, CreatedAt: now}}
-	h := NewBuildHandler(service.NewBuildService(repo))
+	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
 
 	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/steps", nil), "build-1")
 	stepsRes := httptest.NewRecorder()
@@ -482,7 +482,7 @@ func TestBuildHandler_GetBuildSteps_EmptyForExistingBuild(t *testing.T) {
 func TestBuildHandler_GetBuildLogs(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}}
-	h := NewBuildHandler(service.NewBuildService(repo))
+	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
 
 	logsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/logs", nil), "build-1")
 	logsRes := httptest.NewRecorder()
@@ -499,7 +499,7 @@ func TestBuildHandler_GetBuildLogs(t *testing.T) {
 func TestBuildHandler_QueueBuild_WithTemplate(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
-	h := NewBuildHandler(service.NewBuildService(repo))
+	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
 
 	queueReq := addBuildIDParam(
 		httptest.NewRequest(http.MethodPost, "/builds/build-1/queue", bytes.NewBufferString(`{"template":"test"}`)),
@@ -546,7 +546,7 @@ func TestBuildHandler_QueueBuild_WithTemplate(t *testing.T) {
 func TestBuildHandler_QueueBuild_EmptyBodyUsesDefaultTemplate(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
-	h := NewBuildHandler(service.NewBuildService(repo))
+	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
 
 	queueReq := addBuildIDParam(httptest.NewRequest(http.MethodPost, "/builds/build-1/queue", nil), "build-1")
 	queueRes := httptest.NewRecorder()
@@ -584,7 +584,7 @@ func TestBuildHandler_QueueBuild_EmptyBodyUsesDefaultTemplate(t *testing.T) {
 func TestBuildHandler_QueueBuild_CustomTemplateWithCommands(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
-	h := NewBuildHandler(service.NewBuildService(repo))
+	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
 
 	body := `{"template":"custom","steps":[{"command":"echo ok && exit 0"},{"name":"fail","command":"echo fail && exit 1"}]}`
 	queueReq := addBuildIDParam(httptest.NewRequest(http.MethodPost, "/builds/build-1/queue", bytes.NewBufferString(body)), "build-1")
@@ -631,7 +631,7 @@ func TestBuildHandler_QueueBuild_CustomTemplateWithCommands(t *testing.T) {
 func TestBuildHandler_QueueBuild_CustomTemplateValidationErrors(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
-	h := NewBuildHandler(service.NewBuildService(repo))
+	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
 
 	missingStepsReq := addBuildIDParam(
 		httptest.NewRequest(http.MethodPost, "/builds/build-1/queue", bytes.NewBufferString(`{"template":"custom","steps":[]}`)),

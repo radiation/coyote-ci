@@ -1,0 +1,27 @@
+#!/usr/bin/env sh
+set -eu
+
+echo "Running backend pre-commit checks..."
+
+cd backend
+
+echo "- go fmt"
+go fmt ./...
+
+echo "- go vet"
+go vet ./...
+
+if command -v golangci-lint >/dev/null 2>&1; then
+	echo "- golangci-lint"
+	golangci-lint run ./...
+else
+	echo "- golangci-lint (skipped: not installed)"
+fi
+
+cd ..
+
+echo "- regenerate swagger docs"
+make swagger
+git add backend/docs
+
+echo "Pre-commit checks passed; swagger docs staged."
