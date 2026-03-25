@@ -61,6 +61,24 @@ If you need the worker in parallel, run it in a second command:
 docker compose up --build worker
 ```
 
+## Git hooks setup
+
+This repository stores Git hooks in source control under `.githooks` so contributors get consistent local checks.
+
+Enable the hooks path for this clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+If needed, mark the hook as executable:
+
+```bash
+chmod +x .githooks/pre-commit
+```
+
+The pre-commit hook runs backend format/vet/lint checks, regenerates Swagger docs, and stages `backend/docs`. CI remains the enforcement layer.
+
 ## Quality gates
 
 CI includes:

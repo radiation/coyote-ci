@@ -287,10 +287,10 @@ const docTemplate = `{
         },
         "/builds/{buildID}/queue": {
             "post": {
+                "description": "Transitions build status from pending to queued.",
                 "consumes": [
                     "application/json"
                 ],
-                "description": "Transitions build status from pending to queued.",
                 "produces": [
                     "application/json"
                 ],
@@ -504,6 +504,9 @@ const docTemplate = `{
                 "message": {
                     "type": "string"
                 },
+                "step_name": {
+                    "type": "string"
+                },
                 "timestamp": {
                     "type": "string"
                 }
@@ -537,10 +540,25 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "current_step_index": {
+                    "type": "integer"
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
                 },
                 "project_id": {
+                    "type": "string"
+                },
+                "queued_at": {
+                    "type": "string"
+                },
+                "started_at": {
                     "type": "string"
                 },
                 "status": {
@@ -551,7 +569,19 @@ const docTemplate = `{
         "api.BuildStepResponse": {
             "type": "object",
             "properties": {
-                "ended_at": {
+                "build_id": {
+                    "type": "string"
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "exit_code": {
+                    "type": "integer"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
                     "type": "string"
                 },
                 "name": {
@@ -561,6 +591,18 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "status": {
+                    "type": "string"
+                },
+                "stderr": {
+                    "type": "string"
+                },
+                "stdout": {
+                    "type": "string"
+                },
+                "step_index": {
+                    "type": "integer"
+                },
+                "worker_id": {
                     "type": "string"
                 }
             }
@@ -584,6 +626,23 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/api.BuildStepResponse"
                     }
+                }
+            }
+        },
+        "api.CreateBuildRequest": {
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.CreateBuildStepInput"
+                    }
+                },
+                "template": {
+                    "type": "string"
                 }
             }
         },
@@ -616,31 +675,6 @@ const docTemplate = `{
                 }
             }
         },
-        "api.CreateBuildRequest": {
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "type": "string"
-                },
-                "template": {
-                    "type": "string"
-                },
-                "steps": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/api.CreateBuildStepInput"
-                    }
-                }
-            }
-        },
-        "api.QueueBuildRequest": {
-            "type": "object",
-            "properties": {
-                "template": {
-                    "type": "string"
-                }
-            }
-        },
         "api.ErrorBody": {
             "type": "object",
             "properties": {
@@ -657,6 +691,31 @@ const docTemplate = `{
             "properties": {
                 "error": {
                     "$ref": "#/definitions/api.ErrorBody"
+                }
+            }
+        },
+        "api.QueueBuildRequest": {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.QueueBuildStepInput"
+                    }
+                },
+                "template": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.QueueBuildStepInput": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
                 }
             }
         }

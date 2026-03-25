@@ -25,6 +25,7 @@ jobs:
           filters: |
             backend:
               - 'backend/**'
+              - 'Makefile'
               - '.github/workflows/ci.yml'
               - '.github/workflows/codeql.yml'
             mcp:
@@ -47,6 +48,15 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+
+      - name: Install swag CLI
+        run: go install github.com/swaggo/swag/cmd/swag@v1.16.4
+
+      - name: Verify swagger docs are up to date
+        run: |
+          make swagger
+          git diff --exit-code backend/docs
+        working-directory: .
 
       - name: Verify formatting
         run: |
