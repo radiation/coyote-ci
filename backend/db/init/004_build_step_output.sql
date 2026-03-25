@@ -1,0 +1,3 @@
+ALTER TABLE build_steps
+    ADD COLUMN IF NOT EXISTS stdout TEXT,
+    ADD COLUMN IF NOT EXISTS stderr TEXT;
