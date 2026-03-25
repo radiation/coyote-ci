@@ -5,9 +5,14 @@ import { useNavigate } from 'react-router-dom';
 import { createBuild, listBuilds, queueBuild } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 import { formatTime } from '../components/TimeDisplay';
-import type { BuildTemplate } from '../types';
+import type { Build, BuildTemplate } from '../types';
 
-const POLL_INTERVAL = 5000;
+const FAST_POLL_INTERVAL = 3000;
+const SLOW_POLL_INTERVAL = 15000;
+
+function isActiveBuild(build: Build): boolean {
+  return !['success', 'failed', 'canceled'].includes(build.status);
+}
 
 export function BuildsListPage() {
   const queryClient = useQueryClient();
@@ -17,26 +22,35 @@ export function BuildsListPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const { data: builds, isLoading, error } = useQuery({
+  const { data: builds, isLoading, error, dataUpdatedAt } = useQuery({
     queryKey: ['builds'],
     queryFn: listBuilds,
-    refetchInterval: POLL_INTERVAL,
+    refetchInterval: (query) => {
+      const nextBuilds = query.state.data as Build[] | undefined;
+      if (!nextBuilds || nextBuilds.length === 0) {
+        return SLOW_POLL_INTERVAL;
+      }
+
+      return nextBuilds.some(isActiveBuild) ? FAST_POLL_INTERVAL : SLOW_POLL_INTERVAL;
+    },
   });
 
   const queueBuildMutation = useMutation({
     mutationFn: async ({ targetProjectID, targetTemplate }: { targetProjectID: string; targetTemplate: BuildTemplate }) => {
       const createdBuild = await createBuild({ project_id: targetProjectID });
-      return queueBuild(createdBuild.id, targetTemplate);
+      const queuedBuild = await queueBuild(createdBuild.id, targetTemplate);
+      return { createdBuildID: createdBuild.id, queuedBuildID: queuedBuild.id };
     },
     onMutate: () => {
       setSuccessMessage(null);
       setErrorMessage(null);
     },
-    onSuccess: async (queuedBuild) => {
+    onSuccess: async ({ createdBuildID, queuedBuildID }) => {
       await queryClient.invalidateQueries({ queryKey: ['builds'] });
 
-      if (queuedBuild.id) {
-        navigate(`/builds/${queuedBuild.id}`);
+      const nextBuildID = queuedBuildID || createdBuildID;
+      if (nextBuildID) {
+        navigate(`/builds/${nextBuildID}`);
         return;
       }
 
@@ -61,6 +75,7 @@ export function BuildsListPage() {
   return (
     <>
       <h2>Builds</h2>
+      <p className="subtle-text">Last updated: {dataUpdatedAt > 0 ? formatTime(new Date(dataUpdatedAt).toISOString()) : '—'}</p>
 
       <form className="queue-build-form" onSubmit={onQueueBuild}>
         <label htmlFor="project-id">Project ID</label>
@@ -122,7 +137,7 @@ export function BuildsListPage() {
               <td>{formatTime(b.queued_at)}</td>
               <td>{formatTime(b.started_at)}</td>
               <td>{formatTime(b.finished_at)}</td>
-              <td className="error-text">{b.error_message ?? ''}</td>
+              <td className="error-text">{b.error_message ?? '—'}</td>
             </tr>
           ))}
         </tbody>

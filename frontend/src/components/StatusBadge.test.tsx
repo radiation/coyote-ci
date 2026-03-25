@@ -5,12 +5,12 @@ import { StatusBadge } from '../components/StatusBadge';
 describe('StatusBadge', () => {
   it('should render status text', () => {
     render(<StatusBadge status="pending" />);
-    expect(screen.getByText('pending')).toBeTruthy();
+    expect(screen.getByText('Pending')).toBeTruthy();
   });
 
   it('should render success status', () => {
     render(<StatusBadge status="success" />);
-    expect(screen.getByText('success')).toBeTruthy();
+    expect(screen.getByText('Success')).toBeTruthy();
   });
 
   it('should render span element', () => {
@@ -18,7 +18,7 @@ describe('StatusBadge', () => {
     const span = container.querySelector('span');
     expect(span).toBeTruthy();
     if (span) {
-      expect(span.textContent).toBe('queued');
+      expect(span.textContent).toBe('Queued');
     }
   });
 });

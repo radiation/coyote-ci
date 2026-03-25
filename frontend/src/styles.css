@@ -124,6 +124,46 @@ a:hover {
   background: #f9f9ff;
 }
 
+.status-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+}
+
+.status-pending {
+  color: #4b5563;
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.status-queued {
+  color: #0c4a6e;
+  background: #e0f2fe;
+  border-color: #7dd3fc;
+}
+
+.status-running {
+  color: #7c2d12;
+  background: #ffedd5;
+  border-color: #fdba74;
+}
+
+.status-success {
+  color: #14532d;
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
+.status-failed {
+  color: #7f1d1d;
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
 /* Detail grid */
 .detail-grid {
   display: grid;
@@ -149,6 +189,18 @@ a:hover {
   color: #666;
 }
 
+.detail-summary {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+
 /* Utility */
 .error-text {
   color: #d32f2f;
@@ -161,6 +213,12 @@ a:hover {
 .empty {
   color: #888;
   padding: 24px 0;
+}
+
+.subtle-text {
+  color: #6b7280;
+  font-size: 0.85rem;
+  margin-top: 6px;
 }
 
 h2 {

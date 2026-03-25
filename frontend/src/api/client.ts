@@ -13,8 +13,9 @@ import type {
  *
  * In Docker (production-like), the nginx reverse-proxy exposes the backend at /api.
  * In local Vite dev, the vite proxy rewrites /api -> http://localhost:8080.
+ * Override with VITE_API_BASE_PATH when needed (e.g. direct backend testing).
  */
-const BASE = '/api';
+const BASE = import.meta.env.VITE_API_BASE_PATH ?? '/api';
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, init);
