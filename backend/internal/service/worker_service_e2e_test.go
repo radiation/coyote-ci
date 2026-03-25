@@ -18,7 +18,7 @@ func TestWorkerExecutionVerticalSlice_Success(t *testing.T) {
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New(execution.NewLocalExecutor())
-	buildService := NewBuildServiceWithExecution(buildStore, stepRunner, logSink)
+	buildService := NewBuildService(buildStore, stepRunner, logSink)
 	worker := NewWorkerService(buildService)
 
 	build, err := buildService.CreateBuild(ctx, CreateBuildInput{ProjectID: "project-1"})
@@ -88,7 +88,7 @@ func TestWorkerExecutionVerticalSlice_FailedCommand(t *testing.T) {
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New(execution.NewLocalExecutor())
-	buildService := NewBuildServiceWithExecution(buildStore, stepRunner, logSink)
+	buildService := NewBuildService(buildStore, stepRunner, logSink)
 	worker := NewWorkerService(buildService)
 
 	build, err := buildService.CreateBuild(ctx, CreateBuildInput{ProjectID: "project-1"})
@@ -160,7 +160,7 @@ func TestWorkerExecutionVerticalSlice_Timeout(t *testing.T) {
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New(execution.NewLocalExecutor())
-	buildService := NewBuildServiceWithExecution(buildStore, stepRunner, logSink)
+	buildService := NewBuildService(buildStore, stepRunner, logSink)
 	worker := NewWorkerService(buildService)
 
 	build, err := buildService.CreateBuild(ctx, CreateBuildInput{ProjectID: "project-1"})
@@ -233,7 +233,7 @@ func TestWorkerExecutionVerticalSlice_ExitZeroStepSucceeds(t *testing.T) {
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New(execution.NewLocalExecutor())
-	buildService := NewBuildServiceWithExecution(buildStore, stepRunner, logSink)
+	buildService := NewBuildService(buildStore, stepRunner, logSink)
 	worker := NewWorkerService(buildService)
 
 	build, err := buildService.CreateBuild(ctx, CreateBuildInput{
@@ -294,7 +294,7 @@ func TestWorkerExecutionVerticalSlice_MultiStepSuccessThenFailure(t *testing.T) 
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New(execution.NewLocalExecutor())
-	buildService := NewBuildServiceWithExecution(buildStore, stepRunner, logSink)
+	buildService := NewBuildService(buildStore, stepRunner, logSink)
 	worker := NewWorkerService(buildService)
 
 	build, err := buildService.CreateBuild(ctx, CreateBuildInput{

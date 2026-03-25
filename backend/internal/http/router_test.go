@@ -13,7 +13,7 @@ import (
 )
 
 func TestNewRouter_HealthAndNotFound(t *testing.T) {
-	h := handler.NewBuildHandler(service.NewBuildService(repositorymemory.NewBuildRepository()))
+	h := handler.NewBuildHandler(service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
 	r := NewRouter(h)
 
 	tests := []struct {
@@ -46,7 +46,7 @@ func TestNewRouter_HealthAndNotFound(t *testing.T) {
 }
 
 func TestNewRouter_BuildRoutes(t *testing.T) {
-	h := handler.NewBuildHandler(service.NewBuildService(repositorymemory.NewBuildRepository()))
+	h := handler.NewBuildHandler(service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
 	r := NewRouter(h)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
@@ -105,7 +105,7 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 }
 
 func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
-	h := handler.NewBuildHandler(service.NewBuildService(repositorymemory.NewBuildRepository()))
+	h := handler.NewBuildHandler(service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
 	r := NewRouter(h)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
@@ -175,7 +175,7 @@ func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
 }
 
 func TestNewRouter_QueueBuild_UnknownTemplate_FallsBackToDefaultStep(t *testing.T) {
-	h := handler.NewBuildHandler(service.NewBuildService(repositorymemory.NewBuildRepository()))
+	h := handler.NewBuildHandler(service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
 	r := NewRouter(h)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))

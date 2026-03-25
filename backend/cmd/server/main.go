@@ -35,7 +35,7 @@ func main() {
 	}()
 
 	buildRepo := repositorypostgres.NewBuildRepository(db)
-	buildService := service.NewBuildService(buildRepo)
+	buildService := service.NewBuildService(buildRepo, nil, nil)
 	buildHandler := handler.NewBuildHandler(buildService)
 
 	router := apphttp.NewRouter(buildHandler)
