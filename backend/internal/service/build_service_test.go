@@ -398,8 +398,20 @@ func TestBuildService_ValidTransitions(t *testing.T) {
 		expectedStatus domain.BuildStatus
 	}{
 		{
+			name:           "pending to queued",
+			initialStatus:  domain.BuildStatusPending,
+			action:         (*BuildService).QueueBuild,
+			expectedStatus: domain.BuildStatusQueued,
+		},
+		{
 			name:           "pending to running",
 			initialStatus:  domain.BuildStatusPending,
+			action:         (*BuildService).StartBuild,
+			expectedStatus: domain.BuildStatusRunning,
+		},
+		{
+			name:           "queued to running",
+			initialStatus:  domain.BuildStatusQueued,
 			action:         (*BuildService).StartBuild,
 			expectedStatus: domain.BuildStatusRunning,
 		},
@@ -454,37 +466,6 @@ func TestBuildService_ValidTransitions(t *testing.T) {
 				t.Fatalf("expected UpdateStatus status %q, got %q", tc.expectedStatus, repo.updatedStatus)
 			}
 		})
-	}
-}
-
-func TestBuildService_Transitions(t *testing.T) {
-	now := time.Now().UTC()
-	repo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
-	svc := NewBuildService(repo, nil, nil)
-
-	if _, err := svc.QueueBuild(context.Background(), "build-1"); err != nil {
-		t.Fatalf("queue build returned error: %v", err)
-	}
-	if repo.build.Status != domain.BuildStatusQueued {
-		t.Fatalf("expected queued status, got %q", repo.build.Status)
-	}
-
-	if _, err := svc.StartBuild(context.Background(), "build-1"); err != nil {
-		t.Fatalf("start build returned error: %v", err)
-	}
-	if repo.build.Status != domain.BuildStatusRunning {
-		t.Fatalf("expected running status, got %q", repo.build.Status)
-	}
-
-	if _, err := svc.CompleteBuild(context.Background(), "build-1"); err != nil {
-		t.Fatalf("complete build returned error: %v", err)
-	}
-	if repo.build.Status != domain.BuildStatusSuccess {
-		t.Fatalf("expected success status, got %q", repo.build.Status)
-	}
-
-	if _, err := svc.FailBuild(context.Background(), "build-1"); !errors.Is(err, ErrInvalidBuildStatusTransition) {
-		t.Fatalf("expected invalid transition error, got %v", err)
 	}
 }
 
