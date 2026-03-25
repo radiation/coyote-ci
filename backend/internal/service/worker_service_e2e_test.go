@@ -8,14 +8,14 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/execution"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
+	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	inprocessrunner "github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
-	storememory "github.com/radiation/coyote-ci/backend/internal/store/memory"
 	"github.com/radiation/coyote-ci/backend/pkg/contracts"
 )
 
 func TestWorkerExecutionVerticalSlice_Success(t *testing.T) {
 	ctx := context.Background()
-	buildStore := storememory.NewBuildStore()
+	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New(execution.NewLocalExecutor())
 	buildService := NewBuildServiceWithExecution(buildStore, stepRunner, logSink)
@@ -85,7 +85,7 @@ func TestWorkerExecutionVerticalSlice_Success(t *testing.T) {
 
 func TestWorkerExecutionVerticalSlice_FailedCommand(t *testing.T) {
 	ctx := context.Background()
-	buildStore := storememory.NewBuildStore()
+	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New(execution.NewLocalExecutor())
 	buildService := NewBuildServiceWithExecution(buildStore, stepRunner, logSink)
@@ -157,7 +157,7 @@ func TestWorkerExecutionVerticalSlice_FailedCommand(t *testing.T) {
 
 func TestWorkerExecutionVerticalSlice_Timeout(t *testing.T) {
 	ctx := context.Background()
-	buildStore := storememory.NewBuildStore()
+	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New(execution.NewLocalExecutor())
 	buildService := NewBuildServiceWithExecution(buildStore, stepRunner, logSink)
@@ -230,7 +230,7 @@ func TestWorkerExecutionVerticalSlice_Timeout(t *testing.T) {
 
 func TestWorkerExecutionVerticalSlice_ExitZeroStepSucceeds(t *testing.T) {
 	ctx := context.Background()
-	buildStore := storememory.NewBuildStore()
+	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New(execution.NewLocalExecutor())
 	buildService := NewBuildServiceWithExecution(buildStore, stepRunner, logSink)
@@ -291,7 +291,7 @@ func TestWorkerExecutionVerticalSlice_ExitZeroStepSucceeds(t *testing.T) {
 
 func TestWorkerExecutionVerticalSlice_MultiStepSuccessThenFailure(t *testing.T) {
 	ctx := context.Background()
-	buildStore := storememory.NewBuildStore()
+	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New(execution.NewLocalExecutor())
 	buildService := NewBuildServiceWithExecution(buildStore, stepRunner, logSink)

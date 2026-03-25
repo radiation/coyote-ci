@@ -9,8 +9,8 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
+	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/service"
-	storepostgres "github.com/radiation/coyote-ci/backend/internal/store/postgres"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
@@ -34,7 +34,7 @@ func main() {
 		}
 	}()
 
-	buildRepo := storepostgres.NewBuildStore(db)
+	buildRepo := repositorypostgres.NewBuildRepository(db)
 	buildService := service.NewBuildService(buildRepo)
 	buildHandler := handler.NewBuildHandler(buildService)
 

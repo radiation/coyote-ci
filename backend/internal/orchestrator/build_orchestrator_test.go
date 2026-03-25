@@ -463,7 +463,7 @@ func TestBuildOrchestrator_RunStep_DelegatesToRunner(t *testing.T) {
 	if result.Status != contracts.RunStepStatusSuccess {
 		t.Fatalf("expected success status, got %q", result.Status)
 	}
-	store, ok := orchestrator.buildStore.(*fakeBuildStore)
+	store, ok := orchestrator.buildRepo.(*fakeBuildStore)
 	if !ok {
 		t.Fatal("expected fakeBuildStore backing store")
 	}

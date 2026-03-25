@@ -12,8 +12,8 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
-	"github.com/radiation/coyote-ci/backend/internal/store"
 	"github.com/radiation/coyote-ci/backend/pkg/contracts"
 )
 
@@ -33,20 +33,20 @@ const (
 
 // BuildOrchestrator coordinates build lifecycle state transitions and delegates step execution to a runner.
 type BuildOrchestrator struct {
-	buildStore store.BuildStore
-	runner     runner.Runner
-	logSink    logs.LogSink
+	buildRepo repository.BuildRepository
+	runner    runner.Runner
+	logSink   logs.LogSink
 }
 
-func NewBuildOrchestrator(buildStore store.BuildStore, stepRunner runner.Runner, logSink logs.LogSink) *BuildOrchestrator {
+func NewBuildOrchestrator(buildRepo repository.BuildRepository, stepRunner runner.Runner, logSink logs.LogSink) *BuildOrchestrator {
 	if logSink == nil {
 		logSink = logs.NewNoopSink()
 	}
 
 	return &BuildOrchestrator{
-		buildStore: buildStore,
-		runner:     stepRunner,
-		logSink:    logSink,
+		buildRepo: buildRepo,
+		runner:    stepRunner,
+		logSink:   logSink,
 	}
 }
 
@@ -105,22 +105,22 @@ func (o *BuildOrchestrator) CreateBuild(ctx context.Context, input CreateBuildIn
 			})
 		}
 
-		return o.buildStore.CreateQueuedBuild(ctx, build, steps)
+		return o.buildRepo.CreateQueuedBuild(ctx, build, steps)
 	}
 
-	return o.buildStore.Create(ctx, build)
+	return o.buildRepo.Create(ctx, build)
 }
 
 func (o *BuildOrchestrator) GetBuild(ctx context.Context, id string) (domain.Build, error) {
-	return o.buildStore.GetByID(ctx, id)
+	return o.buildRepo.GetByID(ctx, id)
 }
 
 func (o *BuildOrchestrator) ListBuilds(ctx context.Context) ([]domain.Build, error) {
-	return o.buildStore.List(ctx)
+	return o.buildRepo.List(ctx)
 }
 
 func (o *BuildOrchestrator) GetBuildSteps(ctx context.Context, id string) ([]contracts.BuildStep, error) {
-	steps, err := o.buildStore.GetStepsByBuildID(ctx, id)
+	steps, err := o.buildRepo.GetStepsByBuildID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +152,7 @@ func (o *BuildOrchestrator) GetBuildSteps(ctx context.Context, id string) ([]con
 }
 
 func (o *BuildOrchestrator) GetBuildLogs(ctx context.Context, id string) ([]contracts.BuildLogLine, error) {
-	if _, err := o.buildStore.GetByID(ctx, id); err != nil {
+	if _, err := o.buildRepo.GetByID(ctx, id); err != nil {
 		return nil, err
 	}
 
@@ -165,7 +165,7 @@ func (o *BuildOrchestrator) GetBuildLogs(ctx context.Context, id string) ([]cont
 }
 
 func (o *BuildOrchestrator) ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (contracts.BuildStep, bool, error) {
-	step, claimed, err := o.buildStore.ClaimStepIfPending(ctx, buildID, stepIndex, workerID, startedAt)
+	step, claimed, err := o.buildRepo.ClaimStepIfPending(ctx, buildID, stepIndex, workerID, startedAt)
 	if err != nil {
 		return contracts.BuildStep{}, false, err
 	}
@@ -203,7 +203,7 @@ func (o *BuildOrchestrator) QueueBuildWithTemplate(ctx context.Context, id strin
 }
 
 func (o *BuildOrchestrator) QueueBuildWithTemplateAndCustomSteps(ctx context.Context, id string, template string, customSteps []QueueBuildCustomStepInput) (domain.Build, error) {
-	build, err := o.buildStore.GetByID(ctx, id)
+	build, err := o.buildRepo.GetByID(ctx, id)
 	if err != nil {
 		return domain.Build{}, err
 	}
@@ -219,11 +219,11 @@ func (o *BuildOrchestrator) QueueBuildWithTemplateAndCustomSteps(ctx context.Con
 			return domain.Build{}, err
 		}
 
-		return o.buildStore.QueueBuild(ctx, id, steps)
+		return o.buildRepo.QueueBuild(ctx, id, steps)
 	}
 
 	steps := buildStepsForTemplate(id, normalizedTemplate)
-	return o.buildStore.QueueBuild(ctx, id, steps)
+	return o.buildRepo.QueueBuild(ctx, id, steps)
 }
 
 func (o *BuildOrchestrator) StartBuild(ctx context.Context, id string) (domain.Build, error) {
@@ -320,7 +320,7 @@ func splitLogLines(output string) []string {
 }
 
 func (o *BuildOrchestrator) transitionBuildStatus(ctx context.Context, id string, toStatus domain.BuildStatus, errorMessage *string) (domain.Build, error) {
-	build, err := o.buildStore.GetByID(ctx, id)
+	build, err := o.buildRepo.GetByID(ctx, id)
 	if err != nil {
 		return domain.Build{}, err
 	}
@@ -329,7 +329,7 @@ func (o *BuildOrchestrator) transitionBuildStatus(ctx context.Context, id string
 		return domain.Build{}, ErrInvalidBuildStatusTransition
 	}
 
-	return o.buildStore.UpdateStatus(ctx, id, toStatus, errorMessage)
+	return o.buildRepo.UpdateStatus(ctx, id, toStatus, errorMessage)
 }
 
 func isValidBuildTransition(fromStatus, toStatus domain.BuildStatus) bool {
@@ -522,19 +522,19 @@ func normalizeCreateStepInput(in CreateBuildStepInput) CreateBuildStepInput {
 }
 
 func (o *BuildOrchestrator) persistStepResult(ctx context.Context, buildID string, stepIndex int, stepStatus domain.BuildStepStatus, exitCode *int, stdout *string, stderr *string, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
-	persistedStep, err := o.buildStore.UpdateStepByIndex(ctx, buildID, stepIndex, stepStatus, nil, exitCode, stdout, stderr, errorMessage, startedAt, finishedAt)
+	persistedStep, err := o.buildRepo.UpdateStepByIndex(ctx, buildID, stepIndex, stepStatus, nil, exitCode, stdout, stderr, errorMessage, startedAt, finishedAt)
 	if err != nil {
 		return domain.BuildStep{}, err
 	}
 
 	if stepStatus == domain.BuildStepStatusSuccess {
-		build, err := o.buildStore.GetByID(ctx, buildID)
+		build, err := o.buildRepo.GetByID(ctx, buildID)
 		if err != nil {
 			return domain.BuildStep{}, err
 		}
 
 		if stepIndex == build.CurrentStepIndex {
-			_, err = o.buildStore.UpdateCurrentStepIndex(ctx, buildID, build.CurrentStepIndex+1)
+			_, err = o.buildRepo.UpdateCurrentStepIndex(ctx, buildID, build.CurrentStepIndex+1)
 			if err != nil {
 				return domain.BuildStep{}, err
 			}

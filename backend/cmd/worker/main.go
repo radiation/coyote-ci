@@ -10,8 +10,8 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
+	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/service"
-	storepostgres "github.com/radiation/coyote-ci/backend/internal/store/postgres"
 )
 
 const defaultPollInterval = 10 * time.Second
@@ -34,8 +34,8 @@ func main() {
 		}
 	}()
 
-	buildStore := storepostgres.NewBuildStore(db)
-	buildService := service.NewBuildService(buildStore)
+	buildRepo := repositorypostgres.NewBuildRepository(db)
+	buildService := service.NewBuildService(buildRepo)
 	workerService := service.NewWorkerService(buildService)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

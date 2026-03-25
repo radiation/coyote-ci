@@ -7,9 +7,9 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/orchestrator"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	"github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
-	"github.com/radiation/coyote-ci/backend/internal/store"
 	"github.com/radiation/coyote-ci/backend/pkg/contracts"
 )
 
@@ -22,16 +22,16 @@ type BuildService struct {
 	orchestrator *orchestrator.BuildOrchestrator
 }
 
-func NewBuildService(buildStore store.BuildStore) *BuildService {
+func NewBuildService(buildRepo repository.BuildRepository) *BuildService {
 	stepRunner := inprocess.New(nil)
 	logSink := logs.NewMemorySink()
 
-	return NewBuildServiceWithExecution(buildStore, stepRunner, logSink)
+	return NewBuildServiceWithExecution(buildRepo, stepRunner, logSink)
 }
 
-func NewBuildServiceWithExecution(buildStore store.BuildStore, stepRunner runner.Runner, logSink logs.LogSink) *BuildService {
+func NewBuildServiceWithExecution(buildRepo repository.BuildRepository, stepRunner runner.Runner, logSink logs.LogSink) *BuildService {
 	return &BuildService{
-		orchestrator: orchestrator.NewBuildOrchestrator(buildStore, stepRunner, logSink),
+		orchestrator: orchestrator.NewBuildOrchestrator(buildRepo, stepRunner, logSink),
 	}
 }
 
