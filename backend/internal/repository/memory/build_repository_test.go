@@ -225,7 +225,12 @@ func TestBuildRepository_PersistsBuildAndStepStatusUpdates(t *testing.T) {
 	startedAt := time.Now().UTC()
 	finishedAt := startedAt.Add(2 * time.Second)
 	exitCode := 0
-	_, err = repo.UpdateStepByIndex(context.Background(), "build-2", 0, domain.BuildStepStatusSuccess, nil, &exitCode, nil, nil, nil, &startedAt, &finishedAt)
+	_, err = repo.UpdateStepByIndex(context.Background(), "build-2", 0, repository.StepUpdate{
+		Status:     domain.BuildStepStatusSuccess,
+		ExitCode:   &exitCode,
+		StartedAt:  &startedAt,
+		FinishedAt: &finishedAt,
+	})
 	if err != nil {
 		t.Fatalf("update step status failed: %v", err)
 	}

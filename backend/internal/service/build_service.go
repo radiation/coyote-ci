@@ -16,6 +16,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 )
 
+var ErrBuildNotFound = errors.New("build not found")
 var ErrProjectIDRequired = errors.New("project_id is required")
 var ErrInvalidBuildStatusTransition = errors.New("invalid build status transition")
 var ErrRunnerNotConfigured = errors.New("runner not configured")
@@ -111,7 +112,8 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 }
 
 func (s *BuildService) GetBuild(ctx context.Context, id string) (domain.Build, error) {
-	return s.buildRepo.GetByID(ctx, id)
+	build, err := s.buildRepo.GetByID(ctx, id)
+	return build, mapRepoErr(err)
 }
 
 func (s *BuildService) ListBuilds(ctx context.Context) ([]domain.Build, error) {
@@ -119,12 +121,13 @@ func (s *BuildService) ListBuilds(ctx context.Context) ([]domain.Build, error) {
 }
 
 func (s *BuildService) GetBuildSteps(ctx context.Context, id string) ([]domain.BuildStep, error) {
-	return s.buildRepo.GetStepsByBuildID(ctx, id)
+	steps, err := s.buildRepo.GetStepsByBuildID(ctx, id)
+	return steps, mapRepoErr(err)
 }
 
 func (s *BuildService) GetBuildLogs(ctx context.Context, id string) ([]logs.BuildLogLine, error) {
 	if _, err := s.buildRepo.GetByID(ctx, id); err != nil {
-		return nil, err
+		return nil, mapRepoErr(err)
 	}
 
 	reader, ok := s.logSink.(logs.LogReader)
@@ -136,7 +139,8 @@ func (s *BuildService) GetBuildLogs(ctx context.Context, id string) ([]logs.Buil
 }
 
 func (s *BuildService) ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error) {
-	return s.buildRepo.ClaimStepIfPending(ctx, buildID, stepIndex, workerID, startedAt)
+	step, claimed, err := s.buildRepo.ClaimStepIfPending(ctx, buildID, stepIndex, workerID, startedAt)
+	return step, claimed, mapRepoErr(err)
 }
 
 func (s *BuildService) QueueBuild(ctx context.Context, id string) (domain.Build, error) {
@@ -150,7 +154,7 @@ func (s *BuildService) QueueBuildWithTemplate(ctx context.Context, id string, te
 func (s *BuildService) QueueBuildWithTemplateAndCustomSteps(ctx context.Context, id string, template string, customSteps []QueueBuildCustomStepInput) (domain.Build, error) {
 	build, err := s.buildRepo.GetByID(ctx, id)
 	if err != nil {
-		return domain.Build{}, err
+		return domain.Build{}, mapRepoErr(err)
 	}
 
 	if !isValidBuildTransition(build.Status, domain.BuildStatusQueued) {
@@ -267,7 +271,7 @@ func splitLogLines(output string) []string {
 func (s *BuildService) transitionBuildStatus(ctx context.Context, id string, toStatus domain.BuildStatus, errorMessage *string) (domain.Build, error) {
 	build, err := s.buildRepo.GetByID(ctx, id)
 	if err != nil {
-		return domain.Build{}, err
+		return domain.Build{}, mapRepoErr(err)
 	}
 
 	if !isValidBuildTransition(build.Status, toStatus) {
@@ -467,15 +471,23 @@ func normalizeCreateStepInput(in CreateBuildStepInput) CreateBuildStepInput {
 }
 
 func (s *BuildService) persistStepResult(ctx context.Context, buildID string, stepIndex int, stepStatus domain.BuildStepStatus, exitCode *int, stdout *string, stderr *string, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
-	persistedStep, err := s.buildRepo.UpdateStepByIndex(ctx, buildID, stepIndex, stepStatus, nil, exitCode, stdout, stderr, errorMessage, startedAt, finishedAt)
+	persistedStep, err := s.buildRepo.UpdateStepByIndex(ctx, buildID, stepIndex, repository.StepUpdate{
+		Status:       stepStatus,
+		ExitCode:     exitCode,
+		Stdout:       stdout,
+		Stderr:       stderr,
+		ErrorMessage: errorMessage,
+		StartedAt:    startedAt,
+		FinishedAt:   finishedAt,
+	})
 	if err != nil {
-		return domain.BuildStep{}, err
+		return domain.BuildStep{}, mapRepoErr(err)
 	}
 
 	if stepStatus == domain.BuildStepStatusSuccess {
 		build, err := s.buildRepo.GetByID(ctx, buildID)
 		if err != nil {
-			return domain.BuildStep{}, err
+			return domain.BuildStep{}, mapRepoErr(err)
 		}
 
 		if stepIndex == build.CurrentStepIndex {
@@ -487,4 +499,14 @@ func (s *BuildService) persistStepResult(ctx context.Context, buildID string, st
 	}
 
 	return persistedStep, nil
+}
+
+func mapRepoErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, repository.ErrBuildNotFound) {
+		return ErrBuildNotFound
+	}
+	return err
 }

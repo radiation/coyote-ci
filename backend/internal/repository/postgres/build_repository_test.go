@@ -270,7 +270,16 @@ func TestBuildRepository_UpdateStepByIndex(t *testing.T) {
 	)
 
 	workerID := "worker-1"
-	step, err := repo.UpdateStepByIndex(context.Background(), "build-1", 0, domain.BuildStepStatusFailed, &workerID, &exitCode, &stdout, &stderr, &errMsg, &now, &now)
+	step, err := repo.UpdateStepByIndex(context.Background(), "build-1", 0, repository.StepUpdate{
+		Status:       domain.BuildStepStatusFailed,
+		WorkerID:     &workerID,
+		ExitCode:     &exitCode,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		ErrorMessage: &errMsg,
+		StartedAt:    &now,
+		FinishedAt:   &now,
+	})
 	if err != nil {
 		t.Fatalf("update step failed: %v", err)
 	}

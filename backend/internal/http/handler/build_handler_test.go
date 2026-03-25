@@ -140,7 +140,7 @@ func (r *fakeRepo) ClaimStepIfPending(_ context.Context, buildID string, stepInd
 	return domain.BuildStep{}, false, repository.ErrBuildNotFound
 }
 
-func (r *fakeRepo) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, status domain.BuildStepStatus, _ *string, _ *int, _ *string, _ *string, _ *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
+func (r *fakeRepo) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, error) {
 	if r.steps == nil {
 		return domain.BuildStep{}, repository.ErrBuildNotFound
 	}
@@ -150,12 +150,12 @@ func (r *fakeRepo) UpdateStepByIndex(_ context.Context, buildID string, stepInde
 		if steps[i].StepIndex != stepIndex {
 			continue
 		}
-		steps[i].Status = status
-		if startedAt != nil {
-			steps[i].StartedAt = startedAt
+		steps[i].Status = update.Status
+		if update.StartedAt != nil {
+			steps[i].StartedAt = update.StartedAt
 		}
-		if finishedAt != nil {
-			steps[i].FinishedAt = finishedAt
+		if update.FinishedAt != nil {
+			steps[i].FinishedAt = update.FinishedAt
 		}
 		r.steps[buildID] = steps
 		return steps[i], nil

@@ -13,7 +13,6 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
-	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 )
 
@@ -305,7 +304,7 @@ func (h *BuildHandler) transitionBuild(w http.ResponseWriter, r *http.Request, t
 }
 
 func (h *BuildHandler) writeServiceError(w http.ResponseWriter, err error) {
-	if errors.Is(err, repository.ErrBuildNotFound) {
+	if errors.Is(err, service.ErrBuildNotFound) {
 		writeErrorJSON(w, http.StatusNotFound, "build_not_found", "build not found")
 		return
 	}

@@ -375,7 +375,7 @@ func (r *BuildRepository) ClaimStepIfPending(ctx context.Context, buildID string
 	return step, true, nil
 }
 
-func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string, stepIndex int, status domain.BuildStepStatus, workerID *string, exitCode *int, stdout *string, stderr *string, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
+func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, error) {
 	const query = `
 		UPDATE build_steps
 		SET status = $3,
@@ -394,7 +394,7 @@ func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string,
 		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, started_at, finished_at, exit_code, stdout, stderr, error_message
 	`
 
-	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, string(status), workerID, startedAt, finishedAt, exitCode, stdout, stderr, errorMessage))
+	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, string(update.Status), update.WorkerID, update.StartedAt, update.FinishedAt, update.ExitCode, update.Stdout, update.Stderr, update.ErrorMessage))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.BuildStep{}, repository.ErrBuildNotFound

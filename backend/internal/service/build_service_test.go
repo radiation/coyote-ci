@@ -120,7 +120,7 @@ func (r *fakeBuildRepository) ClaimStepIfPending(_ context.Context, _ string, st
 	return domain.BuildStep{}, false, repository.ErrBuildNotFound
 }
 
-func (r *fakeBuildRepository) UpdateStepByIndex(_ context.Context, _ string, stepIndex int, status domain.BuildStepStatus, _ *string, exitCode *int, stdout *string, stderr *string, _ *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
+func (r *fakeBuildRepository) UpdateStepByIndex(_ context.Context, _ string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, error) {
 	if r.updateErr != nil {
 		return domain.BuildStep{}, r.updateErr
 	}
@@ -130,21 +130,21 @@ func (r *fakeBuildRepository) UpdateStepByIndex(_ context.Context, _ string, ste
 			continue
 		}
 
-		r.steps[i].Status = status
-		if exitCode != nil {
-			r.steps[i].ExitCode = exitCode
+		r.steps[i].Status = update.Status
+		if update.ExitCode != nil {
+			r.steps[i].ExitCode = update.ExitCode
 		}
-		if stdout != nil {
-			r.steps[i].Stdout = stdout
+		if update.Stdout != nil {
+			r.steps[i].Stdout = update.Stdout
 		}
-		if stderr != nil {
-			r.steps[i].Stderr = stderr
+		if update.Stderr != nil {
+			r.steps[i].Stderr = update.Stderr
 		}
-		if startedAt != nil {
-			r.steps[i].StartedAt = startedAt
+		if update.StartedAt != nil {
+			r.steps[i].StartedAt = update.StartedAt
 		}
-		if finishedAt != nil {
-			r.steps[i].FinishedAt = finishedAt
+		if update.FinishedAt != nil {
+			r.steps[i].FinishedAt = update.FinishedAt
 		}
 		return r.steps[i], nil
 	}
@@ -342,7 +342,7 @@ func TestBuildService_GetBuild(t *testing.T) {
 			name:      "not found",
 			repo:      &fakeBuildRepository{getErr: repository.ErrBuildNotFound},
 			buildID:   "missing",
-			expectErr: repository.ErrBuildNotFound,
+			expectErr: ErrBuildNotFound,
 		},
 	}
 
@@ -543,7 +543,7 @@ func TestBuildService_TransitionBuildStatus_NotFound(t *testing.T) {
 	svc := NewBuildService(repo, nil, nil)
 
 	_, err := svc.StartBuild(context.Background(), "missing-build")
-	if !errors.Is(err, repository.ErrBuildNotFound) {
+	if !errors.Is(err, ErrBuildNotFound) {
 		t.Fatalf("expected ErrBuildNotFound, got %v", err)
 	}
 
@@ -691,7 +691,7 @@ func TestBuildService_GetBuildSteps_NotFound(t *testing.T) {
 	svc := NewBuildService(repo, nil, nil)
 
 	_, err := svc.GetBuildSteps(context.Background(), "missing")
-	if !errors.Is(err, repository.ErrBuildNotFound) {
+	if !errors.Is(err, ErrBuildNotFound) {
 		t.Fatalf("expected not found, got %v", err)
 	}
 }
@@ -701,7 +701,7 @@ func TestBuildService_GetBuildLogs_NotFound(t *testing.T) {
 	svc := NewBuildService(repo, nil, nil)
 
 	_, err := svc.GetBuildLogs(context.Background(), "missing")
-	if !errors.Is(err, repository.ErrBuildNotFound) {
+	if !errors.Is(err, ErrBuildNotFound) {
 		t.Fatalf("expected not found, got %v", err)
 	}
 }
