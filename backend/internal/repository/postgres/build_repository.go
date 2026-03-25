@@ -84,9 +84,11 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 				started_at,
 				finished_at,
 				exit_code,
+				stdout,
+				stderr,
 				error_message
 			)
-			VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15)
+			VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		`
 
 		for _, step := range steps {
@@ -116,6 +118,8 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 				step.StartedAt,
 				step.FinishedAt,
 				step.ExitCode,
+				step.Stdout,
+				step.Stderr,
 				step.ErrorMessage,
 			); err != nil {
 				return domain.Build{}, err
@@ -258,9 +262,11 @@ func (r *BuildRepository) QueueBuild(ctx context.Context, id string, steps []dom
 				started_at,
 				finished_at,
 				exit_code,
+				stdout,
+				stderr,
 				error_message
 			)
-			VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15)
+			VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		`
 
 		for _, step := range steps {
@@ -290,6 +296,8 @@ func (r *BuildRepository) QueueBuild(ctx context.Context, id string, steps []dom
 				step.StartedAt,
 				step.FinishedAt,
 				step.ExitCode,
+				step.Stdout,
+				step.Stderr,
 				step.ErrorMessage,
 			); err != nil {
 				return domain.Build{}, err
@@ -306,7 +314,7 @@ func (r *BuildRepository) QueueBuild(ctx context.Context, id string, steps []dom
 
 func (r *BuildRepository) GetStepsByBuildID(ctx context.Context, buildID string) (steps []domain.BuildStep, err error) {
 	const query = `
-		SELECT id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, started_at, finished_at, exit_code, error_message
+		SELECT id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, started_at, finished_at, exit_code, stdout, stderr, error_message
 		FROM build_steps
 		WHERE build_id = $1
 		ORDER BY step_index ASC
@@ -353,7 +361,7 @@ func (r *BuildRepository) ClaimStepIfPending(ctx context.Context, buildID string
 		WHERE build_id = $1
 		  AND step_index = $2
 		  AND status = 'pending'
-		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, started_at, finished_at, exit_code, error_message
+		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, started_at, finished_at, exit_code, stdout, stderr, error_message
 	`
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, workerID, startedAt))
@@ -367,7 +375,7 @@ func (r *BuildRepository) ClaimStepIfPending(ctx context.Context, buildID string
 	return step, true, nil
 }
 
-func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string, stepIndex int, status domain.BuildStepStatus, workerID *string, exitCode *int, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
+func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string, stepIndex int, status domain.BuildStepStatus, workerID *string, exitCode *int, stdout *string, stderr *string, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
 	const query = `
 		UPDATE build_steps
 		SET status = $3,
@@ -375,16 +383,18 @@ func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string,
 			started_at = COALESCE($5, started_at),
 			finished_at = COALESCE($6, finished_at),
 			exit_code = COALESCE($7, exit_code),
+			stdout = COALESCE($8, stdout),
+			stderr = COALESCE($9, stderr),
 			error_message = CASE
-				WHEN $3 = 'failed' THEN COALESCE($8, error_message)
-				WHEN $8 IS NOT NULL THEN $8
+				WHEN $3 = 'failed' THEN COALESCE($10, error_message)
+				WHEN $10 IS NOT NULL THEN $10
 				ELSE NULL
 			END
 		WHERE build_id = $1 AND step_index = $2
-		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, started_at, finished_at, exit_code, error_message
+		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, started_at, finished_at, exit_code, stdout, stderr, error_message
 	`
 
-	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, string(status), workerID, startedAt, finishedAt, exitCode, errorMessage))
+	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, string(status), workerID, startedAt, finishedAt, exitCode, stdout, stderr, errorMessage))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.BuildStep{}, repository.ErrBuildNotFound
@@ -474,6 +484,8 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 	var startedAt sql.NullTime
 	var finishedAt sql.NullTime
 	var exitCode sql.NullInt64
+	var stdout sql.NullString
+	var stderr sql.NullString
 	var errorMessage sql.NullString
 
 	err := scanner.Scan(
@@ -491,6 +503,8 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 		&startedAt,
 		&finishedAt,
 		&exitCode,
+		&stdout,
+		&stderr,
 		&errorMessage,
 	)
 	if err != nil {
@@ -530,6 +544,14 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 	if exitCode.Valid {
 		exit := int(exitCode.Int64)
 		step.ExitCode = &exit
+	}
+	if stdout.Valid {
+		stdoutValue := stdout.String
+		step.Stdout = &stdoutValue
+	}
+	if stderr.Valid {
+		stderrValue := stderr.String
+		step.Stderr = &stderrValue
 	}
 	if errorMessage.Valid {
 		errMsg := errorMessage.String

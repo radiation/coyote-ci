@@ -20,11 +20,15 @@ import (
 var ErrProjectIDRequired = errors.New("project_id is required")
 var ErrInvalidBuildStatusTransition = errors.New("invalid build status transition")
 var ErrRunnerNotConfigured = errors.New("runner not configured")
+var ErrCustomTemplateStepsRequired = errors.New("custom template requires at least one step")
+var ErrCustomTemplateStepCommandRequired = errors.New("custom template step command is required")
 
 const (
 	BuildTemplateDefault = "default"
 	BuildTemplateTest    = "test"
 	BuildTemplateBuild   = "build"
+	BuildTemplateCustom  = "custom"
+	BuildTemplateFail    = "fail"
 )
 
 // BuildOrchestrator coordinates build lifecycle state transitions and delegates step execution to a runner.
@@ -58,6 +62,11 @@ type CreateBuildStepInput struct {
 	Env            map[string]string
 	WorkingDir     string
 	TimeoutSeconds int
+}
+
+type QueueBuildCustomStepInput struct {
+	Name    string
+	Command string
 }
 
 func (o *BuildOrchestrator) CreateBuild(ctx context.Context, input CreateBuildInput) (domain.Build, error) {
@@ -133,6 +142,8 @@ func (o *BuildOrchestrator) GetBuildSteps(ctx context.Context, id string) ([]con
 			StartedAt:      step.StartedAt,
 			FinishedAt:     step.FinishedAt,
 			ExitCode:       step.ExitCode,
+			Stdout:         step.Stdout,
+			Stderr:         step.Stderr,
 			ErrorMessage:   step.ErrorMessage,
 		})
 	}
@@ -177,6 +188,8 @@ func (o *BuildOrchestrator) ClaimStepIfPending(ctx context.Context, buildID stri
 		StartedAt:      step.StartedAt,
 		FinishedAt:     step.FinishedAt,
 		ExitCode:       step.ExitCode,
+		Stdout:         step.Stdout,
+		Stderr:         step.Stderr,
 		ErrorMessage:   step.ErrorMessage,
 	}, true, nil
 }
@@ -186,6 +199,10 @@ func (o *BuildOrchestrator) QueueBuild(ctx context.Context, id string) (domain.B
 }
 
 func (o *BuildOrchestrator) QueueBuildWithTemplate(ctx context.Context, id string, template string) (domain.Build, error) {
+	return o.QueueBuildWithTemplateAndCustomSteps(ctx, id, template, nil)
+}
+
+func (o *BuildOrchestrator) QueueBuildWithTemplateAndCustomSteps(ctx context.Context, id string, template string, customSteps []QueueBuildCustomStepInput) (domain.Build, error) {
 	build, err := o.buildStore.GetByID(ctx, id)
 	if err != nil {
 		return domain.Build{}, err
@@ -195,7 +212,17 @@ func (o *BuildOrchestrator) QueueBuildWithTemplate(ctx context.Context, id strin
 		return domain.Build{}, ErrInvalidBuildStatusTransition
 	}
 
-	steps := buildStepsForTemplate(id, template)
+	normalizedTemplate := strings.ToLower(strings.TrimSpace(template))
+	if normalizedTemplate == BuildTemplateCustom {
+		steps, err := buildStepsForCustomTemplate(id, customSteps)
+		if err != nil {
+			return domain.Build{}, err
+		}
+
+		return o.buildStore.QueueBuild(ctx, id, steps)
+	}
+
+	steps := buildStepsForTemplate(id, normalizedTemplate)
 	return o.buildStore.QueueBuild(ctx, id, steps)
 }
 
@@ -217,7 +244,7 @@ func (o *BuildOrchestrator) RunStep(ctx context.Context, request contracts.RunSt
 	}
 
 	startedAt := time.Now().UTC()
-	if _, err := o.persistStepResult(ctx, request.BuildID, request.StepIndex, domain.BuildStepStatusRunning, nil, nil, &startedAt, nil); err != nil {
+	if _, err := o.persistStepResult(ctx, request.BuildID, request.StepIndex, domain.BuildStepStatusRunning, nil, nil, nil, nil, &startedAt, nil); err != nil {
 		return contracts.RunStepResult{}, err
 	}
 
@@ -225,7 +252,7 @@ func (o *BuildOrchestrator) RunStep(ctx context.Context, request contracts.RunSt
 	if err != nil {
 		finishedAt := time.Now().UTC()
 		message := err.Error()
-		if _, persistErr := o.persistStepResult(ctx, request.BuildID, request.StepIndex, domain.BuildStepStatusFailed, nil, &message, nil, &finishedAt); persistErr != nil {
+		if _, persistErr := o.persistStepResult(ctx, request.BuildID, request.StepIndex, domain.BuildStepStatusFailed, nil, nil, nil, &message, nil, &finishedAt); persistErr != nil {
 			return contracts.RunStepResult{}, errors.Join(err, persistErr)
 		}
 		return contracts.RunStepResult{}, err
@@ -251,8 +278,20 @@ func (o *BuildOrchestrator) RunStep(ctx context.Context, request contracts.RunSt
 		}
 	}
 
+	var stdout *string
+	if result.Stdout != "" {
+		stdoutValue := result.Stdout
+		stdout = &stdoutValue
+	}
+
+	var stderr *string
+	if result.Stderr != "" {
+		stderrValue := result.Stderr
+		stderr = &stderrValue
+	}
+
 	exitCode := result.ExitCode
-	if _, err := o.persistStepResult(ctx, request.BuildID, request.StepIndex, stepStatus, &exitCode, stepError, &result.StartedAt, &result.FinishedAt); err != nil {
+	if _, err := o.persistStepResult(ctx, request.BuildID, request.StepIndex, stepStatus, &exitCode, stdout, stderr, stepError, &result.StartedAt, &result.FinishedAt); err != nil {
 		return contracts.RunStepResult{}, err
 	}
 
@@ -314,7 +353,7 @@ func defaultBuildSteps(buildID string) []domain.BuildStep {
 			StepIndex:      0,
 			Name:           "default",
 			Command:        "sh",
-			Args:           []string{"-c", "echo coyote-ci worker default step"},
+			Args:           []string{"-c", "echo coyote-ci worker default step && exit 0"},
 			Env:            map[string]string{},
 			WorkingDir:     ".",
 			TimeoutSeconds: 0,
@@ -330,7 +369,7 @@ func buildStepsForTemplate(buildID string, template string) []domain.BuildStep {
 		{
 			Name:       "default",
 			Command:    "sh",
-			Args:       []string{"-c", "echo coyote-ci worker default step"},
+			Args:       []string{"-c", "echo coyote-ci worker default step && exit 0"},
 			Env:        map[string]string{},
 			WorkingDir: ".",
 		},
@@ -342,7 +381,7 @@ func buildStepsForTemplate(buildID string, template string) []domain.BuildStep {
 			{
 				Name:       "default",
 				Command:    "sh",
-				Args:       []string{"-c", "echo coyote-ci worker default step"},
+				Args:       []string{"-c", "echo coyote-ci worker default step && exit 0"},
 				Env:        map[string]string{},
 				WorkingDir: ".",
 			},
@@ -352,21 +391,21 @@ func buildStepsForTemplate(buildID string, template string) []domain.BuildStep {
 			{
 				Name:       "setup",
 				Command:    "sh",
-				Args:       []string{"-c", "echo running setup"},
+				Args:       []string{"-c", "echo running setup && exit 0"},
 				Env:        map[string]string{},
 				WorkingDir: ".",
 			},
 			{
 				Name:       "test",
 				Command:    "sh",
-				Args:       []string{"-c", "echo running tests"},
+				Args:       []string{"-c", "echo running tests && exit 0"},
 				Env:        map[string]string{},
 				WorkingDir: ".",
 			},
 			{
 				Name:       "teardown",
 				Command:    "sh",
-				Args:       []string{"-c", "echo running teardown"},
+				Args:       []string{"-c", "echo running teardown && exit 0"},
 				Env:        map[string]string{},
 				WorkingDir: ".",
 			},
@@ -376,20 +415,70 @@ func buildStepsForTemplate(buildID string, template string) []domain.BuildStep {
 			{
 				Name:       "install",
 				Command:    "sh",
-				Args:       []string{"-c", "echo installing dependencies"},
+				Args:       []string{"-c", "echo installing dependencies && exit 0"},
 				Env:        map[string]string{},
 				WorkingDir: ".",
 			},
 			{
 				Name:       "compile",
 				Command:    "sh",
-				Args:       []string{"-c", "echo compiling project"},
+				Args:       []string{"-c", "echo compiling project && exit 0"},
+				Env:        map[string]string{},
+				WorkingDir: ".",
+			},
+		}
+	case BuildTemplateFail:
+		stepInputs = []CreateBuildStepInput{
+			{
+				Name:       "setup",
+				Command:    "sh",
+				Args:       []string{"-c", "echo success && exit 0"},
+				Env:        map[string]string{},
+				WorkingDir: ".",
+			},
+			{
+				Name:       "verify",
+				Command:    "sh",
+				Args:       []string{"-c", "echo failure 1>&2 && exit 1"},
 				Env:        map[string]string{},
 				WorkingDir: ".",
 			},
 		}
 	}
 
+	return domainStepsFromInputs(buildID, stepInputs)
+}
+
+func buildStepsForCustomTemplate(buildID string, customSteps []QueueBuildCustomStepInput) ([]domain.BuildStep, error) {
+	if len(customSteps) == 0 {
+		return nil, ErrCustomTemplateStepsRequired
+	}
+
+	stepInputs := make([]CreateBuildStepInput, 0, len(customSteps))
+	for idx, step := range customSteps {
+		command := strings.TrimSpace(step.Command)
+		if command == "" {
+			return nil, ErrCustomTemplateStepCommandRequired
+		}
+
+		name := strings.TrimSpace(step.Name)
+		if name == "" {
+			name = "step-" + strconv.Itoa(idx+1)
+		}
+
+		stepInputs = append(stepInputs, CreateBuildStepInput{
+			Name:       name,
+			Command:    "sh",
+			Args:       []string{"-c", command},
+			Env:        map[string]string{},
+			WorkingDir: ".",
+		})
+	}
+
+	return domainStepsFromInputs(buildID, stepInputs), nil
+}
+
+func domainStepsFromInputs(buildID string, stepInputs []CreateBuildStepInput) []domain.BuildStep {
 	steps := make([]domain.BuildStep, 0, len(stepInputs))
 	for idx, input := range stepInputs {
 		normalized := normalizeCreateStepInput(input)
@@ -417,7 +506,7 @@ func normalizeCreateStepInput(in CreateBuildStepInput) CreateBuildStepInput {
 		out.Command = "sh"
 	}
 	if len(out.Args) == 0 {
-		out.Args = []string{"-c", "echo coyote-ci worker default step"}
+		out.Args = []string{"-c", "echo coyote-ci worker default step && exit 0"}
 	}
 	if out.Env == nil {
 		out.Env = map[string]string{}
@@ -432,8 +521,8 @@ func normalizeCreateStepInput(in CreateBuildStepInput) CreateBuildStepInput {
 	return out
 }
 
-func (o *BuildOrchestrator) persistStepResult(ctx context.Context, buildID string, stepIndex int, stepStatus domain.BuildStepStatus, exitCode *int, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
-	persistedStep, err := o.buildStore.UpdateStepByIndex(ctx, buildID, stepIndex, stepStatus, nil, exitCode, errorMessage, startedAt, finishedAt)
+func (o *BuildOrchestrator) persistStepResult(ctx context.Context, buildID string, stepIndex int, stepStatus domain.BuildStepStatus, exitCode *int, stdout *string, stderr *string, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
+	persistedStep, err := o.buildStore.UpdateStepByIndex(ctx, buildID, stepIndex, stepStatus, nil, exitCode, stdout, stderr, errorMessage, startedAt, finishedAt)
 	if err != nil {
 		return domain.BuildStep{}, err
 	}

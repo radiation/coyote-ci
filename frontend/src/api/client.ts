@@ -6,6 +6,7 @@ import type {
   BuildStepsResponse,
   CreateBuildRequest,
   DataEnvelope,
+  QueueBuildStepInput,
 } from '../types/build';
 
 /**
@@ -64,10 +65,17 @@ export async function createBuild(input: CreateBuildRequest): Promise<Build> {
   return envelope.data;
 }
 
-export async function queueBuild(id: string, template?: BuildTemplate): Promise<Build> {
+export async function queueBuild(id: string, template?: BuildTemplate, steps?: QueueBuildStepInput[]): Promise<Build> {
   const path = `/builds/${encodeURIComponent(id)}/queue`;
-  const envelope = template
-    ? await postJSON<DataEnvelope<Build>, { template: BuildTemplate }>(path, { template })
+  const shouldSendBody = Boolean(template) || Boolean(steps && steps.length > 0);
+  const envelope = shouldSendBody
+    ? await postJSON<DataEnvelope<Build>, { template?: BuildTemplate; steps?: QueueBuildStepInput[] }>(
+        path,
+        {
+          ...(template ? { template } : {}),
+          ...(steps && steps.length > 0 ? { steps } : {}),
+        },
+      )
     : await postNoBodyJSON<DataEnvelope<Build>>(path);
   return envelope.data;
 }

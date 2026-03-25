@@ -84,6 +84,20 @@ describe('BuildsListPage queue form', () => {
     expect(screen.getByRole('option', { name: 'default' })).toBeTruthy();
     expect(screen.getByRole('option', { name: 'test' })).toBeTruthy();
     expect(screen.getByRole('option', { name: 'build' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'custom' })).toBeTruthy();
+  });
+
+  it('shows custom command input when template is custom', async () => {
+    renderPage();
+
+    await screen.findByText('No builds yet.');
+
+    expect(screen.queryByLabelText('Commands')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'custom' } });
+
+    expect(screen.getByLabelText('Commands')).toBeTruthy();
+    expect(screen.getByText('One command per line. Each line becomes a step and runs via sh -c.')).toBeTruthy();
   });
 
   it('queues with selected template', async () => {
@@ -96,7 +110,28 @@ describe('BuildsListPage queue form', () => {
 
     await waitFor(() => {
       expect(mockedCreateBuild).toHaveBeenCalledWith({ project_id: 'project-1' });
-      expect(mockedQueueBuild).toHaveBeenCalledWith('build-123', 'build');
+      expect(mockedQueueBuild).toHaveBeenCalledWith('build-123', 'build', undefined);
+      expect(navigateMock).toHaveBeenCalledWith('/builds/build-123');
+    });
+  });
+
+  it('queues custom template with one step per command line', async () => {
+    renderPage();
+
+    await screen.findByText('No builds yet.');
+
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('Commands'), {
+      target: { value: 'echo ok && exit 0\n\n echo fail && exit 1 ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Queue Build' }));
+
+    await waitFor(() => {
+      expect(mockedCreateBuild).toHaveBeenCalledWith({ project_id: 'project-1' });
+      expect(mockedQueueBuild).toHaveBeenCalledWith('build-123', 'custom', [
+        { command: 'echo ok && exit 0' },
+        { command: 'echo fail && exit 1' },
+      ]);
       expect(navigateMock).toHaveBeenCalledWith('/builds/build-123');
     });
   });

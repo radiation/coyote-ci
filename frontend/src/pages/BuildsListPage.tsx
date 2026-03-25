@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { createBuild, listBuilds, queueBuild } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 import { formatTime } from '../components/TimeDisplay';
-import type { Build, BuildTemplate } from '../types';
+import type { Build, BuildTemplate, QueueBuildStepInput } from '../types/build';
 
 const FAST_POLL_INTERVAL = 3000;
 const SLOW_POLL_INTERVAL = 15000;
@@ -19,6 +19,7 @@ export function BuildsListPage() {
   const navigate = useNavigate();
   const [projectID, setProjectID] = useState('project-1');
   const [template, setTemplate] = useState<BuildTemplate>('default');
+  const [customCommands, setCustomCommands] = useState('');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -36,9 +37,17 @@ export function BuildsListPage() {
   });
 
   const queueBuildMutation = useMutation({
-    mutationFn: async ({ targetProjectID, targetTemplate }: { targetProjectID: string; targetTemplate: BuildTemplate }) => {
+    mutationFn: async ({
+      targetProjectID,
+      targetTemplate,
+      customSteps,
+    }: {
+      targetProjectID: string;
+      targetTemplate: BuildTemplate;
+      customSteps?: QueueBuildStepInput[];
+    }) => {
       const createdBuild = await createBuild({ project_id: targetProjectID });
-      const queuedBuild = await queueBuild(createdBuild.id, targetTemplate);
+      const queuedBuild = await queueBuild(createdBuild.id, targetTemplate, customSteps);
       return { createdBuildID: createdBuild.id, queuedBuildID: queuedBuild.id };
     },
     onMutate: () => {
@@ -69,7 +78,22 @@ export function BuildsListPage() {
       return;
     }
 
-    queueBuildMutation.mutate({ targetProjectID: trimmedProjectID, targetTemplate: template });
+    let customSteps: QueueBuildStepInput[] | undefined
+    if (template === 'custom') {
+      const commands = customCommands
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+
+      if (commands.length === 0) {
+        setErrorMessage('At least one custom command is required.');
+        return;
+      }
+
+      customSteps = commands.map((command) => ({ command }));
+    }
+
+    queueBuildMutation.mutate({ targetProjectID: trimmedProjectID, targetTemplate: template, customSteps });
   };
 
   return (
@@ -96,7 +120,22 @@ export function BuildsListPage() {
           <option value="default">default</option>
           <option value="test">test</option>
           <option value="build">build</option>
+          <option value="custom">custom</option>
         </select>
+        {template === 'custom' && (
+          <div className="queue-build-custom-input">
+            <label htmlFor="custom-commands">Commands</label>
+            <textarea
+              id="custom-commands"
+              value={customCommands}
+              onChange={(event) => setCustomCommands(event.target.value)}
+              disabled={queueBuildMutation.isPending}
+              placeholder={'echo ok && exit 0\necho fail && exit 1'}
+              rows={4}
+            />
+            <p className="subtle-text">One command per line. Each line becomes a step and runs via sh -c.</p>
+          </div>
+        )}
         <button type="submit" disabled={queueBuildMutation.isPending}>
           {queueBuildMutation.isPending ? 'Queueing…' : 'Queue Build'}
         </button>

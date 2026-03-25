@@ -223,7 +223,7 @@ func (r *BuildRepository) ClaimStepIfPending(_ context.Context, buildID string, 
 	return domain.BuildStep{}, false, nil
 }
 
-func (r *BuildRepository) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, status domain.BuildStepStatus, workerID *string, exitCode *int, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
+func (r *BuildRepository) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, status domain.BuildStepStatus, workerID *string, exitCode *int, stdout *string, stderr *string, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -243,6 +243,12 @@ func (r *BuildRepository) UpdateStepByIndex(_ context.Context, buildID string, s
 		}
 		if exitCode != nil {
 			steps[idx].ExitCode = exitCode
+		}
+		if stdout != nil {
+			steps[idx].Stdout = stdout
+		}
+		if stderr != nil {
+			steps[idx].Stderr = stderr
 		}
 		if status == domain.BuildStepStatusFailed {
 			steps[idx].ErrorMessage = errorMessage

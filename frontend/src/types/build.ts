@@ -24,6 +24,8 @@ export interface BuildStep {
   started_at: string | null;
   finished_at: string | null;
   exit_code: number | null;
+  stdout: string | null;
+  stderr: string | null;
   error_message: string | null;
 }
 
@@ -46,7 +48,13 @@ export interface CreateBuildRequest {
   steps?: CreateBuildStepInput[];
 }
 
-export type BuildTemplate = 'default' | 'test' | 'build';
+export type BuildTemplate = 'default' | 'test' | 'build' | 'custom' | 'fail';
+
+/** Matches backend api.QueueBuildStepInput JSON shape. */
+export interface QueueBuildStepInput {
+  name?: string;
+  command: string;
+}
 
 /** Envelope: { data: { builds: Build[] } } */
 export interface BuildListResponse {

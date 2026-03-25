@@ -224,9 +224,9 @@ func TestBuildRepository_GetStepsByBuildID_Ordered(t *testing.T) {
 	now := time.Now().UTC()
 
 	mock.ExpectQuery("SELECT id, build_id, step_index, name, command").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "started_at", "finished_at", "exit_code", "error_message"}).
-			AddRow("step-1", "build-1", 0, "lint", "go", "[\"test\"]", "{}", "/workspace", 60, "success", nil, now, now, 0, nil).
-			AddRow("step-2", "build-1", 1, "test", "go", "[\"test\",\"./...\"]", "{}", "/workspace", 60, "pending", nil, nil, nil, nil, nil),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
+			AddRow("step-1", "build-1", 0, "lint", "go", "[\"test\"]", "{}", "/workspace", 60, "success", nil, now, now, 0, "ok", "", nil).
+			AddRow("step-2", "build-1", 1, "test", "go", "[\"test\",\"./...\"]", "{}", "/workspace", 60, "pending", nil, nil, nil, nil, nil, nil, nil),
 	)
 
 	steps, err := repo.GetStepsByBuildID(context.Background(), "build-1")
@@ -260,15 +260,17 @@ func TestBuildRepository_UpdateStepByIndex(t *testing.T) {
 	repo := NewBuildRepository(db)
 	now := time.Now().UTC()
 	exitCode := 1
+	stdout := "partial output"
+	stderr := "step failed"
 	errMsg := "step failed"
 
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "started_at", "finished_at", "exit_code", "error_message"}).
-			AddRow("step-1", "build-1", 0, "lint", "go", "[\"test\",\"./...\"]", "{}", "/workspace", 60, "failed", "worker-1", now, now, exitCode, errMsg),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
+			AddRow("step-1", "build-1", 0, "lint", "go", "[\"test\",\"./...\"]", "{}", "/workspace", 60, "failed", "worker-1", now, now, exitCode, stdout, stderr, errMsg),
 	)
 
 	workerID := "worker-1"
-	step, err := repo.UpdateStepByIndex(context.Background(), "build-1", 0, domain.BuildStepStatusFailed, &workerID, &exitCode, &errMsg, &now, &now)
+	step, err := repo.UpdateStepByIndex(context.Background(), "build-1", 0, domain.BuildStepStatusFailed, &workerID, &exitCode, &stdout, &stderr, &errMsg, &now, &now)
 	if err != nil {
 		t.Fatalf("update step failed: %v", err)
 	}
@@ -277,6 +279,12 @@ func TestBuildRepository_UpdateStepByIndex(t *testing.T) {
 	}
 	if step.ExitCode == nil || *step.ExitCode != exitCode {
 		t.Fatalf("expected exit code %d, got %v", exitCode, step.ExitCode)
+	}
+	if step.Stdout == nil || *step.Stdout != stdout {
+		t.Fatalf("expected stdout %q, got %v", stdout, step.Stdout)
+	}
+	if step.Stderr == nil || *step.Stderr != stderr {
+		t.Fatalf("expected stderr %q, got %v", stderr, step.Stderr)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -295,8 +303,8 @@ func TestBuildRepository_ClaimStepIfPending(t *testing.T) {
 	}{
 		{
 			name: "success",
-			rows: sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "started_at", "finished_at", "exit_code", "error_message"}).
-				AddRow("step-1", "build-1", 0, "default", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "running", nil, now, nil, nil, nil),
+			rows: sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
+				AddRow("step-1", "build-1", 0, "default", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "running", nil, now, nil, nil, nil, nil, nil),
 			expectClaim: true,
 		},
 		{

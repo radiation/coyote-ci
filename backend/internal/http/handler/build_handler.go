@@ -228,8 +228,16 @@ func (h *BuildHandler) QueueBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	customSteps := make([]service.QueueBuildCustomStepInput, 0, len(req.Steps))
+	for _, step := range req.Steps {
+		customSteps = append(customSteps, service.QueueBuildCustomStepInput{
+			Name:    step.Name,
+			Command: step.Command,
+		})
+	}
+
 	h.transitionBuild(w, r, func(ctx context.Context, id string) (domain.Build, error) {
-		return h.buildService.QueueBuildWithTemplate(ctx, id, req.Template)
+		return h.buildService.QueueBuildWithTemplateAndCustomSteps(ctx, id, req.Template, customSteps)
 	})
 }
 
@@ -308,6 +316,11 @@ func (h *BuildHandler) writeServiceError(w http.ResponseWriter, err error) {
 		return
 	}
 
+	if errors.Is(err, service.ErrCustomTemplateStepsRequired) || errors.Is(err, service.ErrCustomTemplateStepCommandRequired) {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
 	writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 }
 
@@ -334,6 +347,8 @@ func toBuildStepResponse(step contracts.BuildStep) api.BuildStepResponse {
 		Status:       string(step.Status),
 		WorkerID:     step.WorkerID,
 		ExitCode:     step.ExitCode,
+		Stdout:       step.Stdout,
+		Stderr:       step.Stderr,
 		ErrorMessage: step.ErrorMessage,
 	}
 
