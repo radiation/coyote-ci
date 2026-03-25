@@ -97,10 +97,17 @@ definitions:
     properties:
       project_id:
         type: string
+      template:
+        type: string
       steps:
         items:
           $ref: '#/definitions/api.CreateBuildStepInput'
         type: array
+    type: object
+  api.QueueBuildRequest:
+    properties:
+      template:
+        type: string
     type: object
   api.ErrorBody:
     properties:
@@ -300,6 +307,8 @@ paths:
       - builds
   /builds/{buildID}/queue:
     post:
+      consumes:
+      - application/json
       description: Transitions build status from pending to queued.
       parameters:
       - description: Build ID
@@ -307,6 +316,11 @@ paths:
         name: buildID
         required: true
         type: string
+      - description: Queue build request
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/api.QueueBuildRequest'
       produces:
       - application/json
       responses:

@@ -287,6 +287,9 @@ const docTemplate = `{
         },
         "/builds/{buildID}/queue": {
             "post": {
+                "consumes": [
+                    "application/json"
+                ],
                 "description": "Transitions build status from pending to queued.",
                 "produces": [
                     "application/json"
@@ -302,6 +305,14 @@ const docTemplate = `{
                         "name": "buildID",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "description": "Queue build request",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/api.QueueBuildRequest"
+                        }
                     }
                 ],
                 "responses": {
@@ -611,11 +622,22 @@ const docTemplate = `{
                 "project_id": {
                     "type": "string"
                 },
+                "template": {
+                    "type": "string"
+                },
                 "steps": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/api.CreateBuildStepInput"
                     }
+                }
+            }
+        },
+        "api.QueueBuildRequest": {
+            "type": "object",
+            "properties": {
+                "template": {
+                    "type": "string"
                 }
             }
         },

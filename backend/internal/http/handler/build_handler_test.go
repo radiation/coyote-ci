@@ -487,3 +487,88 @@ func TestBuildHandler_GetBuildLogs(t *testing.T) {
 		t.Fatalf("expected build_id build-1, got %v", logsData["build_id"])
 	}
 }
+
+func TestBuildHandler_QueueBuild_WithTemplate(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
+	h := NewBuildHandler(service.NewBuildService(repo))
+
+	queueReq := addBuildIDParam(
+		httptest.NewRequest(http.MethodPost, "/builds/build-1/queue", bytes.NewBufferString(`{"template":"test"}`)),
+		"build-1",
+	)
+	queueRes := httptest.NewRecorder()
+	h.QueueBuild(queueRes, queueReq)
+
+	if queueRes.Code != http.StatusOK {
+		t.Fatalf("expected queue status %d, got %d", http.StatusOK, queueRes.Code)
+	}
+
+	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/steps", nil), "build-1")
+	stepsRes := httptest.NewRecorder()
+	h.GetBuildSteps(stepsRes, stepsReq)
+	if stepsRes.Code != http.StatusOK {
+		t.Fatalf("expected steps status %d, got %d", http.StatusOK, stepsRes.Code)
+	}
+
+	stepsData := decodeDataMap(t, stepsRes)
+	steps, ok := stepsData["steps"].([]any)
+	if !ok {
+		t.Fatalf("expected steps array, got %T", stepsData["steps"])
+	}
+	if len(steps) != 3 {
+		t.Fatalf("expected 3 steps for test template, got %d", len(steps))
+	}
+
+	expectedNames := []string{"setup", "test", "teardown"}
+	for idx, expectedName := range expectedNames {
+		stepMap, ok := steps[idx].(map[string]any)
+		if !ok {
+			t.Fatalf("expected step object, got %T", steps[idx])
+		}
+		if stepMap["step_index"] != float64(idx) {
+			t.Fatalf("expected step_index %d, got %v", idx, stepMap["step_index"])
+		}
+		if stepMap["name"] != expectedName {
+			t.Fatalf("expected step name %q, got %v", expectedName, stepMap["name"])
+		}
+	}
+}
+
+func TestBuildHandler_QueueBuild_EmptyBodyUsesDefaultTemplate(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
+	h := NewBuildHandler(service.NewBuildService(repo))
+
+	queueReq := addBuildIDParam(httptest.NewRequest(http.MethodPost, "/builds/build-1/queue", nil), "build-1")
+	queueRes := httptest.NewRecorder()
+	h.QueueBuild(queueRes, queueReq)
+
+	if queueRes.Code != http.StatusOK {
+		t.Fatalf("expected queue status %d, got %d", http.StatusOK, queueRes.Code)
+	}
+
+	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/steps", nil), "build-1")
+	stepsRes := httptest.NewRecorder()
+	h.GetBuildSteps(stepsRes, stepsReq)
+	if stepsRes.Code != http.StatusOK {
+		t.Fatalf("expected steps status %d, got %d", http.StatusOK, stepsRes.Code)
+	}
+
+	stepsData := decodeDataMap(t, stepsRes)
+	steps, ok := stepsData["steps"].([]any)
+	if !ok {
+		t.Fatalf("expected steps array, got %T", stepsData["steps"])
+	}
+	if len(steps) != 1 {
+		t.Fatalf("expected 1 default step, got %d", len(steps))
+	}
+
+	stepMap, ok := steps[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected step object, got %T", steps[0])
+	}
+	if stepMap["name"] != "default" {
+		t.Fatalf("expected default step name, got %v", stepMap["name"])
+	}
+}

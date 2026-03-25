@@ -4,8 +4,18 @@ import { getBuild, getBuildSteps } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 import { StepList } from '../components/StepList';
 import { formatTime } from '../components/TimeDisplay';
+import type { Build } from '../types';
 
-const POLL_INTERVAL = 3000;
+const FAST_POLL_INTERVAL = 3000;
+const SLOW_POLL_INTERVAL = 15000;
+
+function isActiveBuild(build: Build | undefined): boolean {
+  if (!build) {
+    return false;
+  }
+
+  return !['success', 'failed', 'canceled'].includes(build.status);
+}
 
 export function BuildDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -14,11 +24,15 @@ export function BuildDetailPage() {
     data: build,
     isLoading: buildLoading,
     error: buildError,
+    dataUpdatedAt: buildUpdatedAt,
   } = useQuery({
     queryKey: ['build', id],
     queryFn: () => getBuild(id!),
     enabled: !!id,
-    refetchInterval: POLL_INTERVAL,
+    refetchInterval: (query) => {
+      const nextBuild = query.state.data as Build | undefined;
+      return isActiveBuild(nextBuild) ? FAST_POLL_INTERVAL : SLOW_POLL_INTERVAL;
+    },
   });
 
   const {
@@ -29,7 +43,7 @@ export function BuildDetailPage() {
     queryKey: ['buildSteps', id],
     queryFn: () => getBuildSteps(id!),
     enabled: !!id,
-    refetchInterval: POLL_INTERVAL,
+    refetchInterval: isActiveBuild(build) ? FAST_POLL_INTERVAL : SLOW_POLL_INTERVAL,
   });
 
   if (buildLoading) return <p>Loading build…</p>;
@@ -41,6 +55,12 @@ export function BuildDetailPage() {
       <Link to="/builds">← Back to builds</Link>
 
       <h2>Build {build.id.slice(0, 8)}…</h2>
+      <div className="detail-summary">
+        <span><strong>Project:</strong> {build.project_id}</span>
+        <span><strong>Status:</strong> <StatusBadge status={build.status} /></span>
+        <span><strong>Current Step:</strong> {build.current_step_index}</span>
+      </div>
+      <p className="subtle-text">Last updated: {buildUpdatedAt > 0 ? formatTime(new Date(buildUpdatedAt).toISOString()) : '—'}</p>
 
       <div className="detail-grid">
         <div><strong>ID</strong><span>{build.id}</span></div>
@@ -51,9 +71,7 @@ export function BuildDetailPage() {
         <div><strong>Queued</strong><span>{formatTime(build.queued_at)}</span></div>
         <div><strong>Started</strong><span>{formatTime(build.started_at)}</span></div>
         <div><strong>Finished</strong><span>{formatTime(build.finished_at)}</span></div>
-        {build.error_message && (
-          <div><strong>Error</strong><span className="error-text">{build.error_message}</span></div>
-        )}
+        <div><strong>Error</strong><span className="error-text">{build.error_message ?? '—'}</span></div>
       </div>
 
       <h3>Steps</h3>

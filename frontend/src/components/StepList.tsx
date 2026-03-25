@@ -16,7 +16,7 @@ export function StepList({ steps }: { steps: BuildStep[] }) {
           <th>Status</th>
           <th>Worker</th>
           <th>Started</th>
-          <th>Ended</th>
+          <th>Finished</th>
           <th>Exit Code</th>
           <th>Error</th>
         </tr>
@@ -31,7 +31,7 @@ export function StepList({ steps }: { steps: BuildStep[] }) {
             <td>{formatTime(step.started_at)}</td>
             <td>{formatTime(step.finished_at)}</td>
             <td>{step.exit_code ?? '—'}</td>
-            <td className="error-text">{step.error_message ?? ''}</td>
+            <td className="error-text">{step.error_message ?? '—'}</td>
           </tr>
         ))}
       </tbody>
