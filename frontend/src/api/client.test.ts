@@ -65,4 +65,40 @@ describe('API client - types', () => {
       method: 'POST',
     });
   });
+
+  it('sends queue request with custom steps when provided', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          id: 'build-1',
+          project_id: 'project-1',
+          status: 'queued',
+          created_at: '2026-03-24T00:00:00Z',
+          queued_at: '2026-03-24T00:00:01Z',
+          started_at: null,
+          finished_at: null,
+          current_step_index: 0,
+          error_message: null,
+        },
+      }),
+    } as Response);
+
+    await queueBuild('build-1', 'custom', [
+      { command: 'echo ok && exit 0' },
+      { name: 'fail', command: 'echo fail && exit 1' },
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/builds/build-1/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        template: 'custom',
+        steps: [
+          { command: 'echo ok && exit 0' },
+          { name: 'fail', command: 'echo fail && exit 1' },
+        ],
+      }),
+    });
+  });
 });

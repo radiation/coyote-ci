@@ -48,7 +48,13 @@ export interface CreateBuildRequest {
   steps?: CreateBuildStepInput[];
 }
 
-export type BuildTemplate = 'default' | 'test' | 'build' | 'fail';
+export type BuildTemplate = 'default' | 'test' | 'build' | 'custom' | 'fail';
+
+/** Matches backend api.QueueBuildStepInput JSON shape. */
+export interface QueueBuildStepInput {
+  name?: string;
+  command: string;
+}
 
 /** Envelope: { data: { builds: Build[] } } */
 export interface BuildListResponse {

@@ -580,3 +580,82 @@ func TestBuildHandler_QueueBuild_EmptyBodyUsesDefaultTemplate(t *testing.T) {
 		t.Fatalf("expected default step name, got %v", stepMap["name"])
 	}
 }
+
+func TestBuildHandler_QueueBuild_CustomTemplateWithCommands(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
+	h := NewBuildHandler(service.NewBuildService(repo))
+
+	body := `{"template":"custom","steps":[{"command":"echo ok && exit 0"},{"name":"fail","command":"echo fail && exit 1"}]}`
+	queueReq := addBuildIDParam(httptest.NewRequest(http.MethodPost, "/builds/build-1/queue", bytes.NewBufferString(body)), "build-1")
+	queueRes := httptest.NewRecorder()
+	h.QueueBuild(queueRes, queueReq)
+
+	if queueRes.Code != http.StatusOK {
+		t.Fatalf("expected queue status %d, got %d", http.StatusOK, queueRes.Code)
+	}
+
+	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/steps", nil), "build-1")
+	stepsRes := httptest.NewRecorder()
+	h.GetBuildSteps(stepsRes, stepsReq)
+
+	if stepsRes.Code != http.StatusOK {
+		t.Fatalf("expected steps status %d, got %d", http.StatusOK, stepsRes.Code)
+	}
+
+	stepsData := decodeDataMap(t, stepsRes)
+	steps, ok := stepsData["steps"].([]any)
+	if !ok {
+		t.Fatalf("expected steps array, got %T", stepsData["steps"])
+	}
+	if len(steps) != 2 {
+		t.Fatalf("expected 2 custom steps, got %d", len(steps))
+	}
+
+	first, ok := steps[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first step object, got %T", steps[0])
+	}
+	second, ok := steps[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected second step object, got %T", steps[1])
+	}
+	if first["name"] != "step-1" {
+		t.Fatalf("expected generated first step name step-1, got %v", first["name"])
+	}
+	if second["name"] != "fail" {
+		t.Fatalf("expected explicit second step name fail, got %v", second["name"])
+	}
+}
+
+func TestBuildHandler_QueueBuild_CustomTemplateValidationErrors(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
+	h := NewBuildHandler(service.NewBuildService(repo))
+
+	missingStepsReq := addBuildIDParam(
+		httptest.NewRequest(http.MethodPost, "/builds/build-1/queue", bytes.NewBufferString(`{"template":"custom","steps":[]}`)),
+		"build-1",
+	)
+	missingStepsRes := httptest.NewRecorder()
+	h.QueueBuild(missingStepsRes, missingStepsReq)
+	if missingStepsRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d for missing custom steps, got %d", http.StatusBadRequest, missingStepsRes.Code)
+	}
+	if got := decodeErrorMessage(t, missingStepsRes); got != service.ErrCustomTemplateStepsRequired.Error() {
+		t.Fatalf("expected error %q, got %q", service.ErrCustomTemplateStepsRequired.Error(), got)
+	}
+
+	emptyCommandReq := addBuildIDParam(
+		httptest.NewRequest(http.MethodPost, "/builds/build-1/queue", bytes.NewBufferString(`{"template":"custom","steps":[{"command":"  "}]}`)),
+		"build-1",
+	)
+	emptyCommandRes := httptest.NewRecorder()
+	h.QueueBuild(emptyCommandRes, emptyCommandReq)
+	if emptyCommandRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d for empty custom command, got %d", http.StatusBadRequest, emptyCommandRes.Code)
+	}
+	if got := decodeErrorMessage(t, emptyCommandRes); got != service.ErrCustomTemplateStepCommandRequired.Error() {
+		t.Fatalf("expected error %q, got %q", service.ErrCustomTemplateStepCommandRequired.Error(), got)
+	}
+}

@@ -93,6 +93,25 @@ a:hover {
   cursor: not-allowed;
 }
 
+.queue-build-custom-input {
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  gap: 4px;
+}
+
+.queue-build-custom-input textarea {
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+.queue-build-custom-input textarea:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 /* Tables */
 .table {
   width: 100%;

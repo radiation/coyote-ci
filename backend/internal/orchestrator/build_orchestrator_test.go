@@ -346,6 +346,53 @@ func TestBuildOrchestrator_QueueBuildWithTemplate_FailTemplateCommands(t *testin
 	}
 }
 
+func TestBuildOrchestrator_QueueBuildWithTemplate_CustomTemplateCommands(t *testing.T) {
+	store := &fakeBuildStore{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC()},
+	}
+	o := NewBuildOrchestrator(store, nil, nil)
+
+	customSteps := []QueueBuildCustomStepInput{
+		{Command: "echo ok && exit 0"},
+		{Name: "failure", Command: "echo fail && exit 1"},
+	}
+
+	if _, err := o.QueueBuildWithTemplateAndCustomSteps(context.Background(), "build-1", BuildTemplateCustom, customSteps); err != nil {
+		t.Fatalf("queue with custom template returned error: %v", err)
+	}
+
+	if len(store.steps) != 2 {
+		t.Fatalf("expected 2 custom steps, got %d", len(store.steps))
+	}
+	if store.steps[0].Name != "step-1" {
+		t.Fatalf("expected generated first step name step-1, got %q", store.steps[0].Name)
+	}
+	if len(store.steps[0].Args) < 2 || store.steps[0].Args[0] != "-c" || store.steps[0].Args[1] != "echo ok && exit 0" {
+		t.Fatalf("expected first step to run via sh -c with command, got %+v", store.steps[0].Args)
+	}
+	if store.steps[1].Name != "failure" {
+		t.Fatalf("expected explicit step name to persist, got %q", store.steps[1].Name)
+	}
+	if len(store.steps[1].Args) < 2 || store.steps[1].Args[1] != "echo fail && exit 1" {
+		t.Fatalf("expected second step command to persist, got %+v", store.steps[1].Args)
+	}
+}
+
+func TestBuildOrchestrator_QueueBuildWithTemplate_CustomTemplateValidation(t *testing.T) {
+	store := &fakeBuildStore{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC()},
+	}
+	o := NewBuildOrchestrator(store, nil, nil)
+
+	if _, err := o.QueueBuildWithTemplateAndCustomSteps(context.Background(), "build-1", BuildTemplateCustom, nil); !errors.Is(err, ErrCustomTemplateStepsRequired) {
+		t.Fatalf("expected ErrCustomTemplateStepsRequired, got %v", err)
+	}
+
+	if _, err := o.QueueBuildWithTemplateAndCustomSteps(context.Background(), "build-1", BuildTemplateCustom, []QueueBuildCustomStepInput{{Name: "bad", Command: "  "}}); !errors.Is(err, ErrCustomTemplateStepCommandRequired) {
+		t.Fatalf("expected ErrCustomTemplateStepCommandRequired, got %v", err)
+	}
+}
+
 func TestBuildOrchestrator_TransitionNotFound(t *testing.T) {
 	store := &fakeBuildStore{getErr: repository.ErrBuildNotFound}
 	o := NewBuildOrchestrator(store, nil, nil)

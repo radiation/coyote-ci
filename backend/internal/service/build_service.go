@@ -15,6 +15,8 @@ import (
 
 var ErrProjectIDRequired = orchestrator.ErrProjectIDRequired
 var ErrInvalidBuildStatusTransition = orchestrator.ErrInvalidBuildStatusTransition
+var ErrCustomTemplateStepsRequired = orchestrator.ErrCustomTemplateStepsRequired
+var ErrCustomTemplateStepCommandRequired = orchestrator.ErrCustomTemplateStepCommandRequired
 
 type BuildService struct {
 	orchestrator *orchestrator.BuildOrchestrator
@@ -45,6 +47,11 @@ type CreateBuildStepInput struct {
 	Env            map[string]string
 	WorkingDir     string
 	TimeoutSeconds int
+}
+
+type QueueBuildCustomStepInput struct {
+	Name    string
+	Command string
 }
 
 func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) (domain.Build, error) {
@@ -100,6 +107,18 @@ func (s *BuildService) QueueBuild(ctx context.Context, id string) (domain.Build,
 
 func (s *BuildService) QueueBuildWithTemplate(ctx context.Context, id string, template string) (domain.Build, error) {
 	return s.orchestrator.QueueBuildWithTemplate(ctx, id, template)
+}
+
+func (s *BuildService) QueueBuildWithTemplateAndCustomSteps(ctx context.Context, id string, template string, customSteps []QueueBuildCustomStepInput) (domain.Build, error) {
+	orchestratorSteps := make([]orchestrator.QueueBuildCustomStepInput, 0, len(customSteps))
+	for _, step := range customSteps {
+		orchestratorSteps = append(orchestratorSteps, orchestrator.QueueBuildCustomStepInput{
+			Name:    step.Name,
+			Command: step.Command,
+		})
+	}
+
+	return s.orchestrator.QueueBuildWithTemplateAndCustomSteps(ctx, id, template, orchestratorSteps)
 }
 
 func (s *BuildService) StartBuild(ctx context.Context, id string) (domain.Build, error) {

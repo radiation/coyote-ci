@@ -7,7 +7,13 @@ type CreateBuildRequest struct {
 }
 
 type QueueBuildRequest struct {
-	Template string `json:"template,omitempty"`
+	Template string                `json:"template,omitempty"`
+	Steps    []QueueBuildStepInput `json:"steps,omitempty"`
+}
+
+type QueueBuildStepInput struct {
+	Name    string `json:"name,omitempty"`
+	Command string `json:"command"`
 }
 
 type CreateBuildStepInput struct {

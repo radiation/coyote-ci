@@ -4,4 +4,5 @@ export {
 	type BuildStatus,
 	type BuildStepStatus,
 	type BuildTemplate,
+	type QueueBuildStepInput,
 } from './build';
