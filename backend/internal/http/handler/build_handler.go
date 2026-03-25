@@ -334,6 +334,8 @@ func toBuildStepResponse(step contracts.BuildStep) api.BuildStepResponse {
 		Status:       string(step.Status),
 		WorkerID:     step.WorkerID,
 		ExitCode:     step.ExitCode,
+		Stdout:       step.Stdout,
+		Stderr:       step.Stderr,
 		ErrorMessage: step.ErrorMessage,
 	}
 

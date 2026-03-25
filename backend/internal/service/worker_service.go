@@ -151,7 +151,7 @@ func defaultString(value string, fallback string) string {
 
 func defaultArgs(args []string) []string {
 	if len(args) == 0 {
-		return []string{"-c", "echo coyote-ci worker default step"}
+		return []string{"-c", "echo coyote-ci worker default step && exit 0"}
 	}
 
 	return args

@@ -25,6 +25,7 @@ const (
 	BuildTemplateDefault = "default"
 	BuildTemplateTest    = "test"
 	BuildTemplateBuild   = "build"
+	BuildTemplateFail    = "fail"
 )
 
 // BuildOrchestrator coordinates build lifecycle state transitions and delegates step execution to a runner.
@@ -133,6 +134,8 @@ func (o *BuildOrchestrator) GetBuildSteps(ctx context.Context, id string) ([]con
 			StartedAt:      step.StartedAt,
 			FinishedAt:     step.FinishedAt,
 			ExitCode:       step.ExitCode,
+			Stdout:         step.Stdout,
+			Stderr:         step.Stderr,
 			ErrorMessage:   step.ErrorMessage,
 		})
 	}
@@ -177,6 +180,8 @@ func (o *BuildOrchestrator) ClaimStepIfPending(ctx context.Context, buildID stri
 		StartedAt:      step.StartedAt,
 		FinishedAt:     step.FinishedAt,
 		ExitCode:       step.ExitCode,
+		Stdout:         step.Stdout,
+		Stderr:         step.Stderr,
 		ErrorMessage:   step.ErrorMessage,
 	}, true, nil
 }
@@ -217,7 +222,7 @@ func (o *BuildOrchestrator) RunStep(ctx context.Context, request contracts.RunSt
 	}
 
 	startedAt := time.Now().UTC()
-	if _, err := o.persistStepResult(ctx, request.BuildID, request.StepIndex, domain.BuildStepStatusRunning, nil, nil, &startedAt, nil); err != nil {
+	if _, err := o.persistStepResult(ctx, request.BuildID, request.StepIndex, domain.BuildStepStatusRunning, nil, nil, nil, nil, &startedAt, nil); err != nil {
 		return contracts.RunStepResult{}, err
 	}
 
@@ -225,7 +230,7 @@ func (o *BuildOrchestrator) RunStep(ctx context.Context, request contracts.RunSt
 	if err != nil {
 		finishedAt := time.Now().UTC()
 		message := err.Error()
-		if _, persistErr := o.persistStepResult(ctx, request.BuildID, request.StepIndex, domain.BuildStepStatusFailed, nil, &message, nil, &finishedAt); persistErr != nil {
+		if _, persistErr := o.persistStepResult(ctx, request.BuildID, request.StepIndex, domain.BuildStepStatusFailed, nil, nil, nil, &message, nil, &finishedAt); persistErr != nil {
 			return contracts.RunStepResult{}, errors.Join(err, persistErr)
 		}
 		return contracts.RunStepResult{}, err
@@ -251,8 +256,20 @@ func (o *BuildOrchestrator) RunStep(ctx context.Context, request contracts.RunSt
 		}
 	}
 
+	var stdout *string
+	if result.Stdout != "" {
+		stdoutValue := result.Stdout
+		stdout = &stdoutValue
+	}
+
+	var stderr *string
+	if result.Stderr != "" {
+		stderrValue := result.Stderr
+		stderr = &stderrValue
+	}
+
 	exitCode := result.ExitCode
-	if _, err := o.persistStepResult(ctx, request.BuildID, request.StepIndex, stepStatus, &exitCode, stepError, &result.StartedAt, &result.FinishedAt); err != nil {
+	if _, err := o.persistStepResult(ctx, request.BuildID, request.StepIndex, stepStatus, &exitCode, stdout, stderr, stepError, &result.StartedAt, &result.FinishedAt); err != nil {
 		return contracts.RunStepResult{}, err
 	}
 
@@ -314,7 +331,7 @@ func defaultBuildSteps(buildID string) []domain.BuildStep {
 			StepIndex:      0,
 			Name:           "default",
 			Command:        "sh",
-			Args:           []string{"-c", "echo coyote-ci worker default step"},
+			Args:           []string{"-c", "echo coyote-ci worker default step && exit 0"},
 			Env:            map[string]string{},
 			WorkingDir:     ".",
 			TimeoutSeconds: 0,
@@ -330,7 +347,7 @@ func buildStepsForTemplate(buildID string, template string) []domain.BuildStep {
 		{
 			Name:       "default",
 			Command:    "sh",
-			Args:       []string{"-c", "echo coyote-ci worker default step"},
+			Args:       []string{"-c", "echo coyote-ci worker default step && exit 0"},
 			Env:        map[string]string{},
 			WorkingDir: ".",
 		},
@@ -342,7 +359,7 @@ func buildStepsForTemplate(buildID string, template string) []domain.BuildStep {
 			{
 				Name:       "default",
 				Command:    "sh",
-				Args:       []string{"-c", "echo coyote-ci worker default step"},
+				Args:       []string{"-c", "echo coyote-ci worker default step && exit 0"},
 				Env:        map[string]string{},
 				WorkingDir: ".",
 			},
@@ -352,21 +369,21 @@ func buildStepsForTemplate(buildID string, template string) []domain.BuildStep {
 			{
 				Name:       "setup",
 				Command:    "sh",
-				Args:       []string{"-c", "echo running setup"},
+				Args:       []string{"-c", "echo running setup && exit 0"},
 				Env:        map[string]string{},
 				WorkingDir: ".",
 			},
 			{
 				Name:       "test",
 				Command:    "sh",
-				Args:       []string{"-c", "echo running tests"},
+				Args:       []string{"-c", "echo running tests && exit 0"},
 				Env:        map[string]string{},
 				WorkingDir: ".",
 			},
 			{
 				Name:       "teardown",
 				Command:    "sh",
-				Args:       []string{"-c", "echo running teardown"},
+				Args:       []string{"-c", "echo running teardown && exit 0"},
 				Env:        map[string]string{},
 				WorkingDir: ".",
 			},
@@ -376,14 +393,31 @@ func buildStepsForTemplate(buildID string, template string) []domain.BuildStep {
 			{
 				Name:       "install",
 				Command:    "sh",
-				Args:       []string{"-c", "echo installing dependencies"},
+				Args:       []string{"-c", "echo installing dependencies && exit 0"},
 				Env:        map[string]string{},
 				WorkingDir: ".",
 			},
 			{
 				Name:       "compile",
 				Command:    "sh",
-				Args:       []string{"-c", "echo compiling project"},
+				Args:       []string{"-c", "echo compiling project && exit 0"},
+				Env:        map[string]string{},
+				WorkingDir: ".",
+			},
+		}
+	case BuildTemplateFail:
+		stepInputs = []CreateBuildStepInput{
+			{
+				Name:       "setup",
+				Command:    "sh",
+				Args:       []string{"-c", "echo success && exit 0"},
+				Env:        map[string]string{},
+				WorkingDir: ".",
+			},
+			{
+				Name:       "verify",
+				Command:    "sh",
+				Args:       []string{"-c", "echo failure 1>&2 && exit 1"},
 				Env:        map[string]string{},
 				WorkingDir: ".",
 			},
@@ -417,7 +451,7 @@ func normalizeCreateStepInput(in CreateBuildStepInput) CreateBuildStepInput {
 		out.Command = "sh"
 	}
 	if len(out.Args) == 0 {
-		out.Args = []string{"-c", "echo coyote-ci worker default step"}
+		out.Args = []string{"-c", "echo coyote-ci worker default step && exit 0"}
 	}
 	if out.Env == nil {
 		out.Env = map[string]string{}
@@ -432,8 +466,8 @@ func normalizeCreateStepInput(in CreateBuildStepInput) CreateBuildStepInput {
 	return out
 }
 
-func (o *BuildOrchestrator) persistStepResult(ctx context.Context, buildID string, stepIndex int, stepStatus domain.BuildStepStatus, exitCode *int, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
-	persistedStep, err := o.buildStore.UpdateStepByIndex(ctx, buildID, stepIndex, stepStatus, nil, exitCode, errorMessage, startedAt, finishedAt)
+func (o *BuildOrchestrator) persistStepResult(ctx context.Context, buildID string, stepIndex int, stepStatus domain.BuildStepStatus, exitCode *int, stdout *string, stderr *string, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
+	persistedStep, err := o.buildStore.UpdateStepByIndex(ctx, buildID, stepIndex, stepStatus, nil, exitCode, stdout, stderr, errorMessage, startedAt, finishedAt)
 	if err != nil {
 		return domain.BuildStep{}, err
 	}

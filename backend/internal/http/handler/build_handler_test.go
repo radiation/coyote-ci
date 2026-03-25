@@ -140,7 +140,7 @@ func (r *fakeRepo) ClaimStepIfPending(_ context.Context, buildID string, stepInd
 	return domain.BuildStep{}, false, repository.ErrBuildNotFound
 }
 
-func (r *fakeRepo) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, status domain.BuildStepStatus, _ *string, _ *int, _ *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
+func (r *fakeRepo) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, status domain.BuildStepStatus, _ *string, _ *int, _ *string, _ *string, _ *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
 	if r.steps == nil {
 		return domain.BuildStep{}, repository.ErrBuildNotFound
 	}
@@ -387,12 +387,14 @@ func TestBuildHandler_GetBuildSteps_HappyPathOrdered(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	workerID := "worker-1"
 	exitCode := 0
+	stdout := "lint ok\n"
+	stderr := ""
 	repo := &fakeRepo{
 		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now},
 		steps: map[string][]domain.BuildStep{
 			"build-1": {
 				{ID: "step-2", BuildID: "build-1", StepIndex: 1, Name: "test", Status: domain.BuildStepStatusPending},
-				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "checkout", Status: domain.BuildStepStatusSuccess, WorkerID: &workerID, StartedAt: &now, FinishedAt: &now, ExitCode: &exitCode},
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "checkout", Status: domain.BuildStepStatusSuccess, WorkerID: &workerID, StartedAt: &now, FinishedAt: &now, ExitCode: &exitCode, Stdout: &stdout, Stderr: &stderr},
 			},
 		},
 	}
@@ -426,10 +428,16 @@ func TestBuildHandler_GetBuildSteps_HappyPathOrdered(t *testing.T) {
 	if first["step_index"] != float64(0) || second["step_index"] != float64(1) {
 		t.Fatalf("expected steps ordered by step_index asc, got first=%v second=%v", first["step_index"], second["step_index"])
 	}
-	for _, field := range []string{"id", "build_id", "step_index", "name", "status", "worker_id", "started_at", "finished_at", "exit_code", "error_message"} {
+	for _, field := range []string{"id", "build_id", "step_index", "name", "status", "worker_id", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"} {
 		if _, ok := first[field]; !ok {
 			t.Fatalf("expected step field %q, got %v", field, first)
 		}
+	}
+	if first["stdout"] != stdout {
+		t.Fatalf("expected stdout %q, got %v", stdout, first["stdout"])
+	}
+	if first["stderr"] != stderr {
+		t.Fatalf("expected stderr %q, got %v", stderr, first["stderr"])
 	}
 }
 

@@ -108,7 +108,7 @@ func (r *fakeBuildRepository) ClaimStepIfPending(_ context.Context, _ string, _ 
 	return r.steps[0], true, nil
 }
 
-func (r *fakeBuildRepository) UpdateStepByIndex(_ context.Context, _ string, _ int, _ domain.BuildStepStatus, _ *string, _ *int, _ *string, _ *time.Time, _ *time.Time) (domain.BuildStep, error) {
+func (r *fakeBuildRepository) UpdateStepByIndex(_ context.Context, _ string, _ int, _ domain.BuildStepStatus, _ *string, _ *int, _ *string, _ *string, _ *string, _ *time.Time, _ *time.Time) (domain.BuildStep, error) {
 	if r.updateErr != nil {
 		return domain.BuildStep{}, r.updateErr
 	}

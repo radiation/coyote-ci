@@ -53,7 +53,7 @@ func TestBuildStepsEnvelope_JSONOptionalAndEmptyCollections(t *testing.T) {
 	payload := BuildStepsEnvelope{Data: BuildStepsResponse{
 		BuildID: "build-1",
 		Steps: []BuildStepResponse{
-			{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "checkout", Status: "success", WorkerID: nil, StartedAt: nil, FinishedAt: nil, ExitCode: nil, ErrorMessage: nil},
+			{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "checkout", Status: "success", WorkerID: nil, StartedAt: nil, FinishedAt: nil, ExitCode: nil, Stdout: nil, Stderr: nil, ErrorMessage: nil},
 		},
 	}}
 
@@ -93,7 +93,7 @@ func TestBuildStepsEnvelope_JSONOptionalAndEmptyCollections(t *testing.T) {
 	if first["finished_at"] != nil {
 		t.Fatalf("expected finished_at null, got %v", first["finished_at"])
 	}
-	for _, field := range []string{"id", "build_id", "step_index", "name", "status", "worker_id", "exit_code", "error_message"} {
+	for _, field := range []string{"id", "build_id", "step_index", "name", "status", "worker_id", "exit_code", "stdout", "stderr", "error_message"} {
 		if _, ok := first[field]; !ok {
 			t.Fatalf("expected %s field to be present: %v", field, first)
 		}

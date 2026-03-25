@@ -12,6 +12,7 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"../../../db/init/001_init.sql",
 		"../../../db/init/002_build_lifecycle_and_steps.sql",
 		"../../../db/init/003_build_step_execution_config.sql",
+		"../../../db/init/004_build_step_output.sql",
 	}
 
 	var builder strings.Builder
@@ -32,6 +33,8 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"command",
 		"working_dir",
 		"timeout_seconds",
+		"stdout",
+		"stderr",
 		"queued_at",
 		"started_at",
 		"finished_at",

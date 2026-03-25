@@ -16,6 +16,6 @@ type BuildStore interface {
 	QueueBuild(ctx context.Context, id string, steps []domain.BuildStep) (domain.Build, error)
 	GetStepsByBuildID(ctx context.Context, buildID string) ([]domain.BuildStep, error)
 	ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error)
-	UpdateStepByIndex(ctx context.Context, buildID string, stepIndex int, status domain.BuildStepStatus, workerID *string, exitCode *int, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error)
+	UpdateStepByIndex(ctx context.Context, buildID string, stepIndex int, status domain.BuildStepStatus, workerID *string, exitCode *int, stdout *string, stderr *string, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error)
 	UpdateCurrentStepIndex(ctx context.Context, id string, currentStepIndex int) (domain.Build, error)
 }

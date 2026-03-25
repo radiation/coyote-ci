@@ -26,5 +26,7 @@ type BuildStep struct {
 	StartedAt      *time.Time
 	FinishedAt     *time.Time
 	ExitCode       *int
+	Stdout         *string
+	Stderr         *string
 	ErrorMessage   *string
 }

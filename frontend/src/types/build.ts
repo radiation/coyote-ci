@@ -24,6 +24,8 @@ export interface BuildStep {
   started_at: string | null;
   finished_at: string | null;
   exit_code: number | null;
+  stdout: string | null;
+  stderr: string | null;
   error_message: string | null;
 }
 
@@ -46,7 +48,7 @@ export interface CreateBuildRequest {
   steps?: CreateBuildStepInput[];
 }
 
-export type BuildTemplate = 'default' | 'test' | 'build';
+export type BuildTemplate = 'default' | 'test' | 'build' | 'fail';
 
 /** Envelope: { data: { builds: Build[] } } */
 export interface BuildListResponse {

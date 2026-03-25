@@ -227,3 +227,153 @@ func TestWorkerExecutionVerticalSlice_Timeout(t *testing.T) {
 		t.Fatalf("expected build status failed, got %q", updatedBuild.Status)
 	}
 }
+
+func TestWorkerExecutionVerticalSlice_ExitZeroStepSucceeds(t *testing.T) {
+	ctx := context.Background()
+	buildStore := storememory.NewBuildStore()
+	logSink := logs.NewMemorySink()
+	stepRunner := inprocessrunner.New(execution.NewLocalExecutor())
+	buildService := NewBuildServiceWithExecution(buildStore, stepRunner, logSink)
+	worker := NewWorkerService(buildService)
+
+	build, err := buildService.CreateBuild(ctx, CreateBuildInput{
+		ProjectID: "project-1",
+		Steps: []CreateBuildStepInput{
+			{Name: "success", Command: "sh", Args: []string{"-c", "echo success && exit 0"}, WorkingDir: "."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create build failed: %v", err)
+	}
+
+	runnable, found, err := worker.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("claim runnable step failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected runnable step to be found")
+	}
+
+	report, err := worker.ExecuteRunnableStep(ctx, runnable)
+	if err != nil {
+		t.Fatalf("execute runnable step failed: %v", err)
+	}
+
+	if report.Result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", report.Result.ExitCode)
+	}
+	if report.Result.Status != contracts.RunStepStatusSuccess {
+		t.Fatalf("expected run step success, got %q", report.Result.Status)
+	}
+
+	steps, err := buildService.GetBuildSteps(ctx, build.ID)
+	if err != nil {
+		t.Fatalf("get build steps failed: %v", err)
+	}
+	if len(steps) != 1 {
+		t.Fatalf("expected one step, got %d", len(steps))
+	}
+	if steps[0].Status != contracts.BuildStepStatusSuccess {
+		t.Fatalf("expected step success, got %q", steps[0].Status)
+	}
+	if steps[0].Stdout == nil || !strings.Contains(*steps[0].Stdout, "success") {
+		t.Fatalf("expected persisted stdout to include success, got %v", steps[0].Stdout)
+	}
+
+	updatedBuild, err := buildService.GetBuild(ctx, build.ID)
+	if err != nil {
+		t.Fatalf("get build failed: %v", err)
+	}
+	if updatedBuild.Status != domain.BuildStatusSuccess {
+		t.Fatalf("expected build status success, got %q", updatedBuild.Status)
+	}
+}
+
+func TestWorkerExecutionVerticalSlice_MultiStepSuccessThenFailure(t *testing.T) {
+	ctx := context.Background()
+	buildStore := storememory.NewBuildStore()
+	logSink := logs.NewMemorySink()
+	stepRunner := inprocessrunner.New(execution.NewLocalExecutor())
+	buildService := NewBuildServiceWithExecution(buildStore, stepRunner, logSink)
+	worker := NewWorkerService(buildService)
+
+	build, err := buildService.CreateBuild(ctx, CreateBuildInput{
+		ProjectID: "project-1",
+		Steps: []CreateBuildStepInput{
+			{Name: "setup", Command: "sh", Args: []string{"-c", "echo success && exit 0"}, WorkingDir: "."},
+			{Name: "verify", Command: "sh", Args: []string{"-c", "echo failure 1>&2 && exit 1"}, WorkingDir: "."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create build failed: %v", err)
+	}
+
+	first, found, err := worker.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("claim first runnable step failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected first runnable step")
+	}
+	if first.StepName != "setup" {
+		t.Fatalf("expected setup step first, got %q", first.StepName)
+	}
+
+	firstReport, err := worker.ExecuteRunnableStep(ctx, first)
+	if err != nil {
+		t.Fatalf("execute first step failed: %v", err)
+	}
+	if firstReport.Result.Status != contracts.RunStepStatusSuccess {
+		t.Fatalf("expected first step success, got %q", firstReport.Result.Status)
+	}
+
+	second, found, err := worker.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("claim second runnable step failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected second runnable step")
+	}
+	if second.StepName != "verify" {
+		t.Fatalf("expected verify step second, got %q", second.StepName)
+	}
+
+	secondReport, err := worker.ExecuteRunnableStep(ctx, second)
+	if err != nil {
+		t.Fatalf("execute second step failed: %v", err)
+	}
+	if secondReport.Result.Status != contracts.RunStepStatusFailed {
+		t.Fatalf("expected second step failed, got %q", secondReport.Result.Status)
+	}
+	if secondReport.Result.ExitCode != 1 {
+		t.Fatalf("expected second step exit code 1, got %d", secondReport.Result.ExitCode)
+	}
+
+	steps, err := buildService.GetBuildSteps(ctx, build.ID)
+	if err != nil {
+		t.Fatalf("get build steps failed: %v", err)
+	}
+	if len(steps) != 2 {
+		t.Fatalf("expected two steps, got %d", len(steps))
+	}
+	if steps[0].Status != contracts.BuildStepStatusSuccess {
+		t.Fatalf("expected first step success, got %q", steps[0].Status)
+	}
+	if steps[1].Status != contracts.BuildStepStatusFailed {
+		t.Fatalf("expected second step failed, got %q", steps[1].Status)
+	}
+	if steps[0].Stdout == nil || !strings.Contains(*steps[0].Stdout, "success") {
+		t.Fatalf("expected first step stdout to include success, got %v", steps[0].Stdout)
+	}
+	if steps[1].Stderr == nil || !strings.Contains(*steps[1].Stderr, "failure") {
+		t.Fatalf("expected second step stderr to include failure, got %v", steps[1].Stderr)
+	}
+
+	updatedBuild, err := buildService.GetBuild(ctx, build.ID)
+	if err != nil {
+		t.Fatalf("get build failed: %v", err)
+	}
+	if updatedBuild.Status != domain.BuildStatusFailed {
+		t.Fatalf("expected build status failed, got %q", updatedBuild.Status)
+	}
+}

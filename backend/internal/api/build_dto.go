@@ -74,6 +74,8 @@ type BuildStepResponse struct {
 	StartedAt    *string `json:"started_at"`
 	FinishedAt   *string `json:"finished_at"`
 	ExitCode     *int    `json:"exit_code"`
+	Stdout       *string `json:"stdout"`
+	Stderr       *string `json:"stderr"`
 	ErrorMessage *string `json:"error_message"`
 }
 

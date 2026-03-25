@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,7 +120,7 @@ func (s *fakeBuildStore) ClaimStepIfPending(_ context.Context, _ string, stepInd
 	return domain.BuildStep{}, false, repository.ErrBuildNotFound
 }
 
-func (s *fakeBuildStore) UpdateStepByIndex(_ context.Context, _ string, stepIndex int, status domain.BuildStepStatus, _ *string, _ *int, _ *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
+func (s *fakeBuildStore) UpdateStepByIndex(_ context.Context, _ string, stepIndex int, status domain.BuildStepStatus, _ *string, exitCode *int, stdout *string, stderr *string, _ *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
 	if s.updateErr != nil {
 		return domain.BuildStep{}, s.updateErr
 	}
@@ -130,6 +131,15 @@ func (s *fakeBuildStore) UpdateStepByIndex(_ context.Context, _ string, stepInde
 		}
 
 		s.steps[i].Status = status
+		if exitCode != nil {
+			s.steps[i].ExitCode = exitCode
+		}
+		if stdout != nil {
+			s.steps[i].Stdout = stdout
+		}
+		if stderr != nil {
+			s.steps[i].Stderr = stderr
+		}
 		if startedAt != nil {
 			s.steps[i].StartedAt = startedAt
 		}
@@ -281,6 +291,7 @@ func TestBuildOrchestrator_QueueBuildWithTemplate(t *testing.T) {
 		{name: "default explicit", template: BuildTemplateDefault, expectedNames: []string{"default"}},
 		{name: "test template", template: BuildTemplateTest, expectedNames: []string{"setup", "test", "teardown"}},
 		{name: "build template", template: BuildTemplateBuild, expectedNames: []string{"install", "compile"}},
+		{name: "fail template", template: BuildTemplateFail, expectedNames: []string{"setup", "verify"}},
 		{name: "unknown falls back", template: "unknown", expectedNames: []string{"default"}},
 	}
 
@@ -311,6 +322,27 @@ func TestBuildOrchestrator_QueueBuildWithTemplate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBuildOrchestrator_QueueBuildWithTemplate_FailTemplateCommands(t *testing.T) {
+	store := &fakeBuildStore{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC()},
+	}
+	o := NewBuildOrchestrator(store, nil, nil)
+
+	if _, err := o.QueueBuildWithTemplate(context.Background(), "build-1", BuildTemplateFail); err != nil {
+		t.Fatalf("queue with fail template returned error: %v", err)
+	}
+
+	if len(store.steps) != 2 {
+		t.Fatalf("expected 2 fail-template steps, got %d", len(store.steps))
+	}
+	if len(store.steps[0].Args) < 2 || !strings.Contains(store.steps[0].Args[1], "exit 0") {
+		t.Fatalf("expected first step script to include exit 0, got %+v", store.steps[0].Args)
+	}
+	if len(store.steps[1].Args) < 2 || !strings.Contains(store.steps[1].Args[1], "exit 1") {
+		t.Fatalf("expected second step script to include exit 1, got %+v", store.steps[1].Args)
 	}
 }
 
@@ -383,6 +415,16 @@ func TestBuildOrchestrator_RunStep_DelegatesToRunner(t *testing.T) {
 	}
 	if result.Status != contracts.RunStepStatusSuccess {
 		t.Fatalf("expected success status, got %q", result.Status)
+	}
+	store, ok := orchestrator.buildStore.(*fakeBuildStore)
+	if !ok {
+		t.Fatal("expected fakeBuildStore backing store")
+	}
+	if store.steps[0].ExitCode == nil || *store.steps[0].ExitCode != 0 {
+		t.Fatalf("expected persisted exit code 0, got %v", store.steps[0].ExitCode)
+	}
+	if store.steps[0].Stdout == nil || *store.steps[0].Stdout != "ok\n" {
+		t.Fatalf("expected persisted stdout ok, got %v", store.steps[0].Stdout)
 	}
 	if logs.calls != 1 {
 		t.Fatalf("expected one log write, got %d", logs.calls)
