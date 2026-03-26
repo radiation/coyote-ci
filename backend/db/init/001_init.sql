@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS build_steps (
     started_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
     exit_code INTEGER,
+    stdout TEXT,
+    stderr TEXT,
     error_message TEXT,
     UNIQUE (build_id, step_index)
 );
