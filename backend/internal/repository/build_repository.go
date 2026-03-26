@@ -31,6 +31,7 @@ type BuildRepository interface {
 	QueueBuild(ctx context.Context, id string, steps []domain.BuildStep) (domain.Build, error)
 	GetStepsByBuildID(ctx context.Context, buildID string) ([]domain.BuildStep, error)
 	ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error)
+	CompleteStepIfRunning(ctx context.Context, buildID string, stepIndex int, update StepUpdate) (domain.BuildStep, bool, error)
 	UpdateStepByIndex(ctx context.Context, buildID string, stepIndex int, update StepUpdate) (domain.BuildStep, error)
 	UpdateCurrentStepIndex(ctx context.Context, id string, currentStepIndex int) (domain.Build, error)
 }

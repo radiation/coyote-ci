@@ -152,6 +152,48 @@ func (r *fakeBuildRepository) UpdateStepByIndex(_ context.Context, _ string, ste
 	return domain.BuildStep{}, repository.ErrBuildNotFound
 }
 
+func (r *fakeBuildRepository) CompleteStepIfRunning(_ context.Context, _ string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, bool, error) {
+	if r.updateErr != nil {
+		return domain.BuildStep{}, false, r.updateErr
+	}
+
+	for i := range r.steps {
+		if r.steps[i].StepIndex != stepIndex {
+			continue
+		}
+
+		if r.steps[i].Status != domain.BuildStepStatusRunning {
+			return r.steps[i], false, nil
+		}
+
+		r.steps[i].Status = update.Status
+		if update.ExitCode != nil {
+			r.steps[i].ExitCode = update.ExitCode
+		}
+		if update.Stdout != nil {
+			r.steps[i].Stdout = update.Stdout
+		}
+		if update.Stderr != nil {
+			r.steps[i].Stderr = update.Stderr
+		}
+		if update.ErrorMessage != nil {
+			r.steps[i].ErrorMessage = update.ErrorMessage
+		} else if update.Status == domain.BuildStepStatusSuccess {
+			r.steps[i].ErrorMessage = nil
+		}
+		if update.StartedAt != nil {
+			r.steps[i].StartedAt = update.StartedAt
+		}
+		if update.FinishedAt != nil {
+			r.steps[i].FinishedAt = update.FinishedAt
+		}
+
+		return r.steps[i], true, nil
+	}
+
+	return domain.BuildStep{}, false, repository.ErrBuildNotFound
+}
+
 func (r *fakeBuildRepository) UpdateCurrentStepIndex(_ context.Context, _ string, currentStepIndex int) (domain.Build, error) {
 	if r.updateErr != nil {
 		return domain.Build{}, r.updateErr
@@ -690,7 +732,7 @@ func TestBuildService_GetBuildLogs_NotFound(t *testing.T) {
 func TestBuildService_RunStep_DelegatesToRunner(t *testing.T) {
 	runner := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", Stderr: ""}}
 	logSink := &fakeLogSink{}
-	repo := &fakeBuildRepository{build: domain.Build{ID: "build-1", CurrentStepIndex: 0}, steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusPending}}}
+	repo := &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0}, steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning}}}
 	svc := NewBuildService(repo, runner, logSink)
 
 	request := steprunner.RunStepRequest{BuildID: "build-1", StepName: "test", Command: "echo", Args: []string{"ok"}}
@@ -724,7 +766,7 @@ func TestBuildService_RunStep_DelegatesToRunner(t *testing.T) {
 
 func TestBuildService_RunStep_RunnerError(t *testing.T) {
 	runner := &fakeRunner{err: errors.New("runner failed")}
-	repo := &fakeBuildRepository{build: domain.Build{ID: "build-1", CurrentStepIndex: 0}, steps: []domain.BuildStep{{StepIndex: 0, Name: "echo", Status: domain.BuildStepStatusPending}}}
+	repo := &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0}, steps: []domain.BuildStep{{StepIndex: 0, Name: "echo", Status: domain.BuildStepStatusRunning}}}
 	svc := NewBuildService(repo, runner, &fakeLogSink{})
 
 	_, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepName: "echo", Command: "echo"})
@@ -764,7 +806,7 @@ func TestBuildService_RunStep_PersistsLogsForSuccessAndFailedResults(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			repo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}, steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusPending}}}
+			repo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}, steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning}}}
 			runner := &fakeRunner{result: tc.runnerResult}
 			logStore := logs.NewMemorySink()
 			svc := NewBuildService(repo, runner, logStore)
@@ -790,5 +832,93 @@ func TestBuildService_RunStep_PersistsLogsForSuccessAndFailedResults(t *testing.
 				}
 			}
 		})
+	}
+}
+
+func TestBuildService_HandleStepResult_DuplicateCompletionIsNoOp(t *testing.T) {
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning}},
+	}
+	svc := NewBuildService(repo, nil, logs.NewMemorySink())
+	request := steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1"}
+	result := steprunner.RunStepResult{
+		Status:     steprunner.RunStepStatusSuccess,
+		ExitCode:   0,
+		Stdout:     "ok\n",
+		StartedAt:  time.Now().UTC(),
+		FinishedAt: time.Now().UTC(),
+	}
+
+	_, completed, err := svc.HandleStepResult(context.Background(), request, result)
+	if err != nil {
+		t.Fatalf("first completion failed: %v", err)
+	}
+	if !completed {
+		t.Fatal("expected first completion to complete step")
+	}
+	if repo.build.CurrentStepIndex != 1 {
+		t.Fatalf("expected current step index to advance to 1, got %d", repo.build.CurrentStepIndex)
+	}
+
+	_, completed, err = svc.HandleStepResult(context.Background(), request, result)
+	if err != nil {
+		t.Fatalf("duplicate completion should be no-op, got error %v", err)
+	}
+	if completed {
+		t.Fatal("expected duplicate completion to be no-op")
+	}
+	if repo.build.CurrentStepIndex != 1 {
+		t.Fatalf("expected current step index to remain 1, got %d", repo.build.CurrentStepIndex)
+	}
+}
+
+func TestBuildService_HandleStepResult_MultiStepSuccessDoesNotCompleteBuild(t *testing.T) {
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
+		steps: []domain.BuildStep{
+			{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning},
+			{StepIndex: 1, Name: "step-2", Status: domain.BuildStepStatusPending},
+		},
+	}
+	svc := NewBuildService(repo, nil, logs.NewMemorySink())
+
+	_, completed, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1"}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !completed {
+		t.Fatal("expected completion to persist")
+	}
+	if repo.build.Status != domain.BuildStatusRunning {
+		t.Fatalf("expected build to remain running, got %q", repo.build.Status)
+	}
+	if repo.steps[1].Status != domain.BuildStepStatusPending {
+		t.Fatalf("expected second step to remain pending/runnable, got %q", repo.steps[1].Status)
+	}
+}
+
+func TestBuildService_HandleStepResult_FailureMarksBuildFailed(t *testing.T) {
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
+		steps: []domain.BuildStep{
+			{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning},
+			{StepIndex: 1, Name: "step-2", Status: domain.BuildStepStatusPending},
+		},
+	}
+	svc := NewBuildService(repo, nil, logs.NewMemorySink())
+
+	_, completed, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1"}, steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: 7, Stderr: "boom", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !completed {
+		t.Fatal("expected completion to persist")
+	}
+	if repo.build.Status != domain.BuildStatusFailed {
+		t.Fatalf("expected build failed, got %q", repo.build.Status)
+	}
+	if repo.steps[1].Status != domain.BuildStepStatusPending {
+		t.Fatalf("expected later step to remain pending after fail-fast, got %q", repo.steps[1].Status)
 	}
 }

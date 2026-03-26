@@ -164,6 +164,45 @@ func (r *fakeRepo) UpdateStepByIndex(_ context.Context, buildID string, stepInde
 	return domain.BuildStep{}, repository.ErrBuildNotFound
 }
 
+func (r *fakeRepo) CompleteStepIfRunning(_ context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, bool, error) {
+	if r.steps == nil {
+		return domain.BuildStep{}, false, repository.ErrBuildNotFound
+	}
+
+	steps := r.steps[buildID]
+	for i := range steps {
+		if steps[i].StepIndex != stepIndex {
+			continue
+		}
+		if steps[i].Status != domain.BuildStepStatusRunning {
+			return steps[i], false, nil
+		}
+		steps[i].Status = update.Status
+		if update.StartedAt != nil {
+			steps[i].StartedAt = update.StartedAt
+		}
+		if update.FinishedAt != nil {
+			steps[i].FinishedAt = update.FinishedAt
+		}
+		if update.ExitCode != nil {
+			steps[i].ExitCode = update.ExitCode
+		}
+		if update.Stdout != nil {
+			steps[i].Stdout = update.Stdout
+		}
+		if update.Stderr != nil {
+			steps[i].Stderr = update.Stderr
+		}
+		if update.ErrorMessage != nil {
+			steps[i].ErrorMessage = update.ErrorMessage
+		}
+		r.steps[buildID] = steps
+		return steps[i], true, nil
+	}
+
+	return domain.BuildStep{}, false, repository.ErrBuildNotFound
+}
+
 func (r *fakeRepo) UpdateCurrentStepIndex(_ context.Context, id string, currentStepIndex int) (domain.Build, error) {
 	b, err := r.GetByID(context.Background(), id)
 	if err != nil {

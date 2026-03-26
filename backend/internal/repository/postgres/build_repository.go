@@ -405,6 +405,38 @@ func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string,
 	return step, nil
 }
 
+func (r *BuildRepository) CompleteStepIfRunning(ctx context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, bool, error) {
+	const query = `
+		UPDATE build_steps
+		SET status = $3,
+			worker_id = COALESCE($4, worker_id),
+			started_at = COALESCE($5, started_at),
+			finished_at = COALESCE($6, finished_at),
+			exit_code = COALESCE($7, exit_code),
+			stdout = COALESCE($8, stdout),
+			stderr = COALESCE($9, stderr),
+			error_message = CASE
+				WHEN $3 = 'failed' THEN COALESCE($10, error_message)
+				WHEN $10 IS NOT NULL THEN $10
+				ELSE NULL
+			END
+		WHERE build_id = $1
+		  AND step_index = $2
+		  AND status = 'running'
+		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, started_at, finished_at, exit_code, stdout, stderr, error_message
+	`
+
+	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, string(update.Status), update.WorkerID, update.StartedAt, update.FinishedAt, update.ExitCode, update.Stdout, update.Stderr, update.ErrorMessage))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.BuildStep{}, false, nil
+		}
+		return domain.BuildStep{}, false, err
+	}
+
+	return step, true, nil
+}
+
 func (r *BuildRepository) UpdateCurrentStepIndex(ctx context.Context, id string, currentStepIndex int) (domain.Build, error) {
 	const query = `
 		UPDATE builds

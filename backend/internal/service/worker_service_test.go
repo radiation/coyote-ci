@@ -173,7 +173,7 @@ func TestWorkerService_ExecuteRunnableStep_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if boundary.startCalls != 0 || boundary.runStepCalls != 1 || boundary.completeCalls != 1 || boundary.failCalls != 0 {
+	if boundary.startCalls != 0 || boundary.runStepCalls != 1 || boundary.completeCalls != 0 || boundary.failCalls != 0 {
 		t.Fatalf("unexpected call counts: start=%d run=%d complete=%d fail=%d", boundary.startCalls, boundary.runStepCalls, boundary.completeCalls, boundary.failCalls)
 	}
 	if boundary.lastRequest.Command != "echo" || boundary.lastRequest.StepName != "test" || boundary.lastRequest.BuildID != "build-1" {
@@ -195,8 +195,8 @@ func TestWorkerService_ExecuteRunnableStep_CommandFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if boundary.completeCalls != 0 || boundary.failCalls != 1 {
-		t.Fatalf("expected fail path only, got complete=%d fail=%d", boundary.completeCalls, boundary.failCalls)
+	if boundary.completeCalls != 0 || boundary.failCalls != 0 {
+		t.Fatalf("expected worker to avoid direct build mutation, got complete=%d fail=%d", boundary.completeCalls, boundary.failCalls)
 	}
 	if report.Step.Status != domain.BuildStepStatusFailed {
 		t.Fatalf("expected step status failed, got %q", report.Step.Status)
@@ -211,8 +211,8 @@ func TestWorkerService_ExecuteRunnableStep_RunStepError(t *testing.T) {
 	if err == nil || err.Error() != "startup failed" {
 		t.Fatalf("expected startup failed error, got %v", err)
 	}
-	if boundary.failCalls != 1 {
-		t.Fatalf("expected fail build to be called once, got %d", boundary.failCalls)
+	if boundary.failCalls != 0 {
+		t.Fatalf("expected worker to avoid direct fail build call, got %d", boundary.failCalls)
 	}
 	if report.Step.Status != domain.BuildStepStatusFailed {
 		t.Fatalf("expected step status failed, got %q", report.Step.Status)
@@ -244,8 +244,8 @@ func TestWorkerService_ExecuteRunnableStep_TimeoutMarkedFailedWithReason(t *test
 	if !strings.Contains(report.Result.Stderr, "timed out") {
 		t.Fatalf("expected timeout reason, got %q", report.Result.Stderr)
 	}
-	if boundary.failCalls != 1 {
-		t.Fatalf("expected fail build to be called once, got %d", boundary.failCalls)
+	if boundary.failCalls != 0 {
+		t.Fatalf("expected worker to avoid direct fail build call, got %d", boundary.failCalls)
 	}
 }
 

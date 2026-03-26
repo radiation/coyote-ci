@@ -269,6 +269,56 @@ func (r *BuildRepository) UpdateStepByIndex(_ context.Context, buildID string, s
 	return domain.BuildStep{}, repository.ErrBuildNotFound
 }
 
+func (r *BuildRepository) CompleteStepIfRunning(_ context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, ok := r.builds[buildID]; !ok {
+		return domain.BuildStep{}, false, repository.ErrBuildNotFound
+	}
+
+	steps := r.buildSteps[buildID]
+	for idx := range steps {
+		if steps[idx].StepIndex != stepIndex {
+			continue
+		}
+
+		if steps[idx].Status != domain.BuildStepStatusRunning {
+			return cloneStep(steps[idx]), false, nil
+		}
+
+		steps[idx].Status = update.Status
+		if update.WorkerID != nil {
+			steps[idx].WorkerID = update.WorkerID
+		}
+		if update.ExitCode != nil {
+			steps[idx].ExitCode = update.ExitCode
+		}
+		if update.Stdout != nil {
+			steps[idx].Stdout = update.Stdout
+		}
+		if update.Stderr != nil {
+			steps[idx].Stderr = update.Stderr
+		}
+		if update.Status == domain.BuildStepStatusFailed {
+			steps[idx].ErrorMessage = update.ErrorMessage
+		} else {
+			steps[idx].ErrorMessage = nil
+		}
+		if update.StartedAt != nil {
+			steps[idx].StartedAt = update.StartedAt
+		}
+		if update.FinishedAt != nil {
+			steps[idx].FinishedAt = update.FinishedAt
+		}
+
+		r.buildSteps[buildID] = steps
+		return cloneStep(steps[idx]), true, nil
+	}
+
+	return domain.BuildStep{}, false, nil
+}
+
 func (r *BuildRepository) UpdateCurrentStepIndex(_ context.Context, id string, currentStepIndex int) (domain.Build, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

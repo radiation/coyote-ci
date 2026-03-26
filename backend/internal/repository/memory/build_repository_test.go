@@ -309,6 +309,72 @@ func TestBuildRepository_ClaimStepIfPending(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_CompleteStepIfRunning(t *testing.T) {
+	repo := NewBuildRepository()
+	_, err := repo.Create(context.Background(), domain.Build{
+		ID:        "build-complete",
+		ProjectID: "project-1",
+		Status:    domain.BuildStatusRunning,
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("setup create failed: %v", err)
+	}
+
+	_, err = repo.QueueBuild(context.Background(), "build-complete", []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "default", Status: domain.BuildStepStatusPending}})
+	if err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
+
+	startedAt := time.Now().UTC().Add(-2 * time.Second)
+	_, claimed, err := repo.ClaimStepIfPending(context.Background(), "build-complete", 0, nil, startedAt)
+	if err != nil {
+		t.Fatalf("claim step failed: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected claim to succeed")
+	}
+
+	finishedAt := time.Now().UTC()
+	exitCode := 0
+	stdout := "ok\n"
+	step, completed, err := repo.CompleteStepIfRunning(context.Background(), "build-complete", 0, repository.StepUpdate{
+		Status:     domain.BuildStepStatusSuccess,
+		ExitCode:   &exitCode,
+		Stdout:     &stdout,
+		StartedAt:  &startedAt,
+		FinishedAt: &finishedAt,
+	})
+	if err != nil {
+		t.Fatalf("complete step failed: %v", err)
+	}
+	if !completed {
+		t.Fatal("expected completion to succeed")
+	}
+	if step.Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected success status, got %q", step.Status)
+	}
+	if step.ExitCode == nil || *step.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %v", step.ExitCode)
+	}
+	if step.Stdout == nil || *step.Stdout != stdout {
+		t.Fatalf("expected stdout %q, got %v", stdout, step.Stdout)
+	}
+
+	dup, completed, err := repo.CompleteStepIfRunning(context.Background(), "build-complete", 0, repository.StepUpdate{
+		Status: domain.BuildStepStatusSuccess,
+	})
+	if err != nil {
+		t.Fatalf("duplicate completion failed: %v", err)
+	}
+	if completed {
+		t.Fatal("expected duplicate completion to be no-op")
+	}
+	if dup.Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected terminal status to remain success, got %q", dup.Status)
+	}
+}
+
 func TestBuildRepository_CreateQueuedBuild(t *testing.T) {
 	repo := NewBuildRepository()
 	build, err := repo.CreateQueuedBuild(context.Background(), domain.Build{

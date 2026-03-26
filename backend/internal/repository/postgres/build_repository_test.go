@@ -370,6 +370,83 @@ func TestBuildRepository_ClaimStepIfPending(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_CompleteStepIfRunning(t *testing.T) {
+	now := time.Now().UTC()
+	tests := []struct {
+		name            string
+		queryErr        error
+		rows            *sqlmock.Rows
+		expectErr       bool
+		expectCompleted bool
+	}{
+		{
+			name: "success",
+			rows: sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
+				AddRow("step-1", "build-1", 0, "default", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "success", nil, now, now, 0, "ok", "", nil),
+			expectCompleted: true,
+		},
+		{
+			name:            "no rows means no-op",
+			queryErr:        sql.ErrNoRows,
+			expectCompleted: false,
+		},
+		{
+			name:      "query error",
+			queryErr:  errors.New("query failed"),
+			expectErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("failed to create sql mock: %v", err)
+			}
+
+			repo := NewBuildRepository(db)
+			exp := mock.ExpectQuery("UPDATE build_steps")
+			if tc.queryErr != nil {
+				exp.WillReturnError(tc.queryErr)
+			} else {
+				exp.WillReturnRows(tc.rows)
+			}
+
+			exitCode := 0
+			stdout := "ok"
+			step, completed, err := repo.CompleteStepIfRunning(context.Background(), "build-1", 0, repository.StepUpdate{
+				Status:     domain.BuildStepStatusSuccess,
+				ExitCode:   &exitCode,
+				Stdout:     &stdout,
+				StartedAt:  &now,
+				FinishedAt: &now,
+			})
+			if tc.expectErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if completed != tc.expectCompleted {
+				t.Fatalf("expected completed=%v, got %v", tc.expectCompleted, completed)
+			}
+			if completed && step.Status != domain.BuildStepStatusSuccess {
+				t.Fatalf("expected success status, got %q", step.Status)
+			}
+
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet sql expectations: %v", err)
+			}
+		})
+	}
+}
+
 func TestBuildRepository_CreateQueuedBuild(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
