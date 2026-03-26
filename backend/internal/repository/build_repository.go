@@ -9,6 +9,7 @@ import (
 )
 
 var ErrBuildNotFound = errors.New("build not found")
+var ErrInvalidBuildStepTransition = errors.New("invalid build step transition")
 
 // StepUpdate contains the fields to update on a build step.
 type StepUpdate struct {
@@ -22,6 +23,14 @@ type StepUpdate struct {
 	FinishedAt   *time.Time
 }
 
+type StepCompletionOutcome string
+
+const (
+	StepCompletionCompleted         StepCompletionOutcome = "completed"
+	StepCompletionDuplicateTerminal StepCompletionOutcome = "duplicate_terminal"
+	StepCompletionInvalidTransition StepCompletionOutcome = "invalid_transition"
+)
+
 type BuildRepository interface {
 	Create(ctx context.Context, build domain.Build) (domain.Build, error)
 	CreateQueuedBuild(ctx context.Context, build domain.Build, steps []domain.BuildStep) (domain.Build, error)
@@ -32,6 +41,7 @@ type BuildRepository interface {
 	GetStepsByBuildID(ctx context.Context, buildID string) ([]domain.BuildStep, error)
 	ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error)
 	CompleteStepIfRunning(ctx context.Context, buildID string, stepIndex int, update StepUpdate) (domain.BuildStep, bool, error)
+	CompleteStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, update StepUpdate) (domain.BuildStep, StepCompletionOutcome, error)
 	UpdateStepByIndex(ctx context.Context, buildID string, stepIndex int, update StepUpdate) (domain.BuildStep, error)
 	UpdateCurrentStepIndex(ctx context.Context, id string, currentStepIndex int) (domain.Build, error)
 }

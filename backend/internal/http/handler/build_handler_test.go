@@ -203,6 +203,58 @@ func (r *fakeRepo) CompleteStepIfRunning(_ context.Context, buildID string, step
 	return domain.BuildStep{}, false, repository.ErrBuildNotFound
 }
 
+func (r *fakeRepo) CompleteStepAndAdvanceBuild(_ context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
+	step, completed, err := r.CompleteStepIfRunning(context.Background(), buildID, stepIndex, update)
+	if err != nil {
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
+	}
+	if !completed {
+		if step.Status == domain.BuildStepStatusSuccess || step.Status == domain.BuildStepStatusFailed {
+			return step, repository.StepCompletionDuplicateTerminal, nil
+		}
+		if step.ID == "" && step.Name == "" {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, repository.ErrBuildNotFound
+		}
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+	}
+
+	b, getErr := r.GetByID(context.Background(), buildID)
+	if getErr != nil {
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, getErr
+	}
+
+	if update.Status == domain.BuildStepStatusFailed {
+		b.Status = domain.BuildStatusFailed
+		b.ErrorMessage = step.ErrorMessage
+	} else {
+		nextIndex := stepIndex + 1
+		if nextIndex > b.CurrentStepIndex {
+			b.CurrentStepIndex = nextIndex
+		}
+
+		hasNext := false
+		for idx := range r.steps[buildID] {
+			if r.steps[buildID][idx].StepIndex > stepIndex {
+				hasNext = true
+				break
+			}
+		}
+
+		if !hasNext {
+			b.Status = domain.BuildStatusSuccess
+			b.ErrorMessage = nil
+		}
+	}
+
+	if r.builds == nil {
+		r.build = b
+	} else {
+		r.builds[buildID] = b
+	}
+
+	return step, repository.StepCompletionCompleted, nil
+}
+
 func (r *fakeRepo) UpdateCurrentStepIndex(_ context.Context, id string, currentStepIndex int) (domain.Build, error) {
 	b, err := r.GetByID(context.Background(), id)
 	if err != nil {

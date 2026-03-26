@@ -375,6 +375,178 @@ func TestBuildRepository_CompleteStepIfRunning(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_CompleteStepAndAdvanceBuild(t *testing.T) {
+	repo := NewBuildRepository()
+	_, err := repo.Create(context.Background(), domain.Build{
+		ID:        "build-advance",
+		ProjectID: "project-1",
+		Status:    domain.BuildStatusRunning,
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("setup create failed: %v", err)
+	}
+
+	_, err = repo.QueueBuild(context.Background(), "build-advance", []domain.BuildStep{
+		{ID: "step-1", StepIndex: 0, Name: "first", Status: domain.BuildStepStatusPending},
+		{ID: "step-2", StepIndex: 1, Name: "second", Status: domain.BuildStepStatusPending},
+	})
+	if err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
+
+	_, err = repo.UpdateStatus(context.Background(), "build-advance", domain.BuildStatusRunning, nil)
+	if err != nil {
+		t.Fatalf("set running status failed: %v", err)
+	}
+
+	startedAt := time.Now().UTC().Add(-2 * time.Second)
+	_, claimed, err := repo.ClaimStepIfPending(context.Background(), "build-advance", 0, nil, startedAt)
+	if err != nil {
+		t.Fatalf("claim first step failed: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected first step claim")
+	}
+
+	finishedAt := time.Now().UTC()
+	exitCode := 0
+	stdout := "ok\n"
+	firstStep, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-advance", 0, repository.StepUpdate{
+		Status:     domain.BuildStepStatusSuccess,
+		ExitCode:   &exitCode,
+		Stdout:     &stdout,
+		StartedAt:  &startedAt,
+		FinishedAt: &finishedAt,
+	})
+	if err != nil {
+		t.Fatalf("complete first step failed: %v", err)
+	}
+	if outcome != repository.StepCompletionCompleted || firstStep.Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected first step success completion, got outcome=%q status=%q", outcome, firstStep.Status)
+	}
+
+	build, err := repo.GetByID(context.Background(), "build-advance")
+	if err != nil {
+		t.Fatalf("get build failed: %v", err)
+	}
+	if build.Status != domain.BuildStatusRunning {
+		t.Fatalf("expected build to remain running after non-final success, got %q", build.Status)
+	}
+	if build.CurrentStepIndex != 1 {
+		t.Fatalf("expected current step index 1, got %d", build.CurrentStepIndex)
+	}
+
+	_, claimed, err = repo.ClaimStepIfPending(context.Background(), "build-advance", 1, nil, startedAt)
+	if err != nil {
+		t.Fatalf("claim second step failed: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected second step claim")
+	}
+
+	secondStep, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-advance", 1, repository.StepUpdate{
+		Status:     domain.BuildStepStatusSuccess,
+		ExitCode:   &exitCode,
+		StartedAt:  &startedAt,
+		FinishedAt: &finishedAt,
+	})
+	if err != nil {
+		t.Fatalf("complete second step failed: %v", err)
+	}
+	if outcome != repository.StepCompletionCompleted || secondStep.Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected second step success completion, got outcome=%q status=%q", outcome, secondStep.Status)
+	}
+
+	build, err = repo.GetByID(context.Background(), "build-advance")
+	if err != nil {
+		t.Fatalf("get build failed: %v", err)
+	}
+	if build.Status != domain.BuildStatusSuccess {
+		t.Fatalf("expected build success after final step, got %q", build.Status)
+	}
+
+	dup, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-advance", 1, repository.StepUpdate{Status: domain.BuildStepStatusSuccess})
+	if err != nil {
+		t.Fatalf("duplicate completion failed: %v", err)
+	}
+	if outcome != repository.StepCompletionDuplicateTerminal {
+		t.Fatal("expected duplicate completion no-op")
+	}
+	if dup.Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected duplicate to return existing terminal step, got %q", dup.Status)
+	}
+}
+
+func TestBuildRepository_CompleteStepAndAdvanceBuild_FailedStepMarksBuildFailed(t *testing.T) {
+	repo := NewBuildRepository()
+	_, err := repo.Create(context.Background(), domain.Build{ID: "build-fail", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("setup create failed: %v", err)
+	}
+	_, err = repo.QueueBuild(context.Background(), "build-fail", []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "first", Status: domain.BuildStepStatusPending}, {ID: "step-2", StepIndex: 1, Name: "second", Status: domain.BuildStepStatusPending}})
+	if err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
+	_, err = repo.UpdateStatus(context.Background(), "build-fail", domain.BuildStatusRunning, nil)
+	if err != nil {
+		t.Fatalf("set running status failed: %v", err)
+	}
+
+	startedAt := time.Now().UTC().Add(-1 * time.Second)
+	_, claimed, err := repo.ClaimStepIfPending(context.Background(), "build-fail", 0, nil, startedAt)
+	if err != nil {
+		t.Fatalf("claim failed: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected claim")
+	}
+
+	finishedAt := time.Now().UTC()
+	exitCode := 17
+	stderr := "boom"
+	errMsg := "boom"
+	_, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-fail", 0, repository.StepUpdate{Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, Stderr: &stderr, ErrorMessage: &errMsg, StartedAt: &startedAt, FinishedAt: &finishedAt})
+	if err != nil {
+		t.Fatalf("complete failed step returned error: %v", err)
+	}
+	if outcome != repository.StepCompletionCompleted {
+		t.Fatal("expected completion")
+	}
+
+	build, err := repo.GetByID(context.Background(), "build-fail")
+	if err != nil {
+		t.Fatalf("get build failed: %v", err)
+	}
+	if build.Status != domain.BuildStatusFailed {
+		t.Fatalf("expected build failed, got %q", build.Status)
+	}
+}
+
+func TestBuildRepository_CompleteStepAndAdvanceBuild_InvalidTransition(t *testing.T) {
+	repo := NewBuildRepository()
+	_, err := repo.Create(context.Background(), domain.Build{ID: "build-invalid", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("setup create failed: %v", err)
+	}
+	_, err = repo.QueueBuild(context.Background(), "build-invalid", []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "first", Status: domain.BuildStepStatusPending}})
+	if err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
+	_, err = repo.UpdateStatus(context.Background(), "build-invalid", domain.BuildStatusRunning, nil)
+	if err != nil {
+		t.Fatalf("set running status failed: %v", err)
+	}
+
+	_, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-invalid", 0, repository.StepUpdate{Status: domain.BuildStepStatusSuccess})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if outcome != repository.StepCompletionInvalidTransition {
+		t.Fatal("expected invalid transition to not complete")
+	}
+}
+
 func TestBuildRepository_CreateQueuedBuild(t *testing.T) {
 	repo := NewBuildRepository()
 	build, err := repo.CreateQueuedBuild(context.Background(), domain.Build{
