@@ -3,19 +3,9 @@ import { Link, useParams } from 'react-router-dom';
 import { getBuild, getBuildSteps } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 import { StepList } from '../components/StepList';
-import { formatTime } from '../components/TimeDisplay';
 import type { Build } from '../types';
-
-const FAST_POLL_INTERVAL = 3000;
-const SLOW_POLL_INTERVAL = 15000;
-
-function isActiveBuild(build: Build | undefined): boolean {
-  if (!build) {
-    return false;
-  }
-
-  return !['success', 'failed', 'canceled'].includes(build.status);
-}
+import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL, isActiveBuild } from '../utils/build';
+import { formatTime } from '../utils/time';
 
 export function BuildDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -31,7 +21,7 @@ export function BuildDetailPage() {
     enabled: !!id,
     refetchInterval: (query) => {
       const nextBuild = query.state.data as Build | undefined;
-      return isActiveBuild(nextBuild) ? FAST_POLL_INTERVAL : SLOW_POLL_INTERVAL;
+      return isActiveBuild(nextBuild?.status) ? FAST_POLL_INTERVAL : SLOW_POLL_INTERVAL;
     },
   });
 
@@ -43,7 +33,7 @@ export function BuildDetailPage() {
     queryKey: ['buildSteps', id],
     queryFn: () => getBuildSteps(id!),
     enabled: !!id,
-    refetchInterval: isActiveBuild(build) ? FAST_POLL_INTERVAL : SLOW_POLL_INTERVAL,
+    refetchInterval: isActiveBuild(build?.status) ? FAST_POLL_INTERVAL : SLOW_POLL_INTERVAL,
   });
 
   if (buildLoading) return <p>Loading build…</p>;

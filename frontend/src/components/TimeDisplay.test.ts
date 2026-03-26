@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatTime } from '../components/TimeDisplay';
+import { formatTime } from '../utils/time';
 
 describe('formatTime', () => {
   it('should format ISO string to local datetime', () => {

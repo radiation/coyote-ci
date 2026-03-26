@@ -1,6 +1,6 @@
 import type { BuildStep } from '../types';
 import { StatusBadge } from './StatusBadge';
-import { formatTime } from './TimeDisplay';
+import { formatTime } from '../utils/time';
 
 export function StepList({ steps }: { steps: BuildStep[] }) {
   if (steps.length === 0) {

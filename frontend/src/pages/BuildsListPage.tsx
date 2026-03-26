@@ -4,15 +4,9 @@ import { Link } from 'react-router-dom';
 import { useNavigate } from 'react-router-dom';
 import { createBuild, listBuilds, queueBuild } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
-import { formatTime } from '../components/TimeDisplay';
 import type { Build, BuildTemplate, QueueBuildStepInput } from '../types/build';
-
-const FAST_POLL_INTERVAL = 3000;
-const SLOW_POLL_INTERVAL = 15000;
-
-function isActiveBuild(build: Build): boolean {
-  return !['success', 'failed', 'canceled'].includes(build.status);
-}
+import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL, isActiveBuild } from '../utils/build';
+import { formatTime } from '../utils/time';
 
 export function BuildsListPage() {
   const queryClient = useQueryClient();
@@ -32,7 +26,7 @@ export function BuildsListPage() {
         return SLOW_POLL_INTERVAL;
       }
 
-      return nextBuilds.some(isActiveBuild) ? FAST_POLL_INTERVAL : SLOW_POLL_INTERVAL;
+      return nextBuilds.some((b) => isActiveBuild(b.status)) ? FAST_POLL_INTERVAL : SLOW_POLL_INTERVAL;
     },
   });
 
