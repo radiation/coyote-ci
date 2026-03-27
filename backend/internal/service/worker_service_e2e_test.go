@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 
@@ -480,5 +482,123 @@ func TestWorkerExecutionVerticalSlice_MultiStepFailFastStopsLaterSteps(t *testin
 	}
 	if found {
 		t.Fatalf("expected no third runnable step after failure, got %+v", third)
+	}
+}
+
+func TestWorkerExecutionVerticalSlice_ReclaimRejectsStaleThenSucceeds(t *testing.T) {
+	ctx := context.Background()
+	buildStore := repositorymemory.NewBuildRepository()
+	logSink := logs.NewMemorySink()
+	stepRunner := inprocessrunner.New()
+	buildService := NewBuildService(buildStore, stepRunner, logSink)
+
+	workerA := NewWorkerServiceWithLease(buildService, "worker-a", 1*time.Second)
+	workerB := NewWorkerServiceWithLease(buildService, "worker-b", 1*time.Second)
+	claimTimeA := time.Now().UTC().Add(-2 * time.Minute)
+	claimTimeB := claimTimeA.Add(2 * time.Second)
+	workerA.clock = func() time.Time { return claimTimeA }
+	workerB.clock = func() time.Time { return claimTimeB }
+
+	build, err := buildService.CreateBuild(ctx, CreateBuildInput{
+		ProjectID: "project-1",
+		Steps: []CreateBuildStepInput{
+			{Name: "single", Command: "sh", Args: []string{"-c", "echo ok && exit 0"}, WorkingDir: "."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create build failed: %v", err)
+	}
+
+	claimedByA, found, err := workerA.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("worker A claim failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected worker A to claim step")
+	}
+
+	claimedByB, found, err := workerB.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("worker B reclaim failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected worker B to reclaim expired step")
+	}
+
+	_, staleCompleted, staleErr := buildService.HandleStepResult(ctx, runner.RunStepRequest{BuildID: build.ID, StepIndex: claimedByA.StepIndex, StepName: claimedByA.StepName, ClaimToken: claimedByA.ClaimToken}, runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, StartedAt: claimTimeA, FinishedAt: claimTimeB})
+	if !errors.Is(staleErr, ErrStaleStepClaim) || staleCompleted {
+		t.Fatalf("expected stale completion rejection for worker A, err=%v completed=%v", staleErr, staleCompleted)
+	}
+
+	_, completedByB, completeErr := buildService.HandleStepResult(ctx, runner.RunStepRequest{BuildID: build.ID, StepIndex: claimedByB.StepIndex, StepName: claimedByB.StepName, ClaimToken: claimedByB.ClaimToken}, runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, StartedAt: claimTimeB, FinishedAt: claimTimeB.Add(time.Second)})
+	if completeErr != nil || !completedByB {
+		t.Fatalf("expected worker B completion success, err=%v completed=%v", completeErr, completedByB)
+	}
+
+	updated, err := buildService.GetBuild(ctx, build.ID)
+	if err != nil {
+		t.Fatalf("get build failed: %v", err)
+	}
+	if updated.Status != domain.BuildStatusSuccess {
+		t.Fatalf("expected build success after reclaimed completion, got %q", updated.Status)
+	}
+}
+
+func TestWorkerExecutionVerticalSlice_ReclaimRejectsStaleThenFailsFast(t *testing.T) {
+	ctx := context.Background()
+	buildStore := repositorymemory.NewBuildRepository()
+	logSink := logs.NewMemorySink()
+	stepRunner := inprocessrunner.New()
+	buildService := NewBuildService(buildStore, stepRunner, logSink)
+
+	workerA := NewWorkerServiceWithLease(buildService, "worker-a", 1*time.Second)
+	workerB := NewWorkerServiceWithLease(buildService, "worker-b", 1*time.Second)
+	claimTimeA := time.Now().UTC().Add(-2 * time.Minute)
+	claimTimeB := claimTimeA.Add(2 * time.Second)
+	workerA.clock = func() time.Time { return claimTimeA }
+	workerB.clock = func() time.Time { return claimTimeB }
+
+	build, err := buildService.CreateBuild(ctx, CreateBuildInput{
+		ProjectID: "project-1",
+		Steps: []CreateBuildStepInput{
+			{Name: "single", Command: "sh", Args: []string{"-c", "echo boom 1>&2 && exit 7"}, WorkingDir: "."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create build failed: %v", err)
+	}
+
+	claimedByA, found, err := workerA.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("worker A claim failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected worker A to claim step")
+	}
+
+	claimedByB, found, err := workerB.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("worker B reclaim failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected worker B to reclaim expired step")
+	}
+
+	_, staleCompleted, staleErr := buildService.HandleStepResult(ctx, runner.RunStepRequest{BuildID: build.ID, StepIndex: claimedByA.StepIndex, StepName: claimedByA.StepName, ClaimToken: claimedByA.ClaimToken}, runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, StartedAt: claimTimeA, FinishedAt: claimTimeB})
+	if !errors.Is(staleErr, ErrStaleStepClaim) || staleCompleted {
+		t.Fatalf("expected stale completion rejection for worker A, err=%v completed=%v", staleErr, staleCompleted)
+	}
+
+	_, completedByB, completeErr := buildService.HandleStepResult(ctx, runner.RunStepRequest{BuildID: build.ID, StepIndex: claimedByB.StepIndex, StepName: claimedByB.StepName, ClaimToken: claimedByB.ClaimToken}, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: 7, Stderr: "boom", StartedAt: claimTimeB, FinishedAt: claimTimeB.Add(time.Second)})
+	if completeErr != nil || !completedByB {
+		t.Fatalf("expected worker B failure completion to persist, err=%v completed=%v", completeErr, completedByB)
+	}
+
+	updated, err := buildService.GetBuild(ctx, build.ID)
+	if err != nil {
+		t.Fatalf("get build failed: %v", err)
+	}
+	if updated.Status != domain.BuildStatusFailed {
+		t.Fatalf("expected build failed after reclaimed failure, got %q", updated.Status)
 	}
 }

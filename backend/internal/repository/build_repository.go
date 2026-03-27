@@ -23,11 +23,19 @@ type StepUpdate struct {
 	FinishedAt   *time.Time
 }
 
+type StepClaim struct {
+	WorkerID       string
+	ClaimToken     string
+	ClaimedAt      time.Time
+	LeaseExpiresAt time.Time
+}
+
 type StepCompletionOutcome string
 
 const (
 	StepCompletionCompleted         StepCompletionOutcome = "completed"
 	StepCompletionDuplicateTerminal StepCompletionOutcome = "duplicate_terminal"
+	StepCompletionStaleClaim        StepCompletionOutcome = "stale_claim"
 	StepCompletionInvalidTransition StepCompletionOutcome = "invalid_transition"
 )
 
@@ -39,6 +47,9 @@ type BuildRepository interface {
 	UpdateStatus(ctx context.Context, id string, status domain.BuildStatus, errorMessage *string) (domain.Build, error)
 	QueueBuild(ctx context.Context, id string, steps []domain.BuildStep) (domain.Build, error)
 	GetStepsByBuildID(ctx context.Context, buildID string) ([]domain.BuildStep, error)
+	ClaimPendingStep(ctx context.Context, buildID string, stepIndex int, claim StepClaim) (domain.BuildStep, bool, error)
+	ReclaimExpiredStep(ctx context.Context, buildID string, stepIndex int, reclaimBefore time.Time, claim StepClaim) (domain.BuildStep, bool, error)
+	CompleteClaimedStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, claimToken string, update StepUpdate) (domain.BuildStep, StepCompletionOutcome, error)
 	ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error)
 	CompleteStepIfRunning(ctx context.Context, buildID string, stepIndex int, update StepUpdate) (domain.BuildStep, bool, error)
 	CompleteStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, update StepUpdate) (domain.BuildStep, StepCompletionOutcome, error)

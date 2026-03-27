@@ -576,3 +576,119 @@ func TestBuildRepository_CreateQueuedBuild(t *testing.T) {
 		t.Fatalf("unexpected step ordering: %+v", steps)
 	}
 }
+
+func TestBuildRepository_ClaimPendingStepAndReclaimExpiredStep(t *testing.T) {
+	repo := NewBuildRepository()
+	_, err := repo.Create(context.Background(), domain.Build{ID: "build-lease", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("setup create failed: %v", err)
+	}
+	_, err = repo.QueueBuild(context.Background(), "build-lease", []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "first", Status: domain.BuildStepStatusPending}})
+	if err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
+	_, err = repo.UpdateStatus(context.Background(), "build-lease", domain.BuildStatusRunning, nil)
+	if err != nil {
+		t.Fatalf("set running status failed: %v", err)
+	}
+
+	claimedAt := time.Now().UTC().Add(-2 * time.Minute)
+	claimA := repository.StepClaim{
+		WorkerID:       "worker-a",
+		ClaimToken:     "claim-a",
+		ClaimedAt:      claimedAt,
+		LeaseExpiresAt: claimedAt.Add(30 * time.Second),
+	}
+	step, claimed, err := repo.ClaimPendingStep(context.Background(), "build-lease", 0, claimA)
+	if err != nil {
+		t.Fatalf("claim pending step failed: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected claim to succeed")
+	}
+	if step.ClaimToken == nil || *step.ClaimToken != "claim-a" {
+		t.Fatalf("expected claim token claim-a, got %v", step.ClaimToken)
+	}
+
+	notExpiredBefore := claimedAt.Add(10 * time.Second)
+	_, reclaimed, err := repo.ReclaimExpiredStep(context.Background(), "build-lease", 0, notExpiredBefore, repository.StepClaim{
+		WorkerID:       "worker-b",
+		ClaimToken:     "claim-b",
+		ClaimedAt:      notExpiredBefore,
+		LeaseExpiresAt: notExpiredBefore.Add(30 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("reclaim before lease expiry failed: %v", err)
+	}
+	if reclaimed {
+		t.Fatal("expected reclaim to fail for active lease")
+	}
+
+	reclaimAt := claimedAt.Add(2 * time.Minute)
+	step, reclaimed, err = repo.ReclaimExpiredStep(context.Background(), "build-lease", 0, reclaimAt, repository.StepClaim{
+		WorkerID:       "worker-b",
+		ClaimToken:     "claim-b",
+		ClaimedAt:      reclaimAt,
+		LeaseExpiresAt: reclaimAt.Add(30 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("reclaim expired step failed: %v", err)
+	}
+	if !reclaimed {
+		t.Fatal("expected reclaim to succeed after lease expiry")
+	}
+	if step.ClaimToken == nil || *step.ClaimToken != "claim-b" {
+		t.Fatalf("expected claim token claim-b, got %v", step.ClaimToken)
+	}
+}
+
+func TestBuildRepository_CompleteClaimedStepAndAdvanceBuild_RejectsStaleClaim(t *testing.T) {
+	repo := NewBuildRepository()
+	_, err := repo.Create(context.Background(), domain.Build{ID: "build-stale", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("setup create failed: %v", err)
+	}
+	_, err = repo.QueueBuild(context.Background(), "build-stale", []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "first", Status: domain.BuildStepStatusPending}})
+	if err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
+	_, err = repo.UpdateStatus(context.Background(), "build-stale", domain.BuildStatusRunning, nil)
+	if err != nil {
+		t.Fatalf("set running status failed: %v", err)
+	}
+
+	claimAt := time.Now().UTC()
+	_, claimed, err := repo.ClaimPendingStep(context.Background(), "build-stale", 0, repository.StepClaim{
+		WorkerID:       "worker-a",
+		ClaimToken:     "claim-a",
+		ClaimedAt:      claimAt,
+		LeaseExpiresAt: claimAt.Add(10 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("claim pending step failed: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected initial claim to succeed")
+	}
+
+	exitCode := 0
+	now := time.Now().UTC()
+	_, outcome, err := repo.CompleteClaimedStepAndAdvanceBuild(context.Background(), "build-stale", 0, "stale-claim", repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &claimAt, FinishedAt: &now})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if outcome != repository.StepCompletionStaleClaim {
+		t.Fatalf("expected stale claim outcome, got %q", outcome)
+	}
+
+	step, outcome, err := repo.CompleteClaimedStepAndAdvanceBuild(context.Background(), "build-stale", 0, "claim-a", repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &claimAt, FinishedAt: &now})
+	if err != nil {
+		t.Fatalf("active claim completion failed: %v", err)
+	}
+	if outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed outcome, got %q", outcome)
+	}
+	if step.Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected step success, got %q", step.Status)
+	}
+}

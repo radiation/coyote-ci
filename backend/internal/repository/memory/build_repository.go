@@ -223,6 +223,73 @@ func (r *BuildRepository) ClaimStepIfPending(_ context.Context, buildID string, 
 	return domain.BuildStep{}, false, nil
 }
 
+func (r *BuildRepository) ClaimPendingStep(_ context.Context, buildID string, stepIndex int, claim repository.StepClaim) (domain.BuildStep, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, ok := r.builds[buildID]; !ok {
+		return domain.BuildStep{}, false, repository.ErrBuildNotFound
+	}
+
+	steps := r.buildSteps[buildID]
+	for idx := range steps {
+		if steps[idx].StepIndex != stepIndex {
+			continue
+		}
+
+		if steps[idx].Status != domain.BuildStepStatusPending {
+			return domain.BuildStep{}, false, nil
+		}
+
+		steps[idx].Status = domain.BuildStepStatusRunning
+		steps[idx].WorkerID = &claim.WorkerID
+		steps[idx].ClaimToken = &claim.ClaimToken
+		steps[idx].ClaimedAt = &claim.ClaimedAt
+		steps[idx].LeaseExpiresAt = &claim.LeaseExpiresAt
+		if steps[idx].StartedAt == nil {
+			steps[idx].StartedAt = &claim.ClaimedAt
+		}
+		r.buildSteps[buildID] = steps
+
+		return cloneStep(steps[idx]), true, nil
+	}
+
+	return domain.BuildStep{}, false, nil
+}
+
+func (r *BuildRepository) ReclaimExpiredStep(_ context.Context, buildID string, stepIndex int, reclaimBefore time.Time, claim repository.StepClaim) (domain.BuildStep, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, ok := r.builds[buildID]; !ok {
+		return domain.BuildStep{}, false, repository.ErrBuildNotFound
+	}
+
+	steps := r.buildSteps[buildID]
+	for idx := range steps {
+		if steps[idx].StepIndex != stepIndex {
+			continue
+		}
+
+		if steps[idx].Status != domain.BuildStepStatusRunning {
+			return domain.BuildStep{}, false, nil
+		}
+		if steps[idx].LeaseExpiresAt == nil || steps[idx].LeaseExpiresAt.After(reclaimBefore) {
+			return domain.BuildStep{}, false, nil
+		}
+
+		steps[idx].WorkerID = &claim.WorkerID
+		steps[idx].ClaimToken = &claim.ClaimToken
+		steps[idx].ClaimedAt = &claim.ClaimedAt
+		steps[idx].LeaseExpiresAt = &claim.LeaseExpiresAt
+		r.buildSteps[buildID] = steps
+
+		return cloneStep(steps[idx]), true, nil
+	}
+
+	return domain.BuildStep{}, false, nil
+}
+
 func (r *BuildRepository) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -369,6 +436,103 @@ func (r *BuildRepository) CompleteStepAndAdvanceBuild(_ context.Context, buildID
 		if update.FinishedAt != nil {
 			steps[idx].FinishedAt = update.FinishedAt
 		}
+		if update.Status == domain.BuildStepStatusSuccess || update.Status == domain.BuildStepStatusFailed {
+			steps[idx].ClaimToken = nil
+			steps[idx].ClaimedAt = nil
+			steps[idx].LeaseExpiresAt = nil
+		}
+
+		now := time.Now().UTC()
+		if update.Status == domain.BuildStepStatusFailed {
+			build.Status = domain.BuildStatusFailed
+			build.FinishedAt = &now
+			build.ErrorMessage = steps[idx].ErrorMessage
+		} else {
+			nextIndex := stepIndex + 1
+			if nextIndex > build.CurrentStepIndex {
+				build.CurrentStepIndex = nextIndex
+			}
+
+			hasNext := false
+			for scanIdx := range steps {
+				if steps[scanIdx].StepIndex > stepIndex {
+					hasNext = true
+					break
+				}
+			}
+
+			if !hasNext {
+				build.Status = domain.BuildStatusSuccess
+				build.FinishedAt = &now
+				build.ErrorMessage = nil
+			}
+		}
+
+		r.builds[buildID] = build
+		r.buildSteps[buildID] = steps
+		return cloneStep(steps[idx]), repository.StepCompletionCompleted, nil
+	}
+
+	return domain.BuildStep{}, repository.StepCompletionInvalidTransition, repository.ErrBuildNotFound
+}
+
+func (r *BuildRepository) CompleteClaimedStepAndAdvanceBuild(_ context.Context, buildID string, stepIndex int, claimToken string, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	build, ok := r.builds[buildID]
+	if !ok {
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, repository.ErrBuildNotFound
+	}
+
+	steps := r.buildSteps[buildID]
+	for idx := range steps {
+		if steps[idx].StepIndex != stepIndex {
+			continue
+		}
+
+		if steps[idx].Status != domain.BuildStepStatusRunning {
+			if steps[idx].Status == domain.BuildStepStatusSuccess || steps[idx].Status == domain.BuildStepStatusFailed {
+				return cloneStep(steps[idx]), repository.StepCompletionDuplicateTerminal, nil
+			}
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+		}
+
+		if steps[idx].ClaimToken == nil || *steps[idx].ClaimToken != claimToken {
+			return cloneStep(steps[idx]), repository.StepCompletionStaleClaim, nil
+		}
+
+		if build.Status != domain.BuildStatusRunning {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+		}
+
+		steps[idx].Status = update.Status
+		if update.WorkerID != nil {
+			steps[idx].WorkerID = update.WorkerID
+		}
+		if update.ExitCode != nil {
+			steps[idx].ExitCode = update.ExitCode
+		}
+		if update.Stdout != nil {
+			steps[idx].Stdout = update.Stdout
+		}
+		if update.Stderr != nil {
+			steps[idx].Stderr = update.Stderr
+		}
+		if update.Status == domain.BuildStepStatusFailed {
+			steps[idx].ErrorMessage = update.ErrorMessage
+		} else {
+			steps[idx].ErrorMessage = nil
+		}
+		if update.StartedAt != nil {
+			steps[idx].StartedAt = update.StartedAt
+		}
+		if update.FinishedAt != nil {
+			steps[idx].FinishedAt = update.FinishedAt
+		}
+		steps[idx].ClaimToken = nil
+		steps[idx].ClaimedAt = nil
+		steps[idx].LeaseExpiresAt = nil
 
 		now := time.Now().UTC()
 		if update.Status == domain.BuildStepStatusFailed {
