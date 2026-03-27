@@ -10,6 +10,8 @@ type RunStepRequest struct {
 	BuildID        string
 	StepIndex      int
 	StepName       string
+	WorkerID       string
+	ClaimToken     string
 	Command        string
 	Args           []string
 	Env            map[string]string

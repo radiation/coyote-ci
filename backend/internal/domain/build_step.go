@@ -23,6 +23,9 @@ type BuildStep struct {
 	TimeoutSeconds int
 	Status         BuildStepStatus
 	WorkerID       *string
+	ClaimToken     *string
+	ClaimedAt      *time.Time
+	LeaseExpiresAt *time.Time
 	StartedAt      *time.Time
 	FinishedAt     *time.Time
 	ExitCode       *int

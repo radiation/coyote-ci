@@ -120,6 +120,55 @@ func (r *fakeBuildRepository) ClaimStepIfPending(_ context.Context, _ string, st
 	return domain.BuildStep{}, false, repository.ErrBuildNotFound
 }
 
+func (r *fakeBuildRepository) ClaimPendingStep(_ context.Context, _ string, stepIndex int, claim repository.StepClaim) (domain.BuildStep, bool, error) {
+	if r.updateErr != nil {
+		return domain.BuildStep{}, false, r.updateErr
+	}
+
+	for i := range r.steps {
+		if r.steps[i].StepIndex != stepIndex {
+			continue
+		}
+		if r.steps[i].Status != domain.BuildStepStatusPending {
+			return domain.BuildStep{}, false, nil
+		}
+		r.steps[i].Status = domain.BuildStepStatusRunning
+		r.steps[i].WorkerID = &claim.WorkerID
+		r.steps[i].ClaimToken = &claim.ClaimToken
+		r.steps[i].ClaimedAt = &claim.ClaimedAt
+		r.steps[i].LeaseExpiresAt = &claim.LeaseExpiresAt
+		r.steps[i].StartedAt = &claim.ClaimedAt
+		return r.steps[i], true, nil
+	}
+
+	return domain.BuildStep{}, false, repository.ErrBuildNotFound
+}
+
+func (r *fakeBuildRepository) ReclaimExpiredStep(_ context.Context, _ string, stepIndex int, reclaimBefore time.Time, claim repository.StepClaim) (domain.BuildStep, bool, error) {
+	if r.updateErr != nil {
+		return domain.BuildStep{}, false, r.updateErr
+	}
+
+	for i := range r.steps {
+		if r.steps[i].StepIndex != stepIndex {
+			continue
+		}
+		if r.steps[i].Status != domain.BuildStepStatusRunning {
+			return domain.BuildStep{}, false, nil
+		}
+		if r.steps[i].LeaseExpiresAt == nil || r.steps[i].LeaseExpiresAt.After(reclaimBefore) {
+			return domain.BuildStep{}, false, nil
+		}
+		r.steps[i].WorkerID = &claim.WorkerID
+		r.steps[i].ClaimToken = &claim.ClaimToken
+		r.steps[i].ClaimedAt = &claim.ClaimedAt
+		r.steps[i].LeaseExpiresAt = &claim.LeaseExpiresAt
+		return r.steps[i], true, nil
+	}
+
+	return domain.BuildStep{}, false, repository.ErrBuildNotFound
+}
+
 func (r *fakeBuildRepository) UpdateStepByIndex(_ context.Context, _ string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, error) {
 	if r.updateErr != nil {
 		return domain.BuildStep{}, r.updateErr
@@ -234,6 +283,44 @@ func (r *fakeBuildRepository) CompleteStepAndAdvanceBuild(_ context.Context, bui
 	}
 
 	return step, repository.StepCompletionCompleted, nil
+}
+
+func (r *fakeBuildRepository) CompleteClaimedStepAndAdvanceBuild(_ context.Context, buildID string, stepIndex int, claimToken string, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
+	for i := range r.steps {
+		if r.steps[i].StepIndex != stepIndex {
+			continue
+		}
+
+		if r.steps[i].Status == domain.BuildStepStatusSuccess || r.steps[i].Status == domain.BuildStepStatusFailed {
+			return r.steps[i], repository.StepCompletionDuplicateTerminal, nil
+		}
+		if r.steps[i].Status != domain.BuildStepStatusRunning {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+		}
+		if r.steps[i].ClaimToken == nil || *r.steps[i].ClaimToken != claimToken {
+			return r.steps[i], repository.StepCompletionStaleClaim, nil
+		}
+
+		break
+	}
+
+	step, outcome, err := r.CompleteStepAndAdvanceBuild(context.Background(), buildID, stepIndex, update)
+	if err != nil {
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
+	}
+	if outcome == repository.StepCompletionCompleted {
+		for i := range r.steps {
+			if r.steps[i].StepIndex == stepIndex {
+				r.steps[i].ClaimToken = nil
+				r.steps[i].ClaimedAt = nil
+				r.steps[i].LeaseExpiresAt = nil
+				step = r.steps[i]
+				break
+			}
+		}
+	}
+
+	return step, outcome, nil
 }
 
 func (r *fakeBuildRepository) UpdateCurrentStepIndex(_ context.Context, _ string, currentStepIndex int) (domain.Build, error) {
@@ -1044,5 +1131,45 @@ func TestBuildService_HandleStepResult_NonRunningStepReturnsInvalidStepTransitio
 	}
 	if completed {
 		t.Fatal("expected non-running completion to not complete")
+	}
+}
+
+func TestBuildService_HandleStepResult_StaleClaimReturnsDomainError(t *testing.T) {
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	svc := NewBuildService(repo, nil, logs.NewMemorySink())
+
+	_, completed, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: "claim-stale"}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	if !errors.Is(err, ErrStaleStepClaim) {
+		t.Fatalf("expected ErrStaleStepClaim, got %v", err)
+	}
+	if completed {
+		t.Fatal("expected stale claim completion to be rejected")
+	}
+}
+
+func TestBuildService_HandleStepResult_ClaimedCompletionFinalizesBuild(t *testing.T) {
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	svc := NewBuildService(repo, nil, logs.NewMemorySink())
+
+	step, completed, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: "claim-active"}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !completed {
+		t.Fatal("expected claimed completion to persist")
+	}
+	if step.Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected step success, got %q", step.Status)
+	}
+	if repo.build.Status != domain.BuildStatusSuccess {
+		t.Fatalf("expected build success, got %q", repo.build.Status)
 	}
 }

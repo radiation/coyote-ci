@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 )
 
@@ -20,6 +21,8 @@ type fakeBuildExecutionBoundary struct {
 	claimErr       error
 	claimMap       map[string]bool
 	claimCalls     int
+	reclaimMap     map[string]bool
+	reclaimCalls   int
 	queueCalls     int
 
 	startCalls    int
@@ -64,7 +67,7 @@ func (f *fakeBuildExecutionBoundary) GetBuildSteps(_ context.Context, id string)
 	return out, nil
 }
 
-func (f *fakeBuildExecutionBoundary) ClaimStepIfPending(_ context.Context, buildID string, stepIndex int, _ *string, startedAt time.Time) (domain.BuildStep, bool, error) {
+func (f *fakeBuildExecutionBoundary) ClaimPendingStep(_ context.Context, buildID string, stepIndex int, claim repository.StepClaim) (domain.BuildStep, bool, error) {
 	f.claimCalls++
 	if f.claimErr != nil {
 		return domain.BuildStep{}, false, f.claimErr
@@ -89,7 +92,46 @@ func (f *fakeBuildExecutionBoundary) ClaimStepIfPending(_ context.Context, build
 		}
 
 		steps[idx].Status = domain.BuildStepStatusRunning
-		steps[idx].StartedAt = &startedAt
+		steps[idx].WorkerID = &claim.WorkerID
+		steps[idx].ClaimToken = &claim.ClaimToken
+		steps[idx].ClaimedAt = &claim.ClaimedAt
+		steps[idx].LeaseExpiresAt = &claim.LeaseExpiresAt
+		steps[idx].StartedAt = &claim.ClaimedAt
+		f.stepsByBuildID[buildID] = steps
+		return steps[idx], true, nil
+	}
+
+	return domain.BuildStep{}, false, nil
+}
+
+func (f *fakeBuildExecutionBoundary) ReclaimExpiredStep(_ context.Context, buildID string, stepIndex int, reclaimBefore time.Time, claim repository.StepClaim) (domain.BuildStep, bool, error) {
+	f.reclaimCalls++
+
+	steps := f.stepsByBuildID[buildID]
+	for idx := range steps {
+		if steps[idx].StepIndex != stepIndex {
+			continue
+		}
+
+		key := claimKey(buildID, stepIndex)
+		if f.reclaimMap != nil {
+			allowed, ok := f.reclaimMap[key]
+			if ok && !allowed {
+				return domain.BuildStep{}, false, nil
+			}
+		}
+
+		if steps[idx].Status != domain.BuildStepStatusRunning {
+			return domain.BuildStep{}, false, nil
+		}
+		if steps[idx].LeaseExpiresAt == nil || steps[idx].LeaseExpiresAt.After(reclaimBefore) {
+			return domain.BuildStep{}, false, nil
+		}
+
+		steps[idx].WorkerID = &claim.WorkerID
+		steps[idx].ClaimToken = &claim.ClaimToken
+		steps[idx].ClaimedAt = &claim.ClaimedAt
+		steps[idx].LeaseExpiresAt = &claim.LeaseExpiresAt
 		f.stepsByBuildID[buildID] = steps
 		return steps[idx], true, nil
 	}
@@ -457,5 +499,61 @@ func TestWorkerService_ClaimRunnableStep_PendingBuildWithoutStepsBootstrapsQueue
 	}
 	if boundary.startCalls != 1 {
 		t.Fatalf("expected build start after claim, got %d", boundary.startCalls)
+	}
+}
+
+func TestWorkerService_ClaimRunnableStep_ReclaimsExpiredRunningStep(t *testing.T) {
+	now := time.Now().UTC()
+	expiredAt := now.Add(-time.Second)
+	boundary := &fakeBuildExecutionBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusRunning}},
+		stepsByBuildID: map[string][]domain.BuildStep{
+			"build-1": {
+				{StepIndex: 0, Name: "lint", Status: domain.BuildStepStatusRunning, LeaseExpiresAt: &expiredAt},
+				{StepIndex: 1, Name: "test", Status: domain.BuildStepStatusPending},
+			},
+		},
+	}
+
+	worker := NewWorkerServiceWithLease(boundary, "worker-b", 30*time.Second)
+	worker.clock = func() time.Time { return now }
+
+	runnable, found, err := worker.ClaimRunnableStep(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !found {
+		t.Fatal("expected reclaimable runnable step")
+	}
+	if runnable.StepIndex != 0 {
+		t.Fatalf("expected reclaim of step 0, got %d", runnable.StepIndex)
+	}
+	if boundary.reclaimCalls != 1 {
+		t.Fatalf("expected one reclaim attempt, got %d", boundary.reclaimCalls)
+	}
+}
+
+func TestWorkerService_ClaimRunnableStep_DoesNotReclaimNonExpiredRunningStep(t *testing.T) {
+	now := time.Now().UTC()
+	leaseExpiresAt := now.Add(30 * time.Second)
+	boundary := &fakeBuildExecutionBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusRunning}},
+		stepsByBuildID: map[string][]domain.BuildStep{
+			"build-1": {
+				{StepIndex: 0, Name: "lint", Status: domain.BuildStepStatusRunning, LeaseExpiresAt: &leaseExpiresAt},
+				{StepIndex: 1, Name: "test", Status: domain.BuildStepStatusPending},
+			},
+		},
+	}
+
+	worker := NewWorkerServiceWithLease(boundary, "worker-b", 30*time.Second)
+	worker.clock = func() time.Time { return now }
+
+	_, found, err := worker.ClaimRunnableStep(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if found {
+		t.Fatal("expected no reclaim while lease is active")
 	}
 }

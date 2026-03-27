@@ -3,27 +3,30 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
 
 type Config struct {
-	AppPort    string
-	DBHost     string
-	DBPort     string
-	DBUser     string
-	DBPassword string
-	DBName     string
-	DBSSLMode  string
+	AppPort          string
+	DBHost           string
+	DBPort           string
+	DBUser           string
+	DBPassword       string
+	DBName           string
+	DBSSLMode        string
+	StepLeaseSeconds int
 }
 
 func Load() Config {
 	return Config{
-		AppPort:    getEnv("APP_PORT", "8080"),
-		DBHost:     getEnv("DB_HOST", "localhost"),
-		DBPort:     getEnv("DB_PORT", "5432"),
-		DBUser:     getEnv("DB_USER", "coyote"),
-		DBPassword: getEnv("DB_PASSWORD", "coyote"),
-		DBName:     getEnv("DB_NAME", "coyote_ci"),
-		DBSSLMode:  getEnv("DB_SSLMODE", "disable"),
+		AppPort:          getEnv("APP_PORT", "8080"),
+		DBHost:           getEnv("DB_HOST", "localhost"),
+		DBPort:           getEnv("DB_PORT", "5432"),
+		DBUser:           getEnv("DB_USER", "coyote"),
+		DBPassword:       getEnv("DB_PASSWORD", "coyote"),
+		DBName:           getEnv("DB_NAME", "coyote_ci"),
+		DBSSLMode:        getEnv("DB_SSLMODE", "disable"),
+		StepLeaseSeconds: getEnvInt("WORKER_STEP_LEASE_SECONDS", 45),
 	}
 }
 
@@ -45,4 +48,18 @@ func getEnv(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func getEnvInt(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+
+	return parsed
 }

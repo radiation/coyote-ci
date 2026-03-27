@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -40,7 +42,8 @@ func main() {
 	stepRunner := inprocess.New()
 	logSink := logs.NewMemorySink()
 	buildService := service.NewBuildService(buildRepo, stepRunner, logSink)
-	workerService := service.NewWorkerService(buildService)
+	leaseDuration := time.Duration(cfg.StepLeaseSeconds) * time.Second
+	workerService := service.NewWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -50,6 +53,15 @@ func main() {
 		log.Fatalf("worker loop failed: %v", err)
 	}
 	log.Printf("worker stopped")
+}
+
+func defaultWorkerID() string {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "unknown-host"
+	}
+
+	return fmt.Sprintf("%s-%d", hostname, os.Getpid())
 }
 
 func runWorkerLoop(ctx context.Context, worker workerIterationService, pollInterval time.Duration) error {

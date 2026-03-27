@@ -140,6 +140,51 @@ func (r *fakeRepo) ClaimStepIfPending(_ context.Context, buildID string, stepInd
 	return domain.BuildStep{}, false, repository.ErrBuildNotFound
 }
 
+func (r *fakeRepo) ClaimPendingStep(_ context.Context, buildID string, stepIndex int, claim repository.StepClaim) (domain.BuildStep, bool, error) {
+	steps := r.steps[buildID]
+	for idx := range steps {
+		if steps[idx].StepIndex != stepIndex {
+			continue
+		}
+		if steps[idx].Status != domain.BuildStepStatusPending {
+			return domain.BuildStep{}, false, nil
+		}
+		steps[idx].Status = domain.BuildStepStatusRunning
+		steps[idx].WorkerID = &claim.WorkerID
+		steps[idx].ClaimToken = &claim.ClaimToken
+		steps[idx].ClaimedAt = &claim.ClaimedAt
+		steps[idx].LeaseExpiresAt = &claim.LeaseExpiresAt
+		steps[idx].StartedAt = &claim.ClaimedAt
+		r.steps[buildID] = steps
+		return steps[idx], true, nil
+	}
+
+	return domain.BuildStep{}, false, repository.ErrBuildNotFound
+}
+
+func (r *fakeRepo) ReclaimExpiredStep(_ context.Context, buildID string, stepIndex int, reclaimBefore time.Time, claim repository.StepClaim) (domain.BuildStep, bool, error) {
+	steps := r.steps[buildID]
+	for idx := range steps {
+		if steps[idx].StepIndex != stepIndex {
+			continue
+		}
+		if steps[idx].Status != domain.BuildStepStatusRunning {
+			return domain.BuildStep{}, false, nil
+		}
+		if steps[idx].LeaseExpiresAt == nil || steps[idx].LeaseExpiresAt.After(reclaimBefore) {
+			return domain.BuildStep{}, false, nil
+		}
+		steps[idx].WorkerID = &claim.WorkerID
+		steps[idx].ClaimToken = &claim.ClaimToken
+		steps[idx].ClaimedAt = &claim.ClaimedAt
+		steps[idx].LeaseExpiresAt = &claim.LeaseExpiresAt
+		r.steps[buildID] = steps
+		return steps[idx], true, nil
+	}
+
+	return domain.BuildStep{}, false, repository.ErrBuildNotFound
+}
+
 func (r *fakeRepo) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, error) {
 	if r.steps == nil {
 		return domain.BuildStep{}, repository.ErrBuildNotFound
@@ -253,6 +298,27 @@ func (r *fakeRepo) CompleteStepAndAdvanceBuild(_ context.Context, buildID string
 	}
 
 	return step, repository.StepCompletionCompleted, nil
+}
+
+func (r *fakeRepo) CompleteClaimedStepAndAdvanceBuild(_ context.Context, buildID string, stepIndex int, claimToken string, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
+	steps := r.steps[buildID]
+	for idx := range steps {
+		if steps[idx].StepIndex != stepIndex {
+			continue
+		}
+		if steps[idx].Status == domain.BuildStepStatusSuccess || steps[idx].Status == domain.BuildStepStatusFailed {
+			return steps[idx], repository.StepCompletionDuplicateTerminal, nil
+		}
+		if steps[idx].Status != domain.BuildStepStatusRunning {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+		}
+		if steps[idx].ClaimToken == nil || *steps[idx].ClaimToken != claimToken {
+			return steps[idx], repository.StepCompletionStaleClaim, nil
+		}
+		break
+	}
+
+	return r.CompleteStepAndAdvanceBuild(context.Background(), buildID, stepIndex, update)
 }
 
 func (r *fakeRepo) UpdateCurrentStepIndex(_ context.Context, id string, currentStepIndex int) (domain.Build, error) {

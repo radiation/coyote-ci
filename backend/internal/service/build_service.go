@@ -21,6 +21,7 @@ var ErrBuildStepNotFound = errors.New("build step not found")
 var ErrProjectIDRequired = errors.New("project_id is required")
 var ErrInvalidBuildStatusTransition = errors.New("invalid build status transition")
 var ErrInvalidBuildStepTransition = errors.New("invalid build step transition")
+var ErrStaleStepClaim = errors.New("stale step claim")
 var ErrRunnerNotConfigured = errors.New("runner not configured")
 var ErrCustomTemplateStepsRequired = errors.New("custom template requires at least one step")
 var ErrCustomTemplateStepCommandRequired = errors.New("custom template step command is required")
@@ -145,6 +146,16 @@ func (s *BuildService) ClaimStepIfPending(ctx context.Context, buildID string, s
 	return step, claimed, mapRepoErr(err)
 }
 
+func (s *BuildService) ClaimPendingStep(ctx context.Context, buildID string, stepIndex int, claim repository.StepClaim) (domain.BuildStep, bool, error) {
+	step, claimed, err := s.buildRepo.ClaimPendingStep(ctx, buildID, stepIndex, claim)
+	return step, claimed, mapRepoErr(err)
+}
+
+func (s *BuildService) ReclaimExpiredStep(ctx context.Context, buildID string, stepIndex int, reclaimBefore time.Time, claim repository.StepClaim) (domain.BuildStep, bool, error) {
+	step, claimed, err := s.buildRepo.ReclaimExpiredStep(ctx, buildID, stepIndex, reclaimBefore, claim)
+	return step, claimed, mapRepoErr(err)
+}
+
 func (s *BuildService) QueueBuild(ctx context.Context, id string) (domain.Build, error) {
 	return s.QueueBuildWithTemplate(ctx, id, "")
 }
@@ -244,7 +255,7 @@ func (s *BuildService) HandleStepResult(ctx context.Context, request runner.RunS
 	}
 
 	exitCode := result.ExitCode
-	completedStep, outcome, err := s.buildRepo.CompleteStepAndAdvanceBuild(ctx, request.BuildID, request.StepIndex, repository.StepUpdate{
+	completionUpdate := repository.StepUpdate{
 		Status:       stepStatus,
 		ExitCode:     &exitCode,
 		Stdout:       stdout,
@@ -252,7 +263,19 @@ func (s *BuildService) HandleStepResult(ctx context.Context, request runner.RunS
 		ErrorMessage: stepError,
 		StartedAt:    &result.StartedAt,
 		FinishedAt:   &result.FinishedAt,
-	})
+	}
+
+	var (
+		completedStep domain.BuildStep
+		outcome       repository.StepCompletionOutcome
+		err           error
+	)
+
+	if strings.TrimSpace(request.ClaimToken) == "" {
+		completedStep, outcome, err = s.buildRepo.CompleteStepAndAdvanceBuild(ctx, request.BuildID, request.StepIndex, completionUpdate)
+	} else {
+		completedStep, outcome, err = s.buildRepo.CompleteClaimedStepAndAdvanceBuild(ctx, request.BuildID, request.StepIndex, request.ClaimToken, completionUpdate)
+	}
 	if err != nil {
 		return domain.BuildStep{}, false, mapRepoErr(err)
 	}
@@ -266,6 +289,10 @@ func (s *BuildService) HandleStepResult(ctx context.Context, request runner.RunS
 
 	if outcome == repository.StepCompletionInvalidTransition {
 		return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
+	}
+
+	if outcome == repository.StepCompletionStaleClaim {
+		return completedStep, false, ErrStaleStepClaim
 	}
 
 	if outcome != repository.StepCompletionCompleted {
