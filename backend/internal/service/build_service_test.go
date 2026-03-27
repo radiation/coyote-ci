@@ -169,6 +169,27 @@ func (r *fakeBuildRepository) ReclaimExpiredStep(_ context.Context, _ string, st
 	return domain.BuildStep{}, false, repository.ErrBuildNotFound
 }
 
+func (r *fakeBuildRepository) RenewStepLease(_ context.Context, _ string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, repository.StepCompletionOutcome, error) {
+	for i := range r.steps {
+		if r.steps[i].StepIndex != stepIndex {
+			continue
+		}
+		if r.steps[i].Status == domain.BuildStepStatusSuccess || r.steps[i].Status == domain.BuildStepStatusFailed {
+			return r.steps[i], repository.StepCompletionDuplicateTerminal, nil
+		}
+		if r.steps[i].Status != domain.BuildStepStatusRunning {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+		}
+		if r.steps[i].ClaimToken == nil || *r.steps[i].ClaimToken != claimToken {
+			return r.steps[i], repository.StepCompletionStaleClaim, nil
+		}
+		r.steps[i].LeaseExpiresAt = &leaseExpiresAt
+		return r.steps[i], repository.StepCompletionCompleted, nil
+	}
+
+	return domain.BuildStep{}, repository.StepCompletionInvalidTransition, repository.ErrBuildNotFound
+}
+
 func (r *fakeBuildRepository) UpdateStepByIndex(_ context.Context, _ string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, error) {
 	if r.updateErr != nil {
 		return domain.BuildStep{}, r.updateErr
@@ -1171,5 +1192,43 @@ func TestBuildService_HandleStepResult_ClaimedCompletionFinalizesBuild(t *testin
 	}
 	if repo.build.Status != domain.BuildStatusSuccess {
 		t.Fatalf("expected build success, got %q", repo.build.Status)
+	}
+}
+
+func TestBuildService_RenewStepLease_StaleClaimReturnsDomainError(t *testing.T) {
+	active := "claim-active"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &active}},
+	}
+	svc := NewBuildService(repo, nil, logs.NewMemorySink())
+
+	_, renewed, err := svc.RenewStepLease(context.Background(), "build-1", 0, "claim-stale", time.Now().UTC().Add(time.Minute))
+	if !errors.Is(err, ErrStaleStepClaim) {
+		t.Fatalf("expected ErrStaleStepClaim, got %v", err)
+	}
+	if renewed {
+		t.Fatal("expected stale renewal to fail")
+	}
+}
+
+func TestBuildService_RenewStepLease_SucceedsForActiveClaim(t *testing.T) {
+	active := "claim-active"
+	lease := time.Now().UTC().Add(time.Minute)
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &active}},
+	}
+	svc := NewBuildService(repo, nil, logs.NewMemorySink())
+
+	step, renewed, err := svc.RenewStepLease(context.Background(), "build-1", 0, "claim-active", lease)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !renewed {
+		t.Fatal("expected renewal success")
+	}
+	if step.LeaseExpiresAt == nil || !step.LeaseExpiresAt.Equal(lease) {
+		t.Fatalf("expected lease extension to %s, got %v", lease, step.LeaseExpiresAt)
 	}
 }

@@ -24,6 +24,11 @@ type fakeBuildExecutionBoundary struct {
 	reclaimMap     map[string]bool
 	reclaimCalls   int
 	queueCalls     int
+	renewCalls     int
+	renewErr       error
+	renewStale     bool
+	renewedLeaseAt *time.Time
+	runStepDelay   time.Duration
 
 	startCalls    int
 	completeCalls int
@@ -186,10 +191,42 @@ func (f *fakeBuildExecutionBoundary) FailBuild(_ context.Context, id string) (do
 func (f *fakeBuildExecutionBoundary) RunStep(_ context.Context, request runner.RunStepRequest) (runner.RunStepResult, error) {
 	f.runStepCalls++
 	f.lastRequest = request
+	if f.runStepDelay > 0 {
+		time.Sleep(f.runStepDelay)
+	}
 	if f.runStepErr != nil {
 		return runner.RunStepResult{}, f.runStepErr
 	}
 	return f.runStepResp, nil
+}
+
+func (f *fakeBuildExecutionBoundary) RenewStepLease(_ context.Context, buildID string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, bool, error) {
+	f.renewCalls++
+	if f.renewErr != nil {
+		return domain.BuildStep{}, false, f.renewErr
+	}
+	if f.renewStale {
+		return domain.BuildStep{}, false, ErrStaleStepClaim
+	}
+
+	steps := f.stepsByBuildID[buildID]
+	for idx := range steps {
+		if steps[idx].StepIndex != stepIndex {
+			continue
+		}
+		if steps[idx].Status != domain.BuildStepStatusRunning {
+			return domain.BuildStep{}, false, nil
+		}
+		if steps[idx].ClaimToken == nil || *steps[idx].ClaimToken != claimToken {
+			return steps[idx], false, ErrStaleStepClaim
+		}
+		steps[idx].LeaseExpiresAt = &leaseExpiresAt
+		f.stepsByBuildID[buildID] = steps
+		f.renewedLeaseAt = &leaseExpiresAt
+		return steps[idx], true, nil
+	}
+
+	return domain.BuildStep{}, false, nil
 }
 
 func TestWorkerService_ExecuteRunnableStep_Success(t *testing.T) {
@@ -556,4 +593,83 @@ func TestWorkerService_ClaimRunnableStep_DoesNotReclaimNonExpiredRunningStep(t *
 	if found {
 		t.Fatal("expected no reclaim while lease is active")
 	}
+}
+
+func TestWorkerService_ExecuteRunnableStep_RenewsLeaseWhileRunning(t *testing.T) {
+	claimToken := "claim-a"
+	workerID := "worker-a"
+	now := time.Now().UTC()
+	boundary := &fakeBuildExecutionBoundary{
+		runStepDelay: 120 * time.Millisecond,
+		runStepResp: runner.RunStepResult{
+			Status:     runner.RunStepStatusSuccess,
+			ExitCode:   0,
+			StartedAt:  now,
+			FinishedAt: now.Add(120 * time.Millisecond),
+		},
+		stepsByBuildID: map[string][]domain.BuildStep{
+			"build-1": {
+				{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, WorkerID: &workerID, ClaimToken: &claimToken, LeaseExpiresAt: ptrTime(now.Add(50 * time.Millisecond))},
+			},
+		},
+	}
+
+	worker := NewWorkerServiceWithLease(boundary, workerID, 90*time.Millisecond)
+	worker.clock = time.Now
+
+	_, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{BuildID: "build-1", StepIndex: 0, StepName: "test", WorkerID: workerID, ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if boundary.renewCalls == 0 {
+		t.Fatal("expected at least one lease renewal during execution")
+	}
+
+	renewCallsAfter := boundary.renewCalls
+	time.Sleep(80 * time.Millisecond)
+	if boundary.renewCalls != renewCallsAfter {
+		t.Fatalf("expected heartbeat to stop after execution; renew calls changed from %d to %d", renewCallsAfter, boundary.renewCalls)
+	}
+}
+
+func TestWorkerService_ExecuteRunnableStep_StaleRenewalStopsHeartbeat(t *testing.T) {
+	claimToken := "claim-a"
+	workerID := "worker-a"
+	now := time.Now().UTC()
+	boundary := &fakeBuildExecutionBoundary{
+		runStepDelay: 90 * time.Millisecond,
+		renewStale:   true,
+		runStepResp: runner.RunStepResult{
+			Status:     runner.RunStepStatusSuccess,
+			ExitCode:   0,
+			StartedAt:  now,
+			FinishedAt: now.Add(90 * time.Millisecond),
+		},
+		stepsByBuildID: map[string][]domain.BuildStep{
+			"build-1": {
+				{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, WorkerID: &workerID, ClaimToken: &claimToken, LeaseExpiresAt: ptrTime(now.Add(40 * time.Millisecond))},
+			},
+		},
+	}
+
+	worker := NewWorkerServiceWithLease(boundary, workerID, 60*time.Millisecond)
+	worker.clock = time.Now
+
+	_, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{BuildID: "build-1", StepIndex: 0, StepName: "test", WorkerID: workerID, ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if boundary.renewCalls == 0 {
+		t.Fatal("expected at least one renewal attempt")
+	}
+
+	attempts := boundary.renewCalls
+	time.Sleep(100 * time.Millisecond)
+	if boundary.renewCalls != attempts {
+		t.Fatalf("expected stale renewal to stop heartbeat; renew calls changed from %d to %d", attempts, boundary.renewCalls)
+	}
+}
+
+func ptrTime(t time.Time) *time.Time {
+	return &t
 }

@@ -290,6 +290,38 @@ func (r *BuildRepository) ReclaimExpiredStep(_ context.Context, buildID string, 
 	return domain.BuildStep{}, false, nil
 }
 
+func (r *BuildRepository) RenewStepLease(_ context.Context, buildID string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, repository.StepCompletionOutcome, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, ok := r.builds[buildID]; !ok {
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, repository.ErrBuildNotFound
+	}
+
+	steps := r.buildSteps[buildID]
+	for idx := range steps {
+		if steps[idx].StepIndex != stepIndex {
+			continue
+		}
+
+		if steps[idx].Status == domain.BuildStepStatusSuccess || steps[idx].Status == domain.BuildStepStatusFailed {
+			return cloneStep(steps[idx]), repository.StepCompletionDuplicateTerminal, nil
+		}
+		if steps[idx].Status != domain.BuildStepStatusRunning {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+		}
+		if steps[idx].ClaimToken == nil || *steps[idx].ClaimToken != claimToken {
+			return cloneStep(steps[idx]), repository.StepCompletionStaleClaim, nil
+		}
+
+		steps[idx].LeaseExpiresAt = &leaseExpiresAt
+		r.buildSteps[buildID] = steps
+		return cloneStep(steps[idx]), repository.StepCompletionCompleted, nil
+	}
+
+	return domain.BuildStep{}, repository.StepCompletionInvalidTransition, repository.ErrBuildNotFound
+}
+
 func (r *BuildRepository) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

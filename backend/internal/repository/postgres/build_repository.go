@@ -439,6 +439,49 @@ func (r *BuildRepository) ReclaimExpiredStep(ctx context.Context, buildID string
 	return step, true, nil
 }
 
+func (r *BuildRepository) RenewStepLease(ctx context.Context, buildID string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, repository.StepCompletionOutcome, error) {
+	const renewQuery = `
+		UPDATE build_steps
+		SET lease_expires_at = $4
+		WHERE build_id = $1
+		  AND step_index = $2
+		  AND status = 'running'
+		  AND claim_token = $3
+		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+	`
+
+	step, err := scanStep(r.db.QueryRowContext(ctx, renewQuery, buildID, stepIndex, claimToken, leaseExpiresAt))
+	if err == nil {
+		return step, repository.StepCompletionCompleted, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
+	}
+
+	const currentStepQuery = `
+		SELECT id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+		FROM build_steps
+		WHERE build_id = $1 AND step_index = $2
+	`
+
+	existingStep, currentErr := scanStep(r.db.QueryRowContext(ctx, currentStepQuery, buildID, stepIndex))
+	if currentErr != nil {
+		if errors.Is(currentErr, sql.ErrNoRows) {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, repository.ErrBuildNotFound
+		}
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, currentErr
+	}
+
+	if existingStep.Status == domain.BuildStepStatusSuccess || existingStep.Status == domain.BuildStepStatusFailed {
+		return existingStep, repository.StepCompletionDuplicateTerminal, nil
+	}
+	if existingStep.Status == domain.BuildStepStatusRunning {
+		return existingStep, repository.StepCompletionStaleClaim, nil
+	}
+
+	return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+}
+
 func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, error) {
 	const query = `
 		UPDATE build_steps

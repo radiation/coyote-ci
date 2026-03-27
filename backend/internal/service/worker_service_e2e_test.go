@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,36 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	inprocessrunner "github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
 )
+
+type slowRunner struct {
+	delay  time.Duration
+	mu     sync.Mutex
+	calls  int
+	result runner.RunStepResult
+}
+
+func (r *slowRunner) RunStep(ctx context.Context, _ runner.RunStepRequest) (runner.RunStepResult, error) {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+
+	start := time.Now().UTC()
+	select {
+	case <-ctx.Done():
+		return runner.RunStepResult{}, ctx.Err()
+	case <-time.After(r.delay):
+	}
+
+	finish := time.Now().UTC()
+	return runner.RunStepResult{
+		Status:     r.result.Status,
+		ExitCode:   r.result.ExitCode,
+		Stdout:     r.result.Stdout,
+		Stderr:     r.result.Stderr,
+		StartedAt:  start,
+		FinishedAt: finish,
+	}, nil
+}
 
 func TestWorkerExecutionVerticalSlice_Success(t *testing.T) {
 	ctx := context.Background()
@@ -525,6 +556,16 @@ func TestWorkerExecutionVerticalSlice_ReclaimRejectsStaleThenSucceeds(t *testing
 		t.Fatal("expected worker B to reclaim expired step")
 	}
 
+	_, renewed, renewErr := buildService.RenewStepLease(ctx, build.ID, claimedByA.StepIndex, claimedByA.ClaimToken, claimTimeB.Add(time.Minute))
+	if !errors.Is(renewErr, ErrStaleStepClaim) || renewed {
+		t.Fatalf("expected stale renewal rejection for worker A, err=%v renewed=%v", renewErr, renewed)
+	}
+
+	_, renewed, renewErr = buildService.RenewStepLease(ctx, build.ID, claimedByB.StepIndex, claimedByB.ClaimToken, claimTimeB.Add(2*time.Minute))
+	if renewErr != nil || !renewed {
+		t.Fatalf("expected active renewal success for worker B, err=%v renewed=%v", renewErr, renewed)
+	}
+
 	_, staleCompleted, staleErr := buildService.HandleStepResult(ctx, runner.RunStepRequest{BuildID: build.ID, StepIndex: claimedByA.StepIndex, StepName: claimedByA.StepName, ClaimToken: claimedByA.ClaimToken}, runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, StartedAt: claimTimeA, FinishedAt: claimTimeB})
 	if !errors.Is(staleErr, ErrStaleStepClaim) || staleCompleted {
 		t.Fatalf("expected stale completion rejection for worker A, err=%v completed=%v", staleErr, staleCompleted)
@@ -584,6 +625,16 @@ func TestWorkerExecutionVerticalSlice_ReclaimRejectsStaleThenFailsFast(t *testin
 		t.Fatal("expected worker B to reclaim expired step")
 	}
 
+	_, renewed, renewErr := buildService.RenewStepLease(ctx, build.ID, claimedByA.StepIndex, claimedByA.ClaimToken, claimTimeB.Add(time.Minute))
+	if !errors.Is(renewErr, ErrStaleStepClaim) || renewed {
+		t.Fatalf("expected stale renewal rejection for worker A, err=%v renewed=%v", renewErr, renewed)
+	}
+
+	_, renewed, renewErr = buildService.RenewStepLease(ctx, build.ID, claimedByB.StepIndex, claimedByB.ClaimToken, claimTimeB.Add(2*time.Minute))
+	if renewErr != nil || !renewed {
+		t.Fatalf("expected active renewal success for worker B, err=%v renewed=%v", renewErr, renewed)
+	}
+
 	_, staleCompleted, staleErr := buildService.HandleStepResult(ctx, runner.RunStepRequest{BuildID: build.ID, StepIndex: claimedByA.StepIndex, StepName: claimedByA.StepName, ClaimToken: claimedByA.ClaimToken}, runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, StartedAt: claimTimeA, FinishedAt: claimTimeB})
 	if !errors.Is(staleErr, ErrStaleStepClaim) || staleCompleted {
 		t.Fatalf("expected stale completion rejection for worker A, err=%v completed=%v", staleErr, staleCompleted)
@@ -600,5 +651,59 @@ func TestWorkerExecutionVerticalSlice_ReclaimRejectsStaleThenFailsFast(t *testin
 	}
 	if updated.Status != domain.BuildStatusFailed {
 		t.Fatalf("expected build failed after reclaimed failure, got %q", updated.Status)
+	}
+}
+
+func TestWorkerExecutionVerticalSlice_HeartbeatPreventsReclaimDuringLongRun(t *testing.T) {
+	ctx := context.Background()
+	buildStore := repositorymemory.NewBuildRepository()
+	logSink := logs.NewMemorySink()
+	stepRunner := &slowRunner{delay: 1600 * time.Millisecond, result: runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n"}}
+	buildService := NewBuildService(buildStore, stepRunner, logSink)
+
+	workerA := NewWorkerServiceWithLease(buildService, "worker-a", 900*time.Millisecond)
+	workerB := NewWorkerServiceWithLease(buildService, "worker-b", 900*time.Millisecond)
+
+	build, err := buildService.CreateBuild(ctx, CreateBuildInput{
+		ProjectID: "project-1",
+		Steps:     []CreateBuildStepInput{{Name: "single", Command: "sh", Args: []string{"-c", "echo ok && exit 0"}, WorkingDir: "."}},
+	})
+	if err != nil {
+		t.Fatalf("create build failed: %v", err)
+	}
+
+	claimedByA, found, err := workerA.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("worker A claim failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected worker A to claim")
+	}
+
+	execDone := make(chan error, 1)
+	go func() {
+		_, execErr := workerA.ExecuteRunnableStep(ctx, claimedByA)
+		execDone <- execErr
+	}()
+
+	time.Sleep(1200 * time.Millisecond)
+	_, found, err = workerB.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("worker B claim scan failed: %v", err)
+	}
+	if found {
+		t.Fatal("expected worker B not to reclaim while worker A heartbeat is active")
+	}
+
+	if execErr := <-execDone; execErr != nil {
+		t.Fatalf("worker A execution failed: %v", execErr)
+	}
+
+	updated, err := buildService.GetBuild(ctx, build.ID)
+	if err != nil {
+		t.Fatalf("get build failed: %v", err)
+	}
+	if updated.Status != domain.BuildStatusSuccess {
+		t.Fatalf("expected build success after long-running heartbeat path, got %q", updated.Status)
 	}
 }

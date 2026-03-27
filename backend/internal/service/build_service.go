@@ -156,6 +156,25 @@ func (s *BuildService) ReclaimExpiredStep(ctx context.Context, buildID string, s
 	return step, claimed, mapRepoErr(err)
 }
 
+func (s *BuildService) RenewStepLease(ctx context.Context, buildID string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, bool, error) {
+	step, outcome, err := s.buildRepo.RenewStepLease(ctx, buildID, stepIndex, claimToken, leaseExpiresAt)
+	if err != nil {
+		return domain.BuildStep{}, false, mapRepoErr(err)
+	}
+
+	if outcome == repository.StepCompletionCompleted {
+		return step, true, nil
+	}
+	if outcome == repository.StepCompletionStaleClaim {
+		return step, false, ErrStaleStepClaim
+	}
+	if outcome == repository.StepCompletionDuplicateTerminal || outcome == repository.StepCompletionInvalidTransition {
+		return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
+	}
+
+	return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
+}
+
 func (s *BuildService) QueueBuild(ctx context.Context, id string) (domain.Build, error) {
 	return s.QueueBuildWithTemplate(ctx, id, "")
 }
