@@ -782,3 +782,78 @@ func TestBuildRepository_CompleteClaimedStepAndAdvanceBuild_StaleClaim(t *testin
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
+
+func TestBuildRepository_RenewStepLease_Success(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewBuildRepository(db)
+	now := time.Now().UTC()
+	extended := now.Add(time.Minute)
+
+	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
+			AddRow("step-1", "build-1", 0, "first", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "running", "worker-a", "claim-a", now, extended, now, nil, nil, nil, nil, nil),
+	)
+
+	step, outcome, err := repo.RenewStepLease(context.Background(), "build-1", 0, "claim-a", extended)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed outcome, got %q", outcome)
+	}
+	if step.LeaseExpiresAt == nil || !step.LeaseExpiresAt.Equal(extended) {
+		t.Fatalf("expected extended lease %s, got %v", extended, step.LeaseExpiresAt)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestBuildRepository_RenewStepLease_StaleAndTerminal(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewBuildRepository(db)
+	now := time.Now().UTC()
+
+	// stale claim path
+	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
+			AddRow("step-1", "build-1", 0, "first", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "running", "worker-b", "claim-b", now, now.Add(time.Minute), now, nil, nil, nil, nil, nil),
+	)
+
+	_, outcome, err := repo.RenewStepLease(context.Background(), "build-1", 0, "claim-a", now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if outcome != repository.StepCompletionStaleClaim {
+		t.Fatalf("expected stale outcome, got %q", outcome)
+	}
+
+	// terminal step path
+	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
+			AddRow("step-1", "build-1", 0, "first", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", "worker-b", nil, nil, nil, now, now, 0, "ok", "", nil),
+	)
+
+	_, outcome, err = repo.RenewStepLease(context.Background(), "build-1", 0, "claim-b", now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if outcome != repository.StepCompletionDuplicateTerminal {
+		t.Fatalf("expected duplicate terminal outcome, got %q", outcome)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}

@@ -692,3 +692,98 @@ func TestBuildRepository_CompleteClaimedStepAndAdvanceBuild_RejectsStaleClaim(t 
 		t.Fatalf("expected step success, got %q", step.Status)
 	}
 }
+
+func TestBuildRepository_RenewStepLease_SucceedsForActiveClaim(t *testing.T) {
+	repo := NewBuildRepository()
+	_, err := repo.Create(context.Background(), domain.Build{ID: "build-renew", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("setup create failed: %v", err)
+	}
+	_, err = repo.QueueBuild(context.Background(), "build-renew", []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "first", Status: domain.BuildStepStatusPending}})
+	if err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
+	_, err = repo.UpdateStatus(context.Background(), "build-renew", domain.BuildStatusRunning, nil)
+	if err != nil {
+		t.Fatalf("set running status failed: %v", err)
+	}
+
+	claimedAt := time.Now().UTC()
+	initialLease := claimedAt.Add(20 * time.Second)
+	_, claimed, err := repo.ClaimPendingStep(context.Background(), "build-renew", 0, repository.StepClaim{WorkerID: "worker-a", ClaimToken: "claim-a", ClaimedAt: claimedAt, LeaseExpiresAt: initialLease})
+	if err != nil || !claimed {
+		t.Fatalf("claim failed: %v claimed=%v", err, claimed)
+	}
+
+	extendedLease := claimedAt.Add(60 * time.Second)
+	step, outcome, err := repo.RenewStepLease(context.Background(), "build-renew", 0, "claim-a", extendedLease)
+	if err != nil {
+		t.Fatalf("renew failed: %v", err)
+	}
+	if outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected renewal outcome completed, got %q", outcome)
+	}
+	if step.LeaseExpiresAt == nil || !step.LeaseExpiresAt.Equal(extendedLease) {
+		t.Fatalf("expected lease to be extended to %s, got %v", extendedLease, step.LeaseExpiresAt)
+	}
+}
+
+func TestBuildRepository_RenewStepLease_RejectsStaleAndTerminal(t *testing.T) {
+	repo := NewBuildRepository()
+	_, err := repo.Create(context.Background(), domain.Build{ID: "build-renew-stale", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("setup create failed: %v", err)
+	}
+	_, err = repo.QueueBuild(context.Background(), "build-renew-stale", []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "first", Status: domain.BuildStepStatusPending}})
+	if err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
+	_, err = repo.UpdateStatus(context.Background(), "build-renew-stale", domain.BuildStatusRunning, nil)
+	if err != nil {
+		t.Fatalf("set running status failed: %v", err)
+	}
+
+	claimedAt := time.Now().UTC().Add(-2 * time.Minute)
+	leaseA := claimedAt.Add(20 * time.Second)
+	_, claimed, err := repo.ClaimPendingStep(context.Background(), "build-renew-stale", 0, repository.StepClaim{WorkerID: "worker-a", ClaimToken: "claim-a", ClaimedAt: claimedAt, LeaseExpiresAt: leaseA})
+	if err != nil || !claimed {
+		t.Fatalf("claim failed: %v claimed=%v", err, claimed)
+	}
+
+	reclaimAt := claimedAt.Add(3 * time.Minute)
+	_, reclaimed, err := repo.ReclaimExpiredStep(context.Background(), "build-renew-stale", 0, reclaimAt, repository.StepClaim{WorkerID: "worker-b", ClaimToken: "claim-b", ClaimedAt: reclaimAt, LeaseExpiresAt: reclaimAt.Add(30 * time.Second)})
+	if err != nil || !reclaimed {
+		t.Fatalf("reclaim failed: %v reclaimed=%v", err, reclaimed)
+	}
+
+	_, outcome, err := repo.RenewStepLease(context.Background(), "build-renew-stale", 0, "claim-a", reclaimAt.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("stale renew expected nil err, got %v", err)
+	}
+	if outcome != repository.StepCompletionStaleClaim {
+		t.Fatalf("expected stale claim outcome, got %q", outcome)
+	}
+
+	_, outcome, err = repo.RenewStepLease(context.Background(), "build-renew-stale", 0, "wrong-token", reclaimAt.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("wrong token renew expected nil err, got %v", err)
+	}
+	if outcome != repository.StepCompletionStaleClaim {
+		t.Fatalf("expected stale claim outcome for wrong token, got %q", outcome)
+	}
+
+	exitCode := 0
+	finishedAt := reclaimAt.Add(3 * time.Minute)
+	_, outcome, err = repo.CompleteClaimedStepAndAdvanceBuild(context.Background(), "build-renew-stale", 0, "claim-b", repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &reclaimAt, FinishedAt: &finishedAt})
+	if err != nil || outcome != repository.StepCompletionCompleted {
+		t.Fatalf("active completion failed: err=%v outcome=%q", err, outcome)
+	}
+
+	_, outcome, err = repo.RenewStepLease(context.Background(), "build-renew-stale", 0, "claim-b", finishedAt.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("terminal renew expected nil err, got %v", err)
+	}
+	if outcome != repository.StepCompletionDuplicateTerminal {
+		t.Fatalf("expected terminal duplicate outcome, got %q", outcome)
+	}
+}

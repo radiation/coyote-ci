@@ -185,6 +185,29 @@ func (r *fakeRepo) ReclaimExpiredStep(_ context.Context, buildID string, stepInd
 	return domain.BuildStep{}, false, repository.ErrBuildNotFound
 }
 
+func (r *fakeRepo) RenewStepLease(_ context.Context, buildID string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, repository.StepCompletionOutcome, error) {
+	steps := r.steps[buildID]
+	for idx := range steps {
+		if steps[idx].StepIndex != stepIndex {
+			continue
+		}
+		if steps[idx].Status == domain.BuildStepStatusSuccess || steps[idx].Status == domain.BuildStepStatusFailed {
+			return steps[idx], repository.StepCompletionDuplicateTerminal, nil
+		}
+		if steps[idx].Status != domain.BuildStepStatusRunning {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+		}
+		if steps[idx].ClaimToken == nil || *steps[idx].ClaimToken != claimToken {
+			return steps[idx], repository.StepCompletionStaleClaim, nil
+		}
+		steps[idx].LeaseExpiresAt = &leaseExpiresAt
+		r.steps[buildID] = steps
+		return steps[idx], repository.StepCompletionCompleted, nil
+	}
+
+	return domain.BuildStep{}, repository.StepCompletionInvalidTransition, repository.ErrBuildNotFound
+}
+
 func (r *fakeRepo) UpdateStepByIndex(_ context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, error) {
 	if r.steps == nil {
 		return domain.BuildStep{}, repository.ErrBuildNotFound
