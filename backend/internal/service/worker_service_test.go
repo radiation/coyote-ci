@@ -637,13 +637,13 @@ func TestWorkerService_ExecuteRunnableStep_StaleRenewalStopsHeartbeat(t *testing
 	workerID := "worker-a"
 	now := time.Now().UTC()
 	boundary := &fakeBuildExecutionBoundary{
-		runStepDelay: 90 * time.Millisecond,
+		runStepDelay: 300 * time.Millisecond,
 		renewStale:   true,
 		runStepResp: runner.RunStepResult{
 			Status:     runner.RunStepStatusSuccess,
 			ExitCode:   0,
 			StartedAt:  now,
-			FinishedAt: now.Add(90 * time.Millisecond),
+			FinishedAt: now.Add(300 * time.Millisecond),
 		},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
@@ -652,7 +652,7 @@ func TestWorkerService_ExecuteRunnableStep_StaleRenewalStopsHeartbeat(t *testing
 		},
 	}
 
-	worker := NewWorkerServiceWithLease(boundary, workerID, 60*time.Millisecond)
+	worker := NewWorkerServiceWithLease(boundary, workerID, 120*time.Millisecond)
 	worker.clock = time.Now
 
 	_, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{BuildID: "build-1", StepIndex: 0, StepName: "test", WorkerID: workerID, ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
@@ -672,4 +672,69 @@ func TestWorkerService_ExecuteRunnableStep_StaleRenewalStopsHeartbeat(t *testing
 
 func ptrTime(t time.Time) *time.Time {
 	return &t
+}
+
+func TestWorkerService_HeartbeatIntervalForStep_AddsBoundedJitter(t *testing.T) {
+	worker := NewWorkerServiceWithLease(&fakeBuildExecutionBoundary{}, "worker-a", 30*time.Second)
+	base := worker.heartbeatInterval()
+	window := base / 5
+
+	stepA := RunnableStep{WorkerID: "worker-a", ClaimToken: "claim-a"}
+	stepB := RunnableStep{WorkerID: "worker-a", ClaimToken: "claim-b"}
+
+	intervalA := worker.heartbeatIntervalForStep(stepA)
+	intervalB := worker.heartbeatIntervalForStep(stepB)
+
+	if intervalA < base-window || intervalA > base+window {
+		t.Fatalf("intervalA out of jitter bounds: base=%s window=%s got=%s", base, window, intervalA)
+	}
+	if intervalB < base-window || intervalB > base+window {
+		t.Fatalf("intervalB out of jitter bounds: base=%s window=%s got=%s", base, window, intervalB)
+	}
+	if intervalA == intervalB {
+		t.Fatalf("expected jittered intervals to differ for different claim tokens, got %s and %s", intervalA, intervalB)
+	}
+}
+
+func TestWorkerService_RecoveryStatsSnapshot(t *testing.T) {
+	workerID := "worker-a"
+	now := time.Now().UTC()
+	boundary := &fakeBuildExecutionBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
+		runStepDelay:   120 * time.Millisecond,
+		runStepResp: runner.RunStepResult{
+			Status:     runner.RunStepStatusSuccess,
+			ExitCode:   0,
+			StartedAt:  now,
+			FinishedAt: now.Add(120 * time.Millisecond),
+		},
+		stepsByBuildID: map[string][]domain.BuildStep{
+			"build-1": {
+				{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusPending},
+			},
+		},
+	}
+
+	worker := NewWorkerServiceWithLease(boundary, workerID, 90*time.Millisecond)
+	worker.clock = time.Now
+
+	runnable, found, err := worker.ClaimRunnableStep(context.Background())
+	if err != nil {
+		t.Fatalf("claim failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected runnable step")
+	}
+
+	if _, err := worker.ExecuteRunnableStep(context.Background(), runnable); err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+
+	stats := worker.RecoveryStats()
+	if stats.ClaimsWon != 1 {
+		t.Fatalf("expected claims_won=1, got %d", stats.ClaimsWon)
+	}
+	if stats.RenewalsWon == 0 {
+		t.Fatal("expected renewals_won > 0")
+	}
 }

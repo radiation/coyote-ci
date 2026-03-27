@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	nethttp "net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -20,6 +23,14 @@ type fakeWorkerIterationService struct {
 	executeErr    error
 
 	executeCalls int
+}
+
+type fakeWorkerStatusProvider struct {
+	stats service.WorkerRecoveryStats
+}
+
+func (f *fakeWorkerStatusProvider) RecoveryStats() service.WorkerRecoveryStats {
+	return f.stats
 }
 
 func (f *fakeWorkerIterationService) ClaimRunnableStep(_ context.Context) (service.RunnableStep, bool, error) {
@@ -74,5 +85,53 @@ func TestRunWorkerIteration_ExecutionFailure(t *testing.T) {
 	}
 	if worker.executeCalls != 1 {
 		t.Fatalf("expected execute to be called once, got %d", worker.executeCalls)
+	}
+}
+
+func TestNewWorkerStatusHandler_Healthz(t *testing.T) {
+	h := newWorkerStatusHandler(&fakeWorkerStatusProvider{})
+	req := httptest.NewRequest(nethttp.MethodGet, "/healthz", nil)
+	rr := httptest.NewRecorder()
+
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != nethttp.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if rr.Body.String() != "ok" {
+		t.Fatalf("expected ok body, got %q", rr.Body.String())
+	}
+}
+
+func TestNewWorkerStatusHandler_RecoveryStatus(t *testing.T) {
+	h := newWorkerStatusHandler(&fakeWorkerStatusProvider{stats: service.WorkerRecoveryStats{
+		ClaimsWon:     1,
+		ReclaimsWon:   2,
+		RenewalsWon:   3,
+		RenewalsStale: 4,
+		StaleComplete: 5,
+		ReclaimMisses: 6,
+	}})
+
+	req := httptest.NewRequest(nethttp.MethodGet, "/internal/status/worker", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != nethttp.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+
+	var resp struct {
+		WorkerRecovery service.WorkerRecoveryStats `json:"worker_recovery"`
+		TimestampUTC   time.Time                   `json:"timestamp_utc"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode json: %v", err)
+	}
+	if resp.WorkerRecovery.ClaimsWon != 1 || resp.WorkerRecovery.ReclaimsWon != 2 || resp.WorkerRecovery.RenewalsWon != 3 {
+		t.Fatalf("unexpected recovery stats payload: %+v", resp.WorkerRecovery)
+	}
+	if resp.TimestampUTC.IsZero() {
+		t.Fatal("expected timestamp_utc to be set")
 	}
 }

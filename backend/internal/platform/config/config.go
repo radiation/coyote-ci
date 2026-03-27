@@ -15,6 +15,7 @@ type Config struct {
 	DBName           string
 	DBSSLMode        string
 	StepLeaseSeconds int
+	WorkerStatusAddr string
 }
 
 func Load() Config {
@@ -27,6 +28,7 @@ func Load() Config {
 		DBName:           getEnv("DB_NAME", "coyote_ci"),
 		DBSSLMode:        getEnv("DB_SSLMODE", "disable"),
 		StepLeaseSeconds: getEnvInt("WORKER_STEP_LEASE_SECONDS", 45),
+		WorkerStatusAddr: getEnv("WORKER_STATUS_ADDR", ""),
 	}
 }
 

@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	nethttp "net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,6 +26,10 @@ const defaultPollInterval = 10 * time.Second
 type workerIterationService interface {
 	ClaimRunnableStep(ctx context.Context) (service.RunnableStep, bool, error)
 	ExecuteRunnableStep(ctx context.Context, step service.RunnableStep) (service.StepExecutionReport, error)
+}
+
+type workerStatusProvider interface {
+	RecoveryStats() service.WorkerRecoveryStats
 }
 
 func main() {
@@ -47,6 +54,8 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	startWorkerStatusServer(ctx, cfg.WorkerStatusAddr, workerService)
 
 	log.Printf("starting worker loop")
 	if err := runWorkerLoop(ctx, workerService, defaultPollInterval); err != nil && !errors.Is(err, context.Canceled) {
@@ -98,4 +107,62 @@ func runWorkerIteration(ctx context.Context, worker workerIterationService) erro
 	log.Printf("worker iteration completed for claimed work: build_id=%s step=%s", step.BuildID, step.StepName)
 
 	return nil
+}
+
+func startWorkerStatusServer(ctx context.Context, addr string, worker workerStatusProvider) {
+	trimmed := strings.TrimSpace(addr)
+	if trimmed == "" {
+		return
+	}
+
+	srv := &nethttp.Server{
+		Addr:    trimmed,
+		Handler: newWorkerStatusHandler(worker),
+	}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("worker status server shutdown error: %v", err)
+		}
+	}()
+
+	go func() {
+		log.Printf("worker status server listening on %s", trimmed)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, nethttp.ErrServerClosed) {
+			log.Printf("worker status server error: %v", err)
+		}
+	}()
+}
+
+func newWorkerStatusHandler(worker workerStatusProvider) nethttp.Handler {
+	mux := nethttp.NewServeMux()
+	mux.HandleFunc("/healthz", func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		w.WriteHeader(nethttp.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/internal/status/worker", func(w nethttp.ResponseWriter, req *nethttp.Request) {
+		if req.Method != nethttp.MethodGet {
+			w.WriteHeader(nethttp.StatusMethodNotAllowed)
+			return
+		}
+
+		resp := struct {
+			WorkerRecovery service.WorkerRecoveryStats `json:"worker_recovery"`
+			TimestampUTC   time.Time                   `json:"timestamp_utc"`
+		}{
+			WorkerRecovery: worker.RecoveryStats(),
+			TimestampUTC:   time.Now().UTC(),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			w.WriteHeader(nethttp.StatusInternalServerError)
+			return
+		}
+	})
+
+	return mux
 }
