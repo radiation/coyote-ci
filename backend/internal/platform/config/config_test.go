@@ -20,6 +20,7 @@ func TestLoad(t *testing.T) {
 				"DB_NAME":                   "",
 				"DB_SSLMODE":                "",
 				"WORKER_STEP_LEASE_SECONDS": "",
+				"WORKER_STATUS_ADDR":        "",
 			},
 			expected: Config{
 				AppPort:          "8080",
@@ -30,6 +31,7 @@ func TestLoad(t *testing.T) {
 				DBName:           "coyote_ci",
 				DBSSLMode:        "disable",
 				StepLeaseSeconds: 45,
+				WorkerStatusAddr: "",
 			},
 		},
 		{
@@ -43,6 +45,7 @@ func TestLoad(t *testing.T) {
 				"DB_NAME":                   "name1",
 				"DB_SSLMODE":                "require",
 				"WORKER_STEP_LEASE_SECONDS": "60",
+				"WORKER_STATUS_ADDR":        "127.0.0.1:9091",
 			},
 			expected: Config{
 				AppPort:          "9999",
@@ -53,6 +56,7 @@ func TestLoad(t *testing.T) {
 				DBName:           "name1",
 				DBSSLMode:        "require",
 				StepLeaseSeconds: 60,
+				WorkerStatusAddr: "127.0.0.1:9091",
 			},
 		},
 		{
@@ -66,6 +70,7 @@ func TestLoad(t *testing.T) {
 				"DB_NAME":                   "",
 				"DB_SSLMODE":                "",
 				"WORKER_STEP_LEASE_SECONDS": "not-an-int",
+				"WORKER_STATUS_ADDR":        "",
 			},
 			expected: Config{
 				AppPort:          "8080",
@@ -76,6 +81,7 @@ func TestLoad(t *testing.T) {
 				DBName:           "coyote_ci",
 				DBSSLMode:        "disable",
 				StepLeaseSeconds: 45,
+				WorkerStatusAddr: "",
 			},
 		},
 	}

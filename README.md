@@ -43,6 +43,32 @@ To run migrations manually:
 docker compose run --rm migrate
 ```
 
+## Worker Internal Status Endpoint
+
+The worker can expose a small internal status server with recovery counters.
+
+Set `WORKER_STATUS_ADDR` to enable it (empty by default, disabled):
+
+```bash
+WORKER_STATUS_ADDR=127.0.0.1:9091
+```
+
+When enabled, the worker serves:
+
+- `GET /healthz` returns `ok`
+- `GET /internal/status/worker` returns JSON with worker recovery counters and `timestamp_utc`
+
+Current counters include:
+
+- `claims_won`
+- `reclaims_won`
+- `renewals_won`
+- `renewals_stale`
+- `stale_completion_rejected`
+- `reclaim_misses`
+
+This endpoint is intended for internal observability only and is not exposed by the backend API router.
+
 ## Local dev with live reload (Go)
 
 Go binaries are compiled, so source file changes are not automatically picked up by a running binary. For development, this repo includes a hot-reload profile using Air.

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"hash/fnv"
 	"log"
 	"strings"
 	"sync/atomic"
@@ -45,6 +46,15 @@ type StepExecutionReport struct {
 	BuildID string
 	Step    domain.BuildStep
 	Result  runner.RunStepResult
+}
+
+type WorkerRecoveryStats struct {
+	ClaimsWon     int64 `json:"claims_won"`
+	ReclaimsWon   int64 `json:"reclaims_won"`
+	RenewalsWon   int64 `json:"renewals_won"`
+	RenewalsStale int64 `json:"renewals_stale"`
+	StaleComplete int64 `json:"stale_completion_rejected"`
+	ReclaimMisses int64 `json:"reclaim_misses"`
 }
 
 type WorkerService struct {
@@ -219,6 +229,45 @@ func (w *WorkerService) heartbeatInterval() time.Duration {
 	return interval
 }
 
+func (w *WorkerService) heartbeatIntervalForStep(step RunnableStep) time.Duration {
+	base := w.heartbeatInterval()
+	window := base / 5
+	if window <= 0 {
+		return base
+	}
+
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(step.WorkerID))
+	_, _ = h.Write([]byte(step.ClaimToken))
+
+	spread := int64((2 * window) + 1)
+	offset := time.Duration(int64(h.Sum32())%spread - int64(window))
+	interval := base + offset
+
+	minInterval := 100 * time.Millisecond
+	if interval < minInterval {
+		interval = minInterval
+	}
+
+	maxInterval := w.leaseDuration - (w.leaseDuration / 10)
+	if maxInterval > minInterval && interval > maxInterval {
+		interval = maxInterval
+	}
+
+	return interval
+}
+
+func (w *WorkerService) RecoveryStats() WorkerRecoveryStats {
+	return WorkerRecoveryStats{
+		ClaimsWon:     atomic.LoadInt64(&w.claimsWon),
+		ReclaimsWon:   atomic.LoadInt64(&w.reclaimsWon),
+		RenewalsWon:   atomic.LoadInt64(&w.renewalsWon),
+		RenewalsStale: atomic.LoadInt64(&w.renewalsStale),
+		StaleComplete: atomic.LoadInt64(&w.staleComplete),
+		ReclaimMisses: atomic.LoadInt64(&w.reclaimMisses),
+	}
+}
+
 func (w *WorkerService) renewStepLease(ctx context.Context, step RunnableStep) (bool, error) {
 	leaseExpiresAt := w.clock().UTC().Add(w.leaseDuration)
 	_, renewed, err := w.builds.RenewStepLease(ctx, step.BuildID, step.StepIndex, step.ClaimToken, leaseExpiresAt)
@@ -342,9 +391,10 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 
 	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
 	heartbeatDone := make(chan struct{})
+	heartbeatInterval := w.heartbeatIntervalForStep(step)
 	go func() {
 		defer close(heartbeatDone)
-		ticker := time.NewTicker(w.heartbeatInterval())
+		ticker := time.NewTicker(heartbeatInterval)
 		defer ticker.Stop()
 
 		for {
