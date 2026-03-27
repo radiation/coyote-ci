@@ -405,6 +405,191 @@ func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string,
 	return step, nil
 }
 
+func (r *BuildRepository) CompleteStepIfRunning(ctx context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, bool, error) {
+	const query = `
+		UPDATE build_steps
+		SET status = $3,
+			worker_id = COALESCE($4, worker_id),
+			started_at = COALESCE($5, started_at),
+			finished_at = COALESCE($6, finished_at),
+			exit_code = COALESCE($7, exit_code),
+			stdout = COALESCE($8, stdout),
+			stderr = COALESCE($9, stderr),
+			error_message = CASE
+				WHEN $3 = 'failed' THEN COALESCE($10, error_message)
+				WHEN $10 IS NOT NULL THEN $10
+				ELSE NULL
+			END
+		WHERE build_id = $1
+		  AND step_index = $2
+		  AND status = 'running'
+		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, started_at, finished_at, exit_code, stdout, stderr, error_message
+	`
+
+	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, string(update.Status), update.WorkerID, update.StartedAt, update.FinishedAt, update.ExitCode, update.Stdout, update.Stderr, update.ErrorMessage))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.BuildStep{}, false, nil
+		}
+		return domain.BuildStep{}, false, err
+	}
+
+	return step, true, nil
+}
+
+func (r *BuildRepository) CompleteStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
+	}
+
+	rollback := true
+	defer func() {
+		if rollback {
+			_ = tx.Rollback()
+		}
+	}()
+
+	const completeQuery = `
+		UPDATE build_steps
+		SET status = $3,
+			worker_id = COALESCE($4, worker_id),
+			started_at = COALESCE($5, started_at),
+			finished_at = COALESCE($6, finished_at),
+			exit_code = COALESCE($7, exit_code),
+			stdout = COALESCE($8, stdout),
+			stderr = COALESCE($9, stderr),
+			error_message = CASE
+				WHEN $3 = 'failed' THEN COALESCE($10, error_message)
+				WHEN $10 IS NOT NULL THEN $10
+				ELSE NULL
+			END
+		WHERE build_id = $1
+		  AND step_index = $2
+		  AND status = 'running'
+		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, started_at, finished_at, exit_code, stdout, stderr, error_message
+	`
+
+	step, err := scanStep(tx.QueryRowContext(ctx, completeQuery, buildID, stepIndex, string(update.Status), update.WorkerID, update.StartedAt, update.FinishedAt, update.ExitCode, update.Stdout, update.Stderr, update.ErrorMessage))
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
+		}
+
+		const currentStepQuery = `
+			SELECT id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, started_at, finished_at, exit_code, stdout, stderr, error_message
+			FROM build_steps
+			WHERE build_id = $1 AND step_index = $2
+		`
+
+		existingStep, currentErr := scanStep(tx.QueryRowContext(ctx, currentStepQuery, buildID, stepIndex))
+		if currentErr != nil {
+			if errors.Is(currentErr, sql.ErrNoRows) {
+				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, repository.ErrBuildNotFound
+			}
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, currentErr
+		}
+
+		if existingStep.Status != domain.BuildStepStatusSuccess && existingStep.Status != domain.BuildStepStatusFailed {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+		}
+
+		if commitErr := tx.Commit(); commitErr != nil {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, commitErr
+		}
+		rollback = false
+		return existingStep, repository.StepCompletionDuplicateTerminal, nil
+	}
+
+	if update.Status == domain.BuildStepStatusFailed {
+		const failBuildQuery = `
+			UPDATE builds
+			SET status = 'failed',
+				finished_at = COALESCE(finished_at, NOW()),
+				error_message = CASE WHEN $2 IS NOT NULL THEN $2 ELSE error_message END
+			WHERE id = $1
+			  AND status = 'running'
+		`
+
+		result, execErr := tx.ExecContext(ctx, failBuildQuery, buildID, step.ErrorMessage)
+		if execErr != nil {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, execErr
+		}
+
+		affected, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, rowsErr
+		}
+		if affected == 0 {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+		}
+	} else {
+		const hasNextQuery = `
+			SELECT EXISTS (
+				SELECT 1 FROM build_steps
+				WHERE build_id = $1 AND step_index > $2
+			)
+		`
+
+		var hasNext bool
+		if scanErr := tx.QueryRowContext(ctx, hasNextQuery, buildID, stepIndex).Scan(&hasNext); scanErr != nil {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, scanErr
+		}
+
+		nextIndex := stepIndex + 1
+		if hasNext {
+			const advanceQuery = `
+				UPDATE builds
+				SET current_step_index = GREATEST(current_step_index, $2)
+				WHERE id = $1
+				  AND status = 'running'
+			`
+
+			result, execErr := tx.ExecContext(ctx, advanceQuery, buildID, nextIndex)
+			if execErr != nil {
+				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, execErr
+			}
+
+			affected, rowsErr := result.RowsAffected()
+			if rowsErr != nil {
+				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, rowsErr
+			}
+			if affected == 0 {
+				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+			}
+		} else {
+			const successQuery = `
+				UPDATE builds
+				SET status = 'success',
+					finished_at = COALESCE(finished_at, NOW()),
+					error_message = NULL,
+					current_step_index = GREATEST(current_step_index, $2)
+				WHERE id = $1
+				  AND status = 'running'
+			`
+
+			result, execErr := tx.ExecContext(ctx, successQuery, buildID, nextIndex)
+			if execErr != nil {
+				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, execErr
+			}
+
+			affected, rowsErr := result.RowsAffected()
+			if rowsErr != nil {
+				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, rowsErr
+			}
+			if affected == 0 {
+				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
+	}
+	rollback = false
+	return step, repository.StepCompletionCompleted, nil
+}
+
 func (r *BuildRepository) UpdateCurrentStepIndex(ctx context.Context, id string, currentStepIndex int) (domain.Build, error) {
 	const query = `
 		UPDATE builds

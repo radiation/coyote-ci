@@ -377,3 +377,108 @@ func TestWorkerExecutionVerticalSlice_MultiStepSuccessThenFailure(t *testing.T) 
 		t.Fatalf("expected build status failed, got %q", updatedBuild.Status)
 	}
 }
+
+func TestWorkerExecutionVerticalSlice_MultiStepSuccessPath(t *testing.T) {
+	ctx := context.Background()
+	buildStore := repositorymemory.NewBuildRepository()
+	logSink := logs.NewMemorySink()
+	stepRunner := inprocessrunner.New()
+	buildService := NewBuildService(buildStore, stepRunner, logSink)
+	worker := NewWorkerService(buildService)
+
+	build, err := buildService.CreateBuild(ctx, CreateBuildInput{
+		ProjectID: "project-1",
+		Steps: []CreateBuildStepInput{
+			{Name: "setup", Command: "sh", Args: []string{"-c", "echo setup && exit 0"}, WorkingDir: "."},
+			{Name: "test", Command: "sh", Args: []string{"-c", "echo test && exit 0"}, WorkingDir: "."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create build failed: %v", err)
+	}
+
+	first, found, err := worker.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("claim first runnable step failed: %v", err)
+	}
+	if !found || first.StepName != "setup" {
+		t.Fatalf("expected setup as first runnable step, got found=%v step=%q", found, first.StepName)
+	}
+	_, execErr := worker.ExecuteRunnableStep(ctx, first)
+	if execErr != nil {
+		t.Fatalf("execute first step failed: %v", execErr)
+	}
+
+	second, found, err := worker.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("claim second runnable step failed: %v", err)
+	}
+	if !found || second.StepName != "test" {
+		t.Fatalf("expected test as second runnable step, got found=%v step=%q", found, second.StepName)
+	}
+	_, execErr = worker.ExecuteRunnableStep(ctx, second)
+	if execErr != nil {
+		t.Fatalf("execute second step failed: %v", execErr)
+	}
+
+	updatedBuild, err := buildService.GetBuild(ctx, build.ID)
+	if err != nil {
+		t.Fatalf("get build failed: %v", err)
+	}
+	if updatedBuild.Status != domain.BuildStatusSuccess {
+		t.Fatalf("expected build status success, got %q", updatedBuild.Status)
+	}
+}
+
+func TestWorkerExecutionVerticalSlice_MultiStepFailFastStopsLaterSteps(t *testing.T) {
+	ctx := context.Background()
+	buildStore := repositorymemory.NewBuildRepository()
+	logSink := logs.NewMemorySink()
+	stepRunner := inprocessrunner.New()
+	buildService := NewBuildService(buildStore, stepRunner, logSink)
+	worker := NewWorkerService(buildService)
+
+	_, err := buildService.CreateBuild(ctx, CreateBuildInput{
+		ProjectID: "project-1",
+		Steps: []CreateBuildStepInput{
+			{Name: "setup", Command: "sh", Args: []string{"-c", "echo setup && exit 0"}, WorkingDir: "."},
+			{Name: "verify", Command: "sh", Args: []string{"-c", "echo boom 1>&2 && exit 5"}, WorkingDir: "."},
+			{Name: "package", Command: "sh", Args: []string{"-c", "echo should-not-run && exit 0"}, WorkingDir: "."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create build failed: %v", err)
+	}
+
+	first, found, err := worker.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("claim first runnable step failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected first runnable step")
+	}
+	_, execErr := worker.ExecuteRunnableStep(ctx, first)
+	if execErr != nil {
+		t.Fatalf("execute first step failed: %v", execErr)
+	}
+
+	second, found, err := worker.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("claim second runnable step failed: %v", err)
+	}
+	if !found || second.StepName != "verify" {
+		t.Fatalf("expected verify as second runnable step, got found=%v step=%q", found, second.StepName)
+	}
+	_, execErr = worker.ExecuteRunnableStep(ctx, second)
+	if execErr != nil {
+		t.Fatalf("execute second step failed: %v", execErr)
+	}
+
+	third, found, err := worker.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("claim third runnable step failed: %v", err)
+	}
+	if found {
+		t.Fatalf("expected no third runnable step after failure, got %+v", third)
+	}
+}

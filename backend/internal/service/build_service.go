@@ -17,8 +17,10 @@ import (
 )
 
 var ErrBuildNotFound = errors.New("build not found")
+var ErrBuildStepNotFound = errors.New("build step not found")
 var ErrProjectIDRequired = errors.New("project_id is required")
 var ErrInvalidBuildStatusTransition = errors.New("invalid build status transition")
+var ErrInvalidBuildStepTransition = errors.New("invalid build step transition")
 var ErrRunnerNotConfigured = errors.New("runner not configured")
 var ErrCustomTemplateStepsRequired = errors.New("custom template requires at least one step")
 var ErrCustomTemplateStepCommandRequired = errors.New("custom template step command is required")
@@ -192,28 +194,30 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		return runner.RunStepResult{}, ErrRunnerNotConfigured
 	}
 
-	startedAt := time.Now().UTC()
-	if _, err := s.persistStepResult(ctx, request.BuildID, request.StepIndex, domain.BuildStepStatusRunning, nil, nil, nil, nil, &startedAt, nil); err != nil {
-		return runner.RunStepResult{}, err
-	}
-
 	result, err := s.runner.RunStep(ctx, request)
 	if err != nil {
-		finishedAt := time.Now().UTC()
-		message := err.Error()
-		if _, persistErr := s.persistStepResult(ctx, request.BuildID, request.StepIndex, domain.BuildStepStatusFailed, nil, nil, nil, &message, nil, &finishedAt); persistErr != nil {
-			return runner.RunStepResult{}, errors.Join(err, persistErr)
+		now := time.Now().UTC()
+		result = runner.RunStepResult{
+			Status:     runner.RunStepStatusFailed,
+			ExitCode:   -1,
+			Stderr:     err.Error(),
+			StartedAt:  now,
+			FinishedAt: now,
+		}
+		if _, _, completionErr := s.HandleStepResult(ctx, request, result); completionErr != nil {
+			return runner.RunStepResult{}, errors.Join(err, completionErr)
 		}
 		return runner.RunStepResult{}, err
 	}
 
-	if err := writeOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stdout); err != nil {
-		return runner.RunStepResult{}, err
-	}
-	if err := writeOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stderr); err != nil {
+	if _, _, err := s.HandleStepResult(ctx, request, result); err != nil {
 		return runner.RunStepResult{}, err
 	}
 
+	return result, nil
+}
+
+func (s *BuildService) HandleStepResult(ctx context.Context, request runner.RunStepRequest, result runner.RunStepResult) (domain.BuildStep, bool, error) {
 	stepStatus := domain.BuildStepStatusSuccess
 	if result.Status == runner.RunStepStatusFailed {
 		stepStatus = domain.BuildStepStatusFailed
@@ -240,11 +244,42 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	}
 
 	exitCode := result.ExitCode
-	if _, err := s.persistStepResult(ctx, request.BuildID, request.StepIndex, stepStatus, &exitCode, stdout, stderr, stepError, &result.StartedAt, &result.FinishedAt); err != nil {
-		return runner.RunStepResult{}, err
+	completedStep, outcome, err := s.buildRepo.CompleteStepAndAdvanceBuild(ctx, request.BuildID, request.StepIndex, repository.StepUpdate{
+		Status:       stepStatus,
+		ExitCode:     &exitCode,
+		Stdout:       stdout,
+		Stderr:       stderr,
+		ErrorMessage: stepError,
+		StartedAt:    &result.StartedAt,
+		FinishedAt:   &result.FinishedAt,
+	})
+	if err != nil {
+		return domain.BuildStep{}, false, mapRepoErr(err)
 	}
 
-	return result, nil
+	if outcome == repository.StepCompletionDuplicateTerminal {
+		if completedStep.Status == domain.BuildStepStatusSuccess || completedStep.Status == domain.BuildStepStatusFailed {
+			return completedStep, false, nil
+		}
+		return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
+	}
+
+	if outcome == repository.StepCompletionInvalidTransition {
+		return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
+	}
+
+	if outcome != repository.StepCompletionCompleted {
+		return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
+	}
+
+	if err := writeOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stdout); err != nil {
+		return domain.BuildStep{}, false, err
+	}
+	if err := writeOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stderr); err != nil {
+		return domain.BuildStep{}, false, err
+	}
+
+	return completedStep, true, nil
 }
 
 func writeOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, stepName string, output string) error {
@@ -470,43 +505,15 @@ func normalizeCreateStepInput(in CreateBuildStepInput) CreateBuildStepInput {
 	return out
 }
 
-func (s *BuildService) persistStepResult(ctx context.Context, buildID string, stepIndex int, stepStatus domain.BuildStepStatus, exitCode *int, stdout *string, stderr *string, errorMessage *string, startedAt *time.Time, finishedAt *time.Time) (domain.BuildStep, error) {
-	persistedStep, err := s.buildRepo.UpdateStepByIndex(ctx, buildID, stepIndex, repository.StepUpdate{
-		Status:       stepStatus,
-		ExitCode:     exitCode,
-		Stdout:       stdout,
-		Stderr:       stderr,
-		ErrorMessage: errorMessage,
-		StartedAt:    startedAt,
-		FinishedAt:   finishedAt,
-	})
-	if err != nil {
-		return domain.BuildStep{}, mapRepoErr(err)
-	}
-
-	if stepStatus == domain.BuildStepStatusSuccess {
-		build, err := s.buildRepo.GetByID(ctx, buildID)
-		if err != nil {
-			return domain.BuildStep{}, mapRepoErr(err)
-		}
-
-		if stepIndex == build.CurrentStepIndex {
-			_, err = s.buildRepo.UpdateCurrentStepIndex(ctx, buildID, build.CurrentStepIndex+1)
-			if err != nil {
-				return domain.BuildStep{}, err
-			}
-		}
-	}
-
-	return persistedStep, nil
-}
-
 func mapRepoErr(err error) error {
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, repository.ErrBuildNotFound) {
 		return ErrBuildNotFound
+	}
+	if errors.Is(err, repository.ErrInvalidBuildStepTransition) {
+		return ErrInvalidBuildStepTransition
 	}
 	return err
 }

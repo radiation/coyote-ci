@@ -207,7 +207,6 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 	if err != nil {
 		log.Printf("execution completed: build_id=%s step=%s status=%s exit_code=%d", step.BuildID, step.StepName, runner.RunStepStatusFailed, result.ExitCode)
 		report.Step.Status = domain.BuildStepStatusFailed
-		_, _ = w.builds.FailBuild(ctx, step.BuildID)
 		return report, err
 	}
 
@@ -215,34 +214,9 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 
 	if result.Status == runner.RunStepStatusSuccess {
 		report.Step.Status = domain.BuildStepStatusSuccess
-
-		remaining, err := w.builds.GetBuildSteps(ctx, step.BuildID)
-		if err != nil {
-			return report, err
-		}
-
-		hasPending := false
-		for idx := range remaining {
-			if remaining[idx].Status == domain.BuildStepStatusPending {
-				hasPending = true
-				break
-			}
-		}
-
-		if hasPending {
-			return report, nil
-		}
-
-		if _, err := w.builds.CompleteBuild(ctx, step.BuildID); err != nil {
-			return report, err
-		}
 		return report, nil
 	}
 
 	report.Step.Status = domain.BuildStepStatusFailed
-	if _, err := w.builds.FailBuild(ctx, step.BuildID); err != nil {
-		return report, err
-	}
-
 	return report, nil
 }

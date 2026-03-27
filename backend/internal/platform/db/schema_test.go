@@ -10,9 +10,6 @@ import (
 func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 	files := []string{
 		"../../../db/init/001_init.sql",
-		"../../../db/init/002_build_lifecycle_and_steps.sql",
-		"../../../db/init/003_build_step_execution_config.sql",
-		"../../../db/init/004_build_step_output.sql",
 	}
 
 	var builder strings.Builder
