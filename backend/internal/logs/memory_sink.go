@@ -73,6 +73,9 @@ func (s *MemorySink) ListStepLogChunks(_ context.Context, buildID string, stepIn
 	if limit <= 0 {
 		limit = 200
 	}
+	if limit > 2000 {
+		limit = 2000
+	}
 
 	out := make([]StepLogChunk, 0, limit)
 	for _, chunk := range s.stepChunks {

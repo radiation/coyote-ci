@@ -88,14 +88,21 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 				}
 			}
 		}
+		if scanErr := scanner.Err(); scanErr != nil {
+			streamMu.Lock()
+			if streamErr == nil {
+				streamErr = scanErr
+			}
+			streamMu.Unlock()
+		}
 	}
 
 	wg.Add(2)
 	go consume(stdoutPipe, runner.StepOutputStreamStdout, &stdoutBuilder)
 	go consume(stderrPipe, runner.StepOutputStreamStderr, &stderrBuilder)
 
-	err = cmd.Wait()
 	wg.Wait()
+	err = cmd.Wait()
 	finishedAt := time.Now().UTC()
 
 	streamMu.Lock()

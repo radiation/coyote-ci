@@ -88,3 +88,30 @@ func TestMemorySink_AppendAndListStepLogChunks(t *testing.T) {
 		t.Fatalf("expected one chunk after cursor with sequence 2, got %+v", afterOne)
 	}
 }
+
+func TestMemorySink_ListStepLogChunks_LimitIsCapped(t *testing.T) {
+	sink := NewMemorySink()
+
+	for i := 0; i < 2500; i++ {
+		_, err := sink.AppendStepLogChunk(context.Background(), StepLogChunk{
+			BuildID:   "build-1",
+			StepID:    "step-1",
+			StepIndex: 0,
+			StepName:  "setup",
+			Stream:    StepLogStreamStdout,
+			ChunkText: "line",
+			CreatedAt: time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatalf("append chunk failed at index %d: %v", i, err)
+		}
+	}
+
+	chunks, err := sink.ListStepLogChunks(context.Background(), "build-1", 0, 0, 1000000)
+	if err != nil {
+		t.Fatalf("list chunks failed: %v", err)
+	}
+	if len(chunks) != 2000 {
+		t.Fatalf("expected capped result size 2000, got %d", len(chunks))
+	}
+}
