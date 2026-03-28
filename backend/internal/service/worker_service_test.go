@@ -509,6 +509,9 @@ func TestWorkerService_ClaimRunnableStep_PendingBuildTransitionsToRunning(t *tes
 	if !found {
 		t.Fatal("expected runnable step to be found")
 	}
+	if boundary.queueCalls != 1 {
+		t.Fatalf("expected pending build to be queued before claim, got %d queue calls", boundary.queueCalls)
+	}
 	if boundary.startCalls != 1 {
 		t.Fatalf("expected pending build to transition to running once, got %d", boundary.startCalls)
 	}

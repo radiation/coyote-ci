@@ -199,6 +199,9 @@ func (r *BuildRepository) ClaimStepIfPending(_ context.Context, buildID string, 
 	if _, ok := r.builds[buildID]; !ok {
 		return domain.BuildStep{}, false, repository.ErrBuildNotFound
 	}
+	if !domain.CanTransitionStep(domain.BuildStepStatusPending, domain.BuildStepStatusRunning) {
+		return domain.BuildStep{}, false, repository.ErrInvalidBuildStepTransition
+	}
 
 	steps := r.buildSteps[buildID]
 	for idx := range steps {
@@ -229,6 +232,9 @@ func (r *BuildRepository) ClaimPendingStep(_ context.Context, buildID string, st
 
 	if _, ok := r.builds[buildID]; !ok {
 		return domain.BuildStep{}, false, repository.ErrBuildNotFound
+	}
+	if !domain.CanTransitionStep(domain.BuildStepStatusPending, domain.BuildStepStatusRunning) {
+		return domain.BuildStep{}, false, repository.ErrInvalidBuildStepTransition
 	}
 
 	steps := r.buildSteps[buildID]
@@ -304,7 +310,7 @@ func (r *BuildRepository) RenewStepLease(_ context.Context, buildID string, step
 			continue
 		}
 
-		if steps[idx].Status == domain.BuildStepStatusSuccess || steps[idx].Status == domain.BuildStepStatusFailed {
+		if domain.IsTerminalStepStatus(steps[idx].Status) {
 			return cloneStep(steps[idx]), repository.StepCompletionDuplicateTerminal, nil
 		}
 		if steps[idx].Status != domain.BuildStepStatusRunning {
@@ -335,7 +341,6 @@ func (r *BuildRepository) UpdateStepByIndex(_ context.Context, buildID string, s
 		if steps[idx].StepIndex != stepIndex {
 			continue
 		}
-
 		steps[idx].Status = update.Status
 		if update.WorkerID != nil {
 			steps[idx].WorkerID = update.WorkerID
@@ -385,6 +390,9 @@ func (r *BuildRepository) CompleteStepIfRunning(_ context.Context, buildID strin
 		if steps[idx].Status != domain.BuildStepStatusRunning {
 			return cloneStep(steps[idx]), false, nil
 		}
+		if !domain.CanTransitionStep(steps[idx].Status, update.Status) {
+			return domain.BuildStep{}, false, repository.ErrInvalidBuildStepTransition
+		}
 
 		steps[idx].Status = update.Status
 		if update.WorkerID != nil {
@@ -433,11 +441,12 @@ func (r *BuildRepository) CompleteStepAndAdvanceBuild(_ context.Context, buildID
 			continue
 		}
 
-		if steps[idx].Status != domain.BuildStepStatusRunning {
-			if steps[idx].Status == domain.BuildStepStatusSuccess || steps[idx].Status == domain.BuildStepStatusFailed {
-				return cloneStep(steps[idx]), repository.StepCompletionDuplicateTerminal, nil
+		completion := repository.DecideStepCompletion(steps[idx].Status, update.Status, false, true)
+		if !completion.AllowUpdate {
+			if completion.Outcome == repository.StepCompletionDuplicateTerminal {
+				return cloneStep(steps[idx]), completion.Outcome, nil
 			}
-			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+			return domain.BuildStep{}, completion.Outcome, nil
 		}
 
 		if build.Status != domain.BuildStatusRunning {
@@ -475,29 +484,34 @@ func (r *BuildRepository) CompleteStepAndAdvanceBuild(_ context.Context, buildID
 		}
 
 		now := time.Now().UTC()
-		if update.Status == domain.BuildStepStatusFailed {
+		hasNext := false
+		for scanIdx := range steps {
+			if steps[scanIdx].StepIndex > stepIndex {
+				hasNext = true
+				break
+			}
+		}
+
+		advance := repository.DecideBuildAdvancement(update.Status, stepIndex, hasNext)
+		if advance.FailBuild {
+			if !domain.CanTransitionBuild(build.Status, domain.BuildStatusFailed) {
+				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+			}
 			build.Status = domain.BuildStatusFailed
 			build.FinishedAt = &now
 			build.ErrorMessage = steps[idx].ErrorMessage
-		} else {
-			nextIndex := stepIndex + 1
-			if nextIndex > build.CurrentStepIndex {
-				build.CurrentStepIndex = nextIndex
+		} else if advance.SucceedBuild {
+			if !domain.CanTransitionBuild(build.Status, domain.BuildStatusSuccess) {
+				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
 			}
-
-			hasNext := false
-			for scanIdx := range steps {
-				if steps[scanIdx].StepIndex > stepIndex {
-					hasNext = true
-					break
-				}
+			if advance.NextStepIndex > build.CurrentStepIndex {
+				build.CurrentStepIndex = advance.NextStepIndex
 			}
-
-			if !hasNext {
-				build.Status = domain.BuildStatusSuccess
-				build.FinishedAt = &now
-				build.ErrorMessage = nil
-			}
+			build.Status = domain.BuildStatusSuccess
+			build.FinishedAt = &now
+			build.ErrorMessage = nil
+		} else if advance.AdvanceCurrentStepIndex && advance.NextStepIndex > build.CurrentStepIndex {
+			build.CurrentStepIndex = advance.NextStepIndex
 		}
 
 		r.builds[buildID] = build
@@ -523,15 +537,13 @@ func (r *BuildRepository) CompleteClaimedStepAndAdvanceBuild(_ context.Context, 
 			continue
 		}
 
-		if steps[idx].Status != domain.BuildStepStatusRunning {
-			if steps[idx].Status == domain.BuildStepStatusSuccess || steps[idx].Status == domain.BuildStepStatusFailed {
-				return cloneStep(steps[idx]), repository.StepCompletionDuplicateTerminal, nil
+		claimMatches := steps[idx].ClaimToken != nil && *steps[idx].ClaimToken == claimToken
+		completion := repository.DecideStepCompletion(steps[idx].Status, update.Status, true, claimMatches)
+		if !completion.AllowUpdate {
+			if completion.Outcome == repository.StepCompletionDuplicateTerminal || completion.Outcome == repository.StepCompletionStaleClaim {
+				return cloneStep(steps[idx]), completion.Outcome, nil
 			}
-			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
-		}
-
-		if steps[idx].ClaimToken == nil || *steps[idx].ClaimToken != claimToken {
-			return cloneStep(steps[idx]), repository.StepCompletionStaleClaim, nil
+			return domain.BuildStep{}, completion.Outcome, nil
 		}
 
 		if build.Status != domain.BuildStatusRunning {
@@ -567,29 +579,34 @@ func (r *BuildRepository) CompleteClaimedStepAndAdvanceBuild(_ context.Context, 
 		steps[idx].LeaseExpiresAt = nil
 
 		now := time.Now().UTC()
-		if update.Status == domain.BuildStepStatusFailed {
+		hasNext := false
+		for scanIdx := range steps {
+			if steps[scanIdx].StepIndex > stepIndex {
+				hasNext = true
+				break
+			}
+		}
+
+		advance := repository.DecideBuildAdvancement(update.Status, stepIndex, hasNext)
+		if advance.FailBuild {
+			if !domain.CanTransitionBuild(build.Status, domain.BuildStatusFailed) {
+				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+			}
 			build.Status = domain.BuildStatusFailed
 			build.FinishedAt = &now
 			build.ErrorMessage = steps[idx].ErrorMessage
-		} else {
-			nextIndex := stepIndex + 1
-			if nextIndex > build.CurrentStepIndex {
-				build.CurrentStepIndex = nextIndex
+		} else if advance.SucceedBuild {
+			if !domain.CanTransitionBuild(build.Status, domain.BuildStatusSuccess) {
+				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
 			}
-
-			hasNext := false
-			for scanIdx := range steps {
-				if steps[scanIdx].StepIndex > stepIndex {
-					hasNext = true
-					break
-				}
+			if advance.NextStepIndex > build.CurrentStepIndex {
+				build.CurrentStepIndex = advance.NextStepIndex
 			}
-
-			if !hasNext {
-				build.Status = domain.BuildStatusSuccess
-				build.FinishedAt = &now
-				build.ErrorMessage = nil
-			}
+			build.Status = domain.BuildStatusSuccess
+			build.FinishedAt = &now
+			build.ErrorMessage = nil
+		} else if advance.AdvanceCurrentStepIndex && advance.NextStepIndex > build.CurrentStepIndex {
+			build.CurrentStepIndex = advance.NextStepIndex
 		}
 
 		r.builds[buildID] = build

@@ -189,7 +189,7 @@ func (s *BuildService) QueueBuildWithTemplateAndCustomSteps(ctx context.Context,
 		return domain.Build{}, mapRepoErr(err)
 	}
 
-	if !isValidBuildTransition(build.Status, domain.BuildStatusQueued) {
+	if !domain.CanTransitionBuild(build.Status, domain.BuildStatusQueued) {
 		return domain.Build{}, ErrInvalidBuildStatusTransition
 	}
 
@@ -290,17 +290,18 @@ func (s *BuildService) HandleStepResult(ctx context.Context, request runner.RunS
 		err           error
 	)
 
-	if strings.TrimSpace(request.ClaimToken) == "" {
-		completedStep, outcome, err = s.buildRepo.CompleteStepAndAdvanceBuild(ctx, request.BuildID, request.StepIndex, completionUpdate)
-	} else {
-		completedStep, outcome, err = s.buildRepo.CompleteClaimedStepAndAdvanceBuild(ctx, request.BuildID, request.StepIndex, request.ClaimToken, completionUpdate)
+	claimToken := strings.TrimSpace(request.ClaimToken)
+	if claimToken == "" {
+		return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
 	}
+
+	completedStep, outcome, err = s.buildRepo.CompleteClaimedStepAndAdvanceBuild(ctx, request.BuildID, request.StepIndex, claimToken, completionUpdate)
 	if err != nil {
 		return domain.BuildStep{}, false, mapRepoErr(err)
 	}
 
 	if outcome == repository.StepCompletionDuplicateTerminal {
-		if completedStep.Status == domain.BuildStepStatusSuccess || completedStep.Status == domain.BuildStepStatusFailed {
+		if domain.IsTerminalStepStatus(completedStep.Status) {
 			return completedStep, false, nil
 		}
 		return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
@@ -355,24 +356,11 @@ func (s *BuildService) transitionBuildStatus(ctx context.Context, id string, toS
 		return domain.Build{}, mapRepoErr(err)
 	}
 
-	if !isValidBuildTransition(build.Status, toStatus) {
+	if !domain.CanTransitionBuild(build.Status, toStatus) {
 		return domain.Build{}, ErrInvalidBuildStatusTransition
 	}
 
 	return s.buildRepo.UpdateStatus(ctx, id, toStatus, errorMessage)
-}
-
-func isValidBuildTransition(fromStatus, toStatus domain.BuildStatus) bool {
-	switch fromStatus {
-	case domain.BuildStatusPending:
-		return toStatus == domain.BuildStatusQueued || toStatus == domain.BuildStatusRunning
-	case domain.BuildStatusQueued:
-		return toStatus == domain.BuildStatusRunning
-	case domain.BuildStatusRunning:
-		return toStatus == domain.BuildStatusSuccess || toStatus == domain.BuildStatusFailed
-	default:
-		return false
-	}
 }
 
 func defaultBuildSteps(buildID string) []domain.BuildStep {
