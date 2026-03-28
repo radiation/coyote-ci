@@ -426,19 +426,6 @@ func (r *BuildRepository) CompleteStepIfRunning(_ context.Context, buildID strin
 	return domain.BuildStep{}, false, nil
 }
 
-func (r *BuildRepository) CompleteStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
-	result, err := r.CompleteStep(ctx, repository.CompleteStepRequest{
-		BuildID:   buildID,
-		StepIndex: stepIndex,
-		Update:    update,
-	})
-	if err != nil {
-		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
-	}
-
-	return result.Step, result.Outcome, nil
-}
-
 func (r *BuildRepository) CompleteStep(_ context.Context, request repository.CompleteStepRequest) (repository.CompleteStepResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -541,21 +528,6 @@ func (r *BuildRepository) CompleteStep(_ context.Context, request repository.Com
 	}
 
 	return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, repository.ErrBuildNotFound
-}
-
-func (r *BuildRepository) CompleteClaimedStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, claimToken string, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
-	result, err := r.CompleteStep(ctx, repository.CompleteStepRequest{
-		BuildID:      buildID,
-		StepIndex:    stepIndex,
-		ClaimToken:   claimToken,
-		RequireClaim: true,
-		Update:       update,
-	})
-	if err != nil {
-		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
-	}
-
-	return result.Step, result.Outcome, nil
 }
 
 func (r *BuildRepository) UpdateCurrentStepIndex(_ context.Context, id string, currentStepIndex int) (domain.Build, error) {

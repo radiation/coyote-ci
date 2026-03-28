@@ -375,7 +375,7 @@ func TestBuildRepository_CompleteStepIfRunning(t *testing.T) {
 	}
 }
 
-func TestBuildRepository_CompleteStepAndAdvanceBuild(t *testing.T) {
+func TestBuildRepository_CompleteStep(t *testing.T) {
 	repo := NewBuildRepository()
 	_, err := repo.Create(context.Background(), domain.Build{
 		ID:        "build-advance",
@@ -412,18 +412,22 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild(t *testing.T) {
 	finishedAt := time.Now().UTC()
 	exitCode := 0
 	stdout := "ok\n"
-	firstStep, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-advance", 0, repository.StepUpdate{
-		Status:     domain.BuildStepStatusSuccess,
-		ExitCode:   &exitCode,
-		Stdout:     &stdout,
-		StartedAt:  &startedAt,
-		FinishedAt: &finishedAt,
+	firstResult, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   "build-advance",
+		StepIndex: 0,
+		Update: repository.StepUpdate{
+			Status:     domain.BuildStepStatusSuccess,
+			ExitCode:   &exitCode,
+			Stdout:     &stdout,
+			StartedAt:  &startedAt,
+			FinishedAt: &finishedAt,
+		},
 	})
 	if err != nil {
 		t.Fatalf("complete first step failed: %v", err)
 	}
-	if outcome != repository.StepCompletionCompleted || firstStep.Status != domain.BuildStepStatusSuccess {
-		t.Fatalf("expected first step success completion, got outcome=%q status=%q", outcome, firstStep.Status)
+	if firstResult.Outcome != repository.StepCompletionCompleted || firstResult.Step.Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected first step success completion, got outcome=%q status=%q", firstResult.Outcome, firstResult.Step.Status)
 	}
 
 	build, err := repo.GetByID(context.Background(), "build-advance")
@@ -445,17 +449,21 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild(t *testing.T) {
 		t.Fatal("expected second step claim")
 	}
 
-	secondStep, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-advance", 1, repository.StepUpdate{
-		Status:     domain.BuildStepStatusSuccess,
-		ExitCode:   &exitCode,
-		StartedAt:  &startedAt,
-		FinishedAt: &finishedAt,
+	secondResult, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   "build-advance",
+		StepIndex: 1,
+		Update: repository.StepUpdate{
+			Status:     domain.BuildStepStatusSuccess,
+			ExitCode:   &exitCode,
+			StartedAt:  &startedAt,
+			FinishedAt: &finishedAt,
+		},
 	})
 	if err != nil {
 		t.Fatalf("complete second step failed: %v", err)
 	}
-	if outcome != repository.StepCompletionCompleted || secondStep.Status != domain.BuildStepStatusSuccess {
-		t.Fatalf("expected second step success completion, got outcome=%q status=%q", outcome, secondStep.Status)
+	if secondResult.Outcome != repository.StepCompletionCompleted || secondResult.Step.Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected second step success completion, got outcome=%q status=%q", secondResult.Outcome, secondResult.Step.Status)
 	}
 
 	build, err = repo.GetByID(context.Background(), "build-advance")
@@ -466,19 +474,23 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild(t *testing.T) {
 		t.Fatalf("expected build success after final step, got %q", build.Status)
 	}
 
-	dup, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-advance", 1, repository.StepUpdate{Status: domain.BuildStepStatusSuccess})
+	dupResult, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   "build-advance",
+		StepIndex: 1,
+		Update:    repository.StepUpdate{Status: domain.BuildStepStatusSuccess},
+	})
 	if err != nil {
 		t.Fatalf("duplicate completion failed: %v", err)
 	}
-	if outcome != repository.StepCompletionDuplicateTerminal {
+	if dupResult.Outcome != repository.StepCompletionDuplicateTerminal {
 		t.Fatal("expected duplicate completion no-op")
 	}
-	if dup.Status != domain.BuildStepStatusSuccess {
-		t.Fatalf("expected duplicate to return existing terminal step, got %q", dup.Status)
+	if dupResult.Step.Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected duplicate to return existing terminal step, got %q", dupResult.Step.Status)
 	}
 }
 
-func TestBuildRepository_CompleteStepAndAdvanceBuild_FailedStepMarksBuildFailed(t *testing.T) {
+func TestBuildRepository_CompleteStep_FailedStepMarksBuildFailed(t *testing.T) {
 	repo := NewBuildRepository()
 	_, err := repo.Create(context.Background(), domain.Build{ID: "build-fail", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()})
 	if err != nil {
@@ -506,11 +518,15 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild_FailedStepMarksBuildFailed(
 	exitCode := 17
 	stderr := "boom"
 	errMsg := "boom"
-	_, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-fail", 0, repository.StepUpdate{Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, Stderr: &stderr, ErrorMessage: &errMsg, StartedAt: &startedAt, FinishedAt: &finishedAt})
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   "build-fail",
+		StepIndex: 0,
+		Update:    repository.StepUpdate{Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, Stderr: &stderr, ErrorMessage: &errMsg, StartedAt: &startedAt, FinishedAt: &finishedAt},
+	})
 	if err != nil {
 		t.Fatalf("complete failed step returned error: %v", err)
 	}
-	if outcome != repository.StepCompletionCompleted {
+	if result.Outcome != repository.StepCompletionCompleted {
 		t.Fatal("expected completion")
 	}
 
@@ -523,7 +539,7 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild_FailedStepMarksBuildFailed(
 	}
 }
 
-func TestBuildRepository_CompleteStepAndAdvanceBuild_InvalidTransition(t *testing.T) {
+func TestBuildRepository_CompleteStep_InvalidTransition(t *testing.T) {
 	repo := NewBuildRepository()
 	_, err := repo.Create(context.Background(), domain.Build{ID: "build-invalid", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()})
 	if err != nil {
@@ -538,11 +554,15 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild_InvalidTransition(t *testin
 		t.Fatalf("set running status failed: %v", err)
 	}
 
-	_, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-invalid", 0, repository.StepUpdate{Status: domain.BuildStepStatusSuccess})
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   "build-invalid",
+		StepIndex: 0,
+		Update:    repository.StepUpdate{Status: domain.BuildStepStatusSuccess},
+	})
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if outcome != repository.StepCompletionInvalidTransition {
+	if result.Outcome != repository.StepCompletionInvalidTransition {
 		t.Fatal("expected invalid transition to not complete")
 	}
 }
@@ -642,7 +662,7 @@ func TestBuildRepository_ClaimPendingStepAndReclaimExpiredStep(t *testing.T) {
 	}
 }
 
-func TestBuildRepository_CompleteClaimedStepAndAdvanceBuild_RejectsStaleClaim(t *testing.T) {
+func TestBuildRepository_CompleteStep_RejectsStaleClaim(t *testing.T) {
 	repo := NewBuildRepository()
 	_, err := repo.Create(context.Background(), domain.Build{ID: "build-stale", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()})
 	if err != nil {
@@ -673,23 +693,35 @@ func TestBuildRepository_CompleteClaimedStepAndAdvanceBuild_RejectsStaleClaim(t 
 
 	exitCode := 0
 	now := time.Now().UTC()
-	_, outcome, err := repo.CompleteClaimedStepAndAdvanceBuild(context.Background(), "build-stale", 0, "stale-claim", repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &claimAt, FinishedAt: &now})
+	staleResult, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:      "build-stale",
+		StepIndex:    0,
+		ClaimToken:   "stale-claim",
+		RequireClaim: true,
+		Update:       repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &claimAt, FinishedAt: &now},
+	})
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if outcome != repository.StepCompletionStaleClaim {
-		t.Fatalf("expected stale claim outcome, got %q", outcome)
+	if staleResult.Outcome != repository.StepCompletionStaleClaim {
+		t.Fatalf("expected stale claim outcome, got %q", staleResult.Outcome)
 	}
 
-	step, outcome, err := repo.CompleteClaimedStepAndAdvanceBuild(context.Background(), "build-stale", 0, "claim-a", repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &claimAt, FinishedAt: &now})
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:      "build-stale",
+		StepIndex:    0,
+		ClaimToken:   "claim-a",
+		RequireClaim: true,
+		Update:       repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &claimAt, FinishedAt: &now},
+	})
 	if err != nil {
 		t.Fatalf("active claim completion failed: %v", err)
 	}
-	if outcome != repository.StepCompletionCompleted {
-		t.Fatalf("expected completed outcome, got %q", outcome)
+	if result.Outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed outcome, got %q", result.Outcome)
 	}
-	if step.Status != domain.BuildStepStatusSuccess {
-		t.Fatalf("expected step success, got %q", step.Status)
+	if result.Step.Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected step success, got %q", result.Step.Status)
 	}
 }
 
@@ -774,9 +806,15 @@ func TestBuildRepository_RenewStepLease_RejectsStaleAndTerminal(t *testing.T) {
 
 	exitCode := 0
 	finishedAt := reclaimAt.Add(3 * time.Minute)
-	_, outcome, err = repo.CompleteClaimedStepAndAdvanceBuild(context.Background(), "build-renew-stale", 0, "claim-b", repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &reclaimAt, FinishedAt: &finishedAt})
-	if err != nil || outcome != repository.StepCompletionCompleted {
-		t.Fatalf("active completion failed: err=%v outcome=%q", err, outcome)
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:      "build-renew-stale",
+		StepIndex:    0,
+		ClaimToken:   "claim-b",
+		RequireClaim: true,
+		Update:       repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &reclaimAt, FinishedAt: &finishedAt},
+	})
+	if err != nil || result.Outcome != repository.StepCompletionCompleted {
+		t.Fatalf("active completion failed: err=%v outcome=%q", err, result.Outcome)
 	}
 
 	_, outcome, err = repo.RenewStepLease(context.Background(), "build-renew-stale", 0, "claim-b", finishedAt.Add(time.Minute))

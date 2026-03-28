@@ -26,7 +26,7 @@ type buildExecutionBoundary interface {
 	StartBuild(ctx context.Context, id string) (domain.Build, error)
 	CompleteBuild(ctx context.Context, id string) (domain.Build, error)
 	FailBuild(ctx context.Context, id string) (domain.Build, error)
-	RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, repository.StepCompletionOutcome, error)
+	RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, StepCompletionReport, error)
 }
 
 type RunnableStep struct {
@@ -43,9 +43,10 @@ type RunnableStep struct {
 }
 
 type StepExecutionReport struct {
-	BuildID string
-	Step    domain.BuildStep
-	Result  runner.RunStepResult
+	BuildID         string
+	Step            domain.BuildStep
+	Result          runner.RunStepResult
+	SideEffectError *string
 }
 
 type WorkerRecoveryStats struct {
@@ -413,7 +414,7 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 		}
 	}()
 
-	result, completionOutcome, err := w.builds.RunStep(ctx, runner.RunStepRequest{
+	result, completionReport, err := w.builds.RunStep(ctx, runner.RunStepRequest{
 		BuildID:        step.BuildID,
 		StepIndex:      step.StepIndex,
 		StepName:       step.StepName,
@@ -431,6 +432,12 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 
 	completedAt := time.Now().UTC()
 	report.Step.FinishedAt = &completedAt
+	completionOutcome := completionReport.CompletionOutcome
+	if completionReport.SideEffectErr != nil {
+		log.Printf("post-persist side-effect failed: build_id=%s step=%s err=%v", step.BuildID, step.StepName, completionReport.SideEffectErr)
+		sideEffectMessage := completionReport.SideEffectErr.Error()
+		report.SideEffectError = &sideEffectMessage
+	}
 
 	if completionOutcome == repository.StepCompletionStaleClaim {
 		staleCount := atomic.AddInt64(&w.staleComplete, 1)

@@ -62,34 +62,6 @@ func (r *BuildRepository) CompleteStep(ctx context.Context, request repository.C
 	return repository.CompleteStepResult{Step: step, Outcome: outcome}, nil
 }
 
-func (r *BuildRepository) CompleteClaimedStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, claimToken string, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
-	result, err := r.CompleteStep(ctx, repository.CompleteStepRequest{
-		BuildID:      buildID,
-		StepIndex:    stepIndex,
-		ClaimToken:   claimToken,
-		RequireClaim: true,
-		Update:       update,
-	})
-	if err != nil {
-		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
-	}
-
-	return result.Step, result.Outcome, nil
-}
-
-func (r *BuildRepository) CompleteStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
-	result, err := r.CompleteStep(ctx, repository.CompleteStepRequest{
-		BuildID:   buildID,
-		StepIndex: stepIndex,
-		Update:    update,
-	})
-	if err != nil {
-		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
-	}
-
-	return result.Step, result.Outcome, nil
-}
-
 func resolveAndCommitConflictTx(ctx context.Context, tx *sql.Tx, buildID string, stepIndex int, claimRequired bool, allowStale bool) (domain.BuildStep, repository.StepCompletionOutcome, bool, error) {
 	existingStep, outcome, err := resolveCompletionConflictTx(ctx, tx, buildID, stepIndex, claimRequired)
 	if err != nil {

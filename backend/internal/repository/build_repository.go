@@ -66,10 +66,8 @@ type BuildRepository interface {
 	ReclaimExpiredStep(ctx context.Context, buildID string, stepIndex int, reclaimBefore time.Time, claim StepClaim) (domain.BuildStep, bool, error)
 	RenewStepLease(ctx context.Context, buildID string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, StepCompletionOutcome, error)
 	CompleteStep(ctx context.Context, request CompleteStepRequest) (CompleteStepResult, error)
-	CompleteClaimedStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, claimToken string, update StepUpdate) (domain.BuildStep, StepCompletionOutcome, error)
 	ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error)
 	CompleteStepIfRunning(ctx context.Context, buildID string, stepIndex int, update StepUpdate) (domain.BuildStep, bool, error)
-	CompleteStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, update StepUpdate) (domain.BuildStep, StepCompletionOutcome, error)
 	UpdateStepByIndex(ctx context.Context, buildID string, stepIndex int, update StepUpdate) (domain.BuildStep, error)
 	UpdateCurrentStepIndex(ctx context.Context, id string, currentStepIndex int) (domain.Build, error)
 }

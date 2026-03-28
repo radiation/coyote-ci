@@ -41,6 +41,7 @@ type fakeBuildExecutionBoundary struct {
 	runStepErr  error
 	runStepResp runner.RunStepResult
 	runOutcome  repository.StepCompletionOutcome
+	runSideErr  error
 
 	lastBuildID string
 	lastRequest runner.RunStepRequest
@@ -189,19 +190,20 @@ func (f *fakeBuildExecutionBoundary) FailBuild(_ context.Context, id string) (do
 	return domain.Build{ID: id, Status: domain.BuildStatusFailed}, nil
 }
 
-func (f *fakeBuildExecutionBoundary) RunStep(_ context.Context, request runner.RunStepRequest) (runner.RunStepResult, repository.StepCompletionOutcome, error) {
+func (f *fakeBuildExecutionBoundary) RunStep(_ context.Context, request runner.RunStepRequest) (runner.RunStepResult, StepCompletionReport, error) {
 	f.runStepCalls++
 	f.lastRequest = request
 	if f.runStepDelay > 0 {
 		time.Sleep(f.runStepDelay)
 	}
+	report := StepCompletionReport{CompletionOutcome: f.runOutcome, SideEffectErr: f.runSideErr}
+	if report.CompletionOutcome == "" {
+		report.CompletionOutcome = repository.StepCompletionCompleted
+	}
 	if f.runStepErr != nil {
-		return runner.RunStepResult{}, f.runOutcome, f.runStepErr
+		return runner.RunStepResult{}, report, f.runStepErr
 	}
-	if f.runOutcome == "" {
-		f.runOutcome = repository.StepCompletionCompleted
-	}
-	return f.runStepResp, f.runOutcome, nil
+	return f.runStepResp, report, nil
 }
 
 func (f *fakeBuildExecutionBoundary) RenewStepLease(_ context.Context, buildID string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, bool, error) {
@@ -299,6 +301,29 @@ func TestWorkerService_ExecuteRunnableStep_RunStepError(t *testing.T) {
 	}
 	if report.Step.Status != domain.BuildStepStatusFailed {
 		t.Fatalf("expected step status failed, got %q", report.Step.Status)
+	}
+}
+
+func TestWorkerService_ExecuteRunnableStep_SideEffectFailureIsReported(t *testing.T) {
+	boundary := &fakeBuildExecutionBoundary{
+		runStepResp: runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()},
+		runOutcome:  repository.StepCompletionCompleted,
+		runSideErr:  errors.New("log write failed"),
+	}
+	worker := NewWorkerService(boundary)
+
+	report, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{BuildID: "build-side", StepIndex: 0, StepName: "test", Command: "echo"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if report.Step.Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected step status success, got %q", report.Step.Status)
+	}
+	if report.SideEffectError == nil {
+		t.Fatal("expected side effect error to be present on report")
+	}
+	if *report.SideEffectError != "log write failed" {
+		t.Fatalf("expected side effect message to be preserved, got %q", *report.SideEffectError)
 	}
 }
 
