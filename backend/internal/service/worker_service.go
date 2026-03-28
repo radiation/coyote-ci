@@ -105,31 +105,24 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 			continue
 		}
 
+		if build.Status == domain.BuildStatusPending {
+			queuedBuild, queueErr := w.builds.QueueBuild(ctx, build.ID)
+			if queueErr != nil {
+				if !errors.Is(queueErr, ErrInvalidBuildStatusTransition) {
+					return RunnableStep{}, false, queueErr
+				}
+				continue
+			}
+			build = queuedBuild
+		}
+
 		steps, err := w.builds.GetBuildSteps(ctx, build.ID)
 		if err != nil {
 			return RunnableStep{}, false, err
 		}
 
 		if len(steps) == 0 {
-			if build.Status == domain.BuildStatusPending {
-				_, err = w.builds.QueueBuild(ctx, build.ID)
-				if err != nil {
-					if !errors.Is(err, ErrInvalidBuildStatusTransition) {
-						return RunnableStep{}, false, err
-					}
-					continue
-				}
-
-				steps, err = w.builds.GetBuildSteps(ctx, build.ID)
-				if err != nil {
-					return RunnableStep{}, false, err
-				}
-				if len(steps) == 0 {
-					continue
-				}
-			} else {
-				continue
-			}
+			continue
 		}
 
 		nextStep, runnable := firstRunnableStep(steps)
@@ -148,7 +141,7 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 		claimCount := atomic.AddInt64(&w.claimsWon, 1)
 		log.Printf("claim succeeded: build_id=%s step_index=%d worker_id=%s claim_count=%d", build.ID, claimedStep.StepIndex, claim.WorkerID, claimCount)
 
-		if build.Status == domain.BuildStatusPending || build.Status == domain.BuildStatusQueued {
+		if build.Status == domain.BuildStatusQueued {
 			if _, err := w.builds.StartBuild(ctx, build.ID); err != nil && !errors.Is(err, ErrInvalidBuildStatusTransition) {
 				return RunnableStep{}, false, err
 			}
@@ -172,7 +165,7 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 		if domain.IsTerminalBuildStatus(build.Status) {
 			continue
 		}
-		if build.Status != domain.BuildStatusQueued && build.Status != domain.BuildStatusRunning && build.Status != domain.BuildStatusPending {
+		if build.Status != domain.BuildStatusQueued && build.Status != domain.BuildStatusRunning {
 			continue
 		}
 
@@ -199,7 +192,7 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 		reclaimCount := atomic.AddInt64(&w.reclaimsWon, 1)
 		log.Printf("reclaim succeeded: build_id=%s step_index=%d worker_id=%s reclaim_count=%d", build.ID, reclaimedStep.StepIndex, claim.WorkerID, reclaimCount)
 
-		if build.Status == domain.BuildStatusPending || build.Status == domain.BuildStatusQueued {
+		if build.Status == domain.BuildStatusQueued {
 			if _, err := w.builds.StartBuild(ctx, build.ID); err != nil && !errors.Is(err, ErrInvalidBuildStatusTransition) {
 				return RunnableStep{}, false, err
 			}

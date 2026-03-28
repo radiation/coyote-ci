@@ -55,6 +55,7 @@ This document is the source of truth for build and step lifecycle rules in Coyot
 - Build and step transitions must satisfy the allowed transition table.
 - Terminal states cannot be mutated.
 - Step completion is valid only for the active claim token / lease owner.
+- Claim-less step completion is not supported.
 - Completion from stale claim tokens must be rejected and must not change persisted state.
 - Repository updates use guarded compare-and-swap style conditions (status and claim token checks) so stale workers cannot overwrite newer state.
 

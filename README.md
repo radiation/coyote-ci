@@ -19,7 +19,7 @@ Coyote CI is a greenfield CI/orchestration system focused on a small, correct, a
 - Workers claim and complete steps; build status is derived/reconciled from step outcomes.
 - Terminal states are immutable and stale worker completions are rejected by guarded repository updates.
 
-See [backend/docs/state-machine.md](docs/state-machine.md) for the full state machine, transition guards, and invariants.
+See [backend/docs/state-machine.md](backend/docs/state-machine.md) for the full state machine, transition guards, and invariants.
 
 ## What's in this repo
 

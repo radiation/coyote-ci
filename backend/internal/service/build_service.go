@@ -290,11 +290,12 @@ func (s *BuildService) HandleStepResult(ctx context.Context, request runner.RunS
 		err           error
 	)
 
-	if strings.TrimSpace(request.ClaimToken) == "" {
-		completedStep, outcome, err = s.buildRepo.CompleteStepAndAdvanceBuild(ctx, request.BuildID, request.StepIndex, completionUpdate)
-	} else {
-		completedStep, outcome, err = s.buildRepo.CompleteClaimedStepAndAdvanceBuild(ctx, request.BuildID, request.StepIndex, request.ClaimToken, completionUpdate)
+	claimToken := strings.TrimSpace(request.ClaimToken)
+	if claimToken == "" {
+		return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
 	}
+
+	completedStep, outcome, err = s.buildRepo.CompleteClaimedStepAndAdvanceBuild(ctx, request.BuildID, request.StepIndex, claimToken, completionUpdate)
 	if err != nil {
 		return domain.BuildStep{}, false, mapRepoErr(err)
 	}
