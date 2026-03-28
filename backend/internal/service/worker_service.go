@@ -98,6 +98,9 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 	}
 
 	for _, build := range builds {
+		if domain.IsTerminalBuildStatus(build.Status) {
+			continue
+		}
 		if build.Status != domain.BuildStatusQueued && build.Status != domain.BuildStatusRunning && build.Status != domain.BuildStatusPending {
 			continue
 		}
@@ -166,6 +169,9 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 	}
 
 	for _, build := range builds {
+		if domain.IsTerminalBuildStatus(build.Status) {
+			continue
+		}
 		if build.Status != domain.BuildStatusQueued && build.Status != domain.BuildStatusRunning && build.Status != domain.BuildStatusPending {
 			continue
 		}

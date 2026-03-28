@@ -596,12 +596,6 @@ func TestBuildService_ValidTransitions(t *testing.T) {
 			expectedStatus: domain.BuildStatusQueued,
 		},
 		{
-			name:           "pending to running",
-			initialStatus:  domain.BuildStatusPending,
-			action:         (*BuildService).StartBuild,
-			expectedStatus: domain.BuildStatusRunning,
-		},
-		{
 			name:           "queued to running",
 			initialStatus:  domain.BuildStatusQueued,
 			action:         (*BuildService).StartBuild,
@@ -673,6 +667,11 @@ func TestBuildService_InvalidTransitions(t *testing.T) {
 			action:        (*BuildService).QueueBuild,
 		},
 		{
+			name:          "pending to running is invalid",
+			initialStatus: domain.BuildStatusPending,
+			action:        (*BuildService).StartBuild,
+		},
+		{
 			name:          "pending to success is invalid",
 			initialStatus: domain.BuildStatusPending,
 			action:        (*BuildService).CompleteBuild,
@@ -730,7 +729,7 @@ func TestBuildService_TransitionBuildStatus_UpdateError(t *testing.T) {
 		build: domain.Build{
 			ID:        "build-1",
 			ProjectID: "project-1",
-			Status:    domain.BuildStatusPending,
+			Status:    domain.BuildStatusQueued,
 		},
 		updateErr: errors.New("update failed"),
 	}

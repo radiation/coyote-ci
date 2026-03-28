@@ -472,7 +472,7 @@ func (r *BuildRepository) RenewStepLease(ctx context.Context, buildID string, st
 		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, currentErr
 	}
 
-	if existingStep.Status == domain.BuildStepStatusSuccess || existingStep.Status == domain.BuildStepStatusFailed {
+	if domain.IsTerminalStepStatus(existingStep.Status) {
 		return existingStep, repository.StepCompletionDuplicateTerminal, nil
 	}
 	if existingStep.Status == domain.BuildStepStatusRunning {
@@ -513,6 +513,10 @@ func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string,
 }
 
 func (r *BuildRepository) CompleteStepIfRunning(ctx context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, bool, error) {
+	if !domain.CanTransitionStep(domain.BuildStepStatusRunning, update.Status) {
+		return domain.BuildStep{}, false, repository.ErrInvalidBuildStepTransition
+	}
+
 	const query = `
 		UPDATE build_steps
 		SET status = $3,
@@ -545,6 +549,10 @@ func (r *BuildRepository) CompleteStepIfRunning(ctx context.Context, buildID str
 }
 
 func (r *BuildRepository) CompleteClaimedStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, claimToken string, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
+	if !domain.CanTransitionStep(domain.BuildStepStatusRunning, update.Status) {
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+	}
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
@@ -601,7 +609,7 @@ func (r *BuildRepository) CompleteClaimedStepAndAdvanceBuild(ctx context.Context
 			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, currentErr
 		}
 
-		if existingStep.Status == domain.BuildStepStatusSuccess || existingStep.Status == domain.BuildStepStatusFailed {
+		if domain.IsTerminalStepStatus(existingStep.Status) {
 			if commitErr := tx.Commit(); commitErr != nil {
 				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, commitErr
 			}
@@ -621,6 +629,10 @@ func (r *BuildRepository) CompleteClaimedStepAndAdvanceBuild(ctx context.Context
 	}
 
 	if update.Status == domain.BuildStepStatusFailed {
+		if !domain.CanTransitionBuild(domain.BuildStatusRunning, domain.BuildStatusFailed) {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+		}
+
 		const failBuildQuery = `
 			UPDATE builds
 			SET status = 'failed',
@@ -677,6 +689,10 @@ func (r *BuildRepository) CompleteClaimedStepAndAdvanceBuild(ctx context.Context
 				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
 			}
 		} else {
+			if !domain.CanTransitionBuild(domain.BuildStatusRunning, domain.BuildStatusSuccess) {
+				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+			}
+
 			const successQuery = `
 				UPDATE builds
 				SET status = 'success',
@@ -710,6 +726,10 @@ func (r *BuildRepository) CompleteClaimedStepAndAdvanceBuild(ctx context.Context
 }
 
 func (r *BuildRepository) CompleteStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
+	if !domain.CanTransitionStep(domain.BuildStepStatusRunning, update.Status) {
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+	}
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
@@ -765,7 +785,7 @@ func (r *BuildRepository) CompleteStepAndAdvanceBuild(ctx context.Context, build
 			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, currentErr
 		}
 
-		if existingStep.Status != domain.BuildStepStatusSuccess && existingStep.Status != domain.BuildStepStatusFailed {
+		if !domain.IsTerminalStepStatus(existingStep.Status) {
 			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
 		}
 
@@ -777,6 +797,10 @@ func (r *BuildRepository) CompleteStepAndAdvanceBuild(ctx context.Context, build
 	}
 
 	if update.Status == domain.BuildStepStatusFailed {
+		if !domain.CanTransitionBuild(domain.BuildStatusRunning, domain.BuildStatusFailed) {
+			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+		}
+
 		const failBuildQuery = `
 			UPDATE builds
 			SET status = 'failed',
@@ -833,6 +857,10 @@ func (r *BuildRepository) CompleteStepAndAdvanceBuild(ctx context.Context, build
 				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
 			}
 		} else {
+			if !domain.CanTransitionBuild(domain.BuildStatusRunning, domain.BuildStatusSuccess) {
+				return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+			}
+
 			const successQuery = `
 				UPDATE builds
 				SET status = 'success',
