@@ -245,14 +245,14 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		}
 		completionReport, completionErr := s.HandleStepResult(ctx, request, result)
 		if completionErr != nil {
-			return runner.RunStepResult{}, completionReport, errors.Join(err, completionErr)
+			return result, completionReport, errors.Join(err, completionErr)
 		}
-		return runner.RunStepResult{}, completionReport, err
+		return result, completionReport, err
 	}
 
 	completionReport, completionErr := s.HandleStepResult(ctx, request, result)
 	if completionErr != nil {
-		return runner.RunStepResult{}, completionReport, completionErr
+		return result, completionReport, completionErr
 	}
 
 	return result, completionReport, nil

@@ -924,6 +924,31 @@ func TestBuildService_RunStep_RunnerError(t *testing.T) {
 	}
 }
 
+func TestBuildService_RunStep_ReturnsExecutionResultWhenCompletionPersistenceFails(t *testing.T) {
+	runner := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: 7, Stderr: "boom"}}
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build:     domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
+		steps:     []domain.BuildStep{{StepIndex: 0, Name: "echo", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+		updateErr: errors.New("persist failed"),
+	}
+	svc := NewBuildService(repo, runner, &fakeLogSink{})
+
+	result, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "echo", ClaimToken: claimToken, Command: "sh", Args: []string{"-c", "exit 1"}})
+	if err == nil || err.Error() != "persist failed" {
+		t.Fatalf("expected persistence error, got %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionInvalidTransition {
+		t.Fatalf("expected invalid transition outcome on persistence error, got %q", report.CompletionOutcome)
+	}
+	if result.Status != steprunner.RunStepStatusFailed {
+		t.Fatalf("expected failed status from runner result, got %q", result.Status)
+	}
+	if result.ExitCode != 7 {
+		t.Fatalf("expected runner exit code 7, got %d", result.ExitCode)
+	}
+}
+
 func TestBuildService_RunStep_PersistsLogsForSuccessAndFailedResults(t *testing.T) {
 	tests := []struct {
 		name          string

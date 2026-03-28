@@ -187,6 +187,14 @@ func TestWorkerExecutionVerticalSlice_FailedCommand(t *testing.T) {
 	if updatedBuild.Status != domain.BuildStatusFailed {
 		t.Fatalf("expected build status failed, got %q", updatedBuild.Status)
 	}
+
+	next, found, err := worker.ClaimRunnableStep(ctx)
+	if err != nil {
+		t.Fatalf("claim runnable step after failed build should not error: %v", err)
+	}
+	if found {
+		t.Fatalf("expected no runnable steps after failed build, got %+v", next)
+	}
 }
 
 func TestWorkerExecutionVerticalSlice_Timeout(t *testing.T) {

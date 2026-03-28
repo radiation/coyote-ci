@@ -563,6 +563,51 @@ func TestBuildRepository_CompleteStep_FailedStep(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_CompleteStep_FailedStepNilErrorMessage_UsesTypedBuildUpdate(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewBuildRepository(db)
+	now := time.Now().UTC()
+	exitCode := 1
+	stderr := "command failed"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
+			AddRow("step-1", "build-1", 0, "first", "sh", "[\"-c\",\"exit 1\"]", "{}", ".", 0, "failed", nil, nil, nil, nil, now, now, 1, "", "command failed", nil),
+	)
+	mock.ExpectExec("error_message = COALESCE\\(\\$2::text, error_message\\)").WithArgs("build-1", nil).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   "build-1",
+		StepIndex: 0,
+		Update: repository.StepUpdate{
+			Status:     domain.BuildStepStatusFailed,
+			ExitCode:   &exitCode,
+			Stderr:     &stderr,
+			StartedAt:  &now,
+			FinishedAt: &now,
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.Outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion, got %q", result.Outcome)
+	}
+	if result.Step.Status != domain.BuildStepStatusFailed {
+		t.Fatalf("expected failed status, got %q", result.Step.Status)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 func TestBuildRepository_CompleteStep_DuplicateNoOp(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -766,6 +811,32 @@ func TestBuildRepository_ReclaimExpiredStep(t *testing.T) {
 	}
 	if step.WorkerID == nil || *step.WorkerID != "worker-b" {
 		t.Fatalf("expected worker-b owner, got %v", step.WorkerID)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestBuildRepository_ReclaimExpiredStep_NoMatchReturnsFalse(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewBuildRepository(db)
+	reclaimBefore := time.Now().UTC()
+	lease := reclaimBefore.Add(45 * time.Second)
+
+	// Simulates a terminal (failed/success) or otherwise non-running step where reclaim cannot apply.
+	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
+
+	_, reclaimed, err := repo.ReclaimExpiredStep(context.Background(), "build-1", 0, reclaimBefore, repository.StepClaim{WorkerID: "worker-b", ClaimToken: "claim-b", ClaimedAt: reclaimBefore, LeaseExpiresAt: lease})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if reclaimed {
+		t.Fatal("expected reclaim to fail when step is no longer eligible")
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

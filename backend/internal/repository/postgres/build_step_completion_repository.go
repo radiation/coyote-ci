@@ -212,7 +212,7 @@ func updateBuildFailedTx(ctx context.Context, tx *sql.Tx, buildID string, errorM
 		UPDATE builds
 		SET status = 'failed',
 			finished_at = COALESCE(finished_at, NOW()),
-			error_message = CASE WHEN $2 IS NOT NULL THEN $2 ELSE error_message END
+			error_message = COALESCE($2::text, error_message)
 		WHERE id = $1
 		  AND status = 'running'
 	`
