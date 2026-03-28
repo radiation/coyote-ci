@@ -77,7 +77,7 @@ func (s *MemorySink) ListStepLogChunks(_ context.Context, buildID string, stepIn
 		limit = 2000
 	}
 
-	out := make([]StepLogChunk, 0, limit)
+	var out []StepLogChunk
 	for _, chunk := range s.stepChunks {
 		if chunk.BuildID != buildID || chunk.StepIndex != stepIndex {
 			continue
