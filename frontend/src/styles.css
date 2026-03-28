@@ -143,6 +143,15 @@ a:hover {
   background: #f9f9ff;
 }
 
+.step-command {
+  display: inline-block;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
 .status-badge {
   display: inline-block;
   padding: 3px 8px;

@@ -19,6 +19,7 @@ export interface BuildStep {
   build_id: string;
   step_index: number;
   name: string;
+  command: string;
   status: BuildStepStatus;
   worker_id: string | null;
   started_at: string | null;

@@ -575,8 +575,8 @@ func TestBuildHandler_GetBuildSteps_HappyPathOrdered(t *testing.T) {
 		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now},
 		steps: map[string][]domain.BuildStep{
 			"build-1": {
-				{ID: "step-2", BuildID: "build-1", StepIndex: 1, Name: "test", Status: domain.BuildStepStatusPending},
-				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "checkout", Status: domain.BuildStepStatusSuccess, WorkerID: &workerID, StartedAt: &now, FinishedAt: &now, ExitCode: &exitCode, Stdout: &stdout, Stderr: &stderr},
+				{ID: "step-2", BuildID: "build-1", StepIndex: 1, Name: "test", Command: "go", Args: []string{"test", "./..."}, Status: domain.BuildStepStatusPending},
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "checkout", Command: "sh", Args: []string{"-c", "echo hello"}, Status: domain.BuildStepStatusSuccess, WorkerID: &workerID, StartedAt: &now, FinishedAt: &now, ExitCode: &exitCode, Stdout: &stdout, Stderr: &stderr},
 			},
 		},
 	}
@@ -610,10 +610,16 @@ func TestBuildHandler_GetBuildSteps_HappyPathOrdered(t *testing.T) {
 	if first["step_index"] != float64(0) || second["step_index"] != float64(1) {
 		t.Fatalf("expected steps ordered by step_index asc, got first=%v second=%v", first["step_index"], second["step_index"])
 	}
-	for _, field := range []string{"id", "build_id", "step_index", "name", "status", "worker_id", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"} {
+	for _, field := range []string{"id", "build_id", "step_index", "name", "command", "status", "worker_id", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"} {
 		if _, ok := first[field]; !ok {
 			t.Fatalf("expected step field %q, got %v", field, first)
 		}
+	}
+	if first["command"] != "echo hello" {
+		t.Fatalf("expected command %q, got %v", "echo hello", first["command"])
+	}
+	if second["command"] != "go test ./..." {
+		t.Fatalf("expected command %q, got %v", "go test ./...", second["command"])
 	}
 	if first["stdout"] != stdout {
 		t.Fatalf("expected stdout %q, got %v", stdout, first["stdout"])

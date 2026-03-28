@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -342,6 +343,7 @@ func toBuildStepResponse(step domain.BuildStep) api.BuildStepResponse {
 		BuildID:      step.BuildID,
 		StepIndex:    step.StepIndex,
 		Name:         step.Name,
+		Command:      displayCommand(step),
 		Status:       string(step.Status),
 		WorkerID:     step.WorkerID,
 		ExitCode:     step.ExitCode,
@@ -361,6 +363,45 @@ func toBuildStepResponse(step domain.BuildStep) api.BuildStepResponse {
 	}
 
 	return resp
+}
+
+func displayCommand(step domain.BuildStep) string {
+	command := strings.TrimSpace(step.Command)
+	if command == "" {
+		return ""
+	}
+
+	if isShellCommand(command) && len(step.Args) >= 2 && strings.TrimSpace(step.Args[0]) == "-c" {
+		script := strings.TrimSpace(step.Args[1])
+		if script != "" {
+			return script
+		}
+	}
+
+	if len(step.Args) == 0 {
+		return command
+	}
+
+	parts := make([]string, 0, len(step.Args)+1)
+	parts = append(parts, command)
+	for _, arg := range step.Args {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed == "" {
+			continue
+		}
+		parts = append(parts, trimmed)
+	}
+
+	return strings.Join(parts, " ")
+}
+
+func isShellCommand(command string) bool {
+	switch command {
+	case "sh", "bash", "zsh", "/bin/sh", "/bin/bash", "/bin/zsh":
+		return true
+	default:
+		return false
+	}
 }
 
 func formatOptionalTime(value *time.Time) *string {

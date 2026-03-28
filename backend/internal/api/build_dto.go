@@ -75,6 +75,7 @@ type BuildStepResponse struct {
 	BuildID      string  `json:"build_id"`
 	StepIndex    int     `json:"step_index"`
 	Name         string  `json:"name"`
+	Command      string  `json:"command"`
 	Status       string  `json:"status"`
 	WorkerID     *string `json:"worker_id"`
 	StartedAt    *string `json:"started_at"`

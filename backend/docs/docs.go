@@ -572,6 +572,9 @@ const docTemplate = `{
                 "build_id": {
                     "type": "string"
                 },
+                "command": {
+                    "type": "string"
+                },
                 "error_message": {
                     "type": "string"
                 },
