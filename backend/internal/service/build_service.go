@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -251,6 +252,9 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		hasChunkAppender = true
 	}
 
+	var chunkPersistErr error
+	var chunkPersistMu sync.Mutex
+
 	persistChunk := func(chunk runner.StepOutputChunk) error {
 		if !hasChunkAppender {
 			return nil
@@ -275,7 +279,7 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 			stream = logs.StepLogStreamSystem
 		}
 
-		_, err := appender.AppendStepLogChunk(ctx, logs.StepLogChunk{
+		_, appendErr := appender.AppendStepLogChunk(ctx, logs.StepLogChunk{
 			BuildID:   request.BuildID,
 			StepID:    request.StepID,
 			StepIndex: request.StepIndex,
@@ -284,7 +288,14 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 			ChunkText: text,
 			CreatedAt: chunk.EmittedAt,
 		})
-		return err
+		if appendErr != nil {
+			chunkPersistMu.Lock()
+			if chunkPersistErr == nil {
+				chunkPersistErr = appendErr
+			}
+			chunkPersistMu.Unlock()
+		}
+		return nil
 	}
 
 	var result runner.RunStepResult
@@ -297,21 +308,14 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		result, err = s.runner.RunStep(ctx, request)
 	}
 
-	var chunkPersistErr error
 	if hasChunkAppender && !usedStreamingRunner {
+		// persistChunk never returns an error; failures are captured in chunkPersistErr
+		// via the closure and surfaced as a SideEffectErr after step completion.
 		for _, line := range splitLogLines(result.Stdout) {
-			if persistErr := persistChunk(runner.StepOutputChunk{Stream: runner.StepOutputStreamStdout, ChunkText: line, EmittedAt: time.Now().UTC()}); persistErr != nil {
-				chunkPersistErr = persistErr
-				break
-			}
+			persistChunk(runner.StepOutputChunk{Stream: runner.StepOutputStreamStdout, ChunkText: line, EmittedAt: time.Now().UTC()})
 		}
-		if chunkPersistErr == nil {
-			for _, line := range splitLogLines(result.Stderr) {
-				if persistErr := persistChunk(runner.StepOutputChunk{Stream: runner.StepOutputStreamStderr, ChunkText: line, EmittedAt: time.Now().UTC()}); persistErr != nil {
-					chunkPersistErr = persistErr
-					break
-				}
-			}
+		for _, line := range splitLogLines(result.Stderr) {
+			persistChunk(runner.StepOutputChunk{Stream: runner.StepOutputStreamStderr, ChunkText: line, EmittedAt: time.Now().UTC()})
 		}
 	}
 	if err != nil {
@@ -327,9 +331,11 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		if completionErr != nil {
 			return result, completionReport, errors.Join(err, completionErr)
 		}
+		chunkPersistMu.Lock()
 		if completionReport.SideEffectErr == nil && chunkPersistErr != nil {
 			completionReport.SideEffectErr = chunkPersistErr
 		}
+		chunkPersistMu.Unlock()
 		return result, completionReport, err
 	}
 
@@ -337,9 +343,11 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	if completionErr != nil {
 		return result, completionReport, completionErr
 	}
+	chunkPersistMu.Lock()
 	if completionReport.SideEffectErr == nil && chunkPersistErr != nil {
 		completionReport.SideEffectErr = chunkPersistErr
 	}
+	chunkPersistMu.Unlock()
 
 	return result, completionReport, nil
 }

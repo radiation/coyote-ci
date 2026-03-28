@@ -50,8 +50,34 @@ func (h *BuildHandler) GetBuildStepLogs(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	after := parseQueryInt64(r, "after", 0)
-	limit := parseQueryInt(r, "limit", 200)
+	var after int64
+	afterStr := r.URL.Query().Get("after")
+	if afterStr != "" {
+		parsedAfter, err := strconv.ParseInt(afterStr, 10, 64)
+		if err != nil {
+			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid 'after' query parameter")
+			return
+		}
+		if parsedAfter < 0 {
+			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid 'after' query parameter")
+			return
+		}
+		after = parsedAfter
+	}
+
+	limit := 200
+	limitStr := r.URL.Query().Get("limit")
+	if limitStr != "" {
+		parsedLimit, err := strconv.Atoi(limitStr)
+		if err != nil {
+			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid 'limit' query parameter")
+			return
+		}
+		if parsedLimit < 1 {
+			parsedLimit = 1
+		}
+		limit = parsedLimit
+	}
 
 	chunks, err := h.buildService.GetStepLogChunks(r.Context(), buildID, stepIndex, after, limit)
 	if err != nil {

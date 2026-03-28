@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS build_step_logs (
     step_id UUID NOT NULL REFERENCES build_steps(id) ON DELETE CASCADE,
     step_index INTEGER NOT NULL,
     step_name TEXT NOT NULL,
-    sequence_no BIGINT NOT NULL,
+    sequence_no BIGINT GENERATED ALWAYS AS IDENTITY,
     stream TEXT NOT NULL,
     chunk_text TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

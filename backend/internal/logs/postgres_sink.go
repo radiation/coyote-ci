@@ -49,14 +49,10 @@ func (s *PostgresSink) AppendStepLogChunk(ctx context.Context, chunk StepLogChun
 			SELECT id, name
 			FROM build_steps
 			WHERE build_id = $1 AND step_index = $2
-		), next_seq AS (
-			SELECT COALESCE(MAX(sequence_no), 0) + 1 AS sequence_no
-			FROM build_step_logs
-			WHERE build_id = $1 AND step_index = $2
 		)
-		INSERT INTO build_step_logs (build_id, step_id, step_index, step_name, sequence_no, stream, chunk_text, created_at)
-		SELECT $1, target_step.id, $2, COALESCE($3, target_step.name), next_seq.sequence_no, $4, $5, $6
-		FROM target_step, next_seq
+		INSERT INTO build_step_logs (build_id, step_id, step_index, step_name, stream, chunk_text, created_at)
+		SELECT $1, target_step.id, $2, COALESCE($3, target_step.name), $4, $5, $6
+		FROM target_step
 		RETURNING sequence_no, build_id, step_id, step_index, step_name, stream, chunk_text, created_at
 	`
 
@@ -109,7 +105,7 @@ func (s *PostgresSink) ListStepLogChunks(ctx context.Context, buildID string, st
 		WHERE build_id = $1
 		  AND step_index = $2
 		  AND sequence_no > $3
-		ORDER BY sequence_no ASC
+		ORDER BY created_at ASC, id ASC
 		LIMIT $4
 	`
 
@@ -153,7 +149,7 @@ func (s *PostgresSink) GetBuildLogs(ctx context.Context, buildID string) (out []
 		SELECT step_name, created_at, chunk_text
 		FROM build_step_logs
 		WHERE build_id = $1
-		ORDER BY sequence_no ASC
+		ORDER BY created_at ASC, id ASC
 	`
 
 	rows, err := s.db.QueryContext(ctx, query, buildID)

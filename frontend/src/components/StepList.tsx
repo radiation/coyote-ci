@@ -60,17 +60,17 @@ export function StepList({ buildID, steps }: { buildID: string; steps: BuildStep
 
       eventSource.addEventListener('chunk', (evt: MessageEvent) => {
         const parsed = JSON.parse(evt.data) as StepLogChunk;
+        if (parsed.sequence_no <= latestSequence) {
+          return;
+        }
+        latestSequence = Math.max(latestSequence, parsed.sequence_no);
         setLogChunks((prev) => {
           const existing = prev[openStepIndex] ?? [];
-          if (existing.some((chunk) => chunk.sequence_no === parsed.sequence_no)) {
-            return prev;
-          }
           return {
             ...prev,
             [openStepIndex]: [...existing, parsed],
           };
         });
-        latestSequence = Math.max(latestSequence, parsed.sequence_no);
       });
 
       eventSource.onerror = () => {
