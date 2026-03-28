@@ -68,6 +68,25 @@ export interface BuildStepsResponse {
   steps: BuildStep[];
 }
 
+export interface StepLogChunk {
+  sequence_no: number;
+  build_id: string;
+  step_id: string;
+  step_index: number;
+  step_name: string;
+  stream: 'stdout' | 'stderr' | 'system';
+  chunk_text: string;
+  created_at: string;
+}
+
+export interface StepLogsResponse {
+  build_id: string;
+  step_index: number;
+  after: number;
+  next_sequence: number;
+  chunks: StepLogChunk[];
+}
+
 /** Generic envelope the backend wraps all responses in. */
 export interface DataEnvelope<T> {
   data: T;

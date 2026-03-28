@@ -11,6 +11,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	steprunner "github.com/radiation/coyote-ci/backend/internal/runner"
+	inprocessrunner "github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
 )
 
 type fakeBuildRepository struct {
@@ -1063,6 +1064,78 @@ func TestBuildService_RunStep_ReportsSideEffectFailureSeparately(t *testing.T) {
 	}
 	if !errors.Is(report.SideEffectErr, logErr) {
 		t.Fatalf("expected side effect error %v, got %v", logErr, report.SideEffectErr)
+	}
+}
+
+func TestBuildService_RunStep_PersistsChunkLogsWithoutStepID(t *testing.T) {
+	tests := []struct {
+		name         string
+		args         []string
+		expectedText string
+		expectedType logs.StepLogStream
+	}{
+		{
+			name:         "echo stdout",
+			args:         []string{"-c", "echo hello"},
+			expectedText: "hello",
+			expectedType: logs.StepLogStreamStdout,
+		},
+		{
+			name:         "printf without newline",
+			args:         []string{"-c", "printf hello"},
+			expectedText: "hello",
+			expectedType: logs.StepLogStreamStdout,
+		},
+		{
+			name:         "stderr output",
+			args:         []string{"-c", "echo hello 1>&2"},
+			expectedText: "hello",
+			expectedType: logs.StepLogStreamStderr,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			claimToken := "claim-active"
+			repo := &fakeBuildRepository{
+				build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0, CreatedAt: time.Now().UTC()},
+				steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+			}
+			logStore := logs.NewMemorySink()
+			svc := NewBuildService(repo, inprocessrunner.New(), logStore)
+
+			_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{
+				BuildID:    "build-1",
+				StepIndex:  0,
+				StepName:   "step-1",
+				ClaimToken: claimToken,
+				Command:    "sh",
+				Args:       tc.args,
+			})
+			if err != nil {
+				t.Fatalf("run step failed: %v", err)
+			}
+			if report.CompletionOutcome != repository.StepCompletionCompleted {
+				t.Fatalf("expected completion outcome completed, got %q", report.CompletionOutcome)
+			}
+
+			chunks, err := svc.GetStepLogChunks(context.Background(), "build-1", 0, 0, 100)
+			if err != nil {
+				t.Fatalf("get step log chunks failed: %v", err)
+			}
+			if len(chunks) == 0 {
+				t.Fatal("expected persisted step log chunks")
+			}
+			if chunks[0].ChunkText != tc.expectedText {
+				t.Fatalf("expected chunk text %q, got %q", tc.expectedText, chunks[0].ChunkText)
+			}
+			if chunks[0].Stream != tc.expectedType {
+				t.Fatalf("expected chunk stream %q, got %q", tc.expectedType, chunks[0].Stream)
+			}
+		})
 	}
 }
 

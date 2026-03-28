@@ -1,20 +1,23 @@
 package inprocess
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 )
 
 var _ runner.Runner = (*Runner)(nil)
+var _ runner.StreamingRunner = (*Runner)(nil)
 
 type Runner struct{}
 
@@ -23,6 +26,10 @@ func New() *Runner {
 }
 
 func (r *Runner) RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, error) {
+	return r.RunStepStream(ctx, request, nil)
+}
+
+func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepRequest, onOutput runner.StepOutputCallback) (runner.RunStepResult, error) {
 	if request.Command == "" {
 		return runner.RunStepResult{}, errors.New("command is required")
 	}
@@ -41,21 +48,72 @@ func (r *Runner) RunStep(ctx context.Context, request runner.RunStepRequest) (ru
 	}
 	cmd.Env = mergeEnvironment(request.Env)
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return runner.RunStepResult{}, err
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return runner.RunStepResult{}, err
+	}
 
 	startedAt := time.Now().UTC()
-	err := cmd.Run()
+	err = cmd.Start()
+	if err != nil {
+		return runner.RunStepResult{}, err
+	}
+
+	var stdoutBuilder strings.Builder
+	var stderrBuilder strings.Builder
+	var wg sync.WaitGroup
+	var streamMu sync.Mutex
+	var streamErr error
+
+	consume := func(pipe io.ReadCloser, stream runner.StepOutputStream, target *strings.Builder) {
+		defer wg.Done()
+		scanner := bufio.NewScanner(pipe)
+		buffer := make([]byte, 0, 64*1024)
+		scanner.Buffer(buffer, 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			target.WriteString(line)
+			target.WriteString("\n")
+			if onOutput != nil {
+				if emitErr := onOutput(runner.StepOutputChunk{Stream: stream, ChunkText: line, EmittedAt: time.Now().UTC()}); emitErr != nil {
+					streamMu.Lock()
+					if streamErr == nil {
+						streamErr = emitErr
+					}
+					streamMu.Unlock()
+				}
+			}
+		}
+	}
+
+	wg.Add(2)
+	go consume(stdoutPipe, runner.StepOutputStreamStdout, &stdoutBuilder)
+	go consume(stderrPipe, runner.StepOutputStreamStderr, &stderrBuilder)
+
+	err = cmd.Wait()
+	wg.Wait()
 	finishedAt := time.Now().UTC()
+
+	streamMu.Lock()
+	emitErr := streamErr
+	streamMu.Unlock()
+	if emitErr != nil {
+		return runner.RunStepResult{}, emitErr
+	}
+
+	stdoutStr := stdoutBuilder.String()
+	stderrStr := stderrBuilder.String()
 
 	if err == nil {
 		return runner.RunStepResult{
 			Status:     runner.RunStepStatusSuccess,
 			ExitCode:   0,
-			Stdout:     stdout.String(),
-			Stderr:     stderr.String(),
+			Stdout:     stdoutStr,
+			Stderr:     stderrStr,
 			StartedAt:  startedAt,
 			FinishedAt: finishedAt,
 		}, nil
@@ -63,16 +121,20 @@ func (r *Runner) RunStep(ctx context.Context, request runner.RunStepRequest) (ru
 
 	if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
 		reason := timeoutFailureReason(timeout)
-		stderrStr := stderr.String()
 		if strings.TrimSpace(stderrStr) == "" {
 			stderrStr = reason
 		} else {
 			stderrStr = strings.TrimRight(stderrStr, "\n") + "\n" + reason
 		}
+		if onOutput != nil {
+			if callbackErr := onOutput(runner.StepOutputChunk{Stream: runner.StepOutputStreamSystem, ChunkText: reason, EmittedAt: time.Now().UTC()}); callbackErr != nil {
+				return runner.RunStepResult{}, callbackErr
+			}
+		}
 		return runner.RunStepResult{
 			Status:     runner.RunStepStatusFailed,
 			ExitCode:   -1,
-			Stdout:     stdout.String(),
+			Stdout:     stdoutStr,
 			Stderr:     stderrStr,
 			StartedAt:  startedAt,
 			FinishedAt: finishedAt,
@@ -84,8 +146,8 @@ func (r *Runner) RunStep(ctx context.Context, request runner.RunStepRequest) (ru
 		return runner.RunStepResult{
 			Status:     runner.RunStepStatusFailed,
 			ExitCode:   exitErr.ExitCode(),
-			Stdout:     stdout.String(),
-			Stderr:     stderr.String(),
+			Stdout:     stdoutStr,
+			Stderr:     stderrStr,
 			StartedAt:  startedAt,
 			FinishedAt: finishedAt,
 		}, nil

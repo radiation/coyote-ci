@@ -150,6 +150,19 @@ func (s *BuildService) GetBuildLogs(ctx context.Context, id string) ([]logs.Buil
 	return reader.GetBuildLogs(ctx, id)
 }
 
+func (s *BuildService) GetStepLogChunks(ctx context.Context, buildID string, stepIndex int, afterSequence int64, limit int) ([]logs.StepLogChunk, error) {
+	if _, err := s.buildRepo.GetByID(ctx, buildID); err != nil {
+		return nil, mapRepoErr(err)
+	}
+
+	reader, ok := s.logSink.(logs.StepLogChunkReader)
+	if !ok {
+		return []logs.StepLogChunk{}, nil
+	}
+
+	return reader.ListStepLogChunks(ctx, buildID, stepIndex, afterSequence, limit)
+}
+
 func (s *BuildService) ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error) {
 	step, claimed, err := s.buildRepo.ClaimStepIfPending(ctx, buildID, stepIndex, workerID, startedAt)
 	return step, claimed, mapRepoErr(err)
@@ -233,7 +246,74 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		return runner.RunStepResult{}, StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, ErrRunnerNotConfigured
 	}
 
-	result, err := s.runner.RunStep(ctx, request)
+	hasChunkAppender := false
+	if _, ok := s.logSink.(logs.StepLogChunkAppender); ok {
+		hasChunkAppender = true
+	}
+
+	persistChunk := func(chunk runner.StepOutputChunk) error {
+		if !hasChunkAppender {
+			return nil
+		}
+		appender, ok := s.logSink.(logs.StepLogChunkAppender)
+		if !ok {
+			return nil
+		}
+
+		text := strings.TrimRight(chunk.ChunkText, "\n")
+		if strings.TrimSpace(text) == "" {
+			return nil
+		}
+
+		stream := logs.StepLogStreamSystem
+		switch chunk.Stream {
+		case runner.StepOutputStreamStdout:
+			stream = logs.StepLogStreamStdout
+		case runner.StepOutputStreamStderr:
+			stream = logs.StepLogStreamStderr
+		case runner.StepOutputStreamSystem:
+			stream = logs.StepLogStreamSystem
+		}
+
+		_, err := appender.AppendStepLogChunk(ctx, logs.StepLogChunk{
+			BuildID:   request.BuildID,
+			StepID:    request.StepID,
+			StepIndex: request.StepIndex,
+			StepName:  request.StepName,
+			Stream:    stream,
+			ChunkText: text,
+			CreatedAt: chunk.EmittedAt,
+		})
+		return err
+	}
+
+	var result runner.RunStepResult
+	var err error
+	usedStreamingRunner := false
+	if streamingRunner, ok := s.runner.(runner.StreamingRunner); ok {
+		usedStreamingRunner = true
+		result, err = streamingRunner.RunStepStream(ctx, request, persistChunk)
+	} else {
+		result, err = s.runner.RunStep(ctx, request)
+	}
+
+	var chunkPersistErr error
+	if hasChunkAppender && !usedStreamingRunner {
+		for _, line := range splitLogLines(result.Stdout) {
+			if persistErr := persistChunk(runner.StepOutputChunk{Stream: runner.StepOutputStreamStdout, ChunkText: line, EmittedAt: time.Now().UTC()}); persistErr != nil {
+				chunkPersistErr = persistErr
+				break
+			}
+		}
+		if chunkPersistErr == nil {
+			for _, line := range splitLogLines(result.Stderr) {
+				if persistErr := persistChunk(runner.StepOutputChunk{Stream: runner.StepOutputStreamStderr, ChunkText: line, EmittedAt: time.Now().UTC()}); persistErr != nil {
+					chunkPersistErr = persistErr
+					break
+				}
+			}
+		}
+	}
 	if err != nil {
 		now := time.Now().UTC()
 		result = runner.RunStepResult{
@@ -243,22 +323,32 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 			StartedAt:  now,
 			FinishedAt: now,
 		}
-		completionReport, completionErr := s.HandleStepResult(ctx, request, result)
+		completionReport, completionErr := s.handleStepResult(ctx, request, result, hasChunkAppender)
 		if completionErr != nil {
 			return result, completionReport, errors.Join(err, completionErr)
+		}
+		if completionReport.SideEffectErr == nil && chunkPersistErr != nil {
+			completionReport.SideEffectErr = chunkPersistErr
 		}
 		return result, completionReport, err
 	}
 
-	completionReport, completionErr := s.HandleStepResult(ctx, request, result)
+	completionReport, completionErr := s.handleStepResult(ctx, request, result, hasChunkAppender)
 	if completionErr != nil {
 		return result, completionReport, completionErr
+	}
+	if completionReport.SideEffectErr == nil && chunkPersistErr != nil {
+		completionReport.SideEffectErr = chunkPersistErr
 	}
 
 	return result, completionReport, nil
 }
 
 func (s *BuildService) HandleStepResult(ctx context.Context, request runner.RunStepRequest, result runner.RunStepResult) (StepCompletionReport, error) {
+	return s.handleStepResult(ctx, request, result, false)
+}
+
+func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunStepRequest, result runner.RunStepResult, skipLegacyLogWrite bool) (StepCompletionReport, error) {
 	stepStatus := domain.BuildStepStatusSuccess
 	if result.Status == runner.RunStepStatusFailed {
 		stepStatus = domain.BuildStepStatusFailed
@@ -316,6 +406,9 @@ func (s *BuildService) HandleStepResult(ctx context.Context, request runner.RunS
 	}
 
 	report := StepCompletionReport{Step: completionResult.Step, CompletionOutcome: repository.StepCompletionCompleted}
+	if skipLegacyLogWrite {
+		return report, nil
+	}
 	if err := writeOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stdout); err != nil {
 		report.SideEffectErr = err
 		return report, nil

@@ -25,6 +25,8 @@ func NewRouter(buildHandler *handler.BuildHandler) nethttp.Handler {
 		r.Get("/", buildHandler.ListBuilds)
 		r.Get("/{buildID}", buildHandler.GetBuild)
 		r.Get("/{buildID}/steps", buildHandler.GetBuildSteps)
+		r.Get("/{buildID}/steps/{stepIndex}/logs", buildHandler.GetBuildStepLogs)
+		r.Get("/{buildID}/steps/{stepIndex}/logs/stream", buildHandler.StreamBuildStepLogs)
 		r.Get("/{buildID}/logs", buildHandler.GetBuildLogs)
 		r.Post("/{buildID}/queue", buildHandler.QueueBuild)
 		r.Post("/{buildID}/start", buildHandler.StartBuild)

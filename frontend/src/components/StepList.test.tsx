@@ -24,7 +24,7 @@ function makeStep(overrides: Partial<BuildStep> = {}): BuildStep {
 
 describe('StepList', () => {
   it('renders full command when short', () => {
-    render(<StepList steps={[makeStep({ command: 'echo hello' })]} />);
+    render(<StepList buildID="build-1" steps={[makeStep({ command: 'echo hello' })]} />);
 
     const command = screen.getByTitle('echo hello');
     expect(command.textContent).toBe('echo hello');
@@ -32,7 +32,7 @@ describe('StepList', () => {
 
   it('truncates long command and preserves full command in title', () => {
     const longCommand = 'echo one && echo two && echo three && echo four && echo five && echo six && echo seven && echo eight';
-    render(<StepList steps={[makeStep({ command: longCommand })]} />);
+    render(<StepList buildID="build-1" steps={[makeStep({ command: longCommand })]} />);
 
     const command = screen.getByTitle(longCommand);
     expect(command.textContent?.endsWith('...')).toBe(true);

@@ -445,6 +445,132 @@
                 }
             }
         },
+        "/builds/{buildID}/steps/{stepIndex}/logs": {
+            "get": {
+                "description": "Returns persisted log chunks for a build step.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "builds"
+                ],
+                "summary": "Get build step logs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Build ID",
+                        "name": "buildID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Step index",
+                        "name": "stepIndex",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Replay cursor (exclusive sequence number)",
+                        "name": "after",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Maximum chunks to return",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.StepLogsEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/builds/{buildID}/steps/{stepIndex}/logs/stream": {
+            "get": {
+                "description": "Streams build step log chunks over SSE with cursor resume support.",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "builds"
+                ],
+                "summary": "Stream build step logs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Build ID",
+                        "name": "buildID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Step index",
+                        "name": "stepIndex",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Replay cursor (exclusive sequence number)",
+                        "name": "after",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/health": {
             "get": {
                 "description": "Returns a simple liveness response.",
@@ -715,6 +841,66 @@
                 },
                 "name": {
                     "type": "string"
+                }
+            }
+        },
+        "api.StepLogChunkResponse": {
+            "type": "object",
+            "properties": {
+                "build_id": {
+                    "type": "string"
+                },
+                "chunk_text": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "sequence_no": {
+                    "type": "integer"
+                },
+                "step_id": {
+                    "type": "string"
+                },
+                "step_index": {
+                    "type": "integer"
+                },
+                "step_name": {
+                    "type": "string"
+                },
+                "stream": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.StepLogsEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.StepLogsResponse"
+                }
+            }
+        },
+        "api.StepLogsResponse": {
+            "type": "object",
+            "properties": {
+                "after": {
+                    "type": "integer"
+                },
+                "build_id": {
+                    "type": "string"
+                },
+                "chunks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.StepLogChunkResponse"
+                    }
+                },
+                "next_sequence": {
+                    "type": "integer"
+                },
+                "step_index": {
+                    "type": "integer"
                 }
             }
         }
