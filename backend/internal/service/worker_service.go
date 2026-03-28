@@ -439,6 +439,12 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 		report.SideEffectError = &sideEffectMessage
 	}
 
+	if err != nil {
+		log.Printf("execution completed: build_id=%s step=%s status=%s exit_code=%d", step.BuildID, step.StepName, runner.RunStepStatusFailed, result.ExitCode)
+		report.Step.Status = domain.BuildStepStatusFailed
+		return report, err
+	}
+
 	if completionOutcome == repository.StepCompletionStaleClaim {
 		staleCount := atomic.AddInt64(&w.staleComplete, 1)
 		log.Printf("stale completion ignored: build_id=%s step=%s stale_completion_count=%d", step.BuildID, step.StepName, staleCount)
@@ -451,12 +457,6 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 	if completionOutcome == repository.StepCompletionInvalidTransition {
 		log.Printf("invalid transition completion ignored: build_id=%s step=%s", step.BuildID, step.StepName)
 		return report, nil
-	}
-
-	if err != nil {
-		log.Printf("execution completed: build_id=%s step=%s status=%s exit_code=%d", step.BuildID, step.StepName, runner.RunStepStatusFailed, result.ExitCode)
-		report.Step.Status = domain.BuildStepStatusFailed
-		return report, err
 	}
 
 	log.Printf("execution completed: build_id=%s step=%s status=%s exit_code=%d", step.BuildID, step.StepName, result.Status, result.ExitCode)

@@ -304,6 +304,22 @@ func TestWorkerService_ExecuteRunnableStep_RunStepError(t *testing.T) {
 	}
 }
 
+func TestWorkerService_ExecuteRunnableStep_InvalidTransitionOutcomeWithErrorIsNotIgnored(t *testing.T) {
+	boundary := &fakeBuildExecutionBoundary{
+		runStepErr: errors.New("persistence unavailable"),
+		runOutcome: repository.StepCompletionInvalidTransition,
+	}
+	worker := NewWorkerService(boundary)
+
+	report, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{BuildID: "build-op", StepIndex: 0, StepName: "test", Command: "echo"})
+	if err == nil || err.Error() != "persistence unavailable" {
+		t.Fatalf("expected persistence unavailable error, got %v", err)
+	}
+	if report.Step.Status != domain.BuildStepStatusFailed {
+		t.Fatalf("expected step status failed, got %q", report.Step.Status)
+	}
+}
+
 func TestWorkerService_ExecuteRunnableStep_SideEffectFailureIsReported(t *testing.T) {
 	boundary := &fakeBuildExecutionBoundary{
 		runStepResp: runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()},
