@@ -38,6 +38,17 @@ Use this mental model:
 - **handlers/routes** are thin and handle HTTP request/response concerns only
 - **composition root** wires dependencies together explicitly
 
+## Lifecycle and state machine guidance
+
+For persisted workflow transitions:
+
+- keep lifecycle/state-machine decision logic in shared pure helper functions
+- do not duplicate transition rules across worker, service, repository, and handler layers
+- repositories may apply lifecycle outcomes atomically inside a transaction when persisted state must be checked and mutated together
+- services should orchestrate use cases and map outcomes, but should not re-implement repository-backed transition rules
+- workers should execute work and report results, not decide build advancement or terminal build state
+- when a step result affects both step state and build state, prefer one repository method that applies both atomically
+
 ### Domain
 Domain types should represent core concepts like:
 - Build
@@ -261,6 +272,12 @@ When possible, test:
 - services independently from HTTP
 - repositories with integration tests
 - handlers as thin translation layers
+
+For lifecycle/state-machine code specifically:
+- prefer table-driven tests for pure decision helpers first
+- then verify memory and Postgres repository parity against the same behavior
+- treat repository tests as the source of truth for persisted transition semantics
+- avoid timing-based tests when deterministic state assertions are possible
 
 ## Security guidance
 

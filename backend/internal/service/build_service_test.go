@@ -265,24 +265,61 @@ func (r *fakeBuildRepository) CompleteStepIfRunning(_ context.Context, _ string,
 }
 
 func (r *fakeBuildRepository) CompleteStepAndAdvanceBuild(_ context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
-	step, completed, err := r.CompleteStepIfRunning(context.Background(), buildID, stepIndex, update)
+	result, err := r.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   buildID,
+		StepIndex: stepIndex,
+		Update:    update,
+	})
 	if err != nil {
 		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
 	}
+
+	return result.Step, result.Outcome, nil
+}
+
+func (r *fakeBuildRepository) CompleteStep(_ context.Context, request repository.CompleteStepRequest) (repository.CompleteStepResult, error) {
+	buildID := request.BuildID
+	stepIndex := request.StepIndex
+	update := request.Update
+
+	if request.RequireClaim {
+		for i := range r.steps {
+			if r.steps[i].StepIndex != stepIndex {
+				continue
+			}
+
+			if r.steps[i].Status == domain.BuildStepStatusSuccess || r.steps[i].Status == domain.BuildStepStatusFailed {
+				return repository.CompleteStepResult{Step: r.steps[i], Outcome: repository.StepCompletionDuplicateTerminal}, nil
+			}
+			if r.steps[i].Status != domain.BuildStepStatusRunning {
+				return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, nil
+			}
+			if r.steps[i].ClaimToken == nil || *r.steps[i].ClaimToken != request.ClaimToken {
+				return repository.CompleteStepResult{Step: r.steps[i], Outcome: repository.StepCompletionStaleClaim}, nil
+			}
+
+			break
+		}
+	}
+
+	step, completed, err := r.CompleteStepIfRunning(context.Background(), buildID, stepIndex, update)
+	if err != nil {
+		return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, err
+	}
 	if !completed {
 		if step.Status == domain.BuildStepStatusSuccess || step.Status == domain.BuildStepStatusFailed {
-			return step, repository.StepCompletionDuplicateTerminal, nil
+			return repository.CompleteStepResult{Step: step, Outcome: repository.StepCompletionDuplicateTerminal}, nil
 		}
 		if step.ID == "" && step.Name == "" {
-			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, repository.ErrBuildNotFound
+			return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, repository.ErrBuildNotFound
 		}
-		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+		return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, nil
 	}
 
 	if update.Status == domain.BuildStepStatusFailed {
 		r.build.Status = domain.BuildStatusFailed
 		r.build.ErrorMessage = step.ErrorMessage
-		return step, repository.StepCompletionCompleted, nil
+		return repository.CompleteStepResult{Step: step, Outcome: repository.StepCompletionCompleted}, nil
 	}
 
 	nextIndex := stepIndex + 1
@@ -303,33 +340,22 @@ func (r *fakeBuildRepository) CompleteStepAndAdvanceBuild(_ context.Context, bui
 		r.build.ErrorMessage = nil
 	}
 
-	return step, repository.StepCompletionCompleted, nil
+	return repository.CompleteStepResult{Step: step, Outcome: repository.StepCompletionCompleted}, nil
 }
 
 func (r *fakeBuildRepository) CompleteClaimedStepAndAdvanceBuild(_ context.Context, buildID string, stepIndex int, claimToken string, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
-	for i := range r.steps {
-		if r.steps[i].StepIndex != stepIndex {
-			continue
-		}
-
-		if r.steps[i].Status == domain.BuildStepStatusSuccess || r.steps[i].Status == domain.BuildStepStatusFailed {
-			return r.steps[i], repository.StepCompletionDuplicateTerminal, nil
-		}
-		if r.steps[i].Status != domain.BuildStepStatusRunning {
-			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
-		}
-		if r.steps[i].ClaimToken == nil || *r.steps[i].ClaimToken != claimToken {
-			return r.steps[i], repository.StepCompletionStaleClaim, nil
-		}
-
-		break
-	}
-
-	step, outcome, err := r.CompleteStepAndAdvanceBuild(context.Background(), buildID, stepIndex, update)
+	result, err := r.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:      buildID,
+		StepIndex:    stepIndex,
+		ClaimToken:   claimToken,
+		RequireClaim: true,
+		Update:       update,
+	})
 	if err != nil {
 		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
 	}
-	if outcome == repository.StepCompletionCompleted {
+	step := result.Step
+	if result.Outcome == repository.StepCompletionCompleted {
 		for i := range r.steps {
 			if r.steps[i].StepIndex == stepIndex {
 				r.steps[i].ClaimToken = nil
@@ -341,7 +367,7 @@ func (r *fakeBuildRepository) CompleteClaimedStepAndAdvanceBuild(_ context.Conte
 		}
 	}
 
-	return step, outcome, nil
+	return step, result.Outcome, nil
 }
 
 func (r *fakeBuildRepository) UpdateCurrentStepIndex(_ context.Context, _ string, currentStepIndex int) (domain.Build, error) {
@@ -886,9 +912,12 @@ func TestBuildService_RunStep_DelegatesToRunner(t *testing.T) {
 	svc := NewBuildService(repo, runner, logSink)
 
 	request := steprunner.RunStepRequest{BuildID: "build-1", StepName: "test", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}}
-	result, err := svc.RunStep(context.Background(), request)
+	result, outcome, err := svc.RunStep(context.Background(), request)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	}
+	if outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion outcome completed, got %q", outcome)
 	}
 
 	if !runner.called {
@@ -920,9 +949,12 @@ func TestBuildService_RunStep_RunnerError(t *testing.T) {
 	repo := &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0}, steps: []domain.BuildStep{{StepIndex: 0, Name: "echo", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}}}
 	svc := NewBuildService(repo, runner, &fakeLogSink{})
 
-	_, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepName: "echo", ClaimToken: claimToken, Command: "echo"})
+	_, outcome, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepName: "echo", ClaimToken: claimToken, Command: "echo"})
 	if err == nil || err.Error() != "runner failed" {
 		t.Fatalf("expected runner error, got %v", err)
+	}
+	if outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion outcome completed, got %q", outcome)
 	}
 }
 
@@ -963,8 +995,10 @@ func TestBuildService_RunStep_PersistsLogsForSuccessAndFailedResults(t *testing.
 			logStore := logs.NewMemorySink()
 			svc := NewBuildService(repo, runner, logStore)
 
-			if _, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepName: "step-1", ClaimToken: claimToken, Command: "echo"}); err != nil {
+			if _, outcome, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepName: "step-1", ClaimToken: claimToken, Command: "echo"}); err != nil {
 				t.Fatalf("run step failed: %v", err)
+			} else if outcome != repository.StepCompletionCompleted {
+				t.Fatalf("expected completion outcome completed, got %q", outcome)
 			}
 
 			buildLogs, err := svc.GetBuildLogs(context.Background(), "build-1")
@@ -1004,11 +1038,11 @@ func TestBuildService_HandleStepResult_DuplicateCompletionIsNoOp(t *testing.T) {
 		FinishedAt: time.Now().UTC(),
 	}
 
-	_, completed, err := svc.HandleStepResult(context.Background(), request, result)
+	_, outcome, err := svc.HandleStepResult(context.Background(), request, result)
 	if err != nil {
 		t.Fatalf("first completion failed: %v", err)
 	}
-	if !completed {
+	if outcome != repository.StepCompletionCompleted {
 		t.Fatal("expected first completion to complete step")
 	}
 	if repo.build.CurrentStepIndex != 1 {
@@ -1023,11 +1057,11 @@ func TestBuildService_HandleStepResult_DuplicateCompletionIsNoOp(t *testing.T) {
 		t.Fatalf("expected one log after first completion, got %d", len(buildLogs))
 	}
 
-	_, completed, err = svc.HandleStepResult(context.Background(), request, result)
+	_, outcome, err = svc.HandleStepResult(context.Background(), request, result)
 	if err != nil {
 		t.Fatalf("duplicate completion should be no-op, got error %v", err)
 	}
-	if completed {
+	if outcome != repository.StepCompletionDuplicateTerminal {
 		t.Fatal("expected duplicate completion to be no-op")
 	}
 	if repo.build.CurrentStepIndex != 1 {
@@ -1054,11 +1088,11 @@ func TestBuildService_HandleStepResult_MultiStepSuccessDoesNotCompleteBuild(t *t
 	}
 	svc := NewBuildService(repo, nil, logs.NewMemorySink())
 
-	_, completed, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: claimToken}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	_, outcome, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: claimToken}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if !completed {
+	if outcome != repository.StepCompletionCompleted {
 		t.Fatal("expected completion to persist")
 	}
 	if repo.build.Status != domain.BuildStatusRunning {
@@ -1080,11 +1114,11 @@ func TestBuildService_HandleStepResult_FailureMarksBuildFailed(t *testing.T) {
 	}
 	svc := NewBuildService(repo, nil, logs.NewMemorySink())
 
-	_, completed, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: claimToken}, steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: 7, Stderr: "boom", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	_, outcome, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: claimToken}, steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: 7, Stderr: "boom", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if !completed {
+	if outcome != repository.StepCompletionCompleted {
 		t.Fatal("expected completion to persist")
 	}
 	if repo.build.Status != domain.BuildStatusFailed {
@@ -1106,11 +1140,11 @@ func TestBuildService_HandleStepResult_DuplicateFailureDoesNotDuplicateLogsOrFin
 	request := steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: claimToken}
 	result := steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: 9, Stderr: "boom\n", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()}
 
-	_, completed, err := svc.HandleStepResult(context.Background(), request, result)
+	_, outcome, err := svc.HandleStepResult(context.Background(), request, result)
 	if err != nil {
 		t.Fatalf("first failure completion failed: %v", err)
 	}
-	if !completed {
+	if outcome != repository.StepCompletionCompleted {
 		t.Fatal("expected first failure completion to persist")
 	}
 	if repo.build.Status != domain.BuildStatusFailed {
@@ -1125,11 +1159,11 @@ func TestBuildService_HandleStepResult_DuplicateFailureDoesNotDuplicateLogsOrFin
 		t.Fatalf("expected one log line after first failure, got %d", len(logsAfterFirst))
 	}
 
-	_, completed, err = svc.HandleStepResult(context.Background(), request, result)
+	_, outcome, err = svc.HandleStepResult(context.Background(), request, result)
 	if err != nil {
 		t.Fatalf("duplicate failure completion should be no-op, got %v", err)
 	}
-	if completed {
+	if outcome != repository.StepCompletionDuplicateTerminal {
 		t.Fatal("expected duplicate failure completion to be no-op")
 	}
 	if repo.build.Status != domain.BuildStatusFailed {
@@ -1152,11 +1186,11 @@ func TestBuildService_HandleStepResult_NonRunningStepReturnsInvalidStepTransitio
 	}
 	svc := NewBuildService(repo, nil, logs.NewMemorySink())
 
-	_, completed, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: "claim-any"}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
-	if !errors.Is(err, ErrInvalidBuildStepTransition) {
-		t.Fatalf("expected ErrInvalidBuildStepTransition, got %v", err)
+	_, outcome, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: "claim-any"}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
 	}
-	if completed {
+	if outcome != repository.StepCompletionInvalidTransition {
 		t.Fatal("expected non-running completion to not complete")
 	}
 }
@@ -1168,16 +1202,16 @@ func TestBuildService_HandleStepResult_MissingClaimTokenReturnsInvalidTransition
 	}
 	svc := NewBuildService(repo, nil, logs.NewMemorySink())
 
-	_, completed, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1"}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
-	if !errors.Is(err, ErrInvalidBuildStepTransition) {
-		t.Fatalf("expected ErrInvalidBuildStepTransition, got %v", err)
+	_, outcome, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1"}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
 	}
-	if completed {
+	if outcome != repository.StepCompletionInvalidTransition {
 		t.Fatal("expected completion without claim token to be rejected")
 	}
 }
 
-func TestBuildService_HandleStepResult_StaleClaimReturnsDomainError(t *testing.T) {
+func TestBuildService_HandleStepResult_StaleClaimReturnsStaleOutcome(t *testing.T) {
 	claimToken := "claim-active"
 	repo := &fakeBuildRepository{
 		build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
@@ -1185,11 +1219,11 @@ func TestBuildService_HandleStepResult_StaleClaimReturnsDomainError(t *testing.T
 	}
 	svc := NewBuildService(repo, nil, logs.NewMemorySink())
 
-	_, completed, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: "claim-stale"}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
-	if !errors.Is(err, ErrStaleStepClaim) {
-		t.Fatalf("expected ErrStaleStepClaim, got %v", err)
+	_, outcome, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: "claim-stale"}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
 	}
-	if completed {
+	if outcome != repository.StepCompletionStaleClaim {
 		t.Fatal("expected stale claim completion to be rejected")
 	}
 }
@@ -1202,11 +1236,11 @@ func TestBuildService_HandleStepResult_ClaimedCompletionFinalizesBuild(t *testin
 	}
 	svc := NewBuildService(repo, nil, logs.NewMemorySink())
 
-	step, completed, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: "claim-active"}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	step, outcome, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: "claim-active"}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if !completed {
+	if outcome != repository.StepCompletionCompleted {
 		t.Fatal("expected claimed completion to persist")
 	}
 	if step.Status != domain.BuildStepStatusSuccess {

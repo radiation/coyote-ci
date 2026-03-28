@@ -219,9 +219,9 @@ func (s *BuildService) FailBuild(ctx context.Context, id string) (domain.Build, 
 	return s.transitionBuildStatus(ctx, id, domain.BuildStatusFailed, nil)
 }
 
-func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, error) {
+func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, repository.StepCompletionOutcome, error) {
 	if s.runner == nil {
-		return runner.RunStepResult{}, ErrRunnerNotConfigured
+		return runner.RunStepResult{}, repository.StepCompletionInvalidTransition, ErrRunnerNotConfigured
 	}
 
 	result, err := s.runner.RunStep(ctx, request)
@@ -234,20 +234,22 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 			StartedAt:  now,
 			FinishedAt: now,
 		}
-		if _, _, completionErr := s.HandleStepResult(ctx, request, result); completionErr != nil {
-			return runner.RunStepResult{}, errors.Join(err, completionErr)
+		_, completionOutcome, completionErr := s.HandleStepResult(ctx, request, result)
+		if completionErr != nil {
+			return runner.RunStepResult{}, completionOutcome, errors.Join(err, completionErr)
 		}
-		return runner.RunStepResult{}, err
+		return runner.RunStepResult{}, completionOutcome, err
 	}
 
-	if _, _, err := s.HandleStepResult(ctx, request, result); err != nil {
-		return runner.RunStepResult{}, err
+	_, completionOutcome, completionErr := s.HandleStepResult(ctx, request, result)
+	if completionErr != nil {
+		return runner.RunStepResult{}, completionOutcome, completionErr
 	}
 
-	return result, nil
+	return result, completionOutcome, nil
 }
 
-func (s *BuildService) HandleStepResult(ctx context.Context, request runner.RunStepRequest, result runner.RunStepResult) (domain.BuildStep, bool, error) {
+func (s *BuildService) HandleStepResult(ctx context.Context, request runner.RunStepRequest, result runner.RunStepResult) (domain.BuildStep, repository.StepCompletionOutcome, error) {
 	stepStatus := domain.BuildStepStatusSuccess
 	if result.Status == runner.RunStepStatusFailed {
 		stepStatus = domain.BuildStepStatusFailed
@@ -284,49 +286,34 @@ func (s *BuildService) HandleStepResult(ctx context.Context, request runner.RunS
 		FinishedAt:   &result.FinishedAt,
 	}
 
-	var (
-		completedStep domain.BuildStep
-		outcome       repository.StepCompletionOutcome
-		err           error
-	)
-
 	claimToken := strings.TrimSpace(request.ClaimToken)
 	if claimToken == "" {
-		return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
 	}
 
-	completedStep, outcome, err = s.buildRepo.CompleteClaimedStepAndAdvanceBuild(ctx, request.BuildID, request.StepIndex, claimToken, completionUpdate)
+	completionResult, err := s.buildRepo.CompleteStep(ctx, repository.CompleteStepRequest{
+		BuildID:      request.BuildID,
+		StepIndex:    request.StepIndex,
+		ClaimToken:   claimToken,
+		RequireClaim: true,
+		Update:       completionUpdate,
+	})
 	if err != nil {
-		return domain.BuildStep{}, false, mapRepoErr(err)
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, mapRepoErr(err)
 	}
 
-	if outcome == repository.StepCompletionDuplicateTerminal {
-		if domain.IsTerminalStepStatus(completedStep.Status) {
-			return completedStep, false, nil
-		}
-		return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
-	}
-
-	if outcome == repository.StepCompletionInvalidTransition {
-		return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
-	}
-
-	if outcome == repository.StepCompletionStaleClaim {
-		return completedStep, false, ErrStaleStepClaim
-	}
-
-	if outcome != repository.StepCompletionCompleted {
-		return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
+	if completionResult.Outcome != repository.StepCompletionCompleted {
+		return completionResult.Step, completionResult.Outcome, nil
 	}
 
 	if err := writeOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stdout); err != nil {
-		return domain.BuildStep{}, false, err
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
 	}
 	if err := writeOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stderr); err != nil {
-		return domain.BuildStep{}, false, err
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
 	}
 
-	return completedStep, true, nil
+	return completionResult.Step, repository.StepCompletionCompleted, nil
 }
 
 func writeOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, stepName string, output string) error {

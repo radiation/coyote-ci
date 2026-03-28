@@ -40,6 +40,7 @@ type fakeBuildExecutionBoundary struct {
 	failErr     error
 	runStepErr  error
 	runStepResp runner.RunStepResult
+	runOutcome  repository.StepCompletionOutcome
 
 	lastBuildID string
 	lastRequest runner.RunStepRequest
@@ -188,16 +189,19 @@ func (f *fakeBuildExecutionBoundary) FailBuild(_ context.Context, id string) (do
 	return domain.Build{ID: id, Status: domain.BuildStatusFailed}, nil
 }
 
-func (f *fakeBuildExecutionBoundary) RunStep(_ context.Context, request runner.RunStepRequest) (runner.RunStepResult, error) {
+func (f *fakeBuildExecutionBoundary) RunStep(_ context.Context, request runner.RunStepRequest) (runner.RunStepResult, repository.StepCompletionOutcome, error) {
 	f.runStepCalls++
 	f.lastRequest = request
 	if f.runStepDelay > 0 {
 		time.Sleep(f.runStepDelay)
 	}
 	if f.runStepErr != nil {
-		return runner.RunStepResult{}, f.runStepErr
+		return runner.RunStepResult{}, f.runOutcome, f.runStepErr
 	}
-	return f.runStepResp, nil
+	if f.runOutcome == "" {
+		f.runOutcome = repository.StepCompletionCompleted
+	}
+	return f.runStepResp, f.runOutcome, nil
 }
 
 func (f *fakeBuildExecutionBoundary) RenewStepLease(_ context.Context, buildID string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, bool, error) {

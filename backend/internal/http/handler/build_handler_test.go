@@ -272,23 +272,59 @@ func (r *fakeRepo) CompleteStepIfRunning(_ context.Context, buildID string, step
 }
 
 func (r *fakeRepo) CompleteStepAndAdvanceBuild(_ context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
-	step, completed, err := r.CompleteStepIfRunning(context.Background(), buildID, stepIndex, update)
+	result, err := r.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   buildID,
+		StepIndex: stepIndex,
+		Update:    update,
+	})
 	if err != nil {
 		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
 	}
+
+	return result.Step, result.Outcome, nil
+}
+
+func (r *fakeRepo) CompleteStep(_ context.Context, request repository.CompleteStepRequest) (repository.CompleteStepResult, error) {
+	buildID := request.BuildID
+	stepIndex := request.StepIndex
+	update := request.Update
+
+	if request.RequireClaim {
+		steps := r.steps[buildID]
+		for idx := range steps {
+			if steps[idx].StepIndex != stepIndex {
+				continue
+			}
+			if steps[idx].Status == domain.BuildStepStatusSuccess || steps[idx].Status == domain.BuildStepStatusFailed {
+				return repository.CompleteStepResult{Step: steps[idx], Outcome: repository.StepCompletionDuplicateTerminal}, nil
+			}
+			if steps[idx].Status != domain.BuildStepStatusRunning {
+				return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, nil
+			}
+			if steps[idx].ClaimToken == nil || *steps[idx].ClaimToken != request.ClaimToken {
+				return repository.CompleteStepResult{Step: steps[idx], Outcome: repository.StepCompletionStaleClaim}, nil
+			}
+			break
+		}
+	}
+
+	step, completed, err := r.CompleteStepIfRunning(context.Background(), buildID, stepIndex, update)
+	if err != nil {
+		return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, err
+	}
 	if !completed {
 		if step.Status == domain.BuildStepStatusSuccess || step.Status == domain.BuildStepStatusFailed {
-			return step, repository.StepCompletionDuplicateTerminal, nil
+			return repository.CompleteStepResult{Step: step, Outcome: repository.StepCompletionDuplicateTerminal}, nil
 		}
 		if step.ID == "" && step.Name == "" {
-			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, repository.ErrBuildNotFound
+			return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, repository.ErrBuildNotFound
 		}
-		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
+		return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, nil
 	}
 
 	b, getErr := r.GetByID(context.Background(), buildID)
 	if getErr != nil {
-		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, getErr
+		return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, getErr
 	}
 
 	if update.Status == domain.BuildStepStatusFailed {
@@ -320,28 +356,22 @@ func (r *fakeRepo) CompleteStepAndAdvanceBuild(_ context.Context, buildID string
 		r.builds[buildID] = b
 	}
 
-	return step, repository.StepCompletionCompleted, nil
+	return repository.CompleteStepResult{Step: step, Outcome: repository.StepCompletionCompleted}, nil
 }
 
 func (r *fakeRepo) CompleteClaimedStepAndAdvanceBuild(_ context.Context, buildID string, stepIndex int, claimToken string, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
-	steps := r.steps[buildID]
-	for idx := range steps {
-		if steps[idx].StepIndex != stepIndex {
-			continue
-		}
-		if steps[idx].Status == domain.BuildStepStatusSuccess || steps[idx].Status == domain.BuildStepStatusFailed {
-			return steps[idx], repository.StepCompletionDuplicateTerminal, nil
-		}
-		if steps[idx].Status != domain.BuildStepStatusRunning {
-			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, nil
-		}
-		if steps[idx].ClaimToken == nil || *steps[idx].ClaimToken != claimToken {
-			return steps[idx], repository.StepCompletionStaleClaim, nil
-		}
-		break
+	result, err := r.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:      buildID,
+		StepIndex:    stepIndex,
+		ClaimToken:   claimToken,
+		RequireClaim: true,
+		Update:       update,
+	})
+	if err != nil {
+		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
 	}
 
-	return r.CompleteStepAndAdvanceBuild(context.Background(), buildID, stepIndex, update)
+	return result.Step, result.Outcome, nil
 }
 
 func (r *fakeRepo) UpdateCurrentStepIndex(_ context.Context, id string, currentStepIndex int) (domain.Build, error) {

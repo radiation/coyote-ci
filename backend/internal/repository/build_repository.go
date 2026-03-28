@@ -39,6 +39,21 @@ const (
 	StepCompletionInvalidTransition StepCompletionOutcome = "invalid_transition"
 )
 
+// CompleteStepRequest captures a final worker step result submission.
+type CompleteStepRequest struct {
+	BuildID      string
+	StepIndex    int
+	ClaimToken   string
+	RequireClaim bool
+	Update       StepUpdate
+}
+
+// CompleteStepResult reports the persisted step and classification of the request.
+type CompleteStepResult struct {
+	Step    domain.BuildStep
+	Outcome StepCompletionOutcome
+}
+
 type BuildRepository interface {
 	Create(ctx context.Context, build domain.Build) (domain.Build, error)
 	CreateQueuedBuild(ctx context.Context, build domain.Build, steps []domain.BuildStep) (domain.Build, error)
@@ -50,6 +65,7 @@ type BuildRepository interface {
 	ClaimPendingStep(ctx context.Context, buildID string, stepIndex int, claim StepClaim) (domain.BuildStep, bool, error)
 	ReclaimExpiredStep(ctx context.Context, buildID string, stepIndex int, reclaimBefore time.Time, claim StepClaim) (domain.BuildStep, bool, error)
 	RenewStepLease(ctx context.Context, buildID string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, StepCompletionOutcome, error)
+	CompleteStep(ctx context.Context, request CompleteStepRequest) (CompleteStepResult, error)
 	CompleteClaimedStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, claimToken string, update StepUpdate) (domain.BuildStep, StepCompletionOutcome, error)
 	ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error)
 	CompleteStepIfRunning(ctx context.Context, buildID string, stepIndex int, update StepUpdate) (domain.BuildStep, bool, error)
