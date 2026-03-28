@@ -143,6 +143,42 @@ a:hover {
   background: #f9f9ff;
 }
 
+.step-command {
+  display: inline-block;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+.logs-toggle {
+  border: 1px solid #c9c9c9;
+  background: #fff;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.step-log-panel {
+  background: #111827;
+  color: #e5e7eb;
+  border-radius: 4px;
+  padding: 10px;
+}
+
+.step-log-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  max-height: 260px;
+  overflow: auto;
+}
+
 .status-badge {
   display: inline-block;
   padding: 3px 8px;

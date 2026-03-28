@@ -67,7 +67,7 @@ export function BuildDetailPage() {
       <h3>Steps</h3>
       {stepsLoading && <p>Loading steps…</p>}
       {stepsError && <p className="error-text">Failed to load steps: {String(stepsError)}</p>}
-      {steps && <StepList steps={steps} />}
+      {steps && <StepList buildID={build.id} steps={steps} />}
     </>
   );
 }

@@ -19,6 +19,7 @@ export interface BuildStep {
   build_id: string;
   step_index: number;
   name: string;
+  command: string;
   status: BuildStepStatus;
   worker_id: string | null;
   started_at: string | null;
@@ -65,6 +66,25 @@ export interface BuildListResponse {
 export interface BuildStepsResponse {
   build_id: string;
   steps: BuildStep[];
+}
+
+export interface StepLogChunk {
+  sequence_no: number;
+  build_id: string;
+  step_id: string;
+  step_index: number;
+  step_name: string;
+  stream: 'stdout' | 'stderr' | 'system';
+  chunk_text: string;
+  created_at: string;
+}
+
+export interface StepLogsResponse {
+  build_id: string;
+  step_index: number;
+  after: number;
+  next_sequence: number;
+  chunks: StepLogChunk[];
 }
 
 /** Generic envelope the backend wraps all responses in. */

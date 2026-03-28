@@ -5,9 +5,26 @@ import (
 	"time"
 )
 
+type StepOutputStream string
+
+const (
+	StepOutputStreamStdout StepOutputStream = "stdout"
+	StepOutputStreamStderr StepOutputStream = "stderr"
+	StepOutputStreamSystem StepOutputStream = "system"
+)
+
+type StepOutputChunk struct {
+	Stream    StepOutputStream
+	ChunkText string
+	EmittedAt time.Time
+}
+
+type StepOutputCallback func(chunk StepOutputChunk) error
+
 // RunStepRequest describes the command a runner should execute for a build step.
 type RunStepRequest struct {
 	BuildID        string
+	StepID         string
 	StepIndex      int
 	StepName       string
 	WorkerID       string
@@ -39,4 +56,9 @@ type RunStepResult struct {
 
 type Runner interface {
 	RunStep(ctx context.Context, request RunStepRequest) (RunStepResult, error)
+}
+
+// StreamingRunner emits output incrementally while a step runs.
+type StreamingRunner interface {
+	RunStepStream(ctx context.Context, request RunStepRequest, onOutput StepOutputCallback) (RunStepResult, error)
 }

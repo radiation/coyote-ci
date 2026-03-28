@@ -54,6 +54,10 @@ type BuildLogsEnvelope struct {
 	Data BuildLogsResponse `json:"data"`
 }
 
+type StepLogsEnvelope struct {
+	Data StepLogsResponse `json:"data"`
+}
+
 type BuildResponse struct {
 	ID               string  `json:"id"`
 	ProjectID        string  `json:"project_id"`
@@ -75,6 +79,7 @@ type BuildStepResponse struct {
 	BuildID      string  `json:"build_id"`
 	StepIndex    int     `json:"step_index"`
 	Name         string  `json:"name"`
+	Command      string  `json:"command"`
 	Status       string  `json:"status"`
 	WorkerID     *string `json:"worker_id"`
 	StartedAt    *string `json:"started_at"`
@@ -99,4 +104,23 @@ type BuildLogResponse struct {
 type BuildLogsResponse struct {
 	BuildID string             `json:"build_id"`
 	Logs    []BuildLogResponse `json:"logs"`
+}
+
+type StepLogChunkResponse struct {
+	SequenceNo int64  `json:"sequence_no"`
+	BuildID    string `json:"build_id"`
+	StepID     string `json:"step_id"`
+	StepIndex  int    `json:"step_index"`
+	StepName   string `json:"step_name"`
+	Stream     string `json:"stream"`
+	ChunkText  string `json:"chunk_text"`
+	CreatedAt  string `json:"created_at"`
+}
+
+type StepLogsResponse struct {
+	BuildID      string                 `json:"build_id"`
+	StepIndex    int                    `json:"step_index"`
+	After        int64                  `json:"after"`
+	NextSequence int64                  `json:"next_sequence"`
+	Chunks       []StepLogChunkResponse `json:"chunks"`
 }

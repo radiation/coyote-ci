@@ -31,6 +31,7 @@ type buildExecutionBoundary interface {
 
 type RunnableStep struct {
 	BuildID        string
+	StepID         string
 	StepIndex      int
 	StepName       string
 	WorkerID       string
@@ -150,6 +151,7 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 
 		return RunnableStep{
 			BuildID:        build.ID,
+			StepID:         claimedStep.ID,
 			StepIndex:      claimedStep.StepIndex,
 			StepName:       claimedStep.Name,
 			WorkerID:       claim.WorkerID,
@@ -201,6 +203,7 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 
 		return RunnableStep{
 			BuildID:        build.ID,
+			StepID:         reclaimedStep.ID,
 			StepIndex:      reclaimedStep.StepIndex,
 			StepName:       reclaimedStep.Name,
 			WorkerID:       claim.WorkerID,
@@ -416,6 +419,7 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 
 	result, completionReport, err := w.builds.RunStep(ctx, runner.RunStepRequest{
 		BuildID:        step.BuildID,
+		StepID:         step.StepID,
 		StepIndex:      step.StepIndex,
 		StepName:       step.StepName,
 		WorkerID:       step.WorkerID,

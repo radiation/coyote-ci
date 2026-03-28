@@ -7,6 +7,7 @@ import (
 	docs "github.com/radiation/coyote-ci/backend/docs"
 	apphttp "github.com/radiation/coyote-ci/backend/internal/http"
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
+	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
@@ -35,7 +36,8 @@ func main() {
 	}()
 
 	buildRepo := repositorypostgres.NewBuildRepository(db)
-	buildService := service.NewBuildService(buildRepo, nil, nil)
+	logSink := logs.NewPostgresSink(db)
+	buildService := service.NewBuildService(buildRepo, nil, logSink)
 	buildHandler := handler.NewBuildHandler(buildService)
 
 	router := apphttp.NewRouter(buildHandler)

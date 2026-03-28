@@ -4,20 +4,178 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 )
 
 type BuildHandler struct {
 	buildService *service.BuildService
+}
+
+// GetBuildStepLogs godoc
+// @Summary Get build step logs
+// @Description Returns persisted log chunks for a build step.
+// @Tags builds
+// @Produce json
+// @Param buildID path string true "Build ID"
+// @Param stepIndex path int true "Step index"
+// @Param after query int false "Replay cursor (exclusive sequence number)"
+// @Param limit query int false "Maximum chunks to return"
+// @Success 200 {object} api.StepLogsEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/{buildID}/steps/{stepIndex}/logs [get]
+func (h *BuildHandler) GetBuildStepLogs(w http.ResponseWriter, r *http.Request) {
+	buildID := chi.URLParam(r, "buildID")
+	if buildID == "" {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "build id is required")
+		return
+	}
+
+	stepIndex, ok := parseStepIndex(w, r)
+	if !ok {
+		return
+	}
+
+	var after int64
+	afterStr := r.URL.Query().Get("after")
+	if afterStr != "" {
+		parsedAfter, err := strconv.ParseInt(afterStr, 10, 64)
+		if err != nil {
+			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid 'after' query parameter")
+			return
+		}
+		if parsedAfter < 0 {
+			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid 'after' query parameter")
+			return
+		}
+		after = parsedAfter
+	}
+
+	limit := 200
+	limitStr := r.URL.Query().Get("limit")
+	if limitStr != "" {
+		parsedLimit, err := strconv.Atoi(limitStr)
+		if err != nil {
+			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid 'limit' query parameter")
+			return
+		}
+		if parsedLimit < 1 {
+			parsedLimit = 1
+		}
+		limit = parsedLimit
+	}
+
+	chunks, err := h.buildService.GetStepLogChunks(r.Context(), buildID, stepIndex, after, limit)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+
+	respChunks := make([]api.StepLogChunkResponse, 0, len(chunks))
+	next := after
+	for _, chunk := range chunks {
+		respChunks = append(respChunks, toStepLogChunkResponse(chunk))
+		if chunk.SequenceNo > next {
+			next = chunk.SequenceNo
+		}
+	}
+
+	writeDataJSON(w, http.StatusOK, api.StepLogsResponse{
+		BuildID:      buildID,
+		StepIndex:    stepIndex,
+		After:        after,
+		NextSequence: next,
+		Chunks:       respChunks,
+	})
+}
+
+// StreamBuildStepLogs godoc
+// @Summary Stream build step logs
+// @Description Streams build step log chunks over SSE with cursor resume support.
+// @Tags builds
+// @Produce text/event-stream
+// @Param buildID path string true "Build ID"
+// @Param stepIndex path int true "Step index"
+// @Param after query int false "Replay cursor (exclusive sequence number)"
+// @Success 200 {string} string "SSE stream"
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/{buildID}/steps/{stepIndex}/logs/stream [get]
+func (h *BuildHandler) StreamBuildStepLogs(w http.ResponseWriter, r *http.Request) {
+	buildID := chi.URLParam(r, "buildID")
+	if buildID == "" {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "build id is required")
+		return
+	}
+
+	stepIndex, ok := parseStepIndex(w, r)
+	if !ok {
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "streaming not supported")
+		return
+	}
+
+	after := parseQueryInt64(r, "after", 0)
+	if lastEventID := strings.TrimSpace(r.Header.Get("Last-Event-ID")); lastEventID != "" {
+		if parsed, err := strconv.ParseInt(lastEventID, 10, 64); err == nil && parsed > after {
+			after = parsed
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	writeSSEComment(w, "connected")
+	flusher.Flush()
+
+	ctx := r.Context()
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		chunks, err := h.buildService.GetStepLogChunks(ctx, buildID, stepIndex, after, 500)
+		if err != nil {
+			if errors.Is(err, service.ErrBuildNotFound) {
+				return
+			}
+			writeSSEEvent(w, "error", 0, map[string]string{"message": err.Error()})
+			flusher.Flush()
+			return
+		}
+
+		for _, chunk := range chunks {
+			resp := toStepLogChunkResponse(chunk)
+			writeSSEEvent(w, "chunk", chunk.SequenceNo, resp)
+			after = chunk.SequenceNo
+		}
+		flusher.Flush()
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func NewBuildHandler(buildService *service.BuildService) *BuildHandler {
@@ -342,6 +500,7 @@ func toBuildStepResponse(step domain.BuildStep) api.BuildStepResponse {
 		BuildID:      step.BuildID,
 		StepIndex:    step.StepIndex,
 		Name:         step.Name,
+		Command:      displayCommand(step),
 		Status:       string(step.Status),
 		WorkerID:     step.WorkerID,
 		ExitCode:     step.ExitCode,
@@ -363,6 +522,45 @@ func toBuildStepResponse(step domain.BuildStep) api.BuildStepResponse {
 	return resp
 }
 
+func displayCommand(step domain.BuildStep) string {
+	command := strings.TrimSpace(step.Command)
+	if command == "" {
+		return ""
+	}
+
+	if isShellCommand(command) && len(step.Args) >= 2 && strings.TrimSpace(step.Args[0]) == "-c" {
+		script := strings.TrimSpace(step.Args[1])
+		if script != "" {
+			return script
+		}
+	}
+
+	if len(step.Args) == 0 {
+		return command
+	}
+
+	parts := make([]string, 0, len(step.Args)+1)
+	parts = append(parts, command)
+	for _, arg := range step.Args {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed == "" {
+			continue
+		}
+		parts = append(parts, trimmed)
+	}
+
+	return strings.Join(parts, " ")
+}
+
+func isShellCommand(command string) bool {
+	switch command {
+	case "sh", "bash", "zsh", "/bin/sh", "/bin/bash", "/bin/zsh":
+		return true
+	default:
+		return false
+	}
+}
+
 func formatOptionalTime(value *time.Time) *string {
 	if value == nil {
 		return nil
@@ -370,6 +568,78 @@ func formatOptionalTime(value *time.Time) *string {
 
 	formatted := value.Format(time.RFC3339)
 	return &formatted
+}
+
+func toStepLogChunkResponse(chunk logs.StepLogChunk) api.StepLogChunkResponse {
+	return api.StepLogChunkResponse{
+		SequenceNo: chunk.SequenceNo,
+		BuildID:    chunk.BuildID,
+		StepID:     chunk.StepID,
+		StepIndex:  chunk.StepIndex,
+		StepName:   chunk.StepName,
+		Stream:     string(chunk.Stream),
+		ChunkText:  chunk.ChunkText,
+		CreatedAt:  chunk.CreatedAt.Format(time.RFC3339),
+	}
+}
+
+func parseStepIndex(w http.ResponseWriter, r *http.Request) (int, bool) {
+	stepIndexRaw := chi.URLParam(r, "stepIndex")
+	if strings.TrimSpace(stepIndexRaw) == "" {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "step index is required")
+		return 0, false
+	}
+
+	stepIndex, err := strconv.Atoi(stepIndexRaw)
+	if err != nil || stepIndex < 0 {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "step index must be a non-negative integer")
+		return 0, false
+	}
+
+	return stepIndex, true
+}
+
+func parseQueryInt64(r *http.Request, key string, fallback int64) int64 {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func parseQueryInt(r *http.Request, key string, fallback int) int {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func writeSSEComment(w http.ResponseWriter, comment string) {
+	_, _ = fmt.Fprintf(w, ": %s\n\n", comment)
+}
+
+func writeSSEEvent(w http.ResponseWriter, event string, id int64, payload any) {
+	if id > 0 {
+		_, _ = fmt.Fprintf(w, "id: %d\n", id)
+	}
+	if strings.TrimSpace(event) != "" {
+		_, _ = fmt.Fprintf(w, "event: %s\n", event)
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "data: {\"message\":\"marshal error\"}\n\n")
+		return
+	}
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", raw)
 }
 
 func writeDataJSON(w http.ResponseWriter, status int, payload any) {

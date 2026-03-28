@@ -7,6 +7,7 @@ import type {
   CreateBuildRequest,
   DataEnvelope,
   QueueBuildStepInput,
+  StepLogsResponse,
 } from '../types/build';
 
 /**
@@ -58,6 +59,17 @@ export async function getBuildSteps(id: string): Promise<BuildStep[]> {
     `/builds/${encodeURIComponent(id)}/steps`,
   );
   return envelope.data.steps;
+}
+
+export async function getStepLogs(buildID: string, stepIndex: number, after = 0, limit = 300): Promise<StepLogsResponse> {
+  const envelope = await fetchJSON<DataEnvelope<StepLogsResponse>>(
+    `/builds/${encodeURIComponent(buildID)}/steps/${stepIndex}/logs?after=${after}&limit=${limit}`,
+  );
+  return envelope.data;
+}
+
+export function buildStepLogStreamURL(buildID: string, stepIndex: number, after = 0): string {
+  return `${BASE}/builds/${encodeURIComponent(buildID)}/steps/${stepIndex}/logs/stream?after=${after}`;
 }
 
 export async function createBuild(input: CreateBuildRequest): Promise<Build> {

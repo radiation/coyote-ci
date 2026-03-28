@@ -65,6 +65,8 @@ definitions:
     properties:
       build_id:
         type: string
+      command:
+        type: string
       error_message:
         type: string
       exit_code:
@@ -159,6 +161,45 @@ definitions:
         type: string
       name:
         type: string
+    type: object
+  api.StepLogChunkResponse:
+    properties:
+      build_id:
+        type: string
+      chunk_text:
+        type: string
+      created_at:
+        type: string
+      sequence_no:
+        type: integer
+      step_id:
+        type: string
+      step_index:
+        type: integer
+      step_name:
+        type: string
+      stream:
+        type: string
+    type: object
+  api.StepLogsEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.StepLogsResponse'
+    type: object
+  api.StepLogsResponse:
+    properties:
+      after:
+        type: integer
+      build_id:
+        type: string
+      chunks:
+        items:
+          $ref: '#/definitions/api.StepLogChunkResponse'
+        type: array
+      next_sequence:
+        type: integer
+      step_index:
+        type: integer
     type: object
 info:
   contact: {}
@@ -450,6 +491,90 @@ paths:
           schema:
             $ref: '#/definitions/api.ErrorResponse'
       summary: Get build steps
+      tags:
+      - builds
+  /builds/{buildID}/steps/{stepIndex}/logs:
+    get:
+      description: Returns persisted log chunks for a build step.
+      parameters:
+      - description: Build ID
+        in: path
+        name: buildID
+        required: true
+        type: string
+      - description: Step index
+        in: path
+        name: stepIndex
+        required: true
+        type: integer
+      - description: Replay cursor (exclusive sequence number)
+        in: query
+        name: after
+        type: integer
+      - description: Maximum chunks to return
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.StepLogsEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get build step logs
+      tags:
+      - builds
+  /builds/{buildID}/steps/{stepIndex}/logs/stream:
+    get:
+      description: Streams build step log chunks over SSE with cursor resume support.
+      parameters:
+      - description: Build ID
+        in: path
+        name: buildID
+        required: true
+        type: string
+      - description: Step index
+        in: path
+        name: stepIndex
+        required: true
+        type: integer
+      - description: Replay cursor (exclusive sequence number)
+        in: query
+        name: after
+        type: integer
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: SSE stream
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Stream build step logs
       tags:
       - builds
   /health:

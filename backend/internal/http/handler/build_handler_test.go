@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 )
@@ -367,6 +368,16 @@ func addBuildIDParam(req *http.Request, buildID string) *http.Request {
 	return req.WithContext(ctx)
 }
 
+func addStepIndexParam(req *http.Request, stepIndex string) *http.Request {
+	rctx := chi.RouteContext(req.Context())
+	if rctx == nil {
+		rctx = chi.NewRouteContext()
+	}
+	rctx.URLParams.Add("stepIndex", stepIndex)
+	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, rctx)
+	return req.WithContext(ctx)
+}
+
 func decodeBody(t *testing.T, rr *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	var body map[string]any
@@ -575,8 +586,8 @@ func TestBuildHandler_GetBuildSteps_HappyPathOrdered(t *testing.T) {
 		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now},
 		steps: map[string][]domain.BuildStep{
 			"build-1": {
-				{ID: "step-2", BuildID: "build-1", StepIndex: 1, Name: "test", Status: domain.BuildStepStatusPending},
-				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "checkout", Status: domain.BuildStepStatusSuccess, WorkerID: &workerID, StartedAt: &now, FinishedAt: &now, ExitCode: &exitCode, Stdout: &stdout, Stderr: &stderr},
+				{ID: "step-2", BuildID: "build-1", StepIndex: 1, Name: "test", Command: "go", Args: []string{"test", "./..."}, Status: domain.BuildStepStatusPending},
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "checkout", Command: "sh", Args: []string{"-c", "echo hello"}, Status: domain.BuildStepStatusSuccess, WorkerID: &workerID, StartedAt: &now, FinishedAt: &now, ExitCode: &exitCode, Stdout: &stdout, Stderr: &stderr},
 			},
 		},
 	}
@@ -610,10 +621,16 @@ func TestBuildHandler_GetBuildSteps_HappyPathOrdered(t *testing.T) {
 	if first["step_index"] != float64(0) || second["step_index"] != float64(1) {
 		t.Fatalf("expected steps ordered by step_index asc, got first=%v second=%v", first["step_index"], second["step_index"])
 	}
-	for _, field := range []string{"id", "build_id", "step_index", "name", "status", "worker_id", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"} {
+	for _, field := range []string{"id", "build_id", "step_index", "name", "command", "status", "worker_id", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"} {
 		if _, ok := first[field]; !ok {
 			t.Fatalf("expected step field %q, got %v", field, first)
 		}
+	}
+	if first["command"] != "echo hello" {
+		t.Fatalf("expected command %q, got %v", "echo hello", first["command"])
+	}
+	if second["command"] != "go test ./..." {
+		t.Fatalf("expected command %q, got %v", "go test ./...", second["command"])
 	}
 	if first["stdout"] != stdout {
 		t.Fatalf("expected stdout %q, got %v", stdout, first["stdout"])
@@ -675,6 +692,39 @@ func TestBuildHandler_GetBuildLogs(t *testing.T) {
 	logsData := decodeDataMap(t, logsRes)
 	if logsData["build_id"] != "build-1" {
 		t.Fatalf("expected build_id build-1, got %v", logsData["build_id"])
+	}
+}
+
+func TestBuildHandler_GetBuildStepLogs(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}}
+	logSink := logs.NewMemorySink()
+
+	_, _ = logSink.AppendStepLogChunk(context.Background(), logs.StepLogChunk{BuildID: "build-1", StepID: "step-1", StepIndex: 0, StepName: "setup", Stream: logs.StepLogStreamStdout, ChunkText: "line-1", CreatedAt: now})
+	_, _ = logSink.AppendStepLogChunk(context.Background(), logs.StepLogChunk{BuildID: "build-1", StepID: "step-1", StepIndex: 0, StepName: "setup", Stream: logs.StepLogStreamStderr, ChunkText: "line-2", CreatedAt: now.Add(time.Second)})
+
+	h := NewBuildHandler(service.NewBuildService(repo, nil, logSink))
+	req := addStepIndexParam(addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/steps/0/logs?after=0&limit=10", nil), "build-1"), "0")
+	res := httptest.NewRecorder()
+
+	h.GetBuildStepLogs(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, res.Code)
+	}
+	data := decodeDataMap(t, res)
+	if data["build_id"] != "build-1" {
+		t.Fatalf("expected build_id build-1, got %v", data["build_id"])
+	}
+	if data["step_index"] != float64(0) {
+		t.Fatalf("expected step_index 0, got %v", data["step_index"])
+	}
+	chunks, ok := data["chunks"].([]any)
+	if !ok {
+		t.Fatalf("expected chunks array, got %T", data["chunks"])
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
 	}
 }
 

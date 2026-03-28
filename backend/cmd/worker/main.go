@@ -47,7 +47,7 @@ func main() {
 
 	buildRepo := repositorypostgres.NewBuildRepository(db)
 	stepRunner := inprocess.New()
-	logSink := logs.NewMemorySink()
+	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildService(buildRepo, stepRunner, logSink)
 	leaseDuration := time.Duration(cfg.StepLeaseSeconds) * time.Second
 	workerService := service.NewWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)
