@@ -312,10 +312,10 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		// persistChunk never returns an error; failures are captured in chunkPersistErr
 		// via the closure and surfaced as a SideEffectErr after step completion.
 		for _, line := range splitLogLines(result.Stdout) {
-			persistChunk(runner.StepOutputChunk{Stream: runner.StepOutputStreamStdout, ChunkText: line, EmittedAt: time.Now().UTC()})
+			_ = persistChunk(runner.StepOutputChunk{Stream: runner.StepOutputStreamStdout, ChunkText: line, EmittedAt: time.Now().UTC()})
 		}
 		for _, line := range splitLogLines(result.Stderr) {
-			persistChunk(runner.StepOutputChunk{Stream: runner.StepOutputStreamStderr, ChunkText: line, EmittedAt: time.Now().UTC()})
+			_ = persistChunk(runner.StepOutputChunk{Stream: runner.StepOutputStreamStderr, ChunkText: line, EmittedAt: time.Now().UTC()})
 		}
 	}
 	if err != nil {
