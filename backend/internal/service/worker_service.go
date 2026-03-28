@@ -26,7 +26,7 @@ type buildExecutionBoundary interface {
 	StartBuild(ctx context.Context, id string) (domain.Build, error)
 	CompleteBuild(ctx context.Context, id string) (domain.Build, error)
 	FailBuild(ctx context.Context, id string) (domain.Build, error)
-	RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, error)
+	RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, StepCompletionReport, error)
 }
 
 type RunnableStep struct {
@@ -43,9 +43,10 @@ type RunnableStep struct {
 }
 
 type StepExecutionReport struct {
-	BuildID string
-	Step    domain.BuildStep
-	Result  runner.RunStepResult
+	BuildID         string
+	Step            domain.BuildStep
+	Result          runner.RunStepResult
+	SideEffectError *string
 }
 
 type WorkerRecoveryStats struct {
@@ -413,7 +414,7 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 		}
 	}()
 
-	result, err := w.builds.RunStep(ctx, runner.RunStepRequest{
+	result, completionReport, err := w.builds.RunStep(ctx, runner.RunStepRequest{
 		BuildID:        step.BuildID,
 		StepIndex:      step.StepIndex,
 		StepName:       step.StepName,
@@ -431,16 +432,31 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 
 	completedAt := time.Now().UTC()
 	report.Step.FinishedAt = &completedAt
+	completionOutcome := completionReport.CompletionOutcome
+	if completionReport.SideEffectErr != nil {
+		log.Printf("post-persist side-effect failed: build_id=%s step=%s err=%v", step.BuildID, step.StepName, completionReport.SideEffectErr)
+		sideEffectMessage := completionReport.SideEffectErr.Error()
+		report.SideEffectError = &sideEffectMessage
+	}
 
 	if err != nil {
-		if errors.Is(err, ErrStaleStepClaim) {
-			staleCount := atomic.AddInt64(&w.staleComplete, 1)
-			log.Printf("stale completion ignored: build_id=%s step=%s stale_completion_count=%d", step.BuildID, step.StepName, staleCount)
-			return report, nil
-		}
 		log.Printf("execution completed: build_id=%s step=%s status=%s exit_code=%d", step.BuildID, step.StepName, runner.RunStepStatusFailed, result.ExitCode)
 		report.Step.Status = domain.BuildStepStatusFailed
 		return report, err
+	}
+
+	if completionOutcome == repository.StepCompletionStaleClaim {
+		staleCount := atomic.AddInt64(&w.staleComplete, 1)
+		log.Printf("stale completion ignored: build_id=%s step=%s stale_completion_count=%d", step.BuildID, step.StepName, staleCount)
+		return report, nil
+	}
+	if completionOutcome == repository.StepCompletionDuplicateTerminal {
+		log.Printf("duplicate terminal completion ignored: build_id=%s step=%s", step.BuildID, step.StepName)
+		return report, nil
+	}
+	if completionOutcome == repository.StepCompletionInvalidTransition {
+		log.Printf("invalid transition completion ignored: build_id=%s step=%s", step.BuildID, step.StepName)
+		return report, nil
 	}
 
 	log.Printf("execution completed: build_id=%s step=%s status=%s exit_code=%d", step.BuildID, step.StepName, result.Status, result.ExitCode)

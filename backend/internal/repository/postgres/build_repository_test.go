@@ -447,7 +447,7 @@ func TestBuildRepository_CompleteStepIfRunning(t *testing.T) {
 	}
 }
 
-func TestBuildRepository_CompleteStepAndAdvanceBuild_NonFinalSuccess(t *testing.T) {
+func TestBuildRepository_CompleteStep_NonFinalSuccess(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sql mock: %v", err)
@@ -467,15 +467,19 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild_NonFinalSuccess(t *testing.
 	mock.ExpectExec("UPDATE builds").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	step, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-1", 0, repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, Stdout: &stdout, StartedAt: &now, FinishedAt: &now})
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   "build-1",
+		StepIndex: 0,
+		Update:    repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, Stdout: &stdout, StartedAt: &now, FinishedAt: &now},
+	})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if outcome != repository.StepCompletionCompleted {
+	if result.Outcome != repository.StepCompletionCompleted {
 		t.Fatal("expected completion")
 	}
-	if step.Status != domain.BuildStepStatusSuccess {
-		t.Fatalf("expected success status, got %q", step.Status)
+	if result.Step.Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected success status, got %q", result.Step.Status)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -483,7 +487,7 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild_NonFinalSuccess(t *testing.
 	}
 }
 
-func TestBuildRepository_CompleteStepAndAdvanceBuild_FinalSuccess(t *testing.T) {
+func TestBuildRepository_CompleteStep_FinalSuccess(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sql mock: %v", err)
@@ -502,11 +506,15 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild_FinalSuccess(t *testing.T) 
 	mock.ExpectExec("UPDATE builds").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	_, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-1", 1, repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now})
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   "build-1",
+		StepIndex: 1,
+		Update:    repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now},
+	})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if outcome != repository.StepCompletionCompleted {
+	if result.Outcome != repository.StepCompletionCompleted {
 		t.Fatal("expected completion")
 	}
 
@@ -515,7 +523,7 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild_FinalSuccess(t *testing.T) 
 	}
 }
 
-func TestBuildRepository_CompleteStepAndAdvanceBuild_FailedStep(t *testing.T) {
+func TestBuildRepository_CompleteStep_FailedStep(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sql mock: %v", err)
@@ -535,15 +543,19 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild_FailedStep(t *testing.T) {
 	mock.ExpectExec("UPDATE builds").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	step, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-1", 0, repository.StepUpdate{Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, Stderr: &stderr, ErrorMessage: &errMsg, StartedAt: &now, FinishedAt: &now})
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   "build-1",
+		StepIndex: 0,
+		Update:    repository.StepUpdate{Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, Stderr: &stderr, ErrorMessage: &errMsg, StartedAt: &now, FinishedAt: &now},
+	})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if outcome != repository.StepCompletionCompleted {
+	if result.Outcome != repository.StepCompletionCompleted {
 		t.Fatal("expected completion")
 	}
-	if step.Status != domain.BuildStepStatusFailed {
-		t.Fatalf("expected failed status, got %q", step.Status)
+	if result.Step.Status != domain.BuildStepStatusFailed {
+		t.Fatalf("expected failed status, got %q", result.Step.Status)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -551,7 +563,52 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild_FailedStep(t *testing.T) {
 	}
 }
 
-func TestBuildRepository_CompleteStepAndAdvanceBuild_DuplicateNoOp(t *testing.T) {
+func TestBuildRepository_CompleteStep_FailedStepNilErrorMessage_UsesTypedBuildUpdate(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewBuildRepository(db)
+	now := time.Now().UTC()
+	exitCode := 1
+	stderr := "command failed"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
+			AddRow("step-1", "build-1", 0, "first", "sh", "[\"-c\",\"exit 1\"]", "{}", ".", 0, "failed", nil, nil, nil, nil, now, now, 1, "", "command failed", nil),
+	)
+	mock.ExpectExec("error_message = COALESCE\\(\\$2::text, error_message\\)").WithArgs("build-1", nil).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   "build-1",
+		StepIndex: 0,
+		Update: repository.StepUpdate{
+			Status:     domain.BuildStepStatusFailed,
+			ExitCode:   &exitCode,
+			Stderr:     &stderr,
+			StartedAt:  &now,
+			FinishedAt: &now,
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.Outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion, got %q", result.Outcome)
+	}
+	if result.Step.Status != domain.BuildStepStatusFailed {
+		t.Fatalf("expected failed status, got %q", result.Step.Status)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestBuildRepository_CompleteStep_DuplicateNoOp(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sql mock: %v", err)
@@ -569,15 +626,19 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild_DuplicateNoOp(t *testing.T)
 	)
 	mock.ExpectCommit()
 
-	step, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-1", 0, repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now})
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   "build-1",
+		StepIndex: 0,
+		Update:    repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now},
+	})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if outcome != repository.StepCompletionDuplicateTerminal {
+	if result.Outcome != repository.StepCompletionDuplicateTerminal {
 		t.Fatal("expected duplicate completion to be no-op")
 	}
-	if step.Status != domain.BuildStepStatusSuccess {
-		t.Fatalf("expected terminal step state, got %q", step.Status)
+	if result.Step.Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected terminal step state, got %q", result.Step.Status)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -585,7 +646,7 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild_DuplicateNoOp(t *testing.T)
 	}
 }
 
-func TestBuildRepository_CompleteStepAndAdvanceBuild_InvalidTransition(t *testing.T) {
+func TestBuildRepository_CompleteStep_InvalidTransition(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sql mock: %v", err)
@@ -603,11 +664,15 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild_InvalidTransition(t *testin
 	)
 	mock.ExpectRollback()
 
-	_, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-1", 0, repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now})
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   "build-1",
+		StepIndex: 0,
+		Update:    repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now},
+	})
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if outcome != repository.StepCompletionInvalidTransition {
+	if result.Outcome != repository.StepCompletionInvalidTransition {
 		t.Fatal("expected no completion on invalid transition")
 	}
 
@@ -616,7 +681,7 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild_InvalidTransition(t *testin
 	}
 }
 
-func TestBuildRepository_CompleteStepAndAdvanceBuild_RollsBackOnAdvanceError(t *testing.T) {
+func TestBuildRepository_CompleteStep_RollsBackOnAdvanceError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sql mock: %v", err)
@@ -635,12 +700,16 @@ func TestBuildRepository_CompleteStepAndAdvanceBuild_RollsBackOnAdvanceError(t *
 	mock.ExpectExec("UPDATE builds").WillReturnError(errors.New("update current step failed"))
 	mock.ExpectRollback()
 
-	_, outcome, err := repo.CompleteStepAndAdvanceBuild(context.Background(), "build-1", 0, repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now})
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:   "build-1",
+		StepIndex: 0,
+		Update:    repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now},
+	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if outcome != repository.StepCompletionInvalidTransition {
-		t.Fatal("expected no completion result on rollback path")
+	if result.Outcome != "" {
+		t.Fatalf("expected empty outcome when completion returns error, got %q", result.Outcome)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -749,7 +818,33 @@ func TestBuildRepository_ReclaimExpiredStep(t *testing.T) {
 	}
 }
 
-func TestBuildRepository_CompleteClaimedStepAndAdvanceBuild_StaleClaim(t *testing.T) {
+func TestBuildRepository_ReclaimExpiredStep_NoMatchReturnsFalse(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewBuildRepository(db)
+	reclaimBefore := time.Now().UTC()
+	lease := reclaimBefore.Add(45 * time.Second)
+
+	// Simulates a terminal (failed/success) or otherwise non-running step where reclaim cannot apply.
+	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
+
+	_, reclaimed, err := repo.ReclaimExpiredStep(context.Background(), "build-1", 0, reclaimBefore, repository.StepClaim{WorkerID: "worker-b", ClaimToken: "claim-b", ClaimedAt: reclaimBefore, LeaseExpiresAt: lease})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if reclaimed {
+		t.Fatal("expected reclaim to fail when step is no longer eligible")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestBuildRepository_CompleteStep_StaleClaim(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sql mock: %v", err)
@@ -767,15 +862,21 @@ func TestBuildRepository_CompleteClaimedStepAndAdvanceBuild_StaleClaim(t *testin
 	)
 	mock.ExpectCommit()
 
-	step, outcome, err := repo.CompleteClaimedStepAndAdvanceBuild(context.Background(), "build-1", 0, "claim-a", repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now})
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:      "build-1",
+		StepIndex:    0,
+		ClaimToken:   "claim-a",
+		RequireClaim: true,
+		Update:       repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now},
+	})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if outcome != repository.StepCompletionStaleClaim {
-		t.Fatalf("expected stale claim outcome, got %q", outcome)
+	if result.Outcome != repository.StepCompletionStaleClaim {
+		t.Fatalf("expected stale claim outcome, got %q", result.Outcome)
 	}
-	if step.Status != domain.BuildStepStatusRunning {
-		t.Fatalf("expected running step to remain unchanged, got %q", step.Status)
+	if result.Step.Status != domain.BuildStepStatusRunning {
+		t.Fatalf("expected running step to remain unchanged, got %q", result.Step.Status)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

@@ -12,15 +12,15 @@ import (
 
 var errGuardedBuildUpdateNoop = errors.New("guarded build update no-op")
 
-func (r *BuildRepository) CompleteClaimedStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, claimToken string, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
-	completionReq := repository.DecideStepCompletion(domain.BuildStepStatusRunning, update.Status, true, true)
+func (r *BuildRepository) CompleteStep(ctx context.Context, request repository.CompleteStepRequest) (repository.CompleteStepResult, error) {
+	completionReq := repository.DecideStepCompletion(domain.BuildStepStatusRunning, request.Update.Status, request.RequireClaim, true)
 	if !completionReq.AllowUpdate {
-		return domain.BuildStep{}, completionReq.Outcome, nil
+		return repository.CompleteStepResult{Outcome: completionReq.Outcome}, nil
 	}
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
+		return repository.CompleteStepResult{}, err
 	}
 
 	rollback := true
@@ -30,76 +30,36 @@ func (r *BuildRepository) CompleteClaimedStepAndAdvanceBuild(ctx context.Context
 		}
 	}()
 
-	step, updated, err := applyStepCompletionUpdateTx(ctx, tx, buildID, stepIndex, &claimToken, update)
+	claimToken := (*string)(nil)
+	if request.RequireClaim {
+		claimToken = &request.ClaimToken
+	}
+
+	step, updated, err := applyStepCompletionUpdateTx(ctx, tx, request.BuildID, request.StepIndex, claimToken, request.Update)
 	if err != nil {
-		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
+		return repository.CompleteStepResult{}, err
 	}
 
 	if !updated {
-		existingStep, outcome, committed, resolveErr := resolveAndCommitConflictTx(ctx, tx, buildID, stepIndex, true, true)
+		existingStep, outcome, committed, resolveErr := resolveAndCommitConflictTx(ctx, tx, request.BuildID, request.StepIndex, request.RequireClaim, request.RequireClaim)
 		if resolveErr != nil {
-			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, resolveErr
+			return repository.CompleteStepResult{}, resolveErr
 		}
 		if committed {
 			rollback = false
 		}
-		return existingStep, outcome, nil
+		return repository.CompleteStepResult{Step: existingStep, Outcome: outcome}, nil
 	}
 
-	outcome, finalizeErr := advanceBuildAndCommitTx(ctx, tx, buildID, stepIndex, update.Status, step.ErrorMessage)
+	outcome, finalizeErr := advanceBuildAndCommitTx(ctx, tx, request.BuildID, request.StepIndex, request.Update.Status, step.ErrorMessage)
 	if finalizeErr != nil {
-		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, finalizeErr
+		return repository.CompleteStepResult{}, finalizeErr
 	}
 	if outcome != repository.StepCompletionCompleted {
-		return domain.BuildStep{}, outcome, nil
+		return repository.CompleteStepResult{Outcome: outcome}, nil
 	}
 	rollback = false
-	return step, outcome, nil
-}
-
-func (r *BuildRepository) CompleteStepAndAdvanceBuild(ctx context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, repository.StepCompletionOutcome, error) {
-	completionReq := repository.DecideStepCompletion(domain.BuildStepStatusRunning, update.Status, false, true)
-	if !completionReq.AllowUpdate {
-		return domain.BuildStep{}, completionReq.Outcome, nil
-	}
-
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
-	}
-
-	rollback := true
-	defer func() {
-		if rollback {
-			_ = tx.Rollback()
-		}
-	}()
-
-	step, updated, err := applyStepCompletionUpdateTx(ctx, tx, buildID, stepIndex, nil, update)
-	if err != nil {
-		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
-	}
-
-	if !updated {
-		existingStep, outcome, committed, resolveErr := resolveAndCommitConflictTx(ctx, tx, buildID, stepIndex, false, false)
-		if resolveErr != nil {
-			return domain.BuildStep{}, repository.StepCompletionInvalidTransition, resolveErr
-		}
-		if committed {
-			rollback = false
-		}
-		return existingStep, outcome, nil
-	}
-
-	outcome, finalizeErr := advanceBuildAndCommitTx(ctx, tx, buildID, stepIndex, update.Status, step.ErrorMessage)
-	if finalizeErr != nil {
-		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, finalizeErr
-	}
-	if outcome != repository.StepCompletionCompleted {
-		return domain.BuildStep{}, outcome, nil
-	}
-	rollback = false
-	return step, outcome, nil
+	return repository.CompleteStepResult{Step: step, Outcome: outcome}, nil
 }
 
 func resolveAndCommitConflictTx(ctx context.Context, tx *sql.Tx, buildID string, stepIndex int, claimRequired bool, allowStale bool) (domain.BuildStep, repository.StepCompletionOutcome, bool, error) {
@@ -252,7 +212,7 @@ func updateBuildFailedTx(ctx context.Context, tx *sql.Tx, buildID string, errorM
 		UPDATE builds
 		SET status = 'failed',
 			finished_at = COALESCE(finished_at, NOW()),
-			error_message = CASE WHEN $2 IS NOT NULL THEN $2 ELSE error_message END
+			error_message = COALESCE($2::text, error_message)
 		WHERE id = $1
 		  AND status = 'running'
 	`
