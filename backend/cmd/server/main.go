@@ -12,6 +12,7 @@ import (
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	"github.com/radiation/coyote-ci/backend/internal/source"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
@@ -38,6 +39,7 @@ func main() {
 	buildRepo := repositorypostgres.NewBuildRepository(db)
 	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildService(buildRepo, nil, logSink)
+	buildService.SetRepoFetcher(source.NewGitFetcher())
 	buildHandler := handler.NewBuildHandler(buildService)
 
 	router := apphttp.NewRouter(buildHandler)

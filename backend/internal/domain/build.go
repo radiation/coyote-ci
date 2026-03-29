@@ -27,4 +27,9 @@ type Build struct {
 	PipelineConfigYAML *string
 	PipelineName       *string
 	PipelineSource     *string
+
+	// Repo source: persisted when a build is created from a repository checkout.
+	RepoURL   *string
+	Ref       *string
+	CommitSHA *string
 }

@@ -20,8 +20,8 @@ func NewBuildRepository(db *sql.DB) *BuildRepository {
 
 func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domain.Build, error) {
 	const query = `
-		INSERT INTO builds (id, project_id, status, created_at, current_step_index, pipeline_config_yaml, pipeline_name, pipeline_source)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO builds (id, project_id, status, created_at, current_step_index, pipeline_config_yaml, pipeline_name, pipeline_source, repo_url, ref, commit_sha)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`
 
 	if build.CurrentStepIndex < 0 {
@@ -39,6 +39,9 @@ func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domai
 		build.PipelineConfigYAML,
 		build.PipelineName,
 		build.PipelineSource,
+		build.RepoURL,
+		build.Ref,
+		build.CommitSHA,
 	)
 	if err != nil {
 		return domain.Build{}, err
@@ -59,12 +62,12 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 	}()
 
 	const createQuery = `
-		INSERT INTO builds (id, project_id, status, created_at, queued_at, current_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source)
-		VALUES ($1, $2, 'queued', $3, COALESCE($4, NOW()), 0, NULL, $5, $6, $7)
+		INSERT INTO builds (id, project_id, status, created_at, queued_at, current_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, repo_url, ref, commit_sha)
+		VALUES ($1, $2, 'queued', $3, COALESCE($4, NOW()), 0, NULL, $5, $6, $7, $8, $9, $10)
 		RETURNING ` + buildColumns + `
 	`
 
-	build, err = scanBuild(tx.QueryRowContext(ctx, createQuery, build.ID, build.ProjectID, build.CreatedAt, build.QueuedAt, build.PipelineConfigYAML, build.PipelineName, build.PipelineSource))
+	build, err = scanBuild(tx.QueryRowContext(ctx, createQuery, build.ID, build.ProjectID, build.CreatedAt, build.QueuedAt, build.PipelineConfigYAML, build.PipelineName, build.PipelineSource, build.RepoURL, build.Ref, build.CommitSHA))
 	if err != nil {
 		return domain.Build{}, err
 	}

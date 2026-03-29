@@ -7,7 +7,10 @@ CREATE TABLE IF NOT EXISTS builds (
     started_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
     current_step_index INTEGER NOT NULL DEFAULT 0,
-    error_message TEXT
+    error_message TEXT,
+    repo_url TEXT,
+    ref TEXT,
+    commit_sha TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_builds_project_id ON builds (project_id);

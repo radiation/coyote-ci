@@ -25,6 +25,9 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 	sql := builder.String()
 	required := []string{
 		"current_step_index",
+		"repo_url",
+		"ref",
+		"commit_sha",
 		"CREATE TABLE IF NOT EXISTS build_steps",
 		"step_index",
 		"command",

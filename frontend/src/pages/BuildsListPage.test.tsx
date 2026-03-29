@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { BuildsListPage } from './BuildsListPage';
-import { createBuild, createPipelineBuild, listBuilds, queueBuild } from '../api';
+import { createBuild, createPipelineBuild, createRepoBuild, listBuilds, queueBuild } from '../api';
 
 const navigateMock = vi.fn();
 
@@ -19,6 +19,7 @@ vi.mock('../api', () => ({
   listBuilds: vi.fn(),
   createBuild: vi.fn(),
   createPipelineBuild: vi.fn(),
+  createRepoBuild: vi.fn(),
   queueBuild: vi.fn(),
 }));
 
@@ -47,6 +48,7 @@ describe('BuildsListPage queue form', () => {
   const mockedListBuilds = vi.mocked(listBuilds);
   const mockedCreateBuild = vi.mocked(createBuild);
   const mockedCreatePipelineBuild = vi.mocked(createPipelineBuild);
+  const mockedCreateRepoBuild = vi.mocked(createRepoBuild);
   const mockedQueueBuild = vi.mocked(queueBuild);
 
   beforeEach(() => {
@@ -85,6 +87,17 @@ describe('BuildsListPage queue form', () => {
       current_step_index: 0,
       error_message: null,
     });
+    mockedCreateRepoBuild.mockResolvedValue({
+      id: 'build-repo-1',
+      project_id: 'project-1',
+      status: 'queued',
+      created_at: '2026-03-24T00:00:00Z',
+      queued_at: '2026-03-24T00:00:01Z',
+      started_at: null,
+      finished_at: null,
+      current_step_index: 0,
+      error_message: null,
+    });
   });
 
   it('renders template dropdown with expected options', async () => {
@@ -98,6 +111,7 @@ describe('BuildsListPage queue form', () => {
     expect(screen.getByRole('option', { name: 'test' })).toBeTruthy();
     expect(screen.getByRole('option', { name: 'build' })).toBeTruthy();
     expect(screen.getByRole('option', { name: 'custom' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'repo' })).toBeTruthy();
   });
 
   it('shows custom command input when template is custom', async () => {
@@ -168,6 +182,68 @@ describe('BuildsListPage queue form', () => {
 
     expect(screen.getByLabelText('Pipeline YAML')).toBeTruthy();
     expect(screen.getByText('Paste a Coyote CI pipeline definition. The backend will validate it.')).toBeTruthy();
+  });
+
+  it('shows repo inputs and helper text when repo template is selected', async () => {
+    renderPage();
+
+    await screen.findByText('No builds yet.');
+
+    expect(screen.queryByLabelText('Repository URL')).toBeNull();
+    expect(screen.queryByLabelText('Ref')).toBeNull();
+    expect(screen.queryByLabelText('Pipeline YAML')).toBeNull();
+    expect(screen.queryByLabelText('Commands')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'repo' } });
+
+    expect(screen.getByLabelText('Repository URL')).toBeTruthy();
+    expect(screen.getByLabelText('Ref')).toBeTruthy();
+    expect(screen.getByDisplayValue('main')).toBeTruthy();
+    expect(screen.getByText('Public HTTPS repositories are the current expected path unless credentials are separately configured.')).toBeTruthy();
+    expect(screen.queryByLabelText('Pipeline YAML')).toBeNull();
+    expect(screen.queryByLabelText('Commands')).toBeNull();
+  });
+
+  it('submits repo build via createRepoBuild', async () => {
+    renderPage();
+
+    await screen.findByText('No builds yet.');
+
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'repo' } });
+    fireEvent.change(screen.getByLabelText('Repository URL'), {
+      target: { value: 'https://github.com/org/repo.git' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Repo Build' }));
+
+    await waitFor(() => {
+      expect(mockedCreateRepoBuild).toHaveBeenCalledWith({
+        project_id: 'project-1',
+        repo_url: 'https://github.com/org/repo.git',
+        ref: 'main',
+      });
+      expect(mockedCreateBuild).not.toHaveBeenCalled();
+      expect(mockedQueueBuild).not.toHaveBeenCalled();
+      expect(mockedCreatePipelineBuild).not.toHaveBeenCalled();
+      expect(navigateMock).toHaveBeenCalledWith('/builds/build-repo-1');
+    });
+  });
+
+  it('displays backend errors for repo builds', async () => {
+    mockedCreateRepoBuild.mockRejectedValueOnce(new Error('API 400: pipeline_not_found'));
+
+    renderPage();
+
+    await screen.findByText('No builds yet.');
+
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'repo' } });
+    fireEvent.change(screen.getByLabelText('Repository URL'), {
+      target: { value: 'https://github.com/org/repo.git' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Repo Build' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to create repo build/)).toBeTruthy();
+    });
   });
 
   it('submits pipeline build via createPipelineBuild', async () => {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -957,6 +958,117 @@ func TestCreatePipelineBuild(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/builds/pipeline", bytes.NewBufferString(body))
 		w := httptest.NewRecorder()
 		h.CreatePipelineBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// handlerFakeRepoFetcher implements source.RepoFetcher for handler tests.
+type handlerFakeRepoFetcher struct {
+	localPath string
+	commitSHA string
+	err       error
+}
+
+func (f *handlerFakeRepoFetcher) Fetch(_ context.Context, _ string, _ string) (string, string, error) {
+	if f.err != nil {
+		return "", "", f.err
+	}
+	return f.localPath, f.commitSHA, nil
+}
+
+func TestCreateRepoBuild(t *testing.T) {
+	t.Run("valid repo build", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/.coyote", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tmpDir+"/.coyote/pipeline.yml", []byte("version: 1\nsteps:\n  - name: test\n    run: echo ok\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeRepo{}
+		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id":"proj-1","repo_url":"https://github.com/org/repo.git","ref":"main"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		data := resp["data"]
+		if data["status"] != "queued" {
+			t.Errorf("expected queued, got %v", data["status"])
+		}
+		if data["repo_url"] != "https://github.com/org/repo.git" {
+			t.Errorf("expected repo_url in response, got %v", data["repo_url"])
+		}
+		if data["ref"] != "main" {
+			t.Errorf("expected ref in response, got %v", data["ref"])
+		}
+		if data["commit_sha"] != "abc123" {
+			t.Errorf("expected commit_sha in response, got %v", data["commit_sha"])
+		}
+		if data["pipeline_source"] != ".coyote/pipeline.yml" {
+			t.Errorf("expected pipeline_source in response, got %v", data["pipeline_source"])
+		}
+	})
+
+	t.Run("missing project_id returns 400", func(t *testing.T) {
+		repo := &fakeRepo{}
+		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: "/tmp", commitSHA: "abc"})
+		h := NewBuildHandler(svc)
+
+		body := `{"repo_url":"https://github.com/org/repo.git","ref":"main"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("missing ref returns 400", func(t *testing.T) {
+		repo := &fakeRepo{}
+		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: "/tmp", commitSHA: "abc"})
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id":"proj-1","repo_url":"https://github.com/org/repo.git"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("pipeline not found returns 400", func(t *testing.T) {
+		tmpDir := t.TempDir() // empty dir, no .coyote/pipeline.yml
+		repo := &fakeRepo{}
+		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc"})
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id":"proj-1","repo_url":"https://github.com/org/repo.git","ref":"main"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
