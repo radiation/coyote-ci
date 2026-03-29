@@ -2,9 +2,11 @@ package source
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -24,6 +26,22 @@ func NewGitFetcher() *GitFetcher {
 }
 
 func (g *GitFetcher) Fetch(ctx context.Context, repoURL string, ref string) (string, string, error) {
+	repoURL = strings.TrimSpace(repoURL)
+	if repoURL == "" {
+		return "", "", errors.New("repo URL is required")
+	}
+	if strings.HasPrefix(repoURL, "-") {
+		return "", "", errors.New("repo URL cannot begin with '-'")
+	}
+
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", "", errors.New("ref is required")
+	}
+	if strings.HasPrefix(ref, "-") {
+		return "", "", errors.New("ref cannot begin with '-'")
+	}
+
 	tmpDir, err := os.MkdirTemp("", "coyote-repo-*")
 	if err != nil {
 		return "", "", fmt.Errorf("creating temp dir: %w", err)
@@ -36,12 +54,12 @@ func (g *GitFetcher) Fetch(ctx context.Context, repoURL string, ref string) (str
 		}
 	}()
 
-	err = runGit(ctx, "", "clone", repoURL, tmpDir)
+	err = runGit(ctx, "", "clone", "--", repoURL, tmpDir)
 	if err != nil {
 		return "", "", fmt.Errorf("cloning repo %s: %w", repoURL, err)
 	}
 
-	err = runGit(ctx, tmpDir, "checkout", ref)
+	err = runGit(ctx, tmpDir, "checkout", "--detach", ref)
 	if err != nil {
 		return "", "", fmt.Errorf("checking out ref %q: %w", ref, err)
 	}
@@ -58,7 +76,11 @@ func (g *GitFetcher) Fetch(ctx context.Context, repoURL string, ref string) (str
 func runGit(ctx context.Context, dir string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	if dir != "" {
-		cmd.Dir = dir
+		cleanDir := filepath.Clean(dir)
+		if !filepath.IsAbs(cleanDir) {
+			return errors.New("git working directory must be absolute")
+		}
+		cmd.Dir = cleanDir
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -70,7 +92,11 @@ func runGit(ctx context.Context, dir string, args ...string) error {
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	if dir != "" {
-		cmd.Dir = dir
+		cleanDir := filepath.Clean(dir)
+		if !filepath.IsAbs(cleanDir) {
+			return "", errors.New("git working directory must be absolute")
+		}
+		cmd.Dir = cleanDir
 	}
 	out, err := cmd.Output()
 	if err != nil {
