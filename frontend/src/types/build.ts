@@ -49,7 +49,13 @@ export interface CreateBuildRequest {
   steps?: CreateBuildStepInput[];
 }
 
-export type BuildTemplate = 'default' | 'test' | 'build' | 'custom' | 'fail';
+export type BuildTemplate = 'default' | 'test' | 'build' | 'custom' | 'fail' | 'pipeline';
+
+/** Matches the backend api.CreatePipelineBuildRequest JSON shape. */
+export interface CreatePipelineBuildRequest {
+  project_id: string;
+  pipeline_yaml: string;
+}
 
 /** Matches backend api.QueueBuildStepInput JSON shape. */
 export interface QueueBuildStepInput {

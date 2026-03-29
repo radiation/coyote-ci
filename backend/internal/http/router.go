@@ -22,6 +22,7 @@ func NewRouter(buildHandler *handler.BuildHandler) nethttp.Handler {
 
 	r.Route("/builds", func(r chi.Router) {
 		r.Post("/", buildHandler.CreateBuild)
+		r.Post("/pipeline", buildHandler.CreatePipelineBuild)
 		r.Get("/", buildHandler.ListBuilds)
 		r.Get("/{buildID}", buildHandler.GetBuild)
 		r.Get("/{buildID}/steps", buildHandler.GetBuildSteps)

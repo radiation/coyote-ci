@@ -5,5 +5,6 @@ export {
 	getStepLogs,
 	buildStepLogStreamURL,
 	createBuild,
+	createPipelineBuild,
 	queueBuild,
 } from './client';

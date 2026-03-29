@@ -52,6 +52,12 @@ definitions:
         type: string
       id:
         type: string
+      pipeline_config_yaml:
+        type: string
+      pipeline_name:
+        type: string
+      pipeline_source:
+        type: string
       project_id:
         type: string
       queued_at:
@@ -132,6 +138,13 @@ definitions:
       timeout_seconds:
         type: integer
       working_dir:
+        type: string
+    type: object
+  api.CreatePipelineBuildRequest:
+    properties:
+      pipeline_yaml:
+        type: string
+      project_id:
         type: string
     type: object
   api.ErrorBody:
@@ -575,6 +588,37 @@ paths:
           schema:
             $ref: '#/definitions/api.ErrorResponse'
       summary: Stream build step logs
+      tags:
+      - builds
+  /builds/pipeline:
+    post:
+      consumes:
+      - application/json
+      description: Parses and validates pipeline YAML, then creates a queued build
+        with resolved steps.
+      parameters:
+      - description: Pipeline build create request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.CreatePipelineBuildRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.BuildEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Create build from pipeline YAML
       tags:
       - builds
   /health:

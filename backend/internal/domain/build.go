@@ -22,4 +22,9 @@ type Build struct {
 	FinishedAt       *time.Time
 	CurrentStepIndex int
 	ErrorMessage     *string
+
+	// Pipeline snapshot: persisted at build creation time for replayability.
+	PipelineConfigYAML *string
+	PipelineName       *string
+	PipelineSource     *string
 }

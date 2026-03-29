@@ -17,6 +17,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
+	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 )
 
@@ -233,6 +234,49 @@ func toCreateBuildStepInputs(steps []api.CreateBuildStepInput) []service.CreateB
 	}
 
 	return out
+}
+
+// CreatePipelineBuild godoc
+// @Summary Create build from pipeline YAML
+// @Description Parses and validates pipeline YAML, then creates a queued build with resolved steps.
+// @Tags builds
+// @Accept json
+// @Produce json
+// @Param request body api.CreatePipelineBuildRequest true "Pipeline build create request"
+// @Success 201 {object} api.BuildEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/pipeline [post]
+func (h *BuildHandler) CreatePipelineBuild(w http.ResponseWriter, r *http.Request) {
+	var req api.CreatePipelineBuildRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+
+	build, err := h.buildService.CreateBuildFromPipeline(r.Context(), service.CreatePipelineBuildInput{
+		ProjectID:    req.ProjectID,
+		PipelineYAML: req.PipelineYAML,
+	})
+	if err != nil {
+		if errors.Is(err, service.ErrProjectIDRequired) || errors.Is(err, service.ErrPipelineYAMLRequired) {
+			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		// Pipeline parse/validation errors are user-facing.
+		if _, ok := err.(pipeline.ValidationErrors); ok {
+			writeErrorJSON(w, http.StatusBadRequest, "pipeline_validation", err.Error())
+			return
+		}
+		if pe, ok := err.(*pipeline.ParseError); ok {
+			writeErrorJSON(w, http.StatusBadRequest, "pipeline_parse", pe.Error())
+			return
+		}
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+
+	writeDataJSON(w, http.StatusCreated, toBuildResponse(build))
 }
 
 // ListBuilds godoc
@@ -482,15 +526,18 @@ func (h *BuildHandler) writeServiceError(w http.ResponseWriter, err error) {
 
 func toBuildResponse(build domain.Build) api.BuildResponse {
 	return api.BuildResponse{
-		ID:               build.ID,
-		ProjectID:        build.ProjectID,
-		Status:           string(build.Status),
-		CreatedAt:        build.CreatedAt.Format(time.RFC3339),
-		QueuedAt:         formatOptionalTime(build.QueuedAt),
-		StartedAt:        formatOptionalTime(build.StartedAt),
-		FinishedAt:       formatOptionalTime(build.FinishedAt),
-		CurrentStepIndex: build.CurrentStepIndex,
-		ErrorMessage:     build.ErrorMessage,
+		ID:                 build.ID,
+		ProjectID:          build.ProjectID,
+		Status:             string(build.Status),
+		CreatedAt:          build.CreatedAt.Format(time.RFC3339),
+		QueuedAt:           formatOptionalTime(build.QueuedAt),
+		StartedAt:          formatOptionalTime(build.StartedAt),
+		FinishedAt:         formatOptionalTime(build.FinishedAt),
+		CurrentStepIndex:   build.CurrentStepIndex,
+		ErrorMessage:       build.ErrorMessage,
+		PipelineConfigYAML: build.PipelineConfigYAML,
+		PipelineName:       build.PipelineName,
+		PipelineSource:     build.PipelineSource,
 	}
 }
 

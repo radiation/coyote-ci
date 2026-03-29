@@ -13,6 +13,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
+	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 )
@@ -26,6 +27,7 @@ var ErrStaleStepClaim = errors.New("stale step claim")
 var ErrRunnerNotConfigured = errors.New("runner not configured")
 var ErrCustomTemplateStepsRequired = errors.New("custom template requires at least one step")
 var ErrCustomTemplateStepCommandRequired = errors.New("custom template step command is required")
+var ErrPipelineYAMLRequired = errors.New("pipeline YAML is required")
 
 const (
 	BuildTemplateDefault = "default"
@@ -122,6 +124,84 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 	}
 
 	return s.buildRepo.Create(ctx, build)
+}
+
+// CreatePipelineBuildInput is the service-level input for creating a build from pipeline YAML.
+type CreatePipelineBuildInput struct {
+	ProjectID    string
+	PipelineYAML string
+	SourcePath   string // e.g. ".coyote/pipeline.yml"
+}
+
+// CreateBuildFromPipeline parses, validates, and resolves pipeline YAML, then creates
+// a queued build with canonical build steps. The raw YAML is snapshot-persisted on the build.
+func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input CreatePipelineBuildInput) (domain.Build, error) {
+	if input.ProjectID == "" {
+		return domain.Build{}, ErrProjectIDRequired
+	}
+	yamlText := strings.TrimSpace(input.PipelineYAML)
+	if yamlText == "" {
+		return domain.Build{}, ErrPipelineYAMLRequired
+	}
+
+	resolved, err := pipeline.LoadAndResolve([]byte(yamlText))
+	if err != nil {
+		return domain.Build{}, err
+	}
+
+	buildID := uuid.NewString()
+	steps := pipelineStepsToDomain(buildID, resolved.Steps)
+
+	pipelineName := resolved.Name
+	var pipelineNamePtr *string
+	if pipelineName != "" {
+		pipelineNamePtr = &pipelineName
+	}
+	var sourcePtr *string
+	if input.SourcePath != "" {
+		sourcePtr = &input.SourcePath
+	}
+
+	build := domain.Build{
+		ID:                 buildID,
+		ProjectID:          input.ProjectID,
+		Status:             domain.BuildStatusQueued,
+		CreatedAt:          time.Now().UTC(),
+		CurrentStepIndex:   0,
+		PipelineConfigYAML: &yamlText,
+		PipelineName:       pipelineNamePtr,
+		PipelineSource:     sourcePtr,
+	}
+
+	return s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+}
+
+// pipelineStepsToDomain converts resolved pipeline steps into canonical domain build steps.
+func pipelineStepsToDomain(buildID string, steps []pipeline.ResolvedStep) []domain.BuildStep {
+	out := make([]domain.BuildStep, 0, len(steps))
+	for idx, rs := range steps {
+		env := rs.Env
+		if env == nil {
+			env = map[string]string{}
+		}
+		workingDir := rs.WorkingDir
+		if workingDir == "" {
+			workingDir = "."
+		}
+		out = append(out, domain.BuildStep{
+			ID:             uuid.NewString(),
+			BuildID:        buildID,
+			StepIndex:      idx,
+			Name:           rs.Name,
+			Command:        "sh",
+			Args:           []string{"-c", rs.Run},
+			Env:            env,
+			WorkingDir:     workingDir,
+			TimeoutSeconds: rs.TimeoutSeconds,
+			Status:         domain.BuildStepStatusPending,
+		})
+	}
+	return out
 }
 
 func (s *BuildService) GetBuild(ctx context.Context, id string) (domain.Build, error) {

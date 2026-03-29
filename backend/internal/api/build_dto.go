@@ -16,6 +16,11 @@ type QueueBuildStepInput struct {
 	Command string `json:"command"`
 }
 
+type CreatePipelineBuildRequest struct {
+	ProjectID    string `json:"project_id"`
+	PipelineYAML string `json:"pipeline_yaml"`
+}
+
 type CreateBuildStepInput struct {
 	Name           string            `json:"name"`
 	Command        string            `json:"command,omitempty"`
@@ -59,15 +64,18 @@ type StepLogsEnvelope struct {
 }
 
 type BuildResponse struct {
-	ID               string  `json:"id"`
-	ProjectID        string  `json:"project_id"`
-	Status           string  `json:"status"`
-	CreatedAt        string  `json:"created_at"`
-	QueuedAt         *string `json:"queued_at"`
-	StartedAt        *string `json:"started_at"`
-	FinishedAt       *string `json:"finished_at"`
-	CurrentStepIndex int     `json:"current_step_index"`
-	ErrorMessage     *string `json:"error_message"`
+	ID                 string  `json:"id"`
+	ProjectID          string  `json:"project_id"`
+	Status             string  `json:"status"`
+	CreatedAt          string  `json:"created_at"`
+	QueuedAt           *string `json:"queued_at"`
+	StartedAt          *string `json:"started_at"`
+	FinishedAt         *string `json:"finished_at"`
+	CurrentStepIndex   int     `json:"current_step_index"`
+	ErrorMessage       *string `json:"error_message"`
+	PipelineConfigYAML *string `json:"pipeline_config_yaml,omitempty"`
+	PipelineName       *string `json:"pipeline_name,omitempty"`
+	PipelineSource     *string `json:"pipeline_source,omitempty"`
 }
 
 type BuildListResponse struct {
