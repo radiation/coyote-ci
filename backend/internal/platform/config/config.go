@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 )
 
@@ -16,6 +17,10 @@ type Config struct {
 	DBSSLMode        string
 	StepLeaseSeconds int
 	WorkerStatusAddr string
+
+	ExecutionBackend       string
+	ExecutionDefaultImage  string
+	ExecutionWorkspaceRoot string
 }
 
 func Load() Config {
@@ -29,6 +34,10 @@ func Load() Config {
 		DBSSLMode:        getEnv("DB_SSLMODE", "disable"),
 		StepLeaseSeconds: getEnvInt("WORKER_STEP_LEASE_SECONDS", 45),
 		WorkerStatusAddr: getEnv("WORKER_STATUS_ADDR", ""),
+
+		ExecutionBackend:       getEnv("WORKER_EXECUTION_BACKEND", "docker"),
+		ExecutionDefaultImage:  getEnv("WORKER_EXECUTION_DEFAULT_IMAGE", "alpine:3.20"),
+		ExecutionWorkspaceRoot: getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
 	}
 }
 
