@@ -36,6 +36,10 @@ func TestGitFetcher_Fetch(t *testing.T) {
 
 	expectedSHA := mustOutput(t, workDir, "git", "rev-parse", "HEAD")
 
+	mustRun(t, workDir, "git", "checkout", "-b", "feature/repo-cloning")
+	mustRun(t, workDir, "git", "push", "origin", "feature/repo-cloning")
+	featureSHA := mustOutput(t, workDir, "git", "rev-parse", "HEAD")
+
 	fetcher := NewGitFetcher()
 
 	t.Run("fetch by branch", func(t *testing.T) {
@@ -67,6 +71,18 @@ func TestGitFetcher_Fetch(t *testing.T) {
 
 		if commitSHA != expectedSHA {
 			t.Fatalf("expected SHA %q, got %q", expectedSHA, commitSHA)
+		}
+	})
+
+	t.Run("fetch by remote feature branch", func(t *testing.T) {
+		localPath, commitSHA, err := fetcher.Fetch(context.Background(), remoteDir, "feature/repo-cloning")
+		if err != nil {
+			t.Fatalf("fetch failed: %v", err)
+		}
+		defer func() { _ = os.RemoveAll(localPath) }()
+
+		if commitSHA != featureSHA {
+			t.Fatalf("expected SHA %q, got %q", featureSHA, commitSHA)
 		}
 	})
 

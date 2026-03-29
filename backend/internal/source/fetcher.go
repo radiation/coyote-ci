@@ -59,7 +59,12 @@ func (g *GitFetcher) Fetch(ctx context.Context, repoURL string, ref string) (str
 		return "", "", fmt.Errorf("cloning repo %s: %w", repoURL, err)
 	}
 
-	err = runGit(ctx, tmpDir, "checkout", "--detach", ref)
+	resolvedRef, err := resolveRefCommit(ctx, tmpDir, ref)
+	if err != nil {
+		return "", "", fmt.Errorf("resolving ref %q: %w", ref, err)
+	}
+
+	err = runGit(ctx, tmpDir, "checkout", "--detach", resolvedRef)
 	if err != nil {
 		return "", "", fmt.Errorf("checking out ref %q: %w", ref, err)
 	}
@@ -106,4 +111,27 @@ func gitOutput(ctx context.Context, dir string, args ...string) (string, error) 
 		return "", err
 	}
 	return string(out), nil
+}
+
+func resolveRefCommit(ctx context.Context, dir string, ref string) (string, error) {
+	candidates := []string{
+		ref + "^{commit}",
+		"origin/" + ref + "^{commit}",
+		"refs/remotes/origin/" + ref + "^{commit}",
+		"refs/tags/" + ref + "^{commit}",
+	}
+
+	var lastErr error
+	for _, candidate := range candidates {
+		out, err := gitOutput(ctx, dir, "rev-parse", "--verify", candidate)
+		if err == nil {
+			return strings.TrimSpace(out), nil
+		}
+		lastErr = err
+	}
+
+	if lastErr == nil {
+		lastErr = errors.New("unable to resolve ref")
+	}
+	return "", lastErr
 }
