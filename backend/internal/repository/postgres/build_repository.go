@@ -20,8 +20,8 @@ func NewBuildRepository(db *sql.DB) *BuildRepository {
 
 func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domain.Build, error) {
 	const query = `
-		INSERT INTO builds (id, project_id, status, created_at, current_step_index)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO builds (id, project_id, status, created_at, current_step_index, pipeline_config_yaml, pipeline_name, pipeline_source)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
 
 	if build.CurrentStepIndex < 0 {
@@ -36,6 +36,9 @@ func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domai
 		string(build.Status),
 		build.CreatedAt,
 		build.CurrentStepIndex,
+		build.PipelineConfigYAML,
+		build.PipelineName,
+		build.PipelineSource,
 	)
 	if err != nil {
 		return domain.Build{}, err
@@ -56,12 +59,12 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 	}()
 
 	const createQuery = `
-		INSERT INTO builds (id, project_id, status, created_at, queued_at, current_step_index, error_message)
-		VALUES ($1, $2, 'queued', $3, COALESCE($4, NOW()), 0, NULL)
-		RETURNING id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message
+		INSERT INTO builds (id, project_id, status, created_at, queued_at, current_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source)
+		VALUES ($1, $2, 'queued', $3, COALESCE($4, NOW()), 0, NULL, $5, $6, $7)
+		RETURNING ` + buildColumns + `
 	`
 
-	build, err = scanBuild(tx.QueryRowContext(ctx, createQuery, build.ID, build.ProjectID, build.CreatedAt, build.QueuedAt))
+	build, err = scanBuild(tx.QueryRowContext(ctx, createQuery, build.ID, build.ProjectID, build.CreatedAt, build.QueuedAt, build.PipelineConfigYAML, build.PipelineName, build.PipelineSource))
 	if err != nil {
 		return domain.Build{}, err
 	}
@@ -140,8 +143,8 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 }
 
 func (r *BuildRepository) List(ctx context.Context) (builds []domain.Build, err error) {
-	const query = `
-		SELECT id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message
+	query := `
+		SELECT ` + buildColumns + `
 		FROM builds
 		ORDER BY created_at DESC
 	`
@@ -173,8 +176,8 @@ func (r *BuildRepository) List(ctx context.Context) (builds []domain.Build, err 
 }
 
 func (r *BuildRepository) GetByID(ctx context.Context, id string) (domain.Build, error) {
-	const query = `
-		SELECT id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message
+	query := `
+		SELECT ` + buildColumns + `
 		FROM builds
 		WHERE id = $1
 	`
@@ -191,7 +194,7 @@ func (r *BuildRepository) GetByID(ctx context.Context, id string) (domain.Build,
 }
 
 func (r *BuildRepository) UpdateStatus(ctx context.Context, id string, status domain.BuildStatus, errorMessage *string) (domain.Build, error) {
-	const query = `
+	query := `
 		UPDATE builds
 		SET status = $2,
 			queued_at = CASE WHEN $2 = 'queued' THEN COALESCE(queued_at, NOW()) ELSE queued_at END,
@@ -199,7 +202,7 @@ func (r *BuildRepository) UpdateStatus(ctx context.Context, id string, status do
 			finished_at = CASE WHEN $2 IN ('success', 'failed') THEN NOW() ELSE finished_at END,
 			error_message = CASE WHEN $2 = 'failed' THEN $3 ELSE NULL END
 		WHERE id = $1
-		RETURNING id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message
+		RETURNING ` + buildColumns + `
 	`
 
 	build, err := scanBuild(r.db.QueryRowContext(ctx, query, id, string(status), errorMessage))
@@ -224,14 +227,14 @@ func (r *BuildRepository) QueueBuild(ctx context.Context, id string, steps []dom
 		}
 	}()
 
-	const queueQuery = `
+	queueQuery := `
 		UPDATE builds
 		SET status = 'queued',
 			queued_at = COALESCE(queued_at, NOW()),
 			current_step_index = 0,
 			error_message = NULL
 		WHERE id = $1
-		RETURNING id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message
+		RETURNING ` + buildColumns + `
 	`
 
 	build, err := scanBuild(tx.QueryRowContext(ctx, queueQuery, id))
@@ -324,11 +327,11 @@ func (r *BuildRepository) QueueBuild(ctx context.Context, id string, steps []dom
 }
 
 func (r *BuildRepository) UpdateCurrentStepIndex(ctx context.Context, id string, currentStepIndex int) (domain.Build, error) {
-	const query = `
+	query := `
 		UPDATE builds
 		SET current_step_index = $2
 		WHERE id = $1
-		RETURNING id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message
+		RETURNING ` + buildColumns + `
 	`
 
 	build, err := scanBuild(r.db.QueryRowContext(ctx, query, id, currentStepIndex))

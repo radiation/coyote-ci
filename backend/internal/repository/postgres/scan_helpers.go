@@ -11,6 +11,9 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
+// buildColumns is the canonical column list for build SELECT/RETURNING clauses.
+const buildColumns = `id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source`
+
 func scanBuild(scanner rowScanner) (domain.Build, error) {
 	var build domain.Build
 	var status string
@@ -18,6 +21,9 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 	var startedAt sql.NullTime
 	var finishedAt sql.NullTime
 	var errorMessage sql.NullString
+	var pipelineConfigYAML sql.NullString
+	var pipelineName sql.NullString
+	var pipelineSource sql.NullString
 
 	err := scanner.Scan(
 		&build.ID,
@@ -29,6 +35,9 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 		&finishedAt,
 		&build.CurrentStepIndex,
 		&errorMessage,
+		&pipelineConfigYAML,
+		&pipelineName,
+		&pipelineSource,
 	)
 	if err != nil {
 		return domain.Build{}, err
@@ -50,6 +59,18 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 	if errorMessage.Valid {
 		errMsg := errorMessage.String
 		build.ErrorMessage = &errMsg
+	}
+	if pipelineConfigYAML.Valid {
+		v := pipelineConfigYAML.String
+		build.PipelineConfigYAML = &v
+	}
+	if pipelineName.Valid {
+		v := pipelineName.String
+		build.PipelineName = &v
+	}
+	if pipelineSource.Valid {
+		v := pipelineSource.String
+		build.PipelineSource = &v
 	}
 
 	return build, nil

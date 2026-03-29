@@ -1409,3 +1409,169 @@ func TestBuildService_RenewStepLease_SucceedsForActiveClaim(t *testing.T) {
 		t.Fatalf("expected lease extension to %s, got %v", lease, step.LeaseExpiresAt)
 	}
 }
+
+func TestBuildService_CreateBuildFromPipeline(t *testing.T) {
+	validYAML := `
+version: 1
+pipeline:
+  name: backend-ci
+env:
+  CI: "true"
+steps:
+  - name: Lint
+    run: golangci-lint run
+    working_dir: backend
+    timeout_seconds: 300
+    env:
+      LINT_STRICT: "1"
+  - name: Test
+    run: go test ./...
+`
+
+	t.Run("creates queued build with correct steps", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+
+		build, err := svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{
+			ProjectID:    "proj-1",
+			PipelineYAML: validYAML,
+			SourcePath:   ".coyote/pipeline.yml",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if build.Status != domain.BuildStatusQueued {
+			t.Errorf("expected queued status, got %s", build.Status)
+		}
+		if build.ProjectID != "proj-1" {
+			t.Errorf("expected project_id proj-1, got %s", build.ProjectID)
+		}
+		if build.PipelineConfigYAML == nil {
+			t.Fatal("expected pipeline_config_yaml to be set")
+		}
+		if build.PipelineName == nil || *build.PipelineName != "backend-ci" {
+			t.Errorf("expected pipeline_name backend-ci, got %v", build.PipelineName)
+		}
+		if build.PipelineSource == nil || *build.PipelineSource != ".coyote/pipeline.yml" {
+			t.Errorf("expected pipeline_source, got %v", build.PipelineSource)
+		}
+
+		if len(repo.steps) != 2 {
+			t.Fatalf("expected 2 steps, got %d", len(repo.steps))
+		}
+
+		lint := repo.steps[0]
+		if lint.Name != "Lint" {
+			t.Errorf("step 0 name: got %q", lint.Name)
+		}
+		if lint.Command != "sh" || len(lint.Args) < 2 || lint.Args[1] != "golangci-lint run" {
+			t.Errorf("step 0 command not resolved correctly: %s %v", lint.Command, lint.Args)
+		}
+		if lint.WorkingDir != "backend" {
+			t.Errorf("step 0 working_dir: got %q", lint.WorkingDir)
+		}
+		if lint.TimeoutSeconds != 300 {
+			t.Errorf("step 0 timeout: got %d", lint.TimeoutSeconds)
+		}
+		if lint.Env["CI"] != "true" {
+			t.Errorf("step 0 should inherit pipeline env CI=true")
+		}
+		if lint.Env["LINT_STRICT"] != "1" {
+			t.Errorf("step 0 should have LINT_STRICT=1")
+		}
+
+		test := repo.steps[1]
+		if test.Name != "Test" {
+			t.Errorf("step 1 name: got %q", test.Name)
+		}
+		if test.Env["CI"] != "true" {
+			t.Errorf("step 1 should inherit pipeline env CI=true")
+		}
+	})
+
+	t.Run("missing project_id", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+
+		_, err := svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{
+			PipelineYAML: validYAML,
+		})
+		if !errors.Is(err, ErrProjectIDRequired) {
+			t.Errorf("expected ErrProjectIDRequired, got %v", err)
+		}
+	})
+
+	t.Run("empty yaml", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+
+		_, err := svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{
+			ProjectID:    "proj-1",
+			PipelineYAML: "",
+		})
+		if !errors.Is(err, ErrPipelineYAMLRequired) {
+			t.Errorf("expected ErrPipelineYAMLRequired, got %v", err)
+		}
+	})
+
+	t.Run("invalid yaml", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+
+		_, err := svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{
+			ProjectID:    "proj-1",
+			PipelineYAML: "version: 2\nsteps:\n  - name: X\n    run: echo",
+		})
+		if err == nil {
+			t.Fatal("expected validation error")
+		}
+		if !strings.Contains(err.Error(), "version") {
+			t.Errorf("expected version error, got: %v", err)
+		}
+	})
+
+	t.Run("env merge step overrides pipeline", func(t *testing.T) {
+		yaml := `
+version: 1
+env:
+  SHARED: from-pipeline
+steps:
+  - name: Step1
+    run: echo
+    env:
+      SHARED: from-step
+`
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		_, err := svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{
+			ProjectID:    "proj-1",
+			PipelineYAML: yaml,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if repo.steps[0].Env["SHARED"] != "from-step" {
+			t.Errorf("step env should override pipeline env, got %q", repo.steps[0].Env["SHARED"])
+		}
+	})
+
+	t.Run("pipeline snapshot persisted", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		build, err := svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{
+			ProjectID:    "proj-1",
+			PipelineYAML: validYAML,
+			SourcePath:   ".coyote/pipeline.yml",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if build.PipelineConfigYAML == nil {
+			t.Fatal("expected pipeline YAML snapshot")
+		}
+		if !strings.Contains(*build.PipelineConfigYAML, "golangci-lint") {
+			t.Error("pipeline YAML snapshot should contain original YAML content")
+		}
+	})
+}

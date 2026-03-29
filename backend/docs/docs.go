@@ -85,6 +85,52 @@ const docTemplate = `{
                 }
             }
         },
+        "/builds/pipeline": {
+            "post": {
+                "description": "Parses and validates pipeline YAML, then creates a queued build with resolved steps.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "builds"
+                ],
+                "summary": "Create build from pipeline YAML",
+                "parameters": [
+                    {
+                        "description": "Pipeline build create request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.CreatePipelineBuildRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/api.BuildEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/builds/{buildID}": {
             "get": {
                 "description": "Returns build details by id.",
@@ -678,6 +724,15 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "pipeline_config_yaml": {
+                    "type": "string"
+                },
+                "pipeline_name": {
+                    "type": "string"
+                },
+                "pipeline_source": {
+                    "type": "string"
+                },
                 "project_id": {
                     "type": "string"
                 },
@@ -800,6 +855,17 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "working_dir": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.CreatePipelineBuildRequest": {
+            "type": "object",
+            "properties": {
+                "pipeline_yaml": {
+                    "type": "string"
+                },
+                "project_id": {
                     "type": "string"
                 }
             }

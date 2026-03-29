@@ -891,3 +891,75 @@ func TestBuildHandler_QueueBuild_CustomTemplateValidationErrors(t *testing.T) {
 		t.Fatalf("expected error %q, got %q", service.ErrCustomTemplateStepCommandRequired.Error(), got)
 	}
 }
+
+func TestCreatePipelineBuild(t *testing.T) {
+	t.Run("valid pipeline creates queued build", func(t *testing.T) {
+		repo := &fakeRepo{}
+		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		h := NewBuildHandler(svc)
+
+		body := `{
+			"project_id": "proj-1",
+			"pipeline_yaml": "version: 1\nsteps:\n  - name: Lint\n    run: golangci-lint run\n  - name: Test\n    run: go test ./...\n"
+		}`
+
+		req := httptest.NewRequest(http.MethodPost, "/builds/pipeline", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.CreatePipelineBuild(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		data := resp["data"]
+		if data["status"] != "queued" {
+			t.Errorf("expected queued, got %v", data["status"])
+		}
+		buildID, ok := data["id"].(string)
+		if !ok {
+			t.Fatal("expected string build id in response")
+		}
+		steps := repo.steps[buildID]
+		if len(steps) != 2 {
+			t.Fatalf("expected 2 steps, got %d", len(steps))
+		}
+		if steps[0].Name != "Lint" {
+			t.Errorf("step 0 name: got %q", steps[0].Name)
+		}
+	})
+
+	t.Run("missing project_id returns 400", func(t *testing.T) {
+		repo := &fakeRepo{}
+		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		h := NewBuildHandler(svc)
+
+		body := `{"pipeline_yaml": "version: 1\nsteps:\n  - name: X\n    run: echo\n"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/pipeline", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreatePipelineBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("invalid YAML returns 400", func(t *testing.T) {
+		repo := &fakeRepo{}
+		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id": "proj-1", "pipeline_yaml": "version: 2\nsteps:\n  - name: X\n    run: echo\n"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/pipeline", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreatePipelineBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}
