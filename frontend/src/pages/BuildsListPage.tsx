@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useNavigate } from 'react-router-dom';
-import { createBuild, createPipelineBuild, listBuilds, queueBuild } from '../api';
+import { createBuild, createPipelineBuild, createRepoBuild, listBuilds, queueBuild } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 import type { Build, BuildTemplate, QueueBuildStepInput } from '../types/build';
 import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL, isActiveBuild } from '../utils/build';
@@ -25,6 +25,8 @@ export function BuildsListPage() {
   const [template, setTemplate] = useState<BuildTemplate>('default');
   const [customCommands, setCustomCommands] = useState('');
   const [pipelineYAML, setPipelineYAML] = useState(PIPELINE_YAML_EXAMPLE);
+  const [repoURL, setRepoURL] = useState('');
+  const [repoRef, setRepoRef] = useState('main');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -92,7 +94,24 @@ export function BuildsListPage() {
     },
   });
 
-  const isSubmitting = queueBuildMutation.isPending || pipelineBuildMutation.isPending;
+  const repoBuildMutation = useMutation({
+    mutationFn: async ({ targetProjectID, targetRepoURL, targetRef }: { targetProjectID: string; targetRepoURL: string; targetRef: string }) => {
+      return createRepoBuild({ project_id: targetProjectID, repo_url: targetRepoURL, ref: targetRef });
+    },
+    onMutate: () => {
+      setSuccessMessage(null);
+      setErrorMessage(null);
+    },
+    onSuccess: async (build) => {
+      await queryClient.invalidateQueries({ queryKey: ['builds'] });
+      navigate(`/builds/${build.id}`);
+    },
+    onError: (mutationError) => {
+      setErrorMessage(`Failed to create repo build: ${String(mutationError)}`);
+    },
+  });
+
+  const isSubmitting = queueBuildMutation.isPending || pipelineBuildMutation.isPending || repoBuildMutation.isPending;
 
   const onQueueBuild = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -109,6 +128,26 @@ export function BuildsListPage() {
         return;
       }
       pipelineBuildMutation.mutate({ targetProjectID: trimmedProjectID, yaml: trimmedYAML });
+      return;
+    }
+
+    if (template === 'repo') {
+      const trimmedRepoURL = repoURL.trim();
+      const trimmedRef = repoRef.trim();
+      if (!trimmedRepoURL) {
+        setErrorMessage('Repository URL is required.');
+        return;
+      }
+      if (!trimmedRef) {
+        setErrorMessage('Ref is required.');
+        return;
+      }
+
+      repoBuildMutation.mutate({
+        targetProjectID: trimmedProjectID,
+        targetRepoURL: trimmedRepoURL,
+        targetRef: trimmedRef,
+      });
       return;
     }
 
@@ -156,6 +195,7 @@ export function BuildsListPage() {
           <option value="build">build</option>
           <option value="custom">custom</option>
           <option value="pipeline">pipeline</option>
+          <option value="repo">repo</option>
         </select>
         {template === 'custom' && (
           <div className="queue-build-custom-input">
@@ -184,8 +224,29 @@ export function BuildsListPage() {
             <p className="subtle-text">Paste a Coyote CI pipeline definition. The backend will validate it.</p>
           </div>
         )}
+        {template === 'repo' && (
+          <div className="queue-build-custom-input">
+            <label htmlFor="repo-url">Repository URL</label>
+            <input
+              id="repo-url"
+              value={repoURL}
+              onChange={(event) => setRepoURL(event.target.value)}
+              disabled={isSubmitting}
+              placeholder="https://github.com/org/repo.git"
+            />
+            <label htmlFor="repo-ref">Ref</label>
+            <input
+              id="repo-ref"
+              value={repoRef}
+              onChange={(event) => setRepoRef(event.target.value)}
+              disabled={isSubmitting}
+              placeholder="main"
+            />
+            <p className="subtle-text">Public HTTPS repositories are the current expected path unless credentials are separately configured.</p>
+          </div>
+        )}
         <button type="submit" disabled={isSubmitting}>
-          {isSubmitting ? 'Submitting…' : template === 'pipeline' ? 'Create Pipeline Build' : 'Queue Build'}
+          {isSubmitting ? 'Submitting…' : template === 'pipeline' ? 'Create Pipeline Build' : template === 'repo' ? 'Create Repo Build' : 'Queue Build'}
         </button>
       </form>
 

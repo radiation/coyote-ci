@@ -25,6 +25,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o worker ./cmd/worker
 FROM debian:bookworm-slim
 
 WORKDIR /app
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends git ca-certificates \
+	&& rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/server /app/server
 COPY --from=builder /app/worker /app/worker
 

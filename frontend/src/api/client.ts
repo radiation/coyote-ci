@@ -6,6 +6,7 @@ import type {
   BuildStepsResponse,
   CreateBuildRequest,
   CreatePipelineBuildRequest,
+  CreateRepoBuildRequest,
   DataEnvelope,
   QueueBuildStepInput,
   StepLogsResponse,
@@ -80,6 +81,11 @@ export async function createBuild(input: CreateBuildRequest): Promise<Build> {
 
 export async function createPipelineBuild(input: CreatePipelineBuildRequest): Promise<Build> {
   const envelope = await postJSON<DataEnvelope<Build>, CreatePipelineBuildRequest>('/builds/pipeline', input);
+  return envelope.data;
+}
+
+export async function createRepoBuild(input: CreateRepoBuildRequest): Promise<Build> {
+  const envelope = await postJSON<DataEnvelope<Build>, CreateRepoBuildRequest>('/builds/repo', input);
   return envelope.data;
 }
 

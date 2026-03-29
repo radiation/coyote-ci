@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -272,6 +273,7 @@ func (h *BuildHandler) CreatePipelineBuild(w http.ResponseWriter, r *http.Reques
 			writeErrorJSON(w, http.StatusBadRequest, "pipeline_parse", pe.Error())
 			return
 		}
+		log.Printf("CreatePipelineBuild unexpected error: %v", err)
 		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		return
 	}
@@ -323,6 +325,7 @@ func (h *BuildHandler) CreateRepoBuild(w http.ResponseWriter, r *http.Request) {
 			writeErrorJSON(w, http.StatusBadRequest, "pipeline_parse", pe.Error())
 			return
 		}
+		log.Printf("CreateRepoBuild unexpected error: %v", err)
 		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		return
 	}
