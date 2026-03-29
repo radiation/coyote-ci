@@ -38,6 +38,23 @@ Use this mental model:
 - **handlers/routes** are thin and handle HTTP request/response concerns only
 - **composition root** wires dependencies together explicitly
 
+## Database Migrations (Greenfield Mode)
+
+Until further notice, this project uses a **single migration file** for schema definition.
+
+Guidelines:
+- Do NOT create new numbered migration files (e.g., 002_, 003_, etc.)
+- Instead, modify the existing initial migration (e.g., `001_init.sql`) directly
+- Assume the database will be dropped and recreated on each run
+- Do NOT write ALTER TABLE migrations unless explicitly instructed
+
+Rationale:
+- This is a greenfield project prioritizing speed and iteration
+- Migration history is not required yet
+- Keeping a single schema definition avoids unnecessary complexity
+
+When this changes, explicit instructions will be provided.
+
 ## Lifecycle and state machine guidance
 
 For persisted workflow transitions:

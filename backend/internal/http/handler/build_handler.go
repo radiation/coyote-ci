@@ -279,6 +279,57 @@ func (h *BuildHandler) CreatePipelineBuild(w http.ResponseWriter, r *http.Reques
 	writeDataJSON(w, http.StatusCreated, toBuildResponse(build))
 }
 
+// CreateRepoBuild godoc
+// @Summary Create build from repository
+// @Description Clones a repository, loads .coyote/pipeline.yml, then creates a queued build.
+// @Tags builds
+// @Accept json
+// @Produce json
+// @Param request body api.CreateRepoBuildRequest true "Repo build create request"
+// @Success 201 {object} api.BuildEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/repo [post]
+func (h *BuildHandler) CreateRepoBuild(w http.ResponseWriter, r *http.Request) {
+	var req api.CreateRepoBuildRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+
+	build, err := h.buildService.CreateBuildFromRepo(r.Context(), service.CreateRepoBuildInput{
+		ProjectID: req.ProjectID,
+		RepoURL:   req.RepoURL,
+		Ref:       req.Ref,
+	})
+	if err != nil {
+		if errors.Is(err, service.ErrProjectIDRequired) || errors.Is(err, service.ErrRepoURLRequired) || errors.Is(err, service.ErrRefRequired) {
+			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		if errors.Is(err, service.ErrPipelineFileNotFound) {
+			writeErrorJSON(w, http.StatusBadRequest, "pipeline_not_found", err.Error())
+			return
+		}
+		if errors.Is(err, service.ErrRepoFetcherNotConfigured) {
+			writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "repo fetcher not configured")
+			return
+		}
+		if _, ok := err.(pipeline.ValidationErrors); ok {
+			writeErrorJSON(w, http.StatusBadRequest, "pipeline_validation", err.Error())
+			return
+		}
+		if pe, ok := err.(*pipeline.ParseError); ok {
+			writeErrorJSON(w, http.StatusBadRequest, "pipeline_parse", pe.Error())
+			return
+		}
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+
+	writeDataJSON(w, http.StatusCreated, toBuildResponse(build))
+}
+
 // ListBuilds godoc
 // @Summary List builds
 // @Description Lists all builds sorted by newest first.
@@ -538,6 +589,9 @@ func toBuildResponse(build domain.Build) api.BuildResponse {
 		PipelineConfigYAML: build.PipelineConfigYAML,
 		PipelineName:       build.PipelineName,
 		PipelineSource:     build.PipelineSource,
+		RepoURL:            build.RepoURL,
+		Ref:                build.Ref,
+		CommitSHA:          build.CommitSHA,
 	}
 }
 

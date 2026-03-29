@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -1572,6 +1573,217 @@ steps:
 		}
 		if !strings.Contains(*build.PipelineConfigYAML, "golangci-lint") {
 			t.Error("pipeline YAML snapshot should contain original YAML content")
+		}
+	})
+}
+
+// fakeRepoFetcher implements source.RepoFetcher for testing.
+type fakeRepoFetcher struct {
+	localPath string
+	commitSHA string
+	err       error
+}
+
+func (f *fakeRepoFetcher) Fetch(_ context.Context, _ string, _ string) (string, string, error) {
+	if f.err != nil {
+		return "", "", f.err
+	}
+	return f.localPath, f.commitSHA, nil
+}
+
+func TestBuildService_CreateBuildFromRepo(t *testing.T) {
+	// Set up a temp dir with a valid pipeline file.
+	setupTempRepo := func(t *testing.T, yamlContent string) string {
+		t.Helper()
+		tmpDir := t.TempDir()
+		coyoteDir := tmpDir + "/.coyote"
+		if err := os.MkdirAll(coyoteDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(coyoteDir+"/pipeline.yml", []byte(yamlContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return tmpDir
+	}
+
+	validYAML := `version: 1
+pipeline:
+  name: repo-ci
+steps:
+  - name: test
+    run: go test ./...
+  - name: lint
+    run: golangci-lint run
+`
+
+	t.Run("creates build with repo metadata", func(t *testing.T) {
+		tmpDir := setupTempRepo(t, validYAML)
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{
+			localPath: tmpDir,
+			commitSHA: "abc123def456",
+		})
+
+		build, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID: "proj-1",
+			RepoURL:   "https://github.com/org/repo.git",
+			Ref:       "main",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if build.Status != domain.BuildStatusQueued {
+			t.Errorf("expected queued, got %s", build.Status)
+		}
+		if build.RepoURL == nil || *build.RepoURL != "https://github.com/org/repo.git" {
+			t.Errorf("expected repo_url, got %v", build.RepoURL)
+		}
+		if build.Ref == nil || *build.Ref != "main" {
+			t.Errorf("expected ref main, got %v", build.Ref)
+		}
+		if build.CommitSHA == nil || *build.CommitSHA != "abc123def456" {
+			t.Errorf("expected commit_sha, got %v", build.CommitSHA)
+		}
+		if build.PipelineConfigYAML == nil {
+			t.Fatal("expected pipeline YAML snapshot")
+		}
+		if build.PipelineName == nil || *build.PipelineName != "repo-ci" {
+			t.Errorf("expected pipeline_name repo-ci, got %v", build.PipelineName)
+		}
+		if build.PipelineSource == nil || *build.PipelineSource != ".coyote/pipeline.yml" {
+			t.Errorf("expected logical pipeline_source, got %v", build.PipelineSource)
+		}
+	})
+
+	t.Run("converts steps correctly", func(t *testing.T) {
+		tmpDir := setupTempRepo(t, validYAML)
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{localPath: tmpDir, commitSHA: "abc"})
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID: "proj-1",
+			RepoURL:   "https://example.com/repo.git",
+			Ref:       "main",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(repo.steps) != 2 {
+			t.Fatalf("expected 2 steps, got %d", len(repo.steps))
+		}
+		if repo.steps[0].Name != "test" || repo.steps[0].Command != "sh" {
+			t.Errorf("step 0: got name=%q command=%q", repo.steps[0].Name, repo.steps[0].Command)
+		}
+		if repo.steps[1].Name != "lint" {
+			t.Errorf("step 1: got name=%q", repo.steps[1].Name)
+		}
+	})
+
+	t.Run("missing project_id", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{localPath: "/tmp", commitSHA: "abc"})
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			RepoURL: "https://example.com/repo.git",
+			Ref:     "main",
+		})
+		if !errors.Is(err, ErrProjectIDRequired) {
+			t.Errorf("expected ErrProjectIDRequired, got %v", err)
+		}
+	})
+
+	t.Run("missing repo_url", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{localPath: "/tmp", commitSHA: "abc"})
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID: "proj-1",
+			Ref:       "main",
+		})
+		if !errors.Is(err, ErrRepoURLRequired) {
+			t.Errorf("expected ErrRepoURLRequired, got %v", err)
+		}
+	})
+
+	t.Run("missing ref", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{localPath: "/tmp", commitSHA: "abc"})
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID: "proj-1",
+			RepoURL:   "https://example.com/repo.git",
+		})
+		if !errors.Is(err, ErrRefRequired) {
+			t.Errorf("expected ErrRefRequired, got %v", err)
+		}
+	})
+
+	t.Run("repo fetcher not configured", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID: "proj-1",
+			RepoURL:   "https://example.com/repo.git",
+			Ref:       "main",
+		})
+		if !errors.Is(err, ErrRepoFetcherNotConfigured) {
+			t.Errorf("expected ErrRepoFetcherNotConfigured, got %v", err)
+		}
+	})
+
+	t.Run("repo fetch error", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{err: errors.New("clone failed")})
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID: "proj-1",
+			RepoURL:   "https://example.com/repo.git",
+			Ref:       "main",
+		})
+		if err == nil || !strings.Contains(err.Error(), "clone failed") {
+			t.Errorf("expected clone error, got %v", err)
+		}
+	})
+
+	t.Run("pipeline file not found", func(t *testing.T) {
+		// Use a temp dir without .coyote/pipeline.yml.
+		tmpDir := t.TempDir()
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{localPath: tmpDir, commitSHA: "abc"})
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID: "proj-1",
+			RepoURL:   "https://example.com/repo.git",
+			Ref:       "main",
+		})
+		if !errors.Is(err, ErrPipelineFileNotFound) {
+			t.Errorf("expected ErrPipelineFileNotFound, got %v", err)
+		}
+	})
+
+	t.Run("invalid pipeline YAML", func(t *testing.T) {
+		tmpDir := setupTempRepo(t, "not: valid: pipeline")
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{localPath: tmpDir, commitSHA: "abc"})
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID: "proj-1",
+			RepoURL:   "https://example.com/repo.git",
+			Ref:       "main",
+		})
+		if err == nil {
+			t.Fatal("expected parse/validation error")
 		}
 	})
 }

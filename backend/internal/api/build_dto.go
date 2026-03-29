@@ -21,6 +21,12 @@ type CreatePipelineBuildRequest struct {
 	PipelineYAML string `json:"pipeline_yaml"`
 }
 
+type CreateRepoBuildRequest struct {
+	ProjectID string `json:"project_id"`
+	RepoURL   string `json:"repo_url"`
+	Ref       string `json:"ref"`
+}
+
 type CreateBuildStepInput struct {
 	Name           string            `json:"name"`
 	Command        string            `json:"command,omitempty"`
@@ -76,6 +82,9 @@ type BuildResponse struct {
 	PipelineConfigYAML *string `json:"pipeline_config_yaml,omitempty"`
 	PipelineName       *string `json:"pipeline_name,omitempty"`
 	PipelineSource     *string `json:"pipeline_source,omitempty"`
+	RepoURL            *string `json:"repo_url,omitempty"`
+	Ref                *string `json:"ref,omitempty"`
+	CommitSHA          *string `json:"commit_sha,omitempty"`
 }
 
 type BuildListResponse struct {

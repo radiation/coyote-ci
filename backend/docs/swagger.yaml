@@ -42,6 +42,8 @@ definitions:
     type: object
   api.BuildResponse:
     properties:
+      commit_sha:
+        type: string
       created_at:
         type: string
       current_step_index:
@@ -61,6 +63,10 @@ definitions:
       project_id:
         type: string
       queued_at:
+        type: string
+      ref:
+        type: string
+      repo_url:
         type: string
       started_at:
         type: string
@@ -145,6 +151,15 @@ definitions:
       pipeline_yaml:
         type: string
       project_id:
+        type: string
+    type: object
+  api.CreateRepoBuildRequest:
+    properties:
+      project_id:
+        type: string
+      ref:
+        type: string
+      repo_url:
         type: string
     type: object
   api.ErrorBody:
@@ -619,6 +634,37 @@ paths:
           schema:
             $ref: '#/definitions/api.ErrorResponse'
       summary: Create build from pipeline YAML
+      tags:
+      - builds
+  /builds/repo:
+    post:
+      consumes:
+      - application/json
+      description: Clones a repository, loads .coyote/pipeline.yml, then creates a
+        queued build.
+      parameters:
+      - description: Repo build create request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.CreateRepoBuildRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.BuildEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Create build from repository
       tags:
       - builds
   /health:

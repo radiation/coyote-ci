@@ -131,6 +131,52 @@ const docTemplate = `{
                 }
             }
         },
+        "/builds/repo": {
+            "post": {
+                "description": "Clones a repository, loads .coyote/pipeline.yml, then creates a queued build.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "builds"
+                ],
+                "summary": "Create build from repository",
+                "parameters": [
+                    {
+                        "description": "Repo build create request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.CreateRepoBuildRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/api.BuildEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/builds/{buildID}": {
             "get": {
                 "description": "Returns build details by id.",
@@ -709,6 +755,9 @@ const docTemplate = `{
         "api.BuildResponse": {
             "type": "object",
             "properties": {
+                "commit_sha": {
+                    "type": "string"
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -737,6 +786,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "queued_at": {
+                    "type": "string"
+                },
+                "ref": {
+                    "type": "string"
+                },
+                "repo_url": {
                     "type": "string"
                 },
                 "started_at": {
@@ -866,6 +921,20 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "project_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.CreateRepoBuildRequest": {
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string"
+                },
+                "ref": {
+                    "type": "string"
+                },
+                "repo_url": {
                     "type": "string"
                 }
             }

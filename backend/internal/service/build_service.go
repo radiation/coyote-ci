@@ -3,6 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,6 +19,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
+	"github.com/radiation/coyote-ci/backend/internal/source"
 )
 
 var ErrBuildNotFound = errors.New("build not found")
@@ -28,6 +32,10 @@ var ErrRunnerNotConfigured = errors.New("runner not configured")
 var ErrCustomTemplateStepsRequired = errors.New("custom template requires at least one step")
 var ErrCustomTemplateStepCommandRequired = errors.New("custom template step command is required")
 var ErrPipelineYAMLRequired = errors.New("pipeline YAML is required")
+var ErrRepoURLRequired = errors.New("repo_url is required")
+var ErrRefRequired = errors.New("ref is required")
+var ErrRepoFetcherNotConfigured = errors.New("repo fetcher not configured")
+var ErrPipelineFileNotFound = errors.New(".coyote/pipeline.yml not found in repository")
 
 const (
 	BuildTemplateDefault = "default"
@@ -39,9 +47,10 @@ const (
 
 // BuildService coordinates build lifecycle state transitions and delegates step execution to a runner.
 type BuildService struct {
-	buildRepo repository.BuildRepository
-	runner    runner.Runner
-	logSink   logs.LogSink
+	buildRepo   repository.BuildRepository
+	runner      runner.Runner
+	logSink     logs.LogSink
+	repoFetcher source.RepoFetcher
 }
 
 func NewBuildService(buildRepo repository.BuildRepository, stepRunner runner.Runner, logSink logs.LogSink) *BuildService {
@@ -54,6 +63,11 @@ func NewBuildService(buildRepo repository.BuildRepository, stepRunner runner.Run
 		runner:    stepRunner,
 		logSink:   logSink,
 	}
+}
+
+// SetRepoFetcher attaches a RepoFetcher for repo-backed build creation.
+func (s *BuildService) SetRepoFetcher(fetcher source.RepoFetcher) {
+	s.repoFetcher = fetcher
 }
 
 type CreateBuildInput struct {
@@ -202,6 +216,89 @@ func pipelineStepsToDomain(buildID string, steps []pipeline.ResolvedStep) []doma
 		})
 	}
 	return out
+}
+
+// CreateRepoBuildInput is the service-level input for creating a build from a repository checkout.
+type CreateRepoBuildInput struct {
+	ProjectID string
+	RepoURL   string
+	Ref       string
+}
+
+const pipelineFilePath = ".coyote/pipeline.yml"
+
+// CreateBuildFromRepo clones the repo, loads .coyote/pipeline.yml, parses/validates/resolves
+// it, then creates a queued build with canonical build steps and repo source metadata.
+func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepoBuildInput) (domain.Build, error) {
+	if input.ProjectID == "" {
+		return domain.Build{}, ErrProjectIDRequired
+	}
+	if strings.TrimSpace(input.RepoURL) == "" {
+		return domain.Build{}, ErrRepoURLRequired
+	}
+	if strings.TrimSpace(input.Ref) == "" {
+		return domain.Build{}, ErrRefRequired
+	}
+	if s.repoFetcher == nil {
+		return domain.Build{}, ErrRepoFetcherNotConfigured
+	}
+
+	localPath, commitSHA, err := s.repoFetcher.Fetch(ctx, input.RepoURL, input.Ref)
+	if err != nil {
+		return domain.Build{}, fmt.Errorf("fetching repo: %w", err)
+	}
+	defer func() {
+		if localPath != "" {
+			_ = os.RemoveAll(localPath)
+		}
+	}()
+
+	src := pipeline.FileSource{Path: filepath.Join(localPath, pipelineFilePath)}
+	yamlData, _, err := src.Load()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return domain.Build{}, ErrPipelineFileNotFound
+		}
+		return domain.Build{}, fmt.Errorf("loading pipeline file: %w", err)
+	}
+
+	resolved, err := pipeline.LoadAndResolve(yamlData)
+	if err != nil {
+		return domain.Build{}, err
+	}
+
+	buildID := uuid.NewString()
+	steps := pipelineStepsToDomain(buildID, resolved.Steps)
+
+	yamlText := string(yamlData)
+	var pipelineNamePtr *string
+	if resolved.Name != "" {
+		pipelineNamePtr = &resolved.Name
+	}
+	pipelineSource := pipelineFilePath
+
+	repoURL := strings.TrimSpace(input.RepoURL)
+	ref := strings.TrimSpace(input.Ref)
+	var commitSHAPtr *string
+	if commitSHA != "" {
+		commitSHAPtr = &commitSHA
+	}
+
+	build := domain.Build{
+		ID:                 buildID,
+		ProjectID:          input.ProjectID,
+		Status:             domain.BuildStatusQueued,
+		CreatedAt:          time.Now().UTC(),
+		CurrentStepIndex:   0,
+		PipelineConfigYAML: &yamlText,
+		PipelineName:       pipelineNamePtr,
+		PipelineSource:     &pipelineSource,
+		RepoURL:            &repoURL,
+		Ref:                &ref,
+		CommitSHA:          commitSHAPtr,
+	}
+
+	return s.buildRepo.CreateQueuedBuild(ctx, build, steps)
 }
 
 func (s *BuildService) GetBuild(ctx context.Context, id string) (domain.Build, error) {
