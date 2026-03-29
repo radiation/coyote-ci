@@ -51,6 +51,9 @@ type BuildService struct {
 	runner      runner.Runner
 	logSink     logs.LogSink
 	repoFetcher source.RepoFetcher
+
+	repoWorkspaceRoot string
+	repoWorkspaceMu   sync.Map
 }
 
 func NewBuildService(buildRepo repository.BuildRepository, stepRunner runner.Runner, logSink logs.LogSink) *BuildService {
@@ -68,6 +71,12 @@ func NewBuildService(buildRepo repository.BuildRepository, stepRunner runner.Run
 // SetRepoFetcher attaches a RepoFetcher for repo-backed build creation.
 func (s *BuildService) SetRepoFetcher(fetcher source.RepoFetcher) {
 	s.repoFetcher = fetcher
+}
+
+// SetRepoWorkspaceRoot overrides the default per-build checkout workspace root.
+// When empty, the default root is os.TempDir()/coyote-builds.
+func (s *BuildService) SetRepoWorkspaceRoot(root string) {
+	s.repoWorkspaceRoot = strings.TrimSpace(root)
 }
 
 type CreateBuildInput struct {
@@ -226,6 +235,8 @@ type CreateRepoBuildInput struct {
 }
 
 const pipelineFilePath = ".coyote/pipeline.yml"
+
+const repoWorkspaceDirName = "coyote-builds"
 
 // CreateBuildFromRepo clones the repo, loads .coyote/pipeline.yml, parses/validates/resolves
 // it, then creates a queued build with canonical build steps and repo source metadata.
@@ -424,6 +435,31 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		return runner.RunStepResult{}, StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, ErrRunnerNotConfigured
 	}
 
+	execRequest := request
+	build, getBuildErr := s.buildRepo.GetByID(ctx, request.BuildID)
+	if getBuildErr == nil && build.RepoURL != nil && strings.TrimSpace(*build.RepoURL) != "" {
+		workspacePath, workspaceErr := s.ensureRepoWorkspace(ctx, build)
+		if workspaceErr != nil {
+			now := time.Now().UTC()
+			result := runner.RunStepResult{
+				Status:     runner.RunStepStatusFailed,
+				ExitCode:   -1,
+				Stderr:     workspaceErr.Error(),
+				StartedAt:  now,
+				FinishedAt: now,
+			}
+
+			completionReport, completionErr := s.handleStepResult(ctx, request, result, false)
+			if completionErr != nil {
+				return result, completionReport, errors.Join(workspaceErr, completionErr)
+			}
+
+			return result, completionReport, workspaceErr
+		}
+
+		execRequest.WorkingDir = resolveRepoWorkingDir(workspacePath, request.WorkingDir)
+	}
+
 	hasChunkAppender := false
 	if _, ok := s.logSink.(logs.StepLogChunkAppender); ok {
 		hasChunkAppender = true
@@ -480,9 +516,9 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	usedStreamingRunner := false
 	if streamingRunner, ok := s.runner.(runner.StreamingRunner); ok {
 		usedStreamingRunner = true
-		result, err = streamingRunner.RunStepStream(ctx, request, persistChunk)
+		result, err = streamingRunner.RunStepStream(ctx, execRequest, persistChunk)
 	} else {
-		result, err = s.runner.RunStep(ctx, request)
+		result, err = s.runner.RunStep(ctx, execRequest)
 	}
 
 	if hasChunkAppender && !usedStreamingRunner {
@@ -527,6 +563,96 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	chunkPersistMu.Unlock()
 
 	return result, completionReport, nil
+}
+
+func resolveRepoWorkingDir(workspacePath string, requestedWorkingDir string) string {
+	trimmed := strings.TrimSpace(requestedWorkingDir)
+	if trimmed == "" {
+		trimmed = "."
+	}
+	if filepath.IsAbs(trimmed) {
+		return trimmed
+	}
+	return filepath.Join(workspacePath, trimmed)
+}
+
+func (s *BuildService) workspaceRootPath() string {
+	if s.repoWorkspaceRoot != "" {
+		return s.repoWorkspaceRoot
+	}
+	return filepath.Join(os.TempDir(), repoWorkspaceDirName)
+}
+
+func (s *BuildService) workspaceLock(buildID string) *sync.Mutex {
+	lock, _ := s.repoWorkspaceMu.LoadOrStore(buildID, &sync.Mutex{})
+	mutex, ok := lock.(*sync.Mutex)
+	if ok {
+		return mutex
+	}
+
+	// Defensive fallback if the map was polluted with an unexpected type.
+	mutex = &sync.Mutex{}
+	s.repoWorkspaceMu.Store(buildID, mutex)
+	return mutex
+}
+
+func (s *BuildService) ensureRepoWorkspace(ctx context.Context, build domain.Build) (string, error) {
+	if s.repoFetcher == nil {
+		return "", ErrRepoFetcherNotConfigured
+	}
+	if build.RepoURL == nil || strings.TrimSpace(*build.RepoURL) == "" {
+		return "", ErrRepoURLRequired
+	}
+	if build.ID == "" {
+		return "", errors.New("build id is required for repo workspace")
+	}
+
+	repoURL := strings.TrimSpace(*build.RepoURL)
+	ref := ""
+	if build.CommitSHA != nil {
+		ref = strings.TrimSpace(*build.CommitSHA)
+	}
+	if ref == "" && build.Ref != nil {
+		ref = strings.TrimSpace(*build.Ref)
+	}
+	if ref == "" {
+		return "", ErrRefRequired
+	}
+
+	lock := s.workspaceLock(build.ID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	workspacePath := filepath.Join(s.workspaceRootPath(), build.ID)
+	if info, err := os.Stat(workspacePath); err == nil && info.IsDir() {
+		return workspacePath, nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(workspacePath), 0o755); err != nil {
+		return "", fmt.Errorf("creating repo workspace root: %w", err)
+	}
+
+	tmpPath, _, err := s.repoFetcher.Fetch(ctx, repoURL, ref)
+	if err != nil {
+		return "", fmt.Errorf("fetching repo workspace: %w", err)
+	}
+
+	moved := false
+	defer func() {
+		if !moved && tmpPath != "" {
+			_ = os.RemoveAll(tmpPath)
+		}
+	}()
+
+	if err := os.RemoveAll(workspacePath); err != nil {
+		return "", fmt.Errorf("resetting repo workspace: %w", err)
+	}
+	if err := os.Rename(tmpPath, workspacePath); err != nil {
+		return "", fmt.Errorf("materializing repo workspace: %w", err)
+	}
+	moved = true
+
+	return workspacePath, nil
 }
 
 func (s *BuildService) HandleStepResult(ctx context.Context, request runner.RunStepRequest, result runner.RunStepResult) (StepCompletionReport, error) {

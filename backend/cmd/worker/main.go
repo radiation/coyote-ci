@@ -19,6 +19,7 @@ import (
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	"github.com/radiation/coyote-ci/backend/internal/source"
 )
 
 const defaultPollInterval = 10 * time.Second
@@ -49,6 +50,7 @@ func main() {
 	stepRunner := inprocess.New()
 	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildService(buildRepo, stepRunner, logSink)
+	buildService.SetRepoFetcher(source.NewGitFetcher())
 	leaseDuration := time.Duration(cfg.StepLeaseSeconds) * time.Second
 	workerService := service.NewWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)
 

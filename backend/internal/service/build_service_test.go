@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -908,6 +909,46 @@ func TestBuildService_RunStep_DelegatesToRunner(t *testing.T) {
 	}
 }
 
+func TestBuildService_RunStep_RepoBuildReusesCheckoutWorkspace(t *testing.T) {
+	runner := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", Stderr: ""}}
+	claimToken := "claim-active"
+	repoURL := "https://github.com/org/repo.git"
+	ref := "main"
+	buildID := "build-repo-reuse"
+
+	buildRepo := &fakeBuildRepository{
+		build: domain.Build{ID: buildID, Status: domain.BuildStatusRunning, CurrentStepIndex: 0, RepoURL: &repoURL, Ref: &ref},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	fetchSource := t.TempDir()
+	fetcher := &fakeRepoFetcher{localPath: fetchSource, commitSHA: "abc123"}
+
+	svc := NewBuildService(buildRepo, runner, &fakeLogSink{})
+	svc.SetRepoFetcher(fetcher)
+	svc.SetRepoWorkspaceRoot(t.TempDir())
+
+	request := steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "test", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "backend"}
+	if _, _, err := svc.RunStep(context.Background(), request); err != nil {
+		t.Fatalf("expected first run to succeed, got %v", err)
+	}
+
+	expectedWorkingDir := filepath.Join(svc.workspaceRootPath(), buildID, "backend")
+	if runner.lastRequest.WorkingDir != expectedWorkingDir {
+		t.Fatalf("expected runner working dir %q, got %q", expectedWorkingDir, runner.lastRequest.WorkingDir)
+	}
+	if fetcher.calls != 1 {
+		t.Fatalf("expected one checkout fetch, got %d", fetcher.calls)
+	}
+
+	// A second execution for the same build should reuse the existing workspace.
+	if _, _, err := svc.RunStep(context.Background(), request); err != nil {
+		t.Fatalf("expected second run to succeed, got %v", err)
+	}
+	if fetcher.calls != 1 {
+		t.Fatalf("expected checkout reuse with one fetch call total, got %d", fetcher.calls)
+	}
+}
+
 func TestBuildService_RunStep_RunnerError(t *testing.T) {
 	runner := &fakeRunner{err: errors.New("runner failed")}
 	claimToken := "claim-active"
@@ -1582,9 +1623,11 @@ type fakeRepoFetcher struct {
 	localPath string
 	commitSHA string
 	err       error
+	calls     int
 }
 
 func (f *fakeRepoFetcher) Fetch(_ context.Context, _ string, _ string) (string, string, error) {
+	f.calls++
 	if f.err != nil {
 		return "", "", f.err
 	}
