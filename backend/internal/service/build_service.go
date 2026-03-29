@@ -29,6 +29,7 @@ var ErrInvalidBuildStatusTransition = errors.New("invalid build status transitio
 var ErrInvalidBuildStepTransition = errors.New("invalid build step transition")
 var ErrStaleStepClaim = errors.New("stale step claim")
 var ErrRunnerNotConfigured = errors.New("runner not configured")
+var ErrRunnerWorkspaceNotSupported = errors.New("runner does not support workspace preparation for repo-backed builds")
 var ErrCustomTemplateStepsRequired = errors.New("custom template requires at least one step")
 var ErrCustomTemplateStepCommandRequired = errors.New("custom template step command is required")
 var ErrPipelineYAMLRequired = errors.New("pipeline YAML is required")
@@ -431,7 +432,14 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		return runner.RunStepResult{}, StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, ErrRunnerNotConfigured
 	}
 
-	build, _ := s.buildRepo.GetByID(ctx, request.BuildID)
+	build, err := s.buildRepo.GetByID(ctx, request.BuildID)
+	if err != nil {
+		if errors.Is(err, repository.ErrBuildNotFound) {
+			return runner.RunStepResult{}, StepCompletionReport{}, ErrBuildNotFound
+		}
+		return runner.RunStepResult{}, StepCompletionReport{}, fmt.Errorf("fetching build for step execution: %w", err)
+	}
+
 	if buildScopedRunner, ok := s.runner.(runner.BuildScopedRunner); ok {
 		prepareErr := buildScopedRunner.PrepareBuild(ctx, runner.PrepareBuildRequest{
 			BuildID:    request.BuildID,
@@ -463,6 +471,9 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 
 			return result, completionReport, prepareErr
 		}
+	} else if readOptionalString(build.RepoURL) != "" {
+		// Non-build-scoped runners cannot prepare a workspace for repo-backed builds.
+		return runner.RunStepResult{}, StepCompletionReport{}, ErrRunnerWorkspaceNotSupported
 	}
 
 	hasChunkAppender := false
@@ -517,13 +528,13 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	}
 
 	var result runner.RunStepResult
-	var err error
+	var runErr error
 	usedStreamingRunner := false
 	if streamingRunner, ok := s.runner.(runner.StreamingRunner); ok {
 		usedStreamingRunner = true
-		result, err = streamingRunner.RunStepStream(ctx, request, persistChunk)
+		result, runErr = streamingRunner.RunStepStream(ctx, request, persistChunk)
 	} else {
-		result, err = s.runner.RunStep(ctx, request)
+		result, runErr = s.runner.RunStep(ctx, request)
 	}
 
 	if hasChunkAppender && !usedStreamingRunner {
@@ -536,18 +547,18 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 			_ = persistChunk(runner.StepOutputChunk{Stream: runner.StepOutputStreamStderr, ChunkText: line, EmittedAt: time.Now().UTC()})
 		}
 	}
-	if err != nil {
+	if runErr != nil {
 		now := time.Now().UTC()
 		result = runner.RunStepResult{
 			Status:     runner.RunStepStatusFailed,
 			ExitCode:   -1,
-			Stderr:     err.Error(),
+			Stderr:     runErr.Error(),
 			StartedAt:  now,
 			FinishedAt: now,
 		}
 		completionReport, completionErr := s.handleStepResult(ctx, request, result, hasChunkAppender)
 		if completionErr != nil {
-			return result, completionReport, errors.Join(err, completionErr)
+			return result, completionReport, errors.Join(runErr, completionErr)
 		}
 		if cleanupErr := s.cleanupExecutionIfTerminal(ctx, request.BuildID); cleanupErr != nil {
 			completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, cleanupErr)
@@ -557,7 +568,7 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 			completionReport.SideEffectErr = chunkPersistErr
 		}
 		chunkPersistMu.Unlock()
-		return result, completionReport, err
+		return result, completionReport, runErr
 	}
 
 	completionReport, completionErr := s.handleStepResult(ctx, request, result, hasChunkAppender)
@@ -591,7 +602,7 @@ func (s *BuildService) cleanupExecutionIfTerminal(ctx context.Context, buildID s
 
 	build, err := s.buildRepo.GetByID(ctx, buildID)
 	if err != nil {
-		return nil
+		return fmt.Errorf("fetching build for cleanup check: %w", err)
 	}
 	if !domain.IsTerminalBuildStatus(build.Status) {
 		return nil

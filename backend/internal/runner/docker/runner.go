@@ -304,15 +304,21 @@ func (r *Runner) CleanupBuild(ctx context.Context, buildID string) error {
 	}
 
 	containerName := containerNameForBuild(trimmedBuildID)
-	_, _ = r.executor.Run(ctx, "docker", "rm", "-f", containerName)
+	var rmErr error
+	if _, err := r.executor.Run(ctx, "docker", "rm", "-f", containerName); err != nil && !isContainerNotFound(err, nil) {
+		rmErr = fmt.Errorf("removing build container: %w", err)
+	}
 
 	if r.workspace == nil {
-		return nil
+		return rmErr
 	}
-	if err := r.workspace.CleanupWorkspace(ctx, trimmedBuildID); err != nil {
-		return err
+
+	wsErr := r.workspace.CleanupWorkspace(ctx, trimmedBuildID)
+	if wsErr != nil {
+		wsErr = fmt.Errorf("cleaning up workspace: %w", wsErr)
 	}
-	return nil
+
+	return errors.Join(rmErr, wsErr)
 }
 func containerNameForBuild(buildID string) string {
 	trimmed := strings.TrimSpace(buildID)

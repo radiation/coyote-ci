@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 const defaultWorkspaceDirName = "coyote-builds"
@@ -129,8 +130,24 @@ func (m *HostWorkspaceMaterializer) replaceWorkspaceFromSource(tmpPath string, w
 	if err := os.RemoveAll(workspacePath); err != nil {
 		return fmt.Errorf("resetting workspace path: %w", err)
 	}
-	if err := os.Rename(tmpPath, workspacePath); err != nil {
-		return fmt.Errorf("materializing workspace path: %w", err)
+
+	renameErr := os.Rename(tmpPath, workspacePath)
+	if renameErr == nil {
+		return nil
+	}
+	if !errors.Is(renameErr, syscall.EXDEV) {
+		return fmt.Errorf("materializing workspace path: %w", renameErr)
+	}
+
+	// Cross-device rename: fall back to a recursive copy then remove the source.
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		return fmt.Errorf("creating workspace path for cross-device copy: %w", err)
+	}
+	if err := os.CopyFS(workspacePath, os.DirFS(tmpPath)); err != nil {
+		return fmt.Errorf("copying workspace across devices: %w", err)
+	}
+	if err := os.RemoveAll(tmpPath); err != nil {
+		return fmt.Errorf("removing temporary source after cross-device copy: %w", err)
 	}
 	return nil
 }

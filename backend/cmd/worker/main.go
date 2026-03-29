@@ -52,7 +52,6 @@ func main() {
 	stepRunner := resolveStepRunner(cfg)
 	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildService(buildRepo, stepRunner, logSink)
-	buildService.SetRepoFetcher(source.NewGitFetcher())
 	buildService.SetDefaultExecutionImage(cfg.ExecutionDefaultImage)
 	leaseDuration := time.Duration(cfg.StepLeaseSeconds) * time.Second
 	workerService := service.NewWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)
