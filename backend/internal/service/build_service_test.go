@@ -1830,3 +1830,31 @@ steps:
 		}
 	})
 }
+
+func TestResolveRepoWorkingDir(t *testing.T) {
+	workspace := "/workspace/build-123"
+
+	cases := []struct {
+		name      string
+		requested string
+		want      string
+	}{
+		{"empty stays at root", "", workspace},
+		{"dot stays at root", ".", workspace},
+		{"subdirectory is joined", "backend", filepath.Join(workspace, "backend")},
+		{"nested subdirectory is joined", "a/b/c", filepath.Join(workspace, "a/b/c")},
+		{"absolute path is rejected", "/etc/passwd", workspace},
+		{"traversal with ..", "../other", workspace},
+		{"traversal escaping root", "../../etc", workspace},
+		{"traversal via relative segments", "a/b/../../../secret", workspace},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveRepoWorkingDir(workspace, tc.requested)
+			if got != tc.want {
+				t.Errorf("resolveRepoWorkingDir(%q, %q) = %q; want %q", workspace, tc.requested, got, tc.want)
+			}
+		})
+	}
+}

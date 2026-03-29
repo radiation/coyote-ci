@@ -53,7 +53,7 @@ type BuildService struct {
 	repoFetcher source.RepoFetcher
 
 	repoWorkspaceRoot string
-	repoWorkspaceMu   sync.Map
+	repoWorkspaceMu   sync.Mutex
 }
 
 func NewBuildService(buildRepo repository.BuildRepository, stepRunner runner.Runner, logSink logs.LogSink) *BuildService {
@@ -566,14 +566,32 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 }
 
 func resolveRepoWorkingDir(workspacePath string, requestedWorkingDir string) string {
+	base := filepath.Clean(workspacePath)
+
 	trimmed := strings.TrimSpace(requestedWorkingDir)
 	if trimmed == "" {
-		trimmed = "."
+		// Default to the workspace root when no working directory is specified.
+		return base
 	}
+
+	// Do not allow absolute paths; keep execution within the workspace.
 	if filepath.IsAbs(trimmed) {
-		return trimmed
+		return base
 	}
-	return filepath.Join(workspacePath, trimmed)
+
+	// Join the requested path to the workspace and normalize it.
+	candidate := filepath.Clean(filepath.Join(base, trimmed))
+
+	// Ensure the resolved path is still within the workspace root.
+	rel, err := filepath.Rel(base, candidate)
+	if err != nil {
+		return base
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return base
+	}
+
+	return candidate
 }
 
 func (s *BuildService) workspaceRootPath() string {
@@ -581,19 +599,6 @@ func (s *BuildService) workspaceRootPath() string {
 		return s.repoWorkspaceRoot
 	}
 	return filepath.Join(os.TempDir(), repoWorkspaceDirName)
-}
-
-func (s *BuildService) workspaceLock(buildID string) *sync.Mutex {
-	lock, _ := s.repoWorkspaceMu.LoadOrStore(buildID, &sync.Mutex{})
-	mutex, ok := lock.(*sync.Mutex)
-	if ok {
-		return mutex
-	}
-
-	// Defensive fallback if the map was polluted with an unexpected type.
-	mutex = &sync.Mutex{}
-	s.repoWorkspaceMu.Store(buildID, mutex)
-	return mutex
 }
 
 func (s *BuildService) ensureRepoWorkspace(ctx context.Context, build domain.Build) (string, error) {
@@ -619,9 +624,8 @@ func (s *BuildService) ensureRepoWorkspace(ctx context.Context, build domain.Bui
 		return "", ErrRefRequired
 	}
 
-	lock := s.workspaceLock(build.ID)
-	lock.Lock()
-	defer lock.Unlock()
+	s.repoWorkspaceMu.Lock()
+	defer s.repoWorkspaceMu.Unlock()
 
 	workspacePath := filepath.Join(s.workspaceRootPath(), build.ID)
 	if info, err := os.Stat(workspacePath); err == nil && info.IsDir() {
