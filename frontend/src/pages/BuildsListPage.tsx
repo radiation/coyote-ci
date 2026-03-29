@@ -5,6 +5,8 @@ import { useNavigate } from 'react-router-dom';
 import { createBuild, createPipelineBuild, listBuilds, queueBuild } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 import type { Build, BuildTemplate, QueueBuildStepInput } from '../types/build';
+import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL, isActiveBuild } from '../utils/build';
+import { formatTime } from '../utils/time';
 
 const PIPELINE_YAML_EXAMPLE = `version: 1
 pipeline:
@@ -15,8 +17,6 @@ steps:
   - name: build
     run: go build ./...
 `;
-import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL, isActiveBuild } from '../utils/build';
-import { formatTime } from '../utils/time';
 
 export function BuildsListPage() {
   const queryClient = useQueryClient();

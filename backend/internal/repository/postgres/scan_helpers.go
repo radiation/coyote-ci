@@ -11,8 +11,67 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-// buildColumns is the canonical column list for build SELECT/RETURNING clauses.
+// buildColumns is the canonical column list for build SELECT/RETURNING clauses (full detail).
 const buildColumns = `id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source`
+
+// buildListColumns is a minimal column list used for list queries (omits large pipeline YAML).
+const buildListColumns = `id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message, pipeline_name, pipeline_source`
+
+func scanBuildList(scanner rowScanner) (domain.Build, error) {
+	var build domain.Build
+	var status string
+	var queuedAt sql.NullTime
+	var startedAt sql.NullTime
+	var finishedAt sql.NullTime
+	var errorMessage sql.NullString
+	var pipelineName sql.NullString
+	var pipelineSource sql.NullString
+
+	err := scanner.Scan(
+		&build.ID,
+		&build.ProjectID,
+		&status,
+		&build.CreatedAt,
+		&queuedAt,
+		&startedAt,
+		&finishedAt,
+		&build.CurrentStepIndex,
+		&errorMessage,
+		&pipelineName,
+		&pipelineSource,
+	)
+	if err != nil {
+		return domain.Build{}, err
+	}
+
+	build.Status = domain.BuildStatus(status)
+	if queuedAt.Valid {
+		queued := queuedAt.Time
+		build.QueuedAt = &queued
+	}
+	if startedAt.Valid {
+		started := startedAt.Time
+		build.StartedAt = &started
+	}
+	if finishedAt.Valid {
+		finished := finishedAt.Time
+		build.FinishedAt = &finished
+	}
+	if errorMessage.Valid {
+		errMsg := errorMessage.String
+		build.ErrorMessage = &errMsg
+	}
+	if pipelineName.Valid {
+		v := pipelineName.String
+		build.PipelineName = &v
+	}
+	if pipelineSource.Valid {
+		v := pipelineSource.String
+		build.PipelineSource = &v
+	}
+
+	return build, nil
+}
 
 func scanBuild(scanner rowScanner) (domain.Build, error) {
 	var build domain.Build

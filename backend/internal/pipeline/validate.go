@@ -57,8 +57,13 @@ func Validate(pf *PipelineFile) error {
 			errs = append(errs, ValidationError{Field: prefix + ".timeout_seconds", Message: "must be > 0 when set"})
 		}
 
-		if step.WorkingDir != "" && filepath.IsAbs(step.WorkingDir) {
-			errs = append(errs, ValidationError{Field: prefix + ".working_dir", Message: "must be a relative path"})
+		if step.WorkingDir != "" {
+			cleaned := filepath.Clean(step.WorkingDir)
+			if filepath.IsAbs(cleaned) ||
+				cleaned == ".." ||
+				strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+				errs = append(errs, ValidationError{Field: prefix + ".working_dir", Message: "must be a relative path"})
+			}
 		}
 
 		for key := range step.Env {

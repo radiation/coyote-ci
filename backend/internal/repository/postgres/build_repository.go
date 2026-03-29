@@ -144,7 +144,7 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 
 func (r *BuildRepository) List(ctx context.Context) (builds []domain.Build, err error) {
 	query := `
-		SELECT ` + buildColumns + `
+		SELECT ` + buildListColumns + `
 		FROM builds
 		ORDER BY created_at DESC
 	`
@@ -161,7 +161,7 @@ func (r *BuildRepository) List(ctx context.Context) (builds []domain.Build, err 
 
 	builds = make([]domain.Build, 0)
 	for rows.Next() {
-		build, err := scanBuild(rows)
+		build, err := scanBuildList(rows)
 		if err != nil {
 			return nil, err
 		}

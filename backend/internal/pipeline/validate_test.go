@@ -204,6 +204,22 @@ func TestValidate_NilTimeout_OK(t *testing.T) {
 	}
 }
 
+func TestValidate_PathTraversalWorkingDir(t *testing.T) {
+	cases := []string{"../secret", "../../etc", "..", "foo/../../etc"}
+	for _, wd := range cases {
+		pf := &PipelineFile{
+			Version: 1,
+			Steps:   []StepDef{{Name: "Build", Run: "make", WorkingDir: wd}},
+		}
+		err := Validate(pf)
+		if err == nil {
+			t.Errorf("expected error for path-traversal working_dir %q, got nil", wd)
+			continue
+		}
+		assertContains(t, err.Error(), "relative path")
+	}
+}
+
 func TestValidate_RelativeWorkingDir_OK(t *testing.T) {
 	pf := &PipelineFile{
 		Version: 1,

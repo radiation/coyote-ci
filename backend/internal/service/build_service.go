@@ -165,7 +165,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 	build := domain.Build{
 		ID:                 buildID,
 		ProjectID:          input.ProjectID,
-		Status:             domain.BuildStatusPending,
+		Status:             domain.BuildStatusQueued,
 		CreatedAt:          time.Now().UTC(),
 		CurrentStepIndex:   0,
 		PipelineConfigYAML: &yamlText,
