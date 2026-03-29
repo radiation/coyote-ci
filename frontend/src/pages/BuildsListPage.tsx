@@ -2,9 +2,19 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useNavigate } from 'react-router-dom';
-import { createBuild, listBuilds, queueBuild } from '../api';
+import { createBuild, createPipelineBuild, listBuilds, queueBuild } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 import type { Build, BuildTemplate, QueueBuildStepInput } from '../types/build';
+
+const PIPELINE_YAML_EXAMPLE = `version: 1
+pipeline:
+  name: my-pipeline
+steps:
+  - name: greet
+    run: echo "Hello from pipeline"
+  - name: build
+    run: go build ./...
+`;
 import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL, isActiveBuild } from '../utils/build';
 import { formatTime } from '../utils/time';
 
@@ -14,6 +24,7 @@ export function BuildsListPage() {
   const [projectID, setProjectID] = useState('project-1');
   const [template, setTemplate] = useState<BuildTemplate>('default');
   const [customCommands, setCustomCommands] = useState('');
+  const [pipelineYAML, setPipelineYAML] = useState(PIPELINE_YAML_EXAMPLE);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -64,11 +75,40 @@ export function BuildsListPage() {
     },
   });
 
+  const pipelineBuildMutation = useMutation({
+    mutationFn: async ({ targetProjectID, yaml }: { targetProjectID: string; yaml: string }) => {
+      return createPipelineBuild({ project_id: targetProjectID, pipeline_yaml: yaml });
+    },
+    onMutate: () => {
+      setSuccessMessage(null);
+      setErrorMessage(null);
+    },
+    onSuccess: async (build) => {
+      await queryClient.invalidateQueries({ queryKey: ['builds'] });
+      navigate(`/builds/${build.id}`);
+    },
+    onError: (mutationError) => {
+      setErrorMessage(`Failed to create pipeline build: ${String(mutationError)}`);
+    },
+  });
+
+  const isSubmitting = queueBuildMutation.isPending || pipelineBuildMutation.isPending;
+
   const onQueueBuild = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const trimmedProjectID = projectID.trim();
     if (!trimmedProjectID) {
       setErrorMessage('Project ID is required.');
+      return;
+    }
+
+    if (template === 'pipeline') {
+      const trimmedYAML = pipelineYAML.trim();
+      if (!trimmedYAML) {
+        setErrorMessage('Pipeline YAML is required.');
+        return;
+      }
+      pipelineBuildMutation.mutate({ targetProjectID: trimmedProjectID, yaml: trimmedYAML });
       return;
     }
 
@@ -101,7 +141,7 @@ export function BuildsListPage() {
           id="project-id"
           value={projectID}
           onChange={(event) => setProjectID(event.target.value)}
-          disabled={queueBuildMutation.isPending}
+          disabled={isSubmitting}
           placeholder="project-1"
         />
         <label htmlFor="pipeline-template">Template</label>
@@ -109,12 +149,13 @@ export function BuildsListPage() {
           id="pipeline-template"
           value={template}
           onChange={(event) => setTemplate(event.target.value as BuildTemplate)}
-          disabled={queueBuildMutation.isPending}
+          disabled={isSubmitting}
         >
           <option value="default">default</option>
           <option value="test">test</option>
           <option value="build">build</option>
           <option value="custom">custom</option>
+          <option value="pipeline">pipeline</option>
         </select>
         {template === 'custom' && (
           <div className="queue-build-custom-input">
@@ -123,15 +164,28 @@ export function BuildsListPage() {
               id="custom-commands"
               value={customCommands}
               onChange={(event) => setCustomCommands(event.target.value)}
-              disabled={queueBuildMutation.isPending}
+              disabled={isSubmitting}
               placeholder={'echo ok && exit 0\necho fail && exit 1'}
               rows={4}
             />
             <p className="subtle-text">One command per line. Each line becomes a step and runs via sh -c.</p>
           </div>
         )}
-        <button type="submit" disabled={queueBuildMutation.isPending}>
-          {queueBuildMutation.isPending ? 'Queueing…' : 'Queue Build'}
+        {template === 'pipeline' && (
+          <div className="queue-build-custom-input">
+            <label htmlFor="pipeline-yaml">Pipeline YAML</label>
+            <textarea
+              id="pipeline-yaml"
+              value={pipelineYAML}
+              onChange={(event) => setPipelineYAML(event.target.value)}
+              disabled={isSubmitting}
+              rows={10}
+            />
+            <p className="subtle-text">Paste a Coyote CI pipeline definition. The backend will validate it.</p>
+          </div>
+        )}
+        <button type="submit" disabled={isSubmitting}>
+          {isSubmitting ? 'Submitting…' : template === 'pipeline' ? 'Create Pipeline Build' : 'Queue Build'}
         </button>
       </form>
 

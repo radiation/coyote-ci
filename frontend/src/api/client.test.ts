@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { listBuilds, getBuild, getBuildSteps, createBuild, queueBuild } from '../api/client';
+import { listBuilds, getBuild, getBuildSteps, createBuild, createPipelineBuild, queueBuild } from '../api/client';
 
 describe('API client - types', () => {
   it('should export API functions', () => {
@@ -7,6 +7,7 @@ describe('API client - types', () => {
     expect(typeof getBuild).toBe('function');
     expect(typeof getBuildSteps).toBe('function');
     expect(typeof createBuild).toBe('function');
+    expect(typeof createPipelineBuild).toBe('function');
     expect(typeof queueBuild).toBe('function');
   });
 
@@ -98,6 +99,40 @@ describe('API client - types', () => {
           { command: 'echo ok && exit 0' },
           { name: 'fail', command: 'echo fail && exit 1' },
         ],
+      }),
+    });
+  });
+
+  it('sends pipeline YAML to /builds/pipeline', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          id: 'build-pipe-1',
+          project_id: 'project-1',
+          status: 'queued',
+          created_at: '2026-03-24T00:00:00Z',
+          queued_at: '2026-03-24T00:00:01Z',
+          started_at: null,
+          finished_at: null,
+          current_step_index: 0,
+          error_message: null,
+        },
+      }),
+    } as Response);
+
+    const result = await createPipelineBuild({
+      project_id: 'project-1',
+      pipeline_yaml: 'version: 1\nsteps:\n  - name: greet\n    run: echo hi\n',
+    });
+
+    expect(result.id).toBe('build-pipe-1');
+    expect(fetchMock).toHaveBeenCalledWith('/api/builds/pipeline', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: 'project-1',
+        pipeline_yaml: 'version: 1\nsteps:\n  - name: greet\n    run: echo hi\n',
       }),
     });
   });

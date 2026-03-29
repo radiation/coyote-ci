@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { BuildsListPage } from './BuildsListPage';
-import { createBuild, listBuilds, queueBuild } from '../api';
+import { createBuild, createPipelineBuild, listBuilds, queueBuild } from '../api';
 
 const navigateMock = vi.fn();
 
@@ -18,6 +18,7 @@ vi.mock('react-router-dom', async () => {
 vi.mock('../api', () => ({
   listBuilds: vi.fn(),
   createBuild: vi.fn(),
+  createPipelineBuild: vi.fn(),
   queueBuild: vi.fn(),
 }));
 
@@ -45,6 +46,7 @@ function renderPage() {
 describe('BuildsListPage queue form', () => {
   const mockedListBuilds = vi.mocked(listBuilds);
   const mockedCreateBuild = vi.mocked(createBuild);
+  const mockedCreatePipelineBuild = vi.mocked(createPipelineBuild);
   const mockedQueueBuild = vi.mocked(queueBuild);
 
   beforeEach(() => {
@@ -63,6 +65,17 @@ describe('BuildsListPage queue form', () => {
     });
     mockedQueueBuild.mockResolvedValue({
       id: 'build-123',
+      project_id: 'project-1',
+      status: 'queued',
+      created_at: '2026-03-24T00:00:00Z',
+      queued_at: '2026-03-24T00:00:01Z',
+      started_at: null,
+      finished_at: null,
+      current_step_index: 0,
+      error_message: null,
+    });
+    mockedCreatePipelineBuild.mockResolvedValue({
+      id: 'build-pipe-1',
       project_id: 'project-1',
       status: 'queued',
       created_at: '2026-03-24T00:00:00Z',
@@ -133,6 +146,76 @@ describe('BuildsListPage queue form', () => {
         { command: 'echo fail && exit 1' },
       ]);
       expect(navigateMock).toHaveBeenCalledWith('/builds/build-123');
+    });
+  });
+
+  it('renders pipeline option in template dropdown', async () => {
+    renderPage();
+
+    await screen.findByText('No builds yet.');
+
+    expect(screen.getByRole('option', { name: 'pipeline' })).toBeTruthy();
+  });
+
+  it('shows pipeline YAML textarea when pipeline template is selected', async () => {
+    renderPage();
+
+    await screen.findByText('No builds yet.');
+
+    expect(screen.queryByLabelText('Pipeline YAML')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'pipeline' } });
+
+    expect(screen.getByLabelText('Pipeline YAML')).toBeTruthy();
+    expect(screen.getByText('Paste a Coyote CI pipeline definition. The backend will validate it.')).toBeTruthy();
+  });
+
+  it('submits pipeline build via createPipelineBuild', async () => {
+    renderPage();
+
+    await screen.findByText('No builds yet.');
+
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'pipeline' } });
+    fireEvent.change(screen.getByLabelText('Pipeline YAML'), {
+      target: { value: 'version: 1\nsteps:\n  - name: greet\n    run: echo hi\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Pipeline Build' }));
+
+    await waitFor(() => {
+      expect(mockedCreatePipelineBuild).toHaveBeenCalledWith({
+        project_id: 'project-1',
+        pipeline_yaml: 'version: 1\nsteps:\n  - name: greet\n    run: echo hi',
+      });
+      expect(mockedCreateBuild).not.toHaveBeenCalled();
+      expect(navigateMock).toHaveBeenCalledWith('/builds/build-pipe-1');
+    });
+  });
+
+  it('shows error when pipeline YAML is empty', async () => {
+    renderPage();
+
+    await screen.findByText('No builds yet.');
+
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'pipeline' } });
+    fireEvent.change(screen.getByLabelText('Pipeline YAML'), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Pipeline Build' }));
+
+    expect(screen.getByText('Pipeline YAML is required.')).toBeTruthy();
+    expect(mockedCreatePipelineBuild).not.toHaveBeenCalled();
+  });
+
+  it('displays backend validation errors for pipeline builds', async () => {
+    mockedCreatePipelineBuild.mockRejectedValueOnce(new Error('API 400: pipeline validation failed'));
+
+    renderPage();
+
+    await screen.findByText('No builds yet.');
+
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'pipeline' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Pipeline Build' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to create pipeline build/)).toBeTruthy();
     });
   });
 });
