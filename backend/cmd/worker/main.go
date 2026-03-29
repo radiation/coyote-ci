@@ -17,6 +17,8 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
+	"github.com/radiation/coyote-ci/backend/internal/runner"
+	dockerrunner "github.com/radiation/coyote-ci/backend/internal/runner/docker"
 	"github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	"github.com/radiation/coyote-ci/backend/internal/source"
@@ -47,10 +49,11 @@ func main() {
 	}()
 
 	buildRepo := repositorypostgres.NewBuildRepository(db)
-	stepRunner := inprocess.New()
+	stepRunner := resolveStepRunner(cfg)
 	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildService(buildRepo, stepRunner, logSink)
 	buildService.SetRepoFetcher(source.NewGitFetcher())
+	buildService.SetDefaultExecutionImage(cfg.ExecutionDefaultImage)
 	leaseDuration := time.Duration(cfg.StepLeaseSeconds) * time.Second
 	workerService := service.NewWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)
 
@@ -64,6 +67,22 @@ func main() {
 		log.Fatalf("worker loop failed: %v", err)
 	}
 	log.Printf("worker stopped")
+}
+
+func resolveStepRunner(cfg config.Config) runner.Runner {
+	switch strings.ToLower(strings.TrimSpace(cfg.ExecutionBackend)) {
+	case "", "docker":
+		workspace := source.NewHostWorkspaceMaterializer(source.NewGitFetcher(), cfg.ExecutionWorkspaceRoot)
+		return dockerrunner.New(dockerrunner.Options{
+			Workspace:    workspace,
+			DefaultImage: cfg.ExecutionDefaultImage,
+		})
+	case "inprocess", "local":
+		return inprocess.New()
+	default:
+		log.Printf("unknown execution backend %q; falling back to inprocess", cfg.ExecutionBackend)
+		return inprocess.New()
+	}
 }
 
 func defaultWorkerID() string {

@@ -36,6 +36,17 @@ type RunStepRequest struct {
 	TimeoutSeconds int
 }
 
+// PrepareBuildRequest describes environment inputs needed before step execution.
+type PrepareBuildRequest struct {
+	BuildID    string
+	RepoURL    string
+	Ref        string
+	CommitSHA  string
+	Image      string
+	WorkerID   string
+	ClaimToken string
+}
+
 // RunStepStatus indicates the outcome of a step execution.
 type RunStepStatus string
 
@@ -61,4 +72,11 @@ type Runner interface {
 // StreamingRunner emits output incrementally while a step runs.
 type StreamingRunner interface {
 	RunStepStream(ctx context.Context, request RunStepRequest, onOutput StepOutputCallback) (RunStepResult, error)
+}
+
+// BuildScopedRunner can prepare and cleanup per-build execution environments.
+type BuildScopedRunner interface {
+	StreamingRunner
+	PrepareBuild(ctx context.Context, request PrepareBuildRequest) error
+	CleanupBuild(ctx context.Context, buildID string) error
 }
