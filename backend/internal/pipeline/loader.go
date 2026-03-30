@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -59,6 +60,7 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 
 	return &ResolvedPipeline{
 		Name:      pf.Pipeline.Name,
+		Image:     strings.TrimSpace(pf.Pipeline.Image),
 		Env:       mergedPipelineEnv,
 		Steps:     steps,
 		Artifacts: ResolvedArtifacts{Paths: append([]string(nil), pf.Artifacts.Paths...)},

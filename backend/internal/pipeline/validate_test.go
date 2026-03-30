@@ -170,6 +170,33 @@ func TestValidate_ValidEnvKeys(t *testing.T) {
 	}
 }
 
+func TestValidate_PipelineImage_WhitespaceRejected(t *testing.T) {
+	pf := &PipelineFile{
+		Version:  1,
+		Pipeline: PipelineMeta{Image: "   "},
+		Steps:    []StepDef{{Name: "Build", Run: "make"}},
+	}
+
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected error for whitespace pipeline.image")
+	}
+	assertContains(t, err.Error(), "pipeline.image")
+	assertContains(t, err.Error(), "non-empty")
+}
+
+func TestValidate_PipelineImage_SetAccepted(t *testing.T) {
+	pf := &PipelineFile{
+		Version:  1,
+		Pipeline: PipelineMeta{Image: "golang:1.24"},
+		Steps:    []StepDef{{Name: "Build", Run: "make"}},
+	}
+
+	if err := Validate(pf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidate_MultipleErrors(t *testing.T) {
 	neg := -1
 	pf := &PipelineFile{

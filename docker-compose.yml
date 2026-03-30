@@ -108,10 +108,13 @@ services:
       DB_SSLMODE: disable
       ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
       WORKER_EXECUTION_WORKSPACE_ROOT: /tmp/coyote-builds
-      WORKER_EXECUTION_BACKEND: inprocess
     entrypoint: ["/app/worker"]
     volumes:
       - artifact_data:/var/lib/coyote-artifacts
+      # Local-dev only: mounting the host Docker socket grants root-equivalent host access.
+      # Do not use this pattern in less-trusted or shared environments.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/coyote-builds:/tmp/coyote-builds
 
   frontend:
     build:

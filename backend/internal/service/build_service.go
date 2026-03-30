@@ -505,12 +505,13 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	}
 
 	if buildScopedRunner, ok := s.runner.(runner.BuildScopedRunner); ok {
+		executionImage := s.resolveExecutionImage(build)
 		prepareErr := buildScopedRunner.PrepareBuild(ctx, runner.PrepareBuildRequest{
 			BuildID:    request.BuildID,
 			RepoURL:    readOptionalString(build.RepoURL),
 			Ref:        readOptionalString(build.Ref),
 			CommitSHA:  readOptionalString(build.CommitSHA),
-			Image:      s.defaultExecutionImage,
+			Image:      executionImage,
 			WorkerID:   request.WorkerID,
 			ClaimToken: request.ClaimToken,
 		})
@@ -761,6 +762,29 @@ func readOptionalString(value *string) string {
 		return ""
 	}
 	return strings.TrimSpace(*value)
+}
+
+func (s *BuildService) resolveExecutionImage(build domain.Build) string {
+	defaultImage := strings.TrimSpace(s.defaultExecutionImage)
+	if build.PipelineConfigYAML == nil {
+		return defaultImage
+	}
+
+	yamlText := strings.TrimSpace(*build.PipelineConfigYAML)
+	if yamlText == "" {
+		return defaultImage
+	}
+
+	resolved, err := pipeline.LoadAndResolve([]byte(yamlText))
+	if err != nil {
+		return defaultImage
+	}
+
+	if resolved.Image != "" {
+		return resolved.Image
+	}
+
+	return defaultImage
 }
 
 func (s *BuildService) cleanupExecutionIfTerminal(ctx context.Context, buildID string) error {

@@ -12,7 +12,8 @@ type PipelineFile struct {
 
 // PipelineMeta holds optional pipeline-level metadata from the YAML.
 type PipelineMeta struct {
-	Name string `yaml:"name"`
+	Name  string `yaml:"name"`
+	Image string `yaml:"image"`
 }
 
 // StepDef is the YAML-facing definition for a single step.

@@ -20,6 +20,13 @@ func Validate(pf *PipelineFile) error {
 		errs = append(errs, ValidationError{Field: "version", Message: fmt.Sprintf("unsupported version %d, must be 1", pf.Version)})
 	}
 
+	// optional pipeline image
+	if pf.Pipeline.Image != "" {
+		if strings.TrimSpace(pf.Pipeline.Image) == "" {
+			errs = append(errs, ValidationError{Field: "pipeline.image", Message: "must be non-empty when set"})
+		}
+	}
+
 	// top-level env keys
 	for key := range pf.Env {
 		if !validEnvKey.MatchString(key) {
