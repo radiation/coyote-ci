@@ -281,6 +281,22 @@ func TestValidate_Artifacts_AbsolutePathRejected(t *testing.T) {
 	assertContains(t, err.Error(), "relative")
 }
 
+func TestValidate_Artifacts_BackslashPathRejected(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps:   []StepDef{{Name: "Build", Run: "make"}},
+		Artifacts: ArtifactDef{
+			Paths: []string{"dist\\output.txt"},
+		},
+	}
+
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected artifact backslash path error")
+	}
+	assertContains(t, err.Error(), "forward slashes")
+}
+
 func TestValidate_Artifacts_Valid(t *testing.T) {
 	pf := &PipelineFile{
 		Version: 1,

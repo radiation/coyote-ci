@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -144,7 +145,13 @@ func (c *Collector) Collect(ctx context.Context, request CollectRequest) (Collec
 
 	artifacts := make([]CollectedArtifact, 0, len(selected))
 	failedCollectErrors := make([]error, 0)
+	selectedPaths := make([]string, 0, len(selected))
 	for relPath := range selected {
+		selectedPaths = append(selectedPaths, relPath)
+	}
+	sort.Strings(selectedPaths)
+
+	for _, relPath := range selectedPaths {
 		artifact, err := c.collectSingle(ctx, buildID, workspacePath, relPath)
 		if err != nil {
 			log.Printf("artifact persistence error: build_id=%s logical_path=%s err=%v", buildID, relPath, err)
@@ -165,19 +172,42 @@ func (c *Collector) Collect(ctx context.Context, request CollectRequest) (Collec
 
 func (c *Collector) collectSingle(ctx context.Context, buildID string, workspacePath string, logicalPath string) (CollectedArtifact, error) {
 	absPath := filepath.Join(workspacePath, filepath.FromSlash(logicalPath))
+	resolvedWorkspacePath, err := filepath.EvalSymlinks(workspacePath)
+	if err != nil {
+		resolvedWorkspacePath = workspacePath
+	}
 
-	fileInfo, err := os.Stat(absPath)
+	fileInfo, err := os.Lstat(absPath)
 	if err != nil {
 		return CollectedArtifact{}, fmt.Errorf("stating source artifact: %w", err)
 	}
+	if fileInfo.Mode()&fs.ModeSymlink != 0 {
+		return CollectedArtifact{}, fmt.Errorf("artifact %q is a symlink and cannot be collected", logicalPath)
+	}
 
-	file, err := os.Open(absPath)
+	resolvedPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return CollectedArtifact{}, fmt.Errorf("resolving source artifact path: %w", err)
+	}
+	if !pathWithinBase(resolvedWorkspacePath, resolvedPath) {
+		return CollectedArtifact{}, fmt.Errorf("artifact %q resolves outside workspace", logicalPath)
+	}
+
+	file, err := os.Open(resolvedPath)
 	if err != nil {
 		return CollectedArtifact{}, fmt.Errorf("opening source artifact: %w", err)
 	}
 	defer func() {
 		_ = file.Close()
 	}()
+
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return CollectedArtifact{}, fmt.Errorf("reading source artifact metadata: %w", err)
+	}
+	if !openedInfo.Mode().IsRegular() {
+		return CollectedArtifact{}, fmt.Errorf("artifact %q must be a regular file", logicalPath)
+	}
 
 	hasher := sha256.New()
 	tee := io.TeeReader(file, hasher)
@@ -189,7 +219,7 @@ func (c *Collector) collectSingle(ctx context.Context, buildID string, workspace
 			storagePath = filepath.Join(root, filepath.FromSlash(storageKey))
 		}
 	}
-	log.Printf("artifact persist start: build_id=%s logical_path=%s source_path=%s storage_key=%s storage_path=%s size_bytes=%d", buildID, logicalPath, absPath, storageKey, storagePath, fileInfo.Size())
+	log.Printf("artifact persist start: build_id=%s logical_path=%s source_path=%s resolved_source_path=%s storage_key=%s storage_path=%s size_bytes=%d", buildID, logicalPath, absPath, resolvedPath, storageKey, storagePath, openedInfo.Size())
 	size, err := c.store.Save(ctx, storageKey, tee)
 	if err != nil {
 		return CollectedArtifact{}, fmt.Errorf("saving artifact to store: %w", err)
@@ -210,6 +240,20 @@ func (c *Collector) collectSingle(ctx context.Context, buildID string, workspace
 		ContentType:    contentType,
 		ChecksumSHA256: checksum,
 	}, nil
+}
+
+func pathWithinBase(basePath string, candidatePath string) bool {
+	cleanBase := filepath.Clean(basePath)
+	cleanCandidate := filepath.Clean(candidatePath)
+
+	rel, err := filepath.Rel(cleanBase, cleanCandidate)
+	if err != nil {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
 }
 
 func normalizePatterns(patterns []string) []string {

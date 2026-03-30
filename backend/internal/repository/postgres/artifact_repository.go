@@ -33,6 +33,11 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 		RETURNING id, build_id, logical_path, storage_key, size_bytes, content_type, checksum_sha256, created_at
 	`
 
+	var createdAt any
+	if !artifact.CreatedAt.IsZero() {
+		createdAt = artifact.CreatedAt
+	}
+
 	return scanArtifact(r.db.QueryRowContext(
 		ctx,
 		query,
@@ -43,7 +48,7 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 		artifact.SizeBytes,
 		artifact.ContentType,
 		artifact.ChecksumSHA256,
-		artifact.CreatedAt,
+		createdAt,
 	))
 }
 

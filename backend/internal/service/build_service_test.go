@@ -1554,16 +1554,17 @@ func TestBuildService_RunStep_PersistsChunkLogsWithoutStepID(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			buildID := "build-" + strings.ReplaceAll(tc.name, " ", "-")
 			claimToken := "claim-active"
 			repo := &fakeBuildRepository{
-				build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0, CreatedAt: time.Now().UTC()},
+				build: domain.Build{ID: buildID, Status: domain.BuildStatusRunning, CurrentStepIndex: 0, CreatedAt: time.Now().UTC()},
 				steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
 			}
 			logStore := logs.NewMemorySink()
 			svc := NewBuildService(repo, inprocessrunner.New(), logStore)
 
 			_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{
-				BuildID:    "build-1",
+				BuildID:    buildID,
 				StepIndex:  0,
 				StepName:   "step-1",
 				ClaimToken: claimToken,
@@ -1577,7 +1578,7 @@ func TestBuildService_RunStep_PersistsChunkLogsWithoutStepID(t *testing.T) {
 				t.Fatalf("expected completion outcome completed, got %q", report.CompletionOutcome)
 			}
 
-			chunks, err := svc.GetStepLogChunks(context.Background(), "build-1", 0, 0, 100)
+			chunks, err := svc.GetStepLogChunks(context.Background(), buildID, 0, 0, 100)
 			if err != nil {
 				t.Fatalf("get step log chunks failed: %v", err)
 			}

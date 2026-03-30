@@ -93,7 +93,7 @@ func Validate(pf *PipelineFile) error {
 }
 
 func validateArtifactPathPattern(pattern string) error {
-	if strings.Contains(pattern, `\\`) {
+	if strings.ContainsRune(pattern, '\\') {
 		return fmt.Errorf("artifact path must use forward slashes")
 	}
 	if strings.HasPrefix(pattern, "/") {
