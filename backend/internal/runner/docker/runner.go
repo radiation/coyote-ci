@@ -187,12 +187,13 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 	defer cancel()
 
 	args := dockerExecArgs(request)
+	logCommand := dockerCommandString(redactDockerArgsForLogging(args))
 	containerName := containerNameForBuild(request.BuildID)
 	containerImage := r.inspectContainerImage(ctx, containerName)
 	if containerImage == "" {
 		containerImage = "unknown"
 	}
-	log.Printf("starting container step execution: image=%s command=%s working_dir=%s mounts=%s", containerImage, dockerCommandString(args), resolveContainerWorkingDir(request.WorkingDir), workspaceMountPath)
+	log.Printf("starting container step execution: image=%s command=%s working_dir=%s mounts=%s", containerImage, logCommand, resolveContainerWorkingDir(request.WorkingDir), workspaceMountPath)
 
 	cmd := exec.CommandContext(execCtx, "docker", args...)
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -206,7 +207,7 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 
 	startedAt := time.Now().UTC()
 	if err := cmd.Start(); err != nil {
-		log.Printf("docker command failed: command=%s error=%v output=", dockerCommandString(args), err)
+		log.Printf("docker command failed: command=%s error=%v output=omitted", logCommand, err)
 		return runner.RunStepResult{}, fmt.Errorf("docker command failed: %w", err)
 	}
 
@@ -284,7 +285,7 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 				return runner.RunStepResult{}, err
 			}
 		}
-		log.Printf("docker command failed: command=%s error=%v output=%s", dockerCommandString(args), waitErr, strings.TrimRight(stdout+stderr, "\n"))
+		log.Printf("docker command failed: command=%s error=%v stdout_bytes=%d stderr_bytes=%d output=omitted", logCommand, waitErr, len(stdout), len(stderr))
 		return runner.RunStepResult{
 			Status:     runner.RunStepStatusFailed,
 			ExitCode:   -1,
@@ -297,7 +298,7 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 
 	var exitErr *exec.ExitError
 	if errors.As(waitErr, &exitErr) {
-		log.Printf("docker command failed: command=%s error=%v output=%s", dockerCommandString(args), waitErr, strings.TrimRight(stdout+stderr, "\n"))
+		log.Printf("docker command failed: command=%s error=%v stdout_bytes=%d stderr_bytes=%d output=omitted", logCommand, waitErr, len(stdout), len(stderr))
 		return runner.RunStepResult{
 			Status:     runner.RunStepStatusFailed,
 			ExitCode:   exitErr.ExitCode(),
@@ -308,7 +309,7 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 		}, nil
 	}
 
-	log.Printf("docker command failed: command=%s error=%v output=%s", dockerCommandString(args), waitErr, strings.TrimRight(stdout+stderr, "\n"))
+	log.Printf("docker command failed: command=%s error=%v stdout_bytes=%d stderr_bytes=%d output=omitted", logCommand, waitErr, len(stdout), len(stderr))
 	return runner.RunStepResult{}, fmt.Errorf("docker command failed: %w: %s", waitErr, strings.TrimSpace(stdout+stderr))
 }
 
@@ -441,7 +442,32 @@ func (r *Runner) inspectContainerImage(ctx context.Context, containerName string
 }
 
 func logDockerCommandFailure(args []string, err error, output []byte) {
-	log.Printf("docker command failed: command=%s error=%v output=%s", dockerCommandString(args), err, strings.TrimRight(string(output), "\n"))
+	log.Printf("docker command failed: command=%s error=%v output_bytes=%d output=omitted", dockerCommandString(redactDockerArgsForLogging(args)), err, len(output))
+}
+
+func redactDockerArgsForLogging(args []string) []string {
+	redacted := append([]string(nil), args...)
+	for idx := 0; idx < len(redacted); idx++ {
+		arg := redacted[idx]
+		switch {
+		case arg == "-e" || arg == "--env":
+			if idx+1 < len(redacted) {
+				redacted[idx+1] = redactEnvAssignment(redacted[idx+1])
+				idx++
+			}
+		case strings.HasPrefix(arg, "--env="):
+			redacted[idx] = "--env=" + redactEnvAssignment(strings.TrimPrefix(arg, "--env="))
+		}
+	}
+	return redacted
+}
+
+func redactEnvAssignment(value string) string {
+	equalsAt := strings.Index(value, "=")
+	if equalsAt <= 0 {
+		return value
+	}
+	return value[:equalsAt] + "=<redacted>"
 }
 
 func dockerCommandString(args []string) string {
