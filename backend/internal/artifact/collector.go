@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 // CollectedArtifact is a collected artifact payload ready for metadata persistence.
@@ -57,7 +59,12 @@ func (c *Collector) Collect(ctx context.Context, request CollectRequest) (Collec
 		return CollectResult{}, nil
 	}
 
-	patterns := normalizePatterns(request.Patterns)
+	buildWorkspace := workspace.New(buildID, workspacePath)
+
+	patterns, err := normalizePatterns(request.Patterns, buildWorkspace)
+	if err != nil {
+		return CollectResult{}, err
+	}
 	if len(patterns) == 0 {
 		return CollectResult{}, nil
 	}
@@ -152,7 +159,7 @@ func (c *Collector) Collect(ctx context.Context, request CollectRequest) (Collec
 	sort.Strings(selectedPaths)
 
 	for _, relPath := range selectedPaths {
-		artifact, err := c.collectSingle(ctx, buildID, workspacePath, relPath)
+		artifact, err := c.collectSingle(ctx, buildWorkspace, relPath)
 		if err != nil {
 			log.Printf("artifact persistence error: build_id=%s logical_path=%s err=%v", buildID, relPath, err)
 			failedCollectErrors = append(failedCollectErrors, fmt.Errorf("failed collecting artifact %q: %w", relPath, err))
@@ -170,11 +177,15 @@ func (c *Collector) Collect(ctx context.Context, request CollectRequest) (Collec
 	return result, nil
 }
 
-func (c *Collector) collectSingle(ctx context.Context, buildID string, workspacePath string, logicalPath string) (CollectedArtifact, error) {
-	absPath := filepath.Join(workspacePath, filepath.FromSlash(logicalPath))
-	resolvedWorkspacePath, err := filepath.EvalSymlinks(workspacePath)
+func (c *Collector) collectSingle(ctx context.Context, ws workspace.Workspace, logicalPath string) (CollectedArtifact, error) {
+	absPath, err := ws.ResolveRelativePath(logicalPath)
 	if err != nil {
-		resolvedWorkspacePath = workspacePath
+		return CollectedArtifact{}, err
+	}
+
+	resolvedWorkspacePath, err := filepath.EvalSymlinks(ws.HostRoot)
+	if err != nil {
+		resolvedWorkspacePath = ws.HostRoot
 	}
 
 	fileInfo, err := os.Lstat(absPath)
@@ -211,7 +222,7 @@ func (c *Collector) collectSingle(ctx context.Context, buildID string, workspace
 
 	hasher := sha256.New()
 	tee := io.TeeReader(file, hasher)
-	storageKey := path.Join(buildID, logicalPath)
+	storageKey := path.Join(ws.BuildID, logicalPath)
 	storagePath := storageKey
 	if reporter, ok := c.store.(interface{ RootPath() string }); ok {
 		root := strings.TrimSpace(reporter.RootPath())
@@ -219,7 +230,7 @@ func (c *Collector) collectSingle(ctx context.Context, buildID string, workspace
 			storagePath = filepath.Join(root, filepath.FromSlash(storageKey))
 		}
 	}
-	log.Printf("artifact persist start: build_id=%s logical_path=%s source_path=%s resolved_source_path=%s storage_key=%s storage_path=%s size_bytes=%d", buildID, logicalPath, absPath, resolvedPath, storageKey, storagePath, openedInfo.Size())
+	log.Printf("artifact persist start: build_id=%s logical_path=%s source_path=%s resolved_source_path=%s storage_key=%s storage_path=%s size_bytes=%d", ws.BuildID, logicalPath, absPath, resolvedPath, storageKey, storagePath, openedInfo.Size())
 	size, err := c.store.Save(ctx, storageKey, tee)
 	if err != nil {
 		return CollectedArtifact{}, fmt.Errorf("saving artifact to store: %w", err)
@@ -256,9 +267,9 @@ func pathWithinBase(basePath string, candidatePath string) bool {
 	return true
 }
 
-func normalizePatterns(patterns []string) []string {
+func normalizePatterns(patterns []string, ws workspace.Workspace) ([]string, error) {
 	if len(patterns) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	normalized := make([]string, 0, len(patterns))
@@ -268,6 +279,9 @@ func normalizePatterns(patterns []string) []string {
 		if trimmed == "" {
 			continue
 		}
+		if err := ws.ValidateArtifactPath(trimmed); err != nil {
+			return nil, fmt.Errorf("invalid artifact path %q: %w", trimmed, err)
+		}
 		if _, ok := seen[trimmed]; ok {
 			continue
 		}
@@ -275,7 +289,7 @@ func normalizePatterns(patterns []string) []string {
 		normalized = append(normalized, trimmed)
 	}
 
-	return normalized
+	return normalized, nil
 }
 
 func matchPathPattern(pattern string, relPath string) bool {

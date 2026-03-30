@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"os/exec"
-	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -18,10 +17,11 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	"github.com/radiation/coyote-ci/backend/internal/source"
+	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 const (
-	workspaceMountPath = "/workspace"
+	workspaceMountPath = workspace.DefaultContainerRoot
 	containerIdleCmd   = "while true; do sleep 3600; done"
 )
 
@@ -82,7 +82,7 @@ func (r *Runner) PrepareBuild(ctx context.Context, request runner.PrepareBuildRe
 	}
 
 	containerName := containerNameForBuild(buildID)
-	if err := r.ensureBuildContainerReady(ctx, containerName, image, workspacePath); err != nil {
+	if err := r.ensureBuildContainerReady(ctx, buildID, containerName, image, workspacePath); err != nil {
 		return err
 	}
 
@@ -110,7 +110,7 @@ func (r *Runner) ensureBuildWorkspaceReady(ctx context.Context, request runner.P
 	})
 }
 
-func (r *Runner) ensureBuildContainerReady(ctx context.Context, containerName string, image string, workspacePath string) error {
+func (r *Runner) ensureBuildContainerReady(ctx context.Context, buildID string, containerName string, image string, workspacePath string) error {
 	exists, running, err := r.inspectContainerState(ctx, containerName)
 	if err != nil {
 		return err
@@ -126,7 +126,7 @@ func (r *Runner) ensureBuildContainerReady(ctx context.Context, containerName st
 		return nil
 	}
 
-	return r.createBuildContainer(ctx, containerName, image, workspacePath)
+	return r.createBuildContainer(ctx, buildID, containerName, image, workspacePath)
 }
 
 func (r *Runner) inspectContainerState(ctx context.Context, containerName string) (exists bool, running bool, err error) {
@@ -147,19 +147,23 @@ func isContainerNotFound(err error, output []byte) bool {
 	return strings.Contains(combined, "no such container") || strings.Contains(combined, "no such object")
 }
 
-func (r *Runner) createBuildContainer(ctx context.Context, containerName string, image string, workspacePath string) error {
+func (r *Runner) createBuildContainer(ctx context.Context, buildID string, containerName string, image string, workspacePath string) error {
+	buildWorkspace := workspace.New(buildID, workspacePath)
+	mountBinding := buildWorkspace.HostRoot + ":" + buildWorkspace.ContainerRoot
+	workingDir := buildWorkspace.ContainerWorkingDir(".")
+
 	args := []string{
 		"run",
 		"-d",
 		"--name", containerName,
-		"-w", workspaceMountPath,
-		"-v", workspacePath + ":" + workspaceMountPath,
+		"-w", workingDir,
+		"-v", mountBinding,
 		image,
 		"sh",
 		"-c",
 		containerIdleCmd,
 	}
-	log.Printf("starting container: image=%s command=%s working_dir=%s mounts=%s", image, dockerCommandString(args), workspaceMountPath, workspacePath+":"+workspaceMountPath)
+	log.Printf("starting container: image=%s command=%s working_dir=%s mounts=%s", image, dockerCommandString(args), workingDir, mountBinding)
 	if _, err := r.runDockerCommand(ctx, args...); err != nil {
 		return fmt.Errorf("creating build container: %w", err)
 	}
@@ -357,29 +361,7 @@ func containerNameForBuild(buildID string) string {
 }
 
 func resolveContainerWorkingDir(requested string) string {
-	trimmed := strings.TrimSpace(requested)
-	if trimmed == "" || trimmed == "." {
-		return workspaceMountPath
-	}
-
-	if strings.HasPrefix(trimmed, "/") {
-		cleanAbs := path.Clean(trimmed)
-		if cleanAbs == workspaceMountPath || strings.HasPrefix(cleanAbs, workspaceMountPath+"/") {
-			return cleanAbs
-		}
-		return workspaceMountPath
-	}
-
-	cleanRel := path.Clean(trimmed)
-	if cleanRel == "." || cleanRel == ".." || strings.HasPrefix(cleanRel, "../") {
-		return workspaceMountPath
-	}
-
-	resolved := path.Clean(path.Join(workspaceMountPath, cleanRel))
-	if resolved == workspaceMountPath || strings.HasPrefix(resolved, workspaceMountPath+"/") {
-		return resolved
-	}
-	return workspaceMountPath
+	return workspace.New("", "").ContainerWorkingDir(requested)
 }
 
 func dockerExecArgs(request runner.RunStepRequest) []string {

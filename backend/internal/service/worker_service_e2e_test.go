@@ -101,11 +101,8 @@ func TestWorkerExecutionVerticalSlice_Success(t *testing.T) {
 	if len(buildLogs) == 0 {
 		t.Fatal("expected captured logs for successful command")
 	}
-	if buildLogs[0].StepName != "default" {
-		t.Fatalf("expected step name default, got %q", buildLogs[0].StepName)
-	}
-	if buildLogs[0].Message != "ok-line" {
-		t.Fatalf("expected log line ok-line, got %q", buildLogs[0].Message)
+	if !containsBuildLogMessage(buildLogs, "ok-line") {
+		t.Fatalf("expected log line ok-line, got %#v", buildLogs)
 	}
 
 	updatedBuild, err := buildService.GetBuild(ctx, build.ID)
@@ -173,11 +170,8 @@ func TestWorkerExecutionVerticalSlice_FailedCommand(t *testing.T) {
 	if len(buildLogs) == 0 {
 		t.Fatal("expected captured logs for failed command")
 	}
-	if buildLogs[0].StepName != "default" {
-		t.Fatalf("expected step name default, got %q", buildLogs[0].StepName)
-	}
-	if buildLogs[0].Message != "fail-line" {
-		t.Fatalf("expected log line fail-line, got %q", buildLogs[0].Message)
+	if !containsBuildLogMessage(buildLogs, "fail-line") {
+		t.Fatalf("expected log line fail-line, got %#v", buildLogs)
 	}
 
 	updatedBuild, err := buildService.GetBuild(ctx, build.ID)
@@ -254,11 +248,8 @@ func TestWorkerExecutionVerticalSlice_Timeout(t *testing.T) {
 	if len(buildLogs) == 0 {
 		t.Fatal("expected captured logs for timed out command")
 	}
-	if buildLogs[0].StepName != "default" {
-		t.Fatalf("expected step name default, got %q", buildLogs[0].StepName)
-	}
-	if !strings.Contains(buildLogs[0].Message, "timed out") {
-		t.Fatalf("expected timeout log line, got %q", buildLogs[0].Message)
+	if !containsBuildLogMessage(buildLogs, "timed out") {
+		t.Fatalf("expected timeout log line, got %#v", buildLogs)
 	}
 
 	updatedBuild, err := buildService.GetBuild(ctx, build.ID)
@@ -418,6 +409,15 @@ func TestWorkerExecutionVerticalSlice_MultiStepSuccessThenFailure(t *testing.T) 
 	if updatedBuild.Status != domain.BuildStatusFailed {
 		t.Fatalf("expected build status failed, got %q", updatedBuild.Status)
 	}
+}
+
+func containsBuildLogMessage(lines []logs.BuildLogLine, needle string) bool {
+	for _, line := range lines {
+		if strings.Contains(line.Message, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestWorkerExecutionVerticalSlice_MultiStepSuccessPath(t *testing.T) {

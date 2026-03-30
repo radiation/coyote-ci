@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	"github.com/radiation/coyote-ci/backend/internal/source"
+	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 var ErrBuildNotFound = errors.New("build not found")
@@ -503,9 +505,28 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		}
 		return runner.RunStepResult{}, StepCompletionReport{}, fmt.Errorf("fetching build for step execution: %w", err)
 	}
+	executionImage := s.resolveExecutionImage(build)
+
+	steps, err := s.buildRepo.GetStepsByBuildID(ctx, request.BuildID)
+	if err != nil {
+		return runner.RunStepResult{}, StepCompletionReport{}, fmt.Errorf("fetching build steps for step execution: %w", mapRepoErr(err))
+	}
+	totalSteps := len(steps)
+	if totalSteps <= 0 {
+		totalSteps = request.StepIndex + 1
+	}
+	if totalSteps <= 0 {
+		totalSteps = 1
+	}
+	stepNumber := request.StepIndex + 1
+	if stepNumber <= 0 {
+		stepNumber = 1
+	}
+
+	stepWorkingDir := workspace.New(request.BuildID, "").ContainerWorkingDir(request.WorkingDir)
+	stepCommand := runner.RenderStepCommand(request.Command, request.Args)
 
 	if buildScopedRunner, ok := s.runner.(runner.BuildScopedRunner); ok {
-		executionImage := s.resolveExecutionImage(build)
 		prepareErr := buildScopedRunner.PrepareBuild(ctx, runner.PrepareBuildRequest{
 			BuildID:    request.BuildID,
 			RepoURL:    readOptionalString(build.RepoURL),
@@ -530,7 +551,7 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 				return result, completionReport, errors.Join(prepareErr, completionErr)
 			}
 
-			if sideEffectErr := s.runPostCompletionSideEffects(ctx, request.BuildID); sideEffectErr != nil {
+			if sideEffectErr := s.runPostCompletionSideEffects(ctx, request, nil); sideEffectErr != nil {
 				completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, sideEffectErr)
 			}
 
@@ -542,19 +563,21 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	}
 
 	hasChunkAppender := false
-	if _, ok := s.logSink.(logs.StepLogChunkAppender); ok {
+	var chunkAppender logs.StepLogChunkAppender
+	if appender, ok := s.logSink.(logs.StepLogChunkAppender); ok {
 		hasChunkAppender = true
+		chunkAppender = appender
 	}
 
 	var chunkPersistErr error
 	var chunkPersistMu sync.Mutex
+	var visibilityLogErr error
 
 	persistChunk := func(chunk runner.StepOutputChunk) error {
 		if !hasChunkAppender {
 			return nil
 		}
-		appender, ok := s.logSink.(logs.StepLogChunkAppender)
-		if !ok {
+		if chunkAppender == nil {
 			return nil
 		}
 
@@ -573,7 +596,7 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 			stream = logs.StepLogStreamSystem
 		}
 
-		_, appendErr := appender.AppendStepLogChunk(ctx, logs.StepLogChunk{
+		_, appendErr := chunkAppender.AppendStepLogChunk(ctx, logs.StepLogChunk{
 			BuildID:   request.BuildID,
 			StepID:    request.StepID,
 			StepIndex: request.StepIndex,
@@ -591,6 +614,32 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		}
 		return nil
 	}
+	emitVisibilityLine := func(line string) {
+		if err := s.writeSystemExecutionLogLine(ctx, request, chunkAppender, line); err != nil && visibilityLogErr == nil {
+			visibilityLogErr = err
+		}
+	}
+	emitVisibilityLines := func(lines []string) {
+		for _, line := range lines {
+			emitVisibilityLine(line)
+		}
+	}
+	applyBufferedLogErrors := func(report *StepCompletionReport) {
+		chunkPersistMu.Lock()
+		capturedChunkErr := chunkPersistErr
+		chunkPersistMu.Unlock()
+		if capturedChunkErr != nil {
+			report.SideEffectErr = joinSideEffectErrors(report.SideEffectErr, capturedChunkErr)
+		}
+		if visibilityLogErr != nil {
+			report.SideEffectErr = joinSideEffectErrors(report.SideEffectErr, visibilityLogErr)
+		}
+	}
+
+	if stepNumber == 1 {
+		emitVisibilityLines(formatBuildStartLines(executionImage, workspace.DefaultContainerRoot, totalSteps))
+	}
+	emitVisibilityLines(formatStepStartLines(stepNumber, totalSteps, request.StepName, executionImage, stepWorkingDir, stepCommand))
 
 	var result runner.RunStepResult
 	var runErr error
@@ -621,62 +670,140 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 			StartedAt:  now,
 			FinishedAt: now,
 		}
+		emitVisibilityLine(formatStepEndLine(stepNumber, totalSteps, request.StepName, "failed", result.FinishedAt.Sub(result.StartedAt), result.ExitCode))
 		completionReport, completionErr := s.handleStepResult(ctx, request, result, hasChunkAppender)
 		if completionErr != nil {
 			return result, completionReport, errors.Join(runErr, completionErr)
 		}
-		if sideEffectErr := s.runPostCompletionSideEffects(ctx, request.BuildID); sideEffectErr != nil {
+		if sideEffectErr := s.runPostCompletionSideEffects(ctx, request, chunkAppender); sideEffectErr != nil {
 			completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, sideEffectErr)
 		}
-		chunkPersistMu.Lock()
-		if completionReport.SideEffectErr == nil && chunkPersistErr != nil {
-			completionReport.SideEffectErr = chunkPersistErr
-		}
-		chunkPersistMu.Unlock()
+		applyBufferedLogErrors(&completionReport)
 		return result, completionReport, runErr
 	}
+
+	stepStatus := "succeeded"
+	if result.Status == runner.RunStepStatusFailed {
+		stepStatus = "failed"
+	}
+	emitVisibilityLine(formatStepEndLine(stepNumber, totalSteps, request.StepName, stepStatus, result.FinishedAt.Sub(result.StartedAt), result.ExitCode))
 
 	completionReport, completionErr := s.handleStepResult(ctx, request, result, hasChunkAppender)
 	if completionErr != nil {
 		return result, completionReport, completionErr
 	}
-	if sideEffectErr := s.runPostCompletionSideEffects(ctx, request.BuildID); sideEffectErr != nil {
+	if sideEffectErr := s.runPostCompletionSideEffects(ctx, request, chunkAppender); sideEffectErr != nil {
 		completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, sideEffectErr)
 	}
-	chunkPersistMu.Lock()
-	if completionReport.SideEffectErr == nil && chunkPersistErr != nil {
-		completionReport.SideEffectErr = chunkPersistErr
-	}
-	chunkPersistMu.Unlock()
+	applyBufferedLogErrors(&completionReport)
 
 	return result, completionReport, nil
 }
 
-func (s *BuildService) runPostCompletionSideEffects(ctx context.Context, buildID string) error {
-	artifactErr := s.collectArtifactsIfTerminal(ctx, buildID)
+func (s *BuildService) runPostCompletionSideEffects(ctx context.Context, request runner.RunStepRequest, appender logs.StepLogChunkAppender) error {
+	artifactPaths, artifactErr := s.collectArtifactsIfTerminal(ctx, request.BuildID)
 	if artifactErr != nil {
 		return artifactErr
 	}
 
-	return s.cleanupExecutionIfTerminal(ctx, buildID)
+	summaryErr := s.writeTerminalBuildSummary(ctx, request, appender, artifactPaths)
+	cleanupErr := s.cleanupExecutionIfTerminal(ctx, request.BuildID)
+
+	return errors.Join(summaryErr, cleanupErr)
 }
 
-func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID string) error {
-	if s.artifactRepo == nil || s.artifactCollector == nil || strings.TrimSpace(s.artifactWorkspaceRoot) == "" {
-		return nil
-	}
-
-	build, err := s.buildRepo.GetByID(ctx, buildID)
+func (s *BuildService) writeTerminalBuildSummary(ctx context.Context, request runner.RunStepRequest, appender logs.StepLogChunkAppender, artifactPaths []string) error {
+	build, err := s.buildRepo.GetByID(ctx, request.BuildID)
 	if err != nil {
-		return fmt.Errorf("fetching build for artifact collection: %w", err)
+		return fmt.Errorf("fetching build for summary: %w", err)
 	}
 	if !domain.IsTerminalBuildStatus(build.Status) {
 		return nil
 	}
 
+	steps, err := s.buildRepo.GetStepsByBuildID(ctx, request.BuildID)
+	if err != nil {
+		return fmt.Errorf("fetching build steps for summary: %w", err)
+	}
+
+	completedSteps := 0
+	for _, step := range steps {
+		if step.Status == domain.BuildStepStatusSuccess || step.Status == domain.BuildStepStatusFailed {
+			completedSteps++
+		}
+	}
+
+	duration := terminalBuildSummaryDuration(build, time.Now().UTC())
+	for _, line := range formatBuildSummaryLines(build.Status, duration, completedSteps, len(steps), artifactPaths) {
+		if err := s.writeSystemExecutionLogLine(ctx, request, appender, line); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *BuildService) writeSystemExecutionLogLine(ctx context.Context, request runner.RunStepRequest, appender logs.StepLogChunkAppender, line string) error {
+	text := strings.TrimRight(line, "\n")
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+
+	if appender != nil {
+		_, err := appender.AppendStepLogChunk(ctx, logs.StepLogChunk{
+			BuildID:   request.BuildID,
+			StepID:    request.StepID,
+			StepIndex: request.StepIndex,
+			StepName:  request.StepName,
+			Stream:    logs.StepLogStreamSystem,
+			ChunkText: text,
+			CreatedAt: time.Now().UTC(),
+		})
+		return err
+	}
+
+	return s.logSink.WriteStepLog(ctx, request.BuildID, request.StepName, text)
+}
+
+func terminalBuildSummaryDuration(build domain.Build, now time.Time) time.Duration {
+	if build.FinishedAt != nil && !build.FinishedAt.IsZero() {
+		if build.StartedAt != nil && !build.StartedAt.IsZero() && !build.FinishedAt.Before(*build.StartedAt) {
+			return build.FinishedAt.Sub(*build.StartedAt)
+		}
+		if !build.CreatedAt.IsZero() && !build.FinishedAt.Before(build.CreatedAt) {
+			return build.FinishedAt.Sub(build.CreatedAt)
+		}
+	}
+
+	if build.CreatedAt.IsZero() {
+		return 0
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if now.Before(build.CreatedAt) {
+		return 0
+	}
+
+	return now.Sub(build.CreatedAt)
+}
+
+func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID string) ([]string, error) {
+	if s.artifactRepo == nil || s.artifactCollector == nil || strings.TrimSpace(s.artifactWorkspaceRoot) == "" {
+		return nil, nil
+	}
+
+	build, err := s.buildRepo.GetByID(ctx, buildID)
+	if err != nil {
+		return nil, fmt.Errorf("fetching build for artifact collection: %w", err)
+	}
+	if !domain.IsTerminalBuildStatus(build.Status) {
+		return nil, nil
+	}
+
 	existing, err := s.artifactRepo.ListByBuildID(ctx, buildID)
 	if err != nil {
-		return fmt.Errorf("checking existing artifacts: %w", err)
+		return nil, fmt.Errorf("checking existing artifacts: %w", err)
 	}
 	existingPaths := make(map[string]struct{}, len(existing))
 	for _, item := range existing {
@@ -685,10 +812,10 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 
 	patterns, err := artifactPatternsFromBuild(build)
 	if err != nil {
-		return fmt.Errorf("resolving build artifact declarations: %w", err)
+		return nil, fmt.Errorf("resolving build artifact declarations: %w", err)
 	}
 	if len(patterns) == 0 {
-		return nil
+		return sortedArtifactPaths(existingPaths), nil
 	}
 
 	workspacePath := filepath.Join(s.artifactWorkspaceRoot, strings.TrimSpace(buildID))
@@ -701,7 +828,7 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 	})
 	if err != nil {
 		log.Printf("artifact collection error: build_id=%s workspace_path=%s err=%v", buildID, workspacePath, err)
-		return err
+		return nil, err
 	}
 	for _, warning := range collectResult.Warnings {
 		log.Printf("artifact collection warning: build_id=%s %s", buildID, warning)
@@ -722,12 +849,22 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 		})
 		if err != nil {
 			log.Printf("artifact metadata persistence error: build_id=%s logical_path=%s err=%v", buildID, item.LogicalPath, err)
-			return fmt.Errorf("persisting artifact metadata: %w", err)
+			return nil, fmt.Errorf("persisting artifact metadata: %w", err)
 		}
+		existingPaths[item.LogicalPath] = struct{}{}
 	}
 	log.Printf("artifact metadata persistence complete: build_id=%s persisted=%d", buildID, len(collectResult.Artifacts))
 
-	return nil
+	return sortedArtifactPaths(existingPaths), nil
+}
+
+func sortedArtifactPaths(values map[string]struct{}) []string {
+	out := make([]string, 0, len(values))
+	for logicalPath := range values {
+		out = append(out, logicalPath)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func artifactStoreRootForLog(store artifact.Store) string {

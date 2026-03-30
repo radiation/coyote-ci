@@ -127,6 +127,40 @@ func TestCollector_CollectResultArtifacts_AreSortedByLogicalPath(t *testing.T) {
 	}
 }
 
+func TestCollector_RejectsAbsoluteArtifactPath(t *testing.T) {
+	workspace := t.TempDir()
+	collector := NewCollector(NewFilesystemStore(t.TempDir()))
+
+	_, err := collector.Collect(context.Background(), CollectRequest{
+		BuildID:       "build-1",
+		WorkspacePath: workspace,
+		Patterns:      []string{"/etc/passwd"},
+	})
+	if err == nil {
+		t.Fatal("expected absolute artifact path to be rejected")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "invalid artifact path") {
+		t.Fatalf("expected invalid artifact path error, got %v", err)
+	}
+}
+
+func TestCollector_RejectsTraversalArtifactPath(t *testing.T) {
+	workspace := t.TempDir()
+	collector := NewCollector(NewFilesystemStore(t.TempDir()))
+
+	_, err := collector.Collect(context.Background(), CollectRequest{
+		BuildID:       "build-1",
+		WorkspacePath: workspace,
+		Patterns:      []string{"../secrets/*"},
+	})
+	if err == nil {
+		t.Fatal("expected traversal artifact path to be rejected")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "invalid artifact path") {
+		t.Fatalf("expected invalid artifact path error, got %v", err)
+	}
+}
+
 func mustWriteFile(t *testing.T, path string, content []byte) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
