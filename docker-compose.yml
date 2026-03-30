@@ -108,6 +108,7 @@ services:
       DB_SSLMODE: disable
       ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
       WORKER_EXECUTION_WORKSPACE_ROOT: /tmp/coyote-builds
+      WORKER_EXECUTION_BACKEND: inprocess
     entrypoint: ["/app/worker"]
     volumes:
       - artifact_data:/var/lib/coyote-artifacts

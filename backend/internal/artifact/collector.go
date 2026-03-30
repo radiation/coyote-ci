@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"mime"
 	"os"
 	"path"
@@ -24,9 +26,10 @@ type CollectedArtifact struct {
 }
 
 type CollectRequest struct {
-	BuildID       string
-	WorkspacePath string
-	Patterns      []string
+	BuildID          string
+	WorkspacePath    string
+	Patterns         []string
+	SkipLogicalPaths map[string]struct{}
 }
 
 type CollectResult struct {
@@ -58,18 +61,39 @@ func (c *Collector) Collect(ctx context.Context, request CollectRequest) (Collec
 		return CollectResult{}, nil
 	}
 
-	if _, err := os.Stat(workspacePath); err != nil {
+	storageRoot := ""
+	if reporter, ok := c.store.(interface{ RootPath() string }); ok {
+		storageRoot = strings.TrimSpace(reporter.RootPath())
+	}
+	log.Printf("artifact collection start: build_id=%s workspace_path=%s patterns=%q storage_root=%s", buildID, workspacePath, patterns, storageRoot)
+
+	workspaceInfo, err := os.Stat(workspacePath)
+	if err != nil {
 		if os.IsNotExist(err) {
+			log.Printf("artifact workspace check: build_id=%s workspace_path=%s exists=false readable=false", buildID, workspacePath)
 			return CollectResult{Warnings: []string{fmt.Sprintf("workspace %q not found; skipping artifact collection", workspacePath)}}, nil
 		}
+		log.Printf("artifact workspace check failed: build_id=%s workspace_path=%s err=%v", buildID, workspacePath, err)
 		return CollectResult{}, fmt.Errorf("checking workspace for artifact collection: %w", err)
 	}
+	if !workspaceInfo.IsDir() {
+		log.Printf("artifact workspace check failed: build_id=%s workspace_path=%s exists=true readable=false err=workspace is not a directory", buildID, workspacePath)
+		return CollectResult{}, fmt.Errorf("workspace %q is not a directory", workspacePath)
+	}
+	if _, err := os.ReadDir(workspacePath); err != nil {
+		log.Printf("artifact workspace check failed: build_id=%s workspace_path=%s exists=true readable=false err=%v", buildID, workspacePath, err)
+		return CollectResult{}, fmt.Errorf("reading workspace for artifact collection: %w", err)
+	}
+	log.Printf("artifact workspace check: build_id=%s workspace_path=%s exists=true readable=true", buildID, workspacePath)
 
-	matchedByPattern := make(map[string]bool, len(patterns))
+	matchedByPattern := make(map[string]int, len(patterns))
+	matchedPaths := map[string]struct{}{}
 	selected := map[string]struct{}{}
+	skippedCount := 0
 
 	walkErr := filepath.WalkDir(workspacePath, func(absPath string, d fs.DirEntry, err error) error {
 		if err != nil {
+			log.Printf("artifact workspace scan error: build_id=%s workspace_path=%s err=%v", buildID, workspacePath, err)
 			return err
 		}
 		if d.IsDir() {
@@ -83,45 +107,73 @@ func (c *Collector) Collect(ctx context.Context, request CollectRequest) (Collec
 		normalizedRel := filepath.ToSlash(relPath)
 
 		for _, pattern := range patterns {
-			if matchPathPattern(pattern, normalizedRel) {
-				selected[normalizedRel] = struct{}{}
-				matchedByPattern[pattern] = true
+			if !matchPathPattern(pattern, normalizedRel) {
+				continue
+			}
+
+			matchedByPattern[pattern]++
+			matchedPaths[normalizedRel] = struct{}{}
+			if _, skipped := request.SkipLogicalPaths[normalizedRel]; skipped {
+				skippedCount++
+				log.Printf("artifact skip existing: build_id=%s logical_path=%s pattern=%s", buildID, normalizedRel, pattern)
 				break
 			}
+
+			selected[normalizedRel] = struct{}{}
+			break
 		}
 
 		return nil
 	})
 	if walkErr != nil {
+		log.Printf("artifact workspace scan failed: build_id=%s workspace_path=%s err=%v", buildID, workspacePath, walkErr)
 		return CollectResult{}, fmt.Errorf("walking workspace for artifact collection: %w", walkErr)
 	}
 
 	warnings := make([]string, 0)
 	for _, pattern := range patterns {
-		if !matchedByPattern[pattern] {
+		count := matchedByPattern[pattern]
+		if count == 0 {
+			log.Printf("artifact pattern evaluation: build_id=%s pattern=%s resolution=workspace-relative-glob matches=0", buildID, pattern)
+			log.Printf("artifact pattern unmatched: build_id=%s pattern=%s", buildID, pattern)
 			warnings = append(warnings, fmt.Sprintf("artifact pattern %q matched no files", pattern))
+			continue
 		}
+		log.Printf("artifact pattern evaluation: build_id=%s pattern=%s resolution=workspace-relative-glob matches=%d", buildID, pattern, count)
 	}
 
 	artifacts := make([]CollectedArtifact, 0, len(selected))
+	failedCollectErrors := make([]error, 0)
 	for relPath := range selected {
 		artifact, err := c.collectSingle(ctx, buildID, workspacePath, relPath)
 		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("failed collecting artifact %q: %v", relPath, err))
+			log.Printf("artifact persistence error: build_id=%s logical_path=%s err=%v", buildID, relPath, err)
+			failedCollectErrors = append(failedCollectErrors, fmt.Errorf("failed collecting artifact %q: %w", relPath, err))
 			continue
 		}
 		artifacts = append(artifacts, artifact)
 	}
 
-	return CollectResult{Artifacts: artifacts, Warnings: warnings}, nil
+	result := CollectResult{Artifacts: artifacts, Warnings: warnings}
+	log.Printf("artifact collection summary: build_id=%s matched=%d persisted=%d skipped=%d warnings=%d errors=%d", buildID, len(matchedPaths), len(artifacts), skippedCount, len(warnings), len(failedCollectErrors))
+	if len(failedCollectErrors) > 0 {
+		return result, errors.Join(failedCollectErrors...)
+	}
+
+	return result, nil
 }
 
 func (c *Collector) collectSingle(ctx context.Context, buildID string, workspacePath string, logicalPath string) (CollectedArtifact, error) {
 	absPath := filepath.Join(workspacePath, filepath.FromSlash(logicalPath))
 
+	fileInfo, err := os.Stat(absPath)
+	if err != nil {
+		return CollectedArtifact{}, fmt.Errorf("stating source artifact: %w", err)
+	}
+
 	file, err := os.Open(absPath)
 	if err != nil {
-		return CollectedArtifact{}, err
+		return CollectedArtifact{}, fmt.Errorf("opening source artifact: %w", err)
 	}
 	defer func() {
 		_ = file.Close()
@@ -130,9 +182,17 @@ func (c *Collector) collectSingle(ctx context.Context, buildID string, workspace
 	hasher := sha256.New()
 	tee := io.TeeReader(file, hasher)
 	storageKey := path.Join(buildID, logicalPath)
+	storagePath := storageKey
+	if reporter, ok := c.store.(interface{ RootPath() string }); ok {
+		root := strings.TrimSpace(reporter.RootPath())
+		if root != "" {
+			storagePath = filepath.Join(root, filepath.FromSlash(storageKey))
+		}
+	}
+	log.Printf("artifact persist start: build_id=%s logical_path=%s source_path=%s storage_key=%s storage_path=%s size_bytes=%d", buildID, logicalPath, absPath, storageKey, storagePath, fileInfo.Size())
 	size, err := c.store.Save(ctx, storageKey, tee)
 	if err != nil {
-		return CollectedArtifact{}, err
+		return CollectedArtifact{}, fmt.Errorf("saving artifact to store: %w", err)
 	}
 
 	sum := hex.EncodeToString(hasher.Sum(nil))

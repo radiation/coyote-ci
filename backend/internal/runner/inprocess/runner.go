@@ -6,23 +6,92 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/runner"
+	"github.com/radiation/coyote-ci/backend/internal/source"
 )
 
 var _ runner.Runner = (*Runner)(nil)
 var _ runner.StreamingRunner = (*Runner)(nil)
+var _ runner.BuildScopedRunner = (*Runner)(nil)
 
-type Runner struct{}
+type Runner struct {
+	workspace source.WorkspaceMaterializer
+
+	mu         sync.RWMutex
+	workspaces map[string]string
+}
 
 func New() *Runner {
-	return &Runner{}
+	return NewWithWorkspaceRoot("")
+}
+
+func NewWithWorkspaceRoot(root string) *Runner {
+	materializer := source.NewHostWorkspaceMaterializer(source.NewGitFetcher(), root)
+	return NewWithWorkspaceMaterializer(materializer)
+}
+
+func NewWithWorkspaceMaterializer(workspace source.WorkspaceMaterializer) *Runner {
+	return &Runner{
+		workspace:  workspace,
+		workspaces: map[string]string{},
+	}
+}
+
+func (r *Runner) PrepareBuild(ctx context.Context, request runner.PrepareBuildRequest) error {
+	if r.workspace == nil {
+		return errors.New("workspace materializer is required")
+	}
+
+	buildID := strings.TrimSpace(request.BuildID)
+	if buildID == "" {
+		return errors.New("build id is required")
+	}
+
+	workspacePath, err := r.workspace.PrepareWorkspace(ctx, source.WorkspacePrepareRequest{
+		BuildID:   buildID,
+		RepoURL:   strings.TrimSpace(request.RepoURL),
+		Ref:       strings.TrimSpace(request.Ref),
+		CommitSHA: strings.TrimSpace(request.CommitSHA),
+	})
+	if err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	r.workspaces[buildID] = workspacePath
+	r.mu.Unlock()
+
+	log.Printf("inprocess prepare build: build_id=%s workspace_path=%s", buildID, workspacePath)
+	return nil
+}
+
+func (r *Runner) CleanupBuild(ctx context.Context, buildID string) error {
+	trimmedBuildID := strings.TrimSpace(buildID)
+	if trimmedBuildID == "" {
+		return nil
+	}
+
+	if r.workspace != nil {
+		if err := r.workspace.CleanupWorkspace(ctx, trimmedBuildID); err != nil {
+			return err
+		}
+	}
+
+	r.mu.Lock()
+	delete(r.workspaces, trimmedBuildID)
+	r.mu.Unlock()
+
+	log.Printf("inprocess cleanup build: build_id=%s", trimmedBuildID)
+	return nil
 }
 
 func (r *Runner) RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, error) {
@@ -43,7 +112,14 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 	defer cancel()
 
 	cmd := exec.CommandContext(execCtx, request.Command, request.Args...)
-	if request.WorkingDir != "" {
+	if workspacePath, ok := r.lookupWorkspacePath(request.BuildID); ok {
+		resolvedDir, resolveErr := resolveWorkingDir(workspacePath, request.WorkingDir)
+		if resolveErr != nil {
+			return runner.RunStepResult{}, resolveErr
+		}
+		cmd.Dir = resolvedDir
+		log.Printf("inprocess run step: build_id=%s workspace_path=%s working_dir=%s resolved_dir=%s", strings.TrimSpace(request.BuildID), workspacePath, strings.TrimSpace(request.WorkingDir), resolvedDir)
+	} else if request.WorkingDir != "" {
 		cmd.Dir = request.WorkingDir
 	}
 	cmd.Env = mergeEnvironment(request.Env)
@@ -187,4 +263,47 @@ func mergeEnvironment(extra map[string]string) []string {
 	}
 
 	return base
+}
+
+func (r *Runner) lookupWorkspacePath(buildID string) (string, bool) {
+	trimmedBuildID := strings.TrimSpace(buildID)
+	if trimmedBuildID == "" {
+		return "", false
+	}
+
+	r.mu.RLock()
+	workspacePath, ok := r.workspaces[trimmedBuildID]
+	r.mu.RUnlock()
+	if !ok || strings.TrimSpace(workspacePath) == "" {
+		return "", false
+	}
+
+	return workspacePath, true
+}
+
+func resolveWorkingDir(workspacePath string, workingDir string) (string, error) {
+	trimmedWorkspacePath := strings.TrimSpace(workspacePath)
+	if trimmedWorkspacePath == "" {
+		return "", errors.New("workspace path is required")
+	}
+
+	trimmedWorkingDir := strings.TrimSpace(workingDir)
+	if trimmedWorkingDir == "" || trimmedWorkingDir == "." {
+		return trimmedWorkspacePath, nil
+	}
+
+	if filepath.IsAbs(trimmedWorkingDir) {
+		return trimmedWorkingDir, nil
+	}
+
+	resolved := filepath.Clean(filepath.Join(trimmedWorkspacePath, trimmedWorkingDir))
+	rel, err := filepath.Rel(trimmedWorkspacePath, resolved)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("working directory %q escapes build workspace", workingDir)
+	}
+
+	return resolved, nil
 }

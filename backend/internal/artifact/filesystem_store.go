@@ -21,6 +21,10 @@ func NewFilesystemStore(root string) *FilesystemStore {
 	return &FilesystemStore{root: strings.TrimSpace(root)}
 }
 
+func (s *FilesystemStore) RootPath() string {
+	return s.root
+}
+
 func (s *FilesystemStore) Save(_ context.Context, key string, src io.Reader) (int64, error) {
 	fullPath, err := s.resolvePath(key)
 	if err != nil {

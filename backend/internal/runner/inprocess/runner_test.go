@@ -2,6 +2,8 @@ package inprocess
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -116,5 +118,51 @@ func TestRunner_RunStep_CommandNotFound(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected runtime error, got nil")
+	}
+}
+
+func TestRunner_RunStep_UsesPreparedBuildWorkspace(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	r := NewWithWorkspaceRoot(workspaceRoot)
+
+	if err := r.PrepareBuild(context.Background(), runner.PrepareBuildRequest{BuildID: "build-1"}); err != nil {
+		t.Fatalf("prepare build failed: %v", err)
+	}
+
+	res, err := r.RunStep(context.Background(), runner.RunStepRequest{
+		BuildID:    "build-1",
+		WorkingDir: ".",
+		Command:    "sh",
+		Args:       []string{"-c", "mkdir -p dist reports && echo hello > dist/hello.txt && echo '<testsuite></testsuite>' > reports/test.xml"},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if res.Status != runner.RunStepStatusSuccess {
+		t.Fatalf("expected success status, got %q", res.Status)
+	}
+
+	if _, err := os.Stat(filepath.Join(workspaceRoot, "build-1", "dist", "hello.txt")); err != nil {
+		t.Fatalf("expected artifact file in build workspace, stat failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, "build-1", "reports", "test.xml")); err != nil {
+		t.Fatalf("expected report file in build workspace, stat failed: %v", err)
+	}
+}
+
+func TestRunner_CleanupBuild_RemovesPreparedWorkspace(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	r := NewWithWorkspaceRoot(workspaceRoot)
+
+	if err := r.PrepareBuild(context.Background(), runner.PrepareBuildRequest{BuildID: "build-1"}); err != nil {
+		t.Fatalf("prepare build failed: %v", err)
+	}
+
+	if err := r.CleanupBuild(context.Background(), "build-1"); err != nil {
+		t.Fatalf("cleanup build failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(workspaceRoot, "build-1")); !os.IsNotExist(err) {
+		t.Fatalf("expected workspace to be removed, got err=%v", err)
 	}
 }

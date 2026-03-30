@@ -653,8 +653,11 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 
 func (s *BuildService) runPostCompletionSideEffects(ctx context.Context, buildID string) error {
 	artifactErr := s.collectArtifactsIfTerminal(ctx, buildID)
-	cleanupErr := s.cleanupExecutionIfTerminal(ctx, buildID)
-	return joinSideEffectErrors(artifactErr, cleanupErr)
+	if artifactErr != nil {
+		return artifactErr
+	}
+
+	return s.cleanupExecutionIfTerminal(ctx, buildID)
 }
 
 func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID string) error {
@@ -674,8 +677,9 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 	if err != nil {
 		return fmt.Errorf("checking existing artifacts: %w", err)
 	}
-	if len(existing) > 0 {
-		return nil
+	existingPaths := make(map[string]struct{}, len(existing))
+	for _, item := range existing {
+		existingPaths[item.LogicalPath] = struct{}{}
 	}
 
 	patterns, err := artifactPatternsFromBuild(build)
@@ -687,19 +691,24 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 	}
 
 	workspacePath := filepath.Join(s.artifactWorkspaceRoot, strings.TrimSpace(buildID))
+	log.Printf("artifact collection start: build_id=%s workspace_path=%s declared_patterns=%q storage_root=%s", buildID, workspacePath, patterns, artifactStoreRootForLog(s.artifactStore))
 	collectResult, err := s.artifactCollector.Collect(ctx, artifact.CollectRequest{
-		BuildID:       buildID,
-		WorkspacePath: workspacePath,
-		Patterns:      patterns,
+		BuildID:          buildID,
+		WorkspacePath:    workspacePath,
+		Patterns:         patterns,
+		SkipLogicalPaths: existingPaths,
 	})
 	if err != nil {
+		log.Printf("artifact collection error: build_id=%s workspace_path=%s err=%v", buildID, workspacePath, err)
 		return err
 	}
 	for _, warning := range collectResult.Warnings {
 		log.Printf("artifact collection warning: build_id=%s %s", buildID, warning)
 	}
+	log.Printf("artifact metadata persistence start: build_id=%s artifacts_to_persist=%d", buildID, len(collectResult.Artifacts))
 
 	for _, item := range collectResult.Artifacts {
+		log.Printf("artifact metadata persist: build_id=%s logical_path=%s storage_key=%s size_bytes=%d", buildID, item.LogicalPath, item.StorageKey, item.SizeBytes)
 		_, err := s.artifactRepo.Create(ctx, domain.BuildArtifact{
 			ID:             uuid.NewString(),
 			BuildID:        buildID,
@@ -711,11 +720,23 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 			CreatedAt:      time.Now().UTC(),
 		})
 		if err != nil {
+			log.Printf("artifact metadata persistence error: build_id=%s logical_path=%s err=%v", buildID, item.LogicalPath, err)
 			return fmt.Errorf("persisting artifact metadata: %w", err)
 		}
 	}
+	log.Printf("artifact metadata persistence complete: build_id=%s persisted=%d", buildID, len(collectResult.Artifacts))
 
 	return nil
+}
+
+func artifactStoreRootForLog(store artifact.Store) string {
+	if store == nil {
+		return ""
+	}
+	if reporter, ok := store.(interface{ RootPath() string }); ok {
+		return strings.TrimSpace(reporter.RootPath())
+	}
+	return ""
 }
 
 func artifactPatternsFromBuild(build domain.Build) ([]string, error) {

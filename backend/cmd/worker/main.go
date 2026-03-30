@@ -81,10 +81,10 @@ func resolveStepRunner(cfg config.Config) runner.Runner {
 			DefaultImage: cfg.ExecutionDefaultImage,
 		})
 	case "inprocess", "local":
-		return inprocess.New()
+		return inprocess.NewWithWorkspaceRoot(cfg.ExecutionWorkspaceRoot)
 	default:
 		log.Printf("unknown execution backend %q; falling back to inprocess", cfg.ExecutionBackend)
-		return inprocess.New()
+		return inprocess.NewWithWorkspaceRoot(cfg.ExecutionWorkspaceRoot)
 	}
 }
 

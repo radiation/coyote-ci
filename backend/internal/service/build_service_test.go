@@ -441,6 +441,22 @@ func (s *recordingStore) Open(_ context.Context, _ string) (io.ReadCloser, error
 	return io.NopCloser(strings.NewReader("")), nil
 }
 
+type failingStore struct {
+	events *[]string
+	err    error
+}
+
+func (s *failingStore) Save(_ context.Context, key string, _ io.Reader) (int64, error) {
+	if s.events != nil {
+		*s.events = append(*s.events, "save:"+key)
+	}
+	return 0, s.err
+}
+
+func (s *failingStore) Open(_ context.Context, _ string) (io.ReadCloser, error) {
+	return nil, s.err
+}
+
 func (s *fakeLogSink) WriteStepLog(_ context.Context, buildID string, stepName string, line string) error {
 	if s.err != nil {
 		return s.err
@@ -1136,6 +1152,213 @@ func TestBuildService_RunStep_MissingArtifactPathsDoNotFailBuild(t *testing.T) {
 	}
 	if len(artifactRepo.artifacts[buildID]) != 0 {
 		t.Fatalf("expected no persisted artifacts for unmatched paths, got %d", len(artifactRepo.artifacts[buildID]))
+	}
+}
+
+func TestBuildService_RunStep_ConvergesAfterPartialArtifactPersistence(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	buildID := "build-terminal"
+	claimToken := "claim-active"
+	now := time.Now().UTC()
+
+	workspacePath := filepath.Join(workspaceRoot, buildID)
+	if err := os.MkdirAll(filepath.Join(workspacePath, "dist"), 0o755); err != nil {
+		t.Fatalf("failed creating workspace: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspacePath, "reports"), 0o755); err != nil {
+		t.Fatalf("failed creating workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePath, "dist", "app"), []byte("artifact-one"), 0o644); err != nil {
+		t.Fatalf("failed writing dist artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePath, "reports", "junit.xml"), []byte("artifact-two"), 0o644); err != nil {
+		t.Fatalf("failed writing report artifact: %v", err)
+	}
+
+	runner := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", Stderr: ""}}}
+	events := make([]string, 0)
+	runner.onCleanup = func() {
+		events = append(events, "cleanup")
+	}
+
+	pipelineYAML := "version: 1\nsteps:\n  - name: build\n    run: make build\nartifacts:\n  paths:\n    - dist/**\n    - reports/*.xml\n"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: buildID, Status: domain.BuildStatusRunning, CurrentStepIndex: 0, PipelineConfigYAML: &pipelineYAML},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	artifactRepo := &fakeArtifactRepository{artifacts: map[string][]domain.BuildArtifact{
+		buildID: {
+			{ID: "existing", BuildID: buildID, LogicalPath: "dist/app", StorageKey: buildID + "/dist/app", CreatedAt: now},
+		},
+	}}
+
+	svc := NewBuildService(repo, runner, &fakeLogSink{})
+	svc.SetArtifactPersistence(artifactRepo, &recordingStore{events: &events}, workspaceRoot)
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	if err != nil {
+		t.Fatalf("expected run to succeed, got %v", err)
+	}
+	if report.SideEffectErr != nil {
+		t.Fatalf("expected nil side effect error, got %v", report.SideEffectErr)
+	}
+
+	artifacts := artifactRepo.artifacts[buildID]
+	if len(artifacts) != 2 {
+		t.Fatalf("expected two artifacts after convergence, got %d", len(artifacts))
+	}
+
+	seen := map[string]int{}
+	for _, item := range artifacts {
+		seen[item.LogicalPath]++
+	}
+	if seen["dist/app"] != 1 || seen["reports/junit.xml"] != 1 {
+		t.Fatalf("expected one entry per logical path, got %#v", seen)
+	}
+
+	saveCount := 0
+	for _, event := range events {
+		if strings.HasPrefix(event, "save:") {
+			saveCount++
+		}
+	}
+	if saveCount != 1 {
+		t.Fatalf("expected only one save for missing artifact, got %d events=%#v", saveCount, events)
+	}
+}
+
+func TestBuildService_RunStep_SkipsCleanupWhenArtifactCollectionFails(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	buildID := "build-terminal"
+	claimToken := "claim-active"
+
+	workspacePath := filepath.Join(workspaceRoot, buildID)
+	if err := os.MkdirAll(filepath.Join(workspacePath, "dist"), 0o755); err != nil {
+		t.Fatalf("failed creating workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePath, "dist", "app"), []byte("artifact-body"), 0o644); err != nil {
+		t.Fatalf("failed writing artifact file: %v", err)
+	}
+
+	runner := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", Stderr: ""}}}
+	pipelineYAML := "version: 1\nsteps:\n  - name: build\n    run: make build\nartifacts:\n  paths:\n    - dist/**\n"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: buildID, Status: domain.BuildStatusRunning, CurrentStepIndex: 0, PipelineConfigYAML: &pipelineYAML},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+
+	svc := NewBuildService(repo, runner, &fakeLogSink{})
+	svc.SetArtifactPersistence(&fakeArtifactRepository{}, &failingStore{err: errors.New("store unavailable")}, workspaceRoot)
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	if err != nil {
+		t.Fatalf("expected run to succeed, got %v", err)
+	}
+	if report.SideEffectErr == nil {
+		t.Fatal("expected side effect error from artifact collection failure")
+	}
+	if runner.cleanupCalls != 0 {
+		t.Fatalf("expected cleanup to be skipped on artifact failure, got %d", runner.cleanupCalls)
+	}
+}
+
+func TestBuildService_CollectArtifactsIfTerminal_IsIdempotent(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	buildID := "build-idempotent"
+
+	workspacePath := filepath.Join(workspaceRoot, buildID)
+	if err := os.MkdirAll(filepath.Join(workspacePath, "dist"), 0o755); err != nil {
+		t.Fatalf("failed creating workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePath, "dist", "app"), []byte("artifact-body"), 0o644); err != nil {
+		t.Fatalf("failed writing artifact file: %v", err)
+	}
+
+	pipelineYAML := "version: 1\nsteps:\n  - name: build\n    run: make build\nartifacts:\n  paths:\n    - dist/**\n"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: buildID, Status: domain.BuildStatusSuccess, CurrentStepIndex: 1, PipelineConfigYAML: &pipelineYAML},
+	}
+	events := make([]string, 0)
+	artifactRepo := &fakeArtifactRepository{}
+
+	svc := NewBuildService(repo, nil, &fakeLogSink{})
+	svc.SetArtifactPersistence(artifactRepo, &recordingStore{events: &events}, workspaceRoot)
+
+	if err := svc.collectArtifactsIfTerminal(context.Background(), buildID); err != nil {
+		t.Fatalf("expected first collection to succeed, got %v", err)
+	}
+	if err := svc.collectArtifactsIfTerminal(context.Background(), buildID); err != nil {
+		t.Fatalf("expected second collection to succeed, got %v", err)
+	}
+
+	artifacts := artifactRepo.artifacts[buildID]
+	if len(artifacts) != 1 {
+		t.Fatalf("expected one persisted artifact without duplicates, got %d", len(artifacts))
+	}
+
+	saveCount := 0
+	for _, event := range events {
+		if strings.HasPrefix(event, "save:") {
+			saveCount++
+		}
+	}
+	if saveCount != 1 {
+		t.Fatalf("expected one storage save across repeated runs, got %d events=%#v", saveCount, events)
+	}
+}
+
+func TestBuildService_RunStep_InprocessRunner_PersistsArtifactsToStorageRoot(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	storageRoot := t.TempDir()
+	buildID := "build-inprocess"
+	claimToken := "claim-active"
+
+	pipelineYAML := "version: 1\nsteps:\n  - name: build\n    run: make build\nartifacts:\n  paths:\n    - dist/**\n    - reports/*.xml\n"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: buildID, Status: domain.BuildStatusRunning, CurrentStepIndex: 0, PipelineConfigYAML: &pipelineYAML},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	artifactRepo := &fakeArtifactRepository{}
+
+	svc := NewBuildService(repo, inprocessrunner.NewWithWorkspaceRoot(workspaceRoot), &fakeLogSink{})
+	svc.SetArtifactPersistence(artifactRepo, artifact.NewFilesystemStore(storageRoot), workspaceRoot)
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{
+		BuildID:    buildID,
+		StepIndex:  0,
+		StepName:   "step-1",
+		ClaimToken: claimToken,
+		WorkingDir: ".",
+		Command:    "sh",
+		Args: []string{
+			"-c",
+			"mkdir -p dist reports && echo 'hello world' > dist/hello.txt && echo '{\"ok\":true}' > dist/result.json && echo '<testsuite></testsuite>' > reports/test.xml",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected run to succeed, got %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed outcome, got %q", report.CompletionOutcome)
+	}
+	if report.SideEffectErr != nil {
+		t.Fatalf("expected nil side effect error, got %v", report.SideEffectErr)
+	}
+
+	artifacts := artifactRepo.artifacts[buildID]
+	if len(artifacts) != 3 {
+		t.Fatalf("expected three persisted artifacts, got %d", len(artifacts))
+	}
+
+	expectedStoragePaths := []string{
+		filepath.Join(storageRoot, buildID, "dist", "hello.txt"),
+		filepath.Join(storageRoot, buildID, "dist", "result.json"),
+		filepath.Join(storageRoot, buildID, "reports", "test.xml"),
+	}
+	for _, expected := range expectedStoragePaths {
+		if _, statErr := os.Stat(expected); statErr != nil {
+			t.Fatalf("expected persisted artifact at %s, stat failed: %v", expected, statErr)
+		}
 	}
 }
 

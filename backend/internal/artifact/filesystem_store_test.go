@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -41,5 +43,23 @@ func TestFilesystemStore_RejectsInvalidKey(t *testing.T) {
 	_, err := store.Save(context.Background(), "../escape.txt", strings.NewReader("x"))
 	if !errors.Is(err, ErrInvalidStorageKey) {
 		t.Fatalf("expected ErrInvalidStorageKey, got %v", err)
+	}
+}
+
+func TestFilesystemStore_Save_WritesUnderConfiguredRoot(t *testing.T) {
+	root := t.TempDir()
+	store := NewFilesystemStore(root)
+
+	if _, err := store.Save(context.Background(), "build-1/dist/hello.txt", strings.NewReader("hello")); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	target := filepath.Join(root, "build-1", "dist", "hello.txt")
+	body, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("expected file under configured root, read failed: %v", err)
+	}
+	if string(body) != "hello" {
+		t.Fatalf("expected stored body hello, got %q", string(body))
 	}
 }
