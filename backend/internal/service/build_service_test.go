@@ -992,11 +992,18 @@ func TestBuildService_RunStep_DelegatesToRunner(t *testing.T) {
 	if repo.steps[0].Stdout == nil || *repo.steps[0].Stdout != "ok\n" {
 		t.Fatalf("expected persisted stdout ok, got %v", repo.steps[0].Stdout)
 	}
-	if logSink.calls != 1 {
-		t.Fatalf("expected one log write, got %d", logSink.calls)
+	if logSink.calls == 0 {
+		t.Fatal("expected at least one log write")
 	}
-	if logSink.lines[0] != "ok" {
-		t.Fatalf("expected trimmed log line, got %q", logSink.lines[0])
+	foundOutput := false
+	for _, line := range logSink.lines {
+		if line == "ok" {
+			foundOutput = true
+			break
+		}
+	}
+	if !foundOutput {
+		t.Fatalf("expected output line 'ok' in logs, got %#v", logSink.lines)
 	}
 }
 
@@ -1321,10 +1328,10 @@ func TestBuildService_CollectArtifactsIfTerminal_IsIdempotent(t *testing.T) {
 	svc := NewBuildService(repo, nil, &fakeLogSink{})
 	svc.SetArtifactPersistence(artifactRepo, &recordingStore{events: &events}, workspaceRoot)
 
-	if err := svc.collectArtifactsIfTerminal(context.Background(), buildID); err != nil {
+	if _, err := svc.collectArtifactsIfTerminal(context.Background(), buildID); err != nil {
 		t.Fatalf("expected first collection to succeed, got %v", err)
 	}
-	if err := svc.collectArtifactsIfTerminal(context.Background(), buildID); err != nil {
+	if _, err := svc.collectArtifactsIfTerminal(context.Background(), buildID); err != nil {
 		t.Fatalf("expected second collection to succeed, got %v", err)
 	}
 
@@ -1491,20 +1498,220 @@ func TestBuildService_RunStep_PersistsLogsForSuccessAndFailedResults(t *testing.
 			if err != nil {
 				t.Fatalf("get build logs failed: %v", err)
 			}
-			if len(buildLogs) != len(tc.expectedLines) {
-				t.Fatalf("expected %d logs, got %d", len(tc.expectedLines), len(buildLogs))
-			}
-
-			for i := range tc.expectedLines {
-				if buildLogs[i].Message != tc.expectedLines[i] {
-					t.Fatalf("expected log line %q at index %d, got %q", tc.expectedLines[i], i, buildLogs[i].Message)
+			for _, expectedLine := range tc.expectedLines {
+				found := false
+				for _, buildLog := range buildLogs {
+					if buildLog.Message == expectedLine {
+						found = true
+						break
+					}
 				}
-				if buildLogs[i].StepName != "step-1" {
-					t.Fatalf("expected step name step-1, got %q", buildLogs[i].StepName)
+				if !found {
+					t.Fatalf("expected log line %q in logs, got %#v", expectedLine, buildLogs)
 				}
 			}
 		})
 	}
+}
+
+func TestBuildService_RunStep_WritesStructuredStepAndBuildMarkers(t *testing.T) {
+	startedAt := time.Now().UTC()
+	finishedAt := startedAt.Add(800 * time.Millisecond)
+
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: startedAt.Add(-2 * time.Second)},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	r := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", StartedAt: startedAt, FinishedAt: finishedAt}}
+	logStore := logs.NewMemorySink()
+
+	svc := NewBuildService(repo, r, logStore)
+	svc.SetDefaultExecutionImage("golang:1.26")
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{
+		BuildID:    "build-1",
+		StepIndex:  0,
+		StepName:   "step-1",
+		ClaimToken: claimToken,
+		Command:    "sh",
+		Args:       []string{"-c", "echo \"hello\""},
+	})
+	if err != nil {
+		t.Fatalf("run step failed: %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion outcome completed, got %q", report.CompletionOutcome)
+	}
+
+	buildLogs, err := svc.GetBuildLogs(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("get build logs failed: %v", err)
+	}
+
+	messages := make([]string, 0, len(buildLogs))
+	for _, line := range buildLogs {
+		messages = append(messages, line.Message)
+	}
+
+	assertMessagesContain(t, messages,
+		"Starting build",
+		"Pipeline image: golang:1.26",
+		"Workspace: /workspace",
+		"Steps: 1",
+		"==> Step 1/1: step-1",
+		"Image: golang:1.26",
+		"Working directory: /workspace",
+		"Command:",
+		"echo \"hello\"",
+		"<== Step 1/1: step-1 succeeded in 0.8s",
+		"Build succeeded in",
+		"Artifacts collected: 0",
+	)
+}
+
+func TestBuildService_RunStep_WritesFailureMarkerWithExitCode(t *testing.T) {
+	startedAt := time.Now().UTC()
+	finishedAt := startedAt.Add(4200 * time.Millisecond)
+
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: startedAt.Add(-2 * time.Second)},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	r := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: 1, Stderr: "boom\n", StartedAt: startedAt, FinishedAt: finishedAt}}
+	logStore := logs.NewMemorySink()
+
+	svc := NewBuildService(repo, r, logStore)
+	svc.SetDefaultExecutionImage("golang:1.26")
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{
+		BuildID:    "build-1",
+		StepIndex:  0,
+		StepName:   "test",
+		ClaimToken: claimToken,
+		Command:    "sh",
+		Args:       []string{"-c", "go test ./..."},
+	})
+	if err != nil {
+		t.Fatalf("run step failed: %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion outcome completed, got %q", report.CompletionOutcome)
+	}
+
+	buildLogs, err := svc.GetBuildLogs(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("get build logs failed: %v", err)
+	}
+
+	messages := make([]string, 0, len(buildLogs))
+	for _, line := range buildLogs {
+		messages = append(messages, line.Message)
+	}
+
+	assertMessagesContain(t, messages,
+		"<== Step 1/1: test failed in 4.2s (exit code 1)",
+		"Build failed in",
+		"Failure summary: see failed step marker(s) above for exit details",
+	)
+}
+
+func TestTerminalBuildSummaryDuration_PrefersDeterministicTimestamps(t *testing.T) {
+	now := time.Date(2026, time.March, 30, 14, 0, 0, 0, time.UTC)
+	created := now.Add(-10 * time.Second)
+	started := now.Add(-8 * time.Second)
+	finished := now.Add(-3 * time.Second)
+
+	if got := terminalBuildSummaryDuration(domain.Build{CreatedAt: created, StartedAt: &started, FinishedAt: &finished}, now); got != 5*time.Second {
+		t.Fatalf("expected finished-started duration of 5s, got %s", got)
+	}
+
+	if got := terminalBuildSummaryDuration(domain.Build{CreatedAt: created, FinishedAt: &finished}, now); got != 7*time.Second {
+		t.Fatalf("expected finished-created duration of 7s, got %s", got)
+	}
+
+	if got := terminalBuildSummaryDuration(domain.Build{CreatedAt: created}, now); got != 10*time.Second {
+		t.Fatalf("expected fallback now-created duration of 10s, got %s", got)
+	}
+
+	futureCreated := now.Add(2 * time.Second)
+	if got := terminalBuildSummaryDuration(domain.Build{CreatedAt: futureCreated}, now); got != 0 {
+		t.Fatalf("expected non-negative fallback duration, got %s", got)
+	}
+}
+
+func TestBuildService_RunStep_EmitsTerminalSummaryInStepChunkFlow(t *testing.T) {
+	createdAt := time.Now().UTC().Add(-10 * time.Second)
+	startedAt := createdAt.Add(2 * time.Second)
+	finishedAt := startedAt.Add(3 * time.Second)
+
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: createdAt},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	r := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", StartedAt: startedAt, FinishedAt: finishedAt}}
+	logStore := logs.NewMemorySink()
+
+	svc := NewBuildService(repo, r, logStore)
+	svc.SetDefaultExecutionImage("golang:1.26")
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{
+		BuildID:    "build-1",
+		StepID:     "step-id-1",
+		StepIndex:  0,
+		StepName:   "step-1",
+		ClaimToken: claimToken,
+		Command:    "sh",
+		Args:       []string{"-c", "echo hello"},
+	})
+	if err != nil {
+		t.Fatalf("run step failed: %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion outcome completed, got %q", report.CompletionOutcome)
+	}
+
+	chunks, err := svc.GetStepLogChunks(context.Background(), "build-1", 0, 0, 500)
+	if err != nil {
+		t.Fatalf("get step log chunks failed: %v", err)
+	}
+	if len(chunks) == 0 {
+		t.Fatal("expected step chunks to be persisted")
+	}
+
+	if !containsSystemChunkText(chunks, "==> Step 1/1: step-1") {
+		t.Fatalf("expected step marker in chunk flow, got %#v", chunks)
+	}
+	if !containsSystemChunkText(chunks, "Build succeeded in") {
+		t.Fatalf("expected terminal summary in chunk flow, got %#v", chunks)
+	}
+}
+
+func assertMessagesContain(t *testing.T, messages []string, expected ...string) {
+	t.Helper()
+	for _, want := range expected {
+		found := false
+		for _, got := range messages {
+			if strings.Contains(got, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected log message containing %q, got %#v", want, messages)
+		}
+	}
+}
+
+func containsSystemChunkText(chunks []logs.StepLogChunk, needle string) bool {
+	for _, chunk := range chunks {
+		if chunk.Stream == logs.StepLogStreamSystem && strings.Contains(chunk.ChunkText, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBuildService_HandleStepResult_PersistedCompletionWithSideEffectFailure(t *testing.T) {
@@ -1622,11 +1829,15 @@ func TestBuildService_RunStep_PersistsChunkLogsWithoutStepID(t *testing.T) {
 			if len(chunks) == 0 {
 				t.Fatal("expected persisted step log chunks")
 			}
-			if chunks[0].ChunkText != tc.expectedText {
-				t.Fatalf("expected chunk text %q, got %q", tc.expectedText, chunks[0].ChunkText)
+			found := false
+			for _, chunk := range chunks {
+				if chunk.ChunkText == tc.expectedText && chunk.Stream == tc.expectedType {
+					found = true
+					break
+				}
 			}
-			if chunks[0].Stream != tc.expectedType {
-				t.Fatalf("expected chunk stream %q, got %q", tc.expectedType, chunks[0].Stream)
+			if !found {
+				t.Fatalf("expected chunk text/stream (%q/%q), got %#v", tc.expectedText, tc.expectedType, chunks)
 			}
 		})
 	}
