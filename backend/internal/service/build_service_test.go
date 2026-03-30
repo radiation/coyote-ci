@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -356,6 +355,30 @@ func (r *fakeRunner) RunStep(_ context.Context, request steprunner.RunStepReques
 		return steprunner.RunStepResult{}, r.err
 	}
 	return r.result, nil
+}
+
+type fakeBuildScopedRunner struct {
+	fakeRunner
+	prepareCalls int
+	cleanupCalls int
+	lastPrepare  steprunner.PrepareBuildRequest
+	prepareErr   error
+	cleanupErr   error
+}
+
+func (r *fakeBuildScopedRunner) PrepareBuild(_ context.Context, request steprunner.PrepareBuildRequest) error {
+	r.prepareCalls++
+	r.lastPrepare = request
+	return r.prepareErr
+}
+
+func (r *fakeBuildScopedRunner) CleanupBuild(_ context.Context, _ string) error {
+	r.cleanupCalls++
+	return r.cleanupErr
+}
+
+func (r *fakeBuildScopedRunner) RunStepStream(ctx context.Context, request steprunner.RunStepRequest, _ steprunner.StepOutputCallback) (steprunner.RunStepResult, error) {
+	return r.RunStep(ctx, request)
 }
 
 type fakeLogSink struct {
@@ -909,43 +932,64 @@ func TestBuildService_RunStep_DelegatesToRunner(t *testing.T) {
 	}
 }
 
-func TestBuildService_RunStep_RepoBuildReusesCheckoutWorkspace(t *testing.T) {
-	runner := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", Stderr: ""}}
+func TestBuildService_RunStep_PreparesBuildScopedEnvironmentWithRepoMetadata(t *testing.T) {
+	runner := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", Stderr: ""}}}
 	claimToken := "claim-active"
 	repoURL := "https://github.com/org/repo.git"
 	ref := "main"
+	commitSHA := "abc123"
 	buildID := "build-repo-reuse"
 
 	buildRepo := &fakeBuildRepository{
-		build: domain.Build{ID: buildID, Status: domain.BuildStatusRunning, CurrentStepIndex: 0, RepoURL: &repoURL, Ref: &ref},
+		build: domain.Build{ID: buildID, Status: domain.BuildStatusRunning, CurrentStepIndex: 0, RepoURL: &repoURL, Ref: &ref, CommitSHA: &commitSHA},
 		steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
 	}
-	fetchSource := t.TempDir()
-	fetcher := &fakeRepoFetcher{localPath: fetchSource, commitSHA: "abc123"}
 
 	svc := NewBuildService(buildRepo, runner, &fakeLogSink{})
-	svc.SetRepoFetcher(fetcher)
-	svc.SetRepoWorkspaceRoot(t.TempDir())
+	svc.SetDefaultExecutionImage("golang:1.23-alpine")
 
 	request := steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "test", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "backend"}
 	if _, _, err := svc.RunStep(context.Background(), request); err != nil {
-		t.Fatalf("expected first run to succeed, got %v", err)
+		t.Fatalf("expected run to succeed, got %v", err)
+	}
+	if runner.prepareCalls != 1 {
+		t.Fatalf("expected one prepare call, got %d", runner.prepareCalls)
+	}
+	if runner.lastPrepare.BuildID != buildID {
+		t.Fatalf("expected prepare build id %q, got %q", buildID, runner.lastPrepare.BuildID)
+	}
+	if runner.lastPrepare.RepoURL != repoURL {
+		t.Fatalf("expected prepare repo url %q, got %q", repoURL, runner.lastPrepare.RepoURL)
+	}
+	if runner.lastPrepare.Ref != ref {
+		t.Fatalf("expected prepare ref %q, got %q", ref, runner.lastPrepare.Ref)
+	}
+	if runner.lastPrepare.CommitSHA != commitSHA {
+		t.Fatalf("expected prepare commit sha %q, got %q", commitSHA, runner.lastPrepare.CommitSHA)
+	}
+	if runner.lastPrepare.Image != "golang:1.23-alpine" {
+		t.Fatalf("expected default execution image to be forwarded")
+	}
+}
+
+func TestBuildService_RunStep_CleansUpBuildScopedEnvironmentOnTerminalBuild(t *testing.T) {
+	runner := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", Stderr: ""}}}
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-terminal", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
 	}
 
-	expectedWorkingDir := filepath.Join(svc.workspaceRootPath(), buildID, "backend")
-	if runner.lastRequest.WorkingDir != expectedWorkingDir {
-		t.Fatalf("expected runner working dir %q, got %q", expectedWorkingDir, runner.lastRequest.WorkingDir)
+	svc := NewBuildService(repo, runner, &fakeLogSink{})
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-terminal", StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	if err != nil {
+		t.Fatalf("expected run to succeed, got %v", err)
 	}
-	if fetcher.calls != 1 {
-		t.Fatalf("expected one checkout fetch, got %d", fetcher.calls)
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion to persist, got %q", report.CompletionOutcome)
 	}
-
-	// A second execution for the same build should reuse the existing workspace.
-	if _, _, err := svc.RunStep(context.Background(), request); err != nil {
-		t.Fatalf("expected second run to succeed, got %v", err)
-	}
-	if fetcher.calls != 1 {
-		t.Fatalf("expected checkout reuse with one fetch call total, got %d", fetcher.calls)
+	if runner.cleanupCalls != 1 {
+		t.Fatalf("expected cleanup to run once for terminal build, got %d", runner.cleanupCalls)
 	}
 }
 
@@ -1829,32 +1873,4 @@ steps:
 			t.Fatal("expected parse/validation error")
 		}
 	})
-}
-
-func TestResolveRepoWorkingDir(t *testing.T) {
-	workspace := "/workspace/build-123"
-
-	cases := []struct {
-		name      string
-		requested string
-		want      string
-	}{
-		{"empty stays at root", "", workspace},
-		{"dot stays at root", ".", workspace},
-		{"subdirectory is joined", "backend", filepath.Join(workspace, "backend")},
-		{"nested subdirectory is joined", "a/b/c", filepath.Join(workspace, "a/b/c")},
-		{"absolute path is rejected", "/etc/passwd", workspace},
-		{"traversal with ..", "../other", workspace},
-		{"traversal escaping root", "../../etc", workspace},
-		{"traversal via relative segments", "a/b/../../../secret", workspace},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := resolveRepoWorkingDir(workspace, tc.requested)
-			if got != tc.want {
-				t.Errorf("resolveRepoWorkingDir(%q, %q) = %q; want %q", workspace, tc.requested, got, tc.want)
-			}
-		})
-	}
 }
