@@ -5,6 +5,7 @@ package pipeline
 // works exclusively with this type.
 type ResolvedPipeline struct {
 	Name      string
+	Image     string
 	Env       map[string]string
 	Steps     []ResolvedStep
 	Artifacts ResolvedArtifacts

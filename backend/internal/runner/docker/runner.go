@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -118,7 +120,7 @@ func (r *Runner) ensureBuildContainerReady(ctx context.Context, containerName st
 		return nil
 	}
 	if exists {
-		if _, err := r.executor.Run(ctx, "docker", "start", containerName); err != nil {
+		if _, err := r.runDockerCommand(ctx, "start", containerName); err != nil {
 			return fmt.Errorf("starting build container: %w", err)
 		}
 		return nil
@@ -128,14 +130,16 @@ func (r *Runner) ensureBuildContainerReady(ctx context.Context, containerName st
 }
 
 func (r *Runner) inspectContainerState(ctx context.Context, containerName string) (exists bool, running bool, err error) {
-	stateOut, inspectErr := r.executor.Run(ctx, "docker", "inspect", "-f", "{{.State.Running}}", containerName)
+	inspectArgs := []string{"inspect", "-f", "{{.State.Running}}", containerName}
+	stateOut, inspectErr := r.executor.Run(ctx, "docker", inspectArgs...)
 	if inspectErr == nil {
 		return true, strings.EqualFold(strings.TrimSpace(string(stateOut)), "true"), nil
 	}
 	if isContainerNotFound(inspectErr, stateOut) {
 		return false, false, nil
 	}
-	return false, false, fmt.Errorf("inspecting build container: %w", inspectErr)
+	logDockerCommandFailure(inspectArgs, inspectErr, stateOut)
+	return false, false, fmt.Errorf("inspecting build container: docker command failed: %w: %s", inspectErr, strings.TrimSpace(string(stateOut)))
 }
 
 func isContainerNotFound(err error, output []byte) bool {
@@ -155,8 +159,9 @@ func (r *Runner) createBuildContainer(ctx context.Context, containerName string,
 		"-c",
 		containerIdleCmd,
 	}
-	if out, err := r.executor.Run(ctx, "docker", args...); err != nil {
-		return fmt.Errorf("creating build container: %w: %s", err, strings.TrimSpace(string(out)))
+	log.Printf("starting container: image=%s command=%s working_dir=%s mounts=%s", image, dockerCommandString(args), workspaceMountPath, workspacePath+":"+workspaceMountPath)
+	if _, err := r.runDockerCommand(ctx, args...); err != nil {
+		return fmt.Errorf("creating build container: %w", err)
 	}
 	return nil
 }
@@ -182,6 +187,12 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 	defer cancel()
 
 	args := dockerExecArgs(request)
+	containerName := containerNameForBuild(request.BuildID)
+	containerImage := r.inspectContainerImage(ctx, containerName)
+	if containerImage == "" {
+		containerImage = "unknown"
+	}
+	log.Printf("starting container step execution: image=%s command=%s working_dir=%s mounts=%s", containerImage, dockerCommandString(args), resolveContainerWorkingDir(request.WorkingDir), workspaceMountPath)
 
 	cmd := exec.CommandContext(execCtx, "docker", args...)
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -195,7 +206,8 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 
 	startedAt := time.Now().UTC()
 	if err := cmd.Start(); err != nil {
-		return runner.RunStepResult{}, err
+		log.Printf("docker command failed: command=%s error=%v output=", dockerCommandString(args), err)
+		return runner.RunStepResult{}, fmt.Errorf("docker command failed: %w", err)
 	}
 
 	var stdoutBuilder strings.Builder
@@ -272,6 +284,7 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 				return runner.RunStepResult{}, err
 			}
 		}
+		log.Printf("docker command failed: command=%s error=%v output=%s", dockerCommandString(args), waitErr, strings.TrimRight(stdout+stderr, "\n"))
 		return runner.RunStepResult{
 			Status:     runner.RunStepStatusFailed,
 			ExitCode:   -1,
@@ -284,6 +297,7 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 
 	var exitErr *exec.ExitError
 	if errors.As(waitErr, &exitErr) {
+		log.Printf("docker command failed: command=%s error=%v output=%s", dockerCommandString(args), waitErr, strings.TrimRight(stdout+stderr, "\n"))
 		return runner.RunStepResult{
 			Status:     runner.RunStepStatusFailed,
 			ExitCode:   exitErr.ExitCode(),
@@ -294,7 +308,8 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 		}, nil
 	}
 
-	return runner.RunStepResult{}, waitErr
+	log.Printf("docker command failed: command=%s error=%v output=%s", dockerCommandString(args), waitErr, strings.TrimRight(stdout+stderr, "\n"))
+	return runner.RunStepResult{}, fmt.Errorf("docker command failed: %w: %s", waitErr, strings.TrimSpace(stdout+stderr))
 }
 
 func (r *Runner) CleanupBuild(ctx context.Context, buildID string) error {
@@ -305,8 +320,11 @@ func (r *Runner) CleanupBuild(ctx context.Context, buildID string) error {
 
 	containerName := containerNameForBuild(trimmedBuildID)
 	var rmErr error
-	if _, err := r.executor.Run(ctx, "docker", "rm", "-f", containerName); err != nil && !isContainerNotFound(err, nil) {
-		rmErr = fmt.Errorf("removing build container: %w", err)
+	rmArgs := []string{"rm", "-f", containerName}
+	rmOut, err := r.executor.Run(ctx, "docker", rmArgs...)
+	if err != nil && !isContainerNotFound(err, rmOut) {
+		logDockerCommandFailure(rmArgs, err, rmOut)
+		rmErr = fmt.Errorf("removing build container: docker command failed: %w: %s", err, strings.TrimSpace(string(rmOut)))
 	}
 
 	if r.workspace == nil {
@@ -403,4 +421,34 @@ func timeoutFailureReason(timeout time.Duration) string {
 		return fmt.Sprintf("step execution timed out after %s", timeout)
 	}
 	return "step execution timed out"
+}
+
+func (r *Runner) runDockerCommand(ctx context.Context, args ...string) ([]byte, error) {
+	output, err := r.executor.Run(ctx, "docker", args...)
+	if err != nil {
+		logDockerCommandFailure(args, err, output)
+		return output, fmt.Errorf("docker command failed: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return output, nil
+}
+
+func (r *Runner) inspectContainerImage(ctx context.Context, containerName string) string {
+	out, err := r.executor.Run(ctx, "docker", "inspect", "-f", "{{.Config.Image}}", containerName)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func logDockerCommandFailure(args []string, err error, output []byte) {
+	log.Printf("docker command failed: command=%s error=%v output=%s", dockerCommandString(args), err, strings.TrimRight(string(output), "\n"))
+}
+
+func dockerCommandString(args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, "docker")
+	for _, arg := range args {
+		parts = append(parts, strconv.Quote(arg))
+	}
+	return strings.Join(parts, " ")
 }

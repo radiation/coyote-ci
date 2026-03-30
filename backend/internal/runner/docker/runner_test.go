@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/runner"
@@ -116,6 +117,23 @@ func TestRunner_PrepareBuild_UsesDefaultImage(t *testing.T) {
 	}
 	if got := exec.calls[1].args[8]; got != "alpine:3.20" {
 		t.Fatalf("expected default image alpine:3.20, got %q", got)
+	}
+}
+
+func TestRunner_PrepareBuild_InspectFailureIncludesOutput(t *testing.T) {
+	workspace := &fakeWorkspace{preparePath: "/tmp/ws/build-inspect-fail"}
+	exec := &fakeExecutor{responses: []executorResponse{{output: []byte("permission denied to access Docker daemon"), err: errors.New("exit status 1")}}}
+
+	r := New(Options{Workspace: workspace, DefaultImage: "alpine:3.20", Executor: exec})
+	err := r.PrepareBuild(context.Background(), runner.PrepareBuildRequest{BuildID: "build-inspect-fail"})
+	if err == nil {
+		t.Fatal("expected prepare build to fail")
+	}
+	if !strings.Contains(err.Error(), "inspecting build container") {
+		t.Fatalf("expected inspect context in error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("expected docker output in error, got %v", err)
 	}
 }
 

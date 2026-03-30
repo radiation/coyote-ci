@@ -38,6 +38,7 @@ func TestParse_FullConfig(t *testing.T) {
 version: 1
 pipeline:
   name: backend-ci
+  image: golang:1.24
 env:
   KEY: value
 steps:
@@ -60,6 +61,9 @@ artifacts:
 	}
 	if pf.Pipeline.Name != "backend-ci" {
 		t.Errorf("expected pipeline name backend-ci, got %q", pf.Pipeline.Name)
+	}
+	if pf.Pipeline.Image != "golang:1.24" {
+		t.Errorf("expected pipeline image golang:1.24, got %q", pf.Pipeline.Image)
 	}
 	if pf.Env["KEY"] != "value" {
 		t.Errorf("expected top-level env KEY=value")
@@ -195,6 +199,39 @@ steps:
 	rp := Resolve(pf)
 	if rp.Name != "my-pipeline" {
 		t.Errorf("expected pipeline name my-pipeline, got %q", rp.Name)
+	}
+}
+
+func TestResolve_PipelineImage(t *testing.T) {
+	yaml := `
+version: 1
+pipeline:
+  name: my-pipeline
+  image: golang:1.24
+steps:
+  - name: Build
+    run: make
+`
+	pf, _ := ParseAndValidate([]byte(yaml))
+	rp := Resolve(pf)
+	if rp.Image != "golang:1.24" {
+		t.Errorf("expected pipeline image golang:1.24, got %q", rp.Image)
+	}
+}
+
+func TestResolve_PipelineImage_Optional(t *testing.T) {
+	yaml := `
+version: 1
+pipeline:
+  name: my-pipeline
+steps:
+  - name: Build
+    run: make
+`
+	pf, _ := ParseAndValidate([]byte(yaml))
+	rp := Resolve(pf)
+	if rp.Image != "" {
+		t.Errorf("expected empty pipeline image when not configured, got %q", rp.Image)
 	}
 }
 

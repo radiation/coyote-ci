@@ -1000,7 +1000,7 @@ func TestBuildService_RunStep_DelegatesToRunner(t *testing.T) {
 	}
 }
 
-func TestBuildService_RunStep_PreparesBuildScopedEnvironmentWithRepoMetadata(t *testing.T) {
+func TestBuildService_RunStep_PreparesBuildScopedEnvironmentWithRepoMetadataAndDefaultImageFallback(t *testing.T) {
 	runner := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", Stderr: ""}}}
 	claimToken := "claim-active"
 	repoURL := "https://github.com/org/repo.git"
@@ -1036,7 +1036,44 @@ func TestBuildService_RunStep_PreparesBuildScopedEnvironmentWithRepoMetadata(t *
 		t.Fatalf("expected prepare commit sha %q, got %q", commitSHA, runner.lastPrepare.CommitSHA)
 	}
 	if runner.lastPrepare.Image != "golang:1.23-alpine" {
-		t.Fatalf("expected default execution image to be forwarded")
+		t.Fatalf("expected default execution image fallback, got %q", runner.lastPrepare.Image)
+	}
+}
+
+func TestBuildService_RunStep_PreparesBuildScopedEnvironmentWithPipelineImageOverride(t *testing.T) {
+	runner := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", Stderr: ""}}}
+	claimToken := "claim-active"
+	repoURL := "https://github.com/org/repo.git"
+	ref := "main"
+	commitSHA := "abc123"
+	buildID := "build-repo-override"
+	pipelineYAML := `
+version: 1
+pipeline:
+  name: backend-ci
+  image: golang:1.24
+steps:
+  - name: test
+    run: go test ./...
+`
+
+	buildRepo := &fakeBuildRepository{
+		build: domain.Build{ID: buildID, Status: domain.BuildStatusRunning, CurrentStepIndex: 0, RepoURL: &repoURL, Ref: &ref, CommitSHA: &commitSHA, PipelineConfigYAML: &pipelineYAML},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+
+	svc := NewBuildService(buildRepo, runner, &fakeLogSink{})
+	svc.SetDefaultExecutionImage("alpine:3.20")
+
+	request := steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "test", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "backend"}
+	if _, _, err := svc.RunStep(context.Background(), request); err != nil {
+		t.Fatalf("expected run to succeed, got %v", err)
+	}
+	if runner.prepareCalls != 1 {
+		t.Fatalf("expected one prepare call, got %d", runner.prepareCalls)
+	}
+	if runner.lastPrepare.Image != "golang:1.24" {
+		t.Fatalf("expected pipeline execution image override, got %q", runner.lastPrepare.Image)
 	}
 }
 
