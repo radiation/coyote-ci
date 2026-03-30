@@ -5,6 +5,7 @@ import (
 	nethttp "net/http"
 
 	docs "github.com/radiation/coyote-ci/backend/docs"
+	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	apphttp "github.com/radiation/coyote-ci/backend/internal/http"
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
@@ -37,9 +38,12 @@ func main() {
 	}()
 
 	buildRepo := repositorypostgres.NewBuildRepository(db)
+	artifactRepo := repositorypostgres.NewArtifactRepository(db)
+	artifactStore := artifact.NewFilesystemStore(cfg.ArtifactStorageRoot)
 	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildService(buildRepo, nil, logSink)
 	buildService.SetRepoFetcher(source.NewGitFetcher())
+	buildService.SetArtifactPersistence(artifactRepo, artifactStore, cfg.ExecutionWorkspaceRoot)
 	buildHandler := handler.NewBuildHandler(buildService)
 
 	router := apphttp.NewRouter(buildHandler)

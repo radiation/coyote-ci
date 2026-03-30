@@ -25,6 +25,9 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 	sql := builder.String()
 	required := []string{
 		"current_step_index",
+		"pipeline_config_yaml",
+		"pipeline_name",
+		"pipeline_source",
 		"repo_url",
 		"ref",
 		"commit_sha",
@@ -41,6 +44,9 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"queued_at",
 		"started_at",
 		"finished_at",
+		"CREATE TABLE IF NOT EXISTS build_artifacts",
+		"logical_path",
+		"storage_key",
 	}
 	for _, token := range required {
 		if !strings.Contains(sql, token) {

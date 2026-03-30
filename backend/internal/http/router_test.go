@@ -80,6 +80,8 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 		{name: "build steps", method: http.MethodGet, path: "/builds/" + id + "/steps", statusCode: http.StatusOK},
 		{name: "build step logs", method: http.MethodGet, path: "/builds/" + id + "/steps/0/logs", statusCode: http.StatusOK},
 		{name: "build logs", method: http.MethodGet, path: "/builds/" + id + "/logs", statusCode: http.StatusOK},
+		{name: "build artifacts", method: http.MethodGet, path: "/builds/" + id + "/artifacts", statusCode: http.StatusOK},
+		{name: "build artifact download missing", method: http.MethodGet, path: "/builds/" + id + "/artifacts/missing/download", statusCode: http.StatusNotFound},
 		{name: "queue build", method: http.MethodPost, path: "/builds/" + id + "/queue", statusCode: http.StatusOK},
 		{name: "start build", method: http.MethodPost, path: "/builds/" + id + "/start", statusCode: http.StatusOK},
 		{name: "complete build", method: http.MethodPost, path: "/builds/" + id + "/complete", statusCode: http.StatusOK},

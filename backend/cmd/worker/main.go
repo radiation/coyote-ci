@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
@@ -49,10 +50,13 @@ func main() {
 	}()
 
 	buildRepo := repositorypostgres.NewBuildRepository(db)
+	artifactRepo := repositorypostgres.NewArtifactRepository(db)
+	artifactStore := artifact.NewFilesystemStore(cfg.ArtifactStorageRoot)
 	stepRunner := resolveStepRunner(cfg)
 	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildService(buildRepo, stepRunner, logSink)
 	buildService.SetDefaultExecutionImage(cfg.ExecutionDefaultImage)
+	buildService.SetArtifactPersistence(artifactRepo, artifactStore, cfg.ExecutionWorkspaceRoot)
 	leaseDuration := time.Duration(cfg.StepLeaseSeconds) * time.Second
 	workerService := service.NewWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)
 
@@ -77,10 +81,10 @@ func resolveStepRunner(cfg config.Config) runner.Runner {
 			DefaultImage: cfg.ExecutionDefaultImage,
 		})
 	case "inprocess", "local":
-		return inprocess.New()
+		return inprocess.NewWithWorkspaceRoot(cfg.ExecutionWorkspaceRoot)
 	default:
 		log.Printf("unknown execution backend %q; falling back to inprocess", cfg.ExecutionBackend)
-		return inprocess.New()
+		return inprocess.NewWithWorkspaceRoot(cfg.ExecutionWorkspaceRoot)
 	}
 }
 

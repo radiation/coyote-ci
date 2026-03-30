@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
@@ -37,6 +40,7 @@ var ErrRepoURLRequired = errors.New("repo_url is required")
 var ErrRefRequired = errors.New("ref is required")
 var ErrRepoFetcherNotConfigured = errors.New("repo fetcher not configured")
 var ErrPipelineFileNotFound = errors.New(".coyote/pipeline.yml not found in repository")
+var ErrArtifactNotFound = errors.New("artifact not found")
 
 const (
 	BuildTemplateDefault = "default"
@@ -52,6 +56,11 @@ type BuildService struct {
 	runner      runner.Runner
 	logSink     logs.LogSink
 	repoFetcher source.RepoFetcher
+
+	artifactRepo          repository.ArtifactRepository
+	artifactStore         artifact.Store
+	artifactCollector     *artifact.Collector
+	artifactWorkspaceRoot string
 
 	defaultExecutionImage string
 }
@@ -76,6 +85,18 @@ func (s *BuildService) SetRepoFetcher(fetcher source.RepoFetcher) {
 // SetDefaultExecutionImage sets the image used when a build-scoped runner requires one.
 func (s *BuildService) SetDefaultExecutionImage(image string) {
 	s.defaultExecutionImage = strings.TrimSpace(image)
+}
+
+// SetArtifactPersistence configures build artifact persistence dependencies.
+func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository, store artifact.Store, workspaceRoot string) {
+	s.artifactRepo = repo
+	s.artifactStore = store
+	s.artifactWorkspaceRoot = strings.TrimSpace(workspaceRoot)
+	if store != nil {
+		s.artifactCollector = artifact.NewCollector(store)
+	} else {
+		s.artifactCollector = nil
+	}
 }
 
 type CreateBuildInput struct {
@@ -349,6 +370,49 @@ func (s *BuildService) GetStepLogChunks(ctx context.Context, buildID string, ste
 	return reader.ListStepLogChunks(ctx, buildID, stepIndex, afterSequence, limit)
 }
 
+func (s *BuildService) GetBuildArtifacts(ctx context.Context, buildID string) ([]domain.BuildArtifact, error) {
+	if _, err := s.buildRepo.GetByID(ctx, buildID); err != nil {
+		return nil, mapRepoErr(err)
+	}
+	if s.artifactRepo == nil {
+		return []domain.BuildArtifact{}, nil
+	}
+
+	artifacts, err := s.artifactRepo.ListByBuildID(ctx, buildID)
+	if err != nil {
+		return nil, err
+	}
+
+	return artifacts, nil
+}
+
+func (s *BuildService) OpenBuildArtifact(ctx context.Context, buildID string, artifactID string) (domain.BuildArtifact, io.ReadCloser, error) {
+	if _, err := s.buildRepo.GetByID(ctx, buildID); err != nil {
+		return domain.BuildArtifact{}, nil, mapRepoErr(err)
+	}
+	if s.artifactRepo == nil || s.artifactStore == nil {
+		return domain.BuildArtifact{}, nil, ErrArtifactNotFound
+	}
+
+	meta, err := s.artifactRepo.GetByID(ctx, buildID, artifactID)
+	if err != nil {
+		if errors.Is(err, repository.ErrArtifactNotFound) {
+			return domain.BuildArtifact{}, nil, ErrArtifactNotFound
+		}
+		return domain.BuildArtifact{}, nil, err
+	}
+
+	stream, err := s.artifactStore.Open(ctx, meta.StorageKey)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return domain.BuildArtifact{}, nil, ErrArtifactNotFound
+		}
+		return domain.BuildArtifact{}, nil, err
+	}
+
+	return meta, stream, nil
+}
+
 func (s *BuildService) ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error) {
 	step, claimed, err := s.buildRepo.ClaimStepIfPending(ctx, buildID, stepIndex, workerID, startedAt)
 	return step, claimed, mapRepoErr(err)
@@ -465,8 +529,8 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 				return result, completionReport, errors.Join(prepareErr, completionErr)
 			}
 
-			if cleanupErr := s.cleanupExecutionIfTerminal(ctx, request.BuildID); cleanupErr != nil {
-				completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, cleanupErr)
+			if sideEffectErr := s.runPostCompletionSideEffects(ctx, request.BuildID); sideEffectErr != nil {
+				completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, sideEffectErr)
 			}
 
 			return result, completionReport, prepareErr
@@ -560,8 +624,8 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		if completionErr != nil {
 			return result, completionReport, errors.Join(runErr, completionErr)
 		}
-		if cleanupErr := s.cleanupExecutionIfTerminal(ctx, request.BuildID); cleanupErr != nil {
-			completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, cleanupErr)
+		if sideEffectErr := s.runPostCompletionSideEffects(ctx, request.BuildID); sideEffectErr != nil {
+			completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, sideEffectErr)
 		}
 		chunkPersistMu.Lock()
 		if completionReport.SideEffectErr == nil && chunkPersistErr != nil {
@@ -575,8 +639,8 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	if completionErr != nil {
 		return result, completionReport, completionErr
 	}
-	if cleanupErr := s.cleanupExecutionIfTerminal(ctx, request.BuildID); cleanupErr != nil {
-		completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, cleanupErr)
+	if sideEffectErr := s.runPostCompletionSideEffects(ctx, request.BuildID); sideEffectErr != nil {
+		completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, sideEffectErr)
 	}
 	chunkPersistMu.Lock()
 	if completionReport.SideEffectErr == nil && chunkPersistErr != nil {
@@ -585,6 +649,111 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	chunkPersistMu.Unlock()
 
 	return result, completionReport, nil
+}
+
+func (s *BuildService) runPostCompletionSideEffects(ctx context.Context, buildID string) error {
+	artifactErr := s.collectArtifactsIfTerminal(ctx, buildID)
+	if artifactErr != nil {
+		return artifactErr
+	}
+
+	return s.cleanupExecutionIfTerminal(ctx, buildID)
+}
+
+func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID string) error {
+	if s.artifactRepo == nil || s.artifactCollector == nil || strings.TrimSpace(s.artifactWorkspaceRoot) == "" {
+		return nil
+	}
+
+	build, err := s.buildRepo.GetByID(ctx, buildID)
+	if err != nil {
+		return fmt.Errorf("fetching build for artifact collection: %w", err)
+	}
+	if !domain.IsTerminalBuildStatus(build.Status) {
+		return nil
+	}
+
+	existing, err := s.artifactRepo.ListByBuildID(ctx, buildID)
+	if err != nil {
+		return fmt.Errorf("checking existing artifacts: %w", err)
+	}
+	existingPaths := make(map[string]struct{}, len(existing))
+	for _, item := range existing {
+		existingPaths[item.LogicalPath] = struct{}{}
+	}
+
+	patterns, err := artifactPatternsFromBuild(build)
+	if err != nil {
+		return fmt.Errorf("resolving build artifact declarations: %w", err)
+	}
+	if len(patterns) == 0 {
+		return nil
+	}
+
+	workspacePath := filepath.Join(s.artifactWorkspaceRoot, strings.TrimSpace(buildID))
+	log.Printf("artifact collection start: build_id=%s workspace_path=%s declared_patterns=%q storage_root=%s", buildID, workspacePath, patterns, artifactStoreRootForLog(s.artifactStore))
+	collectResult, err := s.artifactCollector.Collect(ctx, artifact.CollectRequest{
+		BuildID:          buildID,
+		WorkspacePath:    workspacePath,
+		Patterns:         patterns,
+		SkipLogicalPaths: existingPaths,
+	})
+	if err != nil {
+		log.Printf("artifact collection error: build_id=%s workspace_path=%s err=%v", buildID, workspacePath, err)
+		return err
+	}
+	for _, warning := range collectResult.Warnings {
+		log.Printf("artifact collection warning: build_id=%s %s", buildID, warning)
+	}
+	log.Printf("artifact metadata persistence start: build_id=%s artifacts_to_persist=%d", buildID, len(collectResult.Artifacts))
+
+	for _, item := range collectResult.Artifacts {
+		log.Printf("artifact metadata persist: build_id=%s logical_path=%s storage_key=%s size_bytes=%d", buildID, item.LogicalPath, item.StorageKey, item.SizeBytes)
+		_, err := s.artifactRepo.Create(ctx, domain.BuildArtifact{
+			ID:             uuid.NewString(),
+			BuildID:        buildID,
+			LogicalPath:    item.LogicalPath,
+			StorageKey:     item.StorageKey,
+			SizeBytes:      item.SizeBytes,
+			ContentType:    item.ContentType,
+			ChecksumSHA256: item.ChecksumSHA256,
+			CreatedAt:      time.Now().UTC(),
+		})
+		if err != nil {
+			log.Printf("artifact metadata persistence error: build_id=%s logical_path=%s err=%v", buildID, item.LogicalPath, err)
+			return fmt.Errorf("persisting artifact metadata: %w", err)
+		}
+	}
+	log.Printf("artifact metadata persistence complete: build_id=%s persisted=%d", buildID, len(collectResult.Artifacts))
+
+	return nil
+}
+
+func artifactStoreRootForLog(store artifact.Store) string {
+	if store == nil {
+		return ""
+	}
+	if reporter, ok := store.(interface{ RootPath() string }); ok {
+		return strings.TrimSpace(reporter.RootPath())
+	}
+	return ""
+}
+
+func artifactPatternsFromBuild(build domain.Build) ([]string, error) {
+	if build.PipelineConfigYAML == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*build.PipelineConfigYAML)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	pipelineFile, err := pipeline.ParseAndValidate([]byte(trimmed))
+	if err != nil {
+		return nil, err
+	}
+
+	return pipelineFile.Artifacts.Paths, nil
 }
 
 func readOptionalString(value *string) string {

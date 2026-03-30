@@ -30,6 +30,8 @@ func NewRouter(buildHandler *handler.BuildHandler) nethttp.Handler {
 		r.Get("/{buildID}/steps/{stepIndex}/logs", buildHandler.GetBuildStepLogs)
 		r.Get("/{buildID}/steps/{stepIndex}/logs/stream", buildHandler.StreamBuildStepLogs)
 		r.Get("/{buildID}/logs", buildHandler.GetBuildLogs)
+		r.Get("/{buildID}/artifacts", buildHandler.GetBuildArtifacts)
+		r.Get("/{buildID}/artifacts/{artifactID}/download", buildHandler.DownloadBuildArtifact)
 		r.Post("/{buildID}/queue", buildHandler.QueueBuild)
 		r.Post("/{buildID}/start", buildHandler.StartBuild)
 		r.Post("/{buildID}/complete", buildHandler.CompleteBuild)

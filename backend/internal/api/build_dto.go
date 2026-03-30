@@ -65,6 +65,10 @@ type BuildLogsEnvelope struct {
 	Data BuildLogsResponse `json:"data"`
 }
 
+type BuildArtifactsEnvelope struct {
+	Data BuildArtifactsResponse `json:"data"`
+}
+
 type StepLogsEnvelope struct {
 	Data StepLogsResponse `json:"data"`
 }
@@ -140,4 +144,20 @@ type StepLogsResponse struct {
 	After        int64                  `json:"after"`
 	NextSequence int64                  `json:"next_sequence"`
 	Chunks       []StepLogChunkResponse `json:"chunks"`
+}
+
+type BuildArtifactResponse struct {
+	ID              string  `json:"id"`
+	BuildID         string  `json:"build_id"`
+	Path            string  `json:"path"`
+	SizeBytes       int64   `json:"size_bytes"`
+	ContentType     *string `json:"content_type"`
+	ChecksumSHA256  *string `json:"checksum_sha256"`
+	DownloadURLPath string  `json:"download_url_path"`
+	CreatedAt       string  `json:"created_at"`
+}
+
+type BuildArtifactsResponse struct {
+	BuildID   string                  `json:"build_id"`
+	Artifacts []BuildArtifactResponse `json:"artifacts"`
 }

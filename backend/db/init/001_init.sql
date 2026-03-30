@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS builds (
     finished_at TIMESTAMPTZ,
     current_step_index INTEGER NOT NULL DEFAULT 0,
     error_message TEXT,
+    pipeline_config_yaml TEXT,
+    pipeline_name TEXT,
+    pipeline_source TEXT,
     repo_url TEXT,
     ref TEXT,
     commit_sha TEXT
@@ -41,3 +44,37 @@ CREATE TABLE IF NOT EXISTS build_steps (
 );
 
 CREATE INDEX IF NOT EXISTS idx_build_steps_build_id_step_index ON build_steps (build_id, step_index);
+
+CREATE TABLE IF NOT EXISTS build_artifacts (
+    id UUID PRIMARY KEY,
+    build_id UUID NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+    logical_path TEXT NOT NULL,
+    storage_key TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL,
+    content_type TEXT,
+    checksum_sha256 TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (build_id, logical_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_build_artifacts_build_id_created_at
+    ON build_artifacts (build_id, created_at);
+
+CREATE TABLE IF NOT EXISTS build_step_logs (
+    id BIGSERIAL PRIMARY KEY,
+    build_id UUID NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+    step_id UUID NOT NULL REFERENCES build_steps(id) ON DELETE CASCADE,
+    step_index INTEGER NOT NULL,
+    step_name TEXT NOT NULL,
+    sequence_no BIGINT GENERATED ALWAYS AS IDENTITY,
+    stream TEXT NOT NULL,
+    chunk_text TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (build_id, step_index, sequence_no)
+);
+
+CREATE INDEX IF NOT EXISTS idx_build_step_logs_step_sequence
+    ON build_step_logs (build_id, step_index, sequence_no);
+
+CREATE INDEX IF NOT EXISTS idx_build_step_logs_build
+    ON build_step_logs (build_id, sequence_no);

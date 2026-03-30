@@ -100,6 +100,24 @@ export interface StepLogsResponse {
   chunks: StepLogChunk[];
 }
 
+/** Matches the backend api.BuildArtifactResponse JSON shape. */
+export interface BuildArtifact {
+  id: string;
+  build_id: string;
+  path: string;
+  size_bytes: number;
+  content_type: string | null;
+  checksum_sha256: string | null;
+  download_url_path: string;
+  created_at: string;
+}
+
+/** Envelope: { data: { build_id: string; artifacts: BuildArtifact[] } } */
+export interface BuildArtifactsResponse {
+  build_id: string;
+  artifacts: BuildArtifact[];
+}
+
 /** Generic envelope the backend wraps all responses in. */
 export interface DataEnvelope<T> {
   data: T;

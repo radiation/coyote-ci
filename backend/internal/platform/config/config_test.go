@@ -8,6 +8,7 @@ import (
 
 func TestLoad(t *testing.T) {
 	defaultWorkspaceRoot := filepath.Join(os.TempDir(), "coyote-builds")
+	defaultArtifactRoot := filepath.Join(os.TempDir(), "coyote-artifacts")
 
 	tests := []struct {
 		name      string
@@ -30,6 +31,7 @@ func TestLoad(t *testing.T) {
 				"WORKER_EXECUTION_BACKEND":        "",
 				"WORKER_EXECUTION_DEFAULT_IMAGE":  "",
 				"WORKER_EXECUTION_WORKSPACE_ROOT": "",
+				"ARTIFACT_STORAGE_ROOT":           "",
 			},
 			expected: Config{
 				AppPort:                "8080",
@@ -44,6 +46,7 @@ func TestLoad(t *testing.T) {
 				ExecutionBackend:       "docker",
 				ExecutionDefaultImage:  "alpine:3.20",
 				ExecutionWorkspaceRoot: defaultWorkspaceRoot,
+				ArtifactStorageRoot:    defaultArtifactRoot,
 			},
 		},
 		{
@@ -61,6 +64,7 @@ func TestLoad(t *testing.T) {
 				"WORKER_EXECUTION_BACKEND":        "inprocess",
 				"WORKER_EXECUTION_DEFAULT_IMAGE":  "golang:1.23-alpine",
 				"WORKER_EXECUTION_WORKSPACE_ROOT": "/var/tmp/coyote-workspaces",
+				"ARTIFACT_STORAGE_ROOT":           "/var/tmp/coyote-artifacts",
 			},
 			expected: Config{
 				AppPort:                "9999",
@@ -75,6 +79,7 @@ func TestLoad(t *testing.T) {
 				ExecutionBackend:       "inprocess",
 				ExecutionDefaultImage:  "golang:1.23-alpine",
 				ExecutionWorkspaceRoot: "/var/tmp/coyote-workspaces",
+				ArtifactStorageRoot:    "/var/tmp/coyote-artifacts",
 			},
 		},
 		{
@@ -92,6 +97,7 @@ func TestLoad(t *testing.T) {
 				"WORKER_EXECUTION_BACKEND":        "",
 				"WORKER_EXECUTION_DEFAULT_IMAGE":  "",
 				"WORKER_EXECUTION_WORKSPACE_ROOT": "",
+				"ARTIFACT_STORAGE_ROOT":           "",
 			},
 			expected: Config{
 				AppPort:                "8080",
@@ -106,6 +112,7 @@ func TestLoad(t *testing.T) {
 				ExecutionBackend:       "docker",
 				ExecutionDefaultImage:  "alpine:3.20",
 				ExecutionWorkspaceRoot: defaultWorkspaceRoot,
+				ArtifactStorageRoot:    defaultArtifactRoot,
 			},
 		},
 	}
