@@ -11,9 +11,8 @@ steps:
   - name: Lint
     run: golangci-lint run
 artifacts:
-  paths:
-    - dist/**
-    - reports/*.xml
+  - dist/**
+  - reports/*.xml
 `
 	pf, err := Parse([]byte(yaml))
 	if err != nil {
@@ -51,9 +50,8 @@ steps:
   - name: Test
     run: go test ./...
 artifacts:
-  paths:
-    - dist/**
-    - reports/*.xml
+  - dist/**
+  - reports/*.xml
 `
 	pf, err := Parse([]byte(yaml))
 	if err != nil {
@@ -302,9 +300,8 @@ steps:
   - name: Build
     run: make build
 artifacts:
-  paths:
-    - dist/**
-    - reports/*.xml
+  - dist/**
+  - reports/*.xml
 `
 
 	pf, err := ParseAndValidate([]byte(yaml))
@@ -318,5 +315,57 @@ artifacts:
 	}
 	if rp.Artifacts.Paths[0] != "dist/**" || rp.Artifacts.Paths[1] != "reports/*.xml" {
 		t.Fatalf("unexpected artifact paths: %#v", rp.Artifacts.Paths)
+	}
+}
+
+func TestParse_Artifacts_ObjectForm(t *testing.T) {
+	yaml := `
+version: 1
+steps:
+  - name: Build
+    run: make build
+artifacts:
+  - path: pipeline.txt
+  - path: success.doc
+`
+
+	pf, err := ParseAndValidate([]byte(yaml))
+	if err != nil {
+		t.Fatalf("unexpected parse/validate error: %v", err)
+	}
+
+	if len(pf.Artifacts.Paths) != 2 {
+		t.Fatalf("expected 2 artifact paths, got %d", len(pf.Artifacts.Paths))
+	}
+	if pf.Artifacts.Paths[0] != "pipeline.txt" || pf.Artifacts.Paths[1] != "success.doc" {
+		t.Fatalf("unexpected artifact paths: %#v", pf.Artifacts.Paths)
+	}
+}
+
+func TestParseAndValidate_Artifacts_SimpleListEndToEnd(t *testing.T) {
+	yaml := `
+version: 1
+pipeline:
+  name: my-pipeline
+steps:
+  - name: greet
+    run: echo "Hello from pipeline" > pipeline.txt
+  - name: build
+    run: echo "Hell yeah" > success.doc
+artifacts:
+  - pipeline.txt
+  - success.doc
+`
+
+	pf, err := ParseAndValidate([]byte(yaml))
+	if err != nil {
+		t.Fatalf("unexpected parse/validate error: %v", err)
+	}
+
+	if len(pf.Artifacts.Paths) != 2 {
+		t.Fatalf("expected 2 artifact paths, got %d", len(pf.Artifacts.Paths))
+	}
+	if pf.Artifacts.Paths[0] != "pipeline.txt" || pf.Artifacts.Paths[1] != "success.doc" {
+		t.Fatalf("unexpected artifact paths: %#v", pf.Artifacts.Paths)
 	}
 }
