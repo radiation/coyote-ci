@@ -1291,7 +1291,8 @@ func TestBuildService_RunStep_SkipsCleanupWhenArtifactCollectionFails(t *testing
 		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
 	}
 
-	svc := NewBuildService(repo, runner, &fakeLogSink{})
+	logSink := &fakeLogSink{}
+	svc := NewBuildService(repo, runner, logSink)
 	svc.SetArtifactPersistence(&fakeArtifactRepository{}, &failingStore{err: errors.New("store unavailable")}, workspaceRoot)
 
 	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
@@ -1301,6 +1302,10 @@ func TestBuildService_RunStep_SkipsCleanupWhenArtifactCollectionFails(t *testing
 	if report.SideEffectErr == nil {
 		t.Fatal("expected side effect error from artifact collection failure")
 	}
+	assertMessagesContain(t, logSink.lines,
+		"Artifact collection failed",
+		"Failure reason: artifact collection failed",
+	)
 	if runner.cleanupCalls != 0 {
 		t.Fatalf("expected cleanup to be skipped on artifact failure, got %d", runner.cleanupCalls)
 	}
@@ -1612,9 +1617,179 @@ func TestBuildService_RunStep_WritesFailureMarkerWithExitCode(t *testing.T) {
 
 	assertMessagesContain(t, messages,
 		"<== Step 1/1: test failed in 4.2s (exit code 1)",
+		"Failure reason: command exited with code 1",
 		"Build failed in",
 		"Failure summary: see failed step marker(s) above for exit details",
 	)
+}
+
+func TestBuildService_RunStep_WritesTimeoutFailureMarkerAndReason(t *testing.T) {
+	startedAt := time.Now().UTC()
+	finishedAt := startedAt.Add(600 * time.Second)
+
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: startedAt.Add(-2 * time.Second)},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	r := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: -1, Stderr: "step execution timed out after 10m0s", StartedAt: startedAt, FinishedAt: finishedAt}}
+	logStore := logs.NewMemorySink()
+
+	svc := NewBuildService(repo, r, logStore)
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{
+		BuildID:    "build-1",
+		StepIndex:  0,
+		StepName:   "test",
+		ClaimToken: claimToken,
+		Command:    "sh",
+		Args:       []string{"-c", "sleep 999"},
+	})
+	if err != nil {
+		t.Fatalf("run step failed: %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion outcome completed, got %q", report.CompletionOutcome)
+	}
+
+	buildLogs, err := svc.GetBuildLogs(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("get build logs failed: %v", err)
+	}
+
+	messages := make([]string, 0, len(buildLogs))
+	for _, line := range buildLogs {
+		messages = append(messages, line.Message)
+	}
+
+	assertMessagesContain(t, messages,
+		"<== Step 1/1: test failed in 600.0s (timed out)",
+		"Failure reason: step execution timed out after 10m0s",
+	)
+}
+
+func TestBuildService_RunStep_PrepareFailureEmitsCanonicalContainerStartupFailure(t *testing.T) {
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	r := &fakeBuildScopedRunner{prepareErr: errors.New("creating build container: docker command failed")}
+	logStore := logs.NewMemorySink()
+
+	svc := NewBuildService(repo, r, logStore)
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{
+		BuildID:    "build-1",
+		StepIndex:  0,
+		StepName:   "step-1",
+		ClaimToken: claimToken,
+		Command:    "echo",
+	})
+	if err == nil {
+		t.Fatal("expected prepare failure error")
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion outcome completed, got %q", report.CompletionOutcome)
+	}
+
+	buildLogs, getErr := svc.GetBuildLogs(context.Background(), "build-1")
+	if getErr != nil {
+		t.Fatalf("get build logs failed: %v", getErr)
+	}
+
+	messages := make([]string, 0, len(buildLogs))
+	for _, line := range buildLogs {
+		messages = append(messages, line.Message)
+	}
+
+	assertMessagesContain(t, messages,
+		"Failed to start build container",
+		"Failure reason: docker create failed",
+	)
+}
+
+func TestBuildService_RunStep_EmitsHighSignalPhaseMarkers(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	buildID := "build-phase-markers"
+	claimToken := "claim-active"
+
+	workspacePath := filepath.Join(workspaceRoot, buildID)
+	if err := os.MkdirAll(filepath.Join(workspacePath, "dist"), 0o755); err != nil {
+		t.Fatalf("failed creating workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePath, "dist", "app"), []byte("artifact-body"), 0o644); err != nil {
+		t.Fatalf("failed writing artifact file: %v", err)
+	}
+
+	pipelineYAML := "version: 1\nsteps:\n  - name: build\n    run: make build\nartifacts:\n  - dist/**\n"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: buildID, Status: domain.BuildStatusRunning, CurrentStepIndex: 0, PipelineConfigYAML: &pipelineYAML, CreatedAt: time.Now().UTC()},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	r := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()}}}
+	logStore := logs.NewMemorySink()
+	artifactRepo := &fakeArtifactRepository{}
+
+	svc := NewBuildService(repo, r, logStore)
+	svc.SetArtifactPersistence(artifactRepo, artifact.NewFilesystemStore(t.TempDir()), workspaceRoot)
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	if err != nil {
+		t.Fatalf("run step failed: %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion outcome completed, got %q", report.CompletionOutcome)
+	}
+
+	buildLogs, err := svc.GetBuildLogs(context.Background(), buildID)
+	if err != nil {
+		t.Fatalf("get build logs failed: %v", err)
+	}
+	messages := make([]string, 0, len(buildLogs))
+	for _, line := range buildLogs {
+		messages = append(messages, line.Message)
+	}
+
+	assertMessagesContain(t, messages,
+		"Preparing workspace",
+		"Starting build container",
+		"Executing pipeline steps",
+		"Collecting artifacts",
+		"Finalizing build",
+	)
+}
+
+func TestBuildService_RunStep_DoesNotDuplicateBuildHeaderWhenBuildAlreadyStarted(t *testing.T) {
+	started := time.Now().UTC().Add(-20 * time.Second)
+	finished := started.Add(2 * time.Second)
+
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: started.Add(-2 * time.Second), StartedAt: &started},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	r := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", StartedAt: started, FinishedAt: finished}}
+	logStore := logs.NewMemorySink()
+
+	svc := NewBuildService(repo, r, logStore)
+	if _, _, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo"}); err != nil {
+		t.Fatalf("run step failed: %v", err)
+	}
+
+	buildLogs, err := svc.GetBuildLogs(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("get build logs failed: %v", err)
+	}
+
+	count := 0
+	for _, line := range buildLogs {
+		if line.Message == "Starting build" {
+			count++
+		}
+	}
+	if count != 0 {
+		t.Fatalf("expected no duplicate build header when already started, found %d", count)
+	}
 }
 
 func TestTerminalBuildSummaryDuration_PrefersDeterministicTimestamps(t *testing.T) {
@@ -1683,6 +1858,9 @@ func TestBuildService_RunStep_EmitsTerminalSummaryInStepChunkFlow(t *testing.T) 
 
 	if !containsSystemChunkText(chunks, "==> Step 1/1: step-1") {
 		t.Fatalf("expected step marker in chunk flow, got %#v", chunks)
+	}
+	if !containsSystemChunkText(chunks, "Finalizing build") {
+		t.Fatalf("expected finalizing marker in chunk flow, got %#v", chunks)
 	}
 	if !containsSystemChunkText(chunks, "Build succeeded in") {
 		t.Fatalf("expected terminal summary in chunk flow, got %#v", chunks)

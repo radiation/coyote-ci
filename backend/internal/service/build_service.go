@@ -129,6 +129,15 @@ type StepCompletionReport struct {
 	SideEffectErr     error
 }
 
+type stepFailureKind string
+
+const (
+	stepFailureKindNone     stepFailureKind = "none"
+	stepFailureKindExitCode stepFailureKind = "exit_code"
+	stepFailureKindTimeout  stepFailureKind = "timeout"
+	stepFailureKindInternal stepFailureKind = "internal"
+)
+
 func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) (domain.Build, error) {
 	if input.ProjectID == "" {
 		return domain.Build{}, ErrProjectIDRequired
@@ -526,7 +535,26 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	stepWorkingDir := workspace.New(request.BuildID, "").ContainerWorkingDir(request.WorkingDir)
 	stepCommand := runner.RenderStepCommand(request.Command, request.Args)
 
+	var chunkAppender logs.StepLogChunkAppender
+	if appender, ok := s.logSink.(logs.StepLogChunkAppender); ok {
+		chunkAppender = appender
+	}
+
+	var visibilityLogErr error
+	emitVisibilityLine := func(line string) {
+		if err := s.writeSystemExecutionLogLine(ctx, request, chunkAppender, line); err != nil && visibilityLogErr == nil {
+			visibilityLogErr = err
+		}
+	}
+	emitVisibilityLines := func(lines []string) {
+		for _, line := range lines {
+			emitVisibilityLine(line)
+		}
+	}
+
 	if buildScopedRunner, ok := s.runner.(runner.BuildScopedRunner); ok {
+		emitVisibilityLine("Preparing workspace")
+		emitVisibilityLine("Starting build container")
 		prepareErr := buildScopedRunner.PrepareBuild(ctx, runner.PrepareBuildRequest{
 			BuildID:    request.BuildID,
 			RepoURL:    readOptionalString(build.RepoURL),
@@ -537,11 +565,15 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 			ClaimToken: request.ClaimToken,
 		})
 		if prepareErr != nil {
+			_, reason := classifyPrepareFailure(prepareErr)
+			emitVisibilityLine("Failed to start build container")
+			emitVisibilityLine(formatFailureReasonLine(reason))
+
 			now := time.Now().UTC()
 			result := runner.RunStepResult{
 				Status:     runner.RunStepStatusFailed,
 				ExitCode:   -1,
-				Stderr:     prepareErr.Error(),
+				Stderr:     reason,
 				StartedAt:  now,
 				FinishedAt: now,
 			}
@@ -554,6 +586,9 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 			if sideEffectErr := s.runPostCompletionSideEffects(ctx, request, nil); sideEffectErr != nil {
 				completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, sideEffectErr)
 			}
+			if visibilityLogErr != nil {
+				completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, visibilityLogErr)
+			}
 
 			return result, completionReport, prepareErr
 		}
@@ -562,16 +597,10 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		return runner.RunStepResult{}, StepCompletionReport{}, ErrRunnerWorkspaceNotSupported
 	}
 
-	hasChunkAppender := false
-	var chunkAppender logs.StepLogChunkAppender
-	if appender, ok := s.logSink.(logs.StepLogChunkAppender); ok {
-		hasChunkAppender = true
-		chunkAppender = appender
-	}
+	hasChunkAppender := chunkAppender != nil
 
 	var chunkPersistErr error
 	var chunkPersistMu sync.Mutex
-	var visibilityLogErr error
 
 	persistChunk := func(chunk runner.StepOutputChunk) error {
 		if !hasChunkAppender {
@@ -614,16 +643,6 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		}
 		return nil
 	}
-	emitVisibilityLine := func(line string) {
-		if err := s.writeSystemExecutionLogLine(ctx, request, chunkAppender, line); err != nil && visibilityLogErr == nil {
-			visibilityLogErr = err
-		}
-	}
-	emitVisibilityLines := func(lines []string) {
-		for _, line := range lines {
-			emitVisibilityLine(line)
-		}
-	}
 	applyBufferedLogErrors := func(report *StepCompletionReport) {
 		chunkPersistMu.Lock()
 		capturedChunkErr := chunkPersistErr
@@ -636,8 +655,11 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		}
 	}
 
-	if stepNumber == 1 {
+	if stepNumber == 1 && (build.StartedAt == nil || build.StartedAt.IsZero()) {
 		emitVisibilityLines(formatBuildStartLines(executionImage, workspace.DefaultContainerRoot, totalSteps))
+	}
+	if stepNumber == 1 {
+		emitVisibilityLine("Executing pipeline steps")
 	}
 	emitVisibilityLines(formatStepStartLines(stepNumber, totalSteps, request.StepName, executionImage, stepWorkingDir, stepCommand))
 
@@ -670,7 +692,9 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 			StartedAt:  now,
 			FinishedAt: now,
 		}
-		emitVisibilityLine(formatStepEndLine(stepNumber, totalSteps, request.StepName, "failed", result.FinishedAt.Sub(result.StartedAt), result.ExitCode))
+		failureKind, failureReason := classifyStepFailure(result)
+		emitVisibilityLine(formatFailureStepEndLine(stepNumber, totalSteps, request.StepName, result.FinishedAt.Sub(result.StartedAt), result.ExitCode, failureKind))
+		emitVisibilityLine(formatFailureReasonLine(failureReason))
 		completionReport, completionErr := s.handleStepResult(ctx, request, result, hasChunkAppender)
 		if completionErr != nil {
 			return result, completionReport, errors.Join(runErr, completionErr)
@@ -686,7 +710,13 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	if result.Status == runner.RunStepStatusFailed {
 		stepStatus = "failed"
 	}
-	emitVisibilityLine(formatStepEndLine(stepNumber, totalSteps, request.StepName, stepStatus, result.FinishedAt.Sub(result.StartedAt), result.ExitCode))
+	if stepStatus == "failed" {
+		failureKind, failureReason := classifyStepFailure(result)
+		emitVisibilityLine(formatFailureStepEndLine(stepNumber, totalSteps, request.StepName, result.FinishedAt.Sub(result.StartedAt), result.ExitCode, failureKind))
+		emitVisibilityLine(formatFailureReasonLine(failureReason))
+	} else {
+		emitVisibilityLine(formatStepEndLine(stepNumber, totalSteps, request.StepName, stepStatus, result.FinishedAt.Sub(result.StartedAt), result.ExitCode))
+	}
 
 	completionReport, completionErr := s.handleStepResult(ctx, request, result, hasChunkAppender)
 	if completionErr != nil {
@@ -701,9 +731,31 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 }
 
 func (s *BuildService) runPostCompletionSideEffects(ctx context.Context, request runner.RunStepRequest, appender logs.StepLogChunkAppender) error {
-	artifactPaths, artifactErr := s.collectArtifactsIfTerminal(ctx, request.BuildID)
-	if artifactErr != nil {
-		return artifactErr
+	build, err := s.buildRepo.GetByID(ctx, request.BuildID)
+	if err != nil {
+		return fmt.Errorf("fetching build for post-completion side effects: %w", err)
+	}
+	if !domain.IsTerminalBuildStatus(build.Status) {
+		return nil
+	}
+
+	artifactPaths := []string{}
+	if s.artifactRepo != nil && s.artifactCollector != nil && strings.TrimSpace(s.artifactWorkspaceRoot) != "" {
+		if emitErr := s.writeSystemExecutionLogLine(ctx, request, appender, "Collecting artifacts"); emitErr != nil {
+			return emitErr
+		}
+
+		var artifactErr error
+		artifactPaths, artifactErr = s.collectArtifactsIfTerminal(ctx, request.BuildID)
+		if artifactErr != nil {
+			_ = s.writeSystemExecutionLogLine(ctx, request, appender, "Artifact collection failed")
+			_ = s.writeSystemExecutionLogLine(ctx, request, appender, formatFailureReasonLine("artifact collection failed"))
+			return artifactErr
+		}
+	}
+
+	if emitErr := s.writeSystemExecutionLogLine(ctx, request, appender, "Finalizing build"); emitErr != nil {
+		return emitErr
 	}
 
 	summaryErr := s.writeTerminalBuildSummary(ctx, request, appender, artifactPaths)
@@ -786,6 +838,48 @@ func terminalBuildSummaryDuration(build domain.Build, now time.Time) time.Durati
 	}
 
 	return now.Sub(build.CreatedAt)
+}
+
+func classifyPrepareFailure(err error) (marker string, reason string) {
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	if strings.Contains(message, "creating build container") || strings.Contains(message, "docker create") || strings.Contains(message, "docker run") {
+		return "Failed to start build container", "docker create failed"
+	}
+	if strings.Contains(message, "starting build container") || strings.Contains(message, "docker start") {
+		return "Failed to start build container", "docker start failed"
+	}
+	if strings.Contains(message, "workspace") {
+		return "Failed to prepare workspace", "workspace preparation failed"
+	}
+	return "Failed to prepare build execution", "prepare build failed"
+}
+
+func classifyStepFailure(result runner.RunStepResult) (stepFailureKind, string) {
+	if result.Status != runner.RunStepStatusFailed {
+		return stepFailureKindNone, ""
+	}
+
+	stderr := strings.ToLower(strings.TrimSpace(result.Stderr))
+	if strings.Contains(stderr, "timed out") {
+		trimmed := strings.TrimSpace(result.Stderr)
+		if trimmed == "" {
+			return stepFailureKindTimeout, "step timed out"
+		}
+		return stepFailureKindTimeout, trimmed
+	}
+
+	if result.ExitCode >= 0 {
+		return stepFailureKindExitCode, fmt.Sprintf("command exited with code %d", result.ExitCode)
+	}
+
+	return stepFailureKindInternal, "internal execution error"
+}
+
+func formatFailureStepEndLine(stepNumber int, totalSteps int, stepName string, duration time.Duration, exitCode int, failureKind stepFailureKind) string {
+	if failureKind == stepFailureKindTimeout {
+		return formatTimedOutStepEndLine(stepNumber, totalSteps, stepName, duration)
+	}
+	return formatStepEndLine(stepNumber, totalSteps, stepName, "failed", duration, exitCode)
 }
 
 func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID string) ([]string, error) {

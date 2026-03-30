@@ -54,6 +54,16 @@ func TestFormatStepStartAndEndLines(t *testing.T) {
 	if failure != "<== Step 2/3: test failed in 4.2s (exit code 1)" {
 		t.Fatalf("unexpected failure line: %q", failure)
 	}
+
+	timeoutFailure := formatTimedOutStepEndLine(2, 3, "test", 600*time.Second)
+	if timeoutFailure != "<== Step 2/3: test failed in 600.0s (timed out)" {
+		t.Fatalf("unexpected timeout failure line: %q", timeoutFailure)
+	}
+
+	reason := formatFailureReasonLine("command exited with code 1")
+	if reason != "Failure reason: command exited with code 1" {
+		t.Fatalf("unexpected failure reason line: %q", reason)
+	}
 }
 
 func TestFormatBuildSummaryLines(t *testing.T) {

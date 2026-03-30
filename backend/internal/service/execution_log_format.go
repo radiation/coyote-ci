@@ -52,6 +52,18 @@ func formatStepEndLine(stepIndex int, totalSteps int, stepName string, status st
 	return result
 }
 
+func formatTimedOutStepEndLine(stepIndex int, totalSteps int, stepName string, duration time.Duration) string {
+	return fmt.Sprintf("<== Step %d/%d: %s failed in %s (timed out)", stepIndex, totalSteps, strings.TrimSpace(stepName), formatDurationSeconds(duration))
+}
+
+func formatFailureReasonLine(reason string) string {
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
+		trimmed = "unknown failure"
+	}
+	return "Failure reason: " + trimmed
+}
+
 func formatBuildSummaryLines(status domain.BuildStatus, duration time.Duration, completedSteps int, totalSteps int, artifactPaths []string) []string {
 	result := "finished"
 	if status == domain.BuildStatusSuccess {
