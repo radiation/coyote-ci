@@ -44,14 +44,19 @@ type artifactPathObject struct {
 // into a single internal Paths representation.
 //
 // Supported forms:
-//   - artifacts: ["dist/**", "reports/*.xml"]
-//   - artifacts:
-//   - path: dist/**
-//   - path: reports/*.xml
-//   - artifacts:
-//     paths:
-//   - dist/**
-//   - reports/*.xml
+//
+//	artifacts:
+//	  - dist/**
+//	  - reports/*.xml
+//
+//	artifacts:
+//	  - path: dist/**
+//	  - path: reports/*.xml
+//
+//	artifacts:
+//	  paths:
+//	    - dist/**
+//	    - reports/*.xml
 func (d *ArtifactDef) UnmarshalYAML(node *yaml.Node) error {
 	if node == nil || node.Kind == 0 {
 		d.Paths = nil

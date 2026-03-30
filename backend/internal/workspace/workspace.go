@@ -17,9 +17,14 @@ type Workspace struct {
 }
 
 func New(buildID string, hostRoot string) Workspace {
+	trimmedHostRoot := strings.TrimSpace(hostRoot)
+	if trimmedHostRoot != "" {
+		trimmedHostRoot = filepath.Clean(trimmedHostRoot)
+	}
+
 	return Workspace{
 		BuildID:       strings.TrimSpace(buildID),
-		HostRoot:      filepath.Clean(strings.TrimSpace(hostRoot)),
+		HostRoot:      trimmedHostRoot,
 		ContainerRoot: DefaultContainerRoot,
 	}
 }

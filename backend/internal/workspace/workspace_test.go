@@ -71,3 +71,17 @@ func TestWorkspace_ResolveRelativePath(t *testing.T) {
 		t.Fatal("expected absolute path to be rejected")
 	}
 }
+
+func TestWorkspace_New_EmptyHostRootRemainsEmpty(t *testing.T) {
+	ws := New("build-1", "")
+	if ws.HostRoot != "" {
+		t.Fatalf("expected empty host root, got %q", ws.HostRoot)
+	}
+}
+
+func TestWorkspace_ResolveRelativePath_EmptyHostRootErrors(t *testing.T) {
+	ws := New("build-1", "")
+	if _, err := ws.ResolveRelativePath("dist/app.tar.gz"); err == nil {
+		t.Fatal("expected resolve to fail when host root is empty")
+	}
+}
