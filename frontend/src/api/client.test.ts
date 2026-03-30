@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { listBuilds, getBuild, getBuildSteps, createBuild, createPipelineBuild, createRepoBuild, queueBuild } from '../api/client';
+import { listBuilds, getBuild, getBuildSteps, getBuildArtifacts, artifactDownloadURL, createBuild, createPipelineBuild, createRepoBuild, queueBuild } from '../api/client';
 
 describe('API client - types', () => {
   it('should export API functions', () => {
     expect(typeof listBuilds).toBe('function');
     expect(typeof getBuild).toBe('function');
     expect(typeof getBuildSteps).toBe('function');
+    expect(typeof getBuildArtifacts).toBe('function');
+    expect(typeof artifactDownloadURL).toBe('function');
     expect(typeof createBuild).toBe('function');
     expect(typeof createPipelineBuild).toBe('function');
     expect(typeof createRepoBuild).toBe('function');
@@ -172,5 +174,36 @@ describe('API client - types', () => {
         ref: 'main',
       }),
     });
+  });
+
+  it('fetches build artifacts from /builds/{id}/artifacts', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          build_id: 'build-1',
+          artifacts: [
+            {
+              id: 'artifact-1',
+              build_id: 'build-1',
+              path: 'dist/app',
+              size_bytes: 128,
+              content_type: null,
+              checksum_sha256: null,
+              download_url_path: '/builds/build-1/artifacts/artifact-1/download',
+              created_at: '2026-03-24T00:00:01Z',
+            },
+          ],
+        },
+      }),
+    } as Response);
+
+    const artifacts = await getBuildArtifacts('build-1');
+    expect(artifacts).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith('/api/builds/build-1/artifacts', undefined);
+  });
+
+  it('builds artifact download URL from API base path', () => {
+    expect(artifactDownloadURL('/builds/build-1/artifacts/a1/download')).toBe('/api/builds/build-1/artifacts/a1/download');
   });
 });

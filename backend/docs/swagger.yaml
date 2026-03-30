@@ -1,5 +1,38 @@
 basePath: /
 definitions:
+  api.BuildArtifactResponse:
+    properties:
+      build_id:
+        type: string
+      checksum_sha256:
+        type: string
+      content_type:
+        type: string
+      created_at:
+        type: string
+      download_url_path:
+        type: string
+      id:
+        type: string
+      path:
+        type: string
+      size_bytes:
+        type: integer
+    type: object
+  api.BuildArtifactsEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.BuildArtifactsResponse'
+    type: object
+  api.BuildArtifactsResponse:
+    properties:
+      artifacts:
+        items:
+          $ref: '#/definitions/api.BuildArtifactResponse'
+        type: array
+      build_id:
+        type: string
+    type: object
   api.BuildEnvelope:
     properties:
       data:
@@ -310,6 +343,73 @@ paths:
           schema:
             $ref: '#/definitions/api.ErrorResponse'
       summary: Get build
+      tags:
+      - builds
+  /builds/{buildID}/artifacts:
+    get:
+      description: Returns persisted artifact metadata for a build.
+      parameters:
+      - description: Build ID
+        in: path
+        name: buildID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuildArtifactsEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List build artifacts
+      tags:
+      - builds
+  /builds/{buildID}/artifacts/{artifactID}/download:
+    get:
+      description: Streams stored artifact content for a build artifact.
+      parameters:
+      - description: Build ID
+        in: path
+        name: buildID
+        required: true
+        type: string
+      - description: Artifact ID
+        in: path
+        name: artifactID
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: binary payload
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Download build artifact
       tags:
       - builds
   /builds/{buildID}/complete:

@@ -21,6 +21,7 @@ type Config struct {
 	ExecutionBackend       string
 	ExecutionDefaultImage  string
 	ExecutionWorkspaceRoot string
+	ArtifactStorageRoot    string
 }
 
 func Load() Config {
@@ -38,6 +39,7 @@ func Load() Config {
 		ExecutionBackend:       getEnv("WORKER_EXECUTION_BACKEND", "docker"),
 		ExecutionDefaultImage:  getEnv("WORKER_EXECUTION_DEFAULT_IMAGE", "alpine:3.20"),
 		ExecutionWorkspaceRoot: getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
+		ArtifactStorageRoot:    getEnv("ARTIFACT_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-artifacts")),
 	}
 }
 

@@ -54,8 +54,11 @@ services:
       DB_PASSWORD: coyote
       DB_NAME: coyote_ci
       DB_SSLMODE: disable
+      ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
     ports:
       - "8080:8080"
+    volumes:
+      - artifact_data:/var/lib/coyote-artifacts
 
   backend-dev:
     build:
@@ -76,12 +79,14 @@ services:
       DB_PASSWORD: coyote
       DB_NAME: coyote_ci
       DB_SSLMODE: disable
+      ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
     ports:
       - "8080:8080"
     volumes:
       - ./backend:/app
       - go_mod_cache:/go/pkg/mod
       - go_build_cache:/root/.cache/go-build
+      - artifact_data:/var/lib/coyote-artifacts
     profiles:
       - dev
   worker:
@@ -101,7 +106,11 @@ services:
       DB_PASSWORD: coyote
       DB_NAME: coyote_ci
       DB_SSLMODE: disable
+      ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
+      WORKER_EXECUTION_WORKSPACE_ROOT: /tmp/coyote-builds
     entrypoint: ["/app/worker"]
+    volumes:
+      - artifact_data:/var/lib/coyote-artifacts
 
   frontend:
     build:
@@ -135,3 +144,4 @@ volumes:
   go_mod_cache:
   go_build_cache:
   frontend_node_modules:
+  artifact_data:

@@ -1,5 +1,7 @@
 import type {
   Build,
+  BuildArtifact,
+  BuildArtifactsResponse,
   BuildTemplate,
   BuildListResponse,
   BuildStep,
@@ -68,6 +70,20 @@ export async function getStepLogs(buildID: string, stepIndex: number, after = 0,
     `/builds/${encodeURIComponent(buildID)}/steps/${stepIndex}/logs?after=${after}&limit=${limit}`,
   );
   return envelope.data;
+}
+
+export async function getBuildArtifacts(id: string): Promise<BuildArtifact[]> {
+  const envelope = await fetchJSON<DataEnvelope<BuildArtifactsResponse>>(
+    `/builds/${encodeURIComponent(id)}/artifacts`,
+  );
+  return envelope.data.artifacts;
+}
+
+export function artifactDownloadURL(downloadPath: string): string {
+  if (!downloadPath.startsWith('/')) {
+    return `${BASE}/${downloadPath}`;
+  }
+  return `${BASE}${downloadPath}`;
 }
 
 export function buildStepLogStreamURL(buildID: string, stepIndex: number, after = 0): string {

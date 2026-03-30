@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -26,6 +27,34 @@ type fakeRepo struct {
 	createErr error
 	getErr    error
 	updateErr error
+}
+
+type fakeArtifactRepo struct {
+	artifactsByBuild map[string][]domain.BuildArtifact
+}
+
+func (r *fakeArtifactRepo) Create(_ context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
+	if r.artifactsByBuild == nil {
+		r.artifactsByBuild = map[string][]domain.BuildArtifact{}
+	}
+	r.artifactsByBuild[artifact.BuildID] = append(r.artifactsByBuild[artifact.BuildID], artifact)
+	return artifact, nil
+}
+
+func (r *fakeArtifactRepo) ListByBuildID(_ context.Context, buildID string) ([]domain.BuildArtifact, error) {
+	items := r.artifactsByBuild[buildID]
+	out := make([]domain.BuildArtifact, len(items))
+	copy(out, items)
+	return out, nil
+}
+
+func (r *fakeArtifactRepo) GetByID(_ context.Context, buildID string, artifactID string) (domain.BuildArtifact, error) {
+	for _, item := range r.artifactsByBuild[buildID] {
+		if item.ID == artifactID {
+			return item, nil
+		}
+	}
+	return domain.BuildArtifact{}, repository.ErrArtifactNotFound
 }
 
 func (r *fakeRepo) Create(_ context.Context, build domain.Build) (domain.Build, error) {
@@ -1074,4 +1103,93 @@ func TestCreateRepoBuild(t *testing.T) {
 			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
 		}
 	})
+}
+
+func TestBuildHandler_GetBuildArtifacts(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	repo := &fakeRepo{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
+	}
+	artifactRepo := &fakeArtifactRepo{artifactsByBuild: map[string][]domain.BuildArtifact{
+		"build-1": {
+			{ID: "artifact-1", BuildID: "build-1", LogicalPath: "dist/app", SizeBytes: 128, CreatedAt: now},
+		},
+	}}
+
+	svc := service.NewBuildService(repo, nil, nil)
+	svc.SetArtifactPersistence(artifactRepo, artifact.NewFilesystemStore(t.TempDir()), t.TempDir())
+	h := NewBuildHandler(svc)
+
+	req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/artifacts", nil), "build-1")
+	res := httptest.NewRecorder()
+	h.GetBuildArtifacts(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, res.Code)
+	}
+
+	data := decodeDataMap(t, res)
+	if data["build_id"] != "build-1" {
+		t.Fatalf("expected build_id build-1, got %v", data["build_id"])
+	}
+	items, ok := data["artifacts"].([]any)
+	if !ok {
+		t.Fatalf("expected artifacts array, got %T", data["artifacts"])
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 artifact, got %d", len(items))
+	}
+	artifactData, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected artifact object, got %T", items[0])
+	}
+	if artifactData["path"] != "dist/app" {
+		t.Fatalf("expected path dist/app, got %v", artifactData["path"])
+	}
+}
+
+func TestBuildHandler_DownloadBuildArtifact(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	storeRoot := t.TempDir()
+	store := artifact.NewFilesystemStore(storeRoot)
+	if _, err := store.Save(context.Background(), "build-1/dist/app", bytes.NewBufferString("artifact-content")); err != nil {
+		t.Fatalf("failed to seed artifact store: %v", err)
+	}
+
+	repo := &fakeRepo{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
+	}
+	contentType := "application/octet-stream"
+	artifactRepo := &fakeArtifactRepo{artifactsByBuild: map[string][]domain.BuildArtifact{
+		"build-1": {
+			{
+				ID:          "artifact-1",
+				BuildID:     "build-1",
+				LogicalPath: "dist/app",
+				StorageKey:  "build-1/dist/app",
+				SizeBytes:   int64(len("artifact-content")),
+				ContentType: &contentType,
+				CreatedAt:   now,
+			},
+		},
+	}}
+
+	svc := service.NewBuildService(repo, nil, nil)
+	svc.SetArtifactPersistence(artifactRepo, store, t.TempDir())
+	h := NewBuildHandler(svc)
+
+	req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/artifacts/artifact-1/download", nil), "build-1")
+	rctx := chi.RouteContext(req.Context())
+	rctx.URLParams.Add("artifactID", "artifact-1")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	res := httptest.NewRecorder()
+	h.DownloadBuildArtifact(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, res.Code)
+	}
+	if got := res.Body.String(); got != "artifact-content" {
+		t.Fatalf("expected artifact body, got %q", got)
+	}
 }

@@ -4,9 +4,10 @@ package pipeline
 // YAML schema types do not leak beyond the pipeline package; the rest of the system
 // works exclusively with this type.
 type ResolvedPipeline struct {
-	Name  string
-	Env   map[string]string
-	Steps []ResolvedStep
+	Name      string
+	Env       map[string]string
+	Steps     []ResolvedStep
+	Artifacts ResolvedArtifacts
 }
 
 // ResolvedStep is a single normalized step ready for conversion to a canonical build step.
@@ -16,4 +17,9 @@ type ResolvedStep struct {
 	WorkingDir     string
 	Env            map[string]string
 	TimeoutSeconds int
+}
+
+// ResolvedArtifacts captures normalized build-level artifact paths.
+type ResolvedArtifacts struct {
+	Paths []string
 }

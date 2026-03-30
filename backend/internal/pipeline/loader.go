@@ -58,9 +58,10 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 	}
 
 	return &ResolvedPipeline{
-		Name:  pf.Pipeline.Name,
-		Env:   mergedPipelineEnv,
-		Steps: steps,
+		Name:      pf.Pipeline.Name,
+		Env:       mergedPipelineEnv,
+		Steps:     steps,
+		Artifacts: ResolvedArtifacts{Paths: append([]string(nil), pf.Artifacts.Paths...)},
 	}
 }
 

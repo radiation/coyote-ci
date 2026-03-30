@@ -27,6 +27,19 @@ func Validate(pf *PipelineFile) error {
 		}
 	}
 
+	for i, pattern := range pf.Artifacts.Paths {
+		trimmed := strings.TrimSpace(pattern)
+		field := fmt.Sprintf("artifacts.paths[%d]", i)
+		if trimmed == "" {
+			errs = append(errs, ValidationError{Field: field, Message: "artifact path is required"})
+			continue
+		}
+
+		if err := validateArtifactPathPattern(trimmed); err != nil {
+			errs = append(errs, ValidationError{Field: field, Message: err.Error()})
+		}
+	}
+
 	// steps presence
 	if len(pf.Steps) == 0 {
 		errs = append(errs, ValidationError{Field: "steps", Message: "at least one step is required"})
@@ -76,5 +89,22 @@ func Validate(pf *PipelineFile) error {
 	if len(errs) > 0 {
 		return errs
 	}
+	return nil
+}
+
+func validateArtifactPathPattern(pattern string) error {
+	if strings.Contains(pattern, `\\`) {
+		return fmt.Errorf("artifact path must use forward slashes")
+	}
+	if strings.HasPrefix(pattern, "/") {
+		return fmt.Errorf("artifact path must be relative")
+	}
+
+	for _, seg := range strings.Split(pattern, "/") {
+		if seg == ".." {
+			return fmt.Errorf("artifact path must stay within workspace")
+		}
+	}
+
 	return nil
 }

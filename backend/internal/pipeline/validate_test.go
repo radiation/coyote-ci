@@ -232,6 +232,69 @@ func TestValidate_RelativeWorkingDir_OK(t *testing.T) {
 	}
 }
 
+func TestValidate_Artifacts_EmptyPathRejected(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps:   []StepDef{{Name: "Build", Run: "make"}},
+		Artifacts: ArtifactDef{
+			Paths: []string{"dist/**", "   "},
+		},
+	}
+
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected artifact validation error")
+	}
+	assertContains(t, err.Error(), "artifact")
+	assertContains(t, err.Error(), "required")
+}
+
+func TestValidate_Artifacts_PathTraversalRejected(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps:   []StepDef{{Name: "Build", Run: "make"}},
+		Artifacts: ArtifactDef{
+			Paths: []string{"reports/../secret.txt"},
+		},
+	}
+
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected artifact path traversal error")
+	}
+	assertContains(t, err.Error(), "within workspace")
+}
+
+func TestValidate_Artifacts_AbsolutePathRejected(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps:   []StepDef{{Name: "Build", Run: "make"}},
+		Artifacts: ArtifactDef{
+			Paths: []string{"/tmp/out.txt"},
+		},
+	}
+
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected artifact absolute path error")
+	}
+	assertContains(t, err.Error(), "relative")
+}
+
+func TestValidate_Artifacts_Valid(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps:   []StepDef{{Name: "Build", Run: "make"}},
+		Artifacts: ArtifactDef{
+			Paths: []string{"dist/**", "reports/*.xml"},
+		},
+	}
+
+	if err := Validate(pf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func assertContains(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(strings.ToLower(s), strings.ToLower(substr)) {

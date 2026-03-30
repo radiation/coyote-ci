@@ -10,6 +10,10 @@ version: 1
 steps:
   - name: Lint
     run: golangci-lint run
+artifacts:
+  paths:
+    - dist/**
+    - reports/*.xml
 `
 	pf, err := Parse([]byte(yaml))
 	if err != nil {
@@ -45,6 +49,10 @@ steps:
       FOO: bar
   - name: Test
     run: go test ./...
+artifacts:
+  paths:
+    - dist/**
+    - reports/*.xml
 `
 	pf, err := Parse([]byte(yaml))
 	if err != nil {
@@ -70,6 +78,12 @@ steps:
 	}
 	if pf.Steps[1].TimeoutSeconds != nil {
 		t.Errorf("expected nil timeout_seconds for step 2")
+	}
+	if len(pf.Artifacts.Paths) != 2 {
+		t.Fatalf("expected 2 artifact paths, got %d", len(pf.Artifacts.Paths))
+	}
+	if pf.Artifacts.Paths[0] != "dist/**" {
+		t.Errorf("expected first artifact path dist/**, got %q", pf.Artifacts.Paths[0])
 	}
 }
 
@@ -241,5 +255,31 @@ steps:
 	}
 	if rp.Steps[0].Env["LINT_STRICT"] != "1" {
 		t.Errorf("step0 should have LINT_STRICT=1")
+	}
+}
+
+func TestResolve_Artifacts(t *testing.T) {
+	yaml := `
+version: 1
+steps:
+  - name: Build
+    run: make build
+artifacts:
+  paths:
+    - dist/**
+    - reports/*.xml
+`
+
+	pf, err := ParseAndValidate([]byte(yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rp := Resolve(pf)
+	if len(rp.Artifacts.Paths) != 2 {
+		t.Fatalf("expected 2 resolved artifact paths, got %d", len(rp.Artifacts.Paths))
+	}
+	if rp.Artifacts.Paths[0] != "dist/**" || rp.Artifacts.Paths[1] != "reports/*.xml" {
+		t.Fatalf("unexpected artifact paths: %#v", rp.Artifacts.Paths)
 	}
 }
