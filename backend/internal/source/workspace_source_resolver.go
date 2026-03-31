@@ -43,11 +43,11 @@ func (r *GitWorkspaceSourceResolver) CloneIntoWorkspace(ctx context.Context, wor
 		return err
 	}
 
-	if err := os.RemoveAll(cleanWorkspacePath); err != nil {
-		return fmt.Errorf("%w: resetting workspace path: %v", ErrCloneFailed, err)
+	if err := ensureWorkspaceDirectory(cleanWorkspacePath); err != nil {
+		return fmt.Errorf("%w: preparing workspace path: %v", ErrCloneFailed, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(cleanWorkspacePath), 0o755); err != nil {
-		return fmt.Errorf("%w: creating workspace parent: %v", ErrCloneFailed, err)
+	if err := clearWorkspaceDirectoryContents(cleanWorkspacePath); err != nil {
+		return fmt.Errorf("%w: resetting workspace contents: %v", ErrCloneFailed, err)
 	}
 	if err := gitClone(ctx, repoURL, cleanWorkspacePath); err != nil {
 		return fmt.Errorf("%w: %v", ErrCloneFailed, err)
@@ -114,4 +114,38 @@ func normalizeCloneInputs(workspacePath string, repositoryURL string) (string, s
 	}
 
 	return cleanWorkspacePath, repoURL, nil
+}
+
+func ensureWorkspaceDirectory(workspacePath string) error {
+	if err := os.MkdirAll(filepath.Dir(workspacePath), 0o755); err != nil {
+		return err
+	}
+
+	info, err := os.Stat(workspacePath)
+	if err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("workspace path %q is not a directory", workspacePath)
+		}
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+
+	return os.MkdirAll(workspacePath, 0o755)
+}
+
+func clearWorkspaceDirectoryContents(workspacePath string) error {
+	entries, err := os.ReadDir(workspacePath)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(workspacePath, entry.Name())); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

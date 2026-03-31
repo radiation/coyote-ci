@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -48,6 +49,9 @@ type Runner struct {
 	workspace    source.WorkspaceMaterializer
 	defaultImage string
 	executor     commandExecutor
+
+	workspaceMu    sync.RWMutex
+	workspacePaths map[string]string
 }
 
 var _ runner.BuildScopedRunner = (*Runner)(nil)
@@ -59,9 +63,10 @@ func New(opts Options) *Runner {
 	}
 
 	return &Runner{
-		workspace:    opts.Workspace,
-		defaultImage: strings.TrimSpace(opts.DefaultImage),
-		executor:     execImpl,
+		workspace:      opts.Workspace,
+		defaultImage:   strings.TrimSpace(opts.DefaultImage),
+		executor:       execImpl,
+		workspacePaths: map[string]string{},
 	}
 }
 
@@ -86,6 +91,8 @@ func (r *Runner) PrepareBuild(ctx context.Context, request runner.PrepareBuildRe
 		return err
 	}
 
+	r.setWorkspacePath(buildID, workspacePath)
+
 	return nil
 }
 
@@ -102,12 +109,17 @@ func (r *Runner) ensureBuildWorkspaceReady(ctx context.Context, request runner.P
 		return "", errors.New("workspace materializer is required")
 	}
 
-	return r.workspace.PrepareWorkspace(ctx, source.WorkspacePrepareRequest{
+	workspacePath, err := r.workspace.PrepareWorkspace(ctx, source.WorkspacePrepareRequest{
 		BuildID:   strings.TrimSpace(request.BuildID),
 		RepoURL:   strings.TrimSpace(request.RepoURL),
 		Ref:       strings.TrimSpace(request.Ref),
 		CommitSHA: strings.TrimSpace(request.CommitSHA),
 	})
+	if err != nil {
+		return "", err
+	}
+
+	return canonicalizeHostPath(workspacePath), nil
 }
 
 func (r *Runner) ensureBuildContainerReady(ctx context.Context, buildID string, containerName string, image string, workspacePath string) error {
@@ -190,14 +202,15 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 	}
 	defer cancel()
 
-	args := dockerExecArgs(request)
+	containerWorkingDir := r.resolveContainerWorkingDirForStep(request)
+	args := dockerExecArgs(request, containerWorkingDir)
 	logCommand := dockerCommandString(redactDockerArgsForLogging(args))
 	containerName := containerNameForBuild(request.BuildID)
 	containerImage := r.inspectContainerImage(ctx, containerName)
 	if containerImage == "" {
 		containerImage = "unknown"
 	}
-	log.Printf("starting container step execution: image=%s command=%s working_dir=%s mounts=%s", containerImage, logCommand, resolveContainerWorkingDir(request.WorkingDir), workspaceMountPath)
+	log.Printf("starting container step execution: image=%s command=%s working_dir=%s mounts=%s", containerImage, logCommand, containerWorkingDir, workspaceMountPath)
 
 	cmd := exec.CommandContext(execCtx, "docker", args...)
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -322,6 +335,7 @@ func (r *Runner) CleanupBuild(ctx context.Context, buildID string) error {
 	if trimmedBuildID == "" {
 		return nil
 	}
+	r.clearWorkspacePath(trimmedBuildID)
 
 	containerName := containerNameForBuild(trimmedBuildID)
 	var rmErr error
@@ -364,8 +378,13 @@ func resolveContainerWorkingDir(requested string) string {
 	return workspace.New("", "").ContainerWorkingDir(requested)
 }
 
-func dockerExecArgs(request runner.RunStepRequest) []string {
-	args := []string{"exec", "-w", resolveContainerWorkingDir(request.WorkingDir)}
+func dockerExecArgs(request runner.RunStepRequest, containerWorkingDir string) []string {
+	workingDir := strings.TrimSpace(containerWorkingDir)
+	if workingDir == "" {
+		workingDir = workspaceMountPath
+	}
+
+	args := []string{"exec", "-w", workingDir}
 
 	for _, envEntry := range mergeStepEnvironment(request) {
 		args = append(args, "-e", envEntry)
@@ -374,6 +393,112 @@ func dockerExecArgs(request runner.RunStepRequest) []string {
 	args = append(args, containerNameForBuild(request.BuildID), request.Command)
 	args = append(args, request.Args...)
 	return args
+}
+
+func (r *Runner) setWorkspacePath(buildID string, workspacePath string) {
+	trimmedBuildID := strings.TrimSpace(buildID)
+	trimmedWorkspacePath := strings.TrimSpace(workspacePath)
+	if trimmedBuildID == "" || trimmedWorkspacePath == "" {
+		return
+	}
+
+	r.workspaceMu.Lock()
+	r.workspacePaths[trimmedBuildID] = trimmedWorkspacePath
+	r.workspaceMu.Unlock()
+}
+
+func (r *Runner) clearWorkspacePath(buildID string) {
+	trimmedBuildID := strings.TrimSpace(buildID)
+	if trimmedBuildID == "" {
+		return
+	}
+
+	r.workspaceMu.Lock()
+	delete(r.workspacePaths, trimmedBuildID)
+	r.workspaceMu.Unlock()
+}
+
+func (r *Runner) workspacePathForBuild(buildID string) (string, bool) {
+	trimmedBuildID := strings.TrimSpace(buildID)
+	if trimmedBuildID == "" {
+		return "", false
+	}
+
+	r.workspaceMu.RLock()
+	workspacePath, ok := r.workspacePaths[trimmedBuildID]
+	r.workspaceMu.RUnlock()
+	if !ok || strings.TrimSpace(workspacePath) == "" {
+		return "", false
+	}
+
+	return workspacePath, true
+}
+
+func (r *Runner) resolveContainerWorkingDirForStep(request runner.RunStepRequest) string {
+	resolved := resolveContainerWorkingDir(request.WorkingDir)
+	workspacePath, ok := r.workspacePathForBuild(request.BuildID)
+	if !ok {
+		return resolved
+	}
+
+	return constrainContainerWorkingDirToWorkspace(resolved, workspacePath)
+}
+
+func constrainContainerWorkingDirToWorkspace(containerWorkingDir string, workspacePath string) string {
+	trimmedDir := strings.TrimSpace(containerWorkingDir)
+	if trimmedDir == "" {
+		return workspaceMountPath
+	}
+	if trimmedDir == workspaceMountPath {
+		return trimmedDir
+	}
+
+	prefix := workspaceMountPath + "/"
+	if !strings.HasPrefix(trimmedDir, prefix) {
+		return workspaceMountPath
+	}
+
+	rel := strings.TrimPrefix(trimmedDir, prefix)
+	if rel == "" {
+		return workspaceMountPath
+	}
+
+	workspaceRoot := strings.TrimSpace(workspacePath)
+	if workspaceRoot == "" {
+		return trimmedDir
+	}
+	workspaceRoot = canonicalizeHostPath(workspaceRoot)
+
+	hostCandidate := filepath.Join(workspaceRoot, filepath.FromSlash(rel))
+	resolvedCandidate, err := filepath.EvalSymlinks(hostCandidate)
+	if err != nil {
+		return trimmedDir
+	}
+
+	relToRoot, err := filepath.Rel(workspaceRoot, resolvedCandidate)
+	if err != nil {
+		return workspaceMountPath
+	}
+	if relToRoot == ".." || strings.HasPrefix(relToRoot, ".."+string(filepath.Separator)) {
+		log.Printf("working directory escaped workspace via symlink; falling back to workspace root: requested=%s workspace=%s resolved=%s", trimmedDir, workspaceRoot, resolvedCandidate)
+		return workspaceMountPath
+	}
+
+	return trimmedDir
+}
+
+func canonicalizeHostPath(hostPath string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(hostPath))
+	if cleaned == "" {
+		return ""
+	}
+
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err == nil {
+		return filepath.Clean(resolved)
+	}
+
+	return cleaned
 }
 
 func mergeStepEnvironment(request runner.RunStepRequest) []string {

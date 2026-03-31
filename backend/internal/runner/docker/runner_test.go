@@ -3,6 +3,8 @@ package docker
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -120,6 +122,44 @@ func TestRunner_PrepareBuild_UsesDefaultImage(t *testing.T) {
 	}
 }
 
+func TestRunner_PrepareBuild_UsesCanonicalWorkspaceMountSource(t *testing.T) {
+	realRoot := filepath.Join(t.TempDir(), "real-root")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	realWorkspace := filepath.Join(realRoot, "build-2")
+	if err := os.MkdirAll(realWorkspace, 0o755); err != nil {
+		t.Fatalf("mkdir real workspace: %v", err)
+	}
+
+	symlinkRoot := filepath.Join(t.TempDir(), "root-link")
+	if err := os.Symlink(realRoot, symlinkRoot); err != nil {
+		t.Fatalf("creating symlink root: %v", err)
+	}
+	symlinkWorkspace := filepath.Join(symlinkRoot, "build-2")
+
+	workspace := &fakeWorkspace{preparePath: symlinkWorkspace}
+	exec := &fakeExecutor{responses: []executorResponse{{err: errors.New("No such container: coyote-build-build-2")}, {output: []byte("ok")}}}
+
+	r := New(Options{Workspace: workspace, DefaultImage: "alpine:3.20", Executor: exec})
+	err := r.PrepareBuild(context.Background(), runner.PrepareBuildRequest{BuildID: "build-2"})
+	if err != nil {
+		t.Fatalf("prepare build failed: %v", err)
+	}
+	if len(exec.calls) < 2 {
+		t.Fatalf("expected docker run to be called")
+	}
+
+	canonicalWorkspace, canonicalErr := filepath.EvalSymlinks(realWorkspace)
+	if canonicalErr != nil {
+		t.Fatalf("eval canonical workspace: %v", canonicalErr)
+	}
+	expectedMount := canonicalWorkspace + ":/workspace"
+	if got := exec.calls[1].args[7]; got != expectedMount {
+		t.Fatalf("expected canonical mount source %q, got %q", expectedMount, got)
+	}
+}
+
 func TestRunner_PrepareBuild_InspectFailureIncludesOutput(t *testing.T) {
 	workspace := &fakeWorkspace{preparePath: "/tmp/ws/build-inspect-fail"}
 	exec := &fakeExecutor{responses: []executorResponse{{output: []byte("permission denied to access Docker daemon"), err: errors.New("exit status 1")}}}
@@ -215,7 +255,7 @@ func TestResolveContainerWorkingDir(t *testing.T) {
 }
 
 func TestDockerExecArgs_UsesWorkspaceDefaultAndSafeSubdirectory(t *testing.T) {
-	defaultArgs := dockerExecArgs(runner.RunStepRequest{BuildID: "build-5", Command: "sh", Args: []string{"-c", "pwd"}})
+	defaultArgs := dockerExecArgs(runner.RunStepRequest{BuildID: "build-5", Command: "sh", Args: []string{"-c", "pwd"}}, "/workspace")
 	if len(defaultArgs) < 3 {
 		t.Fatalf("expected docker exec args, got %+v", defaultArgs)
 	}
@@ -223,14 +263,42 @@ func TestDockerExecArgs_UsesWorkspaceDefaultAndSafeSubdirectory(t *testing.T) {
 		t.Fatalf("expected default working dir /workspace, got %+v", defaultArgs[:3])
 	}
 
-	escapedArgs := dockerExecArgs(runner.RunStepRequest{BuildID: "build-5", WorkingDir: "../../etc", Command: "sh", Args: []string{"-c", "pwd"}})
+	escapedArgs := dockerExecArgs(runner.RunStepRequest{BuildID: "build-5", WorkingDir: "../../etc", Command: "sh", Args: []string{"-c", "pwd"}}, "/workspace")
 	if escapedArgs[2] != "/workspace" {
 		t.Fatalf("expected traversal to fall back to /workspace, got %q", escapedArgs[2])
 	}
 
-	subdirArgs := dockerExecArgs(runner.RunStepRequest{BuildID: "build-5", WorkingDir: "backend", Command: "sh", Args: []string{"-c", "pwd"}})
+	subdirArgs := dockerExecArgs(runner.RunStepRequest{BuildID: "build-5", WorkingDir: "backend", Command: "sh", Args: []string{"-c", "pwd"}}, "/workspace/backend")
 	if subdirArgs[2] != "/workspace/backend" {
 		t.Fatalf("expected safe subdirectory under workspace, got %q", subdirArgs[2])
+	}
+}
+
+func TestResolveContainerWorkingDirForStep_SymlinkEscapeFallsBackToWorkspaceRoot(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	outsideRoot := t.TempDir()
+
+	escapingLink := filepath.Join(workspaceRoot, "linked-out")
+	if err := os.Symlink(outsideRoot, escapingLink); err != nil {
+		t.Fatalf("failed creating symlink fixture: %v", err)
+	}
+
+	safeDir := filepath.Join(workspaceRoot, "backend")
+	if err := os.MkdirAll(safeDir, 0o755); err != nil {
+		t.Fatalf("failed creating safe directory fixture: %v", err)
+	}
+
+	r := New(Options{Workspace: &fakeWorkspace{}, DefaultImage: "alpine:3.20", Executor: &fakeExecutor{}})
+	r.setWorkspacePath("build-1", workspaceRoot)
+
+	escaped := r.resolveContainerWorkingDirForStep(runner.RunStepRequest{BuildID: "build-1", WorkingDir: "linked-out"})
+	if escaped != "/workspace" {
+		t.Fatalf("expected symlink escape to fall back to /workspace, got %q", escaped)
+	}
+
+	safe := r.resolveContainerWorkingDirForStep(runner.RunStepRequest{BuildID: "build-1", WorkingDir: "backend"})
+	if safe != "/workspace/backend" {
+		t.Fatalf("expected safe directory to remain under /workspace, got %q", safe)
 	}
 }
 
