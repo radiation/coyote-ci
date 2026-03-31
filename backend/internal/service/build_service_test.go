@@ -1910,6 +1910,47 @@ func TestBuildService_RunStep_ResolvesSourceIntoWorkspaceAndPersistsCommit(t *te
 	)
 }
 
+func TestBuildService_RunStep_ResolvesSourceWithRelativeExecutionWorkspaceRoot(t *testing.T) {
+	buildID := "build-source-relative-root"
+	claimToken := "claim-active"
+	repoURL := "https://github.com/org/repo.git"
+	ref := "main"
+
+	repo := &fakeBuildRepository{
+		build: domain.Build{
+			ID:               buildID,
+			Status:           domain.BuildStatusRunning,
+			CurrentStepIndex: 0,
+			RepoURL:          &repoURL,
+			Ref:              &ref,
+			Source:           domain.NewSourceSpec(repoURL, ref, ""),
+			CreatedAt:        time.Now().UTC(),
+		},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	r := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()}}}
+	resolver := &fakeWorkspaceSourceResolver{resolvedCommit: "abc1234deadbeefabc1234deadbeefabc1234d"}
+	logStore := logs.NewMemorySink()
+
+	svc := NewBuildService(repo, r, logStore)
+	svc.SetExecutionWorkspaceRoot(".")
+	svc.SetSourceResolver(resolver)
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	if err != nil {
+		t.Fatalf("run step failed: %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion outcome completed, got %q", report.CompletionOutcome)
+	}
+	if resolver.cloneCalls != 1 {
+		t.Fatalf("expected clone once, got %d", resolver.cloneCalls)
+	}
+	if !filepath.IsAbs(resolver.lastWorkspace) {
+		t.Fatalf("expected absolute workspace path, got %q", resolver.lastWorkspace)
+	}
+}
+
 func TestBuildService_RunStep_SourceCloneFailureEmitsCanonicalReason(t *testing.T) {
 	buildID := "build-source-clone-failure"
 	claimToken := "claim-active"
@@ -2016,6 +2057,49 @@ func TestBuildService_RunStep_SourceRefAndCommitNotFoundReasons(t *testing.T) {
 		}
 		assertMessagesContain(t, messages, "Failure reason: commit not found: deadbeef")
 	})
+}
+
+func TestBuildService_RunStep_DoesNotResolveSourceOnNonFirstStep(t *testing.T) {
+	buildID := "build-source-second-step"
+	claimToken := "claim-step-2"
+	repoURL := "https://github.com/org/repo.git"
+	ref := "main"
+	commitSHA := "abc1234deadbeefabc1234deadbeefabc1234d"
+
+	repo := &fakeBuildRepository{
+		build: domain.Build{
+			ID:               buildID,
+			Status:           domain.BuildStatusRunning,
+			CurrentStepIndex: 1,
+			RepoURL:          &repoURL,
+			Ref:              &ref,
+			CommitSHA:        &commitSHA,
+			Source:           domain.NewSourceSpec(repoURL, ref, commitSHA),
+			CreatedAt:        time.Now().UTC(),
+		},
+		steps: []domain.BuildStep{
+			{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusSuccess},
+			{StepIndex: 1, Name: "step-2", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken},
+		},
+	}
+	r := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()}}}
+	resolver := &fakeWorkspaceSourceResolver{}
+	logStore := logs.NewMemorySink()
+
+	svc := NewBuildService(repo, r, logStore)
+	svc.SetExecutionWorkspaceRoot(t.TempDir())
+	svc.SetSourceResolver(resolver)
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 1, StepName: "step-2", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	if err != nil {
+		t.Fatalf("run step failed: %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion outcome completed, got %q", report.CompletionOutcome)
+	}
+	if resolver.cloneCalls != 0 || resolver.checkoutCalls != 0 {
+		t.Fatalf("expected no source resolution on non-first step, got clone=%d checkout=%d", resolver.cloneCalls, resolver.checkoutCalls)
+	}
 }
 
 func TestBuildService_RunStep_DoesNotDuplicateBuildHeaderWhenBuildAlreadyStarted(t *testing.T) {

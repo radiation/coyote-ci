@@ -1,21 +1,12 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { getJob, runJob, updateJob } from '../api';
+import type { Job } from '../types/job';
 import { formatTime } from '../utils/time';
 
 export function JobDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-
-  const [name, setName] = useState('');
-  const [repositoryURL, setRepositoryURL] = useState('');
-  const [defaultRef, setDefaultRef] = useState('');
-  const [pipelineYAML, setPipelineYAML] = useState('');
-  const [enabled, setEnabled] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const {
     data: job,
@@ -28,17 +19,50 @@ export function JobDetailPage() {
     enabled: Boolean(id),
   });
 
-  useEffect(() => {
-    if (!job) {
-      return;
-    }
+  if (isLoading) {
+    return <p>Loading job…</p>;
+  }
 
-    setName(job.name);
-    setRepositoryURL(job.repository_url);
-    setDefaultRef(job.default_ref);
-    setPipelineYAML(job.pipeline_yaml);
-    setEnabled(job.enabled);
-  }, [job]);
+  if (error) {
+    return <p className="error-text">Failed to load job: {String(error)}</p>;
+  }
+
+  if (!job || !id) {
+    return <p className="error-text">Job not found.</p>;
+  }
+
+  return (
+    <>
+      <Link to="/jobs">← Back to jobs</Link>
+      <h2>Job: {job.name}</h2>
+      <p className="subtle-text">Last loaded: {dataUpdatedAt > 0 ? formatTime(new Date(dataUpdatedAt).toISOString()) : '—'}</p>
+
+      <div className="detail-grid">
+        <div><strong>ID</strong><span>{job.id}</span></div>
+        <div><strong>Project</strong><span>{job.project_id}</span></div>
+        <div><strong>Created</strong><span>{formatTime(job.created_at)}</span></div>
+        <div><strong>Updated</strong><span>{formatTime(job.updated_at)}</span></div>
+      </div>
+
+      <JobDetailForm
+        key={`${job.id}:${job.updated_at}`}
+        job={job}
+        jobID={id}
+      />
+    </>
+  );
+}
+
+function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [name, setName] = useState(job.name);
+  const [repositoryURL, setRepositoryURL] = useState(job.repository_url);
+  const [defaultRef, setDefaultRef] = useState(job.default_ref);
+  const [pipelineYAML, setPipelineYAML] = useState(job.pipeline_yaml);
+  const [enabled, setEnabled] = useState(job.enabled);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const saveMutation = useMutation({
     mutationFn: (targetID: string) =>
@@ -81,18 +105,6 @@ export function JobDetailPage() {
     },
   });
 
-  if (isLoading) {
-    return <p>Loading job…</p>;
-  }
-
-  if (error) {
-    return <p className="error-text">Failed to load job: {String(error)}</p>;
-  }
-
-  if (!job || !id) {
-    return <p className="error-text">Job not found.</p>;
-  }
-
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -101,23 +113,13 @@ export function JobDetailPage() {
       return;
     }
 
-    saveMutation.mutate(id);
+    saveMutation.mutate(jobID);
   };
 
   const isSubmitting = saveMutation.isPending || runNowMutation.isPending;
 
   return (
     <>
-      <Link to="/jobs">← Back to jobs</Link>
-      <h2>Job: {job.name}</h2>
-      <p className="subtle-text">Last loaded: {dataUpdatedAt > 0 ? formatTime(new Date(dataUpdatedAt).toISOString()) : '—'}</p>
-
-      <div className="detail-grid">
-        <div><strong>ID</strong><span>{job.id}</span></div>
-        <div><strong>Project</strong><span>{job.project_id}</span></div>
-        <div><strong>Created</strong><span>{formatTime(job.created_at)}</span></div>
-        <div><strong>Updated</strong><span>{formatTime(job.updated_at)}</span></div>
-      </div>
 
       <form className="job-form" onSubmit={onSubmit}>
         <label htmlFor="job-name">Name</label>
@@ -171,7 +173,7 @@ export function JobDetailPage() {
           <button
             type="button"
             className="secondary-button"
-            onClick={() => runNowMutation.mutate(id)}
+            onClick={() => runNowMutation.mutate(jobID)}
             disabled={isSubmitting}
           >
             {runNowMutation.isPending ? 'Running…' : 'Run Now'}

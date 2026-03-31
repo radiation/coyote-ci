@@ -23,6 +23,17 @@ func NewJobHandler(jobService *service.JobService) *JobHandler {
 	return &JobHandler{jobService: jobService}
 }
 
+// CreateJob godoc
+// @Summary Create job
+// @Description Creates a new job.
+// @Tags jobs
+// @Accept json
+// @Produce json
+// @Param request body api.CreateJobRequest true "Job create request"
+// @Success 201 {object} api.JobEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /jobs [post]
 func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	var req api.CreateJobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -46,6 +57,14 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	writeDataJSON(w, http.StatusCreated, toJobResponse(job))
 }
 
+// ListJobs godoc
+// @Summary List jobs
+// @Description Lists all jobs.
+// @Tags jobs
+// @Produce json
+// @Success 200 {object} api.JobListEnvelope
+// @Failure 500 {object} api.ErrorResponse
+// @Router /jobs [get]
 func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
 	jobs, err := h.jobService.ListJobs(r.Context())
 	if err != nil {
@@ -61,6 +80,17 @@ func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
 	writeDataJSON(w, http.StatusOK, api.JobListResponse{Jobs: responses})
 }
 
+// GetJob godoc
+// @Summary Get job
+// @Description Returns job details by id.
+// @Tags jobs
+// @Produce json
+// @Param jobID path string true "Job ID"
+// @Success 200 {object} api.JobEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /jobs/{jobID} [get]
 func (h *JobHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 	jobID := strings.TrimSpace(chi.URLParam(r, "jobID"))
 	if jobID == "" {
@@ -77,6 +107,19 @@ func (h *JobHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 	writeDataJSON(w, http.StatusOK, toJobResponse(job))
 }
 
+// UpdateJob godoc
+// @Summary Update job
+// @Description Updates an existing job.
+// @Tags jobs
+// @Accept json
+// @Produce json
+// @Param jobID path string true "Job ID"
+// @Param request body api.UpdateJobRequest true "Job update request"
+// @Success 200 {object} api.JobEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /jobs/{jobID} [put]
 func (h *JobHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 	jobID := strings.TrimSpace(chi.URLParam(r, "jobID"))
 	if jobID == "" {
@@ -105,6 +148,18 @@ func (h *JobHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 	writeDataJSON(w, http.StatusOK, toJobResponse(updated))
 }
 
+// RunNow godoc
+// @Summary Run job now
+// @Description Triggers an immediate build for a job.
+// @Tags jobs
+// @Produce json
+// @Param jobID path string true "Job ID"
+// @Success 201 {object} api.BuildEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /jobs/{jobID}/run [post]
 func (h *JobHandler) RunNow(w http.ResponseWriter, r *http.Request) {
 	jobID := strings.TrimSpace(chi.URLParam(r, "jobID"))
 	if jobID == "" {

@@ -33,7 +33,7 @@ type HostWorkspaceMaterializer struct {
 	mu sync.Mutex
 }
 
-func NewHostWorkspaceMaterializer(_ RepoFetcher, root string) *HostWorkspaceMaterializer {
+func NewHostWorkspaceMaterializer(root string) *HostWorkspaceMaterializer {
 	trimmedRoot := strings.TrimSpace(root)
 	if trimmedRoot == "" {
 		trimmedRoot = filepath.Join(os.TempDir(), defaultWorkspaceDirName)

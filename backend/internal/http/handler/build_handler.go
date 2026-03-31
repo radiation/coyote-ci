@@ -211,7 +211,7 @@ func (h *BuildHandler) CreateBuild(w http.ResponseWriter, r *http.Request) {
 		Source:    toCreateBuildSourceInput(req.Source),
 	})
 	if err != nil {
-		if errors.Is(err, service.ErrProjectIDRequired) || errors.Is(err, service.ErrRepoURLRequired) || errors.Is(err, service.ErrSourceTargetRequired) {
+		if isCreateBuildBadRequestError(err) {
 			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
@@ -281,7 +281,7 @@ func (h *BuildHandler) CreatePipelineBuild(w http.ResponseWriter, r *http.Reques
 		Source:       toCreateBuildSourceInput(req.Source),
 	})
 	if err != nil {
-		if errors.Is(err, service.ErrProjectIDRequired) || errors.Is(err, service.ErrPipelineYAMLRequired) || errors.Is(err, service.ErrRepoURLRequired) || errors.Is(err, service.ErrSourceTargetRequired) {
+		if isCreatePipelineBuildBadRequestError(err) {
 			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
@@ -327,7 +327,7 @@ func (h *BuildHandler) CreateRepoBuild(w http.ResponseWriter, r *http.Request) {
 		CommitSHA: req.CommitSHA,
 	})
 	if err != nil {
-		if errors.Is(err, service.ErrProjectIDRequired) || errors.Is(err, service.ErrRepoURLRequired) || errors.Is(err, service.ErrRefRequired) || errors.Is(err, service.ErrSourceTargetRequired) {
+		if isCreateRepoBuildBadRequestError(err) {
 			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
@@ -686,6 +686,21 @@ func (h *BuildHandler) writeServiceError(w http.ResponseWriter, err error) {
 	}
 
 	writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+}
+
+func isCreateBuildBadRequestError(err error) bool {
+	return errors.Is(err, service.ErrProjectIDRequired) ||
+		errors.Is(err, service.ErrRepoURLRequired) ||
+		errors.Is(err, service.ErrSourceTargetRequired)
+}
+
+func isCreatePipelineBuildBadRequestError(err error) bool {
+	return isCreateBuildBadRequestError(err) ||
+		errors.Is(err, service.ErrPipelineYAMLRequired)
+}
+
+func isCreateRepoBuildBadRequestError(err error) bool {
+	return isCreateBuildBadRequestError(err)
 }
 
 func toBuildResponse(build domain.Build) api.BuildResponse {

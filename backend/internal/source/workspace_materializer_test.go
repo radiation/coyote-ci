@@ -9,7 +9,7 @@ import (
 
 func TestHostWorkspaceMaterializer_PrepareWorkspace_CreatesWorkspace(t *testing.T) {
 	root := t.TempDir()
-	m := NewHostWorkspaceMaterializer(nil, root)
+	m := NewHostWorkspaceMaterializer(root)
 
 	workspacePath, err := m.PrepareWorkspace(context.Background(), WorkspacePrepareRequest{BuildID: "build-1"})
 	if err != nil {
@@ -27,7 +27,7 @@ func TestHostWorkspaceMaterializer_PrepareWorkspace_CreatesWorkspace(t *testing.
 
 func TestHostWorkspaceMaterializer_PrepareWorkspace_ReusesExistingDirectory(t *testing.T) {
 	root := t.TempDir()
-	m := NewHostWorkspaceMaterializer(nil, root)
+	m := NewHostWorkspaceMaterializer(root)
 
 	workspacePath, err := m.PrepareWorkspace(context.Background(), WorkspacePrepareRequest{BuildID: "build-2"})
 	if err != nil {
@@ -53,7 +53,7 @@ func TestHostWorkspaceMaterializer_PrepareWorkspace_ReusesExistingDirectory(t *t
 
 func TestHostWorkspaceMaterializer_CleanupWorkspace(t *testing.T) {
 	root := t.TempDir()
-	m := NewHostWorkspaceMaterializer(nil, root)
+	m := NewHostWorkspaceMaterializer(root)
 	workspacePath := filepath.Join(root, "build-3")
 	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
 		t.Fatalf("mkdir workspace: %v", err)
