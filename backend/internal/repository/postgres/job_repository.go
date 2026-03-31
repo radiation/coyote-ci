@@ -74,15 +74,23 @@ func (r *JobRepository) List(ctx context.Context) (jobs []domain.Job, err error)
 }
 
 func (r *JobRepository) ListPushEnabledByRepository(ctx context.Context, repositoryURL string) (jobs []domain.Job, err error) {
+	normalizedRepo := normalizeRepositoryURLForMatch(repositoryURL)
+	if normalizedRepo == "" {
+		return []domain.Job{}, nil
+	}
+
+	// Normalize the stored repository_url in SQL the same way normalizeRepositoryURLForMatch does
+	// in Go: lowercase, trim whitespace, strip trailing '/', strip trailing '.git'.
 	const query = `
 		SELECT id, project_id, name, repository_url, default_ref, push_enabled, push_branch, pipeline_yaml, enabled, created_at, updated_at
 		FROM jobs
 		WHERE enabled = TRUE
 		  AND push_enabled = TRUE
+		  AND REGEXP_REPLACE(REGEXP_REPLACE(LOWER(TRIM(repository_url)), '/$', ''), '\.git$', '') = $1
 		ORDER BY created_at DESC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query)
+	rows, err := r.db.QueryContext(ctx, query, normalizedRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -93,17 +101,10 @@ func (r *JobRepository) ListPushEnabledByRepository(ctx context.Context, reposit
 	}()
 
 	jobs = make([]domain.Job, 0)
-	normalizedRepo := normalizeRepositoryURLForMatch(repositoryURL)
-	if normalizedRepo == "" {
-		return jobs, nil
-	}
 	for rows.Next() {
 		job, scanErr := scanJob(rows)
 		if scanErr != nil {
 			return nil, scanErr
-		}
-		if normalizeRepositoryURLForMatch(job.RepositoryURL) != normalizedRepo {
-			continue
 		}
 		jobs = append(jobs, job)
 	}

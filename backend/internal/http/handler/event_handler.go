@@ -40,7 +40,7 @@ func (h *EventHandler) IngestPushEvent(w http.ResponseWriter, r *http.Request) {
 		CommitSHA:     req.CommitSHA,
 	})
 	if err != nil {
-		if isJobBadRequestError(err) {
+		if isBadRequestError(err) {
 			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}

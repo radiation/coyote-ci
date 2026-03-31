@@ -41,7 +41,7 @@ export function JobDetailPage() {
         <div><strong>ID</strong><span>{job.id}</span></div>
         <div><strong>Project</strong><span>{job.project_id}</span></div>
         <div><strong>Push Trigger</strong><span>{job.push_enabled ? 'Enabled' : 'Disabled'}</span></div>
-        <div><strong>Push Branch</strong><span>{job.push_branch || 'Any branch'}</span></div>
+        <div><strong>Push Branch</strong><span>{job.push_enabled ? (job.push_branch || 'Any branch') : '—'}</span></div>
         <div><strong>Created</strong><span>{formatTime(job.created_at)}</span></div>
         <div><strong>Updated</strong><span>{formatTime(job.updated_at)}</span></div>
       </div>

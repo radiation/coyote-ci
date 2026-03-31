@@ -50,7 +50,7 @@ func main() {
 	jobHandler := handler.NewJobHandler(jobService)
 	eventHandler := handler.NewEventHandler(jobService)
 
-	router := apphttp.NewRouter(buildHandler, jobHandler, eventHandler)
+	router := apphttp.NewRouter(buildHandler, jobHandler, eventHandler, cfg.PushEventSecret)
 	mux := nethttp.NewServeMux()
 	mux.Handle("/swagger/", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))
 	mux.Handle("/", router)

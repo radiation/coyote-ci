@@ -75,7 +75,7 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 		pushEnabled = *normalized.PushEnabled
 	}
 	var pushBranch *string
-	if normalized.PushBranch != nil {
+	if pushEnabled && normalized.PushBranch != nil {
 		branch := normalizePushRef(*normalized.PushBranch)
 		if branch != "" {
 			pushBranch = &branch
@@ -145,6 +145,11 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 		} else {
 			job.PushBranch = &branch
 		}
+	}
+	// If push has been explicitly disabled and no new push branch was provided,
+	// clear any existing branch filter to avoid leaving stale configuration.
+	if input.PushEnabled != nil && !*input.PushEnabled && input.PushBranch == nil {
+		job.PushBranch = nil
 	}
 	if input.PipelineYAML != nil {
 		job.PipelineYAML = strings.TrimSpace(*input.PipelineYAML)

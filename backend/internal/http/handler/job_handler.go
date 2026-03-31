@@ -189,7 +189,7 @@ func (h *JobHandler) writeJobServiceError(w http.ResponseWriter, err error) {
 		writeErrorJSON(w, http.StatusConflict, "job_disabled", err.Error())
 		return
 	}
-	if isJobBadRequestError(err) {
+	if isBadRequestError(err) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -205,7 +205,7 @@ func (h *JobHandler) writeJobServiceError(w http.ResponseWriter, err error) {
 	writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 }
 
-func isJobBadRequestError(err error) bool {
+func isBadRequestError(err error) bool {
 	return errors.Is(err, service.ErrJobIDRequired) ||
 		errors.Is(err, service.ErrJobNameRequired) ||
 		errors.Is(err, service.ErrJobProjectIDRequired) ||
