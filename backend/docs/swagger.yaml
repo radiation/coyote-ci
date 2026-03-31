@@ -101,9 +101,29 @@ definitions:
         type: string
       repo_url:
         type: string
+      source:
+        $ref: '#/definitions/api.BuildSourceResponse'
       started_at:
         type: string
       status:
+        type: string
+    type: object
+  api.BuildSourceInput:
+    properties:
+      commit_sha:
+        type: string
+      ref:
+        type: string
+      repository_url:
+        type: string
+    type: object
+  api.BuildSourceResponse:
+    properties:
+      commit_sha:
+        type: string
+      ref:
+        type: string
+      repository_url:
         type: string
     type: object
   api.BuildStepResponse:
@@ -153,6 +173,8 @@ definitions:
     properties:
       project_id:
         type: string
+      source:
+        $ref: '#/definitions/api.BuildSourceInput'
       steps:
         items:
           $ref: '#/definitions/api.CreateBuildStepInput'
@@ -185,9 +207,13 @@ definitions:
         type: string
       project_id:
         type: string
+      source:
+        $ref: '#/definitions/api.BuildSourceInput'
     type: object
   api.CreateRepoBuildRequest:
     properties:
+      commit_sha:
+        type: string
       project_id:
         type: string
       ref:

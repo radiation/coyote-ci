@@ -7,26 +7,7 @@ import (
 	"testing"
 )
 
-type fakeWorkspaceFetcher struct {
-	calls      int
-	lastRepo   string
-	lastRef    string
-	localPath  string
-	commitSHA  string
-	fetchError error
-}
-
-func (f *fakeWorkspaceFetcher) Fetch(_ context.Context, repoURL string, ref string) (string, string, error) {
-	f.calls++
-	f.lastRepo = repoURL
-	f.lastRef = ref
-	if f.fetchError != nil {
-		return "", "", f.fetchError
-	}
-	return f.localPath, f.commitSHA, nil
-}
-
-func TestHostWorkspaceMaterializer_PrepareWorkspace_CreatesEmptyWorkspace(t *testing.T) {
+func TestHostWorkspaceMaterializer_PrepareWorkspace_CreatesWorkspace(t *testing.T) {
 	root := t.TempDir()
 	m := NewHostWorkspaceMaterializer(nil, root)
 
@@ -44,81 +25,29 @@ func TestHostWorkspaceMaterializer_PrepareWorkspace_CreatesEmptyWorkspace(t *tes
 	}
 }
 
-func TestHostWorkspaceMaterializer_PrepareWorkspace_RepoUsesCommitSHAWhenPresent(t *testing.T) {
+func TestHostWorkspaceMaterializer_PrepareWorkspace_ReusesExistingDirectory(t *testing.T) {
 	root := t.TempDir()
-	fetched := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(fetched, ".git"), 0o755); err != nil {
-		t.Fatalf("create fake .git dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(fetched, "README.md"), []byte("ok"), 0o644); err != nil {
-		t.Fatalf("write fetched file: %v", err)
-	}
+	m := NewHostWorkspaceMaterializer(nil, root)
 
-	fetcher := &fakeWorkspaceFetcher{localPath: fetched, commitSHA: "abc123"}
-	m := NewHostWorkspaceMaterializer(fetcher, root)
-
-	workspacePath, err := m.PrepareWorkspace(context.Background(), WorkspacePrepareRequest{
-		BuildID:   "build-2",
-		RepoURL:   "https://example.com/repo.git",
-		Ref:       "main",
-		CommitSHA: "deadbeef",
-	})
+	workspacePath, err := m.PrepareWorkspace(context.Background(), WorkspacePrepareRequest{BuildID: "build-2"})
 	if err != nil {
 		t.Fatalf("prepare workspace failed: %v", err)
 	}
-	if fetcher.calls != 1 {
-		t.Fatalf("expected one fetch call, got %d", fetcher.calls)
-	}
-	if fetcher.lastRef != "deadbeef" {
-		t.Fatalf("expected commit sha to be preferred, got %q", fetcher.lastRef)
-	}
-	if _, statErr := os.Stat(filepath.Join(workspacePath, "README.md")); statErr != nil {
-		t.Fatalf("expected materialized file, got %v", statErr)
+
+	contentPath := filepath.Join(workspacePath, "README.md")
+	if writeErr := os.WriteFile(contentPath, []byte("ok"), 0o644); writeErr != nil {
+		t.Fatalf("write workspace content: %v", writeErr)
 	}
 
-	// Reuse the same workspace for subsequent steps.
-	_, err = m.PrepareWorkspace(context.Background(), WorkspacePrepareRequest{
-		BuildID: "build-2",
-		RepoURL: "https://example.com/repo.git",
-		Ref:     "main",
-	})
+	workspacePathAgain, err := m.PrepareWorkspace(context.Background(), WorkspacePrepareRequest{BuildID: "build-2", RepoURL: "https://example.com/repo.git", Ref: "main"})
 	if err != nil {
-		t.Fatalf("expected workspace reuse, got %v", err)
+		t.Fatalf("prepare workspace failed on reuse: %v", err)
 	}
-	if fetcher.calls != 1 {
-		t.Fatalf("expected workspace reuse with one fetch call, got %d", fetcher.calls)
+	if workspacePathAgain != workspacePath {
+		t.Fatalf("expected same workspace path %q, got %q", workspacePath, workspacePathAgain)
 	}
-}
-
-func TestHostWorkspaceMaterializer_PrepareWorkspace_RepoWithoutPreparedMarkerRematerializes(t *testing.T) {
-	root := t.TempDir()
-	buildID := "build-4"
-	workspacePath := filepath.Join(root, buildID)
-	if err := os.MkdirAll(filepath.Join(workspacePath, ".git"), 0o755); err != nil {
-		t.Fatalf("create workspace .git: %v", err)
-	}
-
-	fetched := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(fetched, ".git"), 0o755); err != nil {
-		t.Fatalf("create fetched .git: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(fetched, "README.md"), []byte("ok"), 0o644); err != nil {
-		t.Fatalf("write fetched file: %v", err)
-	}
-
-	fetcher := &fakeWorkspaceFetcher{localPath: fetched, commitSHA: "abc123"}
-	m := NewHostWorkspaceMaterializer(fetcher, root)
-
-	_, err := m.PrepareWorkspace(context.Background(), WorkspacePrepareRequest{
-		BuildID: buildID,
-		RepoURL: "https://example.com/repo.git",
-		Ref:     "main",
-	})
-	if err != nil {
-		t.Fatalf("prepare workspace failed: %v", err)
-	}
-	if fetcher.calls != 1 {
-		t.Fatalf("expected one fetch call when marker missing, got %d", fetcher.calls)
+	if _, statErr := os.Stat(contentPath); statErr != nil {
+		t.Fatalf("expected workspace content to remain on reuse, got %v", statErr)
 	}
 }
 

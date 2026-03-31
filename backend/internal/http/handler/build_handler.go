@@ -208,9 +208,10 @@ func (h *BuildHandler) CreateBuild(w http.ResponseWriter, r *http.Request) {
 	build, err := h.buildService.CreateBuild(r.Context(), service.CreateBuildInput{
 		ProjectID: req.ProjectID,
 		Steps:     toCreateBuildStepInputs(req.Steps),
+		Source:    toCreateBuildSourceInput(req.Source),
 	})
 	if err != nil {
-		if errors.Is(err, service.ErrProjectIDRequired) {
+		if errors.Is(err, service.ErrProjectIDRequired) || errors.Is(err, service.ErrRepoURLRequired) || errors.Is(err, service.ErrSourceTargetRequired) {
 			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
@@ -238,6 +239,24 @@ func toCreateBuildStepInputs(steps []api.CreateBuildStepInput) []service.CreateB
 	return out
 }
 
+func toCreateBuildSourceInput(sourceInput *api.BuildSourceInput) *service.CreateBuildSourceInput {
+	if sourceInput == nil {
+		return nil
+	}
+
+	result := &service.CreateBuildSourceInput{
+		RepositoryURL: sourceInput.RepositoryURL,
+	}
+	if sourceInput.Ref != nil {
+		result.Ref = *sourceInput.Ref
+	}
+	if sourceInput.CommitSHA != nil {
+		result.CommitSHA = *sourceInput.CommitSHA
+	}
+
+	return result
+}
+
 // CreatePipelineBuild godoc
 // @Summary Create build from pipeline YAML
 // @Description Parses and validates pipeline YAML, then creates a queued build with resolved steps.
@@ -259,9 +278,10 @@ func (h *BuildHandler) CreatePipelineBuild(w http.ResponseWriter, r *http.Reques
 	build, err := h.buildService.CreateBuildFromPipeline(r.Context(), service.CreatePipelineBuildInput{
 		ProjectID:    req.ProjectID,
 		PipelineYAML: req.PipelineYAML,
+		Source:       toCreateBuildSourceInput(req.Source),
 	})
 	if err != nil {
-		if errors.Is(err, service.ErrProjectIDRequired) || errors.Is(err, service.ErrPipelineYAMLRequired) {
+		if errors.Is(err, service.ErrProjectIDRequired) || errors.Is(err, service.ErrPipelineYAMLRequired) || errors.Is(err, service.ErrRepoURLRequired) || errors.Is(err, service.ErrSourceTargetRequired) {
 			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
@@ -304,9 +324,10 @@ func (h *BuildHandler) CreateRepoBuild(w http.ResponseWriter, r *http.Request) {
 		ProjectID: req.ProjectID,
 		RepoURL:   req.RepoURL,
 		Ref:       req.Ref,
+		CommitSHA: req.CommitSHA,
 	})
 	if err != nil {
-		if errors.Is(err, service.ErrProjectIDRequired) || errors.Is(err, service.ErrRepoURLRequired) || errors.Is(err, service.ErrRefRequired) {
+		if errors.Is(err, service.ErrProjectIDRequired) || errors.Is(err, service.ErrRepoURLRequired) || errors.Is(err, service.ErrRefRequired) || errors.Is(err, service.ErrSourceTargetRequired) {
 			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
@@ -684,6 +705,27 @@ func toBuildResponse(build domain.Build) api.BuildResponse {
 		RepoURL:            build.RepoURL,
 		Ref:                build.Ref,
 		CommitSHA:          build.CommitSHA,
+		Source:             toBuildSourceResponse(build),
+	}
+}
+
+func toBuildSourceResponse(build domain.Build) *api.BuildSourceResponse {
+	if build.Source != nil {
+		return &api.BuildSourceResponse{
+			RepositoryURL: strings.TrimSpace(build.Source.RepositoryURL),
+			Ref:           build.Source.Ref,
+			CommitSHA:     build.Source.CommitSHA,
+		}
+	}
+
+	if build.RepoURL == nil {
+		return nil
+	}
+
+	return &api.BuildSourceResponse{
+		RepositoryURL: strings.TrimSpace(*build.RepoURL),
+		Ref:           build.Ref,
+		CommitSHA:     build.CommitSHA,
 	}
 }
 

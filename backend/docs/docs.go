@@ -946,10 +946,41 @@ const docTemplate = `{
                 "repo_url": {
                     "type": "string"
                 },
+                "source": {
+                    "$ref": "#/definitions/api.BuildSourceResponse"
+                },
                 "started_at": {
                     "type": "string"
                 },
                 "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.BuildSourceInput": {
+            "type": "object",
+            "properties": {
+                "commit_sha": {
+                    "type": "string"
+                },
+                "ref": {
+                    "type": "string"
+                },
+                "repository_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.BuildSourceResponse": {
+            "type": "object",
+            "properties": {
+                "commit_sha": {
+                    "type": "string"
+                },
+                "ref": {
+                    "type": "string"
+                },
+                "repository_url": {
                     "type": "string"
                 }
             }
@@ -1026,6 +1057,9 @@ const docTemplate = `{
                 "project_id": {
                     "type": "string"
                 },
+                "source": {
+                    "$ref": "#/definitions/api.BuildSourceInput"
+                },
                 "steps": {
                     "type": "array",
                     "items": {
@@ -1074,12 +1108,18 @@ const docTemplate = `{
                 },
                 "project_id": {
                     "type": "string"
+                },
+                "source": {
+                    "$ref": "#/definitions/api.BuildSourceInput"
                 }
             }
         },
         "api.CreateRepoBuildRequest": {
             "type": "object",
             "properties": {
+                "commit_sha": {
+                    "type": "string"
+                },
                 "project_id": {
                     "type": "string"
                 },

@@ -40,9 +40,12 @@ var ErrCustomTemplateStepCommandRequired = errors.New("custom template step comm
 var ErrPipelineYAMLRequired = errors.New("pipeline YAML is required")
 var ErrRepoURLRequired = errors.New("repo_url is required")
 var ErrRefRequired = errors.New("ref is required")
+var ErrSourceTargetRequired = errors.New("ref or commit_sha is required")
 var ErrRepoFetcherNotConfigured = errors.New("repo fetcher not configured")
 var ErrPipelineFileNotFound = errors.New(".coyote/pipeline.yml not found in repository")
 var ErrArtifactNotFound = errors.New("artifact not found")
+var ErrSourceResolverNotConfigured = errors.New("source resolver not configured")
+var ErrExecutionWorkspaceRootNotConfigured = errors.New("execution workspace root not configured")
 
 const (
 	BuildTemplateDefault = "default"
@@ -54,10 +57,12 @@ const (
 
 // BuildService coordinates build lifecycle state transitions and delegates step execution to a runner.
 type BuildService struct {
-	buildRepo   repository.BuildRepository
-	runner      runner.Runner
-	logSink     logs.LogSink
-	repoFetcher source.RepoFetcher
+	buildRepo              repository.BuildRepository
+	runner                 runner.Runner
+	logSink                logs.LogSink
+	repoFetcher            source.RepoFetcher
+	sourceResolver         source.WorkspaceSourceResolver
+	executionWorkspaceRoot string
 
 	artifactRepo          repository.ArtifactRepository
 	artifactStore         artifact.Store
@@ -73,15 +78,24 @@ func NewBuildService(buildRepo repository.BuildRepository, stepRunner runner.Run
 	}
 
 	return &BuildService{
-		buildRepo: buildRepo,
-		runner:    stepRunner,
-		logSink:   logSink,
+		buildRepo:      buildRepo,
+		runner:         stepRunner,
+		logSink:        logSink,
+		sourceResolver: source.NewGitWorkspaceSourceResolver(),
 	}
 }
 
 // SetRepoFetcher attaches a RepoFetcher for repo-backed build creation.
 func (s *BuildService) SetRepoFetcher(fetcher source.RepoFetcher) {
 	s.repoFetcher = fetcher
+}
+
+func (s *BuildService) SetSourceResolver(resolver source.WorkspaceSourceResolver) {
+	s.sourceResolver = resolver
+}
+
+func (s *BuildService) SetExecutionWorkspaceRoot(root string) {
+	s.executionWorkspaceRoot = strings.TrimSpace(root)
 }
 
 // SetDefaultExecutionImage sets the image used when a build-scoped runner requires one.
@@ -94,6 +108,9 @@ func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository
 	s.artifactRepo = repo
 	s.artifactStore = store
 	s.artifactWorkspaceRoot = strings.TrimSpace(workspaceRoot)
+	if s.executionWorkspaceRoot == "" {
+		s.executionWorkspaceRoot = s.artifactWorkspaceRoot
+	}
 	if store != nil {
 		s.artifactCollector = artifact.NewCollector(store)
 	} else {
@@ -104,6 +121,13 @@ func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository
 type CreateBuildInput struct {
 	ProjectID string
 	Steps     []CreateBuildStepInput
+	Source    *CreateBuildSourceInput
+}
+
+type CreateBuildSourceInput struct {
+	RepositoryURL string
+	Ref           string
+	CommitSHA     string
 }
 
 type CreateBuildStepInput struct {
@@ -143,12 +167,21 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 		return domain.Build{}, ErrProjectIDRequired
 	}
 
+	sourceSpec, err := toDomainSourceSpec(input.Source)
+	if err != nil {
+		return domain.Build{}, err
+	}
+
 	build := domain.Build{
 		ID:               uuid.NewString(),
 		ProjectID:        input.ProjectID,
 		Status:           domain.BuildStatusPending,
 		CreatedAt:        time.Now().UTC(),
 		CurrentStepIndex: 0,
+		Source:           sourceSpec,
+		RepoURL:          optionalStringPtr(sourceRepositoryURL(sourceSpec)),
+		Ref:              sourceRef(sourceSpec),
+		CommitSHA:        sourceCommitSHA(sourceSpec),
 	}
 
 	if len(input.Steps) > 0 {
@@ -185,6 +218,7 @@ type CreatePipelineBuildInput struct {
 	ProjectID    string
 	PipelineYAML string
 	SourcePath   string // e.g. ".coyote/pipeline.yml"
+	Source       *CreateBuildSourceInput
 }
 
 // CreateBuildFromPipeline parses, validates, and resolves pipeline YAML, then creates
@@ -196,6 +230,11 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 	yamlText := strings.TrimSpace(input.PipelineYAML)
 	if yamlText == "" {
 		return domain.Build{}, ErrPipelineYAMLRequired
+	}
+
+	sourceSpec, err := toDomainSourceSpec(input.Source)
+	if err != nil {
+		return domain.Build{}, err
 	}
 
 	resolved, err := pipeline.LoadAndResolve([]byte(yamlText))
@@ -225,6 +264,10 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		PipelineConfigYAML: &yamlText,
 		PipelineName:       pipelineNamePtr,
 		PipelineSource:     sourcePtr,
+		Source:             sourceSpec,
+		RepoURL:            optionalStringPtr(sourceRepositoryURL(sourceSpec)),
+		Ref:                sourceRef(sourceSpec),
+		CommitSHA:          sourceCommitSHA(sourceSpec),
 	}
 
 	return s.buildRepo.CreateQueuedBuild(ctx, build, steps)
@@ -263,6 +306,7 @@ type CreateRepoBuildInput struct {
 	ProjectID string
 	RepoURL   string
 	Ref       string
+	CommitSHA string
 }
 
 const pipelineFilePath = ".coyote/pipeline.yml"
@@ -276,14 +320,19 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 	if strings.TrimSpace(input.RepoURL) == "" {
 		return domain.Build{}, ErrRepoURLRequired
 	}
-	if strings.TrimSpace(input.Ref) == "" {
-		return domain.Build{}, ErrRefRequired
+	if strings.TrimSpace(input.Ref) == "" && strings.TrimSpace(input.CommitSHA) == "" {
+		return domain.Build{}, ErrSourceTargetRequired
 	}
 	if s.repoFetcher == nil {
 		return domain.Build{}, ErrRepoFetcherNotConfigured
 	}
 
-	localPath, commitSHA, err := s.repoFetcher.Fetch(ctx, input.RepoURL, input.Ref)
+	fetchTarget := strings.TrimSpace(input.CommitSHA)
+	if fetchTarget == "" {
+		fetchTarget = strings.TrimSpace(input.Ref)
+	}
+
+	localPath, commitSHA, err := s.repoFetcher.Fetch(ctx, input.RepoURL, fetchTarget)
 	if err != nil {
 		return domain.Build{}, fmt.Errorf("fetching repo: %w", err)
 	}
@@ -319,10 +368,17 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 
 	repoURL := strings.TrimSpace(input.RepoURL)
 	ref := strings.TrimSpace(input.Ref)
+	requestedCommitSHA := strings.TrimSpace(input.CommitSHA)
 	var commitSHAPtr *string
 	if commitSHA != "" {
 		commitSHAPtr = &commitSHA
 	}
+
+	sourceCommitValue := requestedCommitSHA
+	if commitSHA != "" {
+		sourceCommitValue = commitSHA
+	}
+	domainSource := domain.NewSourceSpec(repoURL, ref, sourceCommitValue)
 
 	build := domain.Build{
 		ID:                 buildID,
@@ -333,8 +389,9 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		PipelineConfigYAML: &yamlText,
 		PipelineName:       pipelineNamePtr,
 		PipelineSource:     &pipelineSource,
+		Source:             domainSource,
 		RepoURL:            &repoURL,
-		Ref:                &ref,
+		Ref:                optionalStringPtr(ref),
 		CommitSHA:          commitSHAPtr,
 	}
 
@@ -515,6 +572,7 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		return runner.RunStepResult{}, StepCompletionReport{}, fmt.Errorf("fetching build for step execution: %w", err)
 	}
 	executionImage := s.resolveExecutionImage(build)
+	buildSource := sourceSpecFromBuild(build)
 
 	steps, err := s.buildRepo.GetStepsByBuildID(ctx, request.BuildID)
 	if err != nil {
@@ -554,12 +612,11 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 
 	if buildScopedRunner, ok := s.runner.(runner.BuildScopedRunner); ok {
 		emitVisibilityLine("Preparing workspace")
-		emitVisibilityLine("Starting build container")
 		prepareErr := buildScopedRunner.PrepareBuild(ctx, runner.PrepareBuildRequest{
 			BuildID:    request.BuildID,
-			RepoURL:    readOptionalString(build.RepoURL),
-			Ref:        readOptionalString(build.Ref),
-			CommitSHA:  readOptionalString(build.CommitSHA),
+			RepoURL:    buildSource.RepositoryURL,
+			Ref:        buildSource.Ref,
+			CommitSHA:  buildSource.CommitSHA,
 			Image:      executionImage,
 			WorkerID:   request.WorkerID,
 			ClaimToken: request.ClaimToken,
@@ -592,7 +649,51 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 
 			return result, completionReport, prepareErr
 		}
-	} else if readOptionalString(build.RepoURL) != "" {
+
+		if buildSource.HasSource {
+			emitVisibilityLine("Resolving source")
+			emitVisibilityLine("Cloning repository")
+			if buildSource.CommitSHA != "" {
+				emitVisibilityLine("Checking out commit: " + buildSource.CommitSHA)
+			} else {
+				emitVisibilityLine("Checking out ref: " + buildSource.Ref)
+			}
+
+			resolvedCommit, sourceErr := s.resolveBuildSourceIntoWorkspace(ctx, request.BuildID, buildSource)
+			if sourceErr != nil {
+				reason := classifySourceFailureReason(sourceErr, buildSource)
+				emitVisibilityLine("Source checkout failed")
+				emitVisibilityLine(formatFailureReasonLine(reason))
+
+				now := time.Now().UTC()
+				result := runner.RunStepResult{
+					Status:     runner.RunStepStatusFailed,
+					ExitCode:   -1,
+					Stderr:     reason,
+					StartedAt:  now,
+					FinishedAt: now,
+				}
+
+				completionReport, completionErr := s.handleStepResult(ctx, request, result, false)
+				if completionErr != nil {
+					return result, completionReport, errors.Join(sourceErr, completionErr)
+				}
+
+				if sideEffectErr := s.runPostCompletionSideEffects(ctx, request, nil); sideEffectErr != nil {
+					completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, sideEffectErr)
+				}
+				if visibilityLogErr != nil {
+					completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, visibilityLogErr)
+				}
+
+				return result, completionReport, sourceErr
+			}
+
+			emitVisibilityLine("Resolved commit: " + resolvedCommit)
+		}
+
+		emitVisibilityLine("Starting build container")
+	} else if buildSource.HasSource {
 		// Non-build-scoped runners cannot prepare a workspace for repo-backed builds.
 		return runner.RunStepResult{}, StepCompletionReport{}, ErrRunnerWorkspaceNotSupported
 	}
@@ -986,6 +1087,161 @@ func artifactPatternsFromBuild(build domain.Build) ([]string, error) {
 	}
 
 	return pipelineFile.Artifacts.Paths, nil
+}
+
+type resolvedBuildSourceSpec struct {
+	RepositoryURL string
+	Ref           string
+	CommitSHA     string
+	HasSource     bool
+}
+
+func sourceSpecFromBuild(build domain.Build) resolvedBuildSourceSpec {
+	if build.Source != nil {
+		result := resolvedBuildSourceSpec{
+			RepositoryURL: strings.TrimSpace(build.Source.RepositoryURL),
+			Ref:           readOptionalString(build.Source.Ref),
+			CommitSHA:     readOptionalString(build.Source.CommitSHA),
+		}
+		result.HasSource = result.RepositoryURL != ""
+		return result
+	}
+
+	result := resolvedBuildSourceSpec{
+		RepositoryURL: readOptionalString(build.RepoURL),
+		Ref:           readOptionalString(build.Ref),
+		CommitSHA:     readOptionalString(build.CommitSHA),
+	}
+	result.HasSource = result.RepositoryURL != ""
+	return result
+}
+
+func toDomainSourceSpec(input *CreateBuildSourceInput) (*domain.SourceSpec, error) {
+	if input == nil {
+		return nil, nil
+	}
+
+	repoURL := strings.TrimSpace(input.RepositoryURL)
+	if repoURL == "" {
+		return nil, ErrRepoURLRequired
+	}
+
+	ref := strings.TrimSpace(input.Ref)
+	commitSHA := strings.TrimSpace(input.CommitSHA)
+	if ref == "" && commitSHA == "" {
+		return nil, ErrSourceTargetRequired
+	}
+
+	return domain.NewSourceSpec(repoURL, ref, commitSHA), nil
+}
+
+func sourceRepositoryURL(spec *domain.SourceSpec) string {
+	if spec == nil {
+		return ""
+	}
+	return strings.TrimSpace(spec.RepositoryURL)
+}
+
+func sourceRef(spec *domain.SourceSpec) *string {
+	if spec == nil || spec.Ref == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*spec.Ref)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func sourceCommitSHA(spec *domain.SourceSpec) *string {
+	if spec == nil || spec.CommitSHA == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*spec.CommitSHA)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func optionalStringPtr(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func (s *BuildService) resolveBuildSourceIntoWorkspace(ctx context.Context, buildID string, sourceSpec resolvedBuildSourceSpec) (string, error) {
+	if s.sourceResolver == nil {
+		return "", ErrSourceResolverNotConfigured
+	}
+
+	workspaceRoot := strings.TrimSpace(s.executionWorkspaceRoot)
+	if workspaceRoot == "" {
+		workspaceRoot = strings.TrimSpace(s.artifactWorkspaceRoot)
+	}
+	if workspaceRoot == "" {
+		return "", ErrExecutionWorkspaceRootNotConfigured
+	}
+
+	workspacePath := filepath.Join(workspaceRoot, strings.TrimSpace(buildID))
+	if err := s.sourceResolver.CloneIntoWorkspace(ctx, workspacePath, sourceSpec.RepositoryURL); err != nil {
+		return "", err
+	}
+
+	resolvedCommit, err := s.sourceResolver.CheckoutWorkspaceSource(ctx, workspacePath, source.WorkspaceSourceSpec{
+		RepositoryURL: sourceSpec.RepositoryURL,
+		Ref:           sourceSpec.Ref,
+		CommitSHA:     sourceSpec.CommitSHA,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	trimmedResolvedCommit := strings.TrimSpace(resolvedCommit)
+	if trimmedResolvedCommit == "" {
+		return "", source.ErrResolveCommitFailed
+	}
+
+	build, err := s.buildRepo.UpdateSourceCommitSHA(ctx, strings.TrimSpace(buildID), trimmedResolvedCommit)
+	if err != nil {
+		return "", fmt.Errorf("persisting resolved commit SHA: %w", err)
+	}
+	_ = build
+
+	return trimmedResolvedCommit, nil
+}
+
+func classifySourceFailureReason(err error, sourceSpec resolvedBuildSourceSpec) string {
+	if errors.Is(err, source.ErrRepositoryURLRequired) || errors.Is(err, ErrRepoURLRequired) {
+		return "repository URL is required"
+	}
+	if errors.Is(err, source.ErrCloneFailed) {
+		return "repository clone failed"
+	}
+	if errors.Is(err, source.ErrRefNotFound) {
+		return "ref not found: " + sourceSpec.Ref
+	}
+	if errors.Is(err, source.ErrCommitNotFound) {
+		return "commit not found: " + sourceSpec.CommitSHA
+	}
+	if errors.Is(err, source.ErrCheckoutTargetRequired) || errors.Is(err, ErrSourceTargetRequired) {
+		return "ref or commit_sha is required"
+	}
+	if errors.Is(err, source.ErrCheckoutFailed) {
+		return "repository checkout failed"
+	}
+	if errors.Is(err, source.ErrResolveCommitFailed) {
+		return "unable to resolve final commit SHA"
+	}
+	if errors.Is(err, ErrSourceResolverNotConfigured) {
+		return "source resolver not configured"
+	}
+	if errors.Is(err, ErrExecutionWorkspaceRootNotConfigured) {
+		return "execution workspace root not configured"
+	}
+	return "source checkout failed"
 }
 
 func readOptionalString(value *string) string {

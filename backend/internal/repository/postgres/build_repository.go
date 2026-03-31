@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -209,6 +210,25 @@ func (r *BuildRepository) UpdateStatus(ctx context.Context, id string, status do
 	`
 
 	build, err := scanBuild(r.db.QueryRowContext(ctx, query, id, string(status), errorMessage))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.Build{}, repository.ErrBuildNotFound
+		}
+		return domain.Build{}, err
+	}
+
+	return build, nil
+}
+
+func (r *BuildRepository) UpdateSourceCommitSHA(ctx context.Context, id string, commitSHA string) (domain.Build, error) {
+	query := `
+		UPDATE builds
+		SET commit_sha = $2
+		WHERE id = $1
+		RETURNING ` + buildColumns + `
+	`
+
+	build, err := scanBuild(r.db.QueryRowContext(ctx, query, id, strings.TrimSpace(commitSHA)))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.Build{}, repository.ErrBuildNotFound

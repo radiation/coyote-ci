@@ -56,6 +56,7 @@ func main() {
 	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildService(buildRepo, stepRunner, logSink)
 	buildService.SetDefaultExecutionImage(cfg.ExecutionDefaultImage)
+	buildService.SetExecutionWorkspaceRoot(cfg.ExecutionWorkspaceRoot)
 	buildService.SetArtifactPersistence(artifactRepo, artifactStore, cfg.ExecutionWorkspaceRoot)
 	leaseDuration := time.Duration(cfg.StepLeaseSeconds) * time.Second
 	workerService := service.NewWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)

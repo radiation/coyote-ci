@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,6 +143,28 @@ func (r *fakeRepo) QueueBuild(ctx context.Context, id string, steps []domain.Bui
 	return r.UpdateStatus(ctx, id, domain.BuildStatusQueued, nil)
 }
 
+func (r *fakeRepo) UpdateSourceCommitSHA(_ context.Context, id string, commitSHA string) (domain.Build, error) {
+	b, err := r.GetByID(context.Background(), id)
+	if err != nil {
+		return domain.Build{}, err
+	}
+
+	trimmed := strings.TrimSpace(commitSHA)
+	if trimmed == "" {
+		b.CommitSHA = nil
+	} else {
+		b.CommitSHA = &trimmed
+	}
+	b.Source = domain.NewSourceSpec(readOptionalString(b.RepoURL), readOptionalString(b.Ref), readOptionalString(b.CommitSHA))
+
+	if r.builds == nil {
+		r.build = b
+	} else {
+		r.builds[id] = b
+	}
+	return b, nil
+}
+
 func (r *fakeRepo) GetStepsByBuildID(_ context.Context, buildID string) ([]domain.BuildStep, error) {
 	if _, err := r.GetByID(context.Background(), buildID); err != nil {
 		return nil, err
@@ -151,6 +174,13 @@ func (r *fakeRepo) GetStepsByBuildID(_ context.Context, buildID string) ([]domai
 	out := make([]domain.BuildStep, len(steps))
 	copy(out, steps)
 	return out, nil
+}
+
+func readOptionalString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func (r *fakeRepo) ClaimStepIfPending(_ context.Context, buildID string, stepIndex int, _ *string, startedAt time.Time) (domain.BuildStep, bool, error) {
@@ -454,6 +484,7 @@ func TestBuildHandler_CreateBuild(t *testing.T) {
 		{name: "repository error", body: `{"project_id":"project-1"}`, repo: &fakeRepo{createErr: errors.New("create failed")}, statusCode: http.StatusInternalServerError, errMsg: "internal server error"},
 		{name: "success", body: `{"project_id":"project-1"}`, repo: &fakeRepo{}, statusCode: http.StatusCreated},
 		{name: "success with steps auto queues", body: `{"project_id":"project-1","steps":[{"name":"checkout"}]}`, repo: &fakeRepo{}, statusCode: http.StatusCreated},
+		{name: "success with source", body: `{"project_id":"project-1","source":{"repository_url":"https://github.com/org/repo.git","ref":"main"}}`, repo: &fakeRepo{}, statusCode: http.StatusCreated},
 	}
 
 	for _, tc := range tests {
@@ -488,6 +519,18 @@ func TestBuildHandler_CreateBuild(t *testing.T) {
 			}
 			if data["status"] != expectedStatus {
 				t.Fatalf("expected status %s, got %v", expectedStatus, data["status"])
+			}
+			if tc.name == "success with source" {
+				sourceData, ok := data["source"].(map[string]any)
+				if !ok {
+					t.Fatalf("expected source object, got %T", data["source"])
+				}
+				if sourceData["repository_url"] != "https://github.com/org/repo.git" {
+					t.Fatalf("expected source repository_url, got %v", sourceData["repository_url"])
+				}
+				if sourceData["ref"] != "main" {
+					t.Fatalf("expected source ref main, got %v", sourceData["ref"])
+				}
 			}
 			createdAt, ok := data["created_at"].(string)
 			if !ok {
@@ -1084,6 +1127,30 @@ func TestCreateRepoBuild(t *testing.T) {
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("commit sha without ref returns 201", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/.coyote", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tmpDir+"/.coyote/pipeline.yml", []byte("version: 1\nsteps:\n  - name: test\n    run: echo ok\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeRepo{}
+		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id":"proj-1","repo_url":"https://github.com/org/repo.git","commit_sha":"abc123"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
 		}
 	})
 

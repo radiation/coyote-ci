@@ -16,6 +16,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	steprunner "github.com/radiation/coyote-ci/backend/internal/runner"
 	inprocessrunner "github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
+	"github.com/radiation/coyote-ci/backend/internal/source"
 )
 
 type fakeBuildRepository struct {
@@ -27,6 +28,7 @@ type fakeBuildRepository struct {
 	updateCalls   int
 	updatedID     string
 	updatedStatus domain.BuildStatus
+	updatedCommit string
 }
 
 func (r *fakeBuildRepository) Create(_ context.Context, build domain.Build) (domain.Build, error) {
@@ -92,6 +94,26 @@ func (r *fakeBuildRepository) QueueBuild(_ context.Context, id string, steps []d
 	r.build.Status = domain.BuildStatusQueued
 	r.steps = append([]domain.BuildStep(nil), steps...)
 
+	return r.build, nil
+}
+
+func (r *fakeBuildRepository) UpdateSourceCommitSHA(_ context.Context, id string, commitSHA string) (domain.Build, error) {
+	if r.updateErr != nil {
+		return domain.Build{}, r.updateErr
+	}
+
+	if r.build.ID != "" && r.build.ID != id {
+		return domain.Build{}, repository.ErrBuildNotFound
+	}
+
+	trimmed := strings.TrimSpace(commitSHA)
+	r.updatedCommit = trimmed
+	if trimmed == "" {
+		r.build.CommitSHA = nil
+	} else {
+		r.build.CommitSHA = &trimmed
+	}
+	r.build.Source = domain.NewSourceSpec(readOptionalString(r.build.RepoURL), readOptionalString(r.build.Ref), readOptionalString(r.build.CommitSHA))
 	return r.build, nil
 }
 
@@ -388,6 +410,40 @@ func (r *fakeBuildScopedRunner) RunStepStream(ctx context.Context, request stepr
 	return r.RunStep(ctx, request)
 }
 
+type fakeWorkspaceSourceResolver struct {
+	cloneErr       error
+	checkoutErr    error
+	resolvedCommit string
+	cloneCalls     int
+	checkoutCalls  int
+	lastWorkspace  string
+	lastRepoURL    string
+	lastSpec       source.WorkspaceSourceSpec
+}
+
+func (r *fakeWorkspaceSourceResolver) CloneIntoWorkspace(_ context.Context, workspacePath string, repositoryURL string) error {
+	r.cloneCalls++
+	r.lastWorkspace = workspacePath
+	r.lastRepoURL = repositoryURL
+	if r.cloneErr != nil {
+		return r.cloneErr
+	}
+	return nil
+}
+
+func (r *fakeWorkspaceSourceResolver) CheckoutWorkspaceSource(_ context.Context, workspacePath string, spec source.WorkspaceSourceSpec) (string, error) {
+	r.checkoutCalls++
+	r.lastWorkspace = workspacePath
+	r.lastSpec = spec
+	if r.checkoutErr != nil {
+		return "", r.checkoutErr
+	}
+	if strings.TrimSpace(r.resolvedCommit) == "" {
+		return "abc123def456", nil
+	}
+	return strings.TrimSpace(r.resolvedCommit), nil
+}
+
 type fakeLogSink struct {
 	err    error
 	calls  int
@@ -502,6 +558,26 @@ func TestBuildService_CreateBuild(t *testing.T) {
 			input: CreateBuildInput{ProjectID: "project-1"},
 			repo:  &fakeBuildRepository{},
 		},
+		{
+			name:      "source missing repository url",
+			input:     CreateBuildInput{ProjectID: "project-1", Source: &CreateBuildSourceInput{Ref: "main"}},
+			repo:      &fakeBuildRepository{},
+			expectErr: ErrRepoURLRequired,
+		},
+		{
+			name:      "source missing ref and commit",
+			input:     CreateBuildInput{ProjectID: "project-1", Source: &CreateBuildSourceInput{RepositoryURL: "https://github.com/org/repo.git"}},
+			repo:      &fakeBuildRepository{},
+			expectErr: ErrSourceTargetRequired,
+		},
+		{
+			name: "source accepted",
+			input: CreateBuildInput{ProjectID: "project-1", Source: &CreateBuildSourceInput{
+				RepositoryURL: "https://github.com/org/repo.git",
+				Ref:           "main",
+			}},
+			repo: &fakeBuildRepository{},
+		},
 	}
 
 	for _, tc := range tests {
@@ -548,6 +624,15 @@ func TestBuildService_CreateBuild(t *testing.T) {
 
 			if build.CreatedAt.Location() != time.UTC {
 				t.Fatal("expected created_at to be UTC")
+			}
+
+			if tc.input.Source != nil {
+				if build.Source == nil {
+					t.Fatal("expected build source to be persisted")
+				}
+				if build.Source.RepositoryURL != tc.input.Source.RepositoryURL {
+					t.Fatalf("expected source repository %q, got %q", tc.input.Source.RepositoryURL, build.Source.RepositoryURL)
+				}
 			}
 		})
 	}
@@ -1022,6 +1107,8 @@ func TestBuildService_RunStep_PreparesBuildScopedEnvironmentWithRepoMetadataAndD
 
 	svc := NewBuildService(buildRepo, runner, &fakeLogSink{})
 	svc.SetDefaultExecutionImage("golang:1.23-alpine")
+	svc.SetExecutionWorkspaceRoot(t.TempDir())
+	svc.SetSourceResolver(&fakeWorkspaceSourceResolver{})
 
 	request := steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "test", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "backend"}
 	if _, _, err := svc.RunStep(context.Background(), request); err != nil {
@@ -1071,6 +1158,8 @@ steps:
 
 	svc := NewBuildService(buildRepo, runner, &fakeLogSink{})
 	svc.SetDefaultExecutionImage("alpine:3.20")
+	svc.SetExecutionWorkspaceRoot(t.TempDir())
+	svc.SetSourceResolver(&fakeWorkspaceSourceResolver{})
 
 	request := steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "test", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "backend"}
 	if _, _, err := svc.RunStep(context.Background(), request); err != nil {
@@ -1757,6 +1846,176 @@ func TestBuildService_RunStep_EmitsHighSignalPhaseMarkers(t *testing.T) {
 		"Collecting artifacts",
 		"Finalizing build",
 	)
+}
+
+func TestBuildService_RunStep_ResolvesSourceIntoWorkspaceAndPersistsCommit(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	buildID := "build-source-success"
+	claimToken := "claim-active"
+	repoURL := "https://github.com/org/repo.git"
+	ref := "main"
+
+	repo := &fakeBuildRepository{
+		build: domain.Build{
+			ID:               buildID,
+			Status:           domain.BuildStatusRunning,
+			CurrentStepIndex: 0,
+			RepoURL:          &repoURL,
+			Ref:              &ref,
+			Source:           domain.NewSourceSpec(repoURL, ref, ""),
+			CreatedAt:        time.Now().UTC(),
+		},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	r := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()}}}
+	resolver := &fakeWorkspaceSourceResolver{resolvedCommit: "abc1234deadbeefabc1234deadbeefabc1234d"}
+	logStore := logs.NewMemorySink()
+
+	svc := NewBuildService(repo, r, logStore)
+	svc.SetExecutionWorkspaceRoot(workspaceRoot)
+	svc.SetSourceResolver(resolver)
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	if err != nil {
+		t.Fatalf("run step failed: %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion outcome completed, got %q", report.CompletionOutcome)
+	}
+	if resolver.cloneCalls != 1 || resolver.checkoutCalls != 1 {
+		t.Fatalf("expected clone+checkout once, got clone=%d checkout=%d", resolver.cloneCalls, resolver.checkoutCalls)
+	}
+	if resolver.lastSpec.Ref != "main" {
+		t.Fatalf("expected ref main, got %q", resolver.lastSpec.Ref)
+	}
+	if repo.updatedCommit != resolver.resolvedCommit {
+		t.Fatalf("expected persisted commit %q, got %q", resolver.resolvedCommit, repo.updatedCommit)
+	}
+
+	buildLogs, err := svc.GetBuildLogs(context.Background(), buildID)
+	if err != nil {
+		t.Fatalf("get build logs failed: %v", err)
+	}
+	messages := make([]string, 0, len(buildLogs))
+	for _, line := range buildLogs {
+		messages = append(messages, line.Message)
+	}
+	assertMessagesContain(t, messages,
+		"Preparing workspace",
+		"Resolving source",
+		"Cloning repository",
+		"Checking out ref: main",
+		"Resolved commit: "+resolver.resolvedCommit,
+		"Starting build container",
+	)
+}
+
+func TestBuildService_RunStep_SourceCloneFailureEmitsCanonicalReason(t *testing.T) {
+	buildID := "build-source-clone-failure"
+	claimToken := "claim-active"
+	repoURL := "https://github.com/org/repo.git"
+	ref := "main"
+
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: buildID, Status: domain.BuildStatusRunning, CurrentStepIndex: 0, RepoURL: &repoURL, Ref: &ref, Source: domain.NewSourceSpec(repoURL, ref, ""), CreatedAt: time.Now().UTC()},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	r := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n"}}}
+	resolver := &fakeWorkspaceSourceResolver{cloneErr: source.ErrCloneFailed}
+	logStore := logs.NewMemorySink()
+
+	svc := NewBuildService(repo, r, logStore)
+	svc.SetExecutionWorkspaceRoot(t.TempDir())
+	svc.SetSourceResolver(resolver)
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	if err == nil {
+		t.Fatal("expected source clone failure")
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion outcome completed, got %q", report.CompletionOutcome)
+	}
+
+	buildLogs, getErr := svc.GetBuildLogs(context.Background(), buildID)
+	if getErr != nil {
+		t.Fatalf("get build logs failed: %v", getErr)
+	}
+	messages := make([]string, 0, len(buildLogs))
+	for _, line := range buildLogs {
+		messages = append(messages, line.Message)
+	}
+	assertMessagesContain(t, messages,
+		"Source checkout failed",
+		"Failure reason: repository clone failed",
+	)
+}
+
+func TestBuildService_RunStep_SourceRefAndCommitNotFoundReasons(t *testing.T) {
+	t.Run("ref not found", func(t *testing.T) {
+		buildID := "build-source-ref-missing"
+		claimToken := "claim-active"
+		repoURL := "https://github.com/org/repo.git"
+		ref := "missing-branch"
+
+		repo := &fakeBuildRepository{
+			build: domain.Build{ID: buildID, Status: domain.BuildStatusRunning, CurrentStepIndex: 0, RepoURL: &repoURL, Ref: &ref, Source: domain.NewSourceSpec(repoURL, ref, ""), CreatedAt: time.Now().UTC()},
+			steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+		}
+		r := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0}}}
+		resolver := &fakeWorkspaceSourceResolver{checkoutErr: source.ErrRefNotFound}
+		logStore := logs.NewMemorySink()
+
+		svc := NewBuildService(repo, r, logStore)
+		svc.SetExecutionWorkspaceRoot(t.TempDir())
+		svc.SetSourceResolver(resolver)
+
+		_, _, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+		if err == nil {
+			t.Fatal("expected source checkout error")
+		}
+
+		buildLogs, _ := svc.GetBuildLogs(context.Background(), buildID)
+		messages := make([]string, 0, len(buildLogs))
+		for _, line := range buildLogs {
+			messages = append(messages, line.Message)
+		}
+		assertMessagesContain(t, messages, "Failure reason: ref not found: missing-branch")
+	})
+
+	t.Run("commit not found takes precedence", func(t *testing.T) {
+		buildID := "build-source-commit-missing"
+		claimToken := "claim-active"
+		repoURL := "https://github.com/org/repo.git"
+		ref := "main"
+		commitSHA := "deadbeef"
+
+		repo := &fakeBuildRepository{
+			build: domain.Build{ID: buildID, Status: domain.BuildStatusRunning, CurrentStepIndex: 0, RepoURL: &repoURL, Ref: &ref, CommitSHA: &commitSHA, Source: domain.NewSourceSpec(repoURL, ref, commitSHA), CreatedAt: time.Now().UTC()},
+			steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+		}
+		r := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0}}}
+		resolver := &fakeWorkspaceSourceResolver{checkoutErr: source.ErrCommitNotFound}
+		logStore := logs.NewMemorySink()
+
+		svc := NewBuildService(repo, r, logStore)
+		svc.SetExecutionWorkspaceRoot(t.TempDir())
+		svc.SetSourceResolver(resolver)
+
+		_, _, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+		if err == nil {
+			t.Fatal("expected source checkout error")
+		}
+		if resolver.lastSpec.CommitSHA != commitSHA {
+			t.Fatalf("expected checkout commit %q, got %q", commitSHA, resolver.lastSpec.CommitSHA)
+		}
+
+		buildLogs, _ := svc.GetBuildLogs(context.Background(), buildID)
+		messages := make([]string, 0, len(buildLogs))
+		for _, line := range buildLogs {
+			messages = append(messages, line.Message)
+		}
+		assertMessagesContain(t, messages, "Failure reason: commit not found: deadbeef")
+	})
 }
 
 func TestBuildService_RunStep_DoesNotDuplicateBuildHeaderWhenBuildAlreadyStarted(t *testing.T) {
@@ -2464,10 +2723,12 @@ type fakeRepoFetcher struct {
 	commitSHA string
 	err       error
 	calls     int
+	lastRef   string
 }
 
-func (f *fakeRepoFetcher) Fetch(_ context.Context, _ string, _ string) (string, string, error) {
+func (f *fakeRepoFetcher) Fetch(_ context.Context, _ string, ref string) (string, string, error) {
 	f.calls++
+	f.lastRef = ref
 	if f.err != nil {
 		return "", "", f.err
 	}
@@ -2603,8 +2864,55 @@ steps:
 			ProjectID: "proj-1",
 			RepoURL:   "https://example.com/repo.git",
 		})
-		if !errors.Is(err, ErrRefRequired) {
-			t.Errorf("expected ErrRefRequired, got %v", err)
+		if !errors.Is(err, ErrSourceTargetRequired) {
+			t.Errorf("expected ErrSourceTargetRequired, got %v", err)
+		}
+	})
+
+	t.Run("commit sha can be used without ref", func(t *testing.T) {
+		tmpDir := setupTempRepo(t, validYAML)
+		repo := &fakeBuildRepository{}
+		fetcher := &fakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(fetcher)
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID: "proj-1",
+			RepoURL:   "https://example.com/repo.git",
+			CommitSHA: "abc123",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if fetcher.calls != 1 {
+			t.Fatalf("expected one fetch call, got %d", fetcher.calls)
+		}
+		if fetcher.lastRef != "abc123" {
+			t.Fatalf("expected fetch target commit sha, got %q", fetcher.lastRef)
+		}
+	})
+
+	t.Run("commit sha takes precedence over ref", func(t *testing.T) {
+		tmpDir := setupTempRepo(t, validYAML)
+		repo := &fakeBuildRepository{}
+		fetcher := &fakeRepoFetcher{localPath: tmpDir, commitSHA: "cafebabedeadbeef"}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(fetcher)
+
+		build, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID: "proj-1",
+			RepoURL:   "https://example.com/repo.git",
+			Ref:       "main",
+			CommitSHA: "cafebabedeadbeef",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if fetcher.lastRef != "cafebabedeadbeef" {
+			t.Fatalf("expected commit target to take precedence, got %q", fetcher.lastRef)
+		}
+		if build.CommitSHA == nil || *build.CommitSHA != "cafebabedeadbeef" {
+			t.Fatalf("expected persisted commit sha, got %v", build.CommitSHA)
 		}
 	})
 

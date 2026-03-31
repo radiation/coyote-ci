@@ -87,6 +87,7 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 		v := commitSHA.String
 		build.CommitSHA = &v
 	}
+	build.Source = domain.NewSourceSpec(readOptionalString(build.RepoURL), readOptionalString(build.Ref), readOptionalString(build.CommitSHA))
 
 	return build, nil
 }
@@ -167,8 +168,16 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 		v := commitSHA.String
 		build.CommitSHA = &v
 	}
+	build.Source = domain.NewSourceSpec(readOptionalString(build.RepoURL), readOptionalString(build.Ref), readOptionalString(build.CommitSHA))
 
 	return build, nil
+}
+
+func readOptionalString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func scanStep(scanner rowScanner) (domain.BuildStep, error) {
