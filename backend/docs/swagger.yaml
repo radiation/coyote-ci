@@ -213,6 +213,10 @@ definitions:
         type: string
       project_id:
         type: string
+      push_branch:
+        type: string
+      push_enabled:
+        type: boolean
       repository_url:
         type: string
     type: object
@@ -281,9 +285,55 @@ definitions:
         type: string
       project_id:
         type: string
+      push_branch:
+        type: string
+      push_enabled:
+        type: boolean
       repository_url:
         type: string
       updated_at:
+        type: string
+    type: object
+  api.PushEventEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.PushEventResponse'
+    type: object
+  api.PushEventMatchedJob:
+    properties:
+      build_id:
+        type: string
+      build_status:
+        type: string
+      job_id:
+        type: string
+      job_name:
+        type: string
+    type: object
+  api.PushEventRequest:
+    properties:
+      commit_sha:
+        type: string
+      ref:
+        type: string
+      repository_url:
+        type: string
+    type: object
+  api.PushEventResponse:
+    properties:
+      builds:
+        items:
+          $ref: '#/definitions/api.PushEventMatchedJob'
+        type: array
+      commit_sha:
+        type: string
+      created_builds:
+        type: integer
+      matched_jobs:
+        type: integer
+      ref:
+        type: string
+      repository_url:
         type: string
     type: object
   api.QueueBuildRequest:
@@ -351,6 +401,10 @@ definitions:
         type: string
       pipeline_yaml:
         type: string
+      push_branch:
+        type: string
+      push_enabled:
+        type: boolean
       repository_url:
         type: string
     type: object
@@ -859,6 +913,36 @@ paths:
       summary: Create build from repository
       tags:
       - builds
+  /events/push:
+    post:
+      consumes:
+      - application/json
+      description: Triggers builds for matching enabled jobs configured for push events.
+      parameters:
+      - description: Push event payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.PushEventRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.PushEventEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Ingest push event
+      tags:
+      - events
   /health:
     get:
       description: Returns a simple liveness response.

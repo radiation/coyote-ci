@@ -9,6 +9,8 @@ type Job struct {
 	Name          string
 	RepositoryURL string
 	DefaultRef    string
+	PushEnabled   bool
+	PushBranch    *string
 	PipelineYAML  string
 	Enabled       bool
 	CreatedAt     time.Time

@@ -9,7 +9,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
 )
 
-func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandler) nethttp.Handler {
+func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandler, eventHandler *handler.EventHandler) nethttp.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -44,6 +44,10 @@ func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandle
 		r.Get("/{jobID}", jobHandler.GetJob)
 		r.Put("/{jobID}", jobHandler.UpdateJob)
 		r.Post("/{jobID}/run", jobHandler.RunNow)
+	})
+
+	r.Route("/events", func(r chi.Router) {
+		r.Post("/push", eventHandler.IngestPushEvent)
 	})
 
 	return r

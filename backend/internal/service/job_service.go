@@ -20,6 +20,9 @@ var ErrJobProjectIDRequired = errors.New("job project_id is required")
 var ErrJobRepositoryURLRequired = errors.New("job repository_url is required")
 var ErrJobDefaultRefRequired = errors.New("job default_ref is required")
 var ErrJobPipelineYAMLRequired = errors.New("job pipeline_yaml is required")
+var ErrPushEventRepositoryURLRequired = errors.New("push event repository_url is required")
+var ErrPushEventRefRequired = errors.New("push event ref is required")
+var ErrPushEventCommitSHARequired = errors.New("push event commit_sha is required")
 var ErrJobDisabled = errors.New("job is disabled")
 var ErrJobBuildServiceNotConfigured = errors.New("job build service not configured")
 
@@ -37,6 +40,8 @@ type CreateJobInput struct {
 	Name          string
 	RepositoryURL string
 	DefaultRef    string
+	PushEnabled   *bool
+	PushBranch    *string
 	PipelineYAML  string
 	Enabled       *bool
 }
@@ -45,6 +50,8 @@ type UpdateJobInput struct {
 	Name          *string
 	RepositoryURL *string
 	DefaultRef    *string
+	PushEnabled   *bool
+	PushBranch    *string
 	PipelineYAML  *string
 	Enabled       *bool
 }
@@ -63,6 +70,17 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 	if normalized.Enabled != nil {
 		enabled = *normalized.Enabled
 	}
+	pushEnabled := false
+	if normalized.PushEnabled != nil {
+		pushEnabled = *normalized.PushEnabled
+	}
+	var pushBranch *string
+	if normalized.PushBranch != nil {
+		branch := normalizePushRef(*normalized.PushBranch)
+		if branch != "" {
+			pushBranch = &branch
+		}
+	}
 
 	now := time.Now().UTC()
 	job := domain.Job{
@@ -71,6 +89,8 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 		Name:          normalized.Name,
 		RepositoryURL: normalized.RepositoryURL,
 		DefaultRef:    normalized.DefaultRef,
+		PushEnabled:   pushEnabled,
+		PushBranch:    pushBranch,
 		PipelineYAML:  normalized.PipelineYAML,
 		Enabled:       enabled,
 		CreatedAt:     now,
@@ -114,6 +134,17 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 	}
 	if input.DefaultRef != nil {
 		job.DefaultRef = strings.TrimSpace(*input.DefaultRef)
+	}
+	if input.PushEnabled != nil {
+		job.PushEnabled = *input.PushEnabled
+	}
+	if input.PushBranch != nil {
+		branch := normalizePushRef(*input.PushBranch)
+		if branch == "" {
+			job.PushBranch = nil
+		} else {
+			job.PushBranch = &branch
+		}
 	}
 	if input.PipelineYAML != nil {
 		job.PipelineYAML = strings.TrimSpace(*input.PipelineYAML)
@@ -176,6 +207,10 @@ func normalizeCreateJobInput(input CreateJobInput) (CreateJobInput, error) {
 	normalized.Name = strings.TrimSpace(normalized.Name)
 	normalized.RepositoryURL = strings.TrimSpace(normalized.RepositoryURL)
 	normalized.DefaultRef = strings.TrimSpace(normalized.DefaultRef)
+	if normalized.PushBranch != nil {
+		branch := normalizePushRef(*normalized.PushBranch)
+		normalized.PushBranch = &branch
+	}
 	normalized.PipelineYAML = strings.TrimSpace(normalized.PipelineYAML)
 
 	if err := validateCreateJobRequiredFields(normalized); err != nil {

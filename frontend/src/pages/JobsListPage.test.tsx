@@ -51,6 +51,8 @@ describe('JobsListPage', () => {
         name: 'backend-ci',
         repository_url: 'https://github.com/example/backend.git',
         default_ref: 'main',
+        push_enabled: true,
+        push_branch: 'main',
         pipeline_yaml: 'version: 1\nsteps:\n  - name: test\n    run: go test ./...\n',
         enabled: true,
         created_at: '2026-03-30T00:00:00Z',
@@ -79,6 +81,7 @@ describe('JobsListPage', () => {
       expect(screen.getByText('https://github.com/example/backend.git')).toBeTruthy();
       expect(screen.getByText('main')).toBeTruthy();
       expect(screen.getAllByText('Enabled').length).toBeGreaterThan(0);
+      expect(screen.getByText('On main')).toBeTruthy();
     });
   });
 

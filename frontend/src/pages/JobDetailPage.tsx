@@ -40,9 +40,13 @@ export function JobDetailPage() {
       <div className="detail-grid">
         <div><strong>ID</strong><span>{job.id}</span></div>
         <div><strong>Project</strong><span>{job.project_id}</span></div>
+        <div><strong>Push Trigger</strong><span>{job.push_enabled ? 'Enabled' : 'Disabled'}</span></div>
+        <div><strong>Push Branch</strong><span>{job.push_branch || 'Any branch'}</span></div>
         <div><strong>Created</strong><span>{formatTime(job.created_at)}</span></div>
         <div><strong>Updated</strong><span>{formatTime(job.updated_at)}</span></div>
       </div>
+
+      <p className="subtle-text">Internal push events can be sent to POST /events/push with repository_url, ref, and commit_sha.</p>
 
       <JobDetailForm
         key={`${job.id}:${job.updated_at}`}
@@ -59,6 +63,8 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
   const [name, setName] = useState(job.name);
   const [repositoryURL, setRepositoryURL] = useState(job.repository_url);
   const [defaultRef, setDefaultRef] = useState(job.default_ref);
+  const [pushEnabled, setPushEnabled] = useState(job.push_enabled);
+  const [pushBranch, setPushBranch] = useState(job.push_branch ?? '');
   const [pipelineYAML, setPipelineYAML] = useState(job.pipeline_yaml);
   const [enabled, setEnabled] = useState(job.enabled);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -70,6 +76,8 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
         name: name.trim(),
         repository_url: repositoryURL.trim(),
         default_ref: defaultRef.trim(),
+        push_enabled: pushEnabled,
+        push_branch: pushEnabled ? pushBranch.trim() : '',
         pipeline_yaml: pipelineYAML.trim(),
         enabled,
       }),
@@ -144,6 +152,26 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
           value={defaultRef}
           onChange={(event) => setDefaultRef(event.target.value)}
           disabled={isSubmitting}
+        />
+
+        <label className="checkbox-label" htmlFor="job-push-enabled">
+          <input
+            id="job-push-enabled"
+            type="checkbox"
+            checked={pushEnabled}
+            onChange={(event) => setPushEnabled(event.target.checked)}
+            disabled={isSubmitting}
+          />
+          Enable push trigger
+        </label>
+
+        <label htmlFor="job-push-branch">Push Branch</label>
+        <input
+          id="job-push-branch"
+          value={pushBranch}
+          onChange={(event) => setPushBranch(event.target.value)}
+          disabled={isSubmitting}
+          placeholder="main"
         />
 
         <label htmlFor="job-pipeline-yaml">Pipeline YAML</label>

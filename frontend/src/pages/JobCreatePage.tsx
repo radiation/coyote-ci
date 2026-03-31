@@ -15,6 +15,8 @@ export function JobCreatePage() {
   const [name, setName] = useState('');
   const [repositoryURL, setRepositoryURL] = useState('');
   const [defaultRef, setDefaultRef] = useState('main');
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushBranch, setPushBranch] = useState('main');
   const [pipelineYAML, setPipelineYAML] = useState(DEFAULT_PIPELINE_YAML);
   const [enabled, setEnabled] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -39,6 +41,7 @@ export function JobCreatePage() {
     const trimmedName = name.trim();
     const trimmedRepositoryURL = repositoryURL.trim();
     const trimmedDefaultRef = defaultRef.trim();
+    const trimmedPushBranch = pushBranch.trim();
     const trimmedPipelineYAML = pipelineYAML.trim();
 
     if (!trimmedProjectID || !trimmedName || !trimmedRepositoryURL || !trimmedDefaultRef || !trimmedPipelineYAML) {
@@ -51,6 +54,8 @@ export function JobCreatePage() {
       name: trimmedName,
       repository_url: trimmedRepositoryURL,
       default_ref: trimmedDefaultRef,
+      push_enabled: pushEnabled,
+      push_branch: pushEnabled ? trimmedPushBranch : '',
       pipeline_yaml: trimmedPipelineYAML,
       enabled,
     });
@@ -94,6 +99,26 @@ export function JobCreatePage() {
           id="job-default-ref"
           value={defaultRef}
           onChange={(event) => setDefaultRef(event.target.value)}
+          disabled={createMutation.isPending}
+          placeholder="main"
+        />
+
+        <label className="checkbox-label" htmlFor="job-push-enabled">
+          <input
+            id="job-push-enabled"
+            type="checkbox"
+            checked={pushEnabled}
+            onChange={(event) => setPushEnabled(event.target.checked)}
+            disabled={createMutation.isPending}
+          />
+          Enable push trigger
+        </label>
+
+        <label htmlFor="job-push-branch">Push Branch</label>
+        <input
+          id="job-push-branch"
+          value={pushBranch}
+          onChange={(event) => setPushBranch(event.target.value)}
           disabled={createMutation.isPending}
           placeholder="main"
         />

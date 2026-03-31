@@ -17,8 +17,10 @@ func TestNewRouter_HealthAndNotFound(t *testing.T) {
 	jobRepo := repositorymemory.NewJobRepository()
 	buildSvc := service.NewBuildService(buildRepo, nil, nil)
 	h := handler.NewBuildHandler(buildSvc)
-	jh := handler.NewJobHandler(service.NewJobService(jobRepo, buildSvc))
-	r := NewRouter(h, jh)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jh := handler.NewJobHandler(jobSvc)
+	eh := handler.NewEventHandler(jobSvc)
+	r := NewRouter(h, jh, eh)
 
 	tests := []struct {
 		name       string
@@ -54,8 +56,10 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 	jobRepo := repositorymemory.NewJobRepository()
 	buildSvc := service.NewBuildService(buildRepo, nil, nil)
 	h := handler.NewBuildHandler(buildSvc)
-	jh := handler.NewJobHandler(service.NewJobService(jobRepo, buildSvc))
-	r := NewRouter(h, jh)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jh := handler.NewJobHandler(jobSvc)
+	eh := handler.NewEventHandler(jobSvc)
+	r := NewRouter(h, jh, eh)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
 	createRes := httptest.NewRecorder()
@@ -120,8 +124,10 @@ func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
 	jobRepo := repositorymemory.NewJobRepository()
 	buildSvc := service.NewBuildService(buildRepo, nil, nil)
 	h := handler.NewBuildHandler(buildSvc)
-	jh := handler.NewJobHandler(service.NewJobService(jobRepo, buildSvc))
-	r := NewRouter(h, jh)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jh := handler.NewJobHandler(jobSvc)
+	eh := handler.NewEventHandler(jobSvc)
+	r := NewRouter(h, jh, eh)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
 	createRes := httptest.NewRecorder()
@@ -194,8 +200,10 @@ func TestNewRouter_QueueBuild_UnknownTemplate_FallsBackToDefaultStep(t *testing.
 	jobRepo := repositorymemory.NewJobRepository()
 	buildSvc := service.NewBuildService(buildRepo, nil, nil)
 	h := handler.NewBuildHandler(buildSvc)
-	jh := handler.NewJobHandler(service.NewJobService(jobRepo, buildSvc))
-	r := NewRouter(h, jh)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jh := handler.NewJobHandler(jobSvc)
+	eh := handler.NewEventHandler(jobSvc)
+	r := NewRouter(h, jh, eh)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
 	createRes := httptest.NewRecorder()
@@ -264,8 +272,10 @@ func TestNewRouter_JobRoutes(t *testing.T) {
 	jobRepo := repositorymemory.NewJobRepository()
 	buildSvc := service.NewBuildService(buildRepo, nil, nil)
 	h := handler.NewBuildHandler(buildSvc)
-	jh := handler.NewJobHandler(service.NewJobService(jobRepo, buildSvc))
-	r := NewRouter(h, jh)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jh := handler.NewJobHandler(jobSvc)
+	eh := handler.NewEventHandler(jobSvc)
+	r := NewRouter(h, jh, eh)
 
 	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
 	createReq := httptest.NewRequest(http.MethodPost, "/jobs/", bytes.NewBufferString(createBody))
@@ -307,5 +317,32 @@ func TestNewRouter_JobRoutes(t *testing.T) {
 	r.ServeHTTP(runRes, runReq)
 	if runRes.Code != http.StatusCreated {
 		t.Fatalf("expected run-now status %d, got %d", http.StatusCreated, runRes.Code)
+	}
+}
+
+func TestNewRouter_PushEventRoute(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := service.NewBuildService(buildRepo, nil, nil)
+	h := handler.NewBuildHandler(buildSvc)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jh := handler.NewJobHandler(jobSvc)
+	eh := handler.NewEventHandler(jobSvc)
+	r := NewRouter(h, jh, eh)
+
+	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"push_branch":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
+	createReq := httptest.NewRequest(http.MethodPost, "/jobs/", bytes.NewBufferString(createBody))
+	createRes := httptest.NewRecorder()
+	r.ServeHTTP(createRes, createReq)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("expected create job status %d, got %d", http.StatusCreated, createRes.Code)
+	}
+
+	eventBody := `{"repository_url":"https://github.com/example/backend.git","ref":"main","commit_sha":"abc123"}`
+	eventReq := httptest.NewRequest(http.MethodPost, "/events/push", bytes.NewBufferString(eventBody))
+	eventRes := httptest.NewRecorder()
+	r.ServeHTTP(eventRes, eventReq)
+	if eventRes.Code != http.StatusOK {
+		t.Fatalf("expected push event status %d, got %d body=%s", http.StatusOK, eventRes.Code, eventRes.Body.String())
 	}
 }

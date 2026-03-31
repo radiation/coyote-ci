@@ -59,6 +59,7 @@ export function JobsListPage() {
               <th>Repository</th>
               <th>Default Ref</th>
               <th>Enabled</th>
+              <th>Push Trigger</th>
               <th>Updated</th>
               <th>Actions</th>
             </tr>
@@ -70,6 +71,7 @@ export function JobsListPage() {
                 <td>{job.repository_url}</td>
                 <td>{job.default_ref}</td>
                 <td>{job.enabled ? 'Enabled' : 'Disabled'}</td>
+                <td>{job.push_enabled ? (job.push_branch ? `On ${job.push_branch}` : 'Any branch') : 'Off'}</td>
                 <td>{formatTime(job.updated_at)}</td>
                 <td>
                   <div className="table-actions">

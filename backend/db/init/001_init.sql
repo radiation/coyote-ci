@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     name TEXT NOT NULL,
     repository_url TEXT NOT NULL,
     default_ref TEXT NOT NULL,
+    push_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    push_branch TEXT,
     pipeline_yaml TEXT NOT NULL,
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL,
