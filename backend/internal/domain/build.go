@@ -28,6 +28,9 @@ type Build struct {
 	PipelineName       *string
 	PipelineSource     *string
 
+	// Source captures per-build source input and resolved source identity.
+	Source *SourceSpec
+
 	// Repo source: persisted when a build is created from a repository checkout.
 	RepoURL   *string
 	Ref       *string

@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -132,6 +133,27 @@ func (r *BuildRepository) UpdateStatus(_ context.Context, id string, status doma
 
 	r.builds[id] = build
 
+	return build, nil
+}
+
+func (r *BuildRepository) UpdateSourceCommitSHA(_ context.Context, id string, commitSHA string) (domain.Build, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	build, ok := r.builds[id]
+	if !ok {
+		return domain.Build{}, repository.ErrBuildNotFound
+	}
+
+	trimmed := strings.TrimSpace(commitSHA)
+	if trimmed == "" {
+		build.CommitSHA = nil
+	} else {
+		build.CommitSHA = &trimmed
+	}
+	build.Source = domain.NewSourceSpec(readOptionalString(build.RepoURL), readOptionalString(build.Ref), readOptionalString(build.CommitSHA))
+
+	r.builds[id] = build
 	return build, nil
 }
 
@@ -558,4 +580,11 @@ func cloneStep(step domain.BuildStep) domain.BuildStep {
 	}
 
 	return step
+}
+
+func readOptionalString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

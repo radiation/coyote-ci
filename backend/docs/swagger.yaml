@@ -101,9 +101,29 @@ definitions:
         type: string
       repo_url:
         type: string
+      source:
+        $ref: '#/definitions/api.BuildSourceResponse'
       started_at:
         type: string
       status:
+        type: string
+    type: object
+  api.BuildSourceInput:
+    properties:
+      commit_sha:
+        type: string
+      ref:
+        type: string
+      repository_url:
+        type: string
+    type: object
+  api.BuildSourceResponse:
+    properties:
+      commit_sha:
+        type: string
+      ref:
+        type: string
+      repository_url:
         type: string
     type: object
   api.BuildStepResponse:
@@ -153,6 +173,8 @@ definitions:
     properties:
       project_id:
         type: string
+      source:
+        $ref: '#/definitions/api.BuildSourceInput'
       steps:
         items:
           $ref: '#/definitions/api.CreateBuildStepInput'
@@ -179,15 +201,34 @@ definitions:
       working_dir:
         type: string
     type: object
+  api.CreateJobRequest:
+    properties:
+      default_ref:
+        type: string
+      enabled:
+        type: boolean
+      name:
+        type: string
+      pipeline_yaml:
+        type: string
+      project_id:
+        type: string
+      repository_url:
+        type: string
+    type: object
   api.CreatePipelineBuildRequest:
     properties:
       pipeline_yaml:
         type: string
       project_id:
         type: string
+      source:
+        $ref: '#/definitions/api.BuildSourceInput'
     type: object
   api.CreateRepoBuildRequest:
     properties:
+      commit_sha:
+        type: string
       project_id:
         type: string
       ref:
@@ -206,6 +247,44 @@ definitions:
     properties:
       error:
         $ref: '#/definitions/api.ErrorBody'
+    type: object
+  api.JobEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.JobResponse'
+    type: object
+  api.JobListEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.JobListResponse'
+    type: object
+  api.JobListResponse:
+    properties:
+      jobs:
+        items:
+          $ref: '#/definitions/api.JobResponse'
+        type: array
+    type: object
+  api.JobResponse:
+    properties:
+      created_at:
+        type: string
+      default_ref:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: string
+      name:
+        type: string
+      pipeline_yaml:
+        type: string
+      project_id:
+        type: string
+      repository_url:
+        type: string
+      updated_at:
+        type: string
     type: object
   api.QueueBuildRequest:
     properties:
@@ -261,6 +340,19 @@ definitions:
         type: integer
       step_index:
         type: integer
+    type: object
+  api.UpdateJobRequest:
+    properties:
+      default_ref:
+        type: string
+      enabled:
+        type: boolean
+      name:
+        type: string
+      pipeline_yaml:
+        type: string
+      repository_url:
+        type: string
     type: object
 info:
   contact: {}
@@ -780,6 +872,156 @@ paths:
       summary: Health check
       tags:
       - health
+  /jobs:
+    get:
+      description: Lists all jobs.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.JobListEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List jobs
+      tags:
+      - jobs
+    post:
+      consumes:
+      - application/json
+      description: Creates a new job.
+      parameters:
+      - description: Job create request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.CreateJobRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.JobEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Create job
+      tags:
+      - jobs
+  /jobs/{jobID}:
+    get:
+      description: Returns job details by id.
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.JobEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get job
+      tags:
+      - jobs
+    put:
+      consumes:
+      - application/json
+      description: Updates an existing job.
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobID
+        required: true
+        type: string
+      - description: Job update request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.UpdateJobRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.JobEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Update job
+      tags:
+      - jobs
+  /jobs/{jobID}/run:
+    post:
+      description: Triggers an immediate build for a job.
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.BuildEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Run job now
+      tags:
+      - jobs
 schemes:
 - http
 swagger: "2.0"

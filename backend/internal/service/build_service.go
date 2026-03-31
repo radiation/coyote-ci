@@ -4,12 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,10 +35,12 @@ var ErrCustomTemplateStepsRequired = errors.New("custom template requires at lea
 var ErrCustomTemplateStepCommandRequired = errors.New("custom template step command is required")
 var ErrPipelineYAMLRequired = errors.New("pipeline YAML is required")
 var ErrRepoURLRequired = errors.New("repo_url is required")
-var ErrRefRequired = errors.New("ref is required")
+var ErrSourceTargetRequired = errors.New("ref or commit_sha is required")
 var ErrRepoFetcherNotConfigured = errors.New("repo fetcher not configured")
 var ErrPipelineFileNotFound = errors.New(".coyote/pipeline.yml not found in repository")
 var ErrArtifactNotFound = errors.New("artifact not found")
+var ErrSourceResolverNotConfigured = errors.New("source resolver not configured")
+var ErrExecutionWorkspaceRootNotConfigured = errors.New("execution workspace root not configured")
 
 const (
 	BuildTemplateDefault = "default"
@@ -54,10 +52,12 @@ const (
 
 // BuildService coordinates build lifecycle state transitions and delegates step execution to a runner.
 type BuildService struct {
-	buildRepo   repository.BuildRepository
-	runner      runner.Runner
-	logSink     logs.LogSink
-	repoFetcher source.RepoFetcher
+	buildRepo              repository.BuildRepository
+	runner                 runner.Runner
+	logSink                logs.LogSink
+	repoFetcher            source.RepoFetcher
+	sourceResolver         source.WorkspaceSourceResolver
+	executionWorkspaceRoot string
 
 	artifactRepo          repository.ArtifactRepository
 	artifactStore         artifact.Store
@@ -73,15 +73,24 @@ func NewBuildService(buildRepo repository.BuildRepository, stepRunner runner.Run
 	}
 
 	return &BuildService{
-		buildRepo: buildRepo,
-		runner:    stepRunner,
-		logSink:   logSink,
+		buildRepo:      buildRepo,
+		runner:         stepRunner,
+		logSink:        logSink,
+		sourceResolver: source.NewGitWorkspaceSourceResolver(),
 	}
 }
 
 // SetRepoFetcher attaches a RepoFetcher for repo-backed build creation.
 func (s *BuildService) SetRepoFetcher(fetcher source.RepoFetcher) {
 	s.repoFetcher = fetcher
+}
+
+func (s *BuildService) SetSourceResolver(resolver source.WorkspaceSourceResolver) {
+	s.sourceResolver = resolver
+}
+
+func (s *BuildService) SetExecutionWorkspaceRoot(root string) {
+	s.executionWorkspaceRoot = normalizeWorkspaceRoot(root)
 }
 
 // SetDefaultExecutionImage sets the image used when a build-scoped runner requires one.
@@ -93,7 +102,10 @@ func (s *BuildService) SetDefaultExecutionImage(image string) {
 func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository, store artifact.Store, workspaceRoot string) {
 	s.artifactRepo = repo
 	s.artifactStore = store
-	s.artifactWorkspaceRoot = strings.TrimSpace(workspaceRoot)
+	s.artifactWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot)
+	if s.executionWorkspaceRoot == "" {
+		s.executionWorkspaceRoot = s.artifactWorkspaceRoot
+	}
 	if store != nil {
 		s.artifactCollector = artifact.NewCollector(store)
 	} else {
@@ -104,6 +116,13 @@ func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository
 type CreateBuildInput struct {
 	ProjectID string
 	Steps     []CreateBuildStepInput
+	Source    *CreateBuildSourceInput
+}
+
+type CreateBuildSourceInput struct {
+	RepositoryURL string
+	Ref           string
+	CommitSHA     string
 }
 
 type CreateBuildStepInput struct {
@@ -143,12 +162,21 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 		return domain.Build{}, ErrProjectIDRequired
 	}
 
+	sourceSpec, err := toDomainSourceSpec(input.Source)
+	if err != nil {
+		return domain.Build{}, err
+	}
+
 	build := domain.Build{
 		ID:               uuid.NewString(),
 		ProjectID:        input.ProjectID,
 		Status:           domain.BuildStatusPending,
 		CreatedAt:        time.Now().UTC(),
 		CurrentStepIndex: 0,
+		Source:           sourceSpec,
+		RepoURL:          optionalStringPtr(sourceRepositoryURL(sourceSpec)),
+		Ref:              sourceRef(sourceSpec),
+		CommitSHA:        sourceCommitSHA(sourceSpec),
 	}
 
 	if len(input.Steps) > 0 {
@@ -185,6 +213,7 @@ type CreatePipelineBuildInput struct {
 	ProjectID    string
 	PipelineYAML string
 	SourcePath   string // e.g. ".coyote/pipeline.yml"
+	Source       *CreateBuildSourceInput
 }
 
 // CreateBuildFromPipeline parses, validates, and resolves pipeline YAML, then creates
@@ -196,6 +225,11 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 	yamlText := strings.TrimSpace(input.PipelineYAML)
 	if yamlText == "" {
 		return domain.Build{}, ErrPipelineYAMLRequired
+	}
+
+	sourceSpec, err := toDomainSourceSpec(input.Source)
+	if err != nil {
+		return domain.Build{}, err
 	}
 
 	resolved, err := pipeline.LoadAndResolve([]byte(yamlText))
@@ -225,37 +259,13 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		PipelineConfigYAML: &yamlText,
 		PipelineName:       pipelineNamePtr,
 		PipelineSource:     sourcePtr,
+		Source:             sourceSpec,
+		RepoURL:            optionalStringPtr(sourceRepositoryURL(sourceSpec)),
+		Ref:                sourceRef(sourceSpec),
+		CommitSHA:          sourceCommitSHA(sourceSpec),
 	}
 
 	return s.buildRepo.CreateQueuedBuild(ctx, build, steps)
-}
-
-// pipelineStepsToDomain converts resolved pipeline steps into canonical domain build steps.
-func pipelineStepsToDomain(buildID string, steps []pipeline.ResolvedStep) []domain.BuildStep {
-	out := make([]domain.BuildStep, 0, len(steps))
-	for idx, rs := range steps {
-		env := rs.Env
-		if env == nil {
-			env = map[string]string{}
-		}
-		workingDir := rs.WorkingDir
-		if workingDir == "" {
-			workingDir = "."
-		}
-		out = append(out, domain.BuildStep{
-			ID:             uuid.NewString(),
-			BuildID:        buildID,
-			StepIndex:      idx,
-			Name:           rs.Name,
-			Command:        "sh",
-			Args:           []string{"-c", rs.Run},
-			Env:            env,
-			WorkingDir:     workingDir,
-			TimeoutSeconds: rs.TimeoutSeconds,
-			Status:         domain.BuildStepStatusPending,
-		})
-	}
-	return out
 }
 
 // CreateRepoBuildInput is the service-level input for creating a build from a repository checkout.
@@ -263,6 +273,7 @@ type CreateRepoBuildInput struct {
 	ProjectID string
 	RepoURL   string
 	Ref       string
+	CommitSHA string
 }
 
 const pipelineFilePath = ".coyote/pipeline.yml"
@@ -276,14 +287,19 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 	if strings.TrimSpace(input.RepoURL) == "" {
 		return domain.Build{}, ErrRepoURLRequired
 	}
-	if strings.TrimSpace(input.Ref) == "" {
-		return domain.Build{}, ErrRefRequired
+	if strings.TrimSpace(input.Ref) == "" && strings.TrimSpace(input.CommitSHA) == "" {
+		return domain.Build{}, ErrSourceTargetRequired
 	}
 	if s.repoFetcher == nil {
 		return domain.Build{}, ErrRepoFetcherNotConfigured
 	}
 
-	localPath, commitSHA, err := s.repoFetcher.Fetch(ctx, input.RepoURL, input.Ref)
+	fetchTarget := strings.TrimSpace(input.CommitSHA)
+	if fetchTarget == "" {
+		fetchTarget = strings.TrimSpace(input.Ref)
+	}
+
+	localPath, commitSHA, err := s.repoFetcher.Fetch(ctx, input.RepoURL, fetchTarget)
 	if err != nil {
 		return domain.Build{}, fmt.Errorf("fetching repo: %w", err)
 	}
@@ -319,10 +335,17 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 
 	repoURL := strings.TrimSpace(input.RepoURL)
 	ref := strings.TrimSpace(input.Ref)
+	requestedCommitSHA := strings.TrimSpace(input.CommitSHA)
 	var commitSHAPtr *string
 	if commitSHA != "" {
 		commitSHAPtr = &commitSHA
 	}
+
+	sourceCommitValue := requestedCommitSHA
+	if commitSHA != "" {
+		sourceCommitValue = commitSHA
+	}
+	domainSource := domain.NewSourceSpec(repoURL, ref, sourceCommitValue)
 
 	build := domain.Build{
 		ID:                 buildID,
@@ -333,173 +356,13 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		PipelineConfigYAML: &yamlText,
 		PipelineName:       pipelineNamePtr,
 		PipelineSource:     &pipelineSource,
+		Source:             domainSource,
 		RepoURL:            &repoURL,
-		Ref:                &ref,
+		Ref:                optionalStringPtr(ref),
 		CommitSHA:          commitSHAPtr,
 	}
 
 	return s.buildRepo.CreateQueuedBuild(ctx, build, steps)
-}
-
-func (s *BuildService) GetBuild(ctx context.Context, id string) (domain.Build, error) {
-	build, err := s.buildRepo.GetByID(ctx, id)
-	return build, mapRepoErr(err)
-}
-
-func (s *BuildService) ListBuilds(ctx context.Context) ([]domain.Build, error) {
-	return s.buildRepo.List(ctx)
-}
-
-func (s *BuildService) GetBuildSteps(ctx context.Context, id string) ([]domain.BuildStep, error) {
-	steps, err := s.buildRepo.GetStepsByBuildID(ctx, id)
-	return steps, mapRepoErr(err)
-}
-
-func (s *BuildService) GetBuildLogs(ctx context.Context, id string) ([]logs.BuildLogLine, error) {
-	if _, err := s.buildRepo.GetByID(ctx, id); err != nil {
-		return nil, mapRepoErr(err)
-	}
-
-	reader, ok := s.logSink.(logs.LogReader)
-	if !ok {
-		return []logs.BuildLogLine{}, nil
-	}
-
-	return reader.GetBuildLogs(ctx, id)
-}
-
-func (s *BuildService) GetStepLogChunks(ctx context.Context, buildID string, stepIndex int, afterSequence int64, limit int) ([]logs.StepLogChunk, error) {
-	if _, err := s.buildRepo.GetByID(ctx, buildID); err != nil {
-		return nil, mapRepoErr(err)
-	}
-
-	reader, ok := s.logSink.(logs.StepLogChunkReader)
-	if !ok {
-		return []logs.StepLogChunk{}, nil
-	}
-
-	return reader.ListStepLogChunks(ctx, buildID, stepIndex, afterSequence, limit)
-}
-
-func (s *BuildService) GetBuildArtifacts(ctx context.Context, buildID string) ([]domain.BuildArtifact, error) {
-	if _, err := s.buildRepo.GetByID(ctx, buildID); err != nil {
-		return nil, mapRepoErr(err)
-	}
-	if s.artifactRepo == nil {
-		return []domain.BuildArtifact{}, nil
-	}
-
-	artifacts, err := s.artifactRepo.ListByBuildID(ctx, buildID)
-	if err != nil {
-		return nil, err
-	}
-
-	return artifacts, nil
-}
-
-func (s *BuildService) OpenBuildArtifact(ctx context.Context, buildID string, artifactID string) (domain.BuildArtifact, io.ReadCloser, error) {
-	if _, err := s.buildRepo.GetByID(ctx, buildID); err != nil {
-		return domain.BuildArtifact{}, nil, mapRepoErr(err)
-	}
-	if s.artifactRepo == nil || s.artifactStore == nil {
-		return domain.BuildArtifact{}, nil, ErrArtifactNotFound
-	}
-
-	meta, err := s.artifactRepo.GetByID(ctx, buildID, artifactID)
-	if err != nil {
-		if errors.Is(err, repository.ErrArtifactNotFound) {
-			return domain.BuildArtifact{}, nil, ErrArtifactNotFound
-		}
-		return domain.BuildArtifact{}, nil, err
-	}
-
-	stream, err := s.artifactStore.Open(ctx, meta.StorageKey)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return domain.BuildArtifact{}, nil, ErrArtifactNotFound
-		}
-		return domain.BuildArtifact{}, nil, err
-	}
-
-	return meta, stream, nil
-}
-
-func (s *BuildService) ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error) {
-	step, claimed, err := s.buildRepo.ClaimStepIfPending(ctx, buildID, stepIndex, workerID, startedAt)
-	return step, claimed, mapRepoErr(err)
-}
-
-func (s *BuildService) ClaimPendingStep(ctx context.Context, buildID string, stepIndex int, claim repository.StepClaim) (domain.BuildStep, bool, error) {
-	step, claimed, err := s.buildRepo.ClaimPendingStep(ctx, buildID, stepIndex, claim)
-	return step, claimed, mapRepoErr(err)
-}
-
-func (s *BuildService) ReclaimExpiredStep(ctx context.Context, buildID string, stepIndex int, reclaimBefore time.Time, claim repository.StepClaim) (domain.BuildStep, bool, error) {
-	step, claimed, err := s.buildRepo.ReclaimExpiredStep(ctx, buildID, stepIndex, reclaimBefore, claim)
-	return step, claimed, mapRepoErr(err)
-}
-
-func (s *BuildService) RenewStepLease(ctx context.Context, buildID string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, bool, error) {
-	step, outcome, err := s.buildRepo.RenewStepLease(ctx, buildID, stepIndex, claimToken, leaseExpiresAt)
-	if err != nil {
-		return domain.BuildStep{}, false, mapRepoErr(err)
-	}
-
-	if outcome == repository.StepCompletionCompleted {
-		return step, true, nil
-	}
-	if outcome == repository.StepCompletionStaleClaim {
-		return step, false, ErrStaleStepClaim
-	}
-	if outcome == repository.StepCompletionDuplicateTerminal || outcome == repository.StepCompletionInvalidTransition {
-		return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
-	}
-
-	return domain.BuildStep{}, false, ErrInvalidBuildStepTransition
-}
-
-func (s *BuildService) QueueBuild(ctx context.Context, id string) (domain.Build, error) {
-	return s.QueueBuildWithTemplate(ctx, id, "")
-}
-
-func (s *BuildService) QueueBuildWithTemplate(ctx context.Context, id string, template string) (domain.Build, error) {
-	return s.QueueBuildWithTemplateAndCustomSteps(ctx, id, template, nil)
-}
-
-func (s *BuildService) QueueBuildWithTemplateAndCustomSteps(ctx context.Context, id string, template string, customSteps []QueueBuildCustomStepInput) (domain.Build, error) {
-	build, err := s.buildRepo.GetByID(ctx, id)
-	if err != nil {
-		return domain.Build{}, mapRepoErr(err)
-	}
-
-	if !domain.CanTransitionBuild(build.Status, domain.BuildStatusQueued) {
-		return domain.Build{}, ErrInvalidBuildStatusTransition
-	}
-
-	normalizedTemplate := strings.ToLower(strings.TrimSpace(template))
-	if normalizedTemplate == BuildTemplateCustom {
-		steps, err := buildStepsForCustomTemplate(id, customSteps)
-		if err != nil {
-			return domain.Build{}, err
-		}
-
-		return s.buildRepo.QueueBuild(ctx, id, steps)
-	}
-
-	steps := buildStepsForTemplate(id, normalizedTemplate)
-	return s.buildRepo.QueueBuild(ctx, id, steps)
-}
-
-func (s *BuildService) StartBuild(ctx context.Context, id string) (domain.Build, error) {
-	return s.transitionBuildStatus(ctx, id, domain.BuildStatusRunning, nil)
-}
-
-func (s *BuildService) CompleteBuild(ctx context.Context, id string) (domain.Build, error) {
-	return s.transitionBuildStatus(ctx, id, domain.BuildStatusSuccess, nil)
-}
-
-func (s *BuildService) FailBuild(ctx context.Context, id string) (domain.Build, error) {
-	return s.transitionBuildStatus(ctx, id, domain.BuildStatusFailed, nil)
 }
 
 func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, StepCompletionReport, error) {
@@ -515,6 +378,7 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		return runner.RunStepResult{}, StepCompletionReport{}, fmt.Errorf("fetching build for step execution: %w", err)
 	}
 	executionImage := s.resolveExecutionImage(build)
+	buildSource := sourceSpecFromBuild(build)
 
 	steps, err := s.buildRepo.GetStepsByBuildID(ctx, request.BuildID)
 	if err != nil {
@@ -554,12 +418,11 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 
 	if buildScopedRunner, ok := s.runner.(runner.BuildScopedRunner); ok {
 		emitVisibilityLine("Preparing workspace")
-		emitVisibilityLine("Starting build container")
 		prepareErr := buildScopedRunner.PrepareBuild(ctx, runner.PrepareBuildRequest{
 			BuildID:    request.BuildID,
-			RepoURL:    readOptionalString(build.RepoURL),
-			Ref:        readOptionalString(build.Ref),
-			CommitSHA:  readOptionalString(build.CommitSHA),
+			RepoURL:    buildSource.RepositoryURL,
+			Ref:        buildSource.Ref,
+			CommitSHA:  buildSource.CommitSHA,
 			Image:      executionImage,
 			WorkerID:   request.WorkerID,
 			ClaimToken: request.ClaimToken,
@@ -592,7 +455,51 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 
 			return result, completionReport, prepareErr
 		}
-	} else if readOptionalString(build.RepoURL) != "" {
+
+		if buildSource.HasSource && stepNumber == 1 {
+			emitVisibilityLine("Resolving source")
+			emitVisibilityLine("Cloning repository")
+			if buildSource.CommitSHA != "" {
+				emitVisibilityLine("Checking out commit: " + buildSource.CommitSHA)
+			} else {
+				emitVisibilityLine("Checking out ref: " + buildSource.Ref)
+			}
+
+			resolvedCommit, sourceErr := s.resolveBuildSourceIntoWorkspace(ctx, request.BuildID, buildSource)
+			if sourceErr != nil {
+				reason := classifySourceFailureReason(sourceErr, buildSource)
+				emitVisibilityLine("Source checkout failed")
+				emitVisibilityLine(formatFailureReasonLine(reason))
+
+				now := time.Now().UTC()
+				result := runner.RunStepResult{
+					Status:     runner.RunStepStatusFailed,
+					ExitCode:   -1,
+					Stderr:     reason,
+					StartedAt:  now,
+					FinishedAt: now,
+				}
+
+				completionReport, completionErr := s.handleStepResult(ctx, request, result, false)
+				if completionErr != nil {
+					return result, completionReport, errors.Join(sourceErr, completionErr)
+				}
+
+				if sideEffectErr := s.runPostCompletionSideEffects(ctx, request, nil); sideEffectErr != nil {
+					completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, sideEffectErr)
+				}
+				if visibilityLogErr != nil {
+					completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, visibilityLogErr)
+				}
+
+				return result, completionReport, sourceErr
+			}
+
+			emitVisibilityLine("Resolved commit: " + resolvedCommit)
+		}
+
+		emitVisibilityLine("Starting build container")
+	} else if buildSource.HasSource {
 		// Non-build-scoped runners cannot prepare a workspace for repo-backed builds.
 		return runner.RunStepResult{}, StepCompletionReport{}, ErrRunnerWorkspaceNotSupported
 	}
@@ -730,271 +637,6 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	return result, completionReport, nil
 }
 
-func (s *BuildService) runPostCompletionSideEffects(ctx context.Context, request runner.RunStepRequest, appender logs.StepLogChunkAppender) error {
-	build, err := s.buildRepo.GetByID(ctx, request.BuildID)
-	if err != nil {
-		return fmt.Errorf("fetching build for post-completion side effects: %w", err)
-	}
-	if !domain.IsTerminalBuildStatus(build.Status) {
-		return nil
-	}
-
-	artifactPaths := []string{}
-	if s.artifactRepo != nil && s.artifactCollector != nil && strings.TrimSpace(s.artifactWorkspaceRoot) != "" {
-		if emitErr := s.writeSystemExecutionLogLine(ctx, request, appender, "Collecting artifacts"); emitErr != nil {
-			return emitErr
-		}
-
-		var artifactErr error
-		artifactPaths, artifactErr = s.collectArtifactsIfTerminal(ctx, request.BuildID)
-		if artifactErr != nil {
-			_ = s.writeSystemExecutionLogLine(ctx, request, appender, "Artifact collection failed")
-			_ = s.writeSystemExecutionLogLine(ctx, request, appender, formatFailureReasonLine("artifact collection failed"))
-			return artifactErr
-		}
-	}
-
-	if emitErr := s.writeSystemExecutionLogLine(ctx, request, appender, "Finalizing build"); emitErr != nil {
-		return emitErr
-	}
-
-	summaryErr := s.writeTerminalBuildSummary(ctx, request, appender, artifactPaths)
-	cleanupErr := s.cleanupExecutionIfTerminal(ctx, request.BuildID)
-
-	return errors.Join(summaryErr, cleanupErr)
-}
-
-func (s *BuildService) writeTerminalBuildSummary(ctx context.Context, request runner.RunStepRequest, appender logs.StepLogChunkAppender, artifactPaths []string) error {
-	build, err := s.buildRepo.GetByID(ctx, request.BuildID)
-	if err != nil {
-		return fmt.Errorf("fetching build for summary: %w", err)
-	}
-	if !domain.IsTerminalBuildStatus(build.Status) {
-		return nil
-	}
-
-	steps, err := s.buildRepo.GetStepsByBuildID(ctx, request.BuildID)
-	if err != nil {
-		return fmt.Errorf("fetching build steps for summary: %w", err)
-	}
-
-	completedSteps := 0
-	for _, step := range steps {
-		if step.Status == domain.BuildStepStatusSuccess || step.Status == domain.BuildStepStatusFailed {
-			completedSteps++
-		}
-	}
-
-	duration := terminalBuildSummaryDuration(build, time.Now().UTC())
-	for _, line := range formatBuildSummaryLines(build.Status, duration, completedSteps, len(steps), artifactPaths) {
-		if err := s.writeSystemExecutionLogLine(ctx, request, appender, line); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (s *BuildService) writeSystemExecutionLogLine(ctx context.Context, request runner.RunStepRequest, appender logs.StepLogChunkAppender, line string) error {
-	text := strings.TrimRight(line, "\n")
-	if strings.TrimSpace(text) == "" {
-		return nil
-	}
-
-	if appender != nil {
-		_, err := appender.AppendStepLogChunk(ctx, logs.StepLogChunk{
-			BuildID:   request.BuildID,
-			StepID:    request.StepID,
-			StepIndex: request.StepIndex,
-			StepName:  request.StepName,
-			Stream:    logs.StepLogStreamSystem,
-			ChunkText: text,
-			CreatedAt: time.Now().UTC(),
-		})
-		return err
-	}
-
-	return s.logSink.WriteStepLog(ctx, request.BuildID, request.StepName, text)
-}
-
-func terminalBuildSummaryDuration(build domain.Build, now time.Time) time.Duration {
-	if build.FinishedAt != nil && !build.FinishedAt.IsZero() {
-		if build.StartedAt != nil && !build.StartedAt.IsZero() && !build.FinishedAt.Before(*build.StartedAt) {
-			return build.FinishedAt.Sub(*build.StartedAt)
-		}
-		if !build.CreatedAt.IsZero() && !build.FinishedAt.Before(build.CreatedAt) {
-			return build.FinishedAt.Sub(build.CreatedAt)
-		}
-	}
-
-	if build.CreatedAt.IsZero() {
-		return 0
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	if now.Before(build.CreatedAt) {
-		return 0
-	}
-
-	return now.Sub(build.CreatedAt)
-}
-
-func classifyPrepareFailure(err error) (marker string, reason string) {
-	message := strings.ToLower(strings.TrimSpace(err.Error()))
-	if strings.Contains(message, "creating build container") || strings.Contains(message, "docker create") || strings.Contains(message, "docker run") {
-		return "Failed to start build container", "docker create failed"
-	}
-	if strings.Contains(message, "starting build container") || strings.Contains(message, "docker start") {
-		return "Failed to start build container", "docker start failed"
-	}
-	if strings.Contains(message, "workspace") {
-		return "Failed to prepare workspace", "workspace preparation failed"
-	}
-	return "Failed to prepare build execution", "prepare build failed"
-}
-
-func classifyStepFailure(result runner.RunStepResult) (stepFailureKind, string) {
-	if result.Status != runner.RunStepStatusFailed {
-		return stepFailureKindNone, ""
-	}
-
-	stderr := strings.ToLower(strings.TrimSpace(result.Stderr))
-	if strings.Contains(stderr, "timed out") {
-		trimmed := strings.TrimSpace(result.Stderr)
-		if trimmed == "" {
-			return stepFailureKindTimeout, "step timed out"
-		}
-		return stepFailureKindTimeout, trimmed
-	}
-
-	if result.ExitCode >= 0 {
-		return stepFailureKindExitCode, fmt.Sprintf("command exited with code %d", result.ExitCode)
-	}
-
-	return stepFailureKindInternal, "internal execution error"
-}
-
-func formatFailureStepEndLine(stepNumber int, totalSteps int, stepName string, duration time.Duration, exitCode int, failureKind stepFailureKind) string {
-	if failureKind == stepFailureKindTimeout {
-		return formatTimedOutStepEndLine(stepNumber, totalSteps, stepName, duration)
-	}
-	return formatStepEndLine(stepNumber, totalSteps, stepName, "failed", duration, exitCode)
-}
-
-func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID string) ([]string, error) {
-	if s.artifactRepo == nil || s.artifactCollector == nil || strings.TrimSpace(s.artifactWorkspaceRoot) == "" {
-		return nil, nil
-	}
-
-	build, err := s.buildRepo.GetByID(ctx, buildID)
-	if err != nil {
-		return nil, fmt.Errorf("fetching build for artifact collection: %w", err)
-	}
-	if !domain.IsTerminalBuildStatus(build.Status) {
-		return nil, nil
-	}
-
-	existing, err := s.artifactRepo.ListByBuildID(ctx, buildID)
-	if err != nil {
-		return nil, fmt.Errorf("checking existing artifacts: %w", err)
-	}
-	existingPaths := make(map[string]struct{}, len(existing))
-	for _, item := range existing {
-		existingPaths[item.LogicalPath] = struct{}{}
-	}
-
-	patterns, err := artifactPatternsFromBuild(build)
-	if err != nil {
-		return nil, fmt.Errorf("resolving build artifact declarations: %w", err)
-	}
-	if len(patterns) == 0 {
-		return sortedArtifactPaths(existingPaths), nil
-	}
-
-	workspacePath := filepath.Join(s.artifactWorkspaceRoot, strings.TrimSpace(buildID))
-	log.Printf("artifact collection start: build_id=%s workspace_path=%s declared_patterns=%q storage_root=%s", buildID, workspacePath, patterns, artifactStoreRootForLog(s.artifactStore))
-	collectResult, err := s.artifactCollector.Collect(ctx, artifact.CollectRequest{
-		BuildID:          buildID,
-		WorkspacePath:    workspacePath,
-		Patterns:         patterns,
-		SkipLogicalPaths: existingPaths,
-	})
-	if err != nil {
-		log.Printf("artifact collection error: build_id=%s workspace_path=%s err=%v", buildID, workspacePath, err)
-		return nil, err
-	}
-	for _, warning := range collectResult.Warnings {
-		log.Printf("artifact collection warning: build_id=%s %s", buildID, warning)
-	}
-	log.Printf("artifact metadata persistence start: build_id=%s artifacts_to_persist=%d", buildID, len(collectResult.Artifacts))
-
-	for _, item := range collectResult.Artifacts {
-		log.Printf("artifact metadata persist: build_id=%s logical_path=%s storage_key=%s size_bytes=%d", buildID, item.LogicalPath, item.StorageKey, item.SizeBytes)
-		_, err := s.artifactRepo.Create(ctx, domain.BuildArtifact{
-			ID:             uuid.NewString(),
-			BuildID:        buildID,
-			LogicalPath:    item.LogicalPath,
-			StorageKey:     item.StorageKey,
-			SizeBytes:      item.SizeBytes,
-			ContentType:    item.ContentType,
-			ChecksumSHA256: item.ChecksumSHA256,
-			CreatedAt:      time.Now().UTC(),
-		})
-		if err != nil {
-			log.Printf("artifact metadata persistence error: build_id=%s logical_path=%s err=%v", buildID, item.LogicalPath, err)
-			return nil, fmt.Errorf("persisting artifact metadata: %w", err)
-		}
-		existingPaths[item.LogicalPath] = struct{}{}
-	}
-	log.Printf("artifact metadata persistence complete: build_id=%s persisted=%d", buildID, len(collectResult.Artifacts))
-
-	return sortedArtifactPaths(existingPaths), nil
-}
-
-func sortedArtifactPaths(values map[string]struct{}) []string {
-	out := make([]string, 0, len(values))
-	for logicalPath := range values {
-		out = append(out, logicalPath)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func artifactStoreRootForLog(store artifact.Store) string {
-	if store == nil {
-		return ""
-	}
-	if reporter, ok := store.(interface{ RootPath() string }); ok {
-		return strings.TrimSpace(reporter.RootPath())
-	}
-	return ""
-}
-
-func artifactPatternsFromBuild(build domain.Build) ([]string, error) {
-	if build.PipelineConfigYAML == nil {
-		return nil, nil
-	}
-	trimmed := strings.TrimSpace(*build.PipelineConfigYAML)
-	if trimmed == "" {
-		return nil, nil
-	}
-
-	pipelineFile, err := pipeline.ParseAndValidate([]byte(trimmed))
-	if err != nil {
-		return nil, err
-	}
-
-	return pipelineFile.Artifacts.Paths, nil
-}
-
-func readOptionalString(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return strings.TrimSpace(*value)
-}
-
 func (s *BuildService) resolveExecutionImage(build domain.Build) string {
 	defaultImage := strings.TrimSpace(s.defaultExecutionImage)
 	if build.PipelineConfigYAML == nil {
@@ -1043,304 +685,4 @@ func joinSideEffectErrors(existing error, additional error) error {
 		return additional
 	}
 	return errors.Join(existing, additional)
-}
-
-func (s *BuildService) HandleStepResult(ctx context.Context, request runner.RunStepRequest, result runner.RunStepResult) (StepCompletionReport, error) {
-	return s.handleStepResult(ctx, request, result, false)
-}
-
-func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunStepRequest, result runner.RunStepResult, skipLegacyLogWrite bool) (StepCompletionReport, error) {
-	stepStatus := domain.BuildStepStatusSuccess
-	if result.Status == runner.RunStepStatusFailed {
-		stepStatus = domain.BuildStepStatusFailed
-	}
-
-	var stepError *string
-	if stepStatus == domain.BuildStepStatusFailed {
-		message := strings.TrimSpace(result.Stderr)
-		if message != "" {
-			stepError = &message
-		}
-	}
-
-	var stdout *string
-	if result.Stdout != "" {
-		stdoutValue := result.Stdout
-		stdout = &stdoutValue
-	}
-
-	var stderr *string
-	if result.Stderr != "" {
-		stderrValue := result.Stderr
-		stderr = &stderrValue
-	}
-
-	exitCode := result.ExitCode
-	completionUpdate := repository.StepUpdate{
-		Status:       stepStatus,
-		ExitCode:     &exitCode,
-		Stdout:       stdout,
-		Stderr:       stderr,
-		ErrorMessage: stepError,
-		StartedAt:    &result.StartedAt,
-		FinishedAt:   &result.FinishedAt,
-	}
-
-	claimToken := strings.TrimSpace(request.ClaimToken)
-	if claimToken == "" {
-		return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, nil
-	}
-
-	completionResult, err := s.buildRepo.CompleteStep(ctx, repository.CompleteStepRequest{
-		BuildID:      request.BuildID,
-		StepIndex:    request.StepIndex,
-		ClaimToken:   claimToken,
-		RequireClaim: true,
-		Update:       completionUpdate,
-	})
-	if err != nil {
-		return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, mapRepoErr(err)
-	}
-
-	if completionResult.Outcome != repository.StepCompletionCompleted {
-		return StepCompletionReport{Step: completionResult.Step, CompletionOutcome: completionResult.Outcome}, nil
-	}
-
-	report := StepCompletionReport{Step: completionResult.Step, CompletionOutcome: repository.StepCompletionCompleted}
-	if skipLegacyLogWrite {
-		return report, nil
-	}
-	if err := writeOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stdout); err != nil {
-		report.SideEffectErr = err
-		return report, nil
-	}
-	if err := writeOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stderr); err != nil {
-		report.SideEffectErr = err
-		return report, nil
-	}
-
-	return report, nil
-}
-
-func writeOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, stepName string, output string) error {
-	for _, line := range splitLogLines(output) {
-		if err := sink.WriteStepLog(ctx, buildID, stepName, line); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-var lineBreakSplitter = regexp.MustCompile(`\r?\n`)
-
-func splitLogLines(output string) []string {
-	trimmed := strings.TrimSpace(output)
-	if trimmed == "" {
-		return nil
-	}
-
-	return lineBreakSplitter.Split(trimmed, -1)
-}
-
-func (s *BuildService) transitionBuildStatus(ctx context.Context, id string, toStatus domain.BuildStatus, errorMessage *string) (domain.Build, error) {
-	build, err := s.buildRepo.GetByID(ctx, id)
-	if err != nil {
-		return domain.Build{}, mapRepoErr(err)
-	}
-
-	if !domain.CanTransitionBuild(build.Status, toStatus) {
-		return domain.Build{}, ErrInvalidBuildStatusTransition
-	}
-
-	return s.buildRepo.UpdateStatus(ctx, id, toStatus, errorMessage)
-}
-
-func defaultBuildSteps(buildID string) []domain.BuildStep {
-	return []domain.BuildStep{
-		{
-			ID:             uuid.NewString(),
-			BuildID:        buildID,
-			StepIndex:      0,
-			Name:           "default",
-			Command:        "sh",
-			Args:           []string{"-c", "echo coyote-ci worker default step && exit 0"},
-			Env:            map[string]string{},
-			WorkingDir:     ".",
-			TimeoutSeconds: 0,
-			Status:         domain.BuildStepStatusPending,
-		},
-	}
-}
-
-func buildStepsForTemplate(buildID string, template string) []domain.BuildStep {
-	normalizedTemplate := strings.ToLower(strings.TrimSpace(template))
-
-	stepInputs := []CreateBuildStepInput{
-		{
-			Name:       "default",
-			Command:    "sh",
-			Args:       []string{"-c", "echo coyote-ci worker default step && exit 0"},
-			Env:        map[string]string{},
-			WorkingDir: ".",
-		},
-	}
-
-	switch normalizedTemplate {
-	case "", BuildTemplateDefault:
-		stepInputs = []CreateBuildStepInput{
-			{
-				Name:       "default",
-				Command:    "sh",
-				Args:       []string{"-c", "echo coyote-ci worker default step && exit 0"},
-				Env:        map[string]string{},
-				WorkingDir: ".",
-			},
-		}
-	case BuildTemplateTest:
-		stepInputs = []CreateBuildStepInput{
-			{
-				Name:       "setup",
-				Command:    "sh",
-				Args:       []string{"-c", "echo running setup && exit 0"},
-				Env:        map[string]string{},
-				WorkingDir: ".",
-			},
-			{
-				Name:       "test",
-				Command:    "sh",
-				Args:       []string{"-c", "echo running tests && exit 0"},
-				Env:        map[string]string{},
-				WorkingDir: ".",
-			},
-			{
-				Name:       "teardown",
-				Command:    "sh",
-				Args:       []string{"-c", "echo running teardown && exit 0"},
-				Env:        map[string]string{},
-				WorkingDir: ".",
-			},
-		}
-	case BuildTemplateBuild:
-		stepInputs = []CreateBuildStepInput{
-			{
-				Name:       "install",
-				Command:    "sh",
-				Args:       []string{"-c", "echo installing dependencies && exit 0"},
-				Env:        map[string]string{},
-				WorkingDir: ".",
-			},
-			{
-				Name:       "compile",
-				Command:    "sh",
-				Args:       []string{"-c", "echo compiling project && exit 0"},
-				Env:        map[string]string{},
-				WorkingDir: ".",
-			},
-		}
-	case BuildTemplateFail:
-		stepInputs = []CreateBuildStepInput{
-			{
-				Name:       "setup",
-				Command:    "sh",
-				Args:       []string{"-c", "echo success && exit 0"},
-				Env:        map[string]string{},
-				WorkingDir: ".",
-			},
-			{
-				Name:       "verify",
-				Command:    "sh",
-				Args:       []string{"-c", "echo failure 1>&2 && exit 1"},
-				Env:        map[string]string{},
-				WorkingDir: ".",
-			},
-		}
-	}
-
-	return domainStepsFromInputs(buildID, stepInputs)
-}
-
-func buildStepsForCustomTemplate(buildID string, customSteps []QueueBuildCustomStepInput) ([]domain.BuildStep, error) {
-	if len(customSteps) == 0 {
-		return nil, ErrCustomTemplateStepsRequired
-	}
-
-	stepInputs := make([]CreateBuildStepInput, 0, len(customSteps))
-	for idx, step := range customSteps {
-		command := strings.TrimSpace(step.Command)
-		if command == "" {
-			return nil, ErrCustomTemplateStepCommandRequired
-		}
-
-		name := strings.TrimSpace(step.Name)
-		if name == "" {
-			name = "step-" + strconv.Itoa(idx+1)
-		}
-
-		stepInputs = append(stepInputs, CreateBuildStepInput{
-			Name:       name,
-			Command:    "sh",
-			Args:       []string{"-c", command},
-			Env:        map[string]string{},
-			WorkingDir: ".",
-		})
-	}
-
-	return domainStepsFromInputs(buildID, stepInputs), nil
-}
-
-func domainStepsFromInputs(buildID string, stepInputs []CreateBuildStepInput) []domain.BuildStep {
-	steps := make([]domain.BuildStep, 0, len(stepInputs))
-	for idx, input := range stepInputs {
-		normalized := normalizeCreateStepInput(input)
-		steps = append(steps, domain.BuildStep{
-			ID:             uuid.NewString(),
-			BuildID:        buildID,
-			StepIndex:      idx,
-			Name:           normalized.Name,
-			Command:        normalized.Command,
-			Args:           normalized.Args,
-			Env:            normalized.Env,
-			WorkingDir:     normalized.WorkingDir,
-			TimeoutSeconds: normalized.TimeoutSeconds,
-			Status:         domain.BuildStepStatusPending,
-		})
-	}
-
-	return steps
-}
-
-func normalizeCreateStepInput(in CreateBuildStepInput) CreateBuildStepInput {
-	out := in
-
-	if strings.TrimSpace(out.Command) == "" {
-		out.Command = "sh"
-	}
-	if len(out.Args) == 0 {
-		out.Args = []string{"-c", "echo coyote-ci worker default step && exit 0"}
-	}
-	if out.Env == nil {
-		out.Env = map[string]string{}
-	}
-	if strings.TrimSpace(out.WorkingDir) == "" {
-		out.WorkingDir = "."
-	}
-	if out.TimeoutSeconds < 0 {
-		out.TimeoutSeconds = 0
-	}
-
-	return out
-}
-
-func mapRepoErr(err error) error {
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, repository.ErrBuildNotFound) {
-		return ErrBuildNotFound
-	}
-	if errors.Is(err, repository.ErrInvalidBuildStepTransition) {
-		return ErrInvalidBuildStepTransition
-	}
-	return err
 }

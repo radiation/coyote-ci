@@ -4,6 +4,7 @@ type CreateBuildRequest struct {
 	ProjectID string                 `json:"project_id"`
 	Template  string                 `json:"template,omitempty"`
 	Steps     []CreateBuildStepInput `json:"steps,omitempty"`
+	Source    *BuildSourceInput      `json:"source,omitempty"`
 }
 
 type QueueBuildRequest struct {
@@ -17,14 +18,28 @@ type QueueBuildStepInput struct {
 }
 
 type CreatePipelineBuildRequest struct {
-	ProjectID    string `json:"project_id"`
-	PipelineYAML string `json:"pipeline_yaml"`
+	ProjectID    string            `json:"project_id"`
+	PipelineYAML string            `json:"pipeline_yaml"`
+	Source       *BuildSourceInput `json:"source,omitempty"`
 }
 
 type CreateRepoBuildRequest struct {
 	ProjectID string `json:"project_id"`
 	RepoURL   string `json:"repo_url"`
-	Ref       string `json:"ref"`
+	Ref       string `json:"ref,omitempty"`
+	CommitSHA string `json:"commit_sha,omitempty"`
+}
+
+type BuildSourceInput struct {
+	RepositoryURL string  `json:"repository_url"`
+	Ref           *string `json:"ref,omitempty"`
+	CommitSHA     *string `json:"commit_sha,omitempty"`
+}
+
+type BuildSourceResponse struct {
+	RepositoryURL string  `json:"repository_url"`
+	Ref           *string `json:"ref,omitempty"`
+	CommitSHA     *string `json:"commit_sha,omitempty"`
 }
 
 type CreateBuildStepInput struct {
@@ -74,21 +89,22 @@ type StepLogsEnvelope struct {
 }
 
 type BuildResponse struct {
-	ID                 string  `json:"id"`
-	ProjectID          string  `json:"project_id"`
-	Status             string  `json:"status"`
-	CreatedAt          string  `json:"created_at"`
-	QueuedAt           *string `json:"queued_at"`
-	StartedAt          *string `json:"started_at"`
-	FinishedAt         *string `json:"finished_at"`
-	CurrentStepIndex   int     `json:"current_step_index"`
-	ErrorMessage       *string `json:"error_message"`
-	PipelineConfigYAML *string `json:"pipeline_config_yaml,omitempty"`
-	PipelineName       *string `json:"pipeline_name,omitempty"`
-	PipelineSource     *string `json:"pipeline_source,omitempty"`
-	RepoURL            *string `json:"repo_url,omitempty"`
-	Ref                *string `json:"ref,omitempty"`
-	CommitSHA          *string `json:"commit_sha,omitempty"`
+	ID                 string               `json:"id"`
+	ProjectID          string               `json:"project_id"`
+	Status             string               `json:"status"`
+	CreatedAt          string               `json:"created_at"`
+	QueuedAt           *string              `json:"queued_at"`
+	StartedAt          *string              `json:"started_at"`
+	FinishedAt         *string              `json:"finished_at"`
+	CurrentStepIndex   int                  `json:"current_step_index"`
+	ErrorMessage       *string              `json:"error_message"`
+	PipelineConfigYAML *string              `json:"pipeline_config_yaml,omitempty"`
+	PipelineName       *string              `json:"pipeline_name,omitempty"`
+	PipelineSource     *string              `json:"pipeline_source,omitempty"`
+	RepoURL            *string              `json:"repo_url,omitempty"`
+	Ref                *string              `json:"ref,omitempty"`
+	CommitSHA          *string              `json:"commit_sha,omitempty"`
+	Source             *BuildSourceResponse `json:"source,omitempty"`
 }
 
 type BuildListResponse struct {

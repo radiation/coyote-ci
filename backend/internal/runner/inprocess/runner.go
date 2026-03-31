@@ -35,7 +35,7 @@ func New() *Runner {
 }
 
 func NewWithWorkspaceRoot(root string) *Runner {
-	materializer := source.NewHostWorkspaceMaterializer(source.NewGitFetcher(), root)
+	materializer := source.NewHostWorkspaceMaterializer(root)
 	return NewWithWorkspaceMaterializer(materializer)
 }
 

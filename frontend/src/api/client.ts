@@ -13,6 +13,12 @@ import type {
   QueueBuildStepInput,
   StepLogsResponse,
 } from '../types/build';
+import type {
+  CreateJobRequest,
+  Job,
+  JobListResponse,
+  UpdateJobRequest,
+} from '../types/job';
 
 /**
  * Base URL for API requests.
@@ -27,7 +33,18 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, init);
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`API ${res.status}: ${body}`);
+    let message = body;
+
+    try {
+      const parsed = JSON.parse(body) as { error?: { message?: string } };
+      if (parsed?.error?.message) {
+        message = parsed.error.message;
+      }
+    } catch {
+      // Keep raw body when response is not JSON.
+    }
+
+    throw new Error(`API ${res.status}: ${message}`);
   }
   return res.json() as Promise<T>;
 }
@@ -117,5 +134,36 @@ export async function queueBuild(id: string, template?: BuildTemplate, steps?: Q
         },
       )
     : await postNoBodyJSON<DataEnvelope<Build>>(path);
+  return envelope.data;
+}
+
+export async function listJobs(): Promise<Job[]> {
+  const envelope = await fetchJSON<DataEnvelope<JobListResponse>>('/jobs');
+  return envelope.data.jobs;
+}
+
+export async function getJob(id: string): Promise<Job> {
+  const envelope = await fetchJSON<DataEnvelope<Job>>(`/jobs/${encodeURIComponent(id)}`);
+  return envelope.data;
+}
+
+export async function createJob(input: CreateJobRequest): Promise<Job> {
+  const envelope = await postJSON<DataEnvelope<Job>, CreateJobRequest>('/jobs', input);
+  return envelope.data;
+}
+
+export async function updateJob(id: string, input: UpdateJobRequest): Promise<Job> {
+  const envelope = await fetchJSON<DataEnvelope<Job>>(`/jobs/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  });
+  return envelope.data;
+}
+
+export async function runJob(id: string): Promise<Build> {
+  const envelope = await postNoBodyJSON<DataEnvelope<Build>>(`/jobs/${encodeURIComponent(id)}/run`);
   return envelope.data;
 }

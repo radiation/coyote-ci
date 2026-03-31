@@ -56,6 +56,7 @@ func main() {
 	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildService(buildRepo, stepRunner, logSink)
 	buildService.SetDefaultExecutionImage(cfg.ExecutionDefaultImage)
+	buildService.SetExecutionWorkspaceRoot(cfg.ExecutionWorkspaceRoot)
 	buildService.SetArtifactPersistence(artifactRepo, artifactStore, cfg.ExecutionWorkspaceRoot)
 	leaseDuration := time.Duration(cfg.StepLeaseSeconds) * time.Second
 	workerService := service.NewWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)
@@ -75,7 +76,7 @@ func main() {
 func resolveStepRunner(cfg config.Config) runner.Runner {
 	switch strings.ToLower(strings.TrimSpace(cfg.ExecutionBackend)) {
 	case "", "docker":
-		workspace := source.NewHostWorkspaceMaterializer(source.NewGitFetcher(), cfg.ExecutionWorkspaceRoot)
+		workspace := source.NewHostWorkspaceMaterializer(cfg.ExecutionWorkspaceRoot)
 		return dockerrunner.New(dockerrunner.Options{
 			Workspace:    workspace,
 			DefaultImage: cfg.ExecutionDefaultImage,

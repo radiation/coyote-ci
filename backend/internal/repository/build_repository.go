@@ -60,6 +60,7 @@ type BuildRepository interface {
 	List(ctx context.Context) ([]domain.Build, error)
 	GetByID(ctx context.Context, id string) (domain.Build, error)
 	UpdateStatus(ctx context.Context, id string, status domain.BuildStatus, errorMessage *string) (domain.Build, error)
+	UpdateSourceCommitSHA(ctx context.Context, id string, commitSHA string) (domain.Build, error)
 	QueueBuild(ctx context.Context, id string, steps []domain.BuildStep) (domain.Build, error)
 	GetStepsByBuildID(ctx context.Context, buildID string) ([]domain.BuildStep, error)
 	ClaimPendingStep(ctx context.Context, buildID string, stepIndex int, claim StepClaim) (domain.BuildStep, bool, error)
