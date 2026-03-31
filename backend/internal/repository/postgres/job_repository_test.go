@@ -1,0 +1,93 @@
+package postgres
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
+
+	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
+)
+
+func TestJobRepository_CreateGetListUpdate(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+
+	repo := NewJobRepository(db)
+	now := time.Now().UTC()
+	row := []string{"id", "project_id", "name", "repository_url", "default_ref", "pipeline_yaml", "enabled", "created_at", "updated_at"}
+
+	job := domain.Job{
+		ID:            "job-1",
+		ProjectID:     "project-1",
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       true,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+
+	mock.ExpectQuery("INSERT INTO jobs").WillReturnRows(sqlmock.NewRows(row).AddRow(
+		job.ID, job.ProjectID, job.Name, job.RepositoryURL, job.DefaultRef, job.PipelineYAML, job.Enabled, job.CreatedAt, job.UpdatedAt,
+	))
+	created, err := repo.Create(context.Background(), job)
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if created.ID != "job-1" {
+		t.Fatalf("expected created id job-1, got %q", created.ID)
+	}
+
+	mock.ExpectQuery("SELECT id, project_id, name, repository_url").WillReturnRows(sqlmock.NewRows(row).AddRow(
+		job.ID, job.ProjectID, job.Name, job.RepositoryURL, job.DefaultRef, job.PipelineYAML, job.Enabled, job.CreatedAt, job.UpdatedAt,
+	))
+	got, err := repo.GetByID(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	if got.Name != "backend-ci" {
+		t.Fatalf("expected name backend-ci, got %q", got.Name)
+	}
+
+	mock.ExpectQuery("SELECT id, project_id, name, repository_url").WillReturnRows(sqlmock.NewRows(row).AddRow(
+		job.ID, job.ProjectID, job.Name, job.RepositoryURL, job.DefaultRef, job.PipelineYAML, job.Enabled, job.CreatedAt, job.UpdatedAt,
+	))
+	listed, err := repo.List(context.Background())
+	if err != nil {
+		t.Fatalf("list failed: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("expected 1 listed job, got %d", len(listed))
+	}
+
+	job.Enabled = false
+	job.UpdatedAt = now.Add(time.Second)
+	mock.ExpectQuery("UPDATE jobs").WillReturnRows(sqlmock.NewRows(row).AddRow(
+		job.ID, job.ProjectID, job.Name, job.RepositoryURL, job.DefaultRef, job.PipelineYAML, job.Enabled, job.CreatedAt, job.UpdatedAt,
+	))
+	updated, err := repo.Update(context.Background(), job)
+	if err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	if updated.Enabled {
+		t.Fatal("expected enabled=false after update")
+	}
+
+	mock.ExpectQuery("SELECT id, project_id, name, repository_url").WillReturnError(sql.ErrNoRows)
+	_, err = repo.GetByID(context.Background(), "missing")
+	if !errors.Is(err, repository.ErrJobNotFound) {
+		t.Fatalf("expected ErrJobNotFound, got %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}

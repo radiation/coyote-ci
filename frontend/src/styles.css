@@ -35,6 +35,13 @@ a:hover {
   padding: 12px 24px;
 }
 
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .header .logo {
   color: #fff;
   font-size: 1.25rem;
@@ -43,6 +50,23 @@ a:hover {
 .header .logo:hover {
   text-decoration: none;
   opacity: 0.9;
+}
+
+.main-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.main-nav a {
+  color: #fff;
+  opacity: 0.9;
+  font-weight: 600;
+}
+
+.main-nav a:hover {
+  opacity: 1;
+  text-decoration: none;
 }
 
 .main {
@@ -91,6 +115,117 @@ a:hover {
 .queue-build-form select:disabled {
   opacity: 0.65;
   cursor: not-allowed;
+}
+
+.page-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.action-link {
+  border: 1px solid #1a1a2e;
+  background: #1a1a2e;
+  color: #fff;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.action-link:hover {
+  text-decoration: none;
+  opacity: 0.9;
+}
+
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.table-action-button {
+  border: 1px solid #1a1a2e;
+  background: #1a1a2e;
+  color: #fff;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.table-action-button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.job-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 900px;
+  margin-top: 10px;
+}
+
+.job-form label {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.job-form input,
+.job-form textarea {
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.job-form textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+.job-form input:disabled,
+.job-form textarea:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.job-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.job-form button,
+.secondary-button {
+  border: 1px solid #1a1a2e;
+  background: #1a1a2e;
+  color: #fff;
+  border-radius: 4px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.job-form button:disabled,
+.secondary-button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.secondary-button {
+  background: #fff;
+  color: #1a1a2e;
+}
+
+.empty-state {
+  margin-top: 12px;
 }
 
 .queue-build-custom-input {

@@ -19,6 +19,21 @@ CREATE TABLE IF NOT EXISTS builds (
 CREATE INDEX IF NOT EXISTS idx_builds_project_id ON builds (project_id);
 CREATE INDEX IF NOT EXISTS idx_builds_created_at ON builds (created_at DESC);
 
+CREATE TABLE IF NOT EXISTS jobs (
+    id UUID PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    repository_url TEXT NOT NULL,
+    default_ref TEXT NOT NULL,
+    pipeline_yaml TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_project_id ON jobs (project_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs (created_at DESC);
+
 CREATE TABLE IF NOT EXISTS build_steps (
     id UUID PRIMARY KEY,
     build_id UUID NOT NULL REFERENCES builds(id) ON DELETE CASCADE,

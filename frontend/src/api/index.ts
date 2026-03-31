@@ -10,4 +10,9 @@ export {
 	createPipelineBuild,
 	createRepoBuild,
 	queueBuild,
+	listJobs,
+	getJob,
+	createJob,
+	updateJob,
+	runJob,
 } from './client';

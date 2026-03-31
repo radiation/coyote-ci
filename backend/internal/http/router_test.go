@@ -13,8 +13,12 @@ import (
 )
 
 func TestNewRouter_HealthAndNotFound(t *testing.T) {
-	h := handler.NewBuildHandler(service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
-	r := NewRouter(h)
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := service.NewBuildService(buildRepo, nil, nil)
+	h := handler.NewBuildHandler(buildSvc)
+	jh := handler.NewJobHandler(service.NewJobService(jobRepo, buildSvc))
+	r := NewRouter(h, jh)
 
 	tests := []struct {
 		name       string
@@ -46,8 +50,12 @@ func TestNewRouter_HealthAndNotFound(t *testing.T) {
 }
 
 func TestNewRouter_BuildRoutes(t *testing.T) {
-	h := handler.NewBuildHandler(service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
-	r := NewRouter(h)
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := service.NewBuildService(buildRepo, nil, nil)
+	h := handler.NewBuildHandler(buildSvc)
+	jh := handler.NewJobHandler(service.NewJobService(jobRepo, buildSvc))
+	r := NewRouter(h, jh)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
 	createRes := httptest.NewRecorder()
@@ -108,8 +116,12 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 }
 
 func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
-	h := handler.NewBuildHandler(service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
-	r := NewRouter(h)
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := service.NewBuildService(buildRepo, nil, nil)
+	h := handler.NewBuildHandler(buildSvc)
+	jh := handler.NewJobHandler(service.NewJobService(jobRepo, buildSvc))
+	r := NewRouter(h, jh)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
 	createRes := httptest.NewRecorder()
@@ -178,8 +190,12 @@ func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
 }
 
 func TestNewRouter_QueueBuild_UnknownTemplate_FallsBackToDefaultStep(t *testing.T) {
-	h := handler.NewBuildHandler(service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
-	r := NewRouter(h)
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := service.NewBuildService(buildRepo, nil, nil)
+	h := handler.NewBuildHandler(buildSvc)
+	jh := handler.NewJobHandler(service.NewJobService(jobRepo, buildSvc))
+	r := NewRouter(h, jh)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
 	createRes := httptest.NewRecorder()
@@ -240,5 +256,56 @@ func TestNewRouter_QueueBuild_UnknownTemplate_FallsBackToDefaultStep(t *testing.
 	}
 	if step["name"] != "default" {
 		t.Fatalf("expected default step name, got %v", step["name"])
+	}
+}
+
+func TestNewRouter_JobRoutes(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := service.NewBuildService(buildRepo, nil, nil)
+	h := handler.NewBuildHandler(buildSvc)
+	jh := handler.NewJobHandler(service.NewJobService(jobRepo, buildSvc))
+	r := NewRouter(h, jh)
+
+	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
+	createReq := httptest.NewRequest(http.MethodPost, "/jobs/", bytes.NewBufferString(createBody))
+	createRes := httptest.NewRecorder()
+	r.ServeHTTP(createRes, createReq)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("expected create job status %d, got %d", http.StatusCreated, createRes.Code)
+	}
+
+	var createPayload map[string]any
+	if err := json.Unmarshal(createRes.Body.Bytes(), &createPayload); err != nil {
+		t.Fatalf("parse create job response failed: %v", err)
+	}
+	data, ok := createPayload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected create response data object, got %T", createPayload["data"])
+	}
+	jobID, ok := data["id"].(string)
+	if !ok || jobID == "" {
+		t.Fatalf("expected create response job id string, got %v", data["id"])
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/jobs/", nil)
+	listRes := httptest.NewRecorder()
+	r.ServeHTTP(listRes, listReq)
+	if listRes.Code != http.StatusOK {
+		t.Fatalf("expected list jobs status %d, got %d", http.StatusOK, listRes.Code)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/jobs/"+jobID, nil)
+	getRes := httptest.NewRecorder()
+	r.ServeHTTP(getRes, getReq)
+	if getRes.Code != http.StatusOK {
+		t.Fatalf("expected get job status %d, got %d", http.StatusOK, getRes.Code)
+	}
+
+	runReq := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/run", nil)
+	runRes := httptest.NewRecorder()
+	r.ServeHTTP(runRes, runReq)
+	if runRes.Code != http.StatusCreated {
+		t.Fatalf("expected run-now status %d, got %d", http.StatusCreated, runRes.Code)
 	}
 }
