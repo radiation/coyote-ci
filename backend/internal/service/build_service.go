@@ -64,6 +64,7 @@ type BuildService struct {
 	executionWorkspaceRoot string
 
 	artifactRepo          repository.ArtifactRepository
+	executionOutputRepo   repository.ExecutionJobOutputRepository
 	artifactStore         artifact.Store
 	artifactCollector     *artifact.Collector
 	artifactWorkspaceRoot string
@@ -120,6 +121,10 @@ func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository
 
 func (s *BuildService) SetExecutionJobRepository(repo repository.ExecutionJobRepository) {
 	s.executionJobRepo = repo
+}
+
+func (s *BuildService) SetExecutionJobOutputRepository(repo repository.ExecutionJobOutputRepository) {
+	s.executionOutputRepo = repo
 }
 
 type CreateBuildInput struct {
@@ -416,7 +421,59 @@ func (s *BuildService) createDurableJobsForBuild(ctx context.Context, build doma
 		return err
 	}
 	_, err = s.executionJobRepo.CreateJobsForBuild(ctx, jobs)
-	return err
+	if err != nil {
+		return err
+	}
+
+	if s.executionOutputRepo == nil || len(jobs) == 0 {
+		return nil
+	}
+
+	declaredOutputs, outputErr := s.declaredOutputsForBuild(build, jobs)
+	if outputErr != nil {
+		return outputErr
+	}
+	if len(declaredOutputs) == 0 {
+		return nil
+	}
+	_, outputErr = s.executionOutputRepo.CreateMany(ctx, declaredOutputs)
+	return outputErr
+}
+
+func (s *BuildService) declaredOutputsForBuild(build domain.Build, jobs []domain.ExecutionJob) ([]domain.ExecutionJobOutput, error) {
+	if build.PipelineConfigYAML == nil || strings.TrimSpace(*build.PipelineConfigYAML) == "" {
+		return []domain.ExecutionJobOutput{}, nil
+	}
+
+	resolved, err := pipeline.LoadAndResolve([]byte(strings.TrimSpace(*build.PipelineConfigYAML)))
+	if err != nil {
+		return []domain.ExecutionJobOutput{}, nil
+	}
+	if len(resolved.Artifacts.Paths) == 0 {
+		return []domain.ExecutionJobOutput{}, nil
+	}
+
+	// Build-level artifacts are declared against the final execution job in the current sequential model.
+	lastJob := jobs[len(jobs)-1]
+	outputs := make([]domain.ExecutionJobOutput, 0, len(resolved.Artifacts.Paths))
+	for idx, item := range resolved.Artifacts.Paths {
+		name := strings.TrimSpace(item)
+		if name == "" {
+			continue
+		}
+		outputs = append(outputs, domain.ExecutionJobOutput{
+			ID:           uuid.NewString(),
+			JobID:        lastJob.ID,
+			BuildID:      build.ID,
+			Name:         "output-" + strconv.Itoa(idx+1),
+			Kind:         "artifact",
+			DeclaredPath: name,
+			Status:       domain.ExecutionJobOutputStatusDeclared,
+			CreatedAt:    time.Now().UTC(),
+		})
+	}
+
+	return outputs, nil
 }
 
 func resolveRepoPipelinePath(repoRoot string, requestedPath string) (string, string, error) {

@@ -12,8 +12,10 @@ import (
 func TestBuildService_CreateBuildFromPipeline_PersistsDurableJobs(t *testing.T) {
 	buildRepo := &fakeBuildRepository{}
 	execRepo := memoryrepo.NewExecutionJobRepository()
+	outputRepo := memoryrepo.NewExecutionJobOutputRepository()
 	svc := NewBuildService(buildRepo, nil, &fakeLogSink{})
 	svc.SetExecutionJobRepository(execRepo)
+	svc.SetExecutionJobOutputRepository(outputRepo)
 	svc.SetDefaultExecutionImage("golang:1.24")
 
 	pipelineYAML := `
@@ -28,6 +30,9 @@ steps:
     timeout_seconds: 120
     env:
       GOFLAGS: -mod=readonly
+artifacts:
+  paths:
+    - dist/**
 `
 
 	build, err := svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{
@@ -69,6 +74,17 @@ steps:
 	}
 	if job.ResolvedSpecJSON == "" {
 		t.Fatal("expected resolved spec json to be persisted")
+	}
+
+	outputs, err := outputRepo.ListByBuildID(context.Background(), build.ID)
+	if err != nil {
+		t.Fatalf("list outputs failed: %v", err)
+	}
+	if len(outputs) != 1 {
+		t.Fatalf("expected one declared output, got %d", len(outputs))
+	}
+	if outputs[0].DeclaredPath != "dist/**" {
+		t.Fatalf("expected declared output path dist/**, got %q", outputs[0].DeclaredPath)
 	}
 }
 

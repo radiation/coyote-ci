@@ -142,6 +142,8 @@ definitions:
         type: string
       id:
         type: string
+      job:
+        $ref: '#/definitions/api.ExecutionJobResponse'
       name:
         type: string
       started_at:
@@ -255,6 +257,90 @@ definitions:
     properties:
       error:
         $ref: '#/definitions/api.ErrorBody'
+    type: object
+  api.ExecutionJobOutputResponse:
+    properties:
+      build_id:
+        type: string
+      content_type:
+        type: string
+      created_at:
+        type: string
+      declared_path:
+        type: string
+      destination_uri:
+        type: string
+      digest:
+        type: string
+      id:
+        type: string
+      job_id:
+        type: string
+      kind:
+        type: string
+      name:
+        type: string
+      size_bytes:
+        type: integer
+      status:
+        type: string
+    type: object
+  api.ExecutionJobResponse:
+    properties:
+      build_id:
+        type: string
+      command:
+        items:
+          type: string
+        type: array
+      command_preview:
+        type: string
+      context_dir:
+        type: string
+      created_at:
+        type: string
+      environment:
+        additionalProperties:
+          type: string
+        type: object
+      error_message:
+        type: string
+      finished_at:
+        type: string
+      id:
+        type: string
+      image:
+        type: string
+      name:
+        type: string
+      outputs:
+        items:
+          $ref: '#/definitions/api.ExecutionJobOutputResponse'
+        type: array
+      pipeline_file_path:
+        type: string
+      source_commit_sha:
+        type: string
+      source_ref_name:
+        type: string
+      source_repo_url:
+        type: string
+      spec_digest:
+        type: string
+      spec_version:
+        type: integer
+      started_at:
+        type: string
+      status:
+        type: string
+      step_id:
+        type: string
+      step_index:
+        type: integer
+      timeout_seconds:
+        type: integer
+      working_dir:
+        type: string
     type: object
   api.JobEnvelope:
     properties:

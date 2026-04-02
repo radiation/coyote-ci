@@ -27,6 +27,27 @@ func (s *BuildService) GetBuildSteps(ctx context.Context, id string) ([]domain.B
 	return steps, mapRepoErr(err)
 }
 
+func (s *BuildService) GetJobsByBuildID(ctx context.Context, buildID string) ([]domain.ExecutionJob, error) {
+	if s.executionJobRepo == nil {
+		return []domain.ExecutionJob{}, nil
+	}
+	return s.executionJobRepo.GetJobsByBuildID(ctx, buildID)
+}
+
+func (s *BuildService) GetJobOutputsByBuildID(ctx context.Context, buildID string) ([]domain.ExecutionJobOutput, error) {
+	if s.executionOutputRepo == nil {
+		return []domain.ExecutionJobOutput{}, nil
+	}
+	return s.executionOutputRepo.ListByBuildID(ctx, buildID)
+}
+
+func (s *BuildService) ClaimNextRunnableJob(ctx context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
+	if s.executionJobRepo == nil {
+		return domain.ExecutionJob{}, false, nil
+	}
+	return s.executionJobRepo.ClaimNextRunnableJob(ctx, claim)
+}
+
 func (s *BuildService) GetJobByStepID(ctx context.Context, stepID string) (domain.ExecutionJob, error) {
 	if s.executionJobRepo == nil {
 		return domain.ExecutionJob{}, repository.ErrExecutionJobNotFound

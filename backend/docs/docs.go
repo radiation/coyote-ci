@@ -1282,6 +1282,9 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "job": {
+                    "$ref": "#/definitions/api.ExecutionJobResponse"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -1455,6 +1458,133 @@ const docTemplate = `{
             "properties": {
                 "error": {
                     "$ref": "#/definitions/api.ErrorBody"
+                }
+            }
+        },
+        "api.ExecutionJobOutputResponse": {
+            "type": "object",
+            "properties": {
+                "build_id": {
+                    "type": "string"
+                },
+                "content_type": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "declared_path": {
+                    "type": "string"
+                },
+                "destination_uri": {
+                    "type": "string"
+                },
+                "digest": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.ExecutionJobResponse": {
+            "type": "object",
+            "properties": {
+                "build_id": {
+                    "type": "string"
+                },
+                "command": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "command_preview": {
+                    "type": "string"
+                },
+                "context_dir": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "environment": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "image": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "outputs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.ExecutionJobOutputResponse"
+                    }
+                },
+                "pipeline_file_path": {
+                    "type": "string"
+                },
+                "source_commit_sha": {
+                    "type": "string"
+                },
+                "source_ref_name": {
+                    "type": "string"
+                },
+                "source_repo_url": {
+                    "type": "string"
+                },
+                "spec_digest": {
+                    "type": "string"
+                },
+                "spec_version": {
+                    "type": "integer"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "step_id": {
+                    "type": "string"
+                },
+                "step_index": {
+                    "type": "integer"
+                },
+                "timeout_seconds": {
+                    "type": "integer"
+                },
+                "working_dir": {
+                    "type": "string"
                 }
             }
         },

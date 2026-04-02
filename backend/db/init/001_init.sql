@@ -102,6 +102,24 @@ CREATE INDEX IF NOT EXISTS idx_build_jobs_build_id ON build_jobs (build_id);
 CREATE INDEX IF NOT EXISTS idx_build_jobs_status_created_at ON build_jobs (status, created_at);
 CREATE INDEX IF NOT EXISTS idx_build_jobs_claim_expires_at ON build_jobs (claim_expires_at);
 
+CREATE TABLE IF NOT EXISTS build_job_outputs (
+    id UUID PRIMARY KEY,
+    job_id UUID NOT NULL REFERENCES build_jobs(id) ON DELETE CASCADE,
+    build_id UUID NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    declared_path TEXT NOT NULL,
+    destination_uri TEXT,
+    content_type TEXT,
+    size_bytes BIGINT,
+    digest TEXT,
+    status TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_build_job_outputs_build_id ON build_job_outputs (build_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_build_job_outputs_job_id ON build_job_outputs (job_id, created_at);
+
 CREATE TABLE IF NOT EXISTS build_artifacts (
     id UUID PRIMARY KEY,
     build_id UUID NOT NULL REFERENCES builds(id) ON DELETE CASCADE,

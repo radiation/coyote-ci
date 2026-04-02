@@ -120,6 +120,7 @@ export function StepList({ buildID, steps }: { buildID: string; steps: BuildStep
           <th>Name</th>
           <th>Command</th>
           <th>Status</th>
+          <th>Job</th>
           <th>Worker</th>
           <th>Started</th>
           <th>Finished</th>
@@ -144,6 +145,7 @@ export function StepList({ buildID, steps }: { buildID: string; steps: BuildStep
                   <code className="step-command" title={step.command}>{commandPreview(step.command)}</code>
                 </td>
                 <td><StatusBadge status={step.status} /></td>
+                <td>{step.job ? <StatusBadge status={step.job.status} /> : '—'}</td>
                 <td>{step.worker_id ?? '—'}</td>
                 <td>{formatTime(step.started_at)}</td>
                 <td>{formatTime(step.finished_at)}</td>
@@ -161,8 +163,54 @@ export function StepList({ buildID, steps }: { buildID: string; steps: BuildStep
               </tr>
               {isOpen && (
                 <tr key={`logs-${step.step_index}`}>
-                  <td colSpan={10}>
+                  <td colSpan={11}>
                     <div className="step-log-panel">
+                      {step.job && (
+                        <div className="detail-grid" style={{ marginBottom: '1rem' }}>
+                          <div><strong>Job ID</strong><span>{step.job.id}</span></div>
+                          <div><strong>Job Status</strong><span><StatusBadge status={step.job.status} /></span></div>
+                          <div><strong>Image</strong><span>{step.job.image || '—'}</span></div>
+                          <div><strong>Working Dir</strong><span>{step.job.working_dir || '—'}</span></div>
+                          <div><strong>Command</strong><span>{step.job.command_preview || '—'}</span></div>
+                          <div><strong>Timeout</strong><span>{step.job.timeout_seconds ?? '—'}</span></div>
+                          <div><strong>Source Commit</strong><span>{step.job.source_commit_sha || '—'}</span></div>
+                          <div><strong>Pipeline Path</strong><span>{step.job.pipeline_file_path || '—'}</span></div>
+                          <div><strong>Context Dir</strong><span>{step.job.context_dir || '—'}</span></div>
+                          <div><strong>Error</strong><span className="error-text">{step.job.error_message || '—'}</span></div>
+                        </div>
+                      )}
+
+                      {step.job && (
+                        <>
+                          <strong>Outputs</strong>
+                          {step.job.outputs.length === 0 && <p className="subtle-text">No declared or realized outputs.</p>}
+                          {step.job.outputs.length > 0 && (
+                            <table className="table">
+                              <thead>
+                                <tr>
+                                  <th>Name</th>
+                                  <th>Kind</th>
+                                  <th>Declared Path</th>
+                                  <th>Status</th>
+                                  <th>URI</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {step.job.outputs.map((output) => (
+                                  <tr key={output.id}>
+                                    <td>{output.name}</td>
+                                    <td>{output.kind}</td>
+                                    <td>{output.declared_path}</td>
+                                    <td>{output.status}</td>
+                                    <td>{output.destination_uri ?? '—'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </>
+                      )}
+
                       {loading && <p className="subtle-text">Loading logs...</p>}
                       {error && <p className="error-text">Failed to load logs: {error}</p>}
                       {!loading && !error && chunks.length === 0 && <p className="subtle-text">No logs yet.</p>}

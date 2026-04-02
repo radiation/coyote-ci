@@ -11,6 +11,9 @@ export interface Build {
   error_message: string | null;
   pipeline_source?: string | null;
   pipeline_path?: string | null;
+  commit_sha?: string | null;
+  ref?: string | null;
+  repo_url?: string | null;
 }
 
 export type BuildStatus = 'pending' | 'queued' | 'running' | 'success' | 'failed';
@@ -23,6 +26,7 @@ export interface BuildStep {
   name: string;
   command: string;
   status: BuildStepStatus;
+  job?: ExecutionJob | null;
   worker_id: string | null;
   started_at: string | null;
   finished_at: string | null;
@@ -30,6 +34,48 @@ export interface BuildStep {
   stdout: string | null;
   stderr: string | null;
   error_message: string | null;
+}
+
+export interface ExecutionJobOutput {
+  id: string;
+  job_id: string;
+  build_id: string;
+  name: string;
+  kind: string;
+  declared_path: string;
+  destination_uri?: string | null;
+  content_type?: string | null;
+  size_bytes?: number | null;
+  digest?: string | null;
+  status: 'declared' | 'available' | 'missing';
+  created_at: string;
+}
+
+export interface ExecutionJob {
+  id: string;
+  build_id: string;
+  step_id: string;
+  name: string;
+  step_index: number;
+  status: 'queued' | 'running' | 'success' | 'failed';
+  image: string;
+  working_dir: string;
+  command: string[];
+  command_preview: string;
+  environment: Record<string, string>;
+  timeout_seconds?: number | null;
+  pipeline_file_path?: string | null;
+  context_dir?: string | null;
+  source_repo_url?: string;
+  source_commit_sha?: string;
+  source_ref_name?: string | null;
+  spec_version: number;
+  spec_digest?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error_message?: string | null;
+  outputs: ExecutionJobOutput[];
 }
 
 export type BuildStepStatus = 'pending' | 'running' | 'success' | 'failed';

@@ -74,6 +74,9 @@ export function BuildDetailPage() {
         <div><strong>Finished</strong><span>{formatTime(build.finished_at)}</span></div>
         {build.pipeline_source && <div><strong>Pipeline Source</strong><span>{build.pipeline_source}</span></div>}
         {build.pipeline_path && <div><strong>Pipeline Path</strong><span>{build.pipeline_path}</span></div>}
+        {build.repo_url && <div><strong>Repository</strong><span>{build.repo_url}</span></div>}
+        {build.ref && <div><strong>Ref</strong><span>{build.ref}</span></div>}
+        {build.commit_sha && <div><strong>Commit</strong><span>{build.commit_sha}</span></div>}
         <div><strong>Error</strong><span className="error-text">{build.error_message ?? '—'}</span></div>
       </div>
 

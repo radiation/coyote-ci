@@ -17,6 +17,7 @@ import (
 )
 
 type buildExecutionBoundary interface {
+	ClaimNextRunnableJob(ctx context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error)
 	ListBuilds(ctx context.Context) ([]domain.Build, error)
 	GetBuildSteps(ctx context.Context, id string) ([]domain.BuildStep, error)
 	GetJobByStepID(ctx context.Context, stepID string) (domain.ExecutionJob, error)
@@ -98,6 +99,13 @@ func NewWorkerServiceWithLease(builds buildExecutionBoundary, workerID string, l
 }
 
 func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bool, error) {
+	if runnable, found, err := w.claimRunnableStepFromJobs(ctx); err != nil {
+		return RunnableStep{}, false, err
+	} else if found {
+		return runnable, true, nil
+	}
+
+	// Transitional fallback for builds without durable jobs.
 	builds, err := w.builds.ListBuilds(ctx)
 	if err != nil {
 		return RunnableStep{}, false, err
@@ -234,6 +242,74 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 	return RunnableStep{}, false, nil
 }
 
+func (w *WorkerService) claimRunnableStepFromJobs(ctx context.Context) (RunnableStep, bool, error) {
+	claim := w.newStepClaim()
+	job, claimed, err := w.builds.ClaimNextRunnableJob(ctx, claim)
+	if err != nil {
+		return RunnableStep{}, false, err
+	}
+	if !claimed {
+		return RunnableStep{}, false, nil
+	}
+
+	if stepErr := w.mirrorJobClaimToStep(ctx, job, claim); stepErr != nil {
+		return RunnableStep{}, false, stepErr
+	}
+
+	if _, startErr := w.builds.StartBuild(ctx, job.BuildID); startErr != nil && !errors.Is(startErr, ErrInvalidBuildStatusTransition) {
+		return RunnableStep{}, false, startErr
+	}
+
+	claimCount := atomic.AddInt64(&w.claimsWon, 1)
+	log.Printf("job claim succeeded: job_id=%s build_id=%s step_index=%d worker_id=%s claim_count=%d", job.ID, job.BuildID, job.StepIndex, claim.WorkerID, claimCount)
+
+	runnable := RunnableStep{
+		BuildID:        job.BuildID,
+		JobID:          job.ID,
+		StepID:         job.StepID,
+		StepIndex:      job.StepIndex,
+		StepName:       job.Name,
+		WorkerID:       claim.WorkerID,
+		ClaimToken:     claim.ClaimToken,
+		Command:        commandFromJob(job),
+		Args:           argsFromJob(job),
+		Env:            envFromJob(job),
+		WorkingDir:     defaultString(job.WorkingDir, "."),
+		TimeoutSeconds: timeoutFromJob(job),
+	}
+
+	return runnable, true, nil
+}
+
+func (w *WorkerService) mirrorJobClaimToStep(ctx context.Context, job domain.ExecutionJob, claim repository.StepClaim) error {
+	if job.StepID == "" {
+		return nil
+	}
+
+	if _, claimed, err := w.builds.ClaimPendingStep(ctx, job.BuildID, job.StepIndex, claim); err != nil {
+		return err
+	} else if claimed {
+		return nil
+	}
+
+	if _, reclaimed, err := w.builds.ReclaimExpiredStep(ctx, job.BuildID, job.StepIndex, claim.ClaimedAt, claim); err != nil {
+		return err
+	} else if reclaimed {
+		reclaimCount := atomic.AddInt64(&w.reclaimsWon, 1)
+		log.Printf("step reclaim mirrored from job claim: build_id=%s step_index=%d reclaim_count=%d", job.BuildID, job.StepIndex, reclaimCount)
+		return nil
+	}
+
+	return ErrInvalidBuildStepTransition
+}
+
+func timeoutFromJob(job domain.ExecutionJob) int {
+	if job.TimeoutSeconds == nil {
+		return 0
+	}
+	return maxInt(*job.TimeoutSeconds, 0)
+}
+
 func (w *WorkerService) heartbeatInterval() time.Duration {
 	interval := w.leaseDuration / 3
 	if interval <= 0 {
@@ -283,29 +359,40 @@ func (w *WorkerService) RecoveryStats() WorkerRecoveryStats {
 
 func (w *WorkerService) renewStepLease(ctx context.Context, step RunnableStep) (bool, error) {
 	leaseExpiresAt := w.clock().UTC().Add(w.leaseDuration)
-	_, renewed, err := w.builds.RenewStepLease(ctx, step.BuildID, step.StepIndex, step.ClaimToken, leaseExpiresAt)
-	if err != nil {
-		if errors.Is(err, ErrStaleStepClaim) {
+	if step.JobID != "" {
+		_, renewed, renewErr := w.builds.RenewJobLease(ctx, step.JobID, step.ClaimToken, leaseExpiresAt)
+		if renewErr != nil {
+			if errors.Is(renewErr, ErrStaleStepClaim) {
+				staleCount := atomic.AddInt64(&w.renewalsStale, 1)
+				log.Printf("job lease renewal rejected as stale: job_id=%s build_id=%s step=%s stale_count=%d", step.JobID, step.BuildID, step.StepName, staleCount)
+				return false, nil
+			}
+			return false, renewErr
+		}
+		if !renewed {
 			staleCount := atomic.AddInt64(&w.renewalsStale, 1)
-			log.Printf("lease renewal rejected as stale: build_id=%s step=%s stale_count=%d", step.BuildID, step.StepName, staleCount)
+			log.Printf("job lease renewal rejected: job_id=%s build_id=%s step=%s stale_count=%d", step.JobID, step.BuildID, step.StepName, staleCount)
 			return false, nil
 		}
-		return false, err
 	}
-	if !renewed {
+
+	_, renewedStep, stepErr := w.builds.RenewStepLease(ctx, step.BuildID, step.StepIndex, step.ClaimToken, leaseExpiresAt)
+	if stepErr != nil {
+		if errors.Is(stepErr, ErrStaleStepClaim) {
+			staleCount := atomic.AddInt64(&w.renewalsStale, 1)
+			log.Printf("step lease renewal rejected as stale: build_id=%s step=%s stale_count=%d", step.BuildID, step.StepName, staleCount)
+			return false, nil
+		}
+		return false, stepErr
+	}
+	if !renewedStep {
 		staleCount := atomic.AddInt64(&w.renewalsStale, 1)
-		log.Printf("lease renewal rejected: build_id=%s step=%s stale_count=%d", step.BuildID, step.StepName, staleCount)
+		log.Printf("step lease renewal rejected: build_id=%s step=%s stale_count=%d", step.BuildID, step.StepName, staleCount)
 		return false, nil
 	}
 
 	renewCount := atomic.AddInt64(&w.renewalsWon, 1)
 	log.Printf("lease renewal succeeded: build_id=%s step=%s renewal_count=%d", step.BuildID, step.StepName, renewCount)
-
-	if step.JobID != "" {
-		if _, _, renewErr := w.builds.RenewJobLease(ctx, step.JobID, step.ClaimToken, leaseExpiresAt); renewErr != nil && !errors.Is(renewErr, ErrStaleStepClaim) {
-			return false, renewErr
-		}
-	}
 
 	return true, nil
 }

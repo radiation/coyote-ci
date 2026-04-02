@@ -430,9 +430,33 @@ func (h *BuildHandler) GetBuildSteps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	jobs, err := h.buildService.GetJobsByBuildID(r.Context(), id)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	outputs, err := h.buildService.GetJobOutputsByBuildID(r.Context(), id)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	jobByStepID := map[string]domain.ExecutionJob{}
+	for _, job := range jobs {
+		jobByStepID[job.StepID] = job
+	}
+	outputsByJobID := map[string][]domain.ExecutionJobOutput{}
+	for _, output := range outputs {
+		outputsByJobID[output.JobID] = append(outputsByJobID[output.JobID], output)
+	}
+
 	respSteps := make([]api.BuildStepResponse, 0, len(steps))
 	for _, step := range steps {
-		respSteps = append(respSteps, toBuildStepResponse(step))
+		linkedJob, hasJob := jobByStepID[step.ID]
+		if hasJob {
+			respSteps = append(respSteps, toBuildStepResponse(step, &linkedJob, outputsByJobID[linkedJob.ID]))
+			continue
+		}
+		respSteps = append(respSteps, toBuildStepResponse(step, nil, nil))
 	}
 
 	sort.Slice(respSteps, func(i, j int) bool {
@@ -747,7 +771,7 @@ func toBuildSourceResponse(build domain.Build) *api.BuildSourceResponse {
 	}
 }
 
-func toBuildStepResponse(step domain.BuildStep) api.BuildStepResponse {
+func toBuildStepResponse(step domain.BuildStep, job *domain.ExecutionJob, outputs []domain.ExecutionJobOutput) api.BuildStepResponse {
 	resp := api.BuildStepResponse{
 		ID:           step.ID,
 		BuildID:      step.BuildID,
@@ -755,6 +779,7 @@ func toBuildStepResponse(step domain.BuildStep) api.BuildStepResponse {
 		Name:         step.Name,
 		Command:      displayCommand(step),
 		Status:       string(step.Status),
+		Job:          toExecutionJobResponse(job, outputs),
 		WorkerID:     step.WorkerID,
 		ExitCode:     step.ExitCode,
 		Stdout:       step.Stdout,
@@ -772,6 +797,64 @@ func toBuildStepResponse(step domain.BuildStep) api.BuildStepResponse {
 		resp.FinishedAt = &finishedAt
 	}
 
+	return resp
+}
+
+func toExecutionJobResponse(job *domain.ExecutionJob, outputs []domain.ExecutionJobOutput) *api.ExecutionJobResponse {
+	if job == nil {
+		return nil
+	}
+	resp := &api.ExecutionJobResponse{
+		ID:               job.ID,
+		BuildID:          job.BuildID,
+		StepID:           job.StepID,
+		Name:             job.Name,
+		StepIndex:        job.StepIndex,
+		Status:           string(job.Status),
+		Image:            job.Image,
+		WorkingDir:       job.WorkingDir,
+		Command:          append([]string(nil), job.Command...),
+		CommandPreview:   strings.Join(job.Command, " "),
+		Environment:      map[string]string{},
+		TimeoutSeconds:   job.TimeoutSeconds,
+		PipelineFilePath: job.PipelineFilePath,
+		ContextDir:       job.ContextDir,
+		SourceRepoURL:    job.Source.RepositoryURL,
+		SourceCommitSHA:  job.Source.CommitSHA,
+		SourceRefName:    job.Source.RefName,
+		SpecVersion:      job.SpecVersion,
+		SpecDigest:       job.SpecDigest,
+		CreatedAt:        job.CreatedAt.Format(time.RFC3339),
+		ErrorMessage:     job.ErrorMessage,
+		Outputs:          make([]api.ExecutionJobOutputResponse, 0, len(outputs)),
+	}
+	for key, value := range job.Environment {
+		resp.Environment[key] = value
+	}
+	if job.StartedAt != nil {
+		v := job.StartedAt.Format(time.RFC3339)
+		resp.StartedAt = &v
+	}
+	if job.FinishedAt != nil {
+		v := job.FinishedAt.Format(time.RFC3339)
+		resp.FinishedAt = &v
+	}
+	for _, output := range outputs {
+		resp.Outputs = append(resp.Outputs, api.ExecutionJobOutputResponse{
+			ID:             output.ID,
+			JobID:          output.JobID,
+			BuildID:        output.BuildID,
+			Name:           output.Name,
+			Kind:           output.Kind,
+			DeclaredPath:   output.DeclaredPath,
+			DestinationURI: output.DestinationURI,
+			ContentType:    output.ContentType,
+			SizeBytes:      output.SizeBytes,
+			Digest:         output.Digest,
+			Status:         string(output.Status),
+			CreatedAt:      output.CreatedAt.Format(time.RFC3339),
+		})
+	}
 	return resp
 }
 

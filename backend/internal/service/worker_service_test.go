@@ -14,6 +14,7 @@ import (
 )
 
 type fakeBuildExecutionBoundary struct {
+	jobsQueue      []domain.ExecutionJob
 	listBuildsResp []domain.Build
 	listBuildsErr  error
 	stepsByBuildID map[string][]domain.BuildStep
@@ -46,6 +47,23 @@ type fakeBuildExecutionBoundary struct {
 
 	lastBuildID string
 	lastRequest runner.RunStepRequest
+}
+
+func (f *fakeBuildExecutionBoundary) ClaimNextRunnableJob(_ context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
+	if len(f.jobsQueue) == 0 {
+		return domain.ExecutionJob{}, false, nil
+	}
+	job := f.jobsQueue[0]
+	f.jobsQueue = f.jobsQueue[1:]
+	job.Status = domain.ExecutionJobStatusRunning
+	job.ClaimedBy = &claim.WorkerID
+	job.ClaimToken = &claim.ClaimToken
+	job.ClaimExpiresAt = &claim.LeaseExpiresAt
+	if f.jobsByStepID == nil {
+		f.jobsByStepID = map[string]domain.ExecutionJob{}
+	}
+	f.jobsByStepID[job.StepID] = job
+	return job, true, nil
 }
 
 func (f *fakeBuildExecutionBoundary) GetJobByStepID(_ context.Context, stepID string) (domain.ExecutionJob, error) {
@@ -411,6 +429,53 @@ func TestWorkerService_ClaimRunnableStep_UsesPersistedJobSpec(t *testing.T) {
 	}
 	if runnable.Env["A"] != "job" {
 		t.Fatalf("expected env from job spec, got %#v", runnable.Env)
+	}
+}
+
+func TestWorkerService_ClaimRunnableStep_ClaimsJobDirectly(t *testing.T) {
+	now := time.Now().UTC()
+	boundary := &fakeBuildExecutionBoundary{
+		jobsQueue: []domain.ExecutionJob{
+			{
+				ID:             "job-1",
+				BuildID:        "build-1",
+				StepID:         "step-1",
+				StepIndex:      0,
+				Name:           "lint",
+				Status:         domain.ExecutionJobStatusQueued,
+				Command:        []string{"sh", "-c", "echo from-job"},
+				WorkingDir:     "backend",
+				Environment:    map[string]string{"A": "job"},
+				TimeoutSeconds: intPtr(90),
+				CreatedAt:      now,
+			},
+		},
+		stepsByBuildID: map[string][]domain.BuildStep{
+			"build-1": {
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "lint", Status: domain.BuildStepStatusPending},
+			},
+		},
+	}
+
+	worker := NewWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	runnable, found, err := worker.ClaimRunnableStep(context.Background())
+	if err != nil {
+		t.Fatalf("claim runnable step failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected runnable work")
+	}
+	if runnable.JobID != "job-1" {
+		t.Fatalf("expected job claim, got job id %q", runnable.JobID)
+	}
+	if runnable.StepID != "step-1" {
+		t.Fatalf("expected linked step id step-1, got %q", runnable.StepID)
+	}
+	if runnable.TimeoutSeconds != 90 {
+		t.Fatalf("expected timeout from job contract, got %d", runnable.TimeoutSeconds)
+	}
+	if boundary.startCalls != 1 {
+		t.Fatalf("expected start build call once, got %d", boundary.startCalls)
 	}
 }
 
