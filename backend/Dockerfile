@@ -1,4 +1,8 @@
-FROM golang:1.26 AS dev
+# GO_VERSION is supplied by docker-compose from the repo-level .env file.
+# For manual docker build, pass --build-arg GO_VERSION=<x.y.z>.
+ARG GO_VERSION
+
+FROM golang:${GO_VERSION} AS dev
 
 WORKDIR /app
 
@@ -11,7 +15,7 @@ EXPOSE 8080
 
 CMD ["air", "-c", ".air.toml"]
 
-FROM golang:1.26 AS builder
+FROM golang:${GO_VERSION} AS builder
 
 WORKDIR /app
 

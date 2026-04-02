@@ -7,7 +7,7 @@
 [![Lint](https://github.com/radiation/coyote-ci/actions/workflows/lint.yml/badge.svg)](https://github.com/radiation/coyote-ci/actions/workflows/lint.yml)
 [![Actionlint](https://github.com/radiation/coyote-ci/actions/workflows/actionlint.yml/badge.svg)](https://github.com/radiation/coyote-ci/actions/workflows/actionlint.yml)
 [![codecov](https://codecov.io/gh/radiation/coyote-ci/branch/main/graph/badge.svg)](https://codecov.io/gh/radiation/coyote-ci)
-[![Go Version](https://img.shields.io/badge/go-1.26%2B-00ADD8.svg)](https://go.dev/dl/)
+[![Go Version](https://img.shields.io/badge/go-configured%20via%20.env-00ADD8.svg)](https://go.dev/dl/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Coyote CI is a greenfield CI/orchestration system focused on a small, correct, and understandable core.
@@ -32,7 +32,26 @@ See [backend/docs/state-machine.md](backend/docs/state-machine.md) for the full 
 ## Prerequisites
 
 - Docker + Docker Compose
-- Go 1.26+ (for local non-container workflows)
+- Go (version managed repo-wide via `.env`; see version policy below)
+
+## Go version policy
+
+- Single source of truth: `.env` (`GO_VERSION`)
+- Runtime consumers:
+	- `docker-compose.yml` passes `${GO_VERSION}` as backend build args
+	- `backend/Dockerfile` consumes `ARG GO_VERSION` (no pinned fallback)
+
+- Intentionally static consumers (edited directly):
+	- `backend/go.mod` (`go` + `toolchain` lines)
+	- `.coyote/pipeline.yml` (`pipeline.image`)
+
+Workflow:
+
+1. Update `GO_VERSION` in `.env`
+2. Update static consumers (`backend/go.mod` and `.coyote/pipeline.yml`)
+3. Run `make check-go-version`
+
+For manual Docker builds outside compose, pass `--build-arg GO_VERSION=<x.y.z>`.
 
 ## Quick start
 

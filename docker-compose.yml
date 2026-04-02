@@ -40,6 +40,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        GO_VERSION: ${GO_VERSION}
     container_name: coyote-ci-backend
     depends_on:
       db:
@@ -65,6 +67,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
       target: dev
+      args:
+        GO_VERSION: ${GO_VERSION}
     container_name: coyote-ci-backend-dev
     depends_on:
       db:
@@ -93,6 +97,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        GO_VERSION: ${GO_VERSION}
     container_name: coyote-ci-worker
     depends_on:
       db:
