@@ -67,6 +67,9 @@ describe('StepList', () => {
               step_id: 'step-1',
               name: 'verify',
               step_index: 0,
+              attempt_number: 2,
+              retry_of_job_id: 'job-root',
+              lineage_root_job_id: 'job-root',
               status: 'running',
               image: 'golang:1.24',
               working_dir: 'backend',
@@ -81,6 +84,7 @@ describe('StepList', () => {
               source_ref_name: 'main',
               spec_version: 1,
               spec_digest: 'digest',
+              execution_basis: 'persisted_source_and_spec',
               created_at: '2026-04-02T00:00:00Z',
               started_at: null,
               finished_at: null,
@@ -95,8 +99,8 @@ describe('StepList', () => {
                   declared_path: 'dist/**',
                   destination_uri: null,
                   content_type: null,
-                  size_bytes: null,
-                  digest: null,
+                  size_bytes: 1234,
+                  digest: 'sha256:abcd',
                   status: 'declared',
                   created_at: '2026-04-02T00:00:00Z',
                 },
@@ -114,7 +118,108 @@ describe('StepList', () => {
     expect(await screen.findByText('Job ID')).toBeTruthy();
     expect(screen.getByText('job-1')).toBeTruthy();
     expect(screen.getByText('golang:1.24')).toBeTruthy();
-    expect(screen.getByText('Outputs')).toBeTruthy();
+    expect(screen.getAllByText('Outputs').length).toBeGreaterThan(0);
     expect(screen.getByText('dist/**')).toBeTruthy();
+    expect(screen.getByText('sha256:abcd')).toBeTruthy();
+    expect(screen.getByText('1234')).toBeTruthy();
+  });
+
+  it('renders lineage and output summary in row', () => {
+    render(
+      <StepList
+        buildID="build-1"
+        steps={[
+          makeStep({
+            status: 'failed',
+            job: {
+              id: 'job-1',
+              build_id: 'build-1',
+              step_id: 'step-1',
+              name: 'verify',
+              step_index: 0,
+              attempt_number: 3,
+              retry_of_job_id: 'job-0',
+              lineage_root_job_id: 'job-0',
+              status: 'failed',
+              image: 'golang:1.24',
+              working_dir: 'backend',
+              command: ['sh', '-c', 'go test ./...'],
+              command_preview: 'sh -c go test ./...',
+              environment: {},
+              timeout_seconds: 120,
+              pipeline_file_path: '.coyote/pipeline.yml',
+              context_dir: '.',
+              source_repo_url: 'https://github.com/acme/repo.git',
+              source_commit_sha: 'abc123',
+              source_ref_name: 'main',
+              spec_version: 1,
+              spec_digest: 'digest',
+              execution_basis: 'persisted_source_and_spec',
+              created_at: '2026-04-02T00:00:00Z',
+              started_at: null,
+              finished_at: null,
+              error_message: 'boom',
+              outputs: [],
+            },
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('Attempt 3')).toBeTruthy();
+    expect(screen.getByText('Retry of job job-0...')).toBeTruthy();
+    expect(screen.getByText('0 outputs')).toBeTruthy();
+  });
+
+  it('fires retry and rerun actions with expected args', async () => {
+    const onRetryFailedJob = vi.fn();
+    const onRerunFromStep = vi.fn();
+
+    render(
+      <StepList
+        buildID="build-1"
+        canRerunFromStep
+        onRetryFailedJob={onRetryFailedJob}
+        onRerunFromStep={onRerunFromStep}
+        steps={[
+          makeStep({
+            status: 'failed',
+            step_index: 4,
+            job: {
+              id: 'job-1',
+              build_id: 'build-1',
+              step_id: 'step-1',
+              name: 'verify',
+              step_index: 4,
+              status: 'failed',
+              image: 'golang:1.24',
+              working_dir: 'backend',
+              command: ['sh', '-c', 'go test ./...'],
+              command_preview: 'sh -c go test ./...',
+              environment: {},
+              timeout_seconds: 120,
+              pipeline_file_path: '.coyote/pipeline.yml',
+              context_dir: '.',
+              source_repo_url: 'https://github.com/acme/repo.git',
+              source_commit_sha: 'abc123',
+              source_ref_name: 'main',
+              spec_version: 1,
+              spec_digest: 'digest',
+              created_at: '2026-04-02T00:00:00Z',
+              started_at: null,
+              finished_at: null,
+              error_message: 'boom',
+              outputs: [],
+            },
+          }),
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry failed job' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rerun build from this step' }));
+
+    expect(onRetryFailedJob).toHaveBeenCalledWith('job-1');
+    expect(onRerunFromStep).toHaveBeenCalledWith(4);
   });
 });

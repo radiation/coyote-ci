@@ -3,6 +3,7 @@ package postgres
 import (
 	"database/sql"
 	"encoding/json"
+	"strings"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
@@ -19,12 +20,29 @@ const buildListColumns = `id, project_id, status, created_at, queued_at, started
 
 const executionJobColumns = `id, build_id, step_id, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir, command_json, env_json, timeout_seconds, pipeline_file_path, context_dir, source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest, spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at, created_at, started_at, finished_at, error_message, exit_code, output_refs_json`
 
+var executionJobColumnsQualifiedWithJ = qualifyColumns("j", executionJobColumns)
+
+func qualifyColumns(alias string, columns string) string {
+	parts := strings.Split(columns, ",")
+	qualified := make([]string, 0, len(parts))
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			continue
+		}
+		qualified = append(qualified, alias+"."+name)
+	}
+	return strings.Join(qualified, ", ")
+}
+
 func scanBuildList(scanner rowScanner) (domain.Build, error) {
 	var build domain.Build
 	var status string
 	var queuedAt sql.NullTime
 	var startedAt sql.NullTime
 	var finishedAt sql.NullTime
+	var rerunOfBuildID sql.NullString
+	var rerunFromStepIdx sql.NullInt64
 	var errorMessage sql.NullString
 	var pipelineName sql.NullString
 	var pipelineSource sql.NullString
@@ -42,6 +60,9 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 		&startedAt,
 		&finishedAt,
 		&build.CurrentStepIndex,
+		&build.AttemptNumber,
+		&rerunOfBuildID,
+		&rerunFromStepIdx,
 		&errorMessage,
 		&pipelineName,
 		&pipelineSource,
@@ -66,6 +87,17 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 	if finishedAt.Valid {
 		finished := finishedAt.Time
 		build.FinishedAt = &finished
+	}
+	if build.AttemptNumber <= 0 {
+		build.AttemptNumber = 1
+	}
+	if rerunOfBuildID.Valid {
+		v := rerunOfBuildID.String
+		build.RerunOfBuildID = &v
+	}
+	if rerunFromStepIdx.Valid {
+		v := int(rerunFromStepIdx.Int64)
+		build.RerunFromStepIdx = &v
 	}
 	if errorMessage.Valid {
 		errMsg := errorMessage.String
@@ -106,6 +138,8 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 	var queuedAt sql.NullTime
 	var startedAt sql.NullTime
 	var finishedAt sql.NullTime
+	var rerunOfBuildID sql.NullString
+	var rerunFromStepIdx sql.NullInt64
 	var errorMessage sql.NullString
 	var pipelineConfigYAML sql.NullString
 	var pipelineName sql.NullString
@@ -124,6 +158,9 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 		&startedAt,
 		&finishedAt,
 		&build.CurrentStepIndex,
+		&build.AttemptNumber,
+		&rerunOfBuildID,
+		&rerunFromStepIdx,
 		&errorMessage,
 		&pipelineConfigYAML,
 		&pipelineName,
@@ -149,6 +186,17 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 	if finishedAt.Valid {
 		finished := finishedAt.Time
 		build.FinishedAt = &finished
+	}
+	if build.AttemptNumber <= 0 {
+		build.AttemptNumber = 1
+	}
+	if rerunOfBuildID.Valid {
+		v := rerunOfBuildID.String
+		build.RerunOfBuildID = &v
+	}
+	if rerunFromStepIdx.Valid {
+		v := int(rerunFromStepIdx.Int64)
+		build.RerunFromStepIdx = &v
 	}
 	if errorMessage.Valid {
 		errMsg := errorMessage.String

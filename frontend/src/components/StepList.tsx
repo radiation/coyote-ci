@@ -21,7 +21,31 @@ type StepLogChunk = {
   created_at: string;
 };
 
-export function StepList({ buildID, steps }: { buildID: string; steps: BuildStep[] }) {
+type StepListProps = {
+  buildID: string;
+  steps: BuildStep[];
+  canRerunFromStep?: boolean;
+  onRetryFailedJob?: (jobID: string) => Promise<void> | void;
+  onRerunFromStep?: (stepIndex: number) => Promise<void> | void;
+  retryingJobID?: string | null;
+  rerunningStepIndex?: number | null;
+  actionError?: string | null;
+};
+
+function canRetryFailedJob(step: BuildStep): boolean {
+  return step.status === 'failed' && Boolean(step.job?.id) && step.job?.status === 'failed';
+}
+
+export function StepList({
+  buildID,
+  steps,
+  canRerunFromStep = false,
+  onRetryFailedJob,
+  onRerunFromStep,
+  retryingJobID = null,
+  rerunningStepIndex = null,
+  actionError = null,
+}: StepListProps) {
   const [openStepIndex, setOpenStepIndex] = useState<number | null>(null);
   const [logChunks, setLogChunks] = useState<Record<number, StepLogChunk[]>>({});
   const [logLoading, setLogLoading] = useState<Record<number, boolean>>({});
@@ -121,9 +145,12 @@ export function StepList({ buildID, steps }: { buildID: string; steps: BuildStep
           <th>Command</th>
           <th>Status</th>
           <th>Job</th>
+          <th>Lineage</th>
+          <th>Outputs</th>
           <th>Worker</th>
           <th>Started</th>
           <th>Finished</th>
+          <th>Actions</th>
           <th>Exit Code</th>
           <th>Logs</th>
           <th>Error</th>
@@ -145,10 +172,48 @@ export function StepList({ buildID, steps }: { buildID: string; steps: BuildStep
                   <code className="step-command" title={step.command}>{commandPreview(step.command)}</code>
                 </td>
                 <td><StatusBadge status={step.status} /></td>
-                <td>{step.job ? <StatusBadge status={step.job.status} /> : '—'}</td>
+                <td>
+                  {step.job ? (
+                    <div>
+                      <StatusBadge status={step.job.status} />
+                      <div className="subtle-text">Attempt {step.job.attempt_number ?? 1}</div>
+                    </div>
+                  ) : '—'}
+                </td>
+                <td>
+                  {step.job?.retry_of_job_id ? (
+                    <span className="subtle-text">Retry of job {step.job.retry_of_job_id.slice(0, 8)}...</span>
+                  ) : '—'}
+                </td>
+                <td>{step.job ? `${step.job.outputs.length} output${step.job.outputs.length === 1 ? '' : 's'}` : '—'}</td>
                 <td>{step.worker_id ?? '—'}</td>
                 <td>{formatTime(step.started_at)}</td>
                 <td>{formatTime(step.finished_at)}</td>
+                <td>
+                  <div className="table-actions">
+                    {canRetryFailedJob(step) && onRetryFailedJob && step.job && (
+                      <button
+                        type="button"
+                        className="table-action-button"
+                        disabled={retryingJobID === step.job.id}
+                        onClick={() => void onRetryFailedJob(step.job!.id)}
+                      >
+                        {retryingJobID === step.job.id ? 'Retrying...' : 'Retry failed job'}
+                      </button>
+                    )}
+                    {canRerunFromStep && onRerunFromStep && (
+                      <button
+                        type="button"
+                        className="table-action-button"
+                        disabled={rerunningStepIndex === step.step_index}
+                        onClick={() => void onRerunFromStep(step.step_index)}
+                      >
+                        {rerunningStepIndex === step.step_index ? 'Rerunning...' : 'Rerun build from this step'}
+                      </button>
+                    )}
+                    {!canRetryFailedJob(step) && !canRerunFromStep && '—'}
+                  </div>
+                </td>
                 <td>{step.exit_code ?? '—'}</td>
                 <td>
                   <button
@@ -163,11 +228,16 @@ export function StepList({ buildID, steps }: { buildID: string; steps: BuildStep
               </tr>
               {isOpen && (
                 <tr key={`logs-${step.step_index}`}>
-                  <td colSpan={11}>
+                  <td colSpan={14}>
                     <div className="step-log-panel">
+                      {actionError && <p className="error-text">Action failed: {actionError}</p>}
+
                       {step.job && (
                         <div className="detail-grid" style={{ marginBottom: '1rem' }}>
                           <div><strong>Job ID</strong><span>{step.job.id}</span></div>
+                          <div><strong>Job Attempt</strong><span>{step.job.attempt_number ?? 1}</span></div>
+                          <div><strong>Retry Of</strong><span>{step.job.retry_of_job_id ?? '—'}</span></div>
+                          <div><strong>Lineage Root</strong><span>{step.job.lineage_root_job_id ?? '—'}</span></div>
                           <div><strong>Job Status</strong><span><StatusBadge status={step.job.status} /></span></div>
                           <div><strong>Image</strong><span>{step.job.image || '—'}</span></div>
                           <div><strong>Working Dir</strong><span>{step.job.working_dir || '—'}</span></div>
@@ -193,6 +263,8 @@ export function StepList({ buildID, steps }: { buildID: string; steps: BuildStep
                                   <th>Declared Path</th>
                                   <th>Status</th>
                                   <th>URI</th>
+                                  <th>Digest</th>
+                                  <th>Size</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -203,6 +275,8 @@ export function StepList({ buildID, steps }: { buildID: string; steps: BuildStep
                                     <td>{output.declared_path}</td>
                                     <td>{output.status}</td>
                                     <td>{output.destination_uri ?? '—'}</td>
+                                    <td>{output.digest ?? '—'}</td>
+                                    <td>{output.size_bytes ?? '—'}</td>
                                   </tr>
                                 ))}
                               </tbody>

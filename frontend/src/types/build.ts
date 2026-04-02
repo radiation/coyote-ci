@@ -8,6 +8,11 @@ export interface Build {
   started_at: string | null;
   finished_at: string | null;
   current_step_index: number;
+  attempt_number?: number;
+  rerun_of_build_id?: string | null;
+  rerun_from_step_index?: number | null;
+  execution_basis?: string | null;
+  output_reuse_policy?: string | null;
   error_message: string | null;
   pipeline_source?: string | null;
   pipeline_path?: string | null;
@@ -57,6 +62,9 @@ export interface ExecutionJob {
   step_id: string;
   name: string;
   step_index: number;
+  attempt_number?: number;
+  retry_of_job_id?: string | null;
+  lineage_root_job_id?: string | null;
   status: 'queued' | 'running' | 'success' | 'failed';
   image: string;
   working_dir: string;
@@ -71,6 +79,7 @@ export interface ExecutionJob {
   source_ref_name?: string | null;
   spec_version: number;
   spec_digest?: string | null;
+  execution_basis?: string | null;
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;
@@ -128,6 +137,15 @@ export interface BuildListResponse {
 export interface BuildStepsResponse {
   build_id: string;
   steps: BuildStep[];
+}
+
+export interface RetryJobResponse {
+  build: Build;
+  job: ExecutionJob;
+}
+
+export interface RerunBuildFromStepRequest {
+  step_index: number;
 }
 
 export interface StepLogChunk {

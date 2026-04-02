@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { listBuilds, getBuild, getBuildSteps, getBuildArtifacts, artifactDownloadURL, createBuild, createPipelineBuild, createRepoBuild, queueBuild, listJobs, getJob, createJob, updateJob, runJob } from '../api/client';
+import { listBuilds, getBuild, getBuildSteps, getBuildArtifacts, artifactDownloadURL, createBuild, createPipelineBuild, createRepoBuild, queueBuild, listJobs, getJob, createJob, updateJob, runJob, retryFailedJob, rerunBuildFromStep } from '../api/client';
 
 describe('API client - types', () => {
   it('should export API functions', () => {
@@ -17,6 +17,8 @@ describe('API client - types', () => {
     expect(typeof createJob).toBe('function');
     expect(typeof updateJob).toBe('function');
     expect(typeof runJob).toBe('function');
+    expect(typeof retryFailedJob).toBe('function');
+    expect(typeof rerunBuildFromStep).toBe('function');
   });
 
   beforeEach(() => {
@@ -375,6 +377,77 @@ describe('API client - types', () => {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: false }),
+    });
+  });
+
+  it('retries failed job via POST /builds/jobs/{id}/retry', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          build: {
+            id: 'build-2',
+            project_id: 'project-1',
+            status: 'queued',
+            created_at: '2026-03-30T01:00:00Z',
+            queued_at: '2026-03-30T01:00:01Z',
+            started_at: null,
+            finished_at: null,
+            current_step_index: 0,
+            error_message: null,
+          },
+          job: {
+            id: 'job-2',
+            build_id: 'build-2',
+            step_id: 'step-2',
+            name: 'verify',
+            step_index: 0,
+            status: 'queued',
+            image: 'golang:1.24',
+            working_dir: 'backend',
+            command: ['sh', '-c', 'go test ./...'],
+            command_preview: 'sh -c go test ./...',
+            environment: {},
+            spec_version: 1,
+            execution_basis: 'persisted_source_and_spec',
+            created_at: '2026-03-30T01:00:00Z',
+            outputs: [],
+          },
+        },
+      }),
+    } as Response);
+
+    await retryFailedJob('job-1');
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/builds/jobs/job-1/retry', {
+      method: 'POST',
+    });
+  });
+
+  it('reruns build from step via POST /builds/{id}/rerun', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          id: 'build-2',
+          project_id: 'project-1',
+          status: 'queued',
+          created_at: '2026-03-30T01:00:00Z',
+          queued_at: '2026-03-30T01:00:01Z',
+          started_at: null,
+          finished_at: null,
+          current_step_index: 0,
+          error_message: null,
+        },
+      }),
+    } as Response);
+
+    await rerunBuildFromStep('build-1', 3);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/builds/build-1/rerun', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ step_index: 3 }),
     });
   });
 });

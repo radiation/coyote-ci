@@ -116,6 +116,42 @@ func TestExecutionJobRepository_RenewAndComplete(t *testing.T) {
 	}
 }
 
+func TestExecutionJobRepository_ClaimNextRunnableJob(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewExecutionJobRepository(db)
+	now := time.Now().UTC()
+	lease := now.Add(time.Minute)
+
+	mock.ExpectQuery(`WITH candidate AS \(\s*SELECT bj\.id\s*FROM build_jobs AS bj`).WithArgs(now, "worker-1", "claim-1", lease).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "build_id", "step_id", "name", "step_index", "attempt_number", "retry_of_job_id", "lineage_root_job_id", "status", "queue_name", "image", "working_dir", "command_json", "env_json", "timeout_seconds", "pipeline_file_path", "context_dir", "source_repo_url", "source_commit_sha", "source_ref_name", "source_archive_uri", "source_archive_digest", "spec_version", "spec_digest", "resolved_spec_json", "claim_token", "claimed_by", "claim_expires_at", "created_at", "started_at", "finished_at", "error_message", "exit_code", "output_refs_json"}).
+			AddRow("job-1", "build-1", "step-1", "test", 0, 1, nil, nil, "running", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, 30, ".coyote/pipeline.yml", ".", "https://github.com/acme/repo.git", "abc123", "main", nil, nil, 1, "digest", `{"version":1}`, "claim-1", "worker-1", lease, now, now, nil, nil, nil, `[]`),
+	)
+
+	job, claimed, err := repo.ClaimNextRunnableJob(context.Background(), repository.StepClaim{
+		WorkerID:       "worker-1",
+		ClaimToken:     "claim-1",
+		ClaimedAt:      now,
+		LeaseExpiresAt: lease,
+	})
+	if err != nil {
+		t.Fatalf("claim next runnable job failed: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected claim to succeed")
+	}
+	if job.ID != "job-1" {
+		t.Fatalf("expected claimed job-1, got %q", job.ID)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 func stringPtr(value string) *string {
 	return &value
 }

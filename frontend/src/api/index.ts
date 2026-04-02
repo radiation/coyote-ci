@@ -10,6 +10,8 @@ export {
 	createPipelineBuild,
 	createRepoBuild,
 	queueBuild,
+	retryFailedJob,
+	rerunBuildFromStep,
 	listJobs,
 	getJob,
 	createJob,

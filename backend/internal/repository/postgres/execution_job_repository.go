@@ -178,12 +178,12 @@ func (r *ExecutionJobRepository) GetJobByStepID(ctx context.Context, stepID stri
 }
 
 func (r *ExecutionJobRepository) ClaimNextRunnableJob(ctx context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
-	const query = `
+	query := `
 		WITH candidate AS (
-			SELECT id
-			FROM build_jobs
-			WHERE status = 'queued' OR (status = 'running' AND claim_expires_at IS NOT NULL AND claim_expires_at <= $1)
-			ORDER BY created_at ASC, step_index ASC, attempt_number ASC, id ASC
+			SELECT bj.id
+			FROM build_jobs AS bj
+			WHERE bj.status = 'queued' OR (bj.status = 'running' AND bj.claim_expires_at IS NOT NULL AND bj.claim_expires_at <= $1)
+			ORDER BY bj.created_at ASC, bj.step_index ASC, bj.attempt_number ASC, bj.id ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)
@@ -193,9 +193,9 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(ctx context.Context, claim
 			claim_token = $3,
 			claim_expires_at = $4,
 			started_at = COALESCE(j.started_at, $1)
-		FROM candidate
-		WHERE j.id = candidate.id
-		RETURNING ` + executionJobColumns + `
+		FROM candidate AS c
+		WHERE j.id = c.id
+		RETURNING ` + executionJobColumnsQualifiedWithJ + `
 	`
 
 	job, err := scanExecutionJob(r.db.QueryRowContext(ctx, query, claim.ClaimedAt, claim.WorkerID, claim.ClaimToken, claim.LeaseExpiresAt))
@@ -209,25 +209,25 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(ctx context.Context, claim
 }
 
 func (r *ExecutionJobRepository) ClaimJobByStepID(ctx context.Context, stepID string, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
-	const query = `
+	query := `
 		WITH candidate AS (
-			SELECT id
-			FROM build_jobs
-			WHERE step_id = $1
-			  AND status IN ('queued', 'running')
-			ORDER BY attempt_number DESC, created_at DESC
+			SELECT bj.id
+			FROM build_jobs AS bj
+			WHERE bj.step_id = $1
+			  AND bj.status IN ('queued', 'running')
+			ORDER BY bj.attempt_number DESC, bj.created_at DESC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)
-		UPDATE build_jobs
+		UPDATE build_jobs AS j
 		SET status = 'running',
 			claimed_by = $2,
 			claim_token = $3,
 			claim_expires_at = $4,
-			started_at = COALESCE(started_at, $5)
-		FROM candidate
-		WHERE build_jobs.id = candidate.id
-		RETURNING ` + executionJobColumns + `
+			started_at = COALESCE(j.started_at, $5)
+		FROM candidate AS c
+		WHERE j.id = c.id
+		RETURNING ` + executionJobColumnsQualifiedWithJ + `
 	`
 
 	job, err := scanExecutionJob(r.db.QueryRowContext(ctx, query, stepID, claim.WorkerID, claim.ClaimToken, claim.LeaseExpiresAt, claim.ClaimedAt))

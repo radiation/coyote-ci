@@ -11,6 +11,8 @@ import type {
   CreateRepoBuildRequest,
   DataEnvelope,
   QueueBuildStepInput,
+  RerunBuildFromStepRequest,
+  RetryJobResponse,
   StepLogsResponse,
 } from '../types/build';
 import type {
@@ -134,6 +136,21 @@ export async function queueBuild(id: string, template?: BuildTemplate, steps?: Q
         },
       )
     : await postNoBodyJSON<DataEnvelope<Build>>(path);
+  return envelope.data;
+}
+
+export async function retryFailedJob(jobID: string): Promise<RetryJobResponse> {
+  const envelope = await postNoBodyJSON<DataEnvelope<RetryJobResponse>>(
+    `/builds/jobs/${encodeURIComponent(jobID)}/retry`,
+  );
+  return envelope.data;
+}
+
+export async function rerunBuildFromStep(buildID: string, stepIndex: number): Promise<Build> {
+  const envelope = await postJSON<DataEnvelope<Build>, RerunBuildFromStepRequest>(
+    `/builds/${encodeURIComponent(buildID)}/rerun`,
+    { step_index: stepIndex },
+  );
   return envelope.data;
 }
 
