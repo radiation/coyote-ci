@@ -12,10 +12,10 @@ type rowScanner interface {
 }
 
 // buildColumns is the canonical column list for build SELECT/RETURNING clauses (full detail).
-const buildColumns = `id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, repo_url, ref, commit_sha`
+const buildColumns = `id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha`
 
 // buildListColumns is a minimal column list used for list queries (omits large pipeline YAML).
-const buildListColumns = `id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message, pipeline_name, pipeline_source, repo_url, ref, commit_sha`
+const buildListColumns = `id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha`
 
 func scanBuildList(scanner rowScanner) (domain.Build, error) {
 	var build domain.Build
@@ -26,6 +26,7 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 	var errorMessage sql.NullString
 	var pipelineName sql.NullString
 	var pipelineSource sql.NullString
+	var pipelinePath sql.NullString
 	var repoURL sql.NullString
 	var ref sql.NullString
 	var commitSHA sql.NullString
@@ -42,6 +43,7 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 		&errorMessage,
 		&pipelineName,
 		&pipelineSource,
+		&pipelinePath,
 		&repoURL,
 		&ref,
 		&commitSHA,
@@ -75,6 +77,10 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 		v := pipelineSource.String
 		build.PipelineSource = &v
 	}
+	if pipelinePath.Valid {
+		v := pipelinePath.String
+		build.PipelinePath = &v
+	}
 	if repoURL.Valid {
 		v := repoURL.String
 		build.RepoURL = &v
@@ -102,6 +108,7 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 	var pipelineConfigYAML sql.NullString
 	var pipelineName sql.NullString
 	var pipelineSource sql.NullString
+	var pipelinePath sql.NullString
 	var repoURL sql.NullString
 	var ref sql.NullString
 	var commitSHA sql.NullString
@@ -119,6 +126,7 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 		&pipelineConfigYAML,
 		&pipelineName,
 		&pipelineSource,
+		&pipelinePath,
 		&repoURL,
 		&ref,
 		&commitSHA,
@@ -155,6 +163,10 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 	if pipelineSource.Valid {
 		v := pipelineSource.String
 		build.PipelineSource = &v
+	}
+	if pipelinePath.Valid {
+		v := pipelinePath.String
+		build.PipelinePath = &v
 	}
 	if repoURL.Valid {
 		v := repoURL.String

@@ -262,6 +262,40 @@ steps:
 		if build.PipelineSource == nil || *build.PipelineSource != ".coyote/pipeline.yml" {
 			t.Errorf("expected logical pipeline_source, got %v", build.PipelineSource)
 		}
+		if build.PipelinePath == nil || *build.PipelinePath != ".coyote/pipeline.yml" {
+			t.Errorf("expected effective pipeline_path, got %v", build.PipelinePath)
+		}
+	})
+
+	t.Run("uses custom pipeline path", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/scenarios/success-basic", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		customPath := "scenarios/success-basic/coyote.yml"
+		if err := os.WriteFile(tmpDir+"/"+customPath, []byte(validYAML), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123def456"})
+
+		build, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID:    "proj-1",
+			RepoURL:      "https://github.com/org/repo.git",
+			Ref:          "main",
+			PipelinePath: customPath,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if build.PipelinePath == nil || *build.PipelinePath != customPath {
+			t.Fatalf("expected pipeline_path %q, got %v", customPath, build.PipelinePath)
+		}
+		if build.PipelineSource == nil || *build.PipelineSource != customPath {
+			t.Fatalf("expected pipeline_source %q, got %v", customPath, build.PipelineSource)
+		}
 	})
 
 	t.Run("converts steps correctly", func(t *testing.T) {
@@ -422,6 +456,43 @@ steps:
 		})
 		if !errors.Is(err, ErrPipelineFileNotFound) {
 			t.Errorf("expected ErrPipelineFileNotFound, got %v", err)
+		}
+	})
+
+	t.Run("custom pipeline file not found", func(t *testing.T) {
+		tmpDir := setupTempRepo(t, validYAML)
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{localPath: tmpDir, commitSHA: "abc"})
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID:    "proj-1",
+			RepoURL:      "https://example.com/repo.git",
+			Ref:          "main",
+			PipelinePath: "scenarios/missing/coyote.yml",
+		})
+		if !errors.Is(err, ErrPipelineFileNotFound) {
+			t.Fatalf("expected ErrPipelineFileNotFound, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "scenarios/missing/coyote.yml") {
+			t.Fatalf("expected missing path in error, got %v", err)
+		}
+	})
+
+	t.Run("rejects traversal pipeline path", func(t *testing.T) {
+		tmpDir := setupTempRepo(t, validYAML)
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{localPath: tmpDir, commitSHA: "abc"})
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID:    "proj-1",
+			RepoURL:      "https://example.com/repo.git",
+			Ref:          "main",
+			PipelinePath: "../../foo",
+		})
+		if !errors.Is(err, ErrInvalidPipelinePath) {
+			t.Fatalf("expected ErrInvalidPipelinePath, got %v", err)
 		}
 	})
 

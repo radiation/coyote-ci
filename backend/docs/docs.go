@@ -1204,6 +1204,9 @@ const docTemplate = `{
                 "pipeline_name": {
                     "type": "string"
                 },
+                "pipeline_path": {
+                    "type": "string"
+                },
                 "pipeline_source": {
                     "type": "string"
                 },
@@ -1420,6 +1423,9 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "commit_sha": {
+                    "type": "string"
+                },
+                "pipeline_path": {
                     "type": "string"
                 },
                 "project_id": {

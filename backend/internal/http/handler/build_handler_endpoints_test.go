@@ -154,6 +154,43 @@ func TestCreateRepoBuild(t *testing.T) {
 		if data["pipeline_source"] != ".coyote/pipeline.yml" {
 			t.Errorf("expected pipeline_source in response, got %v", data["pipeline_source"])
 		}
+		if data["pipeline_path"] != ".coyote/pipeline.yml" {
+			t.Errorf("expected pipeline_path in response, got %v", data["pipeline_path"])
+		}
+	})
+
+	t.Run("valid repo build with custom pipeline path", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/scenarios/success-basic", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tmpDir+"/scenarios/success-basic/coyote.yml", []byte("version: 1\nsteps:\n  - name: test\n    run: echo ok\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeRepo{}
+		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id":"proj-1","repo_url":"https://github.com/org/repo.git","ref":"main","pipeline_path":"scenarios/success-basic/coyote.yml"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		data := resp["data"]
+		if data["pipeline_path"] != "scenarios/success-basic/coyote.yml" {
+			t.Errorf("expected pipeline_path in response, got %v", data["pipeline_path"])
+		}
 	})
 
 	t.Run("missing project_id returns 400", func(t *testing.T) {
@@ -220,6 +257,30 @@ func TestCreateRepoBuild(t *testing.T) {
 		h := NewBuildHandler(svc)
 
 		body := `{"project_id":"proj-1","repo_url":"https://github.com/org/repo.git","ref":"main"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("invalid pipeline path traversal returns 400", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/.coyote", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tmpDir+"/.coyote/pipeline.yml", []byte("version: 1\nsteps:\n  - name: test\n    run: echo ok\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeRepo{}
+		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc"})
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id":"proj-1","repo_url":"https://github.com/org/repo.git","ref":"main","pipeline_path":"../../foo"}`
 		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
 		w := httptest.NewRecorder()
 		h.CreateRepoBuild(w, req)

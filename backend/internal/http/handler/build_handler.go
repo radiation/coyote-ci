@@ -321,10 +321,11 @@ func (h *BuildHandler) CreateRepoBuild(w http.ResponseWriter, r *http.Request) {
 	}
 
 	build, err := h.buildService.CreateBuildFromRepo(r.Context(), service.CreateRepoBuildInput{
-		ProjectID: req.ProjectID,
-		RepoURL:   req.RepoURL,
-		Ref:       req.Ref,
-		CommitSHA: req.CommitSHA,
+		ProjectID:    req.ProjectID,
+		RepoURL:      req.RepoURL,
+		Ref:          req.Ref,
+		CommitSHA:    req.CommitSHA,
+		PipelinePath: req.PipelinePath,
 	})
 	if err != nil {
 		if isCreateRepoBuildBadRequestError(err) {
@@ -700,7 +701,8 @@ func isCreatePipelineBuildBadRequestError(err error) bool {
 }
 
 func isCreateRepoBuildBadRequestError(err error) bool {
-	return isCreateBuildBadRequestError(err)
+	return isCreateBuildBadRequestError(err) ||
+		errors.Is(err, service.ErrInvalidPipelinePath)
 }
 
 func toBuildResponse(build domain.Build) api.BuildResponse {
@@ -717,6 +719,7 @@ func toBuildResponse(build domain.Build) api.BuildResponse {
 		PipelineConfigYAML: build.PipelineConfigYAML,
 		PipelineName:       build.PipelineName,
 		PipelineSource:     build.PipelineSource,
+		PipelinePath:       build.PipelinePath,
 		RepoURL:            build.RepoURL,
 		Ref:                build.Ref,
 		CommitSHA:          build.CommitSHA,
