@@ -27,6 +27,41 @@ func (s *BuildService) GetBuildSteps(ctx context.Context, id string) ([]domain.B
 	return steps, mapRepoErr(err)
 }
 
+func (s *BuildService) GetJobByStepID(ctx context.Context, stepID string) (domain.ExecutionJob, error) {
+	if s.executionJobRepo == nil {
+		return domain.ExecutionJob{}, repository.ErrExecutionJobNotFound
+	}
+	job, err := s.executionJobRepo.GetJobByStepID(ctx, stepID)
+	if err != nil {
+		return domain.ExecutionJob{}, err
+	}
+	return job, nil
+}
+
+func (s *BuildService) ClaimJobByStepID(ctx context.Context, stepID string, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
+	if s.executionJobRepo == nil {
+		return domain.ExecutionJob{}, false, nil
+	}
+	return s.executionJobRepo.ClaimJobByStepID(ctx, stepID, claim)
+}
+
+func (s *BuildService) RenewJobLease(ctx context.Context, jobID string, claimToken string, leaseExpiresAt time.Time) (domain.ExecutionJob, bool, error) {
+	if s.executionJobRepo == nil {
+		return domain.ExecutionJob{}, false, nil
+	}
+	job, outcome, err := s.executionJobRepo.RenewJobLease(ctx, jobID, claimToken, leaseExpiresAt)
+	if err != nil {
+		return domain.ExecutionJob{}, false, err
+	}
+	if outcome == repository.StepCompletionCompleted {
+		return job, true, nil
+	}
+	if outcome == repository.StepCompletionStaleClaim {
+		return job, false, ErrStaleStepClaim
+	}
+	return job, false, nil
+}
+
 func (s *BuildService) GetBuildLogs(ctx context.Context, id string) ([]logs.BuildLogLine, error) {
 	if _, err := s.buildRepo.GetByID(ctx, id); err != nil {
 		return nil, mapRepoErr(err)
@@ -150,16 +185,29 @@ func (s *BuildService) QueueBuildWithTemplateAndCustomSteps(ctx context.Context,
 
 	normalizedTemplate := strings.ToLower(strings.TrimSpace(template))
 	if normalizedTemplate == BuildTemplateCustom {
-		steps, err := buildStepsForCustomTemplate(id, customSteps)
-		if err != nil {
-			return domain.Build{}, err
+		customTemplateSteps, customStepsErr := buildStepsForCustomTemplate(id, customSteps)
+		if customStepsErr != nil {
+			return domain.Build{}, customStepsErr
 		}
-
-		return s.buildRepo.QueueBuild(ctx, id, steps)
+		queuedBuild, queueErr := s.buildRepo.QueueBuild(ctx, id, customTemplateSteps)
+		if queueErr != nil {
+			return domain.Build{}, queueErr
+		}
+		if durableJobsErr := s.createDurableJobsForBuild(ctx, queuedBuild, customTemplateSteps); durableJobsErr != nil {
+			return domain.Build{}, durableJobsErr
+		}
+		return queuedBuild, nil
 	}
 
 	steps := buildStepsForTemplate(id, normalizedTemplate)
-	return s.buildRepo.QueueBuild(ctx, id, steps)
+	queuedBuild, err := s.buildRepo.QueueBuild(ctx, id, steps)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	if err := s.createDurableJobsForBuild(ctx, queuedBuild, steps); err != nil {
+		return domain.Build{}, err
+	}
+	return queuedBuild, nil
 }
 
 func (s *BuildService) StartBuild(ctx context.Context, id string) (domain.Build, error) {

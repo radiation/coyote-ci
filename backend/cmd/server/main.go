@@ -38,11 +38,13 @@ func main() {
 	}()
 
 	buildRepo := repositorypostgres.NewBuildRepository(db)
+	executionJobRepo := repositorypostgres.NewExecutionJobRepository(db)
 	jobRepo := repositorypostgres.NewJobRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	artifactStore := artifact.NewFilesystemStore(cfg.ArtifactStorageRoot)
 	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildService(buildRepo, nil, logSink)
+	buildService.SetExecutionJobRepository(executionJobRepo)
 	buildService.SetRepoFetcher(source.NewGitFetcher())
 	buildService.SetArtifactPersistence(artifactRepo, artifactStore, cfg.ExecutionWorkspaceRoot)
 	jobService := service.NewJobService(jobRepo, buildService)

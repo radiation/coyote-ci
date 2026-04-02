@@ -19,6 +19,9 @@ import (
 type buildExecutionBoundary interface {
 	ListBuilds(ctx context.Context) ([]domain.Build, error)
 	GetBuildSteps(ctx context.Context, id string) ([]domain.BuildStep, error)
+	GetJobByStepID(ctx context.Context, stepID string) (domain.ExecutionJob, error)
+	ClaimJobByStepID(ctx context.Context, stepID string, claim repository.StepClaim) (domain.ExecutionJob, bool, error)
+	RenewJobLease(ctx context.Context, jobID string, claimToken string, leaseExpiresAt time.Time) (domain.ExecutionJob, bool, error)
 	ClaimPendingStep(ctx context.Context, buildID string, stepIndex int, claim repository.StepClaim) (domain.BuildStep, bool, error)
 	ReclaimExpiredStep(ctx context.Context, buildID string, stepIndex int, reclaimBefore time.Time, claim repository.StepClaim) (domain.BuildStep, bool, error)
 	RenewStepLease(ctx context.Context, buildID string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, bool, error)
@@ -31,6 +34,7 @@ type buildExecutionBoundary interface {
 
 type RunnableStep struct {
 	BuildID        string
+	JobID          string
 	StepID         string
 	StepIndex      int
 	StepName       string
@@ -149,8 +153,9 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 			}
 		}
 
-		return RunnableStep{
+		runnableStep := RunnableStep{
 			BuildID:        build.ID,
+			JobID:          "",
 			StepID:         claimedStep.ID,
 			StepIndex:      claimedStep.StepIndex,
 			StepName:       claimedStep.Name,
@@ -161,7 +166,9 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 			Env:            defaultEnv(claimedStep.Env),
 			WorkingDir:     defaultString(claimedStep.WorkingDir, "."),
 			TimeoutSeconds: maxInt(claimedStep.TimeoutSeconds, 0),
-		}, true, nil
+		}
+
+		return w.bindRunnableStepFromJob(ctx, runnableStep, claim), true, nil
 	}
 
 	for _, build := range builds {
@@ -201,8 +208,9 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 			}
 		}
 
-		return RunnableStep{
+		runnableStep := RunnableStep{
 			BuildID:        build.ID,
+			JobID:          "",
 			StepID:         reclaimedStep.ID,
 			StepIndex:      reclaimedStep.StepIndex,
 			StepName:       reclaimedStep.Name,
@@ -213,7 +221,9 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 			Env:            defaultEnv(reclaimedStep.Env),
 			WorkingDir:     defaultString(reclaimedStep.WorkingDir, "."),
 			TimeoutSeconds: maxInt(reclaimedStep.TimeoutSeconds, 0),
-		}, true, nil
+		}
+
+		return w.bindRunnableStepFromJob(ctx, runnableStep, claim), true, nil
 	}
 
 	if len(builds) > 0 {
@@ -290,6 +300,13 @@ func (w *WorkerService) renewStepLease(ctx context.Context, step RunnableStep) (
 
 	renewCount := atomic.AddInt64(&w.renewalsWon, 1)
 	log.Printf("lease renewal succeeded: build_id=%s step=%s renewal_count=%d", step.BuildID, step.StepName, renewCount)
+
+	if step.JobID != "" {
+		if _, _, renewErr := w.builds.RenewJobLease(ctx, step.JobID, step.ClaimToken, leaseExpiresAt); renewErr != nil && !errors.Is(renewErr, ErrStaleStepClaim) {
+			return false, renewErr
+		}
+	}
+
 	return true, nil
 }
 
@@ -419,6 +436,7 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 
 	result, completionReport, err := w.builds.RunStep(ctx, runner.RunStepRequest{
 		BuildID:        step.BuildID,
+		JobID:          step.JobID,
 		StepID:         step.StepID,
 		StepIndex:      step.StepIndex,
 		StepName:       step.StepName,
@@ -472,4 +490,57 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 
 	report.Step.Status = domain.BuildStepStatusFailed
 	return report, nil
+}
+
+func (w *WorkerService) bindRunnableStepFromJob(ctx context.Context, step RunnableStep, claim repository.StepClaim) RunnableStep {
+	if step.StepID == "" {
+		return step
+	}
+
+	job, err := w.builds.GetJobByStepID(ctx, step.StepID)
+	if err != nil {
+		return step
+	}
+
+	step.JobID = job.ID
+	step.Command = commandFromJob(job)
+	step.Args = argsFromJob(job)
+	step.Env = envFromJob(job)
+	step.WorkingDir = defaultString(job.WorkingDir, ".")
+	if job.TimeoutSeconds != nil {
+		step.TimeoutSeconds = maxInt(*job.TimeoutSeconds, 0)
+	}
+
+	if _, claimed, claimErr := w.builds.ClaimJobByStepID(ctx, step.StepID, claim); claimErr == nil && !claimed {
+		return step
+	}
+
+	return step
+}
+
+func commandFromJob(job domain.ExecutionJob) string {
+	if len(job.Command) > 0 {
+		return defaultString(job.Command[0], "sh")
+	}
+	return "sh"
+}
+
+func argsFromJob(job domain.ExecutionJob) []string {
+	if len(job.Command) <= 1 {
+		return defaultArgs(nil)
+	}
+	args := make([]string, len(job.Command)-1)
+	copy(args, job.Command[1:])
+	return args
+}
+
+func envFromJob(job domain.ExecutionJob) map[string]string {
+	if job.Environment == nil {
+		return map[string]string{}
+	}
+	env := make(map[string]string, len(job.Environment))
+	for key, value := range job.Environment {
+		env[key] = value
+	}
+	return env
 }

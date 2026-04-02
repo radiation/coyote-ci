@@ -17,6 +17,8 @@ const buildColumns = `id, project_id, status, created_at, queued_at, started_at,
 // buildListColumns is a minimal column list used for list queries (omits large pipeline YAML).
 const buildListColumns = `id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha`
 
+const executionJobColumns = `id, build_id, step_id, name, step_index, status, queue_name, image, working_dir, command_json, env_json, timeout_seconds, pipeline_file_path, context_dir, source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest, spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at, created_at, started_at, finished_at, error_message, exit_code, output_refs_json`
+
 func scanBuildList(scanner rowScanner) (domain.Build, error) {
 	var build domain.Build
 	var status string
@@ -297,4 +299,149 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 	}
 
 	return step, nil
+}
+
+func scanExecutionJob(scanner rowScanner) (domain.ExecutionJob, error) {
+	var job domain.ExecutionJob
+	var status string
+	var queueName sql.NullString
+	var commandRaw []byte
+	var envRaw []byte
+	var timeoutSeconds sql.NullInt64
+	var pipelineFilePath sql.NullString
+	var contextDir sql.NullString
+	var sourceRepoURL sql.NullString
+	var sourceRefName sql.NullString
+	var sourceArchiveURI sql.NullString
+	var sourceArchiveDigest sql.NullString
+	var specDigest sql.NullString
+	var claimToken sql.NullString
+	var claimedBy sql.NullString
+	var claimExpiresAt sql.NullTime
+	var startedAt sql.NullTime
+	var finishedAt sql.NullTime
+	var errorMessage sql.NullString
+	var exitCode sql.NullInt64
+	var outputRefsRaw []byte
+
+	err := scanner.Scan(
+		&job.ID,
+		&job.BuildID,
+		&job.StepID,
+		&job.Name,
+		&job.StepIndex,
+		&status,
+		&queueName,
+		&job.Image,
+		&job.WorkingDir,
+		&commandRaw,
+		&envRaw,
+		&timeoutSeconds,
+		&pipelineFilePath,
+		&contextDir,
+		&sourceRepoURL,
+		&job.Source.CommitSHA,
+		&sourceRefName,
+		&sourceArchiveURI,
+		&sourceArchiveDigest,
+		&job.SpecVersion,
+		&specDigest,
+		&job.ResolvedSpecJSON,
+		&claimToken,
+		&claimedBy,
+		&claimExpiresAt,
+		&job.CreatedAt,
+		&startedAt,
+		&finishedAt,
+		&errorMessage,
+		&exitCode,
+		&outputRefsRaw,
+	)
+	if err != nil {
+		return domain.ExecutionJob{}, err
+	}
+
+	job.Status = domain.ExecutionJobStatus(status)
+	if queueName.Valid {
+		v := queueName.String
+		job.QueueName = &v
+	}
+	if err := json.Unmarshal(commandRaw, &job.Command); err != nil {
+		return domain.ExecutionJob{}, err
+	}
+	if len(envRaw) > 0 {
+		if err := json.Unmarshal(envRaw, &job.Environment); err != nil {
+			return domain.ExecutionJob{}, err
+		}
+	} else {
+		job.Environment = map[string]string{}
+	}
+	if timeoutSeconds.Valid {
+		v := int(timeoutSeconds.Int64)
+		job.TimeoutSeconds = &v
+	}
+	if pipelineFilePath.Valid {
+		v := pipelineFilePath.String
+		job.PipelineFilePath = &v
+	}
+	if contextDir.Valid {
+		v := contextDir.String
+		job.ContextDir = &v
+	}
+	if sourceRepoURL.Valid {
+		job.Source.RepositoryURL = sourceRepoURL.String
+	}
+	if sourceRefName.Valid {
+		v := sourceRefName.String
+		job.Source.RefName = &v
+	}
+	if sourceArchiveURI.Valid {
+		v := sourceArchiveURI.String
+		job.Source.ArchiveURI = &v
+	}
+	if sourceArchiveDigest.Valid {
+		v := sourceArchiveDigest.String
+		job.Source.ArchiveDigest = &v
+	}
+	if specDigest.Valid {
+		v := specDigest.String
+		job.SpecDigest = &v
+	}
+	if claimToken.Valid {
+		v := claimToken.String
+		job.ClaimToken = &v
+	}
+	if claimedBy.Valid {
+		v := claimedBy.String
+		job.ClaimedBy = &v
+	}
+	if claimExpiresAt.Valid {
+		v := claimExpiresAt.Time
+		job.ClaimExpiresAt = &v
+	}
+	if startedAt.Valid {
+		v := startedAt.Time
+		job.StartedAt = &v
+	}
+	if finishedAt.Valid {
+		v := finishedAt.Time
+		job.FinishedAt = &v
+	}
+	if errorMessage.Valid {
+		v := errorMessage.String
+		job.ErrorMessage = &v
+	}
+	if exitCode.Valid {
+		v := int(exitCode.Int64)
+		job.ExitCode = &v
+	}
+	if len(outputRefsRaw) > 0 {
+		if err := json.Unmarshal(outputRefsRaw, &job.OutputRefs); err != nil {
+			return domain.ExecutionJob{}, err
+		}
+	} else {
+		job.OutputRefs = []domain.ArtifactRef{}
+	}
+
+	return job, nil
 }

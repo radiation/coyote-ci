@@ -63,6 +63,45 @@ CREATE TABLE IF NOT EXISTS build_steps (
 
 CREATE INDEX IF NOT EXISTS idx_build_steps_build_id_step_index ON build_steps (build_id, step_index);
 
+CREATE TABLE IF NOT EXISTS build_jobs (
+    id UUID PRIMARY KEY,
+    build_id UUID NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+    step_id UUID NOT NULL REFERENCES build_steps(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    queue_name TEXT,
+    image TEXT NOT NULL,
+    working_dir TEXT NOT NULL,
+    command_json JSONB NOT NULL,
+    env_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    timeout_seconds INTEGER,
+    pipeline_file_path TEXT,
+    context_dir TEXT,
+    source_repo_url TEXT,
+    source_commit_sha TEXT NOT NULL,
+    source_ref_name TEXT,
+    source_archive_uri TEXT,
+    source_archive_digest TEXT,
+    spec_version INTEGER NOT NULL DEFAULT 1,
+    spec_digest TEXT,
+    resolved_spec_json JSONB NOT NULL,
+    claim_token TEXT,
+    claimed_by TEXT,
+    claim_expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL,
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    error_message TEXT,
+    exit_code INTEGER,
+    output_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    UNIQUE (step_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_build_jobs_build_id ON build_jobs (build_id);
+CREATE INDEX IF NOT EXISTS idx_build_jobs_status_created_at ON build_jobs (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_build_jobs_claim_expires_at ON build_jobs (claim_expires_at);
+
 CREATE TABLE IF NOT EXISTS build_artifacts (
     id UUID PRIMARY KEY,
     build_id UUID NOT NULL REFERENCES builds(id) ON DELETE CASCADE,

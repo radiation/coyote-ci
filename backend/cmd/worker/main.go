@@ -50,11 +50,13 @@ func main() {
 	}()
 
 	buildRepo := repositorypostgres.NewBuildRepository(db)
+	executionJobRepo := repositorypostgres.NewExecutionJobRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	artifactStore := artifact.NewFilesystemStore(cfg.ArtifactStorageRoot)
 	stepRunner := resolveStepRunner(cfg)
 	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildService(buildRepo, stepRunner, logSink)
+	buildService.SetExecutionJobRepository(executionJobRepo)
 	buildService.SetDefaultExecutionImage(cfg.ExecutionDefaultImage)
 	buildService.SetExecutionWorkspaceRoot(cfg.ExecutionWorkspaceRoot)
 	buildService.SetArtifactPersistence(artifactRepo, artifactStore, cfg.ExecutionWorkspaceRoot)

@@ -17,6 +17,7 @@ type fakeBuildExecutionBoundary struct {
 	listBuildsResp []domain.Build
 	listBuildsErr  error
 	stepsByBuildID map[string][]domain.BuildStep
+	jobsByStepID   map[string]domain.ExecutionJob
 	getStepsErr    error
 	claimErr       error
 	claimMap       map[string]bool
@@ -45,6 +46,51 @@ type fakeBuildExecutionBoundary struct {
 
 	lastBuildID string
 	lastRequest runner.RunStepRequest
+}
+
+func (f *fakeBuildExecutionBoundary) GetJobByStepID(_ context.Context, stepID string) (domain.ExecutionJob, error) {
+	if f.jobsByStepID == nil {
+		return domain.ExecutionJob{}, repository.ErrExecutionJobNotFound
+	}
+	job, ok := f.jobsByStepID[stepID]
+	if !ok {
+		return domain.ExecutionJob{}, repository.ErrExecutionJobNotFound
+	}
+	return job, nil
+}
+
+func (f *fakeBuildExecutionBoundary) ClaimJobByStepID(_ context.Context, stepID string, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
+	if f.jobsByStepID == nil {
+		return domain.ExecutionJob{}, false, nil
+	}
+	job, ok := f.jobsByStepID[stepID]
+	if !ok {
+		return domain.ExecutionJob{}, false, nil
+	}
+	job.Status = domain.ExecutionJobStatusRunning
+	job.ClaimedBy = &claim.WorkerID
+	job.ClaimToken = &claim.ClaimToken
+	job.ClaimExpiresAt = &claim.LeaseExpiresAt
+	f.jobsByStepID[stepID] = job
+	return job, true, nil
+}
+
+func (f *fakeBuildExecutionBoundary) RenewJobLease(_ context.Context, jobID string, claimToken string, leaseExpiresAt time.Time) (domain.ExecutionJob, bool, error) {
+	if f.jobsByStepID == nil {
+		return domain.ExecutionJob{}, false, nil
+	}
+	for stepID, job := range f.jobsByStepID {
+		if job.ID != jobID {
+			continue
+		}
+		if job.ClaimToken == nil || *job.ClaimToken != claimToken {
+			return job, false, ErrStaleStepClaim
+		}
+		job.ClaimExpiresAt = &leaseExpiresAt
+		f.jobsByStepID[stepID] = job
+		return job, true, nil
+	}
+	return domain.ExecutionJob{}, false, nil
 }
 
 func claimKey(buildID string, stepIndex int) string {
@@ -318,6 +364,58 @@ func TestWorkerService_ExecuteRunnableStep_InvalidTransitionOutcomeWithErrorIsNo
 	if report.Step.Status != domain.BuildStepStatusFailed {
 		t.Fatalf("expected step status failed, got %q", report.Step.Status)
 	}
+}
+
+func TestWorkerService_ClaimRunnableStep_UsesPersistedJobSpec(t *testing.T) {
+	now := time.Now().UTC()
+	boundary := &fakeBuildExecutionBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
+		stepsByBuildID: map[string][]domain.BuildStep{
+			"build-1": {
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusPending, Command: "sh", Args: []string{"-c", "echo from-step"}, WorkingDir: ".", Env: map[string]string{"A": "step"}},
+			},
+		},
+		jobsByStepID: map[string]domain.ExecutionJob{
+			"step-1": {
+				ID:             "job-1",
+				BuildID:        "build-1",
+				StepID:         "step-1",
+				StepIndex:      0,
+				Name:           "step-1",
+				Status:         domain.ExecutionJobStatusQueued,
+				Command:        []string{"sh", "-c", "echo from-job"},
+				WorkingDir:     "backend",
+				Environment:    map[string]string{"A": "job"},
+				TimeoutSeconds: intPtr(120),
+				CreatedAt:      now,
+			},
+		},
+	}
+
+	worker := NewWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	runnable, found, err := worker.ClaimRunnableStep(context.Background())
+	if err != nil {
+		t.Fatalf("claim runnable step failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected runnable work")
+	}
+	if runnable.JobID != "job-1" {
+		t.Fatalf("expected job id job-1, got %q", runnable.JobID)
+	}
+	if len(runnable.Args) != 2 || !strings.Contains(runnable.Args[1], "from-job") {
+		t.Fatalf("expected args from persisted job spec, got %#v", runnable.Args)
+	}
+	if runnable.WorkingDir != "backend" {
+		t.Fatalf("expected working dir from job spec, got %q", runnable.WorkingDir)
+	}
+	if runnable.Env["A"] != "job" {
+		t.Fatalf("expected env from job spec, got %#v", runnable.Env)
+	}
+}
+
+func intPtr(value int) *int {
+	return &value
 }
 
 func TestWorkerService_ExecuteRunnableStep_SideEffectFailureIsReported(t *testing.T) {

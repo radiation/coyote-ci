@@ -71,6 +71,22 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 	}
 
 	report := StepCompletionReport{Step: completionResult.Step, CompletionOutcome: repository.StepCompletionCompleted}
+	if s.executionJobRepo != nil && strings.TrimSpace(request.JobID) != "" {
+		var jobErr error
+		if stepStatus == domain.BuildStepStatusSuccess {
+			_, _, jobErr = s.executionJobRepo.CompleteJobSuccess(ctx, request.JobID, claimToken, result.FinishedAt, result.ExitCode, nil)
+		} else {
+			message := "step execution failed"
+			if stepError != nil {
+				message = *stepError
+			}
+			_, _, jobErr = s.executionJobRepo.CompleteJobFailure(ctx, request.JobID, claimToken, result.FinishedAt, message, &exitCode, nil)
+		}
+		if jobErr != nil {
+			report.SideEffectErr = jobErr
+		}
+	}
+
 	if skipLegacyLogWrite {
 		return report, nil
 	}

@@ -55,6 +55,8 @@ const (
 // BuildService coordinates build lifecycle state transitions and delegates step execution to a runner.
 type BuildService struct {
 	buildRepo              repository.BuildRepository
+	executionJobRepo       repository.ExecutionJobRepository
+	executionPlanner       *BuildExecutionPlanner
 	runner                 runner.Runner
 	logSink                logs.LogSink
 	repoFetcher            source.RepoFetcher
@@ -75,10 +77,11 @@ func NewBuildService(buildRepo repository.BuildRepository, stepRunner runner.Run
 	}
 
 	return &BuildService{
-		buildRepo:      buildRepo,
-		runner:         stepRunner,
-		logSink:        logSink,
-		sourceResolver: source.NewGitWorkspaceSourceResolver(),
+		buildRepo:        buildRepo,
+		executionPlanner: NewBuildExecutionPlanner(),
+		runner:           stepRunner,
+		logSink:          logSink,
+		sourceResolver:   source.NewGitWorkspaceSourceResolver(),
 	}
 }
 
@@ -113,6 +116,10 @@ func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository
 	} else {
 		s.artifactCollector = nil
 	}
+}
+
+func (s *BuildService) SetExecutionJobRepository(repo repository.ExecutionJobRepository) {
+	s.executionJobRepo = repo
 }
 
 type CreateBuildInput struct {
@@ -204,7 +211,14 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 			})
 		}
 
-		return s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+		queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+		if err != nil {
+			return domain.Build{}, err
+		}
+		if err := s.createDurableJobsForBuild(ctx, queuedBuild, steps); err != nil {
+			return domain.Build{}, err
+		}
+		return queuedBuild, nil
 	}
 
 	return s.buildRepo.Create(ctx, build)
@@ -263,7 +277,14 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		CommitSHA:          sourceCommitSHA(sourceSpec),
 	}
 
-	return s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	if err := s.createDurableJobsForBuild(ctx, queuedBuild, steps); err != nil {
+		return domain.Build{}, err
+	}
+	return queuedBuild, nil
 }
 
 // CreateRepoBuildInput is the service-level input for creating a build from a repository checkout.
@@ -375,7 +396,27 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		CommitSHA:          commitSHAPtr,
 	}
 
-	return s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	if err := s.createDurableJobsForBuild(ctx, queuedBuild, steps); err != nil {
+		return domain.Build{}, err
+	}
+	return queuedBuild, nil
+}
+
+func (s *BuildService) createDurableJobsForBuild(ctx context.Context, build domain.Build, steps []domain.BuildStep) error {
+	if s.executionJobRepo == nil || s.executionPlanner == nil || len(steps) == 0 {
+		return nil
+	}
+
+	jobs, err := s.executionPlanner.Plan(build, steps, s.resolveExecutionImage(build))
+	if err != nil {
+		return err
+	}
+	_, err = s.executionJobRepo.CreateJobsForBuild(ctx, jobs)
+	return err
 }
 
 func resolveRepoPipelinePath(repoRoot string, requestedPath string) (string, string, error) {
@@ -458,6 +499,8 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		return runner.RunStepResult{}, StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, ErrRunnerNotConfigured
 	}
 
+	request, persistedJob := s.bindRequestToPersistedJob(ctx, request)
+
 	build, err := s.buildRepo.GetByID(ctx, request.BuildID)
 	if err != nil {
 		if errors.Is(err, repository.ErrBuildNotFound) {
@@ -467,6 +510,10 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	}
 	executionImage := s.resolveExecutionImage(build)
 	buildSource := sourceSpecFromBuild(build)
+	if persistedJob != nil {
+		executionImage = persistedJob.Image
+		buildSource = sourceSpecFromJob(*persistedJob)
+	}
 
 	steps, err := s.buildRepo.GetStepsByBuildID(ctx, request.BuildID)
 	if err != nil {
@@ -723,6 +770,67 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	applyBufferedLogErrors(&completionReport)
 
 	return result, completionReport, nil
+}
+
+func (s *BuildService) bindRequestToPersistedJob(ctx context.Context, request runner.RunStepRequest) (runner.RunStepRequest, *domain.ExecutionJob) {
+	if s.executionJobRepo == nil {
+		return request, nil
+	}
+
+	var (
+		job domain.ExecutionJob
+		err error
+	)
+
+	jobID := strings.TrimSpace(request.JobID)
+	if jobID != "" {
+		job, err = s.executionJobRepo.GetJobByID(ctx, jobID)
+	} else if strings.TrimSpace(request.StepID) != "" {
+		job, err = s.executionJobRepo.GetJobByStepID(ctx, request.StepID)
+	}
+	if err != nil {
+		return request, nil
+	}
+
+	request.JobID = job.ID
+	request.StepID = defaultString(request.StepID, job.StepID)
+	request.StepIndex = job.StepIndex
+	request.StepName = defaultString(job.Name, request.StepName)
+	if len(job.Command) > 0 {
+		request.Command = defaultString(job.Command[0], "sh")
+		if len(job.Command) > 1 {
+			request.Args = append([]string(nil), job.Command[1:]...)
+		} else {
+			request.Args = []string{}
+		}
+	}
+	request.Env = cloneEnv(job.Environment)
+	request.WorkingDir = defaultString(job.WorkingDir, ".")
+	if job.TimeoutSeconds != nil {
+		request.TimeoutSeconds = maxInt(*job.TimeoutSeconds, 0)
+	}
+
+	if job.ClaimToken != nil && strings.TrimSpace(request.ClaimToken) == "" {
+		request.ClaimToken = *job.ClaimToken
+	}
+
+	return request, &job
+}
+
+func sourceSpecFromJob(job domain.ExecutionJob) resolvedBuildSourceSpec {
+	return resolvedBuildSourceSpec{
+		HasSource:     strings.TrimSpace(job.Source.RepositoryURL) != "",
+		RepositoryURL: strings.TrimSpace(job.Source.RepositoryURL),
+		Ref:           optionalStringValue(job.Source.RefName),
+		CommitSHA:     strings.TrimSpace(job.Source.CommitSHA),
+	}
+}
+
+func optionalStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func (s *BuildService) resolveExecutionImage(build domain.Build) string {
