@@ -1,15 +1,18 @@
 package http
 
 import (
+	"crypto/subtle"
+	"encoding/json"
 	nethttp "net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
 )
 
-func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandler) nethttp.Handler {
+func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandler, eventHandler *handler.EventHandler, pushEventSecret string) nethttp.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -46,5 +49,31 @@ func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandle
 		r.Post("/{jobID}/run", jobHandler.RunNow)
 	})
 
+	r.Route("/events", func(r chi.Router) {
+		if pushEventSecret != "" {
+			r.Use(requireSecret(pushEventSecret))
+		}
+		r.Post("/push", eventHandler.IngestPushEvent)
+	})
+
 	return r
+}
+
+// requireSecret returns a middleware that validates the X-Coyote-Secret header
+// against the configured secret. Requests with a missing or incorrect secret
+// are rejected with 401 Unauthorized.
+func requireSecret(secret string) func(nethttp.Handler) nethttp.Handler {
+	return func(next nethttp.Handler) nethttp.Handler {
+		return nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+			if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Coyote-Secret")), []byte(secret)) != 1 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(nethttp.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(api.ErrorResponse{
+					Error: api.ErrorBody{Code: "unauthorized", Message: "invalid or missing secret"},
+				})
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }

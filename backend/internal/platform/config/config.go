@@ -22,6 +22,7 @@ type Config struct {
 	ExecutionDefaultImage  string
 	ExecutionWorkspaceRoot string
 	ArtifactStorageRoot    string
+	PushEventSecret        string
 }
 
 func Load() Config {
@@ -40,6 +41,7 @@ func Load() Config {
 		ExecutionDefaultImage:  getEnv("WORKER_EXECUTION_DEFAULT_IMAGE", "alpine:3.20"),
 		ExecutionWorkspaceRoot: getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
 		ArtifactStorageRoot:    getEnv("ARTIFACT_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-artifacts")),
+		PushEventSecret:        getEnv("PUSH_EVENT_SECRET", ""),
 	}
 }
 

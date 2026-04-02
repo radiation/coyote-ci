@@ -16,7 +16,11 @@ func TestHostWorkspaceMaterializer_PrepareWorkspace_CreatesWorkspace(t *testing.
 		t.Fatalf("prepare workspace failed: %v", err)
 	}
 
-	expected := filepath.Join(root, "build-1")
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		canonicalRoot = root
+	}
+	expected := filepath.Join(canonicalRoot, "build-1")
 	if workspacePath != expected {
 		t.Fatalf("expected workspace %q, got %q", expected, workspacePath)
 	}
@@ -65,5 +69,31 @@ func TestHostWorkspaceMaterializer_CleanupWorkspace(t *testing.T) {
 
 	if _, err := os.Stat(workspacePath); !os.IsNotExist(err) {
 		t.Fatalf("expected workspace to be removed, stat err=%v", err)
+	}
+}
+
+func TestHostWorkspaceMaterializer_PrepareWorkspace_ReturnsCanonicalWorkspacePath(t *testing.T) {
+	realRoot := filepath.Join(t.TempDir(), "real-root")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	symlinkRoot := filepath.Join(t.TempDir(), "root-link")
+	if err := os.Symlink(realRoot, symlinkRoot); err != nil {
+		t.Fatalf("creating root symlink: %v", err)
+	}
+
+	m := NewHostWorkspaceMaterializer(symlinkRoot)
+	workspacePath, err := m.PrepareWorkspace(context.Background(), WorkspacePrepareRequest{BuildID: "build-canonical"})
+	if err != nil {
+		t.Fatalf("prepare workspace failed: %v", err)
+	}
+
+	canonicalRoot, err := filepath.EvalSymlinks(realRoot)
+	if err != nil {
+		t.Fatalf("eval real root symlink: %v", err)
+	}
+	expected := filepath.Join(canonicalRoot, "build-canonical")
+	if workspacePath != expected {
+		t.Fatalf("expected canonical workspace %q, got %q", expected, workspacePath)
 	}
 }

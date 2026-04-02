@@ -204,7 +204,7 @@ func TestBuildService_RunStep_CollectsArtifactsBeforeCleanup(t *testing.T) {
 	svc := NewBuildService(repo, runner, &fakeLogSink{})
 	svc.SetArtifactPersistence(artifactRepo, &recordingStore{events: &events}, workspaceRoot)
 
-	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "."})
 	if err != nil {
 		t.Fatalf("expected run to succeed, got %v", err)
 	}
@@ -251,7 +251,7 @@ func TestBuildService_RunStep_MissingArtifactPathsDoNotFailBuild(t *testing.T) {
 	svc := NewBuildService(repo, runner, &fakeLogSink{})
 	svc.SetArtifactPersistence(artifactRepo, artifact.NewFilesystemStore(t.TempDir()), workspaceRoot)
 
-	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "."})
 	if err != nil {
 		t.Fatalf("expected run to succeed, got %v", err)
 	}
@@ -309,7 +309,7 @@ func TestBuildService_RunStep_ConvergesAfterPartialArtifactPersistence(t *testin
 	svc := NewBuildService(repo, runner, &fakeLogSink{})
 	svc.SetArtifactPersistence(artifactRepo, &recordingStore{events: &events}, workspaceRoot)
 
-	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "."})
 	if err != nil {
 		t.Fatalf("expected run to succeed, got %v", err)
 	}
@@ -803,7 +803,7 @@ func TestBuildService_RunStep_EmitsHighSignalPhaseMarkers(t *testing.T) {
 	svc := NewBuildService(repo, r, logStore)
 	svc.SetArtifactPersistence(artifactRepo, artifact.NewFilesystemStore(t.TempDir()), workspaceRoot)
 
-	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "."})
 	if err != nil {
 		t.Fatalf("run step failed: %v", err)
 	}
@@ -856,7 +856,7 @@ func TestBuildService_RunStep_ResolvesSourceIntoWorkspaceAndPersistsCommit(t *te
 	svc.SetExecutionWorkspaceRoot(workspaceRoot)
 	svc.SetSourceResolver(resolver)
 
-	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "."})
 	if err != nil {
 		t.Fatalf("run step failed: %v", err)
 	}
@@ -871,6 +871,9 @@ func TestBuildService_RunStep_ResolvesSourceIntoWorkspaceAndPersistsCommit(t *te
 	}
 	if repo.updatedCommit != resolver.resolvedCommit {
 		t.Fatalf("expected persisted commit %q, got %q", resolver.resolvedCommit, repo.updatedCommit)
+	}
+	if r.lastRequest.WorkingDir != "." {
+		t.Fatalf("expected default working directory '.', got %q", r.lastRequest.WorkingDir)
 	}
 
 	buildLogs, err := svc.GetBuildLogs(context.Background(), buildID)

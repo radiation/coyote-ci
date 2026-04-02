@@ -2,6 +2,7 @@ version: 1
 
 pipeline:
   name: coyote-ci
+  image: golang:1.26.1
 
 steps:
   - name: Backend Format Check

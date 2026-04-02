@@ -46,6 +46,8 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		Name:          req.Name,
 		RepositoryURL: req.RepositoryURL,
 		DefaultRef:    req.DefaultRef,
+		PushEnabled:   req.PushEnabled,
+		PushBranch:    req.PushBranch,
 		PipelineYAML:  req.PipelineYAML,
 		Enabled:       req.Enabled,
 	})
@@ -137,6 +139,8 @@ func (h *JobHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 		Name:          req.Name,
 		RepositoryURL: req.RepositoryURL,
 		DefaultRef:    req.DefaultRef,
+		PushEnabled:   req.PushEnabled,
+		PushBranch:    req.PushBranch,
 		PipelineYAML:  req.PipelineYAML,
 		Enabled:       req.Enabled,
 	})
@@ -185,7 +189,7 @@ func (h *JobHandler) writeJobServiceError(w http.ResponseWriter, err error) {
 		writeErrorJSON(w, http.StatusConflict, "job_disabled", err.Error())
 		return
 	}
-	if errors.Is(err, service.ErrJobIDRequired) || errors.Is(err, service.ErrJobNameRequired) || errors.Is(err, service.ErrJobProjectIDRequired) || errors.Is(err, service.ErrJobRepositoryURLRequired) || errors.Is(err, service.ErrJobDefaultRefRequired) || errors.Is(err, service.ErrJobPipelineYAMLRequired) {
+	if isBadRequestError(err) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -201,6 +205,18 @@ func (h *JobHandler) writeJobServiceError(w http.ResponseWriter, err error) {
 	writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 }
 
+func isBadRequestError(err error) bool {
+	return errors.Is(err, service.ErrJobIDRequired) ||
+		errors.Is(err, service.ErrJobNameRequired) ||
+		errors.Is(err, service.ErrJobProjectIDRequired) ||
+		errors.Is(err, service.ErrJobRepositoryURLRequired) ||
+		errors.Is(err, service.ErrJobDefaultRefRequired) ||
+		errors.Is(err, service.ErrJobPipelineYAMLRequired) ||
+		errors.Is(err, service.ErrPushEventRepositoryURLRequired) ||
+		errors.Is(err, service.ErrPushEventRefRequired) ||
+		errors.Is(err, service.ErrPushEventCommitSHARequired)
+}
+
 func toJobResponse(job domain.Job) api.JobResponse {
 	return api.JobResponse{
 		ID:            job.ID,
@@ -208,6 +224,8 @@ func toJobResponse(job domain.Job) api.JobResponse {
 		Name:          job.Name,
 		RepositoryURL: job.RepositoryURL,
 		DefaultRef:    job.DefaultRef,
+		PushEnabled:   job.PushEnabled,
+		PushBranch:    job.PushBranch,
 		PipelineYAML:  job.PipelineYAML,
 		Enabled:       job.Enabled,
 		CreatedAt:     job.CreatedAt.Format(time.RFC3339),

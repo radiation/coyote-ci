@@ -768,6 +768,52 @@ const docTemplate = `{
                 }
             }
         },
+        "/events/push": {
+            "post": {
+                "description": "Triggers builds for matching enabled jobs configured for push events.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "events"
+                ],
+                "summary": "Ingest push event",
+                "parameters": [
+                    {
+                        "description": "Push event payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.PushEventRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.PushEventEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/health": {
             "get": {
                 "description": "Returns a simple liveness response.",
@@ -1345,6 +1391,12 @@ const docTemplate = `{
                 "project_id": {
                     "type": "string"
                 },
+                "push_branch": {
+                    "type": "string"
+                },
+                "push_enabled": {
+                    "type": "boolean"
+                },
                 "repository_url": {
                     "type": "string"
                 }
@@ -1451,10 +1503,81 @@ const docTemplate = `{
                 "project_id": {
                     "type": "string"
                 },
+                "push_branch": {
+                    "type": "string"
+                },
+                "push_enabled": {
+                    "type": "boolean"
+                },
                 "repository_url": {
                     "type": "string"
                 },
                 "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.PushEventEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.PushEventResponse"
+                }
+            }
+        },
+        "api.PushEventMatchedJob": {
+            "type": "object",
+            "properties": {
+                "build_id": {
+                    "type": "string"
+                },
+                "build_status": {
+                    "type": "string"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "job_name": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.PushEventRequest": {
+            "type": "object",
+            "properties": {
+                "commit_sha": {
+                    "type": "string"
+                },
+                "ref": {
+                    "type": "string"
+                },
+                "repository_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.PushEventResponse": {
+            "type": "object",
+            "properties": {
+                "builds": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.PushEventMatchedJob"
+                    }
+                },
+                "commit_sha": {
+                    "type": "string"
+                },
+                "created_builds": {
+                    "type": "integer"
+                },
+                "matched_jobs": {
+                    "type": "integer"
+                },
+                "ref": {
+                    "type": "string"
+                },
+                "repository_url": {
                     "type": "string"
                 }
             }
@@ -1558,6 +1681,12 @@ const docTemplate = `{
                 },
                 "pipeline_yaml": {
                     "type": "string"
+                },
+                "push_branch": {
+                    "type": "string"
+                },
+                "push_enabled": {
+                    "type": "boolean"
                 },
                 "repository_url": {
                     "type": "string"

@@ -38,6 +38,7 @@ func NewHostWorkspaceMaterializer(root string) *HostWorkspaceMaterializer {
 	if trimmedRoot == "" {
 		trimmedRoot = filepath.Join(os.TempDir(), defaultWorkspaceDirName)
 	}
+	trimmedRoot = normalizeWorkspaceRootPath(trimmedRoot)
 
 	return &HostWorkspaceMaterializer{
 		root: trimmedRoot,
@@ -50,20 +51,25 @@ func (m *HostWorkspaceMaterializer) PrepareWorkspace(ctx context.Context, reques
 		return "", errors.New("build id is required")
 	}
 
-	workspacePath := filepath.Join(m.root, buildID)
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.root = canonicalizeExistingPath(m.root)
+	workspacePath := filepath.Join(m.root, buildID)
+
 	if m.isWorkspacePrepared(workspacePath) {
-		return workspacePath, nil
+		return canonicalizeExistingPath(workspacePath), nil
 	}
 
 	if err := m.ensureWorkspaceRootExists(); err != nil {
 		return "", fmt.Errorf("creating workspace root: %w", err)
 	}
 
-	return workspacePath, m.prepareEmptyWorkspace(workspacePath)
+	if err := m.prepareEmptyWorkspace(workspacePath); err != nil {
+		return "", err
+	}
+
+	return canonicalizeExistingPath(workspacePath), nil
 }
 
 func (m *HostWorkspaceMaterializer) ensureWorkspaceRootExists() error {
@@ -103,4 +109,28 @@ func (m *HostWorkspaceMaterializer) CleanupWorkspace(_ context.Context, buildID 
 
 func (m *HostWorkspaceMaterializer) WorkspaceRoot() string {
 	return m.root
+}
+
+func normalizeWorkspaceRootPath(root string) string {
+	cleaned := filepath.Clean(root)
+	absPath, err := filepath.Abs(cleaned)
+	if err == nil {
+		cleaned = absPath
+	}
+
+	return canonicalizeExistingPath(cleaned)
+}
+
+func canonicalizeExistingPath(path string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(path))
+	if cleaned == "" {
+		return ""
+	}
+
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err == nil {
+		return filepath.Clean(resolved)
+	}
+
+	return cleaned
 }

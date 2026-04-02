@@ -21,7 +21,7 @@ func TestJobHandler_CreateListGetUpdateRunNow(t *testing.T) {
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	h := NewJobHandler(jobSvc)
 
-	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
+	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"push_branch":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
 	createReq := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(createBody))
 	createRes := httptest.NewRecorder()
 	h.CreateJob(createRes, createReq)
@@ -30,6 +30,12 @@ func TestJobHandler_CreateListGetUpdateRunNow(t *testing.T) {
 	}
 
 	createData := decodeDataMap(t, createRes)
+	if createData["push_enabled"] != true {
+		t.Fatalf("expected push_enabled true, got %v", createData["push_enabled"])
+	}
+	if createData["push_branch"] != "main" {
+		t.Fatalf("expected push_branch main, got %v", createData["push_branch"])
+	}
 	jobID, ok := createData["id"].(string)
 	if !ok || jobID == "" {
 		t.Fatalf("expected created job id, got %v", createData["id"])
@@ -55,12 +61,16 @@ func TestJobHandler_CreateListGetUpdateRunNow(t *testing.T) {
 		t.Fatalf("expected get status %d, got %d", http.StatusOK, getRes.Code)
 	}
 
-	updateBody := `{"enabled":false}`
+	updateBody := `{"enabled":false,"push_enabled":false,"push_branch":""}`
 	updateReq := addURLParam(httptest.NewRequest(http.MethodPut, "/jobs/"+jobID, bytes.NewBufferString(updateBody)), "jobID", jobID)
 	updateRes := httptest.NewRecorder()
 	h.UpdateJob(updateRes, updateReq)
 	if updateRes.Code != http.StatusOK {
 		t.Fatalf("expected update status %d, got %d", http.StatusOK, updateRes.Code)
+	}
+	updateData := decodeDataMap(t, updateRes)
+	if updateData["push_enabled"] != false {
+		t.Fatalf("expected push_enabled false after update, got %v", updateData["push_enabled"])
 	}
 
 	runReq := addURLParam(httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/run", nil), "jobID", jobID)

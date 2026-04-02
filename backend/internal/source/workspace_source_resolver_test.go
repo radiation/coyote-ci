@@ -72,6 +72,55 @@ func TestGitWorkspaceSourceResolver_CloneAndCheckout(t *testing.T) {
 	})
 }
 
+func TestGitWorkspaceSourceResolver_CloneIntoWorkspace_PreservesWorkspaceDirectoryInode(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+
+	remoteDir := t.TempDir()
+	mustRun(t, remoteDir, "git", "init", "--bare")
+
+	seedDir := t.TempDir()
+	mustRun(t, seedDir, "git", "clone", remoteDir, ".")
+	mustRun(t, seedDir, "git", "config", "user.email", "test@test.com")
+	mustRun(t, seedDir, "git", "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(seedDir, "README.md"), []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, seedDir, "git", "add", "README.md")
+	mustRun(t, seedDir, "git", "commit", "-m", "seed")
+	mustRun(t, seedDir, "git", "push", "origin", "HEAD")
+
+	workspacePath := filepath.Join(t.TempDir(), "build-keep-inode")
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		t.Fatalf("creating workspace dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePath, "stale.txt"), []byte("stale"), 0o644); err != nil {
+		t.Fatalf("seeding stale file: %v", err)
+	}
+
+	beforeInfo, err := os.Stat(workspacePath)
+	if err != nil {
+		t.Fatalf("stat before clone: %v", err)
+	}
+
+	resolver := NewGitWorkspaceSourceResolver()
+	if cloneErr := resolver.CloneIntoWorkspace(context.Background(), workspacePath, remoteDir); cloneErr != nil {
+		t.Fatalf("clone failed: %v", cloneErr)
+	}
+
+	afterInfo, err := os.Stat(workspacePath)
+	if err != nil {
+		t.Fatalf("stat after clone: %v", err)
+	}
+	if !os.SameFile(beforeInfo, afterInfo) {
+		t.Fatalf("expected workspace directory inode to stay stable across clone")
+	}
+	if _, err := os.Stat(filepath.Join(workspacePath, "stale.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected stale workspace content to be removed, got err=%v", err)
+	}
+}
+
 func TestGitWorkspaceSourceResolver_Failures(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not found in PATH")
