@@ -63,6 +63,84 @@ docker compose up --build
 
 Backend API is exposed on http://localhost:8080.
 
+## Queue Fixture Scenarios (Repo Pipeline Path)
+
+Use the repo-backed build endpoint with `pipeline_path` to queue different scenarios from the same repository.
+
+Set common values once:
+
+```bash
+API_URL="http://localhost:8080"
+FIXTURE_REPO_URL="https://github.com/radiation/coyote-ci-fixtures.git"
+FIXTURE_REF="main"
+PROJECT_ID="fixtures"
+```
+
+Queue each scenario:
+
+```bash
+curl -sS -X POST "$API_URL/builds/repo" \
+	-H "Content-Type: application/json" \
+	-d '{
+		"project_id": "'"$PROJECT_ID"'",
+		"repo_url": "'"$FIXTURE_REPO_URL"'",
+		"ref": "'"$FIXTURE_REF"'",
+		"pipeline_path": "scenarios/success-basic/coyote.yml"
+	}'
+```
+
+```bash
+curl -sS -X POST "$API_URL/builds/repo" \
+	-H "Content-Type: application/json" \
+	-d '{
+		"project_id": "'"$PROJECT_ID"'",
+		"repo_url": "'"$FIXTURE_REPO_URL"'",
+		"ref": "'"$FIXTURE_REF"'",
+		"pipeline_path": "scenarios/failure-exit-1/coyote.yml"
+	}'
+```
+
+```bash
+curl -sS -X POST "$API_URL/builds/repo" \
+	-H "Content-Type: application/json" \
+	-d '{
+		"project_id": "'"$PROJECT_ID"'",
+		"repo_url": "'"$FIXTURE_REPO_URL"'",
+		"ref": "'"$FIXTURE_REF"'",
+		"pipeline_path": "scenarios/logs-long-running/coyote.yml"
+	}'
+```
+
+```bash
+curl -sS -X POST "$API_URL/builds/repo" \
+	-H "Content-Type: application/json" \
+	-d '{
+		"project_id": "'"$PROJECT_ID"'",
+		"repo_url": "'"$FIXTURE_REPO_URL"'",
+		"ref": "'"$FIXTURE_REF"'",
+		"pipeline_path": "scenarios/artifacts-basic/coyote.yml"
+	}'
+```
+
+```bash
+curl -sS -X POST "$API_URL/builds/repo" \
+	-H "Content-Type: application/json" \
+	-d '{
+		"project_id": "'"$PROJECT_ID"'",
+		"repo_url": "'"$FIXTURE_REPO_URL"'",
+		"ref": "'"$FIXTURE_REF"'",
+		"pipeline_path": "scenarios/multi-step-failure/coyote.yml"
+	}'
+```
+
+Expected response fields for repo-backed fixture builds:
+
+- `data.pipeline_source` is `"repo"`
+- `data.pipeline_path` matches the requested scenario path
+- `data.status` is usually `"queued"` at creation time
+
+For a faster workflow, use `scripts/run-fixtures.sh` to queue all scenarios or a single scenario.
+
 Migrations are applied automatically during `docker compose up` by a one-shot `migrate` service before backend and worker start. The Postgres container itself does not run schema SQL directly.
 
 Security note: the worker mounts `/var/run/docker.sock` for local Docker-based step execution. This effectively grants root-equivalent host access to processes in the worker container. Treat this compose setup as trusted local development only, and avoid using it unchanged in less-trusted or shared environments.

@@ -301,6 +301,112 @@ steps:
 		}
 	})
 
+	t.Run("defaults omitted working_dir to pipeline directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/scenarios/success-basic", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		customPath := "scenarios/success-basic/coyote.yml"
+		yaml := `version: 1
+steps:
+  - name: run
+    run: ./scripts/run.sh
+`
+		if err := os.WriteFile(tmpDir+"/"+customPath, []byte(yaml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123def456"})
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID:    "proj-1",
+			RepoURL:      "https://github.com/org/repo.git",
+			Ref:          "main",
+			PipelinePath: customPath,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(repo.steps) != 1 {
+			t.Fatalf("expected 1 step, got %d", len(repo.steps))
+		}
+		if repo.steps[0].WorkingDir != "scenarios/success-basic" {
+			t.Fatalf("expected working_dir scenarios/success-basic, got %q", repo.steps[0].WorkingDir)
+		}
+	})
+
+	t.Run("resolves relative working_dir from pipeline directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/scenarios/success-basic", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		customPath := "scenarios/success-basic/coyote.yml"
+		yaml := `version: 1
+steps:
+  - name: run
+    run: ./run.sh
+    working_dir: scripts
+`
+		if err := os.WriteFile(tmpDir+"/"+customPath, []byte(yaml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123def456"})
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID:    "proj-1",
+			RepoURL:      "https://github.com/org/repo.git",
+			Ref:          "main",
+			PipelinePath: customPath,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(repo.steps) != 1 {
+			t.Fatalf("expected 1 step, got %d", len(repo.steps))
+		}
+		if repo.steps[0].WorkingDir != "scenarios/success-basic/scripts" {
+			t.Fatalf("expected working_dir scenarios/success-basic/scripts, got %q", repo.steps[0].WorkingDir)
+		}
+	})
+
+	t.Run("repo-root pipeline keeps default working_dir at root", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		customPath := "coyote.yml"
+		yaml := `version: 1
+steps:
+  - name: run
+    run: ./scripts/run.sh
+`
+		if err := os.WriteFile(tmpDir+"/"+customPath, []byte(yaml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123def456"})
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID:    "proj-1",
+			RepoURL:      "https://github.com/org/repo.git",
+			Ref:          "main",
+			PipelinePath: customPath,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(repo.steps) != 1 {
+			t.Fatalf("expected 1 step, got %d", len(repo.steps))
+		}
+		if repo.steps[0].WorkingDir != "." {
+			t.Fatalf("expected working_dir ., got %q", repo.steps[0].WorkingDir)
+		}
+	})
+
 	t.Run("converts steps correctly", func(t *testing.T) {
 		tmpDir := setupTempRepo(t, validYAML)
 		repo := &fakeBuildRepository{}
@@ -496,6 +602,40 @@ steps:
 		})
 		if !errors.Is(err, ErrInvalidPipelinePath) {
 			t.Fatalf("expected ErrInvalidPipelinePath, got %v", err)
+		}
+	})
+
+	t.Run("rejects step working_dir that escapes repository root", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/scenarios/success-basic", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		customPath := "scenarios/success-basic/coyote.yml"
+		yaml := `version: 1
+steps:
+  - name: run
+    run: ./run.sh
+    working_dir: ../../../outside
+`
+		if err := os.WriteFile(tmpDir+"/"+customPath, []byte(yaml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{localPath: tmpDir, commitSHA: "abc"})
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID:    "proj-1",
+			RepoURL:      "https://example.com/repo.git",
+			Ref:          "main",
+			PipelinePath: customPath,
+		})
+		if err == nil {
+			t.Fatal("expected working_dir traversal error")
+		}
+		if !strings.Contains(err.Error(), "working_dir") {
+			t.Fatalf("expected working_dir validation error, got %v", err)
 		}
 	})
 

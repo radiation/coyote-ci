@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -329,6 +330,11 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		return domain.Build{}, err
 	}
 
+	resolved, err = resolveRepoStepWorkingDirs(effectivePipelinePath, resolved)
+	if err != nil {
+		return domain.Build{}, err
+	}
+
 	buildID := uuid.NewString()
 	steps := pipelineStepsToDomain(buildID, resolved.Steps)
 
@@ -405,6 +411,43 @@ func resolveRepoPipelinePath(repoRoot string, requestedPath string) (string, str
 
 	normalized := filepath.ToSlash(cleaned)
 	return abs, normalized, nil
+}
+
+func resolveRepoStepWorkingDirs(pipelinePath string, resolved *pipeline.ResolvedPipeline) (*pipeline.ResolvedPipeline, error) {
+	if resolved == nil {
+		return nil, fmt.Errorf("%w: pipeline is required", ErrInvalidPipelinePath)
+	}
+
+	pipelineDir := path.Clean(path.Dir(filepath.ToSlash(strings.TrimSpace(pipelinePath))))
+	if pipelineDir == "" {
+		pipelineDir = "."
+	}
+
+	for i := range resolved.Steps {
+		stepDir := strings.TrimSpace(resolved.Steps[i].WorkingDir)
+		if stepDir == "" || stepDir == "." {
+			resolved.Steps[i].WorkingDir = pipelineDir
+			continue
+		}
+
+		if path.IsAbs(stepDir) {
+			return nil, fmt.Errorf("%w: steps[%d].working_dir must be relative", ErrInvalidPipelinePath, i)
+		}
+
+		normalizedStepDir := path.Clean(strings.ReplaceAll(stepDir, "\\", "/"))
+		if normalizedStepDir == ".." || strings.HasPrefix(normalizedStepDir, "../") {
+			return nil, fmt.Errorf("%w: steps[%d].working_dir escapes repository root", ErrInvalidPipelinePath, i)
+		}
+
+		combined := path.Clean(path.Join(pipelineDir, normalizedStepDir))
+		if combined == ".." || strings.HasPrefix(combined, "../") {
+			return nil, fmt.Errorf("%w: steps[%d].working_dir escapes repository root", ErrInvalidPipelinePath, i)
+		}
+
+		resolved.Steps[i].WorkingDir = combined
+	}
+
+	return resolved, nil
 }
 
 func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, StepCompletionReport, error) {

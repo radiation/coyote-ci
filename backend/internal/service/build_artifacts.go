@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -210,5 +211,22 @@ func artifactPatternsFromBuild(build domain.Build) ([]string, error) {
 		return nil, err
 	}
 
-	return pipelineFile.Artifacts.Paths, nil
+	patterns := append([]string(nil), pipelineFile.Artifacts.Paths...)
+	if build.PipelineSource != nil && *build.PipelineSource == pipelineSourceRepo && build.PipelinePath != nil {
+		pipelineDir := path.Clean(path.Dir(filepath.ToSlash(strings.TrimSpace(*build.PipelinePath))))
+		if pipelineDir == "" {
+			pipelineDir = "."
+		}
+		if pipelineDir != "." {
+			for i, patternValue := range patterns {
+				normalized := path.Clean(path.Join(pipelineDir, strings.TrimSpace(patternValue)))
+				if normalized == ".." || strings.HasPrefix(normalized, "../") {
+					return nil, fmt.Errorf("artifact path escapes repository root")
+				}
+				patterns[i] = normalized
+			}
+		}
+	}
+
+	return patterns, nil
 }

@@ -19,6 +19,12 @@ func Parse(data []byte) (*PipelineFile, error) {
 	if err := decoder.Decode(&pf); err != nil {
 		return nil, &ParseError{Err: err}
 	}
+
+	for i := range pf.Steps {
+		if strings.TrimSpace(pf.Steps[i].Run) == "" {
+			pf.Steps[i].Run = strings.TrimSpace(pf.Steps[i].Command)
+		}
+	}
 	return &pf, nil
 }
 
