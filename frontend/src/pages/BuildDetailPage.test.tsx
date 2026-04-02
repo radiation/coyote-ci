@@ -47,6 +47,8 @@ describe('BuildDetailPage artifacts', () => {
       finished_at: '2026-03-30T00:00:03Z',
       current_step_index: 1,
       error_message: null,
+      pipeline_source: 'repo',
+      pipeline_path: 'scenarios/success-basic/coyote.yml',
     });
     mockedGetBuildSteps.mockResolvedValue([]);
     mockedGetBuildArtifacts.mockResolvedValue([
@@ -73,5 +75,16 @@ describe('BuildDetailPage artifacts', () => {
 
     const link = screen.getByRole('link', { name: 'Download' });
     expect(link.getAttribute('href')).toBe('/api/builds/build-1/artifacts/artifact-1/download');
+  });
+
+  it('shows pipeline metadata when present', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Pipeline Source')).toBeTruthy();
+      expect(screen.getByText('repo')).toBeTruthy();
+      expect(screen.getByText('Pipeline Path')).toBeTruthy();
+      expect(screen.getByText('scenarios/success-basic/coyote.yml')).toBeTruthy();
+    });
   });
 });

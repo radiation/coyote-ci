@@ -27,6 +27,7 @@ export function BuildsListPage() {
   const [pipelineYAML, setPipelineYAML] = useState(PIPELINE_YAML_EXAMPLE);
   const [repoURL, setRepoURL] = useState('');
   const [repoRef, setRepoRef] = useState('main');
+  const [repoPipelinePath, setRepoPipelinePath] = useState('');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -95,8 +96,23 @@ export function BuildsListPage() {
   });
 
   const repoBuildMutation = useMutation({
-    mutationFn: async ({ targetProjectID, targetRepoURL, targetRef }: { targetProjectID: string; targetRepoURL: string; targetRef: string }) => {
-      return createRepoBuild({ project_id: targetProjectID, repo_url: targetRepoURL, ref: targetRef });
+    mutationFn: async ({
+      targetProjectID,
+      targetRepoURL,
+      targetRef,
+      targetPipelinePath,
+    }: {
+      targetProjectID: string;
+      targetRepoURL: string;
+      targetRef: string;
+      targetPipelinePath?: string;
+    }) => {
+      return createRepoBuild({
+        project_id: targetProjectID,
+        repo_url: targetRepoURL,
+        ref: targetRef,
+        ...(targetPipelinePath ? { pipeline_path: targetPipelinePath } : {}),
+      });
     },
     onMutate: () => {
       setSuccessMessage(null);
@@ -134,6 +150,7 @@ export function BuildsListPage() {
     if (template === 'repo') {
       const trimmedRepoURL = repoURL.trim();
       const trimmedRef = repoRef.trim();
+      const trimmedPipelinePath = repoPipelinePath.trim();
       if (!trimmedRepoURL) {
         setErrorMessage('Repository URL is required.');
         return;
@@ -147,6 +164,7 @@ export function BuildsListPage() {
         targetProjectID: trimmedProjectID,
         targetRepoURL: trimmedRepoURL,
         targetRef: trimmedRef,
+        ...(trimmedPipelinePath ? { targetPipelinePath: trimmedPipelinePath } : {}),
       });
       return;
     }
@@ -242,6 +260,20 @@ export function BuildsListPage() {
               disabled={isSubmitting}
               placeholder="main"
             />
+            <details>
+              <summary>Advanced</summary>
+              <div className="queue-build-custom-input">
+                <label htmlFor="repo-pipeline-path">Pipeline path</label>
+                <input
+                  id="repo-pipeline-path"
+                  value={repoPipelinePath}
+                  onChange={(event) => setRepoPipelinePath(event.target.value)}
+                  disabled={isSubmitting}
+                  placeholder=".coyote/pipeline.yml"
+                />
+                <p className="subtle-text">Optional path to a pipeline file inside the repository. If omitted, the default pipeline path is used.</p>
+              </div>
+            </details>
             <p className="subtle-text">Public HTTPS repositories are the current expected path unless credentials are separately configured.</p>
           </div>
         )}
