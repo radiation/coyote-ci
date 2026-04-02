@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -37,7 +38,8 @@ var ErrPipelineYAMLRequired = errors.New("pipeline YAML is required")
 var ErrRepoURLRequired = errors.New("repo_url is required")
 var ErrSourceTargetRequired = errors.New("ref or commit_sha is required")
 var ErrRepoFetcherNotConfigured = errors.New("repo fetcher not configured")
-var ErrPipelineFileNotFound = errors.New(".coyote/pipeline.yml not found in repository")
+var ErrPipelineFileNotFound = errors.New("pipeline file not found in repository")
+var ErrInvalidPipelinePath = errors.New("invalid pipeline path")
 var ErrArtifactNotFound = errors.New("artifact not found")
 var ErrSourceResolverNotConfigured = errors.New("source resolver not configured")
 var ErrExecutionWorkspaceRootNotConfigured = errors.New("execution workspace root not configured")
@@ -212,7 +214,6 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 type CreatePipelineBuildInput struct {
 	ProjectID    string
 	PipelineYAML string
-	SourcePath   string // e.g. ".coyote/pipeline.yml"
 	Source       *CreateBuildSourceInput
 }
 
@@ -245,10 +246,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 	if pipelineName != "" {
 		pipelineNamePtr = &pipelineName
 	}
-	var sourcePtr *string
-	if input.SourcePath != "" {
-		sourcePtr = &input.SourcePath
-	}
+	pipelineSource := pipelineSourceInline
 
 	build := domain.Build{
 		ID:                 buildID,
@@ -258,7 +256,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		CurrentStepIndex:   0,
 		PipelineConfigYAML: &yamlText,
 		PipelineName:       pipelineNamePtr,
-		PipelineSource:     sourcePtr,
+		PipelineSource:     &pipelineSource,
 		Source:             sourceSpec,
 		RepoURL:            optionalStringPtr(sourceRepositoryURL(sourceSpec)),
 		Ref:                sourceRef(sourceSpec),
@@ -270,13 +268,16 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 
 // CreateRepoBuildInput is the service-level input for creating a build from a repository checkout.
 type CreateRepoBuildInput struct {
-	ProjectID string
-	RepoURL   string
-	Ref       string
-	CommitSHA string
+	ProjectID    string
+	RepoURL      string
+	Ref          string
+	CommitSHA    string
+	PipelinePath string
 }
 
 const pipelineFilePath = ".coyote/pipeline.yml"
+const pipelineSourceRepo = "repo"
+const pipelineSourceInline = "inline"
 
 // CreateBuildFromRepo clones the repo, loads .coyote/pipeline.yml, parses/validates/resolves
 // it, then creates a queued build with canonical build steps and repo source metadata.
@@ -309,16 +310,26 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		}
 	}()
 
-	src := pipeline.FileSource{Path: filepath.Join(localPath, pipelineFilePath)}
+	absPipelinePath, effectivePipelinePath, err := resolveRepoPipelinePath(localPath, input.PipelinePath)
+	if err != nil {
+		return domain.Build{}, err
+	}
+
+	src := pipeline.FileSource{Path: absPipelinePath}
 	yamlData, _, err := src.Load()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return domain.Build{}, ErrPipelineFileNotFound
+			return domain.Build{}, fmt.Errorf("%w: %s", ErrPipelineFileNotFound, effectivePipelinePath)
 		}
 		return domain.Build{}, fmt.Errorf("loading pipeline file: %w", err)
 	}
 
 	resolved, err := pipeline.LoadAndResolve(yamlData)
+	if err != nil {
+		return domain.Build{}, err
+	}
+
+	resolved, err = resolveRepoStepWorkingDirs(effectivePipelinePath, resolved)
 	if err != nil {
 		return domain.Build{}, err
 	}
@@ -331,7 +342,8 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 	if resolved.Name != "" {
 		pipelineNamePtr = &resolved.Name
 	}
-	pipelineSource := pipelineFilePath
+	pipelineSource := pipelineSourceRepo
+	pipelinePath := effectivePipelinePath
 
 	repoURL := strings.TrimSpace(input.RepoURL)
 	ref := strings.TrimSpace(input.Ref)
@@ -356,6 +368,7 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		PipelineConfigYAML: &yamlText,
 		PipelineName:       pipelineNamePtr,
 		PipelineSource:     &pipelineSource,
+		PipelinePath:       &pipelinePath,
 		Source:             domainSource,
 		RepoURL:            &repoURL,
 		Ref:                optionalStringPtr(ref),
@@ -363,6 +376,81 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 	}
 
 	return s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+}
+
+func resolveRepoPipelinePath(repoRoot string, requestedPath string) (string, string, error) {
+	trimmed := strings.TrimSpace(requestedPath)
+	if trimmed == "" {
+		trimmed = pipelineFilePath
+	}
+
+	if filepath.IsAbs(trimmed) {
+		return "", "", fmt.Errorf("%w: must be a relative path", ErrInvalidPipelinePath)
+	}
+
+	cleaned := filepath.Clean(trimmed)
+	if cleaned == "." {
+		return "", "", fmt.Errorf("%w: must point to a file", ErrInvalidPipelinePath)
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
+		return "", "", fmt.Errorf("%w: must stay within repository root", ErrInvalidPipelinePath)
+	}
+	if filepath.VolumeName(cleaned) != "" {
+		return "", "", fmt.Errorf("%w: must not include a volume prefix", ErrInvalidPipelinePath)
+	}
+
+	abs := filepath.Join(repoRoot, cleaned)
+	rel, err := filepath.Rel(repoRoot, abs)
+	if err != nil {
+		return "", "", fmt.Errorf("%w: unable to resolve path", ErrInvalidPipelinePath)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", "", fmt.Errorf("%w: must stay within repository root", ErrInvalidPipelinePath)
+	}
+
+	normalized := filepath.ToSlash(cleaned)
+	return abs, normalized, nil
+}
+
+func resolveRepoStepWorkingDirs(pipelinePath string, resolved *pipeline.ResolvedPipeline) (*pipeline.ResolvedPipeline, error) {
+	if resolved == nil {
+		return nil, fmt.Errorf("%w: pipeline is required", ErrInvalidPipelinePath)
+	}
+
+	normalizedPipelinePath := path.Clean(filepath.ToSlash(strings.TrimSpace(pipelinePath)))
+	pipelineDir := "."
+	if normalizedPipelinePath != pipelineFilePath {
+		pipelineDir = path.Clean(path.Dir(normalizedPipelinePath))
+		if pipelineDir == "" {
+			pipelineDir = "."
+		}
+	}
+
+	for i := range resolved.Steps {
+		stepDir := strings.TrimSpace(resolved.Steps[i].WorkingDir)
+		if stepDir == "" || stepDir == "." {
+			resolved.Steps[i].WorkingDir = pipelineDir
+			continue
+		}
+
+		if path.IsAbs(stepDir) {
+			return nil, fmt.Errorf("%w: steps[%d].working_dir must be relative", ErrInvalidPipelinePath, i)
+		}
+
+		normalizedStepDir := path.Clean(strings.ReplaceAll(stepDir, "\\", "/"))
+		if normalizedStepDir == ".." || strings.HasPrefix(normalizedStepDir, "../") {
+			return nil, fmt.Errorf("%w: steps[%d].working_dir escapes repository root", ErrInvalidPipelinePath, i)
+		}
+
+		combined := path.Clean(path.Join(pipelineDir, normalizedStepDir))
+		if combined == ".." || strings.HasPrefix(combined, "../") {
+			return nil, fmt.Errorf("%w: steps[%d].working_dir escapes repository root", ErrInvalidPipelinePath, i)
+		}
+
+		resolved.Steps[i].WorkingDir = combined
+	}
+
+	return resolved, nil
 }
 
 func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, StepCompletionReport, error) {

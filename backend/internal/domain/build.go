@@ -27,6 +27,7 @@ type Build struct {
 	PipelineConfigYAML *string
 	PipelineName       *string
 	PipelineSource     *string
+	PipelinePath       *string
 
 	// Source captures per-build source input and resolved source identity.
 	Source *SourceSpec

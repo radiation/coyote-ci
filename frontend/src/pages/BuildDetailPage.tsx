@@ -72,6 +72,8 @@ export function BuildDetailPage() {
         <div><strong>Queued</strong><span>{formatTime(build.queued_at)}</span></div>
         <div><strong>Started</strong><span>{formatTime(build.started_at)}</span></div>
         <div><strong>Finished</strong><span>{formatTime(build.finished_at)}</span></div>
+        {build.pipeline_source && <div><strong>Pipeline Source</strong><span>{build.pipeline_source}</span></div>}
+        {build.pipeline_path && <div><strong>Pipeline Path</strong><span>{build.pipeline_path}</span></div>}
         <div><strong>Error</strong><span className="error-text">{build.error_message ?? '—'}</span></div>
       </div>
 

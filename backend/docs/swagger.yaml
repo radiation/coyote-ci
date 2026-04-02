@@ -91,6 +91,8 @@ definitions:
         type: string
       pipeline_name:
         type: string
+      pipeline_path:
+        type: string
       pipeline_source:
         type: string
       project_id:
@@ -232,6 +234,8 @@ definitions:
   api.CreateRepoBuildRequest:
     properties:
       commit_sha:
+        type: string
+      pipeline_path:
         type: string
       project_id:
         type: string

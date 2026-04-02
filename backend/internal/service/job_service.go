@@ -193,7 +193,6 @@ func (s *JobService) RunJobNow(ctx context.Context, id string) (domain.Build, er
 	build, err := s.buildService.CreateBuildFromPipeline(ctx, CreatePipelineBuildInput{
 		ProjectID:    job.ProjectID,
 		PipelineYAML: job.PipelineYAML,
-		SourcePath:   "job:" + job.ID,
 		Source: &CreateBuildSourceInput{
 			RepositoryURL: job.RepositoryURL,
 			Ref:           job.DefaultRef,

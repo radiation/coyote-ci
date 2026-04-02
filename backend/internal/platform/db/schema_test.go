@@ -28,6 +28,7 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"pipeline_config_yaml",
 		"pipeline_name",
 		"pipeline_source",
+		"pipeline_path",
 		"repo_url",
 		"ref",
 		"commit_sha",

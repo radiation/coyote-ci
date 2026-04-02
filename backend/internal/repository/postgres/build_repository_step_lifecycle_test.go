@@ -446,8 +446,8 @@ func TestBuildRepository_CreateQueuedBuild(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO builds").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "project_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "repo_url", "ref", "commit_sha"}).
-			AddRow("build-1", "project-1", "queued", now, now, nil, nil, 0, nil, nil, nil, nil, nil, nil, nil),
+		sqlmock.NewRows([]string{"id", "project_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha"}).
+			AddRow("build-1", "project-1", "queued", now, now, nil, nil, 0, nil, nil, nil, nil, nil, nil, nil, nil),
 	)
 	mock.ExpectExec("INSERT INTO build_steps").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO build_steps").WillReturnResult(sqlmock.NewResult(1, 1))

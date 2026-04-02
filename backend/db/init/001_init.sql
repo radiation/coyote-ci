@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS builds (
     pipeline_config_yaml TEXT,
     pipeline_name TEXT,
     pipeline_source TEXT,
+    pipeline_path TEXT,
     repo_url TEXT,
     ref TEXT,
     commit_sha TEXT

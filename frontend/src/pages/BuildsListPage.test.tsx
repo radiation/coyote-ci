@@ -199,6 +199,7 @@ describe('BuildsListPage queue form', () => {
     expect(screen.getByLabelText('Repository URL')).toBeTruthy();
     expect(screen.getByLabelText('Ref')).toBeTruthy();
     expect(screen.getByDisplayValue('main')).toBeTruthy();
+    expect(screen.getByText('Advanced')).toBeTruthy();
     expect(screen.getByText('Public HTTPS repositories are the current expected path unless credentials are separately configured.')).toBeTruthy();
     expect(screen.queryByLabelText('Pipeline YAML')).toBeNull();
     expect(screen.queryByLabelText('Commands')).toBeNull();
@@ -225,6 +226,31 @@ describe('BuildsListPage queue form', () => {
       expect(mockedQueueBuild).not.toHaveBeenCalled();
       expect(mockedCreatePipelineBuild).not.toHaveBeenCalled();
       expect(navigateMock).toHaveBeenCalledWith('/builds/build-repo-1');
+    });
+  });
+
+  it('submits repo build with pipeline path when advanced field is set', async () => {
+    renderPage();
+
+    await screen.findByText('No builds yet.');
+
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'repo' } });
+    fireEvent.click(screen.getByText('Advanced'));
+    fireEvent.change(screen.getByLabelText('Pipeline path'), {
+      target: { value: '  scenarios/success-basic/coyote.yml  ' },
+    });
+    fireEvent.change(screen.getByLabelText('Repository URL'), {
+      target: { value: 'https://github.com/org/repo.git' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Repo Build' }));
+
+    await waitFor(() => {
+      expect(mockedCreateRepoBuild).toHaveBeenCalledWith({
+        project_id: 'project-1',
+        repo_url: 'https://github.com/org/repo.git',
+        ref: 'main',
+        pipeline_path: 'scenarios/success-basic/coyote.yml',
+      });
     });
   });
 

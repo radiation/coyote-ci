@@ -9,6 +9,8 @@ export interface Build {
   finished_at: string | null;
   current_step_index: number;
   error_message: string | null;
+  pipeline_source?: string | null;
+  pipeline_path?: string | null;
 }
 
 export type BuildStatus = 'pending' | 'queued' | 'running' | 'success' | 'failed';
@@ -62,6 +64,7 @@ export interface CreateRepoBuildRequest {
   project_id: string;
   repo_url: string;
   ref: string;
+  pipeline_path?: string;
 }
 
 /** Matches backend api.QueueBuildStepInput JSON shape. */

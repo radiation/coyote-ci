@@ -24,10 +24,11 @@ type CreatePipelineBuildRequest struct {
 }
 
 type CreateRepoBuildRequest struct {
-	ProjectID string `json:"project_id"`
-	RepoURL   string `json:"repo_url"`
-	Ref       string `json:"ref,omitempty"`
-	CommitSHA string `json:"commit_sha,omitempty"`
+	ProjectID    string `json:"project_id"`
+	RepoURL      string `json:"repo_url"`
+	Ref          string `json:"ref,omitempty"`
+	CommitSHA    string `json:"commit_sha,omitempty"`
+	PipelinePath string `json:"pipeline_path,omitempty"`
 }
 
 type BuildSourceInput struct {
@@ -101,6 +102,7 @@ type BuildResponse struct {
 	PipelineConfigYAML *string              `json:"pipeline_config_yaml,omitempty"`
 	PipelineName       *string              `json:"pipeline_name,omitempty"`
 	PipelineSource     *string              `json:"pipeline_source,omitempty"`
+	PipelinePath       *string              `json:"pipeline_path,omitempty"`
 	RepoURL            *string              `json:"repo_url,omitempty"`
 	Ref                *string              `json:"ref,omitempty"`
 	CommitSHA          *string              `json:"commit_sha,omitempty"`

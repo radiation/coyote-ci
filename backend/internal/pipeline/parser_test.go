@@ -89,6 +89,25 @@ artifacts:
 	}
 }
 
+func TestParse_CommandAliasForRun(t *testing.T) {
+	yaml := `
+version: 1
+steps:
+  - name: run
+    command: ./scripts/run.sh
+`
+	pf, err := Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if len(pf.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(pf.Steps))
+	}
+	if pf.Steps[0].Run != "./scripts/run.sh" {
+		t.Fatalf("expected run to be aliased from command, got %q", pf.Steps[0].Run)
+	}
+}
+
 func TestParse_UnknownField(t *testing.T) {
 	yaml := `
 version: 1

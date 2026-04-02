@@ -68,7 +68,6 @@ func (s *JobService) TriggerPushEvent(ctx context.Context, input PushEventInput)
 		build, buildErr := s.buildService.CreateBuildFromPipeline(ctx, CreatePipelineBuildInput{
 			ProjectID:    job.ProjectID,
 			PipelineYAML: job.PipelineYAML,
-			SourcePath:   "job:" + job.ID + ":push",
 			Source: &CreateBuildSourceInput{
 				RepositoryURL: job.RepositoryURL,
 				Ref:           ref,

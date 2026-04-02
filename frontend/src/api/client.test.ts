@@ -181,6 +181,46 @@ describe('API client - types', () => {
     });
   });
 
+  it('sends repo payload with pipeline_path to /builds/repo', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          id: 'build-repo-2',
+          project_id: 'project-1',
+          status: 'queued',
+          created_at: '2026-03-24T00:00:00Z',
+          queued_at: '2026-03-24T00:00:01Z',
+          started_at: null,
+          finished_at: null,
+          current_step_index: 0,
+          error_message: null,
+          pipeline_source: 'repo',
+          pipeline_path: 'scenarios/success-basic/coyote.yml',
+        },
+      }),
+    } as Response);
+
+    const result = await createRepoBuild({
+      project_id: 'project-1',
+      repo_url: 'https://github.com/org/repo.git',
+      ref: 'main',
+      pipeline_path: 'scenarios/success-basic/coyote.yml',
+    });
+
+    expect(result.id).toBe('build-repo-2');
+    expect(fetchMock).toHaveBeenCalledWith('/api/builds/repo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: 'project-1',
+        repo_url: 'https://github.com/org/repo.git',
+        ref: 'main',
+        pipeline_path: 'scenarios/success-basic/coyote.yml',
+      }),
+    });
+  });
+
   it('fetches build artifacts from /builds/{id}/artifacts', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,

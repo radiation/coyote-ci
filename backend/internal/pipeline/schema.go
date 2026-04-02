@@ -26,6 +26,7 @@ type PipelineMeta struct {
 type StepDef struct {
 	Name           string            `yaml:"name"`
 	Run            string            `yaml:"run"`
+	Command        string            `yaml:"command,omitempty"`
 	TimeoutSeconds *int              `yaml:"timeout_seconds"`
 	WorkingDir     string            `yaml:"working_dir"`
 	Env            map[string]string `yaml:"env"`
