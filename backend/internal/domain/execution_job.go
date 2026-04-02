@@ -68,6 +68,9 @@ type ExecutionJob struct {
 	StepID           string
 	Name             string
 	StepIndex        int
+	AttemptNumber    int
+	RetryOfJobID     *string
+	LineageRootJobID *string
 	Status           ExecutionJobStatus
 	QueueName        *string
 	Image            string

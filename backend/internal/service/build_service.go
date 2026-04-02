@@ -41,6 +41,13 @@ var ErrInvalidPipelinePath = errors.New("invalid pipeline path")
 var ErrArtifactNotFound = errors.New("artifact not found")
 var ErrSourceResolverNotConfigured = errors.New("source resolver not configured")
 var ErrExecutionWorkspaceRootNotConfigured = errors.New("execution workspace root not configured")
+var ErrExecutionJobRepoNotConfigured = errors.New("execution job repository not configured")
+var ErrExecutionJobNotFound = errors.New("execution job not found")
+var ErrExecutionJobNotRetryable = errors.New("execution job is not retryable")
+var ErrInvalidRerunStepIndex = errors.New("invalid rerun step index")
+
+const ExecutionBasisPolicyPersisted = "persisted_source_and_spec"
+const OutputReusePolicyExplicitDeclared = "explicit_declared_only_no_implicit_workspace"
 
 const (
 	BuildTemplateDefault = "default"
@@ -183,6 +190,7 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 		ID:               uuid.NewString(),
 		ProjectID:        input.ProjectID,
 		Status:           domain.BuildStatusPending,
+		AttemptNumber:    1,
 		CreatedAt:        time.Now().UTC(),
 		CurrentStepIndex: 0,
 		Source:           sourceSpec,
@@ -269,6 +277,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		ID:                 buildID,
 		ProjectID:          input.ProjectID,
 		Status:             domain.BuildStatusQueued,
+		AttemptNumber:      1,
 		CreatedAt:          time.Now().UTC(),
 		CurrentStepIndex:   0,
 		PipelineConfigYAML: &yamlText,
@@ -387,6 +396,7 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		ID:                 buildID,
 		ProjectID:          input.ProjectID,
 		Status:             domain.BuildStatusQueued,
+		AttemptNumber:      1,
 		CreatedAt:          time.Now().UTC(),
 		CurrentStepIndex:   0,
 		PipelineConfigYAML: &yamlText,

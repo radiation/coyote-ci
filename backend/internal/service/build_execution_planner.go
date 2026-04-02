@@ -56,12 +56,15 @@ func (p *BuildExecutionPlanner) Plan(build domain.Build, steps []domain.BuildSte
 			return nil, err
 		}
 
+		jobID := uuid.NewString()
 		jobs = append(jobs, domain.ExecutionJob{
-			ID:               uuid.NewString(),
+			ID:               jobID,
 			BuildID:          build.ID,
 			StepID:           step.ID,
 			Name:             step.Name,
 			StepIndex:        step.StepIndex,
+			AttemptNumber:    1,
+			LineageRootJobID: &jobID,
 			Status:           domain.ExecutionJobStatusQueued,
 			Image:            resolvedImage,
 			WorkingDir:       spec.WorkingDir,

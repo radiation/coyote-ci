@@ -7,6 +7,9 @@ CREATE TABLE IF NOT EXISTS builds (
     started_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
     current_step_index INTEGER NOT NULL DEFAULT 0,
+    attempt_number INTEGER NOT NULL DEFAULT 1,
+    rerun_of_build_id UUID REFERENCES builds(id) ON DELETE SET NULL,
+    rerun_from_step_index INTEGER,
     error_message TEXT,
     pipeline_config_yaml TEXT,
     pipeline_name TEXT,
@@ -19,6 +22,7 @@ CREATE TABLE IF NOT EXISTS builds (
 
 CREATE INDEX IF NOT EXISTS idx_builds_project_id ON builds (project_id);
 CREATE INDEX IF NOT EXISTS idx_builds_created_at ON builds (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_builds_rerun_of_build_id ON builds (rerun_of_build_id);
 
 CREATE TABLE IF NOT EXISTS jobs (
     id UUID PRIMARY KEY,
@@ -69,6 +73,9 @@ CREATE TABLE IF NOT EXISTS build_jobs (
     step_id UUID NOT NULL REFERENCES build_steps(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     step_index INTEGER NOT NULL,
+    attempt_number INTEGER NOT NULL DEFAULT 1,
+    retry_of_job_id UUID REFERENCES build_jobs(id) ON DELETE SET NULL,
+    lineage_root_job_id UUID REFERENCES build_jobs(id) ON DELETE SET NULL,
     status TEXT NOT NULL,
     queue_name TEXT,
     image TEXT NOT NULL,
@@ -95,12 +102,15 @@ CREATE TABLE IF NOT EXISTS build_jobs (
     error_message TEXT,
     exit_code INTEGER,
     output_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-    UNIQUE (step_id)
+    UNIQUE (build_id, step_id, attempt_number)
 );
 
 CREATE INDEX IF NOT EXISTS idx_build_jobs_build_id ON build_jobs (build_id);
 CREATE INDEX IF NOT EXISTS idx_build_jobs_status_created_at ON build_jobs (status, created_at);
 CREATE INDEX IF NOT EXISTS idx_build_jobs_claim_expires_at ON build_jobs (claim_expires_at);
+CREATE INDEX IF NOT EXISTS idx_build_jobs_step_latest ON build_jobs (step_id, attempt_number DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_build_jobs_retry_of_job_id ON build_jobs (retry_of_job_id);
+CREATE INDEX IF NOT EXISTS idx_build_jobs_lineage_root_job_id ON build_jobs (lineage_root_job_id);
 
 CREATE TABLE IF NOT EXISTS build_job_outputs (
     id UUID PRIMARY KEY,

@@ -13,14 +13,14 @@ import (
 type ExecutionJobRepository struct {
 	mu          sync.RWMutex
 	jobsByID    map[string]domain.ExecutionJob
-	jobByStep   map[string]string
+	jobsByStep  map[string][]string
 	jobsByBuild map[string][]string
 }
 
 func NewExecutionJobRepository() *ExecutionJobRepository {
 	return &ExecutionJobRepository{
 		jobsByID:    map[string]domain.ExecutionJob{},
-		jobByStep:   map[string]string{},
+		jobsByStep:  map[string][]string{},
 		jobsByBuild: map[string][]string{},
 	}
 }
@@ -31,33 +31,58 @@ func (r *ExecutionJobRepository) CreateJobsForBuild(_ context.Context, jobs []do
 
 	out := make([]domain.ExecutionJob, 0, len(jobs))
 	for _, job := range jobs {
+		job.AttemptNumber = normalizeAttemptNumber(job.AttemptNumber)
 		r.jobsByID[job.ID] = cloneExecutionJob(job)
-		r.jobByStep[job.StepID] = job.ID
+		r.jobsByStep[job.StepID] = append(r.jobsByStep[job.StepID], job.ID)
 		r.jobsByBuild[job.BuildID] = append(r.jobsByBuild[job.BuildID], job.ID)
 		out = append(out, cloneExecutionJob(job))
 	}
 
-	r.sortBuildJobsLocked(jobs)
+	r.sortBuildAndStepJobsLocked(jobs)
 	return out, nil
 }
 
-func (r *ExecutionJobRepository) sortBuildJobsLocked(jobs []domain.ExecutionJob) {
-	seen := map[string]struct{}{}
+func (r *ExecutionJobRepository) sortBuildAndStepJobsLocked(jobs []domain.ExecutionJob) {
+	buildSeen := map[string]struct{}{}
+	stepSeen := map[string]struct{}{}
+
 	for _, job := range jobs {
-		if _, ok := seen[job.BuildID]; ok {
-			continue
+		if _, ok := buildSeen[job.BuildID]; !ok {
+			buildSeen[job.BuildID] = struct{}{}
+			ids := r.jobsByBuild[job.BuildID]
+			sort.Slice(ids, func(i, j int) bool {
+				left := r.jobsByID[ids[i]]
+				right := r.jobsByID[ids[j]]
+				if left.StepIndex == right.StepIndex {
+					if left.AttemptNumber == right.AttemptNumber {
+						if left.CreatedAt.Equal(right.CreatedAt) {
+							return left.ID < right.ID
+						}
+						return left.CreatedAt.Before(right.CreatedAt)
+					}
+					return left.AttemptNumber < right.AttemptNumber
+				}
+				return left.StepIndex < right.StepIndex
+			})
+			r.jobsByBuild[job.BuildID] = ids
 		}
-		seen[job.BuildID] = struct{}{}
-		ids := r.jobsByBuild[job.BuildID]
-		sort.Slice(ids, func(i, j int) bool {
-			left := r.jobsByID[ids[i]]
-			right := r.jobsByID[ids[j]]
-			if left.StepIndex == right.StepIndex {
-				return left.ID < right.ID
-			}
-			return left.StepIndex < right.StepIndex
-		})
-		r.jobsByBuild[job.BuildID] = ids
+
+		if _, ok := stepSeen[job.StepID]; !ok {
+			stepSeen[job.StepID] = struct{}{}
+			ids := r.jobsByStep[job.StepID]
+			sort.Slice(ids, func(i, j int) bool {
+				left := r.jobsByID[ids[i]]
+				right := r.jobsByID[ids[j]]
+				if left.AttemptNumber == right.AttemptNumber {
+					if left.CreatedAt.Equal(right.CreatedAt) {
+						return left.ID < right.ID
+					}
+					return left.CreatedAt.Before(right.CreatedAt)
+				}
+				return left.AttemptNumber < right.AttemptNumber
+			})
+			r.jobsByStep[job.StepID] = ids
+		}
 	}
 }
 
@@ -88,14 +113,11 @@ func (r *ExecutionJobRepository) GetJobByStepID(_ context.Context, stepID string
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	id, ok := r.jobByStep[stepID]
-	if !ok {
+	ids := r.jobsByStep[stepID]
+	if len(ids) == 0 {
 		return domain.ExecutionJob{}, repository.ErrExecutionJobNotFound
 	}
-	job, found := r.jobsByID[id]
-	if !found {
-		return domain.ExecutionJob{}, repository.ErrExecutionJobNotFound
-	}
+	job := r.jobsByID[ids[len(ids)-1]]
 	return cloneExecutionJob(job), nil
 }
 
@@ -122,7 +144,10 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(_ context.Context, claim r
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].CreatedAt.Equal(candidates[j].CreatedAt) {
 			if candidates[i].StepIndex == candidates[j].StepIndex {
-				return candidates[i].ID < candidates[j].ID
+				if candidates[i].AttemptNumber == candidates[j].AttemptNumber {
+					return candidates[i].ID < candidates[j].ID
+				}
+				return candidates[i].AttemptNumber < candidates[j].AttemptNumber
 			}
 			return candidates[i].StepIndex < candidates[j].StepIndex
 		}
@@ -146,10 +171,11 @@ func (r *ExecutionJobRepository) ClaimJobByStepID(_ context.Context, stepID stri
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	id, ok := r.jobByStep[stepID]
-	if !ok {
+	ids := r.jobsByStep[stepID]
+	if len(ids) == 0 {
 		return domain.ExecutionJob{}, false, repository.ErrExecutionJobNotFound
 	}
+	id := ids[len(ids)-1]
 	job, ok := r.jobsByID[id]
 	if !ok {
 		return domain.ExecutionJob{}, false, repository.ErrExecutionJobNotFound
@@ -259,4 +285,11 @@ func cloneArtifactRefs(in []domain.ArtifactRef) []domain.ArtifactRef {
 	out := make([]domain.ArtifactRef, len(in))
 	copy(out, in)
 	return out
+}
+
+func normalizeAttemptNumber(value int) int {
+	if value < 1 {
+		return 1
+	}
+	return value
 }

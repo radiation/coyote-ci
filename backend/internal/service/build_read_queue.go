@@ -41,6 +41,13 @@ func (s *BuildService) GetJobOutputsByBuildID(ctx context.Context, buildID strin
 	return s.executionOutputRepo.ListByBuildID(ctx, buildID)
 }
 
+func (s *BuildService) GetJobOutputsByJobID(ctx context.Context, jobID string) ([]domain.ExecutionJobOutput, error) {
+	if s.executionOutputRepo == nil {
+		return []domain.ExecutionJobOutput{}, nil
+	}
+	return s.executionOutputRepo.ListByJobID(ctx, jobID)
+}
+
 func (s *BuildService) ClaimNextRunnableJob(ctx context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
 	if s.executionJobRepo == nil {
 		return domain.ExecutionJob{}, false, nil

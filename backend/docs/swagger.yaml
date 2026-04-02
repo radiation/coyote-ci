@@ -75,6 +75,8 @@ definitions:
     type: object
   api.BuildResponse:
     properties:
+      attempt_number:
+        type: integer
       commit_sha:
         type: string
       created_at:
@@ -83,9 +85,13 @@ definitions:
         type: integer
       error_message:
         type: string
+      execution_basis:
+        type: string
       finished_at:
         type: string
       id:
+        type: string
+      output_reuse_policy:
         type: string
       pipeline_config_yaml:
         type: string
@@ -102,6 +108,10 @@ definitions:
       ref:
         type: string
       repo_url:
+        type: string
+      rerun_from_step_index:
+        type: integer
+      rerun_of_build_id:
         type: string
       source:
         $ref: '#/definitions/api.BuildSourceResponse'
@@ -287,6 +297,8 @@ definitions:
     type: object
   api.ExecutionJobResponse:
     properties:
+      attempt_number:
+        type: integer
       build_id:
         type: string
       command:
@@ -305,11 +317,15 @@ definitions:
         type: object
       error_message:
         type: string
+      execution_basis:
+        type: string
       finished_at:
         type: string
       id:
         type: string
       image:
+        type: string
+      lineage_root_job_id:
         type: string
       name:
         type: string
@@ -318,6 +334,8 @@ definitions:
           $ref: '#/definitions/api.ExecutionJobOutputResponse'
         type: array
       pipeline_file_path:
+        type: string
+      retry_of_job_id:
         type: string
       source_commit_sha:
         type: string
@@ -441,6 +459,23 @@ definitions:
         type: string
       name:
         type: string
+    type: object
+  api.RerunBuildFromStepRequest:
+    properties:
+      step_index:
+        type: integer
+    type: object
+  api.RetryJobEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.RetryJobResponse'
+    type: object
+  api.RetryJobResponse:
+    properties:
+      build:
+        $ref: '#/definitions/api.BuildResponse'
+      job:
+        $ref: '#/definitions/api.ExecutionJobResponse'
     type: object
   api.StepLogChunkResponse:
     properties:
@@ -791,6 +826,45 @@ paths:
       summary: Queue build
       tags:
       - builds
+  /builds/{buildID}/rerun:
+    post:
+      consumes:
+      - application/json
+      description: Creates a new build attempt rerunning from a selected step index.
+      parameters:
+      - description: Build ID
+        in: path
+        name: buildID
+        required: true
+        type: string
+      - description: Rerun request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.RerunBuildFromStepRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuildEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Rerun build from step
+      tags:
+      - builds
   /builds/{buildID}/start:
     post:
       description: Transitions build status from queued to running.
@@ -939,6 +1013,42 @@ paths:
           schema:
             $ref: '#/definitions/api.ErrorResponse'
       summary: Stream build step logs
+      tags:
+      - builds
+  /builds/jobs/{jobID}/retry:
+    post:
+      description: Creates a new build attempt containing a retry of the failed execution
+        job.
+      parameters:
+      - description: Execution Job ID
+        in: path
+        name: jobID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.RetryJobEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Retry failed execution job
       tags:
       - builds
   /builds/pipeline:

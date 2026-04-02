@@ -37,18 +37,18 @@ func (r *ExecutionJobRepository) CreateJobsForBuild(ctx context.Context, jobs []
 
 	const query = `
 		INSERT INTO build_jobs (
-			id, build_id, step_id, name, step_index, status, queue_name, image, working_dir,
+			id, build_id, step_id, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir,
 			command_json, env_json, timeout_seconds, pipeline_file_path, context_dir,
 			source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest,
 			spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at,
 			created_at, started_at, finished_at, error_message, exit_code, output_refs_json
 		)
 		VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9,
-			$10::jsonb, $11::jsonb, $12, $13, $14,
-			$15, $16, $17, $18, $19,
-			$20, $21, $22::jsonb, $23, $24, $25,
-			$26, $27, $28, $29, $30, $31::jsonb
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+			$13::jsonb, $14::jsonb, $15, $16, $17,
+			$18, $19, $20, $21, $22,
+			$23, $24, $25::jsonb, $26, $27, $28,
+			$29, $30, $31, $32, $33, $34::jsonb
 		)
 		RETURNING ` + executionJobColumns + `
 	`
@@ -78,6 +78,9 @@ func (r *ExecutionJobRepository) CreateJobsForBuild(ctx context.Context, jobs []
 			job.StepID,
 			job.Name,
 			job.StepIndex,
+			normalizeAttemptNumber(job.AttemptNumber),
+			job.RetryOfJobID,
+			job.LineageRootJobID,
 			string(job.Status),
 			job.QueueName,
 			job.Image,
@@ -123,7 +126,7 @@ func (r *ExecutionJobRepository) GetJobsByBuildID(ctx context.Context, buildID s
 		SELECT ` + executionJobColumns + `
 		FROM build_jobs
 		WHERE build_id = $1
-		ORDER BY step_index ASC, created_at ASC
+		ORDER BY step_index ASC, attempt_number ASC, created_at ASC
 	`
 
 	rows, err := r.db.QueryContext(ctx, query, buildID)
@@ -163,7 +166,7 @@ func (r *ExecutionJobRepository) GetJobByID(ctx context.Context, id string) (dom
 }
 
 func (r *ExecutionJobRepository) GetJobByStepID(ctx context.Context, stepID string) (domain.ExecutionJob, error) {
-	const query = `SELECT ` + executionJobColumns + ` FROM build_jobs WHERE step_id = $1`
+	const query = `SELECT ` + executionJobColumns + ` FROM build_jobs WHERE step_id = $1 ORDER BY attempt_number DESC, created_at DESC LIMIT 1`
 	job, err := scanExecutionJob(r.db.QueryRowContext(ctx, query, stepID))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -180,7 +183,7 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(ctx context.Context, claim
 			SELECT id
 			FROM build_jobs
 			WHERE status = 'queued' OR (status = 'running' AND claim_expires_at IS NOT NULL AND claim_expires_at <= $1)
-			ORDER BY created_at ASC, step_index ASC, id ASC
+			ORDER BY created_at ASC, step_index ASC, attempt_number ASC, id ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)
@@ -207,14 +210,23 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(ctx context.Context, claim
 
 func (r *ExecutionJobRepository) ClaimJobByStepID(ctx context.Context, stepID string, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
 	const query = `
+		WITH candidate AS (
+			SELECT id
+			FROM build_jobs
+			WHERE step_id = $1
+			  AND status IN ('queued', 'running')
+			ORDER BY attempt_number DESC, created_at DESC
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED
+		)
 		UPDATE build_jobs
 		SET status = 'running',
 			claimed_by = $2,
 			claim_token = $3,
 			claim_expires_at = $4,
 			started_at = COALESCE(started_at, $5)
-		WHERE step_id = $1
-		  AND status IN ('queued', 'running')
+		FROM candidate
+		WHERE build_jobs.id = candidate.id
 		RETURNING ` + executionJobColumns + `
 	`
 
@@ -333,4 +345,11 @@ func normalizeOutputRefs(refs []domain.ArtifactRef) []domain.ArtifactRef {
 		return []domain.ArtifactRef{}
 	}
 	return refs
+}
+
+func normalizeAttemptNumber(value int) int {
+	if value < 1 {
+		return 1
+	}
+	return value
 }
