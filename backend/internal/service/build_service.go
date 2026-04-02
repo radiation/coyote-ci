@@ -246,10 +246,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 	if pipelineName != "" {
 		pipelineNamePtr = &pipelineName
 	}
-	var sourcePtr *string
-	if input.SourcePath != "" {
-		sourcePtr = &input.SourcePath
-	}
+	pipelineSource := pipelineSourceInline
 
 	build := domain.Build{
 		ID:                 buildID,
@@ -259,7 +256,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		CurrentStepIndex:   0,
 		PipelineConfigYAML: &yamlText,
 		PipelineName:       pipelineNamePtr,
-		PipelineSource:     sourcePtr,
+		PipelineSource:     &pipelineSource,
 		Source:             sourceSpec,
 		RepoURL:            optionalStringPtr(sourceRepositoryURL(sourceSpec)),
 		Ref:                sourceRef(sourceSpec),
@@ -279,6 +276,8 @@ type CreateRepoBuildInput struct {
 }
 
 const pipelineFilePath = ".coyote/pipeline.yml"
+const pipelineSourceRepo = "repo"
+const pipelineSourceInline = "inline"
 
 // CreateBuildFromRepo clones the repo, loads .coyote/pipeline.yml, parses/validates/resolves
 // it, then creates a queued build with canonical build steps and repo source metadata.
@@ -338,7 +337,8 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 	if resolved.Name != "" {
 		pipelineNamePtr = &resolved.Name
 	}
-	pipelineSource := effectivePipelinePath
+	pipelineSource := pipelineSourceRepo
+	pipelinePath := effectivePipelinePath
 
 	repoURL := strings.TrimSpace(input.RepoURL)
 	ref := strings.TrimSpace(input.Ref)
@@ -363,7 +363,7 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		PipelineConfigYAML: &yamlText,
 		PipelineName:       pipelineNamePtr,
 		PipelineSource:     &pipelineSource,
-		PipelinePath:       &pipelineSource,
+		PipelinePath:       &pipelinePath,
 		Source:             domainSource,
 		RepoURL:            &repoURL,
 		Ref:                optionalStringPtr(ref),

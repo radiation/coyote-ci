@@ -151,7 +151,7 @@ func TestCreateRepoBuild(t *testing.T) {
 		if data["commit_sha"] != "abc123" {
 			t.Errorf("expected commit_sha in response, got %v", data["commit_sha"])
 		}
-		if data["pipeline_source"] != ".coyote/pipeline.yml" {
+		if data["pipeline_source"] != "repo" {
 			t.Errorf("expected pipeline_source in response, got %v", data["pipeline_source"])
 		}
 		if data["pipeline_path"] != ".coyote/pipeline.yml" {
@@ -188,6 +188,9 @@ func TestCreateRepoBuild(t *testing.T) {
 			t.Fatalf("invalid JSON: %v", err)
 		}
 		data := resp["data"]
+		if data["pipeline_source"] != "repo" {
+			t.Errorf("expected pipeline_source in response, got %v", data["pipeline_source"])
+		}
 		if data["pipeline_path"] != "scenarios/success-basic/coyote.yml" {
 			t.Errorf("expected pipeline_path in response, got %v", data["pipeline_path"])
 		}

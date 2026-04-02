@@ -56,8 +56,11 @@ steps:
 		if build.PipelineName == nil || *build.PipelineName != "backend-ci" {
 			t.Errorf("expected pipeline_name backend-ci, got %v", build.PipelineName)
 		}
-		if build.PipelineSource == nil || *build.PipelineSource != ".coyote/pipeline.yml" {
+		if build.PipelineSource == nil || *build.PipelineSource != "inline" {
 			t.Errorf("expected pipeline_source, got %v", build.PipelineSource)
+		}
+		if build.PipelinePath != nil {
+			t.Errorf("expected nil pipeline_path for inline pipeline build, got %v", build.PipelinePath)
 		}
 
 		if len(repo.steps) != 2 {
@@ -259,7 +262,7 @@ steps:
 		if build.PipelineName == nil || *build.PipelineName != "repo-ci" {
 			t.Errorf("expected pipeline_name repo-ci, got %v", build.PipelineName)
 		}
-		if build.PipelineSource == nil || *build.PipelineSource != ".coyote/pipeline.yml" {
+		if build.PipelineSource == nil || *build.PipelineSource != "repo" {
 			t.Errorf("expected logical pipeline_source, got %v", build.PipelineSource)
 		}
 		if build.PipelinePath == nil || *build.PipelinePath != ".coyote/pipeline.yml" {
@@ -293,8 +296,8 @@ steps:
 		if build.PipelinePath == nil || *build.PipelinePath != customPath {
 			t.Fatalf("expected pipeline_path %q, got %v", customPath, build.PipelinePath)
 		}
-		if build.PipelineSource == nil || *build.PipelineSource != customPath {
-			t.Fatalf("expected pipeline_source %q, got %v", customPath, build.PipelineSource)
+		if build.PipelineSource == nil || *build.PipelineSource != "repo" {
+			t.Fatalf("expected pipeline_source %q, got %v", "repo", build.PipelineSource)
 		}
 	})
 
