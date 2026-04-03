@@ -21,26 +21,34 @@ steps:
     timeout_seconds: 600
 
   - name: Backend Build Server
-    run: go build -o /tmp/coyote-server ./cmd/server
+    run: go build -o dist/coyote-server ./cmd/server
     working_dir: backend
     timeout_seconds: 300
 
   - name: Backend Build Worker
-    run: go build -o /tmp/coyote-worker ./cmd/worker
+    run: go build -o dist/coyote-worker ./cmd/worker
     working_dir: backend
     timeout_seconds: 300
 
   - name: Frontend Install
     run: npm ci
     working_dir: frontend
+    image: node:22-alpine
     timeout_seconds: 600
 
   - name: Frontend Test
     run: npm test
     working_dir: frontend
+    image: node:22-alpine
     timeout_seconds: 600
 
   - name: Frontend Build
     run: npm run build
     working_dir: frontend
+    image: node:22-alpine
     timeout_seconds: 600
+
+artifacts:
+  - backend/dist/coyote-server
+  - backend/dist/coyote-worker
+  - frontend/dist/**
