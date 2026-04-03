@@ -16,6 +16,7 @@ type BuildStep struct {
 	BuildID        string
 	StepIndex      int
 	Name           string
+	Image          string
 	Command        string
 	Args           []string
 	Env            map[string]string

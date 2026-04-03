@@ -226,10 +226,10 @@ func TestBuildRepository_GetStepsByBuildID_Ordered(t *testing.T) {
 	repo := NewBuildRepository(db)
 	now := time.Now().UTC()
 
-	mock.ExpectQuery("SELECT id, build_id, step_index, name, command").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-1", "build-1", 0, "lint", "go", "[\"test\"]", "{}", "/workspace", 60, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil).
-			AddRow("step-2", "build-1", 1, "test", "go", "[\"test\",\"./...\"]", "{}", "/workspace", 60, "pending", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil),
+	mock.ExpectQuery("SELECT id, build_id, step_index, name, image, command").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
+			AddRow("step-1", "build-1", 0, "lint", "", "go", "[\"test\"]", "{}", "/workspace", 60, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil).
+			AddRow("step-2", "build-1", 1, "test", "", "go", "[\"test\",\"./...\"]", "{}", "/workspace", 60, "pending", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil),
 	)
 
 	steps, err := repo.GetStepsByBuildID(context.Background(), "build-1")
@@ -268,8 +268,8 @@ func TestBuildRepository_UpdateStepByIndex(t *testing.T) {
 	errMsg := "step failed"
 
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-1", "build-1", 0, "lint", "go", "[\"test\",\"./...\"]", "{}", "/workspace", 60, "failed", "worker-1", nil, nil, nil, now, now, exitCode, stdout, stderr, errMsg),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
+			AddRow("step-1", "build-1", 0, "lint", "", "go", "[\"test\",\"./...\"]", "{}", "/workspace", 60, "failed", "worker-1", nil, nil, nil, now, now, exitCode, stdout, stderr, errMsg),
 	)
 
 	workerID := "worker-1"

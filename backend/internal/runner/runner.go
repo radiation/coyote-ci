@@ -30,6 +30,7 @@ type RunStepRequest struct {
 	StepName       string
 	WorkerID       string
 	ClaimToken     string
+	Image          string
 	Command        string
 	Args           []string
 	Env            map[string]string

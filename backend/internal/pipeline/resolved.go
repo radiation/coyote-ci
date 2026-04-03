@@ -14,6 +14,7 @@ type ResolvedPipeline struct {
 // ResolvedStep is a single normalized step ready for conversion to a canonical build step.
 type ResolvedStep struct {
 	Name           string
+	Image          string
 	Run            string
 	WorkingDir     string
 	Env            map[string]string

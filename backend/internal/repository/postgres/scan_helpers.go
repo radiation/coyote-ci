@@ -278,6 +278,7 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 		&step.BuildID,
 		&step.StepIndex,
 		&step.Name,
+		&step.Image,
 		&command,
 		&argsRaw,
 		&envRaw,

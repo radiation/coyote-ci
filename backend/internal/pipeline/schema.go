@@ -25,6 +25,7 @@ type PipelineMeta struct {
 // StepDef is the YAML-facing definition for a single step.
 type StepDef struct {
 	Name           string            `yaml:"name"`
+	Image          string            `yaml:"image,omitempty"`
 	Run            string            `yaml:"run"`
 	Command        string            `yaml:"command,omitempty"`
 	TimeoutSeconds *int              `yaml:"timeout_seconds"`

@@ -12,7 +12,7 @@ import (
 
 func (r *BuildRepository) GetStepsByBuildID(ctx context.Context, buildID string) (steps []domain.BuildStep, err error) {
 	const query = `
-		SELECT id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+		SELECT id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
 		FROM build_steps
 		WHERE build_id = $1
 		ORDER BY step_index ASC
@@ -59,7 +59,7 @@ func (r *BuildRepository) ClaimStepIfPending(ctx context.Context, buildID string
 		WHERE build_id = $1
 		  AND step_index = $2
 		  AND status = 'pending'
-		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+		RETURNING id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
 	`
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, workerID, startedAt))
@@ -85,7 +85,7 @@ func (r *BuildRepository) ClaimPendingStep(ctx context.Context, buildID string, 
 		WHERE build_id = $1
 		  AND step_index = $2
 		  AND status = 'pending'
-		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+		RETURNING id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
 	`
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, claim.WorkerID, claim.ClaimToken, claim.ClaimedAt, claim.LeaseExpiresAt))
@@ -111,7 +111,7 @@ func (r *BuildRepository) ReclaimExpiredStep(ctx context.Context, buildID string
 		  AND status = 'running'
 		  AND lease_expires_at IS NOT NULL
 		  AND lease_expires_at <= $3
-		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+		RETURNING id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
 	`
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, reclaimBefore, claim.WorkerID, claim.ClaimToken, claim.ClaimedAt, claim.LeaseExpiresAt))
@@ -133,7 +133,7 @@ func (r *BuildRepository) RenewStepLease(ctx context.Context, buildID string, st
 		  AND step_index = $2
 		  AND status = 'running'
 		  AND claim_token = $3
-		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+		RETURNING id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
 	`
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, renewQuery, buildID, stepIndex, claimToken, leaseExpiresAt))
@@ -145,7 +145,7 @@ func (r *BuildRepository) RenewStepLease(ctx context.Context, buildID string, st
 	}
 
 	const currentStepQuery = `
-		SELECT id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+		SELECT id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
 		FROM build_steps
 		WHERE build_id = $1 AND step_index = $2
 	`
@@ -184,7 +184,7 @@ func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string,
 				ELSE NULL
 			END
 		WHERE build_id = $1 AND step_index = $2
-		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+		RETURNING id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
 	`
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, string(update.Status), update.WorkerID, update.StartedAt, update.FinishedAt, update.ExitCode, update.Stdout, update.Stderr, update.ErrorMessage))
@@ -220,7 +220,7 @@ func (r *BuildRepository) CompleteStepIfRunning(ctx context.Context, buildID str
 		WHERE build_id = $1
 		  AND step_index = $2
 		  AND status = 'running'
-		RETURNING id, build_id, step_index, name, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+		RETURNING id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
 	`
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, string(update.Status), update.WorkerID, update.StartedAt, update.FinishedAt, update.ExitCode, update.Stdout, update.Stderr, update.ErrorMessage))

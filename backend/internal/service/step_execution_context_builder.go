@@ -81,6 +81,11 @@ func (b *StepExecutionContextBuilder) Build(ctx context.Context, request runner.
 		buildSource = sourceSpecFromJob(*persistedJob)
 	}
 
+	// Ensure the execution request carries the resolved image for the runner.
+	if strings.TrimSpace(boundRequest.Image) == "" {
+		boundRequest.Image = executionImage
+	}
+
 	var chunkAppender logs.StepLogChunkAppender
 	if appender, ok := b.service.logSink.(logs.StepLogChunkAppender); ok {
 		chunkAppender = appender
@@ -150,6 +155,7 @@ func (b *StepExecutionContextBuilder) bindRequestToPersistedJob(ctx context.Cont
 	request.StepID = defaultString(request.StepID, job.StepID)
 	request.StepIndex = job.StepIndex
 	request.StepName = defaultString(job.Name, request.StepName)
+	request.Image = job.Image
 	if len(job.Command) > 0 {
 		request.Command = defaultString(job.Command[0], "sh")
 		if len(job.Command) > 1 {
