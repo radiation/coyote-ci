@@ -87,6 +87,8 @@ definitions:
         type: string
       id:
         type: string
+      job_id:
+        type: string
       pipeline_config_yaml:
         type: string
       pipeline_name:
@@ -1269,6 +1271,33 @@ paths:
           schema:
             $ref: '#/definitions/api.ErrorResponse'
       summary: Update job
+      tags:
+      - jobs
+  /jobs/{jobID}/builds:
+    get:
+      description: Returns builds triggered by a specific job, sorted newest first.
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuildListEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List builds for a job
       tags:
       - jobs
   /jobs/{jobID}/run:

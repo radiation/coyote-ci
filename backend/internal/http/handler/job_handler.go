@@ -184,6 +184,37 @@ func (h *JobHandler) RunNow(w http.ResponseWriter, r *http.Request) {
 	writeDataJSON(w, http.StatusCreated, toBuildResponse(build))
 }
 
+// ListJobBuilds godoc
+// @Summary List builds for a job
+// @Description Returns builds triggered by a specific job, sorted newest first.
+// @Tags jobs
+// @Produce json
+// @Param jobID path string true "Job ID"
+// @Success 200 {object} api.BuildListEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /jobs/{jobID}/builds [get]
+func (h *JobHandler) ListJobBuilds(w http.ResponseWriter, r *http.Request) {
+	jobID := strings.TrimSpace(chi.URLParam(r, "jobID"))
+	if jobID == "" {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "job id is required")
+		return
+	}
+
+	builds, err := h.jobService.ListBuildsByJobID(r.Context(), jobID)
+	if err != nil {
+		h.writeJobServiceError(w, err)
+		return
+	}
+
+	responses := make([]api.BuildResponse, 0, len(builds))
+	for _, build := range builds {
+		responses = append(responses, toBuildResponse(build))
+	}
+
+	writeDataJSON(w, http.StatusOK, api.BuildListResponse{Builds: responses})
+}
+
 func (h *JobHandler) writeJobServiceError(w http.ResponseWriter, err error) {
 	if errors.Is(err, service.ErrJobNotFound) {
 		writeErrorJSON(w, http.StatusNotFound, "job_not_found", "job not found")

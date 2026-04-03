@@ -2,6 +2,7 @@
 export interface Build {
   id: string;
   project_id: string;
+  job_id?: string | null;
   status: BuildStatus;
   created_at: string;
   queued_at: string | null;

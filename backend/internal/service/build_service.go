@@ -132,6 +132,7 @@ func (s *BuildService) SetExecutionJobOutputRepository(repo repository.Execution
 
 type CreateBuildInput struct {
 	ProjectID string
+	JobID     *string
 	Steps     []CreateBuildStepInput
 	Source    *CreateBuildSourceInput
 }
@@ -187,6 +188,7 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 	build := domain.Build{
 		ID:               uuid.NewString(),
 		ProjectID:        input.ProjectID,
+		JobID:            input.JobID,
 		Status:           domain.BuildStatusPending,
 		AttemptNumber:    1,
 		CreatedAt:        time.Now().UTC(),
@@ -237,6 +239,7 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 // CreatePipelineBuildInput is the service-level input for creating a build from pipeline YAML.
 type CreatePipelineBuildInput struct {
 	ProjectID    string
+	JobID        *string
 	PipelineYAML string
 	Source       *CreateBuildSourceInput
 }
@@ -275,6 +278,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 	build := domain.Build{
 		ID:                 buildID,
 		ProjectID:          input.ProjectID,
+		JobID:              input.JobID,
 		Status:             domain.BuildStatusQueued,
 		AttemptNumber:      1,
 		CreatedAt:          time.Now().UTC(),
@@ -302,6 +306,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 // CreateRepoBuildInput is the service-level input for creating a build from a repository checkout.
 type CreateRepoBuildInput struct {
 	ProjectID    string
+	JobID        *string
 	RepoURL      string
 	Ref          string
 	CommitSHA    string
@@ -395,6 +400,7 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 	build := domain.Build{
 		ID:                 buildID,
 		ProjectID:          input.ProjectID,
+		JobID:              input.JobID,
 		Status:             domain.BuildStatusQueued,
 		AttemptNumber:      1,
 		CreatedAt:          time.Now().UTC(),

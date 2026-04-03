@@ -15,4 +15,5 @@ export {
 	createJob,
 	updateJob,
 	runJob,
+	listBuildsByJob,
 } from './client';

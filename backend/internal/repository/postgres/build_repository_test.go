@@ -97,11 +97,11 @@ func TestBuildRepository_GetByID(t *testing.T) {
 			}
 
 			repo := NewBuildRepository(db)
-			exp := mock.ExpectQuery("SELECT id, project_id, status, created_at")
+			exp := mock.ExpectQuery("SELECT id, project_id, job_id, status, created_at")
 			if tc.err != nil {
 				exp.WillReturnError(tc.err)
 			} else {
-				exp.WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha"}).AddRow("build-1", "project-1", "queued", now, now, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil))
+				exp.WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "job_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha"}).AddRow("build-1", "project-1", nil, "queued", now, now, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil))
 			}
 
 			got, err := repo.GetByID(context.Background(), "build-1")
@@ -155,7 +155,7 @@ func TestBuildRepository_UpdateStatus(t *testing.T) {
 			if tc.err != nil {
 				exp.WillReturnError(tc.err)
 			} else {
-				exp.WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha"}).AddRow("build-1", "project-1", "running", now, now, now, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil))
+				exp.WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "job_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha"}).AddRow("build-1", "project-1", nil, "running", now, now, now, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil))
 			}
 
 			got, err := repo.UpdateStatus(context.Background(), "build-1", domain.BuildStatusRunning, nil)
@@ -193,8 +193,8 @@ func TestBuildRepository_QueueBuild_PersistsBuildAndSteps(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE builds").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "project_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha"}).
-			AddRow("build-1", "project-1", "queued", now, now, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil),
+		sqlmock.NewRows([]string{"id", "project_id", "job_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha"}).
+			AddRow("build-1", "project-1", nil, "queued", now, now, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil),
 	)
 	mock.ExpectExec("DELETE FROM build_steps").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO build_steps").WillReturnResult(sqlmock.NewResult(1, 1))
