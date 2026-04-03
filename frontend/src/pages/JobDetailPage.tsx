@@ -54,6 +54,8 @@ export function JobDetailPage() {
         <div><strong>Project</strong><span>{job.project_id}</span></div>
         <div><strong>Push Trigger</strong><span>{job.push_enabled ? 'Enabled' : 'Disabled'}</span></div>
         <div><strong>Push Branch</strong><span>{job.push_enabled ? (job.push_branch || 'Any branch') : '—'}</span></div>
+        <div><strong>Pipeline Source</strong><span>{job.pipeline_path ? 'Repository file' : 'Inline YAML'}</span></div>
+        {job.pipeline_path && <div><strong>Pipeline Path</strong><span>{job.pipeline_path}</span></div>}
         <div><strong>Created</strong><span>{formatTime(job.created_at)}</span></div>
         <div><strong>Updated</strong><span>{formatTime(job.updated_at)}</span></div>
       </div>
@@ -98,6 +100,8 @@ export function JobDetailPage() {
   );
 }
 
+type PipelineMode = 'inline' | 'repo';
+
 function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -106,22 +110,37 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
   const [defaultRef, setDefaultRef] = useState(job.default_ref);
   const [pushEnabled, setPushEnabled] = useState(job.push_enabled);
   const [pushBranch, setPushBranch] = useState(job.push_branch ?? '');
+  const [pipelineMode, setPipelineMode] = useState<PipelineMode>(job.pipeline_path ? 'repo' : 'inline');
   const [pipelineYAML, setPipelineYAML] = useState(job.pipeline_yaml);
+  const [pipelinePath, setPipelinePath] = useState(job.pipeline_path ?? '.coyote/pipeline.yml');
   const [enabled, setEnabled] = useState(job.enabled);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const saveMutation = useMutation({
-    mutationFn: (targetID: string) =>
-      updateJob(targetID, {
+    mutationFn: (targetID: string) => {
+      const base = {
         name: name.trim(),
         repository_url: repositoryURL.trim(),
         default_ref: defaultRef.trim(),
         push_enabled: pushEnabled,
         push_branch: pushEnabled ? pushBranch.trim() : '',
-        pipeline_yaml: pipelineYAML.trim(),
         enabled,
-      }),
+      };
+
+      if (pipelineMode === 'inline') {
+        return updateJob(targetID, {
+          ...base,
+          pipeline_yaml: pipelineYAML.trim(),
+          pipeline_path: '',
+        });
+      }
+      return updateJob(targetID, {
+        ...base,
+        pipeline_yaml: '',
+        pipeline_path: pipelinePath.trim(),
+      });
+    },
     onMutate: () => {
       setErrorMessage(null);
       setSuccessMessage(null);
@@ -157,8 +176,18 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    if (!name.trim() || !repositoryURL.trim() || !defaultRef.trim() || !pipelineYAML.trim()) {
-      setErrorMessage('Name, repository URL, default ref, and pipeline YAML are required.');
+    if (!name.trim() || !repositoryURL.trim() || !defaultRef.trim()) {
+      setErrorMessage('Name, repository URL, and default ref are required.');
+      return;
+    }
+
+    if (pipelineMode === 'inline' && !pipelineYAML.trim()) {
+      setErrorMessage('Pipeline YAML is required.');
+      return;
+    }
+
+    if (pipelineMode === 'repo' && !pipelinePath.trim()) {
+      setErrorMessage('Pipeline file path is required.');
       return;
     }
 
@@ -215,14 +244,56 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
           placeholder="main"
         />
 
-        <label htmlFor="job-pipeline-yaml">Pipeline YAML</label>
-        <textarea
-          id="job-pipeline-yaml"
-          value={pipelineYAML}
-          onChange={(event) => setPipelineYAML(event.target.value)}
-          rows={14}
-          disabled={isSubmitting}
-        />
+        <fieldset disabled={isSubmitting}>
+          <legend>Pipeline Source</legend>
+          <label className="radio-label">
+            <input
+              type="radio"
+              name="pipeline-mode"
+              value="inline"
+              checked={pipelineMode === 'inline'}
+              onChange={() => setPipelineMode('inline')}
+            />
+            Inline YAML
+          </label>
+          <label className="radio-label">
+            <input
+              type="radio"
+              name="pipeline-mode"
+              value="repo"
+              checked={pipelineMode === 'repo'}
+              onChange={() => setPipelineMode('repo')}
+            />
+            File in repository
+          </label>
+        </fieldset>
+
+        {pipelineMode === 'inline' && (
+          <>
+            <label htmlFor="job-pipeline-yaml">Pipeline YAML</label>
+            <textarea
+              id="job-pipeline-yaml"
+              value={pipelineYAML}
+              onChange={(event) => setPipelineYAML(event.target.value)}
+              rows={14}
+              disabled={isSubmitting}
+            />
+          </>
+        )}
+
+        {pipelineMode === 'repo' && (
+          <>
+            <label htmlFor="job-pipeline-path">Pipeline File Path</label>
+            <input
+              id="job-pipeline-path"
+              value={pipelinePath}
+              onChange={(event) => setPipelinePath(event.target.value)}
+              disabled={isSubmitting}
+              placeholder=".coyote/pipeline.yml"
+            />
+            <p className="subtle-text">Path to pipeline file inside the repository. Loaded at build time.</p>
+          </>
+        )}
 
         <label className="checkbox-label" htmlFor="job-enabled">
           <input

@@ -2,15 +2,10 @@ import type {
   Build,
   BuildArtifact,
   BuildArtifactsResponse,
-  BuildTemplate,
   BuildListResponse,
   BuildStep,
   BuildStepsResponse,
-  CreateBuildRequest,
-  CreatePipelineBuildRequest,
-  CreateRepoBuildRequest,
   DataEnvelope,
-  QueueBuildStepInput,
   StepLogsResponse,
 } from '../types/build';
 import type {
@@ -105,36 +100,6 @@ export function artifactDownloadURL(downloadPath: string): string {
 
 export function buildStepLogStreamURL(buildID: string, stepIndex: number, after = 0): string {
   return `${BASE}/builds/${encodeURIComponent(buildID)}/steps/${stepIndex}/logs/stream?after=${after}`;
-}
-
-export async function createBuild(input: CreateBuildRequest): Promise<Build> {
-  const envelope = await postJSON<DataEnvelope<Build>, CreateBuildRequest>('/builds', input);
-  return envelope.data;
-}
-
-export async function createPipelineBuild(input: CreatePipelineBuildRequest): Promise<Build> {
-  const envelope = await postJSON<DataEnvelope<Build>, CreatePipelineBuildRequest>('/builds/pipeline', input);
-  return envelope.data;
-}
-
-export async function createRepoBuild(input: CreateRepoBuildRequest): Promise<Build> {
-  const envelope = await postJSON<DataEnvelope<Build>, CreateRepoBuildRequest>('/builds/repo', input);
-  return envelope.data;
-}
-
-export async function queueBuild(id: string, template?: BuildTemplate, steps?: QueueBuildStepInput[]): Promise<Build> {
-  const path = `/builds/${encodeURIComponent(id)}/queue`;
-  const shouldSendBody = Boolean(template) || Boolean(steps && steps.length > 0);
-  const envelope = shouldSendBody
-    ? await postJSON<DataEnvelope<Build>, { template?: BuildTemplate; steps?: QueueBuildStepInput[] }>(
-        path,
-        {
-          ...(template ? { template } : {}),
-          ...(steps && steps.length > 0 ? { steps } : {}),
-        },
-      )
-    : await postNoBodyJSON<DataEnvelope<Build>>(path);
-  return envelope.data;
 }
 
 export async function listJobs(): Promise<Job[]> {

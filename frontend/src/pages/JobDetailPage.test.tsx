@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { JobDetailPage } from './JobDetailPage';
-import { getJob, runJob, updateJob } from '../api';
+import { getJob, listBuildsByJob, runJob, updateJob } from '../api';
 
 const navigateMock = vi.fn();
 
@@ -19,6 +19,7 @@ vi.mock('../api', () => ({
   getJob: vi.fn(),
   updateJob: vi.fn(),
   runJob: vi.fn(),
+  listBuildsByJob: vi.fn(),
 }));
 
 function renderPage() {
@@ -44,9 +45,12 @@ describe('JobDetailPage', () => {
   const mockedGetJob = vi.mocked(getJob);
   const mockedUpdateJob = vi.mocked(updateJob);
   const mockedRunJob = vi.mocked(runJob);
+  const mockedListBuildsByJob = vi.mocked(listBuildsByJob);
 
   beforeEach(() => {
     vi.clearAllMocks();
+
+    mockedListBuildsByJob.mockResolvedValue([]);
 
     mockedGetJob.mockResolvedValue({
       id: 'job-1',
@@ -105,6 +109,7 @@ describe('JobDetailPage', () => {
         push_enabled: true,
         push_branch: 'main',
         pipeline_yaml: 'version: 1\nsteps:\n  - name: test\n    run: go test ./...',
+        pipeline_path: '',
         enabled: true,
       });
       expect(screen.getByText('Job saved.')).toBeTruthy();

@@ -35,45 +35,6 @@ export interface BuildStep {
 
 export type BuildStepStatus = 'pending' | 'running' | 'success' | 'failed';
 
-/** Matches the backend api.CreateBuildStepInput JSON shape. */
-export interface CreateBuildStepInput {
-  name: string;
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  working_dir?: string;
-  timeout_seconds?: number;
-}
-
-/** Matches the backend api.CreateBuildRequest JSON shape. */
-export interface CreateBuildRequest {
-  project_id: string;
-  template?: BuildTemplate;
-  steps?: CreateBuildStepInput[];
-}
-
-export type BuildTemplate = 'default' | 'test' | 'build' | 'custom' | 'fail' | 'pipeline' | 'repo';
-
-/** Matches the backend api.CreatePipelineBuildRequest JSON shape. */
-export interface CreatePipelineBuildRequest {
-  project_id: string;
-  pipeline_yaml: string;
-}
-
-/** Matches the backend api.CreateRepoBuildRequest JSON shape. */
-export interface CreateRepoBuildRequest {
-  project_id: string;
-  repo_url: string;
-  ref: string;
-  pipeline_path?: string;
-}
-
-/** Matches backend api.QueueBuildStepInput JSON shape. */
-export interface QueueBuildStepInput {
-  name?: string;
-  command: string;
-}
-
 /** Envelope: { data: { builds: Build[] } } */
 export interface BuildListResponse {
   builds: Build[];
