@@ -27,6 +27,7 @@ func pipelineStepsToDomain(buildID string, steps []pipeline.ResolvedStep) []doma
 			BuildID:        buildID,
 			StepIndex:      idx,
 			Name:           rs.Name,
+			Image:          rs.Image,
 			Command:        "sh",
 			Args:           []string{"-c", rs.Run},
 			Env:            env,

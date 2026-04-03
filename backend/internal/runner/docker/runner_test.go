@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -65,14 +64,9 @@ func (f *fakeExecutor) Run(_ context.Context, name string, args ...string) ([]by
 	return []byte{}, nil
 }
 
-func TestRunner_PrepareBuild_UsesCommitSHAAndImageParameter(t *testing.T) {
+func TestRunner_PrepareBuild_UsesCommitSHAAndPreparesWorkspace(t *testing.T) {
 	workspace := &fakeWorkspace{preparePath: "/tmp/ws/build-1"}
-	exec := &fakeExecutor{
-		responses: []executorResponse{
-			{output: []byte(""), err: errors.New("No such container: coyote-build-build-1")},
-			{output: []byte("container-id"), err: nil},
-		},
-	}
+	exec := &fakeExecutor{}
 
 	r := New(Options{Workspace: workspace, DefaultImage: "alpine:3.20", Executor: exec})
 	err := r.PrepareBuild(context.Background(), runner.PrepareBuildRequest{
@@ -91,34 +85,24 @@ func TestRunner_PrepareBuild_UsesCommitSHAAndImageParameter(t *testing.T) {
 	if workspace.lastRequest.CommitSHA != "abc123" {
 		t.Fatalf("expected commit sha to be forwarded, got %q", workspace.lastRequest.CommitSHA)
 	}
-	if len(exec.calls) != 2 {
-		t.Fatalf("expected inspect + run calls, got %d", len(exec.calls))
-	}
-
-	runCall := exec.calls[1]
-	expectedPrefix := []string{"run", "-d", "--name", "coyote-build-build-1", "-w", "/workspace", "-v", "/tmp/ws/build-1:/workspace", "golang:1.23-alpine", "sh", "-c"}
-	if len(runCall.args) < len(expectedPrefix) {
-		t.Fatalf("unexpected docker run args length: %+v", runCall.args)
-	}
-	if !reflect.DeepEqual(runCall.args[:len(expectedPrefix)], expectedPrefix) {
-		t.Fatalf("unexpected docker run args prefix: %+v", runCall.args)
+	// PrepareBuild should NOT invoke any docker commands (containers are per-step now)
+	if len(exec.calls) != 0 {
+		t.Fatalf("expected no docker calls, got %d", len(exec.calls))
 	}
 }
 
 func TestRunner_PrepareBuild_UsesDefaultImage(t *testing.T) {
 	workspace := &fakeWorkspace{preparePath: "/tmp/ws/build-2"}
-	exec := &fakeExecutor{responses: []executorResponse{{err: errors.New("No such container: coyote-build-build-2")}, {output: []byte("ok")}}}
+	exec := &fakeExecutor{}
 
 	r := New(Options{Workspace: workspace, DefaultImage: "alpine:3.20", Executor: exec})
 	err := r.PrepareBuild(context.Background(), runner.PrepareBuildRequest{BuildID: "build-2"})
 	if err != nil {
 		t.Fatalf("prepare build failed: %v", err)
 	}
-	if len(exec.calls) < 2 {
-		t.Fatalf("expected docker run to be called")
-	}
-	if got := exec.calls[1].args[8]; got != "alpine:3.20" {
-		t.Fatalf("expected default image alpine:3.20, got %q", got)
+	// No docker calls expected during prepare; image is resolved per-step
+	if len(exec.calls) != 0 {
+		t.Fatalf("expected no docker calls, got %d", len(exec.calls))
 	}
 }
 
@@ -139,53 +123,45 @@ func TestRunner_PrepareBuild_UsesCanonicalWorkspaceMountSource(t *testing.T) {
 	symlinkWorkspace := filepath.Join(symlinkRoot, "build-2")
 
 	workspace := &fakeWorkspace{preparePath: symlinkWorkspace}
-	exec := &fakeExecutor{responses: []executorResponse{{err: errors.New("No such container: coyote-build-build-2")}, {output: []byte("ok")}}}
+	exec := &fakeExecutor{}
 
 	r := New(Options{Workspace: workspace, DefaultImage: "alpine:3.20", Executor: exec})
 	err := r.PrepareBuild(context.Background(), runner.PrepareBuildRequest{BuildID: "build-2"})
 	if err != nil {
 		t.Fatalf("prepare build failed: %v", err)
 	}
-	if len(exec.calls) < 2 {
-		t.Fatalf("expected docker run to be called")
-	}
 
+	// Workspace path should be canonical (symlinks resolved)
+	path, ok := r.workspacePathForBuild("build-2")
+	if !ok {
+		t.Fatal("expected workspace path to be stored")
+	}
 	canonicalWorkspace, canonicalErr := filepath.EvalSymlinks(realWorkspace)
 	if canonicalErr != nil {
 		t.Fatalf("eval canonical workspace: %v", canonicalErr)
 	}
-	expectedMount := canonicalWorkspace + ":/workspace"
-	if got := exec.calls[1].args[7]; got != expectedMount {
-		t.Fatalf("expected canonical mount source %q, got %q", expectedMount, got)
+	if path != canonicalWorkspace {
+		t.Fatalf("expected canonical workspace path %q, got %q", canonicalWorkspace, path)
 	}
 }
 
-func TestRunner_PrepareBuild_InspectFailureIncludesOutput(t *testing.T) {
-	workspace := &fakeWorkspace{preparePath: "/tmp/ws/build-inspect-fail"}
-	exec := &fakeExecutor{responses: []executorResponse{{output: []byte("permission denied to access Docker daemon"), err: errors.New("exit status 1")}}}
+func TestRunner_PrepareBuild_WorkspaceFailurePropagatesError(t *testing.T) {
+	workspace := &fakeWorkspace{prepareErr: errors.New("disk full")}
+	exec := &fakeExecutor{}
 
 	r := New(Options{Workspace: workspace, DefaultImage: "alpine:3.20", Executor: exec})
-	err := r.PrepareBuild(context.Background(), runner.PrepareBuildRequest{BuildID: "build-inspect-fail"})
+	err := r.PrepareBuild(context.Background(), runner.PrepareBuildRequest{BuildID: "build-fail"})
 	if err == nil {
 		t.Fatal("expected prepare build to fail")
 	}
-	if !strings.Contains(err.Error(), "inspecting build container") {
-		t.Fatalf("expected inspect context in error, got %v", err)
-	}
-	if !strings.Contains(err.Error(), "permission denied") {
-		t.Fatalf("expected docker output in error, got %v", err)
+	if !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("expected workspace error in message, got %v", err)
 	}
 }
 
-func TestRunner_PrepareBuild_IdempotentWhenContainerAlreadyRunning(t *testing.T) {
+func TestRunner_PrepareBuild_IdempotentWorkspace(t *testing.T) {
 	workspace := &fakeWorkspace{preparePath: "/tmp/ws/build-3"}
-	exec := &fakeExecutor{
-		responses: []executorResponse{
-			{err: errors.New("No such container: coyote-build-build-3")},
-			{output: []byte("created"), err: nil},
-			{output: []byte("true"), err: nil},
-		},
-	}
+	exec := &fakeExecutor{}
 
 	r := New(Options{Workspace: workspace, DefaultImage: "alpine:3.20", Executor: exec})
 	req := runner.PrepareBuildRequest{BuildID: "build-3", Image: "alpine:3.20"}
@@ -199,33 +175,9 @@ func TestRunner_PrepareBuild_IdempotentWhenContainerAlreadyRunning(t *testing.T)
 	if workspace.prepareCalls != 2 {
 		t.Fatalf("expected workspace convergence check on each call, got %d", workspace.prepareCalls)
 	}
-	if len(exec.calls) != 3 {
-		t.Fatalf("expected inspect+run then inspect, got %d calls", len(exec.calls))
-	}
-	if !reflect.DeepEqual(exec.calls[2].args, []string{"inspect", "-f", "{{.State.Running}}", "coyote-build-build-3"}) {
-		t.Fatalf("expected second prepare to only inspect container, got %+v", exec.calls[2].args)
-	}
-}
-
-func TestRunner_PrepareBuild_StartsStoppedContainer(t *testing.T) {
-	workspace := &fakeWorkspace{preparePath: "/tmp/ws/build-4"}
-	exec := &fakeExecutor{
-		responses: []executorResponse{
-			{output: []byte("false"), err: nil},
-			{output: []byte("started"), err: nil},
-		},
-	}
-
-	r := New(Options{Workspace: workspace, DefaultImage: "alpine:3.20", Executor: exec})
-	if err := r.PrepareBuild(context.Background(), runner.PrepareBuildRequest{BuildID: "build-4"}); err != nil {
-		t.Fatalf("prepare failed: %v", err)
-	}
-
-	if len(exec.calls) != 2 {
-		t.Fatalf("expected inspect + start calls, got %d", len(exec.calls))
-	}
-	if !reflect.DeepEqual(exec.calls[1].args, []string{"start", "coyote-build-build-4"}) {
-		t.Fatalf("expected stopped container to be started, got %+v", exec.calls[1].args)
+	// No docker commands in prepare (containers are per-step)
+	if len(exec.calls) != 0 {
+		t.Fatalf("expected no docker calls, got %d", len(exec.calls))
 	}
 }
 
@@ -254,23 +206,103 @@ func TestResolveContainerWorkingDir(t *testing.T) {
 	}
 }
 
-func TestDockerExecArgs_UsesWorkspaceDefaultAndSafeSubdirectory(t *testing.T) {
-	defaultArgs := dockerExecArgs(runner.RunStepRequest{BuildID: "build-5", Command: "sh", Args: []string{"-c", "pwd"}}, "/workspace")
-	if len(defaultArgs) < 3 {
-		t.Fatalf("expected docker exec args, got %+v", defaultArgs)
+func TestStepContainerRunArgs_BuildsCorrectArgs(t *testing.T) {
+	args := stepContainerRunArgs(
+		"coyote-step-build-5-0",
+		"golang:1.23",
+		"/tmp/ws/build-5:/workspace",
+		"/workspace",
+		false,
+		runner.RunStepRequest{BuildID: "build-5", Command: "sh", Args: []string{"-c", "pwd"}},
+	)
+	// Verify key structural elements
+	if args[0] != "run" {
+		t.Fatalf("expected run command, got %q", args[0])
 	}
-	if defaultArgs[0] != "exec" || defaultArgs[1] != "-w" || defaultArgs[2] != "/workspace" {
-		t.Fatalf("expected default working dir /workspace, got %+v", defaultArgs[:3])
+	if args[1] != "--name" || args[2] != "coyote-step-build-5-0" {
+		t.Fatalf("expected --name coyote-step-build-5-0, got %+v", args[:4])
 	}
 
-	escapedArgs := dockerExecArgs(runner.RunStepRequest{BuildID: "build-5", WorkingDir: "../../etc", Command: "sh", Args: []string{"-c", "pwd"}}, "/workspace")
-	if escapedArgs[2] != "/workspace" {
-		t.Fatalf("expected traversal to fall back to /workspace, got %q", escapedArgs[2])
+	// Verify volume mount and working dir are present
+	foundMount := false
+	foundWorkdir := false
+	for i, a := range args {
+		if a == "-v" && i+1 < len(args) && args[i+1] == "/tmp/ws/build-5:/workspace" {
+			foundMount = true
+		}
+		if a == "-w" && i+1 < len(args) && args[i+1] == "/workspace" {
+			foundWorkdir = true
+		}
+	}
+	if !foundMount {
+		t.Fatalf("expected volume mount, got %+v", args)
+	}
+	if !foundWorkdir {
+		t.Fatalf("expected working directory, got %+v", args)
 	}
 
-	subdirArgs := dockerExecArgs(runner.RunStepRequest{BuildID: "build-5", WorkingDir: "backend", Command: "sh", Args: []string{"-c", "pwd"}}, "/workspace/backend")
-	if subdirArgs[2] != "/workspace/backend" {
-		t.Fatalf("expected safe subdirectory under workspace, got %q", subdirArgs[2])
+	// Image and command should be at the end
+	imgIdx := -1
+	for i, a := range args {
+		if a == "golang:1.23" {
+			imgIdx = i
+			break
+		}
+	}
+	if imgIdx < 0 {
+		t.Fatalf("expected image in args, got %+v", args)
+	}
+	if args[imgIdx+1] != "sh" || args[imgIdx+2] != "-c" || args[imgIdx+3] != "pwd" {
+		t.Fatalf("expected command after image, got %+v", args[imgIdx:])
+	}
+
+	// Verify CI env vars are injected
+	foundCI := false
+	for i, a := range args {
+		if a == "-e" && i+1 < len(args) && args[i+1] == "CI=true" {
+			foundCI = true
+		}
+	}
+	if !foundCI {
+		t.Fatalf("expected CI=true env var, got %+v", args)
+	}
+
+	// With user env vars
+	argsWithEnv := stepContainerRunArgs(
+		"coyote-step-build-5-1",
+		"golang:1.23",
+		"/tmp/ws/build-5:/workspace",
+		"/workspace/backend",
+		false,
+		runner.RunStepRequest{BuildID: "build-5", Command: "make", Env: map[string]string{"GOOS": "linux"}},
+	)
+	foundEnv := false
+	for i, a := range argsWithEnv {
+		if a == "-e" && i+1 < len(argsWithEnv) && argsWithEnv[i+1] == "GOOS=linux" {
+			foundEnv = true
+		}
+	}
+	if !foundEnv {
+		t.Fatalf("expected -e GOOS=linux in args: %+v", argsWithEnv)
+	}
+
+	// With Docker socket mount
+	argsWithSocket := stepContainerRunArgs(
+		"coyote-step-build-5-2",
+		"docker:27",
+		"/tmp/ws/build-5:/workspace",
+		"/workspace",
+		true,
+		runner.RunStepRequest{BuildID: "build-5", Command: "docker", Args: []string{"build", "."}},
+	)
+	foundSocket := false
+	for i, a := range argsWithSocket {
+		if a == "-v" && i+1 < len(argsWithSocket) && argsWithSocket[i+1] == "/var/run/docker.sock:/var/run/docker.sock" {
+			foundSocket = true
+		}
+	}
+	if !foundSocket {
+		t.Fatalf("expected docker socket mount in args: %+v", argsWithSocket)
 	}
 }
 
@@ -302,7 +334,7 @@ func TestResolveContainerWorkingDirForStep_SymlinkEscapeFallsBackToWorkspaceRoot
 	}
 }
 
-func TestRunner_CleanupBuild_InvokesContainerAndWorkspaceCleanup(t *testing.T) {
+func TestRunner_CleanupBuild_InvokesWorkspaceCleanup(t *testing.T) {
 	workspace := &fakeWorkspace{}
 	exec := &fakeExecutor{}
 	r := New(Options{Workspace: workspace, DefaultImage: "alpine:3.20", Executor: exec})
@@ -313,10 +345,8 @@ func TestRunner_CleanupBuild_InvokesContainerAndWorkspaceCleanup(t *testing.T) {
 	if workspace.cleanupCalls != 1 {
 		t.Fatalf("expected one workspace cleanup call, got %d", workspace.cleanupCalls)
 	}
-	if len(exec.calls) != 1 {
-		t.Fatalf("expected one docker rm call, got %d", len(exec.calls))
-	}
-	if !reflect.DeepEqual(exec.calls[0].args, []string{"rm", "-f", "coyote-build-build-9"}) {
-		t.Fatalf("unexpected cleanup args: %+v", exec.calls[0].args)
+	// No docker rm call — containers are per-step and cleaned up after each step
+	if len(exec.calls) != 0 {
+		t.Fatalf("expected no docker calls, got %d", len(exec.calls))
 	}
 }

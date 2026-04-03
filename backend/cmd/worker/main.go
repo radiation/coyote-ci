@@ -82,8 +82,9 @@ func resolveStepRunner(cfg config.Config) runner.Runner {
 	case "", "docker":
 		workspace := source.NewHostWorkspaceMaterializer(cfg.ExecutionWorkspaceRoot)
 		return dockerrunner.New(dockerrunner.Options{
-			Workspace:    workspace,
-			DefaultImage: cfg.ExecutionDefaultImage,
+			Workspace:         workspace,
+			DefaultImage:      cfg.ExecutionDefaultImage,
+			MountDockerSocket: cfg.MountDockerSocket,
 		})
 	case "inprocess", "local":
 		return inprocess.NewWithWorkspaceRoot(cfg.ExecutionWorkspaceRoot)

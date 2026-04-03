@@ -41,6 +41,7 @@ type RunnableStep struct {
 	StepName       string
 	WorkerID       string
 	ClaimToken     string
+	Image          string
 	Command        string
 	Args           []string
 	Env            map[string]string
@@ -271,6 +272,7 @@ func (w *WorkerService) claimRunnableStepFromJobs(ctx context.Context) (Runnable
 		StepName:       job.Name,
 		WorkerID:       claim.WorkerID,
 		ClaimToken:     claim.ClaimToken,
+		Image:          job.Image,
 		Command:        commandFromJob(job),
 		Args:           argsFromJob(job),
 		Env:            envFromJob(job),
@@ -529,6 +531,7 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 		StepName:       step.StepName,
 		WorkerID:       step.WorkerID,
 		ClaimToken:     step.ClaimToken,
+		Image:          step.Image,
 		Command:        step.Command,
 		Args:           step.Args,
 		Env:            step.Env,
@@ -590,6 +593,7 @@ func (w *WorkerService) bindRunnableStepFromJob(ctx context.Context, step Runnab
 	}
 
 	step.JobID = job.ID
+	step.Image = job.Image
 	step.Command = commandFromJob(job)
 	step.Args = argsFromJob(job)
 	step.Env = envFromJob(job)

@@ -39,7 +39,7 @@ func (p *WorkspacePreparer) Prepare(ctx context.Context, executionContext StepEx
 	})
 	if prepareErr != nil {
 		_, reason := classifyPrepareFailure(prepareErr)
-		logManager.EmitSystemLine(ctx, "Failed to start build container")
+		logManager.EmitSystemLine(ctx, "Failed to prepare workspace")
 		logManager.EmitSystemLine(ctx, formatFailureReasonLine(reason))
 		result := failedExecutionResult(reason)
 		return &result, prepareErr, nil
@@ -66,7 +66,7 @@ func (p *WorkspacePreparer) Prepare(ctx context.Context, executionContext StepEx
 		logManager.EmitSystemLine(ctx, "Resolved commit: "+resolvedCommit)
 	}
 
-	logManager.EmitSystemLine(ctx, "Starting build container")
+	logManager.EmitSystemLine(ctx, "Workspace ready")
 	return nil, nil, nil
 }
 

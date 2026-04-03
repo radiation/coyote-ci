@@ -773,7 +773,7 @@ func TestBuildService_RunStep_PrepareFailureEmitsCanonicalContainerStartupFailur
 	}
 
 	assertMessagesContain(t, messages,
-		"Failed to start build container",
+		"Failed to prepare workspace",
 		"Failure reason: docker create failed",
 	)
 }
@@ -822,7 +822,7 @@ func TestBuildService_RunStep_EmitsHighSignalPhaseMarkers(t *testing.T) {
 
 	assertMessagesContain(t, messages,
 		"Preparing workspace",
-		"Starting build container",
+		"Workspace ready",
 		"Executing pipeline steps",
 		"Collecting artifacts",
 		"Finalizing build",
@@ -890,7 +890,7 @@ func TestBuildService_RunStep_ResolvesSourceIntoWorkspaceAndPersistsCommit(t *te
 		"Cloning repository",
 		"Checking out ref: main",
 		"Resolved commit: "+resolver.resolvedCommit,
-		"Starting build container",
+		"Workspace ready",
 	)
 }
 

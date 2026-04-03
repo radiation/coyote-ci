@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS build_steps (
     build_id UUID NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
     step_index INTEGER NOT NULL,
     name TEXT NOT NULL,
+    image TEXT NOT NULL DEFAULT '',
     command TEXT NOT NULL,
     args JSONB NOT NULL DEFAULT '[]'::jsonb,
     env JSONB NOT NULL DEFAULT '{}'::jsonb,

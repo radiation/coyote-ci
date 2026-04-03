@@ -91,6 +91,7 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 				build_id,
 				step_index,
 				name,
+				image,
 				command,
 				args,
 				env,
@@ -108,7 +109,7 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 				stderr,
 				error_message
 			)
-			VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		`
 
 		for _, step := range steps {
@@ -128,6 +129,7 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 				build.ID,
 				step.StepIndex,
 				step.Name,
+				step.Image,
 				step.Command,
 				string(argsJSON),
 				string(envJSON),
@@ -328,6 +330,7 @@ func (r *BuildRepository) QueueBuild(ctx context.Context, id string, steps []dom
 				build_id,
 				step_index,
 				name,
+				image,
 				command,
 				args,
 				env,
@@ -345,7 +348,7 @@ func (r *BuildRepository) QueueBuild(ctx context.Context, id string, steps []dom
 				stderr,
 				error_message
 			)
-			VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		`
 
 		for _, step := range steps {
@@ -365,6 +368,7 @@ func (r *BuildRepository) QueueBuild(ctx context.Context, id string, steps []dom
 				id,
 				step.StepIndex,
 				step.Name,
+				step.Image,
 				step.Command,
 				string(argsJSON),
 				string(envJSON),

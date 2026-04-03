@@ -57,6 +57,7 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 
 		steps = append(steps, ResolvedStep{
 			Name:           sd.Name,
+			Image:          strings.TrimSpace(sd.Image),
 			Run:            sd.Run,
 			WorkingDir:     sd.WorkingDir,
 			Env:            merged,

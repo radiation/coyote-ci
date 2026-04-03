@@ -34,10 +34,16 @@ func (p *BuildExecutionPlanner) Plan(build domain.Build, steps []domain.BuildSte
 
 	jobs := make([]domain.ExecutionJob, 0, len(steps))
 	for _, step := range steps {
+		// Step-level image overrides pipeline-level/default image.
+		stepImage := strings.TrimSpace(step.Image)
+		if stepImage == "" {
+			stepImage = resolvedImage
+		}
+
 		timeout := step.TimeoutSeconds
 		spec := domain.ExecutionJobSpec{
 			Version:          p.specVersion,
-			Image:            resolvedImage,
+			Image:            stepImage,
 			WorkingDir:       defaultValue(step.WorkingDir, "."),
 			Command:          append([]string{defaultValue(step.Command, "sh")}, append([]string(nil), step.Args...)...),
 			Environment:      cloneEnv(step.Env),
@@ -66,7 +72,7 @@ func (p *BuildExecutionPlanner) Plan(build domain.Build, steps []domain.BuildSte
 			AttemptNumber:    1,
 			LineageRootJobID: &jobID,
 			Status:           domain.ExecutionJobStatusQueued,
-			Image:            resolvedImage,
+			Image:            stepImage,
 			WorkingDir:       spec.WorkingDir,
 			Command:          spec.Command,
 			Environment:      spec.Environment,

@@ -23,7 +23,6 @@ import (
 
 const (
 	workspaceMountPath = workspace.DefaultContainerRoot
-	containerIdleCmd   = "while true; do sleep 3600; done"
 )
 
 var validNameChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)
@@ -40,15 +39,17 @@ func (e *osCommandExecutor) Run(ctx context.Context, name string, args ...string
 }
 
 type Options struct {
-	Workspace    source.WorkspaceMaterializer
-	DefaultImage string
-	Executor     commandExecutor
+	Workspace         source.WorkspaceMaterializer
+	DefaultImage      string
+	MountDockerSocket bool
+	Executor          commandExecutor
 }
 
 type Runner struct {
-	workspace    source.WorkspaceMaterializer
-	defaultImage string
-	executor     commandExecutor
+	workspace         source.WorkspaceMaterializer
+	defaultImage      string
+	mountDockerSocket bool
+	executor          commandExecutor
 
 	workspaceMu    sync.RWMutex
 	workspacePaths map[string]string
@@ -63,13 +64,16 @@ func New(opts Options) *Runner {
 	}
 
 	return &Runner{
-		workspace:      opts.Workspace,
-		defaultImage:   strings.TrimSpace(opts.DefaultImage),
-		executor:       execImpl,
-		workspacePaths: map[string]string{},
+		workspace:         opts.Workspace,
+		defaultImage:      strings.TrimSpace(opts.DefaultImage),
+		mountDockerSocket: opts.MountDockerSocket,
+		executor:          execImpl,
+		workspacePaths:    map[string]string{},
 	}
 }
 
+// PrepareBuild creates a shared host workspace for the build.
+// No container is created here; containers are ephemeral and created per-step.
 func (r *Runner) PrepareBuild(ctx context.Context, request runner.PrepareBuildRequest) error {
 	buildID := strings.TrimSpace(request.BuildID)
 	if buildID == "" {
@@ -81,18 +85,7 @@ func (r *Runner) PrepareBuild(ctx context.Context, request runner.PrepareBuildRe
 		return err
 	}
 
-	image := r.resolveExecutionImage(request.Image)
-	if image == "" {
-		return errors.New("execution image is required")
-	}
-
-	containerName := containerNameForBuild(buildID)
-	if err := r.ensureBuildContainerReady(ctx, buildID, containerName, image, workspacePath); err != nil {
-		return err
-	}
-
 	r.setWorkspacePath(buildID, workspacePath)
-
 	return nil
 }
 
@@ -102,6 +95,11 @@ func (r *Runner) resolveExecutionImage(candidate string) string {
 		return image
 	}
 	return r.defaultImage
+}
+
+// ResolveStepImage resolves the image for a step, preferring step-level, then default.
+func (r *Runner) ResolveStepImage(stepImage string) string {
+	return r.resolveExecutionImage(stepImage)
 }
 
 func (r *Runner) ensureBuildWorkspaceReady(ctx context.Context, request runner.PrepareBuildRequest) (string, error) {
@@ -122,70 +120,12 @@ func (r *Runner) ensureBuildWorkspaceReady(ctx context.Context, request runner.P
 	return canonicalizeHostPath(workspacePath), nil
 }
 
-func (r *Runner) ensureBuildContainerReady(ctx context.Context, buildID string, containerName string, image string, workspacePath string) error {
-	exists, running, err := r.inspectContainerState(ctx, containerName)
-	if err != nil {
-		return err
-	}
-
-	if exists && running {
-		return nil
-	}
-	if exists {
-		if _, err := r.runDockerCommand(ctx, "start", containerName); err != nil {
-			return fmt.Errorf("starting build container: %w", err)
-		}
-		return nil
-	}
-
-	return r.createBuildContainer(ctx, buildID, containerName, image, workspacePath)
-}
-
-func (r *Runner) inspectContainerState(ctx context.Context, containerName string) (exists bool, running bool, err error) {
-	inspectArgs := []string{"inspect", "-f", "{{.State.Running}}", containerName}
-	stateOut, inspectErr := r.executor.Run(ctx, "docker", inspectArgs...)
-	if inspectErr == nil {
-		return true, strings.EqualFold(strings.TrimSpace(string(stateOut)), "true"), nil
-	}
-	if isContainerNotFound(inspectErr, stateOut) {
-		return false, false, nil
-	}
-	logDockerCommandFailure(inspectArgs, inspectErr, stateOut)
-	return false, false, fmt.Errorf("inspecting build container: docker command failed: %w: %s", inspectErr, strings.TrimSpace(string(stateOut)))
-}
-
-func isContainerNotFound(err error, output []byte) bool {
-	combined := strings.ToLower(strings.TrimSpace(err.Error() + " " + string(output)))
-	return strings.Contains(combined, "no such container") || strings.Contains(combined, "no such object")
-}
-
-func (r *Runner) createBuildContainer(ctx context.Context, buildID string, containerName string, image string, workspacePath string) error {
-	buildWorkspace := workspace.New(buildID, workspacePath)
-	mountBinding := buildWorkspace.HostRoot + ":" + buildWorkspace.ContainerRoot
-	workingDir := buildWorkspace.ContainerWorkingDir(".")
-
-	args := []string{
-		"run",
-		"-d",
-		"--name", containerName,
-		"-w", workingDir,
-		"-v", mountBinding,
-		image,
-		"sh",
-		"-c",
-		containerIdleCmd,
-	}
-	log.Printf("starting container: image=%s command=%s working_dir=%s mounts=%s", image, dockerCommandString(args), workingDir, mountBinding)
-	if _, err := r.runDockerCommand(ctx, args...); err != nil {
-		return fmt.Errorf("creating build container: %w", err)
-	}
-	return nil
-}
-
 func (r *Runner) RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, error) {
 	return r.RunStepStream(ctx, request, nil)
 }
 
+// RunStepStream creates an ephemeral container for the step, mounts the shared workspace,
+// runs the command, streams output, and removes the container afterward.
 func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepRequest, onOutput runner.StepOutputCallback) (runner.RunStepResult, error) {
 	if strings.TrimSpace(request.BuildID) == "" {
 		return runner.RunStepResult{}, errors.New("build id is required")
@@ -193,6 +133,28 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 	if strings.TrimSpace(request.Command) == "" {
 		return runner.RunStepResult{}, errors.New("command is required")
 	}
+
+	image := r.resolveExecutionImage(request.Image)
+	if image == "" {
+		return runner.RunStepResult{}, errors.New("no execution image available: set step-level image, pipeline-level image, or default image")
+	}
+
+	workspacePath, ok := r.workspacePathForBuild(request.BuildID)
+	if !ok {
+		return runner.RunStepResult{}, fmt.Errorf("workspace not prepared for build %s", request.BuildID)
+	}
+
+	containerName := containerNameForStep(request.BuildID, request.StepIndex)
+	containerWorkingDir := r.resolveContainerWorkingDirForStep(request)
+
+	// Build docker run args for an ephemeral step container.
+	buildWorkspace := workspace.New(request.BuildID, workspacePath)
+	mountBinding := buildWorkspace.HostRoot + ":" + buildWorkspace.ContainerRoot
+
+	args := stepContainerRunArgs(containerName, image, mountBinding, containerWorkingDir, r.mountDockerSocket, request)
+	logCommand := dockerCommandString(redactDockerArgsForLogging(args))
+	log.Printf("starting step container: image=%s container=%s command=%s working_dir=%s mounts=%s",
+		image, containerName, logCommand, containerWorkingDir, mountBinding)
 
 	execCtx := ctx
 	cancel := func() {}
@@ -202,15 +164,8 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 	}
 	defer cancel()
 
-	containerWorkingDir := r.resolveContainerWorkingDirForStep(request)
-	args := dockerExecArgs(request, containerWorkingDir)
-	logCommand := dockerCommandString(redactDockerArgsForLogging(args))
-	containerName := containerNameForBuild(request.BuildID)
-	containerImage := r.inspectContainerImage(ctx, containerName)
-	if containerImage == "" {
-		containerImage = "unknown"
-	}
-	log.Printf("starting container step execution: image=%s command=%s working_dir=%s mounts=%s", containerImage, logCommand, containerWorkingDir, workspaceMountPath)
+	// Ensure container is removed on completion, failure, or cancellation.
+	defer r.removeContainer(context.Background(), containerName)
 
 	cmd := exec.CommandContext(execCtx, "docker", args...)
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -228,57 +183,14 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 		return runner.RunStepResult{}, fmt.Errorf("docker command failed: %w", err)
 	}
 
-	var stdoutBuilder strings.Builder
-	var stderrBuilder strings.Builder
-	var wg sync.WaitGroup
-	var streamErr error
-	var streamMu sync.Mutex
-
-	consume := func(pipe io.ReadCloser, stream runner.StepOutputStream, target *strings.Builder) {
-		defer wg.Done()
-		scanner := bufio.NewScanner(pipe)
-		buffer := make([]byte, 0, 64*1024)
-		scanner.Buffer(buffer, 1024*1024)
-		for scanner.Scan() {
-			line := scanner.Text()
-			target.WriteString(line)
-			target.WriteString("\n")
-			if onOutput != nil {
-				if err := onOutput(runner.StepOutputChunk{Stream: stream, ChunkText: line, EmittedAt: time.Now().UTC()}); err != nil {
-					streamMu.Lock()
-					if streamErr == nil {
-						streamErr = err
-					}
-					streamMu.Unlock()
-				}
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			streamMu.Lock()
-			if streamErr == nil {
-				streamErr = err
-			}
-			streamMu.Unlock()
-		}
-	}
-
-	wg.Add(2)
-	go consume(stdoutPipe, runner.StepOutputStreamStdout, &stdoutBuilder)
-	go consume(stderrPipe, runner.StepOutputStreamStderr, &stderrBuilder)
-
-	wg.Wait()
+	stdout, stderr, streamErr := streamOutput(stdoutPipe, stderrPipe, onOutput)
 	waitErr := cmd.Wait()
 	finishedAt := time.Now().UTC()
 
-	streamMu.Lock()
-	emitErr := streamErr
-	streamMu.Unlock()
-	if emitErr != nil {
-		return runner.RunStepResult{}, emitErr
+	if streamErr != nil {
+		return runner.RunStepResult{}, streamErr
 	}
 
-	stdout := stdoutBuilder.String()
-	stderr := stderrBuilder.String()
 	if waitErr == nil {
 		return runner.RunStepResult{
 			Status:     runner.RunStepStatusSuccess,
@@ -291,6 +203,8 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 	}
 
 	if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
+		// On timeout, stop the container to ensure the process terminates.
+		r.stopContainer(context.Background(), containerName)
 		reason := timeoutFailureReason(timeout)
 		if strings.TrimSpace(stderr) == "" {
 			stderr = reason
@@ -302,7 +216,8 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 				return runner.RunStepResult{}, err
 			}
 		}
-		log.Printf("docker command failed: command=%s error=%v stdout_bytes=%d stderr_bytes=%d output=omitted", logCommand, waitErr, len(stdout), len(stderr))
+		log.Printf("docker command timed out: command=%s error=%v stdout_bytes=%d stderr_bytes=%d",
+			logCommand, waitErr, len(stdout), len(stderr))
 		return runner.RunStepResult{
 			Status:     runner.RunStepStatusFailed,
 			ExitCode:   -1,
@@ -315,7 +230,8 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 
 	var exitErr *exec.ExitError
 	if errors.As(waitErr, &exitErr) {
-		log.Printf("docker command failed: command=%s error=%v stdout_bytes=%d stderr_bytes=%d output=omitted", logCommand, waitErr, len(stdout), len(stderr))
+		log.Printf("step container exited with error: command=%s exit_code=%d stdout_bytes=%d stderr_bytes=%d",
+			logCommand, exitErr.ExitCode(), len(stdout), len(stderr))
 		return runner.RunStepResult{
 			Status:     runner.RunStepStatusFailed,
 			ExitCode:   exitErr.ExitCode(),
@@ -326,10 +242,12 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 		}, nil
 	}
 
-	log.Printf("docker command failed: command=%s error=%v stdout_bytes=%d stderr_bytes=%d output=omitted", logCommand, waitErr, len(stdout), len(stderr))
+	log.Printf("docker command failed: command=%s error=%v stdout_bytes=%d stderr_bytes=%d",
+		logCommand, waitErr, len(stdout), len(stderr))
 	return runner.RunStepResult{}, fmt.Errorf("docker command failed: %w: %s", waitErr, strings.TrimSpace(stdout+stderr))
 }
 
+// CleanupBuild removes the shared workspace. Step containers are ephemeral and already removed.
 func (r *Runner) CleanupBuild(ctx context.Context, buildID string) error {
 	trimmedBuildID := strings.TrimSpace(buildID)
 	if trimmedBuildID == "" {
@@ -337,26 +255,85 @@ func (r *Runner) CleanupBuild(ctx context.Context, buildID string) error {
 	}
 	r.clearWorkspacePath(trimmedBuildID)
 
-	containerName := containerNameForBuild(trimmedBuildID)
-	var rmErr error
+	if r.workspace == nil {
+		return nil
+	}
+
+	if err := r.workspace.CleanupWorkspace(ctx, trimmedBuildID); err != nil {
+		return fmt.Errorf("cleaning up workspace: %w", err)
+	}
+	return nil
+}
+
+// removeContainer force-removes a container, ignoring "not found" errors.
+func (r *Runner) removeContainer(ctx context.Context, containerName string) {
 	rmArgs := []string{"rm", "-f", containerName}
 	rmOut, err := r.executor.Run(ctx, "docker", rmArgs...)
 	if err != nil && !isContainerNotFound(err, rmOut) {
 		logDockerCommandFailure(rmArgs, err, rmOut)
-		rmErr = fmt.Errorf("removing build container: docker command failed: %w: %s", err, strings.TrimSpace(string(rmOut)))
 	}
-
-	if r.workspace == nil {
-		return rmErr
-	}
-
-	wsErr := r.workspace.CleanupWorkspace(ctx, trimmedBuildID)
-	if wsErr != nil {
-		wsErr = fmt.Errorf("cleaning up workspace: %w", wsErr)
-	}
-
-	return errors.Join(rmErr, wsErr)
 }
+
+// stopContainer sends a stop signal to a running container with short timeout.
+func (r *Runner) stopContainer(ctx context.Context, containerName string) {
+	stopCtx, stopCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer stopCancel()
+	stopArgs := []string{"stop", "-t", "5", containerName}
+	if _, err := r.executor.Run(stopCtx, "docker", stopArgs...); err != nil {
+		log.Printf("failed to stop container %s: %v", containerName, err)
+	}
+}
+
+func isContainerNotFound(err error, output []byte) bool {
+	combined := strings.ToLower(strings.TrimSpace(err.Error() + " " + string(output)))
+	return strings.Contains(combined, "no such container") || strings.Contains(combined, "no such object")
+}
+
+// stepContainerRunArgs builds docker run arguments for an ephemeral step container.
+func stepContainerRunArgs(containerName, image, mountBinding, workingDir string, mountDockerSocket bool, request runner.RunStepRequest) []string {
+	if workingDir == "" {
+		workingDir = workspaceMountPath
+	}
+
+	args := []string{
+		"run",
+		"--name", containerName,
+		"-v", mountBinding,
+		"-w", workingDir,
+	}
+
+	if mountDockerSocket {
+		args = append(args, "-v", "/var/run/docker.sock:/var/run/docker.sock")
+	}
+
+	for _, envEntry := range mergeStepEnvironment(request) {
+		args = append(args, "-e", envEntry)
+	}
+
+	args = append(args, image, request.Command)
+	args = append(args, request.Args...)
+	return args
+}
+
+// containerNameForStep generates a unique container name for a build step.
+func containerNameForStep(buildID string, stepIndex int) string {
+	trimmed := strings.TrimSpace(buildID)
+	if trimmed == "" {
+		return fmt.Sprintf("coyote-step-unknown-%d", stepIndex)
+	}
+	normalized := strings.ToLower(trimmed)
+	normalized = validNameChars.ReplaceAllString(normalized, "-")
+	normalized = strings.Trim(normalized, "-._")
+	if normalized == "" {
+		normalized = "unknown"
+	}
+	if len(normalized) > 48 {
+		normalized = normalized[:48]
+	}
+	return fmt.Sprintf("coyote-step-%s-%d", normalized, stepIndex)
+}
+
+// containerNameForBuild kept for backward compatibility in tests.
 func containerNameForBuild(buildID string) string {
 	trimmed := strings.TrimSpace(buildID)
 	if trimmed == "" {
@@ -376,23 +353,6 @@ func containerNameForBuild(buildID string) string {
 
 func resolveContainerWorkingDir(requested string) string {
 	return workspace.New("", "").ContainerWorkingDir(requested)
-}
-
-func dockerExecArgs(request runner.RunStepRequest, containerWorkingDir string) []string {
-	workingDir := strings.TrimSpace(containerWorkingDir)
-	if workingDir == "" {
-		workingDir = workspaceMountPath
-	}
-
-	args := []string{"exec", "-w", workingDir}
-
-	for _, envEntry := range mergeStepEnvironment(request) {
-		args = append(args, "-e", envEntry)
-	}
-
-	args = append(args, containerNameForBuild(request.BuildID), request.Command)
-	args = append(args, request.Args...)
-	return args
 }
 
 func (r *Runner) setWorkspacePath(buildID string, workspacePath string) {
@@ -501,6 +461,55 @@ func canonicalizeHostPath(hostPath string) string {
 	return cleaned
 }
 
+// streamOutput consumes stdout and stderr pipes, forwarding chunks to the callback
+// while accumulating full output strings.
+func streamOutput(stdoutPipe, stderrPipe io.ReadCloser, onOutput runner.StepOutputCallback) (stdout, stderr string, err error) {
+	var stdoutBuilder strings.Builder
+	var stderrBuilder strings.Builder
+	var wg sync.WaitGroup
+	var streamErr error
+	var streamMu sync.Mutex
+
+	consume := func(pipe io.ReadCloser, stream runner.StepOutputStream, target *strings.Builder) {
+		defer wg.Done()
+		scanner := bufio.NewScanner(pipe)
+		buffer := make([]byte, 0, 64*1024)
+		scanner.Buffer(buffer, 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			target.WriteString(line)
+			target.WriteString("\n")
+			if onOutput != nil {
+				if cbErr := onOutput(runner.StepOutputChunk{Stream: stream, ChunkText: line, EmittedAt: time.Now().UTC()}); cbErr != nil {
+					streamMu.Lock()
+					if streamErr == nil {
+						streamErr = cbErr
+					}
+					streamMu.Unlock()
+				}
+			}
+		}
+		if scanErr := scanner.Err(); scanErr != nil {
+			streamMu.Lock()
+			if streamErr == nil {
+				streamErr = scanErr
+			}
+			streamMu.Unlock()
+		}
+	}
+
+	wg.Add(2)
+	go consume(stdoutPipe, runner.StepOutputStreamStdout, &stdoutBuilder)
+	go consume(stderrPipe, runner.StepOutputStreamStderr, &stderrBuilder)
+	wg.Wait()
+
+	streamMu.Lock()
+	emitErr := streamErr
+	streamMu.Unlock()
+
+	return stdoutBuilder.String(), stderrBuilder.String(), emitErr
+}
+
 func mergeStepEnvironment(request runner.RunStepRequest) []string {
 	merged := map[string]string{}
 	for k, v := range request.Env {
@@ -538,14 +547,6 @@ func (r *Runner) runDockerCommand(ctx context.Context, args ...string) ([]byte, 
 		return output, fmt.Errorf("docker command failed: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return output, nil
-}
-
-func (r *Runner) inspectContainerImage(ctx context.Context, containerName string) string {
-	out, err := r.executor.Run(ctx, "docker", "inspect", "-f", "{{.Config.Image}}", containerName)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 func logDockerCommandFailure(args []string, err error, output []byte) {
