@@ -39,15 +39,17 @@ func (e *osCommandExecutor) Run(ctx context.Context, name string, args ...string
 }
 
 type Options struct {
-	Workspace    source.WorkspaceMaterializer
-	DefaultImage string
-	Executor     commandExecutor
+	Workspace         source.WorkspaceMaterializer
+	DefaultImage      string
+	MountDockerSocket bool
+	Executor          commandExecutor
 }
 
 type Runner struct {
-	workspace    source.WorkspaceMaterializer
-	defaultImage string
-	executor     commandExecutor
+	workspace         source.WorkspaceMaterializer
+	defaultImage      string
+	mountDockerSocket bool
+	executor          commandExecutor
 
 	workspaceMu    sync.RWMutex
 	workspacePaths map[string]string
@@ -62,10 +64,11 @@ func New(opts Options) *Runner {
 	}
 
 	return &Runner{
-		workspace:      opts.Workspace,
-		defaultImage:   strings.TrimSpace(opts.DefaultImage),
-		executor:       execImpl,
-		workspacePaths: map[string]string{},
+		workspace:         opts.Workspace,
+		defaultImage:      strings.TrimSpace(opts.DefaultImage),
+		mountDockerSocket: opts.MountDockerSocket,
+		executor:          execImpl,
+		workspacePaths:    map[string]string{},
 	}
 }
 
@@ -148,7 +151,7 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 	buildWorkspace := workspace.New(request.BuildID, workspacePath)
 	mountBinding := buildWorkspace.HostRoot + ":" + buildWorkspace.ContainerRoot
 
-	args := stepContainerRunArgs(containerName, image, mountBinding, containerWorkingDir, request)
+	args := stepContainerRunArgs(containerName, image, mountBinding, containerWorkingDir, r.mountDockerSocket, request)
 	logCommand := dockerCommandString(redactDockerArgsForLogging(args))
 	log.Printf("starting step container: image=%s container=%s command=%s working_dir=%s mounts=%s",
 		image, containerName, logCommand, containerWorkingDir, mountBinding)
@@ -287,7 +290,7 @@ func isContainerNotFound(err error, output []byte) bool {
 }
 
 // stepContainerRunArgs builds docker run arguments for an ephemeral step container.
-func stepContainerRunArgs(containerName, image, mountBinding, workingDir string, request runner.RunStepRequest) []string {
+func stepContainerRunArgs(containerName, image, mountBinding, workingDir string, mountDockerSocket bool, request runner.RunStepRequest) []string {
 	if workingDir == "" {
 		workingDir = workspaceMountPath
 	}
@@ -297,6 +300,10 @@ func stepContainerRunArgs(containerName, image, mountBinding, workingDir string,
 		"--name", containerName,
 		"-v", mountBinding,
 		"-w", workingDir,
+	}
+
+	if mountDockerSocket {
+		args = append(args, "-v", "/var/run/docker.sock:/var/run/docker.sock")
 	}
 
 	for _, envEntry := range mergeStepEnvironment(request) {

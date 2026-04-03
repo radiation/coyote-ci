@@ -30,6 +30,11 @@ steps:
     working_dir: backend
     timeout_seconds: 300
 
+  - name: Backend Image
+    run: docker build --build-arg GO_VERSION=1.26.1 -t coyote-ci/backend:latest -f backend/Dockerfile backend
+    image: docker:27
+    timeout_seconds: 600
+
   - name: Frontend Install
     run: npm ci
     working_dir: frontend
@@ -46,6 +51,11 @@ steps:
     run: npm run build
     working_dir: frontend
     image: node:22-alpine
+    timeout_seconds: 600
+
+  - name: Frontend Image
+    run: docker build -t coyote-ci/frontend:latest -f frontend/Dockerfile frontend
+    image: docker:27
     timeout_seconds: 600
 
 artifacts:

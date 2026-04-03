@@ -212,6 +212,7 @@ func TestStepContainerRunArgs_BuildsCorrectArgs(t *testing.T) {
 		"golang:1.23",
 		"/tmp/ws/build-5:/workspace",
 		"/workspace",
+		false,
 		runner.RunStepRequest{BuildID: "build-5", Command: "sh", Args: []string{"-c", "pwd"}},
 	)
 	// Verify key structural elements
@@ -272,6 +273,7 @@ func TestStepContainerRunArgs_BuildsCorrectArgs(t *testing.T) {
 		"golang:1.23",
 		"/tmp/ws/build-5:/workspace",
 		"/workspace/backend",
+		false,
 		runner.RunStepRequest{BuildID: "build-5", Command: "make", Env: map[string]string{"GOOS": "linux"}},
 	)
 	foundEnv := false
@@ -282,6 +284,25 @@ func TestStepContainerRunArgs_BuildsCorrectArgs(t *testing.T) {
 	}
 	if !foundEnv {
 		t.Fatalf("expected -e GOOS=linux in args: %+v", argsWithEnv)
+	}
+
+	// With Docker socket mount
+	argsWithSocket := stepContainerRunArgs(
+		"coyote-step-build-5-2",
+		"docker:27",
+		"/tmp/ws/build-5:/workspace",
+		"/workspace",
+		true,
+		runner.RunStepRequest{BuildID: "build-5", Command: "docker", Args: []string{"build", "."}},
+	)
+	foundSocket := false
+	for i, a := range argsWithSocket {
+		if a == "-v" && i+1 < len(argsWithSocket) && argsWithSocket[i+1] == "/var/run/docker.sock:/var/run/docker.sock" {
+			foundSocket = true
+		}
+	}
+	if !foundSocket {
+		t.Fatalf("expected docker socket mount in args: %+v", argsWithSocket)
 	}
 }
 
