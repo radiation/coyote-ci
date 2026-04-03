@@ -430,9 +430,33 @@ func (h *BuildHandler) GetBuildSteps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	jobs, err := h.buildService.GetJobsByBuildID(r.Context(), id)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	outputs, err := h.buildService.GetJobOutputsByBuildID(r.Context(), id)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	jobByStepID := map[string]domain.ExecutionJob{}
+	for _, job := range jobs {
+		jobByStepID[job.StepID] = job
+	}
+	outputsByJobID := map[string][]domain.ExecutionJobOutput{}
+	for _, output := range outputs {
+		outputsByJobID[output.JobID] = append(outputsByJobID[output.JobID], output)
+	}
+
 	respSteps := make([]api.BuildStepResponse, 0, len(steps))
 	for _, step := range steps {
-		respSteps = append(respSteps, toBuildStepResponse(step))
+		linkedJob, hasJob := jobByStepID[step.ID]
+		if hasJob {
+			respSteps = append(respSteps, toBuildStepResponse(step, &linkedJob, outputsByJobID[linkedJob.ID]))
+			continue
+		}
+		respSteps = append(respSteps, toBuildStepResponse(step, nil, nil))
 	}
 
 	sort.Slice(respSteps, func(i, j int) bool {
@@ -665,9 +689,92 @@ func (h *BuildHandler) transitionBuild(w http.ResponseWriter, r *http.Request, t
 	writeDataJSON(w, http.StatusOK, toBuildResponse(build))
 }
 
+// RetryJob godoc
+// @Summary Retry failed execution job
+// @Description Creates a new build attempt containing a retry of the failed execution job.
+// @Tags builds
+// @Produce json
+// @Param jobID path string true "Execution Job ID"
+// @Success 200 {object} api.RetryJobEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/jobs/{jobID}/retry [post]
+func (h *BuildHandler) RetryJob(w http.ResponseWriter, r *http.Request) {
+	jobID := strings.TrimSpace(chi.URLParam(r, "jobID"))
+	if jobID == "" {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "job id is required")
+		return
+	}
+
+	retryResult, err := h.buildService.RetryJob(r.Context(), jobID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+
+	outputs, err := h.buildService.GetJobOutputsByJobID(r.Context(), retryResult.Job.ID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+
+	jobResponse := toExecutionJobResponse(&retryResult.Job, outputs)
+	if jobResponse == nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+
+	writeDataJSON(w, http.StatusOK, api.RetryJobResponse{
+		Build: toBuildResponse(retryResult.Build),
+		Job:   *jobResponse,
+	})
+}
+
+// RerunBuildFromStep godoc
+// @Summary Rerun build from step
+// @Description Creates a new build attempt rerunning from a selected step index.
+// @Tags builds
+// @Accept json
+// @Produce json
+// @Param buildID path string true "Build ID"
+// @Param request body api.RerunBuildFromStepRequest true "Rerun request"
+// @Success 200 {object} api.BuildEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/{buildID}/rerun [post]
+func (h *BuildHandler) RerunBuildFromStep(w http.ResponseWriter, r *http.Request) {
+	buildID := strings.TrimSpace(chi.URLParam(r, "buildID"))
+	if buildID == "" {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "build id is required")
+		return
+	}
+
+	var req api.RerunBuildFromStepRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+
+	build, err := h.buildService.RerunBuildFromStep(r.Context(), buildID, req.StepIndex)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+
+	writeDataJSON(w, http.StatusOK, toBuildResponse(build))
+}
+
 func (h *BuildHandler) writeServiceError(w http.ResponseWriter, err error) {
 	if errors.Is(err, service.ErrBuildNotFound) {
 		writeErrorJSON(w, http.StatusNotFound, "build_not_found", "build not found")
+		return
+	}
+
+	if errors.Is(err, service.ErrExecutionJobNotFound) {
+		writeErrorJSON(w, http.StatusNotFound, "execution_job_not_found", "execution job not found")
 		return
 	}
 
@@ -678,6 +785,21 @@ func (h *BuildHandler) writeServiceError(w http.ResponseWriter, err error) {
 
 	if errors.Is(err, service.ErrInvalidBuildStatusTransition) {
 		writeErrorJSON(w, http.StatusConflict, "invalid_transition", err.Error())
+		return
+	}
+
+	if errors.Is(err, service.ErrExecutionJobNotRetryable) {
+		writeErrorJSON(w, http.StatusConflict, "job_not_retryable", err.Error())
+		return
+	}
+
+	if errors.Is(err, service.ErrInvalidRerunStepIndex) {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_step_index", err.Error())
+		return
+	}
+
+	if errors.Is(err, service.ErrExecutionJobRepoNotConfigured) {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
 
@@ -715,14 +837,14 @@ func toBuildResponse(build domain.Build) api.BuildResponse {
 		StartedAt:          formatOptionalTime(build.StartedAt),
 		FinishedAt:         formatOptionalTime(build.FinishedAt),
 		CurrentStepIndex:   build.CurrentStepIndex,
+		AttemptNumber:      max(build.AttemptNumber, 1),
+		RerunOfBuildID:     build.RerunOfBuildID,
+		RerunFromStepIndex: build.RerunFromStepIdx,
 		ErrorMessage:       build.ErrorMessage,
 		PipelineConfigYAML: build.PipelineConfigYAML,
 		PipelineName:       build.PipelineName,
 		PipelineSource:     build.PipelineSource,
 		PipelinePath:       build.PipelinePath,
-		RepoURL:            build.RepoURL,
-		Ref:                build.Ref,
-		CommitSHA:          build.CommitSHA,
 		Source:             toBuildSourceResponse(build),
 	}
 }
@@ -747,7 +869,7 @@ func toBuildSourceResponse(build domain.Build) *api.BuildSourceResponse {
 	}
 }
 
-func toBuildStepResponse(step domain.BuildStep) api.BuildStepResponse {
+func toBuildStepResponse(step domain.BuildStep, job *domain.ExecutionJob, outputs []domain.ExecutionJobOutput) api.BuildStepResponse {
 	resp := api.BuildStepResponse{
 		ID:           step.ID,
 		BuildID:      step.BuildID,
@@ -755,6 +877,7 @@ func toBuildStepResponse(step domain.BuildStep) api.BuildStepResponse {
 		Name:         step.Name,
 		Command:      displayCommand(step),
 		Status:       string(step.Status),
+		Job:          toExecutionJobResponse(job, outputs),
 		WorkerID:     step.WorkerID,
 		ExitCode:     step.ExitCode,
 		Stdout:       step.Stdout,
@@ -772,6 +895,67 @@ func toBuildStepResponse(step domain.BuildStep) api.BuildStepResponse {
 		resp.FinishedAt = &finishedAt
 	}
 
+	return resp
+}
+
+func toExecutionJobResponse(job *domain.ExecutionJob, outputs []domain.ExecutionJobOutput) *api.ExecutionJobResponse {
+	if job == nil {
+		return nil
+	}
+	resp := &api.ExecutionJobResponse{
+		ID:               job.ID,
+		BuildID:          job.BuildID,
+		StepID:           job.StepID,
+		Name:             job.Name,
+		StepIndex:        job.StepIndex,
+		AttemptNumber:    max(job.AttemptNumber, 1),
+		RetryOfJobID:     job.RetryOfJobID,
+		LineageRootJobID: job.LineageRootJobID,
+		Status:           string(job.Status),
+		Image:            job.Image,
+		WorkingDir:       job.WorkingDir,
+		Command:          append([]string(nil), job.Command...),
+		CommandPreview:   strings.Join(job.Command, " "),
+		Environment:      map[string]string{},
+		TimeoutSeconds:   job.TimeoutSeconds,
+		PipelineFilePath: job.PipelineFilePath,
+		ContextDir:       job.ContextDir,
+		SourceRepoURL:    job.Source.RepositoryURL,
+		SourceCommitSHA:  job.Source.CommitSHA,
+		SourceRefName:    job.Source.RefName,
+		SpecVersion:      job.SpecVersion,
+		SpecDigest:       job.SpecDigest,
+		CreatedAt:        job.CreatedAt.Format(time.RFC3339),
+		ErrorMessage:     job.ErrorMessage,
+		Outputs:          make([]api.ExecutionJobOutputResponse, 0, len(outputs)),
+	}
+	for key, value := range job.Environment {
+		resp.Environment[key] = value
+	}
+	if job.StartedAt != nil {
+		v := job.StartedAt.Format(time.RFC3339)
+		resp.StartedAt = &v
+	}
+	if job.FinishedAt != nil {
+		v := job.FinishedAt.Format(time.RFC3339)
+		resp.FinishedAt = &v
+	}
+	for _, output := range outputs {
+		resp.Outputs = append(resp.Outputs, api.ExecutionJobOutputResponse{
+			ID:             output.ID,
+			JobID:          output.JobID,
+			BuildID:        output.BuildID,
+			Name:           output.Name,
+			Kind:           output.Kind,
+			DeclaredPath:   output.DeclaredPath,
+			DestinationURI: output.DestinationURI,
+			ContentType:    output.ContentType,
+			SizeBytes:      output.SizeBytes,
+			Digest:         output.Digest,
+			Status:         string(output.Status),
+			CreatedAt:      output.CreatedAt.Format(time.RFC3339),
+		})
+	}
 	return resp
 }
 
@@ -834,6 +1018,13 @@ func formatOptionalTime(value *time.Time) *string {
 
 	formatted := value.Format(time.RFC3339)
 	return &formatted
+}
+
+func maxInt(value int, fallback int) int {
+	if value < fallback {
+		return fallback
+	}
+	return value
 }
 
 func toStepLogChunkResponse(chunk logs.StepLogChunk) api.StepLogChunkResponse {

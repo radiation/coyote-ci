@@ -20,9 +20,9 @@ func NewJobRepository(db *sql.DB) *JobRepository {
 
 func (r *JobRepository) Create(ctx context.Context, job domain.Job) (domain.Job, error) {
 	const query = `
-		INSERT INTO jobs (id, project_id, name, repository_url, default_ref, push_enabled, push_branch, pipeline_yaml, enabled, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		RETURNING id, project_id, name, repository_url, default_ref, push_enabled, push_branch, pipeline_yaml, enabled, created_at, updated_at
+		INSERT INTO jobs (id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, pipeline_yaml, pipeline_path, enabled, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		RETURNING id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 	`
 
 	return scanJob(r.db.QueryRowContext(ctx, query,
@@ -30,10 +30,12 @@ func (r *JobRepository) Create(ctx context.Context, job domain.Job) (domain.Job,
 		job.ProjectID,
 		job.Name,
 		job.RepositoryURL,
-		job.DefaultRef,
+		nilIfBlank(job.DefaultRef),
+		job.DefaultCommitSHA,
 		job.PushEnabled,
 		job.PushBranch,
-		job.PipelineYAML,
+		nilIfBlank(job.PipelineYAML),
+		job.PipelinePath,
 		job.Enabled,
 		job.CreatedAt,
 		job.UpdatedAt,
@@ -42,7 +44,7 @@ func (r *JobRepository) Create(ctx context.Context, job domain.Job) (domain.Job,
 
 func (r *JobRepository) List(ctx context.Context) (jobs []domain.Job, err error) {
 	const query = `
-		SELECT id, project_id, name, repository_url, default_ref, push_enabled, push_branch, pipeline_yaml, enabled, created_at, updated_at
+		SELECT id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		ORDER BY created_at DESC
 	`
@@ -82,7 +84,7 @@ func (r *JobRepository) ListPushEnabledByRepository(ctx context.Context, reposit
 	// Normalize the stored repository_url in SQL the same way normalizeRepositoryURLForMatch does
 	// in Go: lowercase, trim whitespace, strip trailing '/', strip trailing '.git'.
 	const query = `
-		SELECT id, project_id, name, repository_url, default_ref, push_enabled, push_branch, pipeline_yaml, enabled, created_at, updated_at
+		SELECT id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		WHERE enabled = TRUE
 		  AND push_enabled = TRUE
@@ -128,7 +130,7 @@ func normalizeRepositoryURLForMatch(value string) string {
 
 func (r *JobRepository) GetByID(ctx context.Context, id string) (domain.Job, error) {
 	const query = `
-		SELECT id, project_id, name, repository_url, default_ref, push_enabled, push_branch, pipeline_yaml, enabled, created_at, updated_at
+		SELECT id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		WHERE id = $1
 	`
@@ -151,13 +153,15 @@ func (r *JobRepository) Update(ctx context.Context, job domain.Job) (domain.Job,
 			name = $3,
 			repository_url = $4,
 			default_ref = $5,
-			push_enabled = $6,
-			push_branch = $7,
-			pipeline_yaml = $8,
-			enabled = $9,
-			updated_at = $10
+			default_commit_sha = $6,
+			push_enabled = $7,
+			push_branch = $8,
+			pipeline_yaml = $9,
+			pipeline_path = $10,
+			enabled = $11,
+			updated_at = $12
 		WHERE id = $1
-		RETURNING id, project_id, name, repository_url, default_ref, push_enabled, push_branch, pipeline_yaml, enabled, created_at, updated_at
+		RETURNING id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 	`
 
 	updated, err := scanJob(r.db.QueryRowContext(ctx, query,
@@ -165,10 +169,12 @@ func (r *JobRepository) Update(ctx context.Context, job domain.Job) (domain.Job,
 		job.ProjectID,
 		job.Name,
 		job.RepositoryURL,
-		job.DefaultRef,
+		nilIfBlank(job.DefaultRef),
+		job.DefaultCommitSHA,
 		job.PushEnabled,
 		job.PushBranch,
-		job.PipelineYAML,
+		nilIfBlank(job.PipelineYAML),
+		job.PipelinePath,
 		job.Enabled,
 		job.UpdatedAt,
 	))
@@ -184,15 +190,21 @@ func (r *JobRepository) Update(ctx context.Context, job domain.Job) (domain.Job,
 
 func scanJob(scanner rowScanner) (domain.Job, error) {
 	var job domain.Job
+	var defaultRef sql.NullString
+	var defaultCommitSHA sql.NullString
+	var pipelineYAML sql.NullString
+	var pipelinePath sql.NullString
 	err := scanner.Scan(
 		&job.ID,
 		&job.ProjectID,
 		&job.Name,
 		&job.RepositoryURL,
-		&job.DefaultRef,
+		&defaultRef,
+		&defaultCommitSHA,
 		&job.PushEnabled,
 		&job.PushBranch,
-		&job.PipelineYAML,
+		&pipelineYAML,
+		&pipelinePath,
 		&job.Enabled,
 		&job.CreatedAt,
 		&job.UpdatedAt,
@@ -200,5 +212,27 @@ func scanJob(scanner rowScanner) (domain.Job, error) {
 	if err != nil {
 		return domain.Job{}, err
 	}
+	if defaultRef.Valid {
+		job.DefaultRef = defaultRef.String
+	}
+	if defaultCommitSHA.Valid {
+		v := defaultCommitSHA.String
+		job.DefaultCommitSHA = &v
+	}
+	if pipelineYAML.Valid {
+		job.PipelineYAML = pipelineYAML.String
+	}
+	if pipelinePath.Valid {
+		v := pipelinePath.String
+		job.PipelinePath = &v
+	}
 	return job, nil
+}
+
+func nilIfBlank(value string) *string {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return nil
+	}
+	return &v
 }

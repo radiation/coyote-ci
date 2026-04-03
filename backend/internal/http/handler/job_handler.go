@@ -42,14 +42,16 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job, err := h.jobService.CreateJob(r.Context(), service.CreateJobInput{
-		ProjectID:     req.ProjectID,
-		Name:          req.Name,
-		RepositoryURL: req.RepositoryURL,
-		DefaultRef:    req.DefaultRef,
-		PushEnabled:   req.PushEnabled,
-		PushBranch:    req.PushBranch,
-		PipelineYAML:  req.PipelineYAML,
-		Enabled:       req.Enabled,
+		ProjectID:        req.ProjectID,
+		Name:             req.Name,
+		RepositoryURL:    req.RepositoryURL,
+		DefaultRef:       req.DefaultRef,
+		DefaultCommitSHA: req.DefaultCommitSHA,
+		PushEnabled:      req.PushEnabled,
+		PushBranch:       req.PushBranch,
+		PipelineYAML:     req.PipelineYAML,
+		PipelinePath:     req.PipelinePath,
+		Enabled:          req.Enabled,
 	})
 	if err != nil {
 		h.writeJobServiceError(w, err)
@@ -136,13 +138,15 @@ func (h *JobHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated, err := h.jobService.UpdateJob(r.Context(), jobID, service.UpdateJobInput{
-		Name:          req.Name,
-		RepositoryURL: req.RepositoryURL,
-		DefaultRef:    req.DefaultRef,
-		PushEnabled:   req.PushEnabled,
-		PushBranch:    req.PushBranch,
-		PipelineYAML:  req.PipelineYAML,
-		Enabled:       req.Enabled,
+		Name:             req.Name,
+		RepositoryURL:    req.RepositoryURL,
+		DefaultRef:       req.DefaultRef,
+		DefaultCommitSHA: req.DefaultCommitSHA,
+		PushEnabled:      req.PushEnabled,
+		PushBranch:       req.PushBranch,
+		PipelineYAML:     req.PipelineYAML,
+		PipelinePath:     req.PipelinePath,
+		Enabled:          req.Enabled,
 	})
 	if err != nil {
 		h.writeJobServiceError(w, err)
@@ -210,8 +214,8 @@ func isBadRequestError(err error) bool {
 		errors.Is(err, service.ErrJobNameRequired) ||
 		errors.Is(err, service.ErrJobProjectIDRequired) ||
 		errors.Is(err, service.ErrJobRepositoryURLRequired) ||
-		errors.Is(err, service.ErrJobDefaultRefRequired) ||
-		errors.Is(err, service.ErrJobPipelineYAMLRequired) ||
+		errors.Is(err, service.ErrJobSourceTargetRequired) ||
+		errors.Is(err, service.ErrJobPipelineDefinitionRequired) ||
 		errors.Is(err, service.ErrPushEventRepositoryURLRequired) ||
 		errors.Is(err, service.ErrPushEventRefRequired) ||
 		errors.Is(err, service.ErrPushEventCommitSHARequired)
@@ -219,16 +223,18 @@ func isBadRequestError(err error) bool {
 
 func toJobResponse(job domain.Job) api.JobResponse {
 	return api.JobResponse{
-		ID:            job.ID,
-		ProjectID:     job.ProjectID,
-		Name:          job.Name,
-		RepositoryURL: job.RepositoryURL,
-		DefaultRef:    job.DefaultRef,
-		PushEnabled:   job.PushEnabled,
-		PushBranch:    job.PushBranch,
-		PipelineYAML:  job.PipelineYAML,
-		Enabled:       job.Enabled,
-		CreatedAt:     job.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:     job.UpdatedAt.Format(time.RFC3339),
+		ID:               job.ID,
+		ProjectID:        job.ProjectID,
+		Name:             job.Name,
+		RepositoryURL:    job.RepositoryURL,
+		DefaultRef:       job.DefaultRef,
+		DefaultCommitSHA: job.DefaultCommitSHA,
+		PushEnabled:      job.PushEnabled,
+		PushBranch:       job.PushBranch,
+		PipelineYAML:     job.PipelineYAML,
+		PipelinePath:     job.PipelinePath,
+		Enabled:          job.Enabled,
+		CreatedAt:        job.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:        job.UpdatedAt.Format(time.RFC3339),
 	}
 }

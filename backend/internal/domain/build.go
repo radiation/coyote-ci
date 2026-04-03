@@ -21,6 +21,9 @@ type Build struct {
 	StartedAt        *time.Time
 	FinishedAt       *time.Time
 	CurrentStepIndex int
+	AttemptNumber    int
+	RerunOfBuildID   *string
+	RerunFromStepIdx *int
 	ErrorMessage     *string
 
 	// Pipeline snapshot: persisted at build creation time for replayability.

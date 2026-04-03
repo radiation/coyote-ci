@@ -12,6 +12,10 @@ type QueueBuildRequest struct {
 	Steps    []QueueBuildStepInput `json:"steps,omitempty"`
 }
 
+type RerunBuildFromStepRequest struct {
+	StepIndex int `json:"step_index"`
+}
+
 type QueueBuildStepInput struct {
 	Name    string `json:"name,omitempty"`
 	Command string `json:"command"`
@@ -77,6 +81,10 @@ type BuildStepsEnvelope struct {
 	Data BuildStepsResponse `json:"data"`
 }
 
+type RetryJobEnvelope struct {
+	Data RetryJobResponse `json:"data"`
+}
+
 type BuildLogsEnvelope struct {
 	Data BuildLogsResponse `json:"data"`
 }
@@ -98,14 +106,14 @@ type BuildResponse struct {
 	StartedAt          *string              `json:"started_at"`
 	FinishedAt         *string              `json:"finished_at"`
 	CurrentStepIndex   int                  `json:"current_step_index"`
+	AttemptNumber      int                  `json:"attempt_number"`
+	RerunOfBuildID     *string              `json:"rerun_of_build_id,omitempty"`
+	RerunFromStepIndex *int                 `json:"rerun_from_step_index,omitempty"`
 	ErrorMessage       *string              `json:"error_message"`
 	PipelineConfigYAML *string              `json:"pipeline_config_yaml,omitempty"`
 	PipelineName       *string              `json:"pipeline_name,omitempty"`
 	PipelineSource     *string              `json:"pipeline_source,omitempty"`
 	PipelinePath       *string              `json:"pipeline_path,omitempty"`
-	RepoURL            *string              `json:"repo_url,omitempty"`
-	Ref                *string              `json:"ref,omitempty"`
-	CommitSHA          *string              `json:"commit_sha,omitempty"`
 	Source             *BuildSourceResponse `json:"source,omitempty"`
 }
 
@@ -114,24 +122,75 @@ type BuildListResponse struct {
 }
 
 type BuildStepResponse struct {
-	ID           string  `json:"id"`
-	BuildID      string  `json:"build_id"`
-	StepIndex    int     `json:"step_index"`
-	Name         string  `json:"name"`
-	Command      string  `json:"command"`
-	Status       string  `json:"status"`
-	WorkerID     *string `json:"worker_id"`
-	StartedAt    *string `json:"started_at"`
-	FinishedAt   *string `json:"finished_at"`
-	ExitCode     *int    `json:"exit_code"`
-	Stdout       *string `json:"stdout"`
-	Stderr       *string `json:"stderr"`
-	ErrorMessage *string `json:"error_message"`
+	ID           string                `json:"id"`
+	BuildID      string                `json:"build_id"`
+	StepIndex    int                   `json:"step_index"`
+	Name         string                `json:"name"`
+	Command      string                `json:"command"`
+	Status       string                `json:"status"`
+	Job          *ExecutionJobResponse `json:"job,omitempty"`
+	WorkerID     *string               `json:"worker_id"`
+	StartedAt    *string               `json:"started_at"`
+	FinishedAt   *string               `json:"finished_at"`
+	ExitCode     *int                  `json:"exit_code"`
+	Stdout       *string               `json:"stdout"`
+	Stderr       *string               `json:"stderr"`
+	ErrorMessage *string               `json:"error_message"`
+}
+
+type ExecutionJobResponse struct {
+	ID               string                       `json:"id"`
+	BuildID          string                       `json:"build_id"`
+	StepID           string                       `json:"step_id"`
+	Name             string                       `json:"name"`
+	StepIndex        int                          `json:"step_index"`
+	AttemptNumber    int                          `json:"attempt_number"`
+	RetryOfJobID     *string                      `json:"retry_of_job_id,omitempty"`
+	LineageRootJobID *string                      `json:"lineage_root_job_id,omitempty"`
+	Status           string                       `json:"status"`
+	Image            string                       `json:"image"`
+	WorkingDir       string                       `json:"working_dir"`
+	Command          []string                     `json:"command"`
+	CommandPreview   string                       `json:"command_preview"`
+	Environment      map[string]string            `json:"environment"`
+	TimeoutSeconds   *int                         `json:"timeout_seconds,omitempty"`
+	PipelineFilePath *string                      `json:"pipeline_file_path,omitempty"`
+	ContextDir       *string                      `json:"context_dir,omitempty"`
+	SourceRepoURL    string                       `json:"source_repo_url,omitempty"`
+	SourceCommitSHA  string                       `json:"source_commit_sha,omitempty"`
+	SourceRefName    *string                      `json:"source_ref_name,omitempty"`
+	SpecVersion      int                          `json:"spec_version"`
+	SpecDigest       *string                      `json:"spec_digest,omitempty"`
+	CreatedAt        string                       `json:"created_at"`
+	StartedAt        *string                      `json:"started_at"`
+	FinishedAt       *string                      `json:"finished_at"`
+	ErrorMessage     *string                      `json:"error_message,omitempty"`
+	Outputs          []ExecutionJobOutputResponse `json:"outputs"`
+}
+
+type ExecutionJobOutputResponse struct {
+	ID             string  `json:"id"`
+	JobID          string  `json:"job_id"`
+	BuildID        string  `json:"build_id"`
+	Name           string  `json:"name"`
+	Kind           string  `json:"kind"`
+	DeclaredPath   string  `json:"declared_path"`
+	DestinationURI *string `json:"destination_uri,omitempty"`
+	ContentType    *string `json:"content_type,omitempty"`
+	SizeBytes      *int64  `json:"size_bytes,omitempty"`
+	Digest         *string `json:"digest,omitempty"`
+	Status         string  `json:"status"`
+	CreatedAt      string  `json:"created_at"`
 }
 
 type BuildStepsResponse struct {
 	BuildID string              `json:"build_id"`
 	Steps   []BuildStepResponse `json:"steps"`
+}
+
+type RetryJobResponse struct {
+	Build BuildResponse        `json:"build"`
+	Job   ExecutionJobResponse `json:"job"`
 }
 
 type BuildLogResponse struct {

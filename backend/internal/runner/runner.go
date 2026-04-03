@@ -24,6 +24,7 @@ type StepOutputCallback func(chunk StepOutputChunk) error
 // RunStepRequest describes the command a runner should execute for a build step.
 type RunStepRequest struct {
 	BuildID        string
+	JobID          string
 	StepID         string
 	StepIndex      int
 	StepName       string

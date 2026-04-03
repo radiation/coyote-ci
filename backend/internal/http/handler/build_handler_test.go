@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
+	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 )
 
@@ -331,6 +333,84 @@ func (r *fakeRepo) CompleteStepIfRunning(_ context.Context, buildID string, step
 	}
 
 	return domain.BuildStep{}, false, repository.ErrBuildNotFound
+}
+
+func TestBuildHandler_GetBuildSteps_IncludesLinkedJobMetadata(t *testing.T) {
+	repo := &fakeRepo{
+		builds: map[string]domain.Build{
+			"build-1": {
+				ID:        "build-1",
+				ProjectID: "project-1",
+				Status:    domain.BuildStatusRunning,
+				CreatedAt: time.Now().UTC(),
+			},
+		},
+		steps: map[string][]domain.BuildStep{
+			"build-1": {
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "test", Command: "sh", Args: []string{"-c", "go test ./..."}, Status: domain.BuildStepStatusRunning},
+			},
+		},
+	}
+
+	serviceUnderTest := service.NewBuildService(repo, nil, logs.NewNoopSink())
+	execRepo := repositorymemory.NewExecutionJobRepository()
+	outputRepo := repositorymemory.NewExecutionJobOutputRepository()
+	serviceUnderTest.SetExecutionJobRepository(execRepo)
+	serviceUnderTest.SetExecutionJobOutputRepository(outputRepo)
+
+	timeout := 120
+	now := time.Now().UTC()
+	_, _ = execRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{{
+		ID:               "job-1",
+		BuildID:          "build-1",
+		StepID:           "step-1",
+		Name:             "test",
+		StepIndex:        0,
+		Status:           domain.ExecutionJobStatusRunning,
+		Image:            "golang:1.24",
+		WorkingDir:       "backend",
+		Command:          []string{"sh", "-c", "go test ./..."},
+		Environment:      map[string]string{},
+		TimeoutSeconds:   &timeout,
+		ResolvedSpecJSON: `{"version":1}`,
+		SpecVersion:      1,
+		CreatedAt:        now,
+		Source:           domain.SourceSnapshotRef{RepositoryURL: "https://github.com/acme/repo.git", CommitSHA: "abc123"},
+	}})
+	_, _ = outputRepo.CreateMany(context.Background(), []domain.ExecutionJobOutput{{
+		ID:           "output-1",
+		JobID:        "job-1",
+		BuildID:      "build-1",
+		Name:         "dist",
+		Kind:         "artifact",
+		DeclaredPath: "dist/**",
+		Status:       domain.ExecutionJobOutputStatusDeclared,
+		CreatedAt:    now,
+	}})
+
+	h := NewBuildHandler(serviceUnderTest)
+	req := httptest.NewRequest(http.MethodGet, "/builds/build-1/steps", nil)
+	ctx := chi.NewRouteContext()
+	ctx.URLParams.Add("buildID", "build-1")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, ctx))
+
+	rr := httptest.NewRecorder()
+	h.GetBuildSteps(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	body := rr.Body.String()
+	if !strings.Contains(body, `"job"`) {
+		t.Fatalf("expected linked job metadata in response, got %s", body)
+	}
+	if !strings.Contains(body, `"outputs"`) {
+		t.Fatalf("expected output metadata in response, got %s", body)
+	}
+	if !strings.Contains(body, url.QueryEscape("dist/**")) && !strings.Contains(body, "dist/**") {
+		t.Fatalf("expected declared output path in response, got %s", body)
+	}
 }
 
 func (r *fakeRepo) CompleteStep(_ context.Context, request repository.CompleteStepRequest) (repository.CompleteStepResult, error) {

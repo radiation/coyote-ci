@@ -99,11 +99,15 @@ func TestJobHandler_CreateListGetUpdateRunNow(t *testing.T) {
 	if runPayload["status"] != "queued" {
 		t.Fatalf("expected queued build from run-now, got %v", runPayload["status"])
 	}
-	if runPayload["repo_url"] != "https://github.com/example/backend.git" {
-		t.Fatalf("expected build repo_url from job, got %v", runPayload["repo_url"])
+	source, ok := runPayload["source"].(map[string]interface{})
+	if !ok || source == nil {
+		t.Fatal("expected source object in run-now response")
 	}
-	if runPayload["ref"] != "main" {
-		t.Fatalf("expected build ref from job, got %v", runPayload["ref"])
+	if source["repository_url"] != "https://github.com/example/backend.git" {
+		t.Fatalf("expected build source.repository_url from job, got %v", source["repository_url"])
+	}
+	if source["ref"] != "main" {
+		t.Fatalf("expected build source.ref from job, got %v", source["ref"])
 	}
 }
 
@@ -134,5 +138,25 @@ func TestJobHandler_CreateRejectsInvalidPipeline(t *testing.T) {
 	}
 	if payload["error"] == nil {
 		t.Fatalf("expected error response, got %v", payload)
+	}
+}
+
+func TestJobHandler_CreateAcceptsPipelinePathWithoutInlineYAML(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	h := NewJobHandler(service.NewJobService(jobRepo, service.NewBuildService(buildRepo, nil, nil)))
+
+	body := `{"project_id":"project-1","name":"path-job","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_path":"scenarios/success-basic/coyote.yml"}`
+	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(body))
+	res := httptest.NewRecorder()
+	h.CreateJob(res, req)
+
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, res.Code)
+	}
+
+	data := decodeDataMap(t, res)
+	if data["pipeline_path"] != "scenarios/success-basic/coyote.yml" {
+		t.Fatalf("expected pipeline_path in response, got %v", data["pipeline_path"])
 	}
 }

@@ -33,6 +33,9 @@ func (r *BuildRepository) Create(_ context.Context, build domain.Build) (domain.
 	if build.ID == "" {
 		build.ID = uuid.NewString()
 	}
+	if build.AttemptNumber <= 0 {
+		build.AttemptNumber = 1
+	}
 
 	r.builds[build.ID] = build
 	return build, nil
@@ -44,6 +47,9 @@ func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Buil
 
 	if build.ID == "" {
 		build.ID = uuid.NewString()
+	}
+	if build.AttemptNumber <= 0 {
+		build.AttemptNumber = 1
 	}
 
 	now := time.Now().UTC()

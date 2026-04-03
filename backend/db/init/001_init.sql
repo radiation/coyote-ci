@@ -7,6 +7,9 @@ CREATE TABLE IF NOT EXISTS builds (
     started_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
     current_step_index INTEGER NOT NULL DEFAULT 0,
+    attempt_number INTEGER NOT NULL DEFAULT 1,
+    rerun_of_build_id UUID REFERENCES builds(id) ON DELETE SET NULL,
+    rerun_from_step_index INTEGER,
     error_message TEXT,
     pipeline_config_yaml TEXT,
     pipeline_name TEXT,
@@ -19,16 +22,19 @@ CREATE TABLE IF NOT EXISTS builds (
 
 CREATE INDEX IF NOT EXISTS idx_builds_project_id ON builds (project_id);
 CREATE INDEX IF NOT EXISTS idx_builds_created_at ON builds (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_builds_rerun_of_build_id ON builds (rerun_of_build_id);
 
 CREATE TABLE IF NOT EXISTS jobs (
     id UUID PRIMARY KEY,
     project_id TEXT NOT NULL,
     name TEXT NOT NULL,
     repository_url TEXT NOT NULL,
-    default_ref TEXT NOT NULL,
+    default_ref TEXT,
+    default_commit_sha TEXT,
     push_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     push_branch TEXT,
-    pipeline_yaml TEXT NOT NULL,
+    pipeline_yaml TEXT,
+    pipeline_path TEXT,
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
@@ -62,6 +68,69 @@ CREATE TABLE IF NOT EXISTS build_steps (
 );
 
 CREATE INDEX IF NOT EXISTS idx_build_steps_build_id_step_index ON build_steps (build_id, step_index);
+
+CREATE TABLE IF NOT EXISTS build_jobs (
+    id UUID PRIMARY KEY,
+    build_id UUID NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+    step_id UUID NOT NULL REFERENCES build_steps(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    attempt_number INTEGER NOT NULL DEFAULT 1,
+    retry_of_job_id UUID REFERENCES build_jobs(id) ON DELETE SET NULL,
+    lineage_root_job_id UUID REFERENCES build_jobs(id) ON DELETE SET NULL,
+    status TEXT NOT NULL,
+    queue_name TEXT,
+    image TEXT NOT NULL,
+    working_dir TEXT NOT NULL,
+    command_json JSONB NOT NULL,
+    env_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    timeout_seconds INTEGER,
+    pipeline_file_path TEXT,
+    context_dir TEXT,
+    source_repo_url TEXT,
+    source_commit_sha TEXT NOT NULL,
+    source_ref_name TEXT,
+    source_archive_uri TEXT,
+    source_archive_digest TEXT,
+    spec_version INTEGER NOT NULL DEFAULT 1,
+    spec_digest TEXT,
+    resolved_spec_json JSONB NOT NULL,
+    claim_token TEXT,
+    claimed_by TEXT,
+    claim_expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL,
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    error_message TEXT,
+    exit_code INTEGER,
+    output_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    UNIQUE (build_id, step_id, attempt_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_build_jobs_build_id ON build_jobs (build_id);
+CREATE INDEX IF NOT EXISTS idx_build_jobs_status_created_at ON build_jobs (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_build_jobs_claim_expires_at ON build_jobs (claim_expires_at);
+CREATE INDEX IF NOT EXISTS idx_build_jobs_step_latest ON build_jobs (step_id, attempt_number DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_build_jobs_retry_of_job_id ON build_jobs (retry_of_job_id);
+CREATE INDEX IF NOT EXISTS idx_build_jobs_lineage_root_job_id ON build_jobs (lineage_root_job_id);
+
+CREATE TABLE IF NOT EXISTS build_job_outputs (
+    id UUID PRIMARY KEY,
+    job_id UUID NOT NULL REFERENCES build_jobs(id) ON DELETE CASCADE,
+    build_id UUID NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    declared_path TEXT NOT NULL,
+    destination_uri TEXT,
+    content_type TEXT,
+    size_bytes BIGINT,
+    digest TEXT,
+    status TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_build_job_outputs_build_id ON build_job_outputs (build_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_build_job_outputs_job_id ON build_job_outputs (job_id, created_at);
 
 CREATE TABLE IF NOT EXISTS build_artifacts (
     id UUID PRIMARY KEY,
