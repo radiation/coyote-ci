@@ -3,6 +3,8 @@ import { useMutation } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { createJob } from '../api';
 
+type PipelineMode = 'inline' | 'repo';
+
 const DEFAULT_PIPELINE_YAML = `version: 1
 steps:
   - name: test
@@ -17,7 +19,9 @@ export function JobCreatePage() {
   const [defaultRef, setDefaultRef] = useState('main');
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushBranch, setPushBranch] = useState('main');
+  const [pipelineMode, setPipelineMode] = useState<PipelineMode>('inline');
   const [pipelineYAML, setPipelineYAML] = useState(DEFAULT_PIPELINE_YAML);
+  const [pipelinePath, setPipelinePath] = useState('.coyote/pipeline.yml');
   const [enabled, setEnabled] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -42,30 +46,52 @@ export function JobCreatePage() {
     const trimmedRepositoryURL = repositoryURL.trim();
     const trimmedDefaultRef = defaultRef.trim();
     const trimmedPushBranch = pushBranch.trim();
-    const trimmedPipelineYAML = pipelineYAML.trim();
 
-    if (!trimmedProjectID || !trimmedName || !trimmedRepositoryURL || !trimmedDefaultRef || !trimmedPipelineYAML) {
-      setErrorMessage('Project ID, name, repository URL, default ref, and pipeline YAML are required.');
+    if (!trimmedProjectID || !trimmedName || !trimmedRepositoryURL || !trimmedDefaultRef) {
+      setErrorMessage('Project ID, name, repository URL, and default ref are required.');
       return;
     }
 
-    createMutation.mutate({
-      project_id: trimmedProjectID,
-      name: trimmedName,
-      repository_url: trimmedRepositoryURL,
-      default_ref: trimmedDefaultRef,
-      push_enabled: pushEnabled,
-      push_branch: pushEnabled ? trimmedPushBranch : '',
-      pipeline_yaml: trimmedPipelineYAML,
-      enabled,
-    });
+    if (pipelineMode === 'inline') {
+      const trimmedYAML = pipelineYAML.trim();
+      if (!trimmedYAML) {
+        setErrorMessage('Pipeline YAML is required.');
+        return;
+      }
+      createMutation.mutate({
+        project_id: trimmedProjectID,
+        name: trimmedName,
+        repository_url: trimmedRepositoryURL,
+        default_ref: trimmedDefaultRef,
+        push_enabled: pushEnabled,
+        push_branch: pushEnabled ? trimmedPushBranch : '',
+        pipeline_yaml: trimmedYAML,
+        enabled,
+      });
+    } else {
+      const trimmedPath = pipelinePath.trim();
+      if (!trimmedPath) {
+        setErrorMessage('Pipeline file path is required.');
+        return;
+      }
+      createMutation.mutate({
+        project_id: trimmedProjectID,
+        name: trimmedName,
+        repository_url: trimmedRepositoryURL,
+        default_ref: trimmedDefaultRef,
+        push_enabled: pushEnabled,
+        push_branch: pushEnabled ? trimmedPushBranch : '',
+        pipeline_path: trimmedPath,
+        enabled,
+      });
+    }
   };
 
   return (
     <>
       <Link to="/jobs">← Back to jobs</Link>
       <h2>Create Job</h2>
-      <p className="subtle-text">Define a reusable pipeline and run it manually whenever needed.</p>
+      <p className="subtle-text">Define a reusable pipeline. Builds are created by running a job.</p>
 
       <form className="job-form" onSubmit={onSubmit}>
         <label htmlFor="job-project-id">Project ID</label>
@@ -114,23 +140,69 @@ export function JobCreatePage() {
           Enable push trigger
         </label>
 
-        <label htmlFor="job-push-branch">Push Branch</label>
-        <input
-          id="job-push-branch"
-          value={pushBranch}
-          onChange={(event) => setPushBranch(event.target.value)}
-          disabled={createMutation.isPending}
-          placeholder="main"
-        />
+        {pushEnabled && (
+          <>
+            <label htmlFor="job-push-branch">Push Branch</label>
+            <input
+              id="job-push-branch"
+              value={pushBranch}
+              onChange={(event) => setPushBranch(event.target.value)}
+              disabled={createMutation.isPending}
+              placeholder="main"
+            />
+          </>
+        )}
 
-        <label htmlFor="job-pipeline-yaml">Pipeline YAML</label>
-        <textarea
-          id="job-pipeline-yaml"
-          value={pipelineYAML}
-          onChange={(event) => setPipelineYAML(event.target.value)}
-          rows={14}
-          disabled={createMutation.isPending}
-        />
+        <fieldset disabled={createMutation.isPending}>
+          <legend>Pipeline Source</legend>
+          <label className="radio-label">
+            <input
+              type="radio"
+              name="pipeline-mode"
+              value="inline"
+              checked={pipelineMode === 'inline'}
+              onChange={() => setPipelineMode('inline')}
+            />
+            Inline YAML
+          </label>
+          <label className="radio-label">
+            <input
+              type="radio"
+              name="pipeline-mode"
+              value="repo"
+              checked={pipelineMode === 'repo'}
+              onChange={() => setPipelineMode('repo')}
+            />
+            File in repository
+          </label>
+        </fieldset>
+
+        {pipelineMode === 'inline' && (
+          <>
+            <label htmlFor="job-pipeline-yaml">Pipeline YAML</label>
+            <textarea
+              id="job-pipeline-yaml"
+              value={pipelineYAML}
+              onChange={(event) => setPipelineYAML(event.target.value)}
+              rows={14}
+              disabled={createMutation.isPending}
+            />
+          </>
+        )}
+
+        {pipelineMode === 'repo' && (
+          <>
+            <label htmlFor="job-pipeline-path">Pipeline File Path</label>
+            <input
+              id="job-pipeline-path"
+              value={pipelinePath}
+              onChange={(event) => setPipelinePath(event.target.value)}
+              disabled={createMutation.isPending}
+              placeholder=".coyote/pipeline.yml"
+            />
+            <p className="subtle-text">Path to pipeline file inside the repository. Loaded at build time.</p>
+          </>
+        )}
 
         <label className="checkbox-label" htmlFor="job-enabled">
           <input
