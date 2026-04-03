@@ -85,6 +85,59 @@ const docTemplate = `{
                 }
             }
         },
+        "/builds/jobs/{jobID}/retry": {
+            "post": {
+                "description": "Creates a new build attempt containing a retry of the failed execution job.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "builds"
+                ],
+                "summary": "Retry failed execution job",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Execution Job ID",
+                        "name": "jobID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.RetryJobEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/builds/pipeline": {
             "post": {
                 "description": "Parses and validates pipeline YAML, then creates a queued build with resolved steps.",
@@ -529,6 +582,65 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/builds/{buildID}/rerun": {
+            "post": {
+                "description": "Creates a new build attempt rerunning from a selected step index.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "builds"
+                ],
+                "summary": "Rerun build from step",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Build ID",
+                        "name": "buildID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rerun request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.RerunBuildFromStepRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.BuildEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/api.ErrorResponse"
                         }
@@ -1180,8 +1292,8 @@ const docTemplate = `{
         "api.BuildResponse": {
             "type": "object",
             "properties": {
-                "commit_sha": {
-                    "type": "string"
+                "attempt_number": {
+                    "type": "integer"
                 },
                 "created_at": {
                     "type": "string"
@@ -1216,10 +1328,10 @@ const docTemplate = `{
                 "queued_at": {
                     "type": "string"
                 },
-                "ref": {
-                    "type": "string"
+                "rerun_from_step_index": {
+                    "type": "integer"
                 },
-                "repo_url": {
+                "rerun_of_build_id": {
                     "type": "string"
                 },
                 "source": {
@@ -1281,6 +1393,9 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "string"
+                },
+                "job": {
+                    "$ref": "#/definitions/api.ExecutionJobResponse"
                 },
                 "name": {
                     "type": "string"
@@ -1379,6 +1494,9 @@ const docTemplate = `{
         "api.CreateJobRequest": {
             "type": "object",
             "properties": {
+                "default_commit_sha": {
+                    "type": "string"
+                },
                 "default_ref": {
                     "type": "string"
                 },
@@ -1386,6 +1504,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
                     "type": "string"
                 },
                 "pipeline_yaml": {
@@ -1458,6 +1579,142 @@ const docTemplate = `{
                 }
             }
         },
+        "api.ExecutionJobOutputResponse": {
+            "type": "object",
+            "properties": {
+                "build_id": {
+                    "type": "string"
+                },
+                "content_type": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "declared_path": {
+                    "type": "string"
+                },
+                "destination_uri": {
+                    "type": "string"
+                },
+                "digest": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.ExecutionJobResponse": {
+            "type": "object",
+            "properties": {
+                "attempt_number": {
+                    "type": "integer"
+                },
+                "build_id": {
+                    "type": "string"
+                },
+                "command": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "command_preview": {
+                    "type": "string"
+                },
+                "context_dir": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "environment": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "image": {
+                    "type": "string"
+                },
+                "lineage_root_job_id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "outputs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.ExecutionJobOutputResponse"
+                    }
+                },
+                "pipeline_file_path": {
+                    "type": "string"
+                },
+                "retry_of_job_id": {
+                    "type": "string"
+                },
+                "source_commit_sha": {
+                    "type": "string"
+                },
+                "source_ref_name": {
+                    "type": "string"
+                },
+                "source_repo_url": {
+                    "type": "string"
+                },
+                "spec_digest": {
+                    "type": "string"
+                },
+                "spec_version": {
+                    "type": "integer"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "step_id": {
+                    "type": "string"
+                },
+                "step_index": {
+                    "type": "integer"
+                },
+                "timeout_seconds": {
+                    "type": "integer"
+                },
+                "working_dir": {
+                    "type": "string"
+                }
+            }
+        },
         "api.JobEnvelope": {
             "type": "object",
             "properties": {
@@ -1491,6 +1748,9 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "default_commit_sha": {
+                    "type": "string"
+                },
                 "default_ref": {
                     "type": "string"
                 },
@@ -1501,6 +1761,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
                     "type": "string"
                 },
                 "pipeline_yaml": {
@@ -1613,6 +1876,33 @@ const docTemplate = `{
                 }
             }
         },
+        "api.RerunBuildFromStepRequest": {
+            "type": "object",
+            "properties": {
+                "step_index": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.RetryJobEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.RetryJobResponse"
+                }
+            }
+        },
+        "api.RetryJobResponse": {
+            "type": "object",
+            "properties": {
+                "build": {
+                    "$ref": "#/definitions/api.BuildResponse"
+                },
+                "job": {
+                    "$ref": "#/definitions/api.ExecutionJobResponse"
+                }
+            }
+        },
         "api.StepLogChunkResponse": {
             "type": "object",
             "properties": {
@@ -1676,6 +1966,9 @@ const docTemplate = `{
         "api.UpdateJobRequest": {
             "type": "object",
             "properties": {
+                "default_commit_sha": {
+                    "type": "string"
+                },
                 "default_ref": {
                     "type": "string"
                 },
@@ -1683,6 +1976,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
                     "type": "string"
                 },
                 "pipeline_yaml": {

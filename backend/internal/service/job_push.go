@@ -65,15 +65,29 @@ func (s *JobService) TriggerPushEvent(ctx context.Context, input PushEventInput)
 		}
 		result.MatchedJobs++
 
-		build, buildErr := s.buildService.CreateBuildFromPipeline(ctx, CreatePipelineBuildInput{
-			ProjectID:    job.ProjectID,
-			PipelineYAML: job.PipelineYAML,
-			Source: &CreateBuildSourceInput{
-				RepositoryURL: job.RepositoryURL,
-				Ref:           ref,
-				CommitSHA:     commitSHA,
-			},
-		})
+		var (
+			build    domain.Build
+			buildErr error
+		)
+		if job.PipelinePath != nil && strings.TrimSpace(*job.PipelinePath) != "" {
+			build, buildErr = s.buildService.CreateBuildFromRepo(ctx, CreateRepoBuildInput{
+				ProjectID:    job.ProjectID,
+				RepoURL:      job.RepositoryURL,
+				Ref:          ref,
+				CommitSHA:    commitSHA,
+				PipelinePath: strings.TrimSpace(*job.PipelinePath),
+			})
+		} else {
+			build, buildErr = s.buildService.CreateBuildFromPipeline(ctx, CreatePipelineBuildInput{
+				ProjectID:    job.ProjectID,
+				PipelineYAML: job.PipelineYAML,
+				Source: &CreateBuildSourceInput{
+					RepositoryURL: job.RepositoryURL,
+					Ref:           ref,
+					CommitSHA:     commitSHA,
+				},
+			})
+		}
 		if buildErr != nil {
 			return PushEventResult{}, fmt.Errorf("creating build from push event for job %s: %w", job.ID, buildErr)
 		}

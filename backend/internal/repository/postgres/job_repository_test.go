@@ -21,8 +21,9 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 
 	repo := NewJobRepository(db)
 	now := time.Now().UTC()
-	row := []string{"id", "project_id", "name", "repository_url", "default_ref", "push_enabled", "push_branch", "pipeline_yaml", "enabled", "created_at", "updated_at"}
+	row := []string{"id", "project_id", "name", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "push_branch", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}
 	pushBranch := "main"
+	pipelinePath := ".coyote/pipeline.yml"
 
 	job := domain.Job{
 		ID:            "job-1",
@@ -33,13 +34,14 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 		PushEnabled:   true,
 		PushBranch:    &pushBranch,
 		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		PipelinePath:  &pipelinePath,
 		Enabled:       true,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
 
 	mock.ExpectQuery("INSERT INTO jobs").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		job.ID, job.ProjectID, job.Name, job.RepositoryURL, job.DefaultRef, job.PushEnabled, job.PushBranch, job.PipelineYAML, job.Enabled, job.CreatedAt, job.UpdatedAt,
+		job.ID, job.ProjectID, job.Name, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PushBranch, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
 	))
 	created, err := repo.Create(context.Background(), job)
 	if err != nil {
@@ -50,7 +52,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	}
 
 	mock.ExpectQuery("SELECT id, project_id, name, repository_url").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		job.ID, job.ProjectID, job.Name, job.RepositoryURL, job.DefaultRef, job.PushEnabled, job.PushBranch, job.PipelineYAML, job.Enabled, job.CreatedAt, job.UpdatedAt,
+		job.ID, job.ProjectID, job.Name, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PushBranch, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
 	))
 	got, err := repo.GetByID(context.Background(), job.ID)
 	if err != nil {
@@ -61,7 +63,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	}
 
 	mock.ExpectQuery("SELECT id, project_id, name, repository_url").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		job.ID, job.ProjectID, job.Name, job.RepositoryURL, job.DefaultRef, job.PushEnabled, job.PushBranch, job.PipelineYAML, job.Enabled, job.CreatedAt, job.UpdatedAt,
+		job.ID, job.ProjectID, job.Name, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PushBranch, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
 	))
 	listed, err := repo.List(context.Background())
 	if err != nil {
@@ -74,7 +76,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	job.Enabled = false
 	job.UpdatedAt = now.Add(time.Second)
 	mock.ExpectQuery("UPDATE jobs").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		job.ID, job.ProjectID, job.Name, job.RepositoryURL, job.DefaultRef, job.PushEnabled, job.PushBranch, job.PipelineYAML, job.Enabled, job.CreatedAt, job.UpdatedAt,
+		job.ID, job.ProjectID, job.Name, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PushBranch, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
 	))
 	updated, err := repo.Update(context.Background(), job)
 	if err != nil {
@@ -91,7 +93,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	}
 
 	mock.ExpectQuery("FROM jobs").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		"job-2", "project-1", "backend-main", "https://github.com/example/backend.git", "main", true, "main", "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n", true, now, now,
+		"job-2", "project-1", "backend-main", "https://github.com/example/backend.git", "main", nil, true, "main", "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n", ".coyote/pipeline.yml", true, now, now,
 	))
 	matched, err := repo.ListPushEnabledByRepository(context.Background(), "https://github.com/example/backend")
 	if err != nil {

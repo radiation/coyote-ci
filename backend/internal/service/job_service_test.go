@@ -92,6 +92,29 @@ func TestJobService_CreateRejectsInvalidPipelineYAML(t *testing.T) {
 	}
 }
 
+func TestJobService_CreateAllowsRepoPipelinePathWithoutInlineYAML(t *testing.T) {
+	jobService := NewJobService(memory.NewJobRepository(), NewBuildService(memory.NewBuildRepository(), nil, nil))
+
+	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:        "project-1",
+		Name:             "backend-path",
+		RepositoryURL:    "https://github.com/example/backend.git",
+		DefaultRef:       "main",
+		DefaultCommitSHA: "",
+		PipelinePath:     "scenarios/success-basic/coyote.yml",
+		PipelineYAML:     "",
+	})
+	if err != nil {
+		t.Fatalf("expected path-based job create to succeed, got %v", err)
+	}
+	if job.PipelinePath == nil || *job.PipelinePath != "scenarios/success-basic/coyote.yml" {
+		t.Fatalf("expected persisted pipeline_path, got %v", job.PipelinePath)
+	}
+	if strings.TrimSpace(job.PipelineYAML) != "" {
+		t.Fatalf("expected empty inline pipeline yaml, got %q", job.PipelineYAML)
+	}
+}
+
 func TestJobService_RunNowCreatesNormalBuildAndSnapshotsPipeline(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()

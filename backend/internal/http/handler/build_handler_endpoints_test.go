@@ -142,14 +142,18 @@ func TestCreateRepoBuild(t *testing.T) {
 		if data["status"] != "queued" {
 			t.Errorf("expected queued, got %v", data["status"])
 		}
-		if data["repo_url"] != "https://github.com/org/repo.git" {
-			t.Errorf("expected repo_url in response, got %v", data["repo_url"])
+		source, ok := data["source"].(map[string]interface{})
+		if !ok || source == nil {
+			t.Fatal("expected source object in response")
 		}
-		if data["ref"] != "main" {
-			t.Errorf("expected ref in response, got %v", data["ref"])
+		if source["repository_url"] != "https://github.com/org/repo.git" {
+			t.Errorf("expected source.repository_url in response, got %v", source["repository_url"])
 		}
-		if data["commit_sha"] != "abc123" {
-			t.Errorf("expected commit_sha in response, got %v", data["commit_sha"])
+		if source["ref"] != "main" {
+			t.Errorf("expected source.ref in response, got %v", source["ref"])
+		}
+		if source["commit_sha"] != "abc123" {
+			t.Errorf("expected source.commit_sha in response, got %v", source["commit_sha"])
 		}
 		if data["pipeline_source"] != "repo" {
 			t.Errorf("expected pipeline_source in response, got %v", data["pipeline_source"])

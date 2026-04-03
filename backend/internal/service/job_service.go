@@ -18,8 +18,8 @@ var ErrJobIDRequired = errors.New("job id is required")
 var ErrJobNameRequired = errors.New("job name is required")
 var ErrJobProjectIDRequired = errors.New("job project_id is required")
 var ErrJobRepositoryURLRequired = errors.New("job repository_url is required")
-var ErrJobDefaultRefRequired = errors.New("job default_ref is required")
-var ErrJobPipelineYAMLRequired = errors.New("job pipeline_yaml is required")
+var ErrJobSourceTargetRequired = errors.New("job default_ref or default_commit_sha is required")
+var ErrJobPipelineDefinitionRequired = errors.New("job pipeline_yaml or pipeline_path is required")
 var ErrPushEventRepositoryURLRequired = errors.New("push event repository_url is required")
 var ErrPushEventRefRequired = errors.New("push event ref is required")
 var ErrPushEventCommitSHARequired = errors.New("push event commit_sha is required")
@@ -36,24 +36,28 @@ func NewJobService(jobRepo repository.JobRepository, buildService *BuildService)
 }
 
 type CreateJobInput struct {
-	ProjectID     string
-	Name          string
-	RepositoryURL string
-	DefaultRef    string
-	PushEnabled   *bool
-	PushBranch    *string
-	PipelineYAML  string
-	Enabled       *bool
+	ProjectID        string
+	Name             string
+	RepositoryURL    string
+	DefaultRef       string
+	DefaultCommitSHA string
+	PushEnabled      *bool
+	PushBranch       *string
+	PipelineYAML     string
+	PipelinePath     string
+	Enabled          *bool
 }
 
 type UpdateJobInput struct {
-	Name          *string
-	RepositoryURL *string
-	DefaultRef    *string
-	PushEnabled   *bool
-	PushBranch    *string
-	PipelineYAML  *string
-	Enabled       *bool
+	Name             *string
+	RepositoryURL    *string
+	DefaultRef       *string
+	DefaultCommitSHA *string
+	PushEnabled      *bool
+	PushBranch       *string
+	PipelineYAML     *string
+	PipelinePath     *string
+	Enabled          *bool
 }
 
 func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domain.Job, error) {
@@ -62,7 +66,24 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 		return domain.Job{}, err
 	}
 
-	if err := validatePipelineYAML(normalized.PipelineYAML); err != nil {
+	if strings.TrimSpace(normalized.PipelineYAML) != "" {
+		if err := validatePipelineYAML(normalized.PipelineYAML); err != nil {
+			return domain.Job{}, err
+		}
+	}
+
+	var defaultCommitSHA *string
+	if strings.TrimSpace(normalized.DefaultCommitSHA) != "" {
+		v := strings.TrimSpace(normalized.DefaultCommitSHA)
+		defaultCommitSHA = &v
+	}
+	var pipelinePath *string
+	if strings.TrimSpace(normalized.PipelinePath) != "" {
+		v := strings.TrimSpace(normalized.PipelinePath)
+		pipelinePath = &v
+	}
+
+	if err := validatePipelineDefinition(normalized.PipelineYAML, pipelinePath); err != nil {
 		return domain.Job{}, err
 	}
 
@@ -84,17 +105,19 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 
 	now := time.Now().UTC()
 	job := domain.Job{
-		ID:            uuid.NewString(),
-		ProjectID:     normalized.ProjectID,
-		Name:          normalized.Name,
-		RepositoryURL: normalized.RepositoryURL,
-		DefaultRef:    normalized.DefaultRef,
-		PushEnabled:   pushEnabled,
-		PushBranch:    pushBranch,
-		PipelineYAML:  normalized.PipelineYAML,
-		Enabled:       enabled,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:               uuid.NewString(),
+		ProjectID:        normalized.ProjectID,
+		Name:             normalized.Name,
+		RepositoryURL:    normalized.RepositoryURL,
+		DefaultRef:       normalized.DefaultRef,
+		DefaultCommitSHA: defaultCommitSHA,
+		PushEnabled:      pushEnabled,
+		PushBranch:       pushBranch,
+		PipelineYAML:     normalized.PipelineYAML,
+		PipelinePath:     pipelinePath,
+		Enabled:          enabled,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 
 	return s.jobRepo.Create(ctx, job)
@@ -135,6 +158,14 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 	if input.DefaultRef != nil {
 		job.DefaultRef = strings.TrimSpace(*input.DefaultRef)
 	}
+	if input.DefaultCommitSHA != nil {
+		commit := strings.TrimSpace(*input.DefaultCommitSHA)
+		if commit == "" {
+			job.DefaultCommitSHA = nil
+		} else {
+			job.DefaultCommitSHA = &commit
+		}
+	}
 	if input.PushEnabled != nil {
 		job.PushEnabled = *input.PushEnabled
 	}
@@ -154,6 +185,14 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 	if input.PipelineYAML != nil {
 		job.PipelineYAML = strings.TrimSpace(*input.PipelineYAML)
 	}
+	if input.PipelinePath != nil {
+		path := strings.TrimSpace(*input.PipelinePath)
+		if path == "" {
+			job.PipelinePath = nil
+		} else {
+			job.PipelinePath = &path
+		}
+	}
 	if input.Enabled != nil {
 		job.Enabled = *input.Enabled
 	}
@@ -161,7 +200,12 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 	if validateErr := validateJobRequiredFields(job); validateErr != nil {
 		return domain.Job{}, validateErr
 	}
-	if validateErr := validatePipelineYAML(job.PipelineYAML); validateErr != nil {
+	if strings.TrimSpace(job.PipelineYAML) != "" {
+		if validateErr := validatePipelineYAML(job.PipelineYAML); validateErr != nil {
+			return domain.Job{}, validateErr
+		}
+	}
+	if validateErr := validatePipelineDefinition(job.PipelineYAML, job.PipelinePath); validateErr != nil {
 		return domain.Job{}, validateErr
 	}
 
@@ -190,14 +234,26 @@ func (s *JobService) RunJobNow(ctx context.Context, id string) (domain.Build, er
 		return domain.Build{}, ErrJobDisabled
 	}
 
-	build, err := s.buildService.CreateBuildFromPipeline(ctx, CreatePipelineBuildInput{
-		ProjectID:    job.ProjectID,
-		PipelineYAML: job.PipelineYAML,
-		Source: &CreateBuildSourceInput{
-			RepositoryURL: job.RepositoryURL,
-			Ref:           job.DefaultRef,
-		},
-	})
+	var build domain.Build
+	if job.PipelinePath != nil && strings.TrimSpace(*job.PipelinePath) != "" {
+		build, err = s.buildService.CreateBuildFromRepo(ctx, CreateRepoBuildInput{
+			ProjectID:    job.ProjectID,
+			RepoURL:      job.RepositoryURL,
+			Ref:          job.DefaultRef,
+			CommitSHA:    readStringPtr(job.DefaultCommitSHA),
+			PipelinePath: strings.TrimSpace(*job.PipelinePath),
+		})
+	} else {
+		build, err = s.buildService.CreateBuildFromPipeline(ctx, CreatePipelineBuildInput{
+			ProjectID:    job.ProjectID,
+			PipelineYAML: job.PipelineYAML,
+			Source: &CreateBuildSourceInput{
+				RepositoryURL: job.RepositoryURL,
+				Ref:           job.DefaultRef,
+				CommitSHA:     readStringPtr(job.DefaultCommitSHA),
+			},
+		})
+	}
 	if err != nil {
 		return domain.Build{}, err
 	}
@@ -211,11 +267,13 @@ func normalizeCreateJobInput(input CreateJobInput) (CreateJobInput, error) {
 	normalized.Name = strings.TrimSpace(normalized.Name)
 	normalized.RepositoryURL = strings.TrimSpace(normalized.RepositoryURL)
 	normalized.DefaultRef = strings.TrimSpace(normalized.DefaultRef)
+	normalized.DefaultCommitSHA = strings.TrimSpace(normalized.DefaultCommitSHA)
 	if normalized.PushBranch != nil {
 		branch := normalizePushRef(*normalized.PushBranch)
 		normalized.PushBranch = &branch
 	}
 	normalized.PipelineYAML = strings.TrimSpace(normalized.PipelineYAML)
+	normalized.PipelinePath = strings.TrimSpace(normalized.PipelinePath)
 
 	if err := validateCreateJobRequiredFields(normalized); err != nil {
 		return CreateJobInput{}, err
@@ -234,11 +292,11 @@ func validateCreateJobRequiredFields(input CreateJobInput) error {
 	if input.RepositoryURL == "" {
 		return ErrJobRepositoryURLRequired
 	}
-	if input.DefaultRef == "" {
-		return ErrJobDefaultRefRequired
+	if input.DefaultRef == "" && input.DefaultCommitSHA == "" {
+		return ErrJobSourceTargetRequired
 	}
-	if input.PipelineYAML == "" {
-		return ErrJobPipelineYAMLRequired
+	if input.PipelineYAML == "" && input.PipelinePath == "" {
+		return ErrJobPipelineDefinitionRequired
 	}
 
 	return nil
@@ -246,18 +304,27 @@ func validateCreateJobRequiredFields(input CreateJobInput) error {
 
 func validateJobRequiredFields(job domain.Job) error {
 	return validateCreateJobRequiredFields(CreateJobInput{
-		ProjectID:     strings.TrimSpace(job.ProjectID),
-		Name:          strings.TrimSpace(job.Name),
-		RepositoryURL: strings.TrimSpace(job.RepositoryURL),
-		DefaultRef:    strings.TrimSpace(job.DefaultRef),
-		PipelineYAML:  strings.TrimSpace(job.PipelineYAML),
+		ProjectID:        strings.TrimSpace(job.ProjectID),
+		Name:             strings.TrimSpace(job.Name),
+		RepositoryURL:    strings.TrimSpace(job.RepositoryURL),
+		DefaultRef:       strings.TrimSpace(job.DefaultRef),
+		DefaultCommitSHA: strings.TrimSpace(readStringPtr(job.DefaultCommitSHA)),
+		PipelineYAML:     strings.TrimSpace(job.PipelineYAML),
+		PipelinePath:     strings.TrimSpace(readStringPtr(job.PipelinePath)),
 	})
+}
+
+func validatePipelineDefinition(pipelineYAML string, pipelinePath *string) error {
+	if strings.TrimSpace(pipelineYAML) == "" && strings.TrimSpace(readStringPtr(pipelinePath)) == "" {
+		return ErrJobPipelineDefinitionRequired
+	}
+	return nil
 }
 
 func validatePipelineYAML(yamlText string) error {
 	trimmed := strings.TrimSpace(yamlText)
 	if trimmed == "" {
-		return ErrJobPipelineYAMLRequired
+		return ErrJobPipelineDefinitionRequired
 	}
 
 	_, err := pipeline.LoadAndResolve([]byte(trimmed))
@@ -266,4 +333,11 @@ func validatePipelineYAML(yamlText string) error {
 	}
 
 	return nil
+}
+
+func readStringPtr(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

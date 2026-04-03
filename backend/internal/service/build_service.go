@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,7 +21,6 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	"github.com/radiation/coyote-ci/backend/internal/source"
-	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 var ErrBuildNotFound = errors.New("build not found")
@@ -43,6 +42,10 @@ var ErrInvalidPipelinePath = errors.New("invalid pipeline path")
 var ErrArtifactNotFound = errors.New("artifact not found")
 var ErrSourceResolverNotConfigured = errors.New("source resolver not configured")
 var ErrExecutionWorkspaceRootNotConfigured = errors.New("execution workspace root not configured")
+var ErrExecutionJobRepoNotConfigured = errors.New("execution job repository not configured")
+var ErrExecutionJobNotFound = errors.New("execution job not found")
+var ErrExecutionJobNotRetryable = errors.New("execution job is not retryable")
+var ErrInvalidRerunStepIndex = errors.New("invalid rerun step index")
 
 const (
 	BuildTemplateDefault = "default"
@@ -55,6 +58,8 @@ const (
 // BuildService coordinates build lifecycle state transitions and delegates step execution to a runner.
 type BuildService struct {
 	buildRepo              repository.BuildRepository
+	executionJobRepo       repository.ExecutionJobRepository
+	executionPlanner       *BuildExecutionPlanner
 	runner                 runner.Runner
 	logSink                logs.LogSink
 	repoFetcher            source.RepoFetcher
@@ -62,6 +67,7 @@ type BuildService struct {
 	executionWorkspaceRoot string
 
 	artifactRepo          repository.ArtifactRepository
+	executionOutputRepo   repository.ExecutionJobOutputRepository
 	artifactStore         artifact.Store
 	artifactCollector     *artifact.Collector
 	artifactWorkspaceRoot string
@@ -75,10 +81,11 @@ func NewBuildService(buildRepo repository.BuildRepository, stepRunner runner.Run
 	}
 
 	return &BuildService{
-		buildRepo:      buildRepo,
-		runner:         stepRunner,
-		logSink:        logSink,
-		sourceResolver: source.NewGitWorkspaceSourceResolver(),
+		buildRepo:        buildRepo,
+		executionPlanner: NewBuildExecutionPlanner(),
+		runner:           stepRunner,
+		logSink:          logSink,
+		sourceResolver:   source.NewGitWorkspaceSourceResolver(),
 	}
 }
 
@@ -113,6 +120,14 @@ func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository
 	} else {
 		s.artifactCollector = nil
 	}
+}
+
+func (s *BuildService) SetExecutionJobRepository(repo repository.ExecutionJobRepository) {
+	s.executionJobRepo = repo
+}
+
+func (s *BuildService) SetExecutionJobOutputRepository(repo repository.ExecutionJobOutputRepository) {
+	s.executionOutputRepo = repo
 }
 
 type CreateBuildInput struct {
@@ -173,6 +188,7 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 		ID:               uuid.NewString(),
 		ProjectID:        input.ProjectID,
 		Status:           domain.BuildStatusPending,
+		AttemptNumber:    1,
 		CreatedAt:        time.Now().UTC(),
 		CurrentStepIndex: 0,
 		Source:           sourceSpec,
@@ -204,7 +220,15 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 			})
 		}
 
-		return s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+		queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+		if err != nil {
+			return domain.Build{}, err
+		}
+		if err := s.createDurableJobsForBuild(ctx, queuedBuild, steps); err != nil {
+			log.Printf("WARNING: durable job creation failed for build_id=%s (build already persisted): %v", queuedBuild.ID, err)
+			return domain.Build{}, fmt.Errorf("create execution jobs for build %s: %w", queuedBuild.ID, err)
+		}
+		return queuedBuild, nil
 	}
 
 	return s.buildRepo.Create(ctx, build)
@@ -252,6 +276,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		ID:                 buildID,
 		ProjectID:          input.ProjectID,
 		Status:             domain.BuildStatusQueued,
+		AttemptNumber:      1,
 		CreatedAt:          time.Now().UTC(),
 		CurrentStepIndex:   0,
 		PipelineConfigYAML: &yamlText,
@@ -263,7 +288,15 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		CommitSHA:          sourceCommitSHA(sourceSpec),
 	}
 
-	return s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	if err := s.createDurableJobsForBuild(ctx, queuedBuild, steps); err != nil {
+		log.Printf("WARNING: durable job creation failed for build_id=%s (build already persisted): %v", queuedBuild.ID, err)
+		return domain.Build{}, fmt.Errorf("create execution jobs for build %s: %w", queuedBuild.ID, err)
+	}
+	return queuedBuild, nil
 }
 
 // CreateRepoBuildInput is the service-level input for creating a build from a repository checkout.
@@ -363,6 +396,7 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		ID:                 buildID,
 		ProjectID:          input.ProjectID,
 		Status:             domain.BuildStatusQueued,
+		AttemptNumber:      1,
 		CreatedAt:          time.Now().UTC(),
 		CurrentStepIndex:   0,
 		PipelineConfigYAML: &yamlText,
@@ -375,7 +409,80 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		CommitSHA:          commitSHAPtr,
 	}
 
-	return s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	if err := s.createDurableJobsForBuild(ctx, queuedBuild, steps); err != nil {
+		log.Printf("WARNING: durable job creation failed for build_id=%s (build already persisted): %v", queuedBuild.ID, err)
+		return domain.Build{}, fmt.Errorf("create execution jobs for build %s: %w", queuedBuild.ID, err)
+	}
+	return queuedBuild, nil
+}
+
+func (s *BuildService) createDurableJobsForBuild(ctx context.Context, build domain.Build, steps []domain.BuildStep) error {
+	if s.executionJobRepo == nil || s.executionPlanner == nil || len(steps) == 0 {
+		return nil
+	}
+
+	jobs, err := s.executionPlanner.Plan(build, steps, s.resolveExecutionImage(build))
+	if err != nil {
+		return err
+	}
+	_, err = s.executionJobRepo.CreateJobsForBuild(ctx, jobs)
+	if err != nil {
+		return err
+	}
+
+	if s.executionOutputRepo == nil || len(jobs) == 0 {
+		return nil
+	}
+
+	declaredOutputs, outputErr := s.declaredOutputsForBuild(build, jobs)
+	if outputErr != nil {
+		return outputErr
+	}
+	if len(declaredOutputs) == 0 {
+		return nil
+	}
+	_, outputErr = s.executionOutputRepo.CreateMany(ctx, declaredOutputs)
+	return outputErr
+}
+
+func (s *BuildService) declaredOutputsForBuild(build domain.Build, jobs []domain.ExecutionJob) ([]domain.ExecutionJobOutput, error) {
+	if build.PipelineConfigYAML == nil || strings.TrimSpace(*build.PipelineConfigYAML) == "" {
+		return []domain.ExecutionJobOutput{}, nil
+	}
+
+	resolved, err := pipeline.LoadAndResolve([]byte(strings.TrimSpace(*build.PipelineConfigYAML)))
+	if err != nil {
+		return []domain.ExecutionJobOutput{}, nil
+	}
+	if len(resolved.Artifacts.Paths) == 0 {
+		return []domain.ExecutionJobOutput{}, nil
+	}
+
+	// Build-level artifacts are declared against the final execution job in the current sequential model.
+	lastJob := jobs[len(jobs)-1]
+	outputs := make([]domain.ExecutionJobOutput, 0, len(resolved.Artifacts.Paths))
+	for idx, item := range resolved.Artifacts.Paths {
+		name := strings.TrimSpace(item)
+		if name == "" {
+			continue
+		}
+		outputs = append(outputs, domain.ExecutionJobOutput{
+			ID:           uuid.NewString(),
+			JobID:        lastJob.ID,
+			BuildID:      build.ID,
+			Name:         "output-" + strconv.Itoa(idx+1),
+			Kind:         "artifact",
+			DeclaredPath: name,
+			Status:       domain.ExecutionJobOutputStatusDeclared,
+			CreatedAt:    time.Now().UTC(),
+		})
+	}
+
+	return outputs, nil
 }
 
 func resolveRepoPipelinePath(repoRoot string, requestedPath string) (string, string, error) {
@@ -458,271 +565,46 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		return runner.RunStepResult{}, StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, ErrRunnerNotConfigured
 	}
 
-	build, err := s.buildRepo.GetByID(ctx, request.BuildID)
+	builder := NewStepExecutionContextBuilder(s)
+	executionContext, err := builder.Build(ctx, request)
 	if err != nil {
-		if errors.Is(err, repository.ErrBuildNotFound) {
-			return runner.RunStepResult{}, StepCompletionReport{}, ErrBuildNotFound
-		}
-		return runner.RunStepResult{}, StepCompletionReport{}, fmt.Errorf("fetching build for step execution: %w", err)
-	}
-	executionImage := s.resolveExecutionImage(build)
-	buildSource := sourceSpecFromBuild(build)
-
-	steps, err := s.buildRepo.GetStepsByBuildID(ctx, request.BuildID)
-	if err != nil {
-		return runner.RunStepResult{}, StepCompletionReport{}, fmt.Errorf("fetching build steps for step execution: %w", mapRepoErr(err))
-	}
-	totalSteps := len(steps)
-	if totalSteps <= 0 {
-		totalSteps = request.StepIndex + 1
-	}
-	if totalSteps <= 0 {
-		totalSteps = 1
-	}
-	stepNumber := request.StepIndex + 1
-	if stepNumber <= 0 {
-		stepNumber = 1
+		return runner.RunStepResult{}, StepCompletionReport{}, err
 	}
 
-	stepWorkingDir := workspace.New(request.BuildID, "").ContainerWorkingDir(request.WorkingDir)
-	stepCommand := runner.RenderStepCommand(request.Command, request.Args)
+	logManager := NewExecutionLogManager(s, executionContext)
+	workspacePreparer := NewWorkspacePreparer(s)
+	completionManager := NewStepCompletionManager(s)
+	stepRunner := NewStepRunner(s.runner)
 
-	var chunkAppender logs.StepLogChunkAppender
-	if appender, ok := s.logSink.(logs.StepLogChunkAppender); ok {
-		chunkAppender = appender
+	earlyResult, earlyErr, prepareErr := workspacePreparer.Prepare(ctx, executionContext, logManager)
+	if prepareErr != nil {
+		return runner.RunStepResult{}, StepCompletionReport{}, prepareErr
 	}
-
-	var visibilityLogErr error
-	emitVisibilityLine := func(line string) {
-		if err := s.writeSystemExecutionLogLine(ctx, request, chunkAppender, line); err != nil && visibilityLogErr == nil {
-			visibilityLogErr = err
-		}
-	}
-	emitVisibilityLines := func(lines []string) {
-		for _, line := range lines {
-			emitVisibilityLine(line)
-		}
-	}
-
-	if buildScopedRunner, ok := s.runner.(runner.BuildScopedRunner); ok {
-		emitVisibilityLine("Preparing workspace")
-		prepareErr := buildScopedRunner.PrepareBuild(ctx, runner.PrepareBuildRequest{
-			BuildID:    request.BuildID,
-			RepoURL:    buildSource.RepositoryURL,
-			Ref:        buildSource.Ref,
-			CommitSHA:  buildSource.CommitSHA,
-			Image:      executionImage,
-			WorkerID:   request.WorkerID,
-			ClaimToken: request.ClaimToken,
-		})
-		if prepareErr != nil {
-			_, reason := classifyPrepareFailure(prepareErr)
-			emitVisibilityLine("Failed to start build container")
-			emitVisibilityLine(formatFailureReasonLine(reason))
-
-			now := time.Now().UTC()
-			result := runner.RunStepResult{
-				Status:     runner.RunStepStatusFailed,
-				ExitCode:   -1,
-				Stderr:     reason,
-				StartedAt:  now,
-				FinishedAt: now,
-			}
-
-			completionReport, completionErr := s.handleStepResult(ctx, request, result, false)
-			if completionErr != nil {
-				return result, completionReport, errors.Join(prepareErr, completionErr)
-			}
-
-			if sideEffectErr := s.runPostCompletionSideEffects(ctx, request, nil); sideEffectErr != nil {
-				completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, sideEffectErr)
-			}
-			if visibilityLogErr != nil {
-				completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, visibilityLogErr)
-			}
-
-			return result, completionReport, prepareErr
-		}
-
-		if buildSource.HasSource && stepNumber == 1 {
-			emitVisibilityLine("Resolving source")
-			emitVisibilityLine("Cloning repository")
-			if buildSource.CommitSHA != "" {
-				emitVisibilityLine("Checking out commit: " + buildSource.CommitSHA)
-			} else {
-				emitVisibilityLine("Checking out ref: " + buildSource.Ref)
-			}
-
-			resolvedCommit, sourceErr := s.resolveBuildSourceIntoWorkspace(ctx, request.BuildID, buildSource)
-			if sourceErr != nil {
-				reason := classifySourceFailureReason(sourceErr, buildSource)
-				emitVisibilityLine("Source checkout failed")
-				emitVisibilityLine(formatFailureReasonLine(reason))
-
-				now := time.Now().UTC()
-				result := runner.RunStepResult{
-					Status:     runner.RunStepStatusFailed,
-					ExitCode:   -1,
-					Stderr:     reason,
-					StartedAt:  now,
-					FinishedAt: now,
-				}
-
-				completionReport, completionErr := s.handleStepResult(ctx, request, result, false)
-				if completionErr != nil {
-					return result, completionReport, errors.Join(sourceErr, completionErr)
-				}
-
-				if sideEffectErr := s.runPostCompletionSideEffects(ctx, request, nil); sideEffectErr != nil {
-					completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, sideEffectErr)
-				}
-				if visibilityLogErr != nil {
-					completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, visibilityLogErr)
-				}
-
-				return result, completionReport, sourceErr
-			}
-
-			emitVisibilityLine("Resolved commit: " + resolvedCommit)
-		}
-
-		emitVisibilityLine("Starting build container")
-	} else if buildSource.HasSource {
-		// Non-build-scoped runners cannot prepare a workspace for repo-backed builds.
-		return runner.RunStepResult{}, StepCompletionReport{}, ErrRunnerWorkspaceNotSupported
-	}
-
-	hasChunkAppender := chunkAppender != nil
-
-	var chunkPersistErr error
-	var chunkPersistMu sync.Mutex
-
-	persistChunk := func(chunk runner.StepOutputChunk) error {
-		if !hasChunkAppender {
-			return nil
-		}
-		if chunkAppender == nil {
-			return nil
-		}
-
-		text := strings.TrimRight(chunk.ChunkText, "\n")
-		if strings.TrimSpace(text) == "" {
-			return nil
-		}
-
-		stream := logs.StepLogStreamSystem
-		switch chunk.Stream {
-		case runner.StepOutputStreamStdout:
-			stream = logs.StepLogStreamStdout
-		case runner.StepOutputStreamStderr:
-			stream = logs.StepLogStreamStderr
-		case runner.StepOutputStreamSystem:
-			stream = logs.StepLogStreamSystem
-		}
-
-		_, appendErr := chunkAppender.AppendStepLogChunk(ctx, logs.StepLogChunk{
-			BuildID:   request.BuildID,
-			StepID:    request.StepID,
-			StepIndex: request.StepIndex,
-			StepName:  request.StepName,
-			Stream:    stream,
-			ChunkText: text,
-			CreatedAt: chunk.EmittedAt,
-		})
-		if appendErr != nil {
-			chunkPersistMu.Lock()
-			if chunkPersistErr == nil {
-				chunkPersistErr = appendErr
-			}
-			chunkPersistMu.Unlock()
-		}
-		return nil
-	}
-	applyBufferedLogErrors := func(report *StepCompletionReport) {
-		chunkPersistMu.Lock()
-		capturedChunkErr := chunkPersistErr
-		chunkPersistMu.Unlock()
-		if capturedChunkErr != nil {
-			report.SideEffectErr = joinSideEffectErrors(report.SideEffectErr, capturedChunkErr)
-		}
-		if visibilityLogErr != nil {
-			report.SideEffectErr = joinSideEffectErrors(report.SideEffectErr, visibilityLogErr)
-		}
-	}
-
-	if stepNumber == 1 && (build.StartedAt == nil || build.StartedAt.IsZero()) {
-		emitVisibilityLines(formatBuildStartLines(executionImage, workspace.DefaultContainerRoot, totalSteps))
-	}
-	if stepNumber == 1 {
-		emitVisibilityLine("Executing pipeline steps")
-	}
-	emitVisibilityLines(formatStepStartLines(stepNumber, totalSteps, request.StepName, executionImage, stepWorkingDir, stepCommand))
-
-	var result runner.RunStepResult
-	var runErr error
-	usedStreamingRunner := false
-	if streamingRunner, ok := s.runner.(runner.StreamingRunner); ok {
-		usedStreamingRunner = true
-		result, runErr = streamingRunner.RunStepStream(ctx, request, persistChunk)
-	} else {
-		result, runErr = s.runner.RunStep(ctx, request)
-	}
-
-	if hasChunkAppender && !usedStreamingRunner {
-		// persistChunk never returns an error; failures are captured in chunkPersistErr
-		// via the closure and surfaced as a SideEffectErr after step completion.
-		for _, line := range splitLogLines(result.Stdout) {
-			_ = persistChunk(runner.StepOutputChunk{Stream: runner.StepOutputStreamStdout, ChunkText: line, EmittedAt: time.Now().UTC()})
-		}
-		for _, line := range splitLogLines(result.Stderr) {
-			_ = persistChunk(runner.StepOutputChunk{Stream: runner.StepOutputStreamStderr, ChunkText: line, EmittedAt: time.Now().UTC()})
-		}
-	}
-	if runErr != nil {
-		now := time.Now().UTC()
-		result = runner.RunStepResult{
-			Status:     runner.RunStepStatusFailed,
-			ExitCode:   -1,
-			Stderr:     runErr.Error(),
-			StartedAt:  now,
-			FinishedAt: now,
-		}
-		failureKind, failureReason := classifyStepFailure(result)
-		emitVisibilityLine(formatFailureStepEndLine(stepNumber, totalSteps, request.StepName, result.FinishedAt.Sub(result.StartedAt), result.ExitCode, failureKind))
-		emitVisibilityLine(formatFailureReasonLine(failureReason))
-		completionReport, completionErr := s.handleStepResult(ctx, request, result, hasChunkAppender)
+	if earlyResult != nil {
+		report, completionErr := completionManager.CompleteEarlyExit(ctx, executionContext, *earlyResult, logManager)
 		if completionErr != nil {
-			return result, completionReport, errors.Join(runErr, completionErr)
+			return *earlyResult, report, errors.Join(earlyErr, completionErr)
 		}
-		if sideEffectErr := s.runPostCompletionSideEffects(ctx, request, chunkAppender); sideEffectErr != nil {
-			completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, sideEffectErr)
-		}
-		applyBufferedLogErrors(&completionReport)
-		return result, completionReport, runErr
+		return *earlyResult, report, earlyErr
 	}
 
-	stepStatus := "succeeded"
-	if result.Status == runner.RunStepStatusFailed {
-		stepStatus = "failed"
-	}
-	if stepStatus == "failed" {
-		failureKind, failureReason := classifyStepFailure(result)
-		emitVisibilityLine(formatFailureStepEndLine(stepNumber, totalSteps, request.StepName, result.FinishedAt.Sub(result.StartedAt), result.ExitCode, failureKind))
-		emitVisibilityLine(formatFailureReasonLine(failureReason))
-	} else {
-		emitVisibilityLine(formatStepEndLine(stepNumber, totalSteps, request.StepName, stepStatus, result.FinishedAt.Sub(result.StartedAt), result.ExitCode))
-	}
+	logManager.EmitExecutionStart(ctx)
+	runOutcome := stepRunner.Run(ctx, executionContext, logManager)
+	logManager.EmitExecutionEnd(ctx, runOutcome.Result)
 
-	completionReport, completionErr := s.handleStepResult(ctx, request, result, hasChunkAppender)
+	report, completionErr := completionManager.CompleteExecution(ctx, executionContext, runOutcome.Result, logManager)
 	if completionErr != nil {
-		return result, completionReport, completionErr
+		if runOutcome.ExecutionErr != nil {
+			return runOutcome.Result, report, errors.Join(runOutcome.ExecutionErr, completionErr)
+		}
+		return runOutcome.Result, report, completionErr
 	}
-	if sideEffectErr := s.runPostCompletionSideEffects(ctx, request, chunkAppender); sideEffectErr != nil {
-		completionReport.SideEffectErr = joinSideEffectErrors(completionReport.SideEffectErr, sideEffectErr)
-	}
-	applyBufferedLogErrors(&completionReport)
 
-	return result, completionReport, nil
+	if runOutcome.ExecutionErr != nil {
+		return runOutcome.Result, report, runOutcome.ExecutionErr
+	}
+
+	return runOutcome.Result, report, nil
 }
 
 func (s *BuildService) resolveExecutionImage(build domain.Build) string {
