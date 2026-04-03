@@ -831,6 +831,7 @@ func toBuildResponse(build domain.Build) api.BuildResponse {
 	return api.BuildResponse{
 		ID:                 build.ID,
 		ProjectID:          build.ProjectID,
+		JobID:              build.JobID,
 		Status:             string(build.Status),
 		CreatedAt:          build.CreatedAt.Format(time.RFC3339),
 		QueuedAt:           formatOptionalTime(build.QueuedAt),

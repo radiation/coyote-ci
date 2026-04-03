@@ -127,6 +127,13 @@ func (s *JobService) ListJobs(ctx context.Context) ([]domain.Job, error) {
 	return s.jobRepo.List(ctx)
 }
 
+func (s *JobService) ListBuildsByJobID(ctx context.Context, jobID string) ([]domain.Build, error) {
+	if s.buildService == nil {
+		return nil, ErrJobBuildServiceNotConfigured
+	}
+	return s.buildService.ListBuildsByJobID(ctx, jobID)
+}
+
 func (s *JobService) GetJob(ctx context.Context, id string) (domain.Job, error) {
 	if strings.TrimSpace(id) == "" {
 		return domain.Job{}, ErrJobIDRequired
@@ -238,6 +245,7 @@ func (s *JobService) RunJobNow(ctx context.Context, id string) (domain.Build, er
 	if job.PipelinePath != nil && strings.TrimSpace(*job.PipelinePath) != "" {
 		build, err = s.buildService.CreateBuildFromRepo(ctx, CreateRepoBuildInput{
 			ProjectID:    job.ProjectID,
+			JobID:        &job.ID,
 			RepoURL:      job.RepositoryURL,
 			Ref:          job.DefaultRef,
 			CommitSHA:    readStringPtr(job.DefaultCommitSHA),
@@ -246,6 +254,7 @@ func (s *JobService) RunJobNow(ctx context.Context, id string) (domain.Build, er
 	} else {
 		build, err = s.buildService.CreateBuildFromPipeline(ctx, CreatePipelineBuildInput{
 			ProjectID:    job.ProjectID,
+			JobID:        &job.ID,
 			PipelineYAML: job.PipelineYAML,
 			Source: &CreateBuildSourceInput{
 				RepositoryURL: job.RepositoryURL,

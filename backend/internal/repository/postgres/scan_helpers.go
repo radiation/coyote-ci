@@ -13,10 +13,10 @@ type rowScanner interface {
 }
 
 // buildColumns is the canonical column list for build SELECT/RETURNING clauses (full detail).
-const buildColumns = `id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha`
+const buildColumns = `id, project_id, job_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha`
 
 // buildListColumns is a minimal column list used for list queries (omits large pipeline YAML).
-const buildListColumns = `id, project_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha`
+const buildListColumns = `id, project_id, job_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha`
 
 const executionJobColumns = `id, build_id, step_id, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir, command_json, env_json, timeout_seconds, pipeline_file_path, context_dir, source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest, spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at, created_at, started_at, finished_at, error_message, exit_code, output_refs_json`
 
@@ -38,6 +38,7 @@ func qualifyColumns(alias string, columns string) string {
 func scanBuildList(scanner rowScanner) (domain.Build, error) {
 	var build domain.Build
 	var status string
+	var jobID sql.NullString
 	var queuedAt sql.NullTime
 	var startedAt sql.NullTime
 	var finishedAt sql.NullTime
@@ -54,6 +55,7 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 	err := scanner.Scan(
 		&build.ID,
 		&build.ProjectID,
+		&jobID,
 		&status,
 		&build.CreatedAt,
 		&queuedAt,
@@ -76,6 +78,10 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 	}
 
 	build.Status = domain.BuildStatus(status)
+	if jobID.Valid {
+		v := jobID.String
+		build.JobID = &v
+	}
 	if queuedAt.Valid {
 		queued := queuedAt.Time
 		build.QueuedAt = &queued
@@ -135,6 +141,7 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 func scanBuild(scanner rowScanner) (domain.Build, error) {
 	var build domain.Build
 	var status string
+	var jobID sql.NullString
 	var queuedAt sql.NullTime
 	var startedAt sql.NullTime
 	var finishedAt sql.NullTime
@@ -152,6 +159,7 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 	err := scanner.Scan(
 		&build.ID,
 		&build.ProjectID,
+		&jobID,
 		&status,
 		&build.CreatedAt,
 		&queuedAt,
@@ -175,6 +183,10 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 	}
 
 	build.Status = domain.BuildStatus(status)
+	if jobID.Valid {
+		v := jobID.String
+		build.JobID = &v
+	}
 	if queuedAt.Valid {
 		queued := queuedAt.Time
 		build.QueuedAt = &queued

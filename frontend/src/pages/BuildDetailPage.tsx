@@ -54,6 +54,9 @@ export function BuildDetailPage() {
   return (
     <>
       <Link to="/builds">← Back to builds</Link>
+      {build.job_id && (
+        <> · <Link to={`/jobs/${build.job_id}`}>← Back to job</Link></>
+      )}
 
       <h2>Build {build.id.slice(0, 8)}…</h2>
       <div className="detail-summary">

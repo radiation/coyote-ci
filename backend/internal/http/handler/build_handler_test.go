@@ -103,6 +103,16 @@ func (r *fakeRepo) List(_ context.Context) ([]domain.Build, error) {
 	return builds, nil
 }
 
+func (r *fakeRepo) ListByJobID(_ context.Context, jobID string) ([]domain.Build, error) {
+	builds := make([]domain.Build, 0)
+	for _, build := range r.builds {
+		if build.JobID != nil && *build.JobID == jobID {
+			builds = append(builds, build)
+		}
+	}
+	return builds, nil
+}
+
 func (r *fakeRepo) GetByID(_ context.Context, id string) (domain.Build, error) {
 	if r.getErr != nil {
 		return domain.Build{}, r.getErr

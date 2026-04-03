@@ -24,6 +24,10 @@ func (s *BuildService) ListBuilds(ctx context.Context) ([]domain.Build, error) {
 	return s.buildRepo.List(ctx)
 }
 
+func (s *BuildService) ListBuildsByJobID(ctx context.Context, jobID string) ([]domain.Build, error) {
+	return s.buildRepo.ListByJobID(ctx, jobID)
+}
+
 func (s *BuildService) GetBuildSteps(ctx context.Context, id string) ([]domain.BuildStep, error) {
 	steps, err := s.buildRepo.GetStepsByBuildID(ctx, id)
 	return steps, mapRepoErr(err)

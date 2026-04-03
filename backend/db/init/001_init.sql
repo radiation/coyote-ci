@@ -1,6 +1,26 @@
+CREATE TABLE IF NOT EXISTS jobs (
+    id UUID PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    repository_url TEXT NOT NULL,
+    default_ref TEXT,
+    default_commit_sha TEXT,
+    push_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    push_branch TEXT,
+    pipeline_yaml TEXT,
+    pipeline_path TEXT,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_project_id ON jobs (project_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs (created_at DESC);
+
 CREATE TABLE IF NOT EXISTS builds (
     id UUID PRIMARY KEY,
     project_id TEXT NOT NULL,
+    job_id UUID REFERENCES jobs(id) ON DELETE SET NULL,
     status TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
     queued_at TIMESTAMPTZ,
@@ -21,27 +41,9 @@ CREATE TABLE IF NOT EXISTS builds (
 );
 
 CREATE INDEX IF NOT EXISTS idx_builds_project_id ON builds (project_id);
+CREATE INDEX IF NOT EXISTS idx_builds_job_id ON builds (job_id);
 CREATE INDEX IF NOT EXISTS idx_builds_created_at ON builds (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_builds_rerun_of_build_id ON builds (rerun_of_build_id);
-
-CREATE TABLE IF NOT EXISTS jobs (
-    id UUID PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    repository_url TEXT NOT NULL,
-    default_ref TEXT,
-    default_commit_sha TEXT,
-    push_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-    push_branch TEXT,
-    pipeline_yaml TEXT,
-    pipeline_path TEXT,
-    enabled BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_jobs_project_id ON jobs (project_id);
-CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS build_steps (
     id UUID PRIMARY KEY,

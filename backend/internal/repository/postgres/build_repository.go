@@ -21,8 +21,8 @@ func NewBuildRepository(db *sql.DB) *BuildRepository {
 
 func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domain.Build, error) {
 	const query = `
-		INSERT INTO builds (id, project_id, status, created_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		INSERT INTO builds (id, project_id, job_id, status, created_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`
 
 	if build.CurrentStepIndex < 0 {
@@ -37,6 +37,7 @@ func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domai
 		query,
 		build.ID,
 		build.ProjectID,
+		build.JobID,
 		string(build.Status),
 		build.CreatedAt,
 		build.CurrentStepIndex,
@@ -70,15 +71,15 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 	}()
 
 	const createQuery = `
-		INSERT INTO builds (id, project_id, status, created_at, queued_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha)
-		VALUES ($1, $2, 'queued', $3, COALESCE($4, NOW()), 0, $5, $6, $7, NULL, $8, $9, $10, $11, $12, $13, $14)
+		INSERT INTO builds (id, project_id, job_id, status, created_at, queued_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha)
+		VALUES ($1, $2, $3, 'queued', $4, COALESCE($5, NOW()), 0, $6, $7, $8, NULL, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING ` + buildColumns + `
 	`
 	if build.AttemptNumber <= 0 {
 		build.AttemptNumber = 1
 	}
 
-	build, err = scanBuild(tx.QueryRowContext(ctx, createQuery, build.ID, build.ProjectID, build.CreatedAt, build.QueuedAt, build.AttemptNumber, build.RerunOfBuildID, build.RerunFromStepIdx, build.PipelineConfigYAML, build.PipelineName, build.PipelineSource, build.PipelinePath, build.RepoURL, build.Ref, build.CommitSHA))
+	build, err = scanBuild(tx.QueryRowContext(ctx, createQuery, build.ID, build.ProjectID, build.JobID, build.CreatedAt, build.QueuedAt, build.AttemptNumber, build.RerunOfBuildID, build.RerunFromStepIdx, build.PipelineConfigYAML, build.PipelineName, build.PipelineSource, build.PipelinePath, build.RepoURL, build.Ref, build.CommitSHA))
 	if err != nil {
 		return domain.Build{}, err
 	}
@@ -164,6 +165,40 @@ func (r *BuildRepository) List(ctx context.Context) (builds []domain.Build, err 
 	`
 
 	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	builds = make([]domain.Build, 0)
+	for rows.Next() {
+		build, err := scanBuildList(rows)
+		if err != nil {
+			return nil, err
+		}
+		builds = append(builds, build)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return builds, nil
+}
+
+func (r *BuildRepository) ListByJobID(ctx context.Context, jobID string) (builds []domain.Build, err error) {
+	query := `
+		SELECT ` + buildListColumns + `
+		FROM builds
+		WHERE job_id = $1
+		ORDER BY created_at DESC
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, jobID)
 	if err != nil {
 		return nil, err
 	}

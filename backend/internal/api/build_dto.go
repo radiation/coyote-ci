@@ -100,6 +100,7 @@ type StepLogsEnvelope struct {
 type BuildResponse struct {
 	ID                 string               `json:"id"`
 	ProjectID          string               `json:"project_id"`
+	JobID              *string              `json:"job_id,omitempty"`
 	Status             string               `json:"status"`
 	CreatedAt          string               `json:"created_at"`
 	QueuedAt           *string              `json:"queued_at"`

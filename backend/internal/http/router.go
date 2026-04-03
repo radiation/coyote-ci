@@ -48,6 +48,7 @@ func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandle
 		r.Get("/", jobHandler.ListJobs)
 		r.Get("/{jobID}", jobHandler.GetJob)
 		r.Put("/{jobID}", jobHandler.UpdateJob)
+		r.Get("/{jobID}/builds", jobHandler.ListJobBuilds)
 		r.Post("/{jobID}/run", jobHandler.RunNow)
 	})
 

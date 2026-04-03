@@ -1116,6 +1116,47 @@
                 }
             }
         },
+        "/jobs/{jobID}/builds": {
+            "get": {
+                "description": "Returns builds triggered by a specific job, sorted newest first.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "jobs"
+                ],
+                "summary": "List builds for a job",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "jobID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.BuildListEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/jobs/{jobID}/run": {
             "post": {
                 "description": "Triggers an immediate build for a job.",
@@ -1304,6 +1345,9 @@
                     "type": "string"
                 },
                 "id": {
+                    "type": "string"
+                },
+                "job_id": {
                     "type": "string"
                 },
                 "pipeline_config_yaml": {

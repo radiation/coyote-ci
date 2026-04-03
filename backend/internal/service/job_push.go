@@ -72,6 +72,7 @@ func (s *JobService) TriggerPushEvent(ctx context.Context, input PushEventInput)
 		if job.PipelinePath != nil && strings.TrimSpace(*job.PipelinePath) != "" {
 			build, buildErr = s.buildService.CreateBuildFromRepo(ctx, CreateRepoBuildInput{
 				ProjectID:    job.ProjectID,
+				JobID:        &job.ID,
 				RepoURL:      job.RepositoryURL,
 				Ref:          ref,
 				CommitSHA:    commitSHA,
@@ -80,6 +81,7 @@ func (s *JobService) TriggerPushEvent(ctx context.Context, input PushEventInput)
 		} else {
 			build, buildErr = s.buildService.CreateBuildFromPipeline(ctx, CreatePipelineBuildInput{
 				ProjectID:    job.ProjectID,
+				JobID:        &job.ID,
 				PipelineYAML: job.PipelineYAML,
 				Source: &CreateBuildSourceInput{
 					RepositoryURL: job.RepositoryURL,

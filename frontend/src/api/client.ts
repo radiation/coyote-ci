@@ -167,3 +167,8 @@ export async function runJob(id: string): Promise<Build> {
   const envelope = await postNoBodyJSON<DataEnvelope<Build>>(`/jobs/${encodeURIComponent(id)}/run`);
   return envelope.data;
 }
+
+export async function listBuildsByJob(jobId: string): Promise<Build[]> {
+  const envelope = await fetchJSON<DataEnvelope<BuildListResponse>>(`/jobs/${encodeURIComponent(jobId)}/builds`);
+  return envelope.data.builds;
+}

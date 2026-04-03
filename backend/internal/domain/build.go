@@ -15,6 +15,7 @@ const (
 type Build struct {
 	ID               string
 	ProjectID        string
+	JobID            *string
 	Status           BuildStatus
 	CreatedAt        time.Time
 	QueuedAt         *time.Time

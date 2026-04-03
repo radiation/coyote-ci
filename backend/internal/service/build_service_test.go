@@ -59,6 +59,16 @@ func (r *fakeBuildRepository) List(_ context.Context) ([]domain.Build, error) {
 	return []domain.Build{r.build}, nil
 }
 
+func (r *fakeBuildRepository) ListByJobID(_ context.Context, jobID string) ([]domain.Build, error) {
+	if r.build.ID == "" {
+		return []domain.Build{}, nil
+	}
+	if r.build.JobID != nil && *r.build.JobID == jobID {
+		return []domain.Build{r.build}, nil
+	}
+	return []domain.Build{}, nil
+}
+
 func (r *fakeBuildRepository) GetByID(_ context.Context, _ string) (domain.Build, error) {
 	if r.getErr != nil {
 		return domain.Build{}, r.getErr
