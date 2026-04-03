@@ -7,8 +7,8 @@ export function Layout() {
         <div className="header-row">
           <Link to="/" className="logo">Coyote CI</Link>
           <nav className="main-nav" aria-label="Primary">
-            <Link to="/builds">Builds</Link>
             <Link to="/jobs">Jobs</Link>
+            <Link to="/builds">Build Attempts</Link>
           </nav>
         </div>
       </header>

@@ -217,11 +217,15 @@ definitions:
     type: object
   api.CreateJobRequest:
     properties:
+      default_commit_sha:
+        type: string
       default_ref:
         type: string
       enabled:
         type: boolean
       name:
+        type: string
+      pipeline_path:
         type: string
       pipeline_yaml:
         type: string
@@ -381,6 +385,8 @@ definitions:
     properties:
       created_at:
         type: string
+      default_commit_sha:
+        type: string
       default_ref:
         type: string
       enabled:
@@ -388,6 +394,8 @@ definitions:
       id:
         type: string
       name:
+        type: string
+      pipeline_path:
         type: string
       pipeline_yaml:
         type: string
@@ -518,11 +526,15 @@ definitions:
     type: object
   api.UpdateJobRequest:
     properties:
+      default_commit_sha:
+        type: string
       default_ref:
         type: string
       enabled:
         type: boolean
       name:
+        type: string
+      pipeline_path:
         type: string
       pipeline_yaml:
         type: string

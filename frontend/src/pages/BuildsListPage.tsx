@@ -27,6 +27,7 @@ export function BuildsListPage() {
   const [pipelineYAML, setPipelineYAML] = useState(PIPELINE_YAML_EXAMPLE);
   const [repoURL, setRepoURL] = useState('');
   const [repoRef, setRepoRef] = useState('main');
+  const [repoCommitSHA, setRepoCommitSHA] = useState('');
   const [repoPipelinePath, setRepoPipelinePath] = useState('');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -100,17 +101,20 @@ export function BuildsListPage() {
       targetProjectID,
       targetRepoURL,
       targetRef,
+      targetCommitSHA,
       targetPipelinePath,
     }: {
       targetProjectID: string;
       targetRepoURL: string;
-      targetRef: string;
+      targetRef?: string;
+      targetCommitSHA?: string;
       targetPipelinePath?: string;
     }) => {
       return createRepoBuild({
         project_id: targetProjectID,
         repo_url: targetRepoURL,
-        ref: targetRef,
+        ...(targetRef ? { ref: targetRef } : {}),
+        ...(targetCommitSHA ? { commit_sha: targetCommitSHA } : {}),
         ...(targetPipelinePath ? { pipeline_path: targetPipelinePath } : {}),
       });
     },
@@ -150,20 +154,22 @@ export function BuildsListPage() {
     if (template === 'repo') {
       const trimmedRepoURL = repoURL.trim();
       const trimmedRef = repoRef.trim();
+      const trimmedCommitSHA = repoCommitSHA.trim();
       const trimmedPipelinePath = repoPipelinePath.trim();
       if (!trimmedRepoURL) {
         setErrorMessage('Repository URL is required.');
         return;
       }
-      if (!trimmedRef) {
-        setErrorMessage('Ref is required.');
+      if (!trimmedRef && !trimmedCommitSHA) {
+        setErrorMessage('Either ref or commit SHA is required.');
         return;
       }
 
       repoBuildMutation.mutate({
         targetProjectID: trimmedProjectID,
         targetRepoURL: trimmedRepoURL,
-        targetRef: trimmedRef,
+        ...(trimmedRef ? { targetRef: trimmedRef } : {}),
+        ...(trimmedCommitSHA ? { targetCommitSHA: trimmedCommitSHA } : {}),
         ...(trimmedPipelinePath ? { targetPipelinePath: trimmedPipelinePath } : {}),
       });
       return;
@@ -189,7 +195,8 @@ export function BuildsListPage() {
 
   return (
     <>
-      <h2>Builds</h2>
+      <h2>Build Attempts</h2>
+      <p className="subtle-text">Execution attempts and lineage history for jobs and manual invocations.</p>
       <p className="subtle-text">Last updated: {dataUpdatedAt > 0 ? formatTime(new Date(dataUpdatedAt).toISOString()) : '—'}</p>
 
       <form className="queue-build-form" onSubmit={onQueueBuild}>
@@ -208,12 +215,12 @@ export function BuildsListPage() {
           onChange={(event) => setTemplate(event.target.value as BuildTemplate)}
           disabled={isSubmitting}
         >
+          <option value="repo">repo build (url + ref/commit + path)</option>
+          <option value="pipeline">inline pipeline build (yaml)</option>
           <option value="default">default</option>
           <option value="test">test</option>
           <option value="build">build</option>
           <option value="custom">custom</option>
-          <option value="pipeline">pipeline</option>
-          <option value="repo">repo</option>
         </select>
         {template === 'custom' && (
           <div className="queue-build-custom-input">
@@ -260,6 +267,14 @@ export function BuildsListPage() {
               disabled={isSubmitting}
               placeholder="main"
             />
+            <label htmlFor="repo-commit-sha">Commit SHA</label>
+            <input
+              id="repo-commit-sha"
+              value={repoCommitSHA}
+              onChange={(event) => setRepoCommitSHA(event.target.value)}
+              disabled={isSubmitting}
+              placeholder="Optional commit SHA override"
+            />
             <details>
               <summary>Advanced</summary>
               <div className="queue-build-custom-input">
@@ -274,11 +289,12 @@ export function BuildsListPage() {
                 <p className="subtle-text">Optional path to a pipeline file inside the repository. If omitted, the default pipeline path is used.</p>
               </div>
             </details>
+            <p className="subtle-text">Repo builds call the backend repo endpoint and load pipeline YAML from the repository path above.</p>
             <p className="subtle-text">Public HTTPS repositories are the current expected path unless credentials are separately configured.</p>
           </div>
         )}
         <button type="submit" disabled={isSubmitting}>
-          {isSubmitting ? 'Submitting…' : template === 'pipeline' ? 'Create Pipeline Build' : template === 'repo' ? 'Create Repo Build' : 'Queue Build'}
+          {isSubmitting ? 'Submitting…' : template === 'pipeline' ? 'Create Inline Pipeline Build' : template === 'repo' ? 'Create Repo Build' : 'Queue Build'}
         </button>
       </form>
 

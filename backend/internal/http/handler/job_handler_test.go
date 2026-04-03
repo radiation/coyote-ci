@@ -136,3 +136,23 @@ func TestJobHandler_CreateRejectsInvalidPipeline(t *testing.T) {
 		t.Fatalf("expected error response, got %v", payload)
 	}
 }
+
+func TestJobHandler_CreateAcceptsPipelinePathWithoutInlineYAML(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	h := NewJobHandler(service.NewJobService(jobRepo, service.NewBuildService(buildRepo, nil, nil)))
+
+	body := `{"project_id":"project-1","name":"path-job","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_path":"scenarios/success-basic/coyote.yml"}`
+	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(body))
+	res := httptest.NewRecorder()
+	h.CreateJob(res, req)
+
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, res.Code)
+	}
+
+	data := decodeDataMap(t, res)
+	if data["pipeline_path"] != "scenarios/success-basic/coyote.yml" {
+		t.Fatalf("expected pipeline_path in response, got %v", data["pipeline_path"])
+	}
+}

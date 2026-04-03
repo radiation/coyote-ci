@@ -1505,6 +1505,9 @@
         "api.CreateJobRequest": {
             "type": "object",
             "properties": {
+                "default_commit_sha": {
+                    "type": "string"
+                },
                 "default_ref": {
                     "type": "string"
                 },
@@ -1512,6 +1515,9 @@
                     "type": "boolean"
                 },
                 "name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
                     "type": "string"
                 },
                 "pipeline_yaml": {
@@ -1756,6 +1762,9 @@
                 "created_at": {
                     "type": "string"
                 },
+                "default_commit_sha": {
+                    "type": "string"
+                },
                 "default_ref": {
                     "type": "string"
                 },
@@ -1766,6 +1775,9 @@
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
                     "type": "string"
                 },
                 "pipeline_yaml": {
@@ -1968,6 +1980,9 @@
         "api.UpdateJobRequest": {
             "type": "object",
             "properties": {
+                "default_commit_sha": {
+                    "type": "string"
+                },
                 "default_ref": {
                     "type": "string"
                 },
@@ -1975,6 +1990,9 @@
                     "type": "boolean"
                 },
                 "name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
                     "type": "string"
                 },
                 "pipeline_yaml": {

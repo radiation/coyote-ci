@@ -1509,6 +1509,9 @@ const docTemplate = `{
         "api.CreateJobRequest": {
             "type": "object",
             "properties": {
+                "default_commit_sha": {
+                    "type": "string"
+                },
                 "default_ref": {
                     "type": "string"
                 },
@@ -1516,6 +1519,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
                     "type": "string"
                 },
                 "pipeline_yaml": {
@@ -1760,6 +1766,9 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "default_commit_sha": {
+                    "type": "string"
+                },
                 "default_ref": {
                     "type": "string"
                 },
@@ -1770,6 +1779,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
                     "type": "string"
                 },
                 "pipeline_yaml": {
@@ -1972,6 +1984,9 @@ const docTemplate = `{
         "api.UpdateJobRequest": {
             "type": "object",
             "properties": {
+                "default_commit_sha": {
+                    "type": "string"
+                },
                 "default_ref": {
                     "type": "string"
                 },
@@ -1979,6 +1994,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
                     "type": "string"
                 },
                 "pipeline_yaml": {

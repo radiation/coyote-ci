@@ -40,6 +40,8 @@ export function JobDetailPage() {
       <div className="detail-grid">
         <div><strong>ID</strong><span>{job.id}</span></div>
         <div><strong>Project</strong><span>{job.project_id}</span></div>
+        <div><strong>Default Commit</strong><span>{job.default_commit_sha || '—'}</span></div>
+        <div><strong>Pipeline Path</strong><span>{job.pipeline_path || '—'}</span></div>
         <div><strong>Push Trigger</strong><span>{job.push_enabled ? 'Enabled' : 'Disabled'}</span></div>
         <div><strong>Push Branch</strong><span>{job.push_enabled ? (job.push_branch || 'Any branch') : '—'}</span></div>
         <div><strong>Created</strong><span>{formatTime(job.created_at)}</span></div>
@@ -63,6 +65,8 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
   const [name, setName] = useState(job.name);
   const [repositoryURL, setRepositoryURL] = useState(job.repository_url);
   const [defaultRef, setDefaultRef] = useState(job.default_ref);
+  const [defaultCommitSHA, setDefaultCommitSHA] = useState(job.default_commit_sha ?? '');
+  const [pipelinePath, setPipelinePath] = useState(job.pipeline_path ?? '');
   const [pushEnabled, setPushEnabled] = useState(job.push_enabled);
   const [pushBranch, setPushBranch] = useState(job.push_branch ?? '');
   const [pipelineYAML, setPipelineYAML] = useState(job.pipeline_yaml);
@@ -75,10 +79,12 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
       updateJob(targetID, {
         name: name.trim(),
         repository_url: repositoryURL.trim(),
-        default_ref: defaultRef.trim(),
+        ...(defaultRef.trim() ? { default_ref: defaultRef.trim() } : {}),
+        ...(defaultCommitSHA.trim() ? { default_commit_sha: defaultCommitSHA.trim() } : {}),
         push_enabled: pushEnabled,
         push_branch: pushEnabled ? pushBranch.trim() : '',
-        pipeline_yaml: pipelineYAML.trim(),
+        ...(pipelineYAML.trim() ? { pipeline_yaml: pipelineYAML.trim() } : {}),
+        ...(pipelinePath.trim() ? { pipeline_path: pipelinePath.trim() } : {}),
         enabled,
       }),
     onMutate: () => {
@@ -116,8 +122,16 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    if (!name.trim() || !repositoryURL.trim() || !defaultRef.trim() || !pipelineYAML.trim()) {
-      setErrorMessage('Name, repository URL, default ref, and pipeline YAML are required.');
+    if (!name.trim() || !repositoryURL.trim()) {
+      setErrorMessage('Name and repository URL are required.');
+      return;
+    }
+    if (!defaultRef.trim() && !defaultCommitSHA.trim()) {
+      setErrorMessage('Default ref or default commit SHA is required.');
+      return;
+    }
+    if (!pipelineYAML.trim() && !pipelinePath.trim()) {
+      setErrorMessage('Pipeline YAML or pipeline path is required.');
       return;
     }
 
@@ -154,6 +168,14 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
           disabled={isSubmitting}
         />
 
+        <label htmlFor="job-default-commit-sha">Default Commit SHA</label>
+        <input
+          id="job-default-commit-sha"
+          value={defaultCommitSHA}
+          onChange={(event) => setDefaultCommitSHA(event.target.value)}
+          disabled={isSubmitting}
+        />
+
         <label className="checkbox-label" htmlFor="job-push-enabled">
           <input
             id="job-push-enabled"
@@ -181,6 +203,15 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
           onChange={(event) => setPipelineYAML(event.target.value)}
           rows={14}
           disabled={isSubmitting}
+        />
+
+        <label htmlFor="job-pipeline-path">Pipeline YAML Path</label>
+        <input
+          id="job-pipeline-path"
+          value={pipelinePath}
+          onChange={(event) => setPipelinePath(event.target.value)}
+          disabled={isSubmitting}
+          placeholder=".coyote/pipeline.yml"
         />
 
         <label className="checkbox-label" htmlFor="job-enabled">

@@ -118,7 +118,8 @@ export interface CreatePipelineBuildRequest {
 export interface CreateRepoBuildRequest {
   project_id: string;
   repo_url: string;
-  ref: string;
+  ref?: string;
+  commit_sha?: string;
   pipeline_path?: string;
 }
 

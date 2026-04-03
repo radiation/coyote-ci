@@ -111,7 +111,8 @@ describe('BuildsListPage queue form', () => {
     expect(screen.getByRole('option', { name: 'test' })).toBeTruthy();
     expect(screen.getByRole('option', { name: 'build' })).toBeTruthy();
     expect(screen.getByRole('option', { name: 'custom' })).toBeTruthy();
-    expect(screen.getByRole('option', { name: 'repo' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'repo build (url + ref/commit + path)' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'inline pipeline build (yaml)' })).toBeTruthy();
   });
 
   it('shows custom command input when template is custom', async () => {
@@ -168,7 +169,7 @@ describe('BuildsListPage queue form', () => {
 
     await screen.findByText('No builds yet.');
 
-    expect(screen.getByRole('option', { name: 'pipeline' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'inline pipeline build (yaml)' })).toBeTruthy();
   });
 
   it('shows pipeline YAML textarea when pipeline template is selected', async () => {
@@ -198,8 +199,10 @@ describe('BuildsListPage queue form', () => {
 
     expect(screen.getByLabelText('Repository URL')).toBeTruthy();
     expect(screen.getByLabelText('Ref')).toBeTruthy();
+    expect(screen.getByLabelText('Commit SHA')).toBeTruthy();
     expect(screen.getByDisplayValue('main')).toBeTruthy();
     expect(screen.getByText('Advanced')).toBeTruthy();
+    expect(screen.getByText('Repo builds call the backend repo endpoint and load pipeline YAML from the repository path above.')).toBeTruthy();
     expect(screen.getByText('Public HTTPS repositories are the current expected path unless credentials are separately configured.')).toBeTruthy();
     expect(screen.queryByLabelText('Pipeline YAML')).toBeNull();
     expect(screen.queryByLabelText('Commands')).toBeNull();
@@ -281,7 +284,7 @@ describe('BuildsListPage queue form', () => {
     fireEvent.change(screen.getByLabelText('Pipeline YAML'), {
       target: { value: 'version: 1\nsteps:\n  - name: greet\n    run: echo hi\n' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Pipeline Build' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Inline Pipeline Build' }));
 
     await waitFor(() => {
       expect(mockedCreatePipelineBuild).toHaveBeenCalledWith({
@@ -300,7 +303,7 @@ describe('BuildsListPage queue form', () => {
 
     fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'pipeline' } });
     fireEvent.change(screen.getByLabelText('Pipeline YAML'), { target: { value: '   ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Pipeline Build' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Inline Pipeline Build' }));
 
     expect(screen.getByText('Pipeline YAML is required.')).toBeTruthy();
     expect(mockedCreatePipelineBuild).not.toHaveBeenCalled();
@@ -314,10 +317,58 @@ describe('BuildsListPage queue form', () => {
     await screen.findByText('No builds yet.');
 
     fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'pipeline' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Pipeline Build' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Inline Pipeline Build' }));
 
     await waitFor(() => {
       expect(screen.getByText(/Failed to create pipeline build/)).toBeTruthy();
     });
+  });
+
+  it('submits repo build with commit SHA when provided', async () => {
+    renderPage();
+
+    await screen.findByText('No builds yet.');
+
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'repo' } });
+    fireEvent.change(screen.getByLabelText('Repository URL'), {
+      target: { value: 'https://github.com/org/repo.git' },
+    });
+    fireEvent.change(screen.getByLabelText('Ref'), {
+      target: { value: '' },
+    });
+    fireEvent.change(screen.getByLabelText('Commit SHA'), {
+      target: { value: 'abc123def456' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Repo Build' }));
+
+    await waitFor(() => {
+      expect(mockedCreateRepoBuild).toHaveBeenCalledWith({
+        project_id: 'project-1',
+        repo_url: 'https://github.com/org/repo.git',
+        commit_sha: 'abc123def456',
+      });
+      expect(navigateMock).toHaveBeenCalledWith('/builds/build-repo-1');
+    });
+  });
+
+  it('shows error when both ref and commit SHA are empty for repo builds', async () => {
+    renderPage();
+
+    await screen.findByText('No builds yet.');
+
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'repo' } });
+    fireEvent.change(screen.getByLabelText('Repository URL'), {
+      target: { value: 'https://github.com/org/repo.git' },
+    });
+    fireEvent.change(screen.getByLabelText('Ref'), {
+      target: { value: '   ' },
+    });
+    fireEvent.change(screen.getByLabelText('Commit SHA'), {
+      target: { value: '   ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Repo Build' }));
+
+    expect(screen.getByText('Either ref or commit SHA is required.')).toBeTruthy();
+    expect(mockedCreateRepoBuild).not.toHaveBeenCalled();
   });
 });
