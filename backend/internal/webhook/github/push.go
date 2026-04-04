@@ -9,6 +9,8 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
 
 var ErrUnsupportedEvent = errors.New("unsupported github webhook event")
@@ -19,8 +21,11 @@ type PushEvent struct {
 	RepositoryOwner string
 	RepositoryName  string
 	RepositoryURL   string
+	RawRef          string
 	Ref             string
 	RefType         string
+	RefName         string
+	Deleted         bool
 	CommitSHA       string
 	DeliveryID      string
 	Actor           string
@@ -48,6 +53,7 @@ func ParsePushEvent(headers http.Header, body []byte) (PushEvent, error) {
 	var payload struct {
 		Ref        string `json:"ref"`
 		After      string `json:"after"`
+		Deleted    bool   `json:"deleted"`
 		HeadCommit struct {
 			ID string `json:"id"`
 		} `json:"head_commit"`
@@ -83,24 +89,14 @@ func ParsePushEvent(headers http.Header, body []byte) (PushEvent, error) {
 		repositoryURL = strings.TrimSpace(payload.Repository.URL)
 	}
 
-	ref := strings.TrimSpace(payload.Ref)
-	refType := ""
-	refName := ref
-	if strings.HasPrefix(ref, "refs/heads/") {
-		refType = "branch"
-		refName = strings.TrimPrefix(ref, "refs/heads/")
-	}
-	if strings.HasPrefix(ref, "refs/tags/") {
-		refType = "tag"
-		refName = strings.TrimPrefix(ref, "refs/tags/")
-	}
+	normalizedRef := domain.NormalizeWebhookRef(payload.Ref, payload.Deleted)
 
 	commitSHA := strings.TrimSpace(payload.After)
 	if commitSHA == "" {
 		commitSHA = strings.TrimSpace(payload.HeadCommit.ID)
 	}
 
-	if repositoryOwner == "" || repositoryName == "" || refName == "" || commitSHA == "" {
+	if repositoryOwner == "" || repositoryName == "" || normalizedRef.RefName == "" || (!normalizedRef.Deleted && commitSHA == "") {
 		return PushEvent{}, ErrInvalidPayload
 	}
 
@@ -109,8 +105,11 @@ func ParsePushEvent(headers http.Header, body []byte) (PushEvent, error) {
 		RepositoryOwner: repositoryOwner,
 		RepositoryName:  repositoryName,
 		RepositoryURL:   repositoryURL,
-		Ref:             refName,
-		RefType:         refType,
+		RawRef:          normalizedRef.RawRef,
+		Ref:             normalizedRef.RefName,
+		RefType:         string(normalizedRef.RefType),
+		RefName:         normalizedRef.RefName,
+		Deleted:         normalizedRef.Deleted,
 		CommitSHA:       commitSHA,
 		DeliveryID:      strings.TrimSpace(headers.Get("X-GitHub-Delivery")),
 		Actor:           strings.TrimSpace(payload.Sender.Login),

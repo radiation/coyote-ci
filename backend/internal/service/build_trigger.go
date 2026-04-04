@@ -9,8 +9,11 @@ type CreateBuildTriggerInput struct {
 	RepositoryOwner string
 	RepositoryName  string
 	RepositoryURL   string
+	RawRef          string
 	Ref             string
 	RefType         string
+	RefName         string
+	Deleted         *bool
 	CommitSHA       string
 	DeliveryID      string
 	Actor           string
@@ -28,8 +31,11 @@ func toDomainBuildTrigger(input *CreateBuildTriggerInput) domain.BuildTrigger {
 		RepositoryOwner: optionalStringPtr(input.RepositoryOwner),
 		RepositoryName:  optionalStringPtr(input.RepositoryName),
 		RepositoryURL:   optionalStringPtr(input.RepositoryURL),
+		RawRef:          optionalStringPtr(input.RawRef),
 		Ref:             optionalStringPtr(input.Ref),
 		RefType:         optionalStringPtr(input.RefType),
+		RefName:         optionalStringPtr(input.RefName),
+		Deleted:         input.Deleted,
 		CommitSHA:       optionalStringPtr(input.CommitSHA),
 		DeliveryID:      optionalStringPtr(input.DeliveryID),
 		Actor:           optionalStringPtr(input.Actor),

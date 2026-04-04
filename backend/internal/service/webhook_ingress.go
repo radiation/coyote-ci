@@ -119,7 +119,7 @@ func (s *WebhookIngressService) ProcessVerifiedEvent(ctx context.Context, delive
 	}
 
 	if triggerResult.MatchedJobs == 0 {
-		ignored, ignoredErr := s.updateDelivery(ctx, verified, domain.WebhookDeliveryStatusIgnoredNoMatch, nil)
+		ignored, ignoredErr := s.updateDelivery(ctx, verified, domain.WebhookDeliveryStatusIgnoredNoMatch, triggerResult.NoMatchReason)
 		if ignoredErr != nil {
 			return WebhookIngressResult{}, ignoredErr
 		}
@@ -202,7 +202,11 @@ func applyTriggerMetadata(delivery domain.WebhookDelivery, trigger WebhookTrigge
 	delivery.EventType = optionalString(strings.ToLower(strings.TrimSpace(trigger.EventType)))
 	delivery.RepositoryOwner = optionalString(trigger.RepositoryOwner)
 	delivery.RepositoryName = optionalString(trigger.RepositoryName)
+	delivery.RawRef = optionalString(trigger.RawRef)
+	delivery.RefType = optionalString(trigger.RefType)
+	delivery.RefName = optionalString(trigger.RefName)
 	delivery.TriggerRef = optionalString(trigger.Ref)
+	delivery.Deleted = &trigger.Deleted
 	delivery.CommitSHA = optionalString(trigger.CommitSHA)
 	delivery.Actor = optionalString(trigger.Actor)
 	return delivery

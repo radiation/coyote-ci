@@ -20,47 +20,53 @@ func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandle
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
+	// Keep bare health endpoints for simple infra probes.
 	r.Get("/health", handler.Health)
 	r.Get("/healthz", handler.Health)
 
-	r.Route("/builds", func(r chi.Router) {
-		r.Post("/", buildHandler.CreateBuild)
-		r.Post("/pipeline", buildHandler.CreatePipelineBuild)
-		r.Post("/repo", buildHandler.CreateRepoBuild)
-		r.Post("/jobs/{jobID}/retry", buildHandler.RetryJob)
-		r.Get("/", buildHandler.ListBuilds)
-		r.Get("/{buildID}", buildHandler.GetBuild)
-		r.Post("/{buildID}/rerun", buildHandler.RerunBuildFromStep)
-		r.Get("/{buildID}/steps", buildHandler.GetBuildSteps)
-		r.Get("/{buildID}/steps/{stepIndex}/logs", buildHandler.GetBuildStepLogs)
-		r.Get("/{buildID}/steps/{stepIndex}/logs/stream", buildHandler.StreamBuildStepLogs)
-		r.Get("/{buildID}/logs", buildHandler.GetBuildLogs)
-		r.Get("/{buildID}/artifacts", buildHandler.GetBuildArtifacts)
-		r.Get("/{buildID}/artifacts/{artifactID}/download", buildHandler.DownloadBuildArtifact)
-		r.Post("/{buildID}/queue", buildHandler.QueueBuild)
-		r.Post("/{buildID}/start", buildHandler.StartBuild)
-		r.Post("/{buildID}/complete", buildHandler.CompleteBuild)
-		r.Post("/{buildID}/fail", buildHandler.FailBuild)
-	})
+	r.Route("/api", func(r chi.Router) {
+		r.Get("/health", handler.Health)
+		r.Get("/healthz", handler.Health)
 
-	r.Route("/jobs", func(r chi.Router) {
-		r.Post("/", jobHandler.CreateJob)
-		r.Get("/", jobHandler.ListJobs)
-		r.Get("/{jobID}", jobHandler.GetJob)
-		r.Put("/{jobID}", jobHandler.UpdateJob)
-		r.Get("/{jobID}/builds", jobHandler.ListJobBuilds)
-		r.Post("/{jobID}/run", jobHandler.RunNow)
-	})
+		r.Route("/builds", func(r chi.Router) {
+			r.Post("/", buildHandler.CreateBuild)
+			r.Post("/pipeline", buildHandler.CreatePipelineBuild)
+			r.Post("/repo", buildHandler.CreateRepoBuild)
+			r.Post("/jobs/{jobID}/retry", buildHandler.RetryJob)
+			r.Get("/", buildHandler.ListBuilds)
+			r.Get("/{buildID}", buildHandler.GetBuild)
+			r.Post("/{buildID}/rerun", buildHandler.RerunBuildFromStep)
+			r.Get("/{buildID}/steps", buildHandler.GetBuildSteps)
+			r.Get("/{buildID}/steps/{stepIndex}/logs", buildHandler.GetBuildStepLogs)
+			r.Get("/{buildID}/steps/{stepIndex}/logs/stream", buildHandler.StreamBuildStepLogs)
+			r.Get("/{buildID}/logs", buildHandler.GetBuildLogs)
+			r.Get("/{buildID}/artifacts", buildHandler.GetBuildArtifacts)
+			r.Get("/{buildID}/artifacts/{artifactID}/download", buildHandler.DownloadBuildArtifact)
+			r.Post("/{buildID}/queue", buildHandler.QueueBuild)
+			r.Post("/{buildID}/start", buildHandler.StartBuild)
+			r.Post("/{buildID}/complete", buildHandler.CompleteBuild)
+			r.Post("/{buildID}/fail", buildHandler.FailBuild)
+		})
 
-	r.Route("/events", func(r chi.Router) {
-		if pushEventSecret != "" {
-			r.Use(requireSecret(pushEventSecret))
-		}
-		r.Post("/push", eventHandler.IngestPushEvent)
-	})
+		r.Route("/jobs", func(r chi.Router) {
+			r.Post("/", jobHandler.CreateJob)
+			r.Get("/", jobHandler.ListJobs)
+			r.Get("/{jobID}", jobHandler.GetJob)
+			r.Put("/{jobID}", jobHandler.UpdateJob)
+			r.Get("/{jobID}/builds", jobHandler.ListJobBuilds)
+			r.Post("/{jobID}/run", jobHandler.RunNow)
+		})
 
-	r.Route("/api/webhooks", func(r chi.Router) {
-		r.Post("/github", eventHandler.IngestGitHubWebhook)
+		r.Route("/events", func(r chi.Router) {
+			if pushEventSecret != "" {
+				r.Use(requireSecret(pushEventSecret))
+			}
+			r.Post("/push", eventHandler.IngestPushEvent)
+		})
+
+		r.Route("/webhooks", func(r chi.Router) {
+			r.Post("/github", eventHandler.IngestGitHubWebhook)
+		})
 	})
 
 	return r

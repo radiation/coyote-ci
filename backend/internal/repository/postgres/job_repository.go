@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -20,10 +21,19 @@ func NewJobRepository(db *sql.DB) *JobRepository {
 
 func (r *JobRepository) Create(ctx context.Context, job domain.Job) (domain.Job, error) {
 	const query = `
-		INSERT INTO jobs (id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, pipeline_yaml, pipeline_path, enabled, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		RETURNING id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		INSERT INTO jobs (id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, pipeline_yaml, pipeline_path, enabled, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16)
+		RETURNING id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 	`
+
+	branchAllowlistJSON, err := json.Marshal(job.BranchAllowlist)
+	if err != nil {
+		return domain.Job{}, err
+	}
+	tagAllowlistJSON, err := json.Marshal(job.TagAllowlist)
+	if err != nil {
+		return domain.Job{}, err
+	}
 
 	return scanJob(r.db.QueryRowContext(ctx, query,
 		job.ID,
@@ -34,6 +44,9 @@ func (r *JobRepository) Create(ctx context.Context, job domain.Job) (domain.Job,
 		job.DefaultCommitSHA,
 		job.PushEnabled,
 		job.PushBranch,
+		nilIfBlank(string(job.TriggerMode)),
+		string(branchAllowlistJSON),
+		string(tagAllowlistJSON),
 		nilIfBlank(job.PipelineYAML),
 		job.PipelinePath,
 		job.Enabled,
@@ -44,7 +57,7 @@ func (r *JobRepository) Create(ctx context.Context, job domain.Job) (domain.Job,
 
 func (r *JobRepository) List(ctx context.Context) (jobs []domain.Job, err error) {
 	const query = `
-		SELECT id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		SELECT id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		ORDER BY created_at DESC
 	`
@@ -84,7 +97,7 @@ func (r *JobRepository) ListPushEnabledByRepository(ctx context.Context, reposit
 	// Normalize the stored repository_url in SQL the same way normalizeRepositoryURLForMatch does
 	// in Go: lowercase, trim whitespace, strip trailing '/', strip trailing '.git'.
 	const query = `
-		SELECT id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		SELECT id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		WHERE enabled = TRUE
 		  AND push_enabled = TRUE
@@ -130,7 +143,7 @@ func normalizeRepositoryURLForMatch(value string) string {
 
 func (r *JobRepository) GetByID(ctx context.Context, id string) (domain.Job, error) {
 	const query = `
-		SELECT id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		SELECT id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		WHERE id = $1
 	`
@@ -156,13 +169,25 @@ func (r *JobRepository) Update(ctx context.Context, job domain.Job) (domain.Job,
 			default_commit_sha = $6,
 			push_enabled = $7,
 			push_branch = $8,
-			pipeline_yaml = $9,
-			pipeline_path = $10,
-			enabled = $11,
-			updated_at = $12
+			trigger_mode = $9,
+			branch_allowlist = $10::jsonb,
+			tag_allowlist = $11::jsonb,
+			pipeline_yaml = $12,
+			pipeline_path = $13,
+			enabled = $14,
+			updated_at = $15
 		WHERE id = $1
-		RETURNING id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		RETURNING id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 	`
+
+	branchAllowlistJSON, err := json.Marshal(job.BranchAllowlist)
+	if err != nil {
+		return domain.Job{}, err
+	}
+	tagAllowlistJSON, err := json.Marshal(job.TagAllowlist)
+	if err != nil {
+		return domain.Job{}, err
+	}
 
 	updated, err := scanJob(r.db.QueryRowContext(ctx, query,
 		job.ID,
@@ -173,6 +198,9 @@ func (r *JobRepository) Update(ctx context.Context, job domain.Job) (domain.Job,
 		job.DefaultCommitSHA,
 		job.PushEnabled,
 		job.PushBranch,
+		nilIfBlank(string(job.TriggerMode)),
+		string(branchAllowlistJSON),
+		string(tagAllowlistJSON),
 		nilIfBlank(job.PipelineYAML),
 		job.PipelinePath,
 		job.Enabled,
@@ -192,6 +220,9 @@ func scanJob(scanner rowScanner) (domain.Job, error) {
 	var job domain.Job
 	var defaultRef sql.NullString
 	var defaultCommitSHA sql.NullString
+	var triggerMode sql.NullString
+	var branchAllowlistRaw []byte
+	var tagAllowlistRaw []byte
 	var pipelineYAML sql.NullString
 	var pipelinePath sql.NullString
 	err := scanner.Scan(
@@ -203,6 +234,9 @@ func scanJob(scanner rowScanner) (domain.Job, error) {
 		&defaultCommitSHA,
 		&job.PushEnabled,
 		&job.PushBranch,
+		&triggerMode,
+		&branchAllowlistRaw,
+		&tagAllowlistRaw,
 		&pipelineYAML,
 		&pipelinePath,
 		&job.Enabled,
@@ -218,6 +252,19 @@ func scanJob(scanner rowScanner) (domain.Job, error) {
 	if defaultCommitSHA.Valid {
 		v := defaultCommitSHA.String
 		job.DefaultCommitSHA = &v
+	}
+	if triggerMode.Valid {
+		job.TriggerMode = domain.JobTriggerMode(strings.TrimSpace(triggerMode.String))
+	}
+	if len(branchAllowlistRaw) > 0 {
+		if err := json.Unmarshal(branchAllowlistRaw, &job.BranchAllowlist); err != nil {
+			return domain.Job{}, err
+		}
+	}
+	if len(tagAllowlistRaw) > 0 {
+		if err := json.Unmarshal(tagAllowlistRaw, &job.TagAllowlist); err != nil {
+			return domain.Job{}, err
+		}
 	}
 	if pipelineYAML.Valid {
 		job.PipelineYAML = pipelineYAML.String

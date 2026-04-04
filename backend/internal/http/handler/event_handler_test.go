@@ -230,6 +230,47 @@ func TestEventHandler_IngestGitHubWebhook_NoMatchRecorded(t *testing.T) {
 	}
 }
 
+func TestEventHandler_IngestGitHubWebhook_DeletePushIgnored(t *testing.T) {
+	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
+	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
+	webhookSvc := service.NewWebhookIngressService(deliveryRepo, jobSvc)
+	h := NewEventHandler(jobSvc, webhookSvc, observability.NewNoopWebhookIngressMetrics(), "secret")
+
+	body := []byte(`{
+		"ref":"refs/heads/main",
+		"deleted":true,
+		"after":"",
+		"repository":{
+			"name":"backend",
+			"html_url":"https://github.com/example/backend",
+			"owner":{"login":"example"}
+		},
+		"sender":{"login":"octocat"}
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "push")
+	req.Header.Set("X-GitHub-Delivery", "delivery-delete")
+	req.Header.Set("X-Hub-Signature-256", githubTestSignature("secret", body))
+
+	res := httptest.NewRecorder()
+	h.IngestGitHubWebhook(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, res.Code)
+	}
+
+	delivery, err := deliveryRepo.GetByProviderDeliveryID(context.Background(), "github", "delivery-delete")
+	if err != nil {
+		t.Fatalf("expected ledger record, got %v", err)
+	}
+	if delivery.Status != domain.WebhookDeliveryStatusIgnoredNoMatch {
+		t.Fatalf("expected ignored_no_match status, got %q", delivery.Status)
+	}
+	if delivery.Reason == nil || *delivery.Reason != string(service.WebhookTriggerDecisionDeletedRef) {
+		t.Fatalf("expected reason deleted_ref, got %v", delivery.Reason)
+	}
+}
+
 func TestEventHandler_IngestGitHubWebhook_FailedProcessingRecorded(t *testing.T) {
 	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
 	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), nil)

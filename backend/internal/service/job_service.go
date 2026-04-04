@@ -20,6 +20,7 @@ var ErrJobProjectIDRequired = errors.New("job project_id is required")
 var ErrJobRepositoryURLRequired = errors.New("job repository_url is required")
 var ErrJobSourceTargetRequired = errors.New("job default_ref or default_commit_sha is required")
 var ErrJobPipelineDefinitionRequired = errors.New("job pipeline_yaml or pipeline_path is required")
+var ErrJobInvalidTriggerMode = errors.New("job trigger_mode must be one of branches, tags, branches_and_tags")
 var ErrPushEventRepositoryURLRequired = errors.New("push event repository_url is required")
 var ErrPushEventRefRequired = errors.New("push event ref is required")
 var ErrPushEventCommitSHARequired = errors.New("push event commit_sha is required")
@@ -43,6 +44,9 @@ type CreateJobInput struct {
 	DefaultCommitSHA string
 	PushEnabled      *bool
 	PushBranch       *string
+	TriggerMode      *string
+	BranchAllowlist  []string
+	TagAllowlist     []string
 	PipelineYAML     string
 	PipelinePath     string
 	Enabled          *bool
@@ -55,6 +59,9 @@ type UpdateJobInput struct {
 	DefaultCommitSHA *string
 	PushEnabled      *bool
 	PushBranch       *string
+	TriggerMode      *string
+	BranchAllowlist  *[]string
+	TagAllowlist     *[]string
 	PipelineYAML     *string
 	PipelinePath     *string
 	Enabled          *bool
@@ -103,6 +110,13 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 		}
 	}
 
+	triggerMode := normalizeJobTriggerMode(domain.JobTriggerMode(readStringPtr(normalized.TriggerMode)))
+	branchAllowlist := normalizeBranchAllowlist(normalized.BranchAllowlist)
+	if len(branchAllowlist) == 0 && pushBranch != nil {
+		branchAllowlist = []string{*pushBranch}
+	}
+	tagAllowlist := normalizeTagAllowlist(normalized.TagAllowlist)
+
 	now := time.Now().UTC()
 	job := domain.Job{
 		ID:               uuid.NewString(),
@@ -113,6 +127,9 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 		DefaultCommitSHA: defaultCommitSHA,
 		PushEnabled:      pushEnabled,
 		PushBranch:       pushBranch,
+		TriggerMode:      triggerMode,
+		BranchAllowlist:  branchAllowlist,
+		TagAllowlist:     tagAllowlist,
 		PipelineYAML:     normalized.PipelineYAML,
 		PipelinePath:     pipelinePath,
 		Enabled:          enabled,
@@ -184,10 +201,26 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 			job.PushBranch = &branch
 		}
 	}
+	if input.TriggerMode != nil {
+		if !isValidTriggerMode(*input.TriggerMode) {
+			return domain.Job{}, ErrJobInvalidTriggerMode
+		}
+		mode := normalizeJobTriggerMode(domain.JobTriggerMode(strings.TrimSpace(*input.TriggerMode)))
+		job.TriggerMode = mode
+	}
+	if input.BranchAllowlist != nil {
+		job.BranchAllowlist = normalizeBranchAllowlist(*input.BranchAllowlist)
+	}
+	if input.TagAllowlist != nil {
+		job.TagAllowlist = normalizeTagAllowlist(*input.TagAllowlist)
+	}
 	// If push has been explicitly disabled and no new push branch was provided,
 	// clear any existing branch filter to avoid leaving stale configuration.
 	if input.PushEnabled != nil && !*input.PushEnabled && input.PushBranch == nil {
 		job.PushBranch = nil
+	}
+	if len(job.BranchAllowlist) == 0 && job.PushBranch != nil {
+		job.BranchAllowlist = []string{*job.PushBranch}
 	}
 	if input.PipelineYAML != nil {
 		job.PipelineYAML = strings.TrimSpace(*input.PipelineYAML)
@@ -281,6 +314,12 @@ func normalizeCreateJobInput(input CreateJobInput) (CreateJobInput, error) {
 		branch := normalizePushRef(*normalized.PushBranch)
 		normalized.PushBranch = &branch
 	}
+	if normalized.TriggerMode != nil {
+		mode := strings.ToLower(strings.TrimSpace(*normalized.TriggerMode))
+		normalized.TriggerMode = &mode
+	}
+	normalized.BranchAllowlist = normalizeBranchAllowlist(normalized.BranchAllowlist)
+	normalized.TagAllowlist = normalizeTagAllowlist(normalized.TagAllowlist)
 	normalized.PipelineYAML = strings.TrimSpace(normalized.PipelineYAML)
 	normalized.PipelinePath = strings.TrimSpace(normalized.PipelinePath)
 
@@ -307,6 +346,11 @@ func validateCreateJobRequiredFields(input CreateJobInput) error {
 	if input.PipelineYAML == "" && input.PipelinePath == "" {
 		return ErrJobPipelineDefinitionRequired
 	}
+	if input.TriggerMode != nil {
+		if !isValidTriggerMode(*input.TriggerMode) {
+			return ErrJobInvalidTriggerMode
+		}
+	}
 
 	return nil
 }
@@ -318,6 +362,7 @@ func validateJobRequiredFields(job domain.Job) error {
 		RepositoryURL:    strings.TrimSpace(job.RepositoryURL),
 		DefaultRef:       strings.TrimSpace(job.DefaultRef),
 		DefaultCommitSHA: strings.TrimSpace(readStringPtr(job.DefaultCommitSHA)),
+		TriggerMode:      optionalTrimmedStringPtr(string(job.TriggerMode)),
 		PipelineYAML:     strings.TrimSpace(job.PipelineYAML),
 		PipelinePath:     strings.TrimSpace(readStringPtr(job.PipelinePath)),
 	})
@@ -349,4 +394,61 @@ func readStringPtr(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func optionalTrimmedStringPtr(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func normalizeBranchAllowlist(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, item := range values {
+		branch := normalizePushRef(item)
+		if branch == "" || seen[branch] {
+			continue
+		}
+		seen[branch] = true
+		normalized = append(normalized, branch)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func normalizeTagAllowlist(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, item := range values {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(item, "refs/tags/"))
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		normalized = append(normalized, trimmed)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func isValidTriggerMode(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", string(domain.JobTriggerModeBranches), string(domain.JobTriggerModeTags), string(domain.JobTriggerModeBranchesAndTags):
+		return true
+	default:
+		return false
+	}
 }

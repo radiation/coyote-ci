@@ -22,7 +22,11 @@ type WebhookDelivery struct {
 	EventType       *string
 	RepositoryOwner *string
 	RepositoryName  *string
+	RawRef          *string
+	RefType         *string
+	RefName         *string
 	TriggerRef      *string
+	Deleted         *bool
 	CommitSHA       *string
 	Actor           *string
 	Status          WebhookDeliveryStatus

@@ -15,56 +15,6 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/api/webhooks/github": {
-            "post": {
-                "description": "Verifies a GitHub webhook signature and triggers builds for matching jobs on push events.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "webhooks"
-                ],
-                "summary": "Ingest GitHub webhook",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.PushEventEnvelope"
-                        }
-                    },
-                    "202": {
-                        "description": "Accepted",
-                        "schema": {
-                            "$ref": "#/definitions/api.PushEventEnvelope"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.ErrorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/api.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/api.ErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "$ref": "#/definitions/api.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/builds": {
             "get": {
                 "description": "Lists all builds sorted by newest first.",
@@ -1263,6 +1213,56 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/webhooks/github": {
+            "post": {
+                "description": "Verifies a GitHub webhook signature and triggers builds for matching jobs on push events.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "webhooks"
+                ],
+                "summary": "Ingest GitHub webhook",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.PushEventEnvelope"
+                        }
+                    },
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/api.PushEventEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -1624,6 +1624,12 @@ const docTemplate = `{
         "api.CreateJobRequest": {
             "type": "object",
             "properties": {
+                "branch_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "default_commit_sha": {
                     "type": "string"
                 },
@@ -1652,6 +1658,15 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "repository_url": {
+                    "type": "string"
+                },
+                "tag_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "trigger_mode": {
                     "type": "string"
                 }
             }
@@ -1875,6 +1890,12 @@ const docTemplate = `{
         "api.JobResponse": {
             "type": "object",
             "properties": {
+                "branch_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -1909,6 +1930,15 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "repository_url": {
+                    "type": "string"
+                },
+                "tag_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "trigger_mode": {
                     "type": "string"
                 },
                 "updated_at": {
@@ -2099,6 +2129,12 @@ const docTemplate = `{
         "api.UpdateJobRequest": {
             "type": "object",
             "properties": {
+                "branch_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "default_commit_sha": {
                     "type": "string"
                 },
@@ -2125,6 +2161,15 @@ const docTemplate = `{
                 },
                 "repository_url": {
                     "type": "string"
+                },
+                "tag_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "trigger_mode": {
+                    "type": "string"
                 }
             }
         }
@@ -2135,7 +2180,7 @@ const docTemplate = `{
 var SwaggerInfo = &swag.Spec{
 	Version:          "0.1",
 	Host:             "",
-	BasePath:         "/",
+	BasePath:         "/api",
 	Schemes:          []string{"http"},
 	Title:            "Coyote CI API",
 	Description:      "HTTP API for Coyote CI control-plane workflows.",

@@ -61,7 +61,7 @@ Start Postgres + backend + worker:
 docker compose up --build
 ```
 
-Backend API is exposed on http://localhost:8080.
+Backend API is exposed on http://localhost:8080/api.
 
 ## Queue Fixture Scenarios (Repo Pipeline Path)
 
@@ -79,7 +79,7 @@ PROJECT_ID="fixtures"
 Queue each scenario:
 
 ```bash
-curl -sS -X POST "$API_URL/builds/repo" \
+curl -sS -X POST "$API_URL/api/builds/repo" \
 	-H "Content-Type: application/json" \
 	-d '{
 		"project_id": "'"$PROJECT_ID"'",
@@ -90,7 +90,7 @@ curl -sS -X POST "$API_URL/builds/repo" \
 ```
 
 ```bash
-curl -sS -X POST "$API_URL/builds/repo" \
+curl -sS -X POST "$API_URL/api/builds/repo" \
 	-H "Content-Type: application/json" \
 	-d '{
 		"project_id": "'"$PROJECT_ID"'",
@@ -101,7 +101,7 @@ curl -sS -X POST "$API_URL/builds/repo" \
 ```
 
 ```bash
-curl -sS -X POST "$API_URL/builds/repo" \
+curl -sS -X POST "$API_URL/api/builds/repo" \
 	-H "Content-Type: application/json" \
 	-d '{
 		"project_id": "'"$PROJECT_ID"'",
@@ -112,7 +112,7 @@ curl -sS -X POST "$API_URL/builds/repo" \
 ```
 
 ```bash
-curl -sS -X POST "$API_URL/builds/repo" \
+curl -sS -X POST "$API_URL/api/builds/repo" \
 	-H "Content-Type: application/json" \
 	-d '{
 		"project_id": "'"$PROJECT_ID"'",
@@ -123,7 +123,7 @@ curl -sS -X POST "$API_URL/builds/repo" \
 ```
 
 ```bash
-curl -sS -X POST "$API_URL/builds/repo" \
+curl -sS -X POST "$API_URL/api/builds/repo" \
 	-H "Content-Type: application/json" \
 	-d '{
 		"project_id": "'"$PROJECT_ID"'",

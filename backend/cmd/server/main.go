@@ -22,12 +22,12 @@ import (
 // @title Coyote CI API
 // @version 0.1
 // @description HTTP API for Coyote CI control-plane workflows.
-// @BasePath /
+// @BasePath /api
 // @schemes http
 
 func main() {
 	cfg := config.Load()
-	docs.SwaggerInfo.BasePath = "/"
+	docs.SwaggerInfo.BasePath = "/api"
 
 	db, err := platformdb.Open(cfg.DatabaseURL())
 	if err != nil {

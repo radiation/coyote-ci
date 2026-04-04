@@ -92,7 +92,7 @@ func (h *EventHandler) IngestPushEvent(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} api.ErrorResponse
 // @Failure 503 {object} api.ErrorResponse
 // @Failure 500 {object} api.ErrorResponse
-// @Router /api/webhooks/github [post]
+// @Router /webhooks/github [post]
 func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	startedAt := time.Now()
 	provider := "github"
@@ -184,8 +184,11 @@ func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Reques
 		RepositoryOwner: pushEvent.RepositoryOwner,
 		RepositoryName:  pushEvent.RepositoryName,
 		RepositoryURL:   pushEvent.RepositoryURL,
+		RawRef:          pushEvent.RawRef,
 		Ref:             pushEvent.Ref,
 		RefType:         pushEvent.RefType,
+		RefName:         pushEvent.RefName,
+		Deleted:         pushEvent.Deleted,
 		CommitSHA:       pushEvent.CommitSHA,
 		DeliveryID:      pushEvent.DeliveryID,
 		Actor:           pushEvent.Actor,

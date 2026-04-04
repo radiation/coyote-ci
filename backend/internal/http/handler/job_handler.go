@@ -49,6 +49,9 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		DefaultCommitSHA: req.DefaultCommitSHA,
 		PushEnabled:      req.PushEnabled,
 		PushBranch:       req.PushBranch,
+		TriggerMode:      req.TriggerMode,
+		BranchAllowlist:  req.BranchAllowlist,
+		TagAllowlist:     req.TagAllowlist,
 		PipelineYAML:     req.PipelineYAML,
 		PipelinePath:     req.PipelinePath,
 		Enabled:          req.Enabled,
@@ -144,6 +147,9 @@ func (h *JobHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 		DefaultCommitSHA: req.DefaultCommitSHA,
 		PushEnabled:      req.PushEnabled,
 		PushBranch:       req.PushBranch,
+		TriggerMode:      req.TriggerMode,
+		BranchAllowlist:  req.BranchAllowlist,
+		TagAllowlist:     req.TagAllowlist,
 		PipelineYAML:     req.PipelineYAML,
 		PipelinePath:     req.PipelinePath,
 		Enabled:          req.Enabled,
@@ -246,6 +252,7 @@ func isBadRequestError(err error) bool {
 		errors.Is(err, service.ErrJobProjectIDRequired) ||
 		errors.Is(err, service.ErrJobRepositoryURLRequired) ||
 		errors.Is(err, service.ErrJobSourceTargetRequired) ||
+		errors.Is(err, service.ErrJobInvalidTriggerMode) ||
 		errors.Is(err, service.ErrJobPipelineDefinitionRequired) ||
 		errors.Is(err, service.ErrPushEventRepositoryURLRequired) ||
 		errors.Is(err, service.ErrPushEventRefRequired) ||
@@ -253,6 +260,11 @@ func isBadRequestError(err error) bool {
 }
 
 func toJobResponse(job domain.Job) api.JobResponse {
+	triggerMode := string(job.TriggerMode)
+	if strings.TrimSpace(triggerMode) == "" {
+		triggerMode = string(domain.JobTriggerModeBranches)
+	}
+
 	return api.JobResponse{
 		ID:               job.ID,
 		ProjectID:        job.ProjectID,
@@ -262,6 +274,9 @@ func toJobResponse(job domain.Job) api.JobResponse {
 		DefaultCommitSHA: job.DefaultCommitSHA,
 		PushEnabled:      job.PushEnabled,
 		PushBranch:       job.PushBranch,
+		TriggerMode:      triggerMode,
+		BranchAllowlist:  job.BranchAllowlist,
+		TagAllowlist:     job.TagAllowlist,
 		PipelineYAML:     job.PipelineYAML,
 		PipelinePath:     job.PipelinePath,
 		Enabled:          job.Enabled,

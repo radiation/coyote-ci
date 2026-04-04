@@ -62,7 +62,7 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 	eh := handler.NewEventHandler(jobSvc, service.NewWebhookIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 	r := NewRouter(h, jh, eh, "")
 
-	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
 	createRes := httptest.NewRecorder()
 	r.ServeHTTP(createRes, createReq)
 	if createRes.Code != http.StatusCreated {
@@ -88,16 +88,16 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 		path       string
 		statusCode int
 	}{
-		{name: "list builds", method: http.MethodGet, path: "/builds/", statusCode: http.StatusOK},
-		{name: "get build", method: http.MethodGet, path: "/builds/" + id, statusCode: http.StatusOK},
-		{name: "build steps", method: http.MethodGet, path: "/builds/" + id + "/steps", statusCode: http.StatusOK},
-		{name: "build step logs", method: http.MethodGet, path: "/builds/" + id + "/steps/0/logs", statusCode: http.StatusOK},
-		{name: "build logs", method: http.MethodGet, path: "/builds/" + id + "/logs", statusCode: http.StatusOK},
-		{name: "build artifacts", method: http.MethodGet, path: "/builds/" + id + "/artifacts", statusCode: http.StatusOK},
-		{name: "build artifact download missing", method: http.MethodGet, path: "/builds/" + id + "/artifacts/missing/download", statusCode: http.StatusNotFound},
-		{name: "queue build", method: http.MethodPost, path: "/builds/" + id + "/queue", statusCode: http.StatusOK},
-		{name: "start build", method: http.MethodPost, path: "/builds/" + id + "/start", statusCode: http.StatusOK},
-		{name: "complete build", method: http.MethodPost, path: "/builds/" + id + "/complete", statusCode: http.StatusOK},
+		{name: "list builds", method: http.MethodGet, path: "/api/builds/", statusCode: http.StatusOK},
+		{name: "get build", method: http.MethodGet, path: "/api/builds/" + id, statusCode: http.StatusOK},
+		{name: "build steps", method: http.MethodGet, path: "/api/builds/" + id + "/steps", statusCode: http.StatusOK},
+		{name: "build step logs", method: http.MethodGet, path: "/api/builds/" + id + "/steps/0/logs", statusCode: http.StatusOK},
+		{name: "build logs", method: http.MethodGet, path: "/api/builds/" + id + "/logs", statusCode: http.StatusOK},
+		{name: "build artifacts", method: http.MethodGet, path: "/api/builds/" + id + "/artifacts", statusCode: http.StatusOK},
+		{name: "build artifact download missing", method: http.MethodGet, path: "/api/builds/" + id + "/artifacts/missing/download", statusCode: http.StatusNotFound},
+		{name: "queue build", method: http.MethodPost, path: "/api/builds/" + id + "/queue", statusCode: http.StatusOK},
+		{name: "start build", method: http.MethodPost, path: "/api/builds/" + id + "/start", statusCode: http.StatusOK},
+		{name: "complete build", method: http.MethodPost, path: "/api/builds/" + id + "/complete", statusCode: http.StatusOK},
 	}
 
 	for _, tc := range tests {
@@ -112,7 +112,7 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 		})
 	}
 
-	failReq := httptest.NewRequest(http.MethodPost, "/builds/"+id+"/fail", nil)
+	failReq := httptest.NewRequest(http.MethodPost, "/api/builds/"+id+"/fail", nil)
 	failRes := httptest.NewRecorder()
 	r.ServeHTTP(failRes, failReq)
 	if failRes.Code != http.StatusConflict {
@@ -130,7 +130,7 @@ func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
 	eh := handler.NewEventHandler(jobSvc, service.NewWebhookIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 	r := NewRouter(h, jh, eh, "")
 
-	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
 	createRes := httptest.NewRecorder()
 	r.ServeHTTP(createRes, createReq)
 	if createRes.Code != http.StatusCreated {
@@ -150,14 +150,14 @@ func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
 		t.Fatalf("expected create response id, got %v", createData["id"])
 	}
 
-	queueReq := httptest.NewRequest(http.MethodPost, "/builds/"+buildID+"/queue", bytes.NewBufferString(`{"template":"test"}`))
+	queueReq := httptest.NewRequest(http.MethodPost, "/api/builds/"+buildID+"/queue", bytes.NewBufferString(`{"template":"test"}`))
 	queueRes := httptest.NewRecorder()
 	r.ServeHTTP(queueRes, queueReq)
 	if queueRes.Code != http.StatusOK {
 		t.Fatalf("expected queue status %d, got %d", http.StatusOK, queueRes.Code)
 	}
 
-	stepsReq := httptest.NewRequest(http.MethodGet, "/builds/"+buildID+"/steps", nil)
+	stepsReq := httptest.NewRequest(http.MethodGet, "/api/builds/"+buildID+"/steps", nil)
 	stepsRes := httptest.NewRecorder()
 	r.ServeHTTP(stepsRes, stepsReq)
 	if stepsRes.Code != http.StatusOK {
@@ -206,7 +206,7 @@ func TestNewRouter_QueueBuild_UnknownTemplate_FallsBackToDefaultStep(t *testing.
 	eh := handler.NewEventHandler(jobSvc, service.NewWebhookIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 	r := NewRouter(h, jh, eh, "")
 
-	createReq := httptest.NewRequest(http.MethodPost, "/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
 	createRes := httptest.NewRecorder()
 	r.ServeHTTP(createRes, createReq)
 	if createRes.Code != http.StatusCreated {
@@ -226,14 +226,14 @@ func TestNewRouter_QueueBuild_UnknownTemplate_FallsBackToDefaultStep(t *testing.
 		t.Fatalf("expected create response id, got %v", createData["id"])
 	}
 
-	queueReq := httptest.NewRequest(http.MethodPost, "/builds/"+buildID+"/queue", bytes.NewBufferString(`{"template":"not-a-template"}`))
+	queueReq := httptest.NewRequest(http.MethodPost, "/api/builds/"+buildID+"/queue", bytes.NewBufferString(`{"template":"not-a-template"}`))
 	queueRes := httptest.NewRecorder()
 	r.ServeHTTP(queueRes, queueReq)
 	if queueRes.Code != http.StatusOK {
 		t.Fatalf("expected queue status %d, got %d", http.StatusOK, queueRes.Code)
 	}
 
-	stepsReq := httptest.NewRequest(http.MethodGet, "/builds/"+buildID+"/steps", nil)
+	stepsReq := httptest.NewRequest(http.MethodGet, "/api/builds/"+buildID+"/steps", nil)
 	stepsRes := httptest.NewRecorder()
 	r.ServeHTTP(stepsRes, stepsReq)
 	if stepsRes.Code != http.StatusOK {
@@ -279,7 +279,7 @@ func TestNewRouter_JobRoutes(t *testing.T) {
 	r := NewRouter(h, jh, eh, "")
 
 	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
-	createReq := httptest.NewRequest(http.MethodPost, "/jobs/", bytes.NewBufferString(createBody))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/jobs/", bytes.NewBufferString(createBody))
 	createRes := httptest.NewRecorder()
 	r.ServeHTTP(createRes, createReq)
 	if createRes.Code != http.StatusCreated {
@@ -299,21 +299,21 @@ func TestNewRouter_JobRoutes(t *testing.T) {
 		t.Fatalf("expected create response job id string, got %v", data["id"])
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/jobs/", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/jobs/", nil)
 	listRes := httptest.NewRecorder()
 	r.ServeHTTP(listRes, listReq)
 	if listRes.Code != http.StatusOK {
 		t.Fatalf("expected list jobs status %d, got %d", http.StatusOK, listRes.Code)
 	}
 
-	getReq := httptest.NewRequest(http.MethodGet, "/jobs/"+jobID, nil)
+	getReq := httptest.NewRequest(http.MethodGet, "/api/jobs/"+jobID, nil)
 	getRes := httptest.NewRecorder()
 	r.ServeHTTP(getRes, getReq)
 	if getRes.Code != http.StatusOK {
 		t.Fatalf("expected get job status %d, got %d", http.StatusOK, getRes.Code)
 	}
 
-	runReq := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/run", nil)
+	runReq := httptest.NewRequest(http.MethodPost, "/api/jobs/"+jobID+"/run", nil)
 	runRes := httptest.NewRecorder()
 	r.ServeHTTP(runRes, runReq)
 	if runRes.Code != http.StatusCreated {
@@ -332,7 +332,7 @@ func TestNewRouter_PushEventRoute(t *testing.T) {
 	r := NewRouter(h, jh, eh, "")
 
 	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"push_branch":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
-	createReq := httptest.NewRequest(http.MethodPost, "/jobs/", bytes.NewBufferString(createBody))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/jobs/", bytes.NewBufferString(createBody))
 	createRes := httptest.NewRecorder()
 	r.ServeHTTP(createRes, createReq)
 	if createRes.Code != http.StatusCreated {
@@ -340,7 +340,7 @@ func TestNewRouter_PushEventRoute(t *testing.T) {
 	}
 
 	eventBody := `{"repository_url":"https://github.com/example/backend.git","ref":"main","commit_sha":"abc123"}`
-	eventReq := httptest.NewRequest(http.MethodPost, "/events/push", bytes.NewBufferString(eventBody))
+	eventReq := httptest.NewRequest(http.MethodPost, "/api/events/push", bytes.NewBufferString(eventBody))
 	eventRes := httptest.NewRecorder()
 	r.ServeHTTP(eventRes, eventReq)
 	if eventRes.Code != http.StatusOK {

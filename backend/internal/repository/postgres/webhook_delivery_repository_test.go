@@ -20,10 +20,10 @@ func TestWebhookDeliveryRepository_CreateDuplicateAndUpdate(t *testing.T) {
 
 	repo := NewWebhookDeliveryRepository(db)
 	now := time.Now().UTC()
-	row := []string{"id", "provider", "delivery_id", "event_type", "repository_owner", "repository_name", "trigger_ref", "commit_sha", "actor", "status", "matched_job_id", "queued_build_id", "reason", "received_at", "updated_at"}
+	row := []string{"id", "provider", "delivery_id", "event_type", "repository_owner", "repository_name", "trigger_raw_ref", "trigger_ref_type", "trigger_ref_name", "trigger_ref", "trigger_deleted", "commit_sha", "actor", "status", "matched_job_id", "queued_build_id", "reason", "received_at", "updated_at"}
 
 	mock.ExpectQuery("INSERT INTO webhook_deliveries").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		"delivery-row-1", "github", "delivery-1", "push", "example", "backend", "main", "abc123", "octocat", "received", nil, nil, nil, now, now,
+		"delivery-row-1", "github", "delivery-1", "push", "example", "backend", "refs/heads/main", "branch", "main", "main", false, "abc123", "octocat", "received", nil, nil, nil, now, now,
 	))
 
 	created, err := repo.Create(context.Background(), domain.WebhookDelivery{
@@ -46,7 +46,7 @@ func TestWebhookDeliveryRepository_CreateDuplicateAndUpdate(t *testing.T) {
 	}
 
 	mock.ExpectQuery("UPDATE webhook_deliveries").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		"delivery-row-1", "github", "delivery-1", "push", "example", "backend", "main", "abc123", "octocat", "queued", "job-1", "build-1", nil, now, now,
+		"delivery-row-1", "github", "delivery-1", "push", "example", "backend", "refs/heads/main", "branch", "main", "main", false, "abc123", "octocat", "queued", "job-1", "build-1", nil, now, now,
 	))
 
 	jobID := "job-1"
