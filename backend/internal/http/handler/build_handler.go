@@ -1003,7 +1003,7 @@ func toBuildArtifactResponse(item domain.BuildArtifact) api.BuildArtifactRespons
 		SizeBytes:       item.SizeBytes,
 		ContentType:     item.ContentType,
 		ChecksumSHA256:  item.ChecksumSHA256,
-		DownloadURLPath: "/builds/" + item.BuildID + "/artifacts/" + item.ID + "/download",
+		DownloadURLPath: "/api/builds/" + item.BuildID + "/artifacts/" + item.ID + "/download",
 		CreatedAt:       item.CreatedAt.Format(time.RFC3339),
 	}
 }

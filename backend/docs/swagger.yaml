@@ -1,4 +1,4 @@
-basePath: /
+basePath: /api
 definitions:
   api.BuildArtifactResponse:
     properties:
@@ -597,40 +597,6 @@ info:
   title: Coyote CI API
   version: "0.1"
 paths:
-  /api/webhooks/github:
-    post:
-      description: Verifies a GitHub webhook signature and triggers builds for matching
-        jobs on push events.
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.PushEventEnvelope'
-        "202":
-          description: Accepted
-          schema:
-            $ref: '#/definitions/api.PushEventEnvelope'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.ErrorResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/api.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/api.ErrorResponse'
-        "503":
-          description: Service Unavailable
-          schema:
-            $ref: '#/definitions/api.ErrorResponse'
-      summary: Ingest GitHub webhook
-      tags:
-      - webhooks
   /builds:
     get:
       description: Lists all builds sorted by newest first.
@@ -1425,6 +1391,40 @@ paths:
       summary: Run job now
       tags:
       - jobs
+  /webhooks/github:
+    post:
+      description: Verifies a GitHub webhook signature and triggers builds for matching
+        jobs on push events.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.PushEventEnvelope'
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/api.PushEventEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Ingest GitHub webhook
+      tags:
+      - webhooks
 schemes:
 - http
 swagger: "2.0"
