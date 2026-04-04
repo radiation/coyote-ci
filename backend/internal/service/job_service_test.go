@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
 )
 
@@ -275,6 +276,15 @@ func TestJobService_TriggerPushEvent_MatchesAndCreatesBuilds(t *testing.T) {
 		}
 		if item.Build.PipelineConfigYAML == nil || *item.Build.PipelineConfigYAML == "" {
 			t.Fatal("expected build pipeline snapshot")
+		}
+		if item.Build.Trigger.Kind != domain.BuildTriggerKindWebhook {
+			t.Fatalf("expected webhook trigger kind, got %q", item.Build.Trigger.Kind)
+		}
+		if item.Build.Trigger.SCMProvider == nil || *item.Build.Trigger.SCMProvider != "github" {
+			t.Fatalf("expected trigger scm_provider=github, got %v", item.Build.Trigger.SCMProvider)
+		}
+		if item.Build.Trigger.EventType == nil || *item.Build.Trigger.EventType != "push" {
+			t.Fatalf("expected trigger event_type=push, got %v", item.Build.Trigger.EventType)
 		}
 	}
 

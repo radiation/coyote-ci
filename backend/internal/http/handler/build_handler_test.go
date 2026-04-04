@@ -1,6 +1,7 @@
 package handler
 
 // Core BuildHandler tests.
+
 // Endpoint-focused pipeline/repo/artifact tests live in build_handler_endpoints_test.go.
 
 import (

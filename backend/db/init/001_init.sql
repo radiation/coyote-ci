@@ -37,7 +37,18 @@ CREATE TABLE IF NOT EXISTS builds (
     pipeline_path TEXT,
     repo_url TEXT,
     ref TEXT,
-    commit_sha TEXT
+    commit_sha TEXT,
+    trigger_kind TEXT NOT NULL DEFAULT 'manual',
+    scm_provider TEXT,
+    event_type TEXT,
+    trigger_repository_owner TEXT,
+    trigger_repository_name TEXT,
+    trigger_repository_url TEXT,
+    trigger_ref TEXT,
+    trigger_ref_type TEXT,
+    trigger_commit_sha TEXT,
+    trigger_delivery_id TEXT,
+    trigger_actor TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_builds_project_id ON builds (project_id);
@@ -168,3 +179,25 @@ CREATE INDEX IF NOT EXISTS idx_build_step_logs_step_sequence
 
 CREATE INDEX IF NOT EXISTS idx_build_step_logs_build
     ON build_step_logs (build_id, sequence_no);
+
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    id UUID PRIMARY KEY,
+    provider TEXT NOT NULL,
+    delivery_id TEXT NOT NULL,
+    event_type TEXT,
+    repository_owner TEXT,
+    repository_name TEXT,
+    trigger_ref TEXT,
+    commit_sha TEXT,
+    actor TEXT,
+    status TEXT NOT NULL,
+    matched_job_id UUID REFERENCES jobs(id) ON DELETE SET NULL,
+    queued_build_id UUID REFERENCES builds(id) ON DELETE SET NULL,
+    reason TEXT,
+    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (provider, delivery_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_provider_received_at
+    ON webhook_deliveries (provider, received_at DESC);

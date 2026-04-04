@@ -828,6 +828,9 @@ func isCreateRepoBuildBadRequestError(err error) bool {
 }
 
 func toBuildResponse(build domain.Build) api.BuildResponse {
+	trigger := domain.NormalizeBuildTrigger(build.Trigger)
+	sourceCommitSHA := buildSourceCommitSHA(build)
+	triggerCommitSHA := buildTriggerCommitSHA(build, trigger)
 	return api.BuildResponse{
 		ID:                 build.ID,
 		ProjectID:          build.ProjectID,
@@ -846,6 +849,18 @@ func toBuildResponse(build domain.Build) api.BuildResponse {
 		PipelineName:       build.PipelineName,
 		PipelineSource:     build.PipelineSource,
 		PipelinePath:       build.PipelinePath,
+		TriggerKind:        string(trigger.Kind),
+		SCMProvider:        trigger.SCMProvider,
+		EventType:          trigger.EventType,
+		RepositoryOwner:    trigger.RepositoryOwner,
+		RepositoryName:     trigger.RepositoryName,
+		RepositoryURL:      trigger.RepositoryURL,
+		TriggerRef:         trigger.Ref,
+		RefType:            trigger.RefType,
+		SourceCommitSHA:    sourceCommitSHA,
+		TriggerCommitSHA:   triggerCommitSHA,
+		DeliveryID:         trigger.DeliveryID,
+		Actor:              trigger.Actor,
 		Source:             toBuildSourceResponse(build),
 	}
 }
@@ -853,9 +868,9 @@ func toBuildResponse(build domain.Build) api.BuildResponse {
 func toBuildSourceResponse(build domain.Build) *api.BuildSourceResponse {
 	if build.Source != nil {
 		return &api.BuildSourceResponse{
-			RepositoryURL: strings.TrimSpace(build.Source.RepositoryURL),
-			Ref:           build.Source.Ref,
-			CommitSHA:     build.Source.CommitSHA,
+			RepositoryURL:   strings.TrimSpace(build.Source.RepositoryURL),
+			Ref:             build.Source.Ref,
+			SourceCommitSHA: build.Source.CommitSHA,
 		}
 	}
 
@@ -864,10 +879,30 @@ func toBuildSourceResponse(build domain.Build) *api.BuildSourceResponse {
 	}
 
 	return &api.BuildSourceResponse{
-		RepositoryURL: strings.TrimSpace(*build.RepoURL),
-		Ref:           build.Ref,
-		CommitSHA:     build.CommitSHA,
+		RepositoryURL:   strings.TrimSpace(*build.RepoURL),
+		Ref:             build.Ref,
+		SourceCommitSHA: build.CommitSHA,
 	}
+}
+
+func buildSourceCommitSHA(build domain.Build) *string {
+	if build.Source != nil {
+		return build.Source.CommitSHA
+	}
+	return build.CommitSHA
+}
+
+func buildTriggerCommitSHA(build domain.Build, trigger domain.BuildTrigger) *string {
+	if trigger.CommitSHA != nil {
+		return trigger.CommitSHA
+	}
+	if trigger.Kind != domain.BuildTriggerKindWebhook {
+		return nil
+	}
+	if build.Source != nil {
+		return build.Source.CommitSHA
+	}
+	return build.CommitSHA
 }
 
 func toBuildStepResponse(step domain.BuildStep, job *domain.ExecutionJob, outputs []domain.ExecutionJobOutput) api.BuildStepResponse {

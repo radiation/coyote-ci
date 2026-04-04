@@ -373,6 +373,43 @@ fieldset legend {
   border-color: #fca5a5;
 }
 
+.trigger-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.trigger-badge {
+  display: inline-block;
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border: 1px solid #d1d5db;
+  color: #374151;
+  background: #f3f4f6;
+}
+
+.trigger-webhook {
+  color: #0b4f3a;
+  border-color: #86efac;
+  background: #dcfce7;
+}
+
+.trigger-manual {
+  color: #334155;
+  border-color: #cbd5e1;
+  background: #f1f5f9;
+}
+
+.trigger-meta {
+  color: #6b7280;
+  font-size: 0.8rem;
+}
+
 /* Detail grid */
 .detail-grid {
   display: grid;

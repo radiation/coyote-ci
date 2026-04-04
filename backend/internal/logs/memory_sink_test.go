@@ -92,7 +92,7 @@ func TestMemorySink_AppendAndListStepLogChunks(t *testing.T) {
 func TestMemorySink_ListStepLogChunks_LimitIsCapped(t *testing.T) {
 	sink := NewMemorySink()
 
-	for i := 0; i < 2500; i++ {
+	for i := range 2500 {
 		_, err := sink.AppendStepLogChunk(context.Background(), StepLogChunk{
 			BuildID:   "build-1",
 			StepID:    "step-1",

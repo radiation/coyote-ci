@@ -49,6 +49,13 @@ describe('BuildDetailPage artifacts', () => {
       error_message: null,
       pipeline_source: 'repo',
       pipeline_path: 'scenarios/success-basic/coyote.yml',
+      trigger_kind: 'webhook',
+      scm_provider: 'github',
+      event_type: 'push',
+      trigger_ref: 'main',
+      actor: 'octocat',
+      trigger_commit_sha: 'abc1234567890',
+      source_commit_sha: 'def9876543210',
     });
     mockedGetBuildSteps.mockResolvedValue([]);
     mockedGetBuildArtifacts.mockResolvedValue([
@@ -85,6 +92,19 @@ describe('BuildDetailPage artifacts', () => {
       expect(screen.getByText('repo')).toBeTruthy();
       expect(screen.getByText('Pipeline Path')).toBeTruthy();
       expect(screen.getByText('scenarios/success-basic/coyote.yml')).toBeTruthy();
+    });
+  });
+
+  it('shows trigger metadata and disambiguated commit SHAs', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('webhook')).toBeTruthy();
+      expect(screen.getByText('github • main • abc1234 • octocat')).toBeTruthy();
+      expect(screen.getByText('Trigger Commit')).toBeTruthy();
+      expect(screen.getByText('Source Commit')).toBeTruthy();
+      expect(screen.getByText('abc1234')).toBeTruthy();
+      expect(screen.getByText('def9876')).toBeTruthy();
     });
   });
 });

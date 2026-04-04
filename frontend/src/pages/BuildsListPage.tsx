@@ -6,6 +6,30 @@ import type { Build } from '../types/build';
 import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL, isActiveBuild } from '../utils/build';
 import { formatTime } from '../utils/time';
 
+function shortSHA(value: string | null | undefined): string {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return '';
+  return trimmed.slice(0, 7);
+}
+
+function triggerKind(build: Build): string {
+  return (build.trigger_kind ?? 'manual').trim() || 'manual';
+}
+
+function compactTriggerMetadata(build: Build): string {
+  const parts: string[] = [];
+  const provider = (build.scm_provider ?? '').trim();
+  const ref = (build.trigger_ref ?? '').trim();
+  const sha = shortSHA(build.trigger_commit_sha ?? build.source_commit_sha);
+  const actor = (build.actor ?? '').trim();
+
+  if (provider) parts.push(provider);
+  if (ref) parts.push(ref);
+  if (sha) parts.push(sha);
+  if (actor) parts.push(actor);
+  return parts.join(' • ');
+}
+
 export function BuildsListPage() {
   const { data: builds, isLoading, error, dataUpdatedAt } = useQuery({
     queryKey: ['builds'],
@@ -44,6 +68,7 @@ export function BuildsListPage() {
             <th>Queued</th>
             <th>Started</th>
             <th>Finished</th>
+            <th>Trigger</th>
             <th>Error</th>
           </tr>
         </thead>
@@ -60,6 +85,12 @@ export function BuildsListPage() {
               <td>{formatTime(b.queued_at)}</td>
               <td>{formatTime(b.started_at)}</td>
               <td>{formatTime(b.finished_at)}</td>
+              <td>
+                <div className="trigger-cell">
+                  <span className={`trigger-badge trigger-${triggerKind(b)}`}>{triggerKind(b)}</span>
+                  <span className="trigger-meta">{compactTriggerMetadata(b) || '—'}</span>
+                </div>
+              </td>
               <td className="error-text">{b.error_message ?? '—'}</td>
             </tr>
           ))}

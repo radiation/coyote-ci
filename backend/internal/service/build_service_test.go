@@ -685,6 +685,23 @@ func TestBuildService_CreateBuild_WithStepsAutoQueues(t *testing.T) {
 	}
 }
 
+func TestBuildService_CreateBuild_DefaultsManualTrigger(t *testing.T) {
+	repo := &fakeBuildRepository{}
+	svc := NewBuildService(repo, nil, nil)
+
+	build, err := svc.CreateBuild(context.Background(), CreateBuildInput{ProjectID: "project-1"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if build.Trigger.Kind != domain.BuildTriggerKindManual {
+		t.Fatalf("expected manual trigger kind, got %q", build.Trigger.Kind)
+	}
+	if build.Trigger.SCMProvider != nil {
+		t.Fatalf("expected nil scm_provider for manual build, got %v", build.Trigger.SCMProvider)
+	}
+}
+
 func TestBuildService_GetBuild(t *testing.T) {
 	now := time.Now().UTC()
 

@@ -135,6 +135,7 @@ type CreateBuildInput struct {
 	JobID     *string
 	Steps     []CreateBuildStepInput
 	Source    *CreateBuildSourceInput
+	Trigger   *CreateBuildTriggerInput
 }
 
 type CreateBuildSourceInput struct {
@@ -197,6 +198,7 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 		RepoURL:          optionalStringPtr(sourceRepositoryURL(sourceSpec)),
 		Ref:              sourceRef(sourceSpec),
 		CommitSHA:        sourceCommitSHA(sourceSpec),
+		Trigger:          toDomainBuildTrigger(input.Trigger),
 	}
 
 	if len(input.Steps) > 0 {
@@ -242,6 +244,7 @@ type CreatePipelineBuildInput struct {
 	JobID        *string
 	PipelineYAML string
 	Source       *CreateBuildSourceInput
+	Trigger      *CreateBuildTriggerInput
 }
 
 // CreateBuildFromPipeline parses, validates, and resolves pipeline YAML, then creates
@@ -290,6 +293,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		RepoURL:            optionalStringPtr(sourceRepositoryURL(sourceSpec)),
 		Ref:                sourceRef(sourceSpec),
 		CommitSHA:          sourceCommitSHA(sourceSpec),
+		Trigger:            toDomainBuildTrigger(input.Trigger),
 	}
 
 	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
@@ -311,6 +315,7 @@ type CreateRepoBuildInput struct {
 	Ref          string
 	CommitSHA    string
 	PipelinePath string
+	Trigger      *CreateBuildTriggerInput
 }
 
 const pipelineFilePath = ".coyote/pipeline.yml"
@@ -413,6 +418,7 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		RepoURL:            &repoURL,
 		Ref:                optionalStringPtr(ref),
 		CommitSHA:          commitSHAPtr,
+		Trigger:            toDomainBuildTrigger(input.Trigger),
 	}
 
 	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)

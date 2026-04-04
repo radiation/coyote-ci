@@ -2,18 +2,31 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
+	"log"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
+	"github.com/radiation/coyote-ci/backend/internal/observability"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	githubwebhook "github.com/radiation/coyote-ci/backend/internal/webhook/github"
 )
 
 type EventHandler struct {
-	jobService *service.JobService
+	jobService          *service.JobService
+	webhookService      *service.WebhookIngressService
+	metrics             observability.WebhookIngressMetrics
+	githubWebhookSecret string
 }
 
-func NewEventHandler(jobService *service.JobService) *EventHandler {
-	return &EventHandler{jobService: jobService}
+func NewEventHandler(jobService *service.JobService, webhookService *service.WebhookIngressService, metrics observability.WebhookIngressMetrics, githubWebhookSecret string) *EventHandler {
+	if metrics == nil {
+		metrics = observability.NewNoopWebhookIngressMetrics()
+	}
+	return &EventHandler{jobService: jobService, webhookService: webhookService, metrics: metrics, githubWebhookSecret: githubWebhookSecret}
 }
 
 // IngestPushEvent godoc
@@ -64,6 +77,156 @@ func (h *EventHandler) IngestPushEvent(w http.ResponseWriter, r *http.Request) {
 		CommitSHA:     result.CommitSHA,
 		MatchedJobs:   result.MatchedJobs,
 		CreatedBuilds: len(result.Builds),
+		Builds:        builds,
+	})
+}
+
+// IngestGitHubWebhook godoc
+// @Summary Ingest GitHub webhook
+// @Description Verifies a GitHub webhook signature and triggers builds for matching jobs on push events.
+// @Tags webhooks
+// @Produce json
+// @Success 200 {object} api.PushEventEnvelope
+// @Success 202 {object} api.PushEventEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 503 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /api/webhooks/github [post]
+func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
+	provider := "github"
+	eventType := strings.ToLower(strings.TrimSpace(r.Header.Get("X-GitHub-Event")))
+	deliveryID := strings.TrimSpace(r.Header.Get("X-GitHub-Delivery"))
+	logCtx := service.NewWebhookLogContext(provider, deliveryID, eventType)
+	ctx := service.WithWebhookLogContext(r.Context(), logCtx)
+	outcome := observability.WebhookOutcomeFailedProcessing
+	defer func() {
+		h.metrics.ObserveIngressDuration(provider, eventType, outcome, time.Since(startedAt))
+	}()
+
+	h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeDeliveriesReceived)
+	log.Printf("INFO webhook received %s", service.WebhookLogFields(ctx))
+
+	if h.webhookService == nil {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "webhook service not configured")
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1024*1024))
+	if err != nil {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+
+	delivery, duplicate, deliveryErr := h.webhookService.RegisterReceived(ctx, provider, deliveryID, eventType)
+	if deliveryErr != nil {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+		log.Printf("WARN webhook register failed %s err=%v", service.WebhookLogFields(ctx), deliveryErr)
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", deliveryErr.Error())
+		return
+	}
+	if duplicate {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeDuplicate)
+		outcome = observability.WebhookOutcomeDuplicate
+		log.Printf("INFO webhook duplicate detected %s", service.WebhookLogFields(ctx))
+		writeDataJSON(w, http.StatusOK, api.PushEventResponse{MatchedJobs: 0, CreatedBuilds: 0, Builds: []api.PushEventMatchedJob{}, Duplicate: true})
+		return
+	}
+
+	if h.githubWebhookSecret == "" {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+		_, _ = h.webhookService.MarkFailed(ctx, delivery, "github webhook secret not configured")
+		log.Printf("ERROR webhook secret missing %s", service.WebhookLogFields(ctx))
+		writeErrorJSON(w, http.StatusServiceUnavailable, "misconfigured", "github webhook secret is not configured")
+		return
+	}
+
+	if !githubwebhook.VerifySignature(h.githubWebhookSecret, body, r.Header.Get("X-Hub-Signature-256")) {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeInvalidSignature)
+		outcome = observability.WebhookOutcomeInvalidSignature
+		log.Printf("WARN webhook signature validation failed %s", service.WebhookLogFields(ctx))
+		_, _ = h.webhookService.MarkFailed(ctx, delivery, "signature validation failed")
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "invalid signature")
+		return
+	}
+
+	pushEvent, parseErr := githubwebhook.ParsePushEvent(r.Header, body)
+	if parseErr != nil {
+		if errors.Is(parseErr, githubwebhook.ErrUnsupportedEvent) {
+			h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeUnsupportedEvent)
+			outcome = observability.WebhookOutcomeUnsupportedEvent
+			log.Printf("INFO webhook unsupported event %s", service.WebhookLogFields(ctx))
+			_, _ = h.webhookService.MarkUnsupported(ctx, delivery, "unsupported event", service.WebhookTriggerInput{SCMProvider: provider, EventType: eventType})
+			writeDataJSON(w, http.StatusAccepted, api.PushEventResponse{MatchedJobs: 0, CreatedBuilds: 0, Builds: []api.PushEventMatchedJob{}})
+			return
+		}
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+		_, _ = h.webhookService.MarkFailed(ctx, delivery, "invalid github webhook payload")
+		log.Printf("WARN webhook payload parse failed %s err=%v", service.WebhookLogFields(ctx), parseErr)
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid github webhook payload")
+		return
+	}
+
+	eventType = strings.ToLower(strings.TrimSpace(pushEvent.EventType))
+	ctx = service.WithWebhookLogContext(ctx, service.WebhookLogContext{
+		CorrelationID: logCtx.CorrelationID,
+		Provider:      provider,
+		DeliveryID:    deliveryID,
+		EventType:     eventType,
+	})
+
+	ingressResult, triggerErr := h.webhookService.ProcessVerifiedEvent(ctx, delivery, service.WebhookTriggerInput{
+		SCMProvider:     provider,
+		EventType:       pushEvent.EventType,
+		RepositoryOwner: pushEvent.RepositoryOwner,
+		RepositoryName:  pushEvent.RepositoryName,
+		RepositoryURL:   pushEvent.RepositoryURL,
+		Ref:             pushEvent.Ref,
+		RefType:         pushEvent.RefType,
+		CommitSHA:       pushEvent.CommitSHA,
+		DeliveryID:      pushEvent.DeliveryID,
+		Actor:           pushEvent.Actor,
+	})
+	if triggerErr != nil {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+		log.Printf("ERROR webhook delivery failed %s err=%v", service.WebhookLogFields(ctx), triggerErr)
+		if isBadRequestError(triggerErr) {
+			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", triggerErr.Error())
+			return
+		}
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+
+	if ingressResult.Trigger.MatchedJobs == 0 {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeNoMatchingJob)
+		outcome = observability.WebhookOutcomeNoMatchingJob
+		log.Printf("INFO webhook processed no match %s", service.WebhookLogFields(ctx))
+	} else {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeBuildQueued)
+		outcome = observability.WebhookOutcomeBuildQueued
+		log.Printf("INFO webhook processed build queued %s matched_jobs=%d created_builds=%d", service.WebhookLogFields(ctx), ingressResult.Trigger.MatchedJobs, len(ingressResult.Trigger.Builds))
+	}
+
+	builds := make([]api.PushEventMatchedJob, 0, len(ingressResult.Trigger.Builds))
+	for _, item := range ingressResult.Trigger.Builds {
+		builds = append(builds, api.PushEventMatchedJob{
+			JobID:       item.Job.ID,
+			JobName:     item.Job.Name,
+			BuildID:     item.Build.ID,
+			BuildStatus: string(item.Build.Status),
+		})
+	}
+
+	writeDataJSON(w, http.StatusOK, api.PushEventResponse{
+		RepositoryURL: ingressResult.Trigger.RepositoryURL,
+		Ref:           ingressResult.Trigger.Ref,
+		CommitSHA:     ingressResult.Trigger.CommitSHA,
+		MatchedJobs:   ingressResult.Trigger.MatchedJobs,
+		CreatedBuilds: len(ingressResult.Trigger.Builds),
 		Builds:        builds,
 	})
 }

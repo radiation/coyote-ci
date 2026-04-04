@@ -53,12 +53,19 @@ describe('BuildsListPage', () => {
         finished_at: '2026-03-24T00:00:10Z',
         current_step_index: 2,
         error_message: null,
+        trigger_kind: 'webhook',
+        scm_provider: 'github',
+        trigger_ref: 'main',
+        trigger_commit_sha: 'abc1234567890',
+        actor: 'octocat',
       },
     ]);
     renderPage();
 
     await screen.findByText('aaaa-bbb…');
     expect(screen.getByText('project-1')).toBeTruthy();
+    expect(screen.getByText('webhook')).toBeTruthy();
+    expect(screen.getByText('github • main • abc1234 • octocat')).toBeTruthy();
   });
 
   it('does not render any creation form', async () => {

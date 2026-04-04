@@ -308,7 +308,7 @@ func matchSegments(patternSegs []string, pathSegs []string) bool {
 		if len(patternSegs) == 1 {
 			return true
 		}
-		for i := 0; i <= len(pathSegs); i++ {
+		for i := range len(pathSegs) + 1 {
 			if matchSegments(patternSegs[1:], pathSegs[i:]) {
 				return true
 			}

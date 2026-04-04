@@ -7,6 +7,30 @@ import type { Build } from '../types';
 import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL, isActiveBuild } from '../utils/build';
 import { formatTime } from '../utils/time';
 
+function shortSHA(value: string | null | undefined): string {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return '—';
+  return trimmed.slice(0, 7);
+}
+
+function triggerKind(build: Build): string {
+  return (build.trigger_kind ?? 'manual').trim() || 'manual';
+}
+
+function compactTriggerMetadata(build: Build): string {
+  const parts: string[] = [];
+  const provider = (build.scm_provider ?? '').trim();
+  const ref = (build.trigger_ref ?? '').trim();
+  const sha = (build.trigger_commit_sha ?? '').trim();
+  const actor = (build.actor ?? '').trim();
+
+  if (provider) parts.push(provider);
+  if (ref) parts.push(ref);
+  if (sha) parts.push(shortSHA(sha));
+  if (actor) parts.push(actor);
+  return parts.join(' • ');
+}
+
 export function BuildDetailPage() {
   const { id } = useParams<{ id: string }>();
 
@@ -63,7 +87,9 @@ export function BuildDetailPage() {
         <span><strong>Project:</strong> {build.project_id}</span>
         <span><strong>Status:</strong> <StatusBadge status={build.status} /></span>
         <span><strong>Current Step:</strong> {build.current_step_index}</span>
+        <span><strong>Trigger:</strong> <span className={`trigger-badge trigger-${triggerKind(build)}`}>{triggerKind(build)}</span></span>
       </div>
+      <p className="subtle-text">{compactTriggerMetadata(build) || 'No trigger metadata available for this build.'}</p>
       <p className="subtle-text">Last updated: {buildUpdatedAt > 0 ? formatTime(new Date(buildUpdatedAt).toISOString()) : '—'}</p>
 
       <div className="detail-grid">
@@ -77,6 +103,21 @@ export function BuildDetailPage() {
         <div><strong>Finished</strong><span>{formatTime(build.finished_at)}</span></div>
         {build.pipeline_source && <div><strong>Pipeline Source</strong><span>{build.pipeline_source}</span></div>}
         {build.pipeline_path && <div><strong>Pipeline Path</strong><span>{build.pipeline_path}</span></div>}
+        {build.scm_provider && <div><strong>SCM Provider</strong><span>{build.scm_provider}</span></div>}
+        {build.event_type && <div><strong>Event Type</strong><span>{build.event_type}</span></div>}
+        {build.trigger_ref && <div><strong>Trigger Ref</strong><span>{build.trigger_ref}</span></div>}
+        {build.actor && <div><strong>Actor</strong><span>{build.actor}</span></div>}
+        {build.trigger_commit_sha && build.source_commit_sha && build.trigger_commit_sha !== build.source_commit_sha ? (
+          <>
+            <div><strong>Trigger Commit</strong><span>{shortSHA(build.trigger_commit_sha)}</span></div>
+            <div><strong>Source Commit</strong><span>{shortSHA(build.source_commit_sha)}</span></div>
+          </>
+        ) : (
+          <div>
+            <strong>Commit</strong>
+            <span>{shortSHA(build.source_commit_sha ?? build.trigger_commit_sha)}</span>
+          </div>
+        )}
         <div><strong>Error</strong><span className="error-text">{build.error_message ?? '—'}</span></div>
       </div>
 

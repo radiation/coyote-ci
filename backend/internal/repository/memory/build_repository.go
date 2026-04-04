@@ -36,6 +36,7 @@ func (r *BuildRepository) Create(_ context.Context, build domain.Build) (domain.
 	if build.AttemptNumber <= 0 {
 		build.AttemptNumber = 1
 	}
+	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 
 	r.builds[build.ID] = build
 	return build, nil
@@ -51,6 +52,7 @@ func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Buil
 	if build.AttemptNumber <= 0 {
 		build.AttemptNumber = 1
 	}
+	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 
 	now := time.Now().UTC()
 	build.Status = domain.BuildStatusQueued

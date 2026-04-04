@@ -15,6 +15,56 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/webhooks/github": {
+            "post": {
+                "description": "Verifies a GitHub webhook signature and triggers builds for matching jobs on push events.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "webhooks"
+                ],
+                "summary": "Ingest GitHub webhook",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.PushEventEnvelope"
+                        }
+                    },
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/api.PushEventEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/builds": {
             "get": {
                 "description": "Lists all builds sorted by newest first.",
@@ -1333,6 +1383,9 @@ const docTemplate = `{
         "api.BuildResponse": {
             "type": "object",
             "properties": {
+                "actor": {
+                    "type": "string"
+                },
                 "attempt_number": {
                     "type": "integer"
                 },
@@ -1342,7 +1395,13 @@ const docTemplate = `{
                 "current_step_index": {
                     "type": "integer"
                 },
+                "delivery_id": {
+                    "type": "string"
+                },
                 "error_message": {
+                    "type": "string"
+                },
+                "event_type": {
                     "type": "string"
                 },
                 "finished_at": {
@@ -1372,19 +1431,46 @@ const docTemplate = `{
                 "queued_at": {
                     "type": "string"
                 },
+                "ref_type": {
+                    "type": "string"
+                },
+                "repository_name": {
+                    "type": "string"
+                },
+                "repository_owner": {
+                    "type": "string"
+                },
+                "repository_url": {
+                    "type": "string"
+                },
                 "rerun_from_step_index": {
                     "type": "integer"
                 },
                 "rerun_of_build_id": {
                     "type": "string"
                 },
+                "scm_provider": {
+                    "type": "string"
+                },
                 "source": {
                     "$ref": "#/definitions/api.BuildSourceResponse"
+                },
+                "source_commit_sha": {
+                    "type": "string"
                 },
                 "started_at": {
                     "type": "string"
                 },
                 "status": {
+                    "type": "string"
+                },
+                "trigger_commit_sha": {
+                    "type": "string"
+                },
+                "trigger_kind": {
+                    "type": "string"
+                },
+                "trigger_ref": {
                     "type": "string"
                 }
             }
@@ -1406,13 +1492,13 @@ const docTemplate = `{
         "api.BuildSourceResponse": {
             "type": "object",
             "properties": {
-                "commit_sha": {
-                    "type": "string"
-                },
                 "ref": {
                     "type": "string"
                 },
                 "repository_url": {
+                    "type": "string"
+                },
+                "source_commit_sha": {
                     "type": "string"
                 }
             }
@@ -1883,6 +1969,9 @@ const docTemplate = `{
                 },
                 "created_builds": {
                     "type": "integer"
+                },
+                "duplicate": {
+                    "type": "boolean"
                 },
                 "matched_jobs": {
                     "type": "integer"
