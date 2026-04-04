@@ -1624,6 +1624,12 @@ const docTemplate = `{
         "api.CreateJobRequest": {
             "type": "object",
             "properties": {
+                "branch_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "default_commit_sha": {
                     "type": "string"
                 },
@@ -1652,6 +1658,15 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "repository_url": {
+                    "type": "string"
+                },
+                "tag_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "trigger_mode": {
                     "type": "string"
                 }
             }
@@ -1875,6 +1890,12 @@ const docTemplate = `{
         "api.JobResponse": {
             "type": "object",
             "properties": {
+                "branch_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -1909,6 +1930,15 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "repository_url": {
+                    "type": "string"
+                },
+                "tag_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "trigger_mode": {
                     "type": "string"
                 },
                 "updated_at": {
@@ -2099,6 +2129,12 @@ const docTemplate = `{
         "api.UpdateJobRequest": {
             "type": "object",
             "properties": {
+                "branch_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "default_commit_sha": {
                     "type": "string"
                 },
@@ -2124,6 +2160,15 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "repository_url": {
+                    "type": "string"
+                },
+                "tag_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "trigger_mode": {
                     "type": "string"
                 }
             }

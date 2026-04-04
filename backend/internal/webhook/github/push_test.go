@@ -50,8 +50,84 @@ func TestParsePushEvent(t *testing.T) {
 	if event.Ref != "main" || event.RefType != "branch" {
 		t.Fatalf("unexpected ref parsing: %+v", event)
 	}
+	if event.RawRef != "refs/heads/main" {
+		t.Fatalf("expected raw ref refs/heads/main, got %q", event.RawRef)
+	}
 	if event.CommitSHA != "abc123" {
 		t.Fatalf("unexpected commit sha: %s", event.CommitSHA)
+	}
+}
+
+func TestParsePushEvent_TagRef(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "push")
+
+	body := []byte(`{
+		"ref":"refs/tags/v1.2.3",
+		"after":"abc123",
+		"repository":{
+			"name":"backend",
+			"html_url":"https://github.com/example/backend",
+			"owner":{"login":"example"}
+		},
+		"sender":{"login":"bryan"}
+	}`)
+
+	event, err := ParsePushEvent(headers, body)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if event.RefType != "tag" || event.RefName != "v1.2.3" {
+		t.Fatalf("expected tag ref v1.2.3, got type=%q name=%q", event.RefType, event.RefName)
+	}
+}
+
+func TestParsePushEvent_UnknownRef(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "push")
+
+	body := []byte(`{
+		"ref":"custom/ref/path",
+		"after":"abc123",
+		"repository":{
+			"name":"backend",
+			"html_url":"https://github.com/example/backend",
+			"owner":{"login":"example"}
+		},
+		"sender":{"login":"bryan"}
+	}`)
+
+	event, err := ParsePushEvent(headers, body)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if event.RefType != "unknown" || event.RefName != "custom/ref/path" {
+		t.Fatalf("expected unknown ref custom/ref/path, got type=%q name=%q", event.RefType, event.RefName)
+	}
+}
+
+func TestParsePushEvent_DeletePushAllowedWithoutCommit(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "push")
+
+	body := []byte(`{
+		"ref":"refs/heads/main",
+		"deleted":true,
+		"after":"",
+		"repository":{
+			"name":"backend",
+			"html_url":"https://github.com/example/backend",
+			"owner":{"login":"example"}
+		},
+		"sender":{"login":"bryan"}
+	}`)
+
+	event, err := ParsePushEvent(headers, body)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !event.Deleted {
+		t.Fatal("expected deleted=true")
 	}
 }
 

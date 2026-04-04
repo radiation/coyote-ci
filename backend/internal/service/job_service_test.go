@@ -345,6 +345,95 @@ func TestJobService_TriggerPushEvent_Validation(t *testing.T) {
 	}
 }
 
+func TestJobService_TriggerWebhookEvent_TagOnlyJob(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	buildService := NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService)
+
+	triggerMode := "tags"
+	_, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-tags",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PushEnabled:   boolPtr(true),
+		TriggerMode:   &triggerMode,
+		TagAllowlist:  []string{"v*"},
+		PipelineYAML:  "version: 1\nsteps:\n  - name: release\n    run: echo release\n",
+		Enabled:       boolPtr(true),
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	branchResult, err := jobService.TriggerWebhookEvent(context.Background(), WebhookTriggerInput{
+		SCMProvider:   "github",
+		EventType:     "push",
+		RepositoryURL: "https://github.com/example/backend.git",
+		RawRef:        "refs/heads/main",
+		CommitSHA:     "abc123",
+	})
+	if err != nil {
+		t.Fatalf("branch trigger failed: %v", err)
+	}
+	if branchResult.MatchedJobs != 0 {
+		t.Fatalf("expected no branch matches for tag-only job, got %d", branchResult.MatchedJobs)
+	}
+
+	tagResult, err := jobService.TriggerWebhookEvent(context.Background(), WebhookTriggerInput{
+		SCMProvider:   "github",
+		EventType:     "push",
+		RepositoryURL: "https://github.com/example/backend.git",
+		RawRef:        "refs/tags/v1.2.3",
+		CommitSHA:     "def456",
+	})
+	if err != nil {
+		t.Fatalf("tag trigger failed: %v", err)
+	}
+	if tagResult.MatchedJobs != 1 {
+		t.Fatalf("expected one tag match, got %d", tagResult.MatchedJobs)
+	}
+}
+
+func TestJobService_TriggerWebhookEvent_DeletePushIgnored(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	buildService := NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService)
+
+	_, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-main",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PushEnabled:   boolPtr(true),
+		PushBranch:    strPtr("main"),
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       boolPtr(true),
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	result, err := jobService.TriggerWebhookEvent(context.Background(), WebhookTriggerInput{
+		SCMProvider:   "github",
+		EventType:     "push",
+		RepositoryURL: "https://github.com/example/backend.git",
+		RawRef:        "refs/heads/main",
+		Deleted:       true,
+	})
+	if err != nil {
+		t.Fatalf("delete push should be ignored cleanly, got error: %v", err)
+	}
+	if result.MatchedJobs != 0 {
+		t.Fatalf("expected no matches for deleted ref, got %d", result.MatchedJobs)
+	}
+	if result.NoMatchReason == nil || *result.NoMatchReason != string(WebhookTriggerDecisionDeletedRef) {
+		t.Fatalf("expected no_match_reason deleted_ref, got %v", result.NoMatchReason)
+	}
+}
+
 func strPtr(v string) *string {
 	return &v
 }

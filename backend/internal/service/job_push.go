@@ -28,8 +28,11 @@ type WebhookTriggerInput struct {
 	RepositoryOwner string
 	RepositoryName  string
 	RepositoryURL   string
+	RawRef          string
 	Ref             string
 	RefType         string
+	RefName         string
+	Deleted         bool
 	CommitSHA       string
 	DeliveryID      string
 	Actor           string
@@ -39,10 +42,14 @@ type WebhookTriggerResult struct {
 	SCMProvider   string
 	EventType     string
 	RepositoryURL string
+	RawRef        string
 	Ref           string
 	RefType       string
+	RefName       string
+	Deleted       bool
 	CommitSHA     string
 	MatchedJobs   int
+	NoMatchReason *string
 	Builds        []WebhookMatchedBuild
 }
 
@@ -73,15 +80,12 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 		return WebhookTriggerResult{}, ErrPushEventRepositoryURLRequired
 	}
 
-	ref := normalizePushRef(input.Ref)
-	if ref == "" {
+	normalizedRef := normalizeWebhookRefInput(input)
+	if normalizedRef.RefName == "" {
 		return WebhookTriggerResult{}, ErrPushEventRefRequired
 	}
 
 	commitSHA := strings.TrimSpace(input.CommitSHA)
-	if commitSHA == "" {
-		return WebhookTriggerResult{}, ErrPushEventCommitSHARequired
-	}
 
 	jobs, err := s.jobRepo.ListPushEnabledByRepository(ctx, repoURL)
 	if err != nil {
@@ -92,22 +96,39 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 		SCMProvider:   scmProvider,
 		EventType:     eventType,
 		RepositoryURL: repoURL,
-		Ref:           ref,
-		RefType:       strings.TrimSpace(input.RefType),
+		RawRef:        normalizedRef.RawRef,
+		Ref:           normalizedRef.RefName,
+		RefType:       string(normalizedRef.RefType),
+		RefName:       normalizedRef.RefName,
+		Deleted:       normalizedRef.Deleted,
 		CommitSHA:     commitSHA,
 		Builds:        make([]WebhookMatchedBuild, 0),
 	}
 	webhookFields := WebhookLogFields(ctx)
+	var firstNoMatchReason *string
+	if !shouldTriggerBuild(normalizedRef, WebhookJobTriggerConfig{}).Matched {
+		defaultReason := string(shouldTriggerBuild(normalizedRef, WebhookJobTriggerConfig{}).Reason)
+		firstNoMatchReason = &defaultReason
+	}
 
 	for _, job := range jobs {
 		if !matchesSCMRepositoryIdentity(job.RepositoryURL, scmProvider, repositoryOwner, repositoryName) {
 			continue
 		}
-		if !matchesPushBranch(job, ref) {
+
+		decision := shouldTriggerBuild(normalizedRef, toWebhookJobTriggerConfig(job))
+		if !decision.Matched {
+			if firstNoMatchReason == nil {
+				reason := string(decision.Reason)
+				firstNoMatchReason = &reason
+			}
 			continue
 		}
+		if commitSHA == "" {
+			return WebhookTriggerResult{}, ErrPushEventCommitSHARequired
+		}
 		result.MatchedJobs++
-		log.Printf("INFO webhook job matched %s owner=%s repository=%s job_id=%s ref=%s", webhookFields, repositoryOwner, repositoryName, job.ID, ref)
+		log.Printf("INFO webhook job matched %s owner=%s repository=%s job_id=%s ref=%s ref_type=%s", webhookFields, repositoryOwner, repositoryName, job.ID, normalizedRef.RefName, normalizedRef.RefType)
 
 		var (
 			build    domain.Build
@@ -120,8 +141,11 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 			RepositoryOwner: repositoryOwner,
 			RepositoryName:  repositoryName,
 			RepositoryURL:   repoURL,
-			Ref:             ref,
-			RefType:         strings.TrimSpace(input.RefType),
+			RawRef:          normalizedRef.RawRef,
+			Ref:             normalizedRef.RefName,
+			RefType:         string(normalizedRef.RefType),
+			RefName:         normalizedRef.RefName,
+			Deleted:         boolPtrValue(normalizedRef.Deleted),
 			CommitSHA:       commitSHA,
 			DeliveryID:      strings.TrimSpace(input.DeliveryID),
 			Actor:           strings.TrimSpace(input.Actor),
@@ -131,7 +155,7 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 				ProjectID:    job.ProjectID,
 				JobID:        &job.ID,
 				RepoURL:      job.RepositoryURL,
-				Ref:          ref,
+				Ref:          normalizedRef.RefName,
 				CommitSHA:    commitSHA,
 				PipelinePath: strings.TrimSpace(*job.PipelinePath),
 				Trigger:      triggerInput,
@@ -143,7 +167,7 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 				PipelineYAML: job.PipelineYAML,
 				Source: &CreateBuildSourceInput{
 					RepositoryURL: job.RepositoryURL,
-					Ref:           ref,
+					Ref:           normalizedRef.RefName,
 					CommitSHA:     commitSHA,
 				},
 				Trigger: triggerInput,
@@ -156,22 +180,37 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 
 		result.Builds = append(result.Builds, WebhookMatchedBuild{Job: job, Build: build})
 	}
+	result.NoMatchReason = firstNoMatchReason
 
 	if result.MatchedJobs == 0 {
-		log.Printf("INFO webhook job not matched %s owner=%s repository=%s ref=%s", webhookFields, repositoryOwner, repositoryName, ref)
+		log.Printf("INFO webhook job not matched %s owner=%s repository=%s ref=%s ref_type=%s reason=%s", webhookFields, repositoryOwner, repositoryName, normalizedRef.RefName, normalizedRef.RefType, readStringPtr(firstNoMatchReason))
 	}
 
 	return result, nil
 }
 
 func (s *JobService) TriggerPushEvent(ctx context.Context, input PushEventInput) (PushEventResult, error) {
+	repoURL := strings.TrimSpace(input.RepositoryURL)
+	if repoURL == "" {
+		return PushEventResult{}, ErrPushEventRepositoryURLRequired
+	}
+	ref := strings.TrimSpace(input.Ref)
+	if ref == "" {
+		return PushEventResult{}, ErrPushEventRefRequired
+	}
+	commitSHA := strings.TrimSpace(input.CommitSHA)
+	if commitSHA == "" {
+		return PushEventResult{}, ErrPushEventCommitSHARequired
+	}
+
 	result, err := s.TriggerWebhookEvent(ctx, WebhookTriggerInput{
 		SCMProvider:   "github",
 		EventType:     "push",
-		RepositoryURL: input.RepositoryURL,
-		Ref:           input.Ref,
-		RefType:       "branch",
-		CommitSHA:     input.CommitSHA,
+		RepositoryURL: repoURL,
+		RawRef:        ref,
+		Ref:           ref,
+		RefType:       string(domain.WebhookRefTypeBranch),
+		CommitSHA:     commitSHA,
 	})
 	if err != nil {
 		return PushEventResult{}, err
@@ -191,14 +230,62 @@ func normalizePushRef(value string) string {
 	if trimmed == "" {
 		return ""
 	}
-	return strings.TrimPrefix(trimmed, "refs/heads/")
+	return strings.TrimPrefix(strings.TrimPrefix(trimmed, "refs/heads/"), "refs/tags/")
 }
 
-func matchesPushBranch(job domain.Job, ref string) bool {
-	if job.PushBranch == nil {
-		return true
+func normalizeWebhookRefInput(input WebhookTriggerInput) domain.WebhookRef {
+	raw := strings.TrimSpace(input.RawRef)
+	if raw == "" {
+		raw = strings.TrimSpace(input.Ref)
 	}
-	return normalizePushRef(*job.PushBranch) == ref
+
+	ref := domain.NormalizeWebhookRef(raw, input.Deleted)
+	if ref.RefType == domain.WebhookRefTypeUnknown {
+		inputRefType := strings.ToLower(strings.TrimSpace(input.RefType))
+		switch inputRefType {
+		case string(domain.WebhookRefTypeBranch):
+			ref.RefType = domain.WebhookRefTypeBranch
+		case string(domain.WebhookRefTypeTag):
+			ref.RefType = domain.WebhookRefTypeTag
+		}
+	}
+	if ref.RefName == "" {
+		ref.RefName = normalizePushRef(input.RefName)
+	}
+	if ref.RefName == "" {
+		ref.RefName = normalizePushRef(input.Ref)
+	}
+	return ref
+}
+
+func toWebhookJobTriggerConfig(job domain.Job) WebhookJobTriggerConfig {
+	allowBranches := make([]string, 0, len(job.BranchAllowlist)+1)
+	for _, item := range job.BranchAllowlist {
+		branch := normalizePushRef(item)
+		if branch != "" {
+			allowBranches = append(allowBranches, branch)
+		}
+	}
+	if len(allowBranches) == 0 && job.PushBranch != nil {
+		legacyBranch := normalizePushRef(*job.PushBranch)
+		if legacyBranch != "" {
+			allowBranches = append(allowBranches, legacyBranch)
+		}
+	}
+
+	tagAllowlist := make([]string, 0, len(job.TagAllowlist))
+	for _, item := range job.TagAllowlist {
+		trimmed := strings.TrimSpace(item)
+		if trimmed != "" {
+			tagAllowlist = append(tagAllowlist, strings.TrimPrefix(trimmed, "refs/tags/"))
+		}
+	}
+
+	return WebhookJobTriggerConfig{
+		Mode:            normalizeJobTriggerMode(job.TriggerMode),
+		BranchAllowlist: allowBranches,
+		TagAllowlist:    tagAllowlist,
+	}
 }
 
 func matchesSCMRepositoryIdentity(jobRepositoryURL string, scmProvider string, owner string, name string) bool {
@@ -244,4 +331,8 @@ func parseSCMRepositoryIdentity(rawURL string) (provider string, owner string, n
 	}
 
 	return provider, owner, name
+}
+
+func boolPtrValue(v bool) *bool {
+	return &v
 }

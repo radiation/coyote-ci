@@ -1620,6 +1620,12 @@
         "api.CreateJobRequest": {
             "type": "object",
             "properties": {
+                "branch_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "default_commit_sha": {
                     "type": "string"
                 },
@@ -1648,6 +1654,15 @@
                     "type": "boolean"
                 },
                 "repository_url": {
+                    "type": "string"
+                },
+                "tag_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "trigger_mode": {
                     "type": "string"
                 }
             }
@@ -1871,6 +1886,12 @@
         "api.JobResponse": {
             "type": "object",
             "properties": {
+                "branch_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -1905,6 +1926,15 @@
                     "type": "boolean"
                 },
                 "repository_url": {
+                    "type": "string"
+                },
+                "tag_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "trigger_mode": {
                     "type": "string"
                 },
                 "updated_at": {
@@ -2095,6 +2125,12 @@
         "api.UpdateJobRequest": {
             "type": "object",
             "properties": {
+                "branch_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "default_commit_sha": {
                     "type": "string"
                 },
@@ -2120,6 +2156,15 @@
                     "type": "boolean"
                 },
                 "repository_url": {
+                    "type": "string"
+                },
+                "tag_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "trigger_mode": {
                     "type": "string"
                 }
             }

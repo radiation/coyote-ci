@@ -1,44 +1,53 @@
 package api
 
 type CreateJobRequest struct {
-	ProjectID        string  `json:"project_id"`
-	Name             string  `json:"name"`
-	RepositoryURL    string  `json:"repository_url"`
-	DefaultRef       string  `json:"default_ref,omitempty"`
-	DefaultCommitSHA string  `json:"default_commit_sha,omitempty"`
-	PushEnabled      *bool   `json:"push_enabled,omitempty"`
-	PushBranch       *string `json:"push_branch,omitempty"`
-	PipelineYAML     string  `json:"pipeline_yaml,omitempty"`
-	PipelinePath     string  `json:"pipeline_path,omitempty"`
-	Enabled          *bool   `json:"enabled,omitempty"`
+	ProjectID        string   `json:"project_id"`
+	Name             string   `json:"name"`
+	RepositoryURL    string   `json:"repository_url"`
+	DefaultRef       string   `json:"default_ref,omitempty"`
+	DefaultCommitSHA string   `json:"default_commit_sha,omitempty"`
+	PushEnabled      *bool    `json:"push_enabled,omitempty"`
+	PushBranch       *string  `json:"push_branch,omitempty"`
+	TriggerMode      *string  `json:"trigger_mode,omitempty"`
+	BranchAllowlist  []string `json:"branch_allowlist,omitempty"`
+	TagAllowlist     []string `json:"tag_allowlist,omitempty"`
+	PipelineYAML     string   `json:"pipeline_yaml,omitempty"`
+	PipelinePath     string   `json:"pipeline_path,omitempty"`
+	Enabled          *bool    `json:"enabled,omitempty"`
 }
 
 type UpdateJobRequest struct {
-	Name             *string `json:"name,omitempty"`
-	RepositoryURL    *string `json:"repository_url,omitempty"`
-	DefaultRef       *string `json:"default_ref,omitempty"`
-	DefaultCommitSHA *string `json:"default_commit_sha,omitempty"`
-	PushEnabled      *bool   `json:"push_enabled,omitempty"`
-	PushBranch       *string `json:"push_branch,omitempty"`
-	PipelineYAML     *string `json:"pipeline_yaml,omitempty"`
-	PipelinePath     *string `json:"pipeline_path,omitempty"`
-	Enabled          *bool   `json:"enabled,omitempty"`
+	Name             *string   `json:"name,omitempty"`
+	RepositoryURL    *string   `json:"repository_url,omitempty"`
+	DefaultRef       *string   `json:"default_ref,omitempty"`
+	DefaultCommitSHA *string   `json:"default_commit_sha,omitempty"`
+	PushEnabled      *bool     `json:"push_enabled,omitempty"`
+	PushBranch       *string   `json:"push_branch,omitempty"`
+	TriggerMode      *string   `json:"trigger_mode,omitempty"`
+	BranchAllowlist  *[]string `json:"branch_allowlist,omitempty"`
+	TagAllowlist     *[]string `json:"tag_allowlist,omitempty"`
+	PipelineYAML     *string   `json:"pipeline_yaml,omitempty"`
+	PipelinePath     *string   `json:"pipeline_path,omitempty"`
+	Enabled          *bool     `json:"enabled,omitempty"`
 }
 
 type JobResponse struct {
-	ID               string  `json:"id"`
-	ProjectID        string  `json:"project_id"`
-	Name             string  `json:"name"`
-	RepositoryURL    string  `json:"repository_url"`
-	DefaultRef       string  `json:"default_ref"`
-	DefaultCommitSHA *string `json:"default_commit_sha,omitempty"`
-	PushEnabled      bool    `json:"push_enabled"`
-	PushBranch       *string `json:"push_branch,omitempty"`
-	PipelineYAML     string  `json:"pipeline_yaml"`
-	PipelinePath     *string `json:"pipeline_path,omitempty"`
-	Enabled          bool    `json:"enabled"`
-	CreatedAt        string  `json:"created_at"`
-	UpdatedAt        string  `json:"updated_at"`
+	ID               string   `json:"id"`
+	ProjectID        string   `json:"project_id"`
+	Name             string   `json:"name"`
+	RepositoryURL    string   `json:"repository_url"`
+	DefaultRef       string   `json:"default_ref"`
+	DefaultCommitSHA *string  `json:"default_commit_sha,omitempty"`
+	PushEnabled      bool     `json:"push_enabled"`
+	PushBranch       *string  `json:"push_branch,omitempty"`
+	TriggerMode      string   `json:"trigger_mode"`
+	BranchAllowlist  []string `json:"branch_allowlist,omitempty"`
+	TagAllowlist     []string `json:"tag_allowlist,omitempty"`
+	PipelineYAML     string   `json:"pipeline_yaml"`
+	PipelinePath     *string  `json:"pipeline_path,omitempty"`
+	Enabled          bool     `json:"enabled"`
+	CreatedAt        string   `json:"created_at"`
+	UpdatedAt        string   `json:"updated_at"`
 }
 
 type JobListResponse struct {

@@ -19,12 +19,12 @@ func NewWebhookDeliveryRepository(db *sql.DB) *WebhookDeliveryRepository {
 	return &WebhookDeliveryRepository{db: db}
 }
 
-const webhookDeliveryColumns = `id, provider, delivery_id, event_type, repository_owner, repository_name, trigger_ref, commit_sha, actor, status, matched_job_id, queued_build_id, reason, received_at, updated_at`
+const webhookDeliveryColumns = `id, provider, delivery_id, event_type, repository_owner, repository_name, trigger_raw_ref, trigger_ref_type, trigger_ref_name, trigger_ref, trigger_deleted, commit_sha, actor, status, matched_job_id, queued_build_id, reason, received_at, updated_at`
 
 func (r *WebhookDeliveryRepository) Create(ctx context.Context, delivery domain.WebhookDelivery) (domain.WebhookDelivery, error) {
 	const query = `
-		INSERT INTO webhook_deliveries (id, provider, delivery_id, event_type, repository_owner, repository_name, trigger_ref, commit_sha, actor, status, matched_job_id, queued_build_id, reason, received_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14, NOW()), COALESCE($15, NOW()))
+		INSERT INTO webhook_deliveries (id, provider, delivery_id, event_type, repository_owner, repository_name, trigger_raw_ref, trigger_ref_type, trigger_ref_name, trigger_ref, trigger_deleted, commit_sha, actor, status, matched_job_id, queued_build_id, reason, received_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, COALESCE($18, NOW()), COALESCE($19, NOW()))
 		RETURNING ` + webhookDeliveryColumns + `
 	`
 
@@ -37,7 +37,11 @@ func (r *WebhookDeliveryRepository) Create(ctx context.Context, delivery domain.
 		delivery.EventType,
 		delivery.RepositoryOwner,
 		delivery.RepositoryName,
+		delivery.RawRef,
+		delivery.RefType,
+		delivery.RefName,
 		delivery.TriggerRef,
+		delivery.Deleted,
 		delivery.CommitSHA,
 		delivery.Actor,
 		string(delivery.Status),
@@ -81,14 +85,18 @@ func (r *WebhookDeliveryRepository) Update(ctx context.Context, delivery domain.
 		SET event_type = $2,
 			repository_owner = $3,
 			repository_name = $4,
-			trigger_ref = $5,
-			commit_sha = $6,
-			actor = $7,
-			status = $8,
-			matched_job_id = $9,
-			queued_build_id = $10,
-			reason = $11,
-			updated_at = COALESCE($12, NOW())
+			trigger_raw_ref = $5,
+			trigger_ref_type = $6,
+			trigger_ref_name = $7,
+			trigger_ref = $8,
+			trigger_deleted = $9,
+			commit_sha = $10,
+			actor = $11,
+			status = $12,
+			matched_job_id = $13,
+			queued_build_id = $14,
+			reason = $15,
+			updated_at = COALESCE($16, NOW())
 		WHERE id = $1
 		RETURNING ` + webhookDeliveryColumns + `
 	`
@@ -100,7 +108,11 @@ func (r *WebhookDeliveryRepository) Update(ctx context.Context, delivery domain.
 		delivery.EventType,
 		delivery.RepositoryOwner,
 		delivery.RepositoryName,
+		delivery.RawRef,
+		delivery.RefType,
+		delivery.RefName,
 		delivery.TriggerRef,
+		delivery.Deleted,
 		delivery.CommitSHA,
 		delivery.Actor,
 		string(delivery.Status),
@@ -124,7 +136,11 @@ func scanWebhookDelivery(scanner rowScanner) (domain.WebhookDelivery, error) {
 	var eventType sql.NullString
 	var repositoryOwner sql.NullString
 	var repositoryName sql.NullString
+	var rawRef sql.NullString
+	var refType sql.NullString
+	var refName sql.NullString
 	var triggerRef sql.NullString
+	var deleted sql.NullBool
 	var commitSHA sql.NullString
 	var actor sql.NullString
 	var status string
@@ -139,7 +155,11 @@ func scanWebhookDelivery(scanner rowScanner) (domain.WebhookDelivery, error) {
 		&eventType,
 		&repositoryOwner,
 		&repositoryName,
+		&rawRef,
+		&refType,
+		&refName,
 		&triggerRef,
+		&deleted,
 		&commitSHA,
 		&actor,
 		&status,
@@ -166,9 +186,25 @@ func scanWebhookDelivery(scanner rowScanner) (domain.WebhookDelivery, error) {
 		v := repositoryName.String
 		delivery.RepositoryName = &v
 	}
+	if rawRef.Valid {
+		v := rawRef.String
+		delivery.RawRef = &v
+	}
+	if refType.Valid {
+		v := refType.String
+		delivery.RefType = &v
+	}
+	if refName.Valid {
+		v := refName.String
+		delivery.RefName = &v
+	}
 	if triggerRef.Valid {
 		v := triggerRef.String
 		delivery.TriggerRef = &v
+	}
+	if deleted.Valid {
+		v := deleted.Bool
+		delivery.Deleted = &v
 	}
 	if commitSHA.Valid {
 		v := commitSHA.String

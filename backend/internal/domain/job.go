@@ -2,6 +2,14 @@ package domain
 
 import "time"
 
+type JobTriggerMode string
+
+const (
+	JobTriggerModeBranches        JobTriggerMode = "branches"
+	JobTriggerModeTags            JobTriggerMode = "tags"
+	JobTriggerModeBranchesAndTags JobTriggerMode = "branches_and_tags"
+)
+
 // Job is a durable reusable CI definition that can be manually executed.
 type Job struct {
 	ID               string
@@ -12,6 +20,9 @@ type Job struct {
 	DefaultCommitSHA *string
 	PushEnabled      bool
 	PushBranch       *string
+	TriggerMode      JobTriggerMode
+	BranchAllowlist  []string
+	TagAllowlist     []string
 	PipelineYAML     string
 	PipelinePath     *string
 	Enabled          bool

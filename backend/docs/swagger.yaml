@@ -233,6 +233,10 @@ definitions:
     type: object
   api.CreateJobRequest:
     properties:
+      branch_allowlist:
+        items:
+          type: string
+        type: array
       default_commit_sha:
         type: string
       default_ref:
@@ -252,6 +256,12 @@ definitions:
       push_enabled:
         type: boolean
       repository_url:
+        type: string
+      tag_allowlist:
+        items:
+          type: string
+        type: array
+      trigger_mode:
         type: string
     type: object
   api.CreatePipelineBuildRequest:
@@ -397,6 +407,10 @@ definitions:
     type: object
   api.JobResponse:
     properties:
+      branch_allowlist:
+        items:
+          type: string
+        type: array
       created_at:
         type: string
       default_commit_sha:
@@ -420,6 +434,12 @@ definitions:
       push_enabled:
         type: boolean
       repository_url:
+        type: string
+      tag_allowlist:
+        items:
+          type: string
+        type: array
+      trigger_mode:
         type: string
       updated_at:
         type: string
@@ -542,6 +562,10 @@ definitions:
     type: object
   api.UpdateJobRequest:
     properties:
+      branch_allowlist:
+        items:
+          type: string
+        type: array
       default_commit_sha:
         type: string
       default_ref:
@@ -559,6 +583,12 @@ definitions:
       push_enabled:
         type: boolean
       repository_url:
+        type: string
+      tag_allowlist:
+        items:
+          type: string
+        type: array
+      trigger_mode:
         type: string
     type: object
 info:
