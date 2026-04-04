@@ -40,4 +40,7 @@ type Build struct {
 	RepoURL   *string
 	Ref       *string
 	CommitSHA *string
+
+	// Trigger captures why/how this build was created (manual or webhook metadata).
+	Trigger BuildTrigger
 }

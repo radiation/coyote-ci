@@ -13,10 +13,10 @@ type rowScanner interface {
 }
 
 // buildColumns is the canonical column list for build SELECT/RETURNING clauses (full detail).
-const buildColumns = `id, project_id, job_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha`
+const buildColumns = `id, project_id, job_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_ref, trigger_ref_type, trigger_delivery_id, trigger_actor`
 
 // buildListColumns is a minimal column list used for list queries (omits large pipeline YAML).
-const buildListColumns = `id, project_id, job_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha`
+const buildListColumns = `id, project_id, job_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_ref, trigger_ref_type, trigger_delivery_id, trigger_actor`
 
 const executionJobColumns = `id, build_id, step_id, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir, command_json, env_json, timeout_seconds, pipeline_file_path, context_dir, source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest, spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at, created_at, started_at, finished_at, error_message, exit_code, output_refs_json`
 
@@ -51,6 +51,16 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 	var repoURL sql.NullString
 	var ref sql.NullString
 	var commitSHA sql.NullString
+	var triggerKind sql.NullString
+	var scmProvider sql.NullString
+	var eventType sql.NullString
+	var triggerRepositoryOwner sql.NullString
+	var triggerRepositoryName sql.NullString
+	var triggerRepositoryURL sql.NullString
+	var triggerRef sql.NullString
+	var triggerRefType sql.NullString
+	var triggerDeliveryID sql.NullString
+	var triggerActor sql.NullString
 
 	err := scanner.Scan(
 		&build.ID,
@@ -72,6 +82,16 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 		&repoURL,
 		&ref,
 		&commitSHA,
+		&triggerKind,
+		&scmProvider,
+		&eventType,
+		&triggerRepositoryOwner,
+		&triggerRepositoryName,
+		&triggerRepositoryURL,
+		&triggerRef,
+		&triggerRefType,
+		&triggerDeliveryID,
+		&triggerActor,
 	)
 	if err != nil {
 		return domain.Build{}, err
@@ -133,6 +153,46 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 		v := commitSHA.String
 		build.CommitSHA = &v
 	}
+	if triggerKind.Valid {
+		build.Trigger.Kind = domain.BuildTriggerKind(triggerKind.String)
+	}
+	if scmProvider.Valid {
+		v := scmProvider.String
+		build.Trigger.SCMProvider = &v
+	}
+	if eventType.Valid {
+		v := eventType.String
+		build.Trigger.EventType = &v
+	}
+	if triggerRepositoryOwner.Valid {
+		v := triggerRepositoryOwner.String
+		build.Trigger.RepositoryOwner = &v
+	}
+	if triggerRepositoryName.Valid {
+		v := triggerRepositoryName.String
+		build.Trigger.RepositoryName = &v
+	}
+	if triggerRepositoryURL.Valid {
+		v := triggerRepositoryURL.String
+		build.Trigger.RepositoryURL = &v
+	}
+	if triggerRef.Valid {
+		v := triggerRef.String
+		build.Trigger.Ref = &v
+	}
+	if triggerRefType.Valid {
+		v := triggerRefType.String
+		build.Trigger.RefType = &v
+	}
+	if triggerDeliveryID.Valid {
+		v := triggerDeliveryID.String
+		build.Trigger.DeliveryID = &v
+	}
+	if triggerActor.Valid {
+		v := triggerActor.String
+		build.Trigger.Actor = &v
+	}
+	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 	build.Source = domain.NewSourceSpec(readOptionalString(build.RepoURL), readOptionalString(build.Ref), readOptionalString(build.CommitSHA))
 
 	return build, nil
@@ -155,6 +215,16 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 	var repoURL sql.NullString
 	var ref sql.NullString
 	var commitSHA sql.NullString
+	var triggerKind sql.NullString
+	var scmProvider sql.NullString
+	var eventType sql.NullString
+	var triggerRepositoryOwner sql.NullString
+	var triggerRepositoryName sql.NullString
+	var triggerRepositoryURL sql.NullString
+	var triggerRef sql.NullString
+	var triggerRefType sql.NullString
+	var triggerDeliveryID sql.NullString
+	var triggerActor sql.NullString
 
 	err := scanner.Scan(
 		&build.ID,
@@ -177,6 +247,16 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 		&repoURL,
 		&ref,
 		&commitSHA,
+		&triggerKind,
+		&scmProvider,
+		&eventType,
+		&triggerRepositoryOwner,
+		&triggerRepositoryName,
+		&triggerRepositoryURL,
+		&triggerRef,
+		&triggerRefType,
+		&triggerDeliveryID,
+		&triggerActor,
 	)
 	if err != nil {
 		return domain.Build{}, err
@@ -242,6 +322,46 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 		v := commitSHA.String
 		build.CommitSHA = &v
 	}
+	if triggerKind.Valid {
+		build.Trigger.Kind = domain.BuildTriggerKind(triggerKind.String)
+	}
+	if scmProvider.Valid {
+		v := scmProvider.String
+		build.Trigger.SCMProvider = &v
+	}
+	if eventType.Valid {
+		v := eventType.String
+		build.Trigger.EventType = &v
+	}
+	if triggerRepositoryOwner.Valid {
+		v := triggerRepositoryOwner.String
+		build.Trigger.RepositoryOwner = &v
+	}
+	if triggerRepositoryName.Valid {
+		v := triggerRepositoryName.String
+		build.Trigger.RepositoryName = &v
+	}
+	if triggerRepositoryURL.Valid {
+		v := triggerRepositoryURL.String
+		build.Trigger.RepositoryURL = &v
+	}
+	if triggerRef.Valid {
+		v := triggerRef.String
+		build.Trigger.Ref = &v
+	}
+	if triggerRefType.Valid {
+		v := triggerRefType.String
+		build.Trigger.RefType = &v
+	}
+	if triggerDeliveryID.Valid {
+		v := triggerDeliveryID.String
+		build.Trigger.DeliveryID = &v
+	}
+	if triggerActor.Valid {
+		v := triggerActor.String
+		build.Trigger.Actor = &v
+	}
+	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 	build.Source = domain.NewSourceSpec(readOptionalString(build.RepoURL), readOptionalString(build.Ref), readOptionalString(build.CommitSHA))
 
 	return build, nil

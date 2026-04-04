@@ -59,6 +59,10 @@ func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandle
 		r.Post("/push", eventHandler.IngestPushEvent)
 	})
 
+	r.Route("/api/webhooks", func(r chi.Router) {
+		r.Post("/github", eventHandler.IngestGitHubWebhook)
+	})
+
 	return r
 }
 

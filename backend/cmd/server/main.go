@@ -52,7 +52,7 @@ func main() {
 	jobService := service.NewJobService(jobRepo, buildService)
 	buildHandler := handler.NewBuildHandler(buildService)
 	jobHandler := handler.NewJobHandler(jobService)
-	eventHandler := handler.NewEventHandler(jobService)
+	eventHandler := handler.NewEventHandler(jobService, cfg.GitHubWebhookSecret)
 
 	router := apphttp.NewRouter(buildHandler, jobHandler, eventHandler, cfg.PushEventSecret)
 	mux := nethttp.NewServeMux()

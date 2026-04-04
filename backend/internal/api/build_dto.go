@@ -115,6 +115,16 @@ type BuildResponse struct {
 	PipelineName       *string              `json:"pipeline_name,omitempty"`
 	PipelineSource     *string              `json:"pipeline_source,omitempty"`
 	PipelinePath       *string              `json:"pipeline_path,omitempty"`
+	TriggerKind        string               `json:"trigger_kind"`
+	SCMProvider        *string              `json:"scm_provider,omitempty"`
+	EventType          *string              `json:"event_type,omitempty"`
+	RepositoryOwner    *string              `json:"repository_owner,omitempty"`
+	RepositoryName     *string              `json:"repository_name,omitempty"`
+	RepositoryURL      *string              `json:"repository_url,omitempty"`
+	TriggerRef         *string              `json:"trigger_ref,omitempty"`
+	RefType            *string              `json:"ref_type,omitempty"`
+	DeliveryID         *string              `json:"delivery_id,omitempty"`
+	Actor              *string              `json:"actor,omitempty"`
 	Source             *BuildSourceResponse `json:"source,omitempty"`
 }
 

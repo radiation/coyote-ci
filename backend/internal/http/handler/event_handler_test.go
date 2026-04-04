@@ -3,6 +3,9 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,7 +19,7 @@ func TestEventHandler_IngestPushEvent(t *testing.T) {
 	jobRepo := repositorymemory.NewJobRepository()
 	buildSvc := service.NewBuildService(buildRepo, nil, nil)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
-	h := NewEventHandler(jobSvc)
+	h := NewEventHandler(jobSvc, "")
 
 	_, err := jobSvc.CreateJob(context.Background(), service.CreateJobInput{
 		ProjectID:     "project-1",
@@ -55,7 +58,7 @@ func TestEventHandler_IngestPushEvent(t *testing.T) {
 func TestEventHandler_IngestPushEvent_BadRequest(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
-	h := NewEventHandler(service.NewJobService(jobRepo, service.NewBuildService(buildRepo, nil, nil)))
+	h := NewEventHandler(service.NewJobService(jobRepo, service.NewBuildService(buildRepo, nil, nil)), "")
 
 	req := httptest.NewRequest(http.MethodPost, "/events/push", bytes.NewBufferString(`{"repository_url":"","ref":"","commit_sha":""}`))
 	res := httptest.NewRecorder()
@@ -63,6 +66,96 @@ func TestEventHandler_IngestPushEvent_BadRequest(t *testing.T) {
 
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, res.Code)
+	}
+}
+
+func TestEventHandler_IngestGitHubWebhook_ValidSignature(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := service.NewBuildService(buildRepo, nil, nil)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	h := NewEventHandler(jobSvc, "secret")
+
+	_, err := jobSvc.CreateJob(context.Background(), service.CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PushEnabled:   boolPtr(true),
+		PushBranch:    strPtr("main"),
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       boolPtr(true),
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	body := []byte(`{
+		"ref":"refs/heads/main",
+		"after":"abc123",
+		"repository":{
+			"name":"backend",
+			"html_url":"https://github.com/example/backend",
+			"owner":{"login":"example"}
+		},
+		"sender":{"login":"octocat"}
+	}`)
+
+	mac := hmac.New(sha256.New, []byte("secret"))
+	_, _ = mac.Write(body)
+	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "push")
+	req.Header.Set("X-GitHub-Delivery", "delivery-1")
+	req.Header.Set("X-Hub-Signature-256", sig)
+
+	res := httptest.NewRecorder()
+	h.IngestGitHubWebhook(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+
+	data := decodeDataMap(t, res)
+	if data["matched_jobs"] != float64(1) {
+		t.Fatalf("expected matched_jobs=1, got %v", data["matched_jobs"])
+	}
+	if data["created_builds"] != float64(1) {
+		t.Fatalf("expected created_builds=1, got %v", data["created_builds"])
+	}
+}
+
+func TestEventHandler_IngestGitHubWebhook_InvalidSignature(t *testing.T) {
+	h := NewEventHandler(service.NewJobService(repositorymemory.NewJobRepository(), service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil)), "secret")
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewBufferString(`{"ref":"refs/heads/main"}`))
+	req.Header.Set("X-GitHub-Event", "push")
+	req.Header.Set("X-Hub-Signature-256", "sha256=invalid")
+
+	res := httptest.NewRecorder()
+	h.IngestGitHubWebhook(res, req)
+
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, res.Code)
+	}
+}
+
+func TestEventHandler_IngestGitHubWebhook_UnsupportedEvent(t *testing.T) {
+	h := NewEventHandler(service.NewJobService(repositorymemory.NewJobRepository(), service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil)), "secret")
+	body := []byte(`{}`)
+	mac := hmac.New(sha256.New, []byte("secret"))
+	_, _ = mac.Write(body)
+	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-Hub-Signature-256", sig)
+
+	res := httptest.NewRecorder()
+	h.IngestGitHubWebhook(res, req)
+
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, res.Code)
 	}
 }
 

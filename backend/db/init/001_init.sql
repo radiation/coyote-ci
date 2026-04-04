@@ -37,7 +37,17 @@ CREATE TABLE IF NOT EXISTS builds (
     pipeline_path TEXT,
     repo_url TEXT,
     ref TEXT,
-    commit_sha TEXT
+    commit_sha TEXT,
+    trigger_kind TEXT NOT NULL DEFAULT 'manual',
+    scm_provider TEXT,
+    event_type TEXT,
+    trigger_repository_owner TEXT,
+    trigger_repository_name TEXT,
+    trigger_repository_url TEXT,
+    trigger_ref TEXT,
+    trigger_ref_type TEXT,
+    trigger_delivery_id TEXT,
+    trigger_actor TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_builds_project_id ON builds (project_id);

@@ -828,6 +828,7 @@ func isCreateRepoBuildBadRequestError(err error) bool {
 }
 
 func toBuildResponse(build domain.Build) api.BuildResponse {
+	trigger := domain.NormalizeBuildTrigger(build.Trigger)
 	return api.BuildResponse{
 		ID:                 build.ID,
 		ProjectID:          build.ProjectID,
@@ -846,6 +847,16 @@ func toBuildResponse(build domain.Build) api.BuildResponse {
 		PipelineName:       build.PipelineName,
 		PipelineSource:     build.PipelineSource,
 		PipelinePath:       build.PipelinePath,
+		TriggerKind:        string(trigger.Kind),
+		SCMProvider:        trigger.SCMProvider,
+		EventType:          trigger.EventType,
+		RepositoryOwner:    trigger.RepositoryOwner,
+		RepositoryName:     trigger.RepositoryName,
+		RepositoryURL:      trigger.RepositoryURL,
+		TriggerRef:         trigger.Ref,
+		RefType:            trigger.RefType,
+		DeliveryID:         trigger.DeliveryID,
+		Actor:              trigger.Actor,
 		Source:             toBuildSourceResponse(build),
 	}
 }

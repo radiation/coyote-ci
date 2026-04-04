@@ -24,6 +24,7 @@ type Config struct {
 	MountDockerSocket      bool
 	ArtifactStorageRoot    string
 	PushEventSecret        string
+	GitHubWebhookSecret    string
 }
 
 func Load() Config {
@@ -44,6 +45,7 @@ func Load() Config {
 		MountDockerSocket:      getEnvBool("WORKER_MOUNT_DOCKER_SOCKET", false),
 		ArtifactStorageRoot:    getEnv("ARTIFACT_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-artifacts")),
 		PushEventSecret:        getEnv("PUSH_EVENT_SECRET", ""),
+		GitHubWebhookSecret:    getEnv("GITHUB_WEBHOOK_SECRET", getEnv("PUSH_EVENT_SECRET", "")),
 	}
 }
 
