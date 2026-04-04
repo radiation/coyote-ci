@@ -12,6 +12,17 @@ export interface Build {
   error_message: string | null;
   pipeline_source?: string | null;
   pipeline_path?: string | null;
+  trigger_kind?: string | null;
+  scm_provider?: string | null;
+  event_type?: string | null;
+  repository_owner?: string | null;
+  repository_name?: string | null;
+  repository_url?: string | null;
+  trigger_ref?: string | null;
+  ref_type?: string | null;
+  source_commit_sha?: string | null;
+  trigger_commit_sha?: string | null;
+  actor?: string | null;
 }
 
 export type BuildStatus = 'pending' | 'queued' | 'running' | 'success' | 'failed';

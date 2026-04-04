@@ -11,6 +11,7 @@ type CreateBuildTriggerInput struct {
 	RepositoryURL   string
 	Ref             string
 	RefType         string
+	CommitSHA       string
 	DeliveryID      string
 	Actor           string
 }
@@ -29,6 +30,7 @@ func toDomainBuildTrigger(input *CreateBuildTriggerInput) domain.BuildTrigger {
 		RepositoryURL:   optionalStringPtr(input.RepositoryURL),
 		Ref:             optionalStringPtr(input.Ref),
 		RefType:         optionalStringPtr(input.RefType),
+		CommitSHA:       optionalStringPtr(input.CommitSHA),
 		DeliveryID:      optionalStringPtr(input.DeliveryID),
 		Actor:           optionalStringPtr(input.Actor),
 	}

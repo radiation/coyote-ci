@@ -121,6 +121,7 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 			RepositoryURL:   repoURL,
 			Ref:             ref,
 			RefType:         strings.TrimSpace(input.RefType),
+			CommitSHA:       commitSHA,
 			DeliveryID:      strings.TrimSpace(input.DeliveryID),
 			Actor:           strings.TrimSpace(input.Actor),
 		}

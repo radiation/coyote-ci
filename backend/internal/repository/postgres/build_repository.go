@@ -21,8 +21,8 @@ func NewBuildRepository(db *sql.DB) *BuildRepository {
 
 func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domain.Build, error) {
 	const query = `
-		INSERT INTO builds (id, project_id, job_id, status, created_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_ref, trigger_ref_type, trigger_delivery_id, trigger_actor)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+		INSERT INTO builds (id, project_id, job_id, status, created_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_ref, trigger_ref_type, trigger_commit_sha, trigger_delivery_id, trigger_actor)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 	`
 
 	if build.CurrentStepIndex < 0 {
@@ -60,6 +60,7 @@ func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domai
 		build.Trigger.RepositoryURL,
 		build.Trigger.Ref,
 		build.Trigger.RefType,
+		build.Trigger.CommitSHA,
 		build.Trigger.DeliveryID,
 		build.Trigger.Actor,
 	)
@@ -82,8 +83,8 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 	}()
 
 	const createQuery = `
-		INSERT INTO builds (id, project_id, job_id, status, created_at, queued_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_ref, trigger_ref_type, trigger_delivery_id, trigger_actor)
-		VALUES ($1, $2, $3, 'queued', $4, COALESCE($5, NOW()), 0, $6, $7, $8, NULL, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+		INSERT INTO builds (id, project_id, job_id, status, created_at, queued_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_ref, trigger_ref_type, trigger_commit_sha, trigger_delivery_id, trigger_actor)
+		VALUES ($1, $2, $3, 'queued', $4, COALESCE($5, NOW()), 0, $6, $7, $8, NULL, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
 		RETURNING ` + buildColumns + `
 	`
 	if build.AttemptNumber <= 0 {
@@ -91,7 +92,7 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 	}
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 
-	build, err = scanBuild(tx.QueryRowContext(ctx, createQuery, build.ID, build.ProjectID, build.JobID, build.CreatedAt, build.QueuedAt, build.AttemptNumber, build.RerunOfBuildID, build.RerunFromStepIdx, build.PipelineConfigYAML, build.PipelineName, build.PipelineSource, build.PipelinePath, build.RepoURL, build.Ref, build.CommitSHA, string(build.Trigger.Kind), build.Trigger.SCMProvider, build.Trigger.EventType, build.Trigger.RepositoryOwner, build.Trigger.RepositoryName, build.Trigger.RepositoryURL, build.Trigger.Ref, build.Trigger.RefType, build.Trigger.DeliveryID, build.Trigger.Actor))
+	build, err = scanBuild(tx.QueryRowContext(ctx, createQuery, build.ID, build.ProjectID, build.JobID, build.CreatedAt, build.QueuedAt, build.AttemptNumber, build.RerunOfBuildID, build.RerunFromStepIdx, build.PipelineConfigYAML, build.PipelineName, build.PipelineSource, build.PipelinePath, build.RepoURL, build.Ref, build.CommitSHA, string(build.Trigger.Kind), build.Trigger.SCMProvider, build.Trigger.EventType, build.Trigger.RepositoryOwner, build.Trigger.RepositoryName, build.Trigger.RepositoryURL, build.Trigger.Ref, build.Trigger.RefType, build.Trigger.CommitSHA, build.Trigger.DeliveryID, build.Trigger.Actor))
 	if err != nil {
 		return domain.Build{}, err
 	}

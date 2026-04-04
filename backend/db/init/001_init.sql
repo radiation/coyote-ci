@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS builds (
     trigger_repository_url TEXT,
     trigger_ref TEXT,
     trigger_ref_type TEXT,
+    trigger_commit_sha TEXT,
     trigger_delivery_id TEXT,
     trigger_actor TEXT
 );

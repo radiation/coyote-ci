@@ -18,6 +18,7 @@ type BuildTrigger struct {
 	RepositoryURL   *string
 	Ref             *string
 	RefType         *string
+	CommitSHA       *string
 	DeliveryID      *string
 	Actor           *string
 }
@@ -33,6 +34,7 @@ func NormalizeBuildTrigger(in BuildTrigger) BuildTrigger {
 	in.RepositoryURL = trimOptional(in.RepositoryURL)
 	in.Ref = trimOptional(in.Ref)
 	in.RefType = trimOptional(in.RefType)
+	in.CommitSHA = trimOptional(in.CommitSHA)
 	in.DeliveryID = trimOptional(in.DeliveryID)
 	in.Actor = trimOptional(in.Actor)
 	return in

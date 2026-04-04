@@ -152,8 +152,8 @@ func TestCreateRepoBuild(t *testing.T) {
 		if source["ref"] != "main" {
 			t.Errorf("expected source.ref in response, got %v", source["ref"])
 		}
-		if source["commit_sha"] != "abc123" {
-			t.Errorf("expected source.commit_sha in response, got %v", source["commit_sha"])
+		if source["source_commit_sha"] != "abc123" {
+			t.Errorf("expected source.source_commit_sha in response, got %v", source["source_commit_sha"])
 		}
 		if data["pipeline_source"] != "repo" {
 			t.Errorf("expected pipeline_source in response, got %v", data["pipeline_source"])

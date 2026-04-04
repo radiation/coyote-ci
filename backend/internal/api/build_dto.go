@@ -42,9 +42,9 @@ type BuildSourceInput struct {
 }
 
 type BuildSourceResponse struct {
-	RepositoryURL string  `json:"repository_url"`
-	Ref           *string `json:"ref,omitempty"`
-	CommitSHA     *string `json:"commit_sha,omitempty"`
+	RepositoryURL   string  `json:"repository_url"`
+	Ref             *string `json:"ref,omitempty"`
+	SourceCommitSHA *string `json:"source_commit_sha,omitempty"`
 }
 
 type CreateBuildStepInput struct {
@@ -123,6 +123,8 @@ type BuildResponse struct {
 	RepositoryURL      *string              `json:"repository_url,omitempty"`
 	TriggerRef         *string              `json:"trigger_ref,omitempty"`
 	RefType            *string              `json:"ref_type,omitempty"`
+	SourceCommitSHA    *string              `json:"source_commit_sha,omitempty"`
+	TriggerCommitSHA   *string              `json:"trigger_commit_sha,omitempty"`
 	DeliveryID         *string              `json:"delivery_id,omitempty"`
 	Actor              *string              `json:"actor,omitempty"`
 	Source             *BuildSourceResponse `json:"source,omitempty"`

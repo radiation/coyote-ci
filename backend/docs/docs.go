@@ -1455,10 +1455,16 @@ const docTemplate = `{
                 "source": {
                     "$ref": "#/definitions/api.BuildSourceResponse"
                 },
+                "source_commit_sha": {
+                    "type": "string"
+                },
                 "started_at": {
                     "type": "string"
                 },
                 "status": {
+                    "type": "string"
+                },
+                "trigger_commit_sha": {
                     "type": "string"
                 },
                 "trigger_kind": {
@@ -1486,13 +1492,13 @@ const docTemplate = `{
         "api.BuildSourceResponse": {
             "type": "object",
             "properties": {
-                "commit_sha": {
-                    "type": "string"
-                },
                 "ref": {
                     "type": "string"
                 },
                 "repository_url": {
+                    "type": "string"
+                },
+                "source_commit_sha": {
                     "type": "string"
                 }
             }
