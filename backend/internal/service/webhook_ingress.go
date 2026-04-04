@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/observability"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
@@ -20,6 +21,7 @@ var ErrWebhookInvalidDeliveryTransition = errors.New("invalid webhook delivery t
 type WebhookIngressService struct {
 	deliveryRepo repository.WebhookDeliveryRepository
 	jobService   *JobService
+	metrics      observability.WebhookIngressMetrics
 }
 
 type WebhookIngressResult struct {
@@ -29,7 +31,15 @@ type WebhookIngressResult struct {
 }
 
 func NewWebhookIngressService(deliveryRepo repository.WebhookDeliveryRepository, jobService *JobService) *WebhookIngressService {
-	return &WebhookIngressService{deliveryRepo: deliveryRepo, jobService: jobService}
+	return &WebhookIngressService{deliveryRepo: deliveryRepo, jobService: jobService, metrics: observability.NewNoopWebhookIngressMetrics()}
+}
+
+func (s *WebhookIngressService) SetMetrics(metrics observability.WebhookIngressMetrics) {
+	if metrics == nil {
+		s.metrics = observability.NewNoopWebhookIngressMetrics()
+		return
+	}
+	s.metrics = metrics
 }
 
 func (s *WebhookIngressService) RegisterReceived(ctx context.Context, provider string, deliveryID string, eventType string) (domain.WebhookDelivery, bool, error) {
@@ -100,6 +110,7 @@ func (s *WebhookIngressService) ProcessVerifiedEvent(ctx context.Context, delive
 	if err != nil {
 		return WebhookIngressResult{}, err
 	}
+	s.metrics.IncOutcome(verified.Provider, readOptionalString(verified.EventType), observability.WebhookOutcomeDeliveriesVerified)
 
 	triggerResult, triggerErr := s.jobService.TriggerWebhookEvent(ctx, trigger)
 	if triggerErr != nil {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"expvar"
 	"log"
 	nethttp "net/http"
 
@@ -9,6 +10,7 @@ import (
 	apphttp "github.com/radiation/coyote-ci/backend/internal/http"
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
+	"github.com/radiation/coyote-ci/backend/internal/observability"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
@@ -52,12 +54,15 @@ func main() {
 	buildService.SetArtifactPersistence(artifactRepo, artifactStore, cfg.ExecutionWorkspaceRoot)
 	jobService := service.NewJobService(jobRepo, buildService)
 	webhookService := service.NewWebhookIngressService(webhookDeliveryRepo, jobService)
+	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()
+	webhookService.SetMetrics(webhookMetrics)
 	buildHandler := handler.NewBuildHandler(buildService)
 	jobHandler := handler.NewJobHandler(jobService)
-	eventHandler := handler.NewEventHandler(jobService, webhookService, cfg.GitHubWebhookSecret)
+	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, cfg.GitHubWebhookSecret)
 
 	router := apphttp.NewRouter(buildHandler, jobHandler, eventHandler, cfg.PushEventSecret)
 	mux := nethttp.NewServeMux()
+	mux.Handle("/debug/vars", expvar.Handler())
 	mux.Handle("/swagger/", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))
 	mux.Handle("/", router)
 

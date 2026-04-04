@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/observability"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 )
@@ -21,7 +22,7 @@ func TestEventHandler_IngestPushEvent(t *testing.T) {
 	buildSvc := service.NewBuildService(buildRepo, nil, nil)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	webhookSvc := service.NewWebhookIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc)
-	h := NewEventHandler(jobSvc, webhookSvc, "")
+	h := NewEventHandler(jobSvc, webhookSvc, observability.NewNoopWebhookIngressMetrics(), "")
 
 	_, err := jobSvc.CreateJob(context.Background(), service.CreateJobInput{
 		ProjectID:     "project-1",
@@ -61,7 +62,7 @@ func TestEventHandler_IngestPushEvent_BadRequest(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
 	jobSvc := service.NewJobService(jobRepo, service.NewBuildService(buildRepo, nil, nil))
-	h := NewEventHandler(jobSvc, service.NewWebhookIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), "")
+	h := NewEventHandler(jobSvc, service.NewWebhookIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 
 	req := httptest.NewRequest(http.MethodPost, "/events/push", bytes.NewBufferString(`{"repository_url":"","ref":"","commit_sha":""}`))
 	res := httptest.NewRecorder()
@@ -79,7 +80,9 @@ func TestEventHandler_IngestGitHubWebhook_IdempotentDuplicateNoSecondBuild(t *te
 	buildSvc := service.NewBuildService(buildRepo, nil, nil)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	webhookSvc := service.NewWebhookIngressService(deliveryRepo, jobSvc)
-	h := NewEventHandler(jobSvc, webhookSvc, "secret")
+	metrics := observability.NewInMemoryWebhookIngressMetrics()
+	webhookSvc.SetMetrics(metrics)
+	h := NewEventHandler(jobSvc, webhookSvc, metrics, "secret")
 
 	_, err := jobSvc.CreateJob(context.Background(), service.CreateJobInput{
 		ProjectID:     "project-1",
@@ -141,13 +144,25 @@ func TestEventHandler_IngestGitHubWebhook_IdempotentDuplicateNoSecondBuild(t *te
 	if delivery.Status != domain.WebhookDeliveryStatusDuplicate {
 		t.Fatalf("expected duplicate status after replay, got %q", delivery.Status)
 	}
+	if got := metrics.OutcomeCount("github", "push", observability.WebhookOutcomeDuplicate); got != 1 {
+		t.Fatalf("expected duplicate metric count 1, got %d", got)
+	}
+	if got := metrics.OutcomeCount("github", "push", observability.WebhookOutcomeDeliveriesVerified); got != 1 {
+		t.Fatalf("expected deliveries_verified metric count 1, got %d", got)
+	}
+	if got := metrics.OutcomeCount("github", "push", observability.WebhookOutcomeBuildQueued); got != 1 {
+		t.Fatalf("expected build_queued metric count 1, got %d", got)
+	}
+	if got := metrics.DurationSampleCount("github", "push", observability.WebhookOutcomeDuplicate); got != 1 {
+		t.Fatalf("expected one duplicate duration sample, got %d", got)
+	}
 }
 
 func TestEventHandler_IngestGitHubWebhook_UnsupportedEventRecorded(t *testing.T) {
 	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
 	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
 	webhookSvc := service.NewWebhookIngressService(deliveryRepo, jobSvc)
-	h := NewEventHandler(jobSvc, webhookSvc, "secret")
+	h := NewEventHandler(jobSvc, webhookSvc, observability.NewNoopWebhookIngressMetrics(), "secret")
 
 	body := []byte(`{}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewReader(body))
@@ -174,7 +189,9 @@ func TestEventHandler_IngestGitHubWebhook_NoMatchRecorded(t *testing.T) {
 	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
 	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
 	webhookSvc := service.NewWebhookIngressService(deliveryRepo, jobSvc)
-	h := NewEventHandler(jobSvc, webhookSvc, "secret")
+	metrics := observability.NewInMemoryWebhookIngressMetrics()
+	webhookSvc.SetMetrics(metrics)
+	h := NewEventHandler(jobSvc, webhookSvc, metrics, "secret")
 
 	body := []byte(`{
 		"ref":"refs/heads/main",
@@ -205,13 +222,19 @@ func TestEventHandler_IngestGitHubWebhook_NoMatchRecorded(t *testing.T) {
 	if delivery.Status != domain.WebhookDeliveryStatusIgnoredNoMatch {
 		t.Fatalf("expected ignored_no_match status, got %q", delivery.Status)
 	}
+	if got := metrics.OutcomeCount("github", "push", observability.WebhookOutcomeNoMatchingJob); got != 1 {
+		t.Fatalf("expected no_matching_job metric count 1, got %d", got)
+	}
+	if got := metrics.DurationSampleCount("github", "push", observability.WebhookOutcomeNoMatchingJob); got != 1 {
+		t.Fatalf("expected one no_matching_job duration sample, got %d", got)
+	}
 }
 
 func TestEventHandler_IngestGitHubWebhook_FailedProcessingRecorded(t *testing.T) {
 	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
 	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), nil)
 	webhookSvc := service.NewWebhookIngressService(deliveryRepo, jobSvc)
-	h := NewEventHandler(jobSvc, webhookSvc, "secret")
+	h := NewEventHandler(jobSvc, webhookSvc, observability.NewNoopWebhookIngressMetrics(), "secret")
 
 	body := []byte(`{
 		"ref":"refs/heads/main",
@@ -247,7 +270,9 @@ func TestEventHandler_IngestGitHubWebhook_InvalidSignatureRecorded(t *testing.T)
 	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
 	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
 	webhookSvc := service.NewWebhookIngressService(deliveryRepo, jobSvc)
-	h := NewEventHandler(jobSvc, webhookSvc, "secret")
+	metrics := observability.NewInMemoryWebhookIngressMetrics()
+	webhookSvc.SetMetrics(metrics)
+	h := NewEventHandler(jobSvc, webhookSvc, metrics, "secret")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewBufferString(`{"ref":"refs/heads/main"}`))
 	req.Header.Set("X-GitHub-Event", "push")
@@ -267,6 +292,12 @@ func TestEventHandler_IngestGitHubWebhook_InvalidSignatureRecorded(t *testing.T)
 	}
 	if delivery.Status != domain.WebhookDeliveryStatusFailed {
 		t.Fatalf("expected failed status, got %q", delivery.Status)
+	}
+	if got := metrics.OutcomeCount("github", "push", observability.WebhookOutcomeInvalidSignature); got != 1 {
+		t.Fatalf("expected invalid_signature metric count 1, got %d", got)
+	}
+	if got := metrics.DurationSampleCount("github", "push", observability.WebhookOutcomeInvalidSignature); got != 1 {
+		t.Fatalf("expected one invalid_signature duration sample, got %d", got)
 	}
 }
 

@@ -97,6 +97,7 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 		CommitSHA:     commitSHA,
 		Builds:        make([]WebhookMatchedBuild, 0),
 	}
+	webhookFields := WebhookLogFields(ctx)
 
 	for _, job := range jobs {
 		if !matchesSCMRepositoryIdentity(job.RepositoryURL, scmProvider, repositoryOwner, repositoryName) {
@@ -106,7 +107,7 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 			continue
 		}
 		result.MatchedJobs++
-		log.Printf("INFO webhook job matched provider=%s owner=%s repository=%s job_id=%s ref=%s", scmProvider, repositoryOwner, repositoryName, job.ID, ref)
+		log.Printf("INFO webhook job matched %s owner=%s repository=%s job_id=%s ref=%s", webhookFields, repositoryOwner, repositoryName, job.ID, ref)
 
 		var (
 			build    domain.Build
@@ -151,13 +152,13 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 		if buildErr != nil {
 			return WebhookTriggerResult{}, fmt.Errorf("creating build from webhook event for job %s: %w", job.ID, buildErr)
 		}
-		log.Printf("INFO webhook build queued provider=%s event_type=%s job_id=%s build_id=%s", scmProvider, eventType, job.ID, build.ID)
+		log.Printf("INFO webhook build queued %s job_id=%s build_id=%s", webhookFields, job.ID, build.ID)
 
 		result.Builds = append(result.Builds, WebhookMatchedBuild{Job: job, Build: build})
 	}
 
 	if result.MatchedJobs == 0 {
-		log.Printf("INFO webhook job not matched provider=%s owner=%s repository=%s ref=%s", scmProvider, repositoryOwner, repositoryName, ref)
+		log.Printf("INFO webhook job not matched %s owner=%s repository=%s ref=%s", webhookFields, repositoryOwner, repositoryName, ref)
 	}
 
 	return result, nil
