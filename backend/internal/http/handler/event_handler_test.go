@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 )
@@ -19,7 +20,8 @@ func TestEventHandler_IngestPushEvent(t *testing.T) {
 	jobRepo := repositorymemory.NewJobRepository()
 	buildSvc := service.NewBuildService(buildRepo, nil, nil)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
-	h := NewEventHandler(jobSvc, "")
+	webhookSvc := service.NewWebhookIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc)
+	h := NewEventHandler(jobSvc, webhookSvc, "")
 
 	_, err := jobSvc.CreateJob(context.Background(), service.CreateJobInput{
 		ProjectID:     "project-1",
@@ -58,7 +60,8 @@ func TestEventHandler_IngestPushEvent(t *testing.T) {
 func TestEventHandler_IngestPushEvent_BadRequest(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
-	h := NewEventHandler(service.NewJobService(jobRepo, service.NewBuildService(buildRepo, nil, nil)), "")
+	jobSvc := service.NewJobService(jobRepo, service.NewBuildService(buildRepo, nil, nil))
+	h := NewEventHandler(jobSvc, service.NewWebhookIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), "")
 
 	req := httptest.NewRequest(http.MethodPost, "/events/push", bytes.NewBufferString(`{"repository_url":"","ref":"","commit_sha":""}`))
 	res := httptest.NewRecorder()
@@ -69,12 +72,14 @@ func TestEventHandler_IngestPushEvent_BadRequest(t *testing.T) {
 	}
 }
 
-func TestEventHandler_IngestGitHubWebhook_ValidSignature(t *testing.T) {
+func TestEventHandler_IngestGitHubWebhook_IdempotentDuplicateNoSecondBuild(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
+	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
 	buildSvc := service.NewBuildService(buildRepo, nil, nil)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
-	h := NewEventHandler(jobSvc, "secret")
+	webhookSvc := service.NewWebhookIngressService(deliveryRepo, jobSvc)
+	h := NewEventHandler(jobSvc, webhookSvc, "secret")
 
 	_, err := jobSvc.CreateJob(context.Background(), service.CreateJobInput{
 		ProjectID:     "project-1",
@@ -100,36 +105,153 @@ func TestEventHandler_IngestGitHubWebhook_ValidSignature(t *testing.T) {
 		},
 		"sender":{"login":"octocat"}
 	}`)
+	sig := githubTestSignature("secret", body)
 
-	mac := hmac.New(sha256.New, []byte("secret"))
-	_, _ = mac.Write(body)
-	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	for i := range 2 {
+		req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewReader(body))
+		req.Header.Set("X-GitHub-Event", "push")
+		req.Header.Set("X-GitHub-Delivery", "delivery-1")
+		req.Header.Set("X-Hub-Signature-256", sig)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewReader(body))
-	req.Header.Set("X-GitHub-Event", "push")
-	req.Header.Set("X-GitHub-Delivery", "delivery-1")
-	req.Header.Set("X-Hub-Signature-256", sig)
-
-	res := httptest.NewRecorder()
-	h.IngestGitHubWebhook(res, req)
-
-	if res.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+		res := httptest.NewRecorder()
+		h.IngestGitHubWebhook(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("expected status %d on attempt %d, got %d body=%s", http.StatusOK, i+1, res.Code, res.Body.String())
+		}
+		if i == 1 {
+			data := decodeDataMap(t, res)
+			if duplicate, _ := data["duplicate"].(bool); !duplicate {
+				t.Fatalf("expected duplicate=true on second delivery, got %v", data["duplicate"])
+			}
+		}
 	}
 
-	data := decodeDataMap(t, res)
-	if data["matched_jobs"] != float64(1) {
-		t.Fatalf("expected matched_jobs=1, got %v", data["matched_jobs"])
+	builds, err := buildRepo.List(context.Background())
+	if err != nil {
+		t.Fatalf("list builds failed: %v", err)
 	}
-	if data["created_builds"] != float64(1) {
-		t.Fatalf("expected created_builds=1, got %v", data["created_builds"])
+	if len(builds) != 1 {
+		t.Fatalf("expected exactly one queued build for duplicate deliveries, got %d", len(builds))
+	}
+
+	delivery, err := deliveryRepo.GetByProviderDeliveryID(context.Background(), "github", "delivery-1")
+	if err != nil {
+		t.Fatalf("expected delivery ledger record, got err=%v", err)
+	}
+	if delivery.Status != domain.WebhookDeliveryStatusDuplicate {
+		t.Fatalf("expected duplicate status after replay, got %q", delivery.Status)
 	}
 }
 
-func TestEventHandler_IngestGitHubWebhook_InvalidSignature(t *testing.T) {
-	h := NewEventHandler(service.NewJobService(repositorymemory.NewJobRepository(), service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil)), "secret")
+func TestEventHandler_IngestGitHubWebhook_UnsupportedEventRecorded(t *testing.T) {
+	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
+	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
+	webhookSvc := service.NewWebhookIngressService(deliveryRepo, jobSvc)
+	h := NewEventHandler(jobSvc, webhookSvc, "secret")
+
+	body := []byte(`{}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-GitHub-Delivery", "delivery-unsupported")
+	req.Header.Set("X-Hub-Signature-256", githubTestSignature("secret", body))
+
+	res := httptest.NewRecorder()
+	h.IngestGitHubWebhook(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, res.Code)
+	}
+
+	delivery, err := deliveryRepo.GetByProviderDeliveryID(context.Background(), "github", "delivery-unsupported")
+	if err != nil {
+		t.Fatalf("expected ledger record, got %v", err)
+	}
+	if delivery.Status != domain.WebhookDeliveryStatusUnsupported {
+		t.Fatalf("expected unsupported status, got %q", delivery.Status)
+	}
+}
+
+func TestEventHandler_IngestGitHubWebhook_NoMatchRecorded(t *testing.T) {
+	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
+	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
+	webhookSvc := service.NewWebhookIngressService(deliveryRepo, jobSvc)
+	h := NewEventHandler(jobSvc, webhookSvc, "secret")
+
+	body := []byte(`{
+		"ref":"refs/heads/main",
+		"after":"abc123",
+		"repository":{
+			"name":"backend",
+			"html_url":"https://github.com/example/backend",
+			"owner":{"login":"example"}
+		},
+		"sender":{"login":"octocat"}
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "push")
+	req.Header.Set("X-GitHub-Delivery", "delivery-no-match")
+	req.Header.Set("X-Hub-Signature-256", githubTestSignature("secret", body))
+
+	res := httptest.NewRecorder()
+	h.IngestGitHubWebhook(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, res.Code)
+	}
+
+	delivery, err := deliveryRepo.GetByProviderDeliveryID(context.Background(), "github", "delivery-no-match")
+	if err != nil {
+		t.Fatalf("expected ledger record, got %v", err)
+	}
+	if delivery.Status != domain.WebhookDeliveryStatusIgnoredNoMatch {
+		t.Fatalf("expected ignored_no_match status, got %q", delivery.Status)
+	}
+}
+
+func TestEventHandler_IngestGitHubWebhook_FailedProcessingRecorded(t *testing.T) {
+	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
+	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), nil)
+	webhookSvc := service.NewWebhookIngressService(deliveryRepo, jobSvc)
+	h := NewEventHandler(jobSvc, webhookSvc, "secret")
+
+	body := []byte(`{
+		"ref":"refs/heads/main",
+		"after":"abc123",
+		"repository":{
+			"name":"backend",
+			"html_url":"https://github.com/example/backend",
+			"owner":{"login":"example"}
+		},
+		"sender":{"login":"octocat"}
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "push")
+	req.Header.Set("X-GitHub-Delivery", "delivery-failed")
+	req.Header.Set("X-Hub-Signature-256", githubTestSignature("secret", body))
+
+	res := httptest.NewRecorder()
+	h.IngestGitHubWebhook(res, req)
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, res.Code)
+	}
+
+	delivery, err := deliveryRepo.GetByProviderDeliveryID(context.Background(), "github", "delivery-failed")
+	if err != nil {
+		t.Fatalf("expected ledger record, got %v", err)
+	}
+	if delivery.Status != domain.WebhookDeliveryStatusFailed {
+		t.Fatalf("expected failed status, got %q", delivery.Status)
+	}
+}
+
+func TestEventHandler_IngestGitHubWebhook_InvalidSignatureRecorded(t *testing.T) {
+	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
+	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
+	webhookSvc := service.NewWebhookIngressService(deliveryRepo, jobSvc)
+	h := NewEventHandler(jobSvc, webhookSvc, "secret")
+
 	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewBufferString(`{"ref":"refs/heads/main"}`))
 	req.Header.Set("X-GitHub-Event", "push")
+	req.Header.Set("X-GitHub-Delivery", "delivery-invalid-signature")
 	req.Header.Set("X-Hub-Signature-256", "sha256=invalid")
 
 	res := httptest.NewRecorder()
@@ -138,25 +260,20 @@ func TestEventHandler_IngestGitHubWebhook_InvalidSignature(t *testing.T) {
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, res.Code)
 	}
+
+	delivery, err := deliveryRepo.GetByProviderDeliveryID(context.Background(), "github", "delivery-invalid-signature")
+	if err != nil {
+		t.Fatalf("expected ledger record, got %v", err)
+	}
+	if delivery.Status != domain.WebhookDeliveryStatusFailed {
+		t.Fatalf("expected failed status, got %q", delivery.Status)
+	}
 }
 
-func TestEventHandler_IngestGitHubWebhook_UnsupportedEvent(t *testing.T) {
-	h := NewEventHandler(service.NewJobService(repositorymemory.NewJobRepository(), service.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil)), "secret")
-	body := []byte(`{}`)
-	mac := hmac.New(sha256.New, []byte("secret"))
+func githubTestSignature(secret string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write(body)
-	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-
-	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewReader(body))
-	req.Header.Set("X-GitHub-Event", "pull_request")
-	req.Header.Set("X-Hub-Signature-256", sig)
-
-	res := httptest.NewRecorder()
-	h.IngestGitHubWebhook(res, req)
-
-	if res.Code != http.StatusAccepted {
-		t.Fatalf("expected status %d, got %d", http.StatusAccepted, res.Code)
-	}
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func boolPtr(v bool) *bool    { return &v }

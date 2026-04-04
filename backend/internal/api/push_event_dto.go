@@ -17,6 +17,7 @@ type PushEventResponse struct {
 	RepositoryURL string                `json:"repository_url"`
 	Ref           string                `json:"ref"`
 	CommitSHA     string                `json:"commit_sha"`
+	Duplicate     bool                  `json:"duplicate,omitempty"`
 	MatchedJobs   int                   `json:"matched_jobs"`
 	CreatedBuilds int                   `json:"created_builds"`
 	Builds        []PushEventMatchedJob `json:"builds"`

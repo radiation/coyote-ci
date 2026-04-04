@@ -1970,6 +1970,9 @@ const docTemplate = `{
                 "created_builds": {
                     "type": "integer"
                 },
+                "duplicate": {
+                    "type": "boolean"
+                },
                 "matched_jobs": {
                     "type": "integer"
                 },
