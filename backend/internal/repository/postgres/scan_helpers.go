@@ -489,6 +489,9 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 		if err := json.Unmarshal(artifactPathsRaw, &step.ArtifactPaths); err != nil {
 			return domain.BuildStep{}, err
 		}
+		if step.ArtifactPaths == nil {
+			step.ArtifactPaths = []string{}
+		}
 	} else {
 		step.ArtifactPaths = []string{}
 	}

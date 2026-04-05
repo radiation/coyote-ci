@@ -33,7 +33,7 @@ func pipelineStepsToDomain(buildID string, steps []pipeline.ResolvedStep) []doma
 			Env:            env,
 			WorkingDir:     workingDir,
 			TimeoutSeconds: rs.TimeoutSeconds,
-			ArtifactPaths:  append([]string(nil), rs.ArtifactPaths...),
+			ArtifactPaths:  append([]string{}, rs.ArtifactPaths...),
 			Status:         domain.BuildStepStatusPending,
 		})
 	}

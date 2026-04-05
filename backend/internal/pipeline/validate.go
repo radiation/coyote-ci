@@ -94,7 +94,7 @@ func Validate(pf *PipelineFile) error {
 
 		for j, pattern := range step.Artifacts.Paths {
 			trimmed := strings.TrimSpace(pattern)
-			field := fmt.Sprintf("%s.artifacts[%d]", prefix, j)
+			field := fmt.Sprintf("%s.artifacts.paths[%d]", prefix, j)
 			if trimmed == "" {
 				errs = append(errs, ValidationError{Field: field, Message: "artifact path is required"})
 				continue

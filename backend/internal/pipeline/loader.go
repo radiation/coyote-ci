@@ -62,7 +62,7 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 			WorkingDir:     sd.WorkingDir,
 			Env:            merged,
 			TimeoutSeconds: timeout,
-			ArtifactPaths:  append([]string(nil), sd.Artifacts.Paths...),
+			ArtifactPaths:  append([]string{}, sd.Artifacts.Paths...),
 		})
 	}
 
@@ -71,7 +71,7 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 		Image:     strings.TrimSpace(pf.Pipeline.Image),
 		Env:       mergedPipelineEnv,
 		Steps:     steps,
-		Artifacts: ResolvedArtifacts{Paths: append([]string(nil), pf.Artifacts.Paths...)},
+		Artifacts: ResolvedArtifacts{Paths: append([]string{}, pf.Artifacts.Paths...)},
 	}
 }
 

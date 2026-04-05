@@ -156,10 +156,15 @@ func (s *BuildService) OpenBuildArtifact(ctx context.Context, buildID string, ar
 
 	store := s.artifactStore
 	if s.artifactStoreResolver != nil {
-		resolved, resolveErr := s.artifactStoreResolver.Resolve(meta.StorageProvider)
-		if resolveErr == nil {
-			store = resolved
+		provider := meta.StorageProvider
+		if provider == "" {
+			provider = domain.StorageProviderFilesystem
 		}
+		resolved, resolveErr := s.artifactStoreResolver.Resolve(provider)
+		if resolveErr != nil {
+			return domain.BuildArtifact{}, nil, fmt.Errorf("%w: provider=%s", ErrArtifactStorageProviderNotConfigured, provider)
+		}
+		store = resolved
 	}
 
 	stream, err := store.Open(ctx, meta.StorageKey)

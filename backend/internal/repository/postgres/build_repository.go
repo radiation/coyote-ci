@@ -348,7 +348,11 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 		if marshalErr != nil {
 			return marshalErr
 		}
-		artifactPathsJSON, marshalErr := json.Marshal(step.ArtifactPaths)
+		artifactPaths := step.ArtifactPaths
+		if artifactPaths == nil {
+			artifactPaths = []string{}
+		}
+		artifactPathsJSON, marshalErr := json.Marshal(artifactPaths)
 		if marshalErr != nil {
 			return marshalErr
 		}
