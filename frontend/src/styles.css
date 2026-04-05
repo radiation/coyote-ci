@@ -474,3 +474,23 @@ h2 {
 h3 {
   margin: 20px 0 4px;
 }
+
+/* Artifacts */
+.artifacts-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.artifact-group-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #555;
+  margin: 0;
+}
+
+.artifact-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 0.85rem;
+}

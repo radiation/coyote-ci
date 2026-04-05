@@ -310,7 +310,7 @@ func TestBuildHandler_GetBuildArtifacts(t *testing.T) {
 	}}
 
 	svc := service.NewBuildService(repo, nil, nil)
-	svc.SetArtifactPersistence(artifactRepo, artifact.NewFilesystemStore(t.TempDir()), t.TempDir())
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(artifact.NewFilesystemStore(t.TempDir())), t.TempDir())
 	h := NewBuildHandler(svc)
 
 	req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/artifacts", nil), "build-1")
@@ -368,7 +368,7 @@ func TestBuildHandler_DownloadBuildArtifact(t *testing.T) {
 	}}
 
 	svc := service.NewBuildService(repo, nil, nil)
-	svc.SetArtifactPersistence(artifactRepo, store, t.TempDir())
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(store), t.TempDir())
 	h := NewBuildHandler(svc)
 
 	req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/artifacts/artifact-1/download", nil), "build-1")
@@ -385,4 +385,10 @@ func TestBuildHandler_DownloadBuildArtifact(t *testing.T) {
 	if got := res.Body.String(); got != "artifact-content" {
 		t.Fatalf("expected artifact body, got %q", got)
 	}
+}
+
+func testStoreResolver(store artifact.Store) *artifact.StoreResolver {
+	return artifact.NewStoreResolver(domain.StorageProviderFilesystem, map[domain.StorageProvider]artifact.Store{
+		domain.StorageProviderFilesystem: store,
+	})
 }

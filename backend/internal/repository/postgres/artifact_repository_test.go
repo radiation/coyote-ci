@@ -24,21 +24,24 @@ func TestArtifactRepository_Create(t *testing.T) {
 	now := time.Now().UTC()
 	contentType := "application/zip"
 	checksum := "abc123"
+	stepID := "step-1"
 
 	mock.ExpectQuery("INSERT INTO build_artifacts").
-		WithArgs("artifact-1", "build-1", "dist/output.zip", "build-1/dist/output.zip", int64(10), &contentType, &checksum, now).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "build_id", "logical_path", "storage_key", "size_bytes", "content_type", "checksum_sha256", "created_at"}).
-			AddRow("artifact-1", "build-1", "dist/output.zip", "build-1/dist/output.zip", int64(10), contentType, checksum, now))
+		WithArgs("artifact-1", "build-1", &stepID, "dist/output.zip", "build-1/dist/output.zip", "filesystem", int64(10), &contentType, &checksum, now).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "build_id", "step_id", "logical_path", "storage_key", "storage_provider", "size_bytes", "content_type", "checksum_sha256", "created_at"}).
+			AddRow("artifact-1", "build-1", &stepID, "dist/output.zip", "build-1/dist/output.zip", "filesystem", int64(10), contentType, checksum, now))
 
 	artifact, err := repo.Create(context.Background(), domain.BuildArtifact{
-		ID:             "artifact-1",
-		BuildID:        "build-1",
-		LogicalPath:    "dist/output.zip",
-		StorageKey:     "build-1/dist/output.zip",
-		SizeBytes:      10,
-		ContentType:    &contentType,
-		ChecksumSHA256: &checksum,
-		CreatedAt:      now,
+		ID:              "artifact-1",
+		BuildID:         "build-1",
+		StepID:          &stepID,
+		LogicalPath:     "dist/output.zip",
+		StorageKey:      "build-1/dist/output.zip",
+		StorageProvider: domain.StorageProviderFilesystem,
+		SizeBytes:       10,
+		ContentType:     &contentType,
+		ChecksumSHA256:  &checksum,
+		CreatedAt:       now,
 	})
 	if err != nil {
 		t.Fatalf("create failed: %v", err)
@@ -65,9 +68,9 @@ func TestArtifactRepository_Create_ZeroCreatedAtUsesDatabaseNow(t *testing.T) {
 	now := time.Now().UTC()
 
 	mock.ExpectQuery("INSERT INTO build_artifacts").
-		WithArgs("artifact-1", "build-1", "dist/output.zip", "build-1/dist/output.zip", int64(10), nil, nil, nil).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "build_id", "logical_path", "storage_key", "size_bytes", "content_type", "checksum_sha256", "created_at"}).
-			AddRow("artifact-1", "build-1", "dist/output.zip", "build-1/dist/output.zip", int64(10), nil, nil, now))
+		WithArgs("artifact-1", "build-1", nil, "dist/output.zip", "build-1/dist/output.zip", "filesystem", int64(10), nil, nil, nil).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "build_id", "step_id", "logical_path", "storage_key", "storage_provider", "size_bytes", "content_type", "checksum_sha256", "created_at"}).
+			AddRow("artifact-1", "build-1", nil, "dist/output.zip", "build-1/dist/output.zip", "filesystem", int64(10), nil, nil, now))
 
 	artifact, err := repo.Create(context.Background(), domain.BuildArtifact{
 		ID:          "artifact-1",
@@ -99,9 +102,9 @@ func TestArtifactRepository_GetByID_NotFound(t *testing.T) {
 
 	repo := NewArtifactRepository(db)
 
-	mock.ExpectQuery("SELECT id, build_id, logical_path, storage_key, size_bytes, content_type, checksum_sha256, created_at").
+	mock.ExpectQuery("SELECT id, build_id, step_id, logical_path, storage_key, storage_provider, size_bytes, content_type, checksum_sha256, created_at").
 		WithArgs("build-1", "missing").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "build_id", "logical_path", "storage_key", "size_bytes", "content_type", "checksum_sha256", "created_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "build_id", "step_id", "logical_path", "storage_key", "storage_provider", "size_bytes", "content_type", "checksum_sha256", "created_at"}))
 
 	_, err = repo.GetByID(context.Background(), "build-1", "missing")
 	if err == nil {

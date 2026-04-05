@@ -1292,6 +1292,12 @@ const docTemplate = `{
                 },
                 "size_bytes": {
                     "type": "integer"
+                },
+                "step_id": {
+                    "type": "string"
+                },
+                "storage_provider": {
+                    "type": "string"
                 }
             }
         },

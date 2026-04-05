@@ -44,8 +44,8 @@ func main() {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
 	defer func() {
-		if err := db.Close(); err != nil {
-			log.Printf("error closing database: %v", err)
+		if closeErr := db.Close(); closeErr != nil {
+			log.Printf("error closing database: %v", closeErr)
 		}
 	}()
 
@@ -53,7 +53,17 @@ func main() {
 	executionJobRepo := repositorypostgres.NewExecutionJobRepository(db)
 	executionJobOutputRepo := repositorypostgres.NewExecutionJobOutputRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
-	artifactStore := artifact.NewFilesystemStore(cfg.ArtifactStorageRoot)
+	artifactResolver, err := artifact.ResolveStores(artifact.StoreConfig{
+		Provider:    cfg.ArtifactStorageProvider,
+		StorageRoot: cfg.ArtifactStorageRoot,
+		GCSBucket:   cfg.ArtifactGCSBucket,
+		GCSPrefix:   cfg.ArtifactGCSPrefix,
+		GCSProject:  cfg.ArtifactGCSProject,
+		Strict:      cfg.ArtifactStorageStrict,
+	})
+	if err != nil {
+		log.Fatalf("failed to resolve artifact stores: %v", err)
+	}
 	stepRunner := resolveStepRunner(cfg)
 	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildService(buildRepo, stepRunner, logSink)
@@ -61,7 +71,7 @@ func main() {
 	buildService.SetExecutionJobOutputRepository(executionJobOutputRepo)
 	buildService.SetDefaultExecutionImage(cfg.ExecutionDefaultImage)
 	buildService.SetExecutionWorkspaceRoot(cfg.ExecutionWorkspaceRoot)
-	buildService.SetArtifactPersistence(artifactRepo, artifactStore, cfg.ExecutionWorkspaceRoot)
+	buildService.SetArtifactPersistence(artifactRepo, artifactResolver, cfg.ExecutionWorkspaceRoot)
 	leaseDuration := time.Duration(cfg.StepLeaseSeconds) * time.Second
 	workerService := service.NewWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)
 

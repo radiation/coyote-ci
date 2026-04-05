@@ -16,11 +16,15 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 // CollectedArtifact is a collected artifact payload ready for metadata persistence.
 type CollectedArtifact struct {
+	GeneratedID    string // pre-generated UUID usable as artifact primary key
+	StepID         string // set when artifact came from a step-level declaration
 	LogicalPath    string
 	StorageKey     string
 	SizeBytes      int64
@@ -30,6 +34,7 @@ type CollectedArtifact struct {
 
 type CollectRequest struct {
 	BuildID          string
+	StepID           string // optional; set for step-scoped artifact collection
 	WorkspacePath    string
 	Patterns         []string
 	SkipLogicalPaths map[string]struct{}
@@ -159,7 +164,7 @@ func (c *Collector) Collect(ctx context.Context, request CollectRequest) (Collec
 	sort.Strings(selectedPaths)
 
 	for _, relPath := range selectedPaths {
-		artifact, err := c.collectSingle(ctx, buildWorkspace, relPath)
+		artifact, err := c.collectSingle(ctx, buildWorkspace, request.StepID, relPath)
 		if err != nil {
 			log.Printf("artifact persistence error: build_id=%s logical_path=%s err=%v", buildID, relPath, err)
 			failedCollectErrors = append(failedCollectErrors, fmt.Errorf("failed collecting artifact %q: %w", relPath, err))
@@ -177,7 +182,7 @@ func (c *Collector) Collect(ctx context.Context, request CollectRequest) (Collec
 	return result, nil
 }
 
-func (c *Collector) collectSingle(ctx context.Context, ws workspace.Workspace, logicalPath string) (CollectedArtifact, error) {
+func (c *Collector) collectSingle(ctx context.Context, ws workspace.Workspace, stepID string, logicalPath string) (CollectedArtifact, error) {
 	absPath, err := ws.ResolveRelativePath(logicalPath)
 	if err != nil {
 		return CollectedArtifact{}, err
@@ -222,7 +227,8 @@ func (c *Collector) collectSingle(ctx context.Context, ws workspace.Workspace, l
 
 	hasher := sha256.New()
 	tee := io.TeeReader(file, hasher)
-	storageKey := path.Join(ws.BuildID, logicalPath)
+	generatedID := uuid.NewString()
+	storageKey := buildStorageKey(ws.BuildID, stepID, generatedID, logicalPath)
 	storagePath := storageKey
 	if reporter, ok := c.store.(interface{ RootPath() string }); ok {
 		root := strings.TrimSpace(reporter.RootPath())
@@ -230,7 +236,7 @@ func (c *Collector) collectSingle(ctx context.Context, ws workspace.Workspace, l
 			storagePath = filepath.Join(root, filepath.FromSlash(storageKey))
 		}
 	}
-	log.Printf("artifact persist start: build_id=%s logical_path=%s source_path=%s resolved_source_path=%s storage_key=%s storage_path=%s size_bytes=%d", ws.BuildID, logicalPath, absPath, resolvedPath, storageKey, storagePath, openedInfo.Size())
+	log.Printf("artifact persist start: build_id=%s step_id=%s logical_path=%s source_path=%s resolved_source_path=%s storage_key=%s storage_path=%s size_bytes=%d", ws.BuildID, stepID, logicalPath, absPath, resolvedPath, storageKey, storagePath, openedInfo.Size())
 	size, err := c.store.Save(ctx, storageKey, tee)
 	if err != nil {
 		return CollectedArtifact{}, fmt.Errorf("saving artifact to store: %w", err)
@@ -245,6 +251,8 @@ func (c *Collector) collectSingle(ctx context.Context, ws workspace.Workspace, l
 	}
 
 	return CollectedArtifact{
+		GeneratedID:    generatedID,
+		StepID:         stepID,
 		LogicalPath:    logicalPath,
 		StorageKey:     storageKey,
 		SizeBytes:      size,
@@ -265,6 +273,17 @@ func pathWithinBase(basePath string, candidatePath string) bool {
 		return false
 	}
 	return true
+}
+
+// buildStorageKey constructs a human-readable, collision-safe object key.
+// Format: builds/{buildID}/steps/{stepID}/{id}-{basename} when step-scoped,
+// or builds/{buildID}/shared/{id}-{basename} when build-scoped.
+func buildStorageKey(buildID, stepID, generatedID, logicalPath string) string {
+	basename := path.Base(logicalPath)
+	if stepID != "" {
+		return path.Join("builds", buildID, "steps", stepID, generatedID+"-"+basename)
+	}
+	return path.Join("builds", buildID, "shared", generatedID+"-"+basename)
 }
 
 func normalizePatterns(patterns []string, ws workspace.Workspace) ([]string, error) {

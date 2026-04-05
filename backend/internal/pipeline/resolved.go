@@ -19,6 +19,7 @@ type ResolvedStep struct {
 	WorkingDir     string
 	Env            map[string]string
 	TimeoutSeconds int
+	ArtifactPaths  []string
 }
 
 // ResolvedArtifacts captures normalized build-level artifact paths.

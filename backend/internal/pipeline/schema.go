@@ -31,6 +31,7 @@ type StepDef struct {
 	TimeoutSeconds *int              `yaml:"timeout_seconds"`
 	WorkingDir     string            `yaml:"working_dir"`
 	Env            map[string]string `yaml:"env"`
+	Artifacts      ArtifactDef       `yaml:"artifacts,omitempty"`
 }
 
 // ArtifactDef holds optional build-level artifact path declarations.

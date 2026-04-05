@@ -101,70 +101,8 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 	}
 
 	if len(steps) > 0 {
-		const insertStepQuery = `
-			INSERT INTO build_steps (
-				id,
-				build_id,
-				step_index,
-				name,
-				image,
-				command,
-				args,
-				env,
-				working_dir,
-				timeout_seconds,
-				status,
-				worker_id,
-				claim_token,
-				claimed_at,
-				lease_expires_at,
-				started_at,
-				finished_at,
-				exit_code,
-				stdout,
-				stderr,
-				error_message
-			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
-		`
-
-		for _, step := range steps {
-			argsJSON, marshalErr := json.Marshal(step.Args)
-			if marshalErr != nil {
-				return domain.Build{}, marshalErr
-			}
-			envJSON, marshalErr := json.Marshal(step.Env)
-			if marshalErr != nil {
-				return domain.Build{}, marshalErr
-			}
-
-			if _, err = tx.ExecContext(
-				ctx,
-				insertStepQuery,
-				step.ID,
-				build.ID,
-				step.StepIndex,
-				step.Name,
-				step.Image,
-				step.Command,
-				string(argsJSON),
-				string(envJSON),
-				step.WorkingDir,
-				step.TimeoutSeconds,
-				string(step.Status),
-				step.WorkerID,
-				step.ClaimToken,
-				step.ClaimedAt,
-				step.LeaseExpiresAt,
-				step.StartedAt,
-				step.FinishedAt,
-				step.ExitCode,
-				step.Stdout,
-				step.Stderr,
-				step.ErrorMessage,
-			); err != nil {
-				return domain.Build{}, err
-			}
+		if err = insertSteps(ctx, tx, build.ID, steps); err != nil {
+			return domain.Build{}, err
 		}
 	}
 
@@ -340,70 +278,8 @@ func (r *BuildRepository) QueueBuild(ctx context.Context, id string, steps []dom
 	}
 
 	if len(steps) > 0 {
-		const insertStepQuery = `
-			INSERT INTO build_steps (
-				id,
-				build_id,
-				step_index,
-				name,
-				image,
-				command,
-				args,
-				env,
-				working_dir,
-				timeout_seconds,
-				status,
-				worker_id,
-				claim_token,
-				claimed_at,
-				lease_expires_at,
-				started_at,
-				finished_at,
-				exit_code,
-				stdout,
-				stderr,
-				error_message
-			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
-		`
-
-		for _, step := range steps {
-			argsJSON, marshalErr := json.Marshal(step.Args)
-			if marshalErr != nil {
-				return domain.Build{}, marshalErr
-			}
-			envJSON, marshalErr := json.Marshal(step.Env)
-			if marshalErr != nil {
-				return domain.Build{}, marshalErr
-			}
-
-			if _, err = tx.ExecContext(
-				ctx,
-				insertStepQuery,
-				step.ID,
-				id,
-				step.StepIndex,
-				step.Name,
-				step.Image,
-				step.Command,
-				string(argsJSON),
-				string(envJSON),
-				step.WorkingDir,
-				step.TimeoutSeconds,
-				string(step.Status),
-				step.WorkerID,
-				step.ClaimToken,
-				step.ClaimedAt,
-				step.LeaseExpiresAt,
-				step.StartedAt,
-				step.FinishedAt,
-				step.ExitCode,
-				step.Stdout,
-				step.Stderr,
-				step.ErrorMessage,
-			); err != nil {
-				return domain.Build{}, err
-			}
+		if err = insertSteps(ctx, tx, id, steps); err != nil {
+			return domain.Build{}, err
 		}
 	}
 
@@ -431,4 +307,85 @@ func (r *BuildRepository) UpdateCurrentStepIndex(ctx context.Context, id string,
 	}
 
 	return build, nil
+}
+
+// insertSteps inserts build steps within an existing transaction.
+func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain.BuildStep) error {
+	const insertStepQuery = `
+		INSERT INTO build_steps (
+			id,
+			build_id,
+			step_index,
+			name,
+			image,
+			command,
+			args,
+			env,
+			working_dir,
+			timeout_seconds,
+			status,
+			worker_id,
+			claim_token,
+			claimed_at,
+			lease_expires_at,
+			started_at,
+			finished_at,
+			exit_code,
+			stdout,
+			stderr,
+			error_message,
+			artifact_paths
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb)
+	`
+
+	for _, step := range steps {
+		argsJSON, marshalErr := json.Marshal(step.Args)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		envJSON, marshalErr := json.Marshal(step.Env)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		artifactPaths := step.ArtifactPaths
+		if artifactPaths == nil {
+			artifactPaths = []string{}
+		}
+		artifactPathsJSON, marshalErr := json.Marshal(artifactPaths)
+		if marshalErr != nil {
+			return marshalErr
+		}
+
+		if _, err := tx.ExecContext(
+			ctx,
+			insertStepQuery,
+			step.ID,
+			buildID,
+			step.StepIndex,
+			step.Name,
+			step.Image,
+			step.Command,
+			string(argsJSON),
+			string(envJSON),
+			step.WorkingDir,
+			step.TimeoutSeconds,
+			string(step.Status),
+			step.WorkerID,
+			step.ClaimToken,
+			step.ClaimedAt,
+			step.LeaseExpiresAt,
+			step.StartedAt,
+			step.FinishedAt,
+			step.ExitCode,
+			step.Stdout,
+			step.Stderr,
+			step.ErrorMessage,
+			string(artifactPathsJSON),
+		); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

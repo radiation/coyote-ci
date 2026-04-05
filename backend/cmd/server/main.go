@@ -34,8 +34,8 @@ func main() {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
 	defer func() {
-		if err := db.Close(); err != nil {
-			log.Printf("error closing database: %v", err)
+		if closeErr := db.Close(); closeErr != nil {
+			log.Printf("error closing database: %v", closeErr)
 		}
 	}()
 
@@ -45,13 +45,23 @@ func main() {
 	jobRepo := repositorypostgres.NewJobRepository(db)
 	webhookDeliveryRepo := repositorypostgres.NewWebhookDeliveryRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
-	artifactStore := artifact.NewFilesystemStore(cfg.ArtifactStorageRoot)
+	artifactResolver, err := artifact.ResolveStores(artifact.StoreConfig{
+		Provider:    cfg.ArtifactStorageProvider,
+		StorageRoot: cfg.ArtifactStorageRoot,
+		GCSBucket:   cfg.ArtifactGCSBucket,
+		GCSPrefix:   cfg.ArtifactGCSPrefix,
+		GCSProject:  cfg.ArtifactGCSProject,
+		Strict:      cfg.ArtifactStorageStrict,
+	})
+	if err != nil {
+		log.Fatalf("failed to resolve artifact stores: %v", err)
+	}
 	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildService(buildRepo, nil, logSink)
 	buildService.SetExecutionJobRepository(executionJobRepo)
 	buildService.SetExecutionJobOutputRepository(executionJobOutputRepo)
 	buildService.SetRepoFetcher(source.NewGitFetcher())
-	buildService.SetArtifactPersistence(artifactRepo, artifactStore, cfg.ExecutionWorkspaceRoot)
+	buildService.SetArtifactPersistence(artifactRepo, artifactResolver, cfg.ExecutionWorkspaceRoot)
 	jobService := service.NewJobService(jobRepo, buildService)
 	webhookService := service.NewWebhookIngressService(webhookDeliveryRepo, jobService)
 	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()

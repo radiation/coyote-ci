@@ -146,3 +146,71 @@ artifacts:
 		t.Fatalf("expected traversal validation error, got %v", err)
 	}
 }
+
+func TestArtifactIdentityKey(t *testing.T) {
+	stepA := "step-a"
+	stepB := "step-b"
+
+	tests := []struct {
+		name     string
+		stepID   *string
+		path     string
+		expected string
+	}{
+		{"shared", nil, "dist/app", "shared:dist/app"},
+		{"step-scoped", &stepA, "dist/app", "step:step-a:dist/app"},
+		{"different steps same path differ", &stepB, "dist/app", "step:step-b:dist/app"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := artifactIdentityKey(tc.stepID, tc.path)
+			if got != tc.expected {
+				t.Fatalf("expected %q, got %q", tc.expected, got)
+			}
+		})
+	}
+}
+
+func TestSkipPathsForScope(t *testing.T) {
+	stepA := "step-a"
+	stepB := "step-b"
+	identityKeys := map[string]struct{}{
+		"step:step-a:dist/app":        {},
+		"step:step-b:dist/app":        {},
+		"shared:reports/junit.xml":    {},
+		"step:step-a:reports/out.xml": {},
+	}
+
+	t.Run("step-a scope", func(t *testing.T) {
+		skip := skipPathsForScope(identityKeys, &stepA)
+		if len(skip) != 2 {
+			t.Fatalf("expected 2 skip paths for step-a, got %d: %v", len(skip), skip)
+		}
+		if _, ok := skip["dist/app"]; !ok {
+			t.Fatal("expected dist/app in skip set")
+		}
+		if _, ok := skip["reports/out.xml"]; !ok {
+			t.Fatal("expected reports/out.xml in skip set")
+		}
+	})
+
+	t.Run("step-b scope", func(t *testing.T) {
+		skip := skipPathsForScope(identityKeys, &stepB)
+		if len(skip) != 1 {
+			t.Fatalf("expected 1 skip path for step-b, got %d: %v", len(skip), skip)
+		}
+		if _, ok := skip["dist/app"]; !ok {
+			t.Fatal("expected dist/app in skip set")
+		}
+	})
+
+	t.Run("shared scope", func(t *testing.T) {
+		skip := skipPathsForScope(identityKeys, nil)
+		if len(skip) != 1 {
+			t.Fatalf("expected 1 skip path for shared, got %d: %v", len(skip), skip)
+		}
+		if _, ok := skip["reports/junit.xml"]; !ok {
+			t.Fatal("expected reports/junit.xml in skip set")
+		}
+	})
+}

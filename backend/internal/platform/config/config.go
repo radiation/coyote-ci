@@ -18,13 +18,18 @@ type Config struct {
 	StepLeaseSeconds int
 	WorkerStatusAddr string
 
-	ExecutionBackend       string
-	ExecutionDefaultImage  string
-	ExecutionWorkspaceRoot string
-	MountDockerSocket      bool
-	ArtifactStorageRoot    string
-	PushEventSecret        string
-	GitHubWebhookSecret    string
+	ExecutionBackend        string
+	ExecutionDefaultImage   string
+	ExecutionWorkspaceRoot  string
+	MountDockerSocket       bool
+	ArtifactStorageRoot     string
+	ArtifactStorageProvider string
+	ArtifactStorageStrict   bool
+	ArtifactGCSBucket       string
+	ArtifactGCSPrefix       string
+	ArtifactGCSProject      string
+	PushEventSecret         string
+	GitHubWebhookSecret     string
 }
 
 func Load() Config {
@@ -39,13 +44,18 @@ func Load() Config {
 		StepLeaseSeconds: getEnvInt("WORKER_STEP_LEASE_SECONDS", 45),
 		WorkerStatusAddr: getEnv("WORKER_STATUS_ADDR", ""),
 
-		ExecutionBackend:       getEnv("WORKER_EXECUTION_BACKEND", "docker"),
-		ExecutionDefaultImage:  getEnv("WORKER_EXECUTION_DEFAULT_IMAGE", "alpine:3.20"),
-		ExecutionWorkspaceRoot: getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
-		MountDockerSocket:      getEnvBool("WORKER_MOUNT_DOCKER_SOCKET", false),
-		ArtifactStorageRoot:    getEnv("ARTIFACT_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-artifacts")),
-		PushEventSecret:        getEnv("PUSH_EVENT_SECRET", ""),
-		GitHubWebhookSecret:    getEnv("GITHUB_WEBHOOK_SECRET", getEnv("PUSH_EVENT_SECRET", "")),
+		ExecutionBackend:        getEnv("WORKER_EXECUTION_BACKEND", "docker"),
+		ExecutionDefaultImage:   getEnv("WORKER_EXECUTION_DEFAULT_IMAGE", "alpine:3.20"),
+		ExecutionWorkspaceRoot:  getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
+		MountDockerSocket:       getEnvBool("WORKER_MOUNT_DOCKER_SOCKET", false),
+		ArtifactStorageRoot:     getEnv("ARTIFACT_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-artifacts")),
+		ArtifactStorageProvider: getEnv("ARTIFACT_STORAGE_PROVIDER", "filesystem"),
+		ArtifactStorageStrict:   getEnvBool("ARTIFACT_STORAGE_STRICT", false),
+		ArtifactGCSBucket:       getEnv("ARTIFACT_GCS_BUCKET", ""),
+		ArtifactGCSPrefix:       getEnv("ARTIFACT_GCS_PREFIX", ""),
+		ArtifactGCSProject:      getEnv("ARTIFACT_GCS_PROJECT", ""),
+		PushEventSecret:         getEnv("PUSH_EVENT_SECRET", ""),
+		GitHubWebhookSecret:     getEnv("GITHUB_WEBHOOK_SECRET", getEnv("PUSH_EVENT_SECRET", "")),
 	}
 }
 

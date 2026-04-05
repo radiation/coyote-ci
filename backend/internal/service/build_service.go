@@ -40,6 +40,7 @@ var ErrRepoFetcherNotConfigured = errors.New("repo fetcher not configured")
 var ErrPipelineFileNotFound = errors.New("pipeline file not found in repository")
 var ErrInvalidPipelinePath = errors.New("invalid pipeline path")
 var ErrArtifactNotFound = errors.New("artifact not found")
+var ErrArtifactStorageProviderNotConfigured = errors.New("artifact storage provider not configured")
 var ErrSourceResolverNotConfigured = errors.New("source resolver not configured")
 var ErrExecutionWorkspaceRootNotConfigured = errors.New("execution workspace root not configured")
 var ErrExecutionJobRepoNotConfigured = errors.New("execution job repository not configured")
@@ -66,11 +67,13 @@ type BuildService struct {
 	sourceResolver         source.WorkspaceSourceResolver
 	executionWorkspaceRoot string
 
-	artifactRepo          repository.ArtifactRepository
-	executionOutputRepo   repository.ExecutionJobOutputRepository
-	artifactStore         artifact.Store
-	artifactCollector     *artifact.Collector
-	artifactWorkspaceRoot string
+	artifactRepo            repository.ArtifactRepository
+	executionOutputRepo     repository.ExecutionJobOutputRepository
+	artifactStore           artifact.Store
+	artifactStoreResolver   *artifact.StoreResolver
+	artifactCollector       *artifact.Collector
+	artifactWorkspaceRoot   string
+	artifactStorageProvider domain.StorageProvider
 
 	defaultExecutionImage string
 }
@@ -108,17 +111,22 @@ func (s *BuildService) SetDefaultExecutionImage(image string) {
 }
 
 // SetArtifactPersistence configures build artifact persistence dependencies.
-func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository, store artifact.Store, workspaceRoot string) {
+func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository, resolver *artifact.StoreResolver, workspaceRoot string) {
 	s.artifactRepo = repo
-	s.artifactStore = store
 	s.artifactWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot)
+	if resolver != nil {
+		s.artifactStoreResolver = resolver
+		s.artifactStore = resolver.Default()
+		s.artifactStorageProvider = resolver.DefaultProvider()
+		s.artifactCollector = artifact.NewCollector(resolver.Default())
+	} else {
+		s.artifactStoreResolver = nil
+		s.artifactStore = nil
+		s.artifactStorageProvider = ""
+		s.artifactCollector = nil
+	}
 	if s.executionWorkspaceRoot == "" {
 		s.executionWorkspaceRoot = s.artifactWorkspaceRoot
-	}
-	if store != nil {
-		s.artifactCollector = artifact.NewCollector(store)
-	} else {
-		s.artifactCollector = nil
 	}
 }
 

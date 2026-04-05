@@ -170,3 +170,61 @@ func mustWriteFile(t *testing.T, path string, content []byte) {
 		t.Fatalf("write file failed: %v", err)
 	}
 }
+
+func TestBuildStorageKey_StepScoped(t *testing.T) {
+	key := buildStorageKey("build-1", "step-1", "uuid-abc", "report.xml")
+	expected := "builds/build-1/steps/step-1/uuid-abc-report.xml"
+	if key != expected {
+		t.Fatalf("expected %q, got %q", expected, key)
+	}
+}
+
+func TestBuildStorageKey_Shared(t *testing.T) {
+	key := buildStorageKey("build-1", "", "uuid-abc", "report.xml")
+	expected := "builds/build-1/shared/uuid-abc-report.xml"
+	if key != expected {
+		t.Fatalf("expected %q, got %q", expected, key)
+	}
+}
+
+func TestCollector_StepScoped_SetsGeneratedIDAndStepID(t *testing.T) {
+	workspace := t.TempDir()
+	storeRoot := t.TempDir()
+
+	mustWriteFile(t, filepath.Join(workspace, "dist", "app"), []byte("binary"))
+
+	collector := NewCollector(NewFilesystemStore(storeRoot))
+	result, err := collector.Collect(context.Background(), CollectRequest{
+		BuildID:       "build-1",
+		StepID:        "step-42",
+		WorkspacePath: workspace,
+		Patterns:      []string{"dist/**"},
+	})
+	if err != nil {
+		t.Fatalf("collect failed: %v", err)
+	}
+	if len(result.Artifacts) != 1 {
+		t.Fatalf("expected 1 artifact, got %d", len(result.Artifacts))
+	}
+
+	a := result.Artifacts[0]
+	if a.StepID != "step-42" {
+		t.Fatalf("expected step_id step-42, got %q", a.StepID)
+	}
+	if a.GeneratedID == "" {
+		t.Fatal("expected non-empty generated ID")
+	}
+	if !strings.Contains(a.StorageKey, "steps/step-42/") {
+		t.Fatalf("expected step-scoped storage key, got %q", a.StorageKey)
+	}
+}
+
+func TestNewGCSStore_RequiresBucket(t *testing.T) {
+	_, err := NewGCSStore(nil, GCSStoreConfig{Bucket: ""})
+	if err == nil {
+		t.Fatal("expected error for empty bucket")
+	}
+	if !strings.Contains(err.Error(), "bucket") {
+		t.Fatalf("expected bucket-related error, got %v", err)
+	}
+}

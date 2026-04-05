@@ -489,6 +489,18 @@ func (r *fakeArtifactRepository) GetByID(_ context.Context, buildID string, arti
 	return domain.BuildArtifact{}, repository.ErrArtifactNotFound
 }
 
+func (r *fakeArtifactRepository) ListByStepID(_ context.Context, stepID string) ([]domain.BuildArtifact, error) {
+	var out []domain.BuildArtifact
+	for _, items := range r.artifacts {
+		for _, item := range items {
+			if item.StepID != nil && *item.StepID == stepID {
+				out = append(out, item)
+			}
+		}
+	}
+	return out, nil
+}
+
 type recordingStore struct {
 	events *[]string
 }

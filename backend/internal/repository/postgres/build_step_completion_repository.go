@@ -128,7 +128,7 @@ func applyStepCompletionUpdateTx(ctx context.Context, tx *sql.Tx, buildID string
 		WHERE build_id = $1
 		  AND step_index = $2
 		  AND status = 'running'%s
-		RETURNING id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+		RETURNING `+stepColumns+`
 	`, claimTokenExpr, claimedAtExpr, leaseExpr, claimGuard)
 
 	step, err := scanStep(tx.QueryRowContext(ctx, query, args...))
@@ -142,8 +142,8 @@ func applyStepCompletionUpdateTx(ctx context.Context, tx *sql.Tx, buildID string
 }
 
 func resolveCompletionConflictTx(ctx context.Context, tx *sql.Tx, buildID string, stepIndex int, claimRequired bool) (domain.BuildStep, repository.StepCompletionOutcome, error) {
-	const query = `
-		SELECT id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+	query := `
+		SELECT ` + stepColumns + `
 		FROM build_steps
 		WHERE build_id = $1 AND step_index = $2
 	`

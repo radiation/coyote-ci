@@ -10,9 +10,11 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
+const stepColumns = `id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message, artifact_paths`
+
 func (r *BuildRepository) GetStepsByBuildID(ctx context.Context, buildID string) (steps []domain.BuildStep, err error) {
-	const query = `
-		SELECT id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+	query := `
+		SELECT ` + stepColumns + `
 		FROM build_steps
 		WHERE build_id = $1
 		ORDER BY step_index ASC
@@ -51,7 +53,7 @@ func (r *BuildRepository) GetStepsByBuildID(ctx context.Context, buildID string)
 }
 
 func (r *BuildRepository) ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error) {
-	const query = `
+	query := `
 		UPDATE build_steps
 		SET status = 'running',
 			worker_id = COALESCE($3, worker_id),
@@ -59,8 +61,7 @@ func (r *BuildRepository) ClaimStepIfPending(ctx context.Context, buildID string
 		WHERE build_id = $1
 		  AND step_index = $2
 		  AND status = 'pending'
-		RETURNING id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
-	`
+		RETURNING ` + stepColumns
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, workerID, startedAt))
 	if err != nil {
@@ -74,7 +75,7 @@ func (r *BuildRepository) ClaimStepIfPending(ctx context.Context, buildID string
 }
 
 func (r *BuildRepository) ClaimPendingStep(ctx context.Context, buildID string, stepIndex int, claim repository.StepClaim) (domain.BuildStep, bool, error) {
-	const query = `
+	query := `
 		UPDATE build_steps
 		SET status = 'running',
 			worker_id = $3,
@@ -85,8 +86,7 @@ func (r *BuildRepository) ClaimPendingStep(ctx context.Context, buildID string, 
 		WHERE build_id = $1
 		  AND step_index = $2
 		  AND status = 'pending'
-		RETURNING id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
-	`
+		RETURNING ` + stepColumns
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, claim.WorkerID, claim.ClaimToken, claim.ClaimedAt, claim.LeaseExpiresAt))
 	if err != nil {
@@ -100,7 +100,7 @@ func (r *BuildRepository) ClaimPendingStep(ctx context.Context, buildID string, 
 }
 
 func (r *BuildRepository) ReclaimExpiredStep(ctx context.Context, buildID string, stepIndex int, reclaimBefore time.Time, claim repository.StepClaim) (domain.BuildStep, bool, error) {
-	const query = `
+	query := `
 		UPDATE build_steps
 		SET worker_id = $4,
 			claim_token = $5,
@@ -111,8 +111,7 @@ func (r *BuildRepository) ReclaimExpiredStep(ctx context.Context, buildID string
 		  AND status = 'running'
 		  AND lease_expires_at IS NOT NULL
 		  AND lease_expires_at <= $3
-		RETURNING id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
-	`
+		RETURNING ` + stepColumns
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, reclaimBefore, claim.WorkerID, claim.ClaimToken, claim.ClaimedAt, claim.LeaseExpiresAt))
 	if err != nil {
@@ -126,15 +125,14 @@ func (r *BuildRepository) ReclaimExpiredStep(ctx context.Context, buildID string
 }
 
 func (r *BuildRepository) RenewStepLease(ctx context.Context, buildID string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, repository.StepCompletionOutcome, error) {
-	const renewQuery = `
+	renewQuery := `
 		UPDATE build_steps
 		SET lease_expires_at = $4
 		WHERE build_id = $1
 		  AND step_index = $2
 		  AND status = 'running'
 		  AND claim_token = $3
-		RETURNING id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
-	`
+		RETURNING ` + stepColumns
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, renewQuery, buildID, stepIndex, claimToken, leaseExpiresAt))
 	if err == nil {
@@ -144,8 +142,8 @@ func (r *BuildRepository) RenewStepLease(ctx context.Context, buildID string, st
 		return domain.BuildStep{}, repository.StepCompletionInvalidTransition, err
 	}
 
-	const currentStepQuery = `
-		SELECT id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+	currentStepQuery := `
+		SELECT ` + stepColumns + `
 		FROM build_steps
 		WHERE build_id = $1 AND step_index = $2
 	`
@@ -169,7 +167,7 @@ func (r *BuildRepository) RenewStepLease(ctx context.Context, buildID string, st
 }
 
 func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string, stepIndex int, update repository.StepUpdate) (domain.BuildStep, error) {
-	const query = `
+	query := `
 		UPDATE build_steps
 		SET status = $3,
 			worker_id = COALESCE($4, worker_id),
@@ -184,8 +182,7 @@ func (r *BuildRepository) UpdateStepByIndex(ctx context.Context, buildID string,
 				ELSE NULL
 			END
 		WHERE build_id = $1 AND step_index = $2
-		RETURNING id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
-	`
+		RETURNING ` + stepColumns
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, string(update.Status), update.WorkerID, update.StartedAt, update.FinishedAt, update.ExitCode, update.Stdout, update.Stderr, update.ErrorMessage))
 	if err != nil {

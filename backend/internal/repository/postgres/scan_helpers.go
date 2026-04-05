@@ -440,6 +440,7 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 	var stdout sql.NullString
 	var stderr sql.NullString
 	var errorMessage sql.NullString
+	var artifactPathsRaw []byte
 
 	err := scanner.Scan(
 		&step.ID,
@@ -463,6 +464,7 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 		&stdout,
 		&stderr,
 		&errorMessage,
+		&artifactPathsRaw,
 	)
 	if err != nil {
 		return domain.BuildStep{}, err
@@ -482,6 +484,16 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 		}
 	} else {
 		step.Env = map[string]string{}
+	}
+	if len(artifactPathsRaw) > 0 {
+		if err := json.Unmarshal(artifactPathsRaw, &step.ArtifactPaths); err != nil {
+			return domain.BuildStep{}, err
+		}
+		if step.ArtifactPaths == nil {
+			step.ArtifactPaths = []string{}
+		}
+	} else {
+		step.ArtifactPaths = []string{}
 	}
 	step.WorkingDir = workingDir
 	step.TimeoutSeconds = timeoutSeconds

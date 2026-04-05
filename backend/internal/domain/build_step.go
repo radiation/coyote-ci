@@ -22,6 +22,7 @@ type BuildStep struct {
 	Env            map[string]string
 	WorkingDir     string
 	TimeoutSeconds int
+	ArtifactPaths  []string
 	Status         BuildStepStatus
 	WorkerID       *string
 	ClaimToken     *string

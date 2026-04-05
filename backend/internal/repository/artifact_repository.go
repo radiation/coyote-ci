@@ -8,10 +8,12 @@ import (
 )
 
 var ErrArtifactNotFound = errors.New("artifact not found")
+var ErrArtifactConflict = errors.New("artifact already exists")
 
 // ArtifactRepository persists and queries build artifact metadata.
 type ArtifactRepository interface {
 	Create(ctx context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error)
 	ListByBuildID(ctx context.Context, buildID string) ([]domain.BuildArtifact, error)
 	GetByID(ctx context.Context, buildID string, artifactID string) (domain.BuildArtifact, error)
+	ListByStepID(ctx context.Context, stepID string) ([]domain.BuildArtifact, error)
 }
