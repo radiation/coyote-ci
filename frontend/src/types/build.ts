@@ -80,10 +80,12 @@ export interface StepLogsResponse {
 export interface BuildArtifact {
   id: string;
   build_id: string;
+  step_id: string | null;
   path: string;
   size_bytes: number;
   content_type: string | null;
   checksum_sha256: string | null;
+  storage_provider: string;
   download_url_path: string;
   created_at: string;
 }

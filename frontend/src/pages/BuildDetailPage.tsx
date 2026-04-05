@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
-import { artifactDownloadURL, getBuild, getBuildArtifacts, getBuildSteps } from '../api';
+import { getBuild, getBuildArtifacts, getBuildSteps } from '../api';
+import { BuildArtifactsSection } from '../components/BuildArtifactsSection';
 import { StatusBadge } from '../components/StatusBadge';
 import { StepList } from '../components/StepList';
 import type { Build } from '../types';
@@ -127,35 +128,12 @@ export function BuildDetailPage() {
       {steps && <StepList buildID={build.id} steps={steps} />}
 
       <h3>Artifacts</h3>
-      {artifactsLoading && <p>Loading artifacts…</p>}
-      {artifactsError && <p className="error-text">Failed to load artifacts: {String(artifactsError)}</p>}
-      {!artifactsLoading && !artifactsError && artifacts && artifacts.length === 0 && (
-        <p className="subtle-text">No artifacts were collected for this build.</p>
-      )}
-      {!artifactsLoading && artifacts && artifacts.length > 0 && (
-        <table className="table artifacts-table">
-          <thead>
-            <tr>
-              <th>Path</th>
-              <th>Size</th>
-              <th>Created</th>
-              <th>Download</th>
-            </tr>
-          </thead>
-          <tbody>
-            {artifacts.map((item) => (
-              <tr key={item.id}>
-                <td>{item.path}</td>
-                <td>{item.size_bytes} bytes</td>
-                <td>{formatTime(item.created_at)}</td>
-                <td>
-                  <a href={artifactDownloadURL(item.download_url_path)}>Download</a>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <BuildArtifactsSection
+        artifacts={artifacts ?? []}
+        steps={steps}
+        isLoading={artifactsLoading}
+        error={artifactsError}
+      />
     </>
   );
 }

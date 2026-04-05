@@ -62,10 +62,12 @@ describe('BuildDetailPage artifacts', () => {
       {
         id: 'artifact-1',
         build_id: 'build-1',
+        step_id: null,
         path: 'dist/app',
         size_bytes: 128,
         content_type: null,
         checksum_sha256: null,
+        storage_provider: 'filesystem',
         download_url_path: '/builds/build-1/artifacts/artifact-1/download',
         created_at: '2026-03-30T00:00:04Z',
       },
