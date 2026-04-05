@@ -24,6 +24,7 @@ type Config struct {
 	MountDockerSocket       bool
 	ArtifactStorageRoot     string
 	ArtifactStorageProvider string
+	ArtifactStorageStrict   bool
 	ArtifactGCSBucket       string
 	ArtifactGCSPrefix       string
 	ArtifactGCSProject      string
@@ -49,6 +50,7 @@ func Load() Config {
 		MountDockerSocket:       getEnvBool("WORKER_MOUNT_DOCKER_SOCKET", false),
 		ArtifactStorageRoot:     getEnv("ARTIFACT_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-artifacts")),
 		ArtifactStorageProvider: getEnv("ARTIFACT_STORAGE_PROVIDER", "filesystem"),
+		ArtifactStorageStrict:   getEnvBool("ARTIFACT_STORAGE_STRICT", false),
 		ArtifactGCSBucket:       getEnv("ARTIFACT_GCS_BUCKET", ""),
 		ArtifactGCSPrefix:       getEnv("ARTIFACT_GCS_PREFIX", ""),
 		ArtifactGCSProject:      getEnv("ARTIFACT_GCS_PROJECT", ""),

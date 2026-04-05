@@ -23,8 +23,16 @@ func (r *ArtifactRepository) Create(_ context.Context, artifact domain.BuildArti
 	defer r.mu.Unlock()
 
 	for _, existing := range r.artifacts {
-		if existing.BuildID == artifact.BuildID && existing.LogicalPath == artifact.LogicalPath {
-			return domain.BuildArtifact{}, repository.ErrArtifactNotFound // conflict
+		if existing.BuildID != artifact.BuildID || existing.LogicalPath != artifact.LogicalPath {
+			continue
+		}
+		// Step-scoped: conflict only when step_id matches.
+		if existing.StepID != nil && artifact.StepID != nil && *existing.StepID == *artifact.StepID {
+			return domain.BuildArtifact{}, repository.ErrArtifactConflict
+		}
+		// Shared-scoped: conflict when both have nil step_id.
+		if existing.StepID == nil && artifact.StepID == nil {
+			return domain.BuildArtifact{}, repository.ErrArtifactConflict
 		}
 	}
 

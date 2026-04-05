@@ -163,9 +163,14 @@ CREATE TABLE IF NOT EXISTS build_artifacts (
     size_bytes BIGINT NOT NULL,
     content_type TEXT,
     checksum_sha256 TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (build_id, logical_path)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_build_artifacts_step_scoped
+    ON build_artifacts (build_id, step_id, logical_path) WHERE step_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_build_artifacts_shared_scoped
+    ON build_artifacts (build_id, logical_path) WHERE step_id IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_build_artifacts_build_id_created_at
     ON build_artifacts (build_id, created_at);

@@ -123,9 +123,11 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 	if err != nil {
 		return nil, fmt.Errorf("checking existing artifacts: %w", err)
 	}
-	existingPaths := make(map[string]struct{}, len(existing))
+	identityKeys := make(map[string]struct{}, len(existing))
+	allLogicalPaths := make(map[string]struct{}, len(existing))
 	for _, item := range existing {
-		existingPaths[item.LogicalPath] = struct{}{}
+		identityKeys[artifactIdentityKey(item.StepID, item.LogicalPath)] = struct{}{}
+		allLogicalPaths[item.LogicalPath] = struct{}{}
 	}
 
 	workspacePath := filepath.Join(s.artifactWorkspaceRoot, strings.TrimSpace(buildID))
@@ -141,8 +143,13 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 			continue
 		}
 		log.Printf("artifact step collection start: build_id=%s step_id=%s step_name=%s patterns=%q", buildID, step.ID, step.Name, step.ArtifactPaths)
-		if err = s.collectAndPersistArtifacts(ctx, buildID, &step.ID, provider, workspacePath, step.ArtifactPaths, existingPaths); err != nil {
+		var collected []string
+		collected, err = s.collectAndPersistArtifacts(ctx, buildID, &step.ID, provider, workspacePath, step.ArtifactPaths, identityKeys)
+		if err != nil {
 			return nil, err
+		}
+		for _, p := range collected {
+			allLogicalPaths[p] = struct{}{}
 		}
 	}
 
@@ -153,36 +160,43 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 	}
 	if len(patterns) > 0 {
 		log.Printf("artifact pipeline collection start: build_id=%s patterns=%q", buildID, patterns)
-		if err := s.collectAndPersistArtifacts(ctx, buildID, nil, provider, workspacePath, patterns, existingPaths); err != nil {
+		collected, err := s.collectAndPersistArtifacts(ctx, buildID, nil, provider, workspacePath, patterns, identityKeys)
+		if err != nil {
 			return nil, err
+		}
+		for _, p := range collected {
+			allLogicalPaths[p] = struct{}{}
 		}
 	}
 
-	return sortedArtifactPaths(existingPaths), nil
+	return sortedArtifactPaths(allLogicalPaths), nil
 }
 
 // collectAndPersistArtifacts collects artifacts from the workspace and persists metadata.
-func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID string, stepID *string, provider domain.StorageProvider, workspacePath string, patterns []string, existingPaths map[string]struct{}) error {
+func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID string, stepID *string, provider domain.StorageProvider, workspacePath string, patterns []string, identityKeys map[string]struct{}) ([]string, error) {
 	stepIDStr := ""
 	if stepID != nil {
 		stepIDStr = *stepID
 	}
+
+	skipPaths := skipPathsForScope(identityKeys, stepID)
 
 	collectResult, err := s.artifactCollector.Collect(ctx, artifact.CollectRequest{
 		BuildID:          buildID,
 		StepID:           stepIDStr,
 		WorkspacePath:    workspacePath,
 		Patterns:         patterns,
-		SkipLogicalPaths: existingPaths,
+		SkipLogicalPaths: skipPaths,
 	})
 	if err != nil {
 		log.Printf("artifact collection error: build_id=%s step_id=%s err=%v", buildID, stepIDStr, err)
-		return err
+		return nil, err
 	}
 	for _, warning := range collectResult.Warnings {
 		log.Printf("artifact collection warning: build_id=%s %s", buildID, warning)
 	}
 
+	var collected []string
 	for _, item := range collectResult.Artifacts {
 		log.Printf("artifact metadata persist: build_id=%s step_id=%s logical_path=%s storage_key=%s size_bytes=%d", buildID, stepIDStr, item.LogicalPath, item.StorageKey, item.SizeBytes)
 		_, err := s.artifactRepo.Create(ctx, domain.BuildArtifact{
@@ -199,12 +213,13 @@ func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID s
 		})
 		if err != nil {
 			log.Printf("artifact metadata persistence error: build_id=%s logical_path=%s err=%v", buildID, item.LogicalPath, err)
-			return fmt.Errorf("persisting artifact metadata: %w", err)
+			return nil, fmt.Errorf("persisting artifact metadata: %w", err)
 		}
-		existingPaths[item.LogicalPath] = struct{}{}
+		identityKeys[artifactIdentityKey(stepID, item.LogicalPath)] = struct{}{}
+		collected = append(collected, item.LogicalPath)
 	}
 
-	return nil
+	return collected, nil
 }
 
 // storageProviderName returns the provider identifier for the configured artifact store.
@@ -222,6 +237,34 @@ func sortedArtifactPaths(values map[string]struct{}) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// artifactIdentityKey produces a composite key for artifact deduplication that
+// distinguishes step-scoped from shared artifacts.
+func artifactIdentityKey(stepID *string, logicalPath string) string {
+	if stepID != nil && *stepID != "" {
+		return "step:" + *stepID + ":" + logicalPath
+	}
+	return "shared:" + logicalPath
+}
+
+// skipPathsForScope extracts logical paths from composite identity keys that
+// belong to the given scope (step or shared).
+func skipPathsForScope(identityKeys map[string]struct{}, stepID *string) map[string]struct{} {
+	var prefix string
+	if stepID != nil && *stepID != "" {
+		prefix = "step:" + *stepID + ":"
+	} else {
+		prefix = "shared:"
+	}
+	result := make(map[string]struct{})
+	for key := range identityKeys {
+		after, ok := strings.CutPrefix(key, prefix)
+		if ok {
+			result[after] = struct{}{}
+		}
+	}
+	return result
 }
 
 func artifactStoreRootForLog(store artifact.Store) string {

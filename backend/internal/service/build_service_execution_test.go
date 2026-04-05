@@ -202,7 +202,7 @@ func TestBuildService_RunStep_CollectsArtifactsBeforeCleanup(t *testing.T) {
 	artifactRepo := &fakeArtifactRepository{}
 
 	svc := NewBuildService(repo, runner, &fakeLogSink{})
-	svc.SetArtifactPersistence(artifactRepo, &recordingStore{events: &events}, workspaceRoot, domain.StorageProviderFilesystem)
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(&recordingStore{events: &events}), workspaceRoot)
 
 	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "."})
 	if err != nil {
@@ -249,7 +249,7 @@ func TestBuildService_RunStep_MissingArtifactPathsDoNotFailBuild(t *testing.T) {
 	artifactRepo := &fakeArtifactRepository{}
 
 	svc := NewBuildService(repo, runner, &fakeLogSink{})
-	svc.SetArtifactPersistence(artifactRepo, artifact.NewFilesystemStore(t.TempDir()), workspaceRoot, domain.StorageProviderFilesystem)
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(artifact.NewFilesystemStore(t.TempDir())), workspaceRoot)
 
 	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "."})
 	if err != nil {
@@ -307,7 +307,7 @@ func TestBuildService_RunStep_ConvergesAfterPartialArtifactPersistence(t *testin
 	}}
 
 	svc := NewBuildService(repo, runner, &fakeLogSink{})
-	svc.SetArtifactPersistence(artifactRepo, &recordingStore{events: &events}, workspaceRoot, domain.StorageProviderFilesystem)
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(&recordingStore{events: &events}), workspaceRoot)
 
 	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "."})
 	if err != nil {
@@ -363,7 +363,7 @@ func TestBuildService_RunStep_SkipsCleanupWhenArtifactCollectionFails(t *testing
 
 	logSink := &fakeLogSink{}
 	svc := NewBuildService(repo, runner, logSink)
-	svc.SetArtifactPersistence(&fakeArtifactRepository{}, &failingStore{err: errors.New("store unavailable")}, workspaceRoot, domain.StorageProviderFilesystem)
+	svc.SetArtifactPersistence(&fakeArtifactRepository{}, testStoreResolver(&failingStore{err: errors.New("store unavailable")}), workspaceRoot)
 
 	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
 	if err != nil {
@@ -401,7 +401,7 @@ func TestBuildService_CollectArtifactsIfTerminal_IsIdempotent(t *testing.T) {
 	artifactRepo := &fakeArtifactRepository{}
 
 	svc := NewBuildService(repo, nil, &fakeLogSink{})
-	svc.SetArtifactPersistence(artifactRepo, &recordingStore{events: &events}, workspaceRoot, domain.StorageProviderFilesystem)
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(&recordingStore{events: &events}), workspaceRoot)
 
 	if _, err := svc.collectArtifactsIfTerminal(context.Background(), buildID); err != nil {
 		t.Fatalf("expected first collection to succeed, got %v", err)
@@ -440,7 +440,7 @@ func TestBuildService_RunStep_InprocessRunner_PersistsArtifactsToStorageRoot(t *
 	artifactRepo := &fakeArtifactRepository{}
 
 	svc := NewBuildService(repo, inprocessrunner.NewWithWorkspaceRoot(workspaceRoot), &fakeLogSink{})
-	svc.SetArtifactPersistence(artifactRepo, artifact.NewFilesystemStore(storageRoot), workspaceRoot, domain.StorageProviderFilesystem)
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(artifact.NewFilesystemStore(storageRoot)), workspaceRoot)
 
 	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{
 		BuildID:    buildID,
@@ -798,7 +798,7 @@ func TestBuildService_RunStep_EmitsHighSignalPhaseMarkers(t *testing.T) {
 	artifactRepo := &fakeArtifactRepository{}
 
 	svc := NewBuildService(repo, r, logStore)
-	svc.SetArtifactPersistence(artifactRepo, artifact.NewFilesystemStore(t.TempDir()), workspaceRoot, domain.StorageProviderFilesystem)
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(artifact.NewFilesystemStore(t.TempDir())), workspaceRoot)
 
 	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "."})
 	if err != nil {
@@ -1614,4 +1614,11 @@ func TestBuildService_RenewStepLease_SucceedsForActiveClaim(t *testing.T) {
 	if step.LeaseExpiresAt == nil || !step.LeaseExpiresAt.Equal(lease) {
 		t.Fatalf("expected lease extension to %s, got %v", lease, step.LeaseExpiresAt)
 	}
+}
+
+// testStoreResolver wraps a single Store into a StoreResolver defaulting to filesystem.
+func testStoreResolver(store artifact.Store) *artifact.StoreResolver {
+	return artifact.NewStoreResolver(domain.StorageProviderFilesystem, map[domain.StorageProvider]artifact.Store{
+		domain.StorageProviderFilesystem: store,
+	})
 }

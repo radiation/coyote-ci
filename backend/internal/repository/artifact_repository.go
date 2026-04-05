@@ -8,6 +8,7 @@ import (
 )
 
 var ErrArtifactNotFound = errors.New("artifact not found")
+var ErrArtifactConflict = errors.New("artifact already exists")
 
 // ArtifactRepository persists and queries build artifact metadata.
 type ArtifactRepository interface {
