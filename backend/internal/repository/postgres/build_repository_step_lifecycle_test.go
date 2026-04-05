@@ -30,8 +30,8 @@ func TestBuildRepository_ClaimStepIfPending(t *testing.T) {
 	}{
 		{
 			name: "success",
-			rows: sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-				AddRow("step-1", "build-1", 0, "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "running", nil, nil, nil, nil, now, nil, nil, nil, nil, nil),
+			rows: sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+				AddRow("step-1", "build-1", 0, "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "running", nil, nil, nil, nil, now, nil, nil, nil, nil, nil, "[]"),
 			expectClaim: true,
 		},
 		{
@@ -99,8 +99,8 @@ func TestBuildRepository_CompleteStepIfRunning(t *testing.T) {
 	}{
 		{
 			name: "success",
-			rows: sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-				AddRow("step-1", "build-1", 0, "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil),
+			rows: sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+				AddRow("step-1", "build-1", 0, "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]"),
 			expectCompleted: true,
 		},
 		{
@@ -178,8 +178,8 @@ func TestBuildRepository_CompleteStep_NonFinalSuccess(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]"),
 	)
 	mock.ExpectQuery("SELECT EXISTS").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectExec("UPDATE builds").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -217,8 +217,8 @@ func TestBuildRepository_CompleteStep_FinalSuccess(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-2", "build-1", 1, "second", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+			AddRow("step-2", "build-1", 1, "second", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]"),
 	)
 	mock.ExpectQuery("SELECT EXISTS").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec("UPDATE builds").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -255,8 +255,8 @@ func TestBuildRepository_CompleteStep_FailedStep(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo boom\"]", "{}", ".", 0, "failed", nil, nil, nil, nil, now, now, 7, "", "boom", "boom"),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo boom\"]", "{}", ".", 0, "failed", nil, nil, nil, nil, now, now, 7, "", "boom", "boom", "[]"),
 	)
 	mock.ExpectExec("UPDATE builds").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -294,8 +294,8 @@ func TestBuildRepository_CompleteStep_FailedStepNilErrorMessage_UsesTypedBuildUp
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"exit 1\"]", "{}", ".", 0, "failed", nil, nil, nil, nil, now, now, 1, "", "command failed", nil),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"exit 1\"]", "{}", ".", 0, "failed", nil, nil, nil, nil, now, now, 1, "", "command failed", nil, "[]"),
 	)
 	mock.ExpectExec("error_message = COALESCE\\(\\$2::text, error_message\\)").WithArgs("build-1", nil).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -339,8 +339,8 @@ func TestBuildRepository_CompleteStep_DuplicateNoOp(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]"),
 	)
 	mock.ExpectCommit()
 
@@ -377,8 +377,8 @@ func TestBuildRepository_CompleteStep_InvalidTransition(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "pending", nil, nil, nil, nil, now, nil, nil, nil, nil, nil),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "pending", nil, nil, nil, nil, now, nil, nil, nil, nil, nil, "[]"),
 	)
 	mock.ExpectRollback()
 
@@ -411,8 +411,8 @@ func TestBuildRepository_CompleteStep_RollsBackOnAdvanceError(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]"),
 	)
 	mock.ExpectQuery("SELECT EXISTS").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectExec("UPDATE builds").WillReturnError(errors.New("update current step failed"))
@@ -485,8 +485,8 @@ func TestBuildRepository_ClaimPendingStep(t *testing.T) {
 	lease := now.Add(45 * time.Second)
 
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-1", "build-1", 0, "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "running", "worker-a", "claim-a", now, lease, now, nil, nil, nil, nil, nil),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+			AddRow("step-1", "build-1", 0, "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "running", "worker-a", "claim-a", now, lease, now, nil, nil, nil, nil, nil, "[]"),
 	)
 
 	step, claimed, err := repo.ClaimPendingStep(context.Background(), "build-1", 0, repository.StepClaim{WorkerID: "worker-a", ClaimToken: "claim-a", ClaimedAt: now, LeaseExpiresAt: lease})
@@ -516,8 +516,8 @@ func TestBuildRepository_ReclaimExpiredStep(t *testing.T) {
 	lease := reclaimBefore.Add(45 * time.Second)
 
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-1", "build-1", 0, "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "running", "worker-b", "claim-b", reclaimBefore, lease, reclaimBefore.Add(-time.Minute), nil, nil, nil, nil, nil),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+			AddRow("step-1", "build-1", 0, "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "running", "worker-b", "claim-b", reclaimBefore, lease, reclaimBefore.Add(-time.Minute), nil, nil, nil, nil, nil, "[]"),
 	)
 
 	step, reclaimed, err := repo.ReclaimExpiredStep(context.Background(), "build-1", 0, reclaimBefore, repository.StepClaim{WorkerID: "worker-b", ClaimToken: "claim-b", ClaimedAt: reclaimBefore, LeaseExpiresAt: lease})
@@ -575,8 +575,8 @@ func TestBuildRepository_CompleteStep_StaleClaim(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "running", "worker-b", "claim-b", now, now.Add(time.Minute), now, nil, nil, nil, nil, nil),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "running", "worker-b", "claim-b", now, now.Add(time.Minute), now, nil, nil, nil, nil, nil, "[]"),
 	)
 	mock.ExpectCommit()
 
@@ -613,8 +613,8 @@ func TestBuildRepository_RenewStepLease_Success(t *testing.T) {
 	extended := now.Add(time.Minute)
 
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "running", "worker-a", "claim-a", now, extended, now, nil, nil, nil, nil, nil),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "running", "worker-a", "claim-a", now, extended, now, nil, nil, nil, nil, nil, "[]"),
 	)
 
 	step, outcome, err := repo.RenewStepLease(context.Background(), "build-1", 0, "claim-a", extended)
@@ -645,8 +645,8 @@ func TestBuildRepository_RenewStepLease_StaleAndTerminal(t *testing.T) {
 	// stale claim path
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "running", "worker-b", "claim-b", now, now.Add(time.Minute), now, nil, nil, nil, nil, nil),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "running", "worker-b", "claim-b", now, now.Add(time.Minute), now, nil, nil, nil, nil, nil, "[]"),
 	)
 
 	_, outcome, err := repo.RenewStepLease(context.Background(), "build-1", 0, "claim-a", now.Add(2*time.Minute))
@@ -660,8 +660,8 @@ func TestBuildRepository_RenewStepLease_StaleAndTerminal(t *testing.T) {
 	// terminal step path
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message"}).
-			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", "worker-b", nil, nil, nil, now, now, 0, "ok", "", nil),
+		sqlmock.NewRows([]string{"id", "build_id", "step_index", "name", "image", "command", "args", "env", "working_dir", "timeout_seconds", "status", "worker_id", "claim_token", "claimed_at", "lease_expires_at", "started_at", "finished_at", "exit_code", "stdout", "stderr", "error_message", "artifact_paths"}).
+			AddRow("step-1", "build-1", 0, "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", "worker-b", nil, nil, nil, now, now, 0, "ok", "", nil, "[]"),
 	)
 
 	_, outcome, err = repo.RenewStepLease(context.Background(), "build-1", 0, "claim-b", now.Add(3*time.Minute))

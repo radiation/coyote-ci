@@ -607,6 +607,9 @@ func cloneStep(step domain.BuildStep) domain.BuildStep {
 		}
 		step.Env = env
 	}
+	if step.ArtifactPaths != nil {
+		step.ArtifactPaths = append([]string(nil), step.ArtifactPaths...)
+	}
 
 	return step
 }

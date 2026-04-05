@@ -996,13 +996,19 @@ func toExecutionJobResponse(job *domain.ExecutionJob, outputs []domain.Execution
 }
 
 func toBuildArtifactResponse(item domain.BuildArtifact) api.BuildArtifactResponse {
+	provider := string(item.StorageProvider)
+	if provider == "" {
+		provider = string(domain.StorageProviderFilesystem)
+	}
 	return api.BuildArtifactResponse{
 		ID:              item.ID,
 		BuildID:         item.BuildID,
+		StepID:          item.StepID,
 		Path:            item.LogicalPath,
 		SizeBytes:       item.SizeBytes,
 		ContentType:     item.ContentType,
 		ChecksumSHA256:  item.ChecksumSHA256,
+		StorageProvider: provider,
 		DownloadURLPath: "/api/builds/" + item.BuildID + "/artifacts/" + item.ID + "/download",
 		CreatedAt:       item.CreatedAt.Format(time.RFC3339),
 	}

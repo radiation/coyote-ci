@@ -91,6 +91,18 @@ func Validate(pf *PipelineFile) error {
 				errs = append(errs, ValidationError{Field: prefix + ".env", Message: fmt.Sprintf("invalid env key %q", key)})
 			}
 		}
+
+		for j, pattern := range step.Artifacts.Paths {
+			trimmed := strings.TrimSpace(pattern)
+			field := fmt.Sprintf("%s.artifacts[%d]", prefix, j)
+			if trimmed == "" {
+				errs = append(errs, ValidationError{Field: field, Message: "artifact path is required"})
+				continue
+			}
+			if err := validateArtifactPathPattern(trimmed); err != nil {
+				errs = append(errs, ValidationError{Field: field, Message: err.Error()})
+			}
+		}
 	}
 
 	if len(errs) > 0 {

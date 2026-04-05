@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS build_steps (
     stdout TEXT,
     stderr TEXT,
     error_message TEXT,
+    artifact_paths JSONB NOT NULL DEFAULT '[]'::jsonb,
     UNIQUE (build_id, step_index)
 );
 
@@ -155,8 +156,10 @@ CREATE INDEX IF NOT EXISTS idx_build_job_outputs_job_id ON build_job_outputs (jo
 CREATE TABLE IF NOT EXISTS build_artifacts (
     id UUID PRIMARY KEY,
     build_id UUID NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+    step_id UUID REFERENCES build_steps(id) ON DELETE SET NULL,
     logical_path TEXT NOT NULL,
     storage_key TEXT NOT NULL,
+    storage_provider TEXT NOT NULL DEFAULT 'filesystem',
     size_bytes BIGINT NOT NULL,
     content_type TEXT,
     checksum_sha256 TEXT,

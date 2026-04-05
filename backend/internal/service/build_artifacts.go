@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
@@ -130,52 +128,91 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 		existingPaths[item.LogicalPath] = struct{}{}
 	}
 
+	workspacePath := filepath.Join(s.artifactWorkspaceRoot, strings.TrimSpace(buildID))
+	provider := s.storageProviderName()
+
+	// Step-level artifact collection: preferred path.
+	steps, err := s.buildRepo.GetStepsByBuildID(ctx, buildID)
+	if err != nil {
+		return nil, fmt.Errorf("fetching steps for artifact collection: %w", err)
+	}
+	for _, step := range steps {
+		if len(step.ArtifactPaths) == 0 {
+			continue
+		}
+		log.Printf("artifact step collection start: build_id=%s step_id=%s step_name=%s patterns=%q", buildID, step.ID, step.Name, step.ArtifactPaths)
+		if err = s.collectAndPersistArtifacts(ctx, buildID, &step.ID, provider, workspacePath, step.ArtifactPaths, existingPaths); err != nil {
+			return nil, err
+		}
+	}
+
+	// Pipeline-level artifact collection: backward compatibility.
 	patterns, err := artifactPatternsFromBuild(build)
 	if err != nil {
 		return nil, fmt.Errorf("resolving build artifact declarations: %w", err)
 	}
-	if len(patterns) == 0 {
-		return sortedArtifactPaths(existingPaths), nil
+	if len(patterns) > 0 {
+		log.Printf("artifact pipeline collection start: build_id=%s patterns=%q", buildID, patterns)
+		if err := s.collectAndPersistArtifacts(ctx, buildID, nil, provider, workspacePath, patterns, existingPaths); err != nil {
+			return nil, err
+		}
 	}
 
-	workspacePath := filepath.Join(s.artifactWorkspaceRoot, strings.TrimSpace(buildID))
-	log.Printf("artifact collection start: build_id=%s workspace_path=%s declared_patterns=%q storage_root=%s", buildID, workspacePath, patterns, artifactStoreRootForLog(s.artifactStore))
+	return sortedArtifactPaths(existingPaths), nil
+}
+
+// collectAndPersistArtifacts collects artifacts from the workspace and persists metadata.
+func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID string, stepID *string, provider domain.StorageProvider, workspacePath string, patterns []string, existingPaths map[string]struct{}) error {
+	stepIDStr := ""
+	if stepID != nil {
+		stepIDStr = *stepID
+	}
+
 	collectResult, err := s.artifactCollector.Collect(ctx, artifact.CollectRequest{
 		BuildID:          buildID,
+		StepID:           stepIDStr,
 		WorkspacePath:    workspacePath,
 		Patterns:         patterns,
 		SkipLogicalPaths: existingPaths,
 	})
 	if err != nil {
-		log.Printf("artifact collection error: build_id=%s workspace_path=%s err=%v", buildID, workspacePath, err)
-		return nil, err
+		log.Printf("artifact collection error: build_id=%s step_id=%s err=%v", buildID, stepIDStr, err)
+		return err
 	}
 	for _, warning := range collectResult.Warnings {
 		log.Printf("artifact collection warning: build_id=%s %s", buildID, warning)
 	}
-	log.Printf("artifact metadata persistence start: build_id=%s artifacts_to_persist=%d", buildID, len(collectResult.Artifacts))
 
 	for _, item := range collectResult.Artifacts {
-		log.Printf("artifact metadata persist: build_id=%s logical_path=%s storage_key=%s size_bytes=%d", buildID, item.LogicalPath, item.StorageKey, item.SizeBytes)
+		log.Printf("artifact metadata persist: build_id=%s step_id=%s logical_path=%s storage_key=%s size_bytes=%d", buildID, stepIDStr, item.LogicalPath, item.StorageKey, item.SizeBytes)
 		_, err := s.artifactRepo.Create(ctx, domain.BuildArtifact{
-			ID:             uuid.NewString(),
-			BuildID:        buildID,
-			LogicalPath:    item.LogicalPath,
-			StorageKey:     item.StorageKey,
-			SizeBytes:      item.SizeBytes,
-			ContentType:    item.ContentType,
-			ChecksumSHA256: item.ChecksumSHA256,
-			CreatedAt:      time.Now().UTC(),
+			ID:              item.GeneratedID,
+			BuildID:         buildID,
+			StepID:          stepID,
+			LogicalPath:     item.LogicalPath,
+			StorageKey:      item.StorageKey,
+			StorageProvider: provider,
+			SizeBytes:       item.SizeBytes,
+			ContentType:     item.ContentType,
+			ChecksumSHA256:  item.ChecksumSHA256,
+			CreatedAt:       time.Now().UTC(),
 		})
 		if err != nil {
 			log.Printf("artifact metadata persistence error: build_id=%s logical_path=%s err=%v", buildID, item.LogicalPath, err)
-			return nil, fmt.Errorf("persisting artifact metadata: %w", err)
+			return fmt.Errorf("persisting artifact metadata: %w", err)
 		}
 		existingPaths[item.LogicalPath] = struct{}{}
 	}
-	log.Printf("artifact metadata persistence complete: build_id=%s persisted=%d", buildID, len(collectResult.Artifacts))
 
-	return sortedArtifactPaths(existingPaths), nil
+	return nil
+}
+
+// storageProviderName returns the provider identifier for the configured artifact store.
+func (s *BuildService) storageProviderName() domain.StorageProvider {
+	if s.artifactStorageProvider != "" {
+		return s.artifactStorageProvider
+	}
+	return domain.StorageProviderFilesystem
 }
 
 func sortedArtifactPaths(values map[string]struct{}) []string {

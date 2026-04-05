@@ -239,10 +239,12 @@ type StepLogsResponse struct {
 type BuildArtifactResponse struct {
 	ID              string  `json:"id"`
 	BuildID         string  `json:"build_id"`
+	StepID          *string `json:"step_id,omitempty"`
 	Path            string  `json:"path"`
 	SizeBytes       int64   `json:"size_bytes"`
 	ContentType     *string `json:"content_type"`
 	ChecksumSHA256  *string `json:"checksum_sha256"`
+	StorageProvider string  `json:"storage_provider"`
 	DownloadURLPath string  `json:"download_url_path"`
 	CreatedAt       string  `json:"created_at"`
 }

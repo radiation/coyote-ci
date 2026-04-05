@@ -66,11 +66,12 @@ type BuildService struct {
 	sourceResolver         source.WorkspaceSourceResolver
 	executionWorkspaceRoot string
 
-	artifactRepo          repository.ArtifactRepository
-	executionOutputRepo   repository.ExecutionJobOutputRepository
-	artifactStore         artifact.Store
-	artifactCollector     *artifact.Collector
-	artifactWorkspaceRoot string
+	artifactRepo            repository.ArtifactRepository
+	executionOutputRepo     repository.ExecutionJobOutputRepository
+	artifactStore           artifact.Store
+	artifactCollector       *artifact.Collector
+	artifactWorkspaceRoot   string
+	artifactStorageProvider domain.StorageProvider
 
 	defaultExecutionImage string
 }
@@ -108,10 +109,11 @@ func (s *BuildService) SetDefaultExecutionImage(image string) {
 }
 
 // SetArtifactPersistence configures build artifact persistence dependencies.
-func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository, store artifact.Store, workspaceRoot string) {
+func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository, store artifact.Store, workspaceRoot string, provider domain.StorageProvider) {
 	s.artifactRepo = repo
 	s.artifactStore = store
 	s.artifactWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot)
+	s.artifactStorageProvider = provider
 	if s.executionWorkspaceRoot == "" {
 		s.executionWorkspaceRoot = s.artifactWorkspaceRoot
 	}

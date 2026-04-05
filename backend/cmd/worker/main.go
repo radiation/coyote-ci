@@ -13,7 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	"cloud.google.com/go/storage"
+
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
@@ -53,7 +56,7 @@ func main() {
 	executionJobRepo := repositorypostgres.NewExecutionJobRepository(db)
 	executionJobOutputRepo := repositorypostgres.NewExecutionJobOutputRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
-	artifactStore := artifact.NewFilesystemStore(cfg.ArtifactStorageRoot)
+	artifactStore, artifactProvider := resolveArtifactStore(cfg)
 	stepRunner := resolveStepRunner(cfg)
 	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildService(buildRepo, stepRunner, logSink)
@@ -61,7 +64,7 @@ func main() {
 	buildService.SetExecutionJobOutputRepository(executionJobOutputRepo)
 	buildService.SetDefaultExecutionImage(cfg.ExecutionDefaultImage)
 	buildService.SetExecutionWorkspaceRoot(cfg.ExecutionWorkspaceRoot)
-	buildService.SetArtifactPersistence(artifactRepo, artifactStore, cfg.ExecutionWorkspaceRoot)
+	buildService.SetArtifactPersistence(artifactRepo, artifactStore, cfg.ExecutionWorkspaceRoot, artifactProvider)
 	leaseDuration := time.Duration(cfg.StepLeaseSeconds) * time.Second
 	workerService := service.NewWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)
 
@@ -195,4 +198,33 @@ func newWorkerStatusHandler(worker workerStatusProvider) nethttp.Handler {
 	})
 
 	return mux
+}
+
+func resolveArtifactStore(cfg config.Config) (artifact.Store, domain.StorageProvider) {
+	switch strings.ToLower(strings.TrimSpace(cfg.ArtifactStorageProvider)) {
+	case "gcs":
+		if cfg.ArtifactGCSBucket == "" {
+			log.Printf("ARTIFACT_STORAGE_PROVIDER=gcs but ARTIFACT_GCS_BUCKET is empty; falling back to filesystem")
+			return artifact.NewFilesystemStore(cfg.ArtifactStorageRoot), domain.StorageProviderFilesystem
+		}
+		ctx := context.Background()
+		client, err := storage.NewClient(ctx)
+		if err != nil {
+			log.Printf("failed to create GCS client: %v; falling back to filesystem", err)
+			return artifact.NewFilesystemStore(cfg.ArtifactStorageRoot), domain.StorageProviderFilesystem
+		}
+		store, err := artifact.NewGCSStore(client, artifact.GCSStoreConfig{
+			Bucket:  cfg.ArtifactGCSBucket,
+			Prefix:  cfg.ArtifactGCSPrefix,
+			Project: cfg.ArtifactGCSProject,
+		})
+		if err != nil {
+			log.Printf("failed to create GCS artifact store: %v; falling back to filesystem", err)
+			return artifact.NewFilesystemStore(cfg.ArtifactStorageRoot), domain.StorageProviderFilesystem
+		}
+		log.Printf("artifact storage: gcs bucket=%s prefix=%s", cfg.ArtifactGCSBucket, cfg.ArtifactGCSPrefix)
+		return store, domain.StorageProviderGCS
+	default:
+		return artifact.NewFilesystemStore(cfg.ArtifactStorageRoot), domain.StorageProviderFilesystem
+	}
 }

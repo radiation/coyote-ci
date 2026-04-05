@@ -388,3 +388,43 @@ artifacts:
 		t.Fatalf("unexpected artifact paths: %#v", pf.Artifacts.Paths)
 	}
 }
+
+func TestResolve_StepLevelArtifacts(t *testing.T) {
+	yaml := `
+version: 1
+steps:
+  - name: Build
+    run: make build
+    artifacts:
+      - dist/**
+      - build/output.tar.gz
+  - name: Test
+    run: go test ./...
+artifacts:
+  - reports/*.xml
+`
+	pf, err := ParseAndValidate([]byte(yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rp := Resolve(pf)
+
+	if len(rp.Steps[0].ArtifactPaths) != 2 {
+		t.Fatalf("expected 2 step-level artifact paths on step 0, got %d", len(rp.Steps[0].ArtifactPaths))
+	}
+	if rp.Steps[0].ArtifactPaths[0] != "dist/**" {
+		t.Fatalf("expected dist/**, got %q", rp.Steps[0].ArtifactPaths[0])
+	}
+
+	if len(rp.Steps[1].ArtifactPaths) != 0 {
+		t.Fatalf("expected 0 step-level artifact paths on step 1, got %d", len(rp.Steps[1].ArtifactPaths))
+	}
+
+	if len(rp.Artifacts.Paths) != 1 {
+		t.Fatalf("expected 1 pipeline-level artifact path, got %d", len(rp.Artifacts.Paths))
+	}
+	if rp.Artifacts.Paths[0] != "reports/*.xml" {
+		t.Fatalf("expected reports/*.xml, got %q", rp.Artifacts.Paths[0])
+	}
+}

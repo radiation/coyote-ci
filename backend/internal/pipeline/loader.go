@@ -62,6 +62,7 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 			WorkingDir:     sd.WorkingDir,
 			Env:            merged,
 			TimeoutSeconds: timeout,
+			ArtifactPaths:  append([]string(nil), sd.Artifacts.Paths...),
 		})
 	}
 

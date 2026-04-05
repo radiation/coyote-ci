@@ -62,6 +62,18 @@ func (r *fakeArtifactRepo) GetByID(_ context.Context, buildID string, artifactID
 	return domain.BuildArtifact{}, repository.ErrArtifactNotFound
 }
 
+func (r *fakeArtifactRepo) ListByStepID(_ context.Context, stepID string) ([]domain.BuildArtifact, error) {
+	var out []domain.BuildArtifact
+	for _, items := range r.artifactsByBuild {
+		for _, item := range items {
+			if item.StepID != nil && *item.StepID == stepID {
+				out = append(out, item)
+			}
+		}
+	}
+	return out, nil
+}
+
 func (r *fakeRepo) Create(_ context.Context, build domain.Build) (domain.Build, error) {
 	if r.createErr != nil {
 		return domain.Build{}, r.createErr
