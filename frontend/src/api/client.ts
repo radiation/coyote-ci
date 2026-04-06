@@ -7,13 +7,13 @@ import type {
   BuildStepsResponse,
   DataEnvelope,
   StepLogsResponse,
-} from '../types/build';
+} from "../types/build";
 import type {
   CreateJobRequest,
   Job,
   JobListResponse,
   UpdateJobRequest,
-} from '../types/job';
+} from "../types/job";
 
 /**
  * Base URL for API requests.
@@ -22,7 +22,7 @@ import type {
  * In local Vite dev, the vite proxy rewrites /api -> http://localhost:8080.
  * Override with VITE_API_BASE_PATH when needed (e.g. direct backend testing).
  */
-const BASE = import.meta.env.VITE_API_BASE_PATH ?? '/api';
+const BASE = import.meta.env.VITE_API_BASE_PATH ?? "/api";
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, init);
@@ -44,11 +44,14 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-async function postJSON<TResponse, TRequest>(path: string, body: TRequest): Promise<TResponse> {
+async function postJSON<TResponse, TRequest>(
+  path: string,
+  body: TRequest,
+): Promise<TResponse> {
   return fetchJSON<TResponse>(path, {
-    method: 'POST',
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
   });
@@ -56,17 +59,19 @@ async function postJSON<TResponse, TRequest>(path: string, body: TRequest): Prom
 
 async function postNoBodyJSON<TResponse>(path: string): Promise<TResponse> {
   return fetchJSON<TResponse>(path, {
-    method: 'POST',
+    method: "POST",
   });
 }
 
 export async function listBuilds(): Promise<Build[]> {
-  const envelope = await fetchJSON<DataEnvelope<BuildListResponse>>('/builds');
+  const envelope = await fetchJSON<DataEnvelope<BuildListResponse>>("/builds");
   return envelope.data.builds;
 }
 
 export async function getBuild(id: string): Promise<Build> {
-  const envelope = await fetchJSON<DataEnvelope<Build>>(`/builds/${encodeURIComponent(id)}`);
+  const envelope = await fetchJSON<DataEnvelope<Build>>(
+    `/builds/${encodeURIComponent(id)}`,
+  );
   return envelope.data;
 }
 
@@ -77,7 +82,12 @@ export async function getBuildSteps(id: string): Promise<BuildStep[]> {
   return envelope.data.steps;
 }
 
-export async function getStepLogs(buildID: string, stepIndex: number, after = 0, limit = 300): Promise<StepLogsResponse> {
+export async function getStepLogs(
+  buildID: string,
+  stepIndex: number,
+  after = 0,
+  limit = 300,
+): Promise<StepLogsResponse> {
   const envelope = await fetchJSON<DataEnvelope<StepLogsResponse>>(
     `/builds/${encodeURIComponent(buildID)}/steps/${stepIndex}/logs?after=${after}&limit=${limit}`,
   );
@@ -92,48 +102,67 @@ export async function getBuildArtifacts(id: string): Promise<BuildArtifact[]> {
 }
 
 export function artifactDownloadURL(downloadPath: string): string {
-  if (!downloadPath.startsWith('/')) {
+  if (!downloadPath.startsWith("/")) {
     return `${BASE}/${downloadPath}`;
   }
   return `${BASE}${downloadPath}`;
 }
 
-export function buildStepLogStreamURL(buildID: string, stepIndex: number, after = 0): string {
+export function buildStepLogStreamURL(
+  buildID: string,
+  stepIndex: number,
+  after = 0,
+): string {
   return `${BASE}/builds/${encodeURIComponent(buildID)}/steps/${stepIndex}/logs/stream?after=${after}`;
 }
 
 export async function listJobs(): Promise<Job[]> {
-  const envelope = await fetchJSON<DataEnvelope<JobListResponse>>('/jobs');
+  const envelope = await fetchJSON<DataEnvelope<JobListResponse>>("/jobs");
   return envelope.data.jobs;
 }
 
 export async function getJob(id: string): Promise<Job> {
-  const envelope = await fetchJSON<DataEnvelope<Job>>(`/jobs/${encodeURIComponent(id)}`);
+  const envelope = await fetchJSON<DataEnvelope<Job>>(
+    `/jobs/${encodeURIComponent(id)}`,
+  );
   return envelope.data;
 }
 
 export async function createJob(input: CreateJobRequest): Promise<Job> {
-  const envelope = await postJSON<DataEnvelope<Job>, CreateJobRequest>('/jobs', input);
+  const envelope = await postJSON<DataEnvelope<Job>, CreateJobRequest>(
+    "/jobs",
+    input,
+  );
   return envelope.data;
 }
 
-export async function updateJob(id: string, input: UpdateJobRequest): Promise<Job> {
-  const envelope = await fetchJSON<DataEnvelope<Job>>(`/jobs/${encodeURIComponent(id)}`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
+export async function updateJob(
+  id: string,
+  input: UpdateJobRequest,
+): Promise<Job> {
+  const envelope = await fetchJSON<DataEnvelope<Job>>(
+    `/jobs/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
     },
-    body: JSON.stringify(input),
-  });
+  );
   return envelope.data;
 }
 
 export async function runJob(id: string): Promise<Build> {
-  const envelope = await postNoBodyJSON<DataEnvelope<Build>>(`/jobs/${encodeURIComponent(id)}/run`);
+  const envelope = await postNoBodyJSON<DataEnvelope<Build>>(
+    `/jobs/${encodeURIComponent(id)}/run`,
+  );
   return envelope.data;
 }
 
 export async function listBuildsByJob(jobId: string): Promise<Build[]> {
-  const envelope = await fetchJSON<DataEnvelope<BuildListResponse>>(`/jobs/${encodeURIComponent(jobId)}/builds`);
+  const envelope = await fetchJSON<DataEnvelope<BuildListResponse>>(
+    `/jobs/${encodeURIComponent(jobId)}/builds`,
+  );
   return envelope.data.builds;
 }

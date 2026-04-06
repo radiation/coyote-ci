@@ -1,0 +1,27 @@
+# Codecov configuration for a polyglot repo (Go backend + TypeScript frontend).
+#
+# Each side uploads separately with a flag. The carryforward setting ensures
+# PRs that only touch one side still show a complete coverage picture.
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+      backend:
+        flags: [backend]
+      frontend:
+        flags: [frontend]
+    patch:
+      default:
+        target: auto
+
+flags:
+  backend:
+    paths:
+      - backend/
+    carryforward: true
+  frontend:
+    paths:
+      - frontend/
+    carryforward: true

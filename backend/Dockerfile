@@ -1,6 +1,6 @@
-# GO_VERSION is supplied by docker-compose from the repo-level .env file.
-# For manual docker build, pass --build-arg GO_VERSION=<x.y.z>.
-ARG GO_VERSION
+# Default matches backend/go.mod toolchain directive.
+# docker-compose overrides via build arg; standalone builds use this default.
+ARG GO_VERSION=1.26.1
 
 FROM golang:${GO_VERSION} AS dev
 

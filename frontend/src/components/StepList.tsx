@@ -1,8 +1,8 @@
-import { Fragment, useEffect, useState } from 'react';
-import { buildStepLogStreamURL, getStepLogs } from '../api';
-import type { BuildStep } from '../types';
-import { StatusBadge } from './StatusBadge';
-import { formatTime } from '../utils/time';
+import { Fragment, useEffect, useState } from "react";
+import { buildStepLogStreamURL, getStepLogs } from "../api";
+import type { BuildStep } from "../types";
+import { StatusBadge } from "./StatusBadge";
+import { formatTime } from "../utils/time";
 
 const COMMAND_PREVIEW_LIMIT = 72;
 
@@ -16,14 +16,22 @@ function commandPreview(command: string): string {
 
 type StepLogChunk = {
   sequence_no: number;
-  stream: 'stdout' | 'stderr' | 'system';
+  stream: "stdout" | "stderr" | "system";
   chunk_text: string;
   created_at: string;
 };
 
-export function StepList({ buildID, steps }: { buildID: string; steps: BuildStep[] }) {
+export function StepList({
+  buildID,
+  steps,
+}: {
+  buildID: string;
+  steps: BuildStep[];
+}) {
   const [openStepIndex, setOpenStepIndex] = useState<number | null>(null);
-  const [logChunks, setLogChunks] = useState<Record<number, StepLogChunk[]>>({});
+  const [logChunks, setLogChunks] = useState<Record<number, StepLogChunk[]>>(
+    {},
+  );
   const [logLoading, setLogLoading] = useState<Record<number, boolean>>({});
   const [logError, setLogError] = useState<Record<number, string | null>>({});
 
@@ -56,9 +64,11 @@ export function StepList({ buildID, steps }: { buildID: string; steps: BuildStep
 
       latestSequence = after;
 
-      eventSource = new EventSource(buildStepLogStreamURL(buildID, openStepIndex, after));
+      eventSource = new EventSource(
+        buildStepLogStreamURL(buildID, openStepIndex, after),
+      );
 
-      eventSource.addEventListener('chunk', (evt: MessageEvent) => {
+      eventSource.addEventListener("chunk", (evt: MessageEvent) => {
         const parsed = JSON.parse(evt.data) as StepLogChunk;
         if (parsed.sequence_no <= latestSequence) {
           return;
@@ -141,34 +151,55 @@ export function StepList({ buildID, steps }: { buildID: string; steps: BuildStep
                 <td>{step.step_index}</td>
                 <td>{step.name}</td>
                 <td>
-                  <code className="step-command" title={step.command}>{commandPreview(step.command)}</code>
+                  <code className="step-command" title={step.command}>
+                    {commandPreview(step.command)}
+                  </code>
                 </td>
-                <td><StatusBadge status={step.status} /></td>
-                <td>{step.worker_id ?? '—'}</td>
+                <td>
+                  <StatusBadge status={step.status} />
+                </td>
+                <td>{step.worker_id ?? "—"}</td>
                 <td>{formatTime(step.started_at)}</td>
                 <td>{formatTime(step.finished_at)}</td>
-                <td>{step.exit_code ?? '—'}</td>
+                <td>{step.exit_code ?? "—"}</td>
                 <td>
                   <button
                     type="button"
                     className="logs-toggle"
-                    onClick={() => setOpenStepIndex((prev) => (prev === step.step_index ? null : step.step_index))}
+                    onClick={() =>
+                      setOpenStepIndex((prev) =>
+                        prev === step.step_index ? null : step.step_index,
+                      )
+                    }
                   >
-                    {isOpen ? 'Hide' : 'View'}
+                    {isOpen ? "Hide" : "View"}
                   </button>
                 </td>
-                <td className="error-text">{step.error_message ?? '—'}</td>
+                <td className="error-text">{step.error_message ?? "—"}</td>
               </tr>
               {isOpen && (
                 <tr key={`logs-${step.step_index}`}>
                   <td colSpan={10}>
                     <div className="step-log-panel">
-                      {loading && <p className="subtle-text">Loading logs...</p>}
-                      {error && <p className="error-text">Failed to load logs: {error}</p>}
-                      {!loading && !error && chunks.length === 0 && <p className="subtle-text">No logs yet.</p>}
+                      {loading && (
+                        <p className="subtle-text">Loading logs...</p>
+                      )}
+                      {error && (
+                        <p className="error-text">
+                          Failed to load logs: {error}
+                        </p>
+                      )}
+                      {!loading && !error && chunks.length === 0 && (
+                        <p className="subtle-text">No logs yet.</p>
+                      )}
                       {!error && chunks.length > 0 && (
                         <pre className="step-log-pre">
-                          {chunks.map((chunk) => `[${chunk.stream}] ${chunk.chunk_text}`).join('\n')}
+                          {chunks
+                            .map(
+                              (chunk) =>
+                                `[${chunk.stream}] ${chunk.chunk_text}`,
+                            )
+                            .join("\n")}
                         </pre>
                       )}
                     </div>

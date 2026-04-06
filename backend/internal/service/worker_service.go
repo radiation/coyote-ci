@@ -107,6 +107,13 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 	}
 
 	// Transitional fallback for builds without durable jobs.
+	//
+	// REVIEW NOTE: This fallback is O(builds × steps) per poll cycle and should
+	// be removed once the following prerequisites are met:
+	//   1. executionJobRepo is always wired (required dep, not optional)
+	//   2. expired-lease reclaim logic is ported to the execution_jobs-based path
+	//   3. Pending→Queued auto-transition is handled outside this path
+	//   4. worker e2e tests are updated to wire an ExecutionJobRepository
 	builds, err := w.builds.ListBuilds(ctx)
 	if err != nil {
 		return RunnableStep{}, false, err

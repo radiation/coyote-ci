@@ -1,0 +1,38 @@
+#!/usr/bin/env sh
+#
+# pre-push: run test suites before pushing.
+# Install: make install-hooks
+# Bypass:  git push --no-verify
+#
+set -eu
+
+failed=0
+
+# ── Backend ──────────────────────────────────────────────────────────────────
+if command -v go >/dev/null 2>&1; then
+	echo "== Backend tests =="
+	if ! (cd backend && go test ./...) ; then
+		failed=1
+	fi
+else
+	echo "== Backend tests (skipped: go not found) =="
+fi
+
+# ── Frontend ─────────────────────────────────────────────────────────────────
+if [ -f frontend/package.json ] && command -v npx >/dev/null 2>&1; then
+	echo "== Frontend tests =="
+	if ! (cd frontend && npx --no-install vitest run 2>/dev/null) ; then
+		failed=1
+	fi
+else
+	echo "== Frontend tests (skipped: npx not found or no package.json) =="
+fi
+
+# ── Result ───────────────────────────────────────────────────────────────────
+if [ "$failed" -ne 0 ]; then
+	echo "" >&2
+	echo "Pre-push checks FAILED. Fix issues above or use --no-verify to bypass." >&2
+	exit 1
+fi
+
+echo "Pre-push checks passed."

@@ -246,8 +246,28 @@ func timeoutFailureReason(timeout time.Duration) string {
 	return "step execution timed out"
 }
 
+// safeEnvKeys lists host environment variables that are safe to propagate into
+// build step processes. Everything else from the host is excluded to avoid
+// leaking secrets (DB passwords, webhook secrets, etc.).
+var safeEnvKeys = []string{
+	"PATH",
+	"HOME",
+	"USER",
+	"LANG",
+	"TERM",
+	"TMPDIR",
+	"TZ",
+	"SHELL",
+}
+
 func mergeEnvironment(extra map[string]string) []string {
-	base := os.Environ()
+	base := make([]string, 0, len(safeEnvKeys)+len(extra))
+	for _, key := range safeEnvKeys {
+		if val, ok := os.LookupEnv(key); ok {
+			base = append(base, key+"="+val)
+		}
+	}
+
 	if len(extra) == 0 {
 		return base
 	}

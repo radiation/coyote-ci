@@ -37,382 +37,252 @@ func qualifyColumns(alias string, columns string) string {
 
 func scanBuildList(scanner rowScanner) (domain.Build, error) {
 	var build domain.Build
-	var status string
-	var jobID sql.NullString
-	var queuedAt sql.NullTime
-	var startedAt sql.NullTime
-	var finishedAt sql.NullTime
-	var rerunOfBuildID sql.NullString
-	var rerunFromStepIdx sql.NullInt64
-	var errorMessage sql.NullString
-	var pipelineName sql.NullString
-	var pipelineSource sql.NullString
-	var pipelinePath sql.NullString
-	var repoURL sql.NullString
-	var ref sql.NullString
-	var commitSHA sql.NullString
-	var triggerKind sql.NullString
-	var scmProvider sql.NullString
-	var eventType sql.NullString
-	var triggerRepositoryOwner sql.NullString
-	var triggerRepositoryName sql.NullString
-	var triggerRepositoryURL sql.NullString
-	var triggerRawRef sql.NullString
-	var triggerRef sql.NullString
-	var triggerRefType sql.NullString
-	var triggerRefName sql.NullString
-	var triggerDeleted sql.NullBool
-	var triggerCommitSHA sql.NullString
-	var triggerDeliveryID sql.NullString
-	var triggerActor sql.NullString
+	var nf buildNullFields
 
 	err := scanner.Scan(
 		&build.ID,
 		&build.ProjectID,
-		&jobID,
-		&status,
+		&nf.jobID,
+		&nf.status,
 		&build.CreatedAt,
-		&queuedAt,
-		&startedAt,
-		&finishedAt,
+		&nf.queuedAt,
+		&nf.startedAt,
+		&nf.finishedAt,
 		&build.CurrentStepIndex,
 		&build.AttemptNumber,
-		&rerunOfBuildID,
-		&rerunFromStepIdx,
-		&errorMessage,
-		&pipelineName,
-		&pipelineSource,
-		&pipelinePath,
-		&repoURL,
-		&ref,
-		&commitSHA,
-		&triggerKind,
-		&scmProvider,
-		&eventType,
-		&triggerRepositoryOwner,
-		&triggerRepositoryName,
-		&triggerRepositoryURL,
-		&triggerRawRef,
-		&triggerRef,
-		&triggerRefType,
-		&triggerRefName,
-		&triggerDeleted,
-		&triggerCommitSHA,
-		&triggerDeliveryID,
-		&triggerActor,
+		&nf.rerunOfBuildID,
+		&nf.rerunFromStepIdx,
+		&nf.errorMessage,
+		&nf.pipelineName,
+		&nf.pipelineSource,
+		&nf.pipelinePath,
+		&nf.repoURL,
+		&nf.ref,
+		&nf.commitSHA,
+		&nf.triggerKind,
+		&nf.scmProvider,
+		&nf.eventType,
+		&nf.triggerRepositoryOwner,
+		&nf.triggerRepositoryName,
+		&nf.triggerRepositoryURL,
+		&nf.triggerRawRef,
+		&nf.triggerRef,
+		&nf.triggerRefType,
+		&nf.triggerRefName,
+		&nf.triggerDeleted,
+		&nf.triggerCommitSHA,
+		&nf.triggerDeliveryID,
+		&nf.triggerActor,
 	)
 	if err != nil {
 		return domain.Build{}, err
 	}
 
-	build.Status = domain.BuildStatus(status)
-	if jobID.Valid {
-		v := jobID.String
-		build.JobID = &v
-	}
-	if queuedAt.Valid {
-		queued := queuedAt.Time
-		build.QueuedAt = &queued
-	}
-	if startedAt.Valid {
-		started := startedAt.Time
-		build.StartedAt = &started
-	}
-	if finishedAt.Valid {
-		finished := finishedAt.Time
-		build.FinishedAt = &finished
-	}
-	if build.AttemptNumber <= 0 {
-		build.AttemptNumber = 1
-	}
-	if rerunOfBuildID.Valid {
-		v := rerunOfBuildID.String
-		build.RerunOfBuildID = &v
-	}
-	if rerunFromStepIdx.Valid {
-		v := int(rerunFromStepIdx.Int64)
-		build.RerunFromStepIdx = &v
-	}
-	if errorMessage.Valid {
-		errMsg := errorMessage.String
-		build.ErrorMessage = &errMsg
-	}
-	if pipelineName.Valid {
-		v := pipelineName.String
-		build.PipelineName = &v
-	}
-	if pipelineSource.Valid {
-		v := pipelineSource.String
-		build.PipelineSource = &v
-	}
-	if pipelinePath.Valid {
-		v := pipelinePath.String
-		build.PipelinePath = &v
-	}
-	if repoURL.Valid {
-		v := repoURL.String
-		build.RepoURL = &v
-	}
-	if ref.Valid {
-		v := ref.String
-		build.Ref = &v
-	}
-	if commitSHA.Valid {
-		v := commitSHA.String
-		build.CommitSHA = &v
-	}
-	if triggerKind.Valid {
-		build.Trigger.Kind = domain.BuildTriggerKind(triggerKind.String)
-	}
-	if scmProvider.Valid {
-		v := scmProvider.String
-		build.Trigger.SCMProvider = &v
-	}
-	if eventType.Valid {
-		v := eventType.String
-		build.Trigger.EventType = &v
-	}
-	if triggerRepositoryOwner.Valid {
-		v := triggerRepositoryOwner.String
-		build.Trigger.RepositoryOwner = &v
-	}
-	if triggerRepositoryName.Valid {
-		v := triggerRepositoryName.String
-		build.Trigger.RepositoryName = &v
-	}
-	if triggerRepositoryURL.Valid {
-		v := triggerRepositoryURL.String
-		build.Trigger.RepositoryURL = &v
-	}
-	if triggerRawRef.Valid {
-		v := triggerRawRef.String
-		build.Trigger.RawRef = &v
-	}
-	if triggerRef.Valid {
-		v := triggerRef.String
-		build.Trigger.Ref = &v
-	}
-	if triggerRefType.Valid {
-		v := triggerRefType.String
-		build.Trigger.RefType = &v
-	}
-	if triggerRefName.Valid {
-		v := triggerRefName.String
-		build.Trigger.RefName = &v
-	}
-	if triggerDeleted.Valid {
-		v := triggerDeleted.Bool
-		build.Trigger.Deleted = &v
-	}
-	if triggerCommitSHA.Valid {
-		v := triggerCommitSHA.String
-		build.Trigger.CommitSHA = &v
-	}
-	if triggerDeliveryID.Valid {
-		v := triggerDeliveryID.String
-		build.Trigger.DeliveryID = &v
-	}
-	if triggerActor.Valid {
-		v := triggerActor.String
-		build.Trigger.Actor = &v
-	}
-	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
-	build.Source = domain.NewSourceSpec(readOptionalString(build.RepoURL), readOptionalString(build.Ref), readOptionalString(build.CommitSHA))
-
+	nf.applyTo(&build)
 	return build, nil
 }
 
 func scanBuild(scanner rowScanner) (domain.Build, error) {
 	var build domain.Build
-	var status string
-	var jobID sql.NullString
-	var queuedAt sql.NullTime
-	var startedAt sql.NullTime
-	var finishedAt sql.NullTime
-	var rerunOfBuildID sql.NullString
-	var rerunFromStepIdx sql.NullInt64
-	var errorMessage sql.NullString
-	var pipelineConfigYAML sql.NullString
-	var pipelineName sql.NullString
-	var pipelineSource sql.NullString
-	var pipelinePath sql.NullString
-	var repoURL sql.NullString
-	var ref sql.NullString
-	var commitSHA sql.NullString
-	var triggerKind sql.NullString
-	var scmProvider sql.NullString
-	var eventType sql.NullString
-	var triggerRepositoryOwner sql.NullString
-	var triggerRepositoryName sql.NullString
-	var triggerRepositoryURL sql.NullString
-	var triggerRawRef sql.NullString
-	var triggerRef sql.NullString
-	var triggerRefType sql.NullString
-	var triggerRefName sql.NullString
-	var triggerDeleted sql.NullBool
-	var triggerCommitSHA sql.NullString
-	var triggerDeliveryID sql.NullString
-	var triggerActor sql.NullString
+	var nf buildNullFields
 
 	err := scanner.Scan(
 		&build.ID,
 		&build.ProjectID,
-		&jobID,
-		&status,
+		&nf.jobID,
+		&nf.status,
 		&build.CreatedAt,
-		&queuedAt,
-		&startedAt,
-		&finishedAt,
+		&nf.queuedAt,
+		&nf.startedAt,
+		&nf.finishedAt,
 		&build.CurrentStepIndex,
 		&build.AttemptNumber,
-		&rerunOfBuildID,
-		&rerunFromStepIdx,
-		&errorMessage,
-		&pipelineConfigYAML,
-		&pipelineName,
-		&pipelineSource,
-		&pipelinePath,
-		&repoURL,
-		&ref,
-		&commitSHA,
-		&triggerKind,
-		&scmProvider,
-		&eventType,
-		&triggerRepositoryOwner,
-		&triggerRepositoryName,
-		&triggerRepositoryURL,
-		&triggerRawRef,
-		&triggerRef,
-		&triggerRefType,
-		&triggerRefName,
-		&triggerDeleted,
-		&triggerCommitSHA,
-		&triggerDeliveryID,
-		&triggerActor,
+		&nf.rerunOfBuildID,
+		&nf.rerunFromStepIdx,
+		&nf.errorMessage,
+		&nf.pipelineConfigYAML,
+		&nf.pipelineName,
+		&nf.pipelineSource,
+		&nf.pipelinePath,
+		&nf.repoURL,
+		&nf.ref,
+		&nf.commitSHA,
+		&nf.triggerKind,
+		&nf.scmProvider,
+		&nf.eventType,
+		&nf.triggerRepositoryOwner,
+		&nf.triggerRepositoryName,
+		&nf.triggerRepositoryURL,
+		&nf.triggerRawRef,
+		&nf.triggerRef,
+		&nf.triggerRefType,
+		&nf.triggerRefName,
+		&nf.triggerDeleted,
+		&nf.triggerCommitSHA,
+		&nf.triggerDeliveryID,
+		&nf.triggerActor,
 	)
 	if err != nil {
 		return domain.Build{}, err
 	}
 
-	build.Status = domain.BuildStatus(status)
-	if jobID.Valid {
-		v := jobID.String
+	nf.applyTo(&build)
+	return build, nil
+}
+
+// buildNullFields holds nullable intermediate values used when scanning build
+// rows. The applyTo method maps them onto a domain.Build, eliminating duplicate
+// null-handling code between scanBuild and scanBuildList.
+type buildNullFields struct {
+	status                 string
+	jobID                  sql.NullString
+	queuedAt               sql.NullTime
+	startedAt              sql.NullTime
+	finishedAt             sql.NullTime
+	rerunOfBuildID         sql.NullString
+	rerunFromStepIdx       sql.NullInt64
+	errorMessage           sql.NullString
+	pipelineConfigYAML     sql.NullString
+	pipelineName           sql.NullString
+	pipelineSource         sql.NullString
+	pipelinePath           sql.NullString
+	repoURL                sql.NullString
+	ref                    sql.NullString
+	commitSHA              sql.NullString
+	triggerKind            sql.NullString
+	scmProvider            sql.NullString
+	eventType              sql.NullString
+	triggerRepositoryOwner sql.NullString
+	triggerRepositoryName  sql.NullString
+	triggerRepositoryURL   sql.NullString
+	triggerRawRef          sql.NullString
+	triggerRef             sql.NullString
+	triggerRefType         sql.NullString
+	triggerRefName         sql.NullString
+	triggerDeleted         sql.NullBool
+	triggerCommitSHA       sql.NullString
+	triggerDeliveryID      sql.NullString
+	triggerActor           sql.NullString
+}
+
+func (nf *buildNullFields) applyTo(build *domain.Build) {
+	build.Status = domain.BuildStatus(nf.status)
+	if nf.jobID.Valid {
+		v := nf.jobID.String
 		build.JobID = &v
 	}
-	if queuedAt.Valid {
-		queued := queuedAt.Time
-		build.QueuedAt = &queued
+	if nf.queuedAt.Valid {
+		v := nf.queuedAt.Time
+		build.QueuedAt = &v
 	}
-	if startedAt.Valid {
-		started := startedAt.Time
-		build.StartedAt = &started
+	if nf.startedAt.Valid {
+		v := nf.startedAt.Time
+		build.StartedAt = &v
 	}
-	if finishedAt.Valid {
-		finished := finishedAt.Time
-		build.FinishedAt = &finished
+	if nf.finishedAt.Valid {
+		v := nf.finishedAt.Time
+		build.FinishedAt = &v
 	}
 	if build.AttemptNumber <= 0 {
 		build.AttemptNumber = 1
 	}
-	if rerunOfBuildID.Valid {
-		v := rerunOfBuildID.String
+	if nf.rerunOfBuildID.Valid {
+		v := nf.rerunOfBuildID.String
 		build.RerunOfBuildID = &v
 	}
-	if rerunFromStepIdx.Valid {
-		v := int(rerunFromStepIdx.Int64)
+	if nf.rerunFromStepIdx.Valid {
+		v := int(nf.rerunFromStepIdx.Int64)
 		build.RerunFromStepIdx = &v
 	}
-	if errorMessage.Valid {
-		errMsg := errorMessage.String
-		build.ErrorMessage = &errMsg
+	if nf.errorMessage.Valid {
+		v := nf.errorMessage.String
+		build.ErrorMessage = &v
 	}
-	if pipelineConfigYAML.Valid {
-		v := pipelineConfigYAML.String
+	if nf.pipelineConfigYAML.Valid {
+		v := nf.pipelineConfigYAML.String
 		build.PipelineConfigYAML = &v
 	}
-	if pipelineName.Valid {
-		v := pipelineName.String
+	if nf.pipelineName.Valid {
+		v := nf.pipelineName.String
 		build.PipelineName = &v
 	}
-	if pipelineSource.Valid {
-		v := pipelineSource.String
+	if nf.pipelineSource.Valid {
+		v := nf.pipelineSource.String
 		build.PipelineSource = &v
 	}
-	if pipelinePath.Valid {
-		v := pipelinePath.String
+	if nf.pipelinePath.Valid {
+		v := nf.pipelinePath.String
 		build.PipelinePath = &v
 	}
-	if repoURL.Valid {
-		v := repoURL.String
+	if nf.repoURL.Valid {
+		v := nf.repoURL.String
 		build.RepoURL = &v
 	}
-	if ref.Valid {
-		v := ref.String
+	if nf.ref.Valid {
+		v := nf.ref.String
 		build.Ref = &v
 	}
-	if commitSHA.Valid {
-		v := commitSHA.String
+	if nf.commitSHA.Valid {
+		v := nf.commitSHA.String
 		build.CommitSHA = &v
 	}
-	if triggerKind.Valid {
-		build.Trigger.Kind = domain.BuildTriggerKind(triggerKind.String)
+	if nf.triggerKind.Valid {
+		build.Trigger.Kind = domain.BuildTriggerKind(nf.triggerKind.String)
 	}
-	if scmProvider.Valid {
-		v := scmProvider.String
+	if nf.scmProvider.Valid {
+		v := nf.scmProvider.String
 		build.Trigger.SCMProvider = &v
 	}
-	if eventType.Valid {
-		v := eventType.String
+	if nf.eventType.Valid {
+		v := nf.eventType.String
 		build.Trigger.EventType = &v
 	}
-	if triggerRepositoryOwner.Valid {
-		v := triggerRepositoryOwner.String
+	if nf.triggerRepositoryOwner.Valid {
+		v := nf.triggerRepositoryOwner.String
 		build.Trigger.RepositoryOwner = &v
 	}
-	if triggerRepositoryName.Valid {
-		v := triggerRepositoryName.String
+	if nf.triggerRepositoryName.Valid {
+		v := nf.triggerRepositoryName.String
 		build.Trigger.RepositoryName = &v
 	}
-	if triggerRepositoryURL.Valid {
-		v := triggerRepositoryURL.String
+	if nf.triggerRepositoryURL.Valid {
+		v := nf.triggerRepositoryURL.String
 		build.Trigger.RepositoryURL = &v
 	}
-	if triggerRawRef.Valid {
-		v := triggerRawRef.String
+	if nf.triggerRawRef.Valid {
+		v := nf.triggerRawRef.String
 		build.Trigger.RawRef = &v
 	}
-	if triggerRef.Valid {
-		v := triggerRef.String
+	if nf.triggerRef.Valid {
+		v := nf.triggerRef.String
 		build.Trigger.Ref = &v
 	}
-	if triggerRefType.Valid {
-		v := triggerRefType.String
+	if nf.triggerRefType.Valid {
+		v := nf.triggerRefType.String
 		build.Trigger.RefType = &v
 	}
-	if triggerRefName.Valid {
-		v := triggerRefName.String
+	if nf.triggerRefName.Valid {
+		v := nf.triggerRefName.String
 		build.Trigger.RefName = &v
 	}
-	if triggerDeleted.Valid {
-		v := triggerDeleted.Bool
+	if nf.triggerDeleted.Valid {
+		v := nf.triggerDeleted.Bool
 		build.Trigger.Deleted = &v
 	}
-	if triggerCommitSHA.Valid {
-		v := triggerCommitSHA.String
+	if nf.triggerCommitSHA.Valid {
+		v := nf.triggerCommitSHA.String
 		build.Trigger.CommitSHA = &v
 	}
-	if triggerDeliveryID.Valid {
-		v := triggerDeliveryID.String
+	if nf.triggerDeliveryID.Valid {
+		v := nf.triggerDeliveryID.String
 		build.Trigger.DeliveryID = &v
 	}
-	if triggerActor.Valid {
-		v := triggerActor.String
+	if nf.triggerActor.Valid {
+		v := nf.triggerActor.String
 		build.Trigger.Actor = &v
 	}
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 	build.Source = domain.NewSourceSpec(readOptionalString(build.RepoURL), readOptionalString(build.Ref), readOptionalString(build.CommitSHA))
-
-	return build, nil
 }
 
 func readOptionalString(value *string) string {

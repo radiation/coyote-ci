@@ -101,6 +101,23 @@ func (r *BuildRepository) List(_ context.Context) ([]domain.Build, error) {
 	return builds, nil
 }
 
+func (r *BuildRepository) ListPaged(ctx context.Context, params repository.ListParams) ([]domain.Build, error) {
+	all, err := r.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	limit, offset := clampMemoryPageParams(params)
+	if offset >= len(all) {
+		return []domain.Build{}, nil
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], nil
+}
+
 func (r *BuildRepository) ListByJobID(_ context.Context, jobID string) ([]domain.Build, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

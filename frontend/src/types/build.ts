@@ -25,7 +25,12 @@ export interface Build {
   actor?: string | null;
 }
 
-export type BuildStatus = 'pending' | 'queued' | 'running' | 'success' | 'failed';
+export type BuildStatus =
+  | "pending"
+  | "queued"
+  | "running"
+  | "success"
+  | "failed";
 
 /** Matches the backend api.BuildStepResponse JSON shape. */
 export interface BuildStep {
@@ -44,7 +49,7 @@ export interface BuildStep {
   error_message: string | null;
 }
 
-export type BuildStepStatus = 'pending' | 'running' | 'success' | 'failed';
+export type BuildStepStatus = "pending" | "running" | "success" | "failed";
 
 /** Envelope: { data: { builds: Build[] } } */
 export interface BuildListResponse {
@@ -63,7 +68,7 @@ export interface StepLogChunk {
   step_id: string;
   step_index: number;
   step_name: string;
-  stream: 'stdout' | 'stderr' | 'system';
+  stream: "stdout" | "stderr" | "system";
   chunk_text: string;
   created_at: string;
 }
