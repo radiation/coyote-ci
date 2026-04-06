@@ -1,7 +1,7 @@
-import { artifactDownloadURL } from '../api';
-import type { BuildArtifact, BuildStep } from '../types';
-import { formatFileSize } from '../utils/format';
-import { formatTime } from '../utils/time';
+import { artifactDownloadURL } from "../api";
+import type { BuildArtifact, BuildStep } from "../types";
+import { formatFileSize } from "../utils/format";
+import { formatTime } from "../utils/time";
 
 interface Props {
   artifacts: BuildArtifact[];
@@ -45,11 +45,21 @@ function ArtifactTable({ items }: { items: BuildArtifact[] }) {
   );
 }
 
-export function BuildArtifactsSection({ artifacts, steps, isLoading, error }: Props) {
+export function BuildArtifactsSection({
+  artifacts,
+  steps,
+  isLoading,
+  error,
+}: Props) {
   if (isLoading) return <p>Loading artifacts…</p>;
-  if (error) return <p className="error-text">Failed to load artifacts: {String(error)}</p>;
+  if (error)
+    return (
+      <p className="error-text">Failed to load artifacts: {String(error)}</p>
+    );
   if (!artifacts || artifacts.length === 0) {
-    return <p className="subtle-text">No artifacts were collected for this build.</p>;
+    return (
+      <p className="subtle-text">No artifacts were collected for this build.</p>
+    );
   }
 
   const shared = artifacts.filter((a) => !a.step_id);
@@ -64,8 +74,8 @@ export function BuildArtifactsSection({ artifacts, steps, isLoading, error }: Pr
 
   // Sort step groups by first artifact's created_at for stable ordering.
   const stepEntries = [...byStep.entries()].sort((a, b) => {
-    const aTime = a[1][0]?.created_at ?? '';
-    const bTime = b[1][0]?.created_at ?? '';
+    const aTime = a[1][0]?.created_at ?? "";
+    const bTime = b[1][0]?.created_at ?? "";
     return aTime.localeCompare(bTime);
   });
 

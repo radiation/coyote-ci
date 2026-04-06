@@ -1,10 +1,10 @@
-import { useState, type FormEvent } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import { getJob, listBuildsByJob, runJob, updateJob } from '../api';
-import { StatusBadge } from '../components/StatusBadge';
-import type { Job } from '../types/job';
-import { formatTime } from '../utils/time';
+import { useState, type FormEvent } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { getJob, listBuildsByJob, runJob, updateJob } from "../api";
+import { StatusBadge } from "../components/StatusBadge";
+import type { Job } from "../types/job";
+import { formatTime } from "../utils/time";
 
 export function JobDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -15,7 +15,7 @@ export function JobDetailPage() {
     error,
     dataUpdatedAt,
   } = useQuery({
-    queryKey: ['job', id],
+    queryKey: ["job", id],
     queryFn: () => getJob(id!),
     enabled: Boolean(id),
   });
@@ -25,7 +25,7 @@ export function JobDetailPage() {
     isLoading: buildsLoading,
     error: buildsError,
   } = useQuery({
-    queryKey: ['jobBuilds', id],
+    queryKey: ["jobBuilds", id],
     queryFn: () => listBuildsByJob(id!),
     enabled: Boolean(id),
     refetchInterval: 15_000,
@@ -47,30 +47,66 @@ export function JobDetailPage() {
     <>
       <Link to="/jobs">← Back to jobs</Link>
       <h2>Job: {job.name}</h2>
-      <p className="subtle-text">Last loaded: {dataUpdatedAt > 0 ? formatTime(new Date(dataUpdatedAt).toISOString()) : '—'}</p>
+      <p className="subtle-text">
+        Last loaded:{" "}
+        {dataUpdatedAt > 0
+          ? formatTime(new Date(dataUpdatedAt).toISOString())
+          : "—"}
+      </p>
 
       <div className="detail-grid">
-        <div><strong>ID</strong><span>{job.id}</span></div>
-        <div><strong>Project</strong><span>{job.project_id}</span></div>
-        <div><strong>Push Trigger</strong><span>{job.push_enabled ? 'Enabled' : 'Disabled'}</span></div>
-        <div><strong>Push Branch</strong><span>{job.push_enabled ? (job.push_branch || 'Any branch') : '—'}</span></div>
-        <div><strong>Pipeline Source</strong><span>{job.pipeline_path ? 'Repository file' : 'Inline YAML'}</span></div>
-        {job.pipeline_path && <div><strong>Pipeline Path</strong><span>{job.pipeline_path}</span></div>}
-        <div><strong>Created</strong><span>{formatTime(job.created_at)}</span></div>
-        <div><strong>Updated</strong><span>{formatTime(job.updated_at)}</span></div>
+        <div>
+          <strong>ID</strong>
+          <span>{job.id}</span>
+        </div>
+        <div>
+          <strong>Project</strong>
+          <span>{job.project_id}</span>
+        </div>
+        <div>
+          <strong>Push Trigger</strong>
+          <span>{job.push_enabled ? "Enabled" : "Disabled"}</span>
+        </div>
+        <div>
+          <strong>Push Branch</strong>
+          <span>
+            {job.push_enabled ? job.push_branch || "Any branch" : "—"}
+          </span>
+        </div>
+        <div>
+          <strong>Pipeline Source</strong>
+          <span>{job.pipeline_path ? "Repository file" : "Inline YAML"}</span>
+        </div>
+        {job.pipeline_path && (
+          <div>
+            <strong>Pipeline Path</strong>
+            <span>{job.pipeline_path}</span>
+          </div>
+        )}
+        <div>
+          <strong>Created</strong>
+          <span>{formatTime(job.created_at)}</span>
+        </div>
+        <div>
+          <strong>Updated</strong>
+          <span>{formatTime(job.updated_at)}</span>
+        </div>
       </div>
 
-      <p className="subtle-text">Internal push events can be sent to POST /events/push with repository_url, ref, and commit_sha.</p>
+      <p className="subtle-text">
+        Internal push events can be sent to POST /events/push with
+        repository_url, ref, and commit_sha.
+      </p>
 
-      <JobDetailForm
-        key={`${job.id}:${job.updated_at}`}
-        job={job}
-        jobID={id}
-      />
+      <JobDetailForm key={`${job.id}:${job.updated_at}`} job={job} jobID={id} />
 
       <h3>Recent Builds</h3>
       {buildsLoading && <p>Loading builds…</p>}
-      {buildsError && <p className="error-text">Failed to load builds: {String(buildsError)}</p>}
+      {buildsError && (
+        <p className="error-text">
+          Failed to load builds: {String(buildsError)}
+        </p>
+      )}
       {!buildsLoading && !buildsError && (!builds || builds.length === 0) && (
         <p className="subtle-text">No builds yet for this job.</p>
       )}
@@ -87,8 +123,12 @@ export function JobDetailPage() {
           <tbody>
             {builds.map((b) => (
               <tr key={b.id}>
-                <td><Link to={`/builds/${b.id}`}>{b.id.slice(0, 8)}…</Link></td>
-                <td><StatusBadge status={b.status} /></td>
+                <td>
+                  <Link to={`/builds/${b.id}`}>{b.id.slice(0, 8)}…</Link>
+                </td>
+                <td>
+                  <StatusBadge status={b.status} />
+                </td>
                 <td>{formatTime(b.created_at)}</td>
                 <td>{formatTime(b.finished_at)}</td>
               </tr>
@@ -100,7 +140,7 @@ export function JobDetailPage() {
   );
 }
 
-type PipelineMode = 'inline' | 'repo';
+type PipelineMode = "inline" | "repo";
 
 function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
   const navigate = useNavigate();
@@ -109,10 +149,14 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
   const [repositoryURL, setRepositoryURL] = useState(job.repository_url);
   const [defaultRef, setDefaultRef] = useState(job.default_ref);
   const [pushEnabled, setPushEnabled] = useState(job.push_enabled);
-  const [pushBranch, setPushBranch] = useState(job.push_branch ?? '');
-  const [pipelineMode, setPipelineMode] = useState<PipelineMode>(job.pipeline_path ? 'repo' : 'inline');
+  const [pushBranch, setPushBranch] = useState(job.push_branch ?? "");
+  const [pipelineMode, setPipelineMode] = useState<PipelineMode>(
+    job.pipeline_path ? "repo" : "inline",
+  );
   const [pipelineYAML, setPipelineYAML] = useState(job.pipeline_yaml);
-  const [pipelinePath, setPipelinePath] = useState(job.pipeline_path ?? '.coyote/pipeline.yml');
+  const [pipelinePath, setPipelinePath] = useState(
+    job.pipeline_path ?? ".coyote/pipeline.yml",
+  );
   const [enabled, setEnabled] = useState(job.enabled);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -124,20 +168,20 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
         repository_url: repositoryURL.trim(),
         default_ref: defaultRef.trim(),
         push_enabled: pushEnabled,
-        push_branch: pushEnabled ? pushBranch.trim() : '',
+        push_branch: pushEnabled ? pushBranch.trim() : "",
         enabled,
       };
 
-      if (pipelineMode === 'inline') {
+      if (pipelineMode === "inline") {
         return updateJob(targetID, {
           ...base,
           pipeline_yaml: pipelineYAML.trim(),
-          pipeline_path: '',
+          pipeline_path: "",
         });
       }
       return updateJob(targetID, {
         ...base,
-        pipeline_yaml: '',
+        pipeline_yaml: "",
         pipeline_path: pipelinePath.trim(),
       });
     },
@@ -146,9 +190,9 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
       setSuccessMessage(null);
     },
     onSuccess: async (updated) => {
-      setSuccessMessage('Job saved.');
-      await queryClient.invalidateQueries({ queryKey: ['job', updated.id] });
-      await queryClient.invalidateQueries({ queryKey: ['jobs'] });
+      setSuccessMessage("Job saved.");
+      await queryClient.invalidateQueries({ queryKey: ["job", updated.id] });
+      await queryClient.invalidateQueries({ queryKey: ["jobs"] });
     },
     onError: (mutationError) => {
       setErrorMessage(`Failed to save job: ${String(mutationError)}`);
@@ -166,7 +210,7 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
         navigate(`/builds/${build.id}`);
         return;
       }
-      setSuccessMessage('Job run started.');
+      setSuccessMessage("Job run started.");
     },
     onError: (mutationError) => {
       setErrorMessage(`Failed to run job: ${String(mutationError)}`);
@@ -177,17 +221,17 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
     event.preventDefault();
 
     if (!name.trim() || !repositoryURL.trim() || !defaultRef.trim()) {
-      setErrorMessage('Name, repository URL, and default ref are required.');
+      setErrorMessage("Name, repository URL, and default ref are required.");
       return;
     }
 
-    if (pipelineMode === 'inline' && !pipelineYAML.trim()) {
-      setErrorMessage('Pipeline YAML is required.');
+    if (pipelineMode === "inline" && !pipelineYAML.trim()) {
+      setErrorMessage("Pipeline YAML is required.");
       return;
     }
 
-    if (pipelineMode === 'repo' && !pipelinePath.trim()) {
-      setErrorMessage('Pipeline file path is required.');
+    if (pipelineMode === "repo" && !pipelinePath.trim()) {
+      setErrorMessage("Pipeline file path is required.");
       return;
     }
 
@@ -198,7 +242,6 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
 
   return (
     <>
-
       <form className="job-form" onSubmit={onSubmit}>
         <label htmlFor="job-name">Name</label>
         <input
@@ -251,8 +294,8 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
               type="radio"
               name="pipeline-mode"
               value="inline"
-              checked={pipelineMode === 'inline'}
-              onChange={() => setPipelineMode('inline')}
+              checked={pipelineMode === "inline"}
+              onChange={() => setPipelineMode("inline")}
             />
             Inline YAML
           </label>
@@ -261,14 +304,14 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
               type="radio"
               name="pipeline-mode"
               value="repo"
-              checked={pipelineMode === 'repo'}
-              onChange={() => setPipelineMode('repo')}
+              checked={pipelineMode === "repo"}
+              onChange={() => setPipelineMode("repo")}
             />
             File in repository
           </label>
         </fieldset>
 
-        {pipelineMode === 'inline' && (
+        {pipelineMode === "inline" && (
           <>
             <label htmlFor="job-pipeline-yaml">Pipeline YAML</label>
             <textarea
@@ -281,7 +324,7 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
           </>
         )}
 
-        {pipelineMode === 'repo' && (
+        {pipelineMode === "repo" && (
           <>
             <label htmlFor="job-pipeline-path">Pipeline File Path</label>
             <input
@@ -291,7 +334,9 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
               disabled={isSubmitting}
               placeholder=".coyote/pipeline.yml"
             />
-            <p className="subtle-text">Path to pipeline file inside the repository. Loaded at build time.</p>
+            <p className="subtle-text">
+              Path to pipeline file inside the repository. Loaded at build time.
+            </p>
           </>
         )}
 
@@ -308,7 +353,7 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
 
         <div className="job-form-actions">
           <button type="submit" disabled={isSubmitting}>
-            {saveMutation.isPending ? 'Saving…' : 'Save Job'}
+            {saveMutation.isPending ? "Saving…" : "Save Job"}
           </button>
           <button
             type="button"
@@ -316,7 +361,7 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
             onClick={() => runNowMutation.mutate(jobID)}
             disabled={isSubmitting}
           >
-            {runNowMutation.isPending ? 'Running…' : 'Run Now'}
+            {runNowMutation.isPending ? "Running…" : "Run Now"}
           </button>
         </div>
       </form>

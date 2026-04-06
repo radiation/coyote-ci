@@ -230,23 +230,35 @@ Frontend:
 cd frontend && npm test -- --run
 ```
 
-## Git hooks setup
+## Git hooks
 
-This repository stores Git hooks in source control under `.githooks` so contributors get consistent local checks.
+Hooks are stored in `.githooks/` and checked into source control.
 
-Enable the hooks path for this clone:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-If needed, mark the hook as executable:
+### Install
 
 ```bash
-chmod +x .githooks/pre-commit
+make install-hooks
 ```
 
-The pre-commit hook runs backend format/vet/lint checks, regenerates Swagger docs, and stages `backend/docs`. CI remains the enforcement layer.
+This sets `core.hooksPath` for this clone. Hooks are `#!/usr/bin/env sh` and work on macOS and Linux.
+
+### What runs when
+
+| Hook         | When             | What                                                                  | Speed   |
+|--------------|------------------|-----------------------------------------------------------------------|---------|
+| `pre-commit` | `git commit`     | `gofmt`, `go vet`, `golangci-lint`, ESLint, swagger doc regeneration  | Seconds |
+| `pre-push`   | `git push`       | `go test ./...`, `vitest run`                                         | Minutes |
+
+Both hooks gracefully skip checks when the required tool is not installed.
+
+### Bypass
+
+```bash
+git commit --no-verify   # skip pre-commit
+git push --no-verify     # skip pre-push
+```
+
+CI remains the enforcement layer.
 
 ## Quality gates
 

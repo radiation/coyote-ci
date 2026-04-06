@@ -1,21 +1,24 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { JobDetailPage } from './JobDetailPage';
-import { getJob, listBuildsByJob, runJob, updateJob } from '../api';
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { JobDetailPage } from "./JobDetailPage";
+import { getJob, listBuildsByJob, runJob, updateJob } from "../api";
 
 const navigateMock = vi.fn();
 
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+vi.mock("react-router-dom", async () => {
+  const actual =
+    await vi.importActual<typeof import("react-router-dom")>(
+      "react-router-dom",
+    );
   return {
     ...actual,
     useNavigate: () => navigateMock,
   };
 });
 
-vi.mock('../api', () => ({
+vi.mock("../api", () => ({
   getJob: vi.fn(),
   updateJob: vi.fn(),
   runJob: vi.fn(),
@@ -32,7 +35,7 @@ function renderPage() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/jobs/job-1']}>
+      <MemoryRouter initialEntries={["/jobs/job-1"]}>
         <Routes>
           <Route path="/jobs/:id" element={<JobDetailPage />} />
         </Routes>
@@ -41,7 +44,7 @@ function renderPage() {
   );
 }
 
-describe('JobDetailPage', () => {
+describe("JobDetailPage", () => {
   const mockedGetJob = vi.mocked(getJob);
   const mockedUpdateJob = vi.mocked(updateJob);
   const mockedRunJob = vi.mocked(runJob);
@@ -53,39 +56,41 @@ describe('JobDetailPage', () => {
     mockedListBuildsByJob.mockResolvedValue([]);
 
     mockedGetJob.mockResolvedValue({
-      id: 'job-1',
-      project_id: 'project-1',
-      name: 'backend-ci',
-      repository_url: 'https://github.com/example/backend.git',
-      default_ref: 'main',
+      id: "job-1",
+      project_id: "project-1",
+      name: "backend-ci",
+      repository_url: "https://github.com/example/backend.git",
+      default_ref: "main",
       push_enabled: true,
-      push_branch: 'main',
-      pipeline_yaml: 'version: 1\nsteps:\n  - name: test\n    run: go test ./...\n',
+      push_branch: "main",
+      pipeline_yaml:
+        "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
       enabled: true,
-      created_at: '2026-03-30T00:00:00Z',
-      updated_at: '2026-03-30T00:00:00Z',
+      created_at: "2026-03-30T00:00:00Z",
+      updated_at: "2026-03-30T00:00:00Z",
     });
 
     mockedUpdateJob.mockResolvedValue({
-      id: 'job-1',
-      project_id: 'project-1',
-      name: 'backend-ci-updated',
-      repository_url: 'https://github.com/example/backend.git',
-      default_ref: 'main',
+      id: "job-1",
+      project_id: "project-1",
+      name: "backend-ci-updated",
+      repository_url: "https://github.com/example/backend.git",
+      default_ref: "main",
       push_enabled: true,
-      push_branch: 'main',
-      pipeline_yaml: 'version: 1\nsteps:\n  - name: test\n    run: go test ./...\n',
+      push_branch: "main",
+      pipeline_yaml:
+        "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
       enabled: true,
-      created_at: '2026-03-30T00:00:00Z',
-      updated_at: '2026-03-30T00:00:01Z',
+      created_at: "2026-03-30T00:00:00Z",
+      updated_at: "2026-03-30T00:00:01Z",
     });
 
     mockedRunJob.mockResolvedValue({
-      id: 'build-123',
-      project_id: 'project-1',
-      status: 'queued',
-      created_at: '2026-03-30T00:00:00Z',
-      queued_at: '2026-03-30T00:00:01Z',
+      id: "build-123",
+      project_id: "project-1",
+      status: "queued",
+      created_at: "2026-03-30T00:00:00Z",
+      queued_at: "2026-03-30T00:00:01Z",
       started_at: null,
       finished_at: null,
       current_step_index: 0,
@@ -93,50 +98,53 @@ describe('JobDetailPage', () => {
     });
   });
 
-  it('loads job and saves edits', async () => {
+  it("loads job and saves edits", async () => {
     renderPage();
 
-    await screen.findByDisplayValue('backend-ci');
+    await screen.findByDisplayValue("backend-ci");
 
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'backend-ci-updated' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save Job' }));
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "backend-ci-updated" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Job" }));
 
     await waitFor(() => {
-      expect(mockedUpdateJob).toHaveBeenCalledWith('job-1', {
-        name: 'backend-ci-updated',
-        repository_url: 'https://github.com/example/backend.git',
-        default_ref: 'main',
+      expect(mockedUpdateJob).toHaveBeenCalledWith("job-1", {
+        name: "backend-ci-updated",
+        repository_url: "https://github.com/example/backend.git",
+        default_ref: "main",
         push_enabled: true,
-        push_branch: 'main',
-        pipeline_yaml: 'version: 1\nsteps:\n  - name: test\n    run: go test ./...',
-        pipeline_path: '',
+        push_branch: "main",
+        pipeline_yaml:
+          "version: 1\nsteps:\n  - name: test\n    run: go test ./...",
+        pipeline_path: "",
         enabled: true,
       });
-      expect(screen.getByText('Job saved.')).toBeTruthy();
+      expect(screen.getByText("Job saved.")).toBeTruthy();
     });
   });
 
-  it('runs now and navigates to build detail', async () => {
+  it("runs now and navigates to build detail", async () => {
     renderPage();
 
-    await screen.findByDisplayValue('backend-ci');
+    await screen.findByDisplayValue("backend-ci");
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run Now' }));
+    fireEvent.click(screen.getByRole("button", { name: "Run Now" }));
 
     await waitFor(() => {
-      expect(mockedRunJob).toHaveBeenCalledWith('job-1');
-      expect(navigateMock).toHaveBeenCalledWith('/builds/build-123');
+      expect(mockedRunJob).toHaveBeenCalledWith("job-1");
+      expect(navigateMock).toHaveBeenCalledWith("/builds/build-123");
     });
   });
 
-  it('surfaces run-now error message', async () => {
-    mockedRunJob.mockRejectedValueOnce(new Error('API 409: job is disabled'));
+  it("surfaces run-now error message", async () => {
+    mockedRunJob.mockRejectedValueOnce(new Error("API 409: job is disabled"));
 
     renderPage();
 
-    await screen.findByDisplayValue('backend-ci');
+    await screen.findByDisplayValue("backend-ci");
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run Now' }));
+    fireEvent.click(screen.getByRole("button", { name: "Run Now" }));
 
     await waitFor(() => {
       expect(screen.getByText(/Failed to run job/)).toBeTruthy();

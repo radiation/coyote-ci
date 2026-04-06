@@ -1,27 +1,76 @@
 #!/usr/bin/env sh
+#
+# pre-commit: fast local hygiene checks for backend + frontend.
+# Install: make install-hooks
+# Bypass:  git commit --no-verify
+#
 set -eu
 
-echo "Running backend pre-commit checks..."
+failed=0
 
-cd backend
+# ── Backend ──────────────────────────────────────────────────────────────────
+if command -v go >/dev/null 2>&1; then
+	echo "== Backend =="
 
-echo "- go fmt"
-go fmt ./...
+	echo "  go fmt"
+	if [ -n "$(cd backend && gofmt -l . 2>/dev/null)" ]; then
+		echo "  ERROR: unformatted Go files:" >&2
+		(cd backend && gofmt -l .) >&2
+		failed=1
+	fi
 
-echo "- go vet"
-go vet ./...
+	echo "  go vet"
+	if ! (cd backend && go vet ./...) ; then
+		failed=1
+	fi
 
-if command -v golangci-lint >/dev/null 2>&1; then
-	echo "- golangci-lint"
-	golangci-lint run ./...
+	if command -v golangci-lint >/dev/null 2>&1; then
+		echo "  golangci-lint"
+		if ! (cd backend && golangci-lint run ./...) ; then
+			failed=1
+		fi
+	else
+		echo "  golangci-lint (skipped: not installed)"
+	fi
 else
-	echo "- golangci-lint (skipped: not installed)"
+	echo "== Backend (skipped: go not found) =="
 fi
 
-cd ..
+# ── Frontend ─────────────────────────────────────────────────────────────────
+if [ -f frontend/package.json ] && command -v npx >/dev/null 2>&1; then
+	echo "== Frontend =="
 
-echo "- regenerate swagger docs"
+	echo "  prettier --write"
+	(cd frontend && npx --no-install prettier --write . 2>/dev/null)
+	if ! git diff --quiet frontend 2>/dev/null; then
+		git add frontend
+		echo "  prettier formatted files and staged"
+	fi
+
+	echo "  eslint"
+	if ! (cd frontend && npx --no-install eslint . 2>/dev/null) ; then
+		failed=1
+	fi
+else
+	echo "== Frontend (skipped: npx not found or no package.json) =="
+fi
+
+# ── Swagger docs ─────────────────────────────────────────────────────────────
+echo "== Swagger =="
+echo "  regenerate docs"
 make swagger
-git add backend/docs
+if ! git diff --quiet backend/docs 2>/dev/null; then
+	git add backend/docs
+	echo "  swagger docs updated and staged"
+else
+	echo "  swagger docs up to date"
+fi
 
-echo "Pre-commit checks passed; swagger docs staged."
+# ── Result ───────────────────────────────────────────────────────────────────
+if [ "$failed" -ne 0 ]; then
+	echo "" >&2
+	echo "Pre-commit checks FAILED. Fix issues above or use --no-verify to bypass." >&2
+	exit 1
+fi
+
+echo "Pre-commit checks passed."

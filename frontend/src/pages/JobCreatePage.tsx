@@ -1,9 +1,9 @@
-import { useState, type FormEvent } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
-import { createJob } from '../api';
+import { useState, type FormEvent } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { Link, useNavigate } from "react-router-dom";
+import { createJob } from "../api";
 
-type PipelineMode = 'inline' | 'repo';
+type PipelineMode = "inline" | "repo";
 
 const DEFAULT_PIPELINE_YAML = `version: 1
 steps:
@@ -13,15 +13,15 @@ steps:
 
 export function JobCreatePage() {
   const navigate = useNavigate();
-  const [projectID, setProjectID] = useState('project-1');
-  const [name, setName] = useState('');
-  const [repositoryURL, setRepositoryURL] = useState('');
-  const [defaultRef, setDefaultRef] = useState('main');
+  const [projectID, setProjectID] = useState("project-1");
+  const [name, setName] = useState("");
+  const [repositoryURL, setRepositoryURL] = useState("");
+  const [defaultRef, setDefaultRef] = useState("main");
   const [pushEnabled, setPushEnabled] = useState(false);
-  const [pushBranch, setPushBranch] = useState('main');
-  const [pipelineMode, setPipelineMode] = useState<PipelineMode>('inline');
+  const [pushBranch, setPushBranch] = useState("main");
+  const [pipelineMode, setPipelineMode] = useState<PipelineMode>("inline");
   const [pipelineYAML, setPipelineYAML] = useState(DEFAULT_PIPELINE_YAML);
-  const [pipelinePath, setPipelinePath] = useState('.coyote/pipeline.yml');
+  const [pipelinePath, setPipelinePath] = useState(".coyote/pipeline.yml");
   const [enabled, setEnabled] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -47,15 +47,22 @@ export function JobCreatePage() {
     const trimmedDefaultRef = defaultRef.trim();
     const trimmedPushBranch = pushBranch.trim();
 
-    if (!trimmedProjectID || !trimmedName || !trimmedRepositoryURL || !trimmedDefaultRef) {
-      setErrorMessage('Project ID, name, repository URL, and default ref are required.');
+    if (
+      !trimmedProjectID ||
+      !trimmedName ||
+      !trimmedRepositoryURL ||
+      !trimmedDefaultRef
+    ) {
+      setErrorMessage(
+        "Project ID, name, repository URL, and default ref are required.",
+      );
       return;
     }
 
-    if (pipelineMode === 'inline') {
+    if (pipelineMode === "inline") {
       const trimmedYAML = pipelineYAML.trim();
       if (!trimmedYAML) {
-        setErrorMessage('Pipeline YAML is required.');
+        setErrorMessage("Pipeline YAML is required.");
         return;
       }
       createMutation.mutate({
@@ -64,14 +71,14 @@ export function JobCreatePage() {
         repository_url: trimmedRepositoryURL,
         default_ref: trimmedDefaultRef,
         push_enabled: pushEnabled,
-        push_branch: pushEnabled ? trimmedPushBranch : '',
+        push_branch: pushEnabled ? trimmedPushBranch : "",
         pipeline_yaml: trimmedYAML,
         enabled,
       });
     } else {
       const trimmedPath = pipelinePath.trim();
       if (!trimmedPath) {
-        setErrorMessage('Pipeline file path is required.');
+        setErrorMessage("Pipeline file path is required.");
         return;
       }
       createMutation.mutate({
@@ -80,7 +87,7 @@ export function JobCreatePage() {
         repository_url: trimmedRepositoryURL,
         default_ref: trimmedDefaultRef,
         push_enabled: pushEnabled,
-        push_branch: pushEnabled ? trimmedPushBranch : '',
+        push_branch: pushEnabled ? trimmedPushBranch : "",
         pipeline_path: trimmedPath,
         enabled,
       });
@@ -91,7 +98,9 @@ export function JobCreatePage() {
     <>
       <Link to="/jobs">← Back to jobs</Link>
       <h2>Create Job</h2>
-      <p className="subtle-text">Define a reusable pipeline. Builds are created by running a job.</p>
+      <p className="subtle-text">
+        Define a reusable pipeline. Builds are created by running a job.
+      </p>
 
       <form className="job-form" onSubmit={onSubmit}>
         <label htmlFor="job-project-id">Project ID</label>
@@ -160,8 +169,8 @@ export function JobCreatePage() {
               type="radio"
               name="pipeline-mode"
               value="inline"
-              checked={pipelineMode === 'inline'}
-              onChange={() => setPipelineMode('inline')}
+              checked={pipelineMode === "inline"}
+              onChange={() => setPipelineMode("inline")}
             />
             Inline YAML
           </label>
@@ -170,14 +179,14 @@ export function JobCreatePage() {
               type="radio"
               name="pipeline-mode"
               value="repo"
-              checked={pipelineMode === 'repo'}
-              onChange={() => setPipelineMode('repo')}
+              checked={pipelineMode === "repo"}
+              onChange={() => setPipelineMode("repo")}
             />
             File in repository
           </label>
         </fieldset>
 
-        {pipelineMode === 'inline' && (
+        {pipelineMode === "inline" && (
           <>
             <label htmlFor="job-pipeline-yaml">Pipeline YAML</label>
             <textarea
@@ -190,7 +199,7 @@ export function JobCreatePage() {
           </>
         )}
 
-        {pipelineMode === 'repo' && (
+        {pipelineMode === "repo" && (
           <>
             <label htmlFor="job-pipeline-path">Pipeline File Path</label>
             <input
@@ -200,7 +209,9 @@ export function JobCreatePage() {
               disabled={createMutation.isPending}
               placeholder=".coyote/pipeline.yml"
             />
-            <p className="subtle-text">Path to pipeline file inside the repository. Loaded at build time.</p>
+            <p className="subtle-text">
+              Path to pipeline file inside the repository. Loaded at build time.
+            </p>
           </>
         )}
 
@@ -216,7 +227,7 @@ export function JobCreatePage() {
         </label>
 
         <button type="submit" disabled={createMutation.isPending}>
-          {createMutation.isPending ? 'Creating…' : 'Create Job'}
+          {createMutation.isPending ? "Creating…" : "Create Job"}
         </button>
       </form>
 
