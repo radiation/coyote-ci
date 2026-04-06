@@ -61,6 +61,31 @@ type ListParams struct {
 	Offset int
 }
 
+const (
+	DefaultPageLimit = 50
+	MaxPageLimit     = 200
+)
+
+// ClampPageParams returns sanitized limit and offset values. Zero or negative
+// limit defaults to DefaultPageLimit; values above MaxPageLimit are capped.
+// Negative offset is clamped to 0.
+func ClampPageParams(p ListParams) (int, int) {
+	limit := p.Limit
+	if limit <= 0 {
+		limit = DefaultPageLimit
+	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
+
+	offset := p.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	return limit, offset
+}
+
 type BuildRepository interface {
 	Create(ctx context.Context, build domain.Build) (domain.Build, error)
 	CreateQueuedBuild(ctx context.Context, build domain.Build, steps []domain.BuildStep) (domain.Build, error)

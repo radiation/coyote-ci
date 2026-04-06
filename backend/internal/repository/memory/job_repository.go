@@ -51,8 +51,8 @@ func (r *JobRepository) List(_ context.Context) ([]domain.Job, error) {
 	return out, nil
 }
 
-func (r *JobRepository) ListPaged(_ context.Context, params repository.ListParams) ([]domain.Job, error) {
-	all, err := r.List(context.Background())
+func (r *JobRepository) ListPaged(ctx context.Context, params repository.ListParams) ([]domain.Job, error) {
+	all, err := r.List(ctx)
 	if err != nil {
 		return nil, err
 	}

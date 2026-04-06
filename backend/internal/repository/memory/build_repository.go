@@ -101,8 +101,8 @@ func (r *BuildRepository) List(_ context.Context) ([]domain.Build, error) {
 	return builds, nil
 }
 
-func (r *BuildRepository) ListPaged(_ context.Context, params repository.ListParams) ([]domain.Build, error) {
-	all, err := r.List(context.Background())
+func (r *BuildRepository) ListPaged(ctx context.Context, params repository.ListParams) ([]domain.Build, error) {
+	all, err := r.List(ctx)
 	if err != nil {
 		return nil, err
 	}

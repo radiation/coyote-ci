@@ -153,7 +153,8 @@ func (h *BuildHandler) StreamBuildStepLogs(w http.ResponseWriter, r *http.Reques
 
 	const maxSSEDuration = 30 * time.Minute
 	ctx := r.Context()
-	deadline := time.After(maxSSEDuration)
+	deadlineTimer := time.NewTimer(maxSSEDuration)
+	defer deadlineTimer.Stop()
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -178,7 +179,7 @@ func (h *BuildHandler) StreamBuildStepLogs(w http.ResponseWriter, r *http.Reques
 		select {
 		case <-ctx.Done():
 			return
-		case <-deadline:
+		case <-deadlineTimer.C:
 			writeSSEEvent(w, "timeout", 0, map[string]string{"message": "maximum stream duration exceeded"})
 			flusher.Flush()
 			return

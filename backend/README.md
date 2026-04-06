@@ -30,7 +30,7 @@ See [docs/state-machine.md](docs/state-machine.md) for build/step lifecycle deta
 
 ## Prerequisites
 
-- Go 1.24+
+- Go 1.26+
 - Docker & Docker Compose
 - PostgreSQL 17 (provided via Compose)
 

@@ -165,7 +165,7 @@ func (r *BuildRepository) ListPaged(ctx context.Context, params repository.ListP
 		}
 	}()
 
-	builds = make([]domain.Build, 0, limit)
+	builds = make([]domain.Build, 0)
 	for rows.Next() {
 		build, err := scanBuildList(rows)
 		if err != nil {

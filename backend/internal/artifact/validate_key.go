@@ -20,8 +20,14 @@ func validateKey(key string) error {
 		return ErrInvalidStorageKey
 	}
 
+	for _, seg := range strings.Split(trimmed, "/") {
+		if seg == ".." {
+			return ErrInvalidStorageKey
+		}
+	}
+
 	cleaned := path.Clean(trimmed)
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+	if cleaned == "." {
 		return ErrInvalidStorageKey
 	}
 

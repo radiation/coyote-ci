@@ -107,7 +107,7 @@ func (r *JobRepository) ListPaged(ctx context.Context, params repository.ListPar
 		}
 	}()
 
-	jobs = make([]domain.Job, 0, limit)
+	jobs = make([]domain.Job, 0)
 	for rows.Next() {
 		job, scanErr := scanJob(rows)
 		if scanErr != nil {
