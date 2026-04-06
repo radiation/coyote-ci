@@ -8,6 +8,7 @@ swagger:
 	fi
 
 check-go-version:
+	@echo "Checking Go version consistency (source of truth: backend/go.mod)..."
 	@go_version=$$(grep '^GO_VERSION=' .env | cut -d= -f2); \
 	go_major_minor=$$(echo $$go_version | awk -F. '{print $$1"."$$2}'); \
 	mod_go=$$(awk '/^go / {print $$2; exit}' backend/go.mod); \
@@ -17,6 +18,8 @@ check-go-version:
 	if [ "$$mod_go" != "$$go_major_minor" ]; then echo "backend/go.mod go version ($$mod_go) does not match .env major.minor ($$go_major_minor)"; exit 1; fi; \
 	if [ "$$mod_toolchain" != "go$$go_version" ]; then echo "backend/go.mod toolchain ($$mod_toolchain) does not match .env GO_VERSION ($$go_version)"; exit 1; fi; \
 	if [ "$$pipeline_image" != "$$go_version" ]; then echo ".coyote/pipeline.yml golang image ($$pipeline_image) does not match .env GO_VERSION ($$go_version)"; exit 1; fi; \
-	grep -q '^ARG GO_VERSION$$' backend/Dockerfile || (echo "backend/Dockerfile must use ARG GO_VERSION (no pinned fallback)" && exit 1); \
+	dockerfile_default=$$(grep '^ARG GO_VERSION=' backend/Dockerfile | head -1 | cut -d= -f2); \
+	if [ -z "$$dockerfile_default" ]; then echo "backend/Dockerfile must have ARG GO_VERSION=<version>"; exit 1; fi; \
+	if [ "$$dockerfile_default" != "$$go_version" ]; then echo "backend/Dockerfile default ($$dockerfile_default) does not match .env GO_VERSION ($$go_version)"; exit 1; fi; \
 	grep -q 'GO_VERSION: $${GO_VERSION}' docker-compose.yml || (echo "docker-compose.yml must pass GO_VERSION build args" && exit 1); \
 	echo "Go version consistency check passed (GO_VERSION=$$go_version)"

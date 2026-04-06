@@ -7,7 +7,7 @@
 [![Lint](https://github.com/radiation/coyote-ci/actions/workflows/lint.yml/badge.svg)](https://github.com/radiation/coyote-ci/actions/workflows/lint.yml)
 [![Actionlint](https://github.com/radiation/coyote-ci/actions/workflows/actionlint.yml/badge.svg)](https://github.com/radiation/coyote-ci/actions/workflows/actionlint.yml)
 [![codecov](https://codecov.io/gh/radiation/coyote-ci/branch/main/graph/badge.svg)](https://codecov.io/gh/radiation/coyote-ci)
-[![Go Version](https://img.shields.io/badge/go-configured%20via%20.env-00ADD8.svg)](https://go.dev/dl/)
+[![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8.svg)](backend/go.mod)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Coyote CI is a greenfield CI/orchestration system focused on a small, correct, and understandable core.
@@ -32,36 +32,49 @@ See [backend/docs/state-machine.md](backend/docs/state-machine.md) for the full 
 ## Prerequisites
 
 - Docker + Docker Compose
-- Go (version managed repo-wide via `.env`; see version policy below)
+- Go 1.26+ (see `backend/go.mod` for exact toolchain version)
+- Node.js 22+ (frontend)
 
 ## Go version policy
 
-- Single source of truth: `.env` (`GO_VERSION`)
-- Runtime consumers:
-	- `docker-compose.yml` passes `${GO_VERSION}` as backend build args
-	- `backend/Dockerfile` consumes `ARG GO_VERSION` (no pinned fallback)
+**Source of truth:** `backend/go.mod` (`go` and `toolchain` directives).
 
-- Intentionally static consumers (edited directly):
-	- `backend/go.mod` (`go` + `toolchain` lines)
-	- `.coyote/pipeline.yml` (`pipeline.image`)
+CI reads `go.mod` directly (`go-version-file: backend/go.mod`). The Dockerfile has a matching default so standalone builds work without extra args.
 
-Workflow:
+For Docker Compose, `.env` contains a `GO_VERSION` override that is passed as a build arg. This must stay in sync with `go.mod`.
 
-1. Update `GO_VERSION` in `.env`
-2. Update static consumers (`backend/go.mod` and `.coyote/pipeline.yml`)
-3. Run `make check-go-version`
+To update Go:
 
-For manual Docker builds outside compose, pass `--build-arg GO_VERSION=<x.y.z>`.
+1. Update `backend/go.mod` (`go` + `toolchain` lines)
+2. Update `GO_VERSION` in `.env`
+3. Update `.coyote/pipeline.yml` image tag
+4. Update the `ARG GO_VERSION` default in `backend/Dockerfile`
+5. Run `make check-go-version` to verify consistency
 
 ## Quick start
 
-Start Postgres + backend + worker:
-
 ```bash
+cp .env.example .env   # set GITHUB_WEBHOOK_SECRET and review defaults
 docker compose up --build
 ```
 
-Backend API is exposed on http://localhost:8080/api.
+The default `.env` sets `COMPOSE_PROFILES=dev`, which starts:
+
+| Service        | Description                          | Address               |
+|----------------|--------------------------------------|-----------------------|
+| db             | PostgreSQL 17                        | localhost:5432        |
+| migrate        | Applies schema migrations on startup | —                     |
+| backend-dev    | Go backend with hot reload (Air)     | http://localhost:8080 |
+| worker         | Build step executor                  | —                     |
+| frontend-dev   | Vite dev server with HMR             | http://localhost:3000 |
+
+For production-like images instead:
+
+```bash
+COMPOSE_PROFILES=prod docker compose up --build
+```
+
+This swaps `backend-dev`/`frontend-dev` for pre-built `backend`/`frontend` containers.
 
 ## Queue Fixture Scenarios (Repo Pipeline Path)
 
@@ -177,22 +190,44 @@ Current counters include:
 
 This endpoint is intended for internal observability only and is not exposed by the backend API router.
 
-## Local dev with live reload (Go)
+## Docker Compose profiles
 
-Go binaries are compiled, so source file changes are not automatically picked up by a running binary. For development, this repo includes a hot-reload profile using Air.
+The compose file uses two profiles to avoid port conflicts:
 
-Start DB + hot-reload backend:
+| Profile | Services started                                 | Use case                    |
+|---------|--------------------------------------------------|-----------------------------|
+| `dev`   | db, migrate, **backend-dev**, worker, **frontend-dev** | Active local development    |
+| `prod`  | db, migrate, **backend**, worker, **frontend**         | Production-like validation  |
+
+Shared infrastructure (`db`, `migrate`, `worker`) has no profile and starts with either.
+
+The default profile is set via `COMPOSE_PROFILES` in `.env`. Change it to `prod` when you want to test built images.
+
+## Local development
+
+The dev profile mounts source directories into the containers so changes are reflected immediately:
+
+- **backend-dev** uses [Air](https://github.com/air-verse/air) to rebuild and restart on Go file changes.
+- **frontend-dev** runs the Vite dev server with HMR.
+
+If you only need the backend:
 
 ```bash
-docker compose --profile dev up --build db backend-dev
+docker compose up --build db backend-dev worker
 ```
 
-This mounts [backend](backend) into the container and rebuilds/restarts on file changes.
+### Running tests locally
 
-If you need the worker in parallel, run it in a second command:
+Backend:
 
 ```bash
-docker compose up --build worker
+cd backend && go test ./...
+```
+
+Frontend:
+
+```bash
+cd frontend && npm test -- --run
 ```
 
 ## Git hooks setup
@@ -218,12 +253,16 @@ The pre-commit hook runs backend format/vet/lint checks, regenerates Swagger doc
 CI includes:
 
 - backend workflow ([.github/workflows/ci.yml](.github/workflows/ci.yml)): `gofmt`, `go vet`, tests with coverage, `golangci-lint`
-- frontend workflow ([.github/workflows/frontend-ci.yml](.github/workflows/frontend-ci.yml)): `npm test -- --run`, `npm run lint`, `npm run build`
+- frontend workflow ([.github/workflows/frontend-ci.yml](.github/workflows/frontend-ci.yml)): `vitest` with coverage, `eslint`, `vite build`
 - actions workflow linting (`actionlint`)
 - CodeQL analysis
 - dependency vulnerability scan (`govulncheck`)
 
-Coverage artifacts are uploaded from CI, and coverage is published to Codecov.
+### Coverage
+
+Both backend and frontend upload coverage to [Codecov](https://codecov.io/gh/radiation/coyote-ci) with separate flags (`backend`, `frontend`). Configuration lives in [codecov.yml](codecov.yml).
+
+PRs that only touch one side carry forward the other side's coverage automatically (`carryforward: true`), so coverage status checks remain meaningful on partial changes.
 
 ## Notes
 
