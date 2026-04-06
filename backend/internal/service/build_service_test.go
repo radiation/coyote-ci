@@ -69,6 +69,10 @@ func (r *fakeBuildRepository) ListByJobID(_ context.Context, jobID string) ([]do
 	return []domain.Build{}, nil
 }
 
+func (r *fakeBuildRepository) ListPaged(_ context.Context, _ repository.ListParams) ([]domain.Build, error) {
+	return r.List(context.Background())
+}
+
 func (r *fakeBuildRepository) GetByID(_ context.Context, _ string) (domain.Build, error) {
 	if r.getErr != nil {
 		return domain.Build{}, r.getErr

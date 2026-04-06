@@ -78,6 +78,35 @@ type BuildService struct {
 	defaultExecutionImage string
 }
 
+// BuildServiceConfig groups all optional dependencies for BuildService. Zero
+// values are safe — each field is only used when set.
+type BuildServiceConfig struct {
+	ExecutionJobRepo    repository.ExecutionJobRepository
+	ExecutionOutputRepo repository.ExecutionJobOutputRepository
+	RepoFetcher         source.RepoFetcher
+	SourceResolver      source.WorkspaceSourceResolver
+	ArtifactRepo        repository.ArtifactRepository
+	ArtifactResolver    *artifact.StoreResolver
+	ArtifactWorkspace   string
+	ExecutionWorkspace  string
+	DefaultImage        string
+}
+
+// NewBuildServiceFromConfig creates a fully-wired BuildService in one call.
+func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner runner.Runner, logSink logs.LogSink, cfg BuildServiceConfig) *BuildService {
+	svc := NewBuildService(buildRepo, stepRunner, logSink)
+	svc.executionJobRepo = cfg.ExecutionJobRepo
+	svc.executionOutputRepo = cfg.ExecutionOutputRepo
+	svc.repoFetcher = cfg.RepoFetcher
+	if cfg.SourceResolver != nil {
+		svc.sourceResolver = cfg.SourceResolver
+	}
+	svc.defaultExecutionImage = strings.TrimSpace(cfg.DefaultImage)
+	svc.executionWorkspaceRoot = normalizeWorkspaceRoot(cfg.ExecutionWorkspace)
+	svc.SetArtifactPersistence(cfg.ArtifactRepo, cfg.ArtifactResolver, cfg.ArtifactWorkspace)
+	return svc
+}
+
 func NewBuildService(buildRepo repository.BuildRepository, stepRunner runner.Runner, logSink logs.LogSink) *BuildService {
 	if logSink == nil {
 		logSink = logs.NewNoopSink()

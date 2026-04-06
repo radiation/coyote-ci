@@ -146,6 +146,41 @@ func (r *BuildRepository) List(ctx context.Context) (builds []domain.Build, err 
 	return builds, nil
 }
 
+func (r *BuildRepository) ListPaged(ctx context.Context, params repository.ListParams) (builds []domain.Build, err error) {
+	limit, offset := clampPageParams(params)
+	query := `
+		SELECT ` + buildListColumns + `
+		FROM builds
+		ORDER BY created_at DESC
+		LIMIT $1 OFFSET $2
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	builds = make([]domain.Build, 0, limit)
+	for rows.Next() {
+		build, err := scanBuildList(rows)
+		if err != nil {
+			return nil, err
+		}
+		builds = append(builds, build)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return builds, nil
+}
+
 func (r *BuildRepository) ListByJobID(ctx context.Context, jobID string) (builds []domain.Build, err error) {
 	query := `
 		SELECT ` + buildListColumns + `

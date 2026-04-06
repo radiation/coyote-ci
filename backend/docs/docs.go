@@ -17,7 +17,7 @@ const docTemplate = `{
     "paths": {
         "/builds": {
             "get": {
-                "description": "Lists all builds sorted by newest first.",
+                "description": "Lists builds sorted by newest first with optional pagination.",
                 "produces": [
                     "application/json"
                 ],
@@ -25,6 +25,20 @@ const docTemplate = `{
                     "builds"
                 ],
                 "summary": "List builds",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Max results (default 50, max 200)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of results to skip",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -948,7 +962,7 @@ const docTemplate = `{
         },
         "/jobs": {
             "get": {
-                "description": "Lists all jobs.",
+                "description": "Lists jobs with optional pagination.",
                 "produces": [
                     "application/json"
                 ],
@@ -956,6 +970,20 @@ const docTemplate = `{
                     "jobs"
                 ],
                 "summary": "List jobs",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Max results (default 50, max 200)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of results to skip",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",

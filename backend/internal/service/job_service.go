@@ -144,6 +144,10 @@ func (s *JobService) ListJobs(ctx context.Context) ([]domain.Job, error) {
 	return s.jobRepo.List(ctx)
 }
 
+func (s *JobService) ListJobsPaged(ctx context.Context, params repository.ListParams) ([]domain.Job, error) {
+	return s.jobRepo.ListPaged(ctx, params)
+}
+
 func (s *JobService) ListBuildsByJobID(ctx context.Context, jobID string) ([]domain.Build, error) {
 	if s.buildService == nil {
 		return nil, ErrJobBuildServiceNotConfigured

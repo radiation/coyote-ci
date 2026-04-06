@@ -12,6 +12,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 )
 
@@ -66,14 +67,22 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 
 // ListJobs godoc
 // @Summary List jobs
-// @Description Lists all jobs.
+// @Description Lists jobs with optional pagination.
 // @Tags jobs
 // @Produce json
+// @Param limit query int false "Max results (default 50, max 200)"
+// @Param offset query int false "Number of results to skip"
 // @Success 200 {object} api.JobListEnvelope
 // @Failure 500 {object} api.ErrorResponse
 // @Router /jobs [get]
 func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
-	jobs, err := h.jobService.ListJobs(r.Context())
+	limit := parseQueryInt(r, "limit", 0)
+	offset := parseQueryInt(r, "offset", 0)
+
+	jobs, err := h.jobService.ListJobsPaged(r.Context(), repository.ListParams{
+		Limit:  limit,
+		Offset: offset,
+	})
 	if err != nil {
 		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		return

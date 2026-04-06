@@ -40,6 +40,10 @@ func NewGCSStore(client *storage.Client, cfg GCSStoreConfig) (*GCSStore, error) 
 }
 
 func (s *GCSStore) Save(ctx context.Context, key string, src io.Reader) (int64, error) {
+	if err := validateKey(key); err != nil {
+		return 0, err
+	}
+
 	objectName := s.objectName(key)
 	obj := s.client.Bucket(s.bucket).Object(objectName)
 	writer := obj.NewWriter(ctx)
@@ -58,6 +62,10 @@ func (s *GCSStore) Save(ctx context.Context, key string, src io.Reader) (int64, 
 }
 
 func (s *GCSStore) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
+
 	objectName := s.objectName(key)
 	reader, err := s.client.Bucket(s.bucket).Object(objectName).NewReader(ctx)
 	if err != nil {

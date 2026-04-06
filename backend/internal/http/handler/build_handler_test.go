@@ -116,6 +116,10 @@ func (r *fakeRepo) List(_ context.Context) ([]domain.Build, error) {
 	return builds, nil
 }
 
+func (r *fakeRepo) ListPaged(_ context.Context, _ repository.ListParams) ([]domain.Build, error) {
+	return r.List(context.Background())
+}
+
 func (r *fakeRepo) ListByJobID(_ context.Context, jobID string) ([]domain.Build, error) {
 	builds := make([]domain.Build, 0)
 	for _, build := range r.builds {

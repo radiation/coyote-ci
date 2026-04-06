@@ -12,6 +12,10 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
 )
 
+// maxRequestBodySize is the default limit applied to POST/PUT/PATCH request
+// bodies. Requests exceeding this size receive 413 Request Entity Too Large.
+const maxRequestBodySize = 1 << 20 // 1 MiB
+
 func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandler, eventHandler *handler.EventHandler, pushEventSecret string) nethttp.Handler {
 	r := chi.NewRouter()
 
@@ -19,6 +23,7 @@ func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandle
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(limitRequestBody(maxRequestBodySize))
 
 	// Keep bare health endpoints for simple infra probes.
 	r.Get("/health", handler.Health)
@@ -70,6 +75,21 @@ func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandle
 	})
 
 	return r
+}
+
+// limitRequestBody returns a middleware that caps the request body size for
+// mutating HTTP methods (POST, PUT, PATCH). GET, HEAD, DELETE, and OPTIONS
+// requests are passed through unchanged.
+func limitRequestBody(maxBytes int64) func(nethttp.Handler) nethttp.Handler {
+	return func(next nethttp.Handler) nethttp.Handler {
+		return nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+			switch r.Method {
+			case nethttp.MethodPost, nethttp.MethodPut, nethttp.MethodPatch:
+				r.Body = nethttp.MaxBytesReader(w, r.Body, maxBytes)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // requireSecret returns a middleware that validates the X-Coyote-Secret header

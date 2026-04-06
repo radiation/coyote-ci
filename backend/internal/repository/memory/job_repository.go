@@ -51,6 +51,23 @@ func (r *JobRepository) List(_ context.Context) ([]domain.Job, error) {
 	return out, nil
 }
 
+func (r *JobRepository) ListPaged(_ context.Context, params repository.ListParams) ([]domain.Job, error) {
+	all, err := r.List(context.Background())
+	if err != nil {
+		return nil, err
+	}
+
+	limit, offset := clampMemoryPageParams(params)
+	if offset >= len(all) {
+		return []domain.Job{}, nil
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], nil
+}
+
 func (r *JobRepository) ListPushEnabledByRepository(_ context.Context, repositoryURL string) ([]domain.Job, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
