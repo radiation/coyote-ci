@@ -14,8 +14,7 @@ func TestNewBuildRepository(t *testing.T) {
 	repo := NewBuildRepository()
 	if repo == nil {
 		t.Fatal("expected repository, got nil")
-	}
-	if repo.builds == nil {
+	} else if repo.builds == nil {
 		t.Fatal("expected builds map to be initialized")
 	}
 }
