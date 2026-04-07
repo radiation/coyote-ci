@@ -143,8 +143,7 @@ func TestWorkspacePreparer_ReturnsEarlyFailureResultOnPrepareError(t *testing.T)
 	}
 	if earlyResult == nil {
 		t.Fatal("expected early result")
-	}
-	if earlyResult.Status != runner.RunStepStatusFailed || earlyResult.ExitCode != -1 {
+	} else if earlyResult.Status != runner.RunStepStatusFailed || earlyResult.ExitCode != -1 {
 		t.Fatalf("expected failed early result, got status=%q exit=%d", earlyResult.Status, earlyResult.ExitCode)
 	}
 	if earlyResult.Stderr != "docker create failed" {

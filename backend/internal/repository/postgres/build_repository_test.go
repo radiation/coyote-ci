@@ -20,8 +20,7 @@ func TestNewBuildRepository(t *testing.T) {
 	repo := NewBuildRepository(&sql.DB{})
 	if repo == nil {
 		t.Fatal("expected repository, got nil")
-	}
-	if repo.db == nil {
+	} else if repo.db == nil {
 		t.Fatal("expected db to be set")
 	}
 }
