@@ -20,6 +20,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Guard migration immutability
+        if: github.event_name == 'pull_request'
+        working-directory: .
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}" --depth=1
+          changed="$(git diff --name-status "origin/${{ github.base_ref }}"...HEAD -- backend/db/migrations || true)"
+          echo "$changed"
+          modified="$(echo "$changed" | awk '$1=="M" {print $2}')"
+          if [ -n "$modified" ]; then
+            echo "ERROR: existing migration files were modified:"
+            echo "$modified"
+            echo "Create a new numbered migration instead of editing an applied migration."
+            exit 1
+          fi
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:

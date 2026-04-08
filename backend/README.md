@@ -73,7 +73,15 @@ go run ./cmd/worker   # worker (separate terminal)
 ```
 make swagger           # regenerate Swagger docs
 make check-go-version  # verify Go version consistency
+make db-migrate-status # goose migration status
+make db-migrate-up     # apply pending migrations
+make db-migrate-down-one # rollback one migration
+make db-migrate-create name=<migration_name> # create new numbered SQL migration
 ```
+
+Migrations live in `backend/db/migrations` and are managed with Goose.
+Applied migrations are immutable; add new numbered migrations for schema changes.
+See [../deploy/docs/database-migrations.md](../deploy/docs/database-migrations.md) for rollout and operator workflow.
 
 ## Testing
 

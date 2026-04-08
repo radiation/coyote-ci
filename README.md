@@ -176,7 +176,13 @@ Expected response fields for repo-backed fixture builds:
 
 For a faster workflow, use `scripts/run-fixtures.sh` to queue all scenarios or a single scenario.
 
-Migrations are applied automatically during `docker compose up` by a one-shot `migrate` service before backend and worker start. The Postgres container itself does not run schema SQL directly.
+Migrations are applied automatically during `docker compose up` by a one-shot `migrate` service that runs Goose before backend and worker start.
+
+Schema evolution policy:
+
+- Migration files are immutable once applied.
+- New schema changes must be added as new numbered migrations in `backend/db/migrations`.
+- Do not edit old applied migrations in place.
 
 Security note: the worker mounts `/var/run/docker.sock` for local Docker-based step execution. This effectively grants root-equivalent host access to processes in the worker container. Treat this compose setup as trusted local development only, and avoid using it unchanged in less-trusted or shared environments.
 
@@ -201,6 +207,23 @@ To run migrations manually:
 ```bash
 docker compose run --rm migrate
 ```
+
+Or use local Goose Make targets:
+
+```bash
+make db-migrate-status
+make db-migrate-up
+make db-migrate-down-one
+make db-migrate-create name=add_example_index
+```
+
+`MIGRATE_DSN` is configurable when running Make targets, for example:
+
+```bash
+make db-migrate-up MIGRATE_DSN='postgres://user:pass@localhost:5432/coyote_ci?sslmode=disable'
+```
+
+For the full operational workflow, see [deploy/docs/database-migrations.md](deploy/docs/database-migrations.md).
 
 ## Worker Internal Status Endpoint
 

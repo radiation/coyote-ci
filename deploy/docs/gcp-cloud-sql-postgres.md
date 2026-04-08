@@ -61,8 +61,8 @@ If your deployment runs in the same VPC and network policy allows it, you can co
 
 ## Migrations and startup
 
-- Apply SQL from `backend/db/init/001_init.sql` before starting backend/worker.
-- For greenfield environments, this project currently maintains schema in that single migration file.
+- Run Goose migrations from `backend/db/migrations` before starting backend/worker.
+- Migration history is tracked by Goose in the target database.
 
 Recommended operator sequence (current repo model):
 

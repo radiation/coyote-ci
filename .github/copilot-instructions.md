@@ -2,7 +2,7 @@
 
 ## Project intent
 
-Coyote CI is a greenfield CI/orchestration system. The project should start small, stay understandable, and grow incrementally.
+Coyote CI is a CI control plane and artifact repository system. The project should stay understandable, start with clear local defaults, and grow incrementally toward durable multi-node operation.
 
 Prioritize:
 - correctness
@@ -18,13 +18,14 @@ Do not over-engineer for speculative future needs. Build the simplest version th
 Assume the near-term architecture is:
 - a Go backend as the primary control plane
 - containerized local development with Docker Compose
-- Postgres for persistence once database-backed coordination is added
+- Postgres as the durable system of record for metadata and workflow state
+- artifact blob storage via a pluggable store (filesystem for local/simple installs; object storage for production)
 - worker execution via containers or external workers
 - a UI/API layer added incrementally, not all at once
 
 Prefer standard library or lightweight libraries unless there is a clear productivity or reliability benefit.
 
-Avoid introducing complex frameworks, distributed systems infrastructure, or Kubernetes-specific behavior unless explicitly requested.
+Avoid introducing complex frameworks or distributed infrastructure unless explicitly requested. Keep deployment assumptions compatible with both single-instance setups and future Helm/Kubernetes packaging.
 
 ## Layering rules
 
@@ -38,22 +39,20 @@ Use this mental model:
 - **handlers/routes** are thin and handle HTTP request/response concerns only
 - **composition root** wires dependencies together explicitly
 
-## Database Migrations (Greenfield Mode)
+## Database Migrations (Durable Mode)
 
-Until further notice, this project uses a **single migration file** for schema definition.
+This project now assumes durable Postgres deployments.
 
 Guidelines:
-- Do NOT create new numbered migration files (e.g., 002_, 003_, etc.)
-- Instead, modify the existing initial migration (e.g., `001_init.sql`) directly
-- Assume the database will be dropped and recreated on each run
-- Do NOT write ALTER TABLE migrations unless explicitly instructed
+- Applied migrations are immutable; do not edit old migration files after they may have been applied in any environment.
+- Add new numbered migration files for schema changes.
+- Prefer additive, forward-safe migrations (new tables/columns/indexes, backfill, compatibility windows).
+- Avoid destructive or irreversible migrations unless explicitly required.
+- Keep migration steps explicit and operationally safe for persistent environments.
 
-Rationale:
-- This is a greenfield project prioritizing speed and iteration
-- Migration history is not required yet
-- Keeping a single schema definition avoids unnecessary complexity
-
-When this changes, explicit instructions will be provided.
+Migration tracking expectations:
+- Use a real migration tool and migration history table.
+- New schema work should be authored as tracked migrations, not by mutating existing applied files.
 
 ## Lifecycle and state machine guidance
 
@@ -214,6 +213,11 @@ However:
 - do not add event sourcing unless explicitly requested
 - prefer straightforward relational schemas and explicit transactions
 
+For artifacts:
+- keep metadata in Postgres
+- keep blob bytes in pluggable artifact stores
+- keep provider-specific storage behavior in adapter/infra layers, not domain/service/handler logic
+
 ## Queue and execution guidance
 
 Queueing should be modeled explicitly.
@@ -309,6 +313,20 @@ Therefore:
 - make room for future credential scoping and artifact scanning
 
 Do not invent a full security subsystem unless explicitly requested.
+
+For auth/authz seams:
+- keep identity and authorization integration points explicit at service/handler boundaries
+- design for external identity providers and group/project-scoped authorization over time
+- avoid hardwiring provider-specific IAM semantics into core domain logic
+
+## Deployment guidance
+
+Keep runtime behavior provider-agnostic. Place provider-specific details in deploy/config/docs layers.
+
+Implementation posture:
+- support a simple single-instance deployment path
+- keep seams clean for future multi-control-plane scaling
+- keep artifacts and API serving concerns separable so artifact serving can scale independently later
 
 ## Monorepo and dependency-awareness guidance
 

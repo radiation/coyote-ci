@@ -1,3 +1,5 @@
+-- +goose Up
+
 CREATE TABLE IF NOT EXISTS jobs (
     id UUID PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -219,3 +221,14 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_provider_received_at
     ON webhook_deliveries (provider, received_at DESC);
+
+-- +goose Down
+
+DROP TABLE IF EXISTS webhook_deliveries;
+DROP TABLE IF EXISTS build_step_logs;
+DROP TABLE IF EXISTS build_artifacts;
+DROP TABLE IF EXISTS build_job_outputs;
+DROP TABLE IF EXISTS build_jobs;
+DROP TABLE IF EXISTS build_steps;
+DROP TABLE IF EXISTS builds;
+DROP TABLE IF EXISTS jobs;
