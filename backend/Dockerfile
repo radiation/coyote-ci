@@ -1,6 +1,6 @@
 # Default matches backend/go.mod toolchain directive.
 # docker-compose overrides via build arg; standalone builds use this default.
-ARG GO_VERSION=1.26.1
+ARG GO_VERSION=1.26.2
 
 FROM golang:${GO_VERSION} AS dev
 

@@ -1,4 +1,4 @@
-package main
+package dbopen
 
 import (
 	"testing"
@@ -7,25 +7,25 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 )
 
-func TestDatabaseConfigMode_UsesDatabaseURL(t *testing.T) {
+func TestConfigMode_UsesDatabaseURL(t *testing.T) {
 	cfg := config.Config{DatabaseURLValue: "postgres://example/db?sslmode=require"}
 
-	got := databaseConfigMode(cfg)
+	got := ConfigMode(cfg)
 	if got != "using DATABASE_URL" {
 		t.Fatalf("expected using DATABASE_URL, got %q", got)
 	}
 }
 
-func TestDatabaseConfigMode_UsesDiscreteSettings(t *testing.T) {
+func TestConfigMode_UsesDiscreteSettings(t *testing.T) {
 	cfg := config.Config{}
 
-	got := databaseConfigMode(cfg)
+	got := ConfigMode(cfg)
 	if got != "using discrete DB_* settings" {
 		t.Fatalf("expected using discrete DB_* settings, got %q", got)
 	}
 }
 
-func TestDatabaseOpenConfig_UsesDatabaseURLAndPoolSettings(t *testing.T) {
+func TestFromConfig_UsesDatabaseURLAndPoolSettings(t *testing.T) {
 	cfg := config.Config{
 		DatabaseURLValue:  "postgres://external-user:external-pass@external-host:5432/external-db?sslmode=require",
 		DBHost:            "ignored-host",
@@ -40,7 +40,7 @@ func TestDatabaseOpenConfig_UsesDatabaseURLAndPoolSettings(t *testing.T) {
 		DBConnMaxIdleTime: 11 * time.Minute,
 	}
 
-	gotURL, gotPool := databaseOpenConfig(cfg)
+	gotURL, gotPool := FromConfig(cfg)
 	if gotURL != cfg.DatabaseURLValue {
 		t.Fatalf("expected DATABASE_URL precedence, got %q", gotURL)
 	}

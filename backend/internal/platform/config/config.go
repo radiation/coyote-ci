@@ -72,8 +72,8 @@ func Load() Config {
 }
 
 func (c Config) DatabaseURL() string {
-	if c.DatabaseURLValue != "" {
-		return c.DatabaseURLValue
+	if databaseURL := strings.TrimSpace(c.DatabaseURLValue); databaseURL != "" {
+		return databaseURL
 	}
 
 	return fmt.Sprintf(

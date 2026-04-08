@@ -226,6 +226,19 @@ func TestConfig_DatabaseURL(t *testing.T) {
 			expected: "postgres://user:pass@localhost:5432/db?sslmode=disable",
 		},
 		{
+			name: "ignores whitespace-only explicit database url",
+			cfg: Config{
+				DatabaseURLValue: "   \t\n  ",
+				DBUser:           "user",
+				DBPassword:       "pass",
+				DBHost:           "localhost",
+				DBPort:           "5432",
+				DBName:           "db",
+				DBSSLMode:        "disable",
+			},
+			expected: "postgres://user:pass@localhost:5432/db?sslmode=disable",
+		},
+		{
 			name: "keeps provided ssl mode",
 			cfg: Config{
 				DBUser:     "u",

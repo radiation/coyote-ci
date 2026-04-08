@@ -17,6 +17,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
+	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	dockerrunner "github.com/radiation/coyote-ci/backend/internal/runner/docker"
@@ -38,9 +39,9 @@ type workerStatusProvider interface {
 
 func main() {
 	cfg := config.Load()
-	log.Printf("database config: %s", databaseConfigMode(cfg))
+	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
 
-	dbURL, dbPoolCfg := databaseOpenConfig(cfg)
+	dbURL, dbPoolCfg := dbopen.FromConfig(cfg)
 	db, err := platformdb.Open(dbURL, dbPoolCfg)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
@@ -90,23 +91,6 @@ func main() {
 		log.Fatalf("worker loop failed: %v", err)
 	}
 	log.Printf("worker stopped")
-}
-
-func databaseConfigMode(cfg config.Config) string {
-	if cfg.UsesDatabaseURL() {
-		return "using DATABASE_URL"
-	}
-
-	return "using discrete DB_* settings"
-}
-
-func databaseOpenConfig(cfg config.Config) (string, platformdb.PoolConfig) {
-	return cfg.DatabaseURL(), platformdb.PoolConfig{
-		MaxOpenConns:    cfg.DBMaxOpenConns,
-		MaxIdleConns:    cfg.DBMaxIdleConns,
-		ConnMaxLifetime: cfg.DBConnMaxLifetime,
-		ConnMaxIdleTime: cfg.DBConnMaxIdleTime,
-	}
 }
 
 func resolveStepRunner(cfg config.Config) runner.Runner {
