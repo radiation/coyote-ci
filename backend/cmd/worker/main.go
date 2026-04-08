@@ -38,8 +38,10 @@ type workerStatusProvider interface {
 
 func main() {
 	cfg := config.Load()
+	log.Printf("database config: %s", databaseConfigMode(cfg))
 
-	db, err := platformdb.Open(cfg.DatabaseURL())
+	dbURL, dbPoolCfg := databaseOpenConfig(cfg)
+	db, err := platformdb.Open(dbURL, dbPoolCfg)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
@@ -88,6 +90,23 @@ func main() {
 		log.Fatalf("worker loop failed: %v", err)
 	}
 	log.Printf("worker stopped")
+}
+
+func databaseConfigMode(cfg config.Config) string {
+	if cfg.UsesDatabaseURL() {
+		return "using DATABASE_URL"
+	}
+
+	return "using discrete DB_* settings"
+}
+
+func databaseOpenConfig(cfg config.Config) (string, platformdb.PoolConfig) {
+	return cfg.DatabaseURL(), platformdb.PoolConfig{
+		MaxOpenConns:    cfg.DBMaxOpenConns,
+		MaxIdleConns:    cfg.DBMaxIdleConns,
+		ConnMaxLifetime: cfg.DBConnMaxLifetime,
+		ConnMaxIdleTime: cfg.DBConnMaxIdleTime,
+	}
 }
 
 func resolveStepRunner(cfg config.Config) runner.Runner {

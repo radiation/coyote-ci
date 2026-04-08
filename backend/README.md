@@ -85,6 +85,12 @@ go test ./...
 Tests use in-memory repository implementations by default. Integration tests
 that require Postgres are gated behind `DB_HOST` being set.
 
+## Persistence support
+
+- Durable runtime persistence is PostgreSQL only.
+- In-memory repositories are for tests/non-durable scenarios.
+- Managed Postgres provider selection is deployment-specific and stays outside core runtime logic.
+
 ## API documentation
 
 With the server running, visit http://localhost:8080/swagger/ for the Swagger UI.
@@ -93,3 +99,15 @@ With the server running, visit http://localhost:8080/swagger/ for the Swagger UI
 
 All configuration is via environment variables. See `../.env.example` for the
 full list with defaults and descriptions.
+
+Database configuration supports:
+
+- `DATABASE_URL` (preferred for external/managed Postgres)
+- or split fields: `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_SSLMODE`
+
+Optional connection pool settings:
+
+- `DB_MAX_OPEN_CONNS`
+- `DB_MAX_IDLE_CONNS`
+- `DB_CONN_MAX_LIFETIME` (Go duration, e.g. `30m`)
+- `DB_CONN_MAX_IDLE_TIME` (Go duration, e.g. `5m`)

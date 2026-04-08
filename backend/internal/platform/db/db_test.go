@@ -1,6 +1,9 @@
 package db
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestOpen_ErrorPath(t *testing.T) {
 	tests := []struct {
@@ -21,7 +24,12 @@ func TestOpen_ErrorPath(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			db, err := Open(tc.url)
+			db, err := Open(tc.url, PoolConfig{
+				MaxOpenConns:    10,
+				MaxIdleConns:    5,
+				ConnMaxLifetime: 30 * time.Minute,
+				ConnMaxIdleTime: 5 * time.Minute,
+			})
 			if err == nil {
 				t.Fatalf("expected error, got nil (db=%v)", db)
 			}
