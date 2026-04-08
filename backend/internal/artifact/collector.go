@@ -228,6 +228,8 @@ func (c *Collector) collectSingle(ctx context.Context, ws workspace.Workspace, s
 	hasher := sha256.New()
 	tee := io.TeeReader(file, hasher)
 	generatedID := uuid.NewString()
+	// ResolveStorageKey is applied before Save so persisted metadata key and
+	// blob-store write key are identical for later retrieval.
 	storageKey := resolveStorageKey(c.store, buildStorageKey(ws.BuildID, stepID, generatedID, logicalPath))
 	storagePath := storageKey
 	if reporter, ok := c.store.(interface{ RootPath() string }); ok {

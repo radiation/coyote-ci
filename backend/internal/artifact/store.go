@@ -13,8 +13,16 @@ type Store interface {
 	Open(ctx context.Context, key string) (io.ReadCloser, error)
 }
 
-// KeyResolver allows a store to map a logical storage key to a provider-native
-// storage key for persistence.
+// KeyResolver maps a generated logical storage key to the final provider-native
+// key that will be persisted in artifact metadata and later used for reads.
+//
+// Contract:
+//   - Implementations should be deterministic and idempotent.
+//   - Calling ResolveStorageKey multiple times with an already-resolved key
+//     should return the same key.
+//   - Resolution is expected to happen before Save so the exact same key can be
+//     passed to Save and persisted in metadata.
+//   - Implementations should avoid I/O and perform key translation only.
 type KeyResolver interface {
 	ResolveStorageKey(key string) string
 }

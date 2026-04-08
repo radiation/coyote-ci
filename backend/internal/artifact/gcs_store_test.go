@@ -34,6 +34,16 @@ func TestGCSStore_ResolveStorageKey_DoesNotDoublePrefix(t *testing.T) {
 	}
 }
 
+func TestGCSStore_ResolveStorageKey_IsIdempotent(t *testing.T) {
+	store := &GCSStore{bucket: "bucket", prefix: "prefix-root"}
+
+	first := store.ResolveStorageKey("builds/build-1/shared/a.txt")
+	second := store.ResolveStorageKey(first)
+	if second != first {
+		t.Fatalf("expected idempotent key resolution, first=%q second=%q", first, second)
+	}
+}
+
 func TestGCSStore_Exists_RejectsInvalidKey(t *testing.T) {
 	store := &GCSStore{bucket: "bucket", prefix: "prefix-root"}
 
