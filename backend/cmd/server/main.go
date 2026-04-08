@@ -13,6 +13,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/observability"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
+	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	"github.com/radiation/coyote-ci/backend/internal/source"
@@ -28,8 +29,10 @@ import (
 func main() {
 	cfg := config.Load()
 	docs.SwaggerInfo.BasePath = "/api"
+	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
 
-	db, err := platformdb.Open(cfg.DatabaseURL())
+	dbURL, dbPoolCfg := dbopen.FromConfig(cfg)
+	db, err := platformdb.Open(dbURL, dbPoolCfg)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
 	}

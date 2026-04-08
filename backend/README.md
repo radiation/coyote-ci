@@ -73,7 +73,15 @@ go run ./cmd/worker   # worker (separate terminal)
 ```
 make swagger           # regenerate Swagger docs
 make check-go-version  # verify Go version consistency
+make db-migrate-status # goose migration status
+make db-migrate-up     # apply pending migrations
+make db-migrate-down-one # rollback one migration
+make db-migrate-create name=<migration_name> # create new numbered SQL migration
 ```
+
+Migrations live in `backend/db/migrations` and are managed with Goose.
+Applied migrations are immutable; add new numbered migrations for schema changes.
+See [../deploy/docs/database-migrations.md](../deploy/docs/database-migrations.md) for rollout and operator workflow.
 
 ## Testing
 
@@ -85,6 +93,19 @@ go test ./...
 Tests use in-memory repository implementations by default. Integration tests
 that require Postgres are gated behind `DB_HOST` being set.
 
+## Persistence support
+
+- Durable runtime persistence is PostgreSQL only.
+- In-memory repositories are for tests/non-durable scenarios.
+- Managed Postgres provider selection is deployment-specific and stays outside core runtime logic.
+
+## Artifact persistence support
+
+- Artifact metadata is stored in PostgreSQL.
+- Artifact blob bytes are stored in the configured artifact store.
+- `filesystem` is the default artifact store for local/simple installs.
+- `gcs` is supported for production object storage deployments.
+
 ## API documentation
 
 With the server running, visit http://localhost:8080/swagger/ for the Swagger UI.
@@ -93,3 +114,23 @@ With the server running, visit http://localhost:8080/swagger/ for the Swagger UI
 
 All configuration is via environment variables. See `../.env.example` for the
 full list with defaults and descriptions.
+
+Database configuration supports:
+
+- `DATABASE_URL` (preferred for external/managed Postgres)
+- or split fields: `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_SSLMODE`
+
+Optional connection pool settings:
+
+- `DB_MAX_OPEN_CONNS`
+- `DB_MAX_IDLE_CONNS`
+- `DB_CONN_MAX_LIFETIME` (Go duration, e.g. `30m`)
+- `DB_CONN_MAX_IDLE_TIME` (Go duration, e.g. `5m`)
+
+Artifact storage configuration:
+
+- `ARTIFACT_STORAGE_PROVIDER` (`filesystem` or `gcs`)
+- `ARTIFACT_STORAGE_ROOT` (required for filesystem)
+- `ARTIFACT_STORAGE_STRICT` (fail startup on gcs config/init errors when true)
+- `ARTIFACT_GCS_BUCKET` (required when provider is `gcs`)
+- `ARTIFACT_GCS_PREFIX` (optional)

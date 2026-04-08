@@ -25,9 +25,31 @@ See [backend/docs/state-machine.md](backend/docs/state-machine.md) for the full 
 
 - Go backend control plane
 - Worker process
-- Postgres-backed persistence
+- PostgreSQL-backed durable persistence
 - Layered architecture (domain, repository, service, handlers)
 - Docker Compose local development
+
+## Persistence model
+
+- PostgreSQL is the supported durable production database.
+- In-memory repositories exist for tests and non-durable scenarios only.
+- Managed database choice (self-hosted Postgres, Cloud SQL, etc.) is a deployment concern, not a product abstraction.
+
+For external/managed Postgres runtime configuration and Cloud SQL deployment guidance, see [deploy/docs/gcp-cloud-sql-postgres.md](deploy/docs/gcp-cloud-sql-postgres.md).
+
+## Artifact storage model
+
+- Artifact metadata is persisted in PostgreSQL (`build_artifacts`).
+- Artifact blob bytes are persisted in the configured artifact store.
+- `filesystem` is the default artifact store and is recommended for local development and simple installs.
+- Object storage is recommended for production and multi-node deployments.
+
+Supported artifact blob stores:
+
+- `filesystem`
+- `gcs` (deployment profile example for GCP)
+
+Deployment guidance for GCS is in [deploy/docs/gcp-gcs-artifacts.md](deploy/docs/gcp-gcs-artifacts.md).
 
 ## Prerequisites
 
@@ -154,15 +176,54 @@ Expected response fields for repo-backed fixture builds:
 
 For a faster workflow, use `scripts/run-fixtures.sh` to queue all scenarios or a single scenario.
 
-Migrations are applied automatically during `docker compose up` by a one-shot `migrate` service before backend and worker start. The Postgres container itself does not run schema SQL directly.
+Migrations are applied automatically during `docker compose up` by a one-shot `migrate` service that runs Goose before backend and worker start.
+
+Schema evolution policy:
+
+- Migration files are immutable once applied.
+- New schema changes must be added as new numbered migrations in `backend/db/migrations`.
+- Do not edit old applied migrations in place.
 
 Security note: the worker mounts `/var/run/docker.sock` for local Docker-based step execution. This effectively grants root-equivalent host access to processes in the worker container. Treat this compose setup as trusted local development only, and avoid using it unchanged in less-trusted or shared environments.
+
+### External Postgres runtime configuration
+
+The backend and worker support two equivalent ways to configure Postgres:
+
+- `DATABASE_URL` (preferred for production/external Postgres)
+- `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_SSLMODE` (compose-friendly split fields)
+
+Optional pool tuning env vars:
+
+- `DB_MAX_OPEN_CONNS` (default `10`)
+- `DB_MAX_IDLE_CONNS` (default `5`)
+- `DB_CONN_MAX_LIFETIME` (default `30m`)
+- `DB_CONN_MAX_IDLE_TIME` (default `5m`)
+
+Local Docker Compose continues to use split `DB_*` values by default.
 
 To run migrations manually:
 
 ```bash
 docker compose run --rm migrate
 ```
+
+Or use local Goose Make targets:
+
+```bash
+make db-migrate-status
+make db-migrate-up
+make db-migrate-down-one
+make db-migrate-create name=add_example_index
+```
+
+`MIGRATE_DSN` is configurable when running Make targets, for example:
+
+```bash
+make db-migrate-up MIGRATE_DSN='postgres://user:pass@localhost:5432/coyote_ci?sslmode=disable'
+```
+
+For the full operational workflow, see [deploy/docs/database-migrations.md](deploy/docs/database-migrations.md).
 
 ## Worker Internal Status Endpoint
 

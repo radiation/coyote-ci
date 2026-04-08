@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,5 +227,61 @@ func TestNewGCSStore_RequiresBucket(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bucket") {
 		t.Fatalf("expected bucket-related error, got %v", err)
+	}
+}
+
+type keyResolvingRecordingStore struct {
+	events *[]string
+	prefix string
+}
+
+func (s *keyResolvingRecordingStore) ResolveStorageKey(key string) string {
+	trimmedPrefix := strings.TrimSpace(s.prefix)
+	if trimmedPrefix == "" {
+		return key
+	}
+	return trimmedPrefix + "/" + key
+}
+
+func (s *keyResolvingRecordingStore) Save(_ context.Context, key string, src io.Reader) (int64, error) {
+	body, err := io.ReadAll(src)
+	if err != nil {
+		return 0, err
+	}
+	*s.events = append(*s.events, "save:"+key)
+	return int64(len(body)), nil
+}
+
+func (s *keyResolvingRecordingStore) Open(_ context.Context, _ string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
+func TestCollector_Collect_UsesResolvedStorageKeyWhenStoreSupportsIt(t *testing.T) {
+	workspace := t.TempDir()
+	mustWriteFile(t, filepath.Join(workspace, "dist", "app"), []byte("binary"))
+
+	events := make([]string, 0)
+	store := &keyResolvingRecordingStore{events: &events, prefix: "artifacts-prefix"}
+	collector := NewCollector(store)
+
+	result, err := collector.Collect(context.Background(), CollectRequest{
+		BuildID:       "build-1",
+		StepID:        "step-1",
+		WorkspacePath: workspace,
+		Patterns:      []string{"dist/**"},
+	})
+	if err != nil {
+		t.Fatalf("collect failed: %v", err)
+	}
+	if len(result.Artifacts) != 1 {
+		t.Fatalf("expected 1 artifact, got %d", len(result.Artifacts))
+	}
+
+	storageKey := result.Artifacts[0].StorageKey
+	if !strings.HasPrefix(storageKey, "artifacts-prefix/builds/build-1/steps/step-1/") {
+		t.Fatalf("expected resolved storage key with prefix, got %q", storageKey)
+	}
+	if len(events) != 1 || !strings.HasPrefix(events[0], "save:"+storageKey) {
+		t.Fatalf("expected save event with resolved storage key, got %v", events)
 	}
 }

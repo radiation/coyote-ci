@@ -17,6 +17,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
+	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	dockerrunner "github.com/radiation/coyote-ci/backend/internal/runner/docker"
@@ -38,8 +39,10 @@ type workerStatusProvider interface {
 
 func main() {
 	cfg := config.Load()
+	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
 
-	db, err := platformdb.Open(cfg.DatabaseURL())
+	dbURL, dbPoolCfg := dbopen.FromConfig(cfg)
+	db, err := platformdb.Open(dbURL, dbPoolCfg)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
 	}

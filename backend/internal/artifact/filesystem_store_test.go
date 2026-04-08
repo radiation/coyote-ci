@@ -63,3 +63,45 @@ func TestFilesystemStore_Save_WritesUnderConfiguredRoot(t *testing.T) {
 		t.Fatalf("expected stored body hello, got %q", string(body))
 	}
 }
+
+func TestFilesystemStore_Exists(t *testing.T) {
+	store := NewFilesystemStore(t.TempDir())
+	ctx := context.Background()
+
+	if _, err := store.Save(ctx, "build-1/dist/file.txt", strings.NewReader("body")); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	exists, err := store.Exists(ctx, "build-1/dist/file.txt")
+	if err != nil {
+		t.Fatalf("exists failed: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected exists=true for saved artifact")
+	}
+
+	exists, err = store.Exists(ctx, "build-1/dist/missing.txt")
+	if err != nil {
+		t.Fatalf("exists missing failed: %v", err)
+	}
+	if exists {
+		t.Fatal("expected exists=false for missing artifact")
+	}
+}
+
+func TestExists_FallbackToOpen(t *testing.T) {
+	store := NewFilesystemStore(t.TempDir())
+	ctx := context.Background()
+
+	if _, err := store.Save(ctx, "build-2/reports/out.txt", strings.NewReader("x")); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	exists, err := Exists(ctx, store, "build-2/reports/out.txt")
+	if err != nil {
+		t.Fatalf("Exists helper failed: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected exists=true")
+	}
+}

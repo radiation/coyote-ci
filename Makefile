@@ -1,4 +1,8 @@
-.PHONY: swagger check-go-version install-hooks
+.PHONY: swagger check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status
+
+GOOSE := go run github.com/pressly/goose/v3/cmd/goose@v3.24.1
+MIGRATIONS_DIR := backend/db/migrations
+MIGRATE_DSN ?= postgres://coyote:coyote@localhost:5432/coyote_ci?sslmode=disable
 
 swagger:
 	cd backend && if command -v swag >/dev/null 2>&1; then \
@@ -28,3 +32,16 @@ check-go-version:
 install-hooks:
 	git config core.hooksPath .githooks
 	@echo "Git hooks installed (.githooks)"
+
+db-migrate-create:
+	@if [ -z "$(name)" ]; then echo "Usage: make db-migrate-create name=<migration_name>"; exit 1; fi
+	$(GOOSE) -dir $(MIGRATIONS_DIR) create $(name) sql
+
+db-migrate-up:
+	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(MIGRATE_DSN)" up
+
+db-migrate-down-one:
+	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(MIGRATE_DSN)" down-by-one
+
+db-migrate-status:
+	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(MIGRATE_DSN)" status

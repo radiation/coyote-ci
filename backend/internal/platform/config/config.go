@@ -5,18 +5,25 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"time"
 )
 
 type Config struct {
-	AppPort          string
-	DBHost           string
-	DBPort           string
-	DBUser           string
-	DBPassword       string
-	DBName           string
-	DBSSLMode        string
-	StepLeaseSeconds int
-	WorkerStatusAddr string
+	AppPort           string
+	DatabaseURLValue  string
+	DBHost            string
+	DBPort            string
+	DBUser            string
+	DBPassword        string
+	DBName            string
+	DBSSLMode         string
+	DBMaxOpenConns    int
+	DBMaxIdleConns    int
+	DBConnMaxLifetime time.Duration
+	DBConnMaxIdleTime time.Duration
+	StepLeaseSeconds  int
+	WorkerStatusAddr  string
 
 	ExecutionBackend        string
 	ExecutionDefaultImage   string
@@ -34,15 +41,20 @@ type Config struct {
 
 func Load() Config {
 	return Config{
-		AppPort:          getEnv("APP_PORT", "8080"),
-		DBHost:           getEnv("DB_HOST", "localhost"),
-		DBPort:           getEnv("DB_PORT", "5432"),
-		DBUser:           getEnv("DB_USER", "coyote"),
-		DBPassword:       getEnv("DB_PASSWORD", "coyote"),
-		DBName:           getEnv("DB_NAME", "coyote_ci"),
-		DBSSLMode:        getEnv("DB_SSLMODE", "disable"),
-		StepLeaseSeconds: getEnvInt("WORKER_STEP_LEASE_SECONDS", 45),
-		WorkerStatusAddr: getEnv("WORKER_STATUS_ADDR", ""),
+		AppPort:           getEnv("APP_PORT", "8080"),
+		DatabaseURLValue:  getEnv("DATABASE_URL", ""),
+		DBHost:            getEnv("DB_HOST", "localhost"),
+		DBPort:            getEnv("DB_PORT", "5432"),
+		DBUser:            getEnv("DB_USER", "coyote"),
+		DBPassword:        getEnv("DB_PASSWORD", "coyote"),
+		DBName:            getEnv("DB_NAME", "coyote_ci"),
+		DBSSLMode:         getEnv("DB_SSLMODE", "disable"),
+		DBMaxOpenConns:    getEnvInt("DB_MAX_OPEN_CONNS", 10),
+		DBMaxIdleConns:    getEnvInt("DB_MAX_IDLE_CONNS", 5),
+		DBConnMaxLifetime: getEnvDuration("DB_CONN_MAX_LIFETIME", 30*time.Minute),
+		DBConnMaxIdleTime: getEnvDuration("DB_CONN_MAX_IDLE_TIME", 5*time.Minute),
+		StepLeaseSeconds:  getEnvInt("WORKER_STEP_LEASE_SECONDS", 45),
+		WorkerStatusAddr:  getEnv("WORKER_STATUS_ADDR", ""),
 
 		ExecutionBackend:        getEnv("WORKER_EXECUTION_BACKEND", "docker"),
 		ExecutionDefaultImage:   getEnv("WORKER_EXECUTION_DEFAULT_IMAGE", "alpine:3.20"),
@@ -60,6 +72,10 @@ func Load() Config {
 }
 
 func (c Config) DatabaseURL() string {
+	if databaseURL := strings.TrimSpace(c.DatabaseURLValue); databaseURL != "" {
+		return databaseURL
+	}
+
 	return fmt.Sprintf(
 		"postgres://%s:%s@%s:%s/%s?sslmode=%s",
 		c.DBUser,
@@ -69,6 +85,10 @@ func (c Config) DatabaseURL() string {
 		c.DBName,
 		c.DBSSLMode,
 	)
+}
+
+func (c Config) UsesDatabaseURL() bool {
+	return strings.TrimSpace(c.DatabaseURLValue) != ""
 }
 
 func getEnv(key, fallback string) string {
@@ -99,6 +119,18 @@ func getEnvBool(key string, fallback bool) bool {
 		return fallback
 	}
 	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvDuration(key string, fallback time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
 	if err != nil {
 		return fallback
 	}

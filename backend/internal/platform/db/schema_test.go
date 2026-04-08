@@ -9,7 +9,7 @@ import (
 
 func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 	files := []string{
-		"../../../db/init/001_init.sql",
+		"../../../db/migrations/00001_init_schema.sql",
 	}
 
 	var builder strings.Builder

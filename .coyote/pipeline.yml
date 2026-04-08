@@ -2,7 +2,7 @@ version: 1
 
 pipeline:
   name: coyote-ci
-  image: golang:1.26.1
+  image: golang:1.26.2
 
 steps:
   - name: Backend Format Check
@@ -31,7 +31,7 @@ steps:
     timeout_seconds: 300
 
   - name: Backend Image
-    run: docker build --build-arg GO_VERSION=1.26.1 -t coyote-ci/backend:latest -f backend/Dockerfile backend
+    run: docker build --build-arg GO_VERSION=1.26.2 -t coyote-ci/backend:latest -f backend/Dockerfile backend
     image: docker:27
     timeout_seconds: 600
 

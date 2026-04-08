@@ -8,9 +8,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -387,8 +389,87 @@ func TestBuildHandler_DownloadBuildArtifact(t *testing.T) {
 	}
 }
 
+type downloadMapStore struct {
+	objects map[string]string
+}
+
+func (s *downloadMapStore) Save(_ context.Context, key string, src io.Reader) (int64, error) {
+	body, err := io.ReadAll(src)
+	if err != nil {
+		return 0, err
+	}
+	if s.objects == nil {
+		s.objects = map[string]string{}
+	}
+	s.objects[key] = string(body)
+	return int64(len(body)), nil
+}
+
+func (s *downloadMapStore) Open(_ context.Context, key string) (io.ReadCloser, error) {
+	body, ok := s.objects[key]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return io.NopCloser(strings.NewReader(body)), nil
+}
+
+func TestBuildHandler_DownloadBuildArtifact_GCSProviderNativeStorageKey(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	fsStore := artifact.NewFilesystemStore(t.TempDir())
+	gcsStore := &downloadMapStore{}
+	nativeKey := "prefix-root/builds/build-1/shared/artifact-1-app"
+	if _, err := gcsStore.Save(context.Background(), nativeKey, bytes.NewBufferString("artifact-content-gcs")); err != nil {
+		t.Fatalf("failed to seed gcs store: %v", err)
+	}
+
+	repo := &fakeRepo{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
+	}
+	contentType := "application/octet-stream"
+	artifactRepo := &fakeArtifactRepo{artifactsByBuild: map[string][]domain.BuildArtifact{
+		"build-1": {
+			{
+				ID:              "artifact-1",
+				BuildID:         "build-1",
+				LogicalPath:     "dist/app",
+				StorageKey:      nativeKey,
+				StorageProvider: domain.StorageProviderGCS,
+				SizeBytes:       int64(len("artifact-content-gcs")),
+				ContentType:     &contentType,
+				CreatedAt:       now,
+			},
+		},
+	}}
+
+	svc := service.NewBuildService(repo, nil, nil)
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolverWithProviders(domain.StorageProviderFilesystem, map[domain.StorageProvider]artifact.Store{
+		domain.StorageProviderFilesystem: fsStore,
+		domain.StorageProviderGCS:        gcsStore,
+	}), t.TempDir())
+	h := NewBuildHandler(svc)
+
+	req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/artifacts/artifact-1/download", nil), "build-1")
+	rctx := chi.RouteContext(req.Context())
+	rctx.URLParams.Add("artifactID", "artifact-1")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	res := httptest.NewRecorder()
+	h.DownloadBuildArtifact(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, res.Code)
+	}
+	if got := res.Body.String(); got != "artifact-content-gcs" {
+		t.Fatalf("expected artifact body from gcs-native key, got %q", got)
+	}
+}
+
 func testStoreResolver(store artifact.Store) *artifact.StoreResolver {
-	return artifact.NewStoreResolver(domain.StorageProviderFilesystem, map[domain.StorageProvider]artifact.Store{
+	return testStoreResolverWithProviders(domain.StorageProviderFilesystem, map[domain.StorageProvider]artifact.Store{
 		domain.StorageProviderFilesystem: store,
 	})
+}
+
+func testStoreResolverWithProviders(defaultProvider domain.StorageProvider, stores map[domain.StorageProvider]artifact.Store) *artifact.StoreResolver {
+	return artifact.NewStoreResolver(defaultProvider, stores)
 }
