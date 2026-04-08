@@ -228,7 +228,7 @@ func (c *Collector) collectSingle(ctx context.Context, ws workspace.Workspace, s
 	hasher := sha256.New()
 	tee := io.TeeReader(file, hasher)
 	generatedID := uuid.NewString()
-	storageKey := buildStorageKey(ws.BuildID, stepID, generatedID, logicalPath)
+	storageKey := resolveStorageKey(c.store, buildStorageKey(ws.BuildID, stepID, generatedID, logicalPath))
 	storagePath := storageKey
 	if reporter, ok := c.store.(interface{ RootPath() string }); ok {
 		root := strings.TrimSpace(reporter.RootPath())

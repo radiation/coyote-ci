@@ -25,6 +25,10 @@ func (s *FilesystemStore) RootPath() string {
 	return s.root
 }
 
+func (s *FilesystemStore) ResolveStorageKey(key string) string {
+	return key
+}
+
 func (s *FilesystemStore) Save(_ context.Context, key string, src io.Reader) (int64, error) {
 	fullPath, err := s.resolvePath(key)
 	if err != nil {
@@ -81,6 +85,23 @@ func (s *FilesystemStore) Open(_ context.Context, key string) (io.ReadCloser, er
 	}
 
 	return file, nil
+}
+
+func (s *FilesystemStore) Exists(_ context.Context, key string) (bool, error) {
+	fullPath, err := s.resolvePath(key)
+	if err != nil {
+		return false, err
+	}
+
+	_, statErr := os.Stat(fullPath)
+	if statErr == nil {
+		return true, nil
+	}
+	if os.IsNotExist(statErr) {
+		return false, nil
+	}
+
+	return false, statErr
 }
 
 func (s *FilesystemStore) resolvePath(key string) (string, error) {

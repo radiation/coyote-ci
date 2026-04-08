@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -31,12 +32,19 @@ func NewGCSStore(client *storage.Client, cfg GCSStoreConfig) (*GCSStore, error) 
 	if bucket == "" {
 		return nil, fmt.Errorf("GCS bucket name is required")
 	}
+	if client == nil {
+		return nil, fmt.Errorf("GCS client is required")
+	}
 
 	return &GCSStore{
 		client: client,
 		bucket: bucket,
 		prefix: strings.TrimSpace(cfg.Prefix),
 	}, nil
+}
+
+func (s *GCSStore) ResolveStorageKey(key string) string {
+	return s.objectName(key)
 }
 
 func (s *GCSStore) Save(ctx context.Context, key string, src io.Reader) (int64, error) {
@@ -61,6 +69,23 @@ func (s *GCSStore) Save(ctx context.Context, key string, src io.Reader) (int64, 
 	return written, nil
 }
 
+func (s *GCSStore) Exists(ctx context.Context, key string) (bool, error) {
+	if err := validateKey(key); err != nil {
+		return false, err
+	}
+
+	objectName := s.objectName(key)
+	_, err := s.client.Bucket(s.bucket).Object(objectName).Attrs(ctx)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, storage.ErrObjectNotExist) {
+		return false, nil
+	}
+
+	return false, fmt.Errorf("checking artifact in GCS: %w", err)
+}
+
 func (s *GCSStore) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	if err := validateKey(key); err != nil {
 		return nil, err
@@ -75,8 +100,12 @@ func (s *GCSStore) Open(ctx context.Context, key string) (io.ReadCloser, error) 
 }
 
 func (s *GCSStore) objectName(key string) string {
-	if s.prefix != "" {
-		return path.Join(s.prefix, key)
+	trimmed := strings.TrimSpace(key)
+	if s.prefix == "" {
+		return trimmed
 	}
-	return key
+	if trimmed == s.prefix || strings.HasPrefix(trimmed, s.prefix+"/") {
+		return trimmed
+	}
+	return path.Join(s.prefix, trimmed)
 }

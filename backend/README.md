@@ -91,6 +91,13 @@ that require Postgres are gated behind `DB_HOST` being set.
 - In-memory repositories are for tests/non-durable scenarios.
 - Managed Postgres provider selection is deployment-specific and stays outside core runtime logic.
 
+## Artifact persistence support
+
+- Artifact metadata is stored in PostgreSQL.
+- Artifact blob bytes are stored in the configured artifact store.
+- `filesystem` is the default artifact store for local/simple installs.
+- `gcs` is supported for production object storage deployments.
+
 ## API documentation
 
 With the server running, visit http://localhost:8080/swagger/ for the Swagger UI.
@@ -111,3 +118,11 @@ Optional connection pool settings:
 - `DB_MAX_IDLE_CONNS`
 - `DB_CONN_MAX_LIFETIME` (Go duration, e.g. `30m`)
 - `DB_CONN_MAX_IDLE_TIME` (Go duration, e.g. `5m`)
+
+Artifact storage configuration:
+
+- `ARTIFACT_STORAGE_PROVIDER` (`filesystem` or `gcs`)
+- `ARTIFACT_STORAGE_ROOT` (required for filesystem)
+- `ARTIFACT_STORAGE_STRICT` (fail startup on gcs config/init errors when true)
+- `ARTIFACT_GCS_BUCKET` (required when provider is `gcs`)
+- `ARTIFACT_GCS_PREFIX` (optional)

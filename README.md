@@ -37,6 +37,20 @@ See [backend/docs/state-machine.md](backend/docs/state-machine.md) for the full 
 
 For external/managed Postgres runtime configuration and Cloud SQL deployment guidance, see [deploy/docs/gcp-cloud-sql-postgres.md](deploy/docs/gcp-cloud-sql-postgres.md).
 
+## Artifact storage model
+
+- Artifact metadata is persisted in PostgreSQL (`build_artifacts`).
+- Artifact blob bytes are persisted in the configured artifact store.
+- `filesystem` is the default artifact store and is recommended for local development and simple installs.
+- Object storage is recommended for production and multi-node deployments.
+
+Supported artifact blob stores:
+
+- `filesystem`
+- `gcs` (deployment profile example for GCP)
+
+Deployment guidance for GCS is in [deploy/docs/gcp-gcs-artifacts.md](deploy/docs/gcp-gcs-artifacts.md).
+
 ## Prerequisites
 
 - Docker + Docker Compose
