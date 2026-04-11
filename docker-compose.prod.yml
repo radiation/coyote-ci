@@ -1,0 +1,87 @@
+services:
+  cloudsql-proxy:
+    image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.21.1
+    container_name: coyote-ci-cloudsql-proxy
+    command:
+      - "--address=0.0.0.0"
+      - "--port=5432"
+      - "coyote-ci:us-east1:coyote-ci-postgres"
+    restart: unless-stopped
+
+  migrate:
+    image: golang:${GO_VERSION:-1.26.2}
+    container_name: coyote-ci-migrate
+    depends_on:
+      - cloudsql-proxy
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      GOOSE_MIGRATION_DIR: /migrations
+    volumes:
+      - ./backend/db/migrations:/migrations:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'go run github.com/pressly/goose/v3/cmd/goose@v3.24.1 -dir "$${GOOSE_MIGRATION_DIR}" postgres "$${DATABASE_URL}" up'
+    restart: "no"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        GO_VERSION: ${GO_VERSION:-1.26.2}
+    container_name: coyote-ci-backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_PORT: "8080"
+      DATABASE_URL: ${DATABASE_URL}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
+      ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
+    ports:
+      - "8080:8080"
+    volumes:
+      - artifact_data:/var/lib/coyote-artifacts
+    profiles:
+      - prod
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        GO_VERSION: ${GO_VERSION:-1.26.2}
+    container_name: coyote-ci-worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
+      DATABASE_URL: ${DATABASE_URL}
+      WORKER_EXECUTION_WORKSPACE_ROOT: /tmp/coyote-builds
+      WORKER_MOUNT_DOCKER_SOCKET: "true"
+    entrypoint: ["/app/worker"]
+    volumes:
+      - artifact_data:/var/lib/coyote-artifacts
+      # Local-dev only: mounting the host Docker socket grants root-equivalent host access.
+      # Do not use this pattern in less-trusted or shared environments.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/coyote-builds:/tmp/coyote-builds
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: coyote-ci-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+    profiles:
+      - prod
+
+volumes:
+  go_mod_cache:
+  go_build_cache:
+  frontend_node_modules:
+  artifact_data:
