@@ -2,9 +2,12 @@ package pipeline
 
 import (
 	"fmt"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
 
 // validEnvKey matches POSIX-style environment variable names: letters, digits, underscore, starting with letter or underscore.
@@ -26,6 +29,9 @@ func Validate(pf *PipelineFile) error {
 			errs = append(errs, ValidationError{Field: "pipeline.image", Message: "must be non-empty when set"})
 		}
 	}
+
+	errCache := validateCacheDef("pipeline.cache", pf.Pipeline.Cache)
+	errs = append(errs, errCache...)
 
 	// top-level env keys
 	for key := range pf.Env {
@@ -103,12 +109,88 @@ func Validate(pf *PipelineFile) error {
 				errs = append(errs, ValidationError{Field: field, Message: err.Error()})
 			}
 		}
+
+		stepCacheErrs := validateCacheDef(prefix+".cache", step.Cache)
+		errs = append(errs, stepCacheErrs...)
 	}
 
 	if len(errs) > 0 {
 		return errs
 	}
 	return nil
+}
+
+func validateCacheDef(fieldPrefix string, def *CacheDef) ValidationErrors {
+	if def == nil {
+		return nil
+	}
+
+	var errs ValidationErrors
+	scope := strings.TrimSpace(def.Scope)
+	if scope == "" {
+		errs = append(errs, ValidationError{Field: fieldPrefix + ".scope", Message: "scope is required when cache is set"})
+	} else if scope != string(domain.CacheScopeBuild) && scope != string(domain.CacheScopeJob) {
+		errs = append(errs, ValidationError{Field: fieldPrefix + ".scope", Message: "scope must be one of: build, job"})
+	}
+
+	preset := strings.TrimSpace(def.Preset)
+	if preset != "" {
+		if _, _, ok := presetValues(preset); !ok {
+			errs = append(errs, ValidationError{Field: fieldPrefix + ".preset", Message: fmt.Sprintf("unknown cache preset %q", preset)})
+		}
+	}
+
+	for i, rawPath := range def.Paths {
+		cachePath := strings.TrimSpace(rawPath)
+		pathField := fmt.Sprintf("%s.paths[%d]", fieldPrefix, i)
+		if cachePath == "" {
+			errs = append(errs, ValidationError{Field: pathField, Message: "cache path is required"})
+			continue
+		}
+		if strings.ContainsRune(cachePath, '\\') {
+			errs = append(errs, ValidationError{Field: pathField, Message: "cache path must use forward slashes"})
+			continue
+		}
+		if !path.IsAbs(cachePath) {
+			errs = append(errs, ValidationError{Field: pathField, Message: "cache path must be an absolute container path"})
+		}
+	}
+
+	for i, rawFile := range def.Key.Files {
+		file := strings.TrimSpace(rawFile)
+		fileField := fmt.Sprintf("%s.key.files[%d]", fieldPrefix, i)
+		if file == "" {
+			errs = append(errs, ValidationError{Field: fileField, Message: "cache key file is required"})
+			continue
+		}
+		if strings.ContainsRune(file, '\\') {
+			errs = append(errs, ValidationError{Field: fileField, Message: "cache key file must use forward slashes"})
+			continue
+		}
+		if path.IsAbs(file) {
+			errs = append(errs, ValidationError{Field: fileField, Message: "cache key file must be workspace-relative"})
+			continue
+		}
+		cleaned := path.Clean(file)
+		if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+			errs = append(errs, ValidationError{Field: fileField, Message: "cache key file must stay within workspace"})
+		}
+	}
+
+	resolved := resolveCache(def)
+	if resolved == nil || len(resolved.Paths) == 0 {
+		errs = append(errs, ValidationError{Field: fieldPrefix + ".paths", Message: "resolved cache paths must be non-empty"})
+	}
+	if resolved == nil || len(resolved.KeyFiles) == 0 {
+		errs = append(errs, ValidationError{Field: fieldPrefix + ".key.files", Message: "resolved cache key files must be non-empty"})
+	}
+
+	return errs
+}
+
+func presetValues(name string) ([]string, []string, bool) {
+	paths, keyFiles := cachePresetDefaults(name)
+	return paths, keyFiles, len(paths) > 0 || len(keyFiles) > 0
 }
 
 func validateArtifactPathPattern(pattern string) error {

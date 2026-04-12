@@ -45,6 +45,7 @@ func ParseAndValidate(data []byte) (*PipelineFile, error) {
 // Top-level env is merged into each step; step-level env wins on conflict.
 func Resolve(pf *PipelineFile) *ResolvedPipeline {
 	mergedPipelineEnv := copyEnv(pf.Env)
+	pipelineCache := resolveCache(pf.Pipeline.Cache)
 
 	steps := make([]ResolvedStep, 0, len(pf.Steps))
 	for _, sd := range pf.Steps {
@@ -55,6 +56,11 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 			timeout = *sd.TimeoutSeconds
 		}
 
+		stepCache := pipelineCache
+		if sd.Cache != nil {
+			stepCache = resolveCache(sd.Cache)
+		}
+
 		steps = append(steps, ResolvedStep{
 			Name:           sd.Name,
 			Image:          strings.TrimSpace(sd.Image),
@@ -63,6 +69,7 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 			Env:            merged,
 			TimeoutSeconds: timeout,
 			ArtifactPaths:  append([]string{}, sd.Artifacts.Paths...),
+			Cache:          stepCache.Clone(),
 		})
 	}
 
@@ -72,6 +79,7 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 		Env:       mergedPipelineEnv,
 		Steps:     steps,
 		Artifacts: ResolvedArtifacts{Paths: append([]string{}, pf.Artifacts.Paths...)},
+		Cache:     pipelineCache.Clone(),
 	}
 }
 

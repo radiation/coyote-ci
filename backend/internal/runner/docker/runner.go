@@ -302,6 +302,15 @@ func stepContainerRunArgs(containerName, image, mountBinding, workingDir string,
 		"-w", workingDir,
 	}
 
+	for _, cacheMount := range request.CacheMounts {
+		hostPath := strings.TrimSpace(cacheMount.HostPath)
+		containerPath := strings.TrimSpace(cacheMount.ContainerPath)
+		if hostPath == "" || containerPath == "" {
+			continue
+		}
+		args = append(args, "-v", hostPath+":"+containerPath)
+	}
+
 	if mountDockerSocket {
 		args = append(args, "-v", "/var/run/docker.sock:/var/run/docker.sock")
 	}

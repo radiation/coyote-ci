@@ -1,0 +1,191 @@
+package service
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
+
+	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
+	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/runner"
+)
+
+type preparedStepCache struct {
+	Enabled    bool
+	Key        string
+	Scope      domain.CacheScope
+	RuntimeDir string
+	Mounts     []runner.CacheMount
+}
+
+type StepCacheManager struct {
+	store             cachepkg.Store
+	executionRootPath string
+}
+
+func NewStepCacheManager(store cachepkg.Store, executionRootPath string) *StepCacheManager {
+	return &StepCacheManager{
+		store:             store,
+		executionRootPath: strings.TrimSpace(executionRootPath),
+	}
+}
+
+func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExecutionContext, logManager *ExecutionLogManager) (preparedStepCache, error) {
+	if m == nil || m.store == nil {
+		return preparedStepCache{}, nil
+	}
+	if executionContext.Step == nil || executionContext.Step.Cache == nil {
+		logManager.EmitSystemLine(ctx, "Cache: not configured")
+		return preparedStepCache{}, nil
+	}
+
+	cacheConfig := executionContext.Step.Cache.Clone()
+	workspaceRoot, err := m.workspaceRootForBuild(executionContext.Build.ID)
+	if err != nil {
+		return preparedStepCache{}, err
+	}
+
+	filesDigest, err := digestCacheKeyFiles(workspaceRoot, cacheConfig.KeyFiles)
+	if err != nil {
+		return preparedStepCache{}, err
+	}
+
+	key, err := cachepkg.ResolveKey(cachepkg.KeyInput{
+		Scope:          string(cacheConfig.Scope),
+		BuildID:        buildScopedID(cacheConfig.Scope, executionContext.Build.ID),
+		JobIdentity:    jobScopedIdentity(cacheConfig.Scope, executionContext),
+		Image:          executionContext.ExecutionImage,
+		Platform:       runtime.GOOS + "/" + runtime.GOARCH,
+		Paths:          cacheConfig.Paths,
+		KeyFilesDigest: filesDigest,
+	})
+	if err != nil {
+		return preparedStepCache{}, err
+	}
+
+	runtimeDir := filepath.Join(workspaceRoot, ".coyote", "cache-runtime", sanitizeStepDirName(executionContext.ExecutionRequest.StepID, executionContext.ExecutionRequest.StepIndex))
+	if removeErr := os.RemoveAll(runtimeDir); removeErr != nil {
+		return preparedStepCache{}, removeErr
+	}
+	if mkdirErr := os.MkdirAll(runtimeDir, 0o755); mkdirErr != nil {
+		return preparedStepCache{}, mkdirErr
+	}
+
+	hit, err := m.store.Restore(ctx, key, runtimeDir)
+	if err != nil {
+		return preparedStepCache{}, err
+	}
+
+	mounts := make([]runner.CacheMount, 0, len(cacheConfig.Paths))
+	for idx, cachePath := range cacheConfig.Paths {
+		hostPath := filepath.Join(runtimeDir, "paths", fmt.Sprintf("%03d", idx))
+		if mkdirErr := os.MkdirAll(hostPath, 0o755); mkdirErr != nil {
+			return preparedStepCache{}, mkdirErr
+		}
+		mounts = append(mounts, runner.CacheMount{HostPath: hostPath, ContainerPath: cachePath})
+	}
+
+	logManager.EmitSystemLine(ctx, fmt.Sprintf("Cache: configured scope=%s key=%s", cacheConfig.Scope, key))
+	if hit {
+		logManager.EmitSystemLine(ctx, "Cache: hit (restored)")
+	} else {
+		logManager.EmitSystemLine(ctx, "Cache: miss")
+	}
+
+	return preparedStepCache{
+		Enabled:    true,
+		Key:        key,
+		Scope:      cacheConfig.Scope,
+		RuntimeDir: runtimeDir,
+		Mounts:     mounts,
+	}, nil
+}
+
+func (m *StepCacheManager) Save(ctx context.Context, logManager *ExecutionLogManager, prepared preparedStepCache) error {
+	if !prepared.Enabled || m == nil || m.store == nil {
+		return nil
+	}
+	if err := m.store.Save(ctx, prepared.Key, prepared.RuntimeDir); err != nil {
+		return err
+	}
+	logManager.EmitSystemLine(ctx, "Cache: saved")
+	return nil
+}
+
+func (m *StepCacheManager) workspaceRootForBuild(buildID string) (string, error) {
+	root := strings.TrimSpace(m.executionRootPath)
+	if root == "" {
+		return "", ErrExecutionWorkspaceRootNotConfigured
+	}
+	return filepath.Join(root, strings.TrimSpace(buildID)), nil
+}
+
+func digestCacheKeyFiles(workspaceRoot string, files []string) (string, error) {
+	hasher := sha256.New()
+	ordered := append([]string(nil), files...)
+	sort.Strings(ordered)
+	for _, relativePath := range ordered {
+		cleaned := filepath.Clean(filepath.FromSlash(relativePath))
+		hasher.Write([]byte(relativePath))
+		hasher.Write([]byte("\n"))
+		fullPath := filepath.Join(workspaceRoot, cleaned)
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				hasher.Write([]byte("<missing>\n"))
+				continue
+			}
+			return "", err
+		}
+		sum := sha256.Sum256(data)
+		hasher.Write([]byte(hex.EncodeToString(sum[:])))
+		hasher.Write([]byte("\n"))
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func buildScopedID(scope domain.CacheScope, buildID string) string {
+	if scope != domain.CacheScopeBuild {
+		return ""
+	}
+	return strings.TrimSpace(buildID)
+}
+
+func jobScopedIdentity(scope domain.CacheScope, executionContext StepExecutionContext) string {
+	if scope != domain.CacheScopeJob {
+		return ""
+	}
+	if trimmed := strings.TrimSpace(executionContext.ExecutionRequest.JobID); trimmed != "" {
+		return trimmed
+	}
+	if executionContext.Build.JobID != nil {
+		if trimmed := strings.TrimSpace(*executionContext.Build.JobID); trimmed != "" {
+			return trimmed
+		}
+	}
+	if executionContext.Build.PipelinePath != nil {
+		if trimmed := strings.TrimSpace(*executionContext.Build.PipelinePath); trimmed != "" {
+			return executionContext.Build.ProjectID + ":" + trimmed
+		}
+	}
+	if executionContext.Build.PipelineName != nil {
+		if trimmed := strings.TrimSpace(*executionContext.Build.PipelineName); trimmed != "" {
+			return executionContext.Build.ProjectID + ":" + trimmed
+		}
+	}
+	return executionContext.Build.ProjectID + ":adhoc"
+}
+
+func sanitizeStepDirName(stepID string, stepIndex int) string {
+	trimmed := strings.TrimSpace(stepID)
+	if trimmed != "" {
+		return strings.ReplaceAll(trimmed, string(filepath.Separator), "-")
+	}
+	return fmt.Sprintf("step-%d", stepIndex)
+}

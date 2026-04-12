@@ -36,6 +36,13 @@ type RunStepRequest struct {
 	Env            map[string]string
 	WorkingDir     string
 	TimeoutSeconds int
+	CacheMounts    []CacheMount
+}
+
+// CacheMount maps a host directory to a container-absolute cache path.
+type CacheMount struct {
+	HostPath      string
+	ContainerPath string
 }
 
 // PrepareBuildRequest describes environment inputs needed before step execution.

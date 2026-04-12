@@ -9,6 +9,7 @@ import (
 
 func TestLoad(t *testing.T) {
 	defaultWorkspaceRoot := filepath.Join(os.TempDir(), "coyote-builds")
+	defaultCacheRoot := filepath.Join(os.TempDir(), "coyote-cache")
 	defaultArtifactRoot := filepath.Join(os.TempDir(), "coyote-artifacts")
 
 	tests := []struct {
@@ -57,6 +58,7 @@ func TestLoad(t *testing.T) {
 				ExecutionBackend:        "docker",
 				ExecutionDefaultImage:   "alpine:3.20",
 				ExecutionWorkspaceRoot:  defaultWorkspaceRoot,
+				WorkerCacheStorageRoot:  defaultCacheRoot,
 				ArtifactStorageRoot:     defaultArtifactRoot,
 				ArtifactStorageProvider: "filesystem",
 			},
@@ -101,6 +103,7 @@ func TestLoad(t *testing.T) {
 				ExecutionBackend:        "inprocess",
 				ExecutionDefaultImage:   "golang:1.23-alpine",
 				ExecutionWorkspaceRoot:  "/var/tmp/coyote-workspaces",
+				WorkerCacheStorageRoot:  defaultCacheRoot,
 				ArtifactStorageRoot:     "/var/tmp/coyote-artifacts",
 				ArtifactStorageProvider: "filesystem",
 			},
@@ -145,6 +148,7 @@ func TestLoad(t *testing.T) {
 				ExecutionBackend:        "docker",
 				ExecutionDefaultImage:   "alpine:3.20",
 				ExecutionWorkspaceRoot:  defaultWorkspaceRoot,
+				WorkerCacheStorageRoot:  defaultCacheRoot,
 				ArtifactStorageRoot:     defaultArtifactRoot,
 				ArtifactStorageProvider: "filesystem",
 			},
@@ -173,6 +177,7 @@ func TestLoad(t *testing.T) {
 				ExecutionBackend:        "docker",
 				ExecutionDefaultImage:   "alpine:3.20",
 				ExecutionWorkspaceRoot:  defaultWorkspaceRoot,
+				WorkerCacheStorageRoot:  defaultCacheRoot,
 				ArtifactStorageRoot:     defaultArtifactRoot,
 				ArtifactStorageProvider: "filesystem",
 			},

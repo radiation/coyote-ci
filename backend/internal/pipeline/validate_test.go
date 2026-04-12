@@ -338,6 +338,98 @@ func TestValidate_Artifacts_Valid(t *testing.T) {
 	}
 }
 
+func TestValidate_CacheScopeRequired(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps: []StepDef{{
+			Name:  "test",
+			Run:   "go test ./...",
+			Cache: &CacheDef{Preset: "golang"},
+		}},
+	}
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected error when cache.scope missing")
+	}
+	assertContains(t, err.Error(), "scope")
+}
+
+func TestValidate_CacheUnknownPresetRejected(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps: []StepDef{{
+			Name: "test",
+			Run:  "go test ./...",
+			Cache: &CacheDef{
+				Preset: "unknown",
+				Scope:  "job",
+			},
+		}},
+	}
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected unknown preset validation error")
+	}
+	assertContains(t, err.Error(), "unknown")
+}
+
+func TestValidate_CachePathMustBeAbsolute(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps: []StepDef{{
+			Name: "test",
+			Run:  "go test ./...",
+			Cache: &CacheDef{
+				Scope: "job",
+				Paths: []string{"relative/cache"},
+				Key:   CacheKeyDef{Files: []string{"go.mod"}},
+			},
+		}},
+	}
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected absolute cache path validation error")
+	}
+	assertContains(t, err.Error(), "absolute")
+}
+
+func TestValidate_CacheKeyFileMustBeWorkspaceRelative(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps: []StepDef{{
+			Name: "test",
+			Run:  "go test ./...",
+			Cache: &CacheDef{
+				Scope: "job",
+				Paths: []string{"/go/pkg/mod"},
+				Key:   CacheKeyDef{Files: []string{"/go.mod"}},
+			},
+		}},
+	}
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected key file path validation error")
+	}
+	assertContains(t, err.Error(), "workspace-relative")
+}
+
+func TestValidate_CachePresetOnlyValid(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps: []StepDef{{
+			Name: "test",
+			Run:  "go test ./...",
+			Cache: &CacheDef{
+				Preset: "golang",
+				Scope:  "job",
+			},
+		}},
+	}
+	if err := Validate(pf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func assertContains(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(strings.ToLower(s), strings.ToLower(substr)) {

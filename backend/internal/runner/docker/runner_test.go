@@ -213,7 +213,14 @@ func TestStepContainerRunArgs_BuildsCorrectArgs(t *testing.T) {
 		"/tmp/ws/build-5:/workspace",
 		"/workspace",
 		false,
-		runner.RunStepRequest{BuildID: "build-5", Command: "sh", Args: []string{"-c", "pwd"}},
+		runner.RunStepRequest{
+			BuildID: "build-5",
+			Command: "sh",
+			Args:    []string{"-c", "pwd"},
+			CacheMounts: []runner.CacheMount{
+				{HostPath: "/tmp/cache/mod", ContainerPath: "/go/pkg/mod"},
+			},
+		},
 	)
 	// Verify key structural elements
 	if args[0] != "run" {
@@ -239,6 +246,16 @@ func TestStepContainerRunArgs_BuildsCorrectArgs(t *testing.T) {
 	}
 	if !foundWorkdir {
 		t.Fatalf("expected working directory, got %+v", args)
+	}
+
+	foundCacheMount := false
+	for i, a := range args {
+		if a == "-v" && i+1 < len(args) && args[i+1] == "/tmp/cache/mod:/go/pkg/mod" {
+			foundCacheMount = true
+		}
+	}
+	if !foundCacheMount {
+		t.Fatalf("expected cache mount, got %+v", args)
 	}
 
 	// Image and command should be at the end

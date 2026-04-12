@@ -627,6 +627,9 @@ func cloneStep(step domain.BuildStep) domain.BuildStep {
 	if step.ArtifactPaths != nil {
 		step.ArtifactPaths = append([]string(nil), step.ArtifactPaths...)
 	}
+	if step.Cache != nil {
+		step.Cache = step.Cache.Clone()
+	}
 
 	return step
 }

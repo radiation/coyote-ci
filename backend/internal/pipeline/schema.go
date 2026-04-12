@@ -18,8 +18,9 @@ type PipelineFile struct {
 
 // PipelineMeta holds optional pipeline-level metadata from the YAML.
 type PipelineMeta struct {
-	Name  string `yaml:"name"`
-	Image string `yaml:"image"`
+	Name  string    `yaml:"name"`
+	Image string    `yaml:"image"`
+	Cache *CacheDef `yaml:"cache,omitempty"`
 }
 
 // StepDef is the YAML-facing definition for a single step.
@@ -32,6 +33,18 @@ type StepDef struct {
 	WorkingDir     string            `yaml:"working_dir"`
 	Env            map[string]string `yaml:"env"`
 	Artifacts      ArtifactDef       `yaml:"artifacts,omitempty"`
+	Cache          *CacheDef         `yaml:"cache,omitempty"`
+}
+
+type CacheDef struct {
+	Preset string      `yaml:"preset,omitempty"`
+	Paths  []string    `yaml:"paths,omitempty"`
+	Scope  string      `yaml:"scope"`
+	Key    CacheKeyDef `yaml:"key,omitempty"`
+}
+
+type CacheKeyDef struct {
+	Files []string `yaml:"files,omitempty"`
 }
 
 // ArtifactDef holds optional build-level artifact path declarations.

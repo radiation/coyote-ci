@@ -23,6 +23,7 @@ type BuildStep struct {
 	WorkingDir     string
 	TimeoutSeconds int
 	ArtifactPaths  []string
+	Cache          *StepCacheConfig
 	Status         BuildStepStatus
 	WorkerID       *string
 	ClaimToken     *string

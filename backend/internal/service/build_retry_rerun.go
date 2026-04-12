@@ -215,6 +215,7 @@ func cloneStepForAttempt(buildID string, sourceStep domain.BuildStep, newStepInd
 		WorkingDir:     defaultValue(sourceStep.WorkingDir, "."),
 		TimeoutSeconds: maxInt(sourceStep.TimeoutSeconds, 0),
 		ArtifactPaths:  append([]string{}, sourceStep.ArtifactPaths...),
+		Cache:          sourceStep.Cache.Clone(),
 		Status:         domain.BuildStepStatusPending,
 	}
 }

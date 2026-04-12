@@ -369,9 +369,10 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 			stdout,
 			stderr,
 			error_message,
-			artifact_paths
+			artifact_paths,
+			cache_config
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb)
+		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23::jsonb)
 	`
 
 	for _, step := range steps {
@@ -390,6 +391,15 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 		artifactPathsJSON, marshalErr := json.Marshal(artifactPaths)
 		if marshalErr != nil {
 			return marshalErr
+		}
+		var cacheJSON []byte
+		if step.Cache != nil {
+			cacheJSON, marshalErr = json.Marshal(step.Cache)
+			if marshalErr != nil {
+				return marshalErr
+			}
+		} else {
+			cacheJSON = []byte("null")
 		}
 
 		if _, err := tx.ExecContext(
@@ -417,6 +427,7 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 			step.Stderr,
 			step.ErrorMessage,
 			string(artifactPathsJSON),
+			string(cacheJSON),
 		); err != nil {
 			return err
 		}

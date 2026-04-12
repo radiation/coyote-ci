@@ -10,7 +10,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
-const stepColumns = `id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message, artifact_paths`
+const stepColumns = `id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message, artifact_paths, cache_config`
 
 func (r *BuildRepository) GetStepsByBuildID(ctx context.Context, buildID string) (steps []domain.BuildStep, err error) {
 	query := `
@@ -217,7 +217,7 @@ func (r *BuildRepository) CompleteStepIfRunning(ctx context.Context, buildID str
 		WHERE build_id = $1
 		  AND step_index = $2
 		  AND status = 'running'
-		RETURNING id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message
+		RETURNING ` + stepColumns + `
 	`
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, string(update.Status), update.WorkerID, update.StartedAt, update.FinishedAt, update.ExitCode, update.Stdout, update.Stderr, update.ErrorMessage))

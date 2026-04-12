@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
+	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
@@ -74,6 +75,7 @@ type BuildService struct {
 	artifactCollector       *artifact.Collector
 	artifactWorkspaceRoot   string
 	artifactStorageProvider domain.StorageProvider
+	stepCacheManager        *StepCacheManager
 
 	defaultExecutionImage string
 }
@@ -90,6 +92,7 @@ type BuildServiceConfig struct {
 	ArtifactWorkspace   string
 	ExecutionWorkspace  string
 	DefaultImage        string
+	CacheStore          cachepkg.Store
 }
 
 // NewBuildServiceFromConfig creates a fully-wired BuildService in one call.
@@ -104,6 +107,7 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 	svc.defaultExecutionImage = strings.TrimSpace(cfg.DefaultImage)
 	svc.executionWorkspaceRoot = normalizeWorkspaceRoot(cfg.ExecutionWorkspace)
 	svc.SetArtifactPersistence(cfg.ArtifactRepo, cfg.ArtifactResolver, cfg.ArtifactWorkspace)
+	svc.SetStepCacheStore(cfg.CacheStore)
 	return svc
 }
 
@@ -132,6 +136,9 @@ func (s *BuildService) SetSourceResolver(resolver source.WorkspaceSourceResolver
 
 func (s *BuildService) SetExecutionWorkspaceRoot(root string) {
 	s.executionWorkspaceRoot = normalizeWorkspaceRoot(root)
+	if s.stepCacheManager != nil {
+		s.stepCacheManager = NewStepCacheManager(s.stepCacheManager.store, s.executionWorkspaceRoot)
+	}
 }
 
 // SetDefaultExecutionImage sets the image used when a build-scoped runner requires one.
@@ -165,6 +172,14 @@ func (s *BuildService) SetExecutionJobRepository(repo repository.ExecutionJobRep
 
 func (s *BuildService) SetExecutionJobOutputRepository(repo repository.ExecutionJobOutputRepository) {
 	s.executionOutputRepo = repo
+}
+
+func (s *BuildService) SetStepCacheStore(store cachepkg.Store) {
+	if store == nil {
+		s.stepCacheManager = nil
+		return
+	}
+	s.stepCacheManager = NewStepCacheManager(store, s.executionWorkspaceRoot)
 }
 
 type CreateBuildInput struct {
@@ -638,10 +653,32 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	}
 
 	logManager.EmitExecutionStart(ctx)
+	cacheSideEffectErr := error(nil)
+	preparedCache := preparedStepCache{}
+	if s.stepCacheManager != nil {
+		cacheState, cacheErr := s.stepCacheManager.Prepare(ctx, executionContext, logManager)
+		if cacheErr != nil {
+			logManager.EmitSystemLine(ctx, "Cache: restore failed")
+			logManager.EmitSystemLine(ctx, formatFailureReasonLine(cacheErr.Error()))
+			cacheSideEffectErr = joinSideEffectErrors(cacheSideEffectErr, cacheErr)
+		} else if cacheState.Enabled {
+			preparedCache = cacheState
+			executionContext.ExecutionRequest.CacheMounts = append([]runner.CacheMount(nil), cacheState.Mounts...)
+		}
+	}
 	runOutcome := stepRunner.Run(ctx, executionContext, logManager)
+	if s.stepCacheManager != nil && preparedCache.Enabled {
+		saveErr := s.stepCacheManager.Save(ctx, logManager, preparedCache)
+		if saveErr != nil {
+			logManager.EmitSystemLine(ctx, "Cache: save failed")
+			logManager.EmitSystemLine(ctx, formatFailureReasonLine(saveErr.Error()))
+			cacheSideEffectErr = joinSideEffectErrors(cacheSideEffectErr, saveErr)
+		}
+	}
 	logManager.EmitExecutionEnd(ctx, runOutcome.Result)
 
 	report, completionErr := completionManager.CompleteExecution(ctx, executionContext, runOutcome.Result, logManager)
+	report.SideEffectErr = joinSideEffectErrors(report.SideEffectErr, cacheSideEffectErr)
 	if completionErr != nil {
 		if runOutcome.ExecutionErr != nil {
 			return runOutcome.Result, report, errors.Join(runOutcome.ExecutionErr, completionErr)
