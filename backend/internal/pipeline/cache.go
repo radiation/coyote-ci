@@ -38,6 +38,8 @@ func resolveCache(def *CacheDef) *domain.StepCacheConfig {
 func cachePresetDefaults(name string) (paths []string, keyFiles []string) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case cachePresetGolang:
+		// These defaults follow official golang container image conventions.
+		// Non-root or custom images may use different cache directories.
 		return []string{"/go/pkg/mod", "/root/.cache/go-build"}, []string{"go.mod", "go.sum"}
 	default:
 		return nil, nil

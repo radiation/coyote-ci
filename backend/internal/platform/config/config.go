@@ -29,6 +29,7 @@ type Config struct {
 	ExecutionDefaultImage   string
 	ExecutionWorkspaceRoot  string
 	WorkerCacheStorageRoot  string
+	WorkerCacheMaxSizeMB    int
 	MountDockerSocket       bool
 	ArtifactStorageRoot     string
 	ArtifactStorageProvider string
@@ -61,6 +62,7 @@ func Load() Config {
 		ExecutionDefaultImage:   getEnv("WORKER_EXECUTION_DEFAULT_IMAGE", "alpine:3.20"),
 		ExecutionWorkspaceRoot:  getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
 		WorkerCacheStorageRoot:  getEnv("WORKER_CACHE_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-cache")),
+		WorkerCacheMaxSizeMB:    getEnvInt("CACHE_MAX_SIZE_MB", 10240),
 		MountDockerSocket:       getEnvBool("WORKER_MOUNT_DOCKER_SOCKET", false),
 		ArtifactStorageRoot:     getEnv("ARTIFACT_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-artifacts")),
 		ArtifactStorageProvider: getEnv("ARTIFACT_STORAGE_PROVIDER", "filesystem"),

@@ -138,6 +138,7 @@ Artifact storage configuration:
 Worker cache configuration:
 
 - `WORKER_CACHE_STORAGE_ROOT` (local cache snapshot root; defaults to `$TMPDIR/coyote-cache`)
+- `CACHE_MAX_SIZE_MB` (local cache retention limit; oldest entries are evicted when exceeded)
 
 ## Pipeline Step Cache DSL
 

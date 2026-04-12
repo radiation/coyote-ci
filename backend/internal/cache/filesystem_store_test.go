@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestFilesystemStore_SaveAndRestore(t *testing.T) {
@@ -50,5 +51,57 @@ func TestFilesystemStore_RestoreMiss(t *testing.T) {
 	}
 	if hit {
 		t.Fatal("expected miss for missing cache key")
+	}
+}
+
+func TestFilesystemStore_EvictsOldestEntriesWhenOverLimit(t *testing.T) {
+	ctx := context.Background()
+	store := NewFilesystemStoreWithMaxSize(t.TempDir(), 1024)
+
+	sourceA := filepath.Join(t.TempDir(), "source-a")
+	if err := os.MkdirAll(filepath.Join(sourceA, "paths", "000"), 0o755); err != nil {
+		t.Fatalf("mkdir source-a: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceA, "paths", "000", "cache.bin"), make([]byte, 800), 0o644); err != nil {
+		t.Fatalf("write source-a: %v", err)
+	}
+	if err := store.Save(ctx, "v1/job/key-a", sourceA); err != nil {
+		t.Fatalf("save key-a: %v", err)
+	}
+
+	entryAPath, err := store.resolvePathForKey("v1/job/key-a")
+	if err != nil {
+		t.Fatalf("resolve key-a path: %v", err)
+	}
+	old := time.Now().UTC().Add(-2 * time.Hour)
+	if chtimesErr := os.Chtimes(entryAPath, old, old); chtimesErr != nil {
+		t.Fatalf("touch key-a old: %v", chtimesErr)
+	}
+
+	sourceB := filepath.Join(t.TempDir(), "source-b")
+	if mkdirErr := os.MkdirAll(filepath.Join(sourceB, "paths", "000"), 0o755); mkdirErr != nil {
+		t.Fatalf("mkdir source-b: %v", mkdirErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(sourceB, "paths", "000", "cache.bin"), make([]byte, 800), 0o644); writeErr != nil {
+		t.Fatalf("write source-b: %v", writeErr)
+	}
+	if saveErr := store.Save(ctx, "v1/job/key-b", sourceB); saveErr != nil {
+		t.Fatalf("save key-b: %v", saveErr)
+	}
+
+	hitA, err := store.Restore(ctx, "v1/job/key-a", filepath.Join(t.TempDir(), "dest-a"))
+	if err != nil {
+		t.Fatalf("restore key-a: %v", err)
+	}
+	if hitA {
+		t.Fatal("expected key-a to be evicted")
+	}
+
+	hitB, err := store.Restore(ctx, "v1/job/key-b", filepath.Join(t.TempDir(), "dest-b"))
+	if err != nil {
+		t.Fatalf("restore key-b: %v", err)
+	}
+	if !hitB {
+		t.Fatal("expected key-b to remain after eviction")
 	}
 }

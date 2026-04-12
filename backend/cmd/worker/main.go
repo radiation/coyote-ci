@@ -75,7 +75,7 @@ func main() {
 		ExecutionOutputRepo: executionJobOutputRepo,
 		DefaultImage:        cfg.ExecutionDefaultImage,
 		ExecutionWorkspace:  cfg.ExecutionWorkspaceRoot,
-		CacheStore:          cachepkg.NewFilesystemStore(cfg.WorkerCacheStorageRoot),
+		CacheStore:          cachepkg.NewFilesystemStoreWithMaxSize(cfg.WorkerCacheStorageRoot, int64(cfg.WorkerCacheMaxSizeMB)*1024*1024),
 		ArtifactRepo:        artifactRepo,
 		ArtifactResolver:    artifactResolver,
 		ArtifactWorkspace:   cfg.ExecutionWorkspaceRoot,

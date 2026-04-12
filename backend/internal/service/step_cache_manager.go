@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -77,10 +78,12 @@ func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExe
 		return preparedStepCache{}, mkdirErr
 	}
 
+	restoreStarted := time.Now()
 	hit, err := m.store.Restore(ctx, key, runtimeDir)
 	if err != nil {
 		return preparedStepCache{}, err
 	}
+	logManager.EmitSystemLine(ctx, fmt.Sprintf("cache restore: hit=%t duration_ms=%d", hit, time.Since(restoreStarted).Milliseconds()))
 
 	mounts := make([]runner.CacheMount, 0, len(cacheConfig.Paths))
 	for idx, cachePath := range cacheConfig.Paths {
@@ -107,13 +110,22 @@ func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExe
 	}, nil
 }
 
-func (m *StepCacheManager) Save(ctx context.Context, logManager *ExecutionLogManager, prepared preparedStepCache) error {
+func (m *StepCacheManager) Save(ctx context.Context, logManager *ExecutionLogManager, prepared preparedStepCache, result runner.RunStepResult) error {
 	if !prepared.Enabled || m == nil || m.store == nil {
 		return nil
 	}
+	if result.Status != runner.RunStepStatusSuccess {
+		logManager.EmitSystemLine(ctx, "cache save skipped: step not successful")
+		logManager.EmitSystemLine(ctx, "cache save: success=false duration_ms=0")
+		return nil
+	}
+
+	saveStarted := time.Now()
 	if err := m.store.Save(ctx, prepared.Key, prepared.RuntimeDir); err != nil {
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=false duration_ms=%d", time.Since(saveStarted).Milliseconds()))
 		return err
 	}
+	logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=true duration_ms=%d", time.Since(saveStarted).Milliseconds()))
 	logManager.EmitSystemLine(ctx, "Cache: saved")
 	return nil
 }
@@ -171,15 +183,29 @@ func jobScopedIdentity(scope domain.CacheScope, executionContext StepExecutionCo
 	}
 	if executionContext.Build.PipelinePath != nil {
 		if trimmed := strings.TrimSpace(*executionContext.Build.PipelinePath); trimmed != "" {
-			return executionContext.Build.ProjectID + ":" + trimmed
+			return executionContext.Build.ProjectID + ":" + stableRepoIdentity(executionContext.Build) + ":" + trimmed
 		}
 	}
 	if executionContext.Build.PipelineName != nil {
 		if trimmed := strings.TrimSpace(*executionContext.Build.PipelineName); trimmed != "" {
-			return executionContext.Build.ProjectID + ":" + trimmed
+			return executionContext.Build.ProjectID + ":" + stableRepoIdentity(executionContext.Build) + ":" + trimmed
 		}
 	}
-	return executionContext.Build.ProjectID + ":adhoc"
+	return executionContext.Build.ProjectID + ":" + stableRepoIdentity(executionContext.Build) + ":adhoc"
+}
+
+func stableRepoIdentity(build domain.Build) string {
+	if build.Source != nil {
+		if trimmed := strings.TrimSpace(build.Source.RepositoryURL); trimmed != "" {
+			return trimmed
+		}
+	}
+	if build.RepoURL != nil {
+		if trimmed := strings.TrimSpace(*build.RepoURL); trimmed != "" {
+			return trimmed
+		}
+	}
+	return "repo-unknown"
 }
 
 func sanitizeStepDirName(stepID string, stepIndex int) string {

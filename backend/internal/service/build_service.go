@@ -668,7 +668,7 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	}
 	runOutcome := stepRunner.Run(ctx, executionContext, logManager)
 	if s.stepCacheManager != nil && preparedCache.Enabled {
-		saveErr := s.stepCacheManager.Save(ctx, logManager, preparedCache)
+		saveErr := s.stepCacheManager.Save(ctx, logManager, preparedCache, runOutcome.Result)
 		if saveErr != nil {
 			logManager.EmitSystemLine(ctx, "Cache: save failed")
 			logManager.EmitSystemLine(ctx, formatFailureReasonLine(saveErr.Error()))

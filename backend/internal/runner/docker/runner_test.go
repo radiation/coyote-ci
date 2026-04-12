@@ -367,3 +367,28 @@ func TestRunner_CleanupBuild_InvokesWorkspaceCleanup(t *testing.T) {
 		t.Fatalf("expected no docker calls, got %d", len(exec.calls))
 	}
 }
+
+func TestValidateCacheMounts_RejectsForbiddenContainerPath(t *testing.T) {
+	_, err := validateCacheMounts([]runner.CacheMount{{HostPath: t.TempDir(), ContainerPath: "/etc"}})
+	if err == nil {
+		t.Fatal("expected forbidden cache mount path to be rejected")
+	}
+	if !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("expected clear not-allowed error, got %v", err)
+	}
+}
+
+func TestValidateCacheMounts_HostPathMustBeDirectory(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "cache-file")
+	if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write fixture file: %v", err)
+	}
+
+	_, err := validateCacheMounts([]runner.CacheMount{{HostPath: filePath, ContainerPath: "/go/pkg/mod"}})
+	if err == nil {
+		t.Fatal("expected file host path to be rejected")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("expected not-a-directory error, got %v", err)
+	}
+}

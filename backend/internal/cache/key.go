@@ -4,10 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 )
+
+var ErrInvalidKeyInput = errors.New("invalid cache key input")
 
 type KeyInput struct {
 	Scope          string
@@ -31,11 +34,25 @@ type keyEnvelope struct {
 }
 
 func ResolveKey(input KeyInput) (string, error) {
+	scope := strings.TrimSpace(input.Scope)
+	if scope == "" {
+		return "", fmt.Errorf("%w: scope is required", ErrInvalidKeyInput)
+	}
+	if len(input.Paths) == 0 {
+		return "", fmt.Errorf("%w: paths are required", ErrInvalidKeyInput)
+	}
+	if scope == "job" && strings.TrimSpace(input.JobIdentity) == "" {
+		return "", fmt.Errorf("%w: job identity is required for job scope", ErrInvalidKeyInput)
+	}
+	if scope == "build" && strings.TrimSpace(input.BuildID) == "" {
+		return "", fmt.Errorf("%w: build id is required for build scope", ErrInvalidKeyInput)
+	}
+
 	paths := append([]string(nil), input.Paths...)
 	sort.Strings(paths)
 	envelope := keyEnvelope{
 		Version:        1,
-		Scope:          strings.TrimSpace(input.Scope),
+		Scope:          scope,
 		BuildID:        strings.TrimSpace(input.BuildID),
 		JobIdentity:    strings.TrimSpace(input.JobIdentity),
 		Image:          strings.TrimSpace(input.Image),
