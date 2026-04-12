@@ -35,9 +35,14 @@ services:
         condition: service_completed_successfully
     environment:
       APP_PORT: "8080"
+      ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
+
       DATABASE_URL: ${DATABASE_URL}
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
-      ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
+
+      ARTIFACT_STORAGE_PROVIDER: ${ARTIFACT_STORAGE_PROVIDER}
+      ARTIFACT_GCS_BUCKET: ${ARTIFACT_GCS_BUCKET}
+      ARTIFACT_GCS_PREFIX: ${ARTIFACT_GCS_PREFIX}
     ports:
       - "8080:8080"
     volumes:
@@ -56,6 +61,11 @@ services:
     environment:
       ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
       DATABASE_URL: ${DATABASE_URL}
+
+      ARTIFACT_STORAGE_PROVIDER: ${ARTIFACT_STORAGE_PROVIDER}
+      ARTIFACT_GCS_BUCKET: ${ARTIFACT_GCS_BUCKET}
+      ARTIFACT_GCS_PREFIX: ${ARTIFACT_GCS_PREFIX}
+
       WORKER_EXECUTION_WORKSPACE_ROOT: /tmp/coyote-builds
       WORKER_MOUNT_DOCKER_SOCKET: "true"
     entrypoint: ["/app/worker"]
