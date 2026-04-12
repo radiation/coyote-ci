@@ -22,7 +22,7 @@ echo "🚀 Starting application services..."
 docker compose --env-file "$ENV_FILE" \
   -f docker-compose.yml \
   -f docker-compose.prod.yml \
-  up -d --build backend worker frontend
+  up -d --build server worker frontend
 
 echo "📊 Status:"
 docker compose --env-file "$ENV_FILE" \

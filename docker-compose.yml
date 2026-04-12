@@ -38,43 +38,14 @@ services:
       - 'go run github.com/pressly/goose/v3/cmd/goose@v3.24.1 -dir "$${GOOSE_MIGRATION_DIR}" postgres "$${DATABASE_URL}" up'
     restart: "no"
 
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      args:
-        GO_VERSION: ${GO_VERSION:-1.26.2}
-    container_name: coyote-ci-backend
-    depends_on:
-      db:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    environment:
-      APP_PORT: "8080"
-      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
-      DB_HOST: db
-      DB_PORT: "5432"
-      DB_USER: coyote
-      DB_PASSWORD: coyote
-      DB_NAME: coyote_ci
-      DB_SSLMODE: disable
-      ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
-    ports:
-      - "8080:8080"
-    volumes:
-      - artifact_data:/var/lib/coyote-artifacts
-    profiles:
-      - prod
-
-  backend-dev:
+  server:
     build:
       context: ./backend
       dockerfile: Dockerfile
       target: dev
       args:
         GO_VERSION: ${GO_VERSION:-1.26.2}
-    container_name: coyote-ci-backend-dev
+    container_name: coyote-ci-server
     depends_on:
       db:
         condition: service_healthy
@@ -97,8 +68,7 @@ services:
       - go_mod_cache:/go/pkg/mod
       - go_build_cache:/root/.cache/go-build
       - artifact_data:/var/lib/coyote-artifacts
-    profiles:
-      - dev
+
   worker:
     build:
       context: ./backend
@@ -130,23 +100,11 @@ services:
       - /tmp/coyote-builds:/tmp/coyote-builds
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: coyote-ci-frontend
-    depends_on:
-      - backend
-    ports:
-      - "3000:3000"
-    profiles:
-      - prod
-
-  frontend-dev:
     image: node:22-alpine
-    container_name: coyote-ci-frontend-dev
+    container_name: coyote-ci-frontend
     working_dir: /app
     depends_on:
-      - backend-dev
+      - server
     ports:
       - "3000:3000"
     volumes:
@@ -154,9 +112,7 @@ services:
       - frontend_node_modules:/app/node_modules
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
     environment:
-      VITE_API_BASE: http://backend-dev:8080
-    profiles:
-      - dev
+      VITE_API_BASE: http://server:8080
 
 volumes:
   postgres_data:
