@@ -182,7 +182,9 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(ctx context.Context, claim
 		WITH candidate AS (
 			SELECT bj.id
 			FROM build_jobs AS bj
-			WHERE bj.status = 'queued' OR (bj.status = 'running' AND bj.claim_expires_at IS NOT NULL AND bj.claim_expires_at <= $1)
+			INNER JOIN builds AS b ON b.id = bj.build_id
+			WHERE b.status IN ('queued', 'running')
+			  AND (bj.status = 'queued' OR (bj.status = 'running' AND bj.claim_expires_at IS NOT NULL AND bj.claim_expires_at <= $1))
 			ORDER BY bj.created_at ASC, bj.step_index ASC, bj.attempt_number ASC, bj.id ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED

@@ -953,6 +953,57 @@ func TestBuildService_TransitionBuildStatus_UpdateError(t *testing.T) {
 	}
 }
 
+func TestBuildService_CancelBuild_TerminalizesBuildAndNonTerminalSteps(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now},
+		steps: []domain.BuildStep{
+			{ID: "step-0", BuildID: "build-1", StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusSuccess},
+			{ID: "step-1", BuildID: "build-1", StepIndex: 1, Name: "test", Status: domain.BuildStepStatusRunning},
+			{ID: "step-2", BuildID: "build-1", StepIndex: 2, Name: "lint", Status: domain.BuildStepStatusPending},
+		},
+	}
+	svc := NewBuildService(repo, nil, nil)
+
+	canceled, err := svc.CancelBuild(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("cancel build failed: %v", err)
+	}
+	if canceled.Status != domain.BuildStatusFailed {
+		t.Fatalf("expected canceled build status failed, got %q", canceled.Status)
+	}
+
+	if repo.steps[0].Status != domain.BuildStepStatusSuccess {
+		t.Fatalf("expected already terminal step to remain success, got %q", repo.steps[0].Status)
+	}
+	if repo.steps[1].Status != domain.BuildStepStatusFailed {
+		t.Fatalf("expected running step to be terminalized as failed, got %q", repo.steps[1].Status)
+	}
+	if repo.steps[2].Status != domain.BuildStepStatusFailed {
+		t.Fatalf("expected pending step to be terminalized as failed, got %q", repo.steps[2].Status)
+	}
+}
+
+func TestBuildService_CancelBuild_TerminalBuildIsNoop(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
+		steps: []domain.BuildStep{{ID: "step-0", BuildID: "build-1", StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusSuccess}},
+	}
+	svc := NewBuildService(repo, nil, nil)
+
+	canceled, err := svc.CancelBuild(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("cancel build failed: %v", err)
+	}
+	if canceled.Status != domain.BuildStatusSuccess {
+		t.Fatalf("expected terminal build status unchanged, got %q", canceled.Status)
+	}
+	if repo.updateCalls != 0 {
+		t.Fatalf("expected no update status call for terminal build, got %d", repo.updateCalls)
+	}
+}
+
 func TestBuildService_QueueBuildWithTemplate(t *testing.T) {
 	tests := []struct {
 		name          string

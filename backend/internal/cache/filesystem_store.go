@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -85,7 +86,23 @@ func (s *FilesystemStore) Save(_ context.Context, key string, sourceRoot string)
 		return mkdirErr
 	}
 
-	tmpPath, err := os.MkdirTemp(filepath.Dir(entryPath), ".cache-entry-*")
+	existingInfo, statErr := os.Stat(entryPath)
+	if statErr == nil && existingInfo.IsDir() {
+		sameSnapshot, sameErr := dirsEqual(sourceRoot, entryPath)
+		if sameErr != nil {
+			return sameErr
+		}
+		if sameSnapshot {
+			now := time.Now().UTC()
+			_ = os.Chtimes(entryPath, now, now)
+			return nil
+		}
+	}
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return statErr
+	}
+
+	tmpPath, err := os.MkdirTemp(filepath.Dir(entryPath), ".cache-entry-staging-*")
 	if err != nil {
 		return err
 	}
@@ -97,12 +114,27 @@ func (s *FilesystemStore) Save(_ context.Context, key string, sourceRoot string)
 		return copyErr
 	}
 
-	if removeErr := os.RemoveAll(entryPath); removeErr != nil {
-		return removeErr
+	backupPath := ""
+	if statErr == nil {
+		backupPath = fmt.Sprintf("%s.backup.%d", entryPath, time.Now().UTC().UnixNano())
+		if renameErr := os.Rename(entryPath, backupPath); renameErr != nil {
+			return renameErr
+		}
 	}
+
 	if renameErr := os.Rename(tmpPath, entryPath); renameErr != nil {
+		if backupPath != "" {
+			_ = os.Rename(backupPath, entryPath)
+		}
 		return renameErr
 	}
+
+	if backupPath != "" {
+		if removeErr := os.RemoveAll(backupPath); removeErr != nil {
+			return removeErr
+		}
+	}
+
 	now := time.Now().UTC()
 	_ = os.Chtimes(entryPath, now, now)
 
@@ -110,6 +142,14 @@ func (s *FilesystemStore) Save(_ context.Context, key string, sourceRoot string)
 		return evictErr
 	}
 	return nil
+}
+
+func (s *FilesystemStore) TotalSizeBytes() (int64, error) {
+	_, total, err := s.collectEntries()
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 type cacheEntry struct {
@@ -314,3 +354,148 @@ func copyDir(srcRoot string, dstRoot string) error {
 		return nil
 	})
 }
+
+func dirsEqual(aRoot string, bRoot string) (bool, error) {
+	err := filepath.WalkDir(aRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		rel, err := filepath.Rel(aRoot, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+
+		aInfo, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if aInfo.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlinks are not allowed in cache content: %s", path)
+		}
+
+		bPath := filepath.Join(bRoot, rel)
+		bInfo, err := os.Lstat(bPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return ErrDifferentDirectoryContent
+			}
+			return err
+		}
+		if bInfo.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlinks are not allowed in cache content: %s", bPath)
+		}
+
+		if aInfo.IsDir() != bInfo.IsDir() {
+			return ErrDifferentDirectoryContent
+		}
+		if aInfo.IsDir() {
+			return nil
+		}
+
+		equal, err := fileContentsEqual(path, bPath)
+		if err != nil {
+			return err
+		}
+		if !equal {
+			return ErrDifferentDirectoryContent
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrDifferentDirectoryContent) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	err = filepath.WalkDir(bRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		rel, relErr := filepath.Rel(bRoot, path)
+		if relErr != nil {
+			return relErr
+		}
+		if rel == "." {
+			return nil
+		}
+
+		aPath := filepath.Join(aRoot, rel)
+		if _, statErr := os.Lstat(aPath); statErr != nil {
+			if os.IsNotExist(statErr) {
+				return ErrDifferentDirectoryContent
+			}
+			return statErr
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrDifferentDirectoryContent) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return true, nil
+}
+
+func fileContentsEqual(aPath string, bPath string) (bool, error) {
+	aInfo, err := os.Stat(aPath)
+	if err != nil {
+		return false, err
+	}
+	bInfo, err := os.Stat(bPath)
+	if err != nil {
+		return false, err
+	}
+	if aInfo.Size() != bInfo.Size() {
+		return false, nil
+	}
+
+	aFile, err := os.Open(aPath)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		_ = aFile.Close()
+	}()
+
+	bFile, err := os.Open(bPath)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		_ = bFile.Close()
+	}()
+
+	aBuf := make([]byte, 32*1024)
+	bBuf := make([]byte, 32*1024)
+	for {
+		aN, aErr := aFile.Read(aBuf)
+		bN, bErr := bFile.Read(bBuf)
+
+		if aN != bN {
+			return false, nil
+		}
+		if aN > 0 && !bytes.Equal(aBuf[:aN], bBuf[:bN]) {
+			return false, nil
+		}
+
+		if aErr == io.EOF && bErr == io.EOF {
+			return true, nil
+		}
+		if aErr != nil && aErr != io.EOF {
+			return false, aErr
+		}
+		if bErr != nil && bErr != io.EOF {
+			return false, bErr
+		}
+	}
+}
+
+var ErrDifferentDirectoryContent = errors.New("cache directory content differs")

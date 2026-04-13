@@ -689,6 +689,21 @@ func (h *BuildHandler) FailBuild(w http.ResponseWriter, r *http.Request) {
 	h.transitionBuild(w, r, h.buildService.FailBuild)
 }
 
+// CancelBuild godoc
+// @Summary Cancel build
+// @Description Marks a non-terminal build as failed and terminalizes non-terminal steps.
+// @Tags builds
+// @Produce json
+// @Param buildID path string true "Build ID"
+// @Success 200 {object} api.BuildEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/{buildID}/cancel [post]
+func (h *BuildHandler) CancelBuild(w http.ResponseWriter, r *http.Request) {
+	h.transitionBuild(w, r, h.buildService.CancelBuild)
+}
+
 func (h *BuildHandler) transitionBuild(w http.ResponseWriter, r *http.Request, transition func(ctx context.Context, id string) (domain.Build, error)) {
 	id := chi.URLParam(r, "buildID")
 	if id == "" {

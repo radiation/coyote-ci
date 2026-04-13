@@ -51,6 +51,7 @@ func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandle
 			r.Post("/{buildID}/start", buildHandler.StartBuild)
 			r.Post("/{buildID}/complete", buildHandler.CompleteBuild)
 			r.Post("/{buildID}/fail", buildHandler.FailBuild)
+			r.Post("/{buildID}/cancel", buildHandler.CancelBuild)
 		})
 
 		r.Route("/jobs", func(r chi.Router) {

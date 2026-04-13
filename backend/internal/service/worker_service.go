@@ -18,6 +18,7 @@ import (
 
 type buildExecutionBoundary interface {
 	ClaimNextRunnableJob(ctx context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error)
+	GetBuild(ctx context.Context, id string) (domain.Build, error)
 	ListBuilds(ctx context.Context) ([]domain.Build, error)
 	GetBuildSteps(ctx context.Context, id string) ([]domain.BuildStep, error)
 	GetJobByStepID(ctx context.Context, stepID string) (domain.ExecutionJob, error)
@@ -167,6 +168,9 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 			if _, err := w.builds.StartBuild(ctx, build.ID); err != nil && !errors.Is(err, ErrInvalidBuildStatusTransition) {
 				return RunnableStep{}, false, err
 			}
+			if err := w.ensureBuildRunning(ctx, build.ID); err != nil {
+				return RunnableStep{}, false, err
+			}
 		}
 
 		runnableStep := RunnableStep{
@@ -222,6 +226,9 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 			if _, err := w.builds.StartBuild(ctx, build.ID); err != nil && !errors.Is(err, ErrInvalidBuildStatusTransition) {
 				return RunnableStep{}, false, err
 			}
+			if err := w.ensureBuildRunning(ctx, build.ID); err != nil {
+				return RunnableStep{}, false, err
+			}
 		}
 
 		runnableStep := RunnableStep{
@@ -264,8 +271,8 @@ func (w *WorkerService) claimRunnableStepFromJobs(ctx context.Context) (Runnable
 		return RunnableStep{}, false, stepErr
 	}
 
-	if _, startErr := w.builds.StartBuild(ctx, job.BuildID); startErr != nil && !errors.Is(startErr, ErrInvalidBuildStatusTransition) {
-		return RunnableStep{}, false, startErr
+	if err := w.ensureBuildRunning(ctx, job.BuildID); err != nil {
+		return RunnableStep{}, false, err
 	}
 
 	claimCount := atomic.AddInt64(&w.claimsWon, 1)
@@ -617,6 +624,38 @@ func commandFromJob(job domain.ExecutionJob) string {
 		return defaultString(job.Command[0], "sh")
 	}
 	return "sh"
+}
+
+func (w *WorkerService) ensureBuildRunning(ctx context.Context, buildID string) error {
+	build, err := w.builds.GetBuild(ctx, buildID)
+	if err != nil {
+		return err
+	}
+
+	if build.Status == domain.BuildStatusQueued {
+		if _, err := w.builds.StartBuild(ctx, buildID); err != nil {
+			if !errors.Is(err, ErrInvalidBuildStatusTransition) {
+				return err
+			}
+			refreshed, refreshErr := w.builds.GetBuild(ctx, buildID)
+			if refreshErr != nil {
+				return refreshErr
+			}
+			if refreshed.Status != domain.BuildStatusRunning {
+				return ErrInvalidBuildStatusTransition
+			}
+			return nil
+		}
+
+		log.Printf("build transition to running accepted: build_id=%s", buildID)
+		return nil
+	}
+
+	if build.Status == domain.BuildStatusRunning {
+		return nil
+	}
+
+	return ErrInvalidBuildStatusTransition
 }
 
 func argsFromJob(job domain.ExecutionJob) []string {

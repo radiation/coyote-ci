@@ -137,6 +137,15 @@ func (f *fakeBuildExecutionBoundary) ListBuilds(_ context.Context) ([]domain.Bui
 	return f.listBuildsResp, nil
 }
 
+func (f *fakeBuildExecutionBoundary) GetBuild(_ context.Context, id string) (domain.Build, error) {
+	for _, build := range f.listBuildsResp {
+		if build.ID == id {
+			return build, nil
+		}
+	}
+	return domain.Build{}, ErrBuildNotFound
+}
+
 func (f *fakeBuildExecutionBoundary) GetBuildSteps(_ context.Context, id string) ([]domain.BuildStep, error) {
 	if f.getStepsErr != nil {
 		return nil, f.getStepsErr
@@ -234,7 +243,15 @@ func (f *fakeBuildExecutionBoundary) QueueBuild(_ context.Context, id string) (d
 		}}
 	}
 
-	return domain.Build{ID: id, Status: domain.BuildStatusQueued}, nil
+	for i := range f.listBuildsResp {
+		if f.listBuildsResp[i].ID == id {
+			f.listBuildsResp[i].Status = domain.BuildStatusQueued
+			return f.listBuildsResp[i], nil
+		}
+	}
+	build := domain.Build{ID: id, Status: domain.BuildStatusQueued}
+	f.listBuildsResp = append(f.listBuildsResp, build)
+	return build, nil
 }
 
 func (f *fakeBuildExecutionBoundary) StartBuild(_ context.Context, id string) (domain.Build, error) {
@@ -243,7 +260,15 @@ func (f *fakeBuildExecutionBoundary) StartBuild(_ context.Context, id string) (d
 	if f.startErr != nil {
 		return domain.Build{}, f.startErr
 	}
-	return domain.Build{ID: id, Status: domain.BuildStatusRunning}, nil
+	for i := range f.listBuildsResp {
+		if f.listBuildsResp[i].ID == id {
+			f.listBuildsResp[i].Status = domain.BuildStatusRunning
+			return f.listBuildsResp[i], nil
+		}
+	}
+	build := domain.Build{ID: id, Status: domain.BuildStatusRunning}
+	f.listBuildsResp = append(f.listBuildsResp, build)
+	return build, nil
 }
 
 func (f *fakeBuildExecutionBoundary) CompleteBuild(_ context.Context, id string) (domain.Build, error) {
@@ -252,7 +277,15 @@ func (f *fakeBuildExecutionBoundary) CompleteBuild(_ context.Context, id string)
 	if f.completeErr != nil {
 		return domain.Build{}, f.completeErr
 	}
-	return domain.Build{ID: id, Status: domain.BuildStatusSuccess}, nil
+	for i := range f.listBuildsResp {
+		if f.listBuildsResp[i].ID == id {
+			f.listBuildsResp[i].Status = domain.BuildStatusSuccess
+			return f.listBuildsResp[i], nil
+		}
+	}
+	build := domain.Build{ID: id, Status: domain.BuildStatusSuccess}
+	f.listBuildsResp = append(f.listBuildsResp, build)
+	return build, nil
 }
 
 func (f *fakeBuildExecutionBoundary) FailBuild(_ context.Context, id string) (domain.Build, error) {
@@ -261,7 +294,15 @@ func (f *fakeBuildExecutionBoundary) FailBuild(_ context.Context, id string) (do
 	if f.failErr != nil {
 		return domain.Build{}, f.failErr
 	}
-	return domain.Build{ID: id, Status: domain.BuildStatusFailed}, nil
+	for i := range f.listBuildsResp {
+		if f.listBuildsResp[i].ID == id {
+			f.listBuildsResp[i].Status = domain.BuildStatusFailed
+			return f.listBuildsResp[i], nil
+		}
+	}
+	build := domain.Build{ID: id, Status: domain.BuildStatusFailed}
+	f.listBuildsResp = append(f.listBuildsResp, build)
+	return build, nil
 }
 
 func (f *fakeBuildExecutionBoundary) RunStep(_ context.Context, request runner.RunStepRequest) (runner.RunStepResult, StepCompletionReport, error) {
@@ -442,6 +483,100 @@ func TestWorkerService_ClaimRunnableStep_UsesPersistedJobSpec(t *testing.T) {
 	}
 }
 
+func TestWorkerService_ClaimRunnableStep_FromJobClaim_StartsQueuedBuild(t *testing.T) {
+	now := time.Now().UTC()
+	boundary := &fakeBuildExecutionBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-queue", Status: domain.BuildStatusQueued}},
+		stepsByBuildID: map[string][]domain.BuildStep{
+			"build-queue": {
+				{ID: "step-1", BuildID: "build-queue", StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusPending, Command: "sh", Args: []string{"-c", "echo from-step"}, WorkingDir: "."},
+			},
+		},
+		jobsQueue: []domain.ExecutionJob{{
+			ID:         "job-1",
+			BuildID:    "build-queue",
+			StepID:     "step-1",
+			StepIndex:  0,
+			Name:       "step-1",
+			Status:     domain.ExecutionJobStatusQueued,
+			Command:    []string{"sh", "-c", "echo from-job"},
+			WorkingDir: "backend",
+			CreatedAt:  now,
+		}},
+		jobsByStepID: map[string]domain.ExecutionJob{
+			"step-1": {
+				ID:         "job-1",
+				BuildID:    "build-queue",
+				StepID:     "step-1",
+				StepIndex:  0,
+				Name:       "step-1",
+				Status:     domain.ExecutionJobStatusQueued,
+				Command:    []string{"sh", "-c", "echo from-job"},
+				WorkingDir: "backend",
+				CreatedAt:  now,
+			},
+		},
+	}
+
+	worker := NewWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	runnable, found, err := worker.ClaimRunnableStep(context.Background())
+	if err != nil {
+		t.Fatalf("claim runnable step failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected runnable work")
+	}
+	if boundary.startCalls != 1 {
+		t.Fatalf("expected queued build to be transitioned to running exactly once, got start_calls=%d", boundary.startCalls)
+	}
+	if runnable.BuildID != "build-queue" || runnable.StepID != "step-1" {
+		t.Fatalf("unexpected runnable binding: %+v", runnable)
+	}
+}
+
+func TestWorkerService_ClaimRunnableStep_FromJobClaim_RejectsPendingBuild(t *testing.T) {
+	now := time.Now().UTC()
+	boundary := &fakeBuildExecutionBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-pending", Status: domain.BuildStatusPending}},
+		stepsByBuildID: map[string][]domain.BuildStep{
+			"build-pending": {
+				{ID: "step-1", BuildID: "build-pending", StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusPending, Command: "sh", Args: []string{"-c", "echo from-step"}, WorkingDir: "."},
+			},
+		},
+		jobsQueue: []domain.ExecutionJob{{
+			ID:        "job-1",
+			BuildID:   "build-pending",
+			StepID:    "step-1",
+			StepIndex: 0,
+			Name:      "step-1",
+			Status:    domain.ExecutionJobStatusQueued,
+			Command:   []string{"sh", "-c", "echo from-job"},
+			CreatedAt: now,
+		}},
+		jobsByStepID: map[string]domain.ExecutionJob{
+			"step-1": {
+				ID:        "job-1",
+				BuildID:   "build-pending",
+				StepID:    "step-1",
+				StepIndex: 0,
+				Name:      "step-1",
+				Status:    domain.ExecutionJobStatusQueued,
+				Command:   []string{"sh", "-c", "echo from-job"},
+				CreatedAt: now,
+			},
+		},
+	}
+
+	worker := NewWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	_, found, err := worker.ClaimRunnableStep(context.Background())
+	if !errors.Is(err, ErrInvalidBuildStatusTransition) {
+		t.Fatalf("expected pending build to be rejected for job execution, got err=%v", err)
+	}
+	if found {
+		t.Fatal("expected no runnable step when build is not runnable")
+	}
+}
+
 func TestWorkerService_ClaimRunnableStep_DoesNotBindPersistedJobSpecWhenClaimNotAcquired(t *testing.T) {
 	now := time.Now().UTC()
 	boundary := &fakeBuildExecutionBoundary{
@@ -543,6 +678,7 @@ func TestWorkerService_ClaimRunnableStep_DoesNotBindPersistedJobSpecWhenClaimErr
 func TestWorkerService_ClaimRunnableStep_ClaimsJobDirectly(t *testing.T) {
 	now := time.Now().UTC()
 	boundary := &fakeBuildExecutionBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
 		jobsQueue: []domain.ExecutionJob{
 			{
 				ID:             "job-1",

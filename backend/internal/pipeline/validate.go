@@ -135,7 +135,7 @@ func validateCacheDef(fieldPrefix string, def *CacheDef) ValidationErrors {
 
 	preset := strings.TrimSpace(def.Preset)
 	if preset != "" {
-		if _, _, ok := presetValues(preset); !ok {
+		if _, _, ok := presetValues(preset, domain.CacheScope(scope)); !ok {
 			errs = append(errs, ValidationError{Field: fieldPrefix + ".preset", Message: fmt.Sprintf("unknown cache preset %q", preset)})
 		}
 	}
@@ -188,8 +188,8 @@ func validateCacheDef(fieldPrefix string, def *CacheDef) ValidationErrors {
 	return errs
 }
 
-func presetValues(name string) ([]string, []string, bool) {
-	paths, keyFiles := cachePresetDefaults(name)
+func presetValues(name string, scope domain.CacheScope) ([]string, []string, bool) {
+	paths, keyFiles := cachePresetDefaults(name, scope)
 	return paths, keyFiles, len(paths) > 0 || len(keyFiles) > 0
 }
 

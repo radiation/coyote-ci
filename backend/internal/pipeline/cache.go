@@ -18,7 +18,7 @@ func resolveCache(def *CacheDef) *domain.StepCacheConfig {
 		Scope:  domain.CacheScope(strings.TrimSpace(def.Scope)),
 	}
 
-	presetPaths, presetKeyFiles := cachePresetDefaults(resolved.Preset)
+	presetPaths, presetKeyFiles := cachePresetDefaults(resolved.Preset, resolved.Scope)
 
 	if len(def.Paths) > 0 {
 		resolved.Paths = cloneStringSlice(def.Paths)
@@ -35,12 +35,17 @@ func resolveCache(def *CacheDef) *domain.StepCacheConfig {
 	return resolved
 }
 
-func cachePresetDefaults(name string) (paths []string, keyFiles []string) {
+func cachePresetDefaults(name string, scope domain.CacheScope) (paths []string, keyFiles []string) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case cachePresetGolang:
 		// These defaults follow official golang container image conventions.
 		// Non-root or custom images may use different cache directories.
-		return []string{"/go/pkg/mod", "/root/.cache/go-build"}, []string{"go.mod", "go.sum"}
+		if scope == domain.CacheScopeBuild {
+			return []string{"/go/pkg/mod", "/root/.cache/go-build"}, []string{"go.mod", "go.sum"}
+		}
+		// Job scope intentionally excludes go-build cache to avoid oversized
+		// cross-build snapshots in local filesystem-backed cache mode.
+		return []string{"/go/pkg/mod"}, []string{"go.mod", "go.sum"}
 	default:
 		return nil, nil
 	}
