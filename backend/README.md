@@ -134,3 +134,61 @@ Artifact storage configuration:
 - `ARTIFACT_STORAGE_STRICT` (fail startup on gcs config/init errors when true)
 - `ARTIFACT_GCS_BUCKET` (required when provider is `gcs`)
 - `ARTIFACT_GCS_PREFIX` (optional)
+
+Worker cache configuration:
+
+- `WORKER_CACHE_STORAGE_ROOT` (local cache snapshot root; defaults to `$TMPDIR/coyote-cache`)
+- `CACHE_MAX_SIZE_MB` (local cache retention limit; oldest entries are evicted when exceeded)
+
+## Pipeline Step Cache DSL
+
+Pipeline YAML supports first-class per-step cache configuration with pipeline-level defaults and step-level overrides.
+
+Preset shorthand:
+
+```yaml
+version: 1
+pipeline:
+  image: golang:1.26.1
+  cache:
+    preset: golang
+    scope: job
+steps:
+  - name: test
+    run: go test ./...
+```
+
+Explicit form:
+
+```yaml
+version: 1
+steps:
+  - name: lint
+    run: golangci-lint run
+    cache:
+      paths:
+        - /root/.cache/golangci-lint
+      scope: job
+      key:
+        files:
+          - .golangci.yml
+          - go.mod
+          - go.sum
+```
+
+Semantics:
+
+- `pipeline.cache` applies to all steps by default.
+- `steps[].cache` fully overrides the pipeline default for that step.
+- V1 supports scopes `build` and `job`.
+- `build` scope is isolated to a single build.
+- `job` scope is reusable across builds for the same job identity.
+- Cache storage backend details are intentionally not part of YAML.
+
+Validation rules:
+
+- `scope` is required whenever `cache` is present.
+- `paths` must be absolute container paths.
+- `key.files` must be workspace-relative and must not escape the workspace.
+- Unknown presets are rejected.
+- Unknown fields are rejected by strict YAML decoding.

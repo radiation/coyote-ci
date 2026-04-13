@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
+	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
@@ -74,6 +75,7 @@ func main() {
 		ExecutionOutputRepo: executionJobOutputRepo,
 		DefaultImage:        cfg.ExecutionDefaultImage,
 		ExecutionWorkspace:  cfg.ExecutionWorkspaceRoot,
+		CacheStore:          cachepkg.NewFilesystemStoreWithMaxSize(cfg.WorkerCacheStorageRoot, int64(cfg.WorkerCacheMaxSizeMB)*1024*1024),
 		ArtifactRepo:        artifactRepo,
 		ArtifactResolver:    artifactResolver,
 		ArtifactWorkspace:   cfg.ExecutionWorkspaceRoot,

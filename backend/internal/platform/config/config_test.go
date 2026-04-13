@@ -9,6 +9,7 @@ import (
 
 func TestLoad(t *testing.T) {
 	defaultWorkspaceRoot := filepath.Join(os.TempDir(), "coyote-builds")
+	defaultCacheRoot := filepath.Join(os.TempDir(), "coyote-cache")
 	defaultArtifactRoot := filepath.Join(os.TempDir(), "coyote-artifacts")
 
 	tests := []struct {
@@ -37,6 +38,8 @@ func TestLoad(t *testing.T) {
 				"WORKER_EXECUTION_BACKEND":        "",
 				"WORKER_EXECUTION_DEFAULT_IMAGE":  "",
 				"WORKER_EXECUTION_WORKSPACE_ROOT": "",
+				"WORKER_CACHE_STORAGE_ROOT":       "",
+				"CACHE_MAX_SIZE_MB":               "",
 				"ARTIFACT_STORAGE_ROOT":           "",
 			},
 			expected: Config{
@@ -57,6 +60,8 @@ func TestLoad(t *testing.T) {
 				ExecutionBackend:        "docker",
 				ExecutionDefaultImage:   "alpine:3.20",
 				ExecutionWorkspaceRoot:  defaultWorkspaceRoot,
+				WorkerCacheStorageRoot:  defaultCacheRoot,
+				WorkerCacheMaxSizeMB:    10240,
 				ArtifactStorageRoot:     defaultArtifactRoot,
 				ArtifactStorageProvider: "filesystem",
 			},
@@ -81,6 +86,8 @@ func TestLoad(t *testing.T) {
 				"WORKER_EXECUTION_BACKEND":        "inprocess",
 				"WORKER_EXECUTION_DEFAULT_IMAGE":  "golang:1.23-alpine",
 				"WORKER_EXECUTION_WORKSPACE_ROOT": "/var/tmp/coyote-workspaces",
+				"WORKER_CACHE_STORAGE_ROOT":       "/var/tmp/coyote-cache",
+				"CACHE_MAX_SIZE_MB":               "2048",
 				"ARTIFACT_STORAGE_ROOT":           "/var/tmp/coyote-artifacts",
 			},
 			expected: Config{
@@ -101,6 +108,8 @@ func TestLoad(t *testing.T) {
 				ExecutionBackend:        "inprocess",
 				ExecutionDefaultImage:   "golang:1.23-alpine",
 				ExecutionWorkspaceRoot:  "/var/tmp/coyote-workspaces",
+				WorkerCacheStorageRoot:  "/var/tmp/coyote-cache",
+				WorkerCacheMaxSizeMB:    2048,
 				ArtifactStorageRoot:     "/var/tmp/coyote-artifacts",
 				ArtifactStorageProvider: "filesystem",
 			},
@@ -125,6 +134,8 @@ func TestLoad(t *testing.T) {
 				"WORKER_EXECUTION_BACKEND":        "",
 				"WORKER_EXECUTION_DEFAULT_IMAGE":  "",
 				"WORKER_EXECUTION_WORKSPACE_ROOT": "",
+				"WORKER_CACHE_STORAGE_ROOT":       "",
+				"CACHE_MAX_SIZE_MB":               "",
 				"ARTIFACT_STORAGE_ROOT":           "",
 			},
 			expected: Config{
@@ -145,6 +156,8 @@ func TestLoad(t *testing.T) {
 				ExecutionBackend:        "docker",
 				ExecutionDefaultImage:   "alpine:3.20",
 				ExecutionWorkspaceRoot:  defaultWorkspaceRoot,
+				WorkerCacheStorageRoot:  defaultCacheRoot,
+				WorkerCacheMaxSizeMB:    10240,
 				ArtifactStorageRoot:     defaultArtifactRoot,
 				ArtifactStorageProvider: "filesystem",
 			},
@@ -152,8 +165,9 @@ func TestLoad(t *testing.T) {
 		{
 			name: "invalid duration falls back to default",
 			env: map[string]string{
-				"DB_CONN_MAX_LIFETIME":  "invalid",
-				"DB_CONN_MAX_IDLE_TIME": "still-invalid",
+				"DB_CONN_MAX_LIFETIME":      "invalid",
+				"DB_CONN_MAX_IDLE_TIME":     "still-invalid",
+				"WORKER_CACHE_STORAGE_ROOT": "",
 			},
 			expected: Config{
 				AppPort:                 "8080",
@@ -173,6 +187,8 @@ func TestLoad(t *testing.T) {
 				ExecutionBackend:        "docker",
 				ExecutionDefaultImage:   "alpine:3.20",
 				ExecutionWorkspaceRoot:  defaultWorkspaceRoot,
+				WorkerCacheStorageRoot:  defaultCacheRoot,
+				WorkerCacheMaxSizeMB:    10240,
 				ArtifactStorageRoot:     defaultArtifactRoot,
 				ArtifactStorageProvider: "filesystem",
 			},

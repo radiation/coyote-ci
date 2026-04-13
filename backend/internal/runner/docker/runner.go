@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -146,6 +148,11 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 
 	containerName := containerNameForStep(request.BuildID, request.StepIndex)
 	containerWorkingDir := r.resolveContainerWorkingDirForStep(request)
+	validatedCacheMounts, validateErr := validateCacheMounts(request.CacheMounts)
+	if validateErr != nil {
+		return runner.RunStepResult{}, validateErr
+	}
+	request.CacheMounts = validatedCacheMounts
 
 	// Build docker run args for an ephemeral step container.
 	buildWorkspace := workspace.New(request.BuildID, workspacePath)
@@ -302,6 +309,15 @@ func stepContainerRunArgs(containerName, image, mountBinding, workingDir string,
 		"-w", workingDir,
 	}
 
+	for _, cacheMount := range request.CacheMounts {
+		hostPath := strings.TrimSpace(cacheMount.HostPath)
+		containerPath := strings.TrimSpace(cacheMount.ContainerPath)
+		if hostPath == "" || containerPath == "" {
+			continue
+		}
+		args = append(args, "-v", hostPath+":"+containerPath)
+	}
+
 	if mountDockerSocket {
 		args = append(args, "-v", "/var/run/docker.sock:/var/run/docker.sock")
 	}
@@ -313,6 +329,70 @@ func stepContainerRunArgs(containerName, image, mountBinding, workingDir string,
 	args = append(args, image, request.Command)
 	args = append(args, request.Args...)
 	return args
+}
+
+var forbiddenCacheMountPaths = []string{
+	"/",
+	"/bin",
+	"/dev",
+	"/etc",
+	"/lib",
+	"/lib64",
+	"/proc",
+	"/sbin",
+	"/sys",
+	"/usr",
+	"/var/run",
+	workspaceMountPath,
+}
+
+func validateCacheMounts(mounts []runner.CacheMount) ([]runner.CacheMount, error) {
+	validated := make([]runner.CacheMount, 0, len(mounts))
+	for idx, mount := range mounts {
+		hostPath := strings.TrimSpace(mount.HostPath)
+		if hostPath == "" {
+			return nil, fmt.Errorf("invalid cache mount[%d]: host path is required", idx)
+		}
+		hostPath = filepath.Clean(hostPath)
+		if !filepath.IsAbs(hostPath) {
+			return nil, fmt.Errorf("invalid cache mount[%d]: host path must be absolute", idx)
+		}
+
+		containerPath := path.Clean(strings.TrimSpace(strings.ReplaceAll(mount.ContainerPath, "\\", "/")))
+		if containerPath == "." || !path.IsAbs(containerPath) {
+			return nil, fmt.Errorf("invalid cache mount[%d]: container path must be absolute", idx)
+		}
+		for _, forbidden := range forbiddenCacheMountPaths {
+			if containerPath == forbidden || strings.HasPrefix(containerPath, forbidden+"/") {
+				return nil, fmt.Errorf("invalid cache mount[%d]: container path %s is not allowed", idx, containerPath)
+			}
+		}
+
+		if mkdirErr := os.MkdirAll(hostPath, 0o755); mkdirErr != nil {
+			return nil, fmt.Errorf("invalid cache mount[%d]: ensuring host path %s: %w", idx, hostPath, mkdirErr)
+		}
+		info, statErr := os.Stat(hostPath)
+		if statErr != nil {
+			return nil, fmt.Errorf("invalid cache mount[%d]: stat host path %s: %w", idx, hostPath, statErr)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("invalid cache mount[%d]: host path %s is not a directory", idx, hostPath)
+		}
+		dirHandle, openErr := os.Open(hostPath)
+		if openErr != nil {
+			return nil, fmt.Errorf("invalid cache mount[%d]: host path %s not accessible: %w", idx, hostPath, openErr)
+		}
+		_, readErr := dirHandle.Readdirnames(1)
+		if closeErr := dirHandle.Close(); closeErr != nil {
+			return nil, fmt.Errorf("invalid cache mount[%d]: closing host path %s: %w", idx, hostPath, closeErr)
+		}
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return nil, fmt.Errorf("invalid cache mount[%d]: host path %s not readable: %w", idx, hostPath, readErr)
+		}
+
+		validated = append(validated, runner.CacheMount{HostPath: hostPath, ContainerPath: containerPath})
+	}
+	return validated, nil
 }
 
 // containerNameForStep generates a unique container name for a build step.

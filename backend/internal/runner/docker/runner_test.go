@@ -213,7 +213,14 @@ func TestStepContainerRunArgs_BuildsCorrectArgs(t *testing.T) {
 		"/tmp/ws/build-5:/workspace",
 		"/workspace",
 		false,
-		runner.RunStepRequest{BuildID: "build-5", Command: "sh", Args: []string{"-c", "pwd"}},
+		runner.RunStepRequest{
+			BuildID: "build-5",
+			Command: "sh",
+			Args:    []string{"-c", "pwd"},
+			CacheMounts: []runner.CacheMount{
+				{HostPath: "/tmp/cache/mod", ContainerPath: "/go/pkg/mod"},
+			},
+		},
 	)
 	// Verify key structural elements
 	if args[0] != "run" {
@@ -239,6 +246,16 @@ func TestStepContainerRunArgs_BuildsCorrectArgs(t *testing.T) {
 	}
 	if !foundWorkdir {
 		t.Fatalf("expected working directory, got %+v", args)
+	}
+
+	foundCacheMount := false
+	for i, a := range args {
+		if a == "-v" && i+1 < len(args) && args[i+1] == "/tmp/cache/mod:/go/pkg/mod" {
+			foundCacheMount = true
+		}
+	}
+	if !foundCacheMount {
+		t.Fatalf("expected cache mount, got %+v", args)
 	}
 
 	// Image and command should be at the end
@@ -348,5 +365,30 @@ func TestRunner_CleanupBuild_InvokesWorkspaceCleanup(t *testing.T) {
 	// No docker rm call — containers are per-step and cleaned up after each step
 	if len(exec.calls) != 0 {
 		t.Fatalf("expected no docker calls, got %d", len(exec.calls))
+	}
+}
+
+func TestValidateCacheMounts_RejectsForbiddenContainerPath(t *testing.T) {
+	_, err := validateCacheMounts([]runner.CacheMount{{HostPath: t.TempDir(), ContainerPath: "/etc"}})
+	if err == nil {
+		t.Fatal("expected forbidden cache mount path to be rejected")
+	}
+	if !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("expected clear not-allowed error, got %v", err)
+	}
+}
+
+func TestValidateCacheMounts_HostPathMustBeDirectory(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "cache-file")
+	if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write fixture file: %v", err)
+	}
+
+	_, err := validateCacheMounts([]runner.CacheMount{{HostPath: filePath, ContainerPath: "/go/pkg/mod"}})
+	if err == nil {
+		t.Fatal("expected file host path to be rejected")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("expected not-a-directory error, got %v", err)
 	}
 }

@@ -361,6 +361,92 @@ artifacts:
 	}
 }
 
+func TestResolve_CachePipelineDefaultAndStepOverride(t *testing.T) {
+	yaml := `
+version: 1
+pipeline:
+  cache:
+    preset: golang
+    scope: job
+steps:
+  - name: test
+    run: go test ./...
+  - name: lint
+    run: golangci-lint run
+    cache:
+      paths:
+        - /root/.cache/golangci-lint
+      scope: job
+      key:
+        files:
+          - .golangci.yml
+          - go.mod
+          - go.sum
+`
+
+	pf, err := ParseAndValidate([]byte(yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rp := Resolve(pf)
+
+	if rp.Cache == nil {
+		t.Fatal("expected pipeline cache to be resolved")
+	}
+	if len(rp.Steps) != 2 {
+		t.Fatalf("expected two steps, got %d", len(rp.Steps))
+	}
+
+	if rp.Steps[0].Cache == nil {
+		t.Fatal("expected step 0 to inherit pipeline cache")
+	}
+	if len(rp.Steps[0].Cache.Paths) != 2 || rp.Steps[0].Cache.Paths[0] != "/go/pkg/mod" {
+		t.Fatalf("expected step 0 to use golang preset paths, got %#v", rp.Steps[0].Cache.Paths)
+	}
+
+	if rp.Steps[1].Cache == nil {
+		t.Fatal("expected step 1 cache override to resolve")
+	}
+	if len(rp.Steps[1].Cache.Paths) != 1 || rp.Steps[1].Cache.Paths[0] != "/root/.cache/golangci-lint" {
+		t.Fatalf("expected step 1 custom paths, got %#v", rp.Steps[1].Cache.Paths)
+	}
+	if len(rp.Steps[1].Cache.KeyFiles) != 3 || rp.Steps[1].Cache.KeyFiles[0] != ".golangci.yml" {
+		t.Fatalf("expected step 1 custom key files, got %#v", rp.Steps[1].Cache.KeyFiles)
+	}
+}
+
+func TestResolve_CacheExplicitOverridesPresetFields(t *testing.T) {
+	yaml := `
+version: 1
+steps:
+  - name: test
+    run: go test ./...
+    cache:
+      preset: golang
+      scope: job
+      paths:
+        - /custom/cache
+      key:
+        files:
+          - custom.lock
+`
+
+	pf, err := ParseAndValidate([]byte(yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rp := Resolve(pf)
+	if rp.Steps[0].Cache == nil {
+		t.Fatal("expected cache to resolve")
+	}
+	if len(rp.Steps[0].Cache.Paths) != 1 || rp.Steps[0].Cache.Paths[0] != "/custom/cache" {
+		t.Fatalf("expected explicit paths to override preset, got %#v", rp.Steps[0].Cache.Paths)
+	}
+	if len(rp.Steps[0].Cache.KeyFiles) != 1 || rp.Steps[0].Cache.KeyFiles[0] != "custom.lock" {
+		t.Fatalf("expected explicit key files to override preset, got %#v", rp.Steps[0].Cache.KeyFiles)
+	}
+}
+
 func TestParseAndValidate_Artifacts_SimpleListEndToEnd(t *testing.T) {
 	yaml := `
 version: 1

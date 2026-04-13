@@ -34,6 +34,7 @@ func pipelineStepsToDomain(buildID string, steps []pipeline.ResolvedStep) []doma
 			WorkingDir:     workingDir,
 			TimeoutSeconds: rs.TimeoutSeconds,
 			ArtifactPaths:  append([]string{}, rs.ArtifactPaths...),
+			Cache:          rs.Cache.Clone(),
 			Status:         domain.BuildStepStatusPending,
 		})
 	}
