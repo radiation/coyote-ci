@@ -15,6 +15,7 @@ type stubCacheStore struct {
 	restoredKeys []string
 	savedKeys    []string
 	hits         map[string]bool
+	totalSize    int64
 }
 
 func (s *stubCacheStore) Restore(_ context.Context, key string, _ string) (bool, error) {
@@ -24,7 +25,12 @@ func (s *stubCacheStore) Restore(_ context.Context, key string, _ string) (bool,
 
 func (s *stubCacheStore) Save(_ context.Context, key string, _ string) error {
 	s.savedKeys = append(s.savedKeys, key)
+	s.totalSize += 64
 	return nil
+}
+
+func (s *stubCacheStore) TotalSizeBytes() (int64, error) {
+	return s.totalSize, nil
 }
 
 func TestStepCacheManager_PrepareAndSave(t *testing.T) {
@@ -202,4 +208,76 @@ func TestStepCacheManager_ScopeAffectsKeySpace(t *testing.T) {
 
 func strPtrCache(value string) *string {
 	return &value
+}
+
+func TestStepCacheManager_EmitsCacheSizeObservabilityLogs(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	buildID := "build-observability"
+	buildWorkspace := filepath.Join(workspaceRoot, buildID)
+	if err := os.MkdirAll(buildWorkspace, 0o755); err != nil {
+		t.Fatalf("mkdir build workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(buildWorkspace, "go.mod"), []byte("module example"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(buildWorkspace, "go.sum"), []byte("sum"), 0o644); err != nil {
+		t.Fatalf("write go.sum: %v", err)
+	}
+
+	store := &stubCacheStore{hits: map[string]bool{}, totalSize: 1024}
+	manager := NewStepCacheManager(store, workspaceRoot)
+	svc := NewBuildService(&fakeBuildRepository{}, &fakeRunner{}, &fakeLogSink{})
+	logManager := NewExecutionLogManager(svc, StepExecutionContext{ExecutionRequest: runner.RunStepRequest{BuildID: buildID, StepID: "step-1", StepName: "test", StepIndex: 0}})
+
+	executionContext := StepExecutionContext{
+		Build: domain.Build{ID: buildID, ProjectID: "project-1"},
+		Step: &domain.BuildStep{Cache: &domain.StepCacheConfig{
+			Scope:    domain.CacheScopeJob,
+			Paths:    []string{"/go/pkg/mod"},
+			KeyFiles: []string{"go.mod", "go.sum"},
+		}},
+		ExecutionImage: "golang:1.26",
+		ExecutionRequest: runner.RunStepRequest{
+			BuildID:   buildID,
+			JobID:     "job-1",
+			StepID:    "step-1",
+			StepIndex: 0,
+			StepName:  "test",
+		},
+	}
+
+	prepared, err := manager.Prepare(context.Background(), executionContext, logManager)
+	if err != nil {
+		t.Fatalf("prepare cache: %v", err)
+	}
+	if err := manager.Save(context.Background(), logManager, prepared, runner.RunStepResult{Status: runner.RunStepStatusSuccess}); err != nil {
+		t.Fatalf("save cache: %v", err)
+	}
+
+	sink, ok := svc.logSink.(*fakeLogSink)
+	if !ok {
+		t.Fatalf("expected fakeLogSink, got %T", svc.logSink)
+	}
+
+	contains := func(sub string) bool {
+		for _, line := range sink.lines {
+			if strings.Contains(line, sub) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !contains("cache restore: hit=false path_count=1 bytes=0") {
+		t.Fatalf("expected restore observability log, got %#v", sink.lines)
+	}
+	if !contains("cache store size before save: bytes=1024") {
+		t.Fatalf("expected store size before save log, got %#v", sink.lines)
+	}
+	if !contains("cache store size after save: bytes=1088") {
+		t.Fatalf("expected store size after save log, got %#v", sink.lines)
+	}
+	if !contains("cache save: success=true path_count=1 bytes=0 store_bytes_before=1024 store_bytes_after=1088") {
+		t.Fatalf("expected cache save observability log, got %#v", sink.lines)
+	}
 }

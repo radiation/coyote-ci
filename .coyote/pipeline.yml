@@ -3,6 +3,9 @@ version: 1
 pipeline:
   name: coyote-ci
   image: golang:1.26.2
+  cache:
+    preset: golang
+    scope: job
 
 steps:
   - name: Backend Format Check

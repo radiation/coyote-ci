@@ -400,8 +400,8 @@ steps:
 	if rp.Steps[0].Cache == nil {
 		t.Fatal("expected step 0 to inherit pipeline cache")
 	}
-	if len(rp.Steps[0].Cache.Paths) != 2 || rp.Steps[0].Cache.Paths[0] != "/go/pkg/mod" {
-		t.Fatalf("expected step 0 to use golang preset paths, got %#v", rp.Steps[0].Cache.Paths)
+	if len(rp.Steps[0].Cache.Paths) != 1 || rp.Steps[0].Cache.Paths[0] != "/go/pkg/mod" {
+		t.Fatalf("expected step 0 to use job-scope golang preset paths, got %#v", rp.Steps[0].Cache.Paths)
 	}
 
 	if rp.Steps[1].Cache == nil {
@@ -412,6 +412,46 @@ steps:
 	}
 	if len(rp.Steps[1].Cache.KeyFiles) != 3 || rp.Steps[1].Cache.KeyFiles[0] != ".golangci.yml" {
 		t.Fatalf("expected step 1 custom key files, got %#v", rp.Steps[1].Cache.KeyFiles)
+	}
+}
+
+func TestResolve_CachePresetGolangScopeSpecificDefaults(t *testing.T) {
+	yaml := `
+version: 1
+steps:
+  - name: test-job
+    run: go test ./...
+    cache:
+      preset: golang
+      scope: job
+  - name: test-build
+    run: go test ./...
+    cache:
+      preset: golang
+      scope: build
+`
+
+	pf, err := ParseAndValidate([]byte(yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rp := Resolve(pf)
+
+	if rp.Steps[0].Cache == nil {
+		t.Fatal("expected job-scope cache to resolve")
+	}
+	if len(rp.Steps[0].Cache.Paths) != 1 || rp.Steps[0].Cache.Paths[0] != "/go/pkg/mod" {
+		t.Fatalf("expected job-scope golang preset to include only module cache, got %#v", rp.Steps[0].Cache.Paths)
+	}
+
+	if rp.Steps[1].Cache == nil {
+		t.Fatal("expected build-scope cache to resolve")
+	}
+	if len(rp.Steps[1].Cache.Paths) != 2 {
+		t.Fatalf("expected build-scope golang preset to include two paths, got %#v", rp.Steps[1].Cache.Paths)
+	}
+	if rp.Steps[1].Cache.Paths[0] != "/go/pkg/mod" || rp.Steps[1].Cache.Paths[1] != "/root/.cache/go-build" {
+		t.Fatalf("unexpected build-scope golang preset paths: %#v", rp.Steps[1].Cache.Paths)
 	}
 }
 

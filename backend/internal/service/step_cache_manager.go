@@ -30,6 +30,10 @@ type StepCacheManager struct {
 	executionRootPath string
 }
 
+type cacheStoreSizeReporter interface {
+	TotalSizeBytes() (int64, error)
+}
+
 func NewStepCacheManager(store cachepkg.Store, executionRootPath string) *StepCacheManager {
 	return &StepCacheManager{
 		store:             store,
@@ -83,7 +87,6 @@ func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExe
 	if err != nil {
 		return preparedStepCache{}, err
 	}
-	logManager.EmitSystemLine(ctx, fmt.Sprintf("cache restore: hit=%t duration_ms=%d", hit, time.Since(restoreStarted).Milliseconds()))
 
 	mounts := make([]runner.CacheMount, 0, len(cacheConfig.Paths))
 	for idx, cachePath := range cacheConfig.Paths {
@@ -93,6 +96,13 @@ func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExe
 		}
 		mounts = append(mounts, runner.CacheMount{HostPath: hostPath, ContainerPath: cachePath})
 	}
+
+	restoredBytes, sizeErr := dirFileBytes(filepath.Join(runtimeDir, "paths"))
+	if sizeErr != nil {
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache restore bytes unavailable: %s", sizeErr.Error()))
+		restoredBytes = 0
+	}
+	logManager.EmitSystemLine(ctx, fmt.Sprintf("cache restore: hit=%t path_count=%d bytes=%d duration_ms=%d", hit, len(cacheConfig.Paths), restoredBytes, time.Since(restoreStarted).Milliseconds()))
 
 	logManager.EmitSystemLine(ctx, fmt.Sprintf("Cache: configured scope=%s key=%s", cacheConfig.Scope, key))
 	if hit {
@@ -121,13 +131,77 @@ func (m *StepCacheManager) Save(ctx context.Context, logManager *ExecutionLogMan
 	}
 
 	saveStarted := time.Now()
+	pathCount := len(prepared.Mounts)
+	savedBytes, bytesErr := dirFileBytes(filepath.Join(prepared.RuntimeDir, "paths"))
+	if bytesErr != nil {
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save bytes unavailable: %s", bytesErr.Error()))
+		savedBytes = 0
+	}
+	storeSizeBefore, hasStoreSizeBefore := cacheStoreTotalSizeBytes(m.store)
+	if hasStoreSizeBefore {
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache store size before save: bytes=%d", storeSizeBefore))
+	}
+
 	if err := m.store.Save(ctx, prepared.Key, prepared.RuntimeDir); err != nil {
-		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=false duration_ms=%d", time.Since(saveStarted).Milliseconds()))
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=false path_count=%d bytes=%d duration_ms=%d", pathCount, savedBytes, time.Since(saveStarted).Milliseconds()))
 		return err
 	}
-	logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=true duration_ms=%d", time.Since(saveStarted).Milliseconds()))
+	storeSizeAfter, hasStoreSizeAfter := cacheStoreTotalSizeBytes(m.store)
+	if hasStoreSizeAfter {
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache store size after save: bytes=%d", storeSizeAfter))
+	}
+	if hasStoreSizeBefore && hasStoreSizeAfter {
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=true path_count=%d bytes=%d store_bytes_before=%d store_bytes_after=%d duration_ms=%d", pathCount, savedBytes, storeSizeBefore, storeSizeAfter, time.Since(saveStarted).Milliseconds()))
+	} else {
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=true path_count=%d bytes=%d duration_ms=%d", pathCount, savedBytes, time.Since(saveStarted).Milliseconds()))
+	}
 	logManager.EmitSystemLine(ctx, "Cache: saved")
 	return nil
+}
+
+func cacheStoreTotalSizeBytes(store cachepkg.Store) (int64, bool) {
+	reporter, ok := store.(cacheStoreSizeReporter)
+	if !ok {
+		return 0, false
+	}
+	total, err := reporter.TotalSizeBytes()
+	if err != nil {
+		return 0, false
+	}
+	return total, true
+}
+
+func dirFileBytes(root string) (int64, error) {
+	if strings.TrimSpace(root) == "" {
+		return 0, nil
+	}
+
+	total := int64(0)
+	err := filepath.WalkDir(root, func(_ string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, infoErr := d.Info()
+		if infoErr != nil {
+			return infoErr
+		}
+		total += info.Size()
+		return nil
+	})
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	return total, nil
 }
 
 func (m *StepCacheManager) workspaceRootForBuild(buildID string) (string, error) {

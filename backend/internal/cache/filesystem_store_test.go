@@ -155,3 +155,46 @@ func TestFilesystemStore_RestoreRejectsSymlinkContent(t *testing.T) {
 		t.Fatalf("expected symlink rejection error, got %v", err)
 	}
 }
+
+func TestFilesystemStore_SaveSkipsRewriteWhenSnapshotUnchanged(t *testing.T) {
+	ctx := context.Background()
+	store := NewFilesystemStore(t.TempDir())
+
+	source := filepath.Join(t.TempDir(), "source")
+	cacheFile := filepath.Join(source, "paths", "000", "mod.cache")
+	if err := os.MkdirAll(filepath.Dir(cacheFile), 0o755); err != nil {
+		t.Fatalf("mkdir source: %v", err)
+	}
+	if err := os.WriteFile(cacheFile, []byte("cached-data"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	if err := store.Save(ctx, "v1/job/unchanged", source); err != nil {
+		t.Fatalf("initial save: %v", err)
+	}
+
+	entryPath, err := store.resolvePathForKey("v1/job/unchanged")
+	if err != nil {
+		t.Fatalf("resolve key path: %v", err)
+	}
+	entryFile := filepath.Join(entryPath, "paths", "000", "mod.cache")
+
+	sentinel := time.Now().UTC().Add(-1 * time.Hour).Round(time.Second)
+	err = os.Chtimes(entryFile, sentinel, sentinel)
+	if err != nil {
+		t.Fatalf("set sentinel mtime: %v", err)
+	}
+
+	err = store.Save(ctx, "v1/job/unchanged", source)
+	if err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+
+	info, err := os.Stat(entryFile)
+	if err != nil {
+		t.Fatalf("stat entry file: %v", err)
+	}
+	if !info.ModTime().Equal(sentinel) {
+		t.Fatalf("expected unchanged snapshot save to preserve entry file mtime, want=%s got=%s", sentinel, info.ModTime())
+	}
+}
