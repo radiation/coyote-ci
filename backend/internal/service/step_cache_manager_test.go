@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 )
@@ -279,5 +280,129 @@ func TestStepCacheManager_EmitsCacheSizeObservabilityLogs(t *testing.T) {
 	}
 	if !contains("cache save: success=true path_count=1 bytes=0 store_bytes_before=1024 store_bytes_after=1088") {
 		t.Fatalf("expected cache save observability log, got %#v", sink.lines)
+	}
+}
+
+func TestStepCacheManager_JobScopeKeyStableAcrossStepSpecificExecutionIDs(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	buildID := "build-1"
+	buildWorkspace := filepath.Join(workspaceRoot, buildID)
+	if err := os.MkdirAll(filepath.Join(buildWorkspace, "subdir"), 0o755); err != nil {
+		t.Fatalf("mkdir build workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(buildWorkspace, "go.mod"), []byte("module example"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(buildWorkspace, "go.sum"), []byte("sum"), 0o644); err != nil {
+		t.Fatalf("write go.sum: %v", err)
+	}
+
+	store := &stubCacheStore{hits: map[string]bool{}}
+	manager := NewStepCacheManager(store, workspaceRoot)
+	svc := NewBuildService(&fakeBuildRepository{}, &fakeRunner{}, &fakeLogSink{})
+
+	prepareKey := func(stepID string, executionJobID string, workingDir string) string {
+		logManager := NewExecutionLogManager(svc, StepExecutionContext{ExecutionRequest: runner.RunStepRequest{BuildID: buildID, StepID: stepID, StepName: stepID, StepIndex: 0}})
+		prepared, err := manager.Prepare(context.Background(), StepExecutionContext{
+			Build: domain.Build{ID: buildID, ProjectID: "project-1", JobID: strPtrCache("logical-job-1")},
+			Step: &domain.BuildStep{WorkingDir: workingDir, Cache: &domain.StepCacheConfig{
+				Scope:    domain.CacheScopeJob,
+				Paths:    []string{"/go/pkg/mod"},
+				KeyFiles: []string{"go.mod", "go.sum"},
+			}},
+			ExecutionImage: "golang:1.26",
+			ExecutionRequest: runner.RunStepRequest{
+				BuildID: buildID,
+				JobID:   executionJobID,
+				StepID:  stepID,
+			},
+		}, logManager)
+		if err != nil {
+			t.Fatalf("prepare cache for step %s: %v", stepID, err)
+		}
+		return prepared.Key
+	}
+
+	keyStep3 := prepareKey("step-3", "execution-job-3", ".")
+	keyStep4 := prepareKey("step-4", "execution-job-4", "subdir")
+
+	if keyStep3 != keyStep4 {
+		t.Fatalf("expected job-scope keys to remain stable across step-specific execution IDs and working dirs, got %q vs %q", keyStep3, keyStep4)
+	}
+}
+
+func TestStepCacheManager_JobScopeCacheReusableAcrossSteps(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	cacheStoreRoot := t.TempDir()
+	buildID := "build-reuse"
+	buildWorkspace := filepath.Join(workspaceRoot, buildID)
+	if err := os.MkdirAll(buildWorkspace, 0o755); err != nil {
+		t.Fatalf("mkdir build workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(buildWorkspace, "go.mod"), []byte("module example"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(buildWorkspace, "go.sum"), []byte("sum"), 0o644); err != nil {
+		t.Fatalf("write go.sum: %v", err)
+	}
+
+	store := cachepkg.NewFilesystemStore(cacheStoreRoot)
+	manager := NewStepCacheManager(store, workspaceRoot)
+	svc := NewBuildService(&fakeBuildRepository{}, &fakeRunner{}, &fakeLogSink{})
+	commonBuild := domain.Build{ID: buildID, ProjectID: "project-1", JobID: strPtrCache("logical-job-1")}
+
+	prepareStep := func(stepID string, executionJobID string) (preparedStepCache, *ExecutionLogManager) {
+		logManager := NewExecutionLogManager(svc, StepExecutionContext{ExecutionRequest: runner.RunStepRequest{BuildID: buildID, StepID: stepID, StepName: stepID, StepIndex: 0}})
+		prepared, err := manager.Prepare(context.Background(), StepExecutionContext{
+			Build: commonBuild,
+			Step: &domain.BuildStep{Cache: &domain.StepCacheConfig{
+				Scope:    domain.CacheScopeJob,
+				Paths:    []string{"/go/pkg/mod"},
+				KeyFiles: []string{"go.mod", "go.sum"},
+			}},
+			ExecutionImage: "golang:1.26",
+			ExecutionRequest: runner.RunStepRequest{
+				BuildID: buildID,
+				JobID:   executionJobID,
+				StepID:  stepID,
+			},
+		}, logManager)
+		if err != nil {
+			t.Fatalf("prepare cache for %s: %v", stepID, err)
+		}
+		return prepared, logManager
+	}
+
+	preparedStep3, log3 := prepareStep("step-3", "execution-job-3")
+	cachePath := filepath.Join(preparedStep3.RuntimeDir, "paths", "000", "mod.cache")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatalf("mkdir cache path: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte("cached-data"), 0o644); err != nil {
+		t.Fatalf("write cache file: %v", err)
+	}
+	if err := manager.Save(context.Background(), log3, preparedStep3, runner.RunStepResult{Status: runner.RunStepStatusSuccess}); err != nil {
+		t.Fatalf("save cache from step 3: %v", err)
+	}
+
+	preparedStep4, log4 := prepareStep("step-4", "execution-job-4")
+	if preparedStep4.Key != preparedStep3.Key {
+		t.Fatalf("expected same key across steps for job scope, got %q vs %q", preparedStep3.Key, preparedStep4.Key)
+	}
+
+	sink, ok := svc.logSink.(*fakeLogSink)
+	if !ok {
+		t.Fatalf("expected fakeLogSink, got %T", svc.logSink)
+	}
+	_ = log4
+	seenHit := false
+	for _, line := range sink.lines {
+		if strings.Contains(line, "cache restore: hit=true") {
+			seenHit = true
+			break
+		}
+	}
+	if !seenHit {
+		t.Fatalf("expected second step restore to be a cache hit, logs=%#v", sink.lines)
 	}
 }

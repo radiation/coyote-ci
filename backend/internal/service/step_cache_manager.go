@@ -61,12 +61,26 @@ func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExe
 		return preparedStepCache{}, err
 	}
 
+	jobIdentity := jobScopedIdentity(cacheConfig.Scope, executionContext)
+	buildIdentity := buildScopedID(cacheConfig.Scope, executionContext.Build.ID)
+	platform := runtime.GOOS + "/" + runtime.GOARCH
+	logManager.EmitSystemLine(ctx, fmt.Sprintf("cache key preimage: scope=%s build_id=%q job_identity=%q image=%q platform=%q paths=%q key_files=%q key_files_digest=%s",
+		cacheConfig.Scope,
+		buildIdentity,
+		jobIdentity,
+		executionContext.ExecutionImage,
+		platform,
+		cacheConfig.Paths,
+		cacheConfig.KeyFiles,
+		filesDigest,
+	))
+
 	key, err := cachepkg.ResolveKey(cachepkg.KeyInput{
 		Scope:          string(cacheConfig.Scope),
-		BuildID:        buildScopedID(cacheConfig.Scope, executionContext.Build.ID),
-		JobIdentity:    jobScopedIdentity(cacheConfig.Scope, executionContext),
+		BuildID:        buildIdentity,
+		JobIdentity:    jobIdentity,
 		Image:          executionContext.ExecutionImage,
-		Platform:       runtime.GOOS + "/" + runtime.GOARCH,
+		Platform:       platform,
 		Paths:          cacheConfig.Paths,
 		KeyFilesDigest: filesDigest,
 	})
@@ -247,9 +261,8 @@ func jobScopedIdentity(scope domain.CacheScope, executionContext StepExecutionCo
 	if scope != domain.CacheScopeJob {
 		return ""
 	}
-	if trimmed := strings.TrimSpace(executionContext.ExecutionRequest.JobID); trimmed != "" {
-		return trimmed
-	}
+	// ExecutionRequest.JobID is an execution-job claim identifier and can differ
+	// across steps in the same logical job; using it would fragment job cache keys.
 	if executionContext.Build.JobID != nil {
 		if trimmed := strings.TrimSpace(*executionContext.Build.JobID); trimmed != "" {
 			return trimmed
