@@ -378,8 +378,16 @@ func validateCacheMounts(mounts []runner.CacheMount) ([]runner.CacheMount, error
 		if !info.IsDir() {
 			return nil, fmt.Errorf("invalid cache mount[%d]: host path %s is not a directory", idx, hostPath)
 		}
-		if _, readErr := os.ReadDir(hostPath); readErr != nil {
-			return nil, fmt.Errorf("invalid cache mount[%d]: host path %s not accessible: %w", idx, hostPath, readErr)
+		dirHandle, openErr := os.Open(hostPath)
+		if openErr != nil {
+			return nil, fmt.Errorf("invalid cache mount[%d]: host path %s not accessible: %w", idx, hostPath, openErr)
+		}
+		_, readErr := dirHandle.Readdirnames(1)
+		if closeErr := dirHandle.Close(); closeErr != nil {
+			return nil, fmt.Errorf("invalid cache mount[%d]: closing host path %s: %w", idx, hostPath, closeErr)
+		}
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return nil, fmt.Errorf("invalid cache mount[%d]: host path %s not readable: %w", idx, hostPath, readErr)
 		}
 
 		validated = append(validated, runner.CacheMount{HostPath: hostPath, ContainerPath: containerPath})

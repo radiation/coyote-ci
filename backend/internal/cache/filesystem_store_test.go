@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,5 +104,54 @@ func TestFilesystemStore_EvictsOldestEntriesWhenOverLimit(t *testing.T) {
 	}
 	if !hitB {
 		t.Fatal("expected key-b to remain after eviction")
+	}
+}
+
+func TestFilesystemStore_SaveRejectsSymlinkContent(t *testing.T) {
+	ctx := context.Background()
+	store := NewFilesystemStore(t.TempDir())
+
+	source := filepath.Join(t.TempDir(), "source")
+	pathsDir := filepath.Join(source, "paths", "000")
+	if err := os.MkdirAll(pathsDir, 0o755); err != nil {
+		t.Fatalf("mkdir source paths: %v", err)
+	}
+	if err := os.Symlink("/etc/hosts", filepath.Join(pathsDir, "hosts-link")); err != nil {
+		t.Fatalf("create symlink fixture: %v", err)
+	}
+
+	err := store.Save(ctx, "v1/job/symlink-save", source)
+	if err == nil {
+		t.Fatal("expected save to fail when cache content includes a symlink")
+	}
+	if !strings.Contains(err.Error(), "symlinks are not allowed") {
+		t.Fatalf("expected symlink rejection error, got %v", err)
+	}
+}
+
+func TestFilesystemStore_RestoreRejectsSymlinkContent(t *testing.T) {
+	ctx := context.Background()
+	store := NewFilesystemStore(t.TempDir())
+
+	entryPath, err := store.resolvePathForKey("v1/job/symlink-restore")
+	if err != nil {
+		t.Fatalf("resolve key path: %v", err)
+	}
+	pathsDir := filepath.Join(entryPath, "paths", "000")
+	err = os.MkdirAll(pathsDir, 0o755)
+	if err != nil {
+		t.Fatalf("mkdir cache entry paths: %v", err)
+	}
+	err = os.Symlink("/etc/hosts", filepath.Join(pathsDir, "hosts-link"))
+	if err != nil {
+		t.Fatalf("create symlink fixture: %v", err)
+	}
+
+	_, err = store.Restore(ctx, "v1/job/symlink-restore", filepath.Join(t.TempDir(), "dest"))
+	if err == nil {
+		t.Fatal("expected restore to fail when cache entry includes a symlink")
+	}
+	if !strings.Contains(err.Error(), "symlinks are not allowed") {
+		t.Fatalf("expected symlink rejection error, got %v", err)
 	}
 }

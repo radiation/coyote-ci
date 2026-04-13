@@ -210,9 +210,16 @@ func dirSizeAndModTime(root string) (int64, time.Time, error) {
 		if walkErr != nil {
 			return walkErr
 		}
-		info, infoErr := d.Info()
+		info, infoErr := os.Lstat(path)
 		if infoErr != nil {
 			return infoErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			mod := info.ModTime()
+			if mod.After(latest) {
+				latest = mod
+			}
+			return nil
 		}
 		if !info.IsDir() {
 			size += info.Size()
@@ -262,6 +269,9 @@ func copyDir(srcRoot string, dstRoot string) error {
 	return filepath.WalkDir(srcRoot, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlinks are not allowed in cache content: %s", path)
 		}
 		rel, err := filepath.Rel(srcRoot, path)
 		if err != nil {
