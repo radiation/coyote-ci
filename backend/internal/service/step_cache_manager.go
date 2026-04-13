@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +35,13 @@ type StepCacheManager struct {
 type cacheStoreSizeReporter interface {
 	TotalSizeBytes() (int64, error)
 }
+
+const (
+	cachePathBytesModeEnv          = "COYOTE_CACHE_PATH_BYTES_MODE"
+	cachePathBytesSamplePercentEnv = "COYOTE_CACHE_PATH_BYTES_SAMPLE_PERCENT"
+	cacheStoreSizeModeEnv          = "COYOTE_CACHE_STORE_SIZE_MODE"
+	cacheStoreSizeSamplePercentEnv = "COYOTE_CACHE_STORE_SIZE_SAMPLE_PERCENT"
+)
 
 func NewStepCacheManager(store cachepkg.Store, executionRootPath string) *StepCacheManager {
 	return &StepCacheManager{
@@ -111,12 +120,12 @@ func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExe
 		mounts = append(mounts, runner.CacheMount{HostPath: hostPath, ContainerPath: cachePath})
 	}
 
-	restoredBytes, sizeErr := dirFileBytes(filepath.Join(runtimeDir, "paths"))
+	restoredBytes, restoredMeasured, sizeErr := measuredDirFileBytes("restore", key, filepath.Join(runtimeDir, "paths"))
 	if sizeErr != nil {
 		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache restore bytes unavailable: %s", sizeErr.Error()))
 		restoredBytes = 0
 	}
-	logManager.EmitSystemLine(ctx, fmt.Sprintf("cache restore: hit=%t path_count=%d bytes=%d duration_ms=%d", hit, len(cacheConfig.Paths), restoredBytes, time.Since(restoreStarted).Milliseconds()))
+	logManager.EmitSystemLine(ctx, fmt.Sprintf("cache restore: hit=%t path_count=%d bytes=%d duration_ms=%d bytes_measured=%t", hit, len(cacheConfig.Paths), restoredBytes, time.Since(restoreStarted).Milliseconds(), restoredMeasured))
 
 	logManager.EmitSystemLine(ctx, fmt.Sprintf("Cache: configured scope=%s key=%s", cacheConfig.Scope, key))
 	if hit {
@@ -146,31 +155,122 @@ func (m *StepCacheManager) Save(ctx context.Context, logManager *ExecutionLogMan
 
 	saveStarted := time.Now()
 	pathCount := len(prepared.Mounts)
-	savedBytes, bytesErr := dirFileBytes(filepath.Join(prepared.RuntimeDir, "paths"))
+	savedBytes, savedMeasured, bytesErr := measuredDirFileBytes("save", prepared.Key, filepath.Join(prepared.RuntimeDir, "paths"))
 	if bytesErr != nil {
 		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save bytes unavailable: %s", bytesErr.Error()))
 		savedBytes = 0
 	}
-	storeSizeBefore, hasStoreSizeBefore := cacheStoreTotalSizeBytes(m.store)
+	storeSizeBefore, hasStoreSizeBefore := measuredCacheStoreTotalSizeBytes("before-save", prepared.Key, m.store)
 	if hasStoreSizeBefore {
 		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache store size before save: bytes=%d", storeSizeBefore))
 	}
 
 	if err := m.store.Save(ctx, prepared.Key, prepared.RuntimeDir); err != nil {
-		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=false path_count=%d bytes=%d duration_ms=%d", pathCount, savedBytes, time.Since(saveStarted).Milliseconds()))
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=false path_count=%d bytes=%d duration_ms=%d bytes_measured=%t", pathCount, savedBytes, time.Since(saveStarted).Milliseconds(), savedMeasured))
 		return err
 	}
-	storeSizeAfter, hasStoreSizeAfter := cacheStoreTotalSizeBytes(m.store)
+	storeSizeAfter, hasStoreSizeAfter := measuredCacheStoreTotalSizeBytes("after-save", prepared.Key, m.store)
 	if hasStoreSizeAfter {
 		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache store size after save: bytes=%d", storeSizeAfter))
 	}
 	if hasStoreSizeBefore && hasStoreSizeAfter {
-		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=true path_count=%d bytes=%d store_bytes_before=%d store_bytes_after=%d duration_ms=%d", pathCount, savedBytes, storeSizeBefore, storeSizeAfter, time.Since(saveStarted).Milliseconds()))
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=true path_count=%d bytes=%d store_bytes_before=%d store_bytes_after=%d duration_ms=%d bytes_measured=%t", pathCount, savedBytes, storeSizeBefore, storeSizeAfter, time.Since(saveStarted).Milliseconds(), savedMeasured))
 	} else {
-		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=true path_count=%d bytes=%d duration_ms=%d", pathCount, savedBytes, time.Since(saveStarted).Milliseconds()))
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=true path_count=%d bytes=%d duration_ms=%d bytes_measured=%t", pathCount, savedBytes, time.Since(saveStarted).Milliseconds(), savedMeasured))
 	}
 	logManager.EmitSystemLine(ctx, "Cache: saved")
 	return nil
+}
+
+func measuredDirFileBytes(operation string, key string, root string) (int64, bool, error) {
+	if !shouldMeasureCachePathBytes(operation, key) {
+		return 0, false, nil
+	}
+	bytes, err := dirFileBytes(root)
+	if err != nil {
+		return 0, true, err
+	}
+	return bytes, true, nil
+}
+
+func shouldMeasureCachePathBytes(operation string, key string) bool {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv(cachePathBytesModeEnv)))
+	switch mode {
+	case "always":
+		return true
+	case "sample":
+		samplePercent := cachePathBytesSamplePercent()
+		if samplePercent <= 0 {
+			return false
+		}
+		if samplePercent >= 100 {
+			return true
+		}
+		hasher := fnv.New32a()
+		_, _ = hasher.Write([]byte(operation))
+		_, _ = hasher.Write([]byte("\x00"))
+		_, _ = hasher.Write([]byte(key))
+		return int(hasher.Sum32()%100) < samplePercent
+	default:
+		return false
+	}
+}
+
+func cachePathBytesSamplePercent() int {
+	trimmed := strings.TrimSpace(os.Getenv(cachePathBytesSamplePercentEnv))
+	return parseSamplePercent(trimmed, 10)
+}
+
+func measuredCacheStoreTotalSizeBytes(operation string, key string, store cachepkg.Store) (int64, bool) {
+	if !shouldMeasureCacheStoreSize(operation, key) {
+		return 0, false
+	}
+	return cacheStoreTotalSizeBytes(store)
+}
+
+func shouldMeasureCacheStoreSize(operation string, key string) bool {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv(cacheStoreSizeModeEnv)))
+	switch mode {
+	case "always":
+		return true
+	case "sample":
+		samplePercent := cacheStoreSizeSamplePercent()
+		if samplePercent <= 0 {
+			return false
+		}
+		if samplePercent >= 100 {
+			return true
+		}
+		hasher := fnv.New32a()
+		_, _ = hasher.Write([]byte(operation))
+		_, _ = hasher.Write([]byte("\x00"))
+		_, _ = hasher.Write([]byte(key))
+		return int(hasher.Sum32()%100) < samplePercent
+	default:
+		return false
+	}
+}
+
+func cacheStoreSizeSamplePercent() int {
+	trimmed := strings.TrimSpace(os.Getenv(cacheStoreSizeSamplePercentEnv))
+	return parseSamplePercent(trimmed, 10)
+}
+
+func parseSamplePercent(value string, fallback int) int {
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	if parsed < 0 {
+		return 0
+	}
+	if parsed > 100 {
+		return 100
+	}
+	return parsed
 }
 
 func cacheStoreTotalSizeBytes(store cachepkg.Store) (int64, bool) {

@@ -139,6 +139,19 @@ Worker cache configuration:
 
 - `WORKER_CACHE_STORAGE_ROOT` (local cache snapshot root; defaults to `$TMPDIR/coyote-cache`)
 - `CACHE_MAX_SIZE_MB` (local cache retention limit; oldest entries are evicted when exceeded)
+- `COYOTE_CACHE_PATH_BYTES_MODE` (optional cache path byte measurement mode: `off`/unset, `sample`, `always`; default is `off`)
+- `COYOTE_CACHE_PATH_BYTES_SAMPLE_PERCENT` (optional sampling percentage for `sample` mode, `0-100`; default `10`)
+- `COYOTE_CACHE_STORE_SIZE_MODE` (optional cache store total-size measurement mode: `off`/unset, `sample`, `always`; default is `off`)
+- `COYOTE_CACHE_STORE_SIZE_SAMPLE_PERCENT` (optional sampling percentage for `sample` mode, `0-100`; default `10`)
+
+Recommended production defaults:
+
+- Keep `COYOTE_CACHE_PATH_BYTES_MODE` unset (or set to `off`) to avoid full cache-directory walks on every step restore/save.
+- Use `COYOTE_CACHE_PATH_BYTES_MODE=sample` with a low `COYOTE_CACHE_PATH_BYTES_SAMPLE_PERCENT` (for example `1` to `5`) when you need periodic byte-size observability with lower overhead.
+- Use `COYOTE_CACHE_PATH_BYTES_MODE=always` only for short debugging windows.
+- Keep `COYOTE_CACHE_STORE_SIZE_MODE` unset (or set to `off`) to avoid expensive total-size scans on every cache save.
+- Use `COYOTE_CACHE_STORE_SIZE_MODE=sample` with a low `COYOTE_CACHE_STORE_SIZE_SAMPLE_PERCENT` (for example `1` to `5`) for occasional capacity signals with limited overhead.
+- Use `COYOTE_CACHE_STORE_SIZE_MODE=always` only for short debugging windows.
 
 ## Pipeline Step Cache DSL
 

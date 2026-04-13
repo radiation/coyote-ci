@@ -34,16 +34,29 @@ func (s *BuildService) CancelBuild(ctx context.Context, id string) (domain.Build
 		return build, nil
 	}
 
+	now := time.Now().UTC()
+	reason := "build canceled by operator request"
+	if repoWithAtomicCancel, ok := s.buildRepo.(interface {
+		CancelBuild(ctx context.Context, id string, reason string, canceledAt time.Time) (domain.Build, int, error)
+	}); ok {
+		failed, updatedSteps, cancelErr := repoWithAtomicCancel.CancelBuild(ctx, id, reason, now)
+		if cancelErr != nil {
+			return domain.Build{}, mapRepoErr(cancelErr)
+		}
+		log.Printf("cancel applied: build_id=%s status=%s updated_steps=%d", id, failed.Status, updatedSteps)
+		return failed, nil
+	}
+
 	steps, err := s.buildRepo.GetStepsByBuildID(ctx, id)
 	if err != nil {
 		return domain.Build{}, mapRepoErr(err)
 	}
 
-	now := time.Now().UTC()
-	reason := "build canceled by operator request"
 	updatedSteps := 0
 	for _, step := range steps {
-		if domain.IsTerminalStepStatus(step.Status) {
+		// Cancellation uses explicit terminalization semantics rather than normal
+		// execution transitions; see domain.CanCancelStepToFailed.
+		if !domain.CanCancelStepToFailed(step.Status) {
 			continue
 		}
 

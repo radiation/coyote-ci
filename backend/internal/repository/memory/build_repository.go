@@ -42,6 +42,59 @@ func (r *BuildRepository) Create(_ context.Context, build domain.Build) (domain.
 	return build, nil
 }
 
+// CancelBuild terminalizes a non-terminal build and cancellable steps atomically under lock.
+func (r *BuildRepository) CancelBuild(_ context.Context, id string, reason string, canceledAt time.Time) (domain.Build, int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	build, ok := r.builds[id]
+	if !ok {
+		return domain.Build{}, 0, repository.ErrBuildNotFound
+	}
+
+	if domain.IsTerminalBuildStatus(build.Status) {
+		return build, 0, nil
+	}
+
+	trimmedReason := strings.TrimSpace(reason)
+	var reasonPtr *string
+	if trimmedReason != "" {
+		reasonPtr = &trimmedReason
+	}
+
+	updatedSteps := 0
+	steps := r.buildSteps[id]
+	for idx := range steps {
+		if !domain.CanCancelStepToFailed(steps[idx].Status) {
+			continue
+		}
+		steps[idx].Status = domain.BuildStepStatusFailed
+		steps[idx].ClaimToken = nil
+		steps[idx].ClaimedAt = nil
+		steps[idx].LeaseExpiresAt = nil
+		if steps[idx].StartedAt == nil {
+			steps[idx].StartedAt = &canceledAt
+		}
+		if steps[idx].FinishedAt == nil {
+			steps[idx].FinishedAt = &canceledAt
+		}
+		if reasonPtr != nil {
+			steps[idx].ErrorMessage = reasonPtr
+		}
+		updatedSteps++
+	}
+	r.buildSteps[id] = steps
+
+	build.Status = domain.BuildStatusFailed
+	if build.FinishedAt == nil {
+		build.FinishedAt = &canceledAt
+	}
+	build.ErrorMessage = reasonPtr
+	r.builds[id] = build
+
+	return build, updatedSteps, nil
+}
+
 func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Build, steps []domain.BuildStep) (domain.Build, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

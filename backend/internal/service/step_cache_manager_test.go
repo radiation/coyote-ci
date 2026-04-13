@@ -212,6 +212,11 @@ func strPtrCache(value string) *string {
 }
 
 func TestStepCacheManager_EmitsCacheSizeObservabilityLogs(t *testing.T) {
+	t.Setenv(cachePathBytesModeEnv, "always")
+	t.Setenv(cachePathBytesSamplePercentEnv, "100")
+	t.Setenv(cacheStoreSizeModeEnv, "always")
+	t.Setenv(cacheStoreSizeSamplePercentEnv, "100")
+
 	workspaceRoot := t.TempDir()
 	buildID := "build-observability"
 	buildWorkspace := filepath.Join(workspaceRoot, buildID)
@@ -272,6 +277,9 @@ func TestStepCacheManager_EmitsCacheSizeObservabilityLogs(t *testing.T) {
 	if !contains("cache restore: hit=false path_count=1 bytes=0") {
 		t.Fatalf("expected restore observability log, got %#v", sink.lines)
 	}
+	if !contains("bytes_measured=true") {
+		t.Fatalf("expected measured byte logs, got %#v", sink.lines)
+	}
 	if !contains("cache store size before save: bytes=1024") {
 		t.Fatalf("expected store size before save log, got %#v", sink.lines)
 	}
@@ -280,6 +288,68 @@ func TestStepCacheManager_EmitsCacheSizeObservabilityLogs(t *testing.T) {
 	}
 	if !contains("cache save: success=true path_count=1 bytes=0 store_bytes_before=1024 store_bytes_after=1088") {
 		t.Fatalf("expected cache save observability log, got %#v", sink.lines)
+	}
+}
+
+func TestShouldMeasureCachePathBytes_DefaultOff(t *testing.T) {
+	t.Setenv(cachePathBytesModeEnv, "")
+	t.Setenv(cachePathBytesSamplePercentEnv, "")
+
+	if shouldMeasureCachePathBytes("restore", "cache-key") {
+		t.Fatal("expected cache path byte measurement to be disabled by default")
+	}
+}
+
+func TestShouldMeasureCachePathBytes_Always(t *testing.T) {
+	t.Setenv(cachePathBytesModeEnv, "always")
+
+	if !shouldMeasureCachePathBytes("restore", "cache-key") {
+		t.Fatal("expected cache path byte measurement to be enabled in always mode")
+	}
+}
+
+func TestShouldMeasureCachePathBytes_SampledDeterministic(t *testing.T) {
+	t.Setenv(cachePathBytesModeEnv, "sample")
+	t.Setenv(cachePathBytesSamplePercentEnv, "1")
+
+	operation := "restore"
+	key := "deterministic-sample-key"
+	first := shouldMeasureCachePathBytes(operation, key)
+	for i := 0; i < 20; i++ {
+		if shouldMeasureCachePathBytes(operation, key) != first {
+			t.Fatal("expected deterministic sampling decision for identical operation/key")
+		}
+	}
+}
+
+func TestShouldMeasureCacheStoreSize_DefaultOff(t *testing.T) {
+	t.Setenv(cacheStoreSizeModeEnv, "")
+	t.Setenv(cacheStoreSizeSamplePercentEnv, "")
+
+	if shouldMeasureCacheStoreSize("before-save", "cache-key") {
+		t.Fatal("expected cache store size measurement to be disabled by default")
+	}
+}
+
+func TestShouldMeasureCacheStoreSize_Always(t *testing.T) {
+	t.Setenv(cacheStoreSizeModeEnv, "always")
+
+	if !shouldMeasureCacheStoreSize("before-save", "cache-key") {
+		t.Fatal("expected cache store size measurement to be enabled in always mode")
+	}
+}
+
+func TestShouldMeasureCacheStoreSize_SampledDeterministic(t *testing.T) {
+	t.Setenv(cacheStoreSizeModeEnv, "sample")
+	t.Setenv(cacheStoreSizeSamplePercentEnv, "1")
+
+	operation := "before-save"
+	key := "deterministic-store-size-sample-key"
+	first := shouldMeasureCacheStoreSize(operation, key)
+	for i := 0; i < 20; i++ {
+		if shouldMeasureCacheStoreSize(operation, key) != first {
+			t.Fatal("expected deterministic sampling decision for identical operation/key")
+		}
 	}
 }
 

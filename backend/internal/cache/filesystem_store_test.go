@@ -198,3 +198,52 @@ func TestFilesystemStore_SaveSkipsRewriteWhenSnapshotUnchanged(t *testing.T) {
 		t.Fatalf("expected unchanged snapshot save to preserve entry file mtime, want=%s got=%s", sentinel, info.ModTime())
 	}
 }
+
+func TestFilesystemStore_SaveFailurePreservesExistingEntry(t *testing.T) {
+	ctx := context.Background()
+	store := NewFilesystemStore(t.TempDir())
+
+	initialSource := filepath.Join(t.TempDir(), "source-initial")
+	initialFile := filepath.Join(initialSource, "paths", "000", "mod.cache")
+	if err := os.MkdirAll(filepath.Dir(initialFile), 0o755); err != nil {
+		t.Fatalf("mkdir initial source: %v", err)
+	}
+	if err := os.WriteFile(initialFile, []byte("cached-data-v1"), 0o644); err != nil {
+		t.Fatalf("write initial source file: %v", err)
+	}
+
+	if err := store.Save(ctx, "v1/job/atomic-preserve", initialSource); err != nil {
+		t.Fatalf("initial save: %v", err)
+	}
+
+	brokenSource := filepath.Join(t.TempDir(), "source-broken")
+	brokenPaths := filepath.Join(brokenSource, "paths", "000")
+	if err := os.MkdirAll(brokenPaths, 0o755); err != nil {
+		t.Fatalf("mkdir broken source: %v", err)
+	}
+	if err := os.Symlink("/etc/hosts", filepath.Join(brokenPaths, "hosts-link")); err != nil {
+		t.Fatalf("create broken symlink fixture: %v", err)
+	}
+
+	err := store.Save(ctx, "v1/job/atomic-preserve", brokenSource)
+	if err == nil {
+		t.Fatal("expected save to fail when incoming cache content includes symlink")
+	}
+
+	dest := filepath.Join(t.TempDir(), "restore-dest")
+	hit, err := store.Restore(ctx, "v1/job/atomic-preserve", dest)
+	if err != nil {
+		t.Fatalf("restore after failed save: %v", err)
+	}
+	if !hit {
+		t.Fatal("expected existing cache entry to remain after failed save")
+	}
+
+	restored, err := os.ReadFile(filepath.Join(dest, "paths", "000", "mod.cache"))
+	if err != nil {
+		t.Fatalf("read restored cache content: %v", err)
+	}
+	if string(restored) != "cached-data-v1" {
+		t.Fatalf("expected preserved cache content, got %q", string(restored))
+	}
+}

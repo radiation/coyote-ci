@@ -102,14 +102,39 @@ func (s *FilesystemStore) Save(_ context.Context, key string, sourceRoot string)
 		return statErr
 	}
 
-	if removeErr := os.RemoveAll(entryPath); removeErr != nil {
-		return removeErr
+	tmpPath, err := os.MkdirTemp(filepath.Dir(entryPath), ".cache-entry-staging-*")
+	if err != nil {
+		return err
 	}
+	defer func() {
+		_ = os.RemoveAll(tmpPath)
+	}()
 
-	if copyErr := copyDir(sourceRoot, entryPath); copyErr != nil {
-		_ = os.RemoveAll(entryPath)
+	if copyErr := copyDir(sourceRoot, tmpPath); copyErr != nil {
 		return copyErr
 	}
+
+	backupPath := ""
+	if statErr == nil {
+		backupPath = fmt.Sprintf("%s.backup.%d", entryPath, time.Now().UTC().UnixNano())
+		if renameErr := os.Rename(entryPath, backupPath); renameErr != nil {
+			return renameErr
+		}
+	}
+
+	if renameErr := os.Rename(tmpPath, entryPath); renameErr != nil {
+		if backupPath != "" {
+			_ = os.Rename(backupPath, entryPath)
+		}
+		return renameErr
+	}
+
+	if backupPath != "" {
+		if removeErr := os.RemoveAll(backupPath); removeErr != nil {
+			return removeErr
+		}
+	}
+
 	now := time.Now().UTC()
 	_ = os.Chtimes(entryPath, now, now)
 
