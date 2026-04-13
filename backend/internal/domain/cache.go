@@ -2,20 +2,20 @@ package domain
 
 import "strings"
 
-type CacheScope string
+type CachePolicy string
 
 const (
-	CacheScopeBuild CacheScope = "build"
-	CacheScopeJob   CacheScope = "job"
+	CachePolicyPullPush CachePolicy = "pull-push"
+	CachePolicyPull     CachePolicy = "pull"
+	CachePolicyPush     CachePolicy = "push"
+	CachePolicyOff      CachePolicy = "off"
 )
 
 // StepCacheConfig is the resolved cache configuration consumed by execution.
 // It does not expose storage backend concerns.
 type StepCacheConfig struct {
-	Preset   string     `json:"preset,omitempty"`
-	Scope    CacheScope `json:"scope"`
-	Paths    []string   `json:"paths"`
-	KeyFiles []string   `json:"key_files"`
+	Preset string      `json:"preset,omitempty"`
+	Policy CachePolicy `json:"policy,omitempty"`
 }
 
 func (c *StepCacheConfig) Clone() *StepCacheConfig {
@@ -24,9 +24,17 @@ func (c *StepCacheConfig) Clone() *StepCacheConfig {
 	}
 	out := &StepCacheConfig{
 		Preset: strings.TrimSpace(c.Preset),
-		Scope:  c.Scope,
+		Policy: c.Policy,
 	}
-	out.Paths = append([]string(nil), c.Paths...)
-	out.KeyFiles = append([]string(nil), c.KeyFiles...)
 	return out
+}
+
+func NormalizeCachePolicy(value CachePolicy) CachePolicy {
+	trimmed := strings.ToLower(strings.TrimSpace(string(value)))
+	switch CachePolicy(trimmed) {
+	case CachePolicyPull, CachePolicyPush, CachePolicyOff, CachePolicyPullPush:
+		return CachePolicy(trimmed)
+	default:
+		return CachePolicyPullPush
+	}
 }

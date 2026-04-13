@@ -93,6 +93,7 @@ type BuildServiceConfig struct {
 	ExecutionWorkspace  string
 	DefaultImage        string
 	CacheStore          cachepkg.Store
+	CacheEntryRepo      repository.CacheEntryRepository
 }
 
 // NewBuildServiceFromConfig creates a fully-wired BuildService in one call.
@@ -107,7 +108,7 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 	svc.defaultExecutionImage = strings.TrimSpace(cfg.DefaultImage)
 	svc.executionWorkspaceRoot = normalizeWorkspaceRoot(cfg.ExecutionWorkspace)
 	svc.SetArtifactPersistence(cfg.ArtifactRepo, cfg.ArtifactResolver, cfg.ArtifactWorkspace)
-	svc.SetStepCacheStore(cfg.CacheStore)
+	svc.SetStepCacheStore(cfg.CacheStore, cfg.CacheEntryRepo)
 	return svc
 }
 
@@ -137,7 +138,7 @@ func (s *BuildService) SetSourceResolver(resolver source.WorkspaceSourceResolver
 func (s *BuildService) SetExecutionWorkspaceRoot(root string) {
 	s.executionWorkspaceRoot = normalizeWorkspaceRoot(root)
 	if s.stepCacheManager != nil {
-		s.stepCacheManager = NewStepCacheManager(s.stepCacheManager.store, s.executionWorkspaceRoot)
+		s.stepCacheManager = NewStepCacheManager(s.stepCacheManager.store, s.stepCacheManager.entryRepo, s.executionWorkspaceRoot)
 	}
 }
 
@@ -174,12 +175,12 @@ func (s *BuildService) SetExecutionJobOutputRepository(repo repository.Execution
 	s.executionOutputRepo = repo
 }
 
-func (s *BuildService) SetStepCacheStore(store cachepkg.Store) {
-	if store == nil {
+func (s *BuildService) SetStepCacheStore(store cachepkg.Store, entryRepo repository.CacheEntryRepository) {
+	if store == nil || entryRepo == nil {
 		s.stepCacheManager = nil
 		return
 	}
-	s.stepCacheManager = NewStepCacheManager(store, s.executionWorkspaceRoot)
+	s.stepCacheManager = NewStepCacheManager(store, entryRepo, s.executionWorkspaceRoot)
 }
 
 type CreateBuildInput struct {
@@ -668,7 +669,7 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	}
 	runOutcome := stepRunner.Run(ctx, executionContext, logManager)
 	if s.stepCacheManager != nil && preparedCache.Enabled {
-		saveErr := s.stepCacheManager.Save(ctx, logManager, preparedCache, runOutcome.Result)
+		saveErr := s.stepCacheManager.Save(ctx, executionContext, logManager, preparedCache, runOutcome.Result)
 		if saveErr != nil {
 			logManager.EmitSystemLine(ctx, "Cache: save failed")
 			logManager.EmitSystemLine(ctx, formatFailureReasonLine(saveErr.Error()))

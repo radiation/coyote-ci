@@ -10,6 +10,8 @@ import (
 func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 	files := []string{
 		"../../../db/migrations/00001_init_schema.sql",
+		"../../../db/migrations/00002_add_build_step_cache_config.sql",
+		"../../../db/migrations/00003_add_cache_entries.sql",
 	}
 
 	var builder strings.Builder
@@ -48,6 +50,9 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS build_artifacts",
 		"logical_path",
 		"storage_key",
+		"CREATE TABLE IF NOT EXISTS cache_entries",
+		"cache_key",
+		"object_key",
 	}
 	for _, token := range required {
 		if !strings.Contains(sql, token) {

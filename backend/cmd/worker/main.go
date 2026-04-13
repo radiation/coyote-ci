@@ -57,6 +57,7 @@ func main() {
 	executionJobRepo := repositorypostgres.NewExecutionJobRepository(db)
 	executionJobOutputRepo := repositorypostgres.NewExecutionJobOutputRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
+	cacheEntryRepo := repositorypostgres.NewCacheEntryRepository(db)
 	artifactResolver, err := artifact.ResolveStores(artifact.StoreConfig{
 		Provider:    cfg.ArtifactStorageProvider,
 		StorageRoot: cfg.ArtifactStorageRoot,
@@ -68,6 +69,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to resolve artifact stores: %v", err)
 	}
+	cacheStore, err := cachepkg.ResolveStore(cachepkg.StoreConfig{
+		Provider:    cfg.WorkerCacheStorageProvider,
+		StorageRoot: cfg.WorkerCacheStorageRoot,
+		MaxSizeMB:   cfg.WorkerCacheMaxSizeMB,
+		GCSBucket:   cfg.WorkerCacheGCSBucket,
+		GCSPrefix:   cfg.WorkerCacheGCSPrefix,
+		GCSProject:  cfg.WorkerCacheGCSProject,
+		Strict:      cfg.WorkerCacheStorageStrict,
+	})
+	if err != nil {
+		log.Fatalf("failed to resolve cache store: %v", err)
+	}
 	stepRunner := resolveStepRunner(cfg)
 	logSink := logs.NewPostgresSink(db)
 	buildService := service.NewBuildServiceFromConfig(buildRepo, stepRunner, logSink, service.BuildServiceConfig{
@@ -75,7 +88,8 @@ func main() {
 		ExecutionOutputRepo: executionJobOutputRepo,
 		DefaultImage:        cfg.ExecutionDefaultImage,
 		ExecutionWorkspace:  cfg.ExecutionWorkspaceRoot,
-		CacheStore:          cachepkg.NewFilesystemStoreWithMaxSize(cfg.WorkerCacheStorageRoot, int64(cfg.WorkerCacheMaxSizeMB)*1024*1024),
+		CacheStore:          cacheStore,
+		CacheEntryRepo:      cacheEntryRepo,
 		ArtifactRepo:        artifactRepo,
 		ArtifactResolver:    artifactResolver,
 		ArtifactWorkspace:   cfg.ExecutionWorkspaceRoot,
