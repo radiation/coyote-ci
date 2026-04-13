@@ -116,6 +116,7 @@ func TestStepCacheManager_FailedReplacementDoesNotClobberReadyCache(t *testing.T
 	svc := NewBuildService(&fakeBuildRepository{}, &fakeRunner{}, &fakeLogSink{})
 
 	ctx := stepContext(buildID, "job-1", "step-1", "go", domain.CachePolicyPullPush)
+	cacheJobID := effectiveJobID(ctx)
 	logManager := NewExecutionLogManager(svc, ctx)
 	prepared, err := manager.Prepare(context.Background(), ctx, logManager)
 	if err != nil {
@@ -124,7 +125,7 @@ func TestStepCacheManager_FailedReplacementDoesNotClobberReadyCache(t *testing.T
 
 	store.objects["old-object"] = cachepkg.SaveResult{SizeBytes: 11, Checksum: "old", Compression: "tar.gz"}
 	_, err = repo.Upsert(context.Background(), repository.CacheEntryUpsertInput{
-		JobID:            "job-1",
+		JobID:            cacheJobID,
 		Preset:           "go",
 		CacheKey:         prepared.CacheKey,
 		StorageProvider:  domain.StorageProviderFilesystem,
@@ -146,7 +147,7 @@ func TestStepCacheManager_FailedReplacementDoesNotClobberReadyCache(t *testing.T
 		t.Fatal("expected save error")
 	}
 
-	entry, found, err := repo.FindReadyByKey(context.Background(), "job-1", "go", prepared.CacheKey)
+	entry, found, err := repo.FindReadyByKey(context.Background(), cacheJobID, "go", prepared.CacheKey)
 	if err != nil {
 		t.Fatalf("find ready after failed refresh: %v", err)
 	}
@@ -261,6 +262,7 @@ func TestStepCacheManager_PolicySemantics(t *testing.T) {
 			manager := NewStepCacheManager(store, repo, workspaceRoot)
 			svc := NewBuildService(&fakeBuildRepository{}, &fakeRunner{}, &fakeLogSink{})
 			ctx := stepContext(buildID, "job-1", "step-1", "go", tc.policy)
+			cacheJobID := effectiveJobID(ctx)
 			logManager := NewExecutionLogManager(svc, ctx)
 
 			// Seed a ready entry so restore path is exercised for pull and pull-push.
@@ -270,7 +272,7 @@ func TestStepCacheManager_PolicySemantics(t *testing.T) {
 			}
 			store.objects["ready-object"] = cachepkg.SaveResult{SizeBytes: 9, Checksum: "seed", Compression: "tar.gz"}
 			_, err = repo.Upsert(context.Background(), repository.CacheEntryUpsertInput{
-				JobID:            "job-1",
+				JobID:            cacheJobID,
 				Preset:           "go",
 				CacheKey:         preparedSeed.CacheKey,
 				StorageProvider:  domain.StorageProviderFilesystem,
@@ -308,6 +310,109 @@ func TestStepCacheManager_PolicySemantics(t *testing.T) {
 	}
 }
 
+func TestPresetMounts_ReturnsErrorWhenPathCreationFails(t *testing.T) {
+	runtimeDir := t.TempDir()
+	pathsFile := filepath.Join(runtimeDir, "paths")
+	if err := os.WriteFile(pathsFile, []byte("not-a-directory"), 0o644); err != nil {
+		t.Fatalf("seed paths file: %v", err)
+	}
+
+	mounts, err := presetMounts(runtimeDir, []string{"/go/pkg/mod"})
+	if err == nil {
+		t.Fatal("expected presetMounts to fail when parent path is not a directory")
+	}
+	if mounts != nil {
+		t.Fatalf("expected nil mounts on error, got %d", len(mounts))
+	}
+}
+
+func TestStepCacheManager_UsesStableBuildJobIDAcrossExecutionJobIDs(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	buildID := "build-1"
+	buildWorkspace := filepath.Join(workspaceRoot, buildID)
+	if err := os.MkdirAll(buildWorkspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(buildWorkspace, "go.sum"), []byte("sum"), 0o644); err != nil {
+		t.Fatalf("write go.sum: %v", err)
+	}
+
+	store := &fakeCacheStore{objects: map[string]cachepkg.SaveResult{}}
+	repo := memory.NewCacheEntryRepository()
+	manager := NewStepCacheManager(store, repo, workspaceRoot)
+	svc := NewBuildService(&fakeBuildRepository{}, &fakeRunner{}, &fakeLogSink{})
+
+	ctxStep1 := stepContextWithBuildJobID(buildID, "logical-job-1", "exec-job-step-1", "step-1", "go", domain.CachePolicyPullPush)
+	logManagerStep1 := NewExecutionLogManager(svc, ctxStep1)
+	preparedStep1, err := manager.Prepare(context.Background(), ctxStep1, logManagerStep1)
+	if err != nil {
+		t.Fatalf("prepare step 1: %v", err)
+	}
+	err = manager.Save(context.Background(), ctxStep1, logManagerStep1, preparedStep1, runner.RunStepResult{Status: runner.RunStepStatusSuccess})
+	if err != nil {
+		t.Fatalf("save step 1: %v", err)
+	}
+
+	_, found, err := repo.FindReadyByKey(context.Background(), "logical-job-1", "go", preparedStep1.CacheKey)
+	if err != nil {
+		t.Fatalf("find ready by logical job id: %v", err)
+	}
+	if !found {
+		t.Fatal("expected ready cache entry under logical build job id")
+	}
+	_, found, err = repo.FindReadyByKey(context.Background(), "exec-job-step-1", "go", preparedStep1.CacheKey)
+	if err != nil {
+		t.Fatalf("find ready by execution job id: %v", err)
+	}
+	if found {
+		t.Fatal("did not expect ready cache entry under execution job id")
+	}
+
+	ctxStep2 := stepContextWithBuildJobID(buildID, "logical-job-1", "exec-job-step-2", "step-2", "go", domain.CachePolicyPullPush)
+	logManagerStep2 := NewExecutionLogManager(svc, ctxStep2)
+	preparedStep2, err := manager.Prepare(context.Background(), ctxStep2, logManagerStep2)
+	if err != nil {
+		t.Fatalf("prepare step 2: %v", err)
+	}
+
+	if preparedStep2.MetadataEntry == nil {
+		t.Fatal("expected cache hit for second step using same logical job id")
+	}
+	if store.restoreCalls != 1 {
+		t.Fatalf("expected one restore call for second-step lookup, got %d", store.restoreCalls)
+	}
+}
+
+func TestEffectiveJobID_PrefersStableLogicalIdentity(t *testing.T) {
+	logicalJobID := "logical-job"
+	ctx := StepExecutionContext{
+		Build: domain.Build{ID: "build-1", JobID: &logicalJobID},
+		PersistedJob: &domain.ExecutionJob{
+			ID: "exec-job-id",
+		},
+		ExecutionRequest: runner.RunStepRequest{JobID: "request-job-id"},
+	}
+
+	if got := effectiveJobID(ctx); got != logicalJobID {
+		t.Fatalf("expected logical build job id, got %q", got)
+	}
+
+	ctx.Build.JobID = nil
+	if got := effectiveJobID(ctx); got != "build:build-1" {
+		t.Fatalf("expected stable build fallback, got %q", got)
+	}
+
+	ctx.Build.ID = ""
+	if got := effectiveJobID(ctx); got != "exec-job-id" {
+		t.Fatalf("expected persisted execution job id fallback, got %q", got)
+	}
+
+	ctx.PersistedJob = nil
+	if got := effectiveJobID(ctx); got != "request-job-id" {
+		t.Fatalf("expected request execution job id fallback, got %q", got)
+	}
+}
+
 func stepContext(buildID string, jobID string, stepID string, preset string, policy domain.CachePolicy) StepExecutionContext {
 	return StepExecutionContext{
 		Build: domain.Build{ID: buildID},
@@ -325,4 +430,10 @@ func stepContext(buildID string, jobID string, stepID string, preset string, pol
 			StepID:  stepID,
 		},
 	}
+}
+
+func stepContextWithBuildJobID(buildID string, buildJobID string, executionJobID string, stepID string, preset string, policy domain.CachePolicy) StepExecutionContext {
+	ctx := stepContext(buildID, executionJobID, stepID, preset, policy)
+	ctx.Build.JobID = &buildJobID
+	return ctx
 }

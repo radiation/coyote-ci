@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -76,5 +78,30 @@ func TestFilesystemStore_SaveRejectsSymlinkContent(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "symlinks are not allowed") {
 		t.Fatalf("expected symlink error, got %v", err)
+	}
+}
+
+func TestFilesystemStore_SaveRejectsFIFOContent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mkfifo is not supported on windows")
+	}
+
+	store := NewFilesystemStore(t.TempDir())
+	source := filepath.Join(t.TempDir(), "source")
+	pathsDir := filepath.Join(source, "paths", "000")
+	if err := os.MkdirAll(pathsDir, 0o755); err != nil {
+		t.Fatalf("mkdir source: %v", err)
+	}
+	fifoPath := filepath.Join(pathsDir, "pipe")
+	if mkfifoErr := syscall.Mkfifo(fifoPath, 0o644); mkfifoErr != nil {
+		t.Fatalf("create fifo: %v", mkfifoErr)
+	}
+
+	_, saveErr := store.Save(context.Background(), "v1/job/key", source)
+	if saveErr == nil {
+		t.Fatal("expected fifo save failure")
+	}
+	if !strings.Contains(saveErr.Error(), "unsupported file type") {
+		t.Fatalf("expected unsupported file type error, got %v", saveErr)
 	}
 }

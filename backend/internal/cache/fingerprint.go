@@ -19,8 +19,13 @@ func ComputeFingerprint(workspaceRoot string, fingerprintFiles []string) (string
 		return "", nil, errors.New("workspace root is required")
 	}
 
+	type fingerprintEntry struct {
+		relPath string
+		data    []byte
+	}
+
 	hasher := sha256.New()
-	seen := make([]string, 0, len(fingerprintFiles))
+	entries := make([]fingerprintEntry, 0, len(fingerprintFiles))
 	for _, rel := range fingerprintFiles {
 		trimmed := strings.TrimSpace(rel)
 		if trimmed == "" {
@@ -37,17 +42,26 @@ func ComputeFingerprint(workspaceRoot string, fingerprintFiles []string) (string
 			}
 			return "", nil, err
 		}
-		seen = append(seen, filepath.ToSlash(trimmed))
-		_, _ = io.WriteString(hasher, filepath.ToSlash(trimmed))
+		entries = append(entries, fingerprintEntry{relPath: filepath.ToSlash(trimmed), data: data})
+	}
+
+	if len(entries) == 0 {
+		return "", nil, ErrNoFingerprintFilesFound
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].relPath < entries[j].relPath
+	})
+
+	seen := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		seen = append(seen, entry.relPath)
+		_, _ = io.WriteString(hasher, entry.relPath)
 		_, _ = io.WriteString(hasher, "\n")
-		_, _ = hasher.Write(data)
+		_, _ = hasher.Write(entry.data)
 		_, _ = io.WriteString(hasher, "\n")
 	}
 
-	if len(seen) == 0 {
-		return "", nil, ErrNoFingerprintFilesFound
-	}
-	sort.Strings(seen)
 	return hex.EncodeToString(hasher.Sum(nil)), seen, nil
 }
 

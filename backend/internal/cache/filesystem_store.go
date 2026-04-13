@@ -273,6 +273,9 @@ func writeTarGz(dstArchivePath string, srcRoot string) error {
 		if err != nil {
 			return err
 		}
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported file type in cache content: %s", path)
+		}
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return err

@@ -10,15 +10,13 @@ import (
 	"strings"
 
 	"cloud.google.com/go/storage"
-	"google.golang.org/api/option"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
 
 type GCSStoreConfig struct {
-	Bucket  string
-	Prefix  string
-	Project string
+	Bucket string
+	Prefix string
 }
 
 type GCSStore struct {
@@ -36,9 +34,6 @@ func NewGCSStore(client *storage.Client, cfg GCSStoreConfig) (*GCSStore, error) 
 		return nil, errors.New("gcs cache bucket is required")
 	}
 	prefix := strings.Trim(strings.TrimSpace(cfg.Prefix), "/")
-	if strings.TrimSpace(cfg.Project) != "" {
-		_ = option.WithQuotaProject(strings.TrimSpace(cfg.Project))
-	}
 	return &GCSStore{client: client, bucket: bucket, prefix: prefix}, nil
 }
 

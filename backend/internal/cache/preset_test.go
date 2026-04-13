@@ -54,3 +54,28 @@ func TestComputeFingerprint_UsesLockfileContent(t *testing.T) {
 		t.Fatal("expected fingerprint change when lockfile changes")
 	}
 }
+
+func TestComputeFingerprint_InputOrderDoesNotChangeDigest(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "repo"), 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "repo", "a.lock"), []byte("alpha"), 0o644); err != nil {
+		t.Fatalf("write a.lock: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "repo", "b.lock"), []byte("beta"), 0o644); err != nil {
+		t.Fatalf("write b.lock: %v", err)
+	}
+
+	first, _, firstErr := ComputeFingerprint(workspace, []string{"repo/a.lock", "repo/b.lock"})
+	if firstErr != nil {
+		t.Fatalf("first fingerprint: %v", firstErr)
+	}
+	second, _, secondErr := ComputeFingerprint(workspace, []string{"repo/b.lock", "repo/a.lock"})
+	if secondErr != nil {
+		t.Fatalf("second fingerprint: %v", secondErr)
+	}
+	if first != second {
+		t.Fatalf("expected stable fingerprint regardless of input order, first=%s second=%s", first, second)
+	}
+}

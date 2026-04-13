@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -78,8 +76,13 @@ func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExe
 		CacheKey:    key,
 		RuntimeDir:  runtimeDir,
 		Fingerprint: strings.TrimPrefix(key, preset.Name+":"),
-		Mounts:      presetMounts(runtimeDir, preset.CachePaths),
 	}
+
+	mounts, err := presetMounts(runtimeDir, preset.CachePaths)
+	if err != nil {
+		return preparedStepCache{}, err
+	}
+	prepared.Mounts = mounts
 
 	if policy == domain.CachePolicyPush {
 		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache restore skipped: policy=%s", policy))
@@ -228,32 +231,37 @@ func (m *StepCacheManager) workspaceRootForBuild(buildID string) (string, error)
 	return workspaceRoot, nil
 }
 
-func presetMounts(runtimeDir string, cachePaths []string) []runner.CacheMount {
+func presetMounts(runtimeDir string, cachePaths []string) ([]runner.CacheMount, error) {
 	mounts := make([]runner.CacheMount, 0, len(cachePaths))
 	for idx, cachePath := range cachePaths {
 		hostPath := filepath.Join(runtimeDir, "paths", fmt.Sprintf("%03d", idx))
-		_ = os.MkdirAll(hostPath, 0o755)
+		if err := os.MkdirAll(hostPath, 0o755); err != nil {
+			return nil, fmt.Errorf("create cache mount path %s: %w", hostPath, err)
+		}
 		mounts = append(mounts, runner.CacheMount{HostPath: hostPath, ContainerPath: cachePath})
 	}
-	return mounts
+	return mounts, nil
 }
 
 func effectiveJobID(executionContext StepExecutionContext) string {
+	if executionContext.Build.JobID != nil && strings.TrimSpace(*executionContext.Build.JobID) != "" {
+		return strings.TrimSpace(*executionContext.Build.JobID)
+	}
+	if strings.TrimSpace(executionContext.Build.ID) != "" {
+		return "build:" + strings.TrimSpace(executionContext.Build.ID)
+	}
 	if executionContext.PersistedJob != nil && strings.TrimSpace(executionContext.PersistedJob.ID) != "" {
 		return strings.TrimSpace(executionContext.PersistedJob.ID)
 	}
 	if strings.TrimSpace(executionContext.ExecutionRequest.JobID) != "" {
 		return strings.TrimSpace(executionContext.ExecutionRequest.JobID)
 	}
-	if executionContext.Build.JobID != nil && strings.TrimSpace(*executionContext.Build.JobID) != "" {
-		return strings.TrimSpace(*executionContext.Build.JobID)
-	}
 	return "build:" + strings.TrimSpace(executionContext.Build.ID)
 }
 
 func (m *StepCacheManager) objectKey(jobID string, preset string, cacheKey string) string {
 	hash := sha256.Sum256([]byte(strings.TrimSpace(cacheKey)))
-	return fmt.Sprintf("v1/jobs/%s/%s/%s/%s", sanitizeKeyPart(jobID), sanitizeKeyPart(preset), hex.EncodeToString(hash[:]), uuid.NewString())
+	return fmt.Sprintf("v1/jobs/%s/%s/%s", sanitizeKeyPart(jobID), sanitizeKeyPart(preset), hex.EncodeToString(hash[:]))
 }
 
 func sanitizeStepDirName(stepID string, stepIndex int) string {

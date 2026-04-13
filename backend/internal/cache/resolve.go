@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"cloud.google.com/go/storage"
+	"google.golang.org/api/option"
 )
 
 type StoreConfig struct {
@@ -31,7 +32,11 @@ func ResolveStore(cfg StoreConfig) (Store, error) {
 			log.Printf("cache storage provider gcs configured but bucket is empty; falling back to filesystem")
 			return NewFilesystemStoreWithMaxSize(cfg.StorageRoot, int64(cfg.MaxSizeMB)*1024*1024), nil
 		}
-		client, err := storage.NewClient(context.Background())
+		clientOptions := make([]option.ClientOption, 0, 1)
+		if project := strings.TrimSpace(cfg.GCSProject); project != "" {
+			clientOptions = append(clientOptions, option.WithQuotaProject(project))
+		}
+		client, err := storage.NewClient(context.Background(), clientOptions...)
 		if err != nil {
 			if cfg.Strict {
 				return nil, fmt.Errorf("create gcs cache store client: %w", err)
@@ -40,9 +45,8 @@ func ResolveStore(cfg StoreConfig) (Store, error) {
 			return NewFilesystemStoreWithMaxSize(cfg.StorageRoot, int64(cfg.MaxSizeMB)*1024*1024), nil
 		}
 		store, err := NewGCSStore(client, GCSStoreConfig{
-			Bucket:  cfg.GCSBucket,
-			Prefix:  cfg.GCSPrefix,
-			Project: cfg.GCSProject,
+			Bucket: cfg.GCSBucket,
+			Prefix: cfg.GCSPrefix,
 		})
 		if err != nil {
 			if cfg.Strict {
