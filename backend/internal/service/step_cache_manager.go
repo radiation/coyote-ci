@@ -5,400 +5,284 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"hash/fnv"
 	"os"
 	"path/filepath"
-	"runtime"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 )
 
+const cacheCompressionTarGz = "tar.gz"
+
 type preparedStepCache struct {
-	Enabled    bool
-	Key        string
-	Scope      domain.CacheScope
-	RuntimeDir string
-	Mounts     []runner.CacheMount
+	Enabled       bool
+	Policy        domain.CachePolicy
+	Preset        cachepkg.Preset
+	Fingerprint   string
+	CacheKey      string
+	RuntimeDir    string
+	Mounts        []runner.CacheMount
+	MetadataEntry *domain.CacheEntry
 }
 
 type StepCacheManager struct {
 	store             cachepkg.Store
+	entryRepo         repository.CacheEntryRepository
 	executionRootPath string
+	now               func() time.Time
 }
 
-type cacheStoreSizeReporter interface {
-	TotalSizeBytes() (int64, error)
-}
-
-const (
-	cachePathBytesModeEnv          = "COYOTE_CACHE_PATH_BYTES_MODE"
-	cachePathBytesSamplePercentEnv = "COYOTE_CACHE_PATH_BYTES_SAMPLE_PERCENT"
-	cacheStoreSizeModeEnv          = "COYOTE_CACHE_STORE_SIZE_MODE"
-	cacheStoreSizeSamplePercentEnv = "COYOTE_CACHE_STORE_SIZE_SAMPLE_PERCENT"
-)
-
-func NewStepCacheManager(store cachepkg.Store, executionRootPath string) *StepCacheManager {
+func NewStepCacheManager(store cachepkg.Store, entryRepo repository.CacheEntryRepository, executionRootPath string) *StepCacheManager {
 	return &StepCacheManager{
 		store:             store,
+		entryRepo:         entryRepo,
 		executionRootPath: strings.TrimSpace(executionRootPath),
+		now:               func() time.Time { return time.Now().UTC() },
 	}
 }
 
 func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExecutionContext, logManager *ExecutionLogManager) (preparedStepCache, error) {
-	if m == nil || m.store == nil {
+	if m == nil || m.store == nil || m.entryRepo == nil {
 		return preparedStepCache{}, nil
 	}
 	if executionContext.Step == nil || executionContext.Step.Cache == nil {
-		logManager.EmitSystemLine(ctx, "Cache: not configured")
+		logManager.EmitSystemLine(ctx, "cache restore skipped: step cache not configured")
 		return preparedStepCache{}, nil
 	}
 
-	cacheConfig := executionContext.Step.Cache.Clone()
-	workspaceRoot, err := m.workspaceRootForBuild(executionContext.Build.ID)
+	policy := domain.NormalizeCachePolicy(executionContext.Step.Cache.Policy)
+	if policy == domain.CachePolicyOff {
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache restore skipped: policy=%s", policy))
+		return preparedStepCache{Policy: policy}, nil
+	}
+
+	preset, runtimeDir, key, err := m.resolvePreparedIdentity(executionContext)
 	if err != nil {
-		return preparedStepCache{}, err
-	}
-
-	filesDigest, err := digestCacheKeyFiles(workspaceRoot, cacheConfig.KeyFiles)
-	if err != nil {
-		return preparedStepCache{}, err
-	}
-
-	jobIdentity := jobScopedIdentity(cacheConfig.Scope, executionContext)
-	buildIdentity := buildScopedID(cacheConfig.Scope, executionContext.Build.ID)
-	platform := runtime.GOOS + "/" + runtime.GOARCH
-	logManager.EmitSystemLine(ctx, fmt.Sprintf("cache key preimage: scope=%s build_id=%q job_identity=%q image=%q platform=%q paths=%q key_files=%q key_files_digest=%s",
-		cacheConfig.Scope,
-		buildIdentity,
-		jobIdentity,
-		executionContext.ExecutionImage,
-		platform,
-		cacheConfig.Paths,
-		cacheConfig.KeyFiles,
-		filesDigest,
-	))
-
-	key, err := cachepkg.ResolveKey(cachepkg.KeyInput{
-		Scope:          string(cacheConfig.Scope),
-		BuildID:        buildIdentity,
-		JobIdentity:    jobIdentity,
-		Image:          executionContext.ExecutionImage,
-		Platform:       platform,
-		Paths:          cacheConfig.Paths,
-		KeyFilesDigest: filesDigest,
-	})
-	if err != nil {
-		return preparedStepCache{}, err
-	}
-
-	runtimeDir := filepath.Join(workspaceRoot, ".coyote", "cache-runtime", sanitizeStepDirName(executionContext.ExecutionRequest.StepID, executionContext.ExecutionRequest.StepIndex))
-	if removeErr := os.RemoveAll(runtimeDir); removeErr != nil {
-		return preparedStepCache{}, removeErr
-	}
-	if mkdirErr := os.MkdirAll(runtimeDir, 0o755); mkdirErr != nil {
-		return preparedStepCache{}, mkdirErr
-	}
-
-	restoreStarted := time.Now()
-	hit, err := m.store.Restore(ctx, key, runtimeDir)
-	if err != nil {
-		return preparedStepCache{}, err
-	}
-
-	mounts := make([]runner.CacheMount, 0, len(cacheConfig.Paths))
-	for idx, cachePath := range cacheConfig.Paths {
-		hostPath := filepath.Join(runtimeDir, "paths", fmt.Sprintf("%03d", idx))
-		if mkdirErr := os.MkdirAll(hostPath, 0o755); mkdirErr != nil {
-			return preparedStepCache{}, mkdirErr
+		if err == cachepkg.ErrNoFingerprintFilesFound {
+			logManager.EmitSystemLine(ctx, fmt.Sprintf("cache skipped: preset=%s reason=lockfile_missing", strings.TrimSpace(executionContext.Step.Cache.Preset)))
+			return preparedStepCache{Policy: policy}, nil
 		}
-		mounts = append(mounts, runner.CacheMount{HostPath: hostPath, ContainerPath: cachePath})
+		return preparedStepCache{}, err
 	}
 
-	restoredBytes, restoredMeasured, sizeErr := measuredDirFileBytes("restore", key, filepath.Join(runtimeDir, "paths"))
-	if sizeErr != nil {
-		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache restore bytes unavailable: %s", sizeErr.Error()))
-		restoredBytes = 0
-	}
-	logManager.EmitSystemLine(ctx, fmt.Sprintf("cache restore: hit=%t path_count=%d bytes=%d duration_ms=%d bytes_measured=%t", hit, len(cacheConfig.Paths), restoredBytes, time.Since(restoreStarted).Milliseconds(), restoredMeasured))
-
-	logManager.EmitSystemLine(ctx, fmt.Sprintf("Cache: configured scope=%s key=%s", cacheConfig.Scope, key))
-	if hit {
-		logManager.EmitSystemLine(ctx, "Cache: hit (restored)")
-	} else {
-		logManager.EmitSystemLine(ctx, "Cache: miss")
+	prepared := preparedStepCache{
+		Enabled:     true,
+		Policy:      policy,
+		Preset:      preset,
+		CacheKey:    key,
+		RuntimeDir:  runtimeDir,
+		Fingerprint: strings.TrimPrefix(key, preset.Name+":"),
 	}
 
-	return preparedStepCache{
-		Enabled:    true,
-		Key:        key,
-		Scope:      cacheConfig.Scope,
-		RuntimeDir: runtimeDir,
-		Mounts:     mounts,
-	}, nil
+	mounts, err := presetMounts(runtimeDir, preset.CachePaths)
+	if err != nil {
+		return preparedStepCache{}, err
+	}
+	prepared.Mounts = mounts
+
+	if policy == domain.CachePolicyPush {
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache restore skipped: policy=%s", policy))
+		return prepared, nil
+	}
+
+	jobID := effectiveJobID(executionContext)
+	entry, found, err := m.entryRepo.FindReadyByKey(ctx, jobID, preset.Name, key)
+	if err != nil {
+		return preparedStepCache{}, err
+	}
+
+	lookupStart := time.Now()
+	if !found {
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache lookup: preset=%s key=%s hit=false job_id=%s", preset.Name, key, jobID))
+		return prepared, nil
+	}
+
+	restoreStart := time.Now()
+	restoreResult, err := m.store.Restore(ctx, entry.ObjectKey, runtimeDir)
+	if err != nil {
+		return preparedStepCache{}, err
+	}
+	if !restoreResult.Hit {
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache lookup: preset=%s key=%s hit=false job_id=%s", preset.Name, key, jobID))
+		return prepared, nil
+	}
+
+	if markErr := m.entryRepo.MarkAccessed(ctx, entry.ID, m.now()); markErr != nil && markErr != repository.ErrCacheEntryNotFound {
+		return preparedStepCache{}, markErr
+	}
+
+	prepared.MetadataEntry = &entry
+	logManager.EmitSystemLine(ctx, fmt.Sprintf("cache lookup: preset=%s key=%s hit=true job_id=%s duration_ms=%d", preset.Name, key, jobID, time.Since(lookupStart).Milliseconds()))
+	logManager.EmitSystemLine(ctx, fmt.Sprintf("cache restore end: preset=%s key=%s bytes=%d duration_ms=%d", preset.Name, key, restoreResult.SizeBytes, time.Since(restoreStart).Milliseconds()))
+	return prepared, nil
 }
 
-func (m *StepCacheManager) Save(ctx context.Context, logManager *ExecutionLogManager, prepared preparedStepCache, result runner.RunStepResult) error {
-	if !prepared.Enabled || m == nil || m.store == nil {
+func (m *StepCacheManager) Save(ctx context.Context, executionContext StepExecutionContext, logManager *ExecutionLogManager, prepared preparedStepCache, result runner.RunStepResult) error {
+	if !prepared.Enabled || m == nil || m.store == nil || m.entryRepo == nil {
 		return nil
 	}
 	if result.Status != runner.RunStepStatusSuccess {
 		logManager.EmitSystemLine(ctx, "cache save skipped: step not successful")
-		logManager.EmitSystemLine(ctx, "cache save: success=false duration_ms=0")
+		return nil
+	}
+	if prepared.Policy == domain.CachePolicyPull || prepared.Policy == domain.CachePolicyOff {
+		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save skipped: policy=%s", prepared.Policy))
 		return nil
 	}
 
-	saveStarted := time.Now()
-	pathCount := len(prepared.Mounts)
-	savedBytes, savedMeasured, bytesErr := measuredDirFileBytes("save", prepared.Key, filepath.Join(prepared.RuntimeDir, "paths"))
-	if bytesErr != nil {
-		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save bytes unavailable: %s", bytesErr.Error()))
-		savedBytes = 0
-	}
-	storeSizeBefore, hasStoreSizeBefore := measuredCacheStoreTotalSizeBytes("before-save", prepared.Key, m.store)
-	if hasStoreSizeBefore {
-		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache store size before save: bytes=%d", storeSizeBefore))
-	}
+	jobID := effectiveJobID(executionContext)
+	objectKey := m.objectKey(jobID, prepared.Preset.Name, prepared.CacheKey)
 
-	if err := m.store.Save(ctx, prepared.Key, prepared.RuntimeDir); err != nil {
-		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=false path_count=%d bytes=%d duration_ms=%d bytes_measured=%t", pathCount, savedBytes, time.Since(saveStarted).Milliseconds(), savedMeasured))
+	start := time.Now()
+	saveResult, err := m.store.Save(ctx, objectKey, prepared.RuntimeDir)
+	if err != nil {
 		return err
 	}
-	storeSizeAfter, hasStoreSizeAfter := measuredCacheStoreTotalSizeBytes("after-save", prepared.Key, m.store)
-	if hasStoreSizeAfter {
-		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache store size after save: bytes=%d", storeSizeAfter))
+
+	_, err = m.entryRepo.Upsert(ctx, repository.CacheEntryUpsertInput{
+		JobID:            jobID,
+		Preset:           prepared.Preset.Name,
+		CacheKey:         prepared.CacheKey,
+		StorageProvider:  m.store.Provider(),
+		ObjectKey:        objectKey,
+		SizeBytes:        saveResult.SizeBytes,
+		Checksum:         saveResult.Checksum,
+		Compression:      saveResult.Compression,
+		Status:           domain.CacheEntryStatusReady,
+		CreatedByBuildID: executionContext.Build.ID,
+		CreatedByStepID:  executionContext.ExecutionRequest.StepID,
+	})
+	if err != nil {
+		return err
 	}
-	if hasStoreSizeBefore && hasStoreSizeAfter {
-		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=true path_count=%d bytes=%d store_bytes_before=%d store_bytes_after=%d duration_ms=%d bytes_measured=%t", pathCount, savedBytes, storeSizeBefore, storeSizeAfter, time.Since(saveStarted).Milliseconds(), savedMeasured))
-	} else {
-		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save: success=true path_count=%d bytes=%d duration_ms=%d bytes_measured=%t", pathCount, savedBytes, time.Since(saveStarted).Milliseconds(), savedMeasured))
-	}
-	logManager.EmitSystemLine(ctx, "Cache: saved")
+
+	logManager.EmitSystemLine(ctx, fmt.Sprintf("cache save end: preset=%s key=%s bytes=%d duration_ms=%d", prepared.Preset.Name, prepared.CacheKey, saveResult.SizeBytes, time.Since(start).Milliseconds()))
 	return nil
 }
 
-func measuredDirFileBytes(operation string, key string, root string) (int64, bool, error) {
-	if !shouldMeasureCachePathBytes(operation, key) {
-		return 0, false, nil
-	}
-	bytes, err := dirFileBytes(root)
+func (m *StepCacheManager) resolvePreparedIdentity(executionContext StepExecutionContext) (cachepkg.Preset, string, string, error) {
+	workspaceRoot, err := m.workspaceRootForBuild(executionContext.Build.ID)
 	if err != nil {
-		return 0, true, err
+		return cachepkg.Preset{}, "", "", err
 	}
-	return bytes, true, nil
-}
 
-func shouldMeasureCachePathBytes(operation string, key string) bool {
-	mode := strings.ToLower(strings.TrimSpace(os.Getenv(cachePathBytesModeEnv)))
-	switch mode {
-	case "always":
-		return true
-	case "sample":
-		samplePercent := cachePathBytesSamplePercent()
-		if samplePercent <= 0 {
-			return false
-		}
-		if samplePercent >= 100 {
-			return true
-		}
-		hasher := fnv.New32a()
-		_, _ = hasher.Write([]byte(operation))
-		_, _ = hasher.Write([]byte("\x00"))
-		_, _ = hasher.Write([]byte(key))
-		return int(hasher.Sum32()%100) < samplePercent
-	default:
-		return false
+	stepWorkingDir := "."
+	if executionContext.Step != nil {
+		stepWorkingDir = executionContext.Step.WorkingDir
 	}
-}
 
-func cachePathBytesSamplePercent() int {
-	trimmed := strings.TrimSpace(os.Getenv(cachePathBytesSamplePercentEnv))
-	return parseSamplePercent(trimmed, 10)
-}
-
-func measuredCacheStoreTotalSizeBytes(operation string, key string, store cachepkg.Store) (int64, bool) {
-	if !shouldMeasureCacheStoreSize(operation, key) {
-		return 0, false
-	}
-	return cacheStoreTotalSizeBytes(store)
-}
-
-func shouldMeasureCacheStoreSize(operation string, key string) bool {
-	mode := strings.ToLower(strings.TrimSpace(os.Getenv(cacheStoreSizeModeEnv)))
-	switch mode {
-	case "always":
-		return true
-	case "sample":
-		samplePercent := cacheStoreSizeSamplePercent()
-		if samplePercent <= 0 {
-			return false
-		}
-		if samplePercent >= 100 {
-			return true
-		}
-		hasher := fnv.New32a()
-		_, _ = hasher.Write([]byte(operation))
-		_, _ = hasher.Write([]byte("\x00"))
-		_, _ = hasher.Write([]byte(key))
-		return int(hasher.Sum32()%100) < samplePercent
-	default:
-		return false
-	}
-}
-
-func cacheStoreSizeSamplePercent() int {
-	trimmed := strings.TrimSpace(os.Getenv(cacheStoreSizeSamplePercentEnv))
-	return parseSamplePercent(trimmed, 10)
-}
-
-func parseSamplePercent(value string, fallback int) int {
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
+	preset, err := cachepkg.ResolvePreset(executionContext.Step.Cache.Preset, stepWorkingDir)
 	if err != nil {
-		return fallback
+		return cachepkg.Preset{}, "", "", err
 	}
-	if parsed < 0 {
-		return 0
-	}
-	if parsed > 100 {
-		return 100
-	}
-	return parsed
-}
 
-func cacheStoreTotalSizeBytes(store cachepkg.Store) (int64, bool) {
-	reporter, ok := store.(cacheStoreSizeReporter)
-	if !ok {
-		return 0, false
-	}
-	total, err := reporter.TotalSizeBytes()
+	fingerprint, _, err := cachepkg.ComputeFingerprint(workspaceRoot, preset.FingerprintFiles)
 	if err != nil {
-		return 0, false
-	}
-	return total, true
-}
-
-func dirFileBytes(root string) (int64, error) {
-	if strings.TrimSpace(root) == "" {
-		return 0, nil
+		if err == cachepkg.ErrNoFingerprintFilesFound {
+			return cachepkg.Preset{}, "", "", err
+		}
+		return cachepkg.Preset{}, "", "", err
 	}
 
-	total := int64(0)
-	err := filepath.WalkDir(root, func(_ string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			if os.IsNotExist(walkErr) {
-				return nil
-			}
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		info, infoErr := d.Info()
-		if infoErr != nil {
-			return infoErr
-		}
-		total += info.Size()
-		return nil
-	})
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, nil
-		}
-		return 0, err
+	cacheKey := fmt.Sprintf("%s:%s", preset.Name, fingerprint)
+	runtimeDir := filepath.Join(workspaceRoot, ".coyote", "cache-runtime", sanitizeStepDirName(executionContext.ExecutionRequest.StepID, executionContext.ExecutionRequest.StepIndex))
+	if err := os.RemoveAll(runtimeDir); err != nil {
+		return cachepkg.Preset{}, "", "", err
 	}
-
-	return total, nil
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		return cachepkg.Preset{}, "", "", err
+	}
+	return preset, runtimeDir, cacheKey, nil
 }
 
 func (m *StepCacheManager) workspaceRootForBuild(buildID string) (string, error) {
-	root := strings.TrimSpace(m.executionRootPath)
-	if root == "" {
+	executionRoot := strings.TrimSpace(m.executionRootPath)
+	if executionRoot == "" {
 		return "", ErrExecutionWorkspaceRootNotConfigured
 	}
-	return filepath.Join(root, strings.TrimSpace(buildID)), nil
+
+	trimmedBuildID := strings.TrimSpace(buildID)
+	if trimmedBuildID == "" {
+		return "", fmt.Errorf("build id is required")
+	}
+
+	workspaceRoot := filepath.Join(executionRoot, trimmedBuildID)
+	cleanRoot := filepath.Clean(executionRoot)
+	cleanWorkspace := filepath.Clean(workspaceRoot)
+	rel, err := filepath.Rel(cleanRoot, cleanWorkspace)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("workspace root escapes execution root")
+	}
+
+	if _, err := os.Stat(workspaceRoot); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("build workspace not found: %s", workspaceRoot)
+		}
+		return "", err
+	}
+
+	return workspaceRoot, nil
 }
 
-func digestCacheKeyFiles(workspaceRoot string, files []string) (string, error) {
-	hasher := sha256.New()
-	ordered := append([]string(nil), files...)
-	sort.Strings(ordered)
-	for _, relativePath := range ordered {
-		cleaned := filepath.Clean(filepath.FromSlash(relativePath))
-		hasher.Write([]byte(relativePath))
-		hasher.Write([]byte("\n"))
-		fullPath := filepath.Join(workspaceRoot, cleaned)
-		data, err := os.ReadFile(fullPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				hasher.Write([]byte("<missing>\n"))
-				continue
-			}
-			return "", err
+func presetMounts(runtimeDir string, cachePaths []string) ([]runner.CacheMount, error) {
+	mounts := make([]runner.CacheMount, 0, len(cachePaths))
+	for idx, cachePath := range cachePaths {
+		hostPath := filepath.Join(runtimeDir, "paths", fmt.Sprintf("%03d", idx))
+		if err := os.MkdirAll(hostPath, 0o755); err != nil {
+			return nil, fmt.Errorf("create cache mount path %s: %w", hostPath, err)
 		}
-		sum := sha256.Sum256(data)
-		hasher.Write([]byte(hex.EncodeToString(sum[:])))
-		hasher.Write([]byte("\n"))
+		mounts = append(mounts, runner.CacheMount{HostPath: hostPath, ContainerPath: cachePath})
 	}
-	return hex.EncodeToString(hasher.Sum(nil)), nil
+	return mounts, nil
 }
 
-func buildScopedID(scope domain.CacheScope, buildID string) string {
-	if scope != domain.CacheScopeBuild {
-		return ""
+func effectiveJobID(executionContext StepExecutionContext) string {
+	if executionContext.Build.JobID != nil && strings.TrimSpace(*executionContext.Build.JobID) != "" {
+		return strings.TrimSpace(*executionContext.Build.JobID)
 	}
-	return strings.TrimSpace(buildID)
+	if strings.TrimSpace(executionContext.Build.ID) != "" {
+		return "build:" + strings.TrimSpace(executionContext.Build.ID)
+	}
+	if executionContext.PersistedJob != nil && strings.TrimSpace(executionContext.PersistedJob.ID) != "" {
+		return strings.TrimSpace(executionContext.PersistedJob.ID)
+	}
+	if strings.TrimSpace(executionContext.ExecutionRequest.JobID) != "" {
+		return strings.TrimSpace(executionContext.ExecutionRequest.JobID)
+	}
+	return "build:" + strings.TrimSpace(executionContext.Build.ID)
 }
 
-func jobScopedIdentity(scope domain.CacheScope, executionContext StepExecutionContext) string {
-	if scope != domain.CacheScopeJob {
-		return ""
-	}
-	// ExecutionRequest.JobID is an execution-job claim identifier and can differ
-	// across steps in the same logical job; using it would fragment job cache keys.
-	if executionContext.Build.JobID != nil {
-		if trimmed := strings.TrimSpace(*executionContext.Build.JobID); trimmed != "" {
-			return trimmed
-		}
-	}
-	if executionContext.Build.PipelinePath != nil {
-		if trimmed := strings.TrimSpace(*executionContext.Build.PipelinePath); trimmed != "" {
-			return executionContext.Build.ProjectID + ":" + stableRepoIdentity(executionContext.Build) + ":" + trimmed
-		}
-	}
-	if executionContext.Build.PipelineName != nil {
-		if trimmed := strings.TrimSpace(*executionContext.Build.PipelineName); trimmed != "" {
-			return executionContext.Build.ProjectID + ":" + stableRepoIdentity(executionContext.Build) + ":" + trimmed
-		}
-	}
-	return executionContext.Build.ProjectID + ":" + stableRepoIdentity(executionContext.Build) + ":adhoc"
-}
-
-func stableRepoIdentity(build domain.Build) string {
-	if build.Source != nil {
-		if trimmed := strings.TrimSpace(build.Source.RepositoryURL); trimmed != "" {
-			return trimmed
-		}
-	}
-	if build.RepoURL != nil {
-		if trimmed := strings.TrimSpace(*build.RepoURL); trimmed != "" {
-			return trimmed
-		}
-	}
-	return "repo-unknown"
+func (m *StepCacheManager) objectKey(jobID string, preset string, cacheKey string) string {
+	hash := sha256.Sum256([]byte(strings.TrimSpace(cacheKey)))
+	return fmt.Sprintf("v1/jobs/%s/%s/%s", sanitizeKeyPart(jobID), sanitizeKeyPart(preset), hex.EncodeToString(hash[:]))
 }
 
 func sanitizeStepDirName(stepID string, stepIndex int) string {
 	trimmed := strings.TrimSpace(stepID)
-	if trimmed != "" {
-		return strings.ReplaceAll(trimmed, string(filepath.Separator), "-")
+	if trimmed == "" {
+		return fmt.Sprintf("step-%d", stepIndex)
 	}
-	return fmt.Sprintf("step-%d", stepIndex)
+
+	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_")
+	sanitized := replacer.Replace(trimmed)
+	if sanitized == "" {
+		return fmt.Sprintf("step-%d", stepIndex)
+	}
+	return sanitized
+}
+
+func sanitizeKeyPart(value string) string {
+	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_", "|", "_")
+	sanitized := replacer.Replace(strings.TrimSpace(value))
+	if sanitized == "" {
+		return "unknown"
+	}
+	return sanitized
 }

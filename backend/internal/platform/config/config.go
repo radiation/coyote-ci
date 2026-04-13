@@ -25,20 +25,25 @@ type Config struct {
 	StepLeaseSeconds  int
 	WorkerStatusAddr  string
 
-	ExecutionBackend        string
-	ExecutionDefaultImage   string
-	ExecutionWorkspaceRoot  string
-	WorkerCacheStorageRoot  string
-	WorkerCacheMaxSizeMB    int
-	MountDockerSocket       bool
-	ArtifactStorageRoot     string
-	ArtifactStorageProvider string
-	ArtifactStorageStrict   bool
-	ArtifactGCSBucket       string
-	ArtifactGCSPrefix       string
-	ArtifactGCSProject      string
-	PushEventSecret         string
-	GitHubWebhookSecret     string
+	ExecutionBackend           string
+	ExecutionDefaultImage      string
+	ExecutionWorkspaceRoot     string
+	WorkerCacheStorageProvider string
+	WorkerCacheStorageRoot     string
+	WorkerCacheMaxSizeMB       int
+	WorkerCacheStorageStrict   bool
+	WorkerCacheGCSBucket       string
+	WorkerCacheGCSPrefix       string
+	WorkerCacheGCSProject      string
+	MountDockerSocket          bool
+	ArtifactStorageRoot        string
+	ArtifactStorageProvider    string
+	ArtifactStorageStrict      bool
+	ArtifactGCSBucket          string
+	ArtifactGCSPrefix          string
+	ArtifactGCSProject         string
+	PushEventSecret            string
+	GitHubWebhookSecret        string
 }
 
 func Load() Config {
@@ -58,20 +63,25 @@ func Load() Config {
 		StepLeaseSeconds:  getEnvInt("WORKER_STEP_LEASE_SECONDS", 45),
 		WorkerStatusAddr:  getEnv("WORKER_STATUS_ADDR", ""),
 
-		ExecutionBackend:        getEnv("WORKER_EXECUTION_BACKEND", "docker"),
-		ExecutionDefaultImage:   getEnv("WORKER_EXECUTION_DEFAULT_IMAGE", "alpine:3.20"),
-		ExecutionWorkspaceRoot:  getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
-		WorkerCacheStorageRoot:  getEnv("WORKER_CACHE_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-cache")),
-		WorkerCacheMaxSizeMB:    getEnvInt("CACHE_MAX_SIZE_MB", 10240),
-		MountDockerSocket:       getEnvBool("WORKER_MOUNT_DOCKER_SOCKET", false),
-		ArtifactStorageRoot:     getEnv("ARTIFACT_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-artifacts")),
-		ArtifactStorageProvider: getEnv("ARTIFACT_STORAGE_PROVIDER", "filesystem"),
-		ArtifactStorageStrict:   getEnvBool("ARTIFACT_STORAGE_STRICT", false),
-		ArtifactGCSBucket:       getEnv("ARTIFACT_GCS_BUCKET", ""),
-		ArtifactGCSPrefix:       getEnv("ARTIFACT_GCS_PREFIX", ""),
-		ArtifactGCSProject:      getEnv("ARTIFACT_GCS_PROJECT", ""),
-		PushEventSecret:         getEnv("PUSH_EVENT_SECRET", ""),
-		GitHubWebhookSecret:     getEnv("GITHUB_WEBHOOK_SECRET", getEnv("PUSH_EVENT_SECRET", "")),
+		ExecutionBackend:           getEnv("WORKER_EXECUTION_BACKEND", "docker"),
+		ExecutionDefaultImage:      getEnv("WORKER_EXECUTION_DEFAULT_IMAGE", "alpine:3.20"),
+		ExecutionWorkspaceRoot:     getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
+		WorkerCacheStorageProvider: getEnv("WORKER_CACHE_STORAGE_PROVIDER", ""),
+		WorkerCacheStorageRoot:     getEnv("WORKER_CACHE_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-cache")),
+		WorkerCacheMaxSizeMB:       getEnvInt("CACHE_MAX_SIZE_MB", 10240),
+		WorkerCacheStorageStrict:   getEnvBool("WORKER_CACHE_STORAGE_STRICT", false),
+		WorkerCacheGCSBucket:       getEnv("WORKER_CACHE_GCS_BUCKET", ""),
+		WorkerCacheGCSPrefix:       getEnv("WORKER_CACHE_GCS_PREFIX", ""),
+		WorkerCacheGCSProject:      getEnv("WORKER_CACHE_GCS_PROJECT", ""),
+		MountDockerSocket:          getEnvBool("WORKER_MOUNT_DOCKER_SOCKET", false),
+		ArtifactStorageRoot:        getEnv("ARTIFACT_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-artifacts")),
+		ArtifactStorageProvider:    getEnv("ARTIFACT_STORAGE_PROVIDER", "filesystem"),
+		ArtifactStorageStrict:      getEnvBool("ARTIFACT_STORAGE_STRICT", false),
+		ArtifactGCSBucket:          getEnv("ARTIFACT_GCS_BUCKET", ""),
+		ArtifactGCSPrefix:          getEnv("ARTIFACT_GCS_PREFIX", ""),
+		ArtifactGCSProject:         getEnv("ARTIFACT_GCS_PROJECT", ""),
+		PushEventSecret:            getEnv("PUSH_EVENT_SECRET", ""),
+		GitHubWebhookSecret:        getEnv("GITHUB_WEBHOOK_SECRET", getEnv("PUSH_EVENT_SECRET", "")),
 	}
 }
 

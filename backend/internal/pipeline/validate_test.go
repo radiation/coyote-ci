@@ -338,20 +338,20 @@ func TestValidate_Artifacts_Valid(t *testing.T) {
 	}
 }
 
-func TestValidate_CacheScopeRequired(t *testing.T) {
+func TestValidate_CachePresetRequired(t *testing.T) {
 	pf := &PipelineFile{
 		Version: 1,
 		Steps: []StepDef{{
 			Name:  "test",
 			Run:   "go test ./...",
-			Cache: &CacheDef{Preset: "golang"},
+			Cache: &CacheDef{},
 		}},
 	}
 	err := Validate(pf)
 	if err == nil {
-		t.Fatal("expected error when cache.scope missing")
+		t.Fatal("expected error when cache.preset missing")
 	}
-	assertContains(t, err.Error(), "scope")
+	assertContains(t, err.Error(), "preset")
 }
 
 func TestValidate_CacheUnknownPresetRejected(t *testing.T) {
@@ -362,7 +362,6 @@ func TestValidate_CacheUnknownPresetRejected(t *testing.T) {
 			Run:  "go test ./...",
 			Cache: &CacheDef{
 				Preset: "unknown",
-				Scope:  "job",
 			},
 		}},
 	}
@@ -373,55 +372,50 @@ func TestValidate_CacheUnknownPresetRejected(t *testing.T) {
 	assertContains(t, err.Error(), "unknown")
 }
 
-func TestValidate_CachePathMustBeAbsolute(t *testing.T) {
+func TestValidate_CachePolicyRejectedWhenInvalid(t *testing.T) {
 	pf := &PipelineFile{
 		Version: 1,
 		Steps: []StepDef{{
 			Name: "test",
 			Run:  "go test ./...",
 			Cache: &CacheDef{
-				Scope: "job",
-				Paths: []string{"relative/cache"},
-				Key:   CacheKeyDef{Files: []string{"go.mod"}},
+				Preset: "go",
+				Policy: "bad-policy",
 			},
 		}},
 	}
 	err := Validate(pf)
 	if err == nil {
-		t.Fatal("expected absolute cache path validation error")
+		t.Fatal("expected invalid cache policy validation error")
 	}
-	assertContains(t, err.Error(), "absolute")
+	assertContains(t, err.Error(), "policy")
 }
 
-func TestValidate_CacheKeyFileMustBeWorkspaceRelative(t *testing.T) {
+func TestValidate_CachePresetPolicyValid(t *testing.T) {
 	pf := &PipelineFile{
 		Version: 1,
 		Steps: []StepDef{{
 			Name: "test",
 			Run:  "go test ./...",
 			Cache: &CacheDef{
-				Scope: "job",
-				Paths: []string{"/go/pkg/mod"},
-				Key:   CacheKeyDef{Files: []string{"/go.mod"}},
+				Preset: "node",
+				Policy: "pull",
 			},
 		}},
 	}
-	err := Validate(pf)
-	if err == nil {
-		t.Fatal("expected key file path validation error")
+	if err := Validate(pf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	assertContains(t, err.Error(), "workspace-relative")
 }
 
-func TestValidate_CachePresetOnlyValid(t *testing.T) {
+func TestValidate_CachePresetDefaultPolicyValid(t *testing.T) {
 	pf := &PipelineFile{
 		Version: 1,
 		Steps: []StepDef{{
 			Name: "test",
 			Run:  "go test ./...",
 			Cache: &CacheDef{
-				Preset: "golang",
-				Scope:  "job",
+				Preset: "python-uv",
 			},
 		}},
 	}

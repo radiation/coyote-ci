@@ -1,17 +1,21 @@
 package cache
 
 import (
-	"bytes"
+	"archive/tar"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
 
 var ErrInvalidCacheKey = errors.New("invalid cache key")
@@ -34,120 +38,96 @@ func NewFilesystemStoreWithMaxSize(root string, maxSizeBytes int64) *FilesystemS
 	return &FilesystemStore{root: strings.TrimSpace(root), maxSizeBytes: maxSizeBytes}
 }
 
-func (s *FilesystemStore) Restore(_ context.Context, key string, destinationRoot string) (bool, error) {
-	entryPath, err := s.resolvePathForKey(key)
+func (s *FilesystemStore) Provider() domain.StorageProvider {
+	return domain.StorageProviderFilesystem
+}
+
+func (s *FilesystemStore) Restore(_ context.Context, key string, destinationRoot string) (RestoreResult, error) {
+	archivePath, err := s.resolvePathForKey(key)
 	if err != nil {
-		return false, err
+		return RestoreResult{}, err
 	}
 	if strings.TrimSpace(destinationRoot) == "" {
-		return false, errors.New("destination root is required")
+		return RestoreResult{}, errors.New("destination root is required")
 	}
 
-	info, err := os.Stat(entryPath)
+	info, err := os.Stat(archivePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return RestoreResult{Hit: false, Compression: "tar.gz"}, nil
 		}
-		return false, err
+		return RestoreResult{}, err
 	}
-	if !info.IsDir() {
-		return false, fmt.Errorf("cache entry is not a directory: %s", entryPath)
+	if info.IsDir() {
+		return RestoreResult{}, fmt.Errorf("cache entry is not an archive file: %s", archivePath)
 	}
 
 	if mkdirErr := os.MkdirAll(destinationRoot, 0o755); mkdirErr != nil {
-		return false, mkdirErr
+		return RestoreResult{}, mkdirErr
 	}
-	if copyErr := copyDir(entryPath, destinationRoot); copyErr != nil {
-		return false, copyErr
+	if err := extractTarGz(archivePath, destinationRoot); err != nil {
+		return RestoreResult{}, err
 	}
+
 	now := time.Now().UTC()
-	_ = os.Chtimes(entryPath, now, now)
-	return true, nil
+	_ = os.Chtimes(archivePath, now, now)
+	return RestoreResult{Hit: true, SizeBytes: info.Size(), Compression: "tar.gz"}, nil
 }
 
-func (s *FilesystemStore) Save(_ context.Context, key string, sourceRoot string) error {
-	entryPath, err := s.resolvePathForKey(key)
+func (s *FilesystemStore) Save(_ context.Context, key string, sourceRoot string) (SaveResult, error) {
+	archivePath, err := s.resolvePathForKey(key)
 	if err != nil {
-		return err
+		return SaveResult{}, err
 	}
 	if strings.TrimSpace(sourceRoot) == "" {
-		return errors.New("source root is required")
+		return SaveResult{}, errors.New("source root is required")
 	}
-
 	if _, statErr := os.Stat(sourceRoot); statErr != nil {
-		return statErr
+		return SaveResult{}, statErr
 	}
 
-	if evictErr := s.evictIfNeeded(); evictErr != nil {
-		return evictErr
+	if mkdirErr := os.MkdirAll(filepath.Dir(archivePath), 0o755); mkdirErr != nil {
+		return SaveResult{}, mkdirErr
 	}
 
-	if mkdirErr := os.MkdirAll(filepath.Dir(entryPath), 0o755); mkdirErr != nil {
-		return mkdirErr
-	}
-
-	existingInfo, statErr := os.Stat(entryPath)
-	if statErr == nil && existingInfo.IsDir() {
-		sameSnapshot, sameErr := dirsEqual(sourceRoot, entryPath)
-		if sameErr != nil {
-			return sameErr
-		}
-		if sameSnapshot {
-			now := time.Now().UTC()
-			_ = os.Chtimes(entryPath, now, now)
-			return nil
-		}
-	}
-	if statErr != nil && !os.IsNotExist(statErr) {
-		return statErr
-	}
-
-	tmpPath, err := os.MkdirTemp(filepath.Dir(entryPath), ".cache-entry-staging-*")
+	tmpPath, err := os.CreateTemp(filepath.Dir(archivePath), ".cache-archive-*.tar.gz")
 	if err != nil {
-		return err
+		return SaveResult{}, err
 	}
-	defer func() {
-		_ = os.RemoveAll(tmpPath)
-	}()
-
-	if copyErr := copyDir(sourceRoot, tmpPath); copyErr != nil {
-		return copyErr
+	tmpFilePath := tmpPath.Name()
+	defer func() { _ = os.Remove(tmpFilePath) }()
+	if closeErr := tmpPath.Close(); closeErr != nil {
+		return SaveResult{}, closeErr
 	}
 
-	backupPath := ""
-	if statErr == nil {
-		backupPath = fmt.Sprintf("%s.backup.%d", entryPath, time.Now().UTC().UnixNano())
-		if renameErr := os.Rename(entryPath, backupPath); renameErr != nil {
-			return renameErr
-		}
+	if writeErr := writeTarGz(tmpFilePath, sourceRoot); writeErr != nil {
+		return SaveResult{}, writeErr
 	}
 
-	if renameErr := os.Rename(tmpPath, entryPath); renameErr != nil {
-		if backupPath != "" {
-			_ = os.Rename(backupPath, entryPath)
-		}
-		return renameErr
+	checksum, size, err := fileDigestAndSize(tmpFilePath)
+	if err != nil {
+		return SaveResult{}, err
 	}
 
-	if backupPath != "" {
-		if removeErr := os.RemoveAll(backupPath); removeErr != nil {
-			return removeErr
-		}
+	if err := os.Rename(tmpFilePath, archivePath); err != nil {
+		return SaveResult{}, err
 	}
-
-	now := time.Now().UTC()
-	_ = os.Chtimes(entryPath, now, now)
 
 	if evictErr := s.evictIfNeeded(); evictErr != nil {
-		return evictErr
+		return SaveResult{}, evictErr
 	}
-	return nil
+
+	return SaveResult{SizeBytes: size, Checksum: checksum, Compression: "tar.gz"}, nil
 }
 
 func (s *FilesystemStore) TotalSizeBytes() (int64, error) {
-	_, total, err := s.collectEntries()
+	entries, err := s.collectEntries()
 	if err != nil {
 		return 0, err
+	}
+	total := int64(0)
+	for _, entry := range entries {
+		total += entry.size
 	}
 	return total, nil
 }
@@ -163,11 +143,15 @@ func (s *FilesystemStore) evictIfNeeded() error {
 		return nil
 	}
 
-	entries, totalSize, err := s.collectEntries()
+	entries, err := s.collectEntries()
 	if err != nil {
 		return err
 	}
-	if totalSize <= s.maxSizeBytes {
+	total := int64(0)
+	for _, entry := range entries {
+		total += entry.size
+	}
+	if total <= s.maxSizeBytes {
 		return nil
 	}
 
@@ -175,105 +159,54 @@ func (s *FilesystemStore) evictIfNeeded() error {
 		return entries[i].lastUse.Before(entries[j].lastUse)
 	})
 
-	evictedCount := 0
-	bytesReclaimed := int64(0)
 	for _, entry := range entries {
-		if totalSize <= s.maxSizeBytes {
+		if total <= s.maxSizeBytes {
 			break
 		}
-		if removeErr := os.RemoveAll(entry.path); removeErr != nil {
-			return removeErr
+		if err := os.Remove(entry.path); err != nil {
+			return err
 		}
-		totalSize -= entry.size
-		bytesReclaimed += entry.size
-		evictedCount++
-	}
-
-	if evictedCount > 0 {
-		log.Printf("cache eviction: entries_evicted=%d bytes_reclaimed=%d", evictedCount, bytesReclaimed)
+		total -= entry.size
 	}
 
 	return nil
 }
 
-func (s *FilesystemStore) collectEntries() ([]cacheEntry, int64, error) {
+func (s *FilesystemStore) collectEntries() ([]cacheEntry, error) {
 	entries := make([]cacheEntry, 0)
-	totalSize := int64(0)
 	if strings.TrimSpace(s.root) == "" {
-		return entries, 0, errors.New("cache storage root is required")
+		return entries, errors.New("cache storage root is required")
 	}
 
 	if _, err := os.Stat(s.root); err != nil {
 		if os.IsNotExist(err) {
-			return entries, 0, nil
+			return entries, nil
 		}
-		return nil, 0, err
+		return nil, err
 	}
 
-	walkErr := filepath.WalkDir(s.root, func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(s.root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() {
+		if d.IsDir() {
 			return nil
 		}
-		if path == s.root {
+		if !strings.HasSuffix(strings.ToLower(d.Name()), ".tar.gz") {
 			return nil
 		}
-
-		pathsDir := filepath.Join(path, "paths")
-		pathsInfo, statErr := os.Stat(pathsDir)
-		if statErr != nil || !pathsInfo.IsDir() {
-			return nil
+		info, err := d.Info()
+		if err != nil {
+			return err
 		}
-
-		size, lastUse, entryErr := dirSizeAndModTime(path)
-		if entryErr != nil {
-			return entryErr
-		}
-		entries = append(entries, cacheEntry{path: path, size: size, lastUse: lastUse})
-		totalSize += size
-
-		return filepath.SkipDir
-	})
-	if walkErr != nil {
-		return nil, 0, walkErr
-	}
-
-	return entries, totalSize, nil
-}
-
-func dirSizeAndModTime(root string) (int64, time.Time, error) {
-	size := int64(0)
-	latest := time.Time{}
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		info, infoErr := os.Lstat(path)
-		if infoErr != nil {
-			return infoErr
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			mod := info.ModTime()
-			if mod.After(latest) {
-				latest = mod
-			}
-			return nil
-		}
-		if !info.IsDir() {
-			size += info.Size()
-		}
-		mod := info.ModTime()
-		if mod.After(latest) {
-			latest = mod
-		}
+		entries = append(entries, cacheEntry{path: path, size: info.Size(), lastUse: info.ModTime()})
 		return nil
 	})
 	if err != nil {
-		return 0, time.Time{}, err
+		return nil, err
 	}
-	return size, latest, nil
+
+	return entries, nil
 }
 
 func (s *FilesystemStore) resolvePathForKey(key string) (string, error) {
@@ -293,7 +226,7 @@ func (s *FilesystemStore) resolvePathForKey(key string) (string, error) {
 		return "", ErrInvalidCacheKey
 	}
 
-	full := filepath.Join(s.root, cleaned)
+	full := filepath.Join(s.root, cleaned) + ".tar.gz"
 	root := filepath.Clean(s.root)
 	rel, err := filepath.Rel(root, full)
 	if err != nil {
@@ -305,7 +238,18 @@ func (s *FilesystemStore) resolvePathForKey(key string) (string, error) {
 	return full, nil
 }
 
-func copyDir(srcRoot string, dstRoot string) error {
+func writeTarGz(dstArchivePath string, srcRoot string) error {
+	file, err := os.Create(dstArchivePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+
+	gz := gzip.NewWriter(file)
+	defer func() { _ = gz.Close() }()
+	writer := tar.NewWriter(gz)
+	defer func() { _ = writer.Close() }()
+
 	return filepath.WalkDir(srcRoot, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -317,185 +261,130 @@ func copyDir(srcRoot string, dstRoot string) error {
 		if err != nil {
 			return err
 		}
+		rel = filepath.ToSlash(rel)
 		if rel == "." {
 			return nil
 		}
-
-		dst := filepath.Join(dstRoot, rel)
-		if d.IsDir() {
-			return os.MkdirAll(dst, 0o755)
-		}
-		if mkdirErr := os.MkdirAll(filepath.Dir(dst), 0o755); mkdirErr != nil {
-			return mkdirErr
+		if strings.HasPrefix(rel, "../") {
+			return fmt.Errorf("cache content escapes source root: %s", rel)
 		}
 
-		srcFile, err := os.Open(path)
+		info, err := d.Info()
 		if err != nil {
 			return err
 		}
-
-		dstFile, err := os.Create(dst)
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported file type in cache content: %s", path)
+		}
+		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
-			_ = srcFile.Close()
 			return err
 		}
-		if _, copyErr := io.Copy(dstFile, srcFile); copyErr != nil {
-			_ = dstFile.Close()
-			_ = srcFile.Close()
-			return copyErr
+		header.Name = rel
+		if info.IsDir() && !strings.HasSuffix(header.Name, "/") {
+			header.Name += "/"
 		}
-		if closeErr := dstFile.Close(); closeErr != nil {
-			_ = srcFile.Close()
-			return closeErr
+		if writeHeaderErr := writer.WriteHeader(header); writeHeaderErr != nil {
+			return writeHeaderErr
 		}
-		if closeErr := srcFile.Close(); closeErr != nil {
-			return closeErr
+		if info.IsDir() {
+			return nil
 		}
-		return nil
+
+		src, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = src.Close() }()
+		_, err = io.Copy(writer, src)
+		return err
 	})
 }
 
-func dirsEqual(aRoot string, bRoot string) (bool, error) {
-	err := filepath.WalkDir(aRoot, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-
-		rel, err := filepath.Rel(aRoot, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-
-		aInfo, err := os.Lstat(path)
-		if err != nil {
-			return err
-		}
-		if aInfo.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symlinks are not allowed in cache content: %s", path)
-		}
-
-		bPath := filepath.Join(bRoot, rel)
-		bInfo, err := os.Lstat(bPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return ErrDifferentDirectoryContent
-			}
-			return err
-		}
-		if bInfo.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symlinks are not allowed in cache content: %s", bPath)
-		}
-
-		if aInfo.IsDir() != bInfo.IsDir() {
-			return ErrDifferentDirectoryContent
-		}
-		if aInfo.IsDir() {
-			return nil
-		}
-
-		equal, err := fileContentsEqual(path, bPath)
-		if err != nil {
-			return err
-		}
-		if !equal {
-			return ErrDifferentDirectoryContent
-		}
-		return nil
-	})
+func extractTarGz(srcArchivePath string, destinationRoot string) error {
+	file, err := os.Open(srcArchivePath)
 	if err != nil {
-		if errors.Is(err, ErrDifferentDirectoryContent) {
-			return false, nil
-		}
-		return false, err
+		return err
 	}
+	defer func() { _ = file.Close() }()
 
-	err = filepath.WalkDir(bRoot, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-
-		rel, relErr := filepath.Rel(bRoot, path)
-		if relErr != nil {
-			return relErr
-		}
-		if rel == "." {
-			return nil
-		}
-
-		aPath := filepath.Join(aRoot, rel)
-		if _, statErr := os.Lstat(aPath); statErr != nil {
-			if os.IsNotExist(statErr) {
-				return ErrDifferentDirectoryContent
-			}
-			return statErr
-		}
-		return nil
-	})
+	gz, err := gzip.NewReader(file)
 	if err != nil {
-		if errors.Is(err, ErrDifferentDirectoryContent) {
-			return false, nil
-		}
-		return false, err
+		return err
 	}
+	defer func() { _ = gz.Close() }()
 
-	return true, nil
-}
-
-func fileContentsEqual(aPath string, bPath string) (bool, error) {
-	aInfo, err := os.Stat(aPath)
-	if err != nil {
-		return false, err
-	}
-	bInfo, err := os.Stat(bPath)
-	if err != nil {
-		return false, err
-	}
-	if aInfo.Size() != bInfo.Size() {
-		return false, nil
-	}
-
-	aFile, err := os.Open(aPath)
-	if err != nil {
-		return false, err
-	}
-	defer func() {
-		_ = aFile.Close()
-	}()
-
-	bFile, err := os.Open(bPath)
-	if err != nil {
-		return false, err
-	}
-	defer func() {
-		_ = bFile.Close()
-	}()
-
-	aBuf := make([]byte, 32*1024)
-	bBuf := make([]byte, 32*1024)
+	reader := tar.NewReader(gz)
 	for {
-		aN, aErr := aFile.Read(aBuf)
-		bN, bErr := bFile.Read(bBuf)
-
-		if aN != bN {
-			return false, nil
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
 		}
-		if aN > 0 && !bytes.Equal(aBuf[:aN], bBuf[:bN]) {
-			return false, nil
+		if err != nil {
+			return err
 		}
 
-		if aErr == io.EOF && bErr == io.EOF {
-			return true, nil
+		target, err := safeExtractPath(destinationRoot, header.Name)
+		if err != nil {
+			return err
 		}
-		if aErr != nil && aErr != io.EOF {
-			return false, aErr
-		}
-		if bErr != nil && bErr != io.EOF {
-			return false, bErr
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			dst, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(header.Mode))
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(dst, reader); err != nil {
+				_ = dst.Close()
+				return err
+			}
+			if err := dst.Close(); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported tar entry type: %d", header.Typeflag)
 		}
 	}
 }
 
-var ErrDifferentDirectoryContent = errors.New("cache directory content differs")
+func safeExtractPath(destinationRoot string, entryName string) (string, error) {
+	cleaned := filepath.Clean(strings.ReplaceAll(entryName, "\\", "/"))
+	if cleaned == "." || cleaned == "" {
+		return filepath.Clean(destinationRoot), nil
+	}
+	if strings.HasPrefix(cleaned, "../") || cleaned == ".." {
+		return "", fmt.Errorf("archive entry escapes destination: %s", entryName)
+	}
+	full := filepath.Join(destinationRoot, cleaned)
+	rel, err := filepath.Rel(filepath.Clean(destinationRoot), full)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("archive entry escapes destination: %s", entryName)
+	}
+	return full, nil
+}
+
+func fileDigestAndSize(path string) (string, int64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer func() { _ = file.Close() }()
+
+	hasher := sha256.New()
+	size, err := io.Copy(hasher, file)
+	if err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), size, nil
+}

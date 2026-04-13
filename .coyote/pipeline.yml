@@ -4,8 +4,8 @@ pipeline:
   name: coyote-ci
   image: golang:1.26.2
   cache:
-    preset: golang
-    scope: job
+    preset: go
+    policy: pull-push
 
 steps:
   - name: Backend Format Check

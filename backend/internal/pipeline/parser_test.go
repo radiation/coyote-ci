@@ -362,27 +362,19 @@ artifacts:
 }
 
 func TestResolve_CachePipelineDefaultAndStepOverride(t *testing.T) {
-	yaml := `
-version: 1
-pipeline:
-  cache:
-    preset: golang
-    scope: job
-steps:
-  - name: test
-    run: go test ./...
-  - name: lint
-    run: golangci-lint run
-    cache:
-      paths:
-        - /root/.cache/golangci-lint
-      scope: job
-      key:
-        files:
-          - .golangci.yml
-          - go.mod
-          - go.sum
-`
+	yaml := "version: 1\n" +
+		"pipeline:\n" +
+		"  cache:\n" +
+		"    preset: go\n" +
+		"    policy: pull-push\n" +
+		"steps:\n" +
+		"  - name: test\n" +
+		"    run: go test ./...\n" +
+		"  - name: lint\n" +
+		"    run: golangci-lint run\n" +
+		"    cache:\n" +
+		"      preset: node\n" +
+		"      policy: pull\n"
 
 	pf, err := ParseAndValidate([]byte(yaml))
 	if err != nil {
@@ -400,35 +392,29 @@ steps:
 	if rp.Steps[0].Cache == nil {
 		t.Fatal("expected step 0 to inherit pipeline cache")
 	}
-	if len(rp.Steps[0].Cache.Paths) != 1 || rp.Steps[0].Cache.Paths[0] != "/go/pkg/mod" {
-		t.Fatalf("expected step 0 to use job-scope golang preset paths, got %#v", rp.Steps[0].Cache.Paths)
+	if rp.Steps[0].Cache.Preset != "go" {
+		t.Fatalf("expected step 0 preset go, got %#v", rp.Steps[0].Cache.Preset)
 	}
 
 	if rp.Steps[1].Cache == nil {
 		t.Fatal("expected step 1 cache override to resolve")
 	}
-	if len(rp.Steps[1].Cache.Paths) != 1 || rp.Steps[1].Cache.Paths[0] != "/root/.cache/golangci-lint" {
-		t.Fatalf("expected step 1 custom paths, got %#v", rp.Steps[1].Cache.Paths)
+	if rp.Steps[1].Cache.Preset != "node" {
+		t.Fatalf("expected step 1 preset node, got %#v", rp.Steps[1].Cache.Preset)
 	}
-	if len(rp.Steps[1].Cache.KeyFiles) != 3 || rp.Steps[1].Cache.KeyFiles[0] != ".golangci.yml" {
-		t.Fatalf("expected step 1 custom key files, got %#v", rp.Steps[1].Cache.KeyFiles)
+	if rp.Steps[1].Cache.Policy != "pull" {
+		t.Fatalf("expected step 1 policy pull, got %#v", rp.Steps[1].Cache.Policy)
 	}
 }
 
-func TestResolve_CachePresetGolangScopeSpecificDefaults(t *testing.T) {
+func TestResolve_CachePresetAndDefaultPolicy(t *testing.T) {
 	yaml := `
 version: 1
 steps:
   - name: test-job
     run: go test ./...
     cache:
-      preset: golang
-      scope: job
-  - name: test-build
-    run: go test ./...
-    cache:
-      preset: golang
-      scope: build
+      preset: python-uv
 `
 
 	pf, err := ParseAndValidate([]byte(yaml))
@@ -437,53 +423,14 @@ steps:
 	}
 	rp := Resolve(pf)
 
-	if rp.Steps[0].Cache == nil {
-		t.Fatal("expected job-scope cache to resolve")
-	}
-	if len(rp.Steps[0].Cache.Paths) != 1 || rp.Steps[0].Cache.Paths[0] != "/go/pkg/mod" {
-		t.Fatalf("expected job-scope golang preset to include only module cache, got %#v", rp.Steps[0].Cache.Paths)
-	}
-
-	if rp.Steps[1].Cache == nil {
-		t.Fatal("expected build-scope cache to resolve")
-	}
-	if len(rp.Steps[1].Cache.Paths) != 2 {
-		t.Fatalf("expected build-scope golang preset to include two paths, got %#v", rp.Steps[1].Cache.Paths)
-	}
-	if rp.Steps[1].Cache.Paths[0] != "/go/pkg/mod" || rp.Steps[1].Cache.Paths[1] != "/root/.cache/go-build" {
-		t.Fatalf("unexpected build-scope golang preset paths: %#v", rp.Steps[1].Cache.Paths)
-	}
-}
-
-func TestResolve_CacheExplicitOverridesPresetFields(t *testing.T) {
-	yaml := `
-version: 1
-steps:
-  - name: test
-    run: go test ./...
-    cache:
-      preset: golang
-      scope: job
-      paths:
-        - /custom/cache
-      key:
-        files:
-          - custom.lock
-`
-
-	pf, err := ParseAndValidate([]byte(yaml))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	rp := Resolve(pf)
 	if rp.Steps[0].Cache == nil {
 		t.Fatal("expected cache to resolve")
 	}
-	if len(rp.Steps[0].Cache.Paths) != 1 || rp.Steps[0].Cache.Paths[0] != "/custom/cache" {
-		t.Fatalf("expected explicit paths to override preset, got %#v", rp.Steps[0].Cache.Paths)
+	if rp.Steps[0].Cache.Preset != "python-uv" {
+		t.Fatalf("expected python-uv preset, got %#v", rp.Steps[0].Cache.Preset)
 	}
-	if len(rp.Steps[0].Cache.KeyFiles) != 1 || rp.Steps[0].Cache.KeyFiles[0] != "custom.lock" {
-		t.Fatalf("expected explicit key files to override preset, got %#v", rp.Steps[0].Cache.KeyFiles)
+	if rp.Steps[0].Cache.Policy != "pull-push" {
+		t.Fatalf("expected default policy pull-push, got %#v", rp.Steps[0].Cache.Policy)
 	}
 }
 

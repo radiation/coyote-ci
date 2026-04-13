@@ -37,14 +37,8 @@ type StepDef struct {
 }
 
 type CacheDef struct {
-	Preset string      `yaml:"preset,omitempty"`
-	Paths  []string    `yaml:"paths,omitempty"`
-	Scope  string      `yaml:"scope"`
-	Key    CacheKeyDef `yaml:"key,omitempty"`
-}
-
-type CacheKeyDef struct {
-	Files []string `yaml:"files,omitempty"`
+	Preset string `yaml:"preset,omitempty"`
+	Policy string `yaml:"policy,omitempty"`
 }
 
 // ArtifactDef holds optional build-level artifact path declarations.

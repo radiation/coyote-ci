@@ -365,3 +365,4 @@ When generating code for this repo:
 - keep comments useful and brief
 - explain tradeoffs when making architectural choices
 - when multiple options exist, prefer the simpler one unless requirements clearly justify complexity
+- avoid `go vet` shadow warnings by not re-declaring `err` in inner scopes when an outer `err` is already in scope; prefer explicit names like `writeErr`, `closeErr`, `markErr`
