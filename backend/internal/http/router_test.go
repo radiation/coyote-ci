@@ -118,6 +118,13 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 	if failRes.Code != http.StatusConflict {
 		t.Fatalf("expected fail status %d after completion, got %d", http.StatusConflict, failRes.Code)
 	}
+
+	cancelReq := httptest.NewRequest(http.MethodPost, "/api/builds/"+id+"/cancel", nil)
+	cancelRes := httptest.NewRecorder()
+	r.ServeHTTP(cancelRes, cancelReq)
+	if cancelRes.Code != http.StatusOK {
+		t.Fatalf("expected cancel status %d, got %d", http.StatusOK, cancelRes.Code)
+	}
 }
 
 func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {

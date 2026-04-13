@@ -1578,6 +1578,27 @@ func TestBuildService_HandleStepResult_ClaimedCompletionFinalizesBuild(t *testin
 	}
 }
 
+func TestBuildService_HandleStepResult_AfterCancelReturnsDuplicateTerminal(t *testing.T) {
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	svc := NewBuildService(repo, nil, logs.NewMemorySink())
+
+	if _, err := svc.CancelBuild(context.Background(), "build-1"); err != nil {
+		t.Fatalf("cancel build failed: %v", err)
+	}
+
+	report, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: "claim-active"}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionDuplicateTerminal {
+		t.Fatalf("expected duplicate terminal completion outcome after cancel, got %q", report.CompletionOutcome)
+	}
+}
+
 func TestBuildService_RenewStepLease_StaleClaimReturnsDomainError(t *testing.T) {
 	active := "claim-active"
 	repo := &fakeBuildRepository{

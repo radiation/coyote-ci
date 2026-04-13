@@ -388,6 +388,53 @@
                 }
             }
         },
+        "/builds/{buildID}/cancel": {
+            "post": {
+                "description": "Marks a non-terminal build as failed and terminalizes non-terminal steps.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "builds"
+                ],
+                "summary": "Cancel build",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Build ID",
+                        "name": "buildID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.BuildEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/builds/{buildID}/complete": {
             "post": {
                 "description": "Transitions build status from running to success.",
