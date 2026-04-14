@@ -13,32 +13,32 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
-var ErrWebhookDeliveryRepoNotConfigured = errors.New("webhook delivery repository not configured")
-var ErrWebhookDeliveryIDRequired = errors.New("webhook delivery_id is required")
-var ErrWebhookProviderRequired = errors.New("webhook provider is required")
-var ErrWebhookInvalidDeliveryTransition = errors.New("invalid webhook delivery transition")
+var ErrDeliveryRepoNotConfigured = errors.New("webhook delivery repository not configured")
+var ErrDeliveryIDRequired = errors.New("webhook delivery_id is required")
+var ErrDeliveryProviderRequired = errors.New("webhook provider is required")
+var ErrInvalidDeliveryTransition = errors.New("invalid webhook delivery transition")
 
-type WebhookIngressService struct {
+type DeliveryIngressService struct {
 	deliveryRepo repository.WebhookDeliveryRepository
-	jobService   WebhookEventTriggerer
+	jobService   DeliveryEventTriggerer
 	metrics      observability.WebhookIngressMetrics
 }
 
-type WebhookEventTriggerer interface {
+type DeliveryEventTriggerer interface {
 	TriggerWebhookEvent(ctx context.Context, input WebhookTriggerInput) (WebhookTriggerResult, error)
 }
 
-type WebhookIngressResult struct {
+type DeliveryIngressResult struct {
 	Duplicate bool
 	Delivery  domain.WebhookDelivery
 	Trigger   WebhookTriggerResult
 }
 
-func NewWebhookIngressService(deliveryRepo repository.WebhookDeliveryRepository, jobService WebhookEventTriggerer) *WebhookIngressService {
-	return &WebhookIngressService{deliveryRepo: deliveryRepo, jobService: jobService, metrics: observability.NewNoopWebhookIngressMetrics()}
+func NewDeliveryIngressService(deliveryRepo repository.WebhookDeliveryRepository, jobService DeliveryEventTriggerer) *DeliveryIngressService {
+	return &DeliveryIngressService{deliveryRepo: deliveryRepo, jobService: jobService, metrics: observability.NewNoopWebhookIngressMetrics()}
 }
 
-func (s *WebhookIngressService) SetMetrics(metrics observability.WebhookIngressMetrics) {
+func (s *DeliveryIngressService) SetMetrics(metrics observability.WebhookIngressMetrics) {
 	if metrics == nil {
 		s.metrics = observability.NewNoopWebhookIngressMetrics()
 		return
@@ -46,17 +46,17 @@ func (s *WebhookIngressService) SetMetrics(metrics observability.WebhookIngressM
 	s.metrics = metrics
 }
 
-func (s *WebhookIngressService) RegisterReceived(ctx context.Context, provider string, deliveryID string, eventType string) (domain.WebhookDelivery, bool, error) {
+func (s *DeliveryIngressService) RegisterReceived(ctx context.Context, provider string, deliveryID string, eventType string) (domain.WebhookDelivery, bool, error) {
 	if s.deliveryRepo == nil {
-		return domain.WebhookDelivery{}, false, ErrWebhookDeliveryRepoNotConfigured
+		return domain.WebhookDelivery{}, false, ErrDeliveryRepoNotConfigured
 	}
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	deliveryID = strings.TrimSpace(deliveryID)
 	if provider == "" {
-		return domain.WebhookDelivery{}, false, ErrWebhookProviderRequired
+		return domain.WebhookDelivery{}, false, ErrDeliveryProviderRequired
 	}
 	if deliveryID == "" {
-		return domain.WebhookDelivery{}, false, ErrWebhookDeliveryIDRequired
+		return domain.WebhookDelivery{}, false, ErrDeliveryIDRequired
 	}
 
 	now := time.Now().UTC()
@@ -93,66 +93,66 @@ func (s *WebhookIngressService) RegisterReceived(ctx context.Context, provider s
 	return updated, true, nil
 }
 
-func (s *WebhookIngressService) MarkFailed(ctx context.Context, delivery domain.WebhookDelivery, reason string) (domain.WebhookDelivery, error) {
-	reasonPtr := optionalString(reason)
+func (s *DeliveryIngressService) MarkFailed(ctx context.Context, delivery domain.WebhookDelivery, reason string) (domain.WebhookDelivery, error) {
+	reasonPtr := optionalDeliveryString(reason)
 	return s.updateDelivery(ctx, delivery, domain.WebhookDeliveryStatusFailed, reasonPtr)
 }
 
-func (s *WebhookIngressService) MarkUnsupported(ctx context.Context, delivery domain.WebhookDelivery, reason string, trigger WebhookTriggerInput) (domain.WebhookDelivery, error) {
-	delivery = applyTriggerMetadata(delivery, trigger)
-	reasonPtr := optionalString(reason)
+func (s *DeliveryIngressService) MarkUnsupported(ctx context.Context, delivery domain.WebhookDelivery, reason string, trigger WebhookTriggerInput) (domain.WebhookDelivery, error) {
+	delivery = applyDeliveryTriggerMetadata(delivery, trigger)
+	reasonPtr := optionalDeliveryString(reason)
 	return s.updateDelivery(ctx, delivery, domain.WebhookDeliveryStatusUnsupported, reasonPtr)
 }
 
-func (s *WebhookIngressService) ProcessVerifiedEvent(ctx context.Context, delivery domain.WebhookDelivery, trigger WebhookTriggerInput) (WebhookIngressResult, error) {
+func (s *DeliveryIngressService) ProcessVerifiedEvent(ctx context.Context, delivery domain.WebhookDelivery, trigger WebhookTriggerInput) (DeliveryIngressResult, error) {
 	if s.deliveryRepo == nil {
-		return WebhookIngressResult{}, ErrWebhookDeliveryRepoNotConfigured
+		return DeliveryIngressResult{}, ErrDeliveryRepoNotConfigured
 	}
 
-	delivery = applyTriggerMetadata(delivery, trigger)
+	delivery = applyDeliveryTriggerMetadata(delivery, trigger)
 	verified, err := s.updateDelivery(ctx, delivery, domain.WebhookDeliveryStatusVerified, nil)
 	if err != nil {
-		return WebhookIngressResult{}, err
+		return DeliveryIngressResult{}, err
 	}
-	s.metrics.IncOutcome(verified.Provider, readOptionalString(verified.EventType), observability.WebhookOutcomeDeliveriesVerified)
+	s.metrics.IncOutcome(verified.Provider, readOptionalDeliveryString(verified.EventType), observability.WebhookOutcomeDeliveriesVerified)
 
 	triggerResult, triggerErr := s.jobService.TriggerWebhookEvent(ctx, trigger)
 	if triggerErr != nil {
 		failed, _ := s.MarkFailed(ctx, verified, triggerErr.Error())
-		return WebhookIngressResult{Delivery: failed}, triggerErr
+		return DeliveryIngressResult{Delivery: failed}, triggerErr
 	}
 
 	if triggerResult.MatchedJobs == 0 {
 		ignored, ignoredErr := s.updateDelivery(ctx, verified, domain.WebhookDeliveryStatusIgnoredNoMatch, triggerResult.NoMatchReason)
 		if ignoredErr != nil {
-			return WebhookIngressResult{}, ignoredErr
+			return DeliveryIngressResult{}, ignoredErr
 		}
-		return WebhookIngressResult{Delivery: ignored, Trigger: triggerResult}, nil
+		return DeliveryIngressResult{Delivery: ignored, Trigger: triggerResult}, nil
 	}
 
 	matched := verified
-	firstMatchedJobID, firstBuildID := firstMatchIDs(triggerResult)
+	firstMatchedJobID, firstBuildID := firstMatchedIDs(triggerResult)
 	matched.MatchedJobID = firstMatchedJobID
 	matched.QueuedBuildID = firstBuildID
 	matched, err = s.updateDelivery(ctx, matched, domain.WebhookDeliveryStatusMatched, nil)
 	if err != nil {
-		return WebhookIngressResult{}, err
+		return DeliveryIngressResult{}, err
 	}
 
 	queued, err := s.updateDelivery(ctx, matched, domain.WebhookDeliveryStatusQueued, nil)
 	if err != nil {
-		return WebhookIngressResult{}, err
+		return DeliveryIngressResult{}, err
 	}
 
-	return WebhookIngressResult{Delivery: queued, Trigger: triggerResult}, nil
+	return DeliveryIngressResult{Delivery: queued, Trigger: triggerResult}, nil
 }
 
-func (s *WebhookIngressService) updateDelivery(ctx context.Context, delivery domain.WebhookDelivery, next domain.WebhookDeliveryStatus, reason *string) (domain.WebhookDelivery, error) {
+func (s *DeliveryIngressService) updateDelivery(ctx context.Context, delivery domain.WebhookDelivery, next domain.WebhookDeliveryStatus, reason *string) (domain.WebhookDelivery, error) {
 	if s.deliveryRepo == nil {
-		return domain.WebhookDelivery{}, ErrWebhookDeliveryRepoNotConfigured
+		return domain.WebhookDelivery{}, ErrDeliveryRepoNotConfigured
 	}
-	if !isAllowedWebhookTransition(delivery.Status, next) {
-		return domain.WebhookDelivery{}, ErrWebhookInvalidDeliveryTransition
+	if !isAllowedDeliveryTransition(delivery.Status, next) {
+		return domain.WebhookDelivery{}, ErrInvalidDeliveryTransition
 	}
 	delivery.Status = next
 	delivery.Reason = reason
@@ -160,7 +160,7 @@ func (s *WebhookIngressService) updateDelivery(ctx context.Context, delivery dom
 	return s.deliveryRepo.Update(ctx, delivery)
 }
 
-func isAllowedWebhookTransition(from domain.WebhookDeliveryStatus, to domain.WebhookDeliveryStatus) bool {
+func isAllowedDeliveryTransition(from domain.WebhookDeliveryStatus, to domain.WebhookDeliveryStatus) bool {
 	allowed := map[domain.WebhookDeliveryStatus]map[domain.WebhookDeliveryStatus]bool{
 		domain.WebhookDeliveryStatusReceived: {
 			domain.WebhookDeliveryStatusVerified:    true,
@@ -202,30 +202,30 @@ func isAllowedWebhookTransition(from domain.WebhookDeliveryStatus, to domain.Web
 	return allowed[from][to]
 }
 
-func applyTriggerMetadata(delivery domain.WebhookDelivery, trigger WebhookTriggerInput) domain.WebhookDelivery {
-	delivery.EventType = optionalString(strings.ToLower(strings.TrimSpace(trigger.EventType)))
-	delivery.RepositoryOwner = optionalString(trigger.RepositoryOwner)
-	delivery.RepositoryName = optionalString(trigger.RepositoryName)
-	delivery.RawRef = optionalString(trigger.RawRef)
-	delivery.RefType = optionalString(trigger.RefType)
-	delivery.RefName = optionalString(trigger.RefName)
-	delivery.TriggerRef = optionalString(trigger.Ref)
+func applyDeliveryTriggerMetadata(delivery domain.WebhookDelivery, trigger WebhookTriggerInput) domain.WebhookDelivery {
+	delivery.EventType = optionalDeliveryString(strings.ToLower(strings.TrimSpace(trigger.EventType)))
+	delivery.RepositoryOwner = optionalDeliveryString(trigger.RepositoryOwner)
+	delivery.RepositoryName = optionalDeliveryString(trigger.RepositoryName)
+	delivery.RawRef = optionalDeliveryString(trigger.RawRef)
+	delivery.RefType = optionalDeliveryString(trigger.RefType)
+	delivery.RefName = optionalDeliveryString(trigger.RefName)
+	delivery.TriggerRef = optionalDeliveryString(trigger.Ref)
 	delivery.Deleted = &trigger.Deleted
-	delivery.CommitSHA = optionalString(trigger.CommitSHA)
-	delivery.Actor = optionalString(trigger.Actor)
+	delivery.CommitSHA = optionalDeliveryString(trigger.CommitSHA)
+	delivery.Actor = optionalDeliveryString(trigger.Actor)
 	return delivery
 }
 
-func firstMatchIDs(result WebhookTriggerResult) (*string, *string) {
+func firstMatchedIDs(result WebhookTriggerResult) (*string, *string) {
 	if len(result.Builds) == 0 {
 		return nil, nil
 	}
 	jobID := strings.TrimSpace(result.Builds[0].Job.ID)
 	buildID := strings.TrimSpace(result.Builds[0].Build.ID)
-	return optionalString(jobID), optionalString(buildID)
+	return optionalDeliveryString(jobID), optionalDeliveryString(buildID)
 }
 
-func optionalString(value string) *string {
+func optionalDeliveryString(value string) *string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return nil
@@ -233,7 +233,7 @@ func optionalString(value string) *string {
 	return &trimmed
 }
 
-func readOptionalString(value *string) string {
+func readOptionalDeliveryString(value *string) string {
 	if value == nil {
 		return ""
 	}

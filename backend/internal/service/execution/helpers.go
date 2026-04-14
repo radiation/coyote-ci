@@ -1,4 +1,4 @@
-package build
+package execution
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 )
 
-func (s *BuildService) writeSystemExecutionLogLine(ctx context.Context, request runner.RunStepRequest, appender logs.StepLogChunkAppender, line string) error {
+func WriteSystemExecutionLogLine(ctx context.Context, sink logs.LogSink, request runner.RunStepRequest, appender logs.StepLogChunkAppender, line string) error {
 	text := strings.TrimRight(line, "\n")
 	if strings.TrimSpace(text) == "" {
 		return nil
@@ -30,7 +30,7 @@ func (s *BuildService) writeSystemExecutionLogLine(ctx context.Context, request 
 		return err
 	}
 
-	return s.logSink.WriteStepLog(ctx, request.BuildID, request.StepName, text)
+	return sink.WriteStepLog(ctx, request.BuildID, request.StepName, text)
 }
 
 func classifyPrepareFailure(err error) (marker string, reason string) {
@@ -75,7 +75,7 @@ func formatFailureStepEndLine(stepNumber int, totalSteps int, stepName string, d
 	return formatStepEndLine(stepNumber, totalSteps, stepName, "failed", duration, exitCode)
 }
 
-func writeOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, stepName string, output string) error {
+func WriteOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, stepName string, output string) error {
 	for _, line := range splitLogLines(output) {
 		if err := sink.WriteStepLog(ctx, buildID, stepName, line); err != nil {
 			return err
@@ -83,6 +83,10 @@ func writeOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, ste
 	}
 
 	return nil
+}
+
+func writeOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, stepName string, output string) error {
+	return WriteOutputLogs(ctx, sink, buildID, stepName, output)
 }
 
 var lineBreakSplitter = regexp.MustCompile(`\r?\n`)

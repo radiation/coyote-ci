@@ -51,39 +51,69 @@ var BuildTemplateBuild = buildsvc.BuildTemplateBuild
 var BuildTemplateCustom = buildsvc.BuildTemplateCustom
 var BuildTemplateFail = buildsvc.BuildTemplateFail
 
-type WorkerService = workersvc.WorkerService
-type RunnableStep = workersvc.RunnableStep
-type StepExecutionReport = workersvc.StepExecutionReport
-type WorkerRecoveryStats = workersvc.WorkerRecoveryStats
+type ExecutionWorkerService = workersvc.ExecutionWorkerService
+type WorkerService = workersvc.ExecutionWorkerService
+type WorkerRunnableStep = workersvc.WorkerRunnableStep
+type RunnableStep = workersvc.WorkerRunnableStep
+type WorkerStepExecutionReport = workersvc.WorkerStepExecutionReport
+type StepExecutionReport = workersvc.WorkerStepExecutionReport
+type WorkerLeaseRecoveryStats = workersvc.WorkerLeaseRecoveryStats
+type WorkerRecoveryStats = workersvc.WorkerLeaseRecoveryStats
 
-var NewWorkerService = workersvc.NewWorkerService
-var NewWorkerServiceWithLease = workersvc.NewWorkerServiceWithLease
+var NewExecutionWorkerService = workersvc.NewExecutionWorkerService
+var NewWorkerService = workersvc.NewExecutionWorkerService
+var NewExecutionWorkerServiceWithLease = workersvc.NewExecutionWorkerServiceWithLease
+var NewWorkerServiceWithLease = workersvc.NewExecutionWorkerServiceWithLease
 
-type WebhookIngressService = webhooksvc.WebhookIngressService
-type WebhookIngressResult = webhooksvc.WebhookIngressResult
+type DeliveryIngressService = webhooksvc.DeliveryIngressService
+type DeliveryIngressResult = webhooksvc.DeliveryIngressResult
 type WebhookLogContext = webhooksvc.WebhookLogContext
+
+// Backward-compatible aliases retained for existing callers.
+type WebhookIngressService = webhooksvc.DeliveryIngressService
+type WebhookIngressResult = webhooksvc.DeliveryIngressResult
 
 type WebhookMatchedBuild = webhooksvc.WebhookMatchedBuild
 type WebhookTriggerInput = webhooksvc.WebhookTriggerInput
 type WebhookTriggerResult = webhooksvc.WebhookTriggerResult
-type WebhookTriggerDecision = webhooksvc.WebhookTriggerDecision
-type WebhookTriggerDecisionReason = webhooksvc.WebhookTriggerDecisionReason
-type WebhookJobTriggerConfig = webhooksvc.WebhookJobTriggerConfig
+type WebhookFilterDecision = webhooksvc.WebhookFilterDecision
+type WebhookFilterDecisionReason = webhooksvc.WebhookFilterDecisionReason
+type WebhookFilterConfig = webhooksvc.WebhookFilterConfig
 
-var NewWebhookIngressService = webhooksvc.NewWebhookIngressService
+// Backward-compatible trigger-filter aliases.
+type WebhookTriggerDecision = webhooksvc.WebhookFilterDecision
+type WebhookTriggerDecisionReason = webhooksvc.WebhookFilterDecisionReason
+type WebhookJobTriggerConfig = webhooksvc.WebhookFilterConfig
+
+var NewDeliveryIngressService = webhooksvc.NewDeliveryIngressService
+var NewWebhookIngressService = webhooksvc.NewDeliveryIngressService
 var NewWebhookLogContext = webhooksvc.NewWebhookLogContext
 var WithWebhookLogContext = webhooksvc.WithWebhookLogContext
 var WebhookLogContextFromContext = webhooksvc.WebhookLogContextFromContext
 var WebhookLogFields = webhooksvc.WebhookLogFields
+var ShouldTriggerBuild = webhooksvc.WebhookFilterShouldTriggerBuild
+var NormalizeJobTriggerMode = webhooksvc.NormalizeWebhookFilterMode
 
-var ErrWebhookDeliveryRepoNotConfigured = webhooksvc.ErrWebhookDeliveryRepoNotConfigured
-var ErrWebhookDeliveryIDRequired = webhooksvc.ErrWebhookDeliveryIDRequired
-var ErrWebhookProviderRequired = webhooksvc.ErrWebhookProviderRequired
-var ErrWebhookInvalidDeliveryTransition = webhooksvc.ErrWebhookInvalidDeliveryTransition
+var ErrDeliveryRepoNotConfigured = webhooksvc.ErrDeliveryRepoNotConfigured
+var ErrDeliveryIDRequired = webhooksvc.ErrDeliveryIDRequired
+var ErrDeliveryProviderRequired = webhooksvc.ErrDeliveryProviderRequired
+var ErrInvalidDeliveryTransition = webhooksvc.ErrInvalidDeliveryTransition
 
-const WebhookTriggerDecisionMatched = webhooksvc.WebhookTriggerDecisionMatched
-const WebhookTriggerDecisionDeletedRef = webhooksvc.WebhookTriggerDecisionDeletedRef
-const WebhookTriggerDecisionUnsupportedRefType = webhooksvc.WebhookTriggerDecisionUnsupportedRefType
-const WebhookTriggerDecisionFilteredBranch = webhooksvc.WebhookTriggerDecisionFilteredBranch
-const WebhookTriggerDecisionFilteredTag = webhooksvc.WebhookTriggerDecisionFilteredTag
-const WebhookTriggerDecisionFilteredByMode = webhooksvc.WebhookTriggerDecisionFilteredByMode
+var ErrWebhookDeliveryRepoNotConfigured = webhooksvc.ErrDeliveryRepoNotConfigured
+var ErrWebhookDeliveryIDRequired = webhooksvc.ErrDeliveryIDRequired
+var ErrWebhookProviderRequired = webhooksvc.ErrDeliveryProviderRequired
+var ErrWebhookInvalidDeliveryTransition = webhooksvc.ErrInvalidDeliveryTransition
+
+const WebhookFilterDecisionMatched = webhooksvc.WebhookFilterDecisionMatched
+const WebhookFilterDecisionDeletedRef = webhooksvc.WebhookFilterDecisionDeletedRef
+const WebhookFilterDecisionUnsupportedRefType = webhooksvc.WebhookFilterDecisionUnsupportedRefType
+const WebhookFilterDecisionFilteredBranch = webhooksvc.WebhookFilterDecisionFilteredBranch
+const WebhookFilterDecisionFilteredTag = webhooksvc.WebhookFilterDecisionFilteredTag
+const WebhookFilterDecisionFilteredByMode = webhooksvc.WebhookFilterDecisionFilteredByMode
+
+const WebhookTriggerDecisionMatched = webhooksvc.WebhookFilterDecisionMatched
+const WebhookTriggerDecisionDeletedRef = webhooksvc.WebhookFilterDecisionDeletedRef
+const WebhookTriggerDecisionUnsupportedRefType = webhooksvc.WebhookFilterDecisionUnsupportedRefType
+const WebhookTriggerDecisionFilteredBranch = webhooksvc.WebhookFilterDecisionFilteredBranch
+const WebhookTriggerDecisionFilteredTag = webhooksvc.WebhookFilterDecisionFilteredTag
+const WebhookTriggerDecisionFilteredByMode = webhooksvc.WebhookFilterDecisionFilteredByMode

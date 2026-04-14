@@ -1,5 +1,7 @@
 package build
 
+import "strings"
+
 func defaultString(value string, fallback string) string {
 	if value == "" {
 		return fallback
@@ -26,4 +28,11 @@ func maxInt(value int, minimum int) int {
 		return minimum
 	}
 	return value
+}
+
+func optionalStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }

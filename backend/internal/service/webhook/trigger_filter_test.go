@@ -11,41 +11,41 @@ func TestShouldTriggerBuild(t *testing.T) {
 	tagRef := domain.WebhookRef{RawRef: "refs/tags/v1.2.3", RefType: domain.WebhookRefTypeTag, RefName: "v1.2.3"}
 
 	t.Run("branch allowed", func(t *testing.T) {
-		decision := shouldTriggerBuild(branchRef, WebhookJobTriggerConfig{
+		decision := webhookFilterShouldTriggerBuild(branchRef, WebhookFilterConfig{
 			Mode:            domain.JobTriggerModeBranches,
 			BranchAllowlist: []string{"main", "develop"},
 		})
-		if !decision.Matched || decision.Reason != WebhookTriggerDecisionMatched {
+		if !decision.Matched || decision.Reason != WebhookFilterDecisionMatched {
 			t.Fatalf("expected matched, got %+v", decision)
 		}
 	})
 
 	t.Run("branch disallowed", func(t *testing.T) {
-		decision := shouldTriggerBuild(branchRef, WebhookJobTriggerConfig{
+		decision := webhookFilterShouldTriggerBuild(branchRef, WebhookFilterConfig{
 			Mode:            domain.JobTriggerModeBranches,
 			BranchAllowlist: []string{"develop"},
 		})
-		if decision.Matched || decision.Reason != WebhookTriggerDecisionFilteredBranch {
+		if decision.Matched || decision.Reason != WebhookFilterDecisionFilteredBranch {
 			t.Fatalf("expected filtered branch, got %+v", decision)
 		}
 	})
 
 	t.Run("tags only mode ignores branch", func(t *testing.T) {
-		decision := shouldTriggerBuild(branchRef, WebhookJobTriggerConfig{Mode: domain.JobTriggerModeTags})
-		if decision.Matched || decision.Reason != WebhookTriggerDecisionFilteredByMode {
+		decision := webhookFilterShouldTriggerBuild(branchRef, WebhookFilterConfig{Mode: domain.JobTriggerModeTags})
+		if decision.Matched || decision.Reason != WebhookFilterDecisionFilteredByMode {
 			t.Fatalf("expected filtered by mode, got %+v", decision)
 		}
 	})
 
 	t.Run("tags enabled matches tag", func(t *testing.T) {
-		decision := shouldTriggerBuild(tagRef, WebhookJobTriggerConfig{Mode: domain.JobTriggerModeTags})
-		if !decision.Matched || decision.Reason != WebhookTriggerDecisionMatched {
+		decision := webhookFilterShouldTriggerBuild(tagRef, WebhookFilterConfig{Mode: domain.JobTriggerModeTags})
+		if !decision.Matched || decision.Reason != WebhookFilterDecisionMatched {
 			t.Fatalf("expected matched tag, got %+v", decision)
 		}
 	})
 
 	t.Run("tag allowlist supports prefix", func(t *testing.T) {
-		decision := shouldTriggerBuild(tagRef, WebhookJobTriggerConfig{
+		decision := webhookFilterShouldTriggerBuild(tagRef, WebhookFilterConfig{
 			Mode:         domain.JobTriggerModeTags,
 			TagAllowlist: []string{"release-*", "v*"},
 		})
@@ -55,15 +55,15 @@ func TestShouldTriggerBuild(t *testing.T) {
 	})
 
 	t.Run("deleted refs are ignored", func(t *testing.T) {
-		decision := shouldTriggerBuild(domain.WebhookRef{RefType: domain.WebhookRefTypeBranch, RefName: "main", Deleted: true}, WebhookJobTriggerConfig{Mode: domain.JobTriggerModeBranches})
-		if decision.Matched || decision.Reason != WebhookTriggerDecisionDeletedRef {
+		decision := webhookFilterShouldTriggerBuild(domain.WebhookRef{RefType: domain.WebhookRefTypeBranch, RefName: "main", Deleted: true}, WebhookFilterConfig{Mode: domain.JobTriggerModeBranches})
+		if decision.Matched || decision.Reason != WebhookFilterDecisionDeletedRef {
 			t.Fatalf("expected deleted_ref decision, got %+v", decision)
 		}
 	})
 
 	t.Run("unknown refs are ignored", func(t *testing.T) {
-		decision := shouldTriggerBuild(domain.WebhookRef{RefType: domain.WebhookRefTypeUnknown, RefName: "custom"}, WebhookJobTriggerConfig{Mode: domain.JobTriggerModeBranchesAndTags})
-		if decision.Matched || decision.Reason != WebhookTriggerDecisionUnsupportedRefType {
+		decision := webhookFilterShouldTriggerBuild(domain.WebhookRef{RefType: domain.WebhookRefTypeUnknown, RefName: "custom"}, WebhookFilterConfig{Mode: domain.JobTriggerModeBranchesAndTags})
+		if decision.Matched || decision.Reason != WebhookFilterDecisionUnsupportedRefType {
 			t.Fatalf("expected unsupported_ref_type decision, got %+v", decision)
 		}
 	})

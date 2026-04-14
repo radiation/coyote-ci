@@ -113,7 +113,7 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 		}
 	}
 
-	triggerMode := webhooksvc.NormalizeJobTriggerMode(domain.JobTriggerMode(readStringPtr(normalized.TriggerMode)))
+	triggerMode := webhooksvc.NormalizeWebhookFilterMode(domain.JobTriggerMode(readStringPtr(normalized.TriggerMode)))
 	branchAllowlist := normalizeBranchAllowlist(normalized.BranchAllowlist)
 	if len(branchAllowlist) == 0 && pushBranch != nil {
 		branchAllowlist = []string{*pushBranch}
@@ -212,7 +212,7 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 		if !isValidTriggerMode(*input.TriggerMode) {
 			return domain.Job{}, ErrJobInvalidTriggerMode
 		}
-		mode := webhooksvc.NormalizeJobTriggerMode(domain.JobTriggerMode(strings.TrimSpace(*input.TriggerMode)))
+		mode := webhooksvc.NormalizeWebhookFilterMode(domain.JobTriggerMode(strings.TrimSpace(*input.TriggerMode)))
 		job.TriggerMode = mode
 	}
 	if input.BranchAllowlist != nil {

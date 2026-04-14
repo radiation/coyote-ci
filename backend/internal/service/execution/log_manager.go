@@ -1,4 +1,4 @@
-package build
+package execution
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 )
 
 type ExecutionLogManager struct {
-	service          *BuildService
+	logSink          logs.LogSink
 	executionContext StepExecutionContext
 
 	mu              sync.Mutex
@@ -20,8 +20,8 @@ type ExecutionLogManager struct {
 	chunkPersistErr error
 }
 
-func NewExecutionLogManager(service *BuildService, executionContext StepExecutionContext) *ExecutionLogManager {
-	return &ExecutionLogManager{service: service, executionContext: executionContext}
+func NewExecutionLogManager(logSink logs.LogSink, executionContext StepExecutionContext) *ExecutionLogManager {
+	return &ExecutionLogManager{logSink: logSink, executionContext: executionContext}
 }
 
 func (m *ExecutionLogManager) ChunkAppender() logs.StepLogChunkAppender {
@@ -33,7 +33,7 @@ func (m *ExecutionLogManager) HasChunkAppender() bool {
 }
 
 func (m *ExecutionLogManager) EmitSystemLine(ctx context.Context, line string) {
-	if err := m.service.writeSystemExecutionLogLine(ctx, m.executionContext.ExecutionRequest, m.executionContext.ChunkAppender, line); err != nil {
+	if err := WriteSystemExecutionLogLine(ctx, m.logSink, m.executionContext.ExecutionRequest, m.executionContext.ChunkAppender, line); err != nil {
 		m.mu.Lock()
 		if m.visibilityErr == nil {
 			m.visibilityErr = err

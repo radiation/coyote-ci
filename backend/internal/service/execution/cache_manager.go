@@ -1,9 +1,10 @@
-package build
+package execution
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,7 +19,9 @@ import (
 
 const cacheCompressionTarGz = "tar.gz"
 
-type preparedStepCache struct {
+var ErrExecutionWorkspaceRootNotConfigured = errors.New("execution workspace root not configured")
+
+type PreparedStepCache struct {
 	Enabled       bool
 	Policy        domain.CachePolicy
 	Preset        cachepkg.Preset
@@ -45,31 +48,45 @@ func NewStepCacheManager(store cachepkg.Store, entryRepo repository.CacheEntryRe
 	}
 }
 
-func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExecutionContext, logManager *ExecutionLogManager) (preparedStepCache, error) {
+func (m *StepCacheManager) Store() cachepkg.Store {
+	if m == nil {
+		return nil
+	}
+	return m.store
+}
+
+func (m *StepCacheManager) EntryRepo() repository.CacheEntryRepository {
+	if m == nil {
+		return nil
+	}
+	return m.entryRepo
+}
+
+func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExecutionContext, logManager *ExecutionLogManager) (PreparedStepCache, error) {
 	if m == nil || m.store == nil || m.entryRepo == nil {
-		return preparedStepCache{}, nil
+		return PreparedStepCache{}, nil
 	}
 	if executionContext.Step == nil || executionContext.Step.Cache == nil {
 		logManager.EmitSystemLine(ctx, "cache restore skipped: step cache not configured")
-		return preparedStepCache{}, nil
+		return PreparedStepCache{}, nil
 	}
 
 	policy := domain.NormalizeCachePolicy(executionContext.Step.Cache.Policy)
 	if policy == domain.CachePolicyOff {
 		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache restore skipped: policy=%s", policy))
-		return preparedStepCache{Policy: policy}, nil
+		return PreparedStepCache{Policy: policy}, nil
 	}
 
 	preset, runtimeDir, key, err := m.resolvePreparedIdentity(executionContext)
 	if err != nil {
 		if err == cachepkg.ErrNoFingerprintFilesFound {
 			logManager.EmitSystemLine(ctx, fmt.Sprintf("cache skipped: preset=%s reason=lockfile_missing", strings.TrimSpace(executionContext.Step.Cache.Preset)))
-			return preparedStepCache{Policy: policy}, nil
+			return PreparedStepCache{Policy: policy}, nil
 		}
-		return preparedStepCache{}, err
+		return PreparedStepCache{}, err
 	}
 
-	prepared := preparedStepCache{
+	prepared := PreparedStepCache{
 		Enabled:     true,
 		Policy:      policy,
 		Preset:      preset,
@@ -80,7 +97,7 @@ func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExe
 
 	mounts, err := presetMounts(runtimeDir, preset.CachePaths)
 	if err != nil {
-		return preparedStepCache{}, err
+		return PreparedStepCache{}, err
 	}
 	prepared.Mounts = mounts
 
@@ -92,7 +109,7 @@ func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExe
 	jobID := effectiveJobID(executionContext)
 	entry, found, err := m.entryRepo.FindReadyByKey(ctx, jobID, preset.Name, key)
 	if err != nil {
-		return preparedStepCache{}, err
+		return PreparedStepCache{}, err
 	}
 
 	lookupStart := time.Now()
@@ -104,7 +121,7 @@ func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExe
 	restoreStart := time.Now()
 	restoreResult, err := m.store.Restore(ctx, entry.ObjectKey, runtimeDir)
 	if err != nil {
-		return preparedStepCache{}, err
+		return PreparedStepCache{}, err
 	}
 	if !restoreResult.Hit {
 		logManager.EmitSystemLine(ctx, fmt.Sprintf("cache lookup: preset=%s key=%s hit=false job_id=%s", preset.Name, key, jobID))
@@ -112,7 +129,7 @@ func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExe
 	}
 
 	if markErr := m.entryRepo.MarkAccessed(ctx, entry.ID, m.now()); markErr != nil && markErr != repository.ErrCacheEntryNotFound {
-		return preparedStepCache{}, markErr
+		return PreparedStepCache{}, markErr
 	}
 
 	prepared.MetadataEntry = &entry
@@ -121,7 +138,7 @@ func (m *StepCacheManager) Prepare(ctx context.Context, executionContext StepExe
 	return prepared, nil
 }
 
-func (m *StepCacheManager) Save(ctx context.Context, executionContext StepExecutionContext, logManager *ExecutionLogManager, prepared preparedStepCache, result runner.RunStepResult) error {
+func (m *StepCacheManager) Save(ctx context.Context, executionContext StepExecutionContext, logManager *ExecutionLogManager, prepared PreparedStepCache, result runner.RunStepResult) error {
 	if !prepared.Enabled || m == nil || m.store == nil || m.entryRepo == nil {
 		return nil
 	}
@@ -243,6 +260,10 @@ func presetMounts(runtimeDir string, cachePaths []string) ([]runner.CacheMount, 
 	return mounts, nil
 }
 
+func PresetMounts(runtimeDir string, cachePaths []string) ([]runner.CacheMount, error) {
+	return presetMounts(runtimeDir, cachePaths)
+}
+
 func effectiveJobID(executionContext StepExecutionContext) string {
 	if executionContext.Build.JobID != nil && strings.TrimSpace(*executionContext.Build.JobID) != "" {
 		return strings.TrimSpace(*executionContext.Build.JobID)
@@ -257,6 +278,10 @@ func effectiveJobID(executionContext StepExecutionContext) string {
 		return strings.TrimSpace(executionContext.ExecutionRequest.JobID)
 	}
 	return "build:" + strings.TrimSpace(executionContext.Build.ID)
+}
+
+func EffectiveJobID(executionContext StepExecutionContext) string {
+	return effectiveJobID(executionContext)
 }
 
 func (m *StepCacheManager) objectKey(jobID string, preset string, cacheKey string) string {

@@ -126,7 +126,7 @@ func (r *fakeBuildRepository) UpdateSourceCommitSHA(_ context.Context, id string
 	} else {
 		r.build.CommitSHA = &trimmed
 	}
-	r.build.Source = domain.NewSourceSpec(readOptionalString(r.build.RepoURL), readOptionalString(r.build.Ref), readOptionalString(r.build.CommitSHA))
+	r.build.Source = domain.NewSourceSpec(buildReadOptionalString(r.build.RepoURL), buildReadOptionalString(r.build.Ref), buildReadOptionalString(r.build.CommitSHA))
 	return r.build, nil
 }
 

@@ -1,4 +1,4 @@
-package build
+package execution
 
 import (
 	"fmt"
@@ -56,7 +56,7 @@ func formatTimedOutStepEndLine(stepIndex int, totalSteps int, stepName string, d
 	return fmt.Sprintf("<== Step %d/%d: %s failed in %s (timed out)", stepIndex, totalSteps, strings.TrimSpace(stepName), formatDurationSeconds(duration))
 }
 
-func formatFailureReasonLine(reason string) string {
+func FormatFailureReasonLine(reason string) string {
 	trimmed := strings.TrimSpace(reason)
 	if trimmed == "" {
 		trimmed = "unknown failure"
@@ -64,7 +64,7 @@ func formatFailureReasonLine(reason string) string {
 	return "Failure reason: " + trimmed
 }
 
-func formatBuildSummaryLines(status domain.BuildStatus, duration time.Duration, completedSteps int, totalSteps int, artifactPaths []string) []string {
+func FormatBuildSummaryLines(status domain.BuildStatus, duration time.Duration, completedSteps int, totalSteps int, artifactPaths []string) []string {
 	result := "finished"
 	if status == domain.BuildStatusSuccess {
 		result = "succeeded"
@@ -88,6 +88,14 @@ func formatBuildSummaryLines(status domain.BuildStatus, duration time.Duration, 
 	}
 
 	return lines
+}
+
+func formatFailureReasonLine(reason string) string {
+	return FormatFailureReasonLine(reason)
+}
+
+func formatBuildSummaryLines(status domain.BuildStatus, duration time.Duration, completedSteps int, totalSteps int, artifactPaths []string) []string {
+	return FormatBuildSummaryLines(status, duration, completedSteps, totalSteps, artifactPaths)
 }
 
 func formatDurationSeconds(duration time.Duration) string {

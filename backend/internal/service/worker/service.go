@@ -17,7 +17,7 @@ import (
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
-type buildExecutionBoundary interface {
+type workerExecutionBoundary interface {
 	ClaimNextRunnableJob(ctx context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error)
 	GetBuild(ctx context.Context, id string) (domain.Build, error)
 	ListBuilds(ctx context.Context) ([]domain.Build, error)
@@ -35,7 +35,7 @@ type buildExecutionBoundary interface {
 	RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, buildsvc.StepCompletionReport, error)
 }
 
-type RunnableStep struct {
+type WorkerRunnableStep struct {
 	BuildID        string
 	JobID          string
 	StepID         string
@@ -51,14 +51,14 @@ type RunnableStep struct {
 	TimeoutSeconds int
 }
 
-type StepExecutionReport struct {
+type WorkerStepExecutionReport struct {
 	BuildID         string
 	Step            domain.BuildStep
 	Result          runner.RunStepResult
 	SideEffectError *string
 }
 
-type WorkerRecoveryStats struct {
+type WorkerLeaseRecoveryStats struct {
 	ClaimsWon     int64 `json:"claims_won"`
 	ReclaimsWon   int64 `json:"reclaims_won"`
 	RenewalsWon   int64 `json:"renewals_won"`
@@ -67,8 +67,8 @@ type WorkerRecoveryStats struct {
 	ReclaimMisses int64 `json:"reclaim_misses"`
 }
 
-type WorkerService struct {
-	builds        buildExecutionBoundary
+type ExecutionWorkerService struct {
+	builds        workerExecutionBoundary
 	workerID      string
 	leaseDuration time.Duration
 	clock         func() time.Time
@@ -80,11 +80,11 @@ type WorkerService struct {
 	reclaimMisses int64
 }
 
-func NewWorkerService(builds buildExecutionBoundary) *WorkerService {
-	return NewWorkerServiceWithLease(builds, "", 45*time.Second)
+func NewExecutionWorkerService(builds workerExecutionBoundary) *ExecutionWorkerService {
+	return NewExecutionWorkerServiceWithLease(builds, "", 45*time.Second)
 }
 
-func NewWorkerServiceWithLease(builds buildExecutionBoundary, workerID string, leaseDuration time.Duration) *WorkerService {
+func NewExecutionWorkerServiceWithLease(builds workerExecutionBoundary, workerID string, leaseDuration time.Duration) *ExecutionWorkerService {
 	resolvedWorkerID := strings.TrimSpace(workerID)
 	if resolvedWorkerID == "" {
 		resolvedWorkerID = uuid.NewString()
@@ -93,7 +93,7 @@ func NewWorkerServiceWithLease(builds buildExecutionBoundary, workerID string, l
 		leaseDuration = 45 * time.Second
 	}
 
-	return &WorkerService{
+	return &ExecutionWorkerService{
 		builds:        builds,
 		workerID:      resolvedWorkerID,
 		leaseDuration: leaseDuration,
@@ -101,9 +101,9 @@ func NewWorkerServiceWithLease(builds buildExecutionBoundary, workerID string, l
 	}
 }
 
-func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bool, error) {
+func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerRunnableStep, bool, error) {
 	if runnable, found, err := w.claimRunnableStepFromJobs(ctx); err != nil {
-		return RunnableStep{}, false, err
+		return WorkerRunnableStep{}, false, err
 	} else if found {
 		return runnable, true, nil
 	}
@@ -118,7 +118,7 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 	//   4. worker e2e tests are updated to wire an ExecutionJobRepository
 	builds, err := w.builds.ListBuilds(ctx)
 	if err != nil {
-		return RunnableStep{}, false, err
+		return WorkerRunnableStep{}, false, err
 	}
 
 	for _, build := range builds {
@@ -133,7 +133,7 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 			queuedBuild, queueErr := w.builds.QueueBuild(ctx, build.ID)
 			if queueErr != nil {
 				if !errors.Is(queueErr, buildsvc.ErrInvalidBuildStatusTransition) {
-					return RunnableStep{}, false, queueErr
+					return WorkerRunnableStep{}, false, queueErr
 				}
 				continue
 			}
@@ -142,14 +142,14 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 
 		steps, err := w.builds.GetBuildSteps(ctx, build.ID)
 		if err != nil {
-			return RunnableStep{}, false, err
+			return WorkerRunnableStep{}, false, err
 		}
 
 		if len(steps) == 0 {
 			continue
 		}
 
-		nextStep, runnable := firstRunnableStep(steps)
+		nextStep, runnable := workerFirstRunnableStep(steps)
 		if !runnable {
 			continue
 		}
@@ -157,7 +157,7 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 		claim := w.newStepClaim()
 		claimedStep, claimed, err := w.builds.ClaimPendingStep(ctx, build.ID, nextStep.StepIndex, claim)
 		if err != nil {
-			return RunnableStep{}, false, err
+			return WorkerRunnableStep{}, false, err
 		}
 		if !claimed {
 			continue
@@ -167,14 +167,14 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 
 		if build.Status == domain.BuildStatusQueued {
 			if _, err := w.builds.StartBuild(ctx, build.ID); err != nil && !errors.Is(err, buildsvc.ErrInvalidBuildStatusTransition) {
-				return RunnableStep{}, false, err
+				return WorkerRunnableStep{}, false, err
 			}
 			if err := w.ensureBuildRunning(ctx, build.ID); err != nil {
-				return RunnableStep{}, false, err
+				return WorkerRunnableStep{}, false, err
 			}
 		}
 
-		runnableStep := RunnableStep{
+		runnableStep := WorkerRunnableStep{
 			BuildID:        build.ID,
 			JobID:          "",
 			StepID:         claimedStep.ID,
@@ -182,11 +182,11 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 			StepName:       claimedStep.Name,
 			WorkerID:       claim.WorkerID,
 			ClaimToken:     claim.ClaimToken,
-			Command:        defaultString(claimedStep.Command, "sh"),
-			Args:           defaultArgs(claimedStep.Args),
-			Env:            defaultEnv(claimedStep.Env),
-			WorkingDir:     defaultString(claimedStep.WorkingDir, "."),
-			TimeoutSeconds: maxInt(claimedStep.TimeoutSeconds, 0),
+			Command:        workerDefaultString(claimedStep.Command, "sh"),
+			Args:           workerDefaultArgs(claimedStep.Args),
+			Env:            workerDefaultEnv(claimedStep.Env),
+			WorkingDir:     workerDefaultString(claimedStep.WorkingDir, "."),
+			TimeoutSeconds: workerMaxInt(claimedStep.TimeoutSeconds, 0),
 		}
 
 		return w.bindRunnableStepFromJob(ctx, runnableStep, claim), true, nil
@@ -202,10 +202,10 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 
 		steps, err := w.builds.GetBuildSteps(ctx, build.ID)
 		if err != nil {
-			return RunnableStep{}, false, err
+			return WorkerRunnableStep{}, false, err
 		}
 
-		runningStep, reclaimable := firstReclaimableRunningStep(steps, w.clock().UTC())
+		runningStep, reclaimable := workerFirstReclaimableRunningStep(steps, w.clock().UTC())
 		if !reclaimable {
 			continue
 		}
@@ -213,7 +213,7 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 		claim := w.newStepClaim()
 		reclaimedStep, claimed, err := w.builds.ReclaimExpiredStep(ctx, build.ID, runningStep.StepIndex, claim.ClaimedAt, claim)
 		if err != nil {
-			return RunnableStep{}, false, err
+			return WorkerRunnableStep{}, false, err
 		}
 		if !claimed {
 			missCount := atomic.AddInt64(&w.reclaimMisses, 1)
@@ -225,14 +225,14 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 
 		if build.Status == domain.BuildStatusQueued {
 			if _, err := w.builds.StartBuild(ctx, build.ID); err != nil && !errors.Is(err, buildsvc.ErrInvalidBuildStatusTransition) {
-				return RunnableStep{}, false, err
+				return WorkerRunnableStep{}, false, err
 			}
 			if err := w.ensureBuildRunning(ctx, build.ID); err != nil {
-				return RunnableStep{}, false, err
+				return WorkerRunnableStep{}, false, err
 			}
 		}
 
-		runnableStep := RunnableStep{
+		runnableStep := WorkerRunnableStep{
 			BuildID:        build.ID,
 			JobID:          "",
 			StepID:         reclaimedStep.ID,
@@ -240,11 +240,11 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 			StepName:       reclaimedStep.Name,
 			WorkerID:       claim.WorkerID,
 			ClaimToken:     claim.ClaimToken,
-			Command:        defaultString(reclaimedStep.Command, "sh"),
-			Args:           defaultArgs(reclaimedStep.Args),
-			Env:            defaultEnv(reclaimedStep.Env),
-			WorkingDir:     defaultString(reclaimedStep.WorkingDir, "."),
-			TimeoutSeconds: maxInt(reclaimedStep.TimeoutSeconds, 0),
+			Command:        workerDefaultString(reclaimedStep.Command, "sh"),
+			Args:           workerDefaultArgs(reclaimedStep.Args),
+			Env:            workerDefaultEnv(reclaimedStep.Env),
+			WorkingDir:     workerDefaultString(reclaimedStep.WorkingDir, "."),
+			TimeoutSeconds: workerMaxInt(reclaimedStep.TimeoutSeconds, 0),
 		}
 
 		return w.bindRunnableStepFromJob(ctx, runnableStep, claim), true, nil
@@ -255,31 +255,31 @@ func (w *WorkerService) ClaimRunnableStep(ctx context.Context) (RunnableStep, bo
 		log.Printf("reclaim scan no expired running step: miss_count=%d", missCount)
 	}
 
-	return RunnableStep{}, false, nil
+	return WorkerRunnableStep{}, false, nil
 }
 
-func (w *WorkerService) claimRunnableStepFromJobs(ctx context.Context) (RunnableStep, bool, error) {
+func (w *ExecutionWorkerService) claimRunnableStepFromJobs(ctx context.Context) (WorkerRunnableStep, bool, error) {
 	claim := w.newStepClaim()
 	job, claimed, err := w.builds.ClaimNextRunnableJob(ctx, claim)
 	if err != nil {
-		return RunnableStep{}, false, err
+		return WorkerRunnableStep{}, false, err
 	}
 	if !claimed {
-		return RunnableStep{}, false, nil
+		return WorkerRunnableStep{}, false, nil
 	}
 
 	if stepErr := w.mirrorJobClaimToStep(ctx, job, claim); stepErr != nil {
-		return RunnableStep{}, false, stepErr
+		return WorkerRunnableStep{}, false, stepErr
 	}
 
 	if err := w.ensureBuildRunning(ctx, job.BuildID); err != nil {
-		return RunnableStep{}, false, err
+		return WorkerRunnableStep{}, false, err
 	}
 
 	claimCount := atomic.AddInt64(&w.claimsWon, 1)
 	log.Printf("job claim succeeded: job_id=%s build_id=%s step_index=%d worker_id=%s claim_count=%d", job.ID, job.BuildID, job.StepIndex, claim.WorkerID, claimCount)
 
-	runnable := RunnableStep{
+	runnable := WorkerRunnableStep{
 		BuildID:        job.BuildID,
 		JobID:          job.ID,
 		StepID:         job.StepID,
@@ -288,17 +288,17 @@ func (w *WorkerService) claimRunnableStepFromJobs(ctx context.Context) (Runnable
 		WorkerID:       claim.WorkerID,
 		ClaimToken:     claim.ClaimToken,
 		Image:          job.Image,
-		Command:        commandFromJob(job),
-		Args:           argsFromJob(job),
-		Env:            envFromJob(job),
-		WorkingDir:     defaultString(job.WorkingDir, "."),
-		TimeoutSeconds: timeoutFromJob(job),
+		Command:        workerCommandFromJob(job),
+		Args:           workerArgsFromJob(job),
+		Env:            workerEnvFromJob(job),
+		WorkingDir:     workerDefaultString(job.WorkingDir, "."),
+		TimeoutSeconds: workerTimeoutFromJob(job),
 	}
 
 	return runnable, true, nil
 }
 
-func (w *WorkerService) mirrorJobClaimToStep(ctx context.Context, job domain.ExecutionJob, claim repository.StepClaim) error {
+func (w *ExecutionWorkerService) mirrorJobClaimToStep(ctx context.Context, job domain.ExecutionJob, claim repository.StepClaim) error {
 	if job.StepID == "" {
 		return nil
 	}
@@ -320,14 +320,14 @@ func (w *WorkerService) mirrorJobClaimToStep(ctx context.Context, job domain.Exe
 	return buildsvc.ErrInvalidBuildStepTransition
 }
 
-func timeoutFromJob(job domain.ExecutionJob) int {
+func workerTimeoutFromJob(job domain.ExecutionJob) int {
 	if job.TimeoutSeconds == nil {
 		return 0
 	}
-	return maxInt(*job.TimeoutSeconds, 0)
+	return workerMaxInt(*job.TimeoutSeconds, 0)
 }
 
-func (w *WorkerService) heartbeatInterval() time.Duration {
+func (w *ExecutionWorkerService) heartbeatInterval() time.Duration {
 	interval := w.leaseDuration / 3
 	if interval <= 0 {
 		return time.Second
@@ -335,7 +335,7 @@ func (w *WorkerService) heartbeatInterval() time.Duration {
 	return interval
 }
 
-func (w *WorkerService) heartbeatIntervalForStep(step RunnableStep) time.Duration {
+func (w *ExecutionWorkerService) heartbeatIntervalForStep(step WorkerRunnableStep) time.Duration {
 	base := w.heartbeatInterval()
 	window := base / 5
 	if window <= 0 {
@@ -363,8 +363,8 @@ func (w *WorkerService) heartbeatIntervalForStep(step RunnableStep) time.Duratio
 	return interval
 }
 
-func (w *WorkerService) RecoveryStats() WorkerRecoveryStats {
-	return WorkerRecoveryStats{
+func (w *ExecutionWorkerService) RecoveryStats() WorkerLeaseRecoveryStats {
+	return WorkerLeaseRecoveryStats{
 		ClaimsWon:     atomic.LoadInt64(&w.claimsWon),
 		ReclaimsWon:   atomic.LoadInt64(&w.reclaimsWon),
 		RenewalsWon:   atomic.LoadInt64(&w.renewalsWon),
@@ -374,7 +374,7 @@ func (w *WorkerService) RecoveryStats() WorkerRecoveryStats {
 	}
 }
 
-func (w *WorkerService) renewStepLease(ctx context.Context, step RunnableStep) (bool, error) {
+func (w *ExecutionWorkerService) renewStepLease(ctx context.Context, step WorkerRunnableStep) (bool, error) {
 	leaseExpiresAt := w.clock().UTC().Add(w.leaseDuration)
 	if step.JobID != "" {
 		_, renewed, renewErr := w.builds.RenewJobLease(ctx, step.JobID, step.ClaimToken, leaseExpiresAt)
@@ -414,7 +414,7 @@ func (w *WorkerService) renewStepLease(ctx context.Context, step RunnableStep) (
 	return true, nil
 }
 
-func (w *WorkerService) newStepClaim() repository.StepClaim {
+func (w *ExecutionWorkerService) newStepClaim() repository.StepClaim {
 	now := w.clock().UTC()
 	return repository.StepClaim{
 		WorkerID:       w.workerID,
@@ -424,7 +424,7 @@ func (w *WorkerService) newStepClaim() repository.StepClaim {
 	}
 }
 
-func firstRunnableStep(steps []domain.BuildStep) (domain.BuildStep, bool) {
+func workerFirstRunnableStep(steps []domain.BuildStep) (domain.BuildStep, bool) {
 	allPreviousSucceeded := true
 
 	for _, step := range steps {
@@ -446,7 +446,7 @@ func firstRunnableStep(steps []domain.BuildStep) (domain.BuildStep, bool) {
 	return domain.BuildStep{}, false
 }
 
-func firstReclaimableRunningStep(steps []domain.BuildStep, now time.Time) (domain.BuildStep, bool) {
+func workerFirstReclaimableRunningStep(steps []domain.BuildStep, now time.Time) (domain.BuildStep, bool) {
 	for _, step := range steps {
 		if step.Status == domain.BuildStepStatusSuccess {
 			continue
@@ -465,7 +465,7 @@ func firstReclaimableRunningStep(steps []domain.BuildStep, now time.Time) (domai
 	return domain.BuildStep{}, false
 }
 
-func defaultString(value string, fallback string) string {
+func workerDefaultString(value string, fallback string) string {
 	if value == "" {
 		return fallback
 	}
@@ -473,7 +473,7 @@ func defaultString(value string, fallback string) string {
 	return value
 }
 
-func defaultArgs(args []string) []string {
+func workerDefaultArgs(args []string) []string {
 	if len(args) == 0 {
 		return []string{"-c", "echo coyote-ci worker default step && exit 0"}
 	}
@@ -481,7 +481,7 @@ func defaultArgs(args []string) []string {
 	return args
 }
 
-func defaultEnv(env map[string]string) map[string]string {
+func workerDefaultEnv(env map[string]string) map[string]string {
 	if env == nil {
 		return map[string]string{}
 	}
@@ -489,7 +489,7 @@ func defaultEnv(env map[string]string) map[string]string {
 	return env
 }
 
-func maxInt(value int, minimum int) int {
+func workerMaxInt(value int, minimum int) int {
 	if value < minimum {
 		return minimum
 	}
@@ -497,11 +497,11 @@ func maxInt(value int, minimum int) int {
 	return value
 }
 
-func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableStep) (StepExecutionReport, error) {
+func (w *ExecutionWorkerService) ExecuteRunnableStep(ctx context.Context, step WorkerRunnableStep) (WorkerStepExecutionReport, error) {
 	log.Printf("claimed runnable work: build_id=%s step=%s", step.BuildID, step.StepName)
 	log.Printf("starting execution: build_id=%s step=%s", step.BuildID, step.StepName)
 
-	report := StepExecutionReport{
+	report := WorkerStepExecutionReport{
 		BuildID: step.BuildID,
 		Step: domain.BuildStep{
 			Name:   step.StepName,
@@ -597,7 +597,7 @@ func (w *WorkerService) ExecuteRunnableStep(ctx context.Context, step RunnableSt
 	return report, nil
 }
 
-func (w *WorkerService) bindRunnableStepFromJob(ctx context.Context, step RunnableStep, claim repository.StepClaim) RunnableStep {
+func (w *ExecutionWorkerService) bindRunnableStepFromJob(ctx context.Context, step WorkerRunnableStep, claim repository.StepClaim) WorkerRunnableStep {
 	if step.StepID == "" {
 		return step
 	}
@@ -609,25 +609,25 @@ func (w *WorkerService) bindRunnableStepFromJob(ctx context.Context, step Runnab
 
 	step.JobID = job.ID
 	step.Image = job.Image
-	step.Command = commandFromJob(job)
-	step.Args = argsFromJob(job)
-	step.Env = envFromJob(job)
-	step.WorkingDir = defaultString(job.WorkingDir, ".")
+	step.Command = workerCommandFromJob(job)
+	step.Args = workerArgsFromJob(job)
+	step.Env = workerEnvFromJob(job)
+	step.WorkingDir = workerDefaultString(job.WorkingDir, ".")
 	if job.TimeoutSeconds != nil {
-		step.TimeoutSeconds = maxInt(*job.TimeoutSeconds, 0)
+		step.TimeoutSeconds = workerMaxInt(*job.TimeoutSeconds, 0)
 	}
 
 	return step
 }
 
-func commandFromJob(job domain.ExecutionJob) string {
+func workerCommandFromJob(job domain.ExecutionJob) string {
 	if len(job.Command) > 0 {
-		return defaultString(job.Command[0], "sh")
+		return workerDefaultString(job.Command[0], "sh")
 	}
 	return "sh"
 }
 
-func (w *WorkerService) ensureBuildRunning(ctx context.Context, buildID string) error {
+func (w *ExecutionWorkerService) ensureBuildRunning(ctx context.Context, buildID string) error {
 	build, err := w.builds.GetBuild(ctx, buildID)
 	if err != nil {
 		return err
@@ -659,16 +659,16 @@ func (w *WorkerService) ensureBuildRunning(ctx context.Context, buildID string) 
 	return buildsvc.ErrInvalidBuildStatusTransition
 }
 
-func argsFromJob(job domain.ExecutionJob) []string {
+func workerArgsFromJob(job domain.ExecutionJob) []string {
 	if len(job.Command) <= 1 {
-		return defaultArgs(nil)
+		return workerDefaultArgs(nil)
 	}
 	args := make([]string, len(job.Command)-1)
 	copy(args, job.Command[1:])
 	return args
 }
 
-func envFromJob(job domain.ExecutionJob) map[string]string {
+func workerEnvFromJob(job domain.ExecutionJob) map[string]string {
 	if job.Environment == nil {
 		return map[string]string{}
 	}

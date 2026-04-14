@@ -9,6 +9,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
+	"github.com/radiation/coyote-ci/backend/internal/service/execution"
 )
 
 func TestStepExecutionContextBuilder_BindsPersistedJobAsAuthoritativePlan(t *testing.T) {
@@ -120,7 +121,7 @@ func TestWorkspacePreparer_ReturnsEarlyFailureResultOnPrepareError(t *testing.T)
 
 	executionContext := StepExecutionContext{
 		ExecutionImage: "golang:1.24",
-		BuildSource:    resolvedBuildSourceSpec{},
+		BuildSource:    execution.ResolvedBuildSourceSpec{},
 		ExecutionRequest: runner.RunStepRequest{
 			BuildID:    "build-1",
 			StepID:     "step-1",

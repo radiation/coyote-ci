@@ -11,9 +11,10 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
-type fakeBuildExecutionBoundary struct {
+type fakeExecutionWorkerBoundary struct {
 	jobsQueue      []domain.ExecutionJob
 	listBuildsResp []domain.Build
 	listBuildsErr  error
@@ -51,7 +52,7 @@ type fakeBuildExecutionBoundary struct {
 	lastRequest runner.RunStepRequest
 }
 
-func (f *fakeBuildExecutionBoundary) ClaimNextRunnableJob(_ context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
+func (f *fakeExecutionWorkerBoundary) ClaimNextRunnableJob(_ context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
 	if len(f.jobsQueue) == 0 {
 		return domain.ExecutionJob{}, false, nil
 	}
@@ -68,7 +69,7 @@ func (f *fakeBuildExecutionBoundary) ClaimNextRunnableJob(_ context.Context, cla
 	return job, true, nil
 }
 
-func (f *fakeBuildExecutionBoundary) GetJobByStepID(_ context.Context, stepID string) (domain.ExecutionJob, error) {
+func (f *fakeExecutionWorkerBoundary) GetJobByStepID(_ context.Context, stepID string) (domain.ExecutionJob, error) {
 	if f.jobsByStepID == nil {
 		return domain.ExecutionJob{}, repository.ErrExecutionJobNotFound
 	}
@@ -79,7 +80,7 @@ func (f *fakeBuildExecutionBoundary) GetJobByStepID(_ context.Context, stepID st
 	return job, nil
 }
 
-func (f *fakeBuildExecutionBoundary) ClaimJobByStepID(_ context.Context, stepID string, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
+func (f *fakeExecutionWorkerBoundary) ClaimJobByStepID(_ context.Context, stepID string, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
 	if f.claimJobErr != nil {
 		return domain.ExecutionJob{}, false, f.claimJobErr
 	}
@@ -103,7 +104,7 @@ func (f *fakeBuildExecutionBoundary) ClaimJobByStepID(_ context.Context, stepID 
 	return job, true, nil
 }
 
-func (f *fakeBuildExecutionBoundary) RenewJobLease(_ context.Context, jobID string, claimToken string, leaseExpiresAt time.Time) (domain.ExecutionJob, bool, error) {
+func (f *fakeExecutionWorkerBoundary) RenewJobLease(_ context.Context, jobID string, claimToken string, leaseExpiresAt time.Time) (domain.ExecutionJob, bool, error) {
 	if f.jobsByStepID == nil {
 		return domain.ExecutionJob{}, false, nil
 	}
@@ -112,7 +113,7 @@ func (f *fakeBuildExecutionBoundary) RenewJobLease(_ context.Context, jobID stri
 			continue
 		}
 		if job.ClaimToken == nil || *job.ClaimToken != claimToken {
-			return job, false, ErrStaleStepClaim
+			return job, false, buildsvc.ErrStaleStepClaim
 		}
 		job.ClaimExpiresAt = &leaseExpiresAt
 		f.jobsByStepID[stepID] = job
@@ -121,11 +122,11 @@ func (f *fakeBuildExecutionBoundary) RenewJobLease(_ context.Context, jobID stri
 	return domain.ExecutionJob{}, false, nil
 }
 
-func claimKey(buildID string, stepIndex int) string {
+func workerClaimKey(buildID string, stepIndex int) string {
 	return fmt.Sprintf("%s:%d", buildID, stepIndex)
 }
 
-func (f *fakeBuildExecutionBoundary) ListBuilds(_ context.Context) ([]domain.Build, error) {
+func (f *fakeExecutionWorkerBoundary) ListBuilds(_ context.Context) ([]domain.Build, error) {
 	if f.listBuildsErr != nil {
 		return nil, f.listBuildsErr
 	}
@@ -137,16 +138,16 @@ func (f *fakeBuildExecutionBoundary) ListBuilds(_ context.Context) ([]domain.Bui
 	return f.listBuildsResp, nil
 }
 
-func (f *fakeBuildExecutionBoundary) GetBuild(_ context.Context, id string) (domain.Build, error) {
+func (f *fakeExecutionWorkerBoundary) GetBuild(_ context.Context, id string) (domain.Build, error) {
 	for _, build := range f.listBuildsResp {
 		if build.ID == id {
 			return build, nil
 		}
 	}
-	return domain.Build{}, ErrBuildNotFound
+	return domain.Build{}, buildsvc.ErrBuildNotFound
 }
 
-func (f *fakeBuildExecutionBoundary) GetBuildSteps(_ context.Context, id string) ([]domain.BuildStep, error) {
+func (f *fakeExecutionWorkerBoundary) GetBuildSteps(_ context.Context, id string) ([]domain.BuildStep, error) {
 	if f.getStepsErr != nil {
 		return nil, f.getStepsErr
 	}
@@ -157,7 +158,7 @@ func (f *fakeBuildExecutionBoundary) GetBuildSteps(_ context.Context, id string)
 	return out, nil
 }
 
-func (f *fakeBuildExecutionBoundary) ClaimPendingStep(_ context.Context, buildID string, stepIndex int, claim repository.StepClaim) (domain.BuildStep, bool, error) {
+func (f *fakeExecutionWorkerBoundary) ClaimPendingStep(_ context.Context, buildID string, stepIndex int, claim repository.StepClaim) (domain.BuildStep, bool, error) {
 	f.claimCalls++
 	if f.claimErr != nil {
 		return domain.BuildStep{}, false, f.claimErr
@@ -169,7 +170,7 @@ func (f *fakeBuildExecutionBoundary) ClaimPendingStep(_ context.Context, buildID
 			continue
 		}
 
-		key := claimKey(buildID, stepIndex)
+		key := workerClaimKey(buildID, stepIndex)
 		if f.claimMap != nil {
 			allowed, ok := f.claimMap[key]
 			if ok && !allowed {
@@ -194,7 +195,7 @@ func (f *fakeBuildExecutionBoundary) ClaimPendingStep(_ context.Context, buildID
 	return domain.BuildStep{}, false, nil
 }
 
-func (f *fakeBuildExecutionBoundary) ReclaimExpiredStep(_ context.Context, buildID string, stepIndex int, reclaimBefore time.Time, claim repository.StepClaim) (domain.BuildStep, bool, error) {
+func (f *fakeExecutionWorkerBoundary) ReclaimExpiredStep(_ context.Context, buildID string, stepIndex int, reclaimBefore time.Time, claim repository.StepClaim) (domain.BuildStep, bool, error) {
 	f.reclaimCalls++
 
 	steps := f.stepsByBuildID[buildID]
@@ -203,7 +204,7 @@ func (f *fakeBuildExecutionBoundary) ReclaimExpiredStep(_ context.Context, build
 			continue
 		}
 
-		key := claimKey(buildID, stepIndex)
+		key := workerClaimKey(buildID, stepIndex)
 		if f.reclaimMap != nil {
 			allowed, ok := f.reclaimMap[key]
 			if ok && !allowed {
@@ -229,7 +230,7 @@ func (f *fakeBuildExecutionBoundary) ReclaimExpiredStep(_ context.Context, build
 	return domain.BuildStep{}, false, nil
 }
 
-func (f *fakeBuildExecutionBoundary) QueueBuild(_ context.Context, id string) (domain.Build, error) {
+func (f *fakeExecutionWorkerBoundary) QueueBuild(_ context.Context, id string) (domain.Build, error) {
 	f.queueCalls++
 
 	if f.stepsByBuildID == nil {
@@ -254,7 +255,7 @@ func (f *fakeBuildExecutionBoundary) QueueBuild(_ context.Context, id string) (d
 	return build, nil
 }
 
-func (f *fakeBuildExecutionBoundary) StartBuild(_ context.Context, id string) (domain.Build, error) {
+func (f *fakeExecutionWorkerBoundary) StartBuild(_ context.Context, id string) (domain.Build, error) {
 	f.startCalls++
 	f.lastBuildID = id
 	if f.startErr != nil {
@@ -271,7 +272,7 @@ func (f *fakeBuildExecutionBoundary) StartBuild(_ context.Context, id string) (d
 	return build, nil
 }
 
-func (f *fakeBuildExecutionBoundary) CompleteBuild(_ context.Context, id string) (domain.Build, error) {
+func (f *fakeExecutionWorkerBoundary) CompleteBuild(_ context.Context, id string) (domain.Build, error) {
 	f.completeCalls++
 	f.lastBuildID = id
 	if f.completeErr != nil {
@@ -288,7 +289,7 @@ func (f *fakeBuildExecutionBoundary) CompleteBuild(_ context.Context, id string)
 	return build, nil
 }
 
-func (f *fakeBuildExecutionBoundary) FailBuild(_ context.Context, id string) (domain.Build, error) {
+func (f *fakeExecutionWorkerBoundary) FailBuild(_ context.Context, id string) (domain.Build, error) {
 	f.failCalls++
 	f.lastBuildID = id
 	if f.failErr != nil {
@@ -305,13 +306,13 @@ func (f *fakeBuildExecutionBoundary) FailBuild(_ context.Context, id string) (do
 	return build, nil
 }
 
-func (f *fakeBuildExecutionBoundary) RunStep(_ context.Context, request runner.RunStepRequest) (runner.RunStepResult, StepCompletionReport, error) {
+func (f *fakeExecutionWorkerBoundary) RunStep(_ context.Context, request runner.RunStepRequest) (runner.RunStepResult, buildsvc.StepCompletionReport, error) {
 	f.runStepCalls++
 	f.lastRequest = request
 	if f.runStepDelay > 0 {
 		time.Sleep(f.runStepDelay)
 	}
-	report := StepCompletionReport{CompletionOutcome: f.runOutcome, SideEffectErr: f.runSideErr}
+	report := buildsvc.StepCompletionReport{CompletionOutcome: f.runOutcome, SideEffectErr: f.runSideErr}
 	if report.CompletionOutcome == "" {
 		report.CompletionOutcome = repository.StepCompletionCompleted
 	}
@@ -321,13 +322,13 @@ func (f *fakeBuildExecutionBoundary) RunStep(_ context.Context, request runner.R
 	return f.runStepResp, report, nil
 }
 
-func (f *fakeBuildExecutionBoundary) RenewStepLease(_ context.Context, buildID string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, bool, error) {
+func (f *fakeExecutionWorkerBoundary) RenewStepLease(_ context.Context, buildID string, stepIndex int, claimToken string, leaseExpiresAt time.Time) (domain.BuildStep, bool, error) {
 	f.renewCalls++
 	if f.renewErr != nil {
 		return domain.BuildStep{}, false, f.renewErr
 	}
 	if f.renewStale {
-		return domain.BuildStep{}, false, ErrStaleStepClaim
+		return domain.BuildStep{}, false, buildsvc.ErrStaleStepClaim
 	}
 
 	steps := f.stepsByBuildID[buildID]
@@ -339,7 +340,7 @@ func (f *fakeBuildExecutionBoundary) RenewStepLease(_ context.Context, buildID s
 			return domain.BuildStep{}, false, nil
 		}
 		if steps[idx].ClaimToken == nil || *steps[idx].ClaimToken != claimToken {
-			return steps[idx], false, ErrStaleStepClaim
+			return steps[idx], false, buildsvc.ErrStaleStepClaim
 		}
 		steps[idx].LeaseExpiresAt = &leaseExpiresAt
 		f.stepsByBuildID[buildID] = steps
@@ -350,8 +351,8 @@ func (f *fakeBuildExecutionBoundary) RenewStepLease(_ context.Context, buildID s
 	return domain.BuildStep{}, false, nil
 }
 
-func TestWorkerService_ExecuteRunnableStep_Success(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{
+func TestExecutionWorkerService_ExecuteRunnableStep_Success(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{
 		runStepResp: runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
@@ -359,9 +360,9 @@ func TestWorkerService_ExecuteRunnableStep_Success(t *testing.T) {
 			},
 		},
 	}
-	worker := NewWorkerService(boundary)
+	worker := NewExecutionWorkerService(boundary)
 
-	report, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{
+	report, err := worker.ExecuteRunnableStep(context.Background(), WorkerRunnableStep{
 		BuildID:    "build-1",
 		StepIndex:  0,
 		StepName:   "test",
@@ -387,11 +388,11 @@ func TestWorkerService_ExecuteRunnableStep_Success(t *testing.T) {
 	}
 }
 
-func TestWorkerService_ExecuteRunnableStep_CommandFailed(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{runStepResp: runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: 2, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()}}
-	worker := NewWorkerService(boundary)
+func TestExecutionWorkerService_ExecuteRunnableStep_CommandFailed(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{runStepResp: runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: 2, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()}}
+	worker := NewExecutionWorkerService(boundary)
 
-	report, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{BuildID: "build-2", StepIndex: 0, StepName: "test", Command: "false"})
+	report, err := worker.ExecuteRunnableStep(context.Background(), WorkerRunnableStep{BuildID: "build-2", StepIndex: 0, StepName: "test", Command: "false"})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -403,11 +404,11 @@ func TestWorkerService_ExecuteRunnableStep_CommandFailed(t *testing.T) {
 	}
 }
 
-func TestWorkerService_ExecuteRunnableStep_RunStepError(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{runStepErr: errors.New("startup failed")}
-	worker := NewWorkerService(boundary)
+func TestExecutionWorkerService_ExecuteRunnableStep_RunStepError(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{runStepErr: errors.New("startup failed")}
+	worker := NewExecutionWorkerService(boundary)
 
-	report, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{BuildID: "build-3", StepIndex: 0, StepName: "test", Command: "missing"})
+	report, err := worker.ExecuteRunnableStep(context.Background(), WorkerRunnableStep{BuildID: "build-3", StepIndex: 0, StepName: "test", Command: "missing"})
 	if err == nil || err.Error() != "startup failed" {
 		t.Fatalf("expected startup failed error, got %v", err)
 	}
@@ -419,14 +420,14 @@ func TestWorkerService_ExecuteRunnableStep_RunStepError(t *testing.T) {
 	}
 }
 
-func TestWorkerService_ExecuteRunnableStep_InvalidTransitionOutcomeWithErrorIsNotIgnored(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{
+func TestExecutionWorkerService_ExecuteRunnableStep_InvalidTransitionOutcomeWithErrorIsNotIgnored(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{
 		runStepErr: errors.New("persistence unavailable"),
 		runOutcome: repository.StepCompletionInvalidTransition,
 	}
-	worker := NewWorkerService(boundary)
+	worker := NewExecutionWorkerService(boundary)
 
-	report, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{BuildID: "build-op", StepIndex: 0, StepName: "test", Command: "echo"})
+	report, err := worker.ExecuteRunnableStep(context.Background(), WorkerRunnableStep{BuildID: "build-op", StepIndex: 0, StepName: "test", Command: "echo"})
 	if err == nil || err.Error() != "persistence unavailable" {
 		t.Fatalf("expected persistence unavailable error, got %v", err)
 	}
@@ -435,9 +436,9 @@ func TestWorkerService_ExecuteRunnableStep_InvalidTransitionOutcomeWithErrorIsNo
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_UsesPersistedJobSpec(t *testing.T) {
+func TestExecutionWorkerService_ClaimRunnableStep_UsesPersistedJobSpec(t *testing.T) {
 	now := time.Now().UTC()
-	boundary := &fakeBuildExecutionBoundary{
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
@@ -455,13 +456,13 @@ func TestWorkerService_ClaimRunnableStep_UsesPersistedJobSpec(t *testing.T) {
 				Command:        []string{"sh", "-c", "echo from-job"},
 				WorkingDir:     "backend",
 				Environment:    map[string]string{"A": "job"},
-				TimeoutSeconds: intPtr(120),
+				TimeoutSeconds: workerTestIntPtr(120),
 				CreatedAt:      now,
 			},
 		},
 	}
 
-	worker := NewWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
 	runnable, found, err := worker.ClaimRunnableStep(context.Background())
 	if err != nil {
 		t.Fatalf("claim runnable step failed: %v", err)
@@ -483,9 +484,9 @@ func TestWorkerService_ClaimRunnableStep_UsesPersistedJobSpec(t *testing.T) {
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_FromJobClaim_StartsQueuedBuild(t *testing.T) {
+func TestExecutionWorkerService_ClaimRunnableStep_FromJobClaim_StartsQueuedBuild(t *testing.T) {
 	now := time.Now().UTC()
-	boundary := &fakeBuildExecutionBoundary{
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-queue", Status: domain.BuildStatusQueued}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-queue": {
@@ -518,7 +519,7 @@ func TestWorkerService_ClaimRunnableStep_FromJobClaim_StartsQueuedBuild(t *testi
 		},
 	}
 
-	worker := NewWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
 	runnable, found, err := worker.ClaimRunnableStep(context.Background())
 	if err != nil {
 		t.Fatalf("claim runnable step failed: %v", err)
@@ -534,9 +535,9 @@ func TestWorkerService_ClaimRunnableStep_FromJobClaim_StartsQueuedBuild(t *testi
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_FromJobClaim_RejectsPendingBuild(t *testing.T) {
+func TestExecutionWorkerService_ClaimRunnableStep_FromJobClaim_RejectsPendingBuild(t *testing.T) {
 	now := time.Now().UTC()
-	boundary := &fakeBuildExecutionBoundary{
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-pending", Status: domain.BuildStatusPending}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-pending": {
@@ -567,9 +568,9 @@ func TestWorkerService_ClaimRunnableStep_FromJobClaim_RejectsPendingBuild(t *tes
 		},
 	}
 
-	worker := NewWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
 	_, found, err := worker.ClaimRunnableStep(context.Background())
-	if !errors.Is(err, ErrInvalidBuildStatusTransition) {
+	if !errors.Is(err, buildsvc.ErrInvalidBuildStatusTransition) {
 		t.Fatalf("expected pending build to be rejected for job execution, got err=%v", err)
 	}
 	if found {
@@ -577,9 +578,9 @@ func TestWorkerService_ClaimRunnableStep_FromJobClaim_RejectsPendingBuild(t *tes
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_DoesNotBindPersistedJobSpecWhenClaimNotAcquired(t *testing.T) {
+func TestExecutionWorkerService_ClaimRunnableStep_DoesNotBindPersistedJobSpecWhenClaimNotAcquired(t *testing.T) {
 	now := time.Now().UTC()
-	boundary := &fakeBuildExecutionBoundary{
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
@@ -597,14 +598,14 @@ func TestWorkerService_ClaimRunnableStep_DoesNotBindPersistedJobSpecWhenClaimNot
 				Command:        []string{"sh", "-c", "echo from-job"},
 				WorkingDir:     "backend",
 				Environment:    map[string]string{"A": "job"},
-				TimeoutSeconds: intPtr(120),
+				TimeoutSeconds: workerTestIntPtr(120),
 				CreatedAt:      now,
 			},
 		},
 		claimJobMap: map[string]bool{"step-1": false},
 	}
 
-	worker := NewWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
 	runnable, found, err := worker.ClaimRunnableStep(context.Background())
 	if err != nil {
 		t.Fatalf("claim runnable step failed: %v", err)
@@ -626,9 +627,9 @@ func TestWorkerService_ClaimRunnableStep_DoesNotBindPersistedJobSpecWhenClaimNot
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_DoesNotBindPersistedJobSpecWhenClaimErrors(t *testing.T) {
+func TestExecutionWorkerService_ClaimRunnableStep_DoesNotBindPersistedJobSpecWhenClaimErrors(t *testing.T) {
 	now := time.Now().UTC()
-	boundary := &fakeBuildExecutionBoundary{
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
@@ -646,14 +647,14 @@ func TestWorkerService_ClaimRunnableStep_DoesNotBindPersistedJobSpecWhenClaimErr
 				Command:        []string{"sh", "-c", "echo from-job"},
 				WorkingDir:     "backend",
 				Environment:    map[string]string{"A": "job"},
-				TimeoutSeconds: intPtr(120),
+				TimeoutSeconds: workerTestIntPtr(120),
 				CreatedAt:      now,
 			},
 		},
 		claimJobErr: errors.New("claim failed"),
 	}
 
-	worker := NewWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
 	runnable, found, err := worker.ClaimRunnableStep(context.Background())
 	if err != nil {
 		t.Fatalf("claim runnable step failed: %v", err)
@@ -675,9 +676,9 @@ func TestWorkerService_ClaimRunnableStep_DoesNotBindPersistedJobSpecWhenClaimErr
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_ClaimsJobDirectly(t *testing.T) {
+func TestExecutionWorkerService_ClaimRunnableStep_ClaimsJobDirectly(t *testing.T) {
 	now := time.Now().UTC()
-	boundary := &fakeBuildExecutionBoundary{
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
 		jobsQueue: []domain.ExecutionJob{
 			{
@@ -690,7 +691,7 @@ func TestWorkerService_ClaimRunnableStep_ClaimsJobDirectly(t *testing.T) {
 				Command:        []string{"sh", "-c", "echo from-job"},
 				WorkingDir:     "backend",
 				Environment:    map[string]string{"A": "job"},
-				TimeoutSeconds: intPtr(90),
+				TimeoutSeconds: workerTestIntPtr(90),
 				CreatedAt:      now,
 			},
 		},
@@ -701,7 +702,7 @@ func TestWorkerService_ClaimRunnableStep_ClaimsJobDirectly(t *testing.T) {
 		},
 	}
 
-	worker := NewWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
 	runnable, found, err := worker.ClaimRunnableStep(context.Background())
 	if err != nil {
 		t.Fatalf("claim runnable step failed: %v", err)
@@ -723,19 +724,19 @@ func TestWorkerService_ClaimRunnableStep_ClaimsJobDirectly(t *testing.T) {
 	}
 }
 
-func intPtr(value int) *int {
+func workerTestIntPtr(value int) *int {
 	return &value
 }
 
-func TestWorkerService_ExecuteRunnableStep_SideEffectFailureIsReported(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{
+func TestExecutionWorkerService_ExecuteRunnableStep_SideEffectFailureIsReported(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{
 		runStepResp: runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()},
 		runOutcome:  repository.StepCompletionCompleted,
 		runSideErr:  errors.New("log write failed"),
 	}
-	worker := NewWorkerService(boundary)
+	worker := NewExecutionWorkerService(boundary)
 
-	report, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{BuildID: "build-side", StepIndex: 0, StepName: "test", Command: "echo"})
+	report, err := worker.ExecuteRunnableStep(context.Background(), WorkerRunnableStep{BuildID: "build-side", StepIndex: 0, StepName: "test", Command: "echo"})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -750,8 +751,8 @@ func TestWorkerService_ExecuteRunnableStep_SideEffectFailureIsReported(t *testin
 	}
 }
 
-func TestWorkerService_ExecuteRunnableStep_TimeoutMarkedFailedWithReason(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{
+func TestExecutionWorkerService_ExecuteRunnableStep_TimeoutMarkedFailedWithReason(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{
 		runStepResp: runner.RunStepResult{
 			Status:     runner.RunStepStatusFailed,
 			ExitCode:   -1,
@@ -760,9 +761,9 @@ func TestWorkerService_ExecuteRunnableStep_TimeoutMarkedFailedWithReason(t *test
 			FinishedAt: time.Now().UTC(),
 		},
 	}
-	worker := NewWorkerService(boundary)
+	worker := NewExecutionWorkerService(boundary)
 
-	report, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{BuildID: "build-timeout", StepIndex: 0, StepName: "test", Command: "sleep", TimeoutSeconds: 1})
+	report, err := worker.ExecuteRunnableStep(context.Background(), WorkerRunnableStep{BuildID: "build-timeout", StepIndex: 0, StepName: "test", Command: "sleep", TimeoutSeconds: 1})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -780,8 +781,8 @@ func TestWorkerService_ExecuteRunnableStep_TimeoutMarkedFailedWithReason(t *test
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_ClaimsFirstPendingStep(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{
+func TestExecutionWorkerService_ClaimRunnableStep_ClaimsFirstPendingStep(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
@@ -791,7 +792,7 @@ func TestWorkerService_ClaimRunnableStep_ClaimsFirstPendingStep(t *testing.T) {
 		},
 	}
 
-	worker := NewWorkerService(boundary)
+	worker := NewExecutionWorkerService(boundary)
 	runnable, found, err := worker.ClaimRunnableStep(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -810,8 +811,8 @@ func TestWorkerService_ClaimRunnableStep_ClaimsFirstPendingStep(t *testing.T) {
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_UsesPersistedStepIndex(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{
+func TestExecutionWorkerService_ClaimRunnableStep_UsesPersistedStepIndex(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
@@ -820,7 +821,7 @@ func TestWorkerService_ClaimRunnableStep_UsesPersistedStepIndex(t *testing.T) {
 		},
 	}
 
-	worker := NewWorkerService(boundary)
+	worker := NewExecutionWorkerService(boundary)
 	runnable, found, err := worker.ClaimRunnableStep(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -833,8 +834,8 @@ func TestWorkerService_ClaimRunnableStep_UsesPersistedStepIndex(t *testing.T) {
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_UsesPersistedExecutionConfig(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{
+func TestExecutionWorkerService_ClaimRunnableStep_UsesPersistedExecutionConfig(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
@@ -843,7 +844,7 @@ func TestWorkerService_ClaimRunnableStep_UsesPersistedExecutionConfig(t *testing
 		},
 	}
 
-	worker := NewWorkerService(boundary)
+	worker := NewExecutionWorkerService(boundary)
 	runnable, found, err := worker.ClaimRunnableStep(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -868,8 +869,8 @@ func TestWorkerService_ClaimRunnableStep_UsesPersistedExecutionConfig(t *testing
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_OnlyFirstSequentialPendingIsRunnable(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{
+func TestExecutionWorkerService_ClaimRunnableStep_OnlyFirstSequentialPendingIsRunnable(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
@@ -880,7 +881,7 @@ func TestWorkerService_ClaimRunnableStep_OnlyFirstSequentialPendingIsRunnable(t 
 		},
 	}
 
-	worker := NewWorkerService(boundary)
+	worker := NewExecutionWorkerService(boundary)
 	runnable, found, err := worker.ClaimRunnableStep(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -896,8 +897,8 @@ func TestWorkerService_ClaimRunnableStep_OnlyFirstSequentialPendingIsRunnable(t 
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_DoesNotReclaimRunningOrFinishedSteps(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{
+func TestExecutionWorkerService_ClaimRunnableStep_DoesNotReclaimRunningOrFinishedSteps(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusRunning}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
@@ -907,7 +908,7 @@ func TestWorkerService_ClaimRunnableStep_DoesNotReclaimRunningOrFinishedSteps(t 
 		},
 	}
 
-	worker := NewWorkerService(boundary)
+	worker := NewExecutionWorkerService(boundary)
 	_, found, err := worker.ClaimRunnableStep(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -917,8 +918,8 @@ func TestWorkerService_ClaimRunnableStep_DoesNotReclaimRunningOrFinishedSteps(t 
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_ConditionalClaimFailureIsClean(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{
+func TestExecutionWorkerService_ClaimRunnableStep_ConditionalClaimFailureIsClean(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
@@ -926,11 +927,11 @@ func TestWorkerService_ClaimRunnableStep_ConditionalClaimFailureIsClean(t *testi
 			},
 		},
 		claimMap: map[string]bool{
-			claimKey("build-1", 0): false,
+			workerClaimKey("build-1", 0): false,
 		},
 	}
 
-	worker := NewWorkerService(boundary)
+	worker := NewExecutionWorkerService(boundary)
 	_, found, err := worker.ClaimRunnableStep(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -943,8 +944,8 @@ func TestWorkerService_ClaimRunnableStep_ConditionalClaimFailureIsClean(t *testi
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_PendingBuildTransitionsToRunning(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{
+func TestExecutionWorkerService_ClaimRunnableStep_PendingBuildTransitionsToRunning(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusPending}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
@@ -953,7 +954,7 @@ func TestWorkerService_ClaimRunnableStep_PendingBuildTransitionsToRunning(t *tes
 		},
 	}
 
-	worker := NewWorkerService(boundary)
+	worker := NewExecutionWorkerService(boundary)
 	_, found, err := worker.ClaimRunnableStep(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -969,13 +970,13 @@ func TestWorkerService_ClaimRunnableStep_PendingBuildTransitionsToRunning(t *tes
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_PendingBuildWithoutStepsBootstrapsQueue(t *testing.T) {
-	boundary := &fakeBuildExecutionBoundary{
+func TestExecutionWorkerService_ClaimRunnableStep_PendingBuildWithoutStepsBootstrapsQueue(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusPending}},
 		stepsByBuildID: map[string][]domain.BuildStep{},
 	}
 
-	worker := NewWorkerService(boundary)
+	worker := NewExecutionWorkerService(boundary)
 	runnable, found, err := worker.ClaimRunnableStep(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -994,10 +995,10 @@ func TestWorkerService_ClaimRunnableStep_PendingBuildWithoutStepsBootstrapsQueue
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_ReclaimsExpiredRunningStep(t *testing.T) {
+func TestExecutionWorkerService_ClaimRunnableStep_ReclaimsExpiredRunningStep(t *testing.T) {
 	now := time.Now().UTC()
 	expiredAt := now.Add(-time.Second)
-	boundary := &fakeBuildExecutionBoundary{
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusRunning}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
@@ -1007,7 +1008,7 @@ func TestWorkerService_ClaimRunnableStep_ReclaimsExpiredRunningStep(t *testing.T
 		},
 	}
 
-	worker := NewWorkerServiceWithLease(boundary, "worker-b", 30*time.Second)
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-b", 30*time.Second)
 	worker.clock = func() time.Time { return now }
 
 	runnable, found, err := worker.ClaimRunnableStep(context.Background())
@@ -1025,10 +1026,10 @@ func TestWorkerService_ClaimRunnableStep_ReclaimsExpiredRunningStep(t *testing.T
 	}
 }
 
-func TestWorkerService_ClaimRunnableStep_DoesNotReclaimNonExpiredRunningStep(t *testing.T) {
+func TestExecutionWorkerService_ClaimRunnableStep_DoesNotReclaimNonExpiredRunningStep(t *testing.T) {
 	now := time.Now().UTC()
 	leaseExpiresAt := now.Add(30 * time.Second)
-	boundary := &fakeBuildExecutionBoundary{
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusRunning}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
@@ -1038,7 +1039,7 @@ func TestWorkerService_ClaimRunnableStep_DoesNotReclaimNonExpiredRunningStep(t *
 		},
 	}
 
-	worker := NewWorkerServiceWithLease(boundary, "worker-b", 30*time.Second)
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-b", 30*time.Second)
 	worker.clock = func() time.Time { return now }
 
 	_, found, err := worker.ClaimRunnableStep(context.Background())
@@ -1050,11 +1051,11 @@ func TestWorkerService_ClaimRunnableStep_DoesNotReclaimNonExpiredRunningStep(t *
 	}
 }
 
-func TestWorkerService_ExecuteRunnableStep_RenewsLeaseWhileRunning(t *testing.T) {
+func TestExecutionWorkerService_ExecuteRunnableStep_RenewsLeaseWhileRunning(t *testing.T) {
 	claimToken := "claim-a"
 	workerID := "worker-a"
 	now := time.Now().UTC()
-	boundary := &fakeBuildExecutionBoundary{
+	boundary := &fakeExecutionWorkerBoundary{
 		runStepDelay: 120 * time.Millisecond,
 		runStepResp: runner.RunStepResult{
 			Status:     runner.RunStepStatusSuccess,
@@ -1064,15 +1065,15 @@ func TestWorkerService_ExecuteRunnableStep_RenewsLeaseWhileRunning(t *testing.T)
 		},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
-				{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, WorkerID: &workerID, ClaimToken: &claimToken, LeaseExpiresAt: ptrTime(now.Add(50 * time.Millisecond))},
+				{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, WorkerID: &workerID, ClaimToken: &claimToken, LeaseExpiresAt: workerTestPtrTime(now.Add(50 * time.Millisecond))},
 			},
 		},
 	}
 
-	worker := NewWorkerServiceWithLease(boundary, workerID, 90*time.Millisecond)
+	worker := NewExecutionWorkerServiceWithLease(boundary, workerID, 90*time.Millisecond)
 	worker.clock = time.Now
 
-	_, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{BuildID: "build-1", StepIndex: 0, StepName: "test", WorkerID: workerID, ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	_, err := worker.ExecuteRunnableStep(context.Background(), WorkerRunnableStep{BuildID: "build-1", StepIndex: 0, StepName: "test", WorkerID: workerID, ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -1087,11 +1088,11 @@ func TestWorkerService_ExecuteRunnableStep_RenewsLeaseWhileRunning(t *testing.T)
 	}
 }
 
-func TestWorkerService_ExecuteRunnableStep_StaleRenewalStopsHeartbeat(t *testing.T) {
+func TestExecutionWorkerService_ExecuteRunnableStep_StaleRenewalStopsHeartbeat(t *testing.T) {
 	claimToken := "claim-a"
 	workerID := "worker-a"
 	now := time.Now().UTC()
-	boundary := &fakeBuildExecutionBoundary{
+	boundary := &fakeExecutionWorkerBoundary{
 		runStepDelay: 300 * time.Millisecond,
 		renewStale:   true,
 		runStepResp: runner.RunStepResult{
@@ -1102,15 +1103,15 @@ func TestWorkerService_ExecuteRunnableStep_StaleRenewalStopsHeartbeat(t *testing
 		},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
-				{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, WorkerID: &workerID, ClaimToken: &claimToken, LeaseExpiresAt: ptrTime(now.Add(40 * time.Millisecond))},
+				{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, WorkerID: &workerID, ClaimToken: &claimToken, LeaseExpiresAt: workerTestPtrTime(now.Add(40 * time.Millisecond))},
 			},
 		},
 	}
 
-	worker := NewWorkerServiceWithLease(boundary, workerID, 120*time.Millisecond)
+	worker := NewExecutionWorkerServiceWithLease(boundary, workerID, 120*time.Millisecond)
 	worker.clock = time.Now
 
-	_, err := worker.ExecuteRunnableStep(context.Background(), RunnableStep{BuildID: "build-1", StepIndex: 0, StepName: "test", WorkerID: workerID, ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	_, err := worker.ExecuteRunnableStep(context.Background(), WorkerRunnableStep{BuildID: "build-1", StepIndex: 0, StepName: "test", WorkerID: workerID, ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -1125,17 +1126,17 @@ func TestWorkerService_ExecuteRunnableStep_StaleRenewalStopsHeartbeat(t *testing
 	}
 }
 
-func ptrTime(t time.Time) *time.Time {
+func workerTestPtrTime(t time.Time) *time.Time {
 	return &t
 }
 
-func TestWorkerService_HeartbeatIntervalForStep_AddsBoundedJitter(t *testing.T) {
-	worker := NewWorkerServiceWithLease(&fakeBuildExecutionBoundary{}, "worker-a", 30*time.Second)
+func TestExecutionWorkerService_HeartbeatIntervalForStep_AddsBoundedJitter(t *testing.T) {
+	worker := NewExecutionWorkerServiceWithLease(&fakeExecutionWorkerBoundary{}, "worker-a", 30*time.Second)
 	base := worker.heartbeatInterval()
 	window := base / 5
 
-	stepA := RunnableStep{WorkerID: "worker-a", ClaimToken: "claim-a"}
-	stepB := RunnableStep{WorkerID: "worker-a", ClaimToken: "claim-b"}
+	stepA := WorkerRunnableStep{WorkerID: "worker-a", ClaimToken: "claim-a"}
+	stepB := WorkerRunnableStep{WorkerID: "worker-a", ClaimToken: "claim-b"}
 
 	intervalA := worker.heartbeatIntervalForStep(stepA)
 	intervalB := worker.heartbeatIntervalForStep(stepB)
@@ -1151,10 +1152,10 @@ func TestWorkerService_HeartbeatIntervalForStep_AddsBoundedJitter(t *testing.T) 
 	}
 }
 
-func TestWorkerService_RecoveryStatsSnapshot(t *testing.T) {
+func TestExecutionWorkerService_RecoveryStatsSnapshot(t *testing.T) {
 	workerID := "worker-a"
 	now := time.Now().UTC()
-	boundary := &fakeBuildExecutionBoundary{
+	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
 		runStepDelay:   120 * time.Millisecond,
 		runStepResp: runner.RunStepResult{
@@ -1170,7 +1171,7 @@ func TestWorkerService_RecoveryStatsSnapshot(t *testing.T) {
 		},
 	}
 
-	worker := NewWorkerServiceWithLease(boundary, workerID, 90*time.Millisecond)
+	worker := NewExecutionWorkerServiceWithLease(boundary, workerID, 90*time.Millisecond)
 	worker.clock = time.Now
 
 	runnable, found, err := worker.ClaimRunnableStep(context.Background())

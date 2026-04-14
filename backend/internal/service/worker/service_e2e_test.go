@@ -15,16 +15,17 @@ import (
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	inprocessrunner "github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
-type slowRunner struct {
+type workerE2ESlowRunner struct {
 	delay  time.Duration
 	mu     sync.Mutex
 	calls  int
 	result runner.RunStepResult
 }
 
-func (r *slowRunner) RunStep(ctx context.Context, _ runner.RunStepRequest) (runner.RunStepResult, error) {
+func (r *workerE2ESlowRunner) RunStep(ctx context.Context, _ runner.RunStepRequest) (runner.RunStepResult, error) {
 	r.mu.Lock()
 	r.calls++
 	r.mu.Unlock()
@@ -47,15 +48,15 @@ func (r *slowRunner) RunStep(ctx context.Context, _ runner.RunStepRequest) (runn
 	}, nil
 }
 
-func TestWorkerExecutionVerticalSlice_Success(t *testing.T) {
+func TestExecutionWorkerVerticalSlice_Success(t *testing.T) {
 	ctx := context.Background()
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New()
-	buildService := NewBuildService(buildStore, stepRunner, logSink)
-	worker := NewWorkerService(buildService)
+	buildService := buildsvc.NewBuildService(buildStore, stepRunner, logSink)
+	worker := NewExecutionWorkerService(buildService)
 
-	build, err := buildService.CreateBuild(ctx, CreateBuildInput{ProjectID: "project-1"})
+	build, err := buildService.CreateBuild(ctx, buildsvc.CreateBuildInput{ProjectID: "project-1"})
 	if err != nil {
 		t.Fatalf("create build failed: %v", err)
 	}
@@ -101,7 +102,7 @@ func TestWorkerExecutionVerticalSlice_Success(t *testing.T) {
 	if len(buildLogs) == 0 {
 		t.Fatal("expected captured logs for successful command")
 	}
-	if !containsBuildLogMessage(buildLogs, "ok-line") {
+	if !workerE2EContainsBuildLogMessage(buildLogs, "ok-line") {
 		t.Fatalf("expected log line ok-line, got %#v", buildLogs)
 	}
 
@@ -114,15 +115,15 @@ func TestWorkerExecutionVerticalSlice_Success(t *testing.T) {
 	}
 }
 
-func TestWorkerExecutionVerticalSlice_FailedCommand(t *testing.T) {
+func TestExecutionWorkerVerticalSlice_FailedCommand(t *testing.T) {
 	ctx := context.Background()
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New()
-	buildService := NewBuildService(buildStore, stepRunner, logSink)
-	worker := NewWorkerService(buildService)
+	buildService := buildsvc.NewBuildService(buildStore, stepRunner, logSink)
+	worker := NewExecutionWorkerService(buildService)
 
-	build, err := buildService.CreateBuild(ctx, CreateBuildInput{ProjectID: "project-1"})
+	build, err := buildService.CreateBuild(ctx, buildsvc.CreateBuildInput{ProjectID: "project-1"})
 	if err != nil {
 		t.Fatalf("create build failed: %v", err)
 	}
@@ -170,7 +171,7 @@ func TestWorkerExecutionVerticalSlice_FailedCommand(t *testing.T) {
 	if len(buildLogs) == 0 {
 		t.Fatal("expected captured logs for failed command")
 	}
-	if !containsBuildLogMessage(buildLogs, "fail-line") {
+	if !workerE2EContainsBuildLogMessage(buildLogs, "fail-line") {
 		t.Fatalf("expected log line fail-line, got %#v", buildLogs)
 	}
 
@@ -191,15 +192,15 @@ func TestWorkerExecutionVerticalSlice_FailedCommand(t *testing.T) {
 	}
 }
 
-func TestWorkerExecutionVerticalSlice_Timeout(t *testing.T) {
+func TestExecutionWorkerVerticalSlice_Timeout(t *testing.T) {
 	ctx := context.Background()
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New()
-	buildService := NewBuildService(buildStore, stepRunner, logSink)
-	worker := NewWorkerService(buildService)
+	buildService := buildsvc.NewBuildService(buildStore, stepRunner, logSink)
+	worker := NewExecutionWorkerService(buildService)
 
-	build, err := buildService.CreateBuild(ctx, CreateBuildInput{ProjectID: "project-1"})
+	build, err := buildService.CreateBuild(ctx, buildsvc.CreateBuildInput{ProjectID: "project-1"})
 	if err != nil {
 		t.Fatalf("create build failed: %v", err)
 	}
@@ -248,7 +249,7 @@ func TestWorkerExecutionVerticalSlice_Timeout(t *testing.T) {
 	if len(buildLogs) == 0 {
 		t.Fatal("expected captured logs for timed out command")
 	}
-	if !containsBuildLogMessage(buildLogs, "timed out") {
+	if !workerE2EContainsBuildLogMessage(buildLogs, "timed out") {
 		t.Fatalf("expected timeout log line, got %#v", buildLogs)
 	}
 
@@ -261,17 +262,17 @@ func TestWorkerExecutionVerticalSlice_Timeout(t *testing.T) {
 	}
 }
 
-func TestWorkerExecutionVerticalSlice_ExitZeroStepSucceeds(t *testing.T) {
+func TestExecutionWorkerVerticalSlice_ExitZeroStepSucceeds(t *testing.T) {
 	ctx := context.Background()
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New()
-	buildService := NewBuildService(buildStore, stepRunner, logSink)
-	worker := NewWorkerService(buildService)
+	buildService := buildsvc.NewBuildService(buildStore, stepRunner, logSink)
+	worker := NewExecutionWorkerService(buildService)
 
-	build, err := buildService.CreateBuild(ctx, CreateBuildInput{
+	build, err := buildService.CreateBuild(ctx, buildsvc.CreateBuildInput{
 		ProjectID: "project-1",
-		Steps: []CreateBuildStepInput{
+		Steps: []buildsvc.CreateBuildStepInput{
 			{Name: "success", Command: "sh", Args: []string{"-c", "echo success && exit 0"}, WorkingDir: "."},
 		},
 	})
@@ -322,17 +323,17 @@ func TestWorkerExecutionVerticalSlice_ExitZeroStepSucceeds(t *testing.T) {
 	}
 }
 
-func TestWorkerExecutionVerticalSlice_MultiStepSuccessThenFailure(t *testing.T) {
+func TestExecutionWorkerVerticalSlice_MultiStepSuccessThenFailure(t *testing.T) {
 	ctx := context.Background()
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New()
-	buildService := NewBuildService(buildStore, stepRunner, logSink)
-	worker := NewWorkerService(buildService)
+	buildService := buildsvc.NewBuildService(buildStore, stepRunner, logSink)
+	worker := NewExecutionWorkerService(buildService)
 
-	build, err := buildService.CreateBuild(ctx, CreateBuildInput{
+	build, err := buildService.CreateBuild(ctx, buildsvc.CreateBuildInput{
 		ProjectID: "project-1",
-		Steps: []CreateBuildStepInput{
+		Steps: []buildsvc.CreateBuildStepInput{
 			{Name: "setup", Command: "sh", Args: []string{"-c", "echo success && exit 0"}, WorkingDir: "."},
 			{Name: "verify", Command: "sh", Args: []string{"-c", "echo failure 1>&2 && exit 1"}, WorkingDir: "."},
 		},
@@ -411,7 +412,7 @@ func TestWorkerExecutionVerticalSlice_MultiStepSuccessThenFailure(t *testing.T) 
 	}
 }
 
-func containsBuildLogMessage(lines []logs.BuildLogLine, needle string) bool {
+func workerE2EContainsBuildLogMessage(lines []logs.BuildLogLine, needle string) bool {
 	for _, line := range lines {
 		if strings.Contains(line.Message, needle) {
 			return true
@@ -420,17 +421,17 @@ func containsBuildLogMessage(lines []logs.BuildLogLine, needle string) bool {
 	return false
 }
 
-func TestWorkerExecutionVerticalSlice_MultiStepSuccessPath(t *testing.T) {
+func TestExecutionWorkerVerticalSlice_MultiStepSuccessPath(t *testing.T) {
 	ctx := context.Background()
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New()
-	buildService := NewBuildService(buildStore, stepRunner, logSink)
-	worker := NewWorkerService(buildService)
+	buildService := buildsvc.NewBuildService(buildStore, stepRunner, logSink)
+	worker := NewExecutionWorkerService(buildService)
 
-	build, err := buildService.CreateBuild(ctx, CreateBuildInput{
+	build, err := buildService.CreateBuild(ctx, buildsvc.CreateBuildInput{
 		ProjectID: "project-1",
-		Steps: []CreateBuildStepInput{
+		Steps: []buildsvc.CreateBuildStepInput{
 			{Name: "setup", Command: "sh", Args: []string{"-c", "echo setup && exit 0"}, WorkingDir: "."},
 			{Name: "test", Command: "sh", Args: []string{"-c", "echo test && exit 0"}, WorkingDir: "."},
 		},
@@ -472,17 +473,17 @@ func TestWorkerExecutionVerticalSlice_MultiStepSuccessPath(t *testing.T) {
 	}
 }
 
-func TestWorkerExecutionVerticalSlice_MultiStepFailFastStopsLaterSteps(t *testing.T) {
+func TestExecutionWorkerVerticalSlice_MultiStepFailFastStopsLaterSteps(t *testing.T) {
 	ctx := context.Background()
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New()
-	buildService := NewBuildService(buildStore, stepRunner, logSink)
-	worker := NewWorkerService(buildService)
+	buildService := buildsvc.NewBuildService(buildStore, stepRunner, logSink)
+	worker := NewExecutionWorkerService(buildService)
 
-	_, err := buildService.CreateBuild(ctx, CreateBuildInput{
+	_, err := buildService.CreateBuild(ctx, buildsvc.CreateBuildInput{
 		ProjectID: "project-1",
-		Steps: []CreateBuildStepInput{
+		Steps: []buildsvc.CreateBuildStepInput{
 			{Name: "setup", Command: "sh", Args: []string{"-c", "echo setup && exit 0"}, WorkingDir: "."},
 			{Name: "verify", Command: "sh", Args: []string{"-c", "echo boom 1>&2 && exit 5"}, WorkingDir: "."},
 			{Name: "package", Command: "sh", Args: []string{"-c", "echo should-not-run && exit 0"}, WorkingDir: "."},
@@ -525,23 +526,23 @@ func TestWorkerExecutionVerticalSlice_MultiStepFailFastStopsLaterSteps(t *testin
 	}
 }
 
-func TestWorkerExecutionVerticalSlice_ReclaimRejectsStaleThenSucceeds(t *testing.T) {
+func TestExecutionWorkerVerticalSlice_ReclaimRejectsStaleThenSucceeds(t *testing.T) {
 	ctx := context.Background()
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New()
-	buildService := NewBuildService(buildStore, stepRunner, logSink)
+	buildService := buildsvc.NewBuildService(buildStore, stepRunner, logSink)
 
-	workerA := NewWorkerServiceWithLease(buildService, "worker-a", 1*time.Second)
-	workerB := NewWorkerServiceWithLease(buildService, "worker-b", 1*time.Second)
+	workerA := NewExecutionWorkerServiceWithLease(buildService, "worker-a", 1*time.Second)
+	workerB := NewExecutionWorkerServiceWithLease(buildService, "worker-b", 1*time.Second)
 	claimTimeA := time.Now().UTC().Add(-2 * time.Minute)
 	claimTimeB := claimTimeA.Add(2 * time.Second)
 	workerA.clock = func() time.Time { return claimTimeA }
 	workerB.clock = func() time.Time { return claimTimeB }
 
-	build, err := buildService.CreateBuild(ctx, CreateBuildInput{
+	build, err := buildService.CreateBuild(ctx, buildsvc.CreateBuildInput{
 		ProjectID: "project-1",
-		Steps: []CreateBuildStepInput{
+		Steps: []buildsvc.CreateBuildStepInput{
 			{Name: "single", Command: "sh", Args: []string{"-c", "echo ok && exit 0"}, WorkingDir: "."},
 		},
 	})
@@ -566,7 +567,7 @@ func TestWorkerExecutionVerticalSlice_ReclaimRejectsStaleThenSucceeds(t *testing
 	}
 
 	_, renewed, renewErr := buildService.RenewStepLease(ctx, build.ID, claimedByA.StepIndex, claimedByA.ClaimToken, claimTimeB.Add(time.Minute))
-	if !errors.Is(renewErr, ErrStaleStepClaim) || renewed {
+	if !errors.Is(renewErr, buildsvc.ErrStaleStepClaim) || renewed {
 		t.Fatalf("expected stale renewal rejection for worker A, err=%v renewed=%v", renewErr, renewed)
 	}
 
@@ -594,23 +595,23 @@ func TestWorkerExecutionVerticalSlice_ReclaimRejectsStaleThenSucceeds(t *testing
 	}
 }
 
-func TestWorkerExecutionVerticalSlice_ReclaimRejectsStaleThenFailsFast(t *testing.T) {
+func TestExecutionWorkerVerticalSlice_ReclaimRejectsStaleThenFailsFast(t *testing.T) {
 	ctx := context.Background()
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
 	stepRunner := inprocessrunner.New()
-	buildService := NewBuildService(buildStore, stepRunner, logSink)
+	buildService := buildsvc.NewBuildService(buildStore, stepRunner, logSink)
 
-	workerA := NewWorkerServiceWithLease(buildService, "worker-a", 1*time.Second)
-	workerB := NewWorkerServiceWithLease(buildService, "worker-b", 1*time.Second)
+	workerA := NewExecutionWorkerServiceWithLease(buildService, "worker-a", 1*time.Second)
+	workerB := NewExecutionWorkerServiceWithLease(buildService, "worker-b", 1*time.Second)
 	claimTimeA := time.Now().UTC().Add(-2 * time.Minute)
 	claimTimeB := claimTimeA.Add(2 * time.Second)
 	workerA.clock = func() time.Time { return claimTimeA }
 	workerB.clock = func() time.Time { return claimTimeB }
 
-	build, err := buildService.CreateBuild(ctx, CreateBuildInput{
+	build, err := buildService.CreateBuild(ctx, buildsvc.CreateBuildInput{
 		ProjectID: "project-1",
-		Steps: []CreateBuildStepInput{
+		Steps: []buildsvc.CreateBuildStepInput{
 			{Name: "single", Command: "sh", Args: []string{"-c", "echo boom 1>&2 && exit 7"}, WorkingDir: "."},
 		},
 	})
@@ -635,7 +636,7 @@ func TestWorkerExecutionVerticalSlice_ReclaimRejectsStaleThenFailsFast(t *testin
 	}
 
 	_, renewed, renewErr := buildService.RenewStepLease(ctx, build.ID, claimedByA.StepIndex, claimedByA.ClaimToken, claimTimeB.Add(time.Minute))
-	if !errors.Is(renewErr, ErrStaleStepClaim) || renewed {
+	if !errors.Is(renewErr, buildsvc.ErrStaleStepClaim) || renewed {
 		t.Fatalf("expected stale renewal rejection for worker A, err=%v renewed=%v", renewErr, renewed)
 	}
 
@@ -663,19 +664,19 @@ func TestWorkerExecutionVerticalSlice_ReclaimRejectsStaleThenFailsFast(t *testin
 	}
 }
 
-func TestWorkerExecutionVerticalSlice_HeartbeatPreventsReclaimDuringLongRun(t *testing.T) {
+func TestExecutionWorkerVerticalSlice_HeartbeatPreventsReclaimDuringLongRun(t *testing.T) {
 	ctx := context.Background()
 	buildStore := repositorymemory.NewBuildRepository()
 	logSink := logs.NewMemorySink()
-	stepRunner := &slowRunner{delay: 1600 * time.Millisecond, result: runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n"}}
-	buildService := NewBuildService(buildStore, stepRunner, logSink)
+	stepRunner := &workerE2ESlowRunner{delay: 1600 * time.Millisecond, result: runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n"}}
+	buildService := buildsvc.NewBuildService(buildStore, stepRunner, logSink)
 
-	workerA := NewWorkerServiceWithLease(buildService, "worker-a", 900*time.Millisecond)
-	workerB := NewWorkerServiceWithLease(buildService, "worker-b", 900*time.Millisecond)
+	workerA := NewExecutionWorkerServiceWithLease(buildService, "worker-a", 900*time.Millisecond)
+	workerB := NewExecutionWorkerServiceWithLease(buildService, "worker-b", 900*time.Millisecond)
 
-	build, err := buildService.CreateBuild(ctx, CreateBuildInput{
+	build, err := buildService.CreateBuild(ctx, buildsvc.CreateBuildInput{
 		ProjectID: "project-1",
-		Steps:     []CreateBuildStepInput{{Name: "single", Command: "sh", Args: []string{"-c", "echo ok && exit 0"}, WorkingDir: "."}},
+		Steps:     []buildsvc.CreateBuildStepInput{{Name: "single", Command: "sh", Args: []string{"-c", "echo ok && exit 0"}, WorkingDir: "."}},
 	})
 	if err != nil {
 		t.Fatalf("create build failed: %v", err)

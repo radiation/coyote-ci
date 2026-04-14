@@ -429,7 +429,7 @@ func TestJobService_TriggerWebhookEvent_DeletePushIgnored(t *testing.T) {
 	if result.MatchedJobs != 0 {
 		t.Fatalf("expected no matches for deleted ref, got %d", result.MatchedJobs)
 	}
-	if result.NoMatchReason == nil || *result.NoMatchReason != string(WebhookTriggerDecisionDeletedRef) {
+	if result.NoMatchReason == nil || *result.NoMatchReason != string(WebhookFilterDecisionDeletedRef) {
 		t.Fatalf("expected no_match_reason deleted_ref, got %v", result.NoMatchReason)
 	}
 }

@@ -26,19 +26,19 @@ func toDomainBuildTrigger(input *CreateBuildTriggerInput) domain.BuildTrigger {
 
 	trigger := domain.BuildTrigger{
 		Kind:            domain.BuildTriggerKind(input.Kind),
-		SCMProvider:     optionalStringPtr(input.SCMProvider),
-		EventType:       optionalStringPtr(input.EventType),
-		RepositoryOwner: optionalStringPtr(input.RepositoryOwner),
-		RepositoryName:  optionalStringPtr(input.RepositoryName),
-		RepositoryURL:   optionalStringPtr(input.RepositoryURL),
-		RawRef:          optionalStringPtr(input.RawRef),
-		Ref:             optionalStringPtr(input.Ref),
-		RefType:         optionalStringPtr(input.RefType),
-		RefName:         optionalStringPtr(input.RefName),
+		SCMProvider:     buildOptionalStringPtr(input.SCMProvider),
+		EventType:       buildOptionalStringPtr(input.EventType),
+		RepositoryOwner: buildOptionalStringPtr(input.RepositoryOwner),
+		RepositoryName:  buildOptionalStringPtr(input.RepositoryName),
+		RepositoryURL:   buildOptionalStringPtr(input.RepositoryURL),
+		RawRef:          buildOptionalStringPtr(input.RawRef),
+		Ref:             buildOptionalStringPtr(input.Ref),
+		RefType:         buildOptionalStringPtr(input.RefType),
+		RefName:         buildOptionalStringPtr(input.RefName),
 		Deleted:         input.Deleted,
-		CommitSHA:       optionalStringPtr(input.CommitSHA),
-		DeliveryID:      optionalStringPtr(input.DeliveryID),
-		Actor:           optionalStringPtr(input.Actor),
+		CommitSHA:       buildOptionalStringPtr(input.CommitSHA),
+		DeliveryID:      buildOptionalStringPtr(input.DeliveryID),
+		Actor:           buildOptionalStringPtr(input.Actor),
 	}
 
 	return domain.NormalizeBuildTrigger(trigger)

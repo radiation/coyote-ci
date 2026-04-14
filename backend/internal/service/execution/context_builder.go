@@ -1,4 +1,4 @@
-package build
+package execution
 
 import (
 	"context"
@@ -13,13 +13,16 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
+var ErrBuildNotFound = errors.New("build not found")
+var ErrExecutionJobNotFound = errors.New("execution job not found")
+
 // StepExecutionContext is the canonical execution plan for one step execution.
 type StepExecutionContext struct {
 	Build          domain.Build
 	Step           *domain.BuildStep
 	PersistedJob   *domain.ExecutionJob
 	ExecutionImage string
-	BuildSource    resolvedBuildSourceSpec
+	BuildSource    ResolvedBuildSourceSpec
 
 	ExecutionRequest runner.RunStepRequest
 	StepWorkingDir   string
@@ -31,12 +34,19 @@ type StepExecutionContext struct {
 	HasChunkAppender bool
 }
 
-type StepExecutionContextBuilder struct {
-	service *BuildService
+type StepExecutionContextBuilderDeps struct {
+	BuildRepo             repository.BuildRepository
+	ExecutionJobRepo      repository.ExecutionJobRepository
+	ResolveExecutionImage func(domain.Build) string
+	LogSink               logs.LogSink
 }
 
-func NewStepExecutionContextBuilder(service *BuildService) *StepExecutionContextBuilder {
-	return &StepExecutionContextBuilder{service: service}
+type StepExecutionContextBuilder struct {
+	deps StepExecutionContextBuilderDeps
+}
+
+func NewStepExecutionContextBuilder(deps StepExecutionContextBuilderDeps) *StepExecutionContextBuilder {
+	return &StepExecutionContextBuilder{deps: deps}
 }
 
 func (b *StepExecutionContextBuilder) Build(ctx context.Context, request runner.RunStepRequest) (StepExecutionContext, error) {
@@ -48,7 +58,7 @@ func (b *StepExecutionContextBuilder) Build(ctx context.Context, request runner.
 		return StepExecutionContext{}, fmt.Errorf("binding request to persisted execution job: %w", err)
 	}
 
-	build, err := b.service.buildRepo.GetByID(ctx, boundRequest.BuildID)
+	build, err := b.deps.BuildRepo.GetByID(ctx, boundRequest.BuildID)
 	if err != nil {
 		if errors.Is(err, repository.ErrBuildNotFound) {
 			return StepExecutionContext{}, ErrBuildNotFound
@@ -56,9 +66,9 @@ func (b *StepExecutionContextBuilder) Build(ctx context.Context, request runner.
 		return StepExecutionContext{}, fmt.Errorf("fetching build for step execution: %w", err)
 	}
 
-	steps, err := b.service.buildRepo.GetStepsByBuildID(ctx, boundRequest.BuildID)
+	steps, err := b.deps.BuildRepo.GetStepsByBuildID(ctx, boundRequest.BuildID)
 	if err != nil {
-		return StepExecutionContext{}, fmt.Errorf("fetching build steps for step execution: %w", mapRepoErr(err))
+		return StepExecutionContext{}, fmt.Errorf("fetching build steps for step execution: %w", err)
 	}
 
 	totalSteps := len(steps)
@@ -74,7 +84,10 @@ func (b *StepExecutionContextBuilder) Build(ctx context.Context, request runner.
 		stepNumber = 1
 	}
 
-	executionImage := b.service.resolveExecutionImage(build)
+	executionImage := ""
+	if b.deps.ResolveExecutionImage != nil {
+		executionImage = b.deps.ResolveExecutionImage(build)
+	}
 	buildSource := sourceSpecFromBuild(build)
 	if persistedJob != nil {
 		executionImage = persistedJob.Image
@@ -87,7 +100,7 @@ func (b *StepExecutionContextBuilder) Build(ctx context.Context, request runner.
 	}
 
 	var chunkAppender logs.StepLogChunkAppender
-	if appender, ok := b.service.logSink.(logs.StepLogChunkAppender); ok {
+	if appender, ok := b.deps.LogSink.(logs.StepLogChunkAppender); ok {
 		chunkAppender = appender
 	}
 
@@ -129,7 +142,7 @@ func selectExecutionStep(steps []domain.BuildStep, stepID string, stepIndex int)
 }
 
 func (b *StepExecutionContextBuilder) bindRequestToPersistedJob(ctx context.Context, request runner.RunStepRequest) (runner.RunStepRequest, *domain.ExecutionJob, error) {
-	if b.service.executionJobRepo == nil {
+	if b.deps.ExecutionJobRepo == nil {
 		return request, nil, nil
 	}
 
@@ -140,12 +153,12 @@ func (b *StepExecutionContextBuilder) bindRequestToPersistedJob(ctx context.Cont
 
 	jobID := strings.TrimSpace(request.JobID)
 	if jobID != "" {
-		job, err = b.service.executionJobRepo.GetJobByID(ctx, jobID)
+		job, err = b.deps.ExecutionJobRepo.GetJobByID(ctx, jobID)
 		if err != nil {
 			return request, nil, err
 		}
 	} else if strings.TrimSpace(request.StepID) != "" {
-		job, err = b.service.executionJobRepo.GetJobByStepID(ctx, request.StepID)
+		job, err = b.deps.ExecutionJobRepo.GetJobByStepID(ctx, request.StepID)
 		if err != nil {
 			return request, nil, nil
 		}
@@ -164,7 +177,7 @@ func (b *StepExecutionContextBuilder) bindRequestToPersistedJob(ctx context.Cont
 			request.Args = []string{}
 		}
 	}
-	request.Env = cloneEnv(job.Environment)
+	request.Env = cloneStringMap(job.Environment)
 	request.WorkingDir = defaultString(job.WorkingDir, ".")
 	if job.TimeoutSeconds != nil {
 		request.TimeoutSeconds = maxInt(*job.TimeoutSeconds, 0)
@@ -177,18 +190,11 @@ func (b *StepExecutionContextBuilder) bindRequestToPersistedJob(ctx context.Cont
 	return request, &job, nil
 }
 
-func sourceSpecFromJob(job domain.ExecutionJob) resolvedBuildSourceSpec {
-	return resolvedBuildSourceSpec{
+func sourceSpecFromJob(job domain.ExecutionJob) ResolvedBuildSourceSpec {
+	return ResolvedBuildSourceSpec{
 		HasSource:     strings.TrimSpace(job.Source.RepositoryURL) != "",
 		RepositoryURL: strings.TrimSpace(job.Source.RepositoryURL),
 		Ref:           optionalStringValue(job.Source.RefName),
 		CommitSHA:     strings.TrimSpace(job.Source.CommitSHA),
 	}
-}
-
-func optionalStringValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return strings.TrimSpace(*value)
 }

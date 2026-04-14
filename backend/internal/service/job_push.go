@@ -73,8 +73,8 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 	}
 	webhookFields := webhooksvc.WebhookLogFields(ctx)
 	var firstNoMatchReason *string
-	if !webhooksvc.ShouldTriggerBuild(normalizedRef, webhooksvc.WebhookJobTriggerConfig{}).Matched {
-		defaultReason := string(webhooksvc.ShouldTriggerBuild(normalizedRef, webhooksvc.WebhookJobTriggerConfig{}).Reason)
+	if !webhooksvc.WebhookFilterShouldTriggerBuild(normalizedRef, webhooksvc.WebhookFilterConfig{}).Matched {
+		defaultReason := string(webhooksvc.WebhookFilterShouldTriggerBuild(normalizedRef, webhooksvc.WebhookFilterConfig{}).Reason)
 		firstNoMatchReason = &defaultReason
 	}
 
@@ -83,7 +83,7 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 			continue
 		}
 
-		decision := webhooksvc.ShouldTriggerBuild(normalizedRef, toWebhookJobTriggerConfig(job))
+		decision := webhooksvc.WebhookFilterShouldTriggerBuild(normalizedRef, toWebhookJobTriggerConfig(job))
 		if !decision.Matched {
 			if firstNoMatchReason == nil {
 				reason := string(decision.Reason)
@@ -225,7 +225,7 @@ func normalizeWebhookRefInput(input WebhookTriggerInput) domain.WebhookRef {
 	return ref
 }
 
-func toWebhookJobTriggerConfig(job domain.Job) webhooksvc.WebhookJobTriggerConfig {
+func toWebhookJobTriggerConfig(job domain.Job) webhooksvc.WebhookFilterConfig {
 	allowBranches := make([]string, 0, len(job.BranchAllowlist)+1)
 	for _, item := range job.BranchAllowlist {
 		branch := normalizePushRef(item)
@@ -248,8 +248,8 @@ func toWebhookJobTriggerConfig(job domain.Job) webhooksvc.WebhookJobTriggerConfi
 		}
 	}
 
-	return webhooksvc.WebhookJobTriggerConfig{
-		Mode:            webhooksvc.NormalizeJobTriggerMode(job.TriggerMode),
+	return webhooksvc.WebhookFilterConfig{
+		Mode:            webhooksvc.NormalizeWebhookFilterMode(job.TriggerMode),
 		BranchAllowlist: allowBranches,
 		TagAllowlist:    tagAllowlist,
 	}

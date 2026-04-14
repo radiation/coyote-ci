@@ -266,7 +266,7 @@ func TestEventHandler_IngestGitHubWebhook_DeletePushIgnored(t *testing.T) {
 	if delivery.Status != domain.WebhookDeliveryStatusIgnoredNoMatch {
 		t.Fatalf("expected ignored_no_match status, got %q", delivery.Status)
 	}
-	if delivery.Reason == nil || *delivery.Reason != string(service.WebhookTriggerDecisionDeletedRef) {
+	if delivery.Reason == nil || *delivery.Reason != string(service.WebhookFilterDecisionDeletedRef) {
 		t.Fatalf("expected reason deleted_ref, got %v", delivery.Reason)
 	}
 }

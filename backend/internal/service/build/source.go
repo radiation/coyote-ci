@@ -8,37 +8,31 @@ import (
 	"strings"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/service/execution"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 )
 
-type resolvedBuildSourceSpec struct {
-	RepositoryURL string
-	Ref           string
-	CommitSHA     string
-	HasSource     bool
-}
-
-func sourceSpecFromBuild(build domain.Build) resolvedBuildSourceSpec {
+func buildSourceSpecFromBuild(build domain.Build) execution.ResolvedBuildSourceSpec {
 	if build.Source != nil {
-		result := resolvedBuildSourceSpec{
+		result := execution.ResolvedBuildSourceSpec{
 			RepositoryURL: strings.TrimSpace(build.Source.RepositoryURL),
-			Ref:           readOptionalString(build.Source.Ref),
-			CommitSHA:     readOptionalString(build.Source.CommitSHA),
+			Ref:           buildReadOptionalString(build.Source.Ref),
+			CommitSHA:     buildReadOptionalString(build.Source.CommitSHA),
 		}
 		result.HasSource = result.RepositoryURL != ""
 		return result
 	}
 
-	result := resolvedBuildSourceSpec{
-		RepositoryURL: readOptionalString(build.RepoURL),
-		Ref:           readOptionalString(build.Ref),
-		CommitSHA:     readOptionalString(build.CommitSHA),
+	result := execution.ResolvedBuildSourceSpec{
+		RepositoryURL: buildReadOptionalString(build.RepoURL),
+		Ref:           buildReadOptionalString(build.Ref),
+		CommitSHA:     buildReadOptionalString(build.CommitSHA),
 	}
 	result.HasSource = result.RepositoryURL != ""
 	return result
 }
 
-func toDomainSourceSpec(input *CreateBuildSourceInput) (*domain.SourceSpec, error) {
+func buildSourceSpecFromInput(input *CreateBuildSourceInput) (*domain.SourceSpec, error) {
 	if input == nil {
 		return nil, nil
 	}
@@ -57,14 +51,14 @@ func toDomainSourceSpec(input *CreateBuildSourceInput) (*domain.SourceSpec, erro
 	return domain.NewSourceSpec(repoURL, ref, commitSHA), nil
 }
 
-func sourceRepositoryURL(spec *domain.SourceSpec) string {
+func buildSourceRepositoryURL(spec *domain.SourceSpec) string {
 	if spec == nil {
 		return ""
 	}
 	return strings.TrimSpace(spec.RepositoryURL)
 }
 
-func sourceRef(spec *domain.SourceSpec) *string {
+func buildSourceRef(spec *domain.SourceSpec) *string {
 	if spec == nil || spec.Ref == nil {
 		return nil
 	}
@@ -75,7 +69,7 @@ func sourceRef(spec *domain.SourceSpec) *string {
 	return &trimmed
 }
 
-func sourceCommitSHA(spec *domain.SourceSpec) *string {
+func buildSourceCommitSHA(spec *domain.SourceSpec) *string {
 	if spec == nil || spec.CommitSHA == nil {
 		return nil
 	}
@@ -86,7 +80,7 @@ func sourceCommitSHA(spec *domain.SourceSpec) *string {
 	return &trimmed
 }
 
-func optionalStringPtr(value string) *string {
+func buildOptionalStringPtr(value string) *string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return nil
@@ -94,7 +88,7 @@ func optionalStringPtr(value string) *string {
 	return &trimmed
 }
 
-func normalizeWorkspaceRoot(root string) string {
+func buildNormalizeWorkspaceRoot(root string) string {
 	trimmed := strings.TrimSpace(root)
 	if trimmed == "" {
 		return ""
@@ -108,14 +102,14 @@ func normalizeWorkspaceRoot(root string) string {
 	return absRoot
 }
 
-func (s *BuildService) resolveBuildSourceIntoWorkspace(ctx context.Context, buildID string, sourceSpec resolvedBuildSourceSpec) (string, error) {
+func (s *BuildService) resolveBuildSourceInWorkspace(ctx context.Context, buildID string, sourceSpec execution.ResolvedBuildSourceSpec) (string, error) {
 	if s.sourceResolver == nil {
 		return "", ErrSourceResolverNotConfigured
 	}
 
-	workspaceRoot := normalizeWorkspaceRoot(s.executionWorkspaceRoot)
+	workspaceRoot := buildNormalizeWorkspaceRoot(s.executionWorkspaceRoot)
 	if workspaceRoot == "" {
-		workspaceRoot = normalizeWorkspaceRoot(s.artifactWorkspaceRoot)
+		workspaceRoot = buildNormalizeWorkspaceRoot(s.artifactWorkspaceRoot)
 	}
 	if workspaceRoot == "" {
 		return "", ErrExecutionWorkspaceRootNotConfigured
@@ -149,7 +143,7 @@ func (s *BuildService) resolveBuildSourceIntoWorkspace(ctx context.Context, buil
 	return trimmedResolvedCommit, nil
 }
 
-func classifySourceFailureReason(err error, sourceSpec resolvedBuildSourceSpec) string {
+func classifyBuildSourceFailureReason(err error, sourceSpec execution.ResolvedBuildSourceSpec) string {
 	if errors.Is(err, source.ErrRepositoryURLRequired) || errors.Is(err, ErrRepoURLRequired) {
 		return "repository URL is required"
 	}
@@ -180,7 +174,7 @@ func classifySourceFailureReason(err error, sourceSpec resolvedBuildSourceSpec) 
 	return "source checkout failed"
 }
 
-func readOptionalString(value *string) string {
+func buildReadOptionalString(value *string) string {
 	if value == nil {
 		return ""
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
+	"github.com/radiation/coyote-ci/backend/internal/service/execution"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 )
 
@@ -106,7 +107,7 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 		svc.sourceResolver = cfg.SourceResolver
 	}
 	svc.defaultExecutionImage = strings.TrimSpace(cfg.DefaultImage)
-	svc.executionWorkspaceRoot = normalizeWorkspaceRoot(cfg.ExecutionWorkspace)
+	svc.executionWorkspaceRoot = buildNormalizeWorkspaceRoot(cfg.ExecutionWorkspace)
 	svc.SetArtifactPersistence(cfg.ArtifactRepo, cfg.ArtifactResolver, cfg.ArtifactWorkspace)
 	svc.SetStepCacheStore(cfg.CacheStore, cfg.CacheEntryRepo)
 	return svc
@@ -136,9 +137,9 @@ func (s *BuildService) SetSourceResolver(resolver source.WorkspaceSourceResolver
 }
 
 func (s *BuildService) SetExecutionWorkspaceRoot(root string) {
-	s.executionWorkspaceRoot = normalizeWorkspaceRoot(root)
+	s.executionWorkspaceRoot = buildNormalizeWorkspaceRoot(root)
 	if s.stepCacheManager != nil {
-		s.stepCacheManager = NewStepCacheManager(s.stepCacheManager.store, s.stepCacheManager.entryRepo, s.executionWorkspaceRoot)
+		s.stepCacheManager = NewStepCacheManager(s.stepCacheManager.Store(), s.stepCacheManager.EntryRepo(), s.executionWorkspaceRoot)
 	}
 }
 
@@ -150,7 +151,7 @@ func (s *BuildService) SetDefaultExecutionImage(image string) {
 // SetArtifactPersistence configures build artifact persistence dependencies.
 func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository, resolver *artifact.StoreResolver, workspaceRoot string) {
 	s.artifactRepo = repo
-	s.artifactWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot)
+	s.artifactWorkspaceRoot = buildNormalizeWorkspaceRoot(workspaceRoot)
 	if resolver != nil {
 		s.artifactStoreResolver = resolver
 		s.artifactStore = resolver.Default()
@@ -211,14 +212,7 @@ type QueueBuildCustomStepInput struct {
 	Command string
 }
 
-// StepCompletionReport captures lifecycle completion outcome and post-persist side-effect state.
-// CompletionOutcome reflects only persisted lifecycle handling.
-// SideEffectErr is set only when persistence completed and a non-lifecycle side effect failed.
-type StepCompletionReport struct {
-	Step              domain.BuildStep
-	CompletionOutcome repository.StepCompletionOutcome
-	SideEffectErr     error
-}
+type StepCompletionReport = execution.StepCompletionReport
 
 type stepFailureKind string
 
@@ -234,7 +228,7 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 		return domain.Build{}, ErrProjectIDRequired
 	}
 
-	sourceSpec, err := toDomainSourceSpec(input.Source)
+	sourceSpec, err := buildSourceSpecFromInput(input.Source)
 	if err != nil {
 		return domain.Build{}, err
 	}
@@ -248,9 +242,9 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 		CreatedAt:        time.Now().UTC(),
 		CurrentStepIndex: 0,
 		Source:           sourceSpec,
-		RepoURL:          optionalStringPtr(sourceRepositoryURL(sourceSpec)),
-		Ref:              sourceRef(sourceSpec),
-		CommitSHA:        sourceCommitSHA(sourceSpec),
+		RepoURL:          buildOptionalStringPtr(buildSourceRepositoryURL(sourceSpec)),
+		Ref:              buildSourceRef(sourceSpec),
+		CommitSHA:        buildSourceCommitSHA(sourceSpec),
 		Trigger:          toDomainBuildTrigger(input.Trigger),
 	}
 
@@ -311,7 +305,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		return domain.Build{}, ErrPipelineYAMLRequired
 	}
 
-	sourceSpec, err := toDomainSourceSpec(input.Source)
+	sourceSpec, err := buildSourceSpecFromInput(input.Source)
 	if err != nil {
 		return domain.Build{}, err
 	}
@@ -343,9 +337,9 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		PipelineName:       pipelineNamePtr,
 		PipelineSource:     &pipelineSource,
 		Source:             sourceSpec,
-		RepoURL:            optionalStringPtr(sourceRepositoryURL(sourceSpec)),
-		Ref:                sourceRef(sourceSpec),
-		CommitSHA:          sourceCommitSHA(sourceSpec),
+		RepoURL:            buildOptionalStringPtr(buildSourceRepositoryURL(sourceSpec)),
+		Ref:                buildSourceRef(sourceSpec),
+		CommitSHA:          buildSourceCommitSHA(sourceSpec),
 		Trigger:            toDomainBuildTrigger(input.Trigger),
 	}
 
@@ -469,7 +463,7 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		PipelinePath:       &pipelinePath,
 		Source:             domainSource,
 		RepoURL:            &repoURL,
-		Ref:                optionalStringPtr(ref),
+		Ref:                buildOptionalStringPtr(ref),
 		CommitSHA:          commitSHAPtr,
 		Trigger:            toDomainBuildTrigger(input.Trigger),
 	}
@@ -633,7 +627,7 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	builder := NewStepExecutionContextBuilder(s)
 	executionContext, err := builder.Build(ctx, request)
 	if err != nil {
-		return runner.RunStepResult{}, StepCompletionReport{}, err
+		return runner.RunStepResult{}, StepCompletionReport{}, mapExecutionErr(err)
 	}
 
 	logManager := NewExecutionLogManager(s, executionContext)
@@ -643,7 +637,7 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 
 	earlyResult, earlyErr, prepareErr := workspacePreparer.Prepare(ctx, executionContext, logManager)
 	if prepareErr != nil {
-		return runner.RunStepResult{}, StepCompletionReport{}, prepareErr
+		return runner.RunStepResult{}, StepCompletionReport{}, mapExecutionErr(prepareErr)
 	}
 	if earlyResult != nil {
 		report, completionErr := completionManager.CompleteEarlyExit(ctx, executionContext, *earlyResult, logManager)
