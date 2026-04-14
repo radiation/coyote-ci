@@ -11,42 +11,42 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
-	"github.com/radiation/coyote-ci/backend/internal/service"
+	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 )
 
 type fakeWorkerIterationService struct {
-	claimStep service.RunnableStep
+	claimStep workersvc.WorkerRunnableStep
 	claimOK   bool
 	claimErr  error
 
-	executeReport service.StepExecutionReport
+	executeReport workersvc.WorkerStepExecutionReport
 	executeErr    error
 
 	executeCalls int
 }
 
 type fakeWorkerStatusProvider struct {
-	stats service.WorkerRecoveryStats
+	stats workersvc.WorkerLeaseRecoveryStats
 }
 
-func (f *fakeWorkerStatusProvider) RecoveryStats() service.WorkerRecoveryStats {
+func (f *fakeWorkerStatusProvider) RecoveryStats() workersvc.WorkerLeaseRecoveryStats {
 	return f.stats
 }
 
-func (f *fakeWorkerIterationService) ClaimRunnableStep(_ context.Context) (service.RunnableStep, bool, error) {
+func (f *fakeWorkerIterationService) ClaimRunnableStep(_ context.Context) (workersvc.WorkerRunnableStep, bool, error) {
 	return f.claimStep, f.claimOK, f.claimErr
 }
 
-func (f *fakeWorkerIterationService) ExecuteRunnableStep(_ context.Context, _ service.RunnableStep) (service.StepExecutionReport, error) {
+func (f *fakeWorkerIterationService) ExecuteRunnableStep(_ context.Context, _ workersvc.WorkerRunnableStep) (workersvc.WorkerStepExecutionReport, error) {
 	f.executeCalls++
 	return f.executeReport, f.executeErr
 }
 
 func TestRunWorkerIteration_Success(t *testing.T) {
 	worker := &fakeWorkerIterationService{
-		claimStep: service.RunnableStep{BuildID: "build-1", StepName: "default"},
+		claimStep: workersvc.WorkerRunnableStep{BuildID: "build-1", StepName: "default"},
 		claimOK:   true,
-		executeReport: service.StepExecutionReport{
+		executeReport: workersvc.WorkerStepExecutionReport{
 			BuildID: "build-1",
 			Step: domain.BuildStep{
 				Name:   "default",
@@ -71,7 +71,7 @@ func TestRunWorkerIteration_Success(t *testing.T) {
 
 func TestRunWorkerIteration_ExecutionFailure(t *testing.T) {
 	worker := &fakeWorkerIterationService{
-		claimStep:  service.RunnableStep{BuildID: "build-2", StepName: "default"},
+		claimStep:  workersvc.WorkerRunnableStep{BuildID: "build-2", StepName: "default"},
 		claimOK:    true,
 		executeErr: errors.New("step failed"),
 	}
@@ -104,7 +104,7 @@ func TestNewWorkerStatusHandler_Healthz(t *testing.T) {
 }
 
 func TestNewWorkerStatusHandler_RecoveryStatus(t *testing.T) {
-	h := newWorkerStatusHandler(&fakeWorkerStatusProvider{stats: service.WorkerRecoveryStats{
+	h := newWorkerStatusHandler(&fakeWorkerStatusProvider{stats: workersvc.WorkerLeaseRecoveryStats{
 		ClaimsWon:     1,
 		ReclaimsWon:   2,
 		RenewalsWon:   3,
@@ -122,8 +122,8 @@ func TestNewWorkerStatusHandler_RecoveryStatus(t *testing.T) {
 	}
 
 	var resp struct {
-		WorkerRecovery service.WorkerRecoveryStats `json:"worker_recovery"`
-		TimestampUTC   time.Time                   `json:"timestamp_utc"`
+		WorkerRecovery workersvc.WorkerLeaseRecoveryStats `json:"worker_recovery"`
+		TimestampUTC   time.Time                          `json:"timestamp_utc"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to decode json: %v", err)

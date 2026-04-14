@@ -8,12 +8,14 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
 )
 
 func TestJobService_CreateListGetUpdate(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
-	buildService := NewBuildService(buildRepo, nil, nil)
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
 	jobService := NewJobService(jobRepo, buildService)
 
 	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
@@ -79,7 +81,7 @@ func TestJobService_CreateListGetUpdate(t *testing.T) {
 }
 
 func TestJobService_CreateRejectsInvalidPipelineYAML(t *testing.T) {
-	jobService := NewJobService(memory.NewJobRepository(), NewBuildService(memory.NewBuildRepository(), nil, nil))
+	jobService := NewJobService(memory.NewJobRepository(), buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil))
 
 	_, err := jobService.CreateJob(context.Background(), CreateJobInput{
 		ProjectID:     "project-1",
@@ -94,7 +96,7 @@ func TestJobService_CreateRejectsInvalidPipelineYAML(t *testing.T) {
 }
 
 func TestJobService_CreateAllowsRepoPipelinePathWithoutInlineYAML(t *testing.T) {
-	jobService := NewJobService(memory.NewJobRepository(), NewBuildService(memory.NewBuildRepository(), nil, nil))
+	jobService := NewJobService(memory.NewJobRepository(), buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil))
 
 	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
 		ProjectID:        "project-1",
@@ -119,7 +121,7 @@ func TestJobService_CreateAllowsRepoPipelinePathWithoutInlineYAML(t *testing.T) 
 func TestJobService_RunNowCreatesNormalBuildAndSnapshotsPipeline(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
-	buildService := NewBuildService(buildRepo, nil, nil)
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
 	jobService := NewJobService(jobRepo, buildService)
 
 	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
@@ -167,7 +169,7 @@ func TestJobService_RunNowCreatesNormalBuildAndSnapshotsPipeline(t *testing.T) {
 func TestJobService_RunNowDisabledJobRejected(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
-	jobService := NewJobService(jobRepo, NewBuildService(buildRepo, nil, nil))
+	jobService := NewJobService(jobRepo, buildsvc.NewBuildService(buildRepo, nil, nil))
 
 	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
 		ProjectID:     "project-1",
@@ -190,7 +192,7 @@ func TestJobService_RunNowDisabledJobRejected(t *testing.T) {
 func TestJobService_TriggerPushEvent_MatchesAndCreatesBuilds(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
-	buildService := NewBuildService(buildRepo, nil, nil)
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
 	jobService := NewJobService(jobRepo, buildService)
 
 	jobA, err := jobService.CreateJob(context.Background(), CreateJobInput{
@@ -307,7 +309,7 @@ func TestJobService_TriggerPushEvent_MatchesAndCreatesBuilds(t *testing.T) {
 func TestJobService_TriggerPushEvent_NoMatches(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
-	buildService := NewBuildService(buildRepo, nil, nil)
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
 	jobService := NewJobService(jobRepo, buildService)
 
 	result, err := jobService.TriggerPushEvent(context.Background(), PushEventInput{
@@ -327,7 +329,7 @@ func TestJobService_TriggerPushEvent_NoMatches(t *testing.T) {
 }
 
 func TestJobService_TriggerPushEvent_Validation(t *testing.T) {
-	jobService := NewJobService(memory.NewJobRepository(), NewBuildService(memory.NewBuildRepository(), nil, nil))
+	jobService := NewJobService(memory.NewJobRepository(), buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil))
 
 	_, err := jobService.TriggerPushEvent(context.Background(), PushEventInput{})
 	if !errors.Is(err, ErrPushEventRepositoryURLRequired) {
@@ -348,7 +350,7 @@ func TestJobService_TriggerPushEvent_Validation(t *testing.T) {
 func TestJobService_TriggerWebhookEvent_TagOnlyJob(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
-	buildService := NewBuildService(buildRepo, nil, nil)
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
 	jobService := NewJobService(jobRepo, buildService)
 
 	triggerMode := "tags"
@@ -367,7 +369,7 @@ func TestJobService_TriggerWebhookEvent_TagOnlyJob(t *testing.T) {
 		t.Fatalf("create job failed: %v", err)
 	}
 
-	branchResult, err := jobService.TriggerWebhookEvent(context.Background(), WebhookTriggerInput{
+	branchResult, err := jobService.TriggerWebhookEvent(context.Background(), webhooksvc.WebhookTriggerInput{
 		SCMProvider:   "github",
 		EventType:     "push",
 		RepositoryURL: "https://github.com/example/backend.git",
@@ -381,7 +383,7 @@ func TestJobService_TriggerWebhookEvent_TagOnlyJob(t *testing.T) {
 		t.Fatalf("expected no branch matches for tag-only job, got %d", branchResult.MatchedJobs)
 	}
 
-	tagResult, err := jobService.TriggerWebhookEvent(context.Background(), WebhookTriggerInput{
+	tagResult, err := jobService.TriggerWebhookEvent(context.Background(), webhooksvc.WebhookTriggerInput{
 		SCMProvider:   "github",
 		EventType:     "push",
 		RepositoryURL: "https://github.com/example/backend.git",
@@ -399,7 +401,7 @@ func TestJobService_TriggerWebhookEvent_TagOnlyJob(t *testing.T) {
 func TestJobService_TriggerWebhookEvent_DeletePushIgnored(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
-	buildService := NewBuildService(buildRepo, nil, nil)
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
 	jobService := NewJobService(jobRepo, buildService)
 
 	_, err := jobService.CreateJob(context.Background(), CreateJobInput{
@@ -416,7 +418,7 @@ func TestJobService_TriggerWebhookEvent_DeletePushIgnored(t *testing.T) {
 		t.Fatalf("create job failed: %v", err)
 	}
 
-	result, err := jobService.TriggerWebhookEvent(context.Background(), WebhookTriggerInput{
+	result, err := jobService.TriggerWebhookEvent(context.Background(), webhooksvc.WebhookTriggerInput{
 		SCMProvider:   "github",
 		EventType:     "push",
 		RepositoryURL: "https://github.com/example/backend.git",
@@ -429,7 +431,7 @@ func TestJobService_TriggerWebhookEvent_DeletePushIgnored(t *testing.T) {
 	if result.MatchedJobs != 0 {
 		t.Fatalf("expected no matches for deleted ref, got %d", result.MatchedJobs)
 	}
-	if result.NoMatchReason == nil || *result.NoMatchReason != string(WebhookFilterDecisionDeletedRef) {
+	if result.NoMatchReason == nil || *result.NoMatchReason != string(webhooksvc.WebhookFilterDecisionDeletedRef) {
 		t.Fatalf("expected no_match_reason deleted_ref, got %v", result.NoMatchReason)
 	}
 }

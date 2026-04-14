@@ -20,11 +20,11 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
-	"github.com/radiation/coyote-ci/backend/internal/service"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
 type BuildHandler struct {
-	buildService *service.BuildService
+	buildService *buildsvc.BuildService
 }
 
 // GetBuildStepLogs godoc
@@ -161,7 +161,7 @@ func (h *BuildHandler) StreamBuildStepLogs(w http.ResponseWriter, r *http.Reques
 	for {
 		chunks, err := h.buildService.GetStepLogChunks(ctx, buildID, stepIndex, after, 500)
 		if err != nil {
-			if errors.Is(err, service.ErrBuildNotFound) {
+			if errors.Is(err, buildsvc.ErrBuildNotFound) {
 				return
 			}
 			writeSSEEvent(w, "error", 0, map[string]string{"message": err.Error()})
@@ -188,7 +188,7 @@ func (h *BuildHandler) StreamBuildStepLogs(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-func NewBuildHandler(buildService *service.BuildService) *BuildHandler {
+func NewBuildHandler(buildService *buildsvc.BuildService) *BuildHandler {
 	return &BuildHandler{
 		buildService: buildService,
 	}
@@ -212,7 +212,7 @@ func (h *BuildHandler) CreateBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	build, err := h.buildService.CreateBuild(r.Context(), service.CreateBuildInput{
+	build, err := h.buildService.CreateBuild(r.Context(), buildsvc.CreateBuildInput{
 		ProjectID: req.ProjectID,
 		Steps:     toCreateBuildStepInputs(req.Steps),
 		Source:    toCreateBuildSourceInput(req.Source),
@@ -230,10 +230,10 @@ func (h *BuildHandler) CreateBuild(w http.ResponseWriter, r *http.Request) {
 	writeDataJSON(w, http.StatusCreated, toBuildResponse(build))
 }
 
-func toCreateBuildStepInputs(steps []api.CreateBuildStepInput) []service.CreateBuildStepInput {
-	out := make([]service.CreateBuildStepInput, 0, len(steps))
+func toCreateBuildStepInputs(steps []api.CreateBuildStepInput) []buildsvc.CreateBuildStepInput {
+	out := make([]buildsvc.CreateBuildStepInput, 0, len(steps))
 	for _, step := range steps {
-		out = append(out, service.CreateBuildStepInput{
+		out = append(out, buildsvc.CreateBuildStepInput{
 			Name:           step.Name,
 			Command:        step.Command,
 			Args:           step.Args,
@@ -246,12 +246,12 @@ func toCreateBuildStepInputs(steps []api.CreateBuildStepInput) []service.CreateB
 	return out
 }
 
-func toCreateBuildSourceInput(sourceInput *api.BuildSourceInput) *service.CreateBuildSourceInput {
+func toCreateBuildSourceInput(sourceInput *api.BuildSourceInput) *buildsvc.CreateBuildSourceInput {
 	if sourceInput == nil {
 		return nil
 	}
 
-	result := &service.CreateBuildSourceInput{
+	result := &buildsvc.CreateBuildSourceInput{
 		RepositoryURL: sourceInput.RepositoryURL,
 	}
 	if sourceInput.Ref != nil {
@@ -282,7 +282,7 @@ func (h *BuildHandler) CreatePipelineBuild(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	build, err := h.buildService.CreateBuildFromPipeline(r.Context(), service.CreatePipelineBuildInput{
+	build, err := h.buildService.CreateBuildFromPipeline(r.Context(), buildsvc.CreatePipelineBuildInput{
 		ProjectID:    req.ProjectID,
 		PipelineYAML: req.PipelineYAML,
 		Source:       toCreateBuildSourceInput(req.Source),
@@ -327,7 +327,7 @@ func (h *BuildHandler) CreateRepoBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	build, err := h.buildService.CreateBuildFromRepo(r.Context(), service.CreateRepoBuildInput{
+	build, err := h.buildService.CreateBuildFromRepo(r.Context(), buildsvc.CreateRepoBuildInput{
 		ProjectID:    req.ProjectID,
 		RepoURL:      req.RepoURL,
 		Ref:          req.Ref,
@@ -339,11 +339,11 @@ func (h *BuildHandler) CreateRepoBuild(w http.ResponseWriter, r *http.Request) {
 			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
-		if errors.Is(err, service.ErrPipelineFileNotFound) {
+		if errors.Is(err, buildsvc.ErrPipelineFileNotFound) {
 			writeErrorJSON(w, http.StatusBadRequest, "pipeline_not_found", err.Error())
 			return
 		}
-		if errors.Is(err, service.ErrRepoFetcherNotConfigured) {
+		if errors.Is(err, buildsvc.ErrRepoFetcherNotConfigured) {
 			writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "repo fetcher not configured")
 			return
 		}
@@ -628,9 +628,9 @@ func (h *BuildHandler) QueueBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	customSteps := make([]service.QueueBuildCustomStepInput, 0, len(req.Steps))
+	customSteps := make([]buildsvc.QueueBuildCustomStepInput, 0, len(req.Steps))
 	for _, step := range req.Steps {
-		customSteps = append(customSteps, service.QueueBuildCustomStepInput{
+		customSteps = append(customSteps, buildsvc.QueueBuildCustomStepInput{
 			Name:    step.Name,
 			Command: step.Command,
 		})
@@ -799,42 +799,42 @@ func (h *BuildHandler) RerunBuildFromStep(w http.ResponseWriter, r *http.Request
 }
 
 func (h *BuildHandler) writeServiceError(w http.ResponseWriter, err error) {
-	if errors.Is(err, service.ErrBuildNotFound) {
+	if errors.Is(err, buildsvc.ErrBuildNotFound) {
 		writeErrorJSON(w, http.StatusNotFound, "build_not_found", "build not found")
 		return
 	}
 
-	if errors.Is(err, service.ErrExecutionJobNotFound) {
+	if errors.Is(err, buildsvc.ErrExecutionJobNotFound) {
 		writeErrorJSON(w, http.StatusNotFound, "execution_job_not_found", "execution job not found")
 		return
 	}
 
-	if errors.Is(err, service.ErrArtifactNotFound) {
+	if errors.Is(err, buildsvc.ErrArtifactNotFound) {
 		writeErrorJSON(w, http.StatusNotFound, "artifact_not_found", "artifact not found")
 		return
 	}
 
-	if errors.Is(err, service.ErrInvalidBuildStatusTransition) {
+	if errors.Is(err, buildsvc.ErrInvalidBuildStatusTransition) {
 		writeErrorJSON(w, http.StatusConflict, "invalid_transition", err.Error())
 		return
 	}
 
-	if errors.Is(err, service.ErrExecutionJobNotRetryable) {
+	if errors.Is(err, buildsvc.ErrExecutionJobNotRetryable) {
 		writeErrorJSON(w, http.StatusConflict, "job_not_retryable", err.Error())
 		return
 	}
 
-	if errors.Is(err, service.ErrInvalidRerunStepIndex) {
+	if errors.Is(err, buildsvc.ErrInvalidRerunStepIndex) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_step_index", err.Error())
 		return
 	}
 
-	if errors.Is(err, service.ErrExecutionJobRepoNotConfigured) {
+	if errors.Is(err, buildsvc.ErrExecutionJobRepoNotConfigured) {
 		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
 
-	if errors.Is(err, service.ErrCustomTemplateStepsRequired) || errors.Is(err, service.ErrCustomTemplateStepCommandRequired) {
+	if errors.Is(err, buildsvc.ErrCustomTemplateStepsRequired) || errors.Is(err, buildsvc.ErrCustomTemplateStepCommandRequired) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -843,19 +843,19 @@ func (h *BuildHandler) writeServiceError(w http.ResponseWriter, err error) {
 }
 
 func isCreateBuildBadRequestError(err error) bool {
-	return errors.Is(err, service.ErrProjectIDRequired) ||
-		errors.Is(err, service.ErrRepoURLRequired) ||
-		errors.Is(err, service.ErrSourceTargetRequired)
+	return errors.Is(err, buildsvc.ErrProjectIDRequired) ||
+		errors.Is(err, buildsvc.ErrRepoURLRequired) ||
+		errors.Is(err, buildsvc.ErrSourceTargetRequired)
 }
 
 func isCreatePipelineBuildBadRequestError(err error) bool {
 	return isCreateBuildBadRequestError(err) ||
-		errors.Is(err, service.ErrPipelineYAMLRequired)
+		errors.Is(err, buildsvc.ErrPipelineYAMLRequired)
 }
 
 func isCreateRepoBuildBadRequestError(err error) bool {
 	return isCreateBuildBadRequestError(err) ||
-		errors.Is(err, service.ErrInvalidPipelinePath)
+		errors.Is(err, buildsvc.ErrInvalidPipelinePath)
 }
 
 func parseStepIndex(w http.ResponseWriter, r *http.Request) (int, bool) {

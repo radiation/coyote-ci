@@ -23,19 +23,20 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	dockerrunner "github.com/radiation/coyote-ci/backend/internal/runner/docker"
 	"github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
-	"github.com/radiation/coyote-ci/backend/internal/service"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 )
 
 const defaultPollInterval = 10 * time.Second
 
 type workerIterationService interface {
-	ClaimRunnableStep(ctx context.Context) (service.RunnableStep, bool, error)
-	ExecuteRunnableStep(ctx context.Context, step service.RunnableStep) (service.StepExecutionReport, error)
+	ClaimRunnableStep(ctx context.Context) (workersvc.WorkerRunnableStep, bool, error)
+	ExecuteRunnableStep(ctx context.Context, step workersvc.WorkerRunnableStep) (workersvc.WorkerStepExecutionReport, error)
 }
 
 type workerStatusProvider interface {
-	RecoveryStats() service.WorkerRecoveryStats
+	RecoveryStats() workersvc.WorkerLeaseRecoveryStats
 }
 
 func main() {
@@ -83,7 +84,7 @@ func main() {
 	}
 	stepRunner := resolveStepRunner(cfg)
 	logSink := logs.NewPostgresSink(db)
-	buildService := service.NewBuildServiceFromConfig(buildRepo, stepRunner, logSink, service.BuildServiceConfig{
+	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, stepRunner, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:    executionJobRepo,
 		ExecutionOutputRepo: executionJobOutputRepo,
 		DefaultImage:        cfg.ExecutionDefaultImage,
@@ -95,7 +96,7 @@ func main() {
 		ArtifactWorkspace:   cfg.ExecutionWorkspaceRoot,
 	})
 	leaseDuration := time.Duration(cfg.StepLeaseSeconds) * time.Second
-	workerService := service.NewWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)
+	workerService := workersvc.NewExecutionWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -212,8 +213,8 @@ func newWorkerStatusHandler(worker workerStatusProvider) nethttp.Handler {
 		}
 
 		resp := struct {
-			WorkerRecovery service.WorkerRecoveryStats `json:"worker_recovery"`
-			TimestampUTC   time.Time                   `json:"timestamp_utc"`
+			WorkerRecovery workersvc.WorkerLeaseRecoveryStats `json:"worker_recovery"`
+			TimestampUTC   time.Time                          `json:"timestamp_utc"`
 		}{
 			WorkerRecovery: worker.RecoveryStats(),
 			TimestampUTC:   time.Now().UTC(),

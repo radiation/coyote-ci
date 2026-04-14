@@ -22,7 +22,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
-	"github.com/radiation/coyote-ci/backend/internal/service"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
 type fakeRepo struct {
@@ -379,7 +379,7 @@ func TestBuildHandler_GetBuildSteps_IncludesLinkedJobMetadata(t *testing.T) {
 		},
 	}
 
-	serviceUnderTest := service.NewBuildService(repo, nil, logs.NewNoopSink())
+	serviceUnderTest := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
 	execRepo := repositorymemory.NewExecutionJobRepository()
 	outputRepo := repositorymemory.NewExecutionJobOutputRepository()
 	serviceUnderTest.SetExecutionJobRepository(execRepo)
@@ -588,7 +588,7 @@ func TestBuildHandler_CreateBuild(t *testing.T) {
 		errMsg     string
 	}{
 		{name: "invalid json", body: "{", repo: &fakeRepo{}, statusCode: http.StatusBadRequest, errMsg: "invalid request body"},
-		{name: "missing project id", body: `{"project_id":""}`, repo: &fakeRepo{}, statusCode: http.StatusBadRequest, errMsg: service.ErrProjectIDRequired.Error()},
+		{name: "missing project id", body: `{"project_id":""}`, repo: &fakeRepo{}, statusCode: http.StatusBadRequest, errMsg: buildsvc.ErrProjectIDRequired.Error()},
 		{name: "repository error", body: `{"project_id":"project-1"}`, repo: &fakeRepo{createErr: errors.New("create failed")}, statusCode: http.StatusInternalServerError, errMsg: "internal server error"},
 		{name: "success", body: `{"project_id":"project-1"}`, repo: &fakeRepo{}, statusCode: http.StatusCreated},
 		{name: "success with steps auto queues", body: `{"project_id":"project-1","steps":[{"name":"checkout"}]}`, repo: &fakeRepo{}, statusCode: http.StatusCreated},
@@ -599,7 +599,7 @@ func TestBuildHandler_CreateBuild(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			h := NewBuildHandler(service.NewBuildService(tc.repo, nil, nil))
+			h := NewBuildHandler(buildsvc.NewBuildService(tc.repo, nil, nil))
 			req := httptest.NewRequest(http.MethodPost, "/builds", bytes.NewBufferString(tc.body))
 			rr := httptest.NewRecorder()
 			h.CreateBuild(rr, req)
@@ -678,7 +678,7 @@ func TestBuildHandler_ListBuilds(t *testing.T) {
 		},
 	}}
 
-	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, nil))
 	req := httptest.NewRequest(http.MethodGet, "/builds", nil)
 	rr := httptest.NewRecorder()
 
@@ -728,7 +728,7 @@ func TestBuildHandler_GetBuild(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			h := NewBuildHandler(service.NewBuildService(tc.repo, nil, nil))
+			h := NewBuildHandler(buildsvc.NewBuildService(tc.repo, nil, nil))
 			req := httptest.NewRequest(http.MethodGet, "/builds/"+tc.buildID, nil)
 			req = addBuildIDParam(req, tc.buildID)
 			rr := httptest.NewRecorder()
@@ -772,7 +772,7 @@ func TestBuildHandler_GetBuildSteps_HappyPathOrdered(t *testing.T) {
 			},
 		},
 	}
-	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, nil))
 
 	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/steps", nil), "build-1")
 	stepsRes := httptest.NewRecorder()
@@ -822,7 +822,7 @@ func TestBuildHandler_GetBuildSteps_HappyPathOrdered(t *testing.T) {
 }
 
 func TestBuildHandler_GetBuildSteps_NotFound(t *testing.T) {
-	h := NewBuildHandler(service.NewBuildService(&fakeRepo{getErr: repository.ErrBuildNotFound}, nil, nil))
+	h := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{getErr: repository.ErrBuildNotFound}, nil, nil))
 	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/missing/steps", nil), "missing")
 	stepsRes := httptest.NewRecorder()
 
@@ -839,7 +839,7 @@ func TestBuildHandler_GetBuildSteps_NotFound(t *testing.T) {
 func TestBuildHandler_GetBuildSteps_EmptyForExistingBuild(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusQueued, CreatedAt: now}}
-	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, nil))
 
 	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/steps", nil), "build-1")
 	stepsRes := httptest.NewRecorder()
@@ -862,7 +862,7 @@ func TestBuildHandler_GetBuildSteps_EmptyForExistingBuild(t *testing.T) {
 func TestBuildHandler_GetBuildLogs(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}}
-	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, nil))
 
 	logsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/logs", nil), "build-1")
 	logsRes := httptest.NewRecorder()
@@ -884,7 +884,7 @@ func TestBuildHandler_GetBuildStepLogs(t *testing.T) {
 	_, _ = logSink.AppendStepLogChunk(context.Background(), logs.StepLogChunk{BuildID: "build-1", StepID: "step-1", StepIndex: 0, StepName: "setup", Stream: logs.StepLogStreamStdout, ChunkText: "line-1", CreatedAt: now})
 	_, _ = logSink.AppendStepLogChunk(context.Background(), logs.StepLogChunk{BuildID: "build-1", StepID: "step-1", StepIndex: 0, StepName: "setup", Stream: logs.StepLogStreamStderr, ChunkText: "line-2", CreatedAt: now.Add(time.Second)})
 
-	h := NewBuildHandler(service.NewBuildService(repo, nil, logSink))
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, logSink))
 	req := addStepIndexParam(addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/steps/0/logs?after=0&limit=10", nil), "build-1"), "0")
 	res := httptest.NewRecorder()
 
@@ -912,7 +912,7 @@ func TestBuildHandler_GetBuildStepLogs(t *testing.T) {
 func TestBuildHandler_QueueBuild_WithTemplate(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
-	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, nil))
 
 	queueReq := addBuildIDParam(
 		httptest.NewRequest(http.MethodPost, "/builds/build-1/queue", bytes.NewBufferString(`{"template":"test"}`)),
@@ -959,7 +959,7 @@ func TestBuildHandler_QueueBuild_WithTemplate(t *testing.T) {
 func TestBuildHandler_QueueBuild_EmptyBodyUsesDefaultTemplate(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
-	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, nil))
 
 	queueReq := addBuildIDParam(httptest.NewRequest(http.MethodPost, "/builds/build-1/queue", nil), "build-1")
 	queueRes := httptest.NewRecorder()
@@ -997,7 +997,7 @@ func TestBuildHandler_QueueBuild_EmptyBodyUsesDefaultTemplate(t *testing.T) {
 func TestBuildHandler_QueueBuild_CustomTemplateWithCommands(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
-	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, nil))
 
 	body := `{"template":"custom","steps":[{"command":"echo ok && exit 0"},{"name":"fail","command":"echo fail && exit 1"}]}`
 	queueReq := addBuildIDParam(httptest.NewRequest(http.MethodPost, "/builds/build-1/queue", bytes.NewBufferString(body)), "build-1")
@@ -1044,7 +1044,7 @@ func TestBuildHandler_QueueBuild_CustomTemplateWithCommands(t *testing.T) {
 func TestBuildHandler_QueueBuild_CustomTemplateValidationErrors(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}
-	h := NewBuildHandler(service.NewBuildService(repo, nil, nil))
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, nil))
 
 	missingStepsReq := addBuildIDParam(
 		httptest.NewRequest(http.MethodPost, "/builds/build-1/queue", bytes.NewBufferString(`{"template":"custom","steps":[]}`)),
@@ -1055,8 +1055,8 @@ func TestBuildHandler_QueueBuild_CustomTemplateValidationErrors(t *testing.T) {
 	if missingStepsRes.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d for missing custom steps, got %d", http.StatusBadRequest, missingStepsRes.Code)
 	}
-	if got := decodeErrorMessage(t, missingStepsRes); got != service.ErrCustomTemplateStepsRequired.Error() {
-		t.Fatalf("expected error %q, got %q", service.ErrCustomTemplateStepsRequired.Error(), got)
+	if got := decodeErrorMessage(t, missingStepsRes); got != buildsvc.ErrCustomTemplateStepsRequired.Error() {
+		t.Fatalf("expected error %q, got %q", buildsvc.ErrCustomTemplateStepsRequired.Error(), got)
 	}
 
 	emptyCommandReq := addBuildIDParam(
@@ -1068,7 +1068,7 @@ func TestBuildHandler_QueueBuild_CustomTemplateValidationErrors(t *testing.T) {
 	if emptyCommandRes.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d for empty custom command, got %d", http.StatusBadRequest, emptyCommandRes.Code)
 	}
-	if got := decodeErrorMessage(t, emptyCommandRes); got != service.ErrCustomTemplateStepCommandRequired.Error() {
-		t.Fatalf("expected error %q, got %q", service.ErrCustomTemplateStepCommandRequired.Error(), got)
+	if got := decodeErrorMessage(t, emptyCommandRes); got != buildsvc.ErrCustomTemplateStepCommandRequired.Error() {
+		t.Fatalf("expected error %q, got %q", buildsvc.ErrCustomTemplateStepCommandRequired.Error(), got)
 	}
 }

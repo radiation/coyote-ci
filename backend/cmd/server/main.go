@@ -16,6 +16,8 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
@@ -60,7 +62,7 @@ func main() {
 		log.Fatalf("failed to resolve artifact stores: %v", err)
 	}
 	logSink := logs.NewPostgresSink(db)
-	buildService := service.NewBuildServiceFromConfig(buildRepo, nil, logSink, service.BuildServiceConfig{
+	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, nil, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:    executionJobRepo,
 		ExecutionOutputRepo: executionJobOutputRepo,
 		RepoFetcher:         source.NewGitFetcher(),
@@ -69,7 +71,7 @@ func main() {
 		ArtifactWorkspace:   cfg.ExecutionWorkspaceRoot,
 	})
 	jobService := service.NewJobService(jobRepo, buildService)
-	webhookService := service.NewWebhookIngressService(webhookDeliveryRepo, jobService)
+	webhookService := webhooksvc.NewDeliveryIngressService(webhookDeliveryRepo, jobService)
 	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()
 	webhookService.SetMetrics(webhookMetrics)
 	buildHandler := handler.NewBuildHandler(buildService)

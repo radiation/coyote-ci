@@ -11,16 +11,18 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/observability"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
 )
 
 func TestNewRouter_HealthAndNotFound(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
-	buildSvc := service.NewBuildService(buildRepo, nil, nil)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
 	h := handler.NewBuildHandler(buildSvc)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
-	eh := handler.NewEventHandler(jobSvc, service.NewWebhookIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 	r := NewRouter(h, jh, eh, "")
 
 	tests := []struct {
@@ -55,11 +57,11 @@ func TestNewRouter_HealthAndNotFound(t *testing.T) {
 func TestNewRouter_BuildRoutes(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
-	buildSvc := service.NewBuildService(buildRepo, nil, nil)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
 	h := handler.NewBuildHandler(buildSvc)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
-	eh := handler.NewEventHandler(jobSvc, service.NewWebhookIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 	r := NewRouter(h, jh, eh, "")
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
@@ -130,11 +132,11 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
-	buildSvc := service.NewBuildService(buildRepo, nil, nil)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
 	h := handler.NewBuildHandler(buildSvc)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
-	eh := handler.NewEventHandler(jobSvc, service.NewWebhookIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 	r := NewRouter(h, jh, eh, "")
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
@@ -206,11 +208,11 @@ func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
 func TestNewRouter_QueueBuild_UnknownTemplate_FallsBackToDefaultStep(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
-	buildSvc := service.NewBuildService(buildRepo, nil, nil)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
 	h := handler.NewBuildHandler(buildSvc)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
-	eh := handler.NewEventHandler(jobSvc, service.NewWebhookIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 	r := NewRouter(h, jh, eh, "")
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
@@ -278,11 +280,11 @@ func TestNewRouter_QueueBuild_UnknownTemplate_FallsBackToDefaultStep(t *testing.
 func TestNewRouter_JobRoutes(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
-	buildSvc := service.NewBuildService(buildRepo, nil, nil)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
 	h := handler.NewBuildHandler(buildSvc)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
-	eh := handler.NewEventHandler(jobSvc, service.NewWebhookIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 	r := NewRouter(h, jh, eh, "")
 
 	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
@@ -331,11 +333,11 @@ func TestNewRouter_JobRoutes(t *testing.T) {
 func TestNewRouter_PushEventRoute(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
-	buildSvc := service.NewBuildService(buildRepo, nil, nil)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
 	h := handler.NewBuildHandler(buildSvc)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
-	eh := handler.NewEventHandler(jobSvc, service.NewWebhookIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 	r := NewRouter(h, jh, eh, "")
 
 	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"push_branch":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`

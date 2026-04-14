@@ -21,14 +21,14 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
-	"github.com/radiation/coyote-ci/backend/internal/service"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
 // Build creation endpoints beyond the base /builds handler coverage.
 func TestCreatePipelineBuild(t *testing.T) {
 	t.Run("valid pipeline creates queued build", func(t *testing.T) {
 		repo := &fakeRepo{}
-		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
 		h := NewBuildHandler(svc)
 
 		body := `{
@@ -68,7 +68,7 @@ func TestCreatePipelineBuild(t *testing.T) {
 
 	t.Run("missing project_id returns 400", func(t *testing.T) {
 		repo := &fakeRepo{}
-		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
 		h := NewBuildHandler(svc)
 
 		body := `{"pipeline_yaml": "version: 1\nsteps:\n  - name: X\n    run: echo\n"}`
@@ -83,7 +83,7 @@ func TestCreatePipelineBuild(t *testing.T) {
 
 	t.Run("invalid YAML returns 400", func(t *testing.T) {
 		repo := &fakeRepo{}
-		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
 		h := NewBuildHandler(svc)
 
 		body := `{"project_id": "proj-1", "pipeline_yaml": "version: 2\nsteps:\n  - name: X\n    run: echo\n"}`
@@ -122,7 +122,7 @@ func TestCreateRepoBuild(t *testing.T) {
 		}
 
 		repo := &fakeRepo{}
-		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
 		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
 		h := NewBuildHandler(svc)
 
@@ -175,7 +175,7 @@ func TestCreateRepoBuild(t *testing.T) {
 		}
 
 		repo := &fakeRepo{}
-		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
 		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
 		h := NewBuildHandler(svc)
 
@@ -204,7 +204,7 @@ func TestCreateRepoBuild(t *testing.T) {
 
 	t.Run("missing project_id returns 400", func(t *testing.T) {
 		repo := &fakeRepo{}
-		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
 		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: "/tmp", commitSHA: "abc"})
 		h := NewBuildHandler(svc)
 
@@ -220,7 +220,7 @@ func TestCreateRepoBuild(t *testing.T) {
 
 	t.Run("missing ref returns 400", func(t *testing.T) {
 		repo := &fakeRepo{}
-		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
 		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: "/tmp", commitSHA: "abc"})
 		h := NewBuildHandler(svc)
 
@@ -244,7 +244,7 @@ func TestCreateRepoBuild(t *testing.T) {
 		}
 
 		repo := &fakeRepo{}
-		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
 		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
 		h := NewBuildHandler(svc)
 
@@ -261,7 +261,7 @@ func TestCreateRepoBuild(t *testing.T) {
 	t.Run("pipeline not found returns 400", func(t *testing.T) {
 		tmpDir := t.TempDir() // empty dir, no .coyote/pipeline.yml
 		repo := &fakeRepo{}
-		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
 		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc"})
 		h := NewBuildHandler(svc)
 
@@ -285,7 +285,7 @@ func TestCreateRepoBuild(t *testing.T) {
 		}
 
 		repo := &fakeRepo{}
-		svc := service.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
 		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc"})
 		h := NewBuildHandler(svc)
 
@@ -311,7 +311,7 @@ func TestBuildHandler_GetBuildArtifacts(t *testing.T) {
 		},
 	}}
 
-	svc := service.NewBuildService(repo, nil, nil)
+	svc := buildsvc.NewBuildService(repo, nil, nil)
 	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(artifact.NewFilesystemStore(t.TempDir())), t.TempDir())
 	h := NewBuildHandler(svc)
 
@@ -369,7 +369,7 @@ func TestBuildHandler_DownloadBuildArtifact(t *testing.T) {
 		},
 	}}
 
-	svc := service.NewBuildService(repo, nil, nil)
+	svc := buildsvc.NewBuildService(repo, nil, nil)
 	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(store), t.TempDir())
 	h := NewBuildHandler(svc)
 
@@ -441,7 +441,7 @@ func TestBuildHandler_DownloadBuildArtifact_GCSProviderNativeStorageKey(t *testi
 		},
 	}}
 
-	svc := service.NewBuildService(repo, nil, nil)
+	svc := buildsvc.NewBuildService(repo, nil, nil)
 	svc.SetArtifactPersistence(artifactRepo, testStoreResolverWithProviders(domain.StorageProviderFilesystem, map[domain.StorageProvider]artifact.Store{
 		domain.StorageProviderFilesystem: fsStore,
 		domain.StorageProviderGCS:        gcsStore,
