@@ -1,9 +1,1 @@
-{
-    "chat.tools.terminal.autoApprove": {
-        "git stash": true,
-        "/^perl -0pi -e 's/\\\\bWebhookIngressService\\\\b/DeliveryIngressService/g; s/\\\\bWebhookEventTriggerer\\\\b/DeliveryEventTriggerer/g; s/\\\\bWebhookIngressResult\\\\b/DeliveryIngressResult/g; s/\\\\bNewWebhookIngressService\\\\b/NewDeliveryIngressService/g; s/\\\\bErrWebhookDeliveryRepoNotConfigured\\\\b/ErrDeliveryRepoNotConfigured/g; s/\\\\bErrWebhookDeliveryIDRequired\\\\b/ErrDeliveryIDRequired/g; s/\\\\bErrWebhookProviderRequired\\\\b/ErrDeliveryProviderRequired/g; s/\\\\bErrWebhookInvalidDeliveryTransition\\\\b/ErrInvalidDeliveryTransition/g; s/\\\\bisAllowedWebhookTransition\\\\b/isAllowedDeliveryTransition/g; s/\\\\bapplyTriggerMetadata\\\\b/applyDeliveryTriggerMetadata/g; s/\\\\bfirstMatchIDs\\\\b/firstMatchedIDs/g; s/\\\\boptionalString\\\\b/optionalDeliveryString/g; s/\\\\breadOptionalString\\\\b/readOptionalDeliveryString/g' internal/service/webhook/ingress\\.go internal/service/aliases\\.go$/": {
-            "approve": true,
-            "matchCommandLine": true
-        }
-    }
-}
+{}
