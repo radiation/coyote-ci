@@ -8,6 +8,9 @@ import (
 
 	"github.com/google/uuid"
 
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
+
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -29,10 +32,10 @@ var ErrJobBuildServiceNotConfigured = errors.New("job build service not configur
 
 type JobService struct {
 	jobRepo      repository.JobRepository
-	buildService *BuildService
+	buildService *buildsvc.BuildService
 }
 
-func NewJobService(jobRepo repository.JobRepository, buildService *BuildService) *JobService {
+func NewJobService(jobRepo repository.JobRepository, buildService *buildsvc.BuildService) *JobService {
 	return &JobService{jobRepo: jobRepo, buildService: buildService}
 }
 
@@ -110,7 +113,7 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 		}
 	}
 
-	triggerMode := normalizeJobTriggerMode(domain.JobTriggerMode(readStringPtr(normalized.TriggerMode)))
+	triggerMode := webhooksvc.NormalizeWebhookFilterMode(domain.JobTriggerMode(readStringPtr(normalized.TriggerMode)))
 	branchAllowlist := normalizeBranchAllowlist(normalized.BranchAllowlist)
 	if len(branchAllowlist) == 0 && pushBranch != nil {
 		branchAllowlist = []string{*pushBranch}
@@ -209,7 +212,7 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 		if !isValidTriggerMode(*input.TriggerMode) {
 			return domain.Job{}, ErrJobInvalidTriggerMode
 		}
-		mode := normalizeJobTriggerMode(domain.JobTriggerMode(strings.TrimSpace(*input.TriggerMode)))
+		mode := webhooksvc.NormalizeWebhookFilterMode(domain.JobTriggerMode(strings.TrimSpace(*input.TriggerMode)))
 		job.TriggerMode = mode
 	}
 	if input.BranchAllowlist != nil {
@@ -280,7 +283,7 @@ func (s *JobService) RunJobNow(ctx context.Context, id string) (domain.Build, er
 
 	var build domain.Build
 	if job.PipelinePath != nil && strings.TrimSpace(*job.PipelinePath) != "" {
-		build, err = s.buildService.CreateBuildFromRepo(ctx, CreateRepoBuildInput{
+		build, err = s.buildService.CreateBuildFromRepo(ctx, buildsvc.CreateRepoBuildInput{
 			ProjectID:    job.ProjectID,
 			JobID:        &job.ID,
 			RepoURL:      job.RepositoryURL,
@@ -289,11 +292,11 @@ func (s *JobService) RunJobNow(ctx context.Context, id string) (domain.Build, er
 			PipelinePath: strings.TrimSpace(*job.PipelinePath),
 		})
 	} else {
-		build, err = s.buildService.CreateBuildFromPipeline(ctx, CreatePipelineBuildInput{
+		build, err = s.buildService.CreateBuildFromPipeline(ctx, buildsvc.CreatePipelineBuildInput{
 			ProjectID:    job.ProjectID,
 			JobID:        &job.ID,
 			PipelineYAML: job.PipelineYAML,
-			Source: &CreateBuildSourceInput{
+			Source: &buildsvc.CreateBuildSourceInput{
 				RepositoryURL: job.RepositoryURL,
 				Ref:           job.DefaultRef,
 				CommitSHA:     readStringPtr(job.DefaultCommitSHA),

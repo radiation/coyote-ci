@@ -12,12 +12,13 @@ import (
 
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
 func TestJobHandler_CreateListGetUpdateRunNow(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
-	buildSvc := service.NewBuildService(buildRepo, nil, nil)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	h := NewJobHandler(jobSvc)
 
@@ -121,7 +122,7 @@ func addURLParam(req *http.Request, key string, value string) *http.Request {
 func TestJobHandler_CreateRejectsInvalidPipeline(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
-	h := NewJobHandler(service.NewJobService(jobRepo, service.NewBuildService(buildRepo, nil, nil)))
+	h := NewJobHandler(service.NewJobService(jobRepo, buildsvc.NewBuildService(buildRepo, nil, nil)))
 
 	body := `{"project_id":"project-1","name":"bad","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 2\nsteps:\n  - name: test\n    run: go test ./...\n"}`
 	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(body))
@@ -144,7 +145,7 @@ func TestJobHandler_CreateRejectsInvalidPipeline(t *testing.T) {
 func TestJobHandler_CreateAcceptsPipelinePathWithoutInlineYAML(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
-	h := NewJobHandler(service.NewJobService(jobRepo, service.NewBuildService(buildRepo, nil, nil)))
+	h := NewJobHandler(service.NewJobService(jobRepo, buildsvc.NewBuildService(buildRepo, nil, nil)))
 
 	body := `{"project_id":"project-1","name":"path-job","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_path":"scenarios/success-basic/coyote.yml"}`
 	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(body))
