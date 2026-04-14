@@ -48,7 +48,7 @@ func (p *WorkspacePreparer) Prepare(ctx context.Context, executionContext StepEx
 		ClaimToken: request.ClaimToken,
 	})
 	if prepareErr != nil {
-		_, reason := classifyPrepareFailure(prepareErr)
+		_, reason := classifyExecutionPrepareFailure(prepareErr)
 		logManager.EmitSystemLine(ctx, "Failed to prepare workspace")
 		logManager.EmitSystemLine(ctx, formatFailureReasonLine(reason))
 		result := failedExecutionResult(reason)

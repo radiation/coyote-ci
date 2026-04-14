@@ -11,7 +11,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 )
 
-func WriteSystemExecutionLogLine(ctx context.Context, sink logs.LogSink, request runner.RunStepRequest, appender logs.StepLogChunkAppender, line string) error {
+func WriteExecutionSystemLogLine(ctx context.Context, sink logs.LogSink, request runner.RunStepRequest, appender logs.StepLogChunkAppender, line string) error {
 	text := strings.TrimRight(line, "\n")
 	if strings.TrimSpace(text) == "" {
 		return nil
@@ -33,7 +33,7 @@ func WriteSystemExecutionLogLine(ctx context.Context, sink logs.LogSink, request
 	return sink.WriteStepLog(ctx, request.BuildID, request.StepName, text)
 }
 
-func classifyPrepareFailure(err error) (marker string, reason string) {
+func classifyExecutionPrepareFailure(err error) (marker string, reason string) {
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
 	if strings.Contains(message, "creating build container") || strings.Contains(message, "docker create") || strings.Contains(message, "docker run") {
 		return "Failed to start build container", "docker create failed"
@@ -47,7 +47,7 @@ func classifyPrepareFailure(err error) (marker string, reason string) {
 	return "Failed to prepare build execution", "prepare build failed"
 }
 
-func classifyStepFailure(result runner.RunStepResult) (stepFailureKind, string) {
+func classifyExecutionStepFailure(result runner.RunStepResult) (stepFailureKind, string) {
 	if result.Status != runner.RunStepStatusFailed {
 		return stepFailureKindNone, ""
 	}
@@ -68,15 +68,15 @@ func classifyStepFailure(result runner.RunStepResult) (stepFailureKind, string) 
 	return stepFailureKindInternal, "internal execution error"
 }
 
-func formatFailureStepEndLine(stepNumber int, totalSteps int, stepName string, duration time.Duration, exitCode int, failureKind stepFailureKind) string {
+func formatExecutionFailureStepEndLine(stepNumber int, totalSteps int, stepName string, duration time.Duration, exitCode int, failureKind stepFailureKind) string {
 	if failureKind == stepFailureKindTimeout {
 		return formatTimedOutStepEndLine(stepNumber, totalSteps, stepName, duration)
 	}
 	return formatStepEndLine(stepNumber, totalSteps, stepName, "failed", duration, exitCode)
 }
 
-func WriteOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, stepName string, output string) error {
-	for _, line := range splitLogLines(output) {
+func WriteExecutionOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, stepName string, output string) error {
+	for _, line := range splitExecutionLogLines(output) {
 		if err := sink.WriteStepLog(ctx, buildID, stepName, line); err != nil {
 			return err
 		}
@@ -85,17 +85,17 @@ func WriteOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, ste
 	return nil
 }
 
-func writeOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, stepName string, output string) error {
-	return WriteOutputLogs(ctx, sink, buildID, stepName, output)
+func writeExecutionOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, stepName string, output string) error {
+	return WriteExecutionOutputLogs(ctx, sink, buildID, stepName, output)
 }
 
-var lineBreakSplitter = regexp.MustCompile(`\r?\n`)
+var executionLineBreakSplitter = regexp.MustCompile(`\r?\n`)
 
-func splitLogLines(output string) []string {
+func splitExecutionLogLines(output string) []string {
 	trimmed := strings.TrimSpace(output)
 	if trimmed == "" {
 		return nil
 	}
 
-	return lineBreakSplitter.Split(trimmed, -1)
+	return executionLineBreakSplitter.Split(trimmed, -1)
 }

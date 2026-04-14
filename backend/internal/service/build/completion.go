@@ -90,11 +90,11 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 	if skipLegacyLogWrite {
 		return report, nil
 	}
-	if err := writeOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stdout); err != nil {
+	if err := writeExecutionOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stdout); err != nil {
 		report.SideEffectErr = err
 		return report, nil
 	}
-	if err := writeOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stderr); err != nil {
+	if err := writeExecutionOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stderr); err != nil {
 		report.SideEffectErr = err
 		return report, nil
 	}

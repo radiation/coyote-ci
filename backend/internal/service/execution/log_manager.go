@@ -33,7 +33,7 @@ func (m *ExecutionLogManager) HasChunkAppender() bool {
 }
 
 func (m *ExecutionLogManager) EmitSystemLine(ctx context.Context, line string) {
-	if err := WriteSystemExecutionLogLine(ctx, m.logSink, m.executionContext.ExecutionRequest, m.executionContext.ChunkAppender, line); err != nil {
+	if err := WriteExecutionSystemLogLine(ctx, m.logSink, m.executionContext.ExecutionRequest, m.executionContext.ChunkAppender, line); err != nil {
 		m.mu.Lock()
 		if m.visibilityErr == nil {
 			m.visibilityErr = err
@@ -67,8 +67,8 @@ func (m *ExecutionLogManager) EmitExecutionStart(ctx context.Context) {
 
 func (m *ExecutionLogManager) EmitExecutionEnd(ctx context.Context, result runner.RunStepResult) {
 	if result.Status == runner.RunStepStatusFailed {
-		failureKind, failureReason := classifyStepFailure(result)
-		m.EmitSystemLine(ctx, formatFailureStepEndLine(
+		failureKind, failureReason := classifyExecutionStepFailure(result)
+		m.EmitSystemLine(ctx, formatExecutionFailureStepEndLine(
 			m.executionContext.StepNumber,
 			m.executionContext.TotalSteps,
 			m.executionContext.ExecutionRequest.StepName,
@@ -133,10 +133,10 @@ func (m *ExecutionLogManager) BackfillNonStreamingOutput(ctx context.Context, re
 	if !m.executionContext.HasChunkAppender {
 		return
 	}
-	for _, line := range splitLogLines(result.Stdout) {
+	for _, line := range splitExecutionLogLines(result.Stdout) {
 		_ = m.PersistRunnerChunk(ctx, runner.StepOutputChunk{Stream: runner.StepOutputStreamStdout, ChunkText: line, EmittedAt: time.Now().UTC()})
 	}
-	for _, line := range splitLogLines(result.Stderr) {
+	for _, line := range splitExecutionLogLines(result.Stderr) {
 		_ = m.PersistRunnerChunk(ctx, runner.StepOutputChunk{Stream: runner.StepOutputStreamStderr, ChunkText: line, EmittedAt: time.Now().UTC()})
 	}
 }

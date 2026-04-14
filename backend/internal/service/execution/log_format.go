@@ -35,7 +35,7 @@ func formatStepStartLines(stepIndex int, totalSteps int, stepName string, image 
 		"Command:",
 	}
 
-	commandLines := splitLogLines(renderedCommand)
+	commandLines := splitExecutionLogLines(renderedCommand)
 	if len(commandLines) == 0 {
 		lines = append(lines, "<empty>")
 		return lines

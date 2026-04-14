@@ -72,7 +72,7 @@ func NewStepCacheManager(store cachepkg.Store, entryRepo repository.CacheEntryRe
 }
 
 func (s *BuildService) writeSystemExecutionLogLine(ctx context.Context, request runner.RunStepRequest, appender logs.StepLogChunkAppender, line string) error {
-	return execution.WriteSystemExecutionLogLine(ctx, s.logSink, request, appender, line)
+	return execution.WriteExecutionSystemLogLine(ctx, s.logSink, request, appender, line)
 }
 
 func formatFailureReasonLine(reason string) string {
@@ -83,8 +83,8 @@ func formatBuildSummaryLines(status domain.BuildStatus, duration time.Duration, 
 	return execution.FormatBuildSummaryLines(status, duration, completedSteps, totalSteps, artifactPaths)
 }
 
-func writeOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, stepName string, output string) error {
-	return execution.WriteOutputLogs(ctx, sink, buildID, stepName, output)
+func writeExecutionOutputLogs(ctx context.Context, sink logs.LogSink, buildID string, stepName string, output string) error {
+	return execution.WriteExecutionOutputLogs(ctx, sink, buildID, stepName, output)
 }
 
 func presetMounts(runtimeDir string, cachePaths []string) ([]runner.CacheMount, error) {
