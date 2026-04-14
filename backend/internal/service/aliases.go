@@ -1,0 +1,89 @@
+package service
+
+import (
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
+	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
+)
+
+type BuildService = buildsvc.BuildService
+type BuildServiceConfig = buildsvc.BuildServiceConfig
+type CreateBuildInput = buildsvc.CreateBuildInput
+type CreateBuildSourceInput = buildsvc.CreateBuildSourceInput
+type CreateBuildStepInput = buildsvc.CreateBuildStepInput
+type QueueBuildCustomStepInput = buildsvc.QueueBuildCustomStepInput
+type CreateBuildTriggerInput = buildsvc.CreateBuildTriggerInput
+type CreatePipelineBuildInput = buildsvc.CreatePipelineBuildInput
+type CreateRepoBuildInput = buildsvc.CreateRepoBuildInput
+type StepCompletionReport = buildsvc.StepCompletionReport
+
+var NewBuildService = buildsvc.NewBuildService
+var NewBuildServiceFromConfig = buildsvc.NewBuildServiceFromConfig
+
+var ErrBuildNotFound = buildsvc.ErrBuildNotFound
+var ErrBuildStepNotFound = buildsvc.ErrBuildStepNotFound
+var ErrProjectIDRequired = buildsvc.ErrProjectIDRequired
+var ErrInvalidBuildStatusTransition = buildsvc.ErrInvalidBuildStatusTransition
+var ErrInvalidBuildStepTransition = buildsvc.ErrInvalidBuildStepTransition
+var ErrStaleStepClaim = buildsvc.ErrStaleStepClaim
+var ErrRunnerNotConfigured = buildsvc.ErrRunnerNotConfigured
+var ErrRunnerWorkspaceNotSupported = buildsvc.ErrRunnerWorkspaceNotSupported
+var ErrCustomTemplateStepsRequired = buildsvc.ErrCustomTemplateStepsRequired
+var ErrCustomTemplateStepCommandRequired = buildsvc.ErrCustomTemplateStepCommandRequired
+var ErrPipelineYAMLRequired = buildsvc.ErrPipelineYAMLRequired
+var ErrRepoURLRequired = buildsvc.ErrRepoURLRequired
+var ErrSourceTargetRequired = buildsvc.ErrSourceTargetRequired
+var ErrRepoFetcherNotConfigured = buildsvc.ErrRepoFetcherNotConfigured
+var ErrPipelineFileNotFound = buildsvc.ErrPipelineFileNotFound
+var ErrInvalidPipelinePath = buildsvc.ErrInvalidPipelinePath
+var ErrArtifactNotFound = buildsvc.ErrArtifactNotFound
+var ErrArtifactStorageProviderNotConfigured = buildsvc.ErrArtifactStorageProviderNotConfigured
+var ErrSourceResolverNotConfigured = buildsvc.ErrSourceResolverNotConfigured
+var ErrExecutionWorkspaceRootNotConfigured = buildsvc.ErrExecutionWorkspaceRootNotConfigured
+var ErrExecutionJobRepoNotConfigured = buildsvc.ErrExecutionJobRepoNotConfigured
+var ErrExecutionJobNotFound = buildsvc.ErrExecutionJobNotFound
+var ErrExecutionJobNotRetryable = buildsvc.ErrExecutionJobNotRetryable
+var ErrInvalidRerunStepIndex = buildsvc.ErrInvalidRerunStepIndex
+
+var BuildTemplateDefault = buildsvc.BuildTemplateDefault
+var BuildTemplateTest = buildsvc.BuildTemplateTest
+var BuildTemplateBuild = buildsvc.BuildTemplateBuild
+var BuildTemplateCustom = buildsvc.BuildTemplateCustom
+var BuildTemplateFail = buildsvc.BuildTemplateFail
+
+type WorkerService = workersvc.WorkerService
+type RunnableStep = workersvc.RunnableStep
+type StepExecutionReport = workersvc.StepExecutionReport
+type WorkerRecoveryStats = workersvc.WorkerRecoveryStats
+
+var NewWorkerService = workersvc.NewWorkerService
+var NewWorkerServiceWithLease = workersvc.NewWorkerServiceWithLease
+
+type WebhookIngressService = webhooksvc.WebhookIngressService
+type WebhookIngressResult = webhooksvc.WebhookIngressResult
+type WebhookLogContext = webhooksvc.WebhookLogContext
+
+type WebhookMatchedBuild = webhooksvc.WebhookMatchedBuild
+type WebhookTriggerInput = webhooksvc.WebhookTriggerInput
+type WebhookTriggerResult = webhooksvc.WebhookTriggerResult
+type WebhookTriggerDecision = webhooksvc.WebhookTriggerDecision
+type WebhookTriggerDecisionReason = webhooksvc.WebhookTriggerDecisionReason
+type WebhookJobTriggerConfig = webhooksvc.WebhookJobTriggerConfig
+
+var NewWebhookIngressService = webhooksvc.NewWebhookIngressService
+var NewWebhookLogContext = webhooksvc.NewWebhookLogContext
+var WithWebhookLogContext = webhooksvc.WithWebhookLogContext
+var WebhookLogContextFromContext = webhooksvc.WebhookLogContextFromContext
+var WebhookLogFields = webhooksvc.WebhookLogFields
+
+var ErrWebhookDeliveryRepoNotConfigured = webhooksvc.ErrWebhookDeliveryRepoNotConfigured
+var ErrWebhookDeliveryIDRequired = webhooksvc.ErrWebhookDeliveryIDRequired
+var ErrWebhookProviderRequired = webhooksvc.ErrWebhookProviderRequired
+var ErrWebhookInvalidDeliveryTransition = webhooksvc.ErrWebhookInvalidDeliveryTransition
+
+const WebhookTriggerDecisionMatched = webhooksvc.WebhookTriggerDecisionMatched
+const WebhookTriggerDecisionDeletedRef = webhooksvc.WebhookTriggerDecisionDeletedRef
+const WebhookTriggerDecisionUnsupportedRefType = webhooksvc.WebhookTriggerDecisionUnsupportedRefType
+const WebhookTriggerDecisionFilteredBranch = webhooksvc.WebhookTriggerDecisionFilteredBranch
+const WebhookTriggerDecisionFilteredTag = webhooksvc.WebhookTriggerDecisionFilteredTag
+const WebhookTriggerDecisionFilteredByMode = webhooksvc.WebhookTriggerDecisionFilteredByMode

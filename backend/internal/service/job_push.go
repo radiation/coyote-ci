@@ -8,6 +8,9 @@ import (
 	"path"
 	"strings"
 
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
+
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
 
@@ -17,43 +20,7 @@ type PushEventInput struct {
 	CommitSHA     string
 }
 
-type WebhookMatchedBuild struct {
-	Job   domain.Job
-	Build domain.Build
-}
-
-type WebhookTriggerInput struct {
-	SCMProvider     string
-	EventType       string
-	RepositoryOwner string
-	RepositoryName  string
-	RepositoryURL   string
-	RawRef          string
-	Ref             string
-	RefType         string
-	RefName         string
-	Deleted         bool
-	CommitSHA       string
-	DeliveryID      string
-	Actor           string
-}
-
-type WebhookTriggerResult struct {
-	SCMProvider   string
-	EventType     string
-	RepositoryURL string
-	RawRef        string
-	Ref           string
-	RefType       string
-	RefName       string
-	Deleted       bool
-	CommitSHA     string
-	MatchedJobs   int
-	NoMatchReason *string
-	Builds        []WebhookMatchedBuild
-}
-
-type PushEventMatchedBuild = WebhookMatchedBuild
+type PushEventMatchedBuild = webhooksvc.WebhookMatchedBuild
 
 type PushEventResult struct {
 	RepositoryURL string
@@ -104,10 +71,10 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 		CommitSHA:     commitSHA,
 		Builds:        make([]WebhookMatchedBuild, 0),
 	}
-	webhookFields := WebhookLogFields(ctx)
+	webhookFields := webhooksvc.WebhookLogFields(ctx)
 	var firstNoMatchReason *string
-	if !shouldTriggerBuild(normalizedRef, WebhookJobTriggerConfig{}).Matched {
-		defaultReason := string(shouldTriggerBuild(normalizedRef, WebhookJobTriggerConfig{}).Reason)
+	if !webhooksvc.ShouldTriggerBuild(normalizedRef, webhooksvc.WebhookJobTriggerConfig{}).Matched {
+		defaultReason := string(webhooksvc.ShouldTriggerBuild(normalizedRef, webhooksvc.WebhookJobTriggerConfig{}).Reason)
 		firstNoMatchReason = &defaultReason
 	}
 
@@ -116,7 +83,7 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 			continue
 		}
 
-		decision := shouldTriggerBuild(normalizedRef, toWebhookJobTriggerConfig(job))
+		decision := webhooksvc.ShouldTriggerBuild(normalizedRef, toWebhookJobTriggerConfig(job))
 		if !decision.Matched {
 			if firstNoMatchReason == nil {
 				reason := string(decision.Reason)
@@ -134,7 +101,7 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 			build    domain.Build
 			buildErr error
 		)
-		triggerInput := &CreateBuildTriggerInput{
+		triggerInput := &buildsvc.CreateBuildTriggerInput{
 			Kind:            string(domain.BuildTriggerKindWebhook),
 			SCMProvider:     scmProvider,
 			EventType:       eventType,
@@ -151,7 +118,7 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 			Actor:           strings.TrimSpace(input.Actor),
 		}
 		if job.PipelinePath != nil && strings.TrimSpace(*job.PipelinePath) != "" {
-			build, buildErr = s.buildService.CreateBuildFromRepo(ctx, CreateRepoBuildInput{
+			build, buildErr = s.buildService.CreateBuildFromRepo(ctx, buildsvc.CreateRepoBuildInput{
 				ProjectID:    job.ProjectID,
 				JobID:        &job.ID,
 				RepoURL:      job.RepositoryURL,
@@ -161,11 +128,11 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input WebhookTrigg
 				Trigger:      triggerInput,
 			})
 		} else {
-			build, buildErr = s.buildService.CreateBuildFromPipeline(ctx, CreatePipelineBuildInput{
+			build, buildErr = s.buildService.CreateBuildFromPipeline(ctx, buildsvc.CreatePipelineBuildInput{
 				ProjectID:    job.ProjectID,
 				JobID:        &job.ID,
 				PipelineYAML: job.PipelineYAML,
-				Source: &CreateBuildSourceInput{
+				Source: &buildsvc.CreateBuildSourceInput{
 					RepositoryURL: job.RepositoryURL,
 					Ref:           normalizedRef.RefName,
 					CommitSHA:     commitSHA,
@@ -258,7 +225,7 @@ func normalizeWebhookRefInput(input WebhookTriggerInput) domain.WebhookRef {
 	return ref
 }
 
-func toWebhookJobTriggerConfig(job domain.Job) WebhookJobTriggerConfig {
+func toWebhookJobTriggerConfig(job domain.Job) webhooksvc.WebhookJobTriggerConfig {
 	allowBranches := make([]string, 0, len(job.BranchAllowlist)+1)
 	for _, item := range job.BranchAllowlist {
 		branch := normalizePushRef(item)
@@ -281,8 +248,8 @@ func toWebhookJobTriggerConfig(job domain.Job) WebhookJobTriggerConfig {
 		}
 	}
 
-	return WebhookJobTriggerConfig{
-		Mode:            normalizeJobTriggerMode(job.TriggerMode),
+	return webhooksvc.WebhookJobTriggerConfig{
+		Mode:            webhooksvc.NormalizeJobTriggerMode(job.TriggerMode),
 		BranchAllowlist: allowBranches,
 		TagAllowlist:    tagAllowlist,
 	}
