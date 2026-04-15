@@ -128,3 +128,100 @@ func TestExecutionJobRepository_ImmutabilityForSpecFields(t *testing.T) {
 		t.Fatalf("expected immutable source commit, got %q", job.Source.CommitSHA)
 	}
 }
+
+func TestExecutionJobRepository_ClaimNextRunnableJob_RespectsDependencies(t *testing.T) {
+	repo := NewExecutionJobRepository()
+	now := time.Now().UTC()
+	_, err := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{
+		{
+			ID:               "job-setup",
+			BuildID:          "build-graph",
+			StepID:           "step-setup",
+			NodeID:           "node-setup",
+			Name:             "setup",
+			StepIndex:        0,
+			Status:           domain.ExecutionJobStatusQueued,
+			Image:            "alpine:3.20",
+			WorkingDir:       ".",
+			Command:          []string{"sh", "-c", "echo setup"},
+			Environment:      map[string]string{},
+			SpecVersion:      1,
+			ResolvedSpecJSON: "{}",
+			CreatedAt:        now,
+		},
+		{
+			ID:               "job-unit",
+			BuildID:          "build-graph",
+			StepID:           "step-unit",
+			NodeID:           "node-unit",
+			Name:             "unit",
+			StepIndex:        1,
+			DependsOnNodeIDs: []string{"node-setup"},
+			Status:           domain.ExecutionJobStatusQueued,
+			Image:            "alpine:3.20",
+			WorkingDir:       ".",
+			Command:          []string{"sh", "-c", "echo unit"},
+			Environment:      map[string]string{},
+			SpecVersion:      1,
+			ResolvedSpecJSON: "{}",
+			CreatedAt:        now.Add(time.Second),
+		},
+		{
+			ID:               "job-integration",
+			BuildID:          "build-graph",
+			StepID:           "step-integration",
+			NodeID:           "node-integration",
+			Name:             "integration",
+			StepIndex:        2,
+			DependsOnNodeIDs: []string{"node-setup"},
+			Status:           domain.ExecutionJobStatusQueued,
+			Image:            "alpine:3.20",
+			WorkingDir:       ".",
+			Command:          []string{"sh", "-c", "echo integration"},
+			Environment:      map[string]string{},
+			SpecVersion:      1,
+			ResolvedSpecJSON: "{}",
+			CreatedAt:        now.Add(2 * time.Second),
+		},
+	})
+	if err != nil {
+		t.Fatalf("create jobs failed: %v", err)
+	}
+
+	claimSetup := repository.StepClaim{WorkerID: "worker-a", ClaimToken: "claim-a", ClaimedAt: now.Add(3 * time.Second), LeaseExpiresAt: now.Add(30 * time.Second)}
+	setup, found, err := repo.ClaimNextRunnableJob(context.Background(), claimSetup)
+	if err != nil {
+		t.Fatalf("claim setup failed: %v", err)
+	}
+	if !found || setup.Name != "setup" {
+		t.Fatalf("expected setup to be first runnable, got found=%v job=%+v", found, setup)
+	}
+
+	_, outcome, completeErr := repo.CompleteJobSuccess(context.Background(), setup.ID, claimSetup.ClaimToken, now.Add(4*time.Second), 0, nil)
+	if completeErr != nil {
+		t.Fatalf("complete setup failed: %v", completeErr)
+	} else if outcome != repository.StepCompletionCompleted {
+		t.Fatalf("unexpected setup completion outcome %q", outcome)
+	}
+
+	claimOne := repository.StepClaim{WorkerID: "worker-b", ClaimToken: "claim-b", ClaimedAt: now.Add(5 * time.Second), LeaseExpiresAt: now.Add(35 * time.Second)}
+	firstBranch, found, err := repo.ClaimNextRunnableJob(context.Background(), claimOne)
+	if err != nil {
+		t.Fatalf("claim first branch failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected first branch runnable")
+	}
+
+	claimTwo := repository.StepClaim{WorkerID: "worker-c", ClaimToken: "claim-c", ClaimedAt: now.Add(6 * time.Second), LeaseExpiresAt: now.Add(36 * time.Second)}
+	secondBranch, found, err := repo.ClaimNextRunnableJob(context.Background(), claimTwo)
+	if err != nil {
+		t.Fatalf("claim second branch failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected second branch runnable")
+	}
+	if firstBranch.ID == secondBranch.ID {
+		t.Fatalf("expected two distinct runnable jobs, got %s", firstBranch.ID)
+	}
+}

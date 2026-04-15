@@ -95,6 +95,62 @@ steps:
 		}
 	})
 
+	t.Run("expands parallel group into dependency-aware steps", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+
+		groupedYAML := `
+version: 1
+steps:
+  - name: setup
+    run: ./setup.sh
+  - group:
+      name: test-matrix
+      steps:
+        - name: unit-tests
+          run: pytest tests/unit
+        - name: integration-tests
+          run: pytest tests/integration
+  - name: package
+    run: ./package.sh
+`
+
+		_, err := svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{
+			ProjectID:    "proj-1",
+			PipelineYAML: groupedYAML,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(repo.steps) != 4 {
+			t.Fatalf("expected 4 expanded steps, got %d", len(repo.steps))
+		}
+		setup := repo.steps[0]
+		unit := repo.steps[1]
+		integration := repo.steps[2]
+		packageStep := repo.steps[3]
+
+		if setup.NodeID == "" || unit.NodeID == "" || integration.NodeID == "" || packageStep.NodeID == "" {
+			t.Fatal("expected all expanded steps to have node ids")
+		}
+		if unit.GroupName == nil || *unit.GroupName != "test-matrix" {
+			t.Fatalf("expected grouped step to include group name, got %v", unit.GroupName)
+		}
+		if integration.GroupName == nil || *integration.GroupName != "test-matrix" {
+			t.Fatalf("expected grouped step to include group name, got %v", integration.GroupName)
+		}
+		if len(unit.DependsOnNodes) != 1 || unit.DependsOnNodes[0] != setup.NodeID {
+			t.Fatalf("expected unit to depend on setup node %q, got %#v", setup.NodeID, unit.DependsOnNodes)
+		}
+		if len(integration.DependsOnNodes) != 1 || integration.DependsOnNodes[0] != setup.NodeID {
+			t.Fatalf("expected integration to depend on setup node %q, got %#v", setup.NodeID, integration.DependsOnNodes)
+		}
+		if len(packageStep.DependsOnNodes) != 2 {
+			t.Fatalf("expected package to depend on two group nodes, got %#v", packageStep.DependsOnNodes)
+		}
+	})
+
 	t.Run("missing project_id", func(t *testing.T) {
 		repo := &fakeBuildRepository{}
 		svc := NewBuildService(repo, nil, nil)

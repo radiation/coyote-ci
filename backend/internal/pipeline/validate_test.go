@@ -372,6 +372,83 @@ func TestValidate_CacheUnknownPresetRejected(t *testing.T) {
 	assertContains(t, err.Error(), "unknown")
 }
 
+func TestValidate_GroupNameRequired(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps: []StepDef{{
+			Group: &StepGroupDef{
+				Name:  "",
+				Steps: []StepDef{{Name: "unit", Run: "pytest tests/unit"}},
+			},
+		}},
+	}
+
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected validation error for empty group name")
+	}
+	assertContains(t, err.Error(), "group.name")
+}
+
+func TestValidate_GroupMustContainSteps(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps: []StepDef{{
+			Group: &StepGroupDef{Name: "matrix", Steps: nil},
+		}},
+	}
+
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected validation error for empty group")
+	}
+	assertContains(t, err.Error(), "group must contain at least one step")
+}
+
+func TestValidate_NestedGroupsRejected(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps: []StepDef{{
+			Group: &StepGroupDef{
+				Name: "outer",
+				Steps: []StepDef{{
+					Group: &StepGroupDef{
+						Name:  "inner",
+						Steps: []StepDef{{Name: "leaf", Run: "echo ok"}},
+					},
+				}},
+			},
+		}},
+	}
+
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected validation error for nested group")
+	}
+	assertContains(t, err.Error(), "nested groups are not allowed")
+}
+
+func TestValidate_DuplicateStepNamesAfterGroupExpansion(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps: []StepDef{
+			{Name: "lint", Run: "golangci-lint run"},
+			{Group: &StepGroupDef{
+				Name: "matrix",
+				Steps: []StepDef{
+					{Name: "Lint", Run: "pytest tests/unit"},
+				},
+			}},
+		},
+	}
+
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected duplicate validation error")
+	}
+	assertContains(t, err.Error(), "duplicate")
+}
+
 func TestValidate_CachePolicyRejectedWhenInvalid(t *testing.T) {
 	pf := &PipelineFile{
 		Version: 1,

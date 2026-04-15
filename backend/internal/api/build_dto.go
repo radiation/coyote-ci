@@ -138,6 +138,9 @@ type BuildStepResponse struct {
 	ID           string                `json:"id"`
 	BuildID      string                `json:"build_id"`
 	StepIndex    int                   `json:"step_index"`
+	NodeID       string                `json:"node_id"`
+	GroupName    *string               `json:"group_name,omitempty"`
+	DependsOn    []string              `json:"depends_on_node_ids"`
 	Name         string                `json:"name"`
 	Command      string                `json:"command"`
 	Status       string                `json:"status"`
@@ -155,6 +158,9 @@ type ExecutionJobResponse struct {
 	ID               string                       `json:"id"`
 	BuildID          string                       `json:"build_id"`
 	StepID           string                       `json:"step_id"`
+	NodeID           string                       `json:"node_id"`
+	GroupName        *string                      `json:"group_name,omitempty"`
+	DependsOnNodeIDs []string                     `json:"depends_on_node_ids"`
 	Name             string                       `json:"name"`
 	StepIndex        int                          `json:"step_index"`
 	AttemptNumber    int                          `json:"attempt_number"`

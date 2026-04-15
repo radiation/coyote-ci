@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,18 +38,18 @@ func (r *ExecutionJobRepository) CreateJobsForBuild(ctx context.Context, jobs []
 
 	const query = `
 		INSERT INTO build_jobs (
-			id, build_id, step_id, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir,
+			id, build_id, step_id, node_id, group_name, depends_on_node_ids, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir,
 			command_json, env_json, timeout_seconds, pipeline_file_path, context_dir,
 			source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest,
 			spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at,
 			created_at, started_at, finished_at, error_message, exit_code, output_refs_json
 		)
 		VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-			$13::jsonb, $14::jsonb, $15, $16, $17,
-			$18, $19, $20, $21, $22,
-			$23, $24, $25::jsonb, $26, $27, $28,
-			$29, $30, $31, $32, $33, $34::jsonb
+			$1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+			$16::jsonb, $17::jsonb, $18, $19, $20,
+			$21, $22, $23, $24, $25,
+			$26, $27, $28::jsonb, $29, $30, $31,
+			$32, $33, $34, $35, $36, $37::jsonb
 		)
 		RETURNING ` + executionJobColumns + `
 	`
@@ -71,11 +72,22 @@ func (r *ExecutionJobRepository) CreateJobsForBuild(ctx context.Context, jobs []
 		if marshalErr != nil {
 			return nil, marshalErr
 		}
+		nodeDepsJSON, marshalErr := json.Marshal(normalizeNodeIDSlice(job.DependsOnNodeIDs))
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		nodeID := strings.TrimSpace(job.NodeID)
+		if nodeID == "" {
+			nodeID = "step-" + strconv.Itoa(job.StepIndex)
+		}
 
 		created, scanErr := scanExecutionJob(tx.QueryRowContext(ctx, query,
 			job.ID,
 			job.BuildID,
 			job.StepID,
+			nodeID,
+			job.GroupName,
+			string(nodeDepsJSON),
 			job.Name,
 			job.StepIndex,
 			normalizeAttemptNumber(job.AttemptNumber),
@@ -185,6 +197,29 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(ctx context.Context, claim
 			INNER JOIN builds AS b ON b.id = bj.build_id
 			WHERE b.status IN ('queued', 'running')
 			  AND (bj.status = 'queued' OR (bj.status = 'running' AND bj.claim_expires_at IS NOT NULL AND bj.claim_expires_at <= $1))
+			  AND (
+					(
+						jsonb_array_length(COALESCE(bj.depends_on_node_ids, '[]'::jsonb)) > 0
+						AND NOT EXISTS (
+							SELECT 1
+							FROM jsonb_array_elements_text(bj.depends_on_node_ids) AS dep(node_id)
+							LEFT JOIN build_steps upstream
+								ON upstream.build_id = bj.build_id
+							   AND upstream.node_id = dep.node_id
+							WHERE upstream.id IS NULL OR upstream.status <> 'success'
+						)
+					)
+					OR (
+						jsonb_array_length(COALESCE(bj.depends_on_node_ids, '[]'::jsonb)) = 0
+						AND NOT EXISTS (
+							SELECT 1
+							FROM build_steps previous
+							WHERE previous.build_id = bj.build_id
+							  AND previous.step_index < bj.step_index
+							  AND previous.status <> 'success'
+						)
+					)
+			  )
 			ORDER BY bj.created_at ASC, bj.step_index ASC, bj.attempt_number ASC, bj.id ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
@@ -354,4 +389,24 @@ func normalizeAttemptNumber(value int) int {
 		return 1
 	}
 	return value
+}
+
+func normalizeNodeIDSlice(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }

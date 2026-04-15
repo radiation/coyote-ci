@@ -164,17 +164,25 @@ definitions:
         type: string
       command:
         type: string
+      depends_on_node_ids:
+        items:
+          type: string
+        type: array
       error_message:
         type: string
       exit_code:
         type: integer
       finished_at:
         type: string
+      group_name:
+        type: string
       id:
         type: string
       job:
         $ref: '#/definitions/api.ExecutionJobResponse'
       name:
+        type: string
+      node_id:
         type: string
       started_at:
         type: string
@@ -345,6 +353,10 @@ definitions:
         type: string
       created_at:
         type: string
+      depends_on_node_ids:
+        items:
+          type: string
+        type: array
       environment:
         additionalProperties:
           type: string
@@ -353,6 +365,8 @@ definitions:
         type: string
       finished_at:
         type: string
+      group_name:
+        type: string
       id:
         type: string
       image:
@@ -360,6 +374,8 @@ definitions:
       lineage_root_job_id:
         type: string
       name:
+        type: string
+      node_id:
         type: string
       outputs:
         items:

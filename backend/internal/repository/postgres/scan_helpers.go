@@ -18,7 +18,7 @@ const buildColumns = `id, project_id, job_id, status, created_at, queued_at, sta
 // buildListColumns is a minimal column list used for list queries (omits large pipeline YAML).
 const buildListColumns = `id, project_id, job_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor`
 
-const executionJobColumns = `id, build_id, step_id, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir, command_json, env_json, timeout_seconds, pipeline_file_path, context_dir, source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest, spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at, created_at, started_at, finished_at, error_message, exit_code, output_refs_json`
+const executionJobColumns = `id, build_id, step_id, node_id, group_name, depends_on_node_ids, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir, command_json, env_json, timeout_seconds, pipeline_file_path, context_dir, source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest, spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at, created_at, started_at, finished_at, error_message, exit_code, output_refs_json`
 
 var executionJobColumnsQualifiedWithJ = qualifyColumns("j", executionJobColumns)
 
@@ -295,6 +295,8 @@ func readOptionalString(value *string) string {
 func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 	var step domain.BuildStep
 	var status string
+	var groupName sql.NullString
+	var dependsOnRaw []byte
 	var command string
 	var argsRaw []byte
 	var envRaw []byte
@@ -317,6 +319,9 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 		&step.ID,
 		&step.BuildID,
 		&step.StepIndex,
+		&step.NodeID,
+		&groupName,
+		&dependsOnRaw,
 		&step.Name,
 		&step.Image,
 		&command,
@@ -366,6 +371,17 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 		}
 	} else {
 		step.ArtifactPaths = []string{}
+	}
+	if len(dependsOnRaw) > 0 {
+		if err := json.Unmarshal(dependsOnRaw, &step.DependsOnNodes); err != nil {
+			return domain.BuildStep{}, err
+		}
+	} else {
+		step.DependsOnNodes = []string{}
+	}
+	if groupName.Valid {
+		group := groupName.String
+		step.GroupName = &group
 	}
 	if len(cacheConfigRaw) > 0 && strings.TrimSpace(string(cacheConfigRaw)) != "null" {
 		var cacheConfig domain.StepCacheConfig
@@ -424,6 +440,8 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 func scanExecutionJob(scanner rowScanner) (domain.ExecutionJob, error) {
 	var job domain.ExecutionJob
 	var status string
+	var groupName sql.NullString
+	var dependsOnRaw []byte
 	var retryOfJobID sql.NullString
 	var lineageRootJobID sql.NullString
 	var queueName sql.NullString
@@ -450,6 +468,9 @@ func scanExecutionJob(scanner rowScanner) (domain.ExecutionJob, error) {
 		&job.ID,
 		&job.BuildID,
 		&job.StepID,
+		&job.NodeID,
+		&groupName,
+		&dependsOnRaw,
 		&job.Name,
 		&job.StepIndex,
 		&job.AttemptNumber,
@@ -498,6 +519,17 @@ func scanExecutionJob(scanner rowScanner) (domain.ExecutionJob, error) {
 	if queueName.Valid {
 		v := queueName.String
 		job.QueueName = &v
+	}
+	if len(dependsOnRaw) > 0 {
+		if err := json.Unmarshal(dependsOnRaw, &job.DependsOnNodeIDs); err != nil {
+			return domain.ExecutionJob{}, err
+		}
+	} else {
+		job.DependsOnNodeIDs = []string{}
+	}
+	if groupName.Valid {
+		group := groupName.String
+		job.GroupName = &group
 	}
 	if err := json.Unmarshal(commandRaw, &job.Command); err != nil {
 		return domain.ExecutionJob{}, err

@@ -164,47 +164,125 @@ func resolveCompletionConflictTx(ctx context.Context, tx *sql.Tx, buildID string
 }
 
 func advanceBuildAfterStepCompletionTx(ctx context.Context, tx *sql.Tx, buildID string, stepIndex int, stepStatus domain.BuildStepStatus, errorMessage *string) error {
-	if stepStatus == domain.BuildStepStatusFailed {
-		decision := repository.DecideBuildAdvancement(stepStatus, stepIndex, true)
-		if decision.FailBuild {
-			if !domain.CanTransitionBuild(domain.BuildStatusRunning, domain.BuildStatusFailed) {
-				return nil
-			}
-			return updateBuildFailedTx(ctx, tx, buildID, errorMessage)
+	if stepStatus == domain.BuildStepStatusSuccess {
+		nextIndex := stepIndex + 1
+		if err := advanceBuildCurrentStepTx(ctx, tx, buildID, nextIndex); err != nil && !errors.Is(err, errGuardedBuildUpdateNoop) {
+			return err
 		}
-		return nil
 	}
 
-	const hasNextQuery = `
-		SELECT EXISTS (
-			SELECT 1 FROM build_steps
-			WHERE build_id = $1 AND step_index > $2
-		)
-	`
-
-	var hasNext bool
-	if err := tx.QueryRowContext(ctx, hasNextQuery, buildID, stepIndex).Scan(&hasNext); err != nil {
+	stats, err := loadBuildStepProgressTx(ctx, tx, buildID)
+	if err != nil {
 		return err
 	}
 
-	decision := repository.DecideBuildAdvancement(stepStatus, stepIndex, hasNext)
-	if decision.FailBuild {
-		if !domain.CanTransitionBuild(domain.BuildStatusRunning, domain.BuildStatusFailed) {
-			return nil
-		}
-		return updateBuildFailedTx(ctx, tx, buildID, errorMessage)
-	}
-	if decision.SucceedBuild {
+	if stats.totalCount > 0 && stats.successCount == stats.totalCount {
 		if !domain.CanTransitionBuild(domain.BuildStatusRunning, domain.BuildStatusSuccess) {
 			return nil
 		}
-		return updateBuildSuccessTx(ctx, tx, buildID, decision.NextStepIndex)
+		return updateBuildSuccessTx(ctx, tx, buildID, stepIndex+1)
 	}
-	if decision.AdvanceCurrentStepIndex {
-		return advanceBuildCurrentStepTx(ctx, tx, buildID, decision.NextStepIndex)
+
+	if stats.runningCount > 0 {
+		return nil
+	}
+
+	runnableExists, err := hasRunnablePendingStepTx(ctx, tx, buildID)
+	if err != nil {
+		return err
+	}
+	if runnableExists {
+		return nil
+	}
+
+	if stats.failedCount > 0 || stats.pendingCount > 0 {
+		if !domain.CanTransitionBuild(domain.BuildStatusRunning, domain.BuildStatusFailed) {
+			return nil
+		}
+		message := errorMessage
+		if message == nil {
+			defaultMessage := "build cannot make further progress toward success"
+			message = &defaultMessage
+		}
+		return updateBuildFailedTx(ctx, tx, buildID, message)
 	}
 
 	return nil
+}
+
+type buildStepProgressStats struct {
+	totalCount   int
+	successCount int
+	failedCount  int
+	pendingCount int
+	runningCount int
+}
+
+func loadBuildStepProgressTx(ctx context.Context, tx *sql.Tx, buildID string) (buildStepProgressStats, error) {
+	const query = `
+		SELECT
+			COUNT(*)::int AS total_count,
+			COUNT(*) FILTER (WHERE status = 'success')::int AS success_count,
+			COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_count,
+			COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
+			COUNT(*) FILTER (WHERE status = 'running')::int AS running_count
+		FROM build_steps
+		WHERE build_id = $1
+	`
+
+	var stats buildStepProgressStats
+	err := tx.QueryRowContext(ctx, query, buildID).Scan(
+		&stats.totalCount,
+		&stats.successCount,
+		&stats.failedCount,
+		&stats.pendingCount,
+		&stats.runningCount,
+	)
+	if err != nil {
+		return buildStepProgressStats{}, err
+	}
+
+	return stats, nil
+}
+
+func hasRunnablePendingStepTx(ctx context.Context, tx *sql.Tx, buildID string) (bool, error) {
+	const query = `
+		SELECT EXISTS (
+			SELECT 1
+			FROM build_steps AS bs
+			WHERE bs.build_id = $1
+			  AND bs.status = 'pending'
+			  AND (
+					(
+						jsonb_array_length(COALESCE(bs.depends_on_node_ids, '[]'::jsonb)) > 0
+						AND NOT EXISTS (
+							SELECT 1
+							FROM jsonb_array_elements_text(bs.depends_on_node_ids) AS dep(node_id)
+							LEFT JOIN build_steps upstream
+								ON upstream.build_id = bs.build_id
+							   AND upstream.node_id = dep.node_id
+							WHERE upstream.id IS NULL OR upstream.status <> 'success'
+						)
+					)
+					OR (
+						jsonb_array_length(COALESCE(bs.depends_on_node_ids, '[]'::jsonb)) = 0
+						AND NOT EXISTS (
+							SELECT 1
+							FROM build_steps previous
+							WHERE previous.build_id = bs.build_id
+							  AND previous.step_index < bs.step_index
+							  AND previous.status <> 'success'
+						)
+					)
+			  )
+		)
+	`
+
+	var exists bool
+	if err := tx.QueryRowContext(ctx, query, buildID).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func updateBuildFailedTx(ctx context.Context, tx *sql.Tx, buildID string, errorMessage *string) error {

@@ -897,6 +897,45 @@ func TestExecutionWorkerService_ClaimRunnableStep_OnlyFirstSequentialPendingIsRu
 	}
 }
 
+func TestExecutionWorkerService_ClaimRunnableStep_CanClaimIndependentParallelBranches(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
+		stepsByBuildID: map[string][]domain.BuildStep{
+			"build-1": {
+				{StepIndex: 0, NodeID: "node-setup", Name: "setup", Status: domain.BuildStepStatusSuccess},
+				{StepIndex: 1, NodeID: "node-unit", Name: "unit", DependsOnNodes: []string{"node-setup"}, Status: domain.BuildStepStatusPending},
+				{StepIndex: 2, NodeID: "node-integration", Name: "integration", DependsOnNodes: []string{"node-setup"}, Status: domain.BuildStepStatusPending},
+				{StepIndex: 3, NodeID: "node-package", Name: "package", DependsOnNodes: []string{"node-unit", "node-integration"}, Status: domain.BuildStepStatusPending},
+			},
+		},
+	}
+
+	worker := NewExecutionWorkerService(boundary)
+	first, found, err := worker.ClaimRunnableStep(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error on first claim, got %v", err)
+	}
+	if !found {
+		t.Fatal("expected first runnable branch")
+	}
+
+	second, found, err := worker.ClaimRunnableStep(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error on second claim, got %v", err)
+	}
+	if !found {
+		t.Fatal("expected second runnable branch")
+	}
+	if first.StepIndex == second.StepIndex {
+		t.Fatalf("expected distinct branch claims, both were step_index=%d", first.StepIndex)
+	}
+
+	branchNames := map[string]bool{first.StepName: true, second.StepName: true}
+	if !branchNames["unit"] || !branchNames["integration"] {
+		t.Fatalf("expected unit and integration branches to be claimed, got first=%q second=%q", first.StepName, second.StepName)
+	}
+}
+
 func TestExecutionWorkerService_ClaimRunnableStep_DoesNotReclaimRunningOrFinishedSteps(t *testing.T) {
 	boundary := &fakeExecutionWorkerBoundary{
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusRunning}},

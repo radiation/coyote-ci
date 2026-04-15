@@ -3,6 +3,8 @@ package memory
 import (
 	"context"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -127,7 +129,16 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(_ context.Context, claim r
 
 	now := claim.ClaimedAt
 	candidates := make([]domain.ExecutionJob, 0)
+	runnableByBuild := make(map[string]map[string]domain.ExecutionJob)
 	for _, job := range r.jobsByID {
+		latestByNode, ok := runnableByBuild[job.BuildID]
+		if !ok {
+			latestByNode = latestJobsByNodeID(r.jobsByBuild[job.BuildID], r.jobsByID)
+			runnableByBuild[job.BuildID] = latestByNode
+		}
+		if !isJobRunnable(job, latestByNode) {
+			continue
+		}
 		if job.Status == domain.ExecutionJobStatusQueued {
 			candidates = append(candidates, job)
 			continue
@@ -264,6 +275,13 @@ func (r *ExecutionJobRepository) completeJobLocked(jobID string, claimToken stri
 }
 
 func cloneExecutionJob(job domain.ExecutionJob) domain.ExecutionJob {
+	if job.GroupName != nil {
+		group := *job.GroupName
+		job.GroupName = &group
+	}
+	if job.DependsOnNodeIDs != nil {
+		job.DependsOnNodeIDs = append([]string(nil), job.DependsOnNodeIDs...)
+	}
 	if job.Command != nil {
 		job.Command = append([]string(nil), job.Command...)
 	}
@@ -292,4 +310,64 @@ func normalizeAttemptNumber(value int) int {
 		return 1
 	}
 	return value
+}
+
+func latestJobsByNodeID(ids []string, jobsByID map[string]domain.ExecutionJob) map[string]domain.ExecutionJob {
+	out := make(map[string]domain.ExecutionJob, len(ids))
+	for _, id := range ids {
+		job, ok := jobsByID[id]
+		if !ok {
+			continue
+		}
+		nodeID := normalizedJobNodeID(job)
+		existing, exists := out[nodeID]
+		if !exists {
+			out[nodeID] = job
+			continue
+		}
+		if existing.AttemptNumber < job.AttemptNumber {
+			out[nodeID] = job
+			continue
+		}
+		if existing.AttemptNumber == job.AttemptNumber {
+			if existing.CreatedAt.Before(job.CreatedAt) {
+				out[nodeID] = job
+				continue
+			}
+			if existing.CreatedAt.Equal(job.CreatedAt) && existing.ID < job.ID {
+				out[nodeID] = job
+			}
+		}
+	}
+	return out
+}
+
+func normalizedJobNodeID(job domain.ExecutionJob) string {
+	nodeID := strings.TrimSpace(job.NodeID)
+	if nodeID == "" {
+		return "step-" + strconv.Itoa(job.StepIndex)
+	}
+	return nodeID
+}
+
+func isJobRunnable(job domain.ExecutionJob, latestByNode map[string]domain.ExecutionJob) bool {
+	if len(job.DependsOnNodeIDs) > 0 {
+		for _, dep := range job.DependsOnNodeIDs {
+			dependency, ok := latestByNode[strings.TrimSpace(dep)]
+			if !ok || dependency.Status != domain.ExecutionJobStatusSuccess {
+				return false
+			}
+		}
+		return true
+	}
+
+	for _, previous := range latestByNode {
+		if previous.StepIndex >= job.StepIndex {
+			continue
+		}
+		if previous.Status != domain.ExecutionJobStatusSuccess {
+			return false
+		}
+	}
+	return true
 }

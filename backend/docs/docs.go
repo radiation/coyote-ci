@@ -1593,6 +1593,12 @@ const docTemplate = `{
                 "command": {
                     "type": "string"
                 },
+                "depends_on_node_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "error_message": {
                     "type": "string"
                 },
@@ -1602,6 +1608,9 @@ const docTemplate = `{
                 "finished_at": {
                     "type": "string"
                 },
+                "group_name": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -1609,6 +1618,9 @@ const docTemplate = `{
                     "$ref": "#/definitions/api.ExecutionJobResponse"
                 },
                 "name": {
+                    "type": "string"
+                },
+                "node_id": {
                     "type": "string"
                 },
                 "started_at": {
@@ -1870,6 +1882,12 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "depends_on_node_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "environment": {
                     "type": "object",
                     "additionalProperties": {
@@ -1882,6 +1900,9 @@ const docTemplate = `{
                 "finished_at": {
                     "type": "string"
                 },
+                "group_name": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -1892,6 +1913,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                },
+                "node_id": {
                     "type": "string"
                 },
                 "outputs": {

@@ -592,6 +592,80 @@ func TestBuildRepository_CompleteStep_FailedStepMarksBuildFailed(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_CompleteStep_ParallelFailureBlocksDownstreamAfterBranchesFinish(t *testing.T) {
+	repo := NewBuildRepository()
+	_, err := repo.Create(context.Background(), domain.Build{ID: "build-parallel", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("setup create failed: %v", err)
+	}
+	_, err = repo.QueueBuild(context.Background(), "build-parallel", []domain.BuildStep{
+		{ID: "step-setup", StepIndex: 0, NodeID: "node-setup", Name: "setup", Status: domain.BuildStepStatusPending},
+		{ID: "step-unit", StepIndex: 1, NodeID: "node-unit", Name: "unit", DependsOnNodes: []string{"node-setup"}, Status: domain.BuildStepStatusPending},
+		{ID: "step-int", StepIndex: 2, NodeID: "node-int", Name: "integration", DependsOnNodes: []string{"node-setup"}, Status: domain.BuildStepStatusPending},
+		{ID: "step-package", StepIndex: 3, NodeID: "node-package", Name: "package", DependsOnNodes: []string{"node-unit", "node-int"}, Status: domain.BuildStepStatusPending},
+	})
+	if err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
+	_, err = repo.UpdateStatus(context.Background(), "build-parallel", domain.BuildStatusRunning, nil)
+	if err != nil {
+		t.Fatalf("set running status failed: %v", err)
+	}
+
+	now := time.Now().UTC()
+	_, claimed, claimErr := repo.ClaimPendingStep(context.Background(), "build-parallel", 0, repository.StepClaim{WorkerID: "w-0", ClaimToken: "c-0", ClaimedAt: now, LeaseExpiresAt: now.Add(time.Minute)})
+	if claimErr != nil || !claimed {
+		t.Fatalf("claim setup failed claimed=%v err=%v", claimed, claimErr)
+	}
+	_, completeErr := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{BuildID: "build-parallel", StepIndex: 0, ClaimToken: "c-0", RequireClaim: true, Update: repository.StepUpdate{Status: domain.BuildStepStatusSuccess, StartedAt: &now, FinishedAt: &now}})
+	if completeErr != nil {
+		t.Fatalf("complete setup failed: %v", completeErr)
+	}
+
+	_, claimed, claimErr = repo.ClaimPendingStep(context.Background(), "build-parallel", 1, repository.StepClaim{WorkerID: "w-1", ClaimToken: "c-1", ClaimedAt: now, LeaseExpiresAt: now.Add(time.Minute)})
+	if claimErr != nil || !claimed {
+		t.Fatalf("claim unit failed claimed=%v err=%v", claimed, claimErr)
+	}
+	_, claimed, claimErr = repo.ClaimPendingStep(context.Background(), "build-parallel", 2, repository.StepClaim{WorkerID: "w-2", ClaimToken: "c-2", ClaimedAt: now, LeaseExpiresAt: now.Add(time.Minute)})
+	if claimErr != nil || !claimed {
+		t.Fatalf("claim integration failed claimed=%v err=%v", claimed, claimErr)
+	}
+
+	errMsg := "unit failed"
+	_, completeErr = repo.CompleteStep(context.Background(), repository.CompleteStepRequest{BuildID: "build-parallel", StepIndex: 1, ClaimToken: "c-1", RequireClaim: true, Update: repository.StepUpdate{Status: domain.BuildStepStatusFailed, ErrorMessage: &errMsg, StartedAt: &now, FinishedAt: &now}})
+	if completeErr != nil {
+		t.Fatalf("complete unit failed: %v", completeErr)
+	}
+	build, err := repo.GetByID(context.Background(), "build-parallel")
+	if err != nil {
+		t.Fatalf("get build failed: %v", err)
+	}
+	if build.Status != domain.BuildStatusRunning {
+		t.Fatalf("expected build to stay running while other branch runs, got %q", build.Status)
+	}
+
+	_, completeErr = repo.CompleteStep(context.Background(), repository.CompleteStepRequest{BuildID: "build-parallel", StepIndex: 2, ClaimToken: "c-2", RequireClaim: true, Update: repository.StepUpdate{Status: domain.BuildStepStatusSuccess, StartedAt: &now, FinishedAt: &now}})
+	if completeErr != nil {
+		t.Fatalf("complete integration failed: %v", completeErr)
+	}
+
+	build, err = repo.GetByID(context.Background(), "build-parallel")
+	if err != nil {
+		t.Fatalf("get build failed: %v", err)
+	}
+	if build.Status != domain.BuildStatusFailed {
+		t.Fatalf("expected build to fail after no runnable work remains, got %q", build.Status)
+	}
+
+	steps, err := repo.GetStepsByBuildID(context.Background(), "build-parallel")
+	if err != nil {
+		t.Fatalf("get steps failed: %v", err)
+	}
+	if steps[3].Status != domain.BuildStepStatusPending {
+		t.Fatalf("expected downstream blocked step to remain pending, got %q", steps[3].Status)
+	}
+}
+
 func TestBuildRepository_CompleteStep_InvalidTransition(t *testing.T) {
 	repo := NewBuildRepository()
 	_, err := repo.Create(context.Background(), domain.Build{ID: "build-invalid", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()})

@@ -22,10 +22,18 @@ func pipelineStepsToDomain(buildID string, steps []pipeline.ResolvedStep) []doma
 		if workingDir == "" {
 			workingDir = "."
 		}
+		var groupName *string
+		if strings.TrimSpace(rs.GroupName) != "" {
+			trimmed := strings.TrimSpace(rs.GroupName)
+			groupName = &trimmed
+		}
 		out = append(out, domain.BuildStep{
 			ID:             uuid.NewString(),
 			BuildID:        buildID,
 			StepIndex:      idx,
+			NodeID:         rs.NodeID,
+			GroupName:      groupName,
+			DependsOnNodes: append([]string(nil), rs.DependsOnNodeIDs...),
 			Name:           rs.Name,
 			Image:          rs.Image,
 			Command:        "sh",

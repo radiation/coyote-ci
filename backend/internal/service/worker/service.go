@@ -5,6 +5,7 @@ import (
 	"errors"
 	"hash/fnv"
 	"log"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -425,21 +426,46 @@ func (w *ExecutionWorkerService) newStepClaim() repository.StepClaim {
 }
 
 func workerFirstRunnableStep(steps []domain.BuildStep) (domain.BuildStep, bool) {
-	allPreviousSucceeded := true
+	statusByNode := make(map[string]domain.BuildStepStatus, len(steps))
+	for _, step := range steps {
+		nodeID := strings.TrimSpace(step.NodeID)
+		if nodeID == "" {
+			nodeID = "step-" + strconv.Itoa(step.StepIndex)
+		}
+		statusByNode[nodeID] = step.Status
+	}
 
 	for _, step := range steps {
-		switch step.Status {
-		case domain.BuildStepStatusSuccess:
+		if step.Status != domain.BuildStepStatusPending {
 			continue
-		case domain.BuildStepStatusPending:
-			if !allPreviousSucceeded {
-				return domain.BuildStep{}, false
+		}
+
+		if len(step.DependsOnNodes) > 0 {
+			runnable := true
+			for _, depNodeID := range step.DependsOnNodes {
+				if statusByNode[strings.TrimSpace(depNodeID)] != domain.BuildStepStatusSuccess {
+					runnable = false
+					break
+				}
 			}
+			if runnable {
+				return step, true
+			}
+			continue
+		}
+
+		runnable := true
+		for _, previous := range steps {
+			if previous.StepIndex >= step.StepIndex {
+				continue
+			}
+			if previous.Status != domain.BuildStepStatusSuccess {
+				runnable = false
+				break
+			}
+		}
+		if runnable {
 			return step, true
-		case domain.BuildStepStatusRunning, domain.BuildStepStatusFailed:
-			allPreviousSucceeded = false
-		default:
-			allPreviousSucceeded = false
 		}
 	}
 
@@ -448,15 +474,11 @@ func workerFirstRunnableStep(steps []domain.BuildStep) (domain.BuildStep, bool) 
 
 func workerFirstReclaimableRunningStep(steps []domain.BuildStep, now time.Time) (domain.BuildStep, bool) {
 	for _, step := range steps {
-		if step.Status == domain.BuildStepStatusSuccess {
+		if step.Status != domain.BuildStepStatusRunning {
 			continue
 		}
-
-		if step.Status != domain.BuildStepStatusRunning {
-			return domain.BuildStep{}, false
-		}
 		if step.LeaseExpiresAt == nil || step.LeaseExpiresAt.After(now) {
-			return domain.BuildStep{}, false
+			continue
 		}
 
 		return step, true

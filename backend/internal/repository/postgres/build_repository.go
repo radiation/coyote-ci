@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -351,6 +352,9 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 			id,
 			build_id,
 			step_index,
+			node_id,
+			group_name,
+			depends_on_node_ids,
 			name,
 			image,
 			command,
@@ -372,10 +376,14 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 			artifact_paths,
 			cache_config
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23::jsonb)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25::jsonb, $26::jsonb)
 	`
 
 	for _, step := range steps {
+		nodeID := strings.TrimSpace(step.NodeID)
+		if nodeID == "" {
+			nodeID = "step-" + strconv.Itoa(step.StepIndex)
+		}
 		argsJSON, marshalErr := json.Marshal(step.Args)
 		if marshalErr != nil {
 			return marshalErr
@@ -389,6 +397,14 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 			artifactPaths = []string{}
 		}
 		artifactPathsJSON, marshalErr := json.Marshal(artifactPaths)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		dependsOn := step.DependsOnNodes
+		if dependsOn == nil {
+			dependsOn = []string{}
+		}
+		dependsOnJSON, marshalErr := json.Marshal(dependsOn)
 		if marshalErr != nil {
 			return marshalErr
 		}
@@ -408,6 +424,9 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 			step.ID,
 			buildID,
 			step.StepIndex,
+			nodeID,
+			step.GroupName,
+			string(dependsOnJSON),
 			step.Name,
 			step.Image,
 			step.Command,

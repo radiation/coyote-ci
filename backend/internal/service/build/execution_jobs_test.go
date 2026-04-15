@@ -88,6 +88,66 @@ artifacts:
 	}
 }
 
+func TestBuildService_CreateBuildFromPipeline_PersistsParallelDependencies(t *testing.T) {
+	buildRepo := &fakeBuildRepository{}
+	execRepo := memoryrepo.NewExecutionJobRepository()
+	svc := NewBuildService(buildRepo, nil, &fakeLogSink{})
+	svc.SetExecutionJobRepository(execRepo)
+
+	pipelineYAML := `
+version: 1
+steps:
+  - name: setup
+    run: ./setup.sh
+  - group:
+      name: test-matrix
+      steps:
+        - name: unit-tests
+          run: pytest tests/unit
+        - name: integration-tests
+          run: pytest tests/integration
+  - name: package
+    run: ./package.sh
+`
+
+	build, err := svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{
+		ProjectID:    "project-1",
+		PipelineYAML: pipelineYAML,
+	})
+	if err != nil {
+		t.Fatalf("create build from pipeline failed: %v", err)
+	}
+
+	jobs, err := execRepo.GetJobsByBuildID(context.Background(), build.ID)
+	if err != nil {
+		t.Fatalf("get jobs by build failed: %v", err)
+	}
+	if len(jobs) != 4 {
+		t.Fatalf("expected 4 jobs, got %d", len(jobs))
+	}
+
+	setup := jobs[0]
+	unit := jobs[1]
+	integration := jobs[2]
+	packageStep := jobs[3]
+
+	if unit.GroupName == nil || *unit.GroupName != "test-matrix" {
+		t.Fatalf("expected unit grouped metadata, got %v", unit.GroupName)
+	}
+	if integration.GroupName == nil || *integration.GroupName != "test-matrix" {
+		t.Fatalf("expected integration grouped metadata, got %v", integration.GroupName)
+	}
+	if len(unit.DependsOnNodeIDs) != 1 || unit.DependsOnNodeIDs[0] != setup.NodeID {
+		t.Fatalf("expected unit dependency on setup node %q, got %#v", setup.NodeID, unit.DependsOnNodeIDs)
+	}
+	if len(integration.DependsOnNodeIDs) != 1 || integration.DependsOnNodeIDs[0] != setup.NodeID {
+		t.Fatalf("expected integration dependency on setup node %q, got %#v", setup.NodeID, integration.DependsOnNodeIDs)
+	}
+	if len(packageStep.DependsOnNodeIDs) != 2 {
+		t.Fatalf("expected package to depend on both grouped nodes, got %#v", packageStep.DependsOnNodeIDs)
+	}
+}
+
 func TestBuildService_QueueBuildWithTemplate_PersistsDurableJobs(t *testing.T) {
 	buildRepo := &fakeBuildRepository{build: defaultBuild("build-template")}
 	execRepo := memoryrepo.NewExecutionJobRepository()

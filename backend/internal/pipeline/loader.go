@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/radiation/coyote-ci/backend/internal/domain"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,8 +23,12 @@ func Parse(data []byte) (*PipelineFile, error) {
 	}
 
 	for i := range pf.Steps {
-		if strings.TrimSpace(pf.Steps[i].Run) == "" {
-			pf.Steps[i].Run = strings.TrimSpace(pf.Steps[i].Command)
+		hydrateStepRunAlias(&pf.Steps[i])
+		if pf.Steps[i].Group == nil {
+			continue
+		}
+		for j := range pf.Steps[i].Group.Steps {
+			hydrateStepRunAlias(&pf.Steps[i].Group.Steps[j])
 		}
 	}
 	return &pf, nil
@@ -47,30 +53,52 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 	mergedPipelineEnv := copyEnv(pf.Env)
 	pipelineCache := resolveCache(pf.Pipeline.Cache)
 
-	steps := make([]ResolvedStep, 0, len(pf.Steps))
+	nodes := make([]ExecutionNode, 0, len(pf.Steps))
+	frontier := make([]string, 0, 1)
+	nextNodeIndex := 0
+
 	for _, sd := range pf.Steps {
-		merged := mergeEnv(mergedPipelineEnv, sd.Env)
-
-		timeout := 0
-		if sd.TimeoutSeconds != nil {
-			timeout = *sd.TimeoutSeconds
+		if sd.Group == nil {
+			step := resolveStepDef(sd, mergedPipelineEnv, pipelineCache)
+			nodeID := buildNodeID(nextNodeIndex)
+			nextNodeIndex++
+			step.NodeID = nodeID
+			step.GroupName = ""
+			step.DependsOnNodeIDs = append([]string(nil), frontier...)
+			nodes = append(nodes, ExecutionNode{
+				NodeID:           nodeID,
+				GroupName:        "",
+				DependsOnNodeIDs: append([]string(nil), frontier...),
+				Step:             step,
+			})
+			frontier = []string{nodeID}
+			continue
 		}
 
-		stepCache := pipelineCache
-		if sd.Cache != nil {
-			stepCache = resolveCache(sd.Cache)
+		groupName := strings.TrimSpace(sd.Group.Name)
+		groupNodeIDs := make([]string, 0, len(sd.Group.Steps))
+		groupDeps := append([]string(nil), frontier...)
+		for _, groupStepDef := range sd.Group.Steps {
+			step := resolveStepDef(groupStepDef, mergedPipelineEnv, pipelineCache)
+			nodeID := buildNodeID(nextNodeIndex)
+			nextNodeIndex++
+			step.NodeID = nodeID
+			step.GroupName = groupName
+			step.DependsOnNodeIDs = append([]string(nil), groupDeps...)
+			nodes = append(nodes, ExecutionNode{
+				NodeID:           nodeID,
+				GroupName:        groupName,
+				DependsOnNodeIDs: append([]string(nil), groupDeps...),
+				Step:             step,
+			})
+			groupNodeIDs = append(groupNodeIDs, nodeID)
 		}
+		frontier = groupNodeIDs
+	}
 
-		steps = append(steps, ResolvedStep{
-			Name:           sd.Name,
-			Image:          strings.TrimSpace(sd.Image),
-			Run:            sd.Run,
-			WorkingDir:     sd.WorkingDir,
-			Env:            merged,
-			TimeoutSeconds: timeout,
-			ArtifactPaths:  append([]string{}, sd.Artifacts.Paths...),
-			Cache:          stepCache.Clone(),
-		})
+	steps := make([]ResolvedStep, 0, len(nodes))
+	for _, node := range nodes {
+		steps = append(steps, node.Step)
 	}
 
 	return &ResolvedPipeline{
@@ -78,6 +106,7 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 		Image:     strings.TrimSpace(pf.Pipeline.Image),
 		Env:       mergedPipelineEnv,
 		Steps:     steps,
+		Plan:      ExecutionPlan{Nodes: nodes},
 		Artifacts: ResolvedArtifacts{Paths: append([]string{}, pf.Artifacts.Paths...)},
 		Cache:     pipelineCache.Clone(),
 	}
@@ -142,4 +171,42 @@ func mergeEnv(base, override map[string]string) map[string]string {
 		merged[k] = v
 	}
 	return merged
+}
+
+func hydrateStepRunAlias(step *StepDef) {
+	if step == nil {
+		return
+	}
+	if strings.TrimSpace(step.Run) == "" {
+		step.Run = strings.TrimSpace(step.Command)
+	}
+}
+
+func resolveStepDef(sd StepDef, pipelineEnv map[string]string, pipelineCache *domain.StepCacheConfig) ResolvedStep {
+	merged := mergeEnv(pipelineEnv, sd.Env)
+
+	timeout := 0
+	if sd.TimeoutSeconds != nil {
+		timeout = *sd.TimeoutSeconds
+	}
+
+	stepCache := pipelineCache
+	if sd.Cache != nil {
+		stepCache = resolveCache(sd.Cache)
+	}
+
+	return ResolvedStep{
+		Name:           sd.Name,
+		Image:          strings.TrimSpace(sd.Image),
+		Run:            sd.Run,
+		WorkingDir:     sd.WorkingDir,
+		Env:            merged,
+		TimeoutSeconds: timeout,
+		ArtifactPaths:  append([]string{}, sd.Artifacts.Paths...),
+		Cache:          stepCache.Clone(),
+	}
+}
+
+func buildNodeID(index int) string {
+	return fmt.Sprintf("node-%03d", index)
 }

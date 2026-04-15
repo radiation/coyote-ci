@@ -15,6 +15,9 @@ type BuildStep struct {
 	ID             string
 	BuildID        string
 	StepIndex      int
+	NodeID         string
+	GroupName      *string
+	DependsOnNodes []string
 	Name           string
 	Image          string
 	Command        string

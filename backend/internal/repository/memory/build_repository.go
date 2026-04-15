@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -325,12 +326,16 @@ func (r *BuildRepository) ClaimStepIfPending(_ context.Context, buildID string, 
 	}
 
 	steps := r.buildSteps[buildID]
+	statusByNode := stepStatusByNodeID(steps)
 	for idx := range steps {
 		if steps[idx].StepIndex != stepIndex {
 			continue
 		}
 
 		if steps[idx].Status != domain.BuildStepStatusPending {
+			return domain.BuildStep{}, false, nil
+		}
+		if !isStepRunnable(steps[idx], steps, statusByNode) {
 			return domain.BuildStep{}, false, nil
 		}
 
@@ -359,12 +364,16 @@ func (r *BuildRepository) ClaimPendingStep(_ context.Context, buildID string, st
 	}
 
 	steps := r.buildSteps[buildID]
+	statusByNode := stepStatusByNodeID(steps)
 	for idx := range steps {
 		if steps[idx].StepIndex != stepIndex {
 			continue
 		}
 
 		if steps[idx].Status != domain.BuildStepStatusPending {
+			return domain.BuildStep{}, false, nil
+		}
+		if !isStepRunnable(steps[idx], steps, statusByNode) {
 			return domain.BuildStep{}, false, nil
 		}
 
@@ -612,35 +621,55 @@ func (r *BuildRepository) CompleteStep(_ context.Context, request repository.Com
 			steps[idx].LeaseExpiresAt = nil
 		}
 
-		now := time.Now().UTC()
-		hasNext := false
-		for scanIdx := range steps {
-			if steps[scanIdx].StepIndex > request.StepIndex {
-				hasNext = true
-				break
+		if request.Update.Status == domain.BuildStepStatusSuccess {
+			nextIndex := request.StepIndex + 1
+			if nextIndex > build.CurrentStepIndex {
+				build.CurrentStepIndex = nextIndex
 			}
 		}
 
-		advance := repository.DecideBuildAdvancement(request.Update.Status, request.StepIndex, hasNext)
-		if advance.FailBuild {
+		now := time.Now().UTC()
+		successCount := 0
+		failedCount := 0
+		runningCount := 0
+		pendingCount := 0
+		statusByNode := stepStatusByNodeID(steps)
+		runnablePending := false
+		for _, step := range steps {
+			switch step.Status {
+			case domain.BuildStepStatusSuccess:
+				successCount++
+			case domain.BuildStepStatusFailed:
+				failedCount++
+			case domain.BuildStepStatusRunning:
+				runningCount++
+			case domain.BuildStepStatusPending:
+				pendingCount++
+				if isStepRunnable(step, steps, statusByNode) {
+					runnablePending = true
+				}
+			}
+		}
+
+		if len(steps) > 0 && successCount == len(steps) {
+			if !domain.CanTransitionBuild(build.Status, domain.BuildStatusSuccess) {
+				return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, nil
+			}
+			build.Status = domain.BuildStatusSuccess
+			build.FinishedAt = &now
+			build.ErrorMessage = nil
+		} else if runningCount == 0 && !runnablePending && (failedCount > 0 || pendingCount > 0) {
 			if !domain.CanTransitionBuild(build.Status, domain.BuildStatusFailed) {
 				return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, nil
 			}
 			build.Status = domain.BuildStatusFailed
 			build.FinishedAt = &now
-			build.ErrorMessage = steps[idx].ErrorMessage
-		} else if advance.SucceedBuild {
-			if !domain.CanTransitionBuild(build.Status, domain.BuildStatusSuccess) {
-				return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, nil
+			if steps[idx].ErrorMessage != nil {
+				build.ErrorMessage = steps[idx].ErrorMessage
+			} else {
+				message := "build cannot make further progress toward success"
+				build.ErrorMessage = &message
 			}
-			if advance.NextStepIndex > build.CurrentStepIndex {
-				build.CurrentStepIndex = advance.NextStepIndex
-			}
-			build.Status = domain.BuildStatusSuccess
-			build.FinishedAt = &now
-			build.ErrorMessage = nil
-		} else if advance.AdvanceCurrentStepIndex && advance.NextStepIndex > build.CurrentStepIndex {
-			build.CurrentStepIndex = advance.NextStepIndex
 		}
 
 		r.builds[request.BuildID] = build
@@ -667,6 +696,13 @@ func (r *BuildRepository) UpdateCurrentStepIndex(_ context.Context, id string, c
 }
 
 func cloneStep(step domain.BuildStep) domain.BuildStep {
+	if step.GroupName != nil {
+		group := *step.GroupName
+		step.GroupName = &group
+	}
+	if step.DependsOnNodes != nil {
+		step.DependsOnNodes = append([]string(nil), step.DependsOnNodes...)
+	}
 	if step.Args != nil {
 		step.Args = append([]string(nil), step.Args...)
 	}
@@ -685,6 +721,49 @@ func cloneStep(step domain.BuildStep) domain.BuildStep {
 	}
 
 	return step
+}
+
+func stepStatusByNodeID(steps []domain.BuildStep) map[string]domain.BuildStepStatus {
+	out := make(map[string]domain.BuildStepStatus, len(steps))
+	for _, step := range steps {
+		nodeID := normalizedNodeID(step)
+		out[nodeID] = step.Status
+	}
+	return out
+}
+
+func normalizedNodeID(step domain.BuildStep) string {
+	nodeID := strings.TrimSpace(step.NodeID)
+	if nodeID == "" {
+		return "step-" + strconv.Itoa(step.StepIndex)
+	}
+	return nodeID
+}
+
+func isStepRunnable(step domain.BuildStep, all []domain.BuildStep, statusByNode map[string]domain.BuildStepStatus) bool {
+	if step.Status != domain.BuildStepStatusPending {
+		return false
+	}
+
+	if len(step.DependsOnNodes) > 0 {
+		for _, dep := range step.DependsOnNodes {
+			depStatus, ok := statusByNode[strings.TrimSpace(dep)]
+			if !ok || depStatus != domain.BuildStepStatusSuccess {
+				return false
+			}
+		}
+		return true
+	}
+
+	for _, previous := range all {
+		if previous.StepIndex >= step.StepIndex {
+			continue
+		}
+		if previous.Status != domain.BuildStepStatusSuccess {
+			return false
+		}
+	}
+	return true
 }
 
 func readOptionalString(value *string) string {

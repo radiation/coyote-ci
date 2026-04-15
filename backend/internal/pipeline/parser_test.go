@@ -501,3 +501,95 @@ artifacts:
 		t.Fatalf("expected reports/*.xml, got %q", rp.Artifacts.Paths[0])
 	}
 }
+
+func TestParse_CommandAliasForGroupStep(t *testing.T) {
+	yaml := `
+version: 1
+steps:
+  - group:
+      name: matrix
+      steps:
+        - name: unit
+          command: pytest tests/unit
+`
+
+	pf, err := Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if pf.Steps[0].Group == nil || len(pf.Steps[0].Group.Steps) != 1 {
+		t.Fatalf("expected one grouped step, got %#v", pf.Steps[0].Group)
+	}
+	if pf.Steps[0].Group.Steps[0].Run != "pytest tests/unit" {
+		t.Fatalf("expected grouped run alias, got %q", pf.Steps[0].Group.Steps[0].Run)
+	}
+}
+
+func TestResolve_ParallelGroupDependencyGraph(t *testing.T) {
+	yaml := `
+version: 1
+steps:
+  - name: setup
+    run: ./setup.sh
+  - group:
+      name: test-matrix
+      steps:
+        - name: unit-tests
+          run: pytest tests/unit
+        - name: integration-tests
+          run: pytest tests/integration
+  - name: package
+    run: ./package.sh
+`
+
+	rp, err := LoadAndResolve([]byte(yaml))
+	if err != nil {
+		t.Fatalf("unexpected resolve error: %v", err)
+	}
+	if len(rp.Steps) != 4 {
+		t.Fatalf("expected four executable steps, got %d", len(rp.Steps))
+	}
+	if len(rp.Plan.Nodes) != 4 {
+		t.Fatalf("expected four plan nodes, got %d", len(rp.Plan.Nodes))
+	}
+
+	setup := rp.Steps[0]
+	unit := rp.Steps[1]
+	integration := rp.Steps[2]
+	packageStep := rp.Steps[3]
+
+	if setup.NodeID == "" || unit.NodeID == "" || integration.NodeID == "" || packageStep.NodeID == "" {
+		t.Fatal("expected every resolved step to have a node id")
+	}
+	if unit.GroupName != "test-matrix" || integration.GroupName != "test-matrix" {
+		t.Fatalf("expected grouped steps to include group name, got unit=%q integration=%q", unit.GroupName, integration.GroupName)
+	}
+	if packageStep.GroupName != "" {
+		t.Fatalf("expected post-group step to have empty group name, got %q", packageStep.GroupName)
+	}
+
+	if len(unit.DependsOnNodeIDs) != 1 || unit.DependsOnNodeIDs[0] != setup.NodeID {
+		t.Fatalf("expected unit to depend on setup node %q, got %#v", setup.NodeID, unit.DependsOnNodeIDs)
+	}
+	if len(integration.DependsOnNodeIDs) != 1 || integration.DependsOnNodeIDs[0] != setup.NodeID {
+		t.Fatalf("expected integration to depend on setup node %q, got %#v", setup.NodeID, integration.DependsOnNodeIDs)
+	}
+	if len(packageStep.DependsOnNodeIDs) != 2 {
+		t.Fatalf("expected package to depend on both group nodes, got %#v", packageStep.DependsOnNodeIDs)
+	}
+	if !containsString(packageStep.DependsOnNodeIDs, unit.NodeID) {
+		t.Fatalf("expected package dependencies to include unit node %q", unit.NodeID)
+	}
+	if !containsString(packageStep.DependsOnNodeIDs, integration.NodeID) {
+		t.Fatalf("expected package dependencies to include integration node %q", integration.NodeID)
+	}
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
+}
