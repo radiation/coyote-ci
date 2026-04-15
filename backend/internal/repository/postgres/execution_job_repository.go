@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 
@@ -78,7 +77,7 @@ func (r *ExecutionJobRepository) CreateJobsForBuild(ctx context.Context, jobs []
 		}
 		nodeID := strings.TrimSpace(job.NodeID)
 		if nodeID == "" {
-			nodeID = "step-" + strconv.Itoa(job.StepIndex)
+			nodeID = domain.FallbackNodeID(job.StepIndex)
 		}
 
 		created, scanErr := scanExecutionJob(tx.QueryRowContext(ctx, query,
@@ -199,10 +198,10 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(ctx context.Context, claim
 			  AND (bj.status = 'queued' OR (bj.status = 'running' AND bj.claim_expires_at IS NOT NULL AND bj.claim_expires_at <= $1))
 			  AND (
 					(
-						jsonb_array_length(COALESCE(bj.depends_on_node_ids, '[]'::jsonb)) > 0
+						NULLIF(BTRIM(COALESCE(bj.node_id, '')), '') IS NOT NULL
 						AND NOT EXISTS (
 							SELECT 1
-							FROM jsonb_array_elements_text(bj.depends_on_node_ids) AS dep(node_id)
+							FROM jsonb_array_elements_text(COALESCE(bj.depends_on_node_ids, '[]'::jsonb)) AS dep(node_id)
 							LEFT JOIN build_steps upstream
 								ON upstream.build_id = bj.build_id
 							   AND upstream.node_id = dep.node_id
@@ -210,7 +209,7 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(ctx context.Context, claim
 						)
 					)
 					OR (
-						jsonb_array_length(COALESCE(bj.depends_on_node_ids, '[]'::jsonb)) = 0
+						NULLIF(BTRIM(COALESCE(bj.node_id, '')), '') IS NULL
 						AND NOT EXISTS (
 							SELECT 1
 							FROM build_steps previous

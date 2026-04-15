@@ -254,10 +254,10 @@ func hasRunnablePendingStepTx(ctx context.Context, tx *sql.Tx, buildID string) (
 			  AND bs.status = 'pending'
 			  AND (
 					(
-						jsonb_array_length(COALESCE(bs.depends_on_node_ids, '[]'::jsonb)) > 0
+						NULLIF(BTRIM(COALESCE(bs.node_id, '')), '') IS NOT NULL
 						AND NOT EXISTS (
 							SELECT 1
-							FROM jsonb_array_elements_text(bs.depends_on_node_ids) AS dep(node_id)
+							FROM jsonb_array_elements_text(COALESCE(bs.depends_on_node_ids, '[]'::jsonb)) AS dep(node_id)
 							LEFT JOIN build_steps upstream
 								ON upstream.build_id = bs.build_id
 							   AND upstream.node_id = dep.node_id
@@ -265,7 +265,7 @@ func hasRunnablePendingStepTx(ctx context.Context, tx *sql.Tx, buildID string) (
 						)
 					)
 					OR (
-						jsonb_array_length(COALESCE(bs.depends_on_node_ids, '[]'::jsonb)) = 0
+						NULLIF(BTRIM(COALESCE(bs.node_id, '')), '') IS NULL
 						AND NOT EXISTS (
 							SELECT 1
 							FROM build_steps previous

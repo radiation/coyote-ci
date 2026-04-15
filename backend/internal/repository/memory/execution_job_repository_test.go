@@ -225,3 +225,199 @@ func TestExecutionJobRepository_ClaimNextRunnableJob_RespectsDependencies(t *tes
 		t.Fatalf("expected two distinct runnable jobs, got %s", firstBranch.ID)
 	}
 }
+
+func TestExecutionJobRepository_ClaimNextRunnableJob_JoinBlocksUntilAllDepsSucceed(t *testing.T) {
+	repo := NewExecutionJobRepository()
+	now := time.Now().UTC()
+
+	_, err := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{
+		{
+			ID:               "job-setup",
+			BuildID:          "build-join",
+			StepID:           "step-setup",
+			NodeID:           "node-setup",
+			Name:             "setup",
+			StepIndex:        0,
+			Status:           domain.ExecutionJobStatusQueued,
+			Image:            "alpine:3.20",
+			WorkingDir:       ".",
+			Command:          []string{"sh", "-c", "echo setup"},
+			Environment:      map[string]string{},
+			SpecVersion:      1,
+			ResolvedSpecJSON: "{}",
+			CreatedAt:        now,
+		},
+		{
+			ID:               "job-a",
+			BuildID:          "build-join",
+			StepID:           "step-a",
+			NodeID:           "node-a",
+			Name:             "branch-a",
+			StepIndex:        1,
+			DependsOnNodeIDs: []string{"node-setup"},
+			Status:           domain.ExecutionJobStatusQueued,
+			Image:            "alpine:3.20",
+			WorkingDir:       ".",
+			Command:          []string{"sh", "-c", "echo a"},
+			Environment:      map[string]string{},
+			SpecVersion:      1,
+			ResolvedSpecJSON: "{}",
+			CreatedAt:        now.Add(time.Second),
+		},
+		{
+			ID:               "job-b",
+			BuildID:          "build-join",
+			StepID:           "step-b",
+			NodeID:           "node-b",
+			Name:             "branch-b",
+			StepIndex:        2,
+			DependsOnNodeIDs: []string{"node-setup"},
+			Status:           domain.ExecutionJobStatusQueued,
+			Image:            "alpine:3.20",
+			WorkingDir:       ".",
+			Command:          []string{"sh", "-c", "echo b"},
+			Environment:      map[string]string{},
+			SpecVersion:      1,
+			ResolvedSpecJSON: "{}",
+			CreatedAt:        now.Add(2 * time.Second),
+		},
+		{
+			ID:               "job-join",
+			BuildID:          "build-join",
+			StepID:           "step-join",
+			NodeID:           "node-join",
+			Name:             "join",
+			StepIndex:        3,
+			DependsOnNodeIDs: []string{"node-a", "node-b"},
+			Status:           domain.ExecutionJobStatusQueued,
+			Image:            "alpine:3.20",
+			WorkingDir:       ".",
+			Command:          []string{"sh", "-c", "echo join"},
+			Environment:      map[string]string{},
+			SpecVersion:      1,
+			ResolvedSpecJSON: "{}",
+			CreatedAt:        now.Add(3 * time.Second),
+		},
+	})
+	if err != nil {
+		t.Fatalf("create jobs failed: %v", err)
+	}
+
+	claimSetup := repository.StepClaim{WorkerID: "worker-setup", ClaimToken: "claim-setup", ClaimedAt: now.Add(4 * time.Second), LeaseExpiresAt: now.Add(64 * time.Second)}
+	setup, found, err := repo.ClaimNextRunnableJob(context.Background(), claimSetup)
+	if err != nil || !found || setup.ID != "job-setup" {
+		t.Fatalf("expected setup to claim first, found=%v id=%q err=%v", found, setup.ID, err)
+	}
+	if _, outcome, completeErr := repo.CompleteJobSuccess(context.Background(), setup.ID, claimSetup.ClaimToken, now.Add(5*time.Second), 0, nil); completeErr != nil || outcome != repository.StepCompletionCompleted {
+		t.Fatalf("complete setup failed outcome=%q err=%v", outcome, completeErr)
+	}
+
+	claimA := repository.StepClaim{WorkerID: "worker-a", ClaimToken: "claim-a", ClaimedAt: now.Add(6 * time.Second), LeaseExpiresAt: now.Add(66 * time.Second)}
+	branchA, found, err := repo.ClaimNextRunnableJob(context.Background(), claimA)
+	if err != nil || !found {
+		t.Fatalf("expected first branch claim, found=%v err=%v", found, err)
+	}
+	if branchA.ID == "job-join" {
+		t.Fatal("join should not be runnable before branch dependencies succeed")
+	}
+
+	claimB := repository.StepClaim{WorkerID: "worker-b", ClaimToken: "claim-b", ClaimedAt: now.Add(7 * time.Second), LeaseExpiresAt: now.Add(67 * time.Second)}
+	branchB, found, err := repo.ClaimNextRunnableJob(context.Background(), claimB)
+	if err != nil || !found {
+		t.Fatalf("expected second branch claim, found=%v err=%v", found, err)
+	}
+	if branchB.ID == "job-join" {
+		t.Fatal("join should not be runnable before branch dependencies succeed")
+	}
+
+	if _, outcome, completeErr := repo.CompleteJobSuccess(context.Background(), branchA.ID, claimA.ClaimToken, now.Add(8*time.Second), 0, nil); completeErr != nil || outcome != repository.StepCompletionCompleted {
+		t.Fatalf("complete first branch failed outcome=%q err=%v", outcome, completeErr)
+	}
+
+	claimJoinEarly := repository.StepClaim{WorkerID: "worker-join-early", ClaimToken: "claim-join-early", ClaimedAt: now.Add(9 * time.Second), LeaseExpiresAt: now.Add(69 * time.Second)}
+	next, found, err := repo.ClaimNextRunnableJob(context.Background(), claimJoinEarly)
+	if err != nil {
+		t.Fatalf("unexpected error while checking join readiness: %v", err)
+	}
+	if found {
+		t.Fatalf("expected no runnable job before all join deps succeed, got id=%q", next.ID)
+	}
+
+	if _, outcome, completeErr := repo.CompleteJobSuccess(context.Background(), branchB.ID, claimB.ClaimToken, now.Add(10*time.Second), 0, nil); completeErr != nil || outcome != repository.StepCompletionCompleted {
+		t.Fatalf("complete second branch failed outcome=%q err=%v", outcome, completeErr)
+	}
+
+	claimJoin := repository.StepClaim{WorkerID: "worker-join", ClaimToken: "claim-join", ClaimedAt: now.Add(11 * time.Second), LeaseExpiresAt: now.Add(71 * time.Second)}
+	join, found, err := repo.ClaimNextRunnableJob(context.Background(), claimJoin)
+	if err != nil || !found {
+		t.Fatalf("expected join claim after dependencies, found=%v err=%v", found, err)
+	}
+	if join.ID != "job-join" {
+		t.Fatalf("expected join job, got %q", join.ID)
+	}
+}
+
+func TestExecutionJobRepository_ClaimNextRunnableJob_NodeIDFallbackConsistency(t *testing.T) {
+	repo := NewExecutionJobRepository()
+	now := time.Now().UTC()
+
+	_, err := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{
+		{
+			ID:               "job-root",
+			BuildID:          "build-fallback",
+			StepID:           "step-root",
+			Name:             "root",
+			StepIndex:        0,
+			Status:           domain.ExecutionJobStatusQueued,
+			Image:            "alpine:3.20",
+			WorkingDir:       ".",
+			Command:          []string{"sh", "-c", "echo root"},
+			Environment:      map[string]string{},
+			SpecVersion:      1,
+			ResolvedSpecJSON: "{}",
+			CreatedAt:        now,
+		},
+		{
+			ID:               "job-child",
+			BuildID:          "build-fallback",
+			StepID:           "step-child",
+			NodeID:           "node-child",
+			Name:             "child",
+			StepIndex:        1,
+			DependsOnNodeIDs: []string{domain.FallbackNodeID(0)},
+			Status:           domain.ExecutionJobStatusQueued,
+			Image:            "alpine:3.20",
+			WorkingDir:       ".",
+			Command:          []string{"sh", "-c", "echo child"},
+			Environment:      map[string]string{},
+			SpecVersion:      1,
+			ResolvedSpecJSON: "{}",
+			CreatedAt:        now.Add(time.Second),
+		},
+	})
+	if err != nil {
+		t.Fatalf("create jobs failed: %v", err)
+	}
+
+	claimRoot := repository.StepClaim{WorkerID: "worker-root", ClaimToken: "claim-root", ClaimedAt: now.Add(2 * time.Second), LeaseExpiresAt: now.Add(62 * time.Second)}
+	root, found, err := repo.ClaimNextRunnableJob(context.Background(), claimRoot)
+	if err != nil || !found {
+		t.Fatalf("expected root to claim, found=%v err=%v", found, err)
+	}
+	if root.ID != "job-root" {
+		t.Fatalf("expected root job, got %q", root.ID)
+	}
+
+	if _, outcome, completeErr := repo.CompleteJobSuccess(context.Background(), root.ID, claimRoot.ClaimToken, now.Add(3*time.Second), 0, nil); completeErr != nil || outcome != repository.StepCompletionCompleted {
+		t.Fatalf("complete root failed outcome=%q err=%v", outcome, completeErr)
+	}
+
+	claimChild := repository.StepClaim{WorkerID: "worker-child", ClaimToken: "claim-child", ClaimedAt: now.Add(4 * time.Second), LeaseExpiresAt: now.Add(64 * time.Second)}
+	child, found, err := repo.ClaimNextRunnableJob(context.Background(), claimChild)
+	if err != nil || !found {
+		t.Fatalf("expected child to claim after fallback dependency success, found=%v err=%v", found, err)
+	}
+	if child.ID != "job-child" {
+		t.Fatalf("expected child job, got %q", child.ID)
+	}
+}

@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -345,12 +344,23 @@ func latestJobsByNodeID(ids []string, jobsByID map[string]domain.ExecutionJob) m
 func normalizedJobNodeID(job domain.ExecutionJob) string {
 	nodeID := strings.TrimSpace(job.NodeID)
 	if nodeID == "" {
-		return "step-" + strconv.Itoa(job.StepIndex)
+		return domain.FallbackNodeID(job.StepIndex)
 	}
 	return nodeID
 }
 
 func isJobRunnable(job domain.ExecutionJob, latestByNode map[string]domain.ExecutionJob) bool {
+	isGraphJob := strings.TrimSpace(job.NodeID) != ""
+	if isGraphJob {
+		for _, dep := range job.DependsOnNodeIDs {
+			dependency, ok := latestByNode[strings.TrimSpace(dep)]
+			if !ok || dependency.Status != domain.ExecutionJobStatusSuccess {
+				return false
+			}
+		}
+		return true
+	}
+
 	if len(job.DependsOnNodeIDs) > 0 {
 		for _, dep := range job.DependsOnNodeIDs {
 			dependency, ok := latestByNode[strings.TrimSpace(dep)]

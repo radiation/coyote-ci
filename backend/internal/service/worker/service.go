@@ -5,7 +5,6 @@ import (
 	"errors"
 	"hash/fnv"
 	"log"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -430,13 +429,28 @@ func workerFirstRunnableStep(steps []domain.BuildStep) (domain.BuildStep, bool) 
 	for _, step := range steps {
 		nodeID := strings.TrimSpace(step.NodeID)
 		if nodeID == "" {
-			nodeID = "step-" + strconv.Itoa(step.StepIndex)
+			nodeID = domain.FallbackNodeID(step.StepIndex)
 		}
 		statusByNode[nodeID] = step.Status
 	}
 
 	for _, step := range steps {
 		if step.Status != domain.BuildStepStatusPending {
+			continue
+		}
+
+		isGraphStep := strings.TrimSpace(step.NodeID) != ""
+		if isGraphStep {
+			runnable := true
+			for _, depNodeID := range step.DependsOnNodes {
+				if statusByNode[strings.TrimSpace(depNodeID)] != domain.BuildStepStatusSuccess {
+					runnable = false
+					break
+				}
+			}
+			if runnable {
+				return step, true
+			}
 			continue
 		}
 

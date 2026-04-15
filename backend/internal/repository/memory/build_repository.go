@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -735,7 +734,7 @@ func stepStatusByNodeID(steps []domain.BuildStep) map[string]domain.BuildStepSta
 func normalizedNodeID(step domain.BuildStep) string {
 	nodeID := strings.TrimSpace(step.NodeID)
 	if nodeID == "" {
-		return "step-" + strconv.Itoa(step.StepIndex)
+		return domain.FallbackNodeID(step.StepIndex)
 	}
 	return nodeID
 }
@@ -743,6 +742,17 @@ func normalizedNodeID(step domain.BuildStep) string {
 func isStepRunnable(step domain.BuildStep, all []domain.BuildStep, statusByNode map[string]domain.BuildStepStatus) bool {
 	if step.Status != domain.BuildStepStatusPending {
 		return false
+	}
+
+	isGraphStep := strings.TrimSpace(step.NodeID) != ""
+	if isGraphStep {
+		for _, dep := range step.DependsOnNodes {
+			depStatus, ok := statusByNode[strings.TrimSpace(dep)]
+			if !ok || depStatus != domain.BuildStepStatusSuccess {
+				return false
+			}
+		}
+		return true
 	}
 
 	if len(step.DependsOnNodes) > 0 {

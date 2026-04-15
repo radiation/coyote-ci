@@ -362,6 +362,78 @@ func TestBuildRepository_ClaimStepIfPending(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_ClaimPendingStep_GraphRootsDoNotLinearGate(t *testing.T) {
+	repo := NewBuildRepository()
+	_, err := repo.Create(context.Background(), domain.Build{
+		ID:        "build-group-roots",
+		ProjectID: "project-1",
+		Status:    domain.BuildStatusQueued,
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("setup create failed: %v", err)
+	}
+
+	_, err = repo.QueueBuild(context.Background(), "build-group-roots", []domain.BuildStep{
+		{ID: "step-a", StepIndex: 0, NodeID: "node-000", Name: "a", Status: domain.BuildStepStatusPending},
+		{ID: "step-b", StepIndex: 1, NodeID: "node-001", Name: "b", Status: domain.BuildStepStatusPending},
+	})
+	if err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
+
+	claim := repository.StepClaim{
+		WorkerID:       "worker-1",
+		ClaimToken:     "claim-1",
+		ClaimedAt:      time.Now().UTC(),
+		LeaseExpiresAt: time.Now().UTC().Add(time.Minute),
+	}
+
+	_, claimed, err := repo.ClaimPendingStep(context.Background(), "build-group-roots", 1, claim)
+	if err != nil {
+		t.Fatalf("claim graph root failed: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected graph root node to be runnable without linear gating")
+	}
+}
+
+func TestBuildRepository_ClaimPendingStep_LegacyRowsRemainLinear(t *testing.T) {
+	repo := NewBuildRepository()
+	_, err := repo.Create(context.Background(), domain.Build{
+		ID:        "build-legacy-linear",
+		ProjectID: "project-1",
+		Status:    domain.BuildStatusQueued,
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("setup create failed: %v", err)
+	}
+
+	_, err = repo.QueueBuild(context.Background(), "build-legacy-linear", []domain.BuildStep{
+		{ID: "step-0", StepIndex: 0, Name: "first", Status: domain.BuildStepStatusPending},
+		{ID: "step-1", StepIndex: 1, Name: "second", Status: domain.BuildStepStatusPending},
+	})
+	if err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
+
+	claim := repository.StepClaim{
+		WorkerID:       "worker-1",
+		ClaimToken:     "claim-1",
+		ClaimedAt:      time.Now().UTC(),
+		LeaseExpiresAt: time.Now().UTC().Add(time.Minute),
+	}
+
+	_, claimed, err := repo.ClaimPendingStep(context.Background(), "build-legacy-linear", 1, claim)
+	if err != nil {
+		t.Fatalf("claim legacy step failed: %v", err)
+	}
+	if claimed {
+		t.Fatal("expected legacy step_index ordering to block step 1 before step 0 success")
+	}
+}
+
 func TestBuildRepository_CompleteStepIfRunning(t *testing.T) {
 	repo := NewBuildRepository()
 	_, err := repo.Create(context.Background(), domain.Build{

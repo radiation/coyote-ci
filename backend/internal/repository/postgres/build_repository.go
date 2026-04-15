@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"strconv"
 	"strings"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -382,7 +381,7 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 	for _, step := range steps {
 		nodeID := strings.TrimSpace(step.NodeID)
 		if nodeID == "" {
-			nodeID = "step-" + strconv.Itoa(step.StepIndex)
+			nodeID = domain.FallbackNodeID(step.StepIndex)
 		}
 		argsJSON, marshalErr := json.Marshal(step.Args)
 		if marshalErr != nil {
