@@ -138,6 +138,7 @@ type BuildStepResponse struct {
 	ID           string                `json:"id"`
 	BuildID      string                `json:"build_id"`
 	StepIndex    int                   `json:"step_index"`
+	GroupName    *string               `json:"group_name,omitempty"`
 	Name         string                `json:"name"`
 	Command      string                `json:"command"`
 	Status       string                `json:"status"`

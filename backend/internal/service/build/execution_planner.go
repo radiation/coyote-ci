@@ -63,10 +63,20 @@ func (p *BuildExecutionPlanner) Plan(build domain.Build, steps []domain.BuildSte
 		}
 
 		jobID := uuid.NewString()
+		var groupName *string
+		if step.GroupName != nil {
+			trimmed := strings.TrimSpace(*step.GroupName)
+			if trimmed != "" {
+				groupName = &trimmed
+			}
+		}
 		jobs = append(jobs, domain.ExecutionJob{
 			ID:               jobID,
 			BuildID:          build.ID,
 			StepID:           step.ID,
+			NodeID:           step.NodeID,
+			GroupName:        groupName,
+			DependsOnNodeIDs: append([]string(nil), step.DependsOnNodes...),
 			Name:             step.Name,
 			StepIndex:        step.StepIndex,
 			AttemptNumber:    1,

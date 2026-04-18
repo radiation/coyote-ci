@@ -22,10 +22,18 @@ func pipelineStepsToDomain(buildID string, steps []pipeline.ResolvedStep) []doma
 		if workingDir == "" {
 			workingDir = "."
 		}
+		var groupName *string
+		if strings.TrimSpace(rs.GroupName) != "" {
+			trimmed := strings.TrimSpace(rs.GroupName)
+			groupName = &trimmed
+		}
 		out = append(out, domain.BuildStep{
 			ID:             uuid.NewString(),
 			BuildID:        buildID,
 			StepIndex:      idx,
+			NodeID:         rs.NodeID,
+			GroupName:      groupName,
+			DependsOnNodes: append([]string(nil), rs.DependsOnNodeIDs...),
 			Name:           rs.Name,
 			Image:          rs.Image,
 			Command:        "sh",
@@ -47,6 +55,7 @@ func defaultBuildSteps(buildID string) []domain.BuildStep {
 			ID:             uuid.NewString(),
 			BuildID:        buildID,
 			StepIndex:      0,
+			NodeID:         domain.FallbackNodeID(0),
 			Name:           "default",
 			Command:        "sh",
 			Args:           []string{"-c", "echo coyote-ci worker default step && exit 0"},
@@ -182,6 +191,7 @@ func domainStepsFromInputs(buildID string, stepInputs []CreateBuildStepInput) []
 			ID:             uuid.NewString(),
 			BuildID:        buildID,
 			StepIndex:      idx,
+			NodeID:         domain.FallbackNodeID(idx),
 			Name:           normalized.Name,
 			Command:        normalized.Command,
 			Args:           normalized.Args,

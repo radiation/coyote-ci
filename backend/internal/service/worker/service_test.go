@@ -34,6 +34,9 @@ type fakeExecutionWorkerBoundary struct {
 	renewStale     bool
 	renewedLeaseAt *time.Time
 	runStepDelay   time.Duration
+	prepareCalls   int
+	prepareErr     error
+	claimJobCalls  int
 
 	startCalls    int
 	completeCalls int
@@ -53,6 +56,7 @@ type fakeExecutionWorkerBoundary struct {
 }
 
 func (f *fakeExecutionWorkerBoundary) ClaimNextRunnableJob(_ context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
+	f.claimJobCalls++
 	if len(f.jobsQueue) == 0 {
 		return domain.ExecutionJob{}, false, nil
 	}
@@ -252,6 +256,26 @@ func (f *fakeExecutionWorkerBoundary) QueueBuild(_ context.Context, id string) (
 	}
 	build := domain.Build{ID: id, Status: domain.BuildStatusQueued}
 	f.listBuildsResp = append(f.listBuildsResp, build)
+	return build, nil
+}
+
+func (f *fakeExecutionWorkerBoundary) PrepareBuildExecution(_ context.Context, id string) (domain.Build, error) {
+	f.prepareCalls++
+	f.lastBuildID = id
+	if f.prepareErr != nil {
+		return domain.Build{}, f.prepareErr
+	}
+	for i := range f.listBuildsResp {
+		if f.listBuildsResp[i].ID != id {
+			continue
+		}
+		f.listBuildsResp[i].Status = domain.BuildStatusRunning
+		f.startCalls++
+		return f.listBuildsResp[i], nil
+	}
+	build := domain.Build{ID: id, Status: domain.BuildStatusRunning}
+	f.listBuildsResp = append(f.listBuildsResp, build)
+	f.startCalls++
 	return build, nil
 }
 
@@ -535,9 +559,12 @@ func TestExecutionWorkerService_ClaimRunnableStep_FromJobClaim_StartsQueuedBuild
 	}
 }
 
-func TestExecutionWorkerService_ClaimRunnableStep_FromJobClaim_RejectsPendingBuild(t *testing.T) {
+func TestExecutionWorkerService_ClaimRunnableStep_FromJobClaim_PromotesPendingBuild(t *testing.T) {
 	now := time.Now().UTC()
 	boundary := &fakeExecutionWorkerBoundary{
+		// Build is pending (not yet queued). prepareQueuedBuilds should promote
+		// it: pending → queued → running via PrepareBuildExecution. After that
+		// the job claim should succeed because the build is ready.
 		listBuildsResp: []domain.Build{{ID: "build-pending", Status: domain.BuildStatusPending}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-pending": {
@@ -570,11 +597,17 @@ func TestExecutionWorkerService_ClaimRunnableStep_FromJobClaim_RejectsPendingBui
 
 	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
 	_, found, err := worker.ClaimRunnableStep(context.Background())
-	if !errors.Is(err, buildsvc.ErrInvalidBuildStatusTransition) {
-		t.Fatalf("expected pending build to be rejected for job execution, got err=%v", err)
+	if err != nil {
+		t.Fatalf("expected no error after build is promoted to running, got %v", err)
 	}
-	if found {
-		t.Fatal("expected no runnable step when build is not runnable")
+	// After prepareQueuedBuilds promotes the build to running, the job is claimable.
+	// The test verifies the prep-gate path: build was pending → promoted → job found.
+	if !found {
+		t.Fatal("expected job to be found after pending build was promoted to running via prep gate")
+	}
+	// Prep was called exactly once.
+	if boundary.prepareCalls != 1 {
+		t.Fatalf("expected 1 prepare call, got %d", boundary.prepareCalls)
 	}
 }
 
@@ -721,6 +754,39 @@ func TestExecutionWorkerService_ClaimRunnableStep_ClaimsJobDirectly(t *testing.T
 	}
 	if boundary.startCalls != 1 {
 		t.Fatalf("expected start build call once, got %d", boundary.startCalls)
+	}
+}
+
+func TestExecutionWorkerService_ClaimRunnableStep_PrepareGateBlocksClaimsUntilReady(t *testing.T) {
+	now := time.Now().UTC()
+	boundary := &fakeExecutionWorkerBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-prep", Status: domain.BuildStatusQueued}},
+		jobsQueue: []domain.ExecutionJob{{
+			ID:        "job-root",
+			BuildID:   "build-prep",
+			StepID:    "step-1",
+			StepIndex: 0,
+			Name:      "root",
+			Status:    domain.ExecutionJobStatusQueued,
+			Command:   []string{"sh", "-c", "echo from-job"},
+			CreatedAt: now,
+		}},
+		prepareErr: errors.New("prepare failed"),
+	}
+
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	_, found, err := worker.ClaimRunnableStep(context.Background())
+	if err == nil || err.Error() != "prepare failed" {
+		t.Fatalf("expected prepare failure, got err=%v", err)
+	}
+	if found {
+		t.Fatal("expected no runnable step when build preparation fails")
+	}
+	if boundary.prepareCalls != 1 {
+		t.Fatalf("expected one prepare attempt, got %d", boundary.prepareCalls)
+	}
+	if boundary.claimJobCalls != 0 {
+		t.Fatalf("expected no job claim attempts before prep succeeds, got %d", boundary.claimJobCalls)
 	}
 }
 
@@ -920,7 +986,9 @@ func TestExecutionWorkerService_ClaimRunnableStep_DoesNotReclaimRunningOrFinishe
 
 func TestExecutionWorkerService_ClaimRunnableStep_ConditionalClaimFailureIsClean(t *testing.T) {
 	boundary := &fakeExecutionWorkerBoundary{
-		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
+		// Build is already running — prep has already been done. The step claim
+		// will fail (claimMap returns false) but no extra prep or start should occur.
+		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusRunning}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
 				{StepIndex: 0, Name: "lint", Status: domain.BuildStepStatusPending},
@@ -939,8 +1007,9 @@ func TestExecutionWorkerService_ClaimRunnableStep_ConditionalClaimFailureIsClean
 	if found {
 		t.Fatal("expected claim to fail cleanly when step is no longer pending")
 	}
+	// Build was already running — prep should not have been triggered.
 	if boundary.startCalls != 0 {
-		t.Fatalf("expected build start to not be called when claim fails, got %d", boundary.startCalls)
+		t.Fatalf("expected build start to not be called when build is already running, got %d", boundary.startCalls)
 	}
 }
 

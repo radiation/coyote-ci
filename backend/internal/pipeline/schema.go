@@ -25,6 +25,7 @@ type PipelineMeta struct {
 
 // StepDef is the YAML-facing definition for a single step.
 type StepDef struct {
+	Group          *StepGroupDef     `yaml:"group,omitempty"`
 	Name           string            `yaml:"name"`
 	Image          string            `yaml:"image,omitempty"`
 	Run            string            `yaml:"run"`
@@ -34,6 +35,11 @@ type StepDef struct {
 	Env            map[string]string `yaml:"env"`
 	Artifacts      ArtifactDef       `yaml:"artifacts,omitempty"`
 	Cache          *CacheDef         `yaml:"cache,omitempty"`
+}
+
+type StepGroupDef struct {
+	Name  string    `yaml:"name"`
+	Steps []StepDef `yaml:"steps"`
 }
 
 type CacheDef struct {

@@ -264,7 +264,7 @@ func (s *BuildService) QueueBuildWithTemplateAndCustomSteps(ctx context.Context,
 }
 
 func (s *BuildService) StartBuild(ctx context.Context, id string) (domain.Build, error) {
-	return s.transitionBuildStatus(ctx, id, domain.BuildStatusRunning, nil)
+	return s.PrepareBuildExecution(ctx, id)
 }
 
 func (s *BuildService) CompleteBuild(ctx context.Context, id string) (domain.Build, error) {

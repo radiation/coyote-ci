@@ -604,9 +604,7 @@ func TestBuildService_CreateBuild(t *testing.T) {
 			repo: &fakeBuildRepository{},
 		},
 	}
-
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -791,34 +789,40 @@ func TestBuildService_ValidTransitions(t *testing.T) {
 	now := time.Now().UTC()
 
 	tests := []struct {
-		name           string
-		initialStatus  domain.BuildStatus
-		action         func(*BuildService, context.Context, string) (domain.Build, error)
-		expectedStatus domain.BuildStatus
+		name                string
+		initialStatus       domain.BuildStatus
+		action              func(*BuildService, context.Context, string) (domain.Build, error)
+		expectedStatus      domain.BuildStatus
+		expectedUpdateCalls int
 	}{
 		{
-			name:           "pending to queued",
-			initialStatus:  domain.BuildStatusPending,
-			action:         (*BuildService).QueueBuild,
-			expectedStatus: domain.BuildStatusQueued,
+			name:                "pending to queued",
+			initialStatus:       domain.BuildStatusPending,
+			action:              (*BuildService).QueueBuild,
+			expectedStatus:      domain.BuildStatusQueued,
+			expectedUpdateCalls: 1,
 		},
 		{
 			name:           "queued to running",
 			initialStatus:  domain.BuildStatusQueued,
 			action:         (*BuildService).StartBuild,
 			expectedStatus: domain.BuildStatusRunning,
+			// StartBuild now calls PrepareBuildExecution: queued→preparing, preparing→running.
+			expectedUpdateCalls: 2,
 		},
 		{
-			name:           "running to success",
-			initialStatus:  domain.BuildStatusRunning,
-			action:         (*BuildService).CompleteBuild,
-			expectedStatus: domain.BuildStatusSuccess,
+			name:                "running to success",
+			initialStatus:       domain.BuildStatusRunning,
+			action:              (*BuildService).CompleteBuild,
+			expectedStatus:      domain.BuildStatusSuccess,
+			expectedUpdateCalls: 1,
 		},
 		{
-			name:           "running to failed",
-			initialStatus:  domain.BuildStatusRunning,
-			action:         (*BuildService).FailBuild,
-			expectedStatus: domain.BuildStatusFailed,
+			name:                "running to failed",
+			initialStatus:       domain.BuildStatusRunning,
+			action:              (*BuildService).FailBuild,
+			expectedStatus:      domain.BuildStatusFailed,
+			expectedUpdateCalls: 1,
 		},
 	}
 
@@ -847,8 +851,8 @@ func TestBuildService_ValidTransitions(t *testing.T) {
 				t.Fatalf("expected status %q, got %q", tc.expectedStatus, updated.Status)
 			}
 
-			if repo.updateCalls != 1 {
-				t.Fatalf("expected UpdateStatus to be called once, got %d", repo.updateCalls)
+			if repo.updateCalls != tc.expectedUpdateCalls {
+				t.Fatalf("expected UpdateStatus to be called %d times, got %d", tc.expectedUpdateCalls, repo.updateCalls)
 			}
 
 			if repo.updatedID != "build-1" {

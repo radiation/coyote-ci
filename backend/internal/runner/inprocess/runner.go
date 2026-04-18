@@ -295,7 +295,15 @@ func (r *Runner) lookupWorkspacePath(buildID string) (string, bool) {
 	workspacePath, ok := r.workspaces[trimmedBuildID]
 	r.mu.RUnlock()
 	if !ok || strings.TrimSpace(workspacePath) == "" {
-		return "", false
+		rootProvider, providerOK := r.workspace.(interface{ WorkspaceRoot() string })
+		if !providerOK {
+			return "", false
+		}
+		candidate := filepath.Join(strings.TrimSpace(rootProvider.WorkspaceRoot()), trimmedBuildID)
+		if info, statErr := os.Stat(candidate); statErr != nil || !info.IsDir() {
+			return "", false
+		}
+		return candidate, true
 	}
 
 	return workspacePath, true

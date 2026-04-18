@@ -205,3 +205,45 @@ Validation rules:
 - `key.files` must be workspace-relative and must not escape the workspace.
 - Unknown presets are rejected.
 - Unknown fields are rejected by strict YAML decoding.
+
+## Pipeline Parallel Groups
+
+Execution semantics:
+
+- Top-level `steps` execute in declaration order.
+- `group.steps` execute in parallel.
+- A group is a barrier: the next top-level step or group does not start until every step in the current group succeeds.
+- Build/source preparation (workspace + checkout) runs once before any step can run.
+- Step runners do not perform checkout/source-prep work.
+
+Canonical grouped example:
+
+```yaml
+version: 1
+pipeline:
+  name: backend-and-frontend
+steps:
+  - name: prepare
+    run: echo "build prep happens before this step"
+
+  - group:
+      name: verify
+      steps:
+        - name: backend test
+          run: go test ./...
+          working_dir: backend
+        - name: frontend test
+          run: npm test
+          working_dir: frontend
+          image: node:22-alpine
+
+  - group:
+      name: package
+      steps:
+        - name: backend image
+          run: docker build -t coyote-ci/backend:latest -f backend/Dockerfile backend
+          image: docker:27
+        - name: frontend image
+          run: docker build -t coyote-ci/frontend:latest -f frontend/Dockerfile frontend
+          image: docker:27
+```

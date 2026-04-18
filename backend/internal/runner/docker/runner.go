@@ -468,7 +468,15 @@ func (r *Runner) workspacePathForBuild(buildID string) (string, bool) {
 	workspacePath, ok := r.workspacePaths[trimmedBuildID]
 	r.workspaceMu.RUnlock()
 	if !ok || strings.TrimSpace(workspacePath) == "" {
-		return "", false
+		rootProvider, providerOK := r.workspace.(interface{ WorkspaceRoot() string })
+		if !providerOK {
+			return "", false
+		}
+		candidate := canonicalizeHostPath(filepath.Join(strings.TrimSpace(rootProvider.WorkspaceRoot()), trimmedBuildID))
+		if info, statErr := os.Stat(candidate); statErr != nil || !info.IsDir() {
+			return "", false
+		}
+		return candidate, true
 	}
 
 	return workspacePath, true

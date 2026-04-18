@@ -4,13 +4,31 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/service/execution"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 )
+
+const buildPreparationLogStepName = "build-prep"
+
+func (s *BuildService) emitBuildPreparationLog(ctx context.Context, buildID string, line string) {
+	if s.logSink == nil {
+		return
+	}
+	trimmedBuildID := strings.TrimSpace(buildID)
+	trimmedLine := strings.TrimSpace(line)
+	if trimmedBuildID == "" || trimmedLine == "" {
+		return
+	}
+	if err := s.logSink.WriteStepLog(ctx, trimmedBuildID, buildPreparationLogStepName, trimmedLine); err != nil {
+		log.Printf("build prep log write failed: build_id=%s error=%v", trimmedBuildID, err)
+	}
+}
 
 func buildSourceSpecFromBuild(build domain.Build) execution.ResolvedBuildSourceSpec {
 	if build.Source != nil {
@@ -107,10 +125,7 @@ func (s *BuildService) resolveBuildSourceInWorkspace(ctx context.Context, buildI
 		return "", ErrSourceResolverNotConfigured
 	}
 
-	workspaceRoot := buildNormalizeWorkspaceRoot(s.executionWorkspaceRoot)
-	if workspaceRoot == "" {
-		workspaceRoot = buildNormalizeWorkspaceRoot(s.artifactWorkspaceRoot)
-	}
+	workspaceRoot := s.currentWorkspaceRoot()
 	if workspaceRoot == "" {
 		return "", ErrExecutionWorkspaceRootNotConfigured
 	}
@@ -141,6 +156,96 @@ func (s *BuildService) resolveBuildSourceInWorkspace(ctx context.Context, buildI
 	_ = build
 
 	return trimmedResolvedCommit, nil
+}
+
+func (s *BuildService) currentWorkspaceRoot() string {
+	workspaceRoot := buildNormalizeWorkspaceRoot(s.executionWorkspaceRoot)
+	if workspaceRoot != "" {
+		return workspaceRoot
+	}
+	return buildNormalizeWorkspaceRoot(s.artifactWorkspaceRoot)
+}
+
+func (s *BuildService) prepareBuildWorkspace(ctx context.Context, buildID string) error {
+	workspaceRoot := s.currentWorkspaceRoot()
+	if workspaceRoot == "" {
+		// No workspace root configured: the runner manages its own workspace (e.g. inprocess).
+		// Skip host-side directory creation; source resolution below will still gate on HasSource.
+		return nil
+	}
+
+	materializer := source.NewHostWorkspaceMaterializer(workspaceRoot)
+	_, err := materializer.PrepareWorkspace(ctx, source.WorkspacePrepareRequest{BuildID: strings.TrimSpace(buildID)})
+	return err
+}
+
+func (s *BuildService) cleanupPreparedWorkspace(ctx context.Context, buildID string) error {
+	workspaceRoot := s.currentWorkspaceRoot()
+	if workspaceRoot == "" {
+		return nil
+	}
+	materializer := source.NewHostWorkspaceMaterializer(workspaceRoot)
+	return materializer.CleanupWorkspace(ctx, strings.TrimSpace(buildID))
+}
+
+func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (domain.Build, error) {
+	prepStartedAt := time.Now().UTC()
+	buildID := strings.TrimSpace(id)
+
+	build, err := s.buildRepo.GetByID(ctx, buildID)
+	if err != nil {
+		return domain.Build{}, mapRepoErr(err)
+	}
+
+	switch build.Status {
+	case domain.BuildStatusRunning:
+		return build, nil
+	case domain.BuildStatusPreparing:
+		return build, nil
+	case domain.BuildStatusQueued:
+	default:
+		return domain.Build{}, ErrInvalidBuildStatusTransition
+	}
+
+	build, err = s.transitionBuildStatus(ctx, buildID, domain.BuildStatusPreparing, nil)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	s.emitBuildPreparationLog(ctx, buildID, "Preparing build workspace")
+
+	if prepErr := s.prepareBuildWorkspace(ctx, buildID); prepErr != nil {
+		message := prepErr.Error()
+		failed, updateErr := s.buildRepo.UpdateStatus(ctx, buildID, domain.BuildStatusFailed, &message)
+		if updateErr != nil {
+			return domain.Build{}, mapRepoErr(updateErr)
+		}
+		log.Printf("build preparation failed: build_id=%s duration_ms=%d reason=%q", buildID, time.Since(prepStartedAt).Milliseconds(), message)
+		return failed, nil
+	}
+
+	sourceSpec := buildSourceSpecFromBuild(build)
+	if sourceSpec.HasSource {
+		s.emitBuildPreparationLog(ctx, buildID, "Checking out source")
+		if _, sourceErr := s.resolveBuildSourceInWorkspace(ctx, buildID, sourceSpec); sourceErr != nil {
+			reason := classifyBuildSourceFailureReason(sourceErr, sourceSpec)
+			_ = s.cleanupPreparedWorkspace(ctx, buildID)
+			failed, updateErr := s.buildRepo.UpdateStatus(ctx, buildID, domain.BuildStatusFailed, &reason)
+			if updateErr != nil {
+				return domain.Build{}, mapRepoErr(updateErr)
+			}
+			log.Printf("build preparation failed: build_id=%s duration_ms=%d reason=%q", buildID, time.Since(prepStartedAt).Milliseconds(), reason)
+			return failed, nil
+		}
+		s.emitBuildPreparationLog(ctx, buildID, "Source checkout complete")
+	}
+	s.emitBuildPreparationLog(ctx, buildID, "Build workspace ready")
+
+	runningBuild, transitionErr := s.transitionBuildStatus(ctx, buildID, domain.BuildStatusRunning, nil)
+	if transitionErr != nil {
+		return domain.Build{}, transitionErr
+	}
+	log.Printf("build preparation completed: build_id=%s duration_ms=%d", buildID, time.Since(prepStartedAt).Milliseconds())
+	return runningBuild, nil
 }
 
 func classifyBuildSourceFailureReason(err error, sourceSpec execution.ResolvedBuildSourceSpec) string {

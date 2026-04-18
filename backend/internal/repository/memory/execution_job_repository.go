@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,9 @@ func (r *ExecutionJobRepository) CreateJobsForBuild(_ context.Context, jobs []do
 	out := make([]domain.ExecutionJob, 0, len(jobs))
 	for _, job := range jobs {
 		job.AttemptNumber = normalizeAttemptNumber(job.AttemptNumber)
+		if strings.TrimSpace(job.NodeID) == "" {
+			job.NodeID = domain.FallbackNodeID(job.StepIndex)
+		}
 		r.jobsByID[job.ID] = cloneExecutionJob(job)
 		r.jobsByStep[job.StepID] = append(r.jobsByStep[job.StepID], job.ID)
 		r.jobsByBuild[job.BuildID] = append(r.jobsByBuild[job.BuildID], job.ID)
@@ -127,7 +131,16 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(_ context.Context, claim r
 
 	now := claim.ClaimedAt
 	candidates := make([]domain.ExecutionJob, 0)
+	runnableByBuild := make(map[string]map[string]domain.ExecutionJob)
 	for _, job := range r.jobsByID {
+		latestByNode, ok := runnableByBuild[job.BuildID]
+		if !ok {
+			latestByNode = latestJobsByNodeID(r.jobsByBuild[job.BuildID], r.jobsByID)
+			runnableByBuild[job.BuildID] = latestByNode
+		}
+		if !isJobRunnable(job, latestByNode) {
+			continue
+		}
 		if job.Status == domain.ExecutionJobStatusQueued {
 			candidates = append(candidates, job)
 			continue
@@ -264,6 +277,9 @@ func (r *ExecutionJobRepository) completeJobLocked(jobID string, claimToken stri
 }
 
 func cloneExecutionJob(job domain.ExecutionJob) domain.ExecutionJob {
+	if job.DependsOnNodeIDs != nil {
+		job.DependsOnNodeIDs = append([]string(nil), job.DependsOnNodeIDs...)
+	}
 	if job.Command != nil {
 		job.Command = append([]string(nil), job.Command...)
 	}
@@ -276,6 +292,35 @@ func cloneExecutionJob(job domain.ExecutionJob) domain.ExecutionJob {
 	}
 	job.OutputRefs = cloneArtifactRefs(job.OutputRefs)
 	return job
+}
+
+func latestJobsByNodeID(jobIDs []string, jobsByID map[string]domain.ExecutionJob) map[string]domain.ExecutionJob {
+	latest := make(map[string]domain.ExecutionJob, len(jobIDs))
+	for _, id := range jobIDs {
+		job, ok := jobsByID[id]
+		if !ok {
+			continue
+		}
+		nodeID := strings.TrimSpace(job.NodeID)
+		if nodeID == "" {
+			nodeID = domain.FallbackNodeID(job.StepIndex)
+		}
+		existing, found := latest[nodeID]
+		if !found || job.AttemptNumber > existing.AttemptNumber || (job.AttemptNumber == existing.AttemptNumber && job.CreatedAt.After(existing.CreatedAt)) {
+			latest[nodeID] = job
+		}
+	}
+	return latest
+}
+
+func isJobRunnable(job domain.ExecutionJob, latestByNode map[string]domain.ExecutionJob) bool {
+	for _, dep := range job.DependsOnNodeIDs {
+		upstream, ok := latestByNode[strings.TrimSpace(dep)]
+		if !ok || upstream.Status != domain.ExecutionJobStatusSuccess {
+			return false
+		}
+	}
+	return true
 }
 
 func cloneArtifactRefs(in []domain.ArtifactRef) []domain.ArtifactRef {

@@ -8,58 +8,68 @@ pipeline:
     policy: pull-push
 
 steps:
-  - name: Backend Format Check
-    run: test -z "$(gofmt -l .)"
-    working_dir: backend
-    timeout_seconds: 300
+  - group:
+      name: Bootstrap
+      steps:
+        - name: Backend Format Check
+          run: test -z "$(gofmt -l .)"
+          working_dir: backend
+          timeout_seconds: 300
+        - name: Frontend Install
+          run: npm ci
+          working_dir: frontend
+          image: node:22-alpine
+          timeout_seconds: 600
+        - name: Backend Dependencies
+          run: go mod download
+          working_dir: backend
+          timeout_seconds: 600
 
-  - name: Backend Vet
-    run: go vet ./...
-    working_dir: backend
-    timeout_seconds: 300
+  - group:
+      name: Verify
+      steps:
+        - name: Backend Vet
+          run: go vet ./...
+          working_dir: backend
+          timeout_seconds: 300
+        - name: Backend Test
+          run: go test ./...
+          working_dir: backend
+          timeout_seconds: 600
+        - name: Frontend Test
+          run: npm test
+          working_dir: frontend
+          image: node:22-alpine
+          timeout_seconds: 600
 
-  - name: Backend Test
-    run: go test ./...
-    working_dir: backend
-    timeout_seconds: 600
+  - group:
+      name: Build
+      steps:
+        - name: Backend Build Server
+          run: go build -o dist/coyote-server ./cmd/server
+          working_dir: backend
+          timeout_seconds: 300
+        - name: Backend Build Worker
+          run: go build -o dist/coyote-worker ./cmd/worker
+          working_dir: backend
+          timeout_seconds: 300
+        - name: Frontend Build
+          run: npm run build
+          working_dir: frontend
+          image: node:22-alpine
+          timeout_seconds: 600
 
-  - name: Backend Build Server
-    run: go build -o dist/coyote-server ./cmd/server
-    working_dir: backend
-    timeout_seconds: 300
-
-  - name: Backend Build Worker
-    run: go build -o dist/coyote-worker ./cmd/worker
-    working_dir: backend
-    timeout_seconds: 300
-
-  - name: Backend Image
-    run: docker build --build-arg GO_VERSION=1.26.2 -t coyote-ci/backend:latest -f backend/Dockerfile backend
-    image: docker:27
-    timeout_seconds: 600
-
-  - name: Frontend Install
-    run: npm ci
-    working_dir: frontend
-    image: node:22-alpine
-    timeout_seconds: 600
-
-  - name: Frontend Test
-    run: npm test
-    working_dir: frontend
-    image: node:22-alpine
-    timeout_seconds: 600
-
-  - name: Frontend Build
-    run: npm run build
-    working_dir: frontend
-    image: node:22-alpine
-    timeout_seconds: 600
-
-  - name: Frontend Image
-    run: docker build -t coyote-ci/frontend:latest -f frontend/Dockerfile frontend
-    image: docker:27
-    timeout_seconds: 600
+  - group:
+      name: Images
+      steps:
+        - name: Backend Image
+          run: docker build --build-arg GO_VERSION=1.26.2 -t coyote-ci/backend:latest -f backend/Dockerfile backend
+          image: docker:27
+          timeout_seconds: 600
+        - name: Frontend Image
+          run: docker build -t coyote-ci/frontend:latest -f frontend/Dockerfile frontend
+          image: docker:27
+          timeout_seconds: 600
 
 artifacts:
   - backend/dist/coyote-server

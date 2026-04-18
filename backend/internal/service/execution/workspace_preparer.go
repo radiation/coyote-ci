@@ -27,22 +27,19 @@ func NewWorkspacePreparer(deps WorkspacePreparerDeps) *WorkspacePreparer {
 
 func (p *WorkspacePreparer) Prepare(ctx context.Context, executionContext StepExecutionContext, logManager *ExecutionLogManager) (earlyResult *runner.RunStepResult, earlyErr error, err error) {
 	request := executionContext.ExecutionRequest
-	buildSource := executionContext.BuildSource
 
 	buildScopedRunner, ok := p.deps.Runner.(runner.BuildScopedRunner)
 	if !ok {
-		if buildSource.HasSource {
-			return nil, nil, ErrRunnerWorkspaceNotSupported
-		}
+		// Runner does not support build-scoped lifecycle; source is assumed already present.
 		return nil, nil, nil
 	}
 
-	logManager.EmitSystemLine(ctx, "Preparing workspace")
+	logManager.EmitSystemLine(ctx, "Attaching workspace")
 	prepareErr := buildScopedRunner.PrepareBuild(ctx, runner.PrepareBuildRequest{
 		BuildID:    request.BuildID,
-		RepoURL:    buildSource.RepositoryURL,
-		Ref:        buildSource.Ref,
-		CommitSHA:  buildSource.CommitSHA,
+		RepoURL:    executionContext.BuildSource.RepositoryURL,
+		Ref:        executionContext.BuildSource.Ref,
+		CommitSHA:  executionContext.BuildSource.CommitSHA,
 		Image:      executionContext.ExecutionImage,
 		WorkerID:   request.WorkerID,
 		ClaimToken: request.ClaimToken,
@@ -55,32 +52,7 @@ func (p *WorkspacePreparer) Prepare(ctx context.Context, executionContext StepEx
 		return &result, prepareErr, nil
 	}
 
-	if buildSource.HasSource && executionContext.StepNumber == 1 {
-		if p.deps.ResolveBuildSourceIntoWorkspace == nil {
-			result := failedExecutionResult("source resolver not configured")
-			return &result, errors.New("source resolver not configured"), nil
-		}
-		logManager.EmitSystemLine(ctx, "Resolving source")
-		logManager.EmitSystemLine(ctx, "Cloning repository")
-		if buildSource.CommitSHA != "" {
-			logManager.EmitSystemLine(ctx, "Checking out commit: "+buildSource.CommitSHA)
-		} else {
-			logManager.EmitSystemLine(ctx, "Checking out ref: "+buildSource.Ref)
-		}
-
-		resolvedCommit, sourceErr := p.deps.ResolveBuildSourceIntoWorkspace(ctx, request.BuildID, buildSource)
-		if sourceErr != nil {
-			reason := classifySourceFailureReason(sourceErr, buildSource)
-			logManager.EmitSystemLine(ctx, "Source checkout failed")
-			logManager.EmitSystemLine(ctx, formatFailureReasonLine(reason))
-			result := failedExecutionResult(reason)
-			return &result, sourceErr, nil
-		}
-
-		logManager.EmitSystemLine(ctx, "Resolved commit: "+resolvedCommit)
-	}
-
-	logManager.EmitSystemLine(ctx, "Workspace ready")
+	logManager.EmitSystemLine(ctx, "Workspace attached")
 	return nil, nil, nil
 }
 

@@ -5,11 +5,12 @@ import "time"
 type BuildStatus string
 
 const (
-	BuildStatusPending BuildStatus = "pending"
-	BuildStatusQueued  BuildStatus = "queued"
-	BuildStatusRunning BuildStatus = "running"
-	BuildStatusSuccess BuildStatus = "success"
-	BuildStatusFailed  BuildStatus = "failed"
+	BuildStatusPending   BuildStatus = "pending"
+	BuildStatusQueued    BuildStatus = "queued"
+	BuildStatusPreparing BuildStatus = "preparing"
+	BuildStatusRunning   BuildStatus = "running"
+	BuildStatusSuccess   BuildStatus = "success"
+	BuildStatusFailed    BuildStatus = "failed"
 )
 
 type Build struct {

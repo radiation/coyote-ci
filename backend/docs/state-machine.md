@@ -5,7 +5,8 @@ This document is the source of truth for build and step lifecycle rules in Coyot
 ## Build States
 
 - pending: Build record exists but is not yet queued for execution.
-- queued: Build is eligible for worker pickup and step claiming.
+- queued: Build is eligible for preparation.
+- preparing: Build workspace/source preparation is in progress.
 - running: At least one step has been claimed or is executing.
 - success: Build completed successfully.
 - failed: Build completed with at least one failed step.
@@ -22,7 +23,9 @@ This document is the source of truth for build and step lifecycle rules in Coyot
 ### Build
 
 - pending -> queued
-- queued -> running
+- queued -> preparing
+- preparing -> running
+- preparing -> failed
 - running -> success
 - running -> failed
 
@@ -37,7 +40,12 @@ This document is the source of truth for build and step lifecycle rules in Coyot
 - Build pending -> queued:
   - Build is explicitly queued (for example via API or worker queue bootstrap for default steps).
 - Build queued -> running:
-  - First runnable step is successfully claimed by a worker.
+- Build queued -> preparing:
+  - Worker/service begins build-level preparation.
+- Build preparing -> running:
+  - Build workspace and source checkout complete.
+- Build preparing -> failed:
+  - Build-level preparation or checkout fails.
 - Build running -> failed:
   - Any required step completes with failed.
 - Build running -> success:
@@ -69,10 +77,19 @@ This document is the source of truth for build and step lifecycle rules in Coyot
 ## Key Invariants
 
 - A build cannot transition directly from pending -> running.
+- A build cannot transition directly from queued -> running; it must pass through preparing.
 - A step cannot transition directly from pending -> success or pending -> failed.
 - Any step failure forces the build to failed.
 - Build success is only valid when all required steps are successful.
 - Worker result handling must reject stale completions and stale lease renewals.
+- Source checkout/prep happens once per build before step execution; step runners do not perform source preparation.
+
+## Pipeline Group Semantics
+
+- Top-level pipeline `steps` are ordered.
+- `group.steps` are parallel siblings.
+- A group is a barrier: downstream top-level items do not become runnable until all steps in the current group succeed.
+- If any step in a group fails, downstream groups remain blocked and the build fails.
 
 ## Step/Build Relationship
 

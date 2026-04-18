@@ -18,7 +18,7 @@ const buildColumns = `id, project_id, job_id, status, created_at, queued_at, sta
 // buildListColumns is a minimal column list used for list queries (omits large pipeline YAML).
 const buildListColumns = `id, project_id, job_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor`
 
-const executionJobColumns = `id, build_id, step_id, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir, command_json, env_json, timeout_seconds, pipeline_file_path, context_dir, source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest, spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at, created_at, started_at, finished_at, error_message, exit_code, output_refs_json`
+const executionJobColumns = `id, build_id, step_id, node_id, group_name, depends_on_node_ids, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir, command_json, env_json, timeout_seconds, pipeline_file_path, context_dir, source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest, spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at, created_at, started_at, finished_at, error_message, exit_code, output_refs_json`
 
 var executionJobColumnsQualifiedWithJ = qualifyColumns("j", executionJobColumns)
 
@@ -294,6 +294,9 @@ func readOptionalString(value *string) string {
 
 func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 	var step domain.BuildStep
+	var nodeID sql.NullString
+	var groupName sql.NullString
+	var dependsOnRaw []byte
 	var status string
 	var command string
 	var argsRaw []byte
@@ -317,6 +320,9 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 		&step.ID,
 		&step.BuildID,
 		&step.StepIndex,
+		&nodeID,
+		&groupName,
+		&dependsOnRaw,
 		&step.Name,
 		&step.Image,
 		&command,
@@ -340,6 +346,20 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 	)
 	if err != nil {
 		return domain.BuildStep{}, err
+	}
+	if nodeID.Valid {
+		step.NodeID = nodeID.String
+	}
+	if groupName.Valid {
+		v := groupName.String
+		step.GroupName = &v
+	}
+	if len(dependsOnRaw) > 0 {
+		if err := json.Unmarshal(dependsOnRaw, &step.DependsOnNodes); err != nil {
+			return domain.BuildStep{}, err
+		}
+	} else {
+		step.DependsOnNodes = []string{}
 	}
 
 	step.Command = command
@@ -423,6 +443,9 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 
 func scanExecutionJob(scanner rowScanner) (domain.ExecutionJob, error) {
 	var job domain.ExecutionJob
+	var nodeID sql.NullString
+	var groupName sql.NullString
+	var dependsOnRaw []byte
 	var status string
 	var retryOfJobID sql.NullString
 	var lineageRootJobID sql.NullString
@@ -450,6 +473,9 @@ func scanExecutionJob(scanner rowScanner) (domain.ExecutionJob, error) {
 		&job.ID,
 		&job.BuildID,
 		&job.StepID,
+		&nodeID,
+		&groupName,
+		&dependsOnRaw,
 		&job.Name,
 		&job.StepIndex,
 		&job.AttemptNumber,
@@ -484,6 +510,20 @@ func scanExecutionJob(scanner rowScanner) (domain.ExecutionJob, error) {
 	)
 	if err != nil {
 		return domain.ExecutionJob{}, err
+	}
+	if nodeID.Valid {
+		job.NodeID = nodeID.String
+	}
+	if groupName.Valid {
+		v := groupName.String
+		job.GroupName = &v
+	}
+	if len(dependsOnRaw) > 0 {
+		if err := json.Unmarshal(dependsOnRaw, &job.DependsOnNodeIDs); err != nil {
+			return domain.ExecutionJob{}, err
+		}
+	} else {
+		job.DependsOnNodeIDs = []string{}
 	}
 
 	job.Status = domain.ExecutionJobStatus(status)
@@ -577,4 +617,30 @@ func scanExecutionJob(scanner rowScanner) (domain.ExecutionJob, error) {
 	}
 
 	return job, nil
+}
+
+func normalizeNodeID(nodeID string, stepIndex int) string {
+	trimmed := strings.TrimSpace(nodeID)
+	if trimmed == "" {
+		return domain.FallbackNodeID(stepIndex)
+	}
+	return trimmed
+}
+
+func normalizeNodeIDSlice(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	if out == nil {
+		return []string{}
+	}
+	return out
 }

@@ -50,10 +50,11 @@ func TestBuildEnvelope_JSONShape(t *testing.T) {
 }
 
 func TestBuildStepsEnvelope_JSONOptionalAndEmptyCollections(t *testing.T) {
+	groupName := "Verify"
 	payload := BuildStepsEnvelope{Data: BuildStepsResponse{
 		BuildID: "build-1",
 		Steps: []BuildStepResponse{
-			{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "checkout", Command: "git checkout .", Status: "success", WorkerID: nil, StartedAt: nil, FinishedAt: nil, ExitCode: nil, Stdout: nil, Stderr: nil, ErrorMessage: nil},
+			{ID: "step-1", BuildID: "build-1", StepIndex: 0, GroupName: &groupName, Name: "checkout", Command: "git checkout .", Status: "success", WorkerID: nil, StartedAt: nil, FinishedAt: nil, ExitCode: nil, Stdout: nil, Stderr: nil, ErrorMessage: nil},
 		},
 	}}
 
@@ -92,6 +93,9 @@ func TestBuildStepsEnvelope_JSONOptionalAndEmptyCollections(t *testing.T) {
 	}
 	if first["finished_at"] != nil {
 		t.Fatalf("expected finished_at null, got %v", first["finished_at"])
+	}
+	if first["group_name"] != "Verify" {
+		t.Fatalf("expected group_name Verify, got %v", first["group_name"])
 	}
 	for _, field := range []string{"id", "build_id", "step_index", "name", "command", "status", "worker_id", "exit_code", "stdout", "stderr", "error_message"} {
 		if _, ok := first[field]; !ok {

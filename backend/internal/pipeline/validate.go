@@ -60,63 +60,129 @@ func Validate(pf *PipelineFile) error {
 
 	// step-level validation
 	seen := make(map[string]bool, len(pf.Steps))
+	executableStepCount := 0
 	for i, step := range pf.Steps {
 		prefix := fmt.Sprintf("steps[%d]", i)
-
-		name := strings.TrimSpace(step.Name)
-		if name == "" {
-			errs = append(errs, ValidationError{Field: prefix + ".name", Message: "step name is required"})
-		} else {
-			lower := strings.ToLower(name)
-			if seen[lower] {
-				errs = append(errs, ValidationError{Field: prefix + ".name", Message: fmt.Sprintf("duplicate step name %q", name)})
-			}
-			seen[lower] = true
+		if step.Group == nil {
+			errs = append(errs, validateStepDef(step, prefix, seen)...)
+			executableStepCount++
+			continue
 		}
 
-		if strings.TrimSpace(step.Run) == "" {
-			errs = append(errs, ValidationError{Field: prefix + ".run", Message: "run command is required"})
+		errs = append(errs, validateGroupWrapperStep(step, prefix)...)
+
+		groupName := strings.TrimSpace(step.Group.Name)
+		if groupName == "" {
+			errs = append(errs, ValidationError{Field: prefix + ".group.name", Message: "group name is required"})
+		}
+		if len(step.Group.Steps) == 0 {
+			errs = append(errs, ValidationError{Field: prefix + ".group.steps", Message: "group must contain at least one step"})
+			continue
 		}
 
-		if step.TimeoutSeconds != nil && *step.TimeoutSeconds <= 0 {
-			errs = append(errs, ValidationError{Field: prefix + ".timeout_seconds", Message: "must be > 0 when set"})
-		}
-
-		if step.WorkingDir != "" {
-			cleaned := filepath.Clean(step.WorkingDir)
-			if filepath.IsAbs(cleaned) ||
-				cleaned == ".." ||
-				strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
-				errs = append(errs, ValidationError{Field: prefix + ".working_dir", Message: "must be a relative path"})
-			}
-		}
-
-		for key := range step.Env {
-			if !validEnvKey.MatchString(key) {
-				errs = append(errs, ValidationError{Field: prefix + ".env", Message: fmt.Sprintf("invalid env key %q", key)})
-			}
-		}
-
-		for j, pattern := range step.Artifacts.Paths {
-			trimmed := strings.TrimSpace(pattern)
-			field := fmt.Sprintf("%s.artifacts.paths[%d]", prefix, j)
-			if trimmed == "" {
-				errs = append(errs, ValidationError{Field: field, Message: "artifact path is required"})
+		for j, groupStep := range step.Group.Steps {
+			if groupStep.Group != nil {
+				errs = append(errs, ValidationError{Field: fmt.Sprintf("%s.group.steps[%d].group", prefix, j), Message: "nested groups are not allowed"})
 				continue
 			}
-			if err := validateArtifactPathPattern(trimmed); err != nil {
-				errs = append(errs, ValidationError{Field: field, Message: err.Error()})
-			}
+			errs = append(errs, validateStepDef(groupStep, fmt.Sprintf("%s.group.steps[%d]", prefix, j), seen)...)
+			executableStepCount++
 		}
+	}
 
-		stepCacheErrs := validateCacheDef(prefix+".cache", step.Cache)
-		errs = append(errs, stepCacheErrs...)
+	if executableStepCount == 0 {
+		errs = append(errs, ValidationError{Field: "steps", Message: "at least one step is required"})
 	}
 
 	if len(errs) > 0 {
 		return errs
 	}
 	return nil
+}
+
+func validateGroupWrapperStep(step StepDef, prefix string) ValidationErrors {
+	var errs ValidationErrors
+
+	if strings.TrimSpace(step.Name) != "" {
+		errs = append(errs, ValidationError{Field: prefix + ".name", Message: "group wrapper must not set name"})
+	}
+	if strings.TrimSpace(step.Image) != "" {
+		errs = append(errs, ValidationError{Field: prefix + ".image", Message: "group wrapper must not set image"})
+	}
+	if strings.TrimSpace(step.Run) != "" {
+		errs = append(errs, ValidationError{Field: prefix + ".run", Message: "group wrapper must not set run"})
+	}
+	if strings.TrimSpace(step.Command) != "" {
+		errs = append(errs, ValidationError{Field: prefix + ".command", Message: "group wrapper must not set command"})
+	}
+	if step.TimeoutSeconds != nil {
+		errs = append(errs, ValidationError{Field: prefix + ".timeout_seconds", Message: "group wrapper must not set timeout_seconds"})
+	}
+	if strings.TrimSpace(step.WorkingDir) != "" {
+		errs = append(errs, ValidationError{Field: prefix + ".working_dir", Message: "group wrapper must not set working_dir"})
+	}
+	if len(step.Env) > 0 {
+		errs = append(errs, ValidationError{Field: prefix + ".env", Message: "group wrapper must not set env"})
+	}
+	if len(step.Artifacts.Paths) > 0 {
+		errs = append(errs, ValidationError{Field: prefix + ".artifacts", Message: "group wrapper must not set artifacts"})
+	}
+	if step.Cache != nil {
+		errs = append(errs, ValidationError{Field: prefix + ".cache", Message: "group wrapper must not set cache"})
+	}
+
+	return errs
+}
+
+func validateStepDef(step StepDef, prefix string, seen map[string]bool) ValidationErrors {
+	var errs ValidationErrors
+
+	name := strings.TrimSpace(step.Name)
+	if name == "" {
+		errs = append(errs, ValidationError{Field: prefix + ".name", Message: "step name is required"})
+	} else {
+		lower := strings.ToLower(name)
+		if seen[lower] {
+			errs = append(errs, ValidationError{Field: prefix + ".name", Message: fmt.Sprintf("duplicate step name %q", name)})
+		}
+		seen[lower] = true
+	}
+
+	if strings.TrimSpace(step.Run) == "" {
+		errs = append(errs, ValidationError{Field: prefix + ".run", Message: "run command is required"})
+	}
+
+	if step.TimeoutSeconds != nil && *step.TimeoutSeconds <= 0 {
+		errs = append(errs, ValidationError{Field: prefix + ".timeout_seconds", Message: "must be > 0 when set"})
+	}
+
+	if step.WorkingDir != "" {
+		cleaned := filepath.Clean(step.WorkingDir)
+		if filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+			errs = append(errs, ValidationError{Field: prefix + ".working_dir", Message: "must be a relative path"})
+		}
+	}
+
+	for key := range step.Env {
+		if !validEnvKey.MatchString(key) {
+			errs = append(errs, ValidationError{Field: prefix + ".env", Message: fmt.Sprintf("invalid env key %q", key)})
+		}
+	}
+
+	for j, pattern := range step.Artifacts.Paths {
+		trimmed := strings.TrimSpace(pattern)
+		field := fmt.Sprintf("%s.artifacts.paths[%d]", prefix, j)
+		if trimmed == "" {
+			errs = append(errs, ValidationError{Field: field, Message: "artifact path is required"})
+			continue
+		}
+		if err := validateArtifactPathPattern(trimmed); err != nil {
+			errs = append(errs, ValidationError{Field: field, Message: err.Error()})
+		}
+	}
+
+	errs = append(errs, validateCacheDef(prefix+".cache", step.Cache)...)
+	return errs
 }
 
 func validateCacheDef(fieldPrefix string, def *CacheDef) ValidationErrors {
