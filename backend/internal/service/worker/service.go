@@ -103,7 +103,10 @@ func NewExecutionWorkerServiceWithLease(builds workerExecutionBoundary, workerID
 }
 
 func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerRunnableStep, bool, error) {
-	if err := w.prepareQueuedBuilds(ctx); err != nil {
+	// prepareQueuedBuilds returns the full build list it already fetched so the
+	// transitional fallback below can reuse it without a second ListBuilds call.
+	builds, err := w.prepareQueuedBuilds(ctx)
+	if err != nil {
 		return WorkerRunnableStep{}, false, err
 	}
 
@@ -121,10 +124,6 @@ func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerR
 	//   2. expired-lease reclaim logic is ported to the execution_jobs-based path
 	//   3. Pending→Queued auto-transition is handled outside this path
 	//   4. worker e2e tests are updated to wire an ExecutionJobRepository
-	builds, err := w.builds.ListBuilds(ctx)
-	if err != nil {
-		return WorkerRunnableStep{}, false, err
-	}
 
 	for _, build := range builds {
 		if domain.IsTerminalBuildStatus(build.Status) {
@@ -281,13 +280,19 @@ func (w *ExecutionWorkerService) claimRunnableStepFromJobs(ctx context.Context) 
 	return runnable, true, nil
 }
 
-func (w *ExecutionWorkerService) prepareQueuedBuilds(ctx context.Context) error {
+// prepareQueuedBuilds fetches all builds, advances any pending→queued and
+// queued→preparing transitions, and returns the full build list so the caller
+// can reuse it without an additional ListBuilds round-trip.
+//
+// Builds that are successfully advanced have their entry in the returned slice
+// replaced with the post-transition value so the fallback scan sees fresh statuses.
+func (w *ExecutionWorkerService) prepareQueuedBuilds(ctx context.Context) ([]domain.Build, error) {
 	builds, err := w.builds.ListBuilds(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	for _, build := range builds {
+	for i, build := range builds {
 		if domain.IsTerminalBuildStatus(build.Status) {
 			continue
 		}
@@ -298,24 +303,27 @@ func (w *ExecutionWorkerService) prepareQueuedBuilds(ctx context.Context) error 
 				if errors.Is(queueErr, buildsvc.ErrInvalidBuildStatusTransition) {
 					continue
 				}
-				return queueErr
+				return nil, queueErr
 			}
 			build = queuedBuild
+			builds[i] = build
 		}
 
 		if build.Status != domain.BuildStatusQueued {
 			continue
 		}
 
-		if _, prepErr := w.builds.PrepareBuildExecution(ctx, build.ID); prepErr != nil {
+		preparedBuild, prepErr := w.builds.PrepareBuildExecution(ctx, build.ID)
+		if prepErr != nil {
 			if errors.Is(prepErr, buildsvc.ErrInvalidBuildStatusTransition) {
 				continue
 			}
-			return prepErr
+			return nil, prepErr
 		}
+		builds[i] = preparedBuild
 	}
 
-	return nil
+	return builds, nil
 }
 
 func (w *ExecutionWorkerService) mirrorJobClaimToStep(ctx context.Context, job domain.ExecutionJob, claim repository.StepClaim) error {

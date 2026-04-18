@@ -11,7 +11,7 @@ package build
 
 import (
 	"context"
-	"os"
+	"slices"
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -26,15 +26,7 @@ func TestPrepareBuildExecution_TransitionsQueuedToRunning(t *testing.T) {
 	}
 	svc := NewBuildService(repo, nil, nil)
 
-	dir, err := os.MkdirTemp("", "prep-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer func() {
-		if removeErr := os.RemoveAll(dir); removeErr != nil {
-			t.Fatalf("cleanup temp dir: %v", removeErr)
-		}
-	}()
+	dir := t.TempDir()
 
 	resolver := &fakeWorkspaceSourceResolver{}
 	svc.SetSourceResolver(resolver)
@@ -128,15 +120,7 @@ func TestPrepareBuildExecution_SourceClonedExactlyOnce(t *testing.T) {
 		},
 	}
 
-	dir, err := os.MkdirTemp("", "prep-once-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer func() {
-		if removeErr := os.RemoveAll(dir); removeErr != nil {
-			t.Fatalf("cleanup temp dir: %v", removeErr)
-		}
-	}()
+	dir := t.TempDir()
 
 	resolver := &fakeWorkspaceSourceResolver{resolvedCommit: "deadbeef"}
 	svc := NewBuildService(repo, nil, nil)
@@ -183,15 +167,7 @@ func TestPrepareBuildExecution_FailsBuildOnCloneError(t *testing.T) {
 		},
 	}
 
-	dir, err := os.MkdirTemp("", "prep-clone-fail-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer func() {
-		if removeErr := os.RemoveAll(dir); removeErr != nil {
-			t.Fatalf("cleanup temp dir: %v", removeErr)
-		}
-	}()
+	dir := t.TempDir()
 
 	resolver := &fakeWorkspaceSourceResolver{cloneErr: source.ErrCloneFailed}
 	svc := NewBuildService(repo, nil, nil)
@@ -204,5 +180,46 @@ func TestPrepareBuildExecution_FailsBuildOnCloneError(t *testing.T) {
 	}
 	if build.Status != domain.BuildStatusFailed {
 		t.Fatalf("expected failed build on clone error, got %q", build.Status)
+	}
+}
+
+func TestPrepareBuildExecution_EmitsOneTimeBuildPrepLogMessages(t *testing.T) {
+	repoURL := "https://github.com/example/repo.git"
+	ref := "main"
+
+	repo := &fakeBuildRepository{
+		build: domain.Build{
+			ID:     "build-log-prep",
+			Status: domain.BuildStatusQueued,
+			Source: domain.NewSourceSpec(repoURL, ref, ""),
+		},
+	}
+
+	dir := t.TempDir()
+
+	logSink := &fakeLogSink{}
+	resolver := &fakeWorkspaceSourceResolver{resolvedCommit: "cafebabe"}
+	svc := NewBuildService(repo, nil, logSink)
+	svc.SetSourceResolver(resolver)
+	svc.SetExecutionWorkspaceRoot(dir)
+
+	build, prepErr := svc.PrepareBuildExecution(context.Background(), "build-log-prep")
+	if prepErr != nil {
+		t.Fatalf("unexpected prep error: %v", prepErr)
+	}
+	if build.Status != domain.BuildStatusRunning {
+		t.Fatalf("expected running build after prep, got %q", build.Status)
+	}
+
+	expected := []string{
+		"Preparing build workspace",
+		"Checking out source",
+		"Source checkout complete",
+		"Build workspace ready",
+	}
+	for _, message := range expected {
+		if !slices.Contains(logSink.lines, message) {
+			t.Fatalf("expected build prep log message %q, got %#v", message, logSink.lines)
+		}
 	}
 }

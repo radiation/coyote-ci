@@ -69,6 +69,8 @@ func Validate(pf *PipelineFile) error {
 			continue
 		}
 
+		errs = append(errs, validateGroupWrapperStep(step, prefix)...)
+
 		groupName := strings.TrimSpace(step.Group.Name)
 		if groupName == "" {
 			errs = append(errs, ValidationError{Field: prefix + ".group.name", Message: "group name is required"})
@@ -96,6 +98,40 @@ func Validate(pf *PipelineFile) error {
 		return errs
 	}
 	return nil
+}
+
+func validateGroupWrapperStep(step StepDef, prefix string) ValidationErrors {
+	var errs ValidationErrors
+
+	if strings.TrimSpace(step.Name) != "" {
+		errs = append(errs, ValidationError{Field: prefix + ".name", Message: "group wrapper must not set name"})
+	}
+	if strings.TrimSpace(step.Image) != "" {
+		errs = append(errs, ValidationError{Field: prefix + ".image", Message: "group wrapper must not set image"})
+	}
+	if strings.TrimSpace(step.Run) != "" {
+		errs = append(errs, ValidationError{Field: prefix + ".run", Message: "group wrapper must not set run"})
+	}
+	if strings.TrimSpace(step.Command) != "" {
+		errs = append(errs, ValidationError{Field: prefix + ".command", Message: "group wrapper must not set command"})
+	}
+	if step.TimeoutSeconds != nil {
+		errs = append(errs, ValidationError{Field: prefix + ".timeout_seconds", Message: "group wrapper must not set timeout_seconds"})
+	}
+	if strings.TrimSpace(step.WorkingDir) != "" {
+		errs = append(errs, ValidationError{Field: prefix + ".working_dir", Message: "group wrapper must not set working_dir"})
+	}
+	if len(step.Env) > 0 {
+		errs = append(errs, ValidationError{Field: prefix + ".env", Message: "group wrapper must not set env"})
+	}
+	if len(step.Artifacts.Paths) > 0 {
+		errs = append(errs, ValidationError{Field: prefix + ".artifacts", Message: "group wrapper must not set artifacts"})
+	}
+	if step.Cache != nil {
+		errs = append(errs, ValidationError{Field: prefix + ".cache", Message: "group wrapper must not set cache"})
+	}
+
+	return errs
 }
 
 func validateStepDef(step StepDef, prefix string, seen map[string]bool) ValidationErrors {

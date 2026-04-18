@@ -34,7 +34,7 @@ func (p *WorkspacePreparer) Prepare(ctx context.Context, executionContext StepEx
 		return nil, nil, nil
 	}
 
-	logManager.EmitSystemLine(ctx, "Preparing workspace")
+	logManager.EmitSystemLine(ctx, "Attaching workspace")
 	prepareErr := buildScopedRunner.PrepareBuild(ctx, runner.PrepareBuildRequest{
 		BuildID:    request.BuildID,
 		RepoURL:    executionContext.BuildSource.RepositoryURL,
@@ -52,7 +52,7 @@ func (p *WorkspacePreparer) Prepare(ctx context.Context, executionContext StepEx
 		return &result, prepareErr, nil
 	}
 
-	logManager.EmitSystemLine(ctx, "Workspace ready")
+	logManager.EmitSystemLine(ctx, "Workspace attached")
 	return nil, nil, nil
 }
 

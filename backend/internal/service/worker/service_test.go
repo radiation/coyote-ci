@@ -559,7 +559,7 @@ func TestExecutionWorkerService_ClaimRunnableStep_FromJobClaim_StartsQueuedBuild
 	}
 }
 
-func TestExecutionWorkerService_ClaimRunnableStep_FromJobClaim_RejectsPendingBuild(t *testing.T) {
+func TestExecutionWorkerService_ClaimRunnableStep_FromJobClaim_PromotesPendingBuild(t *testing.T) {
 	now := time.Now().UTC()
 	boundary := &fakeExecutionWorkerBoundary{
 		// Build is pending (not yet queued). prepareQueuedBuilds should promote

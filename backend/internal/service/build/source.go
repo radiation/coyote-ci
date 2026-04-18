@@ -14,6 +14,22 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/source"
 )
 
+const buildPreparationLogStepName = "build-prep"
+
+func (s *BuildService) emitBuildPreparationLog(ctx context.Context, buildID string, line string) {
+	if s.logSink == nil {
+		return
+	}
+	trimmedBuildID := strings.TrimSpace(buildID)
+	trimmedLine := strings.TrimSpace(line)
+	if trimmedBuildID == "" || trimmedLine == "" {
+		return
+	}
+	if err := s.logSink.WriteStepLog(ctx, trimmedBuildID, buildPreparationLogStepName, trimmedLine); err != nil {
+		log.Printf("build prep log write failed: build_id=%s error=%v", trimmedBuildID, err)
+	}
+}
+
 func buildSourceSpecFromBuild(build domain.Build) execution.ResolvedBuildSourceSpec {
 	if build.Source != nil {
 		result := execution.ResolvedBuildSourceSpec{
@@ -176,7 +192,7 @@ func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (do
 	prepStartedAt := time.Now().UTC()
 	buildID := strings.TrimSpace(id)
 
-	build, err := s.buildRepo.GetByID(ctx, id)
+	build, err := s.buildRepo.GetByID(ctx, buildID)
 	if err != nil {
 		return domain.Build{}, mapRepoErr(err)
 	}
@@ -191,14 +207,15 @@ func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (do
 		return domain.Build{}, ErrInvalidBuildStatusTransition
 	}
 
-	build, err = s.transitionBuildStatus(ctx, id, domain.BuildStatusPreparing, nil)
+	build, err = s.transitionBuildStatus(ctx, buildID, domain.BuildStatusPreparing, nil)
 	if err != nil {
 		return domain.Build{}, err
 	}
+	s.emitBuildPreparationLog(ctx, buildID, "Preparing build workspace")
 
-	if prepErr := s.prepareBuildWorkspace(ctx, id); prepErr != nil {
+	if prepErr := s.prepareBuildWorkspace(ctx, buildID); prepErr != nil {
 		message := prepErr.Error()
-		failed, updateErr := s.buildRepo.UpdateStatus(ctx, id, domain.BuildStatusFailed, &message)
+		failed, updateErr := s.buildRepo.UpdateStatus(ctx, buildID, domain.BuildStatusFailed, &message)
 		if updateErr != nil {
 			return domain.Build{}, mapRepoErr(updateErr)
 		}
@@ -208,19 +225,22 @@ func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (do
 
 	sourceSpec := buildSourceSpecFromBuild(build)
 	if sourceSpec.HasSource {
-		if _, sourceErr := s.resolveBuildSourceInWorkspace(ctx, id, sourceSpec); sourceErr != nil {
+		s.emitBuildPreparationLog(ctx, buildID, "Checking out source")
+		if _, sourceErr := s.resolveBuildSourceInWorkspace(ctx, buildID, sourceSpec); sourceErr != nil {
 			reason := classifyBuildSourceFailureReason(sourceErr, sourceSpec)
-			_ = s.cleanupPreparedWorkspace(ctx, id)
-			failed, updateErr := s.buildRepo.UpdateStatus(ctx, id, domain.BuildStatusFailed, &reason)
+			_ = s.cleanupPreparedWorkspace(ctx, buildID)
+			failed, updateErr := s.buildRepo.UpdateStatus(ctx, buildID, domain.BuildStatusFailed, &reason)
 			if updateErr != nil {
 				return domain.Build{}, mapRepoErr(updateErr)
 			}
 			log.Printf("build preparation failed: build_id=%s duration_ms=%d reason=%q", buildID, time.Since(prepStartedAt).Milliseconds(), reason)
 			return failed, nil
 		}
+		s.emitBuildPreparationLog(ctx, buildID, "Source checkout complete")
 	}
+	s.emitBuildPreparationLog(ctx, buildID, "Build workspace ready")
 
-	runningBuild, transitionErr := s.transitionBuildStatus(ctx, id, domain.BuildStatusRunning, nil)
+	runningBuild, transitionErr := s.transitionBuildStatus(ctx, buildID, domain.BuildStatusRunning, nil)
 	if transitionErr != nil {
 		return domain.Build{}, transitionErr
 	}

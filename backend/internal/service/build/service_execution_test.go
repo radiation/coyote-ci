@@ -817,8 +817,8 @@ func TestBuildService_RunStep_EmitsHighSignalPhaseMarkers(t *testing.T) {
 	}
 
 	assertMessagesContain(t, messages,
-		"Preparing workspace",
-		"Workspace ready",
+		"Attaching workspace",
+		"Workspace attached",
 		"Executing pipeline steps",
 		"Collecting artifacts",
 		"Finalizing build",

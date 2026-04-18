@@ -424,6 +424,123 @@ func TestValidate_CachePresetDefaultPolicyValid(t *testing.T) {
 	}
 }
 
+func TestValidate_GroupWrapperRejectsExecutableFields(t *testing.T) {
+	timeout := 30
+
+	tests := []struct {
+		name     string
+		mutate   func(step *StepDef)
+		fieldRef string
+	}{
+		{
+			name: "name",
+			mutate: func(step *StepDef) {
+				step.Name = "wrapper"
+			},
+			fieldRef: "steps[0].name",
+		},
+		{
+			name: "run",
+			mutate: func(step *StepDef) {
+				step.Run = "echo should-not-run"
+			},
+			fieldRef: "steps[0].run",
+		},
+		{
+			name: "image",
+			mutate: func(step *StepDef) {
+				step.Image = "alpine:3"
+			},
+			fieldRef: "steps[0].image",
+		},
+		{
+			name: "command",
+			mutate: func(step *StepDef) {
+				step.Command = "sh"
+			},
+			fieldRef: "steps[0].command",
+		},
+		{
+			name: "working_dir",
+			mutate: func(step *StepDef) {
+				step.WorkingDir = "backend"
+			},
+			fieldRef: "steps[0].working_dir",
+		},
+		{
+			name: "timeout_seconds",
+			mutate: func(step *StepDef) {
+				step.TimeoutSeconds = &timeout
+			},
+			fieldRef: "steps[0].timeout_seconds",
+		},
+		{
+			name: "env",
+			mutate: func(step *StepDef) {
+				step.Env = map[string]string{"FOO": "bar"}
+			},
+			fieldRef: "steps[0].env",
+		},
+		{
+			name: "artifacts",
+			mutate: func(step *StepDef) {
+				step.Artifacts = ArtifactDef{Paths: []string{"dist/**"}}
+			},
+			fieldRef: "steps[0].artifacts",
+		},
+		{
+			name: "cache",
+			mutate: func(step *StepDef) {
+				step.Cache = &CacheDef{Preset: "go"}
+			},
+			fieldRef: "steps[0].cache",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			groupWrapper := StepDef{
+				Group: &StepGroupDef{
+					Name: "parallel",
+					Steps: []StepDef{
+						{Name: "a", Run: "echo a"},
+					},
+				},
+			}
+			tc.mutate(&groupWrapper)
+
+			pf := &PipelineFile{Version: 1, Steps: []StepDef{groupWrapper}}
+			err := Validate(pf)
+			if err == nil {
+				t.Fatalf("expected validation error when setting %s on group wrapper", tc.name)
+			}
+			assertContains(t, err.Error(), tc.fieldRef)
+			assertContains(t, err.Error(), "group wrapper must not set")
+		})
+	}
+}
+
+func TestValidate_GroupWrapperWithOnlyGroupFieldsIsValid(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps: []StepDef{
+			{
+				Group: &StepGroupDef{
+					Name: "parallel",
+					Steps: []StepDef{
+						{Name: "lint", Run: "npm run lint"},
+						{Name: "test", Run: "npm test"},
+					},
+				},
+			},
+		},
+	}
+
+	if err := Validate(pf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func assertContains(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(strings.ToLower(s), strings.ToLower(substr)) {
