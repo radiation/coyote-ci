@@ -16,7 +16,9 @@ func CanTransitionBuild(from, to BuildStatus) bool {
 	case BuildStatusPending:
 		return to == BuildStatusQueued
 	case BuildStatusQueued:
-		return to == BuildStatusRunning
+		return to == BuildStatusPreparing
+	case BuildStatusPreparing:
+		return to == BuildStatusRunning || to == BuildStatusFailed
 	case BuildStatusRunning:
 		return to == BuildStatusSuccess || to == BuildStatusFailed
 	default:

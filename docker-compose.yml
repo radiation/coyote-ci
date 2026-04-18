@@ -75,7 +75,6 @@ services:
       dockerfile: Dockerfile
       args:
         GO_VERSION: ${GO_VERSION:-1.26.2}
-    container_name: coyote-ci-worker
     depends_on:
       db:
         condition: service_healthy

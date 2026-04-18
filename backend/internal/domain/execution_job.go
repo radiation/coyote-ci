@@ -66,6 +66,9 @@ type ExecutionJob struct {
 	ID               string
 	BuildID          string
 	StepID           string
+	NodeID           string
+	GroupName        *string
+	DependsOnNodeIDs []string
 	Name             string
 	StepIndex        int
 	AttemptNumber    int

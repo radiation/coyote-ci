@@ -351,6 +351,9 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 			id,
 			build_id,
 			step_index,
+			node_id,
+			group_name,
+			depends_on_node_ids,
 			name,
 			image,
 			command,
@@ -372,7 +375,7 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 			artifact_paths,
 			cache_config
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23::jsonb)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25::jsonb, $26::jsonb)
 	`
 
 	for _, step := range steps {
@@ -392,6 +395,10 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 		if marshalErr != nil {
 			return marshalErr
 		}
+		dependsOnJSON, marshalErr := json.Marshal(normalizeNodeIDSlice(step.DependsOnNodes))
+		if marshalErr != nil {
+			return marshalErr
+		}
 		var cacheJSON []byte
 		if step.Cache != nil {
 			cacheJSON, marshalErr = json.Marshal(step.Cache)
@@ -408,6 +415,9 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 			step.ID,
 			buildID,
 			step.StepIndex,
+			normalizeNodeID(step.NodeID, step.StepIndex),
+			step.GroupName,
+			string(dependsOnJSON),
 			step.Name,
 			step.Image,
 			step.Command,

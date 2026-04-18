@@ -10,7 +10,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
-const stepColumns = `id, build_id, step_index, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message, artifact_paths, cache_config`
+const stepColumns = `id, build_id, step_index, node_id, group_name, depends_on_node_ids, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message, artifact_paths, cache_config`
 
 func (r *BuildRepository) GetStepsByBuildID(ctx context.Context, buildID string) (steps []domain.BuildStep, err error) {
 	query := `
@@ -54,13 +54,36 @@ func (r *BuildRepository) GetStepsByBuildID(ctx context.Context, buildID string)
 
 func (r *BuildRepository) ClaimStepIfPending(ctx context.Context, buildID string, stepIndex int, workerID *string, startedAt time.Time) (domain.BuildStep, bool, error) {
 	query := `
-		UPDATE build_steps
+		UPDATE build_steps AS bs
 		SET status = 'running',
 			worker_id = COALESCE($3, worker_id),
 			started_at = COALESCE(started_at, $4)
 		WHERE build_id = $1
 		  AND step_index = $2
 		  AND status = 'pending'
+		  AND (
+				(
+					NULLIF(BTRIM(COALESCE(bs.node_id, '')), '') IS NOT NULL
+					AND NOT EXISTS (
+						SELECT 1
+						FROM jsonb_array_elements_text(COALESCE(bs.depends_on_node_ids, '[]'::jsonb)) AS dep(node_id)
+						LEFT JOIN build_steps upstream
+							ON upstream.build_id = bs.build_id
+						   AND upstream.node_id = dep.node_id
+						WHERE upstream.id IS NULL OR upstream.status <> 'success'
+					)
+				)
+				OR (
+					NULLIF(BTRIM(COALESCE(bs.node_id, '')), '') IS NULL
+					AND NOT EXISTS (
+						SELECT 1
+						FROM build_steps previous
+						WHERE previous.build_id = bs.build_id
+						  AND previous.step_index < bs.step_index
+						  AND previous.status <> 'success'
+					)
+				)
+		  )
 		RETURNING ` + stepColumns
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, workerID, startedAt))
@@ -76,7 +99,7 @@ func (r *BuildRepository) ClaimStepIfPending(ctx context.Context, buildID string
 
 func (r *BuildRepository) ClaimPendingStep(ctx context.Context, buildID string, stepIndex int, claim repository.StepClaim) (domain.BuildStep, bool, error) {
 	query := `
-		UPDATE build_steps
+		UPDATE build_steps AS bs
 		SET status = 'running',
 			worker_id = $3,
 			claim_token = $4,
@@ -86,6 +109,29 @@ func (r *BuildRepository) ClaimPendingStep(ctx context.Context, buildID string, 
 		WHERE build_id = $1
 		  AND step_index = $2
 		  AND status = 'pending'
+		  AND (
+				(
+					NULLIF(BTRIM(COALESCE(bs.node_id, '')), '') IS NOT NULL
+					AND NOT EXISTS (
+						SELECT 1
+						FROM jsonb_array_elements_text(COALESCE(bs.depends_on_node_ids, '[]'::jsonb)) AS dep(node_id)
+						LEFT JOIN build_steps upstream
+							ON upstream.build_id = bs.build_id
+						   AND upstream.node_id = dep.node_id
+						WHERE upstream.id IS NULL OR upstream.status <> 'success'
+					)
+				)
+				OR (
+					NULLIF(BTRIM(COALESCE(bs.node_id, '')), '') IS NULL
+					AND NOT EXISTS (
+						SELECT 1
+						FROM build_steps previous
+						WHERE previous.build_id = bs.build_id
+						  AND previous.step_index < bs.step_index
+						  AND previous.status <> 'success'
+					)
+				)
+		  )
 		RETURNING ` + stepColumns
 
 	step, err := scanStep(r.db.QueryRowContext(ctx, query, buildID, stepIndex, claim.WorkerID, claim.ClaimToken, claim.ClaimedAt, claim.LeaseExpiresAt))

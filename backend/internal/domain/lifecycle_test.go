@@ -9,7 +9,9 @@ func TestCanTransitionBuild_Valid(t *testing.T) {
 		to   BuildStatus
 	}{
 		{name: "pending to queued", from: BuildStatusPending, to: BuildStatusQueued},
-		{name: "queued to running", from: BuildStatusQueued, to: BuildStatusRunning},
+		{name: "queued to preparing", from: BuildStatusQueued, to: BuildStatusPreparing},
+		{name: "preparing to running", from: BuildStatusPreparing, to: BuildStatusRunning},
+		{name: "preparing to failed", from: BuildStatusPreparing, to: BuildStatusFailed},
 		{name: "running to success", from: BuildStatusRunning, to: BuildStatusSuccess},
 		{name: "running to failed", from: BuildStatusRunning, to: BuildStatusFailed},
 	}
@@ -34,7 +36,9 @@ func TestCanTransitionBuild_Invalid(t *testing.T) {
 	}{
 		{name: "pending to running", from: BuildStatusPending, to: BuildStatusRunning},
 		{name: "pending to success", from: BuildStatusPending, to: BuildStatusSuccess},
+		{name: "queued to running", from: BuildStatusQueued, to: BuildStatusRunning},
 		{name: "queued to success", from: BuildStatusQueued, to: BuildStatusSuccess},
+		{name: "preparing to success", from: BuildStatusPreparing, to: BuildStatusSuccess},
 		{name: "success to failed", from: BuildStatusSuccess, to: BuildStatusFailed},
 		{name: "failed to running", from: BuildStatusFailed, to: BuildStatusRunning},
 	}

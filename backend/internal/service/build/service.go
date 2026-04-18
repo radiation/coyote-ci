@@ -631,10 +631,12 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	}
 
 	logManager := NewExecutionLogManager(s, executionContext)
-	workspacePreparer := NewWorkspacePreparer(s)
 	completionManager := NewStepCompletionManager(s)
 	stepRunner := NewStepRunner(s.runner)
 
+	logManager.EmitExecutionStart(ctx)
+
+	workspacePreparer := NewWorkspacePreparer(s)
 	earlyResult, earlyErr, prepareErr := workspacePreparer.Prepare(ctx, executionContext, logManager)
 	if prepareErr != nil {
 		return runner.RunStepResult{}, StepCompletionReport{}, mapExecutionErr(prepareErr)
@@ -647,7 +649,6 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		return *earlyResult, report, earlyErr
 	}
 
-	logManager.EmitExecutionStart(ctx)
 	cacheSideEffectErr := error(nil)
 	preparedCache := preparedStepCache{}
 	if s.stepCacheManager != nil {

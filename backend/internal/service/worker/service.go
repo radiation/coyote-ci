@@ -19,6 +19,7 @@ import (
 
 type workerExecutionBoundary interface {
 	ClaimNextRunnableJob(ctx context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error)
+	PrepareBuildExecution(ctx context.Context, id string) (domain.Build, error)
 	GetBuild(ctx context.Context, id string) (domain.Build, error)
 	ListBuilds(ctx context.Context) ([]domain.Build, error)
 	GetBuildSteps(ctx context.Context, id string) ([]domain.BuildStep, error)
@@ -102,6 +103,10 @@ func NewExecutionWorkerServiceWithLease(builds workerExecutionBoundary, workerID
 }
 
 func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerRunnableStep, bool, error) {
+	if err := w.prepareQueuedBuilds(ctx); err != nil {
+		return WorkerRunnableStep{}, false, err
+	}
+
 	if runnable, found, err := w.claimRunnableStepFromJobs(ctx); err != nil {
 		return WorkerRunnableStep{}, false, err
 	} else if found {
@@ -125,7 +130,7 @@ func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerR
 		if domain.IsTerminalBuildStatus(build.Status) {
 			continue
 		}
-		if build.Status != domain.BuildStatusQueued && build.Status != domain.BuildStatusRunning && build.Status != domain.BuildStatusPending {
+		if build.Status != domain.BuildStatusRunning && build.Status != domain.BuildStatusPending {
 			continue
 		}
 
@@ -165,15 +170,6 @@ func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerR
 		claimCount := atomic.AddInt64(&w.claimsWon, 1)
 		log.Printf("claim succeeded: build_id=%s step_index=%d worker_id=%s claim_count=%d", build.ID, claimedStep.StepIndex, claim.WorkerID, claimCount)
 
-		if build.Status == domain.BuildStatusQueued {
-			if _, err := w.builds.StartBuild(ctx, build.ID); err != nil && !errors.Is(err, buildsvc.ErrInvalidBuildStatusTransition) {
-				return WorkerRunnableStep{}, false, err
-			}
-			if err := w.ensureBuildRunning(ctx, build.ID); err != nil {
-				return WorkerRunnableStep{}, false, err
-			}
-		}
-
 		runnableStep := WorkerRunnableStep{
 			BuildID:        build.ID,
 			JobID:          "",
@@ -196,7 +192,7 @@ func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerR
 		if domain.IsTerminalBuildStatus(build.Status) {
 			continue
 		}
-		if build.Status != domain.BuildStatusQueued && build.Status != domain.BuildStatusRunning {
+		if build.Status != domain.BuildStatusRunning {
 			continue
 		}
 
@@ -222,15 +218,6 @@ func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerR
 		}
 		reclaimCount := atomic.AddInt64(&w.reclaimsWon, 1)
 		log.Printf("reclaim succeeded: build_id=%s step_index=%d worker_id=%s reclaim_count=%d", build.ID, reclaimedStep.StepIndex, claim.WorkerID, reclaimCount)
-
-		if build.Status == domain.BuildStatusQueued {
-			if _, err := w.builds.StartBuild(ctx, build.ID); err != nil && !errors.Is(err, buildsvc.ErrInvalidBuildStatusTransition) {
-				return WorkerRunnableStep{}, false, err
-			}
-			if err := w.ensureBuildRunning(ctx, build.ID); err != nil {
-				return WorkerRunnableStep{}, false, err
-			}
-		}
 
 		runnableStep := WorkerRunnableStep{
 			BuildID:        build.ID,
@@ -272,10 +259,6 @@ func (w *ExecutionWorkerService) claimRunnableStepFromJobs(ctx context.Context) 
 		return WorkerRunnableStep{}, false, stepErr
 	}
 
-	if err := w.ensureBuildRunning(ctx, job.BuildID); err != nil {
-		return WorkerRunnableStep{}, false, err
-	}
-
 	claimCount := atomic.AddInt64(&w.claimsWon, 1)
 	log.Printf("job claim succeeded: job_id=%s build_id=%s step_index=%d worker_id=%s claim_count=%d", job.ID, job.BuildID, job.StepIndex, claim.WorkerID, claimCount)
 
@@ -296,6 +279,43 @@ func (w *ExecutionWorkerService) claimRunnableStepFromJobs(ctx context.Context) 
 	}
 
 	return runnable, true, nil
+}
+
+func (w *ExecutionWorkerService) prepareQueuedBuilds(ctx context.Context) error {
+	builds, err := w.builds.ListBuilds(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, build := range builds {
+		if domain.IsTerminalBuildStatus(build.Status) {
+			continue
+		}
+
+		if build.Status == domain.BuildStatusPending {
+			queuedBuild, queueErr := w.builds.QueueBuild(ctx, build.ID)
+			if queueErr != nil {
+				if errors.Is(queueErr, buildsvc.ErrInvalidBuildStatusTransition) {
+					continue
+				}
+				return queueErr
+			}
+			build = queuedBuild
+		}
+
+		if build.Status != domain.BuildStatusQueued {
+			continue
+		}
+
+		if _, prepErr := w.builds.PrepareBuildExecution(ctx, build.ID); prepErr != nil {
+			if errors.Is(prepErr, buildsvc.ErrInvalidBuildStatusTransition) {
+				continue
+			}
+			return prepErr
+		}
+	}
+
+	return nil
 }
 
 func (w *ExecutionWorkerService) mirrorJobClaimToStep(ctx context.Context, job domain.ExecutionJob, claim repository.StepClaim) error {

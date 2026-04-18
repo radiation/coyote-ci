@@ -107,10 +107,7 @@ func (s *BuildService) resolveBuildSourceInWorkspace(ctx context.Context, buildI
 		return "", ErrSourceResolverNotConfigured
 	}
 
-	workspaceRoot := buildNormalizeWorkspaceRoot(s.executionWorkspaceRoot)
-	if workspaceRoot == "" {
-		workspaceRoot = buildNormalizeWorkspaceRoot(s.artifactWorkspaceRoot)
-	}
+	workspaceRoot := s.currentWorkspaceRoot()
 	if workspaceRoot == "" {
 		return "", ErrExecutionWorkspaceRootNotConfigured
 	}
@@ -141,6 +138,82 @@ func (s *BuildService) resolveBuildSourceInWorkspace(ctx context.Context, buildI
 	_ = build
 
 	return trimmedResolvedCommit, nil
+}
+
+func (s *BuildService) currentWorkspaceRoot() string {
+	workspaceRoot := buildNormalizeWorkspaceRoot(s.executionWorkspaceRoot)
+	if workspaceRoot != "" {
+		return workspaceRoot
+	}
+	return buildNormalizeWorkspaceRoot(s.artifactWorkspaceRoot)
+}
+
+func (s *BuildService) prepareBuildWorkspace(ctx context.Context, buildID string) error {
+	workspaceRoot := s.currentWorkspaceRoot()
+	if workspaceRoot == "" {
+		// No workspace root configured: the runner manages its own workspace (e.g. inprocess).
+		// Skip host-side directory creation; source resolution below will still gate on HasSource.
+		return nil
+	}
+
+	materializer := source.NewHostWorkspaceMaterializer(workspaceRoot)
+	_, err := materializer.PrepareWorkspace(ctx, source.WorkspacePrepareRequest{BuildID: strings.TrimSpace(buildID)})
+	return err
+}
+
+func (s *BuildService) cleanupPreparedWorkspace(ctx context.Context, buildID string) error {
+	workspaceRoot := s.currentWorkspaceRoot()
+	if workspaceRoot == "" {
+		return nil
+	}
+	materializer := source.NewHostWorkspaceMaterializer(workspaceRoot)
+	return materializer.CleanupWorkspace(ctx, strings.TrimSpace(buildID))
+}
+
+func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (domain.Build, error) {
+	build, err := s.buildRepo.GetByID(ctx, id)
+	if err != nil {
+		return domain.Build{}, mapRepoErr(err)
+	}
+
+	switch build.Status {
+	case domain.BuildStatusRunning:
+		return build, nil
+	case domain.BuildStatusPreparing:
+		return build, nil
+	case domain.BuildStatusQueued:
+	default:
+		return domain.Build{}, ErrInvalidBuildStatusTransition
+	}
+
+	build, err = s.transitionBuildStatus(ctx, id, domain.BuildStatusPreparing, nil)
+	if err != nil {
+		return domain.Build{}, err
+	}
+
+	if prepErr := s.prepareBuildWorkspace(ctx, id); prepErr != nil {
+		message := prepErr.Error()
+		failed, updateErr := s.buildRepo.UpdateStatus(ctx, id, domain.BuildStatusFailed, &message)
+		if updateErr != nil {
+			return domain.Build{}, mapRepoErr(updateErr)
+		}
+		return failed, nil
+	}
+
+	sourceSpec := buildSourceSpecFromBuild(build)
+	if sourceSpec.HasSource {
+		if _, sourceErr := s.resolveBuildSourceInWorkspace(ctx, id, sourceSpec); sourceErr != nil {
+			reason := classifyBuildSourceFailureReason(sourceErr, sourceSpec)
+			_ = s.cleanupPreparedWorkspace(ctx, id)
+			failed, updateErr := s.buildRepo.UpdateStatus(ctx, id, domain.BuildStatusFailed, &reason)
+			if updateErr != nil {
+				return domain.Build{}, mapRepoErr(updateErr)
+			}
+			return failed, nil
+		}
+	}
+
+	return s.transitionBuildStatus(ctx, id, domain.BuildStatusRunning, nil)
 }
 
 func classifyBuildSourceFailureReason(err error, sourceSpec execution.ResolvedBuildSourceSpec) string {
