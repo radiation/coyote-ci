@@ -343,3 +343,188 @@ func TestClaimNextRunnableJob_ParallelFanOut(t *testing.T) {
 		t.Fatalf("expected node-001 and node-002 claimed, got %q and %q", jobA.NodeID, jobB.NodeID)
 	}
 }
+
+func TestClaimNextRunnableJob_GroupBarrierRequiresAllGroupSuccess(t *testing.T) {
+	repo := NewExecutionJobRepository()
+	now := time.Now().UTC()
+
+	_, err := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{
+		{
+			ID:               "job-root",
+			BuildID:          "build-3",
+			StepID:           "step-root",
+			Name:             "root",
+			NodeID:           "node-000",
+			DependsOnNodeIDs: []string{},
+			StepIndex:        0,
+			Status:           domain.ExecutionJobStatusQueued,
+			ResolvedSpecJSON: "{}",
+			CreatedAt:        now,
+		},
+		{
+			ID:               "job-group-a",
+			BuildID:          "build-3",
+			StepID:           "step-a",
+			Name:             "group-a",
+			NodeID:           "node-100",
+			DependsOnNodeIDs: []string{"node-000"},
+			StepIndex:        1,
+			Status:           domain.ExecutionJobStatusQueued,
+			ResolvedSpecJSON: "{}",
+			CreatedAt:        now,
+		},
+		{
+			ID:               "job-group-b",
+			BuildID:          "build-3",
+			StepID:           "step-b",
+			Name:             "group-b",
+			NodeID:           "node-101",
+			DependsOnNodeIDs: []string{"node-000"},
+			StepIndex:        2,
+			Status:           domain.ExecutionJobStatusQueued,
+			ResolvedSpecJSON: "{}",
+			CreatedAt:        now,
+		},
+		{
+			ID:               "job-downstream",
+			BuildID:          "build-3",
+			StepID:           "step-down",
+			Name:             "downstream",
+			NodeID:           "node-200",
+			DependsOnNodeIDs: []string{"node-100", "node-101"},
+			StepIndex:        3,
+			Status:           domain.ExecutionJobStatusQueued,
+			ResolvedSpecJSON: "{}",
+			CreatedAt:        now,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create jobs: %v", err)
+	}
+
+	claimRoot := repository.StepClaim{WorkerID: "w-root", ClaimToken: "tok-root", ClaimedAt: now, LeaseExpiresAt: now.Add(30 * time.Second)}
+	root, ok, err := repo.ClaimNextRunnableJob(context.Background(), claimRoot)
+	if err != nil {
+		t.Fatalf("claim root: %v", err)
+	}
+	if !ok || root.NodeID != "node-000" {
+		t.Fatalf("expected root node claim, got ok=%v node=%q", ok, root.NodeID)
+	}
+	if _, outcome, completeErr := repo.CompleteJobSuccess(context.Background(), root.ID, "tok-root", now.Add(time.Minute), 0, nil); completeErr != nil {
+		t.Fatalf("complete root: %v", completeErr)
+	} else if outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed root outcome, got %q", outcome)
+	}
+
+	claimA := repository.StepClaim{WorkerID: "w-a", ClaimToken: "tok-a", ClaimedAt: now, LeaseExpiresAt: now.Add(30 * time.Second)}
+	jobA, okA, err := repo.ClaimNextRunnableJob(context.Background(), claimA)
+	if err != nil {
+		t.Fatalf("claim group a: %v", err)
+	}
+	if !okA {
+		t.Fatal("expected first grouped step to be claimable")
+	}
+
+	claimB := repository.StepClaim{WorkerID: "w-b", ClaimToken: "tok-b", ClaimedAt: now, LeaseExpiresAt: now.Add(30 * time.Second)}
+	jobB, okB, err := repo.ClaimNextRunnableJob(context.Background(), claimB)
+	if err != nil {
+		t.Fatalf("claim group b: %v", err)
+	}
+	if !okB {
+		t.Fatal("expected second grouped step to be claimable")
+	}
+
+	if jobA.NodeID == "node-200" || jobB.NodeID == "node-200" {
+		t.Fatalf("expected only group steps to be claimable, got nodes %q and %q", jobA.NodeID, jobB.NodeID)
+	}
+
+	if _, blocked, blockedErr := repo.ClaimNextRunnableJob(context.Background(), repository.StepClaim{WorkerID: "w-x", ClaimToken: "tok-x", ClaimedAt: now, LeaseExpiresAt: now.Add(30 * time.Second)}); blockedErr != nil {
+		t.Fatalf("claim while group running: %v", blockedErr)
+	} else if blocked {
+		t.Fatal("expected downstream barrier to block while group is still running")
+	}
+
+	if _, outcome, completeErr := repo.CompleteJobSuccess(context.Background(), jobA.ID, "tok-a", now.Add(2*time.Minute), 0, nil); completeErr != nil {
+		t.Fatalf("complete group a: %v", completeErr)
+	} else if outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed group a outcome, got %q", outcome)
+	}
+
+	if _, blocked, blockedErr := repo.ClaimNextRunnableJob(context.Background(), repository.StepClaim{WorkerID: "w-y", ClaimToken: "tok-y", ClaimedAt: now, LeaseExpiresAt: now.Add(30 * time.Second)}); blockedErr != nil {
+		t.Fatalf("claim while one group member pending completion: %v", blockedErr)
+	} else if blocked {
+		t.Fatal("expected downstream barrier to wait for all group steps")
+	}
+
+	if _, outcome, completeErr := repo.CompleteJobSuccess(context.Background(), jobB.ID, "tok-b", now.Add(2*time.Minute), 0, nil); completeErr != nil {
+		t.Fatalf("complete group b: %v", completeErr)
+	} else if outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed group b outcome, got %q", outcome)
+	}
+
+	downstream, downstreamOK, downstreamErr := repo.ClaimNextRunnableJob(context.Background(), repository.StepClaim{WorkerID: "w-d", ClaimToken: "tok-d", ClaimedAt: now, LeaseExpiresAt: now.Add(30 * time.Second)})
+	if downstreamErr != nil {
+		t.Fatalf("claim downstream: %v", downstreamErr)
+	}
+	if !downstreamOK {
+		t.Fatal("expected downstream step to become runnable once group fully succeeds")
+	}
+	if downstream.NodeID != "node-200" {
+		t.Fatalf("expected downstream node-200, got %q", downstream.NodeID)
+	}
+}
+
+func TestClaimNextRunnableJob_GroupFailureBlocksDownstream(t *testing.T) {
+	repo := NewExecutionJobRepository()
+	now := time.Now().UTC()
+
+	_, err := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{
+		{ID: "job-root", BuildID: "build-4", StepID: "step-root", Name: "root", NodeID: "node-000", DependsOnNodeIDs: []string{}, StepIndex: 0, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now},
+		{ID: "job-group-a", BuildID: "build-4", StepID: "step-a", Name: "group-a", NodeID: "node-100", DependsOnNodeIDs: []string{"node-000"}, StepIndex: 1, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now},
+		{ID: "job-group-b", BuildID: "build-4", StepID: "step-b", Name: "group-b", NodeID: "node-101", DependsOnNodeIDs: []string{"node-000"}, StepIndex: 2, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now},
+		{ID: "job-downstream", BuildID: "build-4", StepID: "step-down", Name: "downstream", NodeID: "node-200", DependsOnNodeIDs: []string{"node-100", "node-101"}, StepIndex: 3, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now},
+	})
+	if err != nil {
+		t.Fatalf("create jobs: %v", err)
+	}
+
+	root, ok, claimErr := repo.ClaimNextRunnableJob(context.Background(), repository.StepClaim{WorkerID: "w-root", ClaimToken: "tok-root", ClaimedAt: now, LeaseExpiresAt: now.Add(30 * time.Second)})
+	if claimErr != nil {
+		t.Fatalf("claim root: %v", claimErr)
+	}
+	if !ok {
+		t.Fatal("expected root claim")
+	}
+	if _, outcome, completeErr := repo.CompleteJobSuccess(context.Background(), root.ID, "tok-root", now.Add(time.Minute), 0, nil); completeErr != nil {
+		t.Fatalf("complete root: %v", completeErr)
+	} else if outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed root outcome, got %q", outcome)
+	}
+
+	jobA, okA, errA := repo.ClaimNextRunnableJob(context.Background(), repository.StepClaim{WorkerID: "w-a", ClaimToken: "tok-a", ClaimedAt: now, LeaseExpiresAt: now.Add(30 * time.Second)})
+	if errA != nil || !okA {
+		t.Fatalf("expected group a claim, ok=%v err=%v", okA, errA)
+	}
+	jobB, okB, errB := repo.ClaimNextRunnableJob(context.Background(), repository.StepClaim{WorkerID: "w-b", ClaimToken: "tok-b", ClaimedAt: now, LeaseExpiresAt: now.Add(30 * time.Second)})
+	if errB != nil || !okB {
+		t.Fatalf("expected group b claim, ok=%v err=%v", okB, errB)
+	}
+
+	if _, outcome, completeErr := repo.CompleteJobSuccess(context.Background(), jobA.ID, "tok-a", now.Add(2*time.Minute), 0, nil); completeErr != nil {
+		t.Fatalf("complete group a: %v", completeErr)
+	} else if outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed group a outcome, got %q", outcome)
+	}
+
+	if _, outcome, completeErr := repo.CompleteJobFailure(context.Background(), jobB.ID, "tok-b", now.Add(2*time.Minute), "intentional group failure", nil, nil); completeErr != nil {
+		t.Fatalf("complete group b failure: %v", completeErr)
+	} else if outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed group b failure outcome, got %q", outcome)
+	}
+
+	if _, blocked, blockedErr := repo.ClaimNextRunnableJob(context.Background(), repository.StepClaim{WorkerID: "w-d", ClaimToken: "tok-d", ClaimedAt: now, LeaseExpiresAt: now.Add(30 * time.Second)}); blockedErr != nil {
+		t.Fatalf("claim downstream after group failure: %v", blockedErr)
+	} else if blocked {
+		t.Fatal("expected downstream step to remain blocked after group failure")
+	}
+}

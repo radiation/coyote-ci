@@ -21,6 +21,32 @@ type StepLogChunk = {
   created_at: string;
 };
 
+type StepBucket = {
+  key: string;
+  groupName: string | null;
+  steps: BuildStep[];
+};
+
+function bucketSteps(steps: BuildStep[]): StepBucket[] {
+  const buckets: StepBucket[] = [];
+  for (const step of steps) {
+    const trimmedGroup = (step.group_name ?? "").trim();
+    const groupName = trimmedGroup === "" ? null : trimmedGroup;
+    const bucketIdentity = groupName ?? `ungrouped:${step.step_index}`;
+    const previous = buckets[buckets.length - 1];
+    if (previous && previous.groupName === groupName) {
+      previous.steps.push(step);
+      continue;
+    }
+    buckets.push({
+      key: `${bucketIdentity}:${buckets.length}`,
+      groupName,
+      steps: [step],
+    });
+  }
+  return buckets;
+}
+
 export function StepList({
   buildID,
   steps,
@@ -122,6 +148,8 @@ export function StepList({
     return <p className="empty">No steps defined for this build.</p>;
   }
 
+  const buckets = bucketSteps(steps);
+
   return (
     <table className="table">
       <thead>
@@ -139,73 +167,114 @@ export function StepList({
         </tr>
       </thead>
       <tbody>
-        {steps.map((step) => {
-          const isOpen = openStepIndex === step.step_index;
-          const chunks = logChunks[step.step_index] ?? [];
-          const loading = logLoading[step.step_index] ?? false;
-          const error = logError[step.step_index];
+        {buckets.map((bucket) => {
+          const runningCount = bucket.steps.filter(
+            (step) => step.status === "running",
+          ).length;
 
           return (
-            <Fragment key={`step-row-${step.step_index}`}>
-              <tr key={step.step_index}>
-                <td>{step.step_index}</td>
-                <td>{step.name}</td>
-                <td>
-                  <code className="step-command" title={step.command}>
-                    {commandPreview(step.command)}
-                  </code>
-                </td>
-                <td>
-                  <StatusBadge status={step.status} />
-                </td>
-                <td>{step.worker_id ?? "—"}</td>
-                <td>{formatTime(step.started_at)}</td>
-                <td>{formatTime(step.finished_at)}</td>
-                <td>{step.exit_code ?? "—"}</td>
-                <td>
-                  <button
-                    type="button"
-                    className="logs-toggle"
-                    onClick={() =>
-                      setOpenStepIndex((prev) =>
-                        prev === step.step_index ? null : step.step_index,
-                      )
-                    }
-                  >
-                    {isOpen ? "Hide" : "View"}
-                  </button>
-                </td>
-                <td className="error-text">{step.error_message ?? "—"}</td>
-              </tr>
-              {isOpen && (
-                <tr key={`logs-${step.step_index}`}>
+            <Fragment key={`bucket-${bucket.key}`}>
+              {bucket.groupName && (
+                <tr className="step-group-row">
                   <td colSpan={10}>
-                    <div className="step-log-panel">
-                      {loading && (
-                        <p className="subtle-text">Loading logs...</p>
-                      )}
-                      {error && (
-                        <p className="error-text">
-                          Failed to load logs: {error}
-                        </p>
-                      )}
-                      {!loading && !error && chunks.length === 0 && (
-                        <p className="subtle-text">No logs yet.</p>
-                      )}
-                      {!error && chunks.length > 0 && (
-                        <pre className="step-log-pre">
-                          {chunks
-                            .map(
-                              (chunk) =>
-                                `[${chunk.stream}] ${chunk.chunk_text}`,
-                            )
-                            .join("\n")}
-                        </pre>
-                      )}
+                    <div className="step-group-header">
+                      <strong>{bucket.groupName}</strong>
+                      <span className="step-group-meta">
+                        {runningCount > 1
+                          ? `${runningCount} steps running concurrently`
+                          : runningCount === 1
+                            ? "1 step running"
+                            : `${bucket.steps.length} parallel steps`}
+                      </span>
                     </div>
                   </td>
                 </tr>
               )}
+
+              {bucket.steps.map((step) => {
+                const isOpen = openStepIndex === step.step_index;
+                const chunks = logChunks[step.step_index] ?? [];
+                const loading = logLoading[step.step_index] ?? false;
+                const error = logError[step.step_index];
+
+                return (
+                  <Fragment key={`step-row-${step.step_index}`}>
+                    <tr
+                      className={
+                        bucket.groupName ? "step-row-grouped" : undefined
+                      }
+                    >
+                      <td>{step.step_index}</td>
+                      <td>
+                        <span
+                          className={
+                            bucket.groupName ? "step-name-grouped" : undefined
+                          }
+                        >
+                          {step.name}
+                        </span>
+                      </td>
+                      <td>
+                        <code className="step-command" title={step.command}>
+                          {commandPreview(step.command)}
+                        </code>
+                      </td>
+                      <td>
+                        <StatusBadge status={step.status} />
+                      </td>
+                      <td>{step.worker_id ?? "—"}</td>
+                      <td>{formatTime(step.started_at)}</td>
+                      <td>{formatTime(step.finished_at)}</td>
+                      <td>{step.exit_code ?? "—"}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="logs-toggle"
+                          onClick={() =>
+                            setOpenStepIndex((prev) =>
+                              prev === step.step_index ? null : step.step_index,
+                            )
+                          }
+                        >
+                          {isOpen ? "Hide" : "View"}
+                        </button>
+                      </td>
+                      <td className="error-text">
+                        {step.error_message ?? "—"}
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr key={`logs-${step.step_index}`}>
+                        <td colSpan={10}>
+                          <div className="step-log-panel">
+                            {loading && (
+                              <p className="subtle-text">Loading logs...</p>
+                            )}
+                            {error && (
+                              <p className="error-text">
+                                Failed to load logs: {error}
+                              </p>
+                            )}
+                            {!loading && !error && chunks.length === 0 && (
+                              <p className="subtle-text">No logs yet.</p>
+                            )}
+                            {!error && chunks.length > 0 && (
+                              <pre className="step-log-pre">
+                                {chunks
+                                  .map(
+                                    (chunk) =>
+                                      `[${chunk.stream}] ${chunk.chunk_text}`,
+                                  )
+                                  .join("\n")}
+                              </pre>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </Fragment>
           );
         })}

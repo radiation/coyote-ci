@@ -1602,6 +1602,9 @@ const docTemplate = `{
                 "finished_at": {
                     "type": "string"
                 },
+                "group_name": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
                 },

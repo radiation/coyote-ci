@@ -302,6 +302,33 @@ fieldset legend {
   background: #f9f9ff;
 }
 
+.step-group-row td {
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.step-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.step-group-meta {
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
+.step-row-grouped td {
+  background: #fcfdff;
+}
+
+.step-name-grouped {
+  display: inline-block;
+  padding-left: 10px;
+  border-left: 2px solid #dbeafe;
+}
+
 .step-command {
   display: inline-block;
   max-width: 420px;

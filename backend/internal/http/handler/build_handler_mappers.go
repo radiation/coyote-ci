@@ -92,6 +92,7 @@ func toBuildStepResponse(step domain.BuildStep, job *domain.ExecutionJob, output
 		ID:           step.ID,
 		BuildID:      step.BuildID,
 		StepIndex:    step.StepIndex,
+		GroupName:    step.GroupName,
 		Name:         step.Name,
 		Command:      displayCommand(step),
 		Status:       string(step.Status),

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/service/execution"
@@ -171,6 +173,9 @@ func (s *BuildService) cleanupPreparedWorkspace(ctx context.Context, buildID str
 }
 
 func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (domain.Build, error) {
+	prepStartedAt := time.Now().UTC()
+	buildID := strings.TrimSpace(id)
+
 	build, err := s.buildRepo.GetByID(ctx, id)
 	if err != nil {
 		return domain.Build{}, mapRepoErr(err)
@@ -197,6 +202,7 @@ func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (do
 		if updateErr != nil {
 			return domain.Build{}, mapRepoErr(updateErr)
 		}
+		log.Printf("build preparation failed: build_id=%s duration_ms=%d reason=%q", buildID, time.Since(prepStartedAt).Milliseconds(), message)
 		return failed, nil
 	}
 
@@ -209,11 +215,17 @@ func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (do
 			if updateErr != nil {
 				return domain.Build{}, mapRepoErr(updateErr)
 			}
+			log.Printf("build preparation failed: build_id=%s duration_ms=%d reason=%q", buildID, time.Since(prepStartedAt).Milliseconds(), reason)
 			return failed, nil
 		}
 	}
 
-	return s.transitionBuildStatus(ctx, id, domain.BuildStatusRunning, nil)
+	runningBuild, transitionErr := s.transitionBuildStatus(ctx, id, domain.BuildStatusRunning, nil)
+	if transitionErr != nil {
+		return domain.Build{}, transitionErr
+	}
+	log.Printf("build preparation completed: build_id=%s duration_ms=%d", buildID, time.Since(prepStartedAt).Milliseconds())
+	return runningBuild, nil
 }
 
 func classifyBuildSourceFailureReason(err error, sourceSpec execution.ResolvedBuildSourceSpec) string {

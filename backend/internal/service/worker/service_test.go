@@ -35,6 +35,8 @@ type fakeExecutionWorkerBoundary struct {
 	renewedLeaseAt *time.Time
 	runStepDelay   time.Duration
 	prepareCalls   int
+	prepareErr     error
+	claimJobCalls  int
 
 	startCalls    int
 	completeCalls int
@@ -54,6 +56,7 @@ type fakeExecutionWorkerBoundary struct {
 }
 
 func (f *fakeExecutionWorkerBoundary) ClaimNextRunnableJob(_ context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
+	f.claimJobCalls++
 	if len(f.jobsQueue) == 0 {
 		return domain.ExecutionJob{}, false, nil
 	}
@@ -259,6 +262,9 @@ func (f *fakeExecutionWorkerBoundary) QueueBuild(_ context.Context, id string) (
 func (f *fakeExecutionWorkerBoundary) PrepareBuildExecution(_ context.Context, id string) (domain.Build, error) {
 	f.prepareCalls++
 	f.lastBuildID = id
+	if f.prepareErr != nil {
+		return domain.Build{}, f.prepareErr
+	}
 	for i := range f.listBuildsResp {
 		if f.listBuildsResp[i].ID != id {
 			continue
@@ -748,6 +754,39 @@ func TestExecutionWorkerService_ClaimRunnableStep_ClaimsJobDirectly(t *testing.T
 	}
 	if boundary.startCalls != 1 {
 		t.Fatalf("expected start build call once, got %d", boundary.startCalls)
+	}
+}
+
+func TestExecutionWorkerService_ClaimRunnableStep_PrepareGateBlocksClaimsUntilReady(t *testing.T) {
+	now := time.Now().UTC()
+	boundary := &fakeExecutionWorkerBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-prep", Status: domain.BuildStatusQueued}},
+		jobsQueue: []domain.ExecutionJob{{
+			ID:        "job-root",
+			BuildID:   "build-prep",
+			StepID:    "step-1",
+			StepIndex: 0,
+			Name:      "root",
+			Status:    domain.ExecutionJobStatusQueued,
+			Command:   []string{"sh", "-c", "echo from-job"},
+			CreatedAt: now,
+		}},
+		prepareErr: errors.New("prepare failed"),
+	}
+
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	_, found, err := worker.ClaimRunnableStep(context.Background())
+	if err == nil || err.Error() != "prepare failed" {
+		t.Fatalf("expected prepare failure, got err=%v", err)
+	}
+	if found {
+		t.Fatal("expected no runnable step when build preparation fails")
+	}
+	if boundary.prepareCalls != 1 {
+		t.Fatalf("expected one prepare attempt, got %d", boundary.prepareCalls)
+	}
+	if boundary.claimJobCalls != 0 {
+		t.Fatalf("expected no job claim attempts before prep succeeds, got %d", boundary.claimJobCalls)
 	}
 }
 

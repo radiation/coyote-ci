@@ -28,6 +28,7 @@ export interface Build {
 export type BuildStatus =
   | "pending"
   | "queued"
+  | "preparing"
   | "running"
   | "success"
   | "failed";
@@ -37,6 +38,7 @@ export interface BuildStep {
   id: string;
   build_id: string;
   step_index: number;
+  group_name?: string | null;
   name: string;
   command: string;
   status: BuildStepStatus;

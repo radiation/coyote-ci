@@ -151,3 +151,45 @@ func TestWorkspacePreparer_ReturnsEarlyFailureResultOnPrepareError(t *testing.T)
 		t.Fatalf("expected normalized prepare failure reason, got %q", earlyResult.Stderr)
 	}
 }
+
+func TestWorkspacePreparer_DoesNotResolveSourceDuringStepExecution(t *testing.T) {
+	runnerWithBuildScope := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0}}}
+	svc := NewBuildService(&fakeBuildRepository{}, runnerWithBuildScope, &fakeLogSink{})
+	// If step-time source resolution is accidentally reintroduced, this resolver
+	// would be called and fail the test path.
+	svc.SetSourceResolver(&fakeWorkspaceSourceResolver{cloneErr: errors.New("unexpected step-time clone")})
+
+	executionContext := StepExecutionContext{
+		ExecutionImage: "golang:1.24",
+		BuildSource: execution.ResolvedBuildSourceSpec{
+			HasSource:     true,
+			RepositoryURL: "https://github.com/acme/repo.git",
+			Ref:           "main",
+		},
+		ExecutionRequest: runner.RunStepRequest{
+			BuildID:    "build-1",
+			StepID:     "step-1",
+			StepIndex:  0,
+			StepName:   "test",
+			ClaimToken: "claim-token",
+		},
+		StepNumber: 1,
+		TotalSteps: 2,
+	}
+
+	preparer := NewWorkspacePreparer(svc)
+	logManager := NewExecutionLogManager(svc, executionContext)
+	earlyResult, earlyErr, err := preparer.Prepare(context.Background(), executionContext, logManager)
+	if err != nil {
+		t.Fatalf("expected no hard prepare error, got %v", err)
+	}
+	if earlyErr != nil {
+		t.Fatalf("expected no early error, got %v", earlyErr)
+	}
+	if earlyResult != nil {
+		t.Fatalf("expected no early result, got %+v", *earlyResult)
+	}
+	if runnerWithBuildScope.prepareCalls != 1 {
+		t.Fatalf("expected exactly one build-scoped prepare call, got %d", runnerWithBuildScope.prepareCalls)
+	}
+}

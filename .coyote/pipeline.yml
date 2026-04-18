@@ -20,6 +20,10 @@ steps:
           working_dir: frontend
           image: node:22-alpine
           timeout_seconds: 600
+        - name: Backend Dependencies
+          run: go mod download
+          working_dir: backend
+          timeout_seconds: 600
 
   - group:
       name: Verify
