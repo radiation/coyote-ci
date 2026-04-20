@@ -97,6 +97,8 @@ definitions:
         type: string
       id:
         type: string
+      image:
+        $ref: '#/definitions/api.ImageExecutionResponse'
       job_id:
         type: string
       pipeline_config_yaml:
@@ -174,6 +176,8 @@ definitions:
         type: string
       id:
         type: string
+      image:
+        $ref: '#/definitions/api.ImageExecutionResponse'
       job:
         $ref: '#/definitions/api.ExecutionJobResponse'
       name:
@@ -392,6 +396,19 @@ definitions:
       timeout_seconds:
         type: integer
       working_dir:
+        type: string
+    type: object
+  api.ImageExecutionResponse:
+    properties:
+      managed_image_id:
+        type: string
+      managed_image_version_id:
+        type: string
+      requested_ref:
+        type: string
+      resolved_ref:
+        type: string
+      source_kind:
         type: string
     type: object
   api.JobEnvelope:

@@ -246,6 +246,7 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 		Ref:              buildSourceRef(sourceSpec),
 		CommitSHA:        buildSourceCommitSHA(sourceSpec),
 		Trigger:          toDomainBuildTrigger(input.Trigger),
+		ImageSourceKind:  domain.ImageSourceKindExternal,
 	}
 
 	if len(input.Steps) > 0 {
@@ -258,16 +259,17 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 			}
 
 			steps = append(steps, domain.BuildStep{
-				ID:             uuid.NewString(),
-				BuildID:        build.ID,
-				StepIndex:      idx,
-				Name:           name,
-				Command:        normalized.Command,
-				Args:           normalized.Args,
-				Env:            normalized.Env,
-				WorkingDir:     normalized.WorkingDir,
-				TimeoutSeconds: normalized.TimeoutSeconds,
-				Status:         domain.BuildStepStatusPending,
+				ID:              uuid.NewString(),
+				BuildID:         build.ID,
+				StepIndex:       idx,
+				Name:            name,
+				Command:         normalized.Command,
+				Args:            normalized.Args,
+				Env:             normalized.Env,
+				WorkingDir:      normalized.WorkingDir,
+				TimeoutSeconds:  normalized.TimeoutSeconds,
+				Status:          domain.BuildStepStatusPending,
+				ImageSourceKind: domain.ImageSourceKindExternal,
 			})
 		}
 
@@ -341,6 +343,8 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		Ref:                buildSourceRef(sourceSpec),
 		CommitSHA:          buildSourceCommitSHA(sourceSpec),
 		Trigger:            toDomainBuildTrigger(input.Trigger),
+		RequestedImageRef:  buildOptionalStringPtr(strings.TrimSpace(resolved.Image)),
+		ImageSourceKind:    domain.ImageSourceKindExternal,
 	}
 
 	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
@@ -466,6 +470,8 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		Ref:                buildOptionalStringPtr(ref),
 		CommitSHA:          commitSHAPtr,
 		Trigger:            toDomainBuildTrigger(input.Trigger),
+		RequestedImageRef:  buildOptionalStringPtr(strings.TrimSpace(resolved.Image)),
+		ImageSourceKind:    domain.ImageSourceKindExternal,
 	}
 
 	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)

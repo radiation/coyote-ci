@@ -38,4 +38,12 @@ type BuildStep struct {
 	Stdout         *string
 	Stderr         *string
 	ErrorMessage   *string
+
+	// RequestedImageRef stores only explicit step override image refs.
+	RequestedImageRef *string
+	ResolvedImageRef  *string
+	ImageSourceKind   ImageSourceKind
+
+	ManagedImageID        *string
+	ManagedImageVersionID *string
 }

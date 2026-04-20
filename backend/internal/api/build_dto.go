@@ -47,6 +47,14 @@ type BuildSourceResponse struct {
 	SourceCommitSHA *string `json:"source_commit_sha,omitempty"`
 }
 
+type ImageExecutionResponse struct {
+	RequestedRef          *string `json:"requested_ref,omitempty"`
+	ResolvedRef           *string `json:"resolved_ref,omitempty"`
+	SourceKind            string  `json:"source_kind"`
+	ManagedImageID        *string `json:"managed_image_id,omitempty"`
+	ManagedImageVersionID *string `json:"managed_image_version_id,omitempty"`
+}
+
 type CreateBuildStepInput struct {
 	Name           string            `json:"name"`
 	Command        string            `json:"command,omitempty"`
@@ -98,36 +106,37 @@ type StepLogsEnvelope struct {
 }
 
 type BuildResponse struct {
-	ID                 string               `json:"id"`
-	ProjectID          string               `json:"project_id"`
-	JobID              *string              `json:"job_id,omitempty"`
-	Status             string               `json:"status"`
-	CreatedAt          string               `json:"created_at"`
-	QueuedAt           *string              `json:"queued_at"`
-	StartedAt          *string              `json:"started_at"`
-	FinishedAt         *string              `json:"finished_at"`
-	CurrentStepIndex   int                  `json:"current_step_index"`
-	AttemptNumber      int                  `json:"attempt_number"`
-	RerunOfBuildID     *string              `json:"rerun_of_build_id,omitempty"`
-	RerunFromStepIndex *int                 `json:"rerun_from_step_index,omitempty"`
-	ErrorMessage       *string              `json:"error_message"`
-	PipelineConfigYAML *string              `json:"pipeline_config_yaml,omitempty"`
-	PipelineName       *string              `json:"pipeline_name,omitempty"`
-	PipelineSource     *string              `json:"pipeline_source,omitempty"`
-	PipelinePath       *string              `json:"pipeline_path,omitempty"`
-	TriggerKind        string               `json:"trigger_kind"`
-	SCMProvider        *string              `json:"scm_provider,omitempty"`
-	EventType          *string              `json:"event_type,omitempty"`
-	RepositoryOwner    *string              `json:"repository_owner,omitempty"`
-	RepositoryName     *string              `json:"repository_name,omitempty"`
-	RepositoryURL      *string              `json:"repository_url,omitempty"`
-	TriggerRef         *string              `json:"trigger_ref,omitempty"`
-	RefType            *string              `json:"ref_type,omitempty"`
-	SourceCommitSHA    *string              `json:"source_commit_sha,omitempty"`
-	TriggerCommitSHA   *string              `json:"trigger_commit_sha,omitempty"`
-	DeliveryID         *string              `json:"delivery_id,omitempty"`
-	Actor              *string              `json:"actor,omitempty"`
-	Source             *BuildSourceResponse `json:"source,omitempty"`
+	ID                 string                 `json:"id"`
+	ProjectID          string                 `json:"project_id"`
+	JobID              *string                `json:"job_id,omitempty"`
+	Status             string                 `json:"status"`
+	CreatedAt          string                 `json:"created_at"`
+	QueuedAt           *string                `json:"queued_at"`
+	StartedAt          *string                `json:"started_at"`
+	FinishedAt         *string                `json:"finished_at"`
+	CurrentStepIndex   int                    `json:"current_step_index"`
+	AttemptNumber      int                    `json:"attempt_number"`
+	RerunOfBuildID     *string                `json:"rerun_of_build_id,omitempty"`
+	RerunFromStepIndex *int                   `json:"rerun_from_step_index,omitempty"`
+	ErrorMessage       *string                `json:"error_message"`
+	PipelineConfigYAML *string                `json:"pipeline_config_yaml,omitempty"`
+	PipelineName       *string                `json:"pipeline_name,omitempty"`
+	PipelineSource     *string                `json:"pipeline_source,omitempty"`
+	PipelinePath       *string                `json:"pipeline_path,omitempty"`
+	TriggerKind        string                 `json:"trigger_kind"`
+	SCMProvider        *string                `json:"scm_provider,omitempty"`
+	EventType          *string                `json:"event_type,omitempty"`
+	RepositoryOwner    *string                `json:"repository_owner,omitempty"`
+	RepositoryName     *string                `json:"repository_name,omitempty"`
+	RepositoryURL      *string                `json:"repository_url,omitempty"`
+	TriggerRef         *string                `json:"trigger_ref,omitempty"`
+	RefType            *string                `json:"ref_type,omitempty"`
+	SourceCommitSHA    *string                `json:"source_commit_sha,omitempty"`
+	TriggerCommitSHA   *string                `json:"trigger_commit_sha,omitempty"`
+	DeliveryID         *string                `json:"delivery_id,omitempty"`
+	Actor              *string                `json:"actor,omitempty"`
+	Source             *BuildSourceResponse   `json:"source,omitempty"`
+	Image              ImageExecutionResponse `json:"image"`
 }
 
 type BuildListResponse struct {
@@ -135,21 +144,22 @@ type BuildListResponse struct {
 }
 
 type BuildStepResponse struct {
-	ID           string                `json:"id"`
-	BuildID      string                `json:"build_id"`
-	StepIndex    int                   `json:"step_index"`
-	GroupName    *string               `json:"group_name,omitempty"`
-	Name         string                `json:"name"`
-	Command      string                `json:"command"`
-	Status       string                `json:"status"`
-	Job          *ExecutionJobResponse `json:"job,omitempty"`
-	WorkerID     *string               `json:"worker_id"`
-	StartedAt    *string               `json:"started_at"`
-	FinishedAt   *string               `json:"finished_at"`
-	ExitCode     *int                  `json:"exit_code"`
-	Stdout       *string               `json:"stdout"`
-	Stderr       *string               `json:"stderr"`
-	ErrorMessage *string               `json:"error_message"`
+	ID           string                 `json:"id"`
+	BuildID      string                 `json:"build_id"`
+	StepIndex    int                    `json:"step_index"`
+	GroupName    *string                `json:"group_name,omitempty"`
+	Name         string                 `json:"name"`
+	Command      string                 `json:"command"`
+	Status       string                 `json:"status"`
+	Image        ImageExecutionResponse `json:"image"`
+	Job          *ExecutionJobResponse  `json:"job,omitempty"`
+	WorkerID     *string                `json:"worker_id"`
+	StartedAt    *string                `json:"started_at"`
+	FinishedAt   *string                `json:"finished_at"`
+	ExitCode     *int                   `json:"exit_code"`
+	Stdout       *string                `json:"stdout"`
+	Stderr       *string                `json:"stderr"`
+	ErrorMessage *string                `json:"error_message"`
 }
 
 type ExecutionJobResponse struct {

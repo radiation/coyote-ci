@@ -2,7 +2,7 @@ version: 1
 
 pipeline:
   name: coyote-ci
-  image: golang:1.26.2
+  image: golang@sha256:5f3787b7f902c07c7ec4f3aa91a301a3eda8133aa32661a3b3a3a86ab3a68a36
   cache:
     preset: go
     policy: pull-push
@@ -18,7 +18,7 @@ steps:
         - name: Frontend Install
           run: npm ci
           working_dir: frontend
-          image: node:22-alpine
+          image: node@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f
           timeout_seconds: 600
         - name: Backend Dependencies
           run: go mod download
@@ -39,7 +39,7 @@ steps:
         - name: Frontend Test
           run: npm test
           working_dir: frontend
-          image: node:22-alpine
+          image: node@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f
           timeout_seconds: 600
 
   - group:
@@ -56,7 +56,7 @@ steps:
         - name: Frontend Build
           run: npm run build
           working_dir: frontend
-          image: node:22-alpine
+          image: node@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f
           timeout_seconds: 600
 
   - group:
@@ -64,11 +64,11 @@ steps:
       steps:
         - name: Backend Image
           run: docker build --build-arg GO_VERSION=1.26.2 -t coyote-ci/backend:latest -f backend/Dockerfile backend
-          image: docker:27
+          image: docker@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
           timeout_seconds: 600
         - name: Frontend Image
           run: docker build -t coyote-ci/frontend:latest -f frontend/Dockerfile frontend
-          image: docker:27
+          image: docker@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
           timeout_seconds: 600
 
 artifacts:

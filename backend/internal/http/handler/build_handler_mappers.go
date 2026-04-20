@@ -44,6 +44,7 @@ func toBuildResponse(build domain.Build) api.BuildResponse {
 		DeliveryID:         trigger.DeliveryID,
 		Actor:              trigger.Actor,
 		Source:             toBuildSourceResponse(build),
+		Image:              toImageExecutionResponse(build.RequestedImageRef, build.ResolvedImageRef, build.ImageSourceKind, build.ManagedImageID, build.ManagedImageVersionID),
 	}
 }
 
@@ -96,6 +97,7 @@ func toBuildStepResponse(step domain.BuildStep, job *domain.ExecutionJob, output
 		Name:         step.Name,
 		Command:      displayCommand(step),
 		Status:       string(step.Status),
+		Image:        toImageExecutionResponse(step.RequestedImageRef, step.ResolvedImageRef, step.ImageSourceKind, step.ManagedImageID, step.ManagedImageVersionID),
 		Job:          toExecutionJobResponse(job, outputs),
 		WorkerID:     step.WorkerID,
 		ExitCode:     step.ExitCode,
@@ -176,6 +178,21 @@ func toExecutionJobResponse(job *domain.ExecutionJob, outputs []domain.Execution
 		})
 	}
 	return resp
+}
+
+func toImageExecutionResponse(requestedRef *string, resolvedRef *string, sourceKind domain.ImageSourceKind, managedImageID *string, managedImageVersionID *string) api.ImageExecutionResponse {
+	kind := strings.TrimSpace(string(sourceKind))
+	if kind == "" {
+		kind = string(domain.ImageSourceKindExternal)
+	}
+
+	return api.ImageExecutionResponse{
+		RequestedRef:          requestedRef,
+		ResolvedRef:           resolvedRef,
+		SourceKind:            kind,
+		ManagedImageID:        managedImageID,
+		ManagedImageVersionID: managedImageVersionID,
+	}
 }
 
 func toBuildArtifactResponse(item domain.BuildArtifact) api.BuildArtifactResponse {
