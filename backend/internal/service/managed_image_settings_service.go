@@ -48,8 +48,17 @@ type CreateSourceCredentialInput struct {
 type UpdateSourceCredentialInput struct {
 	Name      *string
 	Kind      *string
-	Username  **string
+	Username  OptionalStringPatch
 	SecretRef *string
+}
+
+// OptionalStringPatch models a tri-state string patch at service boundaries.
+// - Set=false: field omitted (no update)
+// - Set=true, Value=nil: clear field
+// - Set=true, Value!=nil: set field value
+type OptionalStringPatch struct {
+	Set   bool
+	Value *string
 }
 
 type CreateRepoWritebackConfigInput struct {
@@ -149,8 +158,8 @@ func (s *ManagedImageSettingsService) UpdateSourceCredential(ctx context.Context
 		}
 		current.Kind = kind
 	}
-	if input.Username != nil {
-		current.Username = normalizeStringPtr(*input.Username)
+	if input.Username.Set {
+		current.Username = normalizeStringPtr(input.Username.Value)
 	}
 	if input.SecretRef != nil {
 		secretRef := strings.TrimSpace(*input.SecretRef)

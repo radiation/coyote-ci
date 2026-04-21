@@ -17,18 +17,40 @@ func TestPushURLWithCredential_HTTPSToken(t *testing.T) {
 		Kind:      domain.SourceCredentialKindHTTPSToken,
 		SecretRef: "COYOTE_GIT_TOKEN",
 	}
-	url, err := pushURLWithCredential("https://github.com/example/repo.git", cred)
+	url, env, cleanup, err := pushAuthForCredential("https://github.com/example/repo.git", cred)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(url, "x-access-token:secret-token@github.com") {
+	defer cleanup()
+
+	if strings.Contains(url, "secret-token") {
+		t.Fatalf("expected token to be absent from push URL: %s", url)
+	}
+	if strings.Contains(url, "@github.com") {
+		t.Fatalf("expected URL without embedded credentials: %s", url)
+	}
+	if !strings.Contains(url, "https://github.com/example/repo.git") {
 		t.Fatalf("unexpected push URL: %s", url)
+	}
+
+	askPassPath := envValue(env, "GIT_ASKPASS")
+	if strings.TrimSpace(askPassPath) == "" {
+		t.Fatal("expected GIT_ASKPASS to be configured")
+	}
+	if _, statErr := os.Stat(askPassPath); statErr != nil {
+		t.Fatalf("expected askpass script to exist: %v", statErr)
+	}
+	if strings.Contains(strings.Join(env, "\n"), "secret-token") {
+		t.Fatal("expected token to be absent from configured env")
+	}
+	if envValue(env, "COYOTE_GIT_ASKPASS_SECRET_REF") != "COYOTE_GIT_TOKEN" {
+		t.Fatalf("expected secret ref env to be configured, got %q", envValue(env, "COYOTE_GIT_ASKPASS_SECRET_REF"))
 	}
 }
 
 func TestPushURLWithCredential_SSHNotImplemented(t *testing.T) {
 	cred := domain.SourceCredential{Kind: domain.SourceCredentialKindSSHKey, SecretRef: "SSH_KEY"}
-	_, err := pushURLWithCredential("git@github.com:example/repo.git", cred)
+	_, _, _, err := pushAuthForCredential("git@github.com:example/repo.git", cred)
 	if err == nil || !strings.Contains(err.Error(), ErrSSHWriteNotImplemented.Error()) {
 		t.Fatalf("expected ssh not implemented, got: %v", err)
 	}
@@ -120,4 +142,14 @@ func mustWriteFile(t *testing.T, path string, content []byte) {
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return strings.TrimPrefix(kv, prefix)
+		}
+	}
+	return ""
 }

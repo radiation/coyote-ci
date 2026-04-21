@@ -104,11 +104,13 @@ func (c *GitWriteBackClient) CommitAndPushPipelineUpdate(ctx context.Context, re
 		return GitWriteBackResult{}, err
 	}
 
-	pushURL, err := pushURLWithCredential(strings.TrimSpace(req.RepositoryURL), req.Credential)
-	if err != nil {
-		return GitWriteBackResult{}, err
+	pushURL, pushEnv, cleanupPushAuth, authErr := pushAuthForCredential(strings.TrimSpace(req.RepositoryURL), req.Credential)
+	if authErr != nil {
+		return GitWriteBackResult{}, authErr
 	}
-	pushErr := runGit(ctx, repoRoot, "push", pushURL, "HEAD:refs/heads/"+req.BranchName)
+	defer cleanupPushAuth()
+
+	pushErr := runGitWithEnv(ctx, repoRoot, pushEnv, "push", pushURL, "HEAD:refs/heads/"+req.BranchName)
 	if pushErr != nil {
 		return GitWriteBackResult{}, pushErr
 	}
@@ -121,35 +123,90 @@ func (c *GitWriteBackClient) CommitAndPushPipelineUpdate(ctx context.Context, re
 	}, nil
 }
 
-func pushURLWithCredential(repoURL string, credential domain.SourceCredential) (string, error) {
+func pushAuthForCredential(repoURL string, credential domain.SourceCredential) (string, []string, func(), error) {
 	switch credential.Kind {
 	case domain.SourceCredentialKindHTTPSToken:
 		secretName := strings.TrimSpace(credential.SecretRef)
 		if secretName == "" {
-			return "", ErrCredentialSecretMissing
+			return "", nil, nil, ErrCredentialSecretMissing
 		}
 		token := strings.TrimSpace(os.Getenv(secretName))
 		if token == "" {
-			return "", ErrCredentialSecretMissing
+			return "", nil, nil, ErrCredentialSecretMissing
 		}
 		parsed, err := url.Parse(repoURL)
 		if err != nil {
-			return "", err
+			return "", nil, nil, err
 		}
 		if parsed.Scheme != "https" {
-			return "", fmt.Errorf("https token auth requires https URL")
+			return "", nil, nil, fmt.Errorf("https token auth requires https URL")
 		}
+		parsed.User = nil
+
 		username := "x-access-token"
 		if credential.Username != nil && strings.TrimSpace(*credential.Username) != "" {
 			username = strings.TrimSpace(*credential.Username)
 		}
-		parsed.User = url.UserPassword(username, token)
-		return parsed.String(), nil
+
+		askPassPath, askPassErr := createGitAskPassScript()
+		if askPassErr != nil {
+			return "", nil, nil, askPassErr
+		}
+
+		env := []string{
+			"GIT_TERMINAL_PROMPT=0",
+			"GIT_ASKPASS=" + askPassPath,
+			"COYOTE_GIT_ASKPASS_USERNAME=" + username,
+			"COYOTE_GIT_ASKPASS_SECRET_REF=" + secretName,
+		}
+		cleanup := func() {
+			_ = os.Remove(askPassPath)
+		}
+
+		return parsed.String(), env, cleanup, nil
 	case domain.SourceCredentialKindSSHKey:
-		return "", ErrSSHWriteNotImplemented
+		return "", nil, nil, ErrSSHWriteNotImplemented
 	default:
-		return "", fmt.Errorf("unsupported credential kind %q", credential.Kind)
+		return "", nil, nil, fmt.Errorf("unsupported credential kind %q", credential.Kind)
 	}
+}
+
+func createGitAskPassScript() (string, error) {
+	file, err := os.CreateTemp("", "coyote-git-askpass-*")
+	if err != nil {
+		return "", err
+	}
+
+	path := file.Name()
+	script := "#!/bin/sh\n" +
+		"prompt=\"$1\"\n" +
+		"case \"$prompt\" in\n" +
+		"  *Username*|*username*)\n" +
+		"    printenv COYOTE_GIT_ASKPASS_USERNAME\n" +
+		"    ;;\n" +
+		"  *)\n" +
+		"    secret_ref_name=\"$(printenv COYOTE_GIT_ASKPASS_SECRET_REF)\"\n" +
+		"    if [ -n \"$secret_ref_name\" ]; then\n" +
+		"      printenv \"$secret_ref_name\"\n" +
+		"    fi\n" +
+		"    ;;\n" +
+		"esac\n"
+
+	if _, writeErr := file.WriteString(script); writeErr != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return "", writeErr
+	}
+	if closeErr := file.Close(); closeErr != nil {
+		_ = os.Remove(path)
+		return "", closeErr
+	}
+	if chmodErr := os.Chmod(path, 0o700); chmodErr != nil {
+		_ = os.Remove(path)
+		return "", chmodErr
+	}
+
+	return path, nil
 }
 
 func runGit(ctx context.Context, dir string, args ...string) error {
@@ -162,9 +219,69 @@ func runGitWithEnv(ctx context.Context, dir string, env []string, args ...string
 	cmd.Env = append(os.Environ(), env...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("git %s failed: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		redactedArgs, redactions := redactGitArgs(args)
+		envRedactions := redactSensitiveEnvValues(env)
+		redactions = append(redactions, envRedactions...)
+		trimmedOut := strings.TrimSpace(string(out))
+		for i := range redactions {
+			trimmedOut = strings.ReplaceAll(trimmedOut, redactions[i].raw, redactions[i].redacted)
+		}
+		return fmt.Errorf("git %s failed: %w: %s", strings.Join(redactedArgs, " "), err, trimmedOut)
 	}
 	return nil
+}
+
+type argRedaction struct {
+	raw      string
+	redacted string
+}
+
+func redactGitArgs(args []string) ([]string, []argRedaction) {
+	redactedArgs := make([]string, len(args))
+	redactions := make([]argRedaction, 0)
+	for i, arg := range args {
+		redacted := redactSensitiveArg(arg)
+		redactedArgs[i] = redacted
+		if redacted != arg {
+			redactions = append(redactions, argRedaction{raw: arg, redacted: redacted})
+		}
+	}
+	return redactedArgs, redactions
+}
+
+func redactSensitiveArg(arg string) string {
+	parsed, err := url.Parse(arg)
+	if err != nil {
+		return arg
+	}
+	if parsed.Scheme == "" || parsed.User == nil {
+		return arg
+	}
+	username := strings.TrimSpace(parsed.User.Username())
+	if username == "" {
+		username = "redacted"
+	}
+	parsed.User = url.User(username)
+	return parsed.String()
+}
+
+func redactSensitiveEnvValues(env []string) []argRedaction {
+	redactions := make([]argRedaction, 0)
+	for _, kv := range env {
+		idx := strings.Index(kv, "=")
+		if idx <= 0 {
+			continue
+		}
+		key := strings.ToUpper(strings.TrimSpace(kv[:idx]))
+		value := strings.TrimSpace(kv[idx+1:])
+		if value == "" {
+			continue
+		}
+		if strings.Contains(key, "TOKEN") || strings.Contains(key, "SECRET") || strings.Contains(key, "PASSWORD") {
+			redactions = append(redactions, argRedaction{raw: value, redacted: "[REDACTED]"})
+		}
+	}
+	return redactions
 }
 
 func cleanAbsPath(value string) (string, error) {

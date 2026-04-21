@@ -82,7 +82,7 @@ func (h *ManagedImageSettingsHandler) UpdateSourceCredential(w http.ResponseWrit
 	updated, err := h.settings.UpdateSourceCredential(r.Context(), id, service.UpdateSourceCredentialInput{
 		Name:      req.Name,
 		Kind:      req.Kind,
-		Username:  req.Username,
+		Username:  toOptionalUsernamePatch(req.Username),
 		SecretRef: req.SecretRef,
 	})
 	if err != nil {
@@ -187,6 +187,13 @@ func (h *ManagedImageSettingsHandler) DeleteRepoWritebackConfig(w http.ResponseW
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func toOptionalUsernamePatch(patch api.StringPatch) service.OptionalStringPatch {
+	return service.OptionalStringPatch{
+		Set:   patch.Set,
+		Value: patch.Value,
+	}
 }
 
 func (h *ManagedImageSettingsHandler) writeSettingsError(w http.ResponseWriter, err error) {
