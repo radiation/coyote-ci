@@ -256,6 +256,25 @@ func (r *BuildRepository) UpdateSourceCommitSHA(_ context.Context, id string, co
 	return build, nil
 }
 
+func (r *BuildRepository) UpdateImageExecution(_ context.Context, id string, requestedRef *string, resolvedRef *string, sourceKind domain.ImageSourceKind, managedImageID *string, managedImageVersionID *string) (domain.Build, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	build, ok := r.builds[id]
+	if !ok {
+		return domain.Build{}, repository.ErrBuildNotFound
+	}
+
+	build.RequestedImageRef = requestedRef
+	build.ResolvedImageRef = resolvedRef
+	build.ImageSourceKind = sourceKind
+	build.ManagedImageID = managedImageID
+	build.ManagedImageVersionID = managedImageVersionID
+
+	r.builds[id] = build
+	return build, nil
+}
+
 func (r *BuildRepository) QueueBuild(_ context.Context, id string, steps []domain.BuildStep) (domain.Build, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

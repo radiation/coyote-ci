@@ -491,13 +491,25 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 			refreshRef = strings.TrimSpace(input.Ref)
 		}
 		if refreshRef != "" {
-			if _, refreshErr := s.managedImageRefresher.RefreshManagedPipelineImage(ctx, ManagedImageRefreshInput{
+			refreshResult, refreshErr := s.managedImageRefresher.RefreshManagedPipelineImage(ctx, ManagedImageRefreshInput{
 				ProjectID:     input.ProjectID,
 				RepositoryURL: input.RepoURL,
 				Ref:           refreshRef,
 				PipelinePath:  effectivePipelinePath,
-			}); refreshErr != nil {
+			})
+			if refreshErr != nil {
 				log.Printf("WARNING: managed image refresh write-back failed for build_id=%s repo=%s: %v", queuedBuild.ID, input.RepoURL, refreshErr)
+			} else if refreshResult.ManagedImageID != "" && refreshResult.ManagedImageVersionID != "" && strings.TrimSpace(refreshResult.PinnedImageRef) != "" {
+				requestedRef := buildOptionalStringPtr(strings.TrimSpace(resolved.Image))
+				resolvedRef := buildOptionalStringPtr(strings.TrimSpace(refreshResult.PinnedImageRef))
+				managedImageID := buildOptionalStringPtr(refreshResult.ManagedImageID)
+				managedImageVersionID := buildOptionalStringPtr(refreshResult.ManagedImageVersionID)
+				updatedBuild, updateImageErr := s.buildRepo.UpdateImageExecution(ctx, queuedBuild.ID, requestedRef, resolvedRef, domain.ImageSourceKindManaged, managedImageID, managedImageVersionID)
+				if updateImageErr != nil {
+					log.Printf("WARNING: managed image provenance update failed for build_id=%s: %v", queuedBuild.ID, updateImageErr)
+				} else {
+					queuedBuild = updatedBuild
+				}
 			}
 		}
 	}

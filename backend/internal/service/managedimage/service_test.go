@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 )
@@ -27,6 +28,19 @@ type fakeWritebackConfigs struct {
 
 func (f fakeWritebackConfigs) GetByProjectAndRepo(_ context.Context, _ string, _ string) (domain.RepoWritebackConfig, error) {
 	return f.cfg, nil
+}
+
+type lookupWritebackConfigs struct {
+	configs map[string]domain.RepoWritebackConfig
+}
+
+func (f lookupWritebackConfigs) GetByProjectAndRepo(_ context.Context, projectID string, repositoryURL string) (domain.RepoWritebackConfig, error) {
+	key := projectID + "|" + repositoryURL
+	cfg, ok := f.configs[key]
+	if !ok {
+		return domain.RepoWritebackConfig{}, repository.ErrRepoWritebackConfigNotFound
+	}
+	return cfg, nil
 }
 
 type fakeCredentials struct {
@@ -223,5 +237,47 @@ func TestRefreshManagedPipelineImage_DisabledConfig(t *testing.T) {
 	}
 	if res.Updated {
 		t.Fatal("expected disabled config to skip write-back")
+	}
+}
+
+func TestRefreshManagedPipelineImage_RepoURLVariantLookup(t *testing.T) {
+	repoRoot := t.TempDir()
+	pipelinePath := filepath.Join(repoRoot, ".coyote", "pipeline.yml")
+	if err := os.MkdirAll(filepath.Dir(pipelinePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(pipelinePath, []byte("version: 1\npipeline:\n  image: golang:1.26.2\n"), 0o644); err != nil {
+		t.Fatalf("write pipeline: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, "backend"), 0o755); err != nil {
+		t.Fatalf("mkdir backend: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "backend", "go.mod"), []byte("module demo\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	lookup := lookupWritebackConfigs{configs: map[string]domain.RepoWritebackConfig{
+		"proj-1|https://example.com/repo.git": {
+			ProjectID:         "proj-1",
+			RepositoryURL:     "https://example.com/repo.git",
+			PipelinePath:      ".coyote/pipeline.yml",
+			ManagedImageName:  "go",
+			WriteCredentialID: "cred-1",
+			Enabled:           true,
+		},
+	}}
+
+	svc := NewService(
+		fakeFetcher{repoRoot: repoRoot},
+		lookup,
+		fakeCredentials{cred: domain.SourceCredential{ID: "cred-1", Kind: domain.SourceCredentialKindHTTPSToken, SecretRef: "TOKEN"}},
+		&fakeCatalog{managedImage: domain.ManagedImage{ID: "managed-1"}},
+		&fakePublisher{published: PublishedImage{ImageRef: "registry.example.com/coyote/go@sha256:abcd", ImageDigest: "sha256:abcd", VersionLabel: "v1"}},
+		&fakeWriter{},
+	)
+
+	_, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{ProjectID: "proj-1", RepositoryURL: "https://example.com/repo", Ref: "main"})
+	if err != nil {
+		t.Fatalf("expected .git variant lookup to succeed, got: %v", err)
 	}
 }

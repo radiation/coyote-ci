@@ -17,6 +17,7 @@ import (
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	managedimagesvc "github.com/radiation/coyote-ci/backend/internal/service/managedimage"
 	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 	httpSwagger "github.com/swaggo/http-swagger"
@@ -50,8 +51,17 @@ func main() {
 	jobRepo := repositorypostgres.NewJobRepository(db)
 	sourceCredentialRepo := repositorypostgres.NewSourceCredentialRepository(db)
 	repoWritebackConfigRepo := repositorypostgres.NewRepoWritebackConfigRepository(db)
+	managedImageCatalogRepo := repositorypostgres.NewManagedImageCatalogRepository(db)
 	webhookDeliveryRepo := repositorypostgres.NewWebhookDeliveryRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
+	managedImageRefresher := managedimagesvc.NewService(
+		source.NewGitFetcher(),
+		repoWritebackConfigRepo,
+		sourceCredentialRepo,
+		managedImageCatalogRepo,
+		managedimagesvc.NewDeterministicPublisher(),
+		source.NewGitWriteBackClient(),
+	)
 	artifactResolver, err := artifact.ResolveStores(artifact.StoreConfig{
 		Provider:    cfg.ArtifactStorageProvider,
 		StorageRoot: cfg.ArtifactStorageRoot,
@@ -65,12 +75,13 @@ func main() {
 	}
 	logSink := logs.NewPostgresSink(db)
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, nil, logSink, buildsvc.BuildServiceConfig{
-		ExecutionJobRepo:    executionJobRepo,
-		ExecutionOutputRepo: executionJobOutputRepo,
-		RepoFetcher:         source.NewGitFetcher(),
-		ArtifactRepo:        artifactRepo,
-		ArtifactResolver:    artifactResolver,
-		ArtifactWorkspace:   cfg.ExecutionWorkspaceRoot,
+		ExecutionJobRepo:      executionJobRepo,
+		ExecutionOutputRepo:   executionJobOutputRepo,
+		RepoFetcher:           source.NewGitFetcher(),
+		ManagedImageRefresher: managedImageRefresher,
+		ArtifactRepo:          artifactRepo,
+		ArtifactResolver:      artifactResolver,
+		ArtifactWorkspace:     cfg.ExecutionWorkspaceRoot,
 	})
 	jobService := service.NewJobService(jobRepo, buildService)
 	managedImageSettingsService := service.NewManagedImageSettingsService(sourceCredentialRepo, repoWritebackConfigRepo)
