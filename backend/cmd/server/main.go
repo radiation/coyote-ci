@@ -48,6 +48,8 @@ func main() {
 	executionJobRepo := repositorypostgres.NewExecutionJobRepository(db)
 	executionJobOutputRepo := repositorypostgres.NewExecutionJobOutputRepository(db)
 	jobRepo := repositorypostgres.NewJobRepository(db)
+	sourceCredentialRepo := repositorypostgres.NewSourceCredentialRepository(db)
+	repoWritebackConfigRepo := repositorypostgres.NewRepoWritebackConfigRepository(db)
 	webhookDeliveryRepo := repositorypostgres.NewWebhookDeliveryRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	artifactResolver, err := artifact.ResolveStores(artifact.StoreConfig{
@@ -71,14 +73,16 @@ func main() {
 		ArtifactWorkspace:   cfg.ExecutionWorkspaceRoot,
 	})
 	jobService := service.NewJobService(jobRepo, buildService)
+	managedImageSettingsService := service.NewManagedImageSettingsService(sourceCredentialRepo, repoWritebackConfigRepo)
 	webhookService := webhooksvc.NewDeliveryIngressService(webhookDeliveryRepo, jobService)
 	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()
 	webhookService.SetMetrics(webhookMetrics)
 	buildHandler := handler.NewBuildHandler(buildService)
 	jobHandler := handler.NewJobHandler(jobService)
+	settingsHandler := handler.NewManagedImageSettingsHandler(managedImageSettingsService)
 	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, cfg.GitHubWebhookSecret)
 
-	router := apphttp.NewRouter(buildHandler, jobHandler, eventHandler, cfg.PushEventSecret)
+	router := apphttp.NewRouter(buildHandler, jobHandler, settingsHandler, eventHandler, cfg.PushEventSecret)
 	mux := nethttp.NewServeMux()
 	mux.Handle("/debug/vars", expvar.Handler())
 	mux.Handle("/swagger/", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))
