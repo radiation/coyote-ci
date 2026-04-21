@@ -1491,6 +1491,9 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "image": {
+                    "$ref": "#/definitions/api.ImageExecutionResponse"
+                },
                 "job_id": {
                     "type": "string"
                 },
@@ -1607,6 +1610,9 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "string"
+                },
+                "image": {
+                    "$ref": "#/definitions/api.ImageExecutionResponse"
                 },
                 "job": {
                     "$ref": "#/definitions/api.ExecutionJobResponse"
@@ -1940,6 +1946,26 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "working_dir": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.ImageExecutionResponse": {
+            "type": "object",
+            "properties": {
+                "managed_image_id": {
+                    "type": "string"
+                },
+                "managed_image_version_id": {
+                    "type": "string"
+                },
+                "requested_ref": {
+                    "type": "string"
+                },
+                "resolved_ref": {
+                    "type": "string"
+                },
+                "source_kind": {
                     "type": "string"
                 }
             }

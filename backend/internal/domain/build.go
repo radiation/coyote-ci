@@ -44,4 +44,12 @@ type Build struct {
 
 	// Trigger captures why/how this build was created (manual or webhook metadata).
 	Trigger BuildTrigger
+
+	// Image execution provenance stores what was requested and what immutable
+	// image identity was actually used by execution.
+	RequestedImageRef     *string
+	ResolvedImageRef      *string
+	ImageSourceKind       ImageSourceKind
+	ManagedImageID        *string
+	ManagedImageVersionID *string
 }

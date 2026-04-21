@@ -10,7 +10,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
-const stepColumns = `id, build_id, step_index, node_id, group_name, depends_on_node_ids, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message, artifact_paths, cache_config`
+const stepColumns = `id, build_id, step_index, node_id, group_name, depends_on_node_ids, name, image, command, args, env, working_dir, timeout_seconds, status, worker_id, claim_token, claimed_at, lease_expires_at, started_at, finished_at, exit_code, stdout, stderr, error_message, artifact_paths, cache_config, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
 
 func (r *BuildRepository) GetStepsByBuildID(ctx context.Context, buildID string) (steps []domain.BuildStep, err error) {
 	query := `

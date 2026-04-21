@@ -31,7 +31,7 @@ func TestBuildRepository_ClaimStepIfPending(t *testing.T) {
 		{
 			name: "success",
 			rows: sqlmock.NewRows(stepMockColumns).
-				AddRow("step-1", "build-1", 0, nil, nil, "[]", "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "running", nil, nil, nil, nil, now, nil, nil, nil, nil, nil, "[]", nil),
+				AddRow("step-1", "build-1", 0, nil, nil, "[]", "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "running", nil, nil, nil, nil, now, nil, nil, nil, nil, nil, "[]", nil, nil, nil, "external", nil, nil),
 			expectClaim: true,
 		},
 		{
@@ -100,7 +100,7 @@ func TestBuildRepository_CompleteStepIfRunning(t *testing.T) {
 		{
 			name: "success",
 			rows: sqlmock.NewRows(stepMockColumns).
-				AddRow("step-1", "build-1", 0, nil, nil, "[]", "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil),
+				AddRow("step-1", "build-1", 0, nil, nil, "[]", "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil, nil, nil, "external", nil, nil),
 			expectCompleted: true,
 		},
 		{
@@ -179,7 +179,7 @@ func TestBuildRepository_CompleteStep_NonFinalSuccess(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil),
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil, nil, nil, "external", nil, nil),
 	)
 	mock.ExpectExec("UPDATE builds").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT\\s+COUNT\\(\\*\\)::int AS total_count").WithArgs("build-1").WillReturnRows(
@@ -222,7 +222,7 @@ func TestBuildRepository_CompleteStep_FinalSuccess(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-2", "build-1", 1, nil, nil, "[]", "second", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil),
+			AddRow("step-2", "build-1", 1, nil, nil, "[]", "second", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil, nil, nil, "external", nil, nil),
 	)
 	mock.ExpectExec("UPDATE builds").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT\\s+COUNT\\(\\*\\)::int AS total_count").WithArgs("build-1").WillReturnRows(
@@ -264,7 +264,7 @@ func TestBuildRepository_CompleteStep_FailedStep(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo boom\"]", "{}", ".", 0, "failed", nil, nil, nil, nil, now, now, 7, "", "boom", "boom", "[]", nil),
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo boom\"]", "{}", ".", 0, "failed", nil, nil, nil, nil, now, now, 7, "", "boom", "boom", "[]", nil, nil, nil, "external", nil, nil),
 	)
 	mock.ExpectQuery("SELECT\\s+COUNT\\(\\*\\)::int AS total_count").WithArgs("build-1").WillReturnRows(
 		sqlmock.NewRows([]string{"total_count", "success_count", "failed_count", "pending_count", "running_count"}).
@@ -308,7 +308,7 @@ func TestBuildRepository_CompleteStep_FailedStepNilErrorMessage_UsesTypedBuildUp
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"exit 1\"]", "{}", ".", 0, "failed", nil, nil, nil, nil, now, now, 1, "", "command failed", nil, "[]", nil),
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"exit 1\"]", "{}", ".", 0, "failed", nil, nil, nil, nil, now, now, 1, "", "command failed", nil, "[]", nil, nil, nil, "external", nil, nil),
 	)
 	mock.ExpectQuery("SELECT\\s+COUNT\\(\\*\\)::int AS total_count").WithArgs("build-1").WillReturnRows(
 		sqlmock.NewRows([]string{"total_count", "success_count", "failed_count", "pending_count", "running_count"}).
@@ -358,7 +358,7 @@ func TestBuildRepository_CompleteStep_DuplicateNoOp(t *testing.T) {
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil),
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil, nil, nil, "external", nil, nil),
 	)
 	mock.ExpectCommit()
 
@@ -396,7 +396,7 @@ func TestBuildRepository_CompleteStep_InvalidTransition(t *testing.T) {
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "pending", nil, nil, nil, nil, now, nil, nil, nil, nil, nil, "[]", nil),
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "pending", nil, nil, nil, nil, now, nil, nil, nil, nil, nil, "[]", nil, nil, nil, "external", nil, nil),
 	)
 	mock.ExpectRollback()
 
@@ -430,7 +430,7 @@ func TestBuildRepository_CompleteStep_RollsBackOnAdvanceError(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil),
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil, nil, nil, "external", nil, nil),
 	)
 	mock.ExpectExec("UPDATE builds").WillReturnError(errors.New("update current step failed"))
 	mock.ExpectRollback()
@@ -463,8 +463,8 @@ func TestBuildRepository_CreateQueuedBuild(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO builds").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "project_id", "job_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor"}).
-			AddRow("build-1", "project-1", nil, "queued", now, now, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil),
+		sqlmock.NewRows([]string{"id", "project_id", "job_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).
+			AddRow("build-1", "project-1", nil, "queued", now, now, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil),
 	)
 	mock.ExpectExec("INSERT INTO build_steps").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO build_steps").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -503,7 +503,7 @@ func TestBuildRepository_ClaimPendingStep(t *testing.T) {
 
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-1", "build-1", 0, nil, nil, "[]", "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "running", "worker-a", "claim-a", now, lease, now, nil, nil, nil, nil, nil, "[]", nil),
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "running", "worker-a", "claim-a", now, lease, now, nil, nil, nil, nil, nil, "[]", nil, nil, nil, "external", nil, nil),
 	)
 
 	step, claimed, err := repo.ClaimPendingStep(context.Background(), "build-1", 0, repository.StepClaim{WorkerID: "worker-a", ClaimToken: "claim-a", ClaimedAt: now, LeaseExpiresAt: lease})
@@ -534,7 +534,7 @@ func TestBuildRepository_ReclaimExpiredStep(t *testing.T) {
 
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-1", "build-1", 0, nil, nil, "[]", "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "running", "worker-b", "claim-b", reclaimBefore, lease, reclaimBefore.Add(-time.Minute), nil, nil, nil, nil, nil, "[]", nil),
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "default", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 30, "running", "worker-b", "claim-b", reclaimBefore, lease, reclaimBefore.Add(-time.Minute), nil, nil, nil, nil, nil, "[]", nil, nil, nil, "external", nil, nil),
 	)
 
 	step, reclaimed, err := repo.ReclaimExpiredStep(context.Background(), "build-1", 0, reclaimBefore, repository.StepClaim{WorkerID: "worker-b", ClaimToken: "claim-b", ClaimedAt: reclaimBefore, LeaseExpiresAt: lease})
@@ -593,7 +593,7 @@ func TestBuildRepository_CompleteStep_StaleClaim(t *testing.T) {
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "running", "worker-b", "claim-b", now, now.Add(time.Minute), now, nil, nil, nil, nil, nil, "[]", nil),
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "running", "worker-b", "claim-b", now, now.Add(time.Minute), now, nil, nil, nil, nil, nil, "[]", nil, nil, nil, "external", nil, nil),
 	)
 	mock.ExpectCommit()
 
@@ -631,7 +631,7 @@ func TestBuildRepository_RenewStepLease_Success(t *testing.T) {
 
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "running", "worker-a", "claim-a", now, extended, now, nil, nil, nil, nil, nil, "[]", nil),
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "running", "worker-a", "claim-a", now, extended, now, nil, nil, nil, nil, nil, "[]", nil, nil, nil, "external", nil, nil),
 	)
 
 	step, outcome, err := repo.RenewStepLease(context.Background(), "build-1", 0, "claim-a", extended)
@@ -663,7 +663,7 @@ func TestBuildRepository_RenewStepLease_StaleAndTerminal(t *testing.T) {
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "running", "worker-b", "claim-b", now, now.Add(time.Minute), now, nil, nil, nil, nil, nil, "[]", nil),
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "running", "worker-b", "claim-b", now, now.Add(time.Minute), now, nil, nil, nil, nil, nil, "[]", nil, nil, nil, "external", nil, nil),
 	)
 
 	_, outcome, err := repo.RenewStepLease(context.Background(), "build-1", 0, "claim-a", now.Add(2*time.Minute))
@@ -678,7 +678,7 @@ func TestBuildRepository_RenewStepLease_StaleAndTerminal(t *testing.T) {
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", "worker-b", nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil),
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", "worker-b", nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil, nil, nil, "external", nil, nil),
 	)
 
 	_, outcome, err = repo.RenewStepLease(context.Background(), "build-1", 0, "claim-b", now.Add(3*time.Minute))

@@ -12,4 +12,12 @@ export {
   updateJob,
   runJob,
   listBuildsByJob,
+  listSourceCredentials,
+  createSourceCredential,
+  updateSourceCredential,
+  deleteSourceCredential,
+  listRepoWritebackConfigs,
+  createRepoWritebackConfig,
+  updateRepoWritebackConfig,
+  deleteRepoWritebackConfig,
 } from "./client";

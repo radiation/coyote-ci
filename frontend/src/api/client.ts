@@ -14,6 +14,16 @@ import type {
   JobListResponse,
   UpdateJobRequest,
 } from "../types/job";
+import type {
+  CreateRepoWritebackConfigRequest,
+  CreateSourceCredentialRequest,
+  RepoWritebackConfig,
+  RepoWritebackConfigListResponse,
+  SourceCredential,
+  SourceCredentialListResponse,
+  UpdateRepoWritebackConfigRequest,
+  UpdateSourceCredentialRequest,
+} from "../types/managedImageSettings";
 
 /**
  * Base URL for API requests.
@@ -61,6 +71,25 @@ async function postNoBodyJSON<TResponse>(path: string): Promise<TResponse> {
   return fetchJSON<TResponse>(path, {
     method: "POST",
   });
+}
+
+async function deleteNoContent(path: string): Promise<void> {
+  const res = await fetch(`${BASE}${path}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = await res.text();
+    let message = body;
+
+    try {
+      const parsed = JSON.parse(body) as { error?: { message?: string } };
+      if (parsed?.error?.message) {
+        message = parsed.error.message;
+      }
+    } catch {
+      // Keep raw body when response is not JSON.
+    }
+
+    throw new Error(`API ${res.status}: ${message}`);
+  }
 }
 
 export async function listBuilds(): Promise<Build[]> {
@@ -165,4 +194,84 @@ export async function listBuildsByJob(jobId: string): Promise<Build[]> {
     `/jobs/${encodeURIComponent(jobId)}/builds`,
   );
   return envelope.data.builds;
+}
+
+export async function listSourceCredentials(
+  projectID: string,
+): Promise<SourceCredential[]> {
+  const envelope = await fetchJSON<DataEnvelope<SourceCredentialListResponse>>(
+    `/source-credentials?project_id=${encodeURIComponent(projectID)}`,
+  );
+  return envelope.data.credentials;
+}
+
+export async function createSourceCredential(
+  input: CreateSourceCredentialRequest,
+): Promise<SourceCredential> {
+  const envelope = await postJSON<
+    DataEnvelope<SourceCredential>,
+    CreateSourceCredentialRequest
+  >("/source-credentials", input);
+  return envelope.data;
+}
+
+export async function updateSourceCredential(
+  id: string,
+  input: UpdateSourceCredentialRequest,
+): Promise<SourceCredential> {
+  const envelope = await fetchJSON<DataEnvelope<SourceCredential>>(
+    `/source-credentials/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  return envelope.data;
+}
+
+export async function deleteSourceCredential(id: string): Promise<void> {
+  await deleteNoContent(`/source-credentials/${encodeURIComponent(id)}`);
+}
+
+export async function listRepoWritebackConfigs(
+  projectID: string,
+): Promise<RepoWritebackConfig[]> {
+  const envelope = await fetchJSON<
+    DataEnvelope<RepoWritebackConfigListResponse>
+  >(`/repo-writeback-configs?project_id=${encodeURIComponent(projectID)}`);
+  return envelope.data.configs;
+}
+
+export async function createRepoWritebackConfig(
+  input: CreateRepoWritebackConfigRequest,
+): Promise<RepoWritebackConfig> {
+  const envelope = await postJSON<
+    DataEnvelope<RepoWritebackConfig>,
+    CreateRepoWritebackConfigRequest
+  >("/repo-writeback-configs", input);
+  return envelope.data;
+}
+
+export async function updateRepoWritebackConfig(
+  id: string,
+  input: UpdateRepoWritebackConfigRequest,
+): Promise<RepoWritebackConfig> {
+  const envelope = await fetchJSON<DataEnvelope<RepoWritebackConfig>>(
+    `/repo-writeback-configs/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  return envelope.data;
+}
+
+export async function deleteRepoWritebackConfig(id: string): Promise<void> {
+  await deleteNoContent(`/repo-writeback-configs/${encodeURIComponent(id)}`);
 }

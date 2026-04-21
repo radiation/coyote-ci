@@ -66,6 +66,7 @@ type BuildService struct {
 	runner                 runner.Runner
 	logSink                logs.LogSink
 	repoFetcher            source.RepoFetcher
+	managedImageRefresher  ManagedImageRefresher
 	sourceResolver         source.WorkspaceSourceResolver
 	executionWorkspaceRoot string
 
@@ -84,17 +85,18 @@ type BuildService struct {
 // BuildServiceConfig groups all optional dependencies for BuildService. Zero
 // values are safe — each field is only used when set.
 type BuildServiceConfig struct {
-	ExecutionJobRepo    repository.ExecutionJobRepository
-	ExecutionOutputRepo repository.ExecutionJobOutputRepository
-	RepoFetcher         source.RepoFetcher
-	SourceResolver      source.WorkspaceSourceResolver
-	ArtifactRepo        repository.ArtifactRepository
-	ArtifactResolver    *artifact.StoreResolver
-	ArtifactWorkspace   string
-	ExecutionWorkspace  string
-	DefaultImage        string
-	CacheStore          cachepkg.Store
-	CacheEntryRepo      repository.CacheEntryRepository
+	ExecutionJobRepo      repository.ExecutionJobRepository
+	ExecutionOutputRepo   repository.ExecutionJobOutputRepository
+	RepoFetcher           source.RepoFetcher
+	ManagedImageRefresher ManagedImageRefresher
+	SourceResolver        source.WorkspaceSourceResolver
+	ArtifactRepo          repository.ArtifactRepository
+	ArtifactResolver      *artifact.StoreResolver
+	ArtifactWorkspace     string
+	ExecutionWorkspace    string
+	DefaultImage          string
+	CacheStore            cachepkg.Store
+	CacheEntryRepo        repository.CacheEntryRepository
 }
 
 // NewBuildServiceFromConfig creates a fully-wired BuildService in one call.
@@ -103,6 +105,7 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 	svc.executionJobRepo = cfg.ExecutionJobRepo
 	svc.executionOutputRepo = cfg.ExecutionOutputRepo
 	svc.repoFetcher = cfg.RepoFetcher
+	svc.managedImageRefresher = cfg.ManagedImageRefresher
 	if cfg.SourceResolver != nil {
 		svc.sourceResolver = cfg.SourceResolver
 	}
@@ -246,6 +249,7 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 		Ref:              buildSourceRef(sourceSpec),
 		CommitSHA:        buildSourceCommitSHA(sourceSpec),
 		Trigger:          toDomainBuildTrigger(input.Trigger),
+		ImageSourceKind:  domain.ImageSourceKindExternal,
 	}
 
 	if len(input.Steps) > 0 {
@@ -258,16 +262,17 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 			}
 
 			steps = append(steps, domain.BuildStep{
-				ID:             uuid.NewString(),
-				BuildID:        build.ID,
-				StepIndex:      idx,
-				Name:           name,
-				Command:        normalized.Command,
-				Args:           normalized.Args,
-				Env:            normalized.Env,
-				WorkingDir:     normalized.WorkingDir,
-				TimeoutSeconds: normalized.TimeoutSeconds,
-				Status:         domain.BuildStepStatusPending,
+				ID:              uuid.NewString(),
+				BuildID:         build.ID,
+				StepIndex:       idx,
+				Name:            name,
+				Command:         normalized.Command,
+				Args:            normalized.Args,
+				Env:             normalized.Env,
+				WorkingDir:      normalized.WorkingDir,
+				TimeoutSeconds:  normalized.TimeoutSeconds,
+				Status:          domain.BuildStepStatusPending,
+				ImageSourceKind: domain.ImageSourceKindExternal,
 			})
 		}
 
@@ -341,6 +346,8 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		Ref:                buildSourceRef(sourceSpec),
 		CommitSHA:          buildSourceCommitSHA(sourceSpec),
 		Trigger:            toDomainBuildTrigger(input.Trigger),
+		RequestedImageRef:  buildOptionalStringPtr(strings.TrimSpace(resolved.Image)),
+		ImageSourceKind:    domain.ImageSourceKindExternal,
 	}
 
 	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
@@ -466,6 +473,8 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		Ref:                buildOptionalStringPtr(ref),
 		CommitSHA:          commitSHAPtr,
 		Trigger:            toDomainBuildTrigger(input.Trigger),
+		RequestedImageRef:  buildOptionalStringPtr(strings.TrimSpace(resolved.Image)),
+		ImageSourceKind:    domain.ImageSourceKindExternal,
 	}
 
 	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
@@ -475,6 +484,34 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 	if err := s.createDurableJobsForBuild(ctx, queuedBuild, steps); err != nil {
 		log.Printf("WARNING: durable job creation failed for build_id=%s (build already persisted): %v", queuedBuild.ID, err)
 		return domain.Build{}, fmt.Errorf("create execution jobs for build %s: %w", queuedBuild.ID, err)
+	}
+	if s.managedImageRefresher != nil {
+		refreshRef := strings.TrimSpace(input.CommitSHA)
+		if refreshRef == "" {
+			refreshRef = strings.TrimSpace(input.Ref)
+		}
+		if refreshRef != "" {
+			refreshResult, refreshErr := s.managedImageRefresher.RefreshManagedPipelineImage(ctx, ManagedImageRefreshInput{
+				ProjectID:     input.ProjectID,
+				RepositoryURL: input.RepoURL,
+				Ref:           refreshRef,
+				PipelinePath:  effectivePipelinePath,
+			})
+			if refreshErr != nil {
+				log.Printf("WARNING: managed image refresh write-back failed for build_id=%s repo=%s: %v", queuedBuild.ID, input.RepoURL, refreshErr)
+			} else if refreshResult.ManagedImageID != "" && refreshResult.ManagedImageVersionID != "" && strings.TrimSpace(refreshResult.PinnedImageRef) != "" {
+				requestedRef := buildOptionalStringPtr(strings.TrimSpace(resolved.Image))
+				resolvedRef := buildOptionalStringPtr(strings.TrimSpace(refreshResult.PinnedImageRef))
+				managedImageID := buildOptionalStringPtr(refreshResult.ManagedImageID)
+				managedImageVersionID := buildOptionalStringPtr(refreshResult.ManagedImageVersionID)
+				updatedBuild, updateImageErr := s.buildRepo.UpdateImageExecution(ctx, queuedBuild.ID, requestedRef, resolvedRef, domain.ImageSourceKindManaged, managedImageID, managedImageVersionID)
+				if updateImageErr != nil {
+					log.Printf("WARNING: managed image provenance update failed for build_id=%s: %v", queuedBuild.ID, updateImageErr)
+				} else {
+					queuedBuild = updatedBuild
+				}
+			}
+		}
 	}
 	return queuedBuild, nil
 }
