@@ -5,6 +5,7 @@ import { BuildDetailPage } from "../pages/BuildDetailPage";
 import { JobsListPage } from "../pages/JobsListPage";
 import { JobCreatePage } from "../pages/JobCreatePage";
 import { JobDetailPage } from "../pages/JobDetailPage";
+import { ManagedImageSettingsPage } from "../pages/ManagedImageSettingsPage";
 
 export const router = createBrowserRouter([
   {
@@ -16,6 +17,7 @@ export const router = createBrowserRouter([
       { path: "/jobs", element: <JobsListPage /> },
       { path: "/jobs/new", element: <JobCreatePage /> },
       { path: "/jobs/:id", element: <JobDetailPage /> },
+      { path: "/managed-images", element: <ManagedImageSettingsPage /> },
     ],
   },
 ]);

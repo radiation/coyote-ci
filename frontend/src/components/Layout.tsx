@@ -11,6 +11,7 @@ export function Layout() {
           <nav className="main-nav" aria-label="Primary">
             <Link to="/jobs">Jobs</Link>
             <Link to="/builds">Builds</Link>
+            <Link to="/managed-images">Managed Images</Link>
           </nav>
         </div>
       </header>
