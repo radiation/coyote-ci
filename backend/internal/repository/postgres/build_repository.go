@@ -280,6 +280,36 @@ func (r *BuildRepository) UpdateSourceCommitSHA(ctx context.Context, id string, 
 	return build, nil
 }
 
+func (r *BuildRepository) UpdateImageExecution(ctx context.Context, id string, requestedRef *string, resolvedRef *string, sourceKind domain.ImageSourceKind, managedImageID *string, managedImageVersionID *string) (domain.Build, error) {
+	query := `
+		UPDATE builds
+		SET requested_image_ref = $2,
+			resolved_image_ref = $3,
+			image_source_kind = $4,
+			managed_image_id = $5,
+			managed_image_version_id = $6
+		WHERE id = $1
+		RETURNING ` + buildColumns + `
+	`
+
+	build, err := scanBuild(r.db.QueryRowContext(ctx, query,
+		id,
+		requestedRef,
+		resolvedRef,
+		string(defaultBuildImageSourceKind(sourceKind)),
+		managedImageID,
+		managedImageVersionID,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.Build{}, repository.ErrBuildNotFound
+		}
+		return domain.Build{}, err
+	}
+
+	return build, nil
+}
+
 func (r *BuildRepository) QueueBuild(ctx context.Context, id string, steps []domain.BuildStep) (domain.Build, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

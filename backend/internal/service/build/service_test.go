@@ -130,6 +130,24 @@ func (r *fakeBuildRepository) UpdateSourceCommitSHA(_ context.Context, id string
 	return r.build, nil
 }
 
+func (r *fakeBuildRepository) UpdateImageExecution(_ context.Context, id string, requestedRef *string, resolvedRef *string, sourceKind domain.ImageSourceKind, managedImageID *string, managedImageVersionID *string) (domain.Build, error) {
+	if r.updateErr != nil {
+		return domain.Build{}, r.updateErr
+	}
+
+	if r.build.ID != "" && r.build.ID != id {
+		return domain.Build{}, repository.ErrBuildNotFound
+	}
+
+	r.build.RequestedImageRef = requestedRef
+	r.build.ResolvedImageRef = resolvedRef
+	r.build.ImageSourceKind = sourceKind
+	r.build.ManagedImageID = managedImageID
+	r.build.ManagedImageVersionID = managedImageVersionID
+
+	return r.build, nil
+}
+
 func (r *fakeBuildRepository) GetStepsByBuildID(_ context.Context, _ string) ([]domain.BuildStep, error) {
 	if r.getErr != nil {
 		return nil, r.getErr

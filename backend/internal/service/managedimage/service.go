@@ -2,6 +2,7 @@ package managedimage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 )
@@ -89,7 +91,7 @@ func (s *Service) RefreshManagedPipelineImage(ctx context.Context, req buildsvc.
 		return buildsvc.ManagedImageRefreshResult{}, fmt.Errorf("managed image refresh service is not fully configured")
 	}
 
-	cfg, err := s.writebacks.GetByProjectAndRepo(ctx, strings.TrimSpace(req.ProjectID), strings.TrimSpace(req.RepositoryURL))
+	cfg, err := s.lookupWritebackConfig(ctx, strings.TrimSpace(req.ProjectID), strings.TrimSpace(req.RepositoryURL))
 	if err != nil {
 		return buildsvc.ManagedImageRefreshResult{}, err
 	}
@@ -215,6 +217,46 @@ func (s *Service) RefreshManagedPipelineImage(ctx context.Context, req buildsvc.
 		BranchName:            writeResult.BranchName,
 		CommitSHA:             writeResult.CommitSHA,
 	}, nil
+}
+
+func (s *Service) lookupWritebackConfig(ctx context.Context, projectID string, repositoryURL string) (domain.RepoWritebackConfig, error) {
+	urlCandidates := repoURLCandidates(repositoryURL)
+	var lastErr error
+	for _, candidate := range urlCandidates {
+		cfg, err := s.writebacks.GetByProjectAndRepo(ctx, projectID, candidate)
+		if err == nil {
+			return cfg, nil
+		}
+		if !errors.Is(err, repository.ErrRepoWritebackConfigNotFound) {
+			return domain.RepoWritebackConfig{}, err
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return domain.RepoWritebackConfig{}, lastErr
+	}
+	return domain.RepoWritebackConfig{}, repository.ErrRepoWritebackConfigNotFound
+}
+
+func repoURLCandidates(value string) []string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return []string{trimmed}
+	}
+
+	base := strings.TrimSuffix(strings.TrimSuffix(trimmed, "/"), ".git")
+	candidates := []string{trimmed, strings.TrimSuffix(trimmed, "/"), base, base + ".git"}
+	seen := map[string]bool{}
+	result := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		result = append(result, candidate)
+	}
+	return result
 }
 
 func isImmutableImageRef(value string) bool {

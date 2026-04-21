@@ -195,6 +195,26 @@ func (r *fakeRepo) UpdateSourceCommitSHA(_ context.Context, id string, commitSHA
 	return b, nil
 }
 
+func (r *fakeRepo) UpdateImageExecution(_ context.Context, id string, requestedRef *string, resolvedRef *string, sourceKind domain.ImageSourceKind, managedImageID *string, managedImageVersionID *string) (domain.Build, error) {
+	b, err := r.GetByID(context.Background(), id)
+	if err != nil {
+		return domain.Build{}, err
+	}
+
+	b.RequestedImageRef = requestedRef
+	b.ResolvedImageRef = resolvedRef
+	b.ImageSourceKind = sourceKind
+	b.ManagedImageID = managedImageID
+	b.ManagedImageVersionID = managedImageVersionID
+
+	if r.builds == nil {
+		r.build = b
+	} else {
+		r.builds[id] = b
+	}
+	return b, nil
+}
+
 func (r *fakeRepo) GetStepsByBuildID(_ context.Context, buildID string) ([]domain.BuildStep, error) {
 	if _, err := r.GetByID(context.Background(), buildID); err != nil {
 		return nil, err
