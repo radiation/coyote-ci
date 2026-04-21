@@ -24,14 +24,12 @@ func (r *SourceCredentialRepository) Create(_ context.Context, credential domain
 	return credential, nil
 }
 
-func (r *SourceCredentialRepository) ListByProjectID(_ context.Context, projectID string) ([]domain.SourceCredential, error) {
+func (r *SourceCredentialRepository) List(_ context.Context) ([]domain.SourceCredential, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	result := make([]domain.SourceCredential, 0)
 	for _, credential := range r.credentials {
-		if credential.ProjectID == projectID {
-			result = append(result, credential)
-		}
+		result = append(result, credential)
 	}
 	return result, nil
 }

@@ -20,13 +20,12 @@ func NewSourceCredentialRepository(db *sql.DB) *SourceCredentialRepository {
 func (r *SourceCredentialRepository) Create(ctx context.Context, credential domain.SourceCredential) (domain.SourceCredential, error) {
 	const query = `
 		INSERT INTO source_credentials (id, project_id, name, kind, username, secret_ref, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, project_id, name, kind, username, secret_ref, created_at, updated_at
+		VALUES ($1, NULL, $2, $3, $4, $5, $6, $7)
+		RETURNING id, name, kind, username, secret_ref, created_at, updated_at
 	`
 
 	return scanSourceCredential(r.db.QueryRowContext(ctx, query,
 		credential.ID,
-		credential.ProjectID,
 		credential.Name,
 		string(credential.Kind),
 		credential.Username,
@@ -36,15 +35,14 @@ func (r *SourceCredentialRepository) Create(ctx context.Context, credential doma
 	))
 }
 
-func (r *SourceCredentialRepository) ListByProjectID(ctx context.Context, projectID string) (credentials []domain.SourceCredential, err error) {
+func (r *SourceCredentialRepository) List(ctx context.Context) (credentials []domain.SourceCredential, err error) {
 	const query = `
-		SELECT id, project_id, name, kind, username, secret_ref, created_at, updated_at
+		SELECT id, name, kind, username, secret_ref, created_at, updated_at
 		FROM source_credentials
-		WHERE project_id = $1
 		ORDER BY created_at DESC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, projectID)
+	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +69,7 @@ func (r *SourceCredentialRepository) ListByProjectID(ctx context.Context, projec
 
 func (r *SourceCredentialRepository) GetByID(ctx context.Context, id string) (domain.SourceCredential, error) {
 	const query = `
-		SELECT id, project_id, name, kind, username, secret_ref, created_at, updated_at
+		SELECT id, name, kind, username, secret_ref, created_at, updated_at
 		FROM source_credentials
 		WHERE id = $1
 	`
@@ -91,7 +89,7 @@ func (r *SourceCredentialRepository) Update(ctx context.Context, credential doma
 		UPDATE source_credentials
 		SET name = $2, kind = $3, username = $4, secret_ref = $5, updated_at = $6
 		WHERE id = $1
-		RETURNING id, project_id, name, kind, username, secret_ref, created_at, updated_at
+		RETURNING id, name, kind, username, secret_ref, created_at, updated_at
 	`
 
 	updated, err := scanSourceCredential(r.db.QueryRowContext(ctx, query,
@@ -138,7 +136,6 @@ func scanSourceCredential(scanner sourceCredentialScanner) (domain.SourceCredent
 	var username sql.NullString
 	if err := scanner.Scan(
 		&credential.ID,
-		&credential.ProjectID,
 		&credential.Name,
 		&kind,
 		&username,

@@ -16,8 +16,4 @@ export {
   createSourceCredential,
   updateSourceCredential,
   deleteSourceCredential,
-  listRepoWritebackConfigs,
-  createRepoWritebackConfig,
-  updateRepoWritebackConfig,
-  deleteRepoWritebackConfig,
 } from "./client";

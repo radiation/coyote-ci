@@ -49,14 +49,14 @@ func main() {
 	executionJobRepo := repositorypostgres.NewExecutionJobRepository(db)
 	executionJobOutputRepo := repositorypostgres.NewExecutionJobOutputRepository(db)
 	jobRepo := repositorypostgres.NewJobRepository(db)
+	jobManagedImageConfigRepo := repositorypostgres.NewJobManagedImageConfigRepository(db)
 	sourceCredentialRepo := repositorypostgres.NewSourceCredentialRepository(db)
-	repoWritebackConfigRepo := repositorypostgres.NewRepoWritebackConfigRepository(db)
 	managedImageCatalogRepo := repositorypostgres.NewManagedImageCatalogRepository(db)
 	webhookDeliveryRepo := repositorypostgres.NewWebhookDeliveryRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	managedImageRefresher := managedimagesvc.NewService(
 		source.NewGitFetcher(),
-		repoWritebackConfigRepo,
+		jobManagedImageConfigRepo,
 		sourceCredentialRepo,
 		managedImageCatalogRepo,
 		managedimagesvc.NewDeterministicPublisher(),
@@ -83,17 +83,17 @@ func main() {
 		ArtifactResolver:      artifactResolver,
 		ArtifactWorkspace:     cfg.ExecutionWorkspaceRoot,
 	})
-	jobService := service.NewJobService(jobRepo, buildService)
-	managedImageSettingsService := service.NewManagedImageSettingsService(sourceCredentialRepo, repoWritebackConfigRepo)
+	jobService := service.NewJobService(jobRepo, buildService).WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo)
+	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
 	webhookService := webhooksvc.NewDeliveryIngressService(webhookDeliveryRepo, jobService)
 	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()
 	webhookService.SetMetrics(webhookMetrics)
 	buildHandler := handler.NewBuildHandler(buildService)
 	jobHandler := handler.NewJobHandler(jobService)
-	settingsHandler := handler.NewManagedImageSettingsHandler(managedImageSettingsService)
+	credentialHandler := handler.NewSourceCredentialHandler(sourceCredentialService)
 	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, cfg.GitHubWebhookSecret)
 
-	router := apphttp.NewRouter(buildHandler, jobHandler, settingsHandler, eventHandler, cfg.PushEventSecret)
+	router := apphttp.NewRouter(buildHandler, jobHandler, credentialHandler, eventHandler, cfg.PushEventSecret)
 	mux := nethttp.NewServeMux()
 	mux.Handle("/debug/vars", expvar.Handler())
 	mux.Handle("/swagger/", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))

@@ -1711,6 +1711,32 @@ const docTemplate = `{
                 }
             }
         },
+        "api.CreateJobManagedImageConfigRequest": {
+            "type": "object",
+            "properties": {
+                "bot_branch_prefix": {
+                    "type": "string"
+                },
+                "commit_author_email": {
+                    "type": "string"
+                },
+                "commit_author_name": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "managed_image_name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
+                    "type": "string"
+                },
+                "write_credential_id": {
+                    "type": "string"
+                }
+            }
+        },
         "api.CreateJobRequest": {
             "type": "object",
             "properties": {
@@ -1728,6 +1754,9 @@ const docTemplate = `{
                 },
                 "enabled": {
                     "type": "boolean"
+                },
+                "managed_image": {
+                    "$ref": "#/definitions/api.CreateJobManagedImageConfigRequest"
                 },
                 "name": {
                     "type": "string"
@@ -1997,6 +2026,38 @@ const docTemplate = `{
                 }
             }
         },
+        "api.JobManagedImageConfigResponse": {
+            "type": "object",
+            "properties": {
+                "bot_branch_prefix": {
+                    "type": "string"
+                },
+                "commit_author_email": {
+                    "type": "string"
+                },
+                "commit_author_name": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "managed_image_name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "write_credential_id": {
+                    "type": "string"
+                }
+            }
+        },
         "api.JobResponse": {
             "type": "object",
             "properties": {
@@ -2020,6 +2081,9 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "string"
+                },
+                "managed_image": {
+                    "$ref": "#/definitions/api.JobManagedImageConfigResponse"
                 },
                 "name": {
                     "type": "string"
@@ -2236,6 +2300,43 @@ const docTemplate = `{
                 }
             }
         },
+        "api.UpdateJobManagedImageConfigField": {
+            "type": "object",
+            "properties": {
+                "set": {
+                    "type": "boolean"
+                },
+                "value": {
+                    "$ref": "#/definitions/api.UpdateJobManagedImageConfigRequest"
+                }
+            }
+        },
+        "api.UpdateJobManagedImageConfigRequest": {
+            "type": "object",
+            "properties": {
+                "bot_branch_prefix": {
+                    "type": "string"
+                },
+                "commit_author_email": {
+                    "type": "string"
+                },
+                "commit_author_name": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "managed_image_name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
+                    "type": "string"
+                },
+                "write_credential_id": {
+                    "type": "string"
+                }
+            }
+        },
         "api.UpdateJobRequest": {
             "type": "object",
             "properties": {
@@ -2253,6 +2354,9 @@ const docTemplate = `{
                 },
                 "enabled": {
                     "type": "boolean"
+                },
+                "managed_image": {
+                    "$ref": "#/definitions/api.UpdateJobManagedImageConfigField"
                 },
                 "name": {
                     "type": "string"

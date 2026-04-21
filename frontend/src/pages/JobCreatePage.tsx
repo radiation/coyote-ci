@@ -1,7 +1,11 @@
 import { useState, type FormEvent } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { createJob } from "../api";
+import { createJob, listSourceCredentials } from "../api";
+import {
+  ManagedBuildImageFields,
+  type ManagedBuildImageValue,
+} from "../components/ManagedBuildImageFields";
 
 type PipelineMode = "inline" | "repo";
 
@@ -13,7 +17,7 @@ steps:
 
 export function JobCreatePage() {
   const navigate = useNavigate();
-  const [projectID, setProjectID] = useState("project-1");
+  const [projectID, setProjectID] = useState("");
   const [name, setName] = useState("");
   const [repositoryURL, setRepositoryURL] = useState("");
   const [defaultRef, setDefaultRef] = useState("main");
@@ -22,8 +26,22 @@ export function JobCreatePage() {
   const [pipelineMode, setPipelineMode] = useState<PipelineMode>("inline");
   const [pipelineYAML, setPipelineYAML] = useState(DEFAULT_PIPELINE_YAML);
   const [pipelinePath, setPipelinePath] = useState(".coyote/pipeline.yml");
+  const [managedImage, setManagedImage] = useState<ManagedBuildImageValue>({
+    enabled: false,
+    managedImageName: "go",
+    pipelinePath: ".coyote/pipeline.yml",
+    writeCredentialID: "",
+    botBranchPrefix: "coyote/managed-image-refresh",
+    commitAuthorName: "Coyote CI Bot",
+    commitAuthorEmail: "bot@coyote-ci.local",
+  });
   const [enabled, setEnabled] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const { data: credentials = [], isLoading: credentialsLoading } = useQuery({
+    queryKey: ["source-credentials"],
+    queryFn: () => listSourceCredentials(),
+  });
 
   const createMutation = useMutation({
     mutationFn: createJob,
@@ -59,6 +77,30 @@ export function JobCreatePage() {
       return;
     }
 
+    if (
+      managedImage.enabled &&
+      (!managedImage.managedImageName.trim() ||
+        !managedImage.pipelinePath.trim() ||
+        !managedImage.writeCredentialID.trim())
+    ) {
+      setErrorMessage(
+        "Managed build image name, pipeline path, and write credential are required when automation is enabled.",
+      );
+      return;
+    }
+
+    const managedImagePayload = managedImage.enabled
+      ? {
+          enabled: true,
+          managed_image_name: managedImage.managedImageName.trim(),
+          pipeline_path: managedImage.pipelinePath.trim(),
+          write_credential_id: managedImage.writeCredentialID.trim(),
+          bot_branch_prefix: managedImage.botBranchPrefix.trim(),
+          commit_author_name: managedImage.commitAuthorName.trim(),
+          commit_author_email: managedImage.commitAuthorEmail.trim(),
+        }
+      : undefined;
+
     if (pipelineMode === "inline") {
       const trimmedYAML = pipelineYAML.trim();
       if (!trimmedYAML) {
@@ -73,6 +115,7 @@ export function JobCreatePage() {
         push_enabled: pushEnabled,
         push_branch: pushEnabled ? trimmedPushBranch : "",
         pipeline_yaml: trimmedYAML,
+        managed_image: managedImagePayload,
         enabled,
       });
     } else {
@@ -89,6 +132,7 @@ export function JobCreatePage() {
         push_enabled: pushEnabled,
         push_branch: pushEnabled ? trimmedPushBranch : "",
         pipeline_path: trimmedPath,
+        managed_image: managedImagePayload,
         enabled,
       });
     }
@@ -109,6 +153,7 @@ export function JobCreatePage() {
           value={projectID}
           onChange={(event) => setProjectID(event.target.value)}
           disabled={createMutation.isPending}
+          placeholder="project-slug"
         />
 
         <label htmlFor="job-name">Name</label>
@@ -214,6 +259,16 @@ export function JobCreatePage() {
             </p>
           </>
         )}
+
+        <ManagedBuildImageFields
+          value={managedImage}
+          onChange={(patch) =>
+            setManagedImage((current) => ({ ...current, ...patch }))
+          }
+          credentials={credentials}
+          credentialsLoading={credentialsLoading}
+          disabled={createMutation.isPending}
+        />
 
         <label className="checkbox-label" htmlFor="job-enabled">
           <input

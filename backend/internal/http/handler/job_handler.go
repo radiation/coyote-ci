@@ -55,6 +55,7 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		TagAllowlist:     req.TagAllowlist,
 		PipelineYAML:     req.PipelineYAML,
 		PipelinePath:     req.PipelinePath,
+		ManagedImage:     toCreateManagedImageConfigInput(req.ManagedImage),
 		Enabled:          req.Enabled,
 	})
 	if err != nil {
@@ -161,6 +162,8 @@ func (h *JobHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 		TagAllowlist:     req.TagAllowlist,
 		PipelineYAML:     req.PipelineYAML,
 		PipelinePath:     req.PipelinePath,
+		ManagedImageSet:  req.ManagedImage.Present(),
+		ManagedImage:     toUpdateManagedImageConfigInput(req.ManagedImage.Request()),
 		Enabled:          req.Enabled,
 	})
 	if err != nil {
@@ -259,6 +262,10 @@ func isBadRequestError(err error) bool {
 	return errors.Is(err, service.ErrJobIDRequired) ||
 		errors.Is(err, service.ErrJobNameRequired) ||
 		errors.Is(err, service.ErrJobProjectIDRequired) ||
+		errors.Is(err, service.ErrJobManagedImageConfigNotConfigured) ||
+		errors.Is(err, service.ErrJobManagedImageNameRequired) ||
+		errors.Is(err, service.ErrJobManagedImagePipelinePathRequired) ||
+		errors.Is(err, service.ErrJobManagedImageWriteCredentialIDRequired) ||
 		errors.Is(err, service.ErrJobRepositoryURLRequired) ||
 		errors.Is(err, service.ErrJobSourceTargetRequired) ||
 		errors.Is(err, service.ErrJobInvalidTriggerMode) ||
@@ -288,8 +295,56 @@ func toJobResponse(job domain.Job) api.JobResponse {
 		TagAllowlist:     job.TagAllowlist,
 		PipelineYAML:     job.PipelineYAML,
 		PipelinePath:     job.PipelinePath,
+		ManagedImage:     toManagedImageConfigResponse(job.ManagedImageConfig),
 		Enabled:          job.Enabled,
 		CreatedAt:        job.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:        job.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+func toCreateManagedImageConfigInput(req *api.CreateJobManagedImageConfigRequest) *service.ManagedImageConfigInput {
+	if req == nil {
+		return nil
+	}
+	return &service.ManagedImageConfigInput{
+		Enabled:           req.Enabled,
+		ManagedImageName:  req.ManagedImageName,
+		PipelinePath:      req.PipelinePath,
+		WriteCredentialID: req.WriteCredentialID,
+		BotBranchPrefix:   req.BotBranchPrefix,
+		CommitAuthorName:  req.CommitAuthorName,
+		CommitAuthorEmail: req.CommitAuthorEmail,
+	}
+}
+
+func toUpdateManagedImageConfigInput(req *api.UpdateJobManagedImageConfigRequest) *service.ManagedImageConfigPatch {
+	if req == nil {
+		return nil
+	}
+	return &service.ManagedImageConfigPatch{
+		Enabled:           req.Enabled,
+		ManagedImageName:  req.ManagedImageName,
+		PipelinePath:      req.PipelinePath,
+		WriteCredentialID: req.WriteCredentialID,
+		BotBranchPrefix:   req.BotBranchPrefix,
+		CommitAuthorName:  req.CommitAuthorName,
+		CommitAuthorEmail: req.CommitAuthorEmail,
+	}
+}
+
+func toManagedImageConfigResponse(config *domain.JobManagedImageConfig) *api.JobManagedImageConfigResponse {
+	if config == nil {
+		return nil
+	}
+	return &api.JobManagedImageConfigResponse{
+		Enabled:           config.Enabled,
+		ManagedImageName:  config.ManagedImageName,
+		PipelinePath:      config.PipelinePath,
+		WriteCredentialID: config.WriteCredentialID,
+		BotBranchPrefix:   config.BotBranchPrefix,
+		CommitAuthorName:  config.CommitAuthorName,
+		CommitAuthorEmail: config.CommitAuthorEmail,
+		CreatedAt:         config.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:         config.UpdatedAt.Format(time.RFC3339),
 	}
 }

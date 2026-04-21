@@ -16,7 +16,7 @@ import (
 // bodies. Requests exceeding this size receive 413 Request Entity Too Large.
 const maxRequestBodySize = 1 << 20 // 1 MiB
 
-func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandler, settingsHandler *handler.ManagedImageSettingsHandler, eventHandler *handler.EventHandler, pushEventSecret string) nethttp.Handler {
+func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandler, credentialHandler *handler.SourceCredentialHandler, eventHandler *handler.EventHandler, pushEventSecret string) nethttp.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -63,21 +63,13 @@ func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandle
 			r.Post("/{jobID}/run", jobHandler.RunNow)
 		})
 
-		if settingsHandler != nil {
+		if credentialHandler != nil {
 			r.Route("/source-credentials", func(r chi.Router) {
-				r.Post("/", settingsHandler.CreateSourceCredential)
-				r.Get("/", settingsHandler.ListSourceCredentials)
-				r.Get("/{credentialID}", settingsHandler.GetSourceCredential)
-				r.Put("/{credentialID}", settingsHandler.UpdateSourceCredential)
-				r.Delete("/{credentialID}", settingsHandler.DeleteSourceCredential)
-			})
-
-			r.Route("/repo-writeback-configs", func(r chi.Router) {
-				r.Post("/", settingsHandler.CreateRepoWritebackConfig)
-				r.Get("/", settingsHandler.ListRepoWritebackConfigs)
-				r.Get("/{configID}", settingsHandler.GetRepoWritebackConfig)
-				r.Put("/{configID}", settingsHandler.UpdateRepoWritebackConfig)
-				r.Delete("/{configID}", settingsHandler.DeleteRepoWritebackConfig)
+				r.Post("/", credentialHandler.CreateSourceCredential)
+				r.Get("/", credentialHandler.ListSourceCredentials)
+				r.Get("/{credentialID}", credentialHandler.GetSourceCredential)
+				r.Put("/{credentialID}", credentialHandler.UpdateSourceCredential)
+				r.Delete("/{credentialID}", credentialHandler.DeleteSourceCredential)
 			})
 		}
 

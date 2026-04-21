@@ -10,6 +10,7 @@ import {
   createJob,
   updateJob,
   runJob,
+  listSourceCredentials,
 } from "../api/client";
 
 describe("API client - types", () => {
@@ -24,6 +25,7 @@ describe("API client - types", () => {
     expect(typeof createJob).toBe("function");
     expect(typeof updateJob).toBe("function");
     expect(typeof runJob).toBe("function");
+    expect(typeof listSourceCredentials).toBe("function");
   });
 
   beforeEach(() => {
@@ -82,6 +84,7 @@ describe("API client - types", () => {
               push_enabled: true,
               push_branch: "main",
               pipeline_yaml: "version: 1",
+              managed_image: null,
               enabled: true,
               created_at: "2026-03-30T00:00:00Z",
               updated_at: "2026-03-30T00:00:00Z",
@@ -111,6 +114,7 @@ describe("API client - types", () => {
             push_enabled: true,
             push_branch: "main",
             pipeline_yaml: "version: 1",
+            managed_image: null,
             enabled: true,
             created_at: "2026-03-30T00:00:00Z",
             updated_at: "2026-03-30T00:00:00Z",
@@ -142,6 +146,12 @@ describe("API client - types", () => {
       push_enabled: true,
       push_branch: "main",
       pipeline_yaml: "version: 1",
+      managed_image: {
+        enabled: true,
+        managed_image_name: "go",
+        pipeline_path: ".coyote/pipeline.yml",
+        write_credential_id: "cred-1",
+      },
       enabled: true,
     });
     await runJob("job-1");
@@ -157,6 +167,12 @@ describe("API client - types", () => {
         push_enabled: true,
         push_branch: "main",
         pipeline_yaml: "version: 1",
+        managed_image: {
+          enabled: true,
+          managed_image_name: "go",
+          pipeline_path: ".coyote/pipeline.yml",
+          write_credential_id: "cred-1",
+        },
         enabled: true,
       }),
     });
@@ -178,6 +194,7 @@ describe("API client - types", () => {
           push_enabled: false,
           push_branch: null,
           pipeline_yaml: "version: 1",
+          managed_image: null,
           enabled: false,
           created_at: "2026-03-30T00:00:00Z",
           updated_at: "2026-03-30T00:01:00Z",
@@ -192,5 +209,33 @@ describe("API client - types", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: false }),
     });
+  });
+
+  it("lists source credentials from /source-credentials", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          credentials: [
+            {
+              id: "cred-1",
+              name: "github-bot",
+              kind: "https_token",
+              username: "x-access-token",
+              secret_ref: "COYOTE_TOKEN",
+              created_at: "2026-03-30T00:00:00Z",
+              updated_at: "2026-03-30T00:00:00Z",
+            },
+          ],
+        },
+      }),
+    } as Response);
+
+    const credentials = await listSourceCredentials();
+    expect(credentials).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/source-credentials",
+      undefined,
+    );
   });
 });

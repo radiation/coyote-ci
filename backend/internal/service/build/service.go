@@ -491,7 +491,12 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 			refreshRef = strings.TrimSpace(input.Ref)
 		}
 		if refreshRef != "" {
+			jobID := ""
+			if input.JobID != nil {
+				jobID = strings.TrimSpace(*input.JobID)
+			}
 			refreshResult, refreshErr := s.managedImageRefresher.RefreshManagedPipelineImage(ctx, ManagedImageRefreshInput{
+				JobID:         jobID,
 				ProjectID:     input.ProjectID,
 				RepositoryURL: input.RepoURL,
 				Ref:           refreshRef,

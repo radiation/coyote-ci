@@ -1,7 +1,17 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getJob, listBuildsByJob, runJob, updateJob } from "../api";
+import {
+  getJob,
+  listBuildsByJob,
+  listSourceCredentials,
+  runJob,
+  updateJob,
+} from "../api";
+import {
+  ManagedBuildImageFields,
+  type ManagedBuildImageValue,
+} from "../components/ManagedBuildImageFields";
 import { StatusBadge } from "../components/StatusBadge";
 import type { Job } from "../types/job";
 import { formatTime } from "../utils/time";
@@ -84,6 +94,16 @@ export function JobDetailPage() {
           </div>
         )}
         <div>
+          <strong>Managed Build Image</strong>
+          <span>{job.managed_image?.enabled ? "Enabled" : "Disabled"}</span>
+        </div>
+        {job.managed_image && (
+          <div>
+            <strong>Managed Image Name</strong>
+            <span>{job.managed_image.managed_image_name}</span>
+          </div>
+        )}
+        <div>
           <strong>Created</strong>
           <span>{formatTime(job.created_at)}</span>
         </div>
@@ -157,12 +177,40 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
   const [pipelinePath, setPipelinePath] = useState(
     job.pipeline_path ?? ".coyote/pipeline.yml",
   );
+  const [managedImage, setManagedImage] = useState<ManagedBuildImageValue>({
+    enabled: job.managed_image?.enabled ?? false,
+    managedImageName: job.managed_image?.managed_image_name ?? "go",
+    pipelinePath: job.managed_image?.pipeline_path ?? ".coyote/pipeline.yml",
+    writeCredentialID: job.managed_image?.write_credential_id ?? "",
+    botBranchPrefix:
+      job.managed_image?.bot_branch_prefix ?? "coyote/managed-image-refresh",
+    commitAuthorName: job.managed_image?.commit_author_name ?? "Coyote CI Bot",
+    commitAuthorEmail:
+      job.managed_image?.commit_author_email ?? "bot@coyote-ci.local",
+  });
   const [enabled, setEnabled] = useState(job.enabled);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  const { data: credentials = [], isLoading: credentialsLoading } = useQuery({
+    queryKey: ["source-credentials"],
+    queryFn: () => listSourceCredentials(),
+  });
+
   const saveMutation = useMutation({
     mutationFn: (targetID: string) => {
+      const managedImagePayload = managedImage.enabled
+        ? {
+            enabled: true,
+            managed_image_name: managedImage.managedImageName.trim(),
+            pipeline_path: managedImage.pipelinePath.trim(),
+            write_credential_id: managedImage.writeCredentialID.trim(),
+            bot_branch_prefix: managedImage.botBranchPrefix.trim(),
+            commit_author_name: managedImage.commitAuthorName.trim(),
+            commit_author_email: managedImage.commitAuthorEmail.trim(),
+          }
+        : null;
+
       const base = {
         name: name.trim(),
         repository_url: repositoryURL.trim(),
@@ -170,6 +218,7 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
         push_enabled: pushEnabled,
         push_branch: pushEnabled ? pushBranch.trim() : "",
         enabled,
+        managed_image: managedImagePayload,
       };
 
       if (pipelineMode === "inline") {
@@ -232,6 +281,18 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
 
     if (pipelineMode === "repo" && !pipelinePath.trim()) {
       setErrorMessage("Pipeline file path is required.");
+      return;
+    }
+
+    if (
+      managedImage.enabled &&
+      (!managedImage.managedImageName.trim() ||
+        !managedImage.pipelinePath.trim() ||
+        !managedImage.writeCredentialID.trim())
+    ) {
+      setErrorMessage(
+        "Managed build image name, pipeline path, and write credential are required when automation is enabled.",
+      );
       return;
     }
 
@@ -339,6 +400,16 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
             </p>
           </>
         )}
+
+        <ManagedBuildImageFields
+          value={managedImage}
+          onChange={(patch) =>
+            setManagedImage((current) => ({ ...current, ...patch }))
+          }
+          credentials={credentials}
+          credentialsLoading={credentialsLoading}
+          disabled={isSubmitting}
+        />
 
         <label className="checkbox-label" htmlFor="job-enabled">
           <input
