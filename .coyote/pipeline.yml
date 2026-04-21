@@ -1,12 +1,10 @@
 version: 1
-
 pipeline:
   name: coyote-ci
-  image: golang@sha256:5f3787b7f902c07c7ec4f3aa91a301a3eda8133aa32661a3b3a3a86ab3a68a36
+  image: golang@sha256:9f4cbfd06d668737b1bfae5e3dde53763134635d0f4e6b35dca039edcecd7b90
   cache:
     preset: go
     policy: pull-push
-
 steps:
   - group:
       name: Bootstrap
@@ -24,7 +22,6 @@ steps:
           run: go mod download
           working_dir: backend
           timeout_seconds: 600
-
   - group:
       name: Verify
       steps:
@@ -41,7 +38,6 @@ steps:
           working_dir: frontend
           image: node@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f
           timeout_seconds: 600
-
   - group:
       name: Build
       steps:
@@ -58,7 +54,6 @@ steps:
           working_dir: frontend
           image: node@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f
           timeout_seconds: 600
-
   - group:
       name: Images
       steps:
@@ -70,7 +65,6 @@ steps:
           run: docker build -t coyote-ci/frontend:latest -f frontend/Dockerfile frontend
           image: docker@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
           timeout_seconds: 600
-
 artifacts:
   - backend/dist/coyote-server
   - backend/dist/coyote-worker
