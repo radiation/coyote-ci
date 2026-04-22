@@ -59,6 +59,11 @@ func (c *GitWriteBackClient) CommitAndPushPipelineUpdate(ctx context.Context, re
 		return GitWriteBackResult{}, errors.New("commit message is required")
 	}
 
+	checkoutErr := checkoutWritebackBranch(ctx, repoRoot, req.BranchName)
+	if checkoutErr != nil {
+		return GitWriteBackResult{}, checkoutErr
+	}
+
 	fullPath := filepath.Join(repoRoot, pipelinePath)
 	mkdirErr := os.MkdirAll(filepath.Dir(fullPath), 0o755)
 	if mkdirErr != nil {
@@ -67,11 +72,6 @@ func (c *GitWriteBackClient) CommitAndPushPipelineUpdate(ctx context.Context, re
 	writeErr := os.WriteFile(fullPath, req.Content, 0o644)
 	if writeErr != nil {
 		return GitWriteBackResult{}, writeErr
-	}
-
-	checkoutErr := runGit(ctx, repoRoot, "checkout", "-B", req.BranchName)
-	if checkoutErr != nil {
-		return GitWriteBackResult{}, checkoutErr
 	}
 	addErr := runGit(ctx, repoRoot, "add", "--", pipelinePath)
 	if addErr != nil {
@@ -121,6 +121,20 @@ func (c *GitWriteBackClient) CommitAndPushPipelineUpdate(ctx context.Context, re
 		RemoteRef:     "refs/heads/" + req.BranchName,
 		RepositoryURL: req.RepositoryURL,
 	}, nil
+}
+
+func checkoutWritebackBranch(ctx context.Context, repoRoot string, branchName string) error {
+	trackingRef := "refs/remotes/origin/" + branchName
+	fetchRefspec := "refs/heads/" + branchName + ":" + trackingRef
+
+	fetchErr := runGit(ctx, repoRoot, "fetch", "--no-tags", "origin", fetchRefspec)
+	if fetchErr == nil {
+		return runGit(ctx, repoRoot, "checkout", "-B", branchName, trackingRef)
+	}
+	if !isMissingRemoteBranchError(fetchErr) {
+		return fetchErr
+	}
+	return runGit(ctx, repoRoot, "checkout", "-B", branchName)
 }
 
 func pushAuthForCredential(repoURL string, credential domain.SourceCredential) (string, []string, func(), error) {
@@ -229,6 +243,14 @@ func runGitWithEnv(ctx context.Context, dir string, env []string, args ...string
 		return fmt.Errorf("git %s failed: %w: %s", strings.Join(redactedArgs, " "), err, trimmedOut)
 	}
 	return nil
+}
+
+func isMissingRemoteBranchError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "couldn't find remote ref") || strings.Contains(message, "not our ref")
 }
 
 type argRedaction struct {

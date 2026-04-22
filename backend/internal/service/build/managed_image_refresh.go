@@ -3,9 +3,11 @@ package build
 import "context"
 
 type ManagedImageRefreshInput struct {
+	JobID         string
 	ProjectID     string
 	RepositoryURL string
 	Ref           string
+	BaseBranch    string
 	PipelinePath  string
 }
 

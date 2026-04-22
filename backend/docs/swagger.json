@@ -1707,6 +1707,32 @@
                 }
             }
         },
+        "api.CreateJobManagedImageConfigRequest": {
+            "type": "object",
+            "properties": {
+                "bot_branch_prefix": {
+                    "type": "string"
+                },
+                "commit_author_email": {
+                    "type": "string"
+                },
+                "commit_author_name": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "managed_image_name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
+                    "type": "string"
+                },
+                "write_credential_id": {
+                    "type": "string"
+                }
+            }
+        },
         "api.CreateJobRequest": {
             "type": "object",
             "properties": {
@@ -1724,6 +1750,9 @@
                 },
                 "enabled": {
                     "type": "boolean"
+                },
+                "managed_image": {
+                    "$ref": "#/definitions/api.CreateJobManagedImageConfigRequest"
                 },
                 "name": {
                     "type": "string"
@@ -1993,6 +2022,38 @@
                 }
             }
         },
+        "api.JobManagedImageConfigResponse": {
+            "type": "object",
+            "properties": {
+                "bot_branch_prefix": {
+                    "type": "string"
+                },
+                "commit_author_email": {
+                    "type": "string"
+                },
+                "commit_author_name": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "managed_image_name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "write_credential_id": {
+                    "type": "string"
+                }
+            }
+        },
         "api.JobResponse": {
             "type": "object",
             "properties": {
@@ -2016,6 +2077,9 @@
                 },
                 "id": {
                     "type": "string"
+                },
+                "managed_image": {
+                    "$ref": "#/definitions/api.JobManagedImageConfigResponse"
                 },
                 "name": {
                     "type": "string"
@@ -2232,6 +2296,32 @@
                 }
             }
         },
+        "api.UpdateJobManagedImageConfigRequest": {
+            "type": "object",
+            "properties": {
+                "bot_branch_prefix": {
+                    "type": "string"
+                },
+                "commit_author_email": {
+                    "type": "string"
+                },
+                "commit_author_name": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "managed_image_name": {
+                    "type": "string"
+                },
+                "pipeline_path": {
+                    "type": "string"
+                },
+                "write_credential_id": {
+                    "type": "string"
+                }
+            }
+        },
         "api.UpdateJobRequest": {
             "type": "object",
             "properties": {
@@ -2249,6 +2339,9 @@
                 },
                 "enabled": {
                     "type": "boolean"
+                },
+                "managed_image": {
+                    "$ref": "#/definitions/api.UpdateJobManagedImageConfigRequest"
                 },
                 "name": {
                     "type": "string"

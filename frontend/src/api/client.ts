@@ -15,13 +15,9 @@ import type {
   UpdateJobRequest,
 } from "../types/job";
 import type {
-  CreateRepoWritebackConfigRequest,
   CreateSourceCredentialRequest,
-  RepoWritebackConfig,
-  RepoWritebackConfigListResponse,
   SourceCredential,
   SourceCredentialListResponse,
-  UpdateRepoWritebackConfigRequest,
   UpdateSourceCredentialRequest,
 } from "../types/managedImageSettings";
 
@@ -196,11 +192,9 @@ export async function listBuildsByJob(jobId: string): Promise<Build[]> {
   return envelope.data.builds;
 }
 
-export async function listSourceCredentials(
-  projectID: string,
-): Promise<SourceCredential[]> {
+export async function listSourceCredentials(): Promise<SourceCredential[]> {
   const envelope = await fetchJSON<DataEnvelope<SourceCredentialListResponse>>(
-    `/source-credentials?project_id=${encodeURIComponent(projectID)}`,
+    "/source-credentials",
   );
   return envelope.data.credentials;
 }
@@ -234,44 +228,4 @@ export async function updateSourceCredential(
 
 export async function deleteSourceCredential(id: string): Promise<void> {
   await deleteNoContent(`/source-credentials/${encodeURIComponent(id)}`);
-}
-
-export async function listRepoWritebackConfigs(
-  projectID: string,
-): Promise<RepoWritebackConfig[]> {
-  const envelope = await fetchJSON<
-    DataEnvelope<RepoWritebackConfigListResponse>
-  >(`/repo-writeback-configs?project_id=${encodeURIComponent(projectID)}`);
-  return envelope.data.configs;
-}
-
-export async function createRepoWritebackConfig(
-  input: CreateRepoWritebackConfigRequest,
-): Promise<RepoWritebackConfig> {
-  const envelope = await postJSON<
-    DataEnvelope<RepoWritebackConfig>,
-    CreateRepoWritebackConfigRequest
-  >("/repo-writeback-configs", input);
-  return envelope.data;
-}
-
-export async function updateRepoWritebackConfig(
-  id: string,
-  input: UpdateRepoWritebackConfigRequest,
-): Promise<RepoWritebackConfig> {
-  const envelope = await fetchJSON<DataEnvelope<RepoWritebackConfig>>(
-    `/repo-writeback-configs/${encodeURIComponent(id)}`,
-    {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(input),
-    },
-  );
-  return envelope.data;
-}
-
-export async function deleteRepoWritebackConfig(id: string): Promise<void> {
-  await deleteNoContent(`/repo-writeback-configs/${encodeURIComponent(id)}`);
 }

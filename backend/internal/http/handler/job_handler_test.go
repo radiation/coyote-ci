@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
@@ -18,11 +19,17 @@ import (
 func TestJobHandler_CreateListGetUpdateRunNow(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
+	configRepo := repositorymemory.NewJobManagedImageConfigRepository()
+	credentialRepo := repositorymemory.NewSourceCredentialRepository()
+	_, err := credentialRepo.Create(context.Background(), serviceCredential("cred-1", "github-bot"))
+	if err != nil {
+		t.Fatalf("create credential failed: %v", err)
+	}
 	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
-	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithManagedImageConfigRepository(configRepo, credentialRepo)
 	h := NewJobHandler(jobSvc)
 
-	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"push_branch":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
+	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"push_branch":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","managed_image":{"enabled":true,"managed_image_name":"go","pipeline_path":".coyote/pipeline.yml","write_credential_id":"cred-1"},"enabled":true}`
 	createReq := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(createBody))
 	createRes := httptest.NewRecorder()
 	h.CreateJob(createRes, createReq)
@@ -36,6 +43,10 @@ func TestJobHandler_CreateListGetUpdateRunNow(t *testing.T) {
 	}
 	if createData["push_branch"] != "main" {
 		t.Fatalf("expected push_branch main, got %v", createData["push_branch"])
+	}
+	managedImage, ok := createData["managed_image"].(map[string]any)
+	if !ok || managedImage["managed_image_name"] != "go" {
+		t.Fatalf("expected managed image payload, got %v", createData["managed_image"])
 	}
 	jobID, ok := createData["id"].(string)
 	if !ok || jobID == "" {
@@ -62,7 +73,7 @@ func TestJobHandler_CreateListGetUpdateRunNow(t *testing.T) {
 		t.Fatalf("expected get status %d, got %d", http.StatusOK, getRes.Code)
 	}
 
-	updateBody := `{"enabled":false,"push_enabled":false,"push_branch":""}`
+	updateBody := `{"enabled":false,"push_enabled":false,"push_branch":"","managed_image":null}`
 	updateReq := addURLParam(httptest.NewRequest(http.MethodPut, "/jobs/"+jobID, bytes.NewBufferString(updateBody)), "jobID", jobID)
 	updateRes := httptest.NewRecorder()
 	h.UpdateJob(updateRes, updateReq)
@@ -72,6 +83,9 @@ func TestJobHandler_CreateListGetUpdateRunNow(t *testing.T) {
 	updateData := decodeDataMap(t, updateRes)
 	if updateData["push_enabled"] != false {
 		t.Fatalf("expected push_enabled false after update, got %v", updateData["push_enabled"])
+	}
+	if managedImage, exists := updateData["managed_image"]; exists && managedImage != nil {
+		t.Fatalf("expected managed image config removed, got %v", managedImage)
 	}
 
 	runReq := addURLParam(httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/run", nil), "jobID", jobID)
@@ -109,6 +123,15 @@ func TestJobHandler_CreateListGetUpdateRunNow(t *testing.T) {
 	}
 	if source["ref"] != "main" {
 		t.Fatalf("expected build source.ref from job, got %v", source["ref"])
+	}
+}
+
+func serviceCredential(id string, name string) domain.SourceCredential {
+	return domain.SourceCredential{
+		ID:        id,
+		Name:      name,
+		Kind:      domain.SourceCredentialKindHTTPSToken,
+		SecretRef: "COYOTE_TOKEN",
 	}
 }
 

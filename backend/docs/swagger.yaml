@@ -241,6 +241,23 @@ definitions:
       working_dir:
         type: string
     type: object
+  api.CreateJobManagedImageConfigRequest:
+    properties:
+      bot_branch_prefix:
+        type: string
+      commit_author_email:
+        type: string
+      commit_author_name:
+        type: string
+      enabled:
+        type: boolean
+      managed_image_name:
+        type: string
+      pipeline_path:
+        type: string
+      write_credential_id:
+        type: string
+    type: object
   api.CreateJobRequest:
     properties:
       branch_allowlist:
@@ -253,6 +270,8 @@ definitions:
         type: string
       enabled:
         type: boolean
+      managed_image:
+        $ref: '#/definitions/api.CreateJobManagedImageConfigRequest'
       name:
         type: string
       pipeline_path:
@@ -428,6 +447,27 @@ definitions:
           $ref: '#/definitions/api.JobResponse'
         type: array
     type: object
+  api.JobManagedImageConfigResponse:
+    properties:
+      bot_branch_prefix:
+        type: string
+      commit_author_email:
+        type: string
+      commit_author_name:
+        type: string
+      created_at:
+        type: string
+      enabled:
+        type: boolean
+      managed_image_name:
+        type: string
+      pipeline_path:
+        type: string
+      updated_at:
+        type: string
+      write_credential_id:
+        type: string
+    type: object
   api.JobResponse:
     properties:
       branch_allowlist:
@@ -444,6 +484,8 @@ definitions:
         type: boolean
       id:
         type: string
+      managed_image:
+        $ref: '#/definitions/api.JobManagedImageConfigResponse'
       name:
         type: string
       pipeline_path:
@@ -583,6 +625,23 @@ definitions:
       step_index:
         type: integer
     type: object
+  api.UpdateJobManagedImageConfigRequest:
+    properties:
+      bot_branch_prefix:
+        type: string
+      commit_author_email:
+        type: string
+      commit_author_name:
+        type: string
+      enabled:
+        type: boolean
+      managed_image_name:
+        type: string
+      pipeline_path:
+        type: string
+      write_credential_id:
+        type: string
+    type: object
   api.UpdateJobRequest:
     properties:
       branch_allowlist:
@@ -595,6 +654,8 @@ definitions:
         type: string
       enabled:
         type: boolean
+      managed_image:
+        $ref: '#/definitions/api.UpdateJobManagedImageConfigRequest'
       name:
         type: string
       pipeline_path:

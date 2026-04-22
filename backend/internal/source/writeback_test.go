@@ -113,6 +113,68 @@ func TestCommitAndPushPipelineUpdate_UsesBranchStrategy(t *testing.T) {
 	}
 }
 
+func TestCommitAndPushPipelineUpdate_BasesOnExistingRemoteBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for write-back test")
+	}
+
+	ctx := context.Background()
+	baseDir := t.TempDir()
+	remoteDir := filepath.Join(baseDir, "remote.git")
+	seedDir := filepath.Join(baseDir, "seed")
+	localDir := filepath.Join(baseDir, "local")
+	branchName := "coyote/managed-image-refresh/fp-abc123"
+
+	mustRunGit(t, baseDir, "init", "--bare", remoteDir)
+	mustRunGit(t, baseDir, "clone", remoteDir, seedDir)
+	mustRunGit(t, seedDir, "config", "user.name", "test")
+	mustRunGit(t, seedDir, "config", "user.email", "test@example.com")
+	mustWriteFile(t, filepath.Join(seedDir, ".coyote", "pipeline.yml"), []byte("version: 1\npipeline:\n  image: golang:1.26.2\n"))
+	mustRunGit(t, seedDir, "add", ".")
+	mustRunGit(t, seedDir, "commit", "-m", "initial")
+	mustRunGit(t, seedDir, "push", "origin", "HEAD:main")
+	mustRunGit(t, seedDir, "checkout", "-B", branchName)
+	mustWriteFile(t, filepath.Join(seedDir, "branch-marker.txt"), []byte("remote branch content\n"))
+	mustRunGit(t, seedDir, "add", ".")
+	mustRunGit(t, seedDir, "commit", "-m", "existing bot branch")
+	mustRunGit(t, seedDir, "push", "origin", "HEAD:refs/heads/"+branchName)
+
+	mustRunGit(t, baseDir, "clone", remoteDir, localDir)
+	mustRunGit(t, localDir, "config", "user.name", "test")
+	mustRunGit(t, localDir, "config", "user.email", "test@example.com")
+
+	t.Setenv("COYOTE_GIT_TOKEN", "unused-local-test")
+
+	client := NewGitWriteBackClient()
+	credential := domain.SourceCredential{
+		Kind:      domain.SourceCredentialKindHTTPSToken,
+		SecretRef: "COYOTE_GIT_TOKEN",
+	}
+
+	_, err := client.CommitAndPushPipelineUpdate(ctx, GitWriteBackRequest{
+		RepositoryURL: "https://example.invalid/repo.git",
+		RepoRoot:      localDir,
+		PipelinePath:  ".coyote/pipeline.yml",
+		BranchName:    branchName,
+		CommitMessage: "chore(coyote): refresh managed build image to immutable digest",
+		Content:       []byte("version: 1\npipeline:\n  image: registry.example.com/coyote/go@sha256:1234\n"),
+		AuthorName:    "Coyote CI Bot",
+		AuthorEmail:   "bot@coyote-ci.local",
+		Credential:    credential,
+	})
+	if err == nil {
+		t.Fatal("expected push failure due to invalid https remote")
+	}
+
+	marker, readErr := os.ReadFile(filepath.Join(localDir, "branch-marker.txt"))
+	if readErr != nil {
+		t.Fatalf("expected fetched remote branch content to exist locally: %v", readErr)
+	}
+	if strings.TrimSpace(string(marker)) != "remote branch content" {
+		t.Fatalf("unexpected marker content: %q", string(marker))
+	}
+}
+
 func mustRunGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)

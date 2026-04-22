@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
@@ -77,6 +78,233 @@ func TestJobService_CreateListGetUpdate(t *testing.T) {
 	}
 	if updated.PushBranch != nil {
 		t.Fatalf("expected updated push_branch=nil, got %v", updated.PushBranch)
+	}
+}
+
+func TestJobService_CreateAndUpdateManagedImageConfig(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	configRepo := memory.NewJobManagedImageConfigRepository()
+	credentialRepo := memory.NewSourceCredentialRepository()
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService).WithManagedImageConfigRepository(configRepo, credentialRepo)
+
+	_, err := credentialRepo.Create(context.Background(), domain.SourceCredential{
+		ID:        "cred-1",
+		Name:      "github-bot",
+		Kind:      domain.SourceCredentialKindHTTPSToken,
+		SecretRef: "COYOTE_GITHUB_TOKEN",
+	})
+	if err != nil {
+		t.Fatalf("create credential failed: %v", err)
+	}
+
+	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelinePath:  ".coyote/pipeline.yml",
+		ManagedImage: &ManagedImageConfigInput{
+			Enabled:           true,
+			ManagedImageName:  "go",
+			PipelinePath:      ".coyote/pipeline.yml",
+			WriteCredentialID: "cred-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+	if job.ManagedImageConfig == nil {
+		t.Fatal("expected managed image config on created job")
+	}
+	if job.ManagedImageConfig.WriteCredentialID != "cred-1" {
+		t.Fatalf("expected write credential id cred-1, got %q", job.ManagedImageConfig.WriteCredentialID)
+	}
+
+	loaded, err := jobService.GetJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("get job failed: %v", err)
+	}
+	if loaded.ManagedImageConfig == nil || loaded.ManagedImageConfig.ManagedImageName != "go" {
+		t.Fatalf("expected managed image config to load, got %+v", loaded.ManagedImageConfig)
+	}
+
+	updated, err := jobService.UpdateJob(context.Background(), job.ID, UpdateJobInput{
+		ManagedImageSet: true,
+		ManagedImage: &ManagedImageConfigPatch{
+			Enabled:          boolPtr(true),
+			ManagedImageName: strPtr("go-1-24"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("update job failed: %v", err)
+	}
+	if updated.ManagedImageConfig == nil {
+		t.Fatal("expected managed image config on updated job")
+	}
+	if !updated.ManagedImageConfig.Enabled {
+		t.Fatal("expected managed image config to remain enabled")
+	}
+	if updated.ManagedImageConfig.ManagedImageName != "go-1-24" {
+		t.Fatalf("expected updated managed image name, got %q", updated.ManagedImageConfig.ManagedImageName)
+	}
+}
+
+func TestJobService_UpdateJobManagedImageDisabledDeletesConfig(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	configRepo := memory.NewJobManagedImageConfigRepository()
+	credentialRepo := memory.NewSourceCredentialRepository()
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService).WithManagedImageConfigRepository(configRepo, credentialRepo)
+
+	_, err := credentialRepo.Create(context.Background(), domain.SourceCredential{
+		ID:        "cred-1",
+		Name:      "github-bot",
+		Kind:      domain.SourceCredentialKindHTTPSToken,
+		SecretRef: "COYOTE_GITHUB_TOKEN",
+	})
+	if err != nil {
+		t.Fatalf("create credential failed: %v", err)
+	}
+
+	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelinePath:  ".coyote/pipeline.yml",
+		ManagedImage: &ManagedImageConfigInput{
+			Enabled:           true,
+			ManagedImageName:  "go",
+			PipelinePath:      ".coyote/pipeline.yml",
+			WriteCredentialID: "cred-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	updated, err := jobService.UpdateJob(context.Background(), job.ID, UpdateJobInput{
+		ManagedImageSet: true,
+		ManagedImage: &ManagedImageConfigPatch{
+			Enabled: boolPtr(false),
+		},
+	})
+	if err != nil {
+		t.Fatalf("disable managed image failed: %v", err)
+	}
+	if updated.ManagedImageConfig != nil {
+		t.Fatalf("expected managed image config removed, got %+v", updated.ManagedImageConfig)
+	}
+	if _, err := configRepo.GetByJobID(context.Background(), job.ID); !errors.Is(err, repository.ErrJobManagedImageConfigNotFound) {
+		t.Fatalf("expected config repo row deleted, got %v", err)
+	}
+}
+
+func TestJobService_UpdateJobManagedImageCreateDefaultsEnabledTrue(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	configRepo := memory.NewJobManagedImageConfigRepository()
+	credentialRepo := memory.NewSourceCredentialRepository()
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService).WithManagedImageConfigRepository(configRepo, credentialRepo)
+
+	_, err := credentialRepo.Create(context.Background(), domain.SourceCredential{
+		ID:        "cred-1",
+		Name:      "github-bot",
+		Kind:      domain.SourceCredentialKindHTTPSToken,
+		SecretRef: "COYOTE_GITHUB_TOKEN",
+	})
+	if err != nil {
+		t.Fatalf("create credential failed: %v", err)
+	}
+
+	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelinePath:  ".coyote/pipeline.yml",
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	updated, err := jobService.UpdateJob(context.Background(), job.ID, UpdateJobInput{
+		ManagedImageSet: true,
+		ManagedImage: &ManagedImageConfigPatch{
+			ManagedImageName:  strPtr("go"),
+			PipelinePath:      strPtr(".coyote/pipeline.yml"),
+			WriteCredentialID: strPtr("cred-1"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("create managed image via update failed: %v", err)
+	}
+	if updated.ManagedImageConfig == nil {
+		t.Fatal("expected managed image config on updated job")
+	}
+	if !updated.ManagedImageConfig.Enabled {
+		t.Fatal("expected managed image config to default enabled=true when created via update")
+	}
+	stored, err := configRepo.GetByJobID(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("expected stored managed image config, got %v", err)
+	}
+	if !stored.Enabled {
+		t.Fatal("expected persisted managed image config enabled=true")
+	}
+}
+
+func TestJobService_UpdateJobManagedImageNullDeletesConfigWithoutValidation(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	configRepo := memory.NewJobManagedImageConfigRepository()
+	credentialRepo := memory.NewSourceCredentialRepository()
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService).WithManagedImageConfigRepository(configRepo, credentialRepo)
+
+	_, err := credentialRepo.Create(context.Background(), domain.SourceCredential{
+		ID:        "cred-1",
+		Name:      "github-bot",
+		Kind:      domain.SourceCredentialKindHTTPSToken,
+		SecretRef: "COYOTE_GITHUB_TOKEN",
+	})
+	if err != nil {
+		t.Fatalf("create credential failed: %v", err)
+	}
+
+	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelinePath:  ".coyote/pipeline.yml",
+		ManagedImage: &ManagedImageConfigInput{
+			Enabled:           true,
+			ManagedImageName:  "go",
+			PipelinePath:      ".coyote/pipeline.yml",
+			WriteCredentialID: "cred-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	updated, err := jobService.UpdateJob(context.Background(), job.ID, UpdateJobInput{
+		ManagedImageSet: true,
+		ManagedImage:    nil,
+	})
+	if err != nil {
+		t.Fatalf("null managed image update failed: %v", err)
+	}
+	if updated.ManagedImageConfig != nil {
+		t.Fatalf("expected managed image config removed, got %+v", updated.ManagedImageConfig)
+	}
+	if _, err := configRepo.GetByJobID(context.Background(), job.ID); !errors.Is(err, repository.ErrJobManagedImageConfigNotFound) {
+		t.Fatalf("expected config repo row deleted, got %v", err)
 	}
 }
 

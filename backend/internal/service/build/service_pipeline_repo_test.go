@@ -189,6 +189,19 @@ type fakeRepoFetcher struct {
 	lastRef   string
 }
 
+type fakeManagedImageRefresher struct {
+	lastReq ManagedImageRefreshInput
+	calls   int
+	result  ManagedImageRefreshResult
+	err     error
+}
+
+func (f *fakeManagedImageRefresher) RefreshManagedPipelineImage(_ context.Context, req ManagedImageRefreshInput) (ManagedImageRefreshResult, error) {
+	f.calls++
+	f.lastReq = req
+	return f.result, f.err
+}
+
 func (f *fakeRepoFetcher) Fetch(_ context.Context, _ string, ref string) (string, string, error) {
 	f.calls++
 	f.lastRef = ref
@@ -550,6 +563,35 @@ steps:
 		}
 		if build.CommitSHA == nil || *build.CommitSHA != "cafebabedeadbeef" {
 			t.Fatalf("expected persisted commit sha, got %v", build.CommitSHA)
+		}
+	})
+
+	t.Run("managed image refresh uses branch for pr base when fetching by commit sha", func(t *testing.T) {
+		tmpDir := setupTempRepo(t, validYAML)
+		repo := &fakeBuildRepository{}
+		fetcher := &fakeRepoFetcher{localPath: tmpDir, commitSHA: "cafebabedeadbeef"}
+		refresher := &fakeManagedImageRefresher{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(fetcher)
+		svc.managedImageRefresher = refresher
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID: "proj-1",
+			RepoURL:   "https://example.com/repo.git",
+			Ref:       "main",
+			CommitSHA: "cafebabedeadbeef",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if refresher.calls != 1 {
+			t.Fatalf("expected one managed image refresh call, got %d", refresher.calls)
+		}
+		if refresher.lastReq.Ref != "cafebabedeadbeef" {
+			t.Fatalf("expected refresh fetch ref to use commit sha, got %q", refresher.lastReq.Ref)
+		}
+		if refresher.lastReq.BaseBranch != "main" {
+			t.Fatalf("expected refresh base branch to use ref name, got %q", refresher.lastReq.BaseBranch)
 		}
 	})
 

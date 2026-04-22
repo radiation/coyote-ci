@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,7 @@ type RepoFetcher interface {
 }
 
 type WritebackConfigLookup interface {
-	GetByProjectAndRepo(ctx context.Context, projectID string, repositoryURL string) (domain.RepoWritebackConfig, error)
+	GetByJobID(ctx context.Context, jobID string) (domain.JobManagedImageConfig, error)
 }
 
 type CredentialLookup interface {
@@ -62,6 +63,10 @@ type GitWriteBack interface {
 	CommitAndPushPipelineUpdate(ctx context.Context, req source.GitWriteBackRequest) (source.GitWriteBackResult, error)
 }
 
+type PullRequestCreator interface {
+	CreateOrGetPullRequest(ctx context.Context, req source.GitHubPullRequestRequest) (source.GitHubPullRequestResult, error)
+}
+
 type Service struct {
 	fetcher            RepoFetcher
 	writebacks         WritebackConfigLookup
@@ -69,11 +74,12 @@ type Service struct {
 	catalog            ManagedImageCatalog
 	publisher          ImagePublisher
 	writer             GitWriteBack
+	pullRequests       PullRequestCreator
 	clock              func() time.Time
 	computeFingerprint func(repoRoot string, pipelinePath string) (string, []string, error)
 }
 
-func NewService(fetcher RepoFetcher, writebacks WritebackConfigLookup, credentials CredentialLookup, catalog ManagedImageCatalog, publisher ImagePublisher, writer GitWriteBack) *Service {
+func NewService(fetcher RepoFetcher, writebacks WritebackConfigLookup, credentials CredentialLookup, catalog ManagedImageCatalog, publisher ImagePublisher, writer GitWriteBack, pullRequests PullRequestCreator) *Service {
 	return &Service{
 		fetcher:            fetcher,
 		writebacks:         writebacks,
@@ -81,6 +87,7 @@ func NewService(fetcher RepoFetcher, writebacks WritebackConfigLookup, credentia
 		catalog:            catalog,
 		publisher:          publisher,
 		writer:             writer,
+		pullRequests:       pullRequests,
 		clock:              time.Now,
 		computeFingerprint: ComputeDependencyFingerprint,
 	}
@@ -91,8 +98,16 @@ func (s *Service) RefreshManagedPipelineImage(ctx context.Context, req buildsvc.
 		return buildsvc.ManagedImageRefreshResult{}, fmt.Errorf("managed image refresh service is not fully configured")
 	}
 
-	cfg, err := s.lookupWritebackConfig(ctx, strings.TrimSpace(req.ProjectID), strings.TrimSpace(req.RepositoryURL))
+	jobID := strings.TrimSpace(req.JobID)
+	if jobID == "" {
+		return buildsvc.ManagedImageRefreshResult{Updated: false}, nil
+	}
+
+	cfg, err := s.writebacks.GetByJobID(ctx, jobID)
 	if err != nil {
+		if errors.Is(err, repository.ErrJobManagedImageConfigNotFound) {
+			return buildsvc.ManagedImageRefreshResult{Updated: false}, nil
+		}
 		return buildsvc.ManagedImageRefreshResult{}, err
 	}
 	if !cfg.Enabled {
@@ -120,7 +135,7 @@ func (s *Service) RefreshManagedPipelineImage(ctx context.Context, req buildsvc.
 		return buildsvc.ManagedImageRefreshResult{}, err
 	}
 
-	managedImage, err := s.catalog.EnsureManagedImage(ctx, cfg.ProjectID, cfg.ManagedImageName)
+	managedImage, err := s.catalog.EnsureManagedImage(ctx, strings.TrimSpace(req.ProjectID), cfg.ManagedImageName)
 	if err != nil {
 		return buildsvc.ManagedImageRefreshResult{}, err
 	}
@@ -131,8 +146,8 @@ func (s *Service) RefreshManagedPipelineImage(ctx context.Context, req buildsvc.
 	}
 	if !found {
 		published, publishErr := s.publisher.Publish(ctx, PublishRequest{
-			ProjectID:             cfg.ProjectID,
-			RepositoryURL:         cfg.RepositoryURL,
+			ProjectID:             strings.TrimSpace(req.ProjectID),
+			RepositoryURL:         strings.TrimSpace(req.RepositoryURL),
 			ManagedImageName:      cfg.ManagedImageName,
 			DependencyFingerprint: dependencyFingerprint,
 			RepoRoot:              repoRoot,
@@ -147,7 +162,7 @@ func (s *Service) RefreshManagedPipelineImage(ctx context.Context, req buildsvc.
 		}
 
 		fingerprintValue := dependencyFingerprint
-		repoURLValue := strings.TrimSpace(cfg.RepositoryURL)
+		repoURLValue := strings.TrimSpace(req.RepositoryURL)
 		candidateVersion, err = s.catalog.CreateVersion(ctx, domain.ManagedImageVersion{
 			ID:                    uuid.NewString(),
 			ManagedImageID:        managedImage.ID,
@@ -192,9 +207,10 @@ func (s *Service) RefreshManagedPipelineImage(ctx context.Context, req buildsvc.
 	}
 	branchName := branchPrefix + "/" + dependencyFingerprint[:12]
 	commitMessage := deterministicCommitMessage(candidateVersion.ImageRef)
+	baseBranch := strings.TrimSpace(req.BaseBranch)
 
 	writeResult, err := s.writer.CommitAndPushPipelineUpdate(ctx, source.GitWriteBackRequest{
-		RepositoryURL: cfg.RepositoryURL,
+		RepositoryURL: strings.TrimSpace(req.RepositoryURL),
 		RepoRoot:      repoRoot,
 		PipelinePath:  pipelinePath,
 		BranchName:    branchName,
@@ -206,6 +222,26 @@ func (s *Service) RefreshManagedPipelineImage(ctx context.Context, req buildsvc.
 	})
 	if err != nil {
 		return buildsvc.ManagedImageRefreshResult{}, err
+	}
+	log.Printf("INFO: managed image refresh wrote pipeline update job_id=%s managed_image_id=%s managed_image_version_id=%s branch=%s commit_sha=%s", jobID, managedImage.ID, candidateVersion.ID, writeResult.BranchName, writeResult.CommitSHA)
+	if s.pullRequests != nil {
+		if baseBranch == "" {
+			log.Printf("WARNING: managed image pull request skipped job_id=%s branch=%s repo=%s: missing base branch", jobID, writeResult.BranchName, strings.TrimSpace(req.RepositoryURL))
+		} else {
+			prResult, prErr := s.pullRequests.CreateOrGetPullRequest(ctx, source.GitHubPullRequestRequest{
+				RepositoryURL: strings.TrimSpace(req.RepositoryURL),
+				HeadBranch:    writeResult.BranchName,
+				BaseBranch:    baseBranch,
+				Title:         commitMessage,
+				Body:          managedImagePullRequestBody(candidateVersion.ImageRef, dependencyFingerprint),
+				Credential:    credential,
+			})
+			if prErr != nil {
+				log.Printf("WARNING: managed image pull request creation failed job_id=%s branch=%s repo=%s: %v", jobID, writeResult.BranchName, strings.TrimSpace(req.RepositoryURL), prErr)
+			} else if strings.TrimSpace(prResult.URL) != "" {
+				log.Printf("INFO: managed image pull request ready job_id=%s branch=%s existing=%t url=%s", jobID, writeResult.BranchName, prResult.Existing, prResult.URL)
+			}
+		}
 	}
 
 	return buildsvc.ManagedImageRefreshResult{
@@ -219,52 +255,16 @@ func (s *Service) RefreshManagedPipelineImage(ctx context.Context, req buildsvc.
 	}, nil
 }
 
-func (s *Service) lookupWritebackConfig(ctx context.Context, projectID string, repositoryURL string) (domain.RepoWritebackConfig, error) {
-	urlCandidates := repoURLCandidates(repositoryURL)
-	var lastErr error
-	for _, candidate := range urlCandidates {
-		cfg, err := s.writebacks.GetByProjectAndRepo(ctx, projectID, candidate)
-		if err == nil {
-			return cfg, nil
-		}
-		if !errors.Is(err, repository.ErrRepoWritebackConfigNotFound) {
-			return domain.RepoWritebackConfig{}, err
-		}
-		lastErr = err
-	}
-	if lastErr != nil {
-		return domain.RepoWritebackConfig{}, lastErr
-	}
-	return domain.RepoWritebackConfig{}, repository.ErrRepoWritebackConfigNotFound
-}
-
-func repoURLCandidates(value string) []string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return []string{trimmed}
-	}
-
-	base := strings.TrimSuffix(strings.TrimSuffix(trimmed, "/"), ".git")
-	candidates := []string{trimmed, strings.TrimSuffix(trimmed, "/"), base, base + ".git"}
-	seen := map[string]bool{}
-	result := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" || seen[candidate] {
-			continue
-		}
-		seen[candidate] = true
-		result = append(result, candidate)
-	}
-	return result
-}
-
 func isImmutableImageRef(value string) bool {
 	return strings.Contains(strings.TrimSpace(value), "@sha256:")
 }
 
 func deterministicCommitMessage(imageRef string) string {
 	return "chore(coyote): refresh managed build image to " + strings.TrimSpace(imageRef)
+}
+
+func managedImagePullRequestBody(imageRef string, dependencyFingerprint string) string {
+	return fmt.Sprintf("Automated managed image refresh.\n\n- Image: %s\n- Dependency fingerprint: %s\n", strings.TrimSpace(imageRef), strings.TrimSpace(dependencyFingerprint))
 }
 
 func defaultString(value string, fallback string) string {

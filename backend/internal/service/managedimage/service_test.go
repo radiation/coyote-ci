@@ -23,22 +23,22 @@ func (f fakeFetcher) Fetch(_ context.Context, _ string, _ string) (string, strin
 }
 
 type fakeWritebackConfigs struct {
-	cfg domain.RepoWritebackConfig
+	cfg domain.JobManagedImageConfig
 }
 
-func (f fakeWritebackConfigs) GetByProjectAndRepo(_ context.Context, _ string, _ string) (domain.RepoWritebackConfig, error) {
+func (f fakeWritebackConfigs) GetByJobID(_ context.Context, _ string) (domain.JobManagedImageConfig, error) {
 	return f.cfg, nil
 }
 
 type lookupWritebackConfigs struct {
-	configs map[string]domain.RepoWritebackConfig
+	configs map[string]domain.JobManagedImageConfig
 }
 
-func (f lookupWritebackConfigs) GetByProjectAndRepo(_ context.Context, projectID string, repositoryURL string) (domain.RepoWritebackConfig, error) {
-	key := projectID + "|" + repositoryURL
+func (f lookupWritebackConfigs) GetByJobID(_ context.Context, jobID string) (domain.JobManagedImageConfig, error) {
+	key := jobID
 	cfg, ok := f.configs[key]
 	if !ok {
-		return domain.RepoWritebackConfig{}, repository.ErrRepoWritebackConfigNotFound
+		return domain.JobManagedImageConfig{}, repository.ErrJobManagedImageConfigNotFound
 	}
 	return cfg, nil
 }
@@ -94,6 +94,19 @@ func (f *fakeWriter) CommitAndPushPipelineUpdate(_ context.Context, req source.G
 	return source.GitWriteBackResult{BranchName: req.BranchName, CommitSHA: "def456"}, nil
 }
 
+type fakePullRequests struct {
+	calls  int
+	last   source.GitHubPullRequestRequest
+	result source.GitHubPullRequestResult
+	err    error
+}
+
+func (f *fakePullRequests) CreateOrGetPullRequest(_ context.Context, req source.GitHubPullRequestRequest) (source.GitHubPullRequestResult, error) {
+	f.calls++
+	f.last = req
+	return f.result, f.err
+}
+
 func TestRefreshManagedPipelineImage_FingerprintChangeCreatesVersionAndWritesBack(t *testing.T) {
 	repoRoot := t.TempDir()
 	pipelinePath := filepath.Join(repoRoot, ".coyote", "pipeline.yml")
@@ -113,17 +126,19 @@ func TestRefreshManagedPipelineImage_FingerprintChangeCreatesVersionAndWritesBac
 	catalog := &fakeCatalog{managedImage: domain.ManagedImage{ID: "managed-1"}}
 	publisher := &fakePublisher{published: PublishedImage{ImageRef: "registry.example.com/coyote/go@sha256:abcd", ImageDigest: "sha256:abcd", VersionLabel: "v1"}}
 	writer := &fakeWriter{}
+	pullRequests := &fakePullRequests{result: source.GitHubPullRequestResult{Number: 12, URL: "https://github.com/example/repo/pull/12"}}
 	svc := NewService(
 		fakeFetcher{repoRoot: repoRoot},
-		fakeWritebackConfigs{cfg: domain.RepoWritebackConfig{ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", PipelinePath: ".coyote/pipeline.yml", ManagedImageName: "go", WriteCredentialID: "cred-1", BotBranchPrefix: "coyote/managed-image-refresh", CommitAuthorName: "Coyote Bot", CommitAuthorEmail: "bot@example.com", Enabled: true}},
+		fakeWritebackConfigs{cfg: domain.JobManagedImageConfig{JobID: "job-1", PipelinePath: ".coyote/pipeline.yml", ManagedImageName: "go", WriteCredentialID: "cred-1", BotBranchPrefix: "coyote/managed-image-refresh", CommitAuthorName: "Coyote Bot", CommitAuthorEmail: "bot@example.com", Enabled: true}},
 		fakeCredentials{cred: domain.SourceCredential{ID: "cred-1", Kind: domain.SourceCredentialKindHTTPSToken, SecretRef: "TOKEN"}},
 		catalog,
 		publisher,
 		writer,
+		pullRequests,
 	)
 	svc.clock = func() time.Time { return time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC) }
 
-	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main"})
+	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main", BaseBranch: "main"})
 	if err != nil {
 		t.Fatalf("refresh failed: %v", err)
 	}
@@ -141,6 +156,15 @@ func TestRefreshManagedPipelineImage_FingerprintChangeCreatesVersionAndWritesBac
 	}
 	if writer.calls != 1 {
 		t.Fatalf("expected write-back call, got %d", writer.calls)
+	}
+	if pullRequests.calls != 1 {
+		t.Fatalf("expected pull request call, got %d", pullRequests.calls)
+	}
+	if pullRequests.last.HeadBranch != writer.last.BranchName {
+		t.Fatalf("expected pull request head branch %q, got %q", writer.last.BranchName, pullRequests.last.HeadBranch)
+	}
+	if pullRequests.last.BaseBranch != "main" {
+		t.Fatalf("expected pull request base branch main, got %q", pullRequests.last.BaseBranch)
 	}
 	if !strings.HasPrefix(writer.last.BranchName, "coyote/managed-image-refresh/") {
 		t.Fatalf("expected bot branch prefix, got %q", writer.last.BranchName)
@@ -176,14 +200,15 @@ func TestRefreshManagedPipelineImage_UnchangedFingerprintNoRewrite(t *testing.T)
 	writer := &fakeWriter{}
 	svc := NewService(
 		fakeFetcher{repoRoot: repoRoot},
-		fakeWritebackConfigs{cfg: domain.RepoWritebackConfig{ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", PipelinePath: ".coyote/pipeline.yml", ManagedImageName: "go", WriteCredentialID: "cred-1", Enabled: true}},
+		fakeWritebackConfigs{cfg: domain.JobManagedImageConfig{JobID: "job-1", PipelinePath: ".coyote/pipeline.yml", ManagedImageName: "go", WriteCredentialID: "cred-1", Enabled: true}},
 		fakeCredentials{cred: domain.SourceCredential{ID: "cred-1", Kind: domain.SourceCredentialKindHTTPSToken, SecretRef: "TOKEN"}},
 		catalog,
 		publisher,
 		writer,
+		&fakePullRequests{},
 	)
 
-	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main"})
+	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main", BaseBranch: "main"})
 	if err != nil {
 		t.Fatalf("refresh failed: %v", err)
 	}
@@ -216,22 +241,23 @@ func TestRefreshManagedPipelineImage_RejectsMutableTagFromPublisher(t *testing.T
 
 	svc := NewService(
 		fakeFetcher{repoRoot: repoRoot},
-		fakeWritebackConfigs{cfg: domain.RepoWritebackConfig{ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", PipelinePath: ".coyote/pipeline.yml", ManagedImageName: "go", WriteCredentialID: "cred-1", Enabled: true}},
+		fakeWritebackConfigs{cfg: domain.JobManagedImageConfig{JobID: "job-1", PipelinePath: ".coyote/pipeline.yml", ManagedImageName: "go", WriteCredentialID: "cred-1", Enabled: true}},
 		fakeCredentials{cred: domain.SourceCredential{ID: "cred-1", Kind: domain.SourceCredentialKindHTTPSToken, SecretRef: "TOKEN"}},
 		&fakeCatalog{managedImage: domain.ManagedImage{ID: "managed-1"}},
 		&fakePublisher{published: PublishedImage{ImageRef: "registry.example.com/coyote/go:v2", ImageDigest: "sha256:abcd", VersionLabel: "v2"}},
 		&fakeWriter{},
+		&fakePullRequests{},
 	)
 
-	_, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main"})
+	_, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main", BaseBranch: "main"})
 	if err == nil || !strings.Contains(err.Error(), "immutable digest") {
 		t.Fatalf("expected immutable digest validation error, got: %v", err)
 	}
 }
 
 func TestRefreshManagedPipelineImage_DisabledConfig(t *testing.T) {
-	svc := NewService(fakeFetcher{repoRoot: t.TempDir()}, fakeWritebackConfigs{cfg: domain.RepoWritebackConfig{Enabled: false}}, fakeCredentials{}, &fakeCatalog{}, &fakePublisher{}, &fakeWriter{})
-	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{ProjectID: "proj", RepositoryURL: "repo", Ref: "main"})
+	svc := NewService(fakeFetcher{repoRoot: t.TempDir()}, fakeWritebackConfigs{cfg: domain.JobManagedImageConfig{JobID: "job-1", Enabled: false}}, fakeCredentials{}, &fakeCatalog{}, &fakePublisher{}, &fakeWriter{}, &fakePullRequests{})
+	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj", RepositoryURL: "repo", Ref: "main", BaseBranch: "main"})
 	if err != nil {
 		t.Fatalf("expected disabled config to be no-op, got error: %v", err)
 	}
@@ -256,10 +282,9 @@ func TestRefreshManagedPipelineImage_RepoURLVariantLookup(t *testing.T) {
 		t.Fatalf("write go.mod: %v", err)
 	}
 
-	lookup := lookupWritebackConfigs{configs: map[string]domain.RepoWritebackConfig{
-		"proj-1|https://example.com/repo.git": {
-			ProjectID:         "proj-1",
-			RepositoryURL:     "https://example.com/repo.git",
+	lookup := lookupWritebackConfigs{configs: map[string]domain.JobManagedImageConfig{
+		"job-1": {
+			JobID:             "job-1",
 			PipelinePath:      ".coyote/pipeline.yml",
 			ManagedImageName:  "go",
 			WriteCredentialID: "cred-1",
@@ -274,10 +299,22 @@ func TestRefreshManagedPipelineImage_RepoURLVariantLookup(t *testing.T) {
 		&fakeCatalog{managedImage: domain.ManagedImage{ID: "managed-1"}},
 		&fakePublisher{published: PublishedImage{ImageRef: "registry.example.com/coyote/go@sha256:abcd", ImageDigest: "sha256:abcd", VersionLabel: "v1"}},
 		&fakeWriter{},
+		&fakePullRequests{},
 	)
 
-	_, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{ProjectID: "proj-1", RepositoryURL: "https://example.com/repo", Ref: "main"})
+	_, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo", Ref: "main", BaseBranch: "main"})
 	if err != nil {
-		t.Fatalf("expected .git variant lookup to succeed, got: %v", err)
+		t.Fatalf("expected job-scoped lookup to succeed, got: %v", err)
+	}
+}
+
+func TestRefreshManagedPipelineImage_MissingJobConfigIsNoOp(t *testing.T) {
+	svc := NewService(fakeFetcher{repoRoot: t.TempDir()}, lookupWritebackConfigs{configs: map[string]domain.JobManagedImageConfig{}}, fakeCredentials{}, &fakeCatalog{}, &fakePublisher{}, &fakeWriter{}, &fakePullRequests{})
+	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-missing", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main", BaseBranch: "main"})
+	if err != nil {
+		t.Fatalf("expected missing config to be a no-op, got %v", err)
+	}
+	if res.Updated {
+		t.Fatal("expected missing job config to skip refresh")
 	}
 }

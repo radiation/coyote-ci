@@ -11,7 +11,6 @@ const (
 
 type SourceCredential struct {
 	ID        string
-	ProjectID string
 	Name      string
 	Kind      SourceCredentialKind
 	Username  *string
