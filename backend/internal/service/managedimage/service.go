@@ -207,6 +207,7 @@ func (s *Service) RefreshManagedPipelineImage(ctx context.Context, req buildsvc.
 	}
 	branchName := branchPrefix + "/" + dependencyFingerprint[:12]
 	commitMessage := deterministicCommitMessage(candidateVersion.ImageRef)
+	baseBranch := strings.TrimSpace(req.BaseBranch)
 
 	writeResult, err := s.writer.CommitAndPushPipelineUpdate(ctx, source.GitWriteBackRequest{
 		RepositoryURL: strings.TrimSpace(req.RepositoryURL),
@@ -224,18 +225,22 @@ func (s *Service) RefreshManagedPipelineImage(ctx context.Context, req buildsvc.
 	}
 	log.Printf("INFO: managed image refresh wrote pipeline update job_id=%s managed_image_id=%s managed_image_version_id=%s branch=%s commit_sha=%s", jobID, managedImage.ID, candidateVersion.ID, writeResult.BranchName, writeResult.CommitSHA)
 	if s.pullRequests != nil {
-		prResult, prErr := s.pullRequests.CreateOrGetPullRequest(ctx, source.GitHubPullRequestRequest{
-			RepositoryURL: strings.TrimSpace(req.RepositoryURL),
-			HeadBranch:    writeResult.BranchName,
-			BaseBranch:    cloneRef,
-			Title:         commitMessage,
-			Body:          managedImagePullRequestBody(candidateVersion.ImageRef, dependencyFingerprint),
-			Credential:    credential,
-		})
-		if prErr != nil {
-			log.Printf("WARNING: managed image pull request creation failed job_id=%s branch=%s repo=%s: %v", jobID, writeResult.BranchName, strings.TrimSpace(req.RepositoryURL), prErr)
-		} else if strings.TrimSpace(prResult.URL) != "" {
-			log.Printf("INFO: managed image pull request ready job_id=%s branch=%s existing=%t url=%s", jobID, writeResult.BranchName, prResult.Existing, prResult.URL)
+		if baseBranch == "" {
+			log.Printf("WARNING: managed image pull request skipped job_id=%s branch=%s repo=%s: missing base branch", jobID, writeResult.BranchName, strings.TrimSpace(req.RepositoryURL))
+		} else {
+			prResult, prErr := s.pullRequests.CreateOrGetPullRequest(ctx, source.GitHubPullRequestRequest{
+				RepositoryURL: strings.TrimSpace(req.RepositoryURL),
+				HeadBranch:    writeResult.BranchName,
+				BaseBranch:    baseBranch,
+				Title:         commitMessage,
+				Body:          managedImagePullRequestBody(candidateVersion.ImageRef, dependencyFingerprint),
+				Credential:    credential,
+			})
+			if prErr != nil {
+				log.Printf("WARNING: managed image pull request creation failed job_id=%s branch=%s repo=%s: %v", jobID, writeResult.BranchName, strings.TrimSpace(req.RepositoryURL), prErr)
+			} else if strings.TrimSpace(prResult.URL) != "" {
+				log.Printf("INFO: managed image pull request ready job_id=%s branch=%s existing=%t url=%s", jobID, writeResult.BranchName, prResult.Existing, prResult.URL)
+			}
 		}
 	}
 

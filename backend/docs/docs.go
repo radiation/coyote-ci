@@ -2300,17 +2300,6 @@ const docTemplate = `{
                 }
             }
         },
-        "api.UpdateJobManagedImageConfigField": {
-            "type": "object",
-            "properties": {
-                "set": {
-                    "type": "boolean"
-                },
-                "value": {
-                    "$ref": "#/definitions/api.UpdateJobManagedImageConfigRequest"
-                }
-            }
-        },
         "api.UpdateJobManagedImageConfigRequest": {
             "type": "object",
             "properties": {
@@ -2356,7 +2345,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "managed_image": {
-                    "$ref": "#/definitions/api.UpdateJobManagedImageConfigField"
+                    "$ref": "#/definitions/api.UpdateJobManagedImageConfigRequest"
                 },
                 "name": {
                     "type": "string"

@@ -533,6 +533,7 @@ func (s *JobService) patchManagedImageConfig(ctx context.Context, job domain.Job
 			BotBranchPrefix:   "coyote/managed-image-refresh",
 			CommitAuthorName:  "Coyote CI Bot",
 			CommitAuthorEmail: "bot@coyote-ci.local",
+			Enabled:           true,
 			CreatedAt:         time.Now().UTC(),
 		}
 	}

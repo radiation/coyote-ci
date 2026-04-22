@@ -5,6 +5,25 @@ ALTER TABLE source_credentials
 ALTER TABLE source_credentials
     DROP CONSTRAINT IF EXISTS source_credentials_project_id_name_key;
 
+WITH ranked_source_credentials AS (
+    SELECT
+        id,
+        name,
+        project_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY name
+            ORDER BY created_at ASC, id ASC
+        ) AS duplicate_rank
+    FROM source_credentials
+)
+UPDATE source_credentials AS credentials
+SET
+    name = ranked.name || ' (' || ranked.project_id || ' ' || SUBSTRING(ranked.id::text, 1, 8) || ')',
+    updated_at = NOW()
+FROM ranked_source_credentials AS ranked
+WHERE credentials.id = ranked.id
+  AND ranked.duplicate_rank > 1;
+
 ALTER TABLE source_credentials
     ADD CONSTRAINT source_credentials_name_key UNIQUE (name);
 

@@ -7,6 +7,7 @@ type ManagedImageRefreshInput struct {
 	ProjectID     string
 	RepositoryURL string
 	Ref           string
+	BaseBranch    string
 	PipelinePath  string
 }
 

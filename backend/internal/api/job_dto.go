@@ -23,47 +23,77 @@ type CreateJobRequest struct {
 }
 
 type UpdateJobRequest struct {
-	Name             *string                          `json:"name,omitempty"`
-	RepositoryURL    *string                          `json:"repository_url,omitempty"`
-	DefaultRef       *string                          `json:"default_ref,omitempty"`
-	DefaultCommitSHA *string                          `json:"default_commit_sha,omitempty"`
-	PushEnabled      *bool                            `json:"push_enabled,omitempty"`
-	PushBranch       *string                          `json:"push_branch,omitempty"`
-	TriggerMode      *string                          `json:"trigger_mode,omitempty"`
-	BranchAllowlist  *[]string                        `json:"branch_allowlist,omitempty"`
-	TagAllowlist     *[]string                        `json:"tag_allowlist,omitempty"`
-	PipelineYAML     *string                          `json:"pipeline_yaml,omitempty"`
-	PipelinePath     *string                          `json:"pipeline_path,omitempty"`
-	ManagedImage     UpdateJobManagedImageConfigField `json:"managed_image,omitempty"`
-	Enabled          *bool                            `json:"enabled,omitempty"`
+	Name             *string                             `json:"name,omitempty"`
+	RepositoryURL    *string                             `json:"repository_url,omitempty"`
+	DefaultRef       *string                             `json:"default_ref,omitempty"`
+	DefaultCommitSHA *string                             `json:"default_commit_sha,omitempty"`
+	PushEnabled      *bool                               `json:"push_enabled,omitempty"`
+	PushBranch       *string                             `json:"push_branch,omitempty"`
+	TriggerMode      *string                             `json:"trigger_mode,omitempty"`
+	BranchAllowlist  *[]string                           `json:"branch_allowlist,omitempty"`
+	TagAllowlist     *[]string                           `json:"tag_allowlist,omitempty"`
+	PipelineYAML     *string                             `json:"pipeline_yaml,omitempty"`
+	PipelinePath     *string                             `json:"pipeline_path,omitempty"`
+	ManagedImage     *UpdateJobManagedImageConfigRequest `json:"managed_image,omitempty"`
+	Enabled          *bool                               `json:"enabled,omitempty"`
+
+	managedImageSet bool `json:"-" swaggerignore:"true"`
 }
 
-type UpdateJobManagedImageConfigField struct {
-	Set   bool
-	Value *UpdateJobManagedImageConfigRequest
-}
-
-func (f *UpdateJobManagedImageConfigField) UnmarshalJSON(data []byte) error {
-	f.Set = true
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		f.Value = nil
-		return nil
+func (r *UpdateJobRequest) UnmarshalJSON(data []byte) error {
+	type updateJobRequestAlias struct {
+		Name             *string                             `json:"name,omitempty"`
+		RepositoryURL    *string                             `json:"repository_url,omitempty"`
+		DefaultRef       *string                             `json:"default_ref,omitempty"`
+		DefaultCommitSHA *string                             `json:"default_commit_sha,omitempty"`
+		PushEnabled      *bool                               `json:"push_enabled,omitempty"`
+		PushBranch       *string                             `json:"push_branch,omitempty"`
+		TriggerMode      *string                             `json:"trigger_mode,omitempty"`
+		BranchAllowlist  *[]string                           `json:"branch_allowlist,omitempty"`
+		TagAllowlist     *[]string                           `json:"tag_allowlist,omitempty"`
+		PipelineYAML     *string                             `json:"pipeline_yaml,omitempty"`
+		PipelinePath     *string                             `json:"pipeline_path,omitempty"`
+		ManagedImage     *UpdateJobManagedImageConfigRequest `json:"managed_image,omitempty"`
+		Enabled          *bool                               `json:"enabled,omitempty"`
 	}
 
-	var value UpdateJobManagedImageConfigRequest
-	if err := json.Unmarshal(data, &value); err != nil {
+	var alias updateJobRequestAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
 		return err
 	}
-	f.Value = &value
+
+	r.Name = alias.Name
+	r.RepositoryURL = alias.RepositoryURL
+	r.DefaultRef = alias.DefaultRef
+	r.DefaultCommitSHA = alias.DefaultCommitSHA
+	r.PushEnabled = alias.PushEnabled
+	r.PushBranch = alias.PushBranch
+	r.TriggerMode = alias.TriggerMode
+	r.BranchAllowlist = alias.BranchAllowlist
+	r.TagAllowlist = alias.TagAllowlist
+	r.PipelineYAML = alias.PipelineYAML
+	r.PipelinePath = alias.PipelinePath
+	r.ManagedImage = alias.ManagedImage
+	r.Enabled = alias.Enabled
+	r.managedImageSet = false
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if managedImageRaw, ok := raw["managed_image"]; ok {
+		r.managedImageSet = true
+		if bytes.Equal(bytes.TrimSpace(managedImageRaw), []byte("null")) {
+			r.ManagedImage = nil
+		}
+	}
+
 	return nil
+
 }
 
-func (f UpdateJobManagedImageConfigField) Present() bool {
-	return f.Set
-}
-
-func (f UpdateJobManagedImageConfigField) Request() *UpdateJobManagedImageConfigRequest {
-	return f.Value
+func (r UpdateJobRequest) ManagedImagePresent() bool {
+	return r.managedImageSet
 }
 
 type CreateJobManagedImageConfigRequest struct {

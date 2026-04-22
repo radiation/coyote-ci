@@ -203,6 +203,61 @@ func TestJobService_UpdateJobManagedImageDisabledDeletesConfig(t *testing.T) {
 	}
 }
 
+func TestJobService_UpdateJobManagedImageCreateDefaultsEnabledTrue(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	configRepo := memory.NewJobManagedImageConfigRepository()
+	credentialRepo := memory.NewSourceCredentialRepository()
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService).WithManagedImageConfigRepository(configRepo, credentialRepo)
+
+	_, err := credentialRepo.Create(context.Background(), domain.SourceCredential{
+		ID:        "cred-1",
+		Name:      "github-bot",
+		Kind:      domain.SourceCredentialKindHTTPSToken,
+		SecretRef: "COYOTE_GITHUB_TOKEN",
+	})
+	if err != nil {
+		t.Fatalf("create credential failed: %v", err)
+	}
+
+	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelinePath:  ".coyote/pipeline.yml",
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	updated, err := jobService.UpdateJob(context.Background(), job.ID, UpdateJobInput{
+		ManagedImageSet: true,
+		ManagedImage: &ManagedImageConfigPatch{
+			ManagedImageName:  strPtr("go"),
+			PipelinePath:      strPtr(".coyote/pipeline.yml"),
+			WriteCredentialID: strPtr("cred-1"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("create managed image via update failed: %v", err)
+	}
+	if updated.ManagedImageConfig == nil {
+		t.Fatal("expected managed image config on updated job")
+	}
+	if !updated.ManagedImageConfig.Enabled {
+		t.Fatal("expected managed image config to default enabled=true when created via update")
+	}
+	stored, err := configRepo.GetByJobID(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("expected stored managed image config, got %v", err)
+	}
+	if !stored.Enabled {
+		t.Fatal("expected persisted managed image config enabled=true")
+	}
+}
+
 func TestJobService_UpdateJobManagedImageNullDeletesConfigWithoutValidation(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()

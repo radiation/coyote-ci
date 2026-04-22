@@ -500,6 +500,7 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 				ProjectID:     input.ProjectID,
 				RepositoryURL: input.RepoURL,
 				Ref:           refreshRef,
+				BaseBranch:    strings.TrimSpace(input.Ref),
 				PipelinePath:  effectivePipelinePath,
 			})
 			if refreshErr != nil {

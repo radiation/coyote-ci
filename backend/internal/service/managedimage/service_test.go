@@ -138,7 +138,7 @@ func TestRefreshManagedPipelineImage_FingerprintChangeCreatesVersionAndWritesBac
 	)
 	svc.clock = func() time.Time { return time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC) }
 
-	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main"})
+	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main", BaseBranch: "main"})
 	if err != nil {
 		t.Fatalf("refresh failed: %v", err)
 	}
@@ -162,6 +162,9 @@ func TestRefreshManagedPipelineImage_FingerprintChangeCreatesVersionAndWritesBac
 	}
 	if pullRequests.last.HeadBranch != writer.last.BranchName {
 		t.Fatalf("expected pull request head branch %q, got %q", writer.last.BranchName, pullRequests.last.HeadBranch)
+	}
+	if pullRequests.last.BaseBranch != "main" {
+		t.Fatalf("expected pull request base branch main, got %q", pullRequests.last.BaseBranch)
 	}
 	if !strings.HasPrefix(writer.last.BranchName, "coyote/managed-image-refresh/") {
 		t.Fatalf("expected bot branch prefix, got %q", writer.last.BranchName)
@@ -205,7 +208,7 @@ func TestRefreshManagedPipelineImage_UnchangedFingerprintNoRewrite(t *testing.T)
 		&fakePullRequests{},
 	)
 
-	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main"})
+	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main", BaseBranch: "main"})
 	if err != nil {
 		t.Fatalf("refresh failed: %v", err)
 	}
@@ -246,7 +249,7 @@ func TestRefreshManagedPipelineImage_RejectsMutableTagFromPublisher(t *testing.T
 		&fakePullRequests{},
 	)
 
-	_, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main"})
+	_, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main", BaseBranch: "main"})
 	if err == nil || !strings.Contains(err.Error(), "immutable digest") {
 		t.Fatalf("expected immutable digest validation error, got: %v", err)
 	}
@@ -254,7 +257,7 @@ func TestRefreshManagedPipelineImage_RejectsMutableTagFromPublisher(t *testing.T
 
 func TestRefreshManagedPipelineImage_DisabledConfig(t *testing.T) {
 	svc := NewService(fakeFetcher{repoRoot: t.TempDir()}, fakeWritebackConfigs{cfg: domain.JobManagedImageConfig{JobID: "job-1", Enabled: false}}, fakeCredentials{}, &fakeCatalog{}, &fakePublisher{}, &fakeWriter{}, &fakePullRequests{})
-	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj", RepositoryURL: "repo", Ref: "main"})
+	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj", RepositoryURL: "repo", Ref: "main", BaseBranch: "main"})
 	if err != nil {
 		t.Fatalf("expected disabled config to be no-op, got error: %v", err)
 	}
@@ -299,7 +302,7 @@ func TestRefreshManagedPipelineImage_RepoURLVariantLookup(t *testing.T) {
 		&fakePullRequests{},
 	)
 
-	_, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo", Ref: "main"})
+	_, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-1", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo", Ref: "main", BaseBranch: "main"})
 	if err != nil {
 		t.Fatalf("expected job-scoped lookup to succeed, got: %v", err)
 	}
@@ -307,7 +310,7 @@ func TestRefreshManagedPipelineImage_RepoURLVariantLookup(t *testing.T) {
 
 func TestRefreshManagedPipelineImage_MissingJobConfigIsNoOp(t *testing.T) {
 	svc := NewService(fakeFetcher{repoRoot: t.TempDir()}, lookupWritebackConfigs{configs: map[string]domain.JobManagedImageConfig{}}, fakeCredentials{}, &fakeCatalog{}, &fakePublisher{}, &fakeWriter{}, &fakePullRequests{})
-	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-missing", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main"})
+	res, err := svc.RefreshManagedPipelineImage(context.Background(), buildsvc.ManagedImageRefreshInput{JobID: "job-missing", ProjectID: "proj-1", RepositoryURL: "https://example.com/repo.git", Ref: "main", BaseBranch: "main"})
 	if err != nil {
 		t.Fatalf("expected missing config to be a no-op, got %v", err)
 	}

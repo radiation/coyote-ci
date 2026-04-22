@@ -162,8 +162,8 @@ func (h *JobHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 		TagAllowlist:     req.TagAllowlist,
 		PipelineYAML:     req.PipelineYAML,
 		PipelinePath:     req.PipelinePath,
-		ManagedImageSet:  req.ManagedImage.Present(),
-		ManagedImage:     toUpdateManagedImageConfigInput(req.ManagedImage.Request()),
+		ManagedImageSet:  req.ManagedImagePresent(),
+		ManagedImage:     toUpdateManagedImageConfigInput(req.ManagedImage),
 		Enabled:          req.Enabled,
 	})
 	if err != nil {
