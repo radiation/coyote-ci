@@ -77,7 +77,7 @@ describe("JobCreatePage", () => {
   it("submits expected create payload and navigates to detail", async () => {
     renderPage();
 
-    await screen.findByText("github-bot (https_token)");
+    await screen.findByLabelText("Enable managed build image automation");
 
     fireEvent.change(screen.getByLabelText("Name"), {
       target: { value: " backend-ci " },
@@ -99,6 +99,7 @@ describe("JobCreatePage", () => {
     fireEvent.click(
       screen.getByLabelText("Enable managed build image automation"),
     );
+    await screen.findByText("github-bot (https_token)");
     fireEvent.change(screen.getByLabelText("Write Credential"), {
       target: { value: "cred-1" },
     });

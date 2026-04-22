@@ -185,15 +185,6 @@ describe("JobDetailPage", () => {
     fireEvent.click(
       screen.getByLabelText("Enable managed build image automation"),
     );
-    fireEvent.change(screen.getByLabelText("Managed Image Name"), {
-      target: { value: "" },
-    });
-    fireEvent.change(screen.getByLabelText("Pipeline Path"), {
-      target: { value: "" },
-    });
-    fireEvent.change(screen.getByLabelText("Write Credential"), {
-      target: { value: "" },
-    });
     fireEvent.click(screen.getByRole("button", { name: "Save Job" }));
 
     await waitFor(() => {
