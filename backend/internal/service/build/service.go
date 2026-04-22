@@ -513,6 +513,7 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 				if updateImageErr != nil {
 					log.Printf("WARNING: managed image provenance update failed for build_id=%s: %v", queuedBuild.ID, updateImageErr)
 				} else {
+					log.Printf("INFO: managed image provenance updated build_id=%s source_kind=%s managed_image_id=%s managed_image_version_id=%s", updatedBuild.ID, updatedBuild.ImageSourceKind, buildReadOptionalString(updatedBuild.ManagedImageID), buildReadOptionalString(updatedBuild.ManagedImageVersionID))
 					queuedBuild = updatedBuild
 				}
 			}

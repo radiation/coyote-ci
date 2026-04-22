@@ -61,6 +61,7 @@ func main() {
 		managedImageCatalogRepo,
 		managedimagesvc.NewDeterministicPublisher(),
 		source.NewGitWriteBackClient(),
+		source.NewGitHubPullRequestClient("", nil),
 	)
 	artifactResolver, err := artifact.ResolveStores(artifact.StoreConfig{
 		Provider:    cfg.ArtifactStorageProvider,

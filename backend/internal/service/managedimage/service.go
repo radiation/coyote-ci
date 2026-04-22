@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,10 @@ type GitWriteBack interface {
 	CommitAndPushPipelineUpdate(ctx context.Context, req source.GitWriteBackRequest) (source.GitWriteBackResult, error)
 }
 
+type PullRequestCreator interface {
+	CreateOrGetPullRequest(ctx context.Context, req source.GitHubPullRequestRequest) (source.GitHubPullRequestResult, error)
+}
+
 type Service struct {
 	fetcher            RepoFetcher
 	writebacks         WritebackConfigLookup
@@ -69,11 +74,12 @@ type Service struct {
 	catalog            ManagedImageCatalog
 	publisher          ImagePublisher
 	writer             GitWriteBack
+	pullRequests       PullRequestCreator
 	clock              func() time.Time
 	computeFingerprint func(repoRoot string, pipelinePath string) (string, []string, error)
 }
 
-func NewService(fetcher RepoFetcher, writebacks WritebackConfigLookup, credentials CredentialLookup, catalog ManagedImageCatalog, publisher ImagePublisher, writer GitWriteBack) *Service {
+func NewService(fetcher RepoFetcher, writebacks WritebackConfigLookup, credentials CredentialLookup, catalog ManagedImageCatalog, publisher ImagePublisher, writer GitWriteBack, pullRequests PullRequestCreator) *Service {
 	return &Service{
 		fetcher:            fetcher,
 		writebacks:         writebacks,
@@ -81,6 +87,7 @@ func NewService(fetcher RepoFetcher, writebacks WritebackConfigLookup, credentia
 		catalog:            catalog,
 		publisher:          publisher,
 		writer:             writer,
+		pullRequests:       pullRequests,
 		clock:              time.Now,
 		computeFingerprint: ComputeDependencyFingerprint,
 	}
@@ -215,6 +222,22 @@ func (s *Service) RefreshManagedPipelineImage(ctx context.Context, req buildsvc.
 	if err != nil {
 		return buildsvc.ManagedImageRefreshResult{}, err
 	}
+	log.Printf("INFO: managed image refresh wrote pipeline update job_id=%s managed_image_id=%s managed_image_version_id=%s branch=%s commit_sha=%s", jobID, managedImage.ID, candidateVersion.ID, writeResult.BranchName, writeResult.CommitSHA)
+	if s.pullRequests != nil {
+		prResult, prErr := s.pullRequests.CreateOrGetPullRequest(ctx, source.GitHubPullRequestRequest{
+			RepositoryURL: strings.TrimSpace(req.RepositoryURL),
+			HeadBranch:    writeResult.BranchName,
+			BaseBranch:    cloneRef,
+			Title:         commitMessage,
+			Body:          managedImagePullRequestBody(candidateVersion.ImageRef, dependencyFingerprint),
+			Credential:    credential,
+		})
+		if prErr != nil {
+			log.Printf("WARNING: managed image pull request creation failed job_id=%s branch=%s repo=%s: %v", jobID, writeResult.BranchName, strings.TrimSpace(req.RepositoryURL), prErr)
+		} else if strings.TrimSpace(prResult.URL) != "" {
+			log.Printf("INFO: managed image pull request ready job_id=%s branch=%s existing=%t url=%s", jobID, writeResult.BranchName, prResult.Existing, prResult.URL)
+		}
+	}
 
 	return buildsvc.ManagedImageRefreshResult{
 		ManagedImageID:        managedImage.ID,
@@ -233,6 +256,10 @@ func isImmutableImageRef(value string) bool {
 
 func deterministicCommitMessage(imageRef string) string {
 	return "chore(coyote): refresh managed build image to " + strings.TrimSpace(imageRef)
+}
+
+func managedImagePullRequestBody(imageRef string, dependencyFingerprint string) string {
+	return fmt.Sprintf("Automated managed image refresh.\n\n- Image: %s\n- Dependency fingerprint: %s\n", strings.TrimSpace(imageRef), strings.TrimSpace(dependencyFingerprint))
 }
 
 func defaultString(value string, fallback string) string {
