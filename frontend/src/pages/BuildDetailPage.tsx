@@ -119,25 +119,27 @@ export function BuildDetailPage() {
     );
   if (!build) return <p className="error-text">Build not found.</p>;
 
+  const currentBuild = build;
+
   async function assignArtifactVersion(artifactID: string, version: string) {
-    if (!build.job_id) {
+    if (!currentBuild.job_id) {
       throw new Error("Build is not associated with a job.");
     }
     await createVersionTagMutation.mutateAsync({
-      jobID: build.job_id,
+      jobID: currentBuild.job_id,
       version,
       artifactIDs: [artifactID],
     });
   }
 
   async function assignManagedImageVersion(version: string) {
-    if (!build.job_id || !build.image?.managed_image_version_id) {
+    if (!currentBuild.job_id || !currentBuild.image?.managed_image_version_id) {
       throw new Error("Build has no managed image version to tag.");
     }
     await createVersionTagMutation.mutateAsync({
-      jobID: build.job_id,
+      jobID: currentBuild.job_id,
       version,
-      managedImageVersionIDs: [build.image.managed_image_version_id],
+      managedImageVersionIDs: [currentBuild.image.managed_image_version_id],
     });
   }
 
