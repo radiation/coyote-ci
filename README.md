@@ -44,6 +44,15 @@ For external/managed Postgres runtime configuration and Cloud SQL deployment gui
 - `filesystem` is the default artifact store and is recommended for local development and simple installs.
 - Object storage is recommended for production and multi-node deployments.
 
+## Immutable version tags (V1)
+
+- Jobs can assign immutable version strings to build artifacts and managed build image versions.
+- Version strings are intentionally permissive. Coyote CI accepts trimmed non-empty strings such as `1.2.3`, `2026.04.22`, or `abc1234`.
+- Version scope is job-level: the same version may be attached to multiple artifacts and managed image versions in one job.
+- A target cannot receive the same version twice, and existing tags are never retargeted or mutated.
+- V1 does not implement mutable alias tags such as `latest` or `prod`.
+- V1 also does not introduce linked artifact groups; batch tagging is the supported way to apply one version across multiple outputs.
+
 Supported artifact blob stores:
 
 - `filesystem`
@@ -307,7 +316,7 @@ This sets `core.hooksPath` for this clone. Hooks are `#!/usr/bin/env sh` and wor
 
 | Hook         | When             | What                                                                  | Speed   |
 |--------------|------------------|-----------------------------------------------------------------------|---------|
-| `pre-commit` | `git commit`     | `gofmt`, `go vet`, `golangci-lint`, ESLint, swagger doc regeneration  | Seconds |
+| `pre-commit` | `git commit`     | `gofmt` auto-fix and staging, `go vet`, `golangci-lint`, ESLint, swagger doc regeneration  | Seconds |
 | `pre-push`   | `git push`       | `go test ./...`, `vitest run`                                         | Minutes |
 
 Both hooks gracefully skip checks when the required tool is not installed.

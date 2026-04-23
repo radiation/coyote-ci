@@ -18,6 +18,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	managedimagesvc "github.com/radiation/coyote-ci/backend/internal/service/managedimage"
+	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 	httpSwagger "github.com/swaggo/http-swagger"
@@ -52,6 +53,7 @@ func main() {
 	jobManagedImageConfigRepo := repositorypostgres.NewJobManagedImageConfigRepository(db)
 	sourceCredentialRepo := repositorypostgres.NewSourceCredentialRepository(db)
 	managedImageCatalogRepo := repositorypostgres.NewManagedImageCatalogRepository(db)
+	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
 	webhookDeliveryRepo := repositorypostgres.NewWebhookDeliveryRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	managedImageRefresher := managedimagesvc.NewService(
@@ -86,15 +88,18 @@ func main() {
 	})
 	jobService := service.NewJobService(jobRepo, buildService).WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo)
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
+	versionTagService := versiontagsvc.NewService(versionTagRepo)
 	webhookService := webhooksvc.NewDeliveryIngressService(webhookDeliveryRepo, jobService)
 	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()
 	webhookService.SetMetrics(webhookMetrics)
 	buildHandler := handler.NewBuildHandler(buildService)
+	buildHandler.SetVersionTagService(versionTagService)
 	jobHandler := handler.NewJobHandler(jobService)
+	versionTagHandler := handler.NewVersionTagHandler(versionTagService)
 	credentialHandler := handler.NewSourceCredentialHandler(sourceCredentialService)
 	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, cfg.GitHubWebhookSecret)
 
-	router := apphttp.NewRouter(buildHandler, jobHandler, credentialHandler, eventHandler, cfg.PushEventSecret)
+	router := apphttp.NewRouter(buildHandler, jobHandler, versionTagHandler, credentialHandler, eventHandler, cfg.PushEventSecret)
 	mux := nethttp.NewServeMux()
 	mux.Handle("/debug/vars", expvar.Handler())
 	mux.Handle("/swagger/", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))

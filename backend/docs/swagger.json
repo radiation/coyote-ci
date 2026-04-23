@@ -11,6 +11,47 @@
     },
     "basePath": "/api",
     "paths": {
+        "/artifacts/{artifactID}/version-tags": {
+            "get": {
+                "description": "Returns immutable version tags attached to one artifact.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "version-tags"
+                ],
+                "summary": "List artifact version tags",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Artifact ID",
+                        "name": "artifactID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.DataResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/builds": {
             "get": {
                 "description": "Lists builds sorted by newest first with optional pagination.",
@@ -1285,6 +1326,158 @@
                 }
             }
         },
+        "/jobs/{jobID}/version-tags": {
+            "get": {
+                "description": "Returns all targets in a job carrying the requested immutable version.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "version-tags"
+                ],
+                "summary": "Query job version tags by version",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "jobID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Version",
+                        "name": "version",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.DataResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Creates immutable version tags for one or more artifacts and managed image versions scoped to a job.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "version-tags"
+                ],
+                "summary": "Create immutable version tags for job targets",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "jobID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Version tag create request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.VersionTagCreateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/api.DataResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/managed-image-versions/{managedImageVersionID}/version-tags": {
+            "get": {
+                "description": "Returns immutable version tags attached to one managed image version.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "version-tags"
+                ],
+                "summary": "List managed image version tags",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Managed image version ID",
+                        "name": "managedImageVersionID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.DataResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/webhooks/github": {
             "post": {
                 "description": "Verifies a GitHub webhook signature and triggers builds for matching jobs on push events.",
@@ -1369,6 +1562,12 @@
                 },
                 "storage_provider": {
                     "type": "string"
+                },
+                "version_tags": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.VersionTagResponse"
+                    }
                 }
             }
         },
@@ -1820,6 +2019,12 @@
                 }
             }
         },
+        "api.DataResponse": {
+            "type": "object",
+            "properties": {
+                "data": {}
+            }
+        },
         "api.ErrorBody": {
             "type": "object",
             "properties": {
@@ -1992,6 +2197,12 @@
                 },
                 "source_kind": {
                     "type": "string"
+                },
+                "version_tags": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.VersionTagResponse"
+                    }
                 }
             }
         },
@@ -2368,6 +2579,52 @@
                     }
                 },
                 "trigger_mode": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.VersionTagCreateRequest": {
+            "type": "object",
+            "properties": {
+                "artifact_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "managed_image_version_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.VersionTagResponse": {
+            "type": "object",
+            "properties": {
+                "artifact_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "managed_image_version_id": {
+                    "type": "string"
+                },
+                "target_type": {
+                    "type": "string"
+                },
+                "version": {
                     "type": "string"
                 }
             }

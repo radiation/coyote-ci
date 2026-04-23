@@ -1,9 +1,15 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { getBuild, getBuildArtifacts, getBuildSteps } from "../api";
+import {
+  createJobVersionTags,
+  getBuild,
+  getBuildArtifacts,
+  getBuildSteps,
+} from "../api";
 import { BuildArtifactsSection } from "../components/BuildArtifactsSection";
 import { StatusBadge } from "../components/StatusBadge";
 import { StepList } from "../components/StepList";
+import { VersionTagEditor } from "../components/VersionTagEditor";
 import type { Build } from "../types";
 import {
   FAST_POLL_INTERVAL,
@@ -38,6 +44,7 @@ function compactTriggerMetadata(build: Build): string {
 
 export function BuildDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const queryClient = useQueryClient();
 
   const {
     data: build,
@@ -82,12 +89,57 @@ export function BuildDetailPage() {
       : SLOW_POLL_INTERVAL,
   });
 
+  const createVersionTagMutation = useMutation({
+    mutationFn: ({
+      jobID,
+      version,
+      artifactIDs,
+      managedImageVersionIDs,
+    }: {
+      jobID: string;
+      version: string;
+      artifactIDs?: string[];
+      managedImageVersionIDs?: string[];
+    }) =>
+      createJobVersionTags(jobID, {
+        version,
+        artifact_ids: artifactIDs,
+        managed_image_version_ids: managedImageVersionIDs,
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["build", id] });
+      await queryClient.invalidateQueries({ queryKey: ["buildArtifacts", id] });
+    },
+  });
+
   if (buildLoading) return <p>Loading build…</p>;
   if (buildError)
     return (
       <p className="error-text">Failed to load build: {String(buildError)}</p>
     );
   if (!build) return <p className="error-text">Build not found.</p>;
+
+  async function assignArtifactVersion(artifactID: string, version: string) {
+    if (!build.job_id) {
+      throw new Error("Build is not associated with a job.");
+    }
+    await createVersionTagMutation.mutateAsync({
+      jobID: build.job_id,
+      version,
+      artifactIDs: [artifactID],
+    });
+  }
+
+  async function assignManagedImageVersion(version: string) {
+    if (!build.job_id || !build.image?.managed_image_version_id) {
+      throw new Error("Build has no managed image version to tag.");
+    }
+    await createVersionTagMutation.mutateAsync({
+      jobID: build.job_id,
+      version,
+      managedImageVersionIDs: [build.image.managed_image_version_id],
+    });
+  }
 
   return (
     <>
@@ -226,6 +278,28 @@ export function BuildDetailPage() {
         </div>
       </div>
 
+      {build.image?.managed_image_version_id && (
+        <section className="detail-panel">
+          <h3>Managed Build Image</h3>
+          <div className="detail-grid">
+            <div>
+              <strong>Source Kind</strong>
+              <span>{build.image.source_kind}</span>
+            </div>
+            <div>
+              <strong>Resolved Ref</strong>
+              <span>{build.image.resolved_ref ?? "—"}</span>
+            </div>
+          </div>
+          <VersionTagEditor
+            tags={build.image.version_tags ?? []}
+            emptyText="No version tags for this managed image version yet."
+            inputLabel="managed-image-version-tag"
+            onAssign={build.job_id ? assignManagedImageVersion : undefined}
+          />
+        </section>
+      )}
+
       <h3>Steps</h3>
       {stepsLoading && <p>Loading steps…</p>}
       {stepsError && (
@@ -239,6 +313,7 @@ export function BuildDetailPage() {
         steps={steps}
         isLoading={artifactsLoading}
         error={artifactsError}
+        onAssignVersion={build.job_id ? assignArtifactVersion : undefined}
       />
     </>
   );

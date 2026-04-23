@@ -210,8 +210,41 @@ func toBuildArtifactResponse(item domain.BuildArtifact) api.BuildArtifactRespons
 		ChecksumSHA256:  item.ChecksumSHA256,
 		StorageProvider: provider,
 		DownloadURLPath: "/api/builds/" + item.BuildID + "/artifacts/" + item.ID + "/download",
+		VersionTags:     toVersionTagResponses(item.VersionTags),
 		CreatedAt:       item.CreatedAt.Format(time.RFC3339),
 	}
+}
+
+func toVersionTagResponses(tags []domain.VersionTag) []api.VersionTagResponse {
+	if len(tags) == 0 {
+		return nil
+	}
+	resp := make([]api.VersionTagResponse, 0, len(tags))
+	for _, tag := range tags {
+		resp = append(resp, api.VersionTagResponse{
+			ID:                    tag.ID,
+			JobID:                 tag.JobID,
+			Version:               tag.Version,
+			TargetType:            string(tag.TargetType),
+			ArtifactID:            tag.ArtifactID,
+			ManagedImageVersionID: tag.ManagedImageVersionID,
+			CreatedAt:             tag.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	return resp
+}
+
+func filterVersionTagsForJob(tags []domain.VersionTag, jobID string) []domain.VersionTag {
+	if jobID == "" || len(tags) == 0 {
+		return tags
+	}
+	filtered := make([]domain.VersionTag, 0, len(tags))
+	for _, tag := range tags {
+		if tag.JobID == jobID {
+			filtered = append(filtered, tag)
+		}
+	}
+	return filtered
 }
 
 func toStepLogChunkResponse(chunk logs.StepLogChunk) api.StepLogChunkResponse {

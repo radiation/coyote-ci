@@ -3,6 +3,7 @@ export {
   getBuild,
   getBuildSteps,
   getBuildArtifacts,
+  createJobVersionTags,
   getStepLogs,
   artifactDownloadURL,
   buildStepLogStreamURL,

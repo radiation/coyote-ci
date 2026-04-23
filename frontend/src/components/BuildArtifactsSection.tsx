@@ -2,12 +2,14 @@ import { artifactDownloadURL } from "../api";
 import type { BuildArtifact, BuildStep } from "../types";
 import { formatFileSize } from "../utils/format";
 import { formatTime } from "../utils/time";
+import { VersionTagEditor } from "./VersionTagEditor";
 
 interface Props {
   artifacts: BuildArtifact[];
   steps?: BuildStep[];
   isLoading: boolean;
   error: unknown;
+  onAssignVersion?: (artifactID: string, version: string) => Promise<void>;
 }
 
 function stepLabel(stepId: string, steps: BuildStep[] | undefined): string {
@@ -18,13 +20,20 @@ function stepLabel(stepId: string, steps: BuildStep[] | undefined): string {
   return `Step ${stepId.slice(0, 8)}…`;
 }
 
-function ArtifactTable({ items }: { items: BuildArtifact[] }) {
+function ArtifactTable({
+  items,
+  onAssignVersion,
+}: {
+  items: BuildArtifact[];
+  onAssignVersion?: (artifactID: string, version: string) => Promise<void>;
+}) {
   return (
     <table className="table artifacts-table">
       <thead>
         <tr>
           <th>Path</th>
           <th>Size</th>
+          <th>Version Tags</th>
           <th>Created</th>
           <th></th>
         </tr>
@@ -34,6 +43,18 @@ function ArtifactTable({ items }: { items: BuildArtifact[] }) {
           <tr key={item.id}>
             <td className="artifact-path">{item.path}</td>
             <td>{formatFileSize(item.size_bytes)}</td>
+            <td>
+              <VersionTagEditor
+                tags={item.version_tags ?? []}
+                emptyText="No version tags yet."
+                inputLabel={`artifact-version-${item.id}`}
+                onAssign={
+                  onAssignVersion
+                    ? (version) => onAssignVersion(item.id, version)
+                    : undefined
+                }
+              />
+            </td>
             <td>{formatTime(item.created_at)}</td>
             <td>
               <a href={artifactDownloadURL(item.download_url_path)}>Download</a>
@@ -50,6 +71,7 @@ export function BuildArtifactsSection({
   steps,
   isLoading,
   error,
+  onAssignVersion,
 }: Props) {
   if (isLoading) return <p>Loading artifacts…</p>;
   if (error)
@@ -84,13 +106,13 @@ export function BuildArtifactsSection({
       {shared.length > 0 && (
         <div className="artifact-group">
           <h4 className="artifact-group-label">Build-level</h4>
-          <ArtifactTable items={shared} />
+          <ArtifactTable items={shared} onAssignVersion={onAssignVersion} />
         </div>
       )}
       {stepEntries.map(([stepId, items]) => (
         <div key={stepId} className="artifact-group">
           <h4 className="artifact-group-label">{stepLabel(stepId, steps)}</h4>
-          <ArtifactTable items={items} />
+          <ArtifactTable items={items} onAssignVersion={onAssignVersion} />
         </div>
       ))}
     </div>

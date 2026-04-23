@@ -22,6 +22,10 @@ definitions:
         type: string
       storage_provider:
         type: string
+      version_tags:
+        items:
+          $ref: '#/definitions/api.VersionTagResponse'
+        type: array
     type: object
   api.BuildArtifactsEnvelope:
     properties:
@@ -315,6 +319,10 @@ definitions:
       repo_url:
         type: string
     type: object
+  api.DataResponse:
+    properties:
+      data: {}
+    type: object
   api.ErrorBody:
     properties:
       code:
@@ -429,6 +437,10 @@ definitions:
         type: string
       source_kind:
         type: string
+      version_tags:
+        items:
+          $ref: '#/definitions/api.VersionTagResponse'
+        type: array
     type: object
   api.JobEnvelope:
     properties:
@@ -675,12 +687,69 @@ definitions:
       trigger_mode:
         type: string
     type: object
+  api.VersionTagCreateRequest:
+    properties:
+      artifact_ids:
+        items:
+          type: string
+        type: array
+      managed_image_version_ids:
+        items:
+          type: string
+        type: array
+      version:
+        type: string
+    type: object
+  api.VersionTagResponse:
+    properties:
+      artifact_id:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      job_id:
+        type: string
+      managed_image_version_id:
+        type: string
+      target_type:
+        type: string
+      version:
+        type: string
+    type: object
 info:
   contact: {}
   description: HTTP API for Coyote CI control-plane workflows.
   title: Coyote CI API
   version: "0.1"
 paths:
+  /artifacts/{artifactID}/version-tags:
+    get:
+      description: Returns immutable version tags attached to one artifact.
+      parameters:
+      - description: Artifact ID
+        in: path
+        name: artifactID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.DataResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List artifact version tags
+      tags:
+      - version-tags
   /builds:
     get:
       description: Lists builds sorted by newest first with optional pagination.
@@ -1525,6 +1594,108 @@ paths:
       summary: Run job now
       tags:
       - jobs
+  /jobs/{jobID}/version-tags:
+    get:
+      description: Returns all targets in a job carrying the requested immutable version.
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobID
+        required: true
+        type: string
+      - description: Version
+        in: query
+        name: version
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.DataResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Query job version tags by version
+      tags:
+      - version-tags
+    post:
+      consumes:
+      - application/json
+      description: Creates immutable version tags for one or more artifacts and managed
+        image versions scoped to a job.
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobID
+        required: true
+        type: string
+      - description: Version tag create request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.VersionTagCreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.DataResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Create immutable version tags for job targets
+      tags:
+      - version-tags
+  /managed-image-versions/{managedImageVersionID}/version-tags:
+    get:
+      description: Returns immutable version tags attached to one managed image version.
+      parameters:
+      - description: Managed image version ID
+        in: path
+        name: managedImageVersionID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.DataResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List managed image version tags
+      tags:
+      - version-tags
   /webhooks/github:
     post:
       description: Verifies a GitHub webhook signature and triggers builds for matching

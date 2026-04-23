@@ -48,11 +48,12 @@ type BuildSourceResponse struct {
 }
 
 type ImageExecutionResponse struct {
-	RequestedRef          *string `json:"requested_ref,omitempty"`
-	ResolvedRef           *string `json:"resolved_ref,omitempty"`
-	SourceKind            string  `json:"source_kind"`
-	ManagedImageID        *string `json:"managed_image_id,omitempty"`
-	ManagedImageVersionID *string `json:"managed_image_version_id,omitempty"`
+	RequestedRef          *string              `json:"requested_ref,omitempty"`
+	ResolvedRef           *string              `json:"resolved_ref,omitempty"`
+	SourceKind            string               `json:"source_kind"`
+	ManagedImageID        *string              `json:"managed_image_id,omitempty"`
+	ManagedImageVersionID *string              `json:"managed_image_version_id,omitempty"`
+	VersionTags           []VersionTagResponse `json:"version_tags,omitempty"`
 }
 
 type CreateBuildStepInput struct {
@@ -248,16 +249,17 @@ type StepLogsResponse struct {
 }
 
 type BuildArtifactResponse struct {
-	ID              string  `json:"id"`
-	BuildID         string  `json:"build_id"`
-	StepID          *string `json:"step_id,omitempty"`
-	Path            string  `json:"path"`
-	SizeBytes       int64   `json:"size_bytes"`
-	ContentType     *string `json:"content_type"`
-	ChecksumSHA256  *string `json:"checksum_sha256"`
-	StorageProvider string  `json:"storage_provider"`
-	DownloadURLPath string  `json:"download_url_path"`
-	CreatedAt       string  `json:"created_at"`
+	ID              string               `json:"id"`
+	BuildID         string               `json:"build_id"`
+	StepID          *string              `json:"step_id,omitempty"`
+	Path            string               `json:"path"`
+	SizeBytes       int64                `json:"size_bytes"`
+	ContentType     *string              `json:"content_type"`
+	ChecksumSHA256  *string              `json:"checksum_sha256"`
+	StorageProvider string               `json:"storage_provider"`
+	DownloadURLPath string               `json:"download_url_path"`
+	VersionTags     []VersionTagResponse `json:"version_tags,omitempty"`
+	CreatedAt       string               `json:"created_at"`
 }
 
 type BuildArtifactsResponse struct {
