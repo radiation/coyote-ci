@@ -1669,6 +1669,9 @@ const docTemplate = `{
                 "attempt_number": {
                     "type": "integer"
                 },
+                "build_number": {
+                    "type": "integer"
+                },
                 "created_at": {
                     "type": "string"
                 },

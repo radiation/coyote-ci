@@ -13,10 +13,10 @@ type rowScanner interface {
 }
 
 // buildColumns is the canonical column list for build SELECT/RETURNING clauses (full detail).
-const buildColumns = `id, project_id, job_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
+const buildColumns = `id, build_number, project_id, job_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
 
 // buildListColumns is a minimal column list used for list queries (omits large pipeline YAML).
-const buildListColumns = `id, project_id, job_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
+const buildListColumns = `id, build_number, project_id, job_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
 
 const executionJobColumns = `id, build_id, step_id, node_id, group_name, depends_on_node_ids, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir, command_json, env_json, timeout_seconds, pipeline_file_path, context_dir, source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest, spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at, created_at, started_at, finished_at, error_message, exit_code, output_refs_json`
 
@@ -41,6 +41,7 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 
 	err := scanner.Scan(
 		&build.ID,
+		&build.BuildNumber,
 		&build.ProjectID,
 		&nf.jobID,
 		&nf.status,
@@ -93,6 +94,7 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 
 	err := scanner.Scan(
 		&build.ID,
+		&build.BuildNumber,
 		&build.ProjectID,
 		&nf.jobID,
 		&nf.status,

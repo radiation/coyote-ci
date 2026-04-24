@@ -29,6 +29,65 @@ func TestValidate_UnsupportedVersion(t *testing.T) {
 	assertContains(t, err.Error(), "unsupported version")
 }
 
+func TestValidate_RejectsBlankReleaseVersion(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Release: ReleaseMeta{Version: "   "},
+		Steps:   []StepDef{{Name: "x", Run: "echo"}},
+	}
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected error for blank release.version")
+	}
+	assertContains(t, err.Error(), "release.version")
+}
+
+func TestValidate_AcceptsManualReleaseVersion(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Release: ReleaseMeta{Version: "1.2"},
+		Steps:   []StepDef{{Name: "x", Run: "echo"}},
+	}
+	if err := Validate(pf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_AcceptsSemverPatchReleaseVersion(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Release: ReleaseMeta{Strategy: "semver-patch", Version: "1.2"},
+		Steps:   []StepDef{{Name: "x", Run: "echo"}},
+	}
+	if err := Validate(pf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_RejectsMalformedReleaseVersion(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Release: ReleaseMeta{Strategy: "semver-patch", Version: "1"},
+		Steps:   []StepDef{{Name: "x", Run: "echo"}},
+	}
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected error for malformed release.version")
+	}
+	assertContains(t, err.Error(), "major.minor")
+}
+
+func TestValidate_AcceptsTemplateReleaseVersion(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Release: ReleaseMeta{Strategy: "template", Template: "1.2.{build_number}"},
+		Steps:   []StepDef{{Name: "x", Run: "echo"}},
+	}
+	if err := Validate(pf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidate_EmptySteps(t *testing.T) {
 	pf := &PipelineFile{
 		Version: 1,

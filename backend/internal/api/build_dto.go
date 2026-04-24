@@ -108,6 +108,7 @@ type StepLogsEnvelope struct {
 
 type BuildResponse struct {
 	ID                 string                 `json:"id"`
+	BuildNumber        int64                  `json:"build_number"`
 	ProjectID          string                 `json:"project_id"`
 	JobID              *string                `json:"job_id,omitempty"`
 	Status             string                 `json:"status"`

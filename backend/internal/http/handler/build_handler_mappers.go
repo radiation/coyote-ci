@@ -15,6 +15,7 @@ func toBuildResponse(build domain.Build) api.BuildResponse {
 	triggerCommitSHA := buildTriggerCommitSHA(build, trigger)
 	return api.BuildResponse{
 		ID:                 build.ID,
+		BuildNumber:        build.BuildNumber,
 		ProjectID:          build.ProjectID,
 		JobID:              build.JobID,
 		Status:             string(build.Status),

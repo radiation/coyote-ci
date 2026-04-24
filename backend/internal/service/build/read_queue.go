@@ -12,7 +12,10 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
+	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
+	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
+	"github.com/radiation/coyote-ci/backend/internal/versioning"
 )
 
 func (s *BuildService) GetBuild(ctx context.Context, id string) (domain.Build, error) {
@@ -268,9 +271,85 @@ func (s *BuildService) StartBuild(ctx context.Context, id string) (domain.Build,
 }
 
 func (s *BuildService) CompleteBuild(ctx context.Context, id string) (domain.Build, error) {
-	return s.transitionBuildStatus(ctx, id, domain.BuildStatusSuccess, nil)
+	build, err := s.transitionBuildStatus(ctx, id, domain.BuildStatusSuccess, nil)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	if tagErr := s.autoTagBuildOutputs(ctx, build); tagErr != nil {
+		log.Printf("WARNING: automatic version tagging failed for build_id=%s: %v", build.ID, tagErr)
+	}
+	return build, nil
 }
 
 func (s *BuildService) FailBuild(ctx context.Context, id string) (domain.Build, error) {
 	return s.transitionBuildStatus(ctx, id, domain.BuildStatusFailed, nil)
+}
+
+func (s *BuildService) autoTagBuildOutputs(ctx context.Context, build domain.Build) error {
+	if s.versionTagger == nil || build.JobID == nil || strings.TrimSpace(*build.JobID) == "" {
+		return nil
+	}
+
+	releaseConfig, ok, err := buildReleaseConfig(build)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	version, err := s.versionTagger.ResolveReleaseVersion(ctx, build, releaseConfig)
+	if err != nil {
+		return err
+	}
+
+	artifactIDs := []string{}
+	if s.artifactRepo != nil {
+		artifacts, artifactErr := s.artifactRepo.ListByBuildID(ctx, build.ID)
+		if artifactErr != nil {
+			return artifactErr
+		}
+		artifactIDs = make([]string, 0, len(artifacts))
+		for _, artifact := range artifacts {
+			artifactIDs = append(artifactIDs, artifact.ID)
+		}
+	}
+
+	managedImageVersionIDs := []string{}
+	if build.ManagedImageVersionID != nil && strings.TrimSpace(*build.ManagedImageVersionID) != "" {
+		managedImageVersionIDs = []string{strings.TrimSpace(*build.ManagedImageVersionID)}
+	}
+	if len(artifactIDs) == 0 && len(managedImageVersionIDs) == 0 {
+		return nil
+	}
+
+	_, err = s.versionTagger.CreateVersionTags(ctx, strings.TrimSpace(*build.JobID), versiontagsvc.CreateVersionTagsInput{
+		Version:                version,
+		ArtifactIDs:            artifactIDs,
+		ManagedImageVersionIDs: managedImageVersionIDs,
+	})
+	if errors.Is(err, repository.ErrVersionTagConflict) {
+		return nil
+	}
+	return err
+}
+
+func buildReleaseConfig(build domain.Build) (versioning.Config, bool, error) {
+	if build.PipelineConfigYAML == nil || strings.TrimSpace(*build.PipelineConfigYAML) == "" {
+		return versioning.Config{}, false, nil
+	}
+
+	parsed, err := pipeline.Parse([]byte(strings.TrimSpace(*build.PipelineConfigYAML)))
+	if err != nil {
+		return versioning.Config{}, false, err
+	}
+
+	config := versioning.Config{
+		Strategy: strings.TrimSpace(parsed.Release.Strategy),
+		Version:  strings.TrimSpace(parsed.Release.Version),
+		Template: strings.TrimSpace(parsed.Release.Template),
+	}
+	if config.Empty() {
+		return versioning.Config{}, false, nil
+	}
+	return config, true, nil
 }

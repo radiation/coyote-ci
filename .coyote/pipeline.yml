@@ -1,4 +1,7 @@
 version: 1
+release:
+  strategy: template
+  template: 0.0.{build_number}
 pipeline:
   name: coyote-ci
   image: golang@sha256:1e598ea5752ae26c093b746fd73c5095af97d6f2d679c43e83e0eac484a33dc3

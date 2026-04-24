@@ -8,6 +8,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
+	"github.com/radiation/coyote-ci/backend/internal/versioning"
 )
 
 func TestService_CreateVersionTags(t *testing.T) {
@@ -74,5 +75,43 @@ func TestService_ListJobVersionTags(t *testing.T) {
 	}
 	if len(tags) != 1 {
 		t.Fatalf("expected 1 tag, got %d", len(tags))
+	}
+}
+
+func TestService_ResolveReleaseVersion(t *testing.T) {
+	repo := repositorymemory.NewVersionTagRepository()
+	jobID := "job-1"
+	buildID := "build-1"
+	repo.SeedBuilds(domain.Build{ID: buildID, JobID: &jobID})
+	repo.SeedArtifacts(
+		domain.BuildArtifact{ID: "artifact-1", BuildID: buildID},
+		domain.BuildArtifact{ID: "artifact-2", BuildID: buildID},
+	)
+	_, _ = repo.CreateForTargets(context.Background(), repository.CreateVersionTagsParams{JobID: jobID, Version: "1.2.0", ArtifactIDs: []string{"artifact-1"}})
+	_, _ = repo.CreateForTargets(context.Background(), repository.CreateVersionTagsParams{JobID: jobID, Version: "1.2.1", ArtifactIDs: []string{"artifact-2"}})
+
+	svc := NewService(repo)
+	resolved, err := svc.ResolveReleaseVersion(context.Background(), domain.Build{ID: buildID, JobID: &jobID, BuildNumber: 8}, versioning.Config{Strategy: "semver-patch", Version: "1.2"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if resolved != "1.2.2" {
+		t.Fatalf("expected next patch version 1.2.2, got %q", resolved)
+	}
+
+	explicit, err := svc.ResolveReleaseVersion(context.Background(), domain.Build{ID: buildID, JobID: &jobID}, versioning.Config{Version: "2.0.5"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if explicit != "2.0.5" {
+		t.Fatalf("expected explicit version 2.0.5, got %q", explicit)
+	}
+
+	templateResolved, err := svc.ResolveReleaseVersion(context.Background(), domain.Build{ID: buildID, JobID: &jobID, BuildNumber: 12}, versioning.Config{Strategy: "template", Template: "0.1.{build_number}"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if templateResolved != "0.1.12" {
+		t.Fatalf("expected template version 0.1.12, got %q", templateResolved)
 	}
 }

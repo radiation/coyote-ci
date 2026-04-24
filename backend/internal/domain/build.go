@@ -15,6 +15,7 @@ const (
 
 type Build struct {
 	ID               string
+	BuildNumber      int64
 	ProjectID        string
 	JobID            *string
 	Status           BuildStatus

@@ -11,6 +11,7 @@ import (
 type PipelineFile struct {
 	Version   int               `yaml:"version"`
 	Pipeline  PipelineMeta      `yaml:"pipeline"`
+	Release   ReleaseMeta       `yaml:"release,omitempty"`
 	Env       map[string]string `yaml:"env"`
 	Steps     []StepDef         `yaml:"steps"`
 	Artifacts ArtifactDef       `yaml:"artifacts"`
@@ -21,6 +22,12 @@ type PipelineMeta struct {
 	Name  string    `yaml:"name"`
 	Image string    `yaml:"image"`
 	Cache *CacheDef `yaml:"cache,omitempty"`
+}
+
+type ReleaseMeta struct {
+	Strategy string `yaml:"strategy,omitempty"`
+	Version  string `yaml:"version,omitempty"`
+	Template string `yaml:"template,omitempty"`
 }
 
 // StepDef is the YAML-facing definition for a single step.

@@ -23,6 +23,7 @@ type VersionTagRepository interface {
 	ListByArtifactID(ctx context.Context, artifactID string) ([]domain.VersionTag, error)
 	ListByArtifactIDs(ctx context.Context, artifactIDs []string) ([]domain.VersionTag, error)
 	ListByManagedImageVersionID(ctx context.Context, managedImageVersionID string) ([]domain.VersionTag, error)
+	ListByJobID(ctx context.Context, jobID string) ([]domain.VersionTag, error)
 	CreateForTargets(ctx context.Context, params CreateVersionTagsParams) ([]domain.VersionTag, error)
 	ListByJobIDAndVersion(ctx context.Context, jobID string, version string) ([]domain.VersionTag, error)
 }

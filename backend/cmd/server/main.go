@@ -77,18 +77,19 @@ func main() {
 		log.Fatalf("failed to resolve artifact stores: %v", err)
 	}
 	logSink := logs.NewPostgresSink(db)
+	versionTagService := versiontagsvc.NewService(versionTagRepo)
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, nil, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:      executionJobRepo,
 		ExecutionOutputRepo:   executionJobOutputRepo,
 		RepoFetcher:           source.NewGitFetcher(),
 		ManagedImageRefresher: managedImageRefresher,
+		VersionTagger:         versionTagService,
 		ArtifactRepo:          artifactRepo,
 		ArtifactResolver:      artifactResolver,
 		ArtifactWorkspace:     cfg.ExecutionWorkspaceRoot,
 	})
 	jobService := service.NewJobService(jobRepo, buildService).WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo)
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
-	versionTagService := versiontagsvc.NewService(versionTagRepo)
 	webhookService := webhooksvc.NewDeliveryIngressService(webhookDeliveryRepo, jobService)
 	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()
 	webhookService.SetMetrics(webhookMetrics)

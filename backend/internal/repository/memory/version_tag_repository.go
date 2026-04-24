@@ -89,6 +89,15 @@ func (r *VersionTagRepository) ListByManagedImageVersionID(_ context.Context, ma
 	}), nil
 }
 
+func (r *VersionTagRepository) ListByJobID(_ context.Context, jobID string) ([]domain.VersionTag, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	trimmedJobID := strings.TrimSpace(jobID)
+	return r.filterLocked(func(tag domain.VersionTag) bool {
+		return tag.JobID == trimmedJobID
+	}), nil
+}
+
 func (r *VersionTagRepository) ListByJobIDAndVersion(_ context.Context, jobID string, version string) ([]domain.VersionTag, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

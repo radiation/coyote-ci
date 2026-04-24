@@ -8,6 +8,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
+	"github.com/radiation/coyote-ci/backend/internal/versioning"
 )
 
 const maxVersionTagLength = 255
@@ -78,6 +79,24 @@ func (s *Service) ListArtifactTagsByIDs(ctx context.Context, artifactIDs []strin
 
 func (s *Service) ListManagedImageVersionTags(ctx context.Context, managedImageVersionID string) ([]domain.VersionTag, error) {
 	return s.repo.ListByManagedImageVersionID(ctx, strings.TrimSpace(managedImageVersionID))
+}
+
+func (s *Service) ResolveReleaseVersion(ctx context.Context, build domain.Build, config versioning.Config) (string, error) {
+	existing := []string(nil)
+	if versioning.NormalizeStrategy(config.Strategy) == versioning.ReleaseStrategySemverPatch {
+		if build.JobID == nil || strings.TrimSpace(*build.JobID) == "" {
+			return "", ErrJobIDRequired
+		}
+		tags, err := s.repo.ListByJobID(ctx, strings.TrimSpace(*build.JobID))
+		if err != nil {
+			return "", err
+		}
+		existing = make([]string, 0, len(tags))
+		for _, tag := range tags {
+			existing = append(existing, tag.Version)
+		}
+	}
+	return versioning.ResolveVersion(versioning.ResolveInput{Config: config, Build: build, ExistingVersions: existing})
 }
 
 func (s *Service) ListJobVersionTags(ctx context.Context, jobID string, version string) ([]domain.VersionTag, error) {

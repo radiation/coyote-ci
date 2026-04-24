@@ -58,6 +58,16 @@ func (r *VersionTagRepository) ListByManagedImageVersionID(ctx context.Context, 
 	return scanVersionTagRows(r.db.QueryContext(ctx, query, strings.TrimSpace(managedImageVersionID)))
 }
 
+func (r *VersionTagRepository) ListByJobID(ctx context.Context, jobID string) ([]domain.VersionTag, error) {
+	const query = `
+		SELECT ` + versionTagColumns + `
+		FROM version_tags
+		WHERE job_id = $1
+		ORDER BY created_at ASC, id ASC
+	`
+	return scanVersionTagRows(r.db.QueryContext(ctx, query, strings.TrimSpace(jobID)))
+}
+
 func (r *VersionTagRepository) ListByJobIDAndVersion(ctx context.Context, jobID string, version string) ([]domain.VersionTag, error) {
 	const query = `
 		SELECT ` + versionTagColumns + `

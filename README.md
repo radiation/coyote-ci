@@ -82,6 +82,25 @@ To update Go:
 4. Update the `ARG GO_VERSION` default in `backend/Dockerfile`
 5. Run `make check-go-version` to verify consistency
 
+## Release version tags
+
+Successful builds can automatically assign version tags to produced artifacts and the managed image version used by the build when `.coyote/pipeline.yml` declares a release version:
+
+```yaml
+version: 1
+release:
+	strategy: template
+	template: 1.2.{build_number}
+```
+
+Keep `version: 1` as the pipeline schema version. Release tagging is strategy-based:
+
+- `manual` is the default. Set `release.version` to any exact string you want applied to outputs.
+- `semver-patch` uses `release.version: major.minor` and allocates the next patch number automatically.
+- `template` renders a version string from build metadata such as `{build_number}`, `{attempt_number}`, `{commit_sha}`, and `{short_commit_sha}`.
+
+For this repository, `.coyote/pipeline.yml` uses `template: 0.0.{build_number}`, so successful builds produce tags like `0.0.1`, `0.0.2`, and so on without rewriting the pipeline file.
+
 ## Quick start
 
 ```bash
