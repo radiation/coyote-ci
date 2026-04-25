@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
+	"github.com/radiation/coyote-ci/backend/internal/versioning"
 )
 
 // validEnvKey matches POSIX-style environment variable names: letters, digits, underscore, starting with letter or underscore.
@@ -26,6 +27,16 @@ func Validate(pf *PipelineFile) error {
 	if pf.Pipeline.Image != "" {
 		if strings.TrimSpace(pf.Pipeline.Image) == "" {
 			errs = append(errs, ValidationError{Field: "pipeline.image", Message: "must be non-empty when set"})
+		}
+	}
+
+	if pf.Release.Strategy != "" || pf.Release.Version != "" || pf.Release.Template != "" {
+		if err := versioning.ValidateConfig(versioning.Config{
+			Strategy: pf.Release.Strategy,
+			Version:  pf.Release.Version,
+			Template: pf.Release.Template,
+		}); err != nil {
+			errs = append(errs, ValidationError{Field: "release", Message: err.Error()})
 		}
 	}
 

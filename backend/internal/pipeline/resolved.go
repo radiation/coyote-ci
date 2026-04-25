@@ -8,11 +8,18 @@ import "github.com/radiation/coyote-ci/backend/internal/domain"
 type ResolvedPipeline struct {
 	Name      string
 	Image     string
+	Release   ResolvedRelease
 	Env       map[string]string
 	Steps     []ResolvedStep
 	Plan      ExecutionPlan
 	Artifacts ResolvedArtifacts
 	Cache     *domain.StepCacheConfig
+}
+
+type ResolvedRelease struct {
+	Strategy string
+	Version  string
+	Template string
 }
 
 // ResolvedStep is a single normalized step ready for conversion to a canonical build step.

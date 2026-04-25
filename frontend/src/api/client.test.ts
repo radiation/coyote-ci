@@ -4,6 +4,7 @@ import {
   getBuild,
   getBuildSteps,
   getBuildArtifacts,
+  createJobVersionTags,
   artifactDownloadURL,
   listJobs,
   getJob,
@@ -19,6 +20,7 @@ describe("API client - types", () => {
     expect(typeof getBuild).toBe("function");
     expect(typeof getBuildSteps).toBe("function");
     expect(typeof getBuildArtifacts).toBe("function");
+    expect(typeof createJobVersionTags).toBe("function");
     expect(typeof artifactDownloadURL).toBe("function");
     expect(typeof listJobs).toBe("function");
     expect(typeof getJob).toBe("function");
@@ -67,6 +69,40 @@ describe("API client - types", () => {
     expect(artifactDownloadURL("/builds/build-1/artifacts/a1/download")).toBe(
       "/api/builds/build-1/artifacts/a1/download",
     );
+  });
+
+  it("creates immutable job version tags", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          job_id: "job-1",
+          version: "v1",
+          tags: [
+            {
+              id: "tag-1",
+              job_id: "job-1",
+              version: "v1",
+              target_type: "artifact",
+              artifact_id: "artifact-1",
+              created_at: "2026-04-22T00:00:00Z",
+            },
+          ],
+        },
+      }),
+    } as Response);
+
+    const tags = await createJobVersionTags("job-1", {
+      version: "v1",
+      artifact_ids: ["artifact-1"],
+    });
+
+    expect(tags).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith("/api/jobs/job-1/version-tags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: "v1", artifact_ids: ["artifact-1"] }),
+    });
   });
 
   it("lists jobs from /jobs", async () => {

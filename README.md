@@ -44,6 +44,15 @@ For external/managed Postgres runtime configuration and Cloud SQL deployment gui
 - `filesystem` is the default artifact store and is recommended for local development and simple installs.
 - Object storage is recommended for production and multi-node deployments.
 
+## Immutable version tags (V1)
+
+- Jobs can assign immutable version strings to build artifacts and managed build image versions.
+- Version strings are intentionally permissive. Coyote CI accepts trimmed non-empty strings such as `1.2.3`, `2026.04.22`, or `abc1234`.
+- Version scope is job-level: the same version may be attached to multiple artifacts and managed image versions in one job.
+- A target cannot receive the same version twice, and existing tags are never retargeted or mutated.
+- V1 does not implement mutable alias tags such as `latest` or `prod`.
+- V1 also does not introduce linked artifact groups; batch tagging is the supported way to apply one version across multiple outputs.
+
 Supported artifact blob stores:
 
 - `filesystem`
@@ -72,6 +81,25 @@ To update Go:
 3. Update `.coyote/pipeline.yml` image tag
 4. Update the `ARG GO_VERSION` default in `backend/Dockerfile`
 5. Run `make check-go-version` to verify consistency
+
+## Release version tags
+
+Successful builds can automatically assign version tags to produced artifacts and the managed image version used by the build when `.coyote/pipeline.yml` declares a release version:
+
+```yaml
+version: 1
+release:
+  strategy: template
+  template: 1.2.{build_number}
+```
+
+Keep `version: 1` as the pipeline schema version. Release tagging is strategy-based:
+
+- `manual` is the default. Set `release.version` to any exact string you want applied to outputs.
+- `semver-patch` uses `release.version: major.minor` and allocates the next patch number automatically.
+- `template` renders a version string from build metadata such as `{build_number}`, `{attempt_number}`, `{commit_sha}`, and `{short_commit_sha}`.
+
+For this repository, `.coyote/pipeline.yml` uses `template: 0.0.{build_number}`, so successful builds produce tags like `0.0.1`, `0.0.2`, and so on without rewriting the pipeline file.
 
 ## Quick start
 
@@ -307,7 +335,7 @@ This sets `core.hooksPath` for this clone. Hooks are `#!/usr/bin/env sh` and wor
 
 | Hook         | When             | What                                                                  | Speed   |
 |--------------|------------------|-----------------------------------------------------------------------|---------|
-| `pre-commit` | `git commit`     | `gofmt`, `go vet`, `golangci-lint`, ESLint, swagger doc regeneration  | Seconds |
+| `pre-commit` | `git commit`     | `gofmt` auto-fix and staging, `go vet`, `golangci-lint`, ESLint, swagger doc regeneration  | Seconds |
 | `pre-push`   | `git push`       | `go test ./...`, `vitest run`                                         | Minutes |
 
 Both hooks gracefully skip checks when the required tool is not installed.

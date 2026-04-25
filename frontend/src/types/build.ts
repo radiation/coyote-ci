@@ -1,3 +1,34 @@
+export interface VersionTag {
+  id: string;
+  job_id: string;
+  version: string;
+  target_type: string;
+  artifact_id?: string | null;
+  managed_image_version_id?: string | null;
+  created_at: string;
+}
+
+export interface VersionTagCreateRequest {
+  version: string;
+  artifact_ids?: string[];
+  managed_image_version_ids?: string[];
+}
+
+export interface JobVersionTagsResponse {
+  job_id: string;
+  version: string;
+  tags: VersionTag[];
+}
+
+export interface ImageExecution {
+  requested_ref?: string | null;
+  resolved_ref?: string | null;
+  source_kind: string;
+  managed_image_id?: string | null;
+  managed_image_version_id?: string | null;
+  version_tags?: VersionTag[];
+}
+
 /** Matches the backend api.BuildResponse JSON shape. */
 export interface Build {
   id: string;
@@ -23,6 +54,7 @@ export interface Build {
   source_commit_sha?: string | null;
   trigger_commit_sha?: string | null;
   actor?: string | null;
+  image?: ImageExecution;
 }
 
 export type BuildStatus =
@@ -94,6 +126,7 @@ export interface BuildArtifact {
   checksum_sha256: string | null;
   storage_provider: string;
   download_url_path: string;
+  version_tags?: VersionTag[];
   created_at: string;
 }
 

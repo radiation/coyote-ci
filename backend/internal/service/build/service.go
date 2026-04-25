@@ -22,7 +22,9 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	"github.com/radiation/coyote-ci/backend/internal/service/execution"
+	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	"github.com/radiation/coyote-ci/backend/internal/source"
+	"github.com/radiation/coyote-ci/backend/internal/versioning"
 )
 
 var ErrBuildNotFound = errors.New("build not found")
@@ -78,8 +80,14 @@ type BuildService struct {
 	artifactWorkspaceRoot   string
 	artifactStorageProvider domain.StorageProvider
 	stepCacheManager        *StepCacheManager
+	versionTagger           BuildVersionTagger
 
 	defaultExecutionImage string
+}
+
+type BuildVersionTagger interface {
+	ResolveReleaseVersion(ctx context.Context, build domain.Build, config versioning.Config) (string, error)
+	CreateVersionTags(ctx context.Context, jobID string, input versiontagsvc.CreateVersionTagsInput) ([]domain.VersionTag, error)
 }
 
 // BuildServiceConfig groups all optional dependencies for BuildService. Zero
@@ -97,6 +105,7 @@ type BuildServiceConfig struct {
 	DefaultImage          string
 	CacheStore            cachepkg.Store
 	CacheEntryRepo        repository.CacheEntryRepository
+	VersionTagger         BuildVersionTagger
 }
 
 // NewBuildServiceFromConfig creates a fully-wired BuildService in one call.
@@ -111,6 +120,7 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 	}
 	svc.defaultExecutionImage = strings.TrimSpace(cfg.DefaultImage)
 	svc.executionWorkspaceRoot = buildNormalizeWorkspaceRoot(cfg.ExecutionWorkspace)
+	svc.versionTagger = cfg.VersionTagger
 	svc.SetArtifactPersistence(cfg.ArtifactRepo, cfg.ArtifactResolver, cfg.ArtifactWorkspace)
 	svc.SetStepCacheStore(cfg.CacheStore, cfg.CacheEntryRepo)
 	return svc

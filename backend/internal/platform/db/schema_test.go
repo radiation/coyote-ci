@@ -12,6 +12,7 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"../../../db/migrations/00001_init_schema.sql",
 		"../../../db/migrations/00002_add_build_step_cache_config.sql",
 		"../../../db/migrations/00003_add_cache_entries.sql",
+		"../../../db/migrations/00008_add_version_tags.sql",
 	}
 
 	var builder strings.Builder
@@ -53,6 +54,11 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS cache_entries",
 		"cache_key",
 		"object_key",
+		"CREATE TABLE IF NOT EXISTS version_tags",
+		"version_text",
+		"target_type",
+		"artifact_id",
+		"managed_image_version_id",
 	}
 	for _, token := range required {
 		if !strings.Contains(sql, token) {

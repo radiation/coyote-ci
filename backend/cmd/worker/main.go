@@ -24,6 +24,7 @@ import (
 	dockerrunner "github.com/radiation/coyote-ci/backend/internal/runner/docker"
 	"github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 )
@@ -59,6 +60,7 @@ func main() {
 	executionJobOutputRepo := repositorypostgres.NewExecutionJobOutputRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	cacheEntryRepo := repositorypostgres.NewCacheEntryRepository(db)
+	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
 	artifactResolver, err := artifact.ResolveStores(artifact.StoreConfig{
 		Provider:    cfg.ArtifactStorageProvider,
 		StorageRoot: cfg.ArtifactStorageRoot,
@@ -84,6 +86,7 @@ func main() {
 	}
 	stepRunner := resolveStepRunner(cfg)
 	logSink := logs.NewPostgresSink(db)
+	versionTagService := versiontagsvc.NewService(versionTagRepo)
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, stepRunner, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:    executionJobRepo,
 		ExecutionOutputRepo: executionJobOutputRepo,
@@ -91,6 +94,7 @@ func main() {
 		ExecutionWorkspace:  cfg.ExecutionWorkspaceRoot,
 		CacheStore:          cacheStore,
 		CacheEntryRepo:      cacheEntryRepo,
+		VersionTagger:       versionTagService,
 		ArtifactRepo:        artifactRepo,
 		ArtifactResolver:    artifactResolver,
 		ArtifactWorkspace:   cfg.ExecutionWorkspaceRoot,

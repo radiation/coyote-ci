@@ -821,8 +821,78 @@ func TestBuildService_RunStep_EmitsHighSignalPhaseMarkers(t *testing.T) {
 		"Workspace attached",
 		"Executing pipeline steps",
 		"Collecting artifacts",
+		"Assigning version tags",
 		"Finalizing build",
 	)
+}
+
+func TestBuildService_RunStep_AutoTagsOutputsAfterTerminalSuccess(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	buildID := "build-auto-tags"
+	jobID := "job-1"
+	claimToken := "claim-active"
+	managedImageVersionID := "managed-version-1"
+
+	workspacePath := filepath.Join(workspaceRoot, buildID)
+	if err := os.MkdirAll(filepath.Join(workspacePath, "dist"), 0o755); err != nil {
+		t.Fatalf("failed creating workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePath, "dist", "app"), []byte("artifact-body"), 0o644); err != nil {
+		t.Fatalf("failed writing artifact file: %v", err)
+	}
+
+	pipelineYAML := "version: 1\nrelease:\n  strategy: template\n  template: 0.1.{build_number}\nsteps:\n  - name: build\n    run: make build\nartifacts:\n  - dist/**\n"
+	repo := &fakeBuildRepository{
+		build: domain.Build{
+			ID:                    buildID,
+			BuildNumber:           7,
+			ProjectID:             "project-1",
+			JobID:                 &jobID,
+			Status:                domain.BuildStatusRunning,
+			CurrentStepIndex:      0,
+			PipelineConfigYAML:    &pipelineYAML,
+			ManagedImageVersionID: &managedImageVersionID,
+			CreatedAt:             time.Now().UTC(),
+		},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken, ArtifactPaths: []string{"dist/**"}}},
+	}
+	r := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()}}}
+	logStore := logs.NewMemorySink()
+	artifactRepo := &fakeArtifactRepository{}
+	tagger := &fakeBuildVersionTagger{resolvedVersion: "0.1.7"}
+
+	svc := NewBuildService(repo, r, logStore)
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(artifact.NewFilesystemStore(t.TempDir())), workspaceRoot)
+	svc.versionTagger = tagger
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "."})
+	if err != nil {
+		t.Fatalf("run step failed: %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion outcome completed, got %q", report.CompletionOutcome)
+	}
+	if report.SideEffectErr != nil {
+		t.Fatalf("expected no side effect error, got %v", report.SideEffectErr)
+	}
+	if tagger.calls != 1 {
+		t.Fatalf("expected one auto-tagging call, got %d", tagger.calls)
+	}
+	if tagger.jobID != jobID {
+		t.Fatalf("expected job id %q, got %q", jobID, tagger.jobID)
+	}
+	if tagger.resolvedBuild.BuildNumber != 7 {
+		t.Fatalf("expected build number 7, got %d", tagger.resolvedBuild.BuildNumber)
+	}
+	if tagger.input.Version != "0.1.7" {
+		t.Fatalf("expected resolved release version 0.1.7, got %q", tagger.input.Version)
+	}
+	if len(tagger.input.ArtifactIDs) != 1 {
+		t.Fatalf("expected one collected artifact id, got %d", len(tagger.input.ArtifactIDs))
+	}
+	if len(tagger.input.ManagedImageVersionIDs) != 1 || tagger.input.ManagedImageVersionIDs[0] != managedImageVersionID {
+		t.Fatalf("expected managed image version id %q, got %#v", managedImageVersionID, tagger.input.ManagedImageVersionIDs)
+	}
 }
 
 func TestBuildService_RunStep_DoesNotDuplicateBuildHeaderWhenBuildAlreadyStarted(t *testing.T) {

@@ -15,8 +15,43 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	steprunner "github.com/radiation/coyote-ci/backend/internal/runner"
+	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	"github.com/radiation/coyote-ci/backend/internal/source"
+	"github.com/radiation/coyote-ci/backend/internal/versioning"
 )
+
+type fakeBuildVersionTagger struct {
+	resolvedVersion string
+	resolveErr      error
+	resolvedBuild   domain.Build
+	resolvedConfig  versioning.Config
+	jobID           string
+	input           versiontagsvc.CreateVersionTagsInput
+	calls           int
+	err             error
+}
+
+func (f *fakeBuildVersionTagger) ResolveReleaseVersion(_ context.Context, build domain.Build, config versioning.Config) (string, error) {
+	f.resolvedBuild = build
+	f.resolvedConfig = config
+	if f.resolveErr != nil {
+		return "", f.resolveErr
+	}
+	if strings.TrimSpace(f.resolvedVersion) != "" {
+		return f.resolvedVersion, nil
+	}
+	return config.Version, nil
+}
+
+func (f *fakeBuildVersionTagger) CreateVersionTags(_ context.Context, jobID string, input versiontagsvc.CreateVersionTagsInput) ([]domain.VersionTag, error) {
+	f.calls++
+	f.jobID = jobID
+	f.input = input
+	if f.err != nil {
+		return nil, f.err
+	}
+	return []domain.VersionTag{}, nil
+}
 
 type fakeBuildRepository struct {
 	build         domain.Build
@@ -936,6 +971,82 @@ func TestBuildService_InvalidTransitions(t *testing.T) {
 				t.Fatalf("expected UpdateStatus to not be called, got %d", repo.updateCalls)
 			}
 		})
+	}
+}
+
+func TestBuildService_CompleteBuild_AutoTagsReleaseOutputs(t *testing.T) {
+	jobID := "job-1"
+	managedImageVersionID := "managed-version-1"
+	pipelineYAML := "version: 1\nrelease:\n  strategy: template\n  template: 0.1.{build_number}\nsteps:\n  - name: build\n    run: make build\n"
+	repo := &fakeBuildRepository{build: domain.Build{
+		ID:                    "build-1",
+		BuildNumber:           7,
+		ProjectID:             "project-1",
+		JobID:                 &jobID,
+		Status:                domain.BuildStatusRunning,
+		PipelineConfigYAML:    &pipelineYAML,
+		ManagedImageVersionID: &managedImageVersionID,
+	}}
+	artifactRepo := &fakeArtifactRepository{artifacts: map[string][]domain.BuildArtifact{
+		"build-1": {
+			{ID: "artifact-1", BuildID: "build-1"},
+			{ID: "artifact-2", BuildID: "build-1"},
+		},
+	}}
+	tagger := &fakeBuildVersionTagger{resolvedVersion: "1.2.3"}
+	svc := NewBuildService(repo, nil, nil)
+	svc.artifactRepo = artifactRepo
+	svc.versionTagger = tagger
+
+	build, err := svc.CompleteBuild(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if build.Status != domain.BuildStatusSuccess {
+		t.Fatalf("expected success status, got %q", build.Status)
+	}
+	if tagger.calls != 1 {
+		t.Fatalf("expected one auto-tagging call, got %d", tagger.calls)
+	}
+	if tagger.jobID != jobID {
+		t.Fatalf("expected job id %q, got %q", jobID, tagger.jobID)
+	}
+	if tagger.resolvedConfig.Strategy != "template" || tagger.resolvedConfig.Template != "0.1.{build_number}" {
+		t.Fatalf("expected template release config, got %#v", tagger.resolvedConfig)
+	}
+	if tagger.resolvedBuild.BuildNumber != 7 {
+		t.Fatalf("expected build number 7, got %d", tagger.resolvedBuild.BuildNumber)
+	}
+	if tagger.input.Version != "1.2.3" {
+		t.Fatalf("expected resolved release version 1.2.3, got %q", tagger.input.Version)
+	}
+	if len(tagger.input.ArtifactIDs) != 2 {
+		t.Fatalf("expected two artifact ids, got %d", len(tagger.input.ArtifactIDs))
+	}
+	if len(tagger.input.ManagedImageVersionIDs) != 1 || tagger.input.ManagedImageVersionIDs[0] != managedImageVersionID {
+		t.Fatalf("expected managed image version id %q, got %#v", managedImageVersionID, tagger.input.ManagedImageVersionIDs)
+	}
+}
+
+func TestBuildService_CompleteBuild_SkipsAutoTagWithoutReleaseVersion(t *testing.T) {
+	jobID := "job-1"
+	pipelineYAML := "version: 1\nsteps:\n  - name: build\n    run: make build\n"
+	repo := &fakeBuildRepository{build: domain.Build{
+		ID:                 "build-1",
+		ProjectID:          "project-1",
+		JobID:              &jobID,
+		Status:             domain.BuildStatusRunning,
+		PipelineConfigYAML: &pipelineYAML,
+	}}
+	tagger := &fakeBuildVersionTagger{}
+	svc := NewBuildService(repo, nil, nil)
+	svc.versionTagger = tagger
+
+	if _, err := svc.CompleteBuild(context.Background(), "build-1"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if tagger.calls != 0 {
+		t.Fatalf("expected no auto-tagging call, got %d", tagger.calls)
 	}
 }
 

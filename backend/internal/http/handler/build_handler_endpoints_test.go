@@ -21,7 +21,10 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
+	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 )
 
 // Build creation endpoints beyond the base /builds handler coverage.
@@ -302,18 +305,27 @@ func TestCreateRepoBuild(t *testing.T) {
 
 func TestBuildHandler_GetBuildArtifacts(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
+	jobID := "job-1"
 	repo := &fakeRepo{
-		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
+		build: domain.Build{ID: "build-1", JobID: &jobID, ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
 	}
 	artifactRepo := &fakeArtifactRepo{artifactsByBuild: map[string][]domain.BuildArtifact{
 		"build-1": {
 			{ID: "artifact-1", BuildID: "build-1", LogicalPath: "dist/app", SizeBytes: 128, CreatedAt: now},
 		},
 	}}
+	versionTagRepo := repositorymemory.NewVersionTagRepository()
+	versionTagRepo.SeedBuilds(repo.build)
+	versionTagRepo.SeedArtifacts(domain.BuildArtifact{ID: "artifact-1", BuildID: "build-1"})
+	_, err := versionTagRepo.CreateForTargets(context.Background(), repository.CreateVersionTagsParams{JobID: jobID, Version: "v1", ArtifactIDs: []string{"artifact-1"}})
+	if err != nil {
+		t.Fatalf("failed to seed version tags: %v", err)
+	}
 
 	svc := buildsvc.NewBuildService(repo, nil, nil)
 	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(artifact.NewFilesystemStore(t.TempDir())), t.TempDir())
 	h := NewBuildHandler(svc)
+	h.SetVersionTagService(versiontagsvc.NewService(versionTagRepo))
 
 	req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/artifacts", nil), "build-1")
 	res := httptest.NewRecorder()
@@ -340,6 +352,10 @@ func TestBuildHandler_GetBuildArtifacts(t *testing.T) {
 	}
 	if artifactData["path"] != "dist/app" {
 		t.Fatalf("expected path dist/app, got %v", artifactData["path"])
+	}
+	tags, ok := artifactData["version_tags"].([]any)
+	if !ok || len(tags) != 1 {
+		t.Fatalf("expected 1 version tag, got %v", artifactData["version_tags"])
 	}
 }
 

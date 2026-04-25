@@ -6,7 +6,10 @@ import type {
   BuildStep,
   BuildStepsResponse,
   DataEnvelope,
+  JobVersionTagsResponse,
   StepLogsResponse,
+  VersionTag,
+  VersionTagCreateRequest,
 } from "../types/build";
 import type {
   CreateJobRequest,
@@ -124,6 +127,17 @@ export async function getBuildArtifacts(id: string): Promise<BuildArtifact[]> {
     `/builds/${encodeURIComponent(id)}/artifacts`,
   );
   return envelope.data.artifacts;
+}
+
+export async function createJobVersionTags(
+  jobID: string,
+  input: VersionTagCreateRequest,
+): Promise<VersionTag[]> {
+  const envelope = await postJSON<
+    DataEnvelope<JobVersionTagsResponse>,
+    VersionTagCreateRequest
+  >(`/jobs/${encodeURIComponent(jobID)}/version-tags`, input);
+  return envelope.data.tags;
 }
 
 export function artifactDownloadURL(downloadPath: string): string {

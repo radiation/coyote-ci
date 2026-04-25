@@ -21,5 +21,6 @@ type BuildArtifact struct {
 	SizeBytes       int64
 	ContentType     *string
 	ChecksumSHA256  *string
+	VersionTags     []VersionTag
 	CreatedAt       time.Time
 }

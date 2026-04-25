@@ -17,6 +17,7 @@ type BuildRepository struct {
 	mu         sync.RWMutex
 	builds     map[string]domain.Build
 	buildSteps map[string][]domain.BuildStep
+	nextNumber int64
 }
 
 func NewBuildRepository() *BuildRepository {
@@ -35,6 +36,10 @@ func (r *BuildRepository) Create(_ context.Context, build domain.Build) (domain.
 	}
 	if build.AttemptNumber <= 0 {
 		build.AttemptNumber = 1
+	}
+	if build.BuildNumber <= 0 {
+		r.nextNumber++
+		build.BuildNumber = r.nextNumber
 	}
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 
@@ -104,6 +109,10 @@ func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Buil
 	}
 	if build.AttemptNumber <= 0 {
 		build.AttemptNumber = 1
+	}
+	if build.BuildNumber <= 0 {
+		r.nextNumber++
+		build.BuildNumber = r.nextNumber
 	}
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 

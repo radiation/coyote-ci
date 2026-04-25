@@ -38,6 +38,9 @@ version: 1
 pipeline:
   name: backend-ci
   image: golang:1.24
+release:
+  strategy: template
+  template: "1.2.{build_number}"
 env:
   KEY: value
 steps:
@@ -62,6 +65,12 @@ artifacts:
 	}
 	if pf.Pipeline.Image != "golang:1.24" {
 		t.Errorf("expected pipeline image golang:1.24, got %q", pf.Pipeline.Image)
+	}
+	if pf.Release.Strategy != "template" {
+		t.Errorf("expected release strategy template, got %q", pf.Release.Strategy)
+	}
+	if pf.Release.Template != "1.2.{build_number}" {
+		t.Errorf("expected release template 1.2.{build_number}, got %q", pf.Release.Template)
 	}
 	if pf.Env["KEY"] != "value" {
 		t.Errorf("expected top-level env KEY=value")

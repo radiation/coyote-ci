@@ -21,10 +21,12 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 )
 
 type BuildHandler struct {
 	buildService *buildsvc.BuildService
+	versionTags  *versiontagsvc.Service
 }
 
 // GetBuildStepLogs godoc
@@ -192,6 +194,10 @@ func NewBuildHandler(buildService *buildsvc.BuildService) *BuildHandler {
 	return &BuildHandler{
 		buildService: buildService,
 	}
+}
+
+func (h *BuildHandler) SetVersionTagService(service *versiontagsvc.Service) {
+	h.versionTags = service
 }
 
 // CreateBuild godoc
@@ -418,7 +424,17 @@ func (h *BuildHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeDataJSON(w, http.StatusOK, toBuildResponse(build))
+	resp := toBuildResponse(build)
+	if h.versionTags != nil && build.JobID != nil && build.ManagedImageVersionID != nil {
+		tags, listErr := h.versionTags.ListManagedImageVersionTags(r.Context(), *build.ManagedImageVersionID)
+		if listErr != nil {
+			h.writeServiceError(w, listErr)
+			return
+		}
+		resp.Image.VersionTags = toVersionTagResponses(filterVersionTagsForJob(tags, *build.JobID))
+	}
+
+	writeDataJSON(w, http.StatusOK, resp)
 }
 
 // GetBuildSteps godoc
@@ -545,6 +561,20 @@ func (h *BuildHandler) GetBuildArtifacts(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
+	}
+	if h.versionTags != nil && len(artifacts) > 0 {
+		artifactIDs := make([]string, 0, len(artifacts))
+		for _, item := range artifacts {
+			artifactIDs = append(artifactIDs, item.ID)
+		}
+		tagsByArtifactID, listErr := h.versionTags.ListArtifactTagsByIDs(r.Context(), artifactIDs)
+		if listErr != nil {
+			h.writeServiceError(w, listErr)
+			return
+		}
+		for index := range artifacts {
+			artifacts[index].VersionTags = tagsByArtifactID[artifacts[index].ID]
+		}
 	}
 
 	resp := make([]api.BuildArtifactResponse, 0, len(artifacts))

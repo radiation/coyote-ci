@@ -253,7 +253,7 @@ func classifyBuildSourceFailureReason(err error, sourceSpec execution.ResolvedBu
 		return "repository URL is required"
 	}
 	if errors.Is(err, source.ErrCloneFailed) {
-		return "repository clone failed"
+		return withBuildSourceFailureDetail("repository clone failed", err)
 	}
 	if errors.Is(err, source.ErrRefNotFound) {
 		return "ref not found: " + sourceSpec.Ref
@@ -265,10 +265,10 @@ func classifyBuildSourceFailureReason(err error, sourceSpec execution.ResolvedBu
 		return "ref or commit_sha is required"
 	}
 	if errors.Is(err, source.ErrCheckoutFailed) {
-		return "repository checkout failed"
+		return withBuildSourceFailureDetail("repository checkout failed", err)
 	}
 	if errors.Is(err, source.ErrResolveCommitFailed) {
-		return "unable to resolve final commit SHA"
+		return withBuildSourceFailureDetail("unable to resolve final commit SHA", err)
 	}
 	if errors.Is(err, ErrSourceResolverNotConfigured) {
 		return "source resolver not configured"
@@ -276,7 +276,19 @@ func classifyBuildSourceFailureReason(err error, sourceSpec execution.ResolvedBu
 	if errors.Is(err, ErrExecutionWorkspaceRootNotConfigured) {
 		return "execution workspace root not configured"
 	}
-	return "source checkout failed"
+	return withBuildSourceFailureDetail("source checkout failed", err)
+}
+
+func withBuildSourceFailureDetail(base string, err error) string {
+	detail := strings.TrimSpace(err.Error())
+	if detail == "" || detail == base {
+		return base
+	}
+	prefix := base + ":"
+	if strings.HasPrefix(detail, prefix) {
+		return detail
+	}
+	return prefix + " " + detail
 }
 
 func buildReadOptionalString(value *string) string {

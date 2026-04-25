@@ -18,6 +18,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	managedimagesvc "github.com/radiation/coyote-ci/backend/internal/service/managedimage"
+	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 	httpSwagger "github.com/swaggo/http-swagger"
@@ -52,6 +53,7 @@ func main() {
 	jobManagedImageConfigRepo := repositorypostgres.NewJobManagedImageConfigRepository(db)
 	sourceCredentialRepo := repositorypostgres.NewSourceCredentialRepository(db)
 	managedImageCatalogRepo := repositorypostgres.NewManagedImageCatalogRepository(db)
+	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
 	webhookDeliveryRepo := repositorypostgres.NewWebhookDeliveryRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	managedImageRefresher := managedimagesvc.NewService(
@@ -75,14 +77,18 @@ func main() {
 		log.Fatalf("failed to resolve artifact stores: %v", err)
 	}
 	logSink := logs.NewPostgresSink(db)
+	versionTagService := versiontagsvc.NewService(versionTagRepo)
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, nil, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:      executionJobRepo,
 		ExecutionOutputRepo:   executionJobOutputRepo,
 		RepoFetcher:           source.NewGitFetcher(),
 		ManagedImageRefresher: managedImageRefresher,
+		VersionTagger:         versionTagService,
 		ArtifactRepo:          artifactRepo,
 		ArtifactResolver:      artifactResolver,
 		ArtifactWorkspace:     cfg.ExecutionWorkspaceRoot,
+		ExecutionWorkspace:    cfg.ExecutionWorkspaceRoot,
+		DefaultImage:          cfg.ExecutionDefaultImage,
 	})
 	jobService := service.NewJobService(jobRepo, buildService).WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo)
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
@@ -90,11 +96,13 @@ func main() {
 	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()
 	webhookService.SetMetrics(webhookMetrics)
 	buildHandler := handler.NewBuildHandler(buildService)
+	buildHandler.SetVersionTagService(versionTagService)
 	jobHandler := handler.NewJobHandler(jobService)
+	versionTagHandler := handler.NewVersionTagHandler(versionTagService)
 	credentialHandler := handler.NewSourceCredentialHandler(sourceCredentialService)
 	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, cfg.GitHubWebhookSecret)
 
-	router := apphttp.NewRouter(buildHandler, jobHandler, credentialHandler, eventHandler, cfg.PushEventSecret)
+	router := apphttp.NewRouter(buildHandler, jobHandler, versionTagHandler, credentialHandler, eventHandler, cfg.PushEventSecret)
 	mux := nethttp.NewServeMux()
 	mux.Handle("/debug/vars", expvar.Handler())
 	mux.Handle("/swagger/", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))
