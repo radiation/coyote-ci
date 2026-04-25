@@ -11,7 +11,9 @@ package build
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -169,7 +171,7 @@ func TestPrepareBuildExecution_FailsBuildOnCloneError(t *testing.T) {
 
 	dir := t.TempDir()
 
-	resolver := &fakeWorkspaceSourceResolver{cloneErr: source.ErrCloneFailed}
+	resolver := &fakeWorkspaceSourceResolver{cloneErr: fmt.Errorf("%w: authentication failed", source.ErrCloneFailed)}
 	svc := NewBuildService(repo, nil, nil)
 	svc.SetSourceResolver(resolver)
 	svc.SetExecutionWorkspaceRoot(dir)
@@ -180,6 +182,9 @@ func TestPrepareBuildExecution_FailsBuildOnCloneError(t *testing.T) {
 	}
 	if build.Status != domain.BuildStatusFailed {
 		t.Fatalf("expected failed build on clone error, got %q", build.Status)
+	}
+	if build.ErrorMessage == nil || !strings.Contains(*build.ErrorMessage, "authentication failed") {
+		t.Fatalf("expected detailed clone failure, got %v", build.ErrorMessage)
 	}
 }
 

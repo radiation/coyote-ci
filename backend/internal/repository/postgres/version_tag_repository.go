@@ -140,13 +140,18 @@ func (r *VersionTagRepository) validateArtifactTargets(ctx context.Context, tx *
 	if len(artifactIDs) == 0 {
 		return nil
 	}
-	query, args := stringListQuery(`
+	placeholders := make([]string, 0, len(artifactIDs))
+	args := make([]any, 0, len(artifactIDs)+1)
+	for index, artifactID := range artifactIDs {
+		placeholders = append(placeholders, "$"+strconv.Itoa(index+1))
+		args = append(args, artifactID)
+	}
+	query := fmt.Sprintf(`
 		SELECT build_artifacts.id
 		FROM build_artifacts
 		JOIN builds ON builds.id = build_artifacts.build_id
 		WHERE build_artifacts.id IN (%s) AND builds.job_id = $%d
-	`, 1, artifactIDs)
-	query = fmt.Sprintf(query, len(args)+1)
+	`, strings.Join(placeholders, ", "), len(args)+1)
 	args = append(args, jobID)
 	artifactRows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {

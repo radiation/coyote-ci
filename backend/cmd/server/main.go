@@ -87,6 +87,8 @@ func main() {
 		ArtifactRepo:          artifactRepo,
 		ArtifactResolver:      artifactResolver,
 		ArtifactWorkspace:     cfg.ExecutionWorkspaceRoot,
+		ExecutionWorkspace:    cfg.ExecutionWorkspaceRoot,
+		DefaultImage:          cfg.ExecutionDefaultImage,
 	})
 	jobService := service.NewJobService(jobRepo, buildService).WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo)
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)

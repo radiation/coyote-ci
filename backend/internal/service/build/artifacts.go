@@ -42,6 +42,18 @@ func (s *BuildService) runPostCompletionSideEffects(ctx context.Context, request
 		}
 	}
 
+	var tagErr error
+	if build.Status == domain.BuildStatusSuccess {
+		if emitErr := s.writeSystemExecutionLogLine(ctx, request, appender, "Assigning version tags"); emitErr != nil {
+			return emitErr
+		}
+		tagErr = s.autoTagBuildOutputs(ctx, build)
+		if tagErr != nil {
+			_ = s.writeSystemExecutionLogLine(ctx, request, appender, "Automatic version tagging failed")
+			_ = s.writeSystemExecutionLogLine(ctx, request, appender, formatFailureReasonLine("automatic version tagging failed"))
+		}
+	}
+
 	if emitErr := s.writeSystemExecutionLogLine(ctx, request, appender, "Finalizing build"); emitErr != nil {
 		return emitErr
 	}
@@ -49,7 +61,7 @@ func (s *BuildService) runPostCompletionSideEffects(ctx context.Context, request
 	summaryErr := s.writeTerminalBuildSummary(ctx, request, appender, artifactPaths)
 	cleanupErr := s.cleanupExecutionIfTerminal(ctx, request.BuildID)
 
-	return errors.Join(summaryErr, cleanupErr)
+	return errors.Join(summaryErr, cleanupErr, tagErr)
 }
 
 func (s *BuildService) writeTerminalBuildSummary(ctx context.Context, request runner.RunStepRequest, appender logs.StepLogChunkAppender, artifactPaths []string) error {
