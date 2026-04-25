@@ -36,7 +36,11 @@ export function VersionTagEditor({
       await onAssign(trimmed);
       setValue("");
     } catch (submitError) {
-      setError(String(submitError));
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : String(submitError),
+      );
     } finally {
       setIsSubmitting(false);
     }

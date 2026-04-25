@@ -18,6 +18,7 @@ type VersionTagRepository struct {
 	tags                     []domain.VersionTag
 	artifactsByID            map[string]domain.BuildArtifact
 	buildsByID               map[string]domain.Build
+	managedImagesByID        map[string]domain.ManagedImage
 	managedImageVersionsByID map[string]domain.ManagedImageVersion
 }
 
@@ -25,6 +26,7 @@ func NewVersionTagRepository() *VersionTagRepository {
 	return &VersionTagRepository{
 		artifactsByID:            map[string]domain.BuildArtifact{},
 		buildsByID:               map[string]domain.Build{},
+		managedImagesByID:        map[string]domain.ManagedImage{},
 		managedImageVersionsByID: map[string]domain.ManagedImageVersion{},
 	}
 }
@@ -50,6 +52,14 @@ func (r *VersionTagRepository) SeedManagedImageVersions(versions ...domain.Manag
 	defer r.mu.Unlock()
 	for _, version := range versions {
 		r.managedImageVersionsByID[version.ID] = version
+	}
+}
+
+func (r *VersionTagRepository) SeedManagedImages(images ...domain.ManagedImage) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, image := range images {
+		r.managedImagesByID[image.ID] = image
 	}
 }
 
@@ -136,8 +146,20 @@ func (r *VersionTagRepository) CreateForTargets(_ context.Context, params reposi
 	}
 
 	for _, managedImageVersionID := range managedImageVersionIDs {
-		if _, ok := r.managedImageVersionsByID[managedImageVersionID]; !ok {
+		managedImageVersion, ok := r.managedImageVersionsByID[managedImageVersionID]
+		if !ok {
 			return nil, repository.ErrVersionTagTargetNotFound
+		}
+		image, ok := r.managedImagesByID[managedImageVersion.ManagedImageID]
+		if !ok {
+			return nil, repository.ErrVersionTagTargetNotFound
+		}
+		jobProjectID, ok := r.projectIDForJobLocked(jobID)
+		if !ok {
+			return nil, repository.ErrVersionTagTargetNotFound
+		}
+		if image.ProjectID != jobProjectID {
+			return nil, repository.ErrVersionTagTargetJobMismatch
 		}
 		if r.hasDuplicateLocked(jobID, version, nil, &managedImageVersionID) {
 			return nil, repository.ErrVersionTagConflict
@@ -187,6 +209,20 @@ func (r *VersionTagRepository) hasDuplicateLocked(jobID string, version string, 
 		}
 	}
 	return false
+}
+
+func (r *VersionTagRepository) projectIDForJobLocked(jobID string) (string, bool) {
+	for _, build := range r.buildsByID {
+		if build.JobID == nil || strings.TrimSpace(*build.JobID) != jobID {
+			continue
+		}
+		projectID := strings.TrimSpace(build.ProjectID)
+		if projectID == "" {
+			continue
+		}
+		return projectID, true
+	}
+	return "", false
 }
 
 func (r *VersionTagRepository) filterLocked(include func(domain.VersionTag) bool) []domain.VersionTag {

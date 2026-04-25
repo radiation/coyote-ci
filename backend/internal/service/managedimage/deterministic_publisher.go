@@ -23,7 +23,7 @@ func NewDeterministicPublisher() *DeterministicPublisher {
 	return &DeterministicPublisher{runDocker: runDockerCommand}
 }
 
-func (p *DeterministicPublisher) Publish(_ context.Context, req PublishRequest) (PublishedImage, error) {
+func (p *DeterministicPublisher) Publish(ctx context.Context, req PublishRequest) (PublishedImage, error) {
 	versionLabel := normalizeDigest(req.DependencyFingerprint)
 	if versionLabel == "" {
 		return PublishedImage{}, fmt.Errorf("dependency fingerprint is required")
@@ -45,7 +45,7 @@ func (p *DeterministicPublisher) Publish(_ context.Context, req PublishRequest) 
 	if runDocker == nil {
 		runDocker = runDockerCommand
 	}
-	resolvedRef, resolvedDigest, err := resolveImmutableImageRef(context.Background(), runDocker, imageRef)
+	resolvedRef, resolvedDigest, err := resolveImmutableImageRef(ctx, runDocker, imageRef)
 	if err != nil {
 		return PublishedImage{}, err
 	}

@@ -89,8 +89,8 @@ Successful builds can automatically assign version tags to produced artifacts an
 ```yaml
 version: 1
 release:
-	strategy: template
-	template: 1.2.{build_number}
+  strategy: template
+  template: 1.2.{build_number}
 ```
 
 Keep `version: 1` as the pipeline schema version. Release tagging is strategy-based:

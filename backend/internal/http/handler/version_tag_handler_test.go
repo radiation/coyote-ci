@@ -18,8 +18,9 @@ func TestVersionTagHandler_CreateAndList(t *testing.T) {
 	repo := repositorymemory.NewVersionTagRepository()
 	jobID := "job-1"
 	buildID := "build-1"
-	repo.SeedBuilds(domain.Build{ID: buildID, JobID: &jobID})
+	repo.SeedBuilds(domain.Build{ID: buildID, ProjectID: "project-1", JobID: &jobID})
 	repo.SeedArtifacts(domain.BuildArtifact{ID: "artifact-1", BuildID: buildID})
+	repo.SeedManagedImages(domain.ManagedImage{ID: "image-1", ProjectID: "project-1", Name: "go"})
 	repo.SeedManagedImageVersions(domain.ManagedImageVersion{ID: "image-version-1", ManagedImageID: "image-1"})
 	h := NewVersionTagHandler(versiontagsvc.NewService(repo))
 

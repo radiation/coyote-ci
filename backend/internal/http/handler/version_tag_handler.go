@@ -140,6 +140,8 @@ func (h *VersionTagHandler) writeServiceError(w http.ResponseWriter, err error) 
 		errors.Is(err, versiontagsvc.ErrVersionTooLong),
 		errors.Is(err, versiontagsvc.ErrVersionContainsControlChars):
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
+	case errors.Is(err, versiontagsvc.ErrVersionTagRepositoryNotConfigured):
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 	case errors.Is(err, repository.ErrVersionTagTargetNotFound):
 		writeErrorJSON(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, repository.ErrVersionTagTargetJobMismatch), errors.Is(err, repository.ErrVersionTagConflict):

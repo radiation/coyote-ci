@@ -15,8 +15,14 @@ func TestDeterministicPublisherPublish_ResolvesTaggedImageToImmutableDigest(t *t
 	mustWrite(t, filepath.Join(repoRoot, ".coyote", "pipeline.yml"), []byte("version: 1\npipeline:\n  image: golang:1.26.2\n"))
 
 	var calls [][]string
+	type contextKey string
+	const requestIDKey contextKey = "request-id"
+	ctx := context.WithValue(context.Background(), requestIDKey, "req-123")
 	publisher := &DeterministicPublisher{
-		runDocker: func(_ context.Context, args ...string) ([]byte, error) {
+		runDocker: func(callCtx context.Context, args ...string) ([]byte, error) {
+			if got := callCtx.Value(requestIDKey); got != "req-123" {
+				t.Fatalf("expected publish context to be propagated, got %v", got)
+			}
 			calls = append(calls, append([]string(nil), args...))
 			switch {
 			case len(args) == 2 && args[0] == "pull" && args[1] == "golang:1.26.2":
@@ -29,7 +35,7 @@ func TestDeterministicPublisherPublish_ResolvesTaggedImageToImmutableDigest(t *t
 		},
 	}
 
-	published, err := publisher.Publish(context.Background(), PublishRequest{
+	published, err := publisher.Publish(ctx, PublishRequest{
 		DependencyFingerprint: strings.Repeat("a", 64),
 		RepoRoot:              repoRoot,
 		PipelinePath:          ".coyote/pipeline.yml",

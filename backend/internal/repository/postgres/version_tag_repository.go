@@ -95,7 +95,7 @@ func (r *VersionTagRepository) CreateForTargets(ctx context.Context, params repo
 	if err := r.validateArtifactTargets(ctx, tx, jobID, artifactIDs); err != nil {
 		return nil, err
 	}
-	if err := r.validateManagedImageVersionTargets(ctx, tx, managedImageVersionIDs); err != nil {
+	if err := r.validateManagedImageVersionTargets(ctx, tx, jobID, managedImageVersionIDs); err != nil {
 		return nil, err
 	}
 	if err := r.ensureNoDuplicateTargets(ctx, tx, jobID, version, artifactIDs, managedImageVersionIDs); err != nil {
@@ -206,11 +206,19 @@ func (r *VersionTagRepository) validateArtifactTargets(ctx context.Context, tx *
 	return nil
 }
 
-func (r *VersionTagRepository) validateManagedImageVersionTargets(ctx context.Context, tx *sql.Tx, managedImageVersionIDs []string) error {
+func (r *VersionTagRepository) validateManagedImageVersionTargets(ctx context.Context, tx *sql.Tx, jobID string, managedImageVersionIDs []string) error {
 	if len(managedImageVersionIDs) == 0 {
 		return nil
 	}
-	query, args := stringListQuery(`SELECT id FROM managed_image_versions WHERE id IN (%s)`, 1, managedImageVersionIDs)
+	query, args := stringListQuery(`
+		SELECT managed_image_versions.id
+		FROM managed_image_versions
+		JOIN managed_images ON managed_images.id = managed_image_versions.managed_image_id
+		JOIN jobs ON jobs.project_id = managed_images.project_id
+		WHERE managed_image_versions.id IN (%s) AND jobs.id = $%d
+	`, 1, managedImageVersionIDs)
+	query = fmt.Sprintf(query, len(args)+1)
+	args = append(args, jobID)
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
@@ -226,12 +234,40 @@ func (r *VersionTagRepository) validateManagedImageVersionTargets(ctx context.Co
 		}
 		found[id] = struct{}{}
 	}
-	if err := rows.Err(); err != nil {
-		return err
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return rowsErr
 	}
 	for _, id := range managedImageVersionIDs {
 		if _, ok := found[id]; !ok {
+			break
+		}
+	}
+
+	existenceQuery, existenceArgs := stringListQuery(`SELECT id FROM managed_image_versions WHERE id IN (%s)`, 1, managedImageVersionIDs)
+	existingRows, err := tx.QueryContext(ctx, existenceQuery, existenceArgs...)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = existingRows.Close()
+	}()
+	existing := map[string]struct{}{}
+	for existingRows.Next() {
+		var id string
+		if scanErr := existingRows.Scan(&id); scanErr != nil {
+			return scanErr
+		}
+		existing[id] = struct{}{}
+	}
+	if err := existingRows.Err(); err != nil {
+		return err
+	}
+	for _, id := range managedImageVersionIDs {
+		if _, ok := existing[id]; !ok {
 			return repository.ErrVersionTagTargetNotFound
+		}
+		if _, ok := found[id]; !ok {
+			return repository.ErrVersionTagTargetJobMismatch
 		}
 	}
 	return nil
@@ -286,7 +322,7 @@ func (r *VersionTagRepository) insertVersionTag(ctx context.Context, tx *sql.Tx,
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING ` + versionTagColumns
 
-	return scanVersionTag(tx.QueryRowContext(ctx, query,
+	created, err := scanVersionTag(tx.QueryRowContext(ctx, query,
 		tag.ID,
 		tag.JobID,
 		tag.Version,
@@ -294,6 +330,14 @@ func (r *VersionTagRepository) insertVersionTag(ctx context.Context, tx *sql.Tx,
 		tag.ArtifactID,
 		tag.ManagedImageVersionID,
 	))
+	if err != nil {
+		if isUniqueViolation(err) {
+			return domain.VersionTag{}, repository.ErrVersionTagConflict
+		}
+		return domain.VersionTag{}, err
+	}
+
+	return created, nil
 }
 
 func scanVersionTagRows(rows *sql.Rows, queryErr error) ([]domain.VersionTag, error) {

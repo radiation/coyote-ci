@@ -18,6 +18,7 @@ var ErrVersionRequired = errors.New("version is required")
 var ErrTargetRequired = errors.New("at least one target is required")
 var ErrVersionTooLong = errors.New("version exceeds maximum length")
 var ErrVersionContainsControlChars = errors.New("version contains unsupported control characters")
+var ErrVersionTagRepositoryNotConfigured = errors.New("version tag repository not configured")
 
 type CreateVersionTagsInput struct {
 	Version                string
@@ -35,7 +36,7 @@ func NewService(repo repository.VersionTagRepository) *Service {
 
 func (s *Service) CreateVersionTags(ctx context.Context, jobID string, input CreateVersionTagsInput) ([]domain.VersionTag, error) {
 	if s.repo == nil {
-		return nil, repository.ErrVersionTagTargetNotFound
+		return nil, ErrVersionTagRepositoryNotConfigured
 	}
 	trimmedJobID := strings.TrimSpace(jobID)
 	if trimmedJobID == "" {

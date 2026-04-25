@@ -13,11 +13,12 @@ func TestVersionTagRepository_CreateForTargets_AllowsSharedVersionAcrossTargets(
 	repo := NewVersionTagRepository()
 	jobID := "job-1"
 	buildID := "build-1"
-	repo.SeedBuilds(domain.Build{ID: buildID, JobID: &jobID})
+	repo.SeedBuilds(domain.Build{ID: buildID, ProjectID: "project-1", JobID: &jobID})
 	repo.SeedArtifacts(
 		domain.BuildArtifact{ID: "artifact-1", BuildID: buildID},
 		domain.BuildArtifact{ID: "artifact-2", BuildID: buildID},
 	)
+	repo.SeedManagedImages(domain.ManagedImage{ID: "image-1", ProjectID: "project-1", Name: "go"})
 	repo.SeedManagedImageVersions(domain.ManagedImageVersion{ID: "image-version-1", ManagedImageID: "image-1"})
 
 	tags, err := repo.CreateForTargets(context.Background(), repository.CreateVersionTagsParams{
@@ -72,6 +73,24 @@ func TestVersionTagRepository_CreateForTargets_RejectsArtifactFromDifferentJob(t
 		JobID:       otherJobID,
 		Version:     "v1",
 		ArtifactIDs: []string{"artifact-1"},
+	})
+	if !errors.Is(err, repository.ErrVersionTagTargetJobMismatch) {
+		t.Fatalf("expected ErrVersionTagTargetJobMismatch, got %v", err)
+	}
+}
+
+func TestVersionTagRepository_CreateForTargets_RejectsManagedImageVersionFromDifferentProject(t *testing.T) {
+	repo := NewVersionTagRepository()
+	jobID := "job-1"
+	buildID := "build-1"
+	repo.SeedBuilds(domain.Build{ID: buildID, ProjectID: "project-1", JobID: &jobID})
+	repo.SeedManagedImages(domain.ManagedImage{ID: "image-1", ProjectID: "project-2", Name: "go"})
+	repo.SeedManagedImageVersions(domain.ManagedImageVersion{ID: "image-version-1", ManagedImageID: "image-1"})
+
+	_, err := repo.CreateForTargets(context.Background(), repository.CreateVersionTagsParams{
+		JobID:                  jobID,
+		Version:                "v1",
+		ManagedImageVersionIDs: []string{"image-version-1"},
 	})
 	if !errors.Is(err, repository.ErrVersionTagTargetJobMismatch) {
 		t.Fatalf("expected ErrVersionTagTargetJobMismatch, got %v", err)

@@ -15,8 +15,9 @@ func TestService_CreateVersionTags(t *testing.T) {
 	repo := repositorymemory.NewVersionTagRepository()
 	jobID := "job-1"
 	buildID := "build-1"
-	repo.SeedBuilds(domain.Build{ID: buildID, JobID: &jobID})
+	repo.SeedBuilds(domain.Build{ID: buildID, ProjectID: "project-1", JobID: &jobID})
 	repo.SeedArtifacts(domain.BuildArtifact{ID: "artifact-1", BuildID: buildID})
+	repo.SeedManagedImages(domain.ManagedImage{ID: "image-1", ProjectID: "project-1", Name: "go"})
 	repo.SeedManagedImageVersions(domain.ManagedImageVersion{ID: "image-version-1", ManagedImageID: "image-1"})
 
 	svc := NewService(repo)
@@ -57,6 +58,15 @@ func TestService_CreateVersionTags_ValidatesInput(t *testing.T) {
 	_, err = svc.CreateVersionTags(context.Background(), "job-1", CreateVersionTagsInput{Version: "bad\x01version", ArtifactIDs: []string{"artifact-1"}})
 	if !errors.Is(err, ErrVersionContainsControlChars) {
 		t.Fatalf("expected ErrVersionContainsControlChars, got %v", err)
+	}
+}
+
+func TestService_CreateVersionTags_RepositoryNotConfigured(t *testing.T) {
+	svc := NewService(nil)
+
+	_, err := svc.CreateVersionTags(context.Background(), "job-1", CreateVersionTagsInput{Version: "v1", ArtifactIDs: []string{"artifact-1"}})
+	if !errors.Is(err, ErrVersionTagRepositoryNotConfigured) {
+		t.Fatalf("expected ErrVersionTagRepositoryNotConfigured, got %v", err)
 	}
 }
 
