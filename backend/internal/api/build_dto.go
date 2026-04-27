@@ -253,6 +253,7 @@ type BuildArtifactResponse struct {
 	ID              string               `json:"id"`
 	BuildID         string               `json:"build_id"`
 	StepID          *string              `json:"step_id,omitempty"`
+	Name            string               `json:"name,omitempty"`
 	Path            string               `json:"path"`
 	SizeBytes       int64                `json:"size_bytes"`
 	ContentType     *string              `json:"content_type"`

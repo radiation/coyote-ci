@@ -12,6 +12,12 @@ import type {
   VersionTagCreateRequest,
 } from "../types/build";
 import type {
+  ArtifactBrowseItem,
+  ArtifactBrowseResponse,
+  ArtifactType,
+  DataEnvelope as ArtifactEnvelope,
+} from "../types/artifact";
+import type {
   CreateJobRequest,
   Job,
   JobListResponse,
@@ -32,6 +38,13 @@ import type {
  * Override with VITE_API_BASE_PATH when needed (e.g. direct backend testing).
  */
 const BASE = import.meta.env.VITE_API_BASE_PATH ?? "/api";
+
+export async function checkReadiness(): Promise<void> {
+  const res = await fetch(`${BASE}/readyz`);
+  if (!res.ok) {
+    throw new Error(`API ${res.status}: backend not ready`);
+  }
+}
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, init);
@@ -125,6 +138,28 @@ export async function getStepLogs(
 export async function getBuildArtifacts(id: string): Promise<BuildArtifact[]> {
   const envelope = await fetchJSON<DataEnvelope<BuildArtifactsResponse>>(
     `/builds/${encodeURIComponent(id)}/artifacts`,
+  );
+  return envelope.data.artifacts;
+}
+
+export async function listArtifacts(input?: {
+  q?: string;
+  type?: ArtifactType | "";
+}): Promise<ArtifactBrowseItem[]> {
+  const params = new URLSearchParams();
+  const query = input?.q?.trim() ?? "";
+  const type = input?.type?.trim() ?? "";
+
+  if (query) {
+    params.set("q", query);
+  }
+  if (type) {
+    params.set("type", type);
+  }
+
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const envelope = await fetchJSON<ArtifactEnvelope<ArtifactBrowseResponse>>(
+    `/artifacts${suffix}`,
   );
   return envelope.data.artifacts;
 }

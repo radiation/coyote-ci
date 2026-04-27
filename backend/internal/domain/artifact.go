@@ -15,7 +15,9 @@ type BuildArtifact struct {
 	ID              string
 	BuildID         string
 	StepID          *string // nullable; set when artifact came from a specific step
+	Name            string
 	LogicalPath     string
+	ArtifactType    ArtifactType
 	StorageKey      string
 	StorageProvider StorageProvider
 	SizeBytes       int64
@@ -23,4 +25,11 @@ type BuildArtifact struct {
 	ChecksumSHA256  *string
 	VersionTags     []VersionTag
 	CreatedAt       time.Time
+}
+
+// ArtifactDeclaration describes one artifact path declaration from pipeline config.
+type ArtifactDeclaration struct {
+	Name string
+	Path string
+	Type ArtifactType
 }

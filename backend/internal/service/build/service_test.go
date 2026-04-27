@@ -537,6 +537,25 @@ func (r *fakeArtifactRepository) ListByBuildID(_ context.Context, buildID string
 	return out, nil
 }
 
+func (r *fakeArtifactRepository) ListForBrowse(_ context.Context, query string) ([]domain.ArtifactBrowseRecord, error) {
+	trimmedQuery := strings.TrimSpace(strings.ToLower(query))
+	out := make([]domain.ArtifactBrowseRecord, 0)
+	for buildID, items := range r.artifacts {
+		for _, item := range items {
+			if trimmedQuery != "" && !strings.Contains(strings.ToLower(item.LogicalPath), trimmedQuery) {
+				continue
+			}
+			out = append(out, domain.ArtifactBrowseRecord{
+				Artifact: item,
+				Build: domain.Build{
+					ID: buildID,
+				},
+			})
+		}
+	}
+	return out, nil
+}
+
 func (r *fakeArtifactRepository) GetByID(_ context.Context, buildID string, artifactID string) (domain.BuildArtifact, error) {
 	for _, item := range r.artifacts[buildID] {
 		if item.ID == artifactID {

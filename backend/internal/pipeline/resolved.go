@@ -34,12 +34,14 @@ type ResolvedStep struct {
 	Env              map[string]string
 	TimeoutSeconds   int
 	ArtifactPaths    []string
+	ArtifactDecls    []domain.ArtifactDeclaration
 	Cache            *domain.StepCacheConfig
 }
 
 // ResolvedArtifacts captures normalized build-level artifact paths.
 type ResolvedArtifacts struct {
-	Paths []string
+	Paths        []string
+	Declarations []domain.ArtifactDeclaration
 }
 
 type ExecutionPlan struct {

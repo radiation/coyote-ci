@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -51,6 +52,27 @@ func (r *ArtifactRepository) ListByBuildID(_ context.Context, buildID string) ([
 		}
 	}
 	return out, nil
+}
+
+func (r *ArtifactRepository) ListForBrowse(_ context.Context, query string) ([]domain.ArtifactBrowseRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	trimmedQuery := strings.TrimSpace(strings.ToLower(query))
+	records := make([]domain.ArtifactBrowseRecord, 0, len(r.artifacts))
+	for _, artifact := range r.artifacts {
+		if trimmedQuery != "" && !strings.Contains(strings.ToLower(artifact.LogicalPath), trimmedQuery) {
+			continue
+		}
+		records = append(records, domain.ArtifactBrowseRecord{
+			Artifact: artifact,
+			Build: domain.Build{
+				ID:        artifact.BuildID,
+				CreatedAt: artifact.CreatedAt,
+			},
+		})
+	}
+	return records, nil
 }
 
 func (r *ArtifactRepository) GetByID(_ context.Context, buildID string, artifactID string) (domain.BuildArtifact, error) {

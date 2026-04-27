@@ -14,6 +14,7 @@ var ErrArtifactConflict = errors.New("artifact already exists")
 type ArtifactRepository interface {
 	Create(ctx context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error)
 	ListByBuildID(ctx context.Context, buildID string) ([]domain.BuildArtifact, error)
+	ListForBrowse(ctx context.Context, query string) ([]domain.ArtifactBrowseRecord, error)
 	GetByID(ctx context.Context, buildID string, artifactID string) (domain.BuildArtifact, error)
 	ListByStepID(ctx context.Context, stepID string) ([]domain.BuildArtifact, error)
 }

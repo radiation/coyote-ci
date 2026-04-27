@@ -109,7 +109,7 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 		Env:       mergedPipelineEnv,
 		Steps:     steps,
 		Plan:      ExecutionPlan{Nodes: nodes},
-		Artifacts: ResolvedArtifacts{Paths: append([]string{}, pf.Artifacts.Paths...)},
+		Artifacts: ResolvedArtifacts{Paths: append([]string{}, pf.Artifacts.Paths...), Declarations: append([]domain.ArtifactDeclaration(nil), pf.Artifacts.Declarations...)},
 		Cache:     pipelineCache.Clone(),
 	}
 }
@@ -205,6 +205,7 @@ func resolveStepDef(sd StepDef, pipelineEnv map[string]string, pipelineCache *do
 		Env:            merged,
 		TimeoutSeconds: timeout,
 		ArtifactPaths:  append([]string{}, sd.Artifacts.Paths...),
+		ArtifactDecls:  append([]domain.ArtifactDeclaration(nil), sd.Artifacts.Declarations...),
 		Cache:          stepCache.Clone(),
 	}
 }

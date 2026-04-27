@@ -3,6 +3,7 @@ package pipeline
 import (
 	"fmt"
 
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"gopkg.in/yaml.v3"
 )
 
@@ -56,11 +57,14 @@ type CacheDef struct {
 
 // ArtifactDef holds optional build-level artifact path declarations.
 type ArtifactDef struct {
-	Paths []string `yaml:"paths"`
+	Paths        []string                     `yaml:"paths"`
+	Declarations []domain.ArtifactDeclaration `yaml:"-"`
 }
 
 type artifactPathObject struct {
+	Name string `yaml:"name,omitempty"`
 	Path string `yaml:"path"`
+	Type string `yaml:"type,omitempty"`
 }
 
 // UnmarshalYAML supports ergonomic artifact declarations while normalizing
@@ -83,42 +87,68 @@ type artifactPathObject struct {
 func (d *ArtifactDef) UnmarshalYAML(node *yaml.Node) error {
 	if node == nil || node.Kind == 0 {
 		d.Paths = nil
+		d.Declarations = nil
 		return nil
 	}
 
+	declarations, err := parseArtifactDeclarationsNode(node)
+	if err != nil {
+		return err
+	}
+	d.Declarations = declarations
+	d.Paths = make([]string, 0, len(declarations))
+	for _, declaration := range declarations {
+		d.Paths = append(d.Paths, declaration.Path)
+	}
+	return nil
+}
+
+func parseArtifactDeclarationsNode(node *yaml.Node) ([]domain.ArtifactDeclaration, error) {
 	switch node.Kind {
 	case yaml.SequenceNode:
-		paths := make([]string, 0, len(node.Content))
+		declarations := make([]domain.ArtifactDeclaration, 0, len(node.Content))
 		for idx, item := range node.Content {
-			switch item.Kind {
-			case yaml.ScalarNode:
-				paths = append(paths, item.Value)
-			case yaml.MappingNode:
-				var obj artifactPathObject
-				if err := item.Decode(&obj); err != nil {
-					return fmt.Errorf("invalid artifacts[%d] object: %w", idx, err)
-				}
-				paths = append(paths, obj.Path)
-			default:
-				return fmt.Errorf("artifacts[%d] must be a string or object with path", idx)
+			declaration, err := parseArtifactDeclaration(item)
+			if err != nil {
+				return nil, fmt.Errorf("invalid artifacts[%d]: %w", idx, err)
 			}
+			declarations = append(declarations, declaration)
 		}
-		d.Paths = paths
-		return nil
+		return declarations, nil
 	case yaml.MappingNode:
-		var wrapper struct {
-			Paths []string `yaml:"paths"`
+		for idx := 0; idx+1 < len(node.Content); idx += 2 {
+			if node.Content[idx].Value != "paths" {
+				continue
+			}
+			return parseArtifactDeclarationsNode(node.Content[idx+1])
 		}
-		if err := node.Decode(&wrapper); err != nil {
-			return err
+		declaration, err := parseArtifactDeclaration(node)
+		if err != nil {
+			return nil, err
 		}
-		d.Paths = wrapper.Paths
-		return nil
+		return []domain.ArtifactDeclaration{declaration}, nil
 	case yaml.ScalarNode:
-		// Allow a single scalar for convenience.
-		d.Paths = []string{node.Value}
-		return nil
+		return []domain.ArtifactDeclaration{{Path: node.Value}}, nil
 	default:
-		return fmt.Errorf("artifacts must be a sequence or mapping")
+		return nil, fmt.Errorf("artifacts must be a sequence or mapping")
+	}
+}
+
+func parseArtifactDeclaration(node *yaml.Node) (domain.ArtifactDeclaration, error) {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		return domain.ArtifactDeclaration{Path: node.Value}, nil
+	case yaml.MappingNode:
+		var obj artifactPathObject
+		if err := node.Decode(&obj); err != nil {
+			return domain.ArtifactDeclaration{}, err
+		}
+		declaration := domain.ArtifactDeclaration{Name: obj.Name, Path: obj.Path}
+		if artifactType, ok := domain.ParseArtifactType(obj.Type); ok {
+			declaration.Type = artifactType
+		}
+		return declaration, nil
+	default:
+		return domain.ArtifactDeclaration{}, fmt.Errorf("must be a string or object with path")
 	}
 }

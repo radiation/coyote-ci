@@ -1,4 +1,5 @@
 export {
+  listArtifacts,
   listBuilds,
   getBuild,
   getBuildSteps,

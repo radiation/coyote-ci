@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/versioning"
 )
 
@@ -50,8 +51,8 @@ func Validate(pf *PipelineFile) error {
 		}
 	}
 
-	for i, pattern := range pf.Artifacts.Paths {
-		trimmed := strings.TrimSpace(pattern)
+	for i, declaration := range declarationsForValidation(pf.Artifacts) {
+		trimmed := strings.TrimSpace(declaration.Path)
 		field := fmt.Sprintf("artifacts.paths[%d]", i)
 		if trimmed == "" {
 			errs = append(errs, ValidationError{Field: field, Message: "artifact path is required"})
@@ -60,6 +61,14 @@ func Validate(pf *PipelineFile) error {
 
 		if err := validateArtifactPathPattern(trimmed); err != nil {
 			errs = append(errs, ValidationError{Field: field, Message: err.Error()})
+		}
+		if declaration.Type != "" {
+			if _, ok := domain.ParseArtifactType(string(declaration.Type)); !ok {
+				errs = append(errs, ValidationError{Field: field + ".type", Message: fmt.Sprintf("unsupported artifact type %q", declaration.Type)})
+			}
+		}
+		if strings.TrimSpace(declaration.Name) != "" && pathPatternHasWildcard(trimmed) {
+			errs = append(errs, ValidationError{Field: field + ".name", Message: "artifact name requires an exact path declaration"})
 		}
 	}
 
@@ -180,8 +189,8 @@ func validateStepDef(step StepDef, prefix string, seen map[string]bool) Validati
 		}
 	}
 
-	for j, pattern := range step.Artifacts.Paths {
-		trimmed := strings.TrimSpace(pattern)
+	for j, declaration := range declarationsForValidation(step.Artifacts) {
+		trimmed := strings.TrimSpace(declaration.Path)
 		field := fmt.Sprintf("%s.artifacts.paths[%d]", prefix, j)
 		if trimmed == "" {
 			errs = append(errs, ValidationError{Field: field, Message: "artifact path is required"})
@@ -190,10 +199,26 @@ func validateStepDef(step StepDef, prefix string, seen map[string]bool) Validati
 		if err := validateArtifactPathPattern(trimmed); err != nil {
 			errs = append(errs, ValidationError{Field: field, Message: err.Error()})
 		}
+		if declaration.Type != "" {
+			if _, ok := domain.ParseArtifactType(string(declaration.Type)); !ok {
+				errs = append(errs, ValidationError{Field: field + ".type", Message: fmt.Sprintf("unsupported artifact type %q", declaration.Type)})
+			}
+		}
 	}
 
 	errs = append(errs, validateCacheDef(prefix+".cache", step.Cache)...)
 	return errs
+}
+
+func declarationsForValidation(def ArtifactDef) []domain.ArtifactDeclaration {
+	if len(def.Declarations) > 0 {
+		return def.Declarations
+	}
+	declarations := make([]domain.ArtifactDeclaration, 0, len(def.Paths))
+	for _, path := range def.Paths {
+		declarations = append(declarations, domain.ArtifactDeclaration{Path: path})
+	}
+	return declarations
 }
 
 func validateCacheDef(fieldPrefix string, def *CacheDef) ValidationErrors {
@@ -232,4 +257,8 @@ func validateArtifactPathPattern(pattern string) error {
 	}
 
 	return nil
+}
+
+func pathPatternHasWildcard(pattern string) bool {
+	return strings.ContainsAny(pattern, "*?[")
 }

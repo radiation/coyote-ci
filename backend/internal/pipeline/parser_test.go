@@ -1,7 +1,10 @@
 package pipeline
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
 
 func TestParse_ValidMinimal(t *testing.T) {
@@ -508,5 +511,51 @@ artifacts:
 	}
 	if rp.Artifacts.Paths[0] != "reports/*.xml" {
 		t.Fatalf("expected reports/*.xml, got %q", rp.Artifacts.Paths[0])
+	}
+}
+
+func TestParseAndResolve_TypedArtifactDeclarations(t *testing.T) {
+	yaml := strings.Join([]string{
+		"version: 1",
+		"steps:",
+		"  - name: Build image",
+		"    run: docker build -t app .",
+		"    artifacts:",
+		"      - path: images/backend-image.tar",
+		"        name: coyote-ci/backend",
+		"        type: docker_image",
+		"      - path: reports/junit.xml",
+		"        type: generic",
+		"artifacts:",
+		"  - path: releases/summary.txt",
+		"    type: generic",
+	}, "\n")
+
+	pf, err := ParseAndValidate([]byte(yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pf.Steps[0].Artifacts.Declarations) != 2 {
+		t.Fatalf("expected 2 typed declarations, got %d", len(pf.Steps[0].Artifacts.Declarations))
+	}
+	if pf.Steps[0].Artifacts.Declarations[0].Type != domain.ArtifactTypeDockerImage {
+		t.Fatalf("expected docker_image declaration, got %q", pf.Steps[0].Artifacts.Declarations[0].Type)
+	}
+	if pf.Steps[0].Artifacts.Declarations[0].Name != "coyote-ci/backend" {
+		t.Fatalf("expected named declaration, got %q", pf.Steps[0].Artifacts.Declarations[0].Name)
+	}
+
+	rp := Resolve(pf)
+	if len(rp.Steps[0].ArtifactDecls) != 2 {
+		t.Fatalf("expected 2 resolved artifact declarations, got %d", len(rp.Steps[0].ArtifactDecls))
+	}
+	if rp.Steps[0].ArtifactDecls[0].Type != domain.ArtifactTypeDockerImage {
+		t.Fatalf("expected resolved docker_image declaration, got %q", rp.Steps[0].ArtifactDecls[0].Type)
+	}
+	if rp.Steps[0].ArtifactDecls[0].Name != "coyote-ci/backend" {
+		t.Fatalf("expected resolved artifact name, got %q", rp.Steps[0].ArtifactDecls[0].Name)
+	}
+	if len(rp.Artifacts.Declarations) != 1 || rp.Artifacts.Declarations[0].Type != domain.ArtifactTypeGeneric {
+		t.Fatalf("expected one generic pipeline-level declaration, got %#v", rp.Artifacts.Declarations)
 	}
 }

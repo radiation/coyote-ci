@@ -53,6 +53,10 @@ func (r *fakeArtifactRepo) ListByBuildID(_ context.Context, buildID string) ([]d
 	return out, nil
 }
 
+func (r *fakeArtifactRepo) ListForBrowse(_ context.Context, _ string) ([]domain.ArtifactBrowseRecord, error) {
+	return nil, nil
+}
+
 func (r *fakeArtifactRepo) GetByID(_ context.Context, buildID string, artifactID string) (domain.BuildArtifact, error) {
 	for _, item := range r.artifactsByBuild[buildID] {
 		if item.ID == artifactID {

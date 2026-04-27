@@ -11,6 +11,13 @@ export {
 } from "./build";
 
 export {
+  type ArtifactBrowseItem,
+  type ArtifactBrowseResponse,
+  type ArtifactBrowseVersion,
+  type ArtifactType,
+} from "./artifact";
+
+export {
   type Job,
   type JobListResponse,
   type CreateJobRequest,

@@ -147,6 +147,100 @@ artifacts:
 	}
 }
 
+func TestArtifactDeclarationsFromBuild_PreservesExplicitType(t *testing.T) {
+	source := pipelineSourceInline
+	yaml := `
+version: 1
+steps:
+  - name: run
+    run: ./scripts/run.sh
+artifacts:
+  - path: images/backend-image.tar
+    type: docker_image
+`
+
+	declarations, err := artifactDeclarationsFromBuild(domain.Build{
+		PipelineConfigYAML: &yaml,
+		PipelineSource:     &source,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(declarations) != 1 {
+		t.Fatalf("expected 1 declaration, got %d", len(declarations))
+	}
+	if declarations[0].Type != domain.ArtifactTypeDockerImage {
+		t.Fatalf("expected docker_image type, got %q", declarations[0].Type)
+	}
+}
+
+func TestArtifactDeclarationsFromBuild_PreservesExplicitName(t *testing.T) {
+	source := pipelineSourceInline
+	yaml := `
+version: 1
+steps:
+  - name: run
+    run: ./scripts/run.sh
+artifacts:
+  - path: images/backend-image.tar
+    name: coyote-ci/backend
+    type: docker_image
+`
+
+	declarations, err := artifactDeclarationsFromBuild(domain.Build{
+		PipelineConfigYAML: &yaml,
+		PipelineSource:     &source,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(declarations) != 1 {
+		t.Fatalf("expected 1 declaration, got %d", len(declarations))
+	}
+	if declarations[0].Name != "coyote-ci/backend" {
+		t.Fatalf("expected named declaration, got %q", declarations[0].Name)
+	}
+}
+
+func TestStepArtifactDeclarationsFromBuild_UsesResolvedStepOrder(t *testing.T) {
+	yaml := `
+version: 1
+steps:
+  - group:
+      name: build
+      steps:
+        - name: frontend
+          run: npm run build
+          artifacts:
+            - path: frontend-image.tar
+              name: coyote-ci/frontend
+              type: docker_image
+        - name: backend
+          run: go build ./...
+          artifacts:
+            - path: backend/dist/coyote-server
+              name: coyote-ci/server
+              type: unknown
+`
+
+	declarations, err := stepArtifactDeclarationsFromBuild(domain.Build{PipelineConfigYAML: &yaml})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(declarations[0]) != 1 {
+		t.Fatalf("expected one declaration for resolved step 0, got %#v", declarations[0])
+	}
+	if declarations[0][0].Path != "frontend-image.tar" || declarations[0][0].Name != "coyote-ci/frontend" || declarations[0][0].Type != domain.ArtifactTypeDockerImage {
+		t.Fatalf("unexpected step 0 declaration: %#v", declarations[0][0])
+	}
+	if len(declarations[1]) != 1 {
+		t.Fatalf("expected one declaration for resolved step 1, got %#v", declarations[1])
+	}
+	if declarations[1][0].Path != "backend/dist/coyote-server" || declarations[1][0].Name != "coyote-ci/server" || declarations[1][0].Type != domain.ArtifactTypeUnknown {
+		t.Fatalf("unexpected step 1 declaration: %#v", declarations[1][0])
+	}
+}
+
 func TestArtifactIdentityKey(t *testing.T) {
 	stepA := "step-a"
 	stepB := "step-b"

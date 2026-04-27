@@ -205,6 +205,7 @@ func toBuildArtifactResponse(item domain.BuildArtifact) api.BuildArtifactRespons
 		ID:              item.ID,
 		BuildID:         item.BuildID,
 		StepID:          item.StepID,
+		Name:            item.Name,
 		Path:            item.LogicalPath,
 		SizeBytes:       item.SizeBytes,
 		ContentType:     item.ContentType,

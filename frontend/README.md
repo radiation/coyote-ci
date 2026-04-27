@@ -1,6 +1,11 @@
 # Coyote CI Frontend
 
-React + TypeScript + Vite UI for listing builds, viewing build details, and queueing new builds with a template.
+React + TypeScript + Vite UI for listing builds, viewing build details, browsing artifacts, and queueing new builds with a template.
+
+## Artifact Repository UI V1
+
+- The top-level Artifacts page provides search, type filtering, expandable logical artifact items, version history, and in-place immutable version tagging.
+- V1 is intentionally read-focused: it does not add mutable alias tags, package-manager-specific publish flows, or a dedicated artifact detail route.
 
 ## Prerequisites
 
