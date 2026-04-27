@@ -890,8 +890,57 @@ func TestBuildService_RunStep_AutoTagsOutputsAfterTerminalSuccess(t *testing.T) 
 	if len(tagger.input.ArtifactIDs) != 1 {
 		t.Fatalf("expected one collected artifact id, got %d", len(tagger.input.ArtifactIDs))
 	}
+	if got := artifactRepo.artifacts[buildID][0].ArtifactType; got != "" {
+		t.Fatalf("expected untyped collected artifact for legacy declaration, got %q", got)
+	}
 	if len(tagger.input.ManagedImageVersionIDs) != 1 || tagger.input.ManagedImageVersionIDs[0] != managedImageVersionID {
 		t.Fatalf("expected managed image version id %q, got %#v", managedImageVersionID, tagger.input.ManagedImageVersionIDs)
+	}
+}
+
+func TestBuildService_RunStep_PersistsExplicitArtifactTypeFromPipelineDeclaration(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	buildID := "build-artifact-type"
+	claimToken := "claim-active"
+
+	workspacePath := filepath.Join(workspaceRoot, buildID)
+	if err := os.MkdirAll(filepath.Join(workspacePath, "images"), 0o755); err != nil {
+		t.Fatalf("failed creating workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePath, "images", "backend-image.tar"), []byte("artifact-body"), 0o644); err != nil {
+		t.Fatalf("failed writing artifact file: %v", err)
+	}
+
+	pipelineYAML := "version: 1\nsteps:\n  - name: build\n    run: make build\n    artifacts:\n      - path: images/backend-image.tar\n        type: docker_image\n"
+	repo := &fakeBuildRepository{
+		build: domain.Build{
+			ID:                 buildID,
+			Status:             domain.BuildStatusRunning,
+			CurrentStepIndex:   0,
+			PipelineConfigYAML: &pipelineYAML,
+			CreatedAt:          time.Now().UTC(),
+		},
+		steps: []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken, ArtifactPaths: []string{"images/backend-image.tar"}}},
+	}
+	r := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()}}}
+	logStore := logs.NewMemorySink()
+	artifactRepo := &fakeArtifactRepository{}
+
+	svc := NewBuildService(repo, r, logStore)
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(artifact.NewFilesystemStore(t.TempDir())), workspaceRoot)
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "."})
+	if err != nil {
+		t.Fatalf("run step failed: %v", err)
+	}
+	if report.SideEffectErr != nil {
+		t.Fatalf("expected no side effect error, got %v", report.SideEffectErr)
+	}
+	if len(artifactRepo.artifacts[buildID]) != 1 {
+		t.Fatalf("expected one collected artifact, got %d", len(artifactRepo.artifacts[buildID]))
+	}
+	if artifactRepo.artifacts[buildID][0].ArtifactType != domain.ArtifactTypeDockerImage {
+		t.Fatalf("expected docker_image artifact type, got %q", artifactRepo.artifacts[buildID][0].ArtifactType)
 	}
 }
 

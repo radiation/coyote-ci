@@ -103,23 +103,21 @@ func artifactGroupKey(record domain.ArtifactBrowseRecord) string {
 }
 
 func parseArtifactType(value string) (domain.ArtifactType, error) {
-	switch strings.TrimSpace(value) {
-	case "":
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
 		return "", nil
-	case string(domain.ArtifactTypeDockerImage):
-		return domain.ArtifactTypeDockerImage, nil
-	case string(domain.ArtifactTypeNPMPackage):
-		return domain.ArtifactTypeNPMPackage, nil
-	case string(domain.ArtifactTypeGeneric):
-		return domain.ArtifactTypeGeneric, nil
-	case string(domain.ArtifactTypeUnknown):
-		return domain.ArtifactTypeUnknown, nil
-	default:
+	}
+	artifactType, ok := domain.ParseArtifactType(trimmed)
+	if !ok {
 		return "", ErrInvalidArtifactTypeFilter
 	}
+	return artifactType, nil
 }
 
 func detectArtifactType(artifact domain.BuildArtifact) domain.ArtifactType {
+	if artifact.ArtifactType != "" {
+		return artifact.ArtifactType
+	}
 	lowerPath := strings.ToLower(strings.TrimSpace(artifact.LogicalPath))
 	lowerContentType := ""
 	if artifact.ContentType != nil {
@@ -139,6 +137,8 @@ func detectArtifactType(artifact domain.BuildArtifact) domain.ArtifactType {
 			return domain.ArtifactTypeNPMPackage
 		}
 		return domain.ArtifactTypeGeneric
+	case lowerContentType == "" && filepath.Ext(lowerPath) == "":
+		return domain.ArtifactTypeUnknown
 	case lowerPath == "" && lowerContentType == "":
 		return domain.ArtifactTypeUnknown
 	default:

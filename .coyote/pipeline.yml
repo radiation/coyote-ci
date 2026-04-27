@@ -61,14 +61,22 @@ steps:
       name: Images
       steps:
         - name: Backend Image
-          run: docker build --build-arg GO_VERSION=1.26.2 -t coyote-ci/backend:latest -f backend/Dockerfile backend
+          run: |
+            mkdir -p artifacts/images
+            docker build --build-arg GO_VERSION=1.26.2 -t coyote-ci/backend:latest -f backend/Dockerfile backend
+            docker save coyote-ci/backend:latest -o artifacts/images/backend-image.tar
           image: docker@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
           timeout_seconds: 600
+          artifacts:
+            - path: artifacts/images/backend-image.tar
+              type: docker_image
         - name: Frontend Image
-          run: docker build -t coyote-ci/frontend:latest -f frontend/Dockerfile frontend
+          run: |
+            mkdir -p artifacts/images
+            docker build -t coyote-ci/frontend:latest -f frontend/Dockerfile frontend
+            docker save coyote-ci/frontend:latest -o artifacts/images/frontend-image.tar
           image: docker@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
           timeout_seconds: 600
-artifacts:
-  - backend/dist/coyote-server
-  - backend/dist/coyote-worker
-  - frontend/dist/**
+          artifacts:
+            - path: artifacts/images/frontend-image.tar
+              type: docker_image

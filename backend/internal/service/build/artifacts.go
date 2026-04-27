@@ -144,6 +144,10 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 
 	workspacePath := filepath.Join(s.artifactWorkspaceRoot, strings.TrimSpace(buildID))
 	provider := s.storageProviderName()
+	stepTypeHints, err := stepArtifactTypeHintsFromBuild(build)
+	if err != nil {
+		return nil, fmt.Errorf("resolving step artifact declarations: %w", err)
+	}
 
 	// Step-level artifact collection: preferred path.
 	steps, err := s.buildRepo.GetStepsByBuildID(ctx, buildID)
@@ -156,7 +160,8 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 		}
 		log.Printf("artifact step collection start: build_id=%s step_id=%s step_name=%s patterns=%q", buildID, step.ID, step.Name, step.ArtifactPaths)
 		var collected []string
-		collected, err = s.collectAndPersistArtifacts(ctx, buildID, &step.ID, provider, workspacePath, step.ArtifactPaths, identityKeys)
+		declarations := declarationsForPatterns(step.ArtifactPaths, stepTypeHints[step.StepIndex])
+		collected, err = s.collectAndPersistArtifacts(ctx, buildID, &step.ID, provider, workspacePath, declarations, identityKeys)
 		if err != nil {
 			return nil, err
 		}
@@ -166,13 +171,13 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 	}
 
 	// Pipeline-level artifact collection: backward compatibility.
-	patterns, err := artifactPatternsFromBuild(build)
+	declarations, err := artifactDeclarationsFromBuild(build)
 	if err != nil {
 		return nil, fmt.Errorf("resolving build artifact declarations: %w", err)
 	}
-	if len(patterns) > 0 {
-		log.Printf("artifact pipeline collection start: build_id=%s patterns=%q", buildID, patterns)
-		collected, err := s.collectAndPersistArtifacts(ctx, buildID, nil, provider, workspacePath, patterns, identityKeys)
+	if len(declarations) > 0 {
+		log.Printf("artifact pipeline collection start: build_id=%s patterns=%q", buildID, declarationPaths(declarations))
+		collected, err := s.collectAndPersistArtifacts(ctx, buildID, nil, provider, workspacePath, declarations, identityKeys)
 		if err != nil {
 			return nil, err
 		}
@@ -185,19 +190,20 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 }
 
 // collectAndPersistArtifacts collects artifacts from the workspace and persists metadata.
-func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID string, stepID *string, provider domain.StorageProvider, workspacePath string, patterns []string, identityKeys map[string]struct{}) ([]string, error) {
+func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID string, stepID *string, provider domain.StorageProvider, workspacePath string, declarations []domain.ArtifactDeclaration, identityKeys map[string]struct{}) ([]string, error) {
 	stepIDStr := ""
 	if stepID != nil {
 		stepIDStr = *stepID
 	}
 
 	skipPaths := skipPathsForScope(identityKeys, stepID)
+	artifactTypes := declarationTypeIndex(declarations)
 
 	collectResult, err := s.artifactCollector.Collect(ctx, artifact.CollectRequest{
 		BuildID:          buildID,
 		StepID:           stepIDStr,
 		WorkspacePath:    workspacePath,
-		Patterns:         patterns,
+		Patterns:         declarationPaths(declarations),
 		SkipLogicalPaths: skipPaths,
 	})
 	if err != nil {
@@ -216,6 +222,7 @@ func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID s
 			BuildID:         buildID,
 			StepID:          stepID,
 			LogicalPath:     item.LogicalPath,
+			ArtifactType:    artifactTypes[item.LogicalPath],
 			StorageKey:      item.StorageKey,
 			StorageProvider: provider,
 			SizeBytes:       item.SizeBytes,
@@ -289,7 +296,67 @@ func artifactStoreRootForLog(store artifact.Store) string {
 	return ""
 }
 
-func artifactPatternsFromBuild(build domain.Build) ([]string, error) {
+func declarationPaths(declarations []domain.ArtifactDeclaration) []string {
+	paths := make([]string, 0, len(declarations))
+	for _, declaration := range declarations {
+		paths = append(paths, strings.TrimSpace(declaration.Path))
+	}
+	return paths
+}
+
+func declarationTypeIndex(declarations []domain.ArtifactDeclaration) map[string]domain.ArtifactType {
+	indexed := make(map[string]domain.ArtifactType, len(declarations))
+	for _, declaration := range declarations {
+		trimmedPath := strings.TrimSpace(declaration.Path)
+		if trimmedPath == "" || declaration.Type == "" {
+			continue
+		}
+		indexed[trimmedPath] = declaration.Type
+	}
+	return indexed
+}
+
+func declarationsForPatterns(patterns []string, typeHints map[string]domain.ArtifactType) []domain.ArtifactDeclaration {
+	declarations := make([]domain.ArtifactDeclaration, 0, len(patterns))
+	for _, pattern := range patterns {
+		trimmed := strings.TrimSpace(pattern)
+		if trimmed == "" {
+			continue
+		}
+		declarations = append(declarations, domain.ArtifactDeclaration{
+			Path: trimmed,
+			Type: typeHints[trimmed],
+		})
+	}
+	return declarations
+}
+
+func stepArtifactTypeHintsFromBuild(build domain.Build) (map[int]map[string]domain.ArtifactType, error) {
+	if build.PipelineConfigYAML == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*build.PipelineConfigYAML)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	pipelineFile, err := pipeline.ParseAndValidate([]byte(trimmed))
+	if err != nil {
+		return nil, err
+	}
+	resolved := pipeline.Resolve(pipelineFile)
+	hints := make(map[int]map[string]domain.ArtifactType, len(resolved.Steps))
+	for index, step := range resolved.Steps {
+		declared := declarationTypeIndex(step.ArtifactDecls)
+		if len(declared) == 0 {
+			continue
+		}
+		hints[index] = declared
+	}
+	return hints, nil
+}
+
+func artifactDeclarationsFromBuild(build domain.Build) ([]domain.ArtifactDeclaration, error) {
 	if build.PipelineConfigYAML == nil {
 		return nil, nil
 	}
@@ -303,7 +370,7 @@ func artifactPatternsFromBuild(build domain.Build) ([]string, error) {
 		return nil, err
 	}
 
-	patterns := append([]string(nil), pipelineFile.Artifacts.Paths...)
+	declarations := append([]domain.ArtifactDeclaration(nil), pipelineFile.Artifacts.Declarations...)
 	if build.PipelineSource != nil && *build.PipelineSource == pipelineSourceRepo && build.PipelinePath != nil {
 		normalizedPipelinePath := path.Clean(filepath.ToSlash(strings.TrimSpace(*build.PipelinePath)))
 		if normalizedPipelinePath != pipelineFilePath {
@@ -312,16 +379,24 @@ func artifactPatternsFromBuild(build domain.Build) ([]string, error) {
 				pipelineDir = "."
 			}
 			if pipelineDir != "." {
-				for i, patternValue := range patterns {
-					normalized := path.Clean(path.Join(pipelineDir, strings.TrimSpace(patternValue)))
+				for index, declaration := range declarations {
+					normalized := path.Clean(path.Join(pipelineDir, strings.TrimSpace(declaration.Path)))
 					if normalized == ".." || strings.HasPrefix(normalized, "../") {
 						return nil, fmt.Errorf("artifact path escapes repository root")
 					}
-					patterns[i] = normalized
+					declarations[index].Path = normalized
 				}
 			}
 		}
 	}
 
-	return patterns, nil
+	return declarations, nil
+}
+
+func artifactPatternsFromBuild(build domain.Build) ([]string, error) {
+	declarations, err := artifactDeclarationsFromBuild(build)
+	if err != nil {
+		return nil, err
+	}
+	return declarationPaths(declarations), nil
 }

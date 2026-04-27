@@ -147,6 +147,64 @@ artifacts:
 	}
 }
 
+func TestArtifactDeclarationsFromBuild_PreservesExplicitType(t *testing.T) {
+	source := pipelineSourceInline
+	yaml := `
+version: 1
+steps:
+  - name: run
+    run: ./scripts/run.sh
+artifacts:
+  - path: images/backend-image.tar
+    type: docker_image
+`
+
+	declarations, err := artifactDeclarationsFromBuild(domain.Build{
+		PipelineConfigYAML: &yaml,
+		PipelineSource:     &source,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(declarations) != 1 {
+		t.Fatalf("expected 1 declaration, got %d", len(declarations))
+	}
+	if declarations[0].Type != domain.ArtifactTypeDockerImage {
+		t.Fatalf("expected docker_image type, got %q", declarations[0].Type)
+	}
+}
+
+func TestStepArtifactTypeHintsFromBuild_UsesResolvedStepOrder(t *testing.T) {
+	yaml := `
+version: 1
+steps:
+  - group:
+      name: build
+      steps:
+        - name: frontend
+          run: npm run build
+          artifacts:
+            - path: frontend-image.tar
+              type: docker_image
+        - name: backend
+          run: go build ./...
+          artifacts:
+            - path: backend/dist/coyote-server
+              type: unknown
+`
+
+	hints, err := stepArtifactTypeHintsFromBuild(domain.Build{PipelineConfigYAML: &yaml})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hints[0]["frontend-image.tar"] != domain.ArtifactTypeDockerImage {
+		t.Fatalf("expected docker_image hint for resolved step 0, got %#v", hints[0])
+	}
+	if hints[1]["backend/dist/coyote-server"] != domain.ArtifactTypeUnknown {
+		t.Fatalf("expected unknown hint for resolved step 1, got %#v", hints[1])
+	}
+}
+
 func TestArtifactIdentityKey(t *testing.T) {
 	stepA := "step-a"
 	stepB := "step-b"

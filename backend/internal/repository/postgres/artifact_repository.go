@@ -18,7 +18,7 @@ func NewArtifactRepository(db *sql.DB) *ArtifactRepository {
 	return &ArtifactRepository{db: db}
 }
 
-const artifactColumns = `id, build_id, step_id, logical_path, storage_key, storage_provider, size_bytes, content_type, checksum_sha256, created_at`
+const artifactColumns = `id, build_id, step_id, logical_path, artifact_type, storage_key, storage_provider, size_bytes, content_type, checksum_sha256, created_at`
 
 func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
 	const query = `
@@ -27,6 +27,7 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 			build_id,
 			step_id,
 			logical_path,
+			artifact_type,
 			storage_key,
 			storage_provider,
 			size_bytes,
@@ -34,7 +35,7 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 			checksum_sha256,
 			created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, NOW()))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()))
 		RETURNING ` + artifactColumns
 
 	var createdAt any
@@ -47,6 +48,11 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 		provider = string(domain.StorageProviderFilesystem)
 	}
 
+	var artifactType any
+	if artifact.ArtifactType != "" {
+		artifactType = string(artifact.ArtifactType)
+	}
+
 	return scanArtifact(r.db.QueryRowContext(
 		ctx,
 		query,
@@ -54,6 +60,7 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 		artifact.BuildID,
 		artifact.StepID,
 		artifact.LogicalPath,
+		artifactType,
 		artifact.StorageKey,
 		provider,
 		artifact.SizeBytes,
@@ -182,6 +189,7 @@ func scanArtifactRows(rows *sql.Rows, queryErr error) ([]domain.BuildArtifact, e
 func scanArtifact(scanner rowScanner) (domain.BuildArtifact, error) {
 	var artifact domain.BuildArtifact
 	var stepID sql.NullString
+	var artifactType sql.NullString
 	var storageProvider string
 	var contentType sql.NullString
 	var checksum sql.NullString
@@ -191,6 +199,7 @@ func scanArtifact(scanner rowScanner) (domain.BuildArtifact, error) {
 		&artifact.BuildID,
 		&stepID,
 		&artifact.LogicalPath,
+		&artifactType,
 		&artifact.StorageKey,
 		&storageProvider,
 		&artifact.SizeBytes,
@@ -205,6 +214,9 @@ func scanArtifact(scanner rowScanner) (domain.BuildArtifact, error) {
 	if stepID.Valid {
 		v := stepID.String
 		artifact.StepID = &v
+	}
+	if artifactType.Valid {
+		artifact.ArtifactType = domain.ArtifactType(artifactType.String)
 	}
 	artifact.StorageProvider = domain.StorageProvider(storageProvider)
 	if contentType.Valid {
@@ -222,6 +234,7 @@ func scanArtifact(scanner rowScanner) (domain.BuildArtifact, error) {
 func scanArtifactBrowseRecord(scanner rowScanner) (domain.ArtifactBrowseRecord, error) {
 	var record domain.ArtifactBrowseRecord
 	var artifactStepID sql.NullString
+	var artifactType sql.NullString
 	var artifactStorageProvider string
 	var artifactContentType sql.NullString
 	var artifactChecksum sql.NullString
@@ -235,6 +248,7 @@ func scanArtifactBrowseRecord(scanner rowScanner) (domain.ArtifactBrowseRecord, 
 		&record.Artifact.BuildID,
 		&artifactStepID,
 		&record.Artifact.LogicalPath,
+		&artifactType,
 		&record.Artifact.StorageKey,
 		&artifactStorageProvider,
 		&record.Artifact.SizeBytes,
@@ -291,6 +305,9 @@ func scanArtifactBrowseRecord(scanner rowScanner) (domain.ArtifactBrowseRecord, 
 	if artifactStepID.Valid {
 		v := artifactStepID.String
 		record.Artifact.StepID = &v
+	}
+	if artifactType.Valid {
+		record.Artifact.ArtifactType = domain.ArtifactType(artifactType.String)
 	}
 	record.Artifact.StorageProvider = domain.StorageProvider(artifactStorageProvider)
 	if artifactContentType.Valid {

@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type ArtifactType string
 
@@ -10,6 +13,21 @@ const (
 	ArtifactTypeGeneric     ArtifactType = "generic"
 	ArtifactTypeUnknown     ArtifactType = "unknown"
 )
+
+func ParseArtifactType(value string) (ArtifactType, bool) {
+	switch ArtifactType(strings.TrimSpace(value)) {
+	case ArtifactTypeDockerImage:
+		return ArtifactTypeDockerImage, true
+	case ArtifactTypeNPMPackage:
+		return ArtifactTypeNPMPackage, true
+	case ArtifactTypeGeneric:
+		return ArtifactTypeGeneric, true
+	case ArtifactTypeUnknown:
+		return ArtifactTypeUnknown, true
+	default:
+		return "", false
+	}
+}
 
 type ArtifactBrowseRecord struct {
 	Artifact BuildArtifact
