@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -71,6 +72,59 @@ func (r *ArtifactRepository) ListByBuildID(ctx context.Context, buildID string) 
 	`
 
 	return scanArtifactRows(r.db.QueryContext(ctx, query, buildID))
+}
+
+func (r *ArtifactRepository) ListForBrowse(ctx context.Context, query string) ([]domain.ArtifactBrowseRecord, error) {
+	selectColumns := `
+		` + qualifyColumns("a", artifactColumns) + `,
+		` + qualifyColumns("b", buildListColumns) + `,
+		s.id,
+		s.step_index,
+		s.name
+	`
+	browseQuery := `
+		SELECT ` + selectColumns + `
+		FROM build_artifacts a
+		JOIN builds b ON b.id = a.build_id
+		LEFT JOIN build_steps s ON s.id = a.step_id
+		WHERE (
+			$1 = ''
+			OR a.logical_path ILIKE $2
+			OR b.project_id ILIKE $2
+			OR COALESCE(b.job_id::text, '') ILIKE $2
+			OR EXISTS (
+				SELECT 1
+				FROM version_tags vt
+				WHERE vt.artifact_id = a.id
+				  AND vt.version_text ILIKE $2
+			)
+		)
+		ORDER BY a.created_at DESC, a.logical_path ASC, b.created_at DESC
+	`
+
+	trimmedQuery := strings.TrimSpace(query)
+	likeQuery := "%" + trimmedQuery + "%"
+	rows, err := r.db.QueryContext(ctx, browseQuery, trimmedQuery, likeQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	records := make([]domain.ArtifactBrowseRecord, 0)
+	for rows.Next() {
+		record, scanErr := scanArtifactBrowseRecord(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return records, nil
 }
 
 func (r *ArtifactRepository) ListByStepID(ctx context.Context, stepID string) ([]domain.BuildArtifact, error) {
@@ -163,4 +217,99 @@ func scanArtifact(scanner rowScanner) (domain.BuildArtifact, error) {
 	}
 
 	return artifact, nil
+}
+
+func scanArtifactBrowseRecord(scanner rowScanner) (domain.ArtifactBrowseRecord, error) {
+	var record domain.ArtifactBrowseRecord
+	var artifactStepID sql.NullString
+	var artifactStorageProvider string
+	var artifactContentType sql.NullString
+	var artifactChecksum sql.NullString
+	var buildNulls buildNullFields
+	var stepID sql.NullString
+	var stepIndex sql.NullInt64
+	var stepName sql.NullString
+
+	err := scanner.Scan(
+		&record.Artifact.ID,
+		&record.Artifact.BuildID,
+		&artifactStepID,
+		&record.Artifact.LogicalPath,
+		&record.Artifact.StorageKey,
+		&artifactStorageProvider,
+		&record.Artifact.SizeBytes,
+		&artifactContentType,
+		&artifactChecksum,
+		&record.Artifact.CreatedAt,
+		&record.Build.ID,
+		&record.Build.BuildNumber,
+		&record.Build.ProjectID,
+		&buildNulls.jobID,
+		&buildNulls.status,
+		&record.Build.CreatedAt,
+		&buildNulls.queuedAt,
+		&buildNulls.startedAt,
+		&buildNulls.finishedAt,
+		&record.Build.CurrentStepIndex,
+		&record.Build.AttemptNumber,
+		&buildNulls.rerunOfBuildID,
+		&buildNulls.rerunFromStepIdx,
+		&buildNulls.errorMessage,
+		&buildNulls.pipelineName,
+		&buildNulls.pipelineSource,
+		&buildNulls.pipelinePath,
+		&buildNulls.repoURL,
+		&buildNulls.ref,
+		&buildNulls.commitSHA,
+		&buildNulls.triggerKind,
+		&buildNulls.scmProvider,
+		&buildNulls.eventType,
+		&buildNulls.triggerRepositoryOwner,
+		&buildNulls.triggerRepositoryName,
+		&buildNulls.triggerRepositoryURL,
+		&buildNulls.triggerRawRef,
+		&buildNulls.triggerRef,
+		&buildNulls.triggerRefType,
+		&buildNulls.triggerRefName,
+		&buildNulls.triggerDeleted,
+		&buildNulls.triggerCommitSHA,
+		&buildNulls.triggerDeliveryID,
+		&buildNulls.triggerActor,
+		&buildNulls.requestedImageRef,
+		&buildNulls.resolvedImageRef,
+		&buildNulls.imageSourceKind,
+		&buildNulls.managedImageID,
+		&buildNulls.managedImageVersionID,
+		&stepID,
+		&stepIndex,
+		&stepName,
+	)
+	if err != nil {
+		return domain.ArtifactBrowseRecord{}, err
+	}
+
+	if artifactStepID.Valid {
+		v := artifactStepID.String
+		record.Artifact.StepID = &v
+	}
+	record.Artifact.StorageProvider = domain.StorageProvider(artifactStorageProvider)
+	if artifactContentType.Valid {
+		v := artifactContentType.String
+		record.Artifact.ContentType = &v
+	}
+	if artifactChecksum.Valid {
+		v := artifactChecksum.String
+		record.Artifact.ChecksumSHA256 = &v
+	}
+	buildNulls.applyTo(&record.Build)
+	if stepID.Valid {
+		record.Step = &domain.BuildStep{
+			ID:        stepID.String,
+			BuildID:   record.Build.ID,
+			StepIndex: int(stepIndex.Int64),
+			Name:      stepName.String,
+		}
+	}
+
+	return record, nil
 }

@@ -709,6 +709,208 @@ h3 {
   flex: 1 1 auto;
 }
 
+.artifact-filters-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(180px, 1fr);
+  gap: 12px;
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid #d9dee8;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fcfdff 0%, #f4f7fb 100%);
+}
+
+.artifact-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.artifact-filter-field input,
+.artifact-filter-field select {
+  border: 1px solid #c8d0da;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fff;
+  font: inherit;
+}
+
+.artifact-browser-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.artifact-card {
+  border: 1px solid #d9dee8;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.04);
+  overflow: hidden;
+}
+
+.artifact-card-toggle {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 18px 20px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.artifact-card-toggle:hover {
+  background: #f8fafc;
+}
+
+.artifact-card-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.artifact-card-title {
+  margin: 0;
+  font-size: 1rem;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+}
+
+.artifact-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.artifact-type-pill,
+.artifact-secondary-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.artifact-type-pill {
+  background: #deecf8;
+  color: #12324a;
+}
+
+.artifact-secondary-pill {
+  background: #eef2f7;
+  color: #4b5563;
+}
+
+.artifact-card-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  color: #4b5563;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.artifact-card-body {
+  padding: 0 20px 20px;
+  border-top: 1px solid #e5e7eb;
+  background: linear-gradient(180deg, #ffffff 0%, #f9fbfd 100%);
+}
+
+.artifact-detail-grid,
+.artifact-version-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.artifact-detail-grid div,
+.artifact-version-meta-grid div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.artifact-detail-grid strong,
+.artifact-version-meta-grid strong {
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #667085;
+}
+
+.artifact-version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.artifact-version-row {
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.artifact-version-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.artifact-version-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.artifact-version-subtle {
+  margin-top: 4px;
+}
+
+.artifact-version-actions {
+  display: flex;
+  align-items: center;
+}
+
+.artifact-version-meta-full {
+  grid-column: 1 / -1;
+}
+
+.artifact-mono {
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 0.85rem;
+}
+
+.artifact-empty-state {
+  margin-top: 8px;
+}
+
+@media (max-width: 900px) {
+  .artifact-filters-panel,
+  .artifact-detail-grid,
+  .artifact-version-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .artifact-card-heading,
+  .artifact-version-header {
+    flex-direction: column;
+  }
+
+  .artifact-card-summary {
+    align-items: flex-start;
+  }
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

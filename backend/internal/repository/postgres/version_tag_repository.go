@@ -210,14 +210,19 @@ func (r *VersionTagRepository) validateManagedImageVersionTargets(ctx context.Co
 	if len(managedImageVersionIDs) == 0 {
 		return nil
 	}
-	query, args := stringListQuery(`
+	placeholders := make([]string, 0, len(managedImageVersionIDs))
+	args := make([]any, 0, len(managedImageVersionIDs)+1)
+	for index, managedImageVersionID := range managedImageVersionIDs {
+		placeholders = append(placeholders, "$"+strconv.Itoa(index+1))
+		args = append(args, managedImageVersionID)
+	}
+	query := fmt.Sprintf(`
 		SELECT managed_image_versions.id
 		FROM managed_image_versions
 		JOIN managed_images ON managed_images.id = managed_image_versions.managed_image_id
 		JOIN jobs ON jobs.project_id = managed_images.project_id
 		WHERE managed_image_versions.id IN (%s) AND jobs.id = $%d
-	`, 1, managedImageVersionIDs)
-	query = fmt.Sprintf(query, len(args)+1)
+	`, strings.Join(placeholders, ", "), len(args)+1)
 	args = append(args, jobID)
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {

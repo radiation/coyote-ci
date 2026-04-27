@@ -1,5 +1,75 @@
 basePath: /api
 definitions:
+  api.ArtifactBrowseEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.ArtifactBrowseResponse'
+    type: object
+  api.ArtifactBrowseItemResponse:
+    properties:
+      artifact_type:
+        type: string
+      job_id:
+        type: string
+      key:
+        type: string
+      latest_created_at:
+        type: string
+      path:
+        type: string
+      project_id:
+        type: string
+      versions:
+        items:
+          $ref: '#/definitions/api.ArtifactBrowseVersionResponse'
+        type: array
+    type: object
+  api.ArtifactBrowseResponse:
+    properties:
+      artifacts:
+        items:
+          $ref: '#/definitions/api.ArtifactBrowseItemResponse'
+        type: array
+    type: object
+  api.ArtifactBrowseVersionResponse:
+    properties:
+      artifact_id:
+        type: string
+      build_id:
+        type: string
+      build_number:
+        type: integer
+      build_status:
+        type: string
+      checksum_sha256:
+        type: string
+      content_type:
+        type: string
+      created_at:
+        type: string
+      download_url_path:
+        type: string
+      job_id:
+        type: string
+      path:
+        type: string
+      project_id:
+        type: string
+      size_bytes:
+        type: integer
+      step_id:
+        type: string
+      step_index:
+        type: integer
+      step_name:
+        type: string
+      storage_provider:
+        type: string
+      version_tags:
+        items:
+          $ref: '#/definitions/api.VersionTagResponse'
+        type: array
+    type: object
   api.BuildArtifactResponse:
     properties:
       build_id:
@@ -725,6 +795,42 @@ info:
   title: Coyote CI API
   version: "0.1"
 paths:
+  /artifacts:
+    get:
+      description: Returns logical artifacts grouped with their available versions
+        for artifact repository browsing.
+      parameters:
+      - description: Search artifacts by path, project, job, or version tag
+        in: query
+        name: q
+        type: string
+      - description: Artifact type filter
+        enum:
+        - docker_image
+        - npm_package
+        - generic
+        - unknown
+        in: query
+        name: type
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ArtifactBrowseEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List logical artifacts
+      tags:
+      - artifacts
   /artifacts/{artifactID}/version-tags:
     get:
       description: Returns immutable version tags attached to one artifact.
@@ -1698,6 +1804,24 @@ paths:
       summary: List managed image version tags
       tags:
       - version-tags
+  /readyz:
+    get:
+      description: Returns a readiness response after database connectivity and schema
+        checks succeed.
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: ready
+          schema:
+            type: string
+        "503":
+          description: not ready
+          schema:
+            type: string
+      summary: Readiness check
+      tags:
+      - health
   /webhooks/github:
     post:
       description: Verifies a GitHub webhook signature and triggers builds for matching

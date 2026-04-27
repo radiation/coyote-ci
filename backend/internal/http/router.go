@@ -16,7 +16,7 @@ import (
 // bodies. Requests exceeding this size receive 413 Request Entity Too Large.
 const maxRequestBodySize = 1 << 20 // 1 MiB
 
-func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandler, versionTagHandler *handler.VersionTagHandler, credentialHandler *handler.SourceCredentialHandler, eventHandler *handler.EventHandler, pushEventSecret string) nethttp.Handler {
+func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.ArtifactHandler, jobHandler *handler.JobHandler, versionTagHandler *handler.VersionTagHandler, credentialHandler *handler.SourceCredentialHandler, eventHandler *handler.EventHandler, pushEventSecret string) nethttp.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -66,6 +66,10 @@ func NewRouter(buildHandler *handler.BuildHandler, jobHandler *handler.JobHandle
 				r.Get("/{jobID}/version-tags", versionTagHandler.ListJobVersionTags)
 			}
 		})
+
+		if artifactHandler != nil {
+			r.Get("/artifacts", artifactHandler.ListArtifacts)
+		}
 
 		if versionTagHandler != nil {
 			r.Get("/artifacts/{artifactID}/version-tags", versionTagHandler.ListArtifactVersionTags)

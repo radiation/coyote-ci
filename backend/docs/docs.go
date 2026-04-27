@@ -15,6 +15,58 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/artifacts": {
+            "get": {
+                "description": "Returns logical artifacts grouped with their available versions for artifact repository browsing.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "artifacts"
+                ],
+                "summary": "List logical artifacts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Search artifacts by path, project, job, or version tag",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "docker_image",
+                            "npm_package",
+                            "generic",
+                            "unknown"
+                        ],
+                        "type": "string",
+                        "description": "Artifact type filter",
+                        "name": "type",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ArtifactBrowseEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/artifacts/{artifactID}/version-tags": {
             "get": {
                 "description": "Returns immutable version tags attached to one artifact.",
@@ -1482,6 +1534,32 @@ const docTemplate = `{
                 }
             }
         },
+        "/readyz": {
+            "get": {
+                "description": "Returns a readiness response after database connectivity and schema checks succeed.",
+                "produces": [
+                    "text/plain"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "Readiness check",
+                "responses": {
+                    "200": {
+                        "description": "ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/webhooks/github": {
             "post": {
                 "description": "Verifies a GitHub webhook signature and triggers builds for matching jobs on push events.",
@@ -1534,6 +1612,113 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "api.ArtifactBrowseEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.ArtifactBrowseResponse"
+                }
+            }
+        },
+        "api.ArtifactBrowseItemResponse": {
+            "type": "object",
+            "properties": {
+                "artifact_type": {
+                    "type": "string"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "latest_created_at": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "versions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.ArtifactBrowseVersionResponse"
+                    }
+                }
+            }
+        },
+        "api.ArtifactBrowseResponse": {
+            "type": "object",
+            "properties": {
+                "artifacts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.ArtifactBrowseItemResponse"
+                    }
+                }
+            }
+        },
+        "api.ArtifactBrowseVersionResponse": {
+            "type": "object",
+            "properties": {
+                "artifact_id": {
+                    "type": "string"
+                },
+                "build_id": {
+                    "type": "string"
+                },
+                "build_number": {
+                    "type": "integer"
+                },
+                "build_status": {
+                    "type": "string"
+                },
+                "checksum_sha256": {
+                    "type": "string"
+                },
+                "content_type": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "download_url_path": {
+                    "type": "string"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                },
+                "step_id": {
+                    "type": "string"
+                },
+                "step_index": {
+                    "type": "integer"
+                },
+                "step_name": {
+                    "type": "string"
+                },
+                "storage_provider": {
+                    "type": "string"
+                },
+                "version_tags": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.VersionTagResponse"
+                    }
+                }
+            }
+        },
         "api.BuildArtifactResponse": {
             "type": "object",
             "properties": {

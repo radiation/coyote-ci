@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"expvar"
 	"log"
 	nethttp "net/http"
+	"time"
 
 	docs "github.com/radiation/coyote-ci/backend/docs"
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
@@ -16,6 +19,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	artifactsvc "github.com/radiation/coyote-ci/backend/internal/service/artifact"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	managedimagesvc "github.com/radiation/coyote-ci/backend/internal/service/managedimage"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
@@ -78,6 +82,7 @@ func main() {
 	}
 	logSink := logs.NewPostgresSink(db)
 	versionTagService := versiontagsvc.NewService(versionTagRepo)
+	artifactService := artifactsvc.NewService(artifactRepo)
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, nil, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:      executionJobRepo,
 		ExecutionOutputRepo:   executionJobOutputRepo,
@@ -97,15 +102,42 @@ func main() {
 	webhookService.SetMetrics(webhookMetrics)
 	buildHandler := handler.NewBuildHandler(buildService)
 	buildHandler.SetVersionTagService(versionTagService)
+	artifactHandler := handler.NewArtifactHandler(artifactService)
+	artifactHandler.SetVersionTagService(versionTagService)
 	jobHandler := handler.NewJobHandler(jobService)
 	versionTagHandler := handler.NewVersionTagHandler(versionTagService)
 	credentialHandler := handler.NewSourceCredentialHandler(sourceCredentialService)
 	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, cfg.GitHubWebhookSecret)
+	readyHandler := handler.NewReadinessHandler(handler.ReadinessCheckFunc(func(ctx context.Context) error {
+		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
 
-	router := apphttp.NewRouter(buildHandler, jobHandler, versionTagHandler, credentialHandler, eventHandler, cfg.PushEventSecret)
+		if err := db.PingContext(checkCtx); err != nil {
+			return err
+		}
+
+		const readinessQuery = `
+			SELECT
+				to_regclass('public.goose_db_version') IS NOT NULL
+				AND to_regclass('public.builds') IS NOT NULL
+				AND to_regclass('public.build_jobs') IS NOT NULL
+		`
+		var ready bool
+		if err := db.QueryRowContext(checkCtx, readinessQuery).Scan(&ready); err != nil {
+			return err
+		}
+		if !ready {
+			return errors.New("database schema not ready")
+		}
+		return nil
+	}))
+
+	router := apphttp.NewRouter(buildHandler, artifactHandler, jobHandler, versionTagHandler, credentialHandler, eventHandler, cfg.PushEventSecret)
 	mux := nethttp.NewServeMux()
 	mux.Handle("/debug/vars", expvar.Handler())
 	mux.Handle("/swagger/", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))
+	mux.Handle("/readyz", nethttp.HandlerFunc(readyHandler.Ready))
+	mux.Handle("/api/readyz", nethttp.HandlerFunc(readyHandler.Ready))
 	mux.Handle("/", router)
 
 	addr := ":" + cfg.AppPort
