@@ -144,7 +144,7 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 
 	workspacePath := filepath.Join(s.artifactWorkspaceRoot, strings.TrimSpace(buildID))
 	provider := s.storageProviderName()
-	stepTypeHints, err := stepArtifactTypeHintsFromBuild(build)
+	stepDeclarations, err := stepArtifactDeclarationsFromBuild(build)
 	if err != nil {
 		return nil, fmt.Errorf("resolving step artifact declarations: %w", err)
 	}
@@ -160,7 +160,10 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 		}
 		log.Printf("artifact step collection start: build_id=%s step_id=%s step_name=%s patterns=%q", buildID, step.ID, step.Name, step.ArtifactPaths)
 		var collected []string
-		declarations := declarationsForPatterns(step.ArtifactPaths, stepTypeHints[step.StepIndex])
+		declarations := stepDeclarations[step.StepIndex]
+		if len(declarations) == 0 {
+			declarations = declarationsForPatterns(step.ArtifactPaths, nil)
+		}
 		collected, err = s.collectAndPersistArtifacts(ctx, buildID, &step.ID, provider, workspacePath, declarations, identityKeys)
 		if err != nil {
 			return nil, err
@@ -346,7 +349,7 @@ func declarationsForPatterns(patterns []string, typeHints map[string]domain.Arti
 	return declarations
 }
 
-func stepArtifactTypeHintsFromBuild(build domain.Build) (map[int]map[string]domain.ArtifactType, error) {
+func stepArtifactDeclarationsFromBuild(build domain.Build) (map[int][]domain.ArtifactDeclaration, error) {
 	if build.PipelineConfigYAML == nil {
 		return nil, nil
 	}
@@ -360,15 +363,14 @@ func stepArtifactTypeHintsFromBuild(build domain.Build) (map[int]map[string]doma
 		return nil, err
 	}
 	resolved := pipeline.Resolve(pipelineFile)
-	hints := make(map[int]map[string]domain.ArtifactType, len(resolved.Steps))
+	declarations := make(map[int][]domain.ArtifactDeclaration, len(resolved.Steps))
 	for index, step := range resolved.Steps {
-		declared := declarationTypeIndex(step.ArtifactDecls)
-		if len(declared) == 0 {
+		if len(step.ArtifactDecls) == 0 {
 			continue
 		}
-		hints[index] = declared
+		declarations[index] = append([]domain.ArtifactDeclaration(nil), step.ArtifactDecls...)
 	}
-	return hints, nil
+	return declarations, nil
 }
 
 func artifactDeclarationsFromBuild(build domain.Build) ([]domain.ArtifactDeclaration, error) {
