@@ -18,7 +18,7 @@ func NewArtifactRepository(db *sql.DB) *ArtifactRepository {
 	return &ArtifactRepository{db: db}
 }
 
-const artifactColumns = `id, build_id, step_id, logical_path, artifact_type, storage_key, storage_provider, size_bytes, content_type, checksum_sha256, created_at`
+const artifactColumns = `id, build_id, step_id, artifact_name, logical_path, artifact_type, storage_key, storage_provider, size_bytes, content_type, checksum_sha256, created_at`
 
 func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
 	const query = `
@@ -26,6 +26,7 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 			id,
 			build_id,
 			step_id,
+			artifact_name,
 			logical_path,
 			artifact_type,
 			storage_key,
@@ -35,7 +36,7 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 			checksum_sha256,
 			created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, NOW()))
 		RETURNING ` + artifactColumns
 
 	var createdAt any
@@ -59,6 +60,7 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 		artifact.ID,
 		artifact.BuildID,
 		artifact.StepID,
+		nullableTrimmedString(artifact.Name),
 		artifact.LogicalPath,
 		artifactType,
 		artifact.StorageKey,
@@ -96,6 +98,7 @@ func (r *ArtifactRepository) ListForBrowse(ctx context.Context, query string) ([
 		LEFT JOIN build_steps s ON s.id = a.step_id
 		WHERE (
 			$1 = ''
+			OR COALESCE(a.artifact_name, '') ILIKE $2
 			OR a.logical_path ILIKE $2
 			OR b.project_id ILIKE $2
 			OR COALESCE(b.job_id::text, '') ILIKE $2
@@ -189,6 +192,7 @@ func scanArtifactRows(rows *sql.Rows, queryErr error) ([]domain.BuildArtifact, e
 func scanArtifact(scanner rowScanner) (domain.BuildArtifact, error) {
 	var artifact domain.BuildArtifact
 	var stepID sql.NullString
+	var artifactName sql.NullString
 	var artifactType sql.NullString
 	var storageProvider string
 	var contentType sql.NullString
@@ -198,6 +202,7 @@ func scanArtifact(scanner rowScanner) (domain.BuildArtifact, error) {
 		&artifact.ID,
 		&artifact.BuildID,
 		&stepID,
+		&artifactName,
 		&artifact.LogicalPath,
 		&artifactType,
 		&artifact.StorageKey,
@@ -214,6 +219,9 @@ func scanArtifact(scanner rowScanner) (domain.BuildArtifact, error) {
 	if stepID.Valid {
 		v := stepID.String
 		artifact.StepID = &v
+	}
+	if artifactName.Valid {
+		artifact.Name = artifactName.String
 	}
 	if artifactType.Valid {
 		artifact.ArtifactType = domain.ArtifactType(artifactType.String)
@@ -234,6 +242,7 @@ func scanArtifact(scanner rowScanner) (domain.BuildArtifact, error) {
 func scanArtifactBrowseRecord(scanner rowScanner) (domain.ArtifactBrowseRecord, error) {
 	var record domain.ArtifactBrowseRecord
 	var artifactStepID sql.NullString
+	var artifactName sql.NullString
 	var artifactType sql.NullString
 	var artifactStorageProvider string
 	var artifactContentType sql.NullString
@@ -247,6 +256,7 @@ func scanArtifactBrowseRecord(scanner rowScanner) (domain.ArtifactBrowseRecord, 
 		&record.Artifact.ID,
 		&record.Artifact.BuildID,
 		&artifactStepID,
+		&artifactName,
 		&record.Artifact.LogicalPath,
 		&artifactType,
 		&record.Artifact.StorageKey,
@@ -306,6 +316,9 @@ func scanArtifactBrowseRecord(scanner rowScanner) (domain.ArtifactBrowseRecord, 
 		v := artifactStepID.String
 		record.Artifact.StepID = &v
 	}
+	if artifactName.Valid {
+		record.Artifact.Name = artifactName.String
+	}
 	if artifactType.Valid {
 		record.Artifact.ArtifactType = domain.ArtifactType(artifactType.String)
 	}
@@ -329,4 +342,12 @@ func scanArtifactBrowseRecord(scanner rowScanner) (domain.ArtifactBrowseRecord, 
 	}
 
 	return record, nil
+}
+
+func nullableTrimmedString(value string) any {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
 }

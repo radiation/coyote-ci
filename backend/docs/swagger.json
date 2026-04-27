@@ -1631,6 +1631,9 @@
                 "latest_created_at": {
                     "type": "string"
                 },
+                "name": {
+                    "type": "string"
+                },
                 "path": {
                     "type": "string"
                 },
@@ -1686,6 +1689,9 @@
                 "job_id": {
                     "type": "string"
                 },
+                "name": {
+                    "type": "string"
+                },
                 "path": {
                     "type": "string"
                 },
@@ -1734,6 +1740,9 @@
                     "type": "string"
                 },
                 "id": {
+                    "type": "string"
+                },
+                "name": {
                     "type": "string"
                 },
                 "path": {

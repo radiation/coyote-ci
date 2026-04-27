@@ -1635,6 +1635,9 @@ const docTemplate = `{
                 "latest_created_at": {
                     "type": "string"
                 },
+                "name": {
+                    "type": "string"
+                },
                 "path": {
                     "type": "string"
                 },
@@ -1690,6 +1693,9 @@ const docTemplate = `{
                 "job_id": {
                     "type": "string"
                 },
+                "name": {
+                    "type": "string"
+                },
                 "path": {
                     "type": "string"
                 },
@@ -1738,6 +1744,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "id": {
+                    "type": "string"
+                },
+                "name": {
                     "type": "string"
                 },
                 "path": {

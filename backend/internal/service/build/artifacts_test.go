@@ -174,6 +174,34 @@ artifacts:
 	}
 }
 
+func TestArtifactDeclarationsFromBuild_PreservesExplicitName(t *testing.T) {
+	source := pipelineSourceInline
+	yaml := `
+version: 1
+steps:
+  - name: run
+    run: ./scripts/run.sh
+artifacts:
+  - path: images/backend-image.tar
+    name: coyote-ci/backend
+    type: docker_image
+`
+
+	declarations, err := artifactDeclarationsFromBuild(domain.Build{
+		PipelineConfigYAML: &yaml,
+		PipelineSource:     &source,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(declarations) != 1 {
+		t.Fatalf("expected 1 declaration, got %d", len(declarations))
+	}
+	if declarations[0].Name != "coyote-ci/backend" {
+		t.Fatalf("expected named declaration, got %q", declarations[0].Name)
+	}
+}
+
 func TestStepArtifactTypeHintsFromBuild_UsesResolvedStepOrder(t *testing.T) {
 	yaml := `
 version: 1

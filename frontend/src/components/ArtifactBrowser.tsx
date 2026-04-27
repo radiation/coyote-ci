@@ -45,6 +45,10 @@ function versionContext(version: ArtifactBrowseVersion): string {
   return "Build-level artifact";
 }
 
+function artifactHeading(artifact: ArtifactBrowseItem): string {
+  return artifact.name?.trim() || artifact.path;
+}
+
 export function ArtifactBrowser({
   artifacts,
   isLoading,
@@ -95,7 +99,14 @@ export function ArtifactBrowser({
             >
               <div className="artifact-card-heading">
                 <div>
-                  <h3 className="artifact-card-title">{artifact.path}</h3>
+                  <h3 className="artifact-card-title">
+                    {artifactHeading(artifact)}
+                  </h3>
+                  {artifact.name && artifact.name !== artifact.path && (
+                    <p className="subtle-text artifact-version-subtle">
+                      {artifact.path}
+                    </p>
+                  )}
                   <div className="artifact-card-meta">
                     <span className="artifact-type-pill">
                       {TYPE_LABELS[artifact.artifact_type]}
@@ -124,6 +135,10 @@ export function ArtifactBrowser({
               <div className="artifact-card-body">
                 <div className="artifact-detail-grid">
                   <div>
+                    <strong>Name</strong>
+                    <span>{artifactHeading(artifact)}</span>
+                  </div>
+                  <div>
                     <strong>Type</strong>
                     <span>{TYPE_LABELS[artifact.artifact_type]}</span>
                   </div>
@@ -138,6 +153,10 @@ export function ArtifactBrowser({
                   <div>
                     <strong>Latest Update</strong>
                     <span>{formatTime(artifact.latest_created_at)}</span>
+                  </div>
+                  <div className="artifact-version-meta-full">
+                    <strong>Path</strong>
+                    <span className="artifact-mono">{artifact.path}</span>
                   </div>
                 </div>
 

@@ -67,6 +67,9 @@ func Validate(pf *PipelineFile) error {
 				errs = append(errs, ValidationError{Field: field + ".type", Message: fmt.Sprintf("unsupported artifact type %q", declaration.Type)})
 			}
 		}
+		if strings.TrimSpace(declaration.Name) != "" && pathPatternHasWildcard(trimmed) {
+			errs = append(errs, ValidationError{Field: field + ".name", Message: "artifact name requires an exact path declaration"})
+		}
 	}
 
 	// steps presence
@@ -254,4 +257,8 @@ func validateArtifactPathPattern(pattern string) error {
 	}
 
 	return nil
+}
+
+func pathPatternHasWildcard(pattern string) bool {
+	return strings.ContainsAny(pattern, "*?[")
 }

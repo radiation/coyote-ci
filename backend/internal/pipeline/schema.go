@@ -62,6 +62,7 @@ type ArtifactDef struct {
 }
 
 type artifactPathObject struct {
+	Name string `yaml:"name,omitempty"`
 	Path string `yaml:"path"`
 	Type string `yaml:"type,omitempty"`
 }
@@ -142,7 +143,7 @@ func parseArtifactDeclaration(node *yaml.Node) (domain.ArtifactDeclaration, erro
 		if err := node.Decode(&obj); err != nil {
 			return domain.ArtifactDeclaration{}, err
 		}
-		declaration := domain.ArtifactDeclaration{Path: obj.Path}
+		declaration := domain.ArtifactDeclaration{Name: obj.Name, Path: obj.Path}
 		if artifactType, ok := domain.ParseArtifactType(obj.Type); ok {
 			declaration.Type = artifactType
 		}

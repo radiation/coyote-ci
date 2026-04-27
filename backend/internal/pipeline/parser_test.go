@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -514,20 +515,21 @@ artifacts:
 }
 
 func TestParseAndResolve_TypedArtifactDeclarations(t *testing.T) {
-	yaml := `
-version: 1
-steps:
-  - name: Build image
-    run: docker build -t app .
-    artifacts:
-      - path: images/backend-image.tar
-        type: docker_image
-      - path: reports/junit.xml
-        type: generic
-artifacts:
-  - path: releases/summary.txt
-    type: generic
-`
+	yaml := strings.Join([]string{
+		"version: 1",
+		"steps:",
+		"  - name: Build image",
+		"    run: docker build -t app .",
+		"    artifacts:",
+		"      - path: images/backend-image.tar",
+		"        name: coyote-ci/backend",
+		"        type: docker_image",
+		"      - path: reports/junit.xml",
+		"        type: generic",
+		"artifacts:",
+		"  - path: releases/summary.txt",
+		"    type: generic",
+	}, "\n")
 
 	pf, err := ParseAndValidate([]byte(yaml))
 	if err != nil {
@@ -539,6 +541,9 @@ artifacts:
 	if pf.Steps[0].Artifacts.Declarations[0].Type != domain.ArtifactTypeDockerImage {
 		t.Fatalf("expected docker_image declaration, got %q", pf.Steps[0].Artifacts.Declarations[0].Type)
 	}
+	if pf.Steps[0].Artifacts.Declarations[0].Name != "coyote-ci/backend" {
+		t.Fatalf("expected named declaration, got %q", pf.Steps[0].Artifacts.Declarations[0].Name)
+	}
 
 	rp := Resolve(pf)
 	if len(rp.Steps[0].ArtifactDecls) != 2 {
@@ -546,6 +551,9 @@ artifacts:
 	}
 	if rp.Steps[0].ArtifactDecls[0].Type != domain.ArtifactTypeDockerImage {
 		t.Fatalf("expected resolved docker_image declaration, got %q", rp.Steps[0].ArtifactDecls[0].Type)
+	}
+	if rp.Steps[0].ArtifactDecls[0].Name != "coyote-ci/backend" {
+		t.Fatalf("expected resolved artifact name, got %q", rp.Steps[0].ArtifactDecls[0].Name)
 	}
 	if len(rp.Artifacts.Declarations) != 1 || rp.Artifacts.Declarations[0].Type != domain.ArtifactTypeGeneric {
 		t.Fatalf("expected one generic pipeline-level declaration, got %#v", rp.Artifacts.Declarations)

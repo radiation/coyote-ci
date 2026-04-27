@@ -69,6 +69,7 @@ steps:
           timeout_seconds: 600
           artifacts:
             - path: artifacts/images/backend-image.tar
+              name: coyote-ci/backend
               type: docker_image
         - name: Frontend Image
           run: |
@@ -79,4 +80,5 @@ steps:
           timeout_seconds: 600
           artifacts:
             - path: artifacts/images/frontend-image.tar
+              name: coyote-ci/frontend
               type: docker_image

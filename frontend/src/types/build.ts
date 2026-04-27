@@ -120,6 +120,7 @@ export interface BuildArtifact {
   id: string;
   build_id: string;
   step_id: string | null;
+  name?: string;
   path: string;
   size_bytes: number;
   content_type: string | null;

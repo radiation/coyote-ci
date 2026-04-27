@@ -82,6 +82,8 @@ func (r *ManagedImageCatalogRepository) CreateVersion(ctx context.Context, versi
 			created_at
 		)
 		VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, $6, $7, $8)
+		ON CONFLICT (managed_image_id, image_digest) DO UPDATE
+		SET image_ref = managed_image_versions.image_ref
 		RETURNING id, managed_image_id, version_label, image_ref, image_digest, dependency_fingerprint, source_repository_url, created_at
 	`
 

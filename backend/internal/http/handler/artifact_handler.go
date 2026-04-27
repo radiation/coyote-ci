@@ -100,6 +100,7 @@ func toArtifactBrowseItemResponse(item domain.ArtifactBrowseItem) api.ArtifactBr
 	}
 	return api.ArtifactBrowseItemResponse{
 		Key:             item.GroupKey,
+		Name:            item.Name,
 		Path:            item.Path,
 		ProjectID:       item.ProjectID,
 		JobID:           item.JobID,
@@ -122,6 +123,7 @@ func toArtifactBrowseVersionResponse(version domain.ArtifactBrowseVersion) api.A
 	}
 	return api.ArtifactBrowseVersionResponse{
 		ArtifactID:      version.Artifact.ID,
+		Name:            version.Artifact.Name,
 		BuildID:         version.Build.ID,
 		BuildNumber:     version.Build.BuildNumber,
 		BuildStatus:     string(version.Build.Status),

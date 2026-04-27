@@ -10,6 +10,7 @@ type ArtifactBrowseResponse struct {
 
 type ArtifactBrowseItemResponse struct {
 	Key             string                          `json:"key"`
+	Name            string                          `json:"name,omitempty"`
 	Path            string                          `json:"path"`
 	ProjectID       string                          `json:"project_id"`
 	JobID           *string                         `json:"job_id,omitempty"`
@@ -20,6 +21,7 @@ type ArtifactBrowseItemResponse struct {
 
 type ArtifactBrowseVersionResponse struct {
 	ArtifactID      string               `json:"artifact_id"`
+	Name            string               `json:"name,omitempty"`
 	BuildID         string               `json:"build_id"`
 	BuildNumber     int64                `json:"build_number"`
 	BuildStatus     string               `json:"build_status"`

@@ -198,6 +198,7 @@ func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID s
 
 	skipPaths := skipPathsForScope(identityKeys, stepID)
 	artifactTypes := declarationTypeIndex(declarations)
+	artifactNames := declarationNameIndex(declarations)
 
 	collectResult, err := s.artifactCollector.Collect(ctx, artifact.CollectRequest{
 		BuildID:          buildID,
@@ -221,6 +222,7 @@ func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID s
 			ID:              item.GeneratedID,
 			BuildID:         buildID,
 			StepID:          stepID,
+			Name:            artifactNames[item.LogicalPath],
 			LogicalPath:     item.LogicalPath,
 			ArtifactType:    artifactTypes[item.LogicalPath],
 			StorageKey:      item.StorageKey,
@@ -312,6 +314,19 @@ func declarationTypeIndex(declarations []domain.ArtifactDeclaration) map[string]
 			continue
 		}
 		indexed[trimmedPath] = declaration.Type
+	}
+	return indexed
+}
+
+func declarationNameIndex(declarations []domain.ArtifactDeclaration) map[string]string {
+	indexed := make(map[string]string, len(declarations))
+	for _, declaration := range declarations {
+		trimmedPath := strings.TrimSpace(declaration.Path)
+		trimmedName := strings.TrimSpace(declaration.Name)
+		if trimmedPath == "" || trimmedName == "" {
+			continue
+		}
+		indexed[trimmedPath] = trimmedName
 	}
 	return indexed
 }

@@ -43,6 +43,7 @@ type ArtifactBrowseVersion struct {
 
 type ArtifactBrowseItem struct {
 	GroupKey        string
+	Name            string
 	Path            string
 	ProjectID       string
 	JobID           *string

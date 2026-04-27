@@ -50,6 +50,7 @@ func (s *Service) ListArtifacts(ctx context.Context, input ListArtifactsInput) (
 		if !ok {
 			item = &domain.ArtifactBrowseItem{
 				GroupKey:        groupKey,
+				Name:            record.Artifact.Name,
 				Path:            record.Artifact.LogicalPath,
 				ProjectID:       record.Build.ProjectID,
 				JobID:           record.Build.JobID,
@@ -64,6 +65,7 @@ func (s *Service) ListArtifacts(ctx context.Context, input ListArtifactsInput) (
 		item.Versions = append(item.Versions, domain.ArtifactBrowseVersion(record))
 		if record.Artifact.CreatedAt.After(item.LatestCreatedAt) {
 			item.LatestCreatedAt = record.Artifact.CreatedAt
+			item.Name = record.Artifact.Name
 			item.ArtifactType = detectArtifactType(record.Artifact)
 		}
 	}

@@ -13,6 +13,8 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"../../../db/migrations/00002_add_build_step_cache_config.sql",
 		"../../../db/migrations/00003_add_cache_entries.sql",
 		"../../../db/migrations/00008_add_version_tags.sql",
+		"../../../db/migrations/00010_add_build_artifact_types.sql",
+		"../../../db/migrations/00011_add_build_artifact_names.sql",
 	}
 
 	var builder strings.Builder
@@ -49,6 +51,7 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"started_at",
 		"finished_at",
 		"CREATE TABLE IF NOT EXISTS build_artifacts",
+		"artifact_name",
 		"logical_path",
 		"storage_key",
 		"CREATE TABLE IF NOT EXISTS cache_entries",

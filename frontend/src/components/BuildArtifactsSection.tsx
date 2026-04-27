@@ -31,7 +31,7 @@ function ArtifactTable({
     <table className="table artifacts-table">
       <thead>
         <tr>
-          <th>Path</th>
+          <th>Artifact</th>
           <th>Size</th>
           <th>Version Tags</th>
           <th>Created</th>
@@ -41,7 +41,12 @@ function ArtifactTable({
       <tbody>
         {items.map((item) => (
           <tr key={item.id}>
-            <td className="artifact-path">{item.path}</td>
+            <td className="artifact-path">
+              <div>{item.name?.trim() || item.path}</div>
+              {item.name && item.name !== item.path && (
+                <div className="subtle-text artifact-mono">{item.path}</div>
+              )}
+            </td>
             <td>{formatFileSize(item.size_bytes)}</td>
             <td>
               <VersionTagEditor

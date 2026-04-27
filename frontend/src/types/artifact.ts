@@ -8,6 +8,7 @@ export type ArtifactType =
 
 export interface ArtifactBrowseVersion {
   artifact_id: string;
+  name?: string;
   build_id: string;
   build_number: number;
   build_status: BuildStatus;
@@ -28,6 +29,7 @@ export interface ArtifactBrowseVersion {
 
 export interface ArtifactBrowseItem {
   key: string;
+  name?: string;
   path: string;
   project_id: string;
   job_id?: string | null;

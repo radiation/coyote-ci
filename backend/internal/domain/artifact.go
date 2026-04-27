@@ -15,6 +15,7 @@ type BuildArtifact struct {
 	ID              string
 	BuildID         string
 	StepID          *string // nullable; set when artifact came from a specific step
+	Name            string
 	LogicalPath     string
 	ArtifactType    ArtifactType
 	StorageKey      string
@@ -28,6 +29,7 @@ type BuildArtifact struct {
 
 // ArtifactDeclaration describes one artifact path declaration from pipeline config.
 type ArtifactDeclaration struct {
+	Name string
 	Path string
 	Type ArtifactType
 }

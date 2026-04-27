@@ -45,6 +45,7 @@ describe("ArtifactsPage", () => {
         return [
           {
             key: "job-1::images/backend-image.tar",
+            name: "coyote-ci/backend",
             path: "images/backend-image.tar",
             project_id: "project-1",
             job_id: "job-1",
@@ -53,6 +54,7 @@ describe("ArtifactsPage", () => {
             versions: [
               {
                 artifact_id: "artifact-docker-1",
+                name: "coyote-ci/backend",
                 build_id: "build-2",
                 build_number: 42,
                 build_status: "success",
@@ -80,6 +82,7 @@ describe("ArtifactsPage", () => {
         return [
           {
             key: "job-1::packages/pkg-a.tgz",
+            name: "coyote-ci/package-a",
             path: "packages/pkg-a.tgz",
             project_id: "project-1",
             job_id: "job-1",
@@ -88,6 +91,7 @@ describe("ArtifactsPage", () => {
             versions: [
               {
                 artifact_id: "artifact-pkg-1",
+                name: "coyote-ci/package-a",
                 build_id: "build-1",
                 build_number: 41,
                 build_status: "success",
@@ -123,6 +127,7 @@ describe("ArtifactsPage", () => {
       return [
         {
           key: "job-1::packages/pkg-a.tgz",
+          name: "coyote-ci/package-a",
           path: "packages/pkg-a.tgz",
           project_id: "project-1",
           job_id: "job-1",
@@ -131,6 +136,7 @@ describe("ArtifactsPage", () => {
           versions: [
             {
               artifact_id: "artifact-pkg-1",
+              name: "coyote-ci/package-a",
               build_id: "build-1",
               build_number: 41,
               build_status: "success",
@@ -162,6 +168,7 @@ describe("ArtifactsPage", () => {
         },
         {
           key: "job-1::images/backend-image.tar",
+          name: "coyote-ci/backend",
           path: "images/backend-image.tar",
           project_id: "project-1",
           job_id: "job-1",
@@ -170,6 +177,7 @@ describe("ArtifactsPage", () => {
           versions: [
             {
               artifact_id: "artifact-docker-1",
+              name: "coyote-ci/backend",
               build_id: "build-2",
               build_number: 42,
               build_status: "success",
@@ -198,12 +206,12 @@ describe("ArtifactsPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText("packages/pkg-a.tgz")).toBeTruthy();
-      expect(screen.getByText("images/backend-image.tar")).toBeTruthy();
+      expect(screen.getByText("coyote-ci/package-a")).toBeTruthy();
+      expect(screen.getByText("coyote-ci/backend")).toBeTruthy();
     });
 
     fireEvent.click(
-      screen.getByRole("button", { name: /packages\/pkg-a.tgz/i }),
+      screen.getByRole("button", { name: /coyote-ci\/package-a/i }),
     );
 
     await waitFor(() => {
@@ -247,11 +255,11 @@ describe("ArtifactsPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText("packages/pkg-a.tgz")).toBeTruthy();
+      expect(screen.getByText("coyote-ci/package-a")).toBeTruthy();
     });
 
     fireEvent.click(
-      screen.getByRole("button", { name: /packages\/pkg-a.tgz/i }),
+      screen.getByRole("button", { name: /coyote-ci\/package-a/i }),
     );
 
     const input = await screen.findByLabelText(
