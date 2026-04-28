@@ -39,6 +39,7 @@ func (s *Service) ListArtifacts(ctx context.Context, input ListArtifactsInput) (
 
 	records, err := s.repo.Browse(ctx, repository.BrowseArtifactsParams{
 		Query:  strings.TrimSpace(input.Query),
+		Type:   wantedType,
 		Limit:  input.Limit,
 		Offset: input.Offset,
 	})
@@ -46,15 +47,7 @@ func (s *Service) ListArtifacts(ctx context.Context, input ListArtifactsInput) (
 		return nil, err
 	}
 
-	items := domain.GroupArtifacts(records)
-	filtered := make([]domain.Artifact, 0, len(items))
-	for _, item := range items {
-		if wantedType != "" && item.ArtifactType != wantedType {
-			continue
-		}
-		filtered = append(filtered, item)
-	}
-	return filtered, nil
+	return domain.GroupArtifacts(records), nil
 }
 
 func parseArtifactType(value string) (domain.ArtifactType, error) {

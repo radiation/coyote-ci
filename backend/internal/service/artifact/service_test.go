@@ -14,8 +14,20 @@ type fakeBrowseRepo struct {
 	err     error
 }
 
-func (r *fakeBrowseRepo) Browse(_ context.Context, _ repository.BrowseArtifactsParams) ([]domain.ArtifactBrowseRecord, error) {
-	return r.records, r.err
+func (r *fakeBrowseRepo) Browse(_ context.Context, params repository.BrowseArtifactsParams) ([]domain.ArtifactBrowseRecord, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	if params.Type == "" {
+		return r.records, nil
+	}
+	filtered := make([]domain.ArtifactBrowseRecord, 0, len(r.records))
+	for _, record := range r.records {
+		if domain.ResolveArtifactType(record.Artifact) == params.Type {
+			filtered = append(filtered, record)
+		}
+	}
+	return filtered, nil
 }
 
 func TestServiceListArtifactsFiltersByType(t *testing.T) {

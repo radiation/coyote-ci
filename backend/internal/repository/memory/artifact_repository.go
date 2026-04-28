@@ -13,10 +13,22 @@ import (
 type ArtifactRepository struct {
 	mu        sync.RWMutex
 	artifacts []domain.BuildArtifact
+	builds    map[string]domain.Build
 }
 
 func NewArtifactRepository() *ArtifactRepository {
 	return &ArtifactRepository{}
+}
+
+func (r *ArtifactRepository) SeedBuilds(builds ...domain.Build) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.builds == nil {
+		r.builds = make(map[string]domain.Build, len(builds))
+	}
+	for _, build := range builds {
+		r.builds[build.ID] = build
+	}
 }
 
 func (r *ArtifactRepository) Create(_ context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
@@ -61,27 +73,62 @@ func (r *ArtifactRepository) Browse(_ context.Context, params repository.BrowseA
 	trimmedQuery := strings.TrimSpace(strings.ToLower(params.Query))
 	records := make([]domain.ArtifactRecord, 0, len(r.artifacts))
 	for _, artifact := range r.artifacts {
-		if trimmedQuery != "" && !strings.Contains(strings.ToLower(artifact.LogicalPath), trimmedQuery) {
+		build := r.builds[artifact.BuildID]
+		if build.ID == "" {
+			build = domain.Build{ID: artifact.BuildID, CreatedAt: artifact.CreatedAt}
+		}
+		if trimmedQuery != "" && !matchesBrowseQuery(trimmedQuery, artifact, build) {
 			continue
 		}
 		records = append(records, domain.ArtifactRecord{
 			Artifact: artifact,
-			Build: domain.Build{
-				ID:        artifact.BuildID,
-				CreatedAt: artifact.CreatedAt,
-			},
+			Build:    build,
 		})
 	}
-	start := params.Offset
-	if start > len(records) {
-		start = len(records)
+
+	items := domain.GroupArtifacts(records)
+	if params.Type != "" {
+		filtered := make([]domain.Artifact, 0, len(items))
+		for _, item := range items {
+			if item.ArtifactType == params.Type {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
 	}
-	end := len(records)
+
+	start := params.Offset
+	if start > len(items) {
+		start = len(items)
+	}
+	end := len(items)
 	if params.Limit > 0 && start+params.Limit < end {
 		end = start + params.Limit
 	}
-	records = records[start:end]
-	return records, nil
+
+	out := make([]domain.ArtifactRecord, 0)
+	for _, item := range items[start:end] {
+		for _, version := range item.Versions {
+			out = append(out, domain.ArtifactRecord(version))
+		}
+	}
+	return out, nil
+}
+
+func matchesBrowseQuery(query string, artifact domain.BuildArtifact, build domain.Build) bool {
+	if strings.Contains(strings.ToLower(strings.TrimSpace(artifact.Name)), query) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(strings.TrimSpace(artifact.LogicalPath)), query) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(strings.TrimSpace(build.ProjectID)), query) {
+		return true
+	}
+	if build.JobID != nil && strings.Contains(strings.ToLower(strings.TrimSpace(*build.JobID)), query) {
+		return true
+	}
+	return false
 }
 
 func (r *ArtifactRepository) GetByID(_ context.Context, buildID string, artifactID string) (domain.BuildArtifact, error) {
