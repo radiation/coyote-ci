@@ -241,7 +241,7 @@ steps:
 	}
 }
 
-func TestArtifactIdentityKey(t *testing.T) {
+func TestArtifactInstanceScopeKey(t *testing.T) {
 	stepA := "step-a"
 	stepB := "step-b"
 
@@ -257,7 +257,7 @@ func TestArtifactIdentityKey(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := artifactIdentityKey(tc.stepID, tc.path)
+			got := artifactInstanceScopeKey(tc.stepID, tc.path)
 			if got != tc.expected {
 				t.Fatalf("expected %q, got %q", tc.expected, got)
 			}

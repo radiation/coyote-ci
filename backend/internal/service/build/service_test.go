@@ -537,8 +537,8 @@ func (r *fakeArtifactRepository) ListByBuildID(_ context.Context, buildID string
 	return out, nil
 }
 
-func (r *fakeArtifactRepository) ListForBrowse(_ context.Context, query string) ([]domain.ArtifactBrowseRecord, error) {
-	trimmedQuery := strings.TrimSpace(strings.ToLower(query))
+func (r *fakeArtifactRepository) Browse(_ context.Context, params repository.BrowseArtifactsParams) ([]domain.ArtifactBrowseRecord, error) {
+	trimmedQuery := strings.TrimSpace(strings.ToLower(params.Query))
 	out := make([]domain.ArtifactBrowseRecord, 0)
 	for buildID, items := range r.artifacts {
 		for _, item := range items {
@@ -553,7 +553,23 @@ func (r *fakeArtifactRepository) ListForBrowse(_ context.Context, query string) 
 			})
 		}
 	}
-	return out, nil
+	grouped := domain.GroupArtifacts(out)
+	start := params.Offset
+	if start > len(grouped) {
+		start = len(grouped)
+	}
+	end := len(grouped)
+	if params.Limit > 0 && start+params.Limit < end {
+		end = start + params.Limit
+	}
+	grouped = grouped[start:end]
+	var paged []domain.ArtifactBrowseRecord
+	for _, item := range grouped {
+		for _, v := range item.Versions {
+			paged = append(paged, domain.ArtifactBrowseRecord(v))
+		}
+	}
+	return paged, nil
 }
 
 func (r *fakeArtifactRepository) GetByID(_ context.Context, buildID string, artifactID string) (domain.BuildArtifact, error) {

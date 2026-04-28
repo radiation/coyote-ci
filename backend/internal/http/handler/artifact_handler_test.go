@@ -18,26 +18,12 @@ import (
 type fakeArtifactBrowseRepo struct {
 	records []domain.ArtifactBrowseRecord
 	err     error
+	params  []repository.BrowseArtifactsParams
 }
 
-func (r *fakeArtifactBrowseRepo) Create(_ context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
-	return artifact, nil
-}
-
-func (r *fakeArtifactBrowseRepo) ListByBuildID(_ context.Context, _ string) ([]domain.BuildArtifact, error) {
-	return nil, nil
-}
-
-func (r *fakeArtifactBrowseRepo) ListForBrowse(_ context.Context, _ string) ([]domain.ArtifactBrowseRecord, error) {
+func (r *fakeArtifactBrowseRepo) Browse(_ context.Context, params repository.BrowseArtifactsParams) ([]domain.ArtifactBrowseRecord, error) {
+	r.params = append(r.params, params)
 	return r.records, r.err
-}
-
-func (r *fakeArtifactBrowseRepo) GetByID(_ context.Context, _ string, _ string) (domain.BuildArtifact, error) {
-	return domain.BuildArtifact{}, repository.ErrArtifactNotFound
-}
-
-func (r *fakeArtifactBrowseRepo) ListByStepID(_ context.Context, _ string) ([]domain.BuildArtifact, error) {
-	return nil, nil
 }
 
 func TestArtifactHandlerListArtifacts(t *testing.T) {
@@ -125,5 +111,33 @@ func TestArtifactHandlerListArtifactsRejectsInvalidType(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestArtifactHandlerListArtifactsForwardsPaginationParams(t *testing.T) {
+	repo := &fakeArtifactBrowseRepo{}
+	handler := NewArtifactHandler(artifactsvc.NewService(repo))
+	req := httptest.NewRequest(http.MethodGet, "/artifacts?q=pkg&type=npm_package&limit=5&offset=10", nil)
+	w := httptest.NewRecorder()
+
+	handler.ListArtifacts(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(repo.params) != 1 {
+		t.Fatalf("expected one browse call, got %d", len(repo.params))
+	}
+	if repo.params[0].Query != "pkg" {
+		t.Fatalf("expected query pkg, got %q", repo.params[0].Query)
+	}
+	if repo.params[0].Type != domain.ArtifactTypeNPMPackage {
+		t.Fatalf("expected npm_package type, got %q", repo.params[0].Type)
+	}
+	if repo.params[0].Limit != 5 {
+		t.Fatalf("expected limit 5, got %d", repo.params[0].Limit)
+	}
+	if repo.params[0].Offset != 10 {
+		t.Fatalf("expected offset 10, got %d", repo.params[0].Offset)
 	}
 }

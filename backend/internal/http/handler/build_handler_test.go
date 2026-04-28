@@ -53,7 +53,7 @@ func (r *fakeArtifactRepo) ListByBuildID(_ context.Context, buildID string) ([]d
 	return out, nil
 }
 
-func (r *fakeArtifactRepo) ListForBrowse(_ context.Context, _ string) ([]domain.ArtifactBrowseRecord, error) {
+func (r *fakeArtifactRepo) Browse(_ context.Context, _ repository.BrowseArtifactsParams) ([]domain.ArtifactBrowseRecord, error) {
 	return nil, nil
 }
 

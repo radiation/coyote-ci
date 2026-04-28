@@ -138,7 +138,7 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 	identityKeys := make(map[string]struct{}, len(existing))
 	allLogicalPaths := make(map[string]struct{}, len(existing))
 	for _, item := range existing {
-		identityKeys[artifactIdentityKey(item.StepID, item.LogicalPath)] = struct{}{}
+		identityKeys[artifactInstanceScopeKey(item.StepID, item.LogicalPath)] = struct{}{}
 		allLogicalPaths[item.LogicalPath] = struct{}{}
 	}
 
@@ -221,13 +221,17 @@ func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID s
 	var collected []string
 	for _, item := range collectResult.Artifacts {
 		log.Printf("artifact metadata persist: build_id=%s step_id=%s logical_path=%s storage_key=%s size_bytes=%d", buildID, stepIDStr, item.LogicalPath, item.StorageKey, item.SizeBytes)
+		artifactType := artifactTypes[item.LogicalPath]
+		if artifactType == "" {
+			artifactType = domain.InferArtifactType(item.LogicalPath, item.ContentType)
+		}
 		_, err := s.artifactRepo.Create(ctx, domain.BuildArtifact{
 			ID:              item.GeneratedID,
 			BuildID:         buildID,
 			StepID:          stepID,
 			Name:            artifactNames[item.LogicalPath],
 			LogicalPath:     item.LogicalPath,
-			ArtifactType:    artifactTypes[item.LogicalPath],
+			ArtifactType:    artifactType,
 			StorageKey:      item.StorageKey,
 			StorageProvider: provider,
 			SizeBytes:       item.SizeBytes,
@@ -239,7 +243,7 @@ func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID s
 			log.Printf("artifact metadata persistence error: build_id=%s logical_path=%s err=%v", buildID, item.LogicalPath, err)
 			return nil, fmt.Errorf("persisting artifact metadata: %w", err)
 		}
-		identityKeys[artifactIdentityKey(stepID, item.LogicalPath)] = struct{}{}
+		identityKeys[artifactInstanceScopeKey(stepID, item.LogicalPath)] = struct{}{}
 		collected = append(collected, item.LogicalPath)
 	}
 
@@ -263,9 +267,9 @@ func sortedArtifactPaths(values map[string]struct{}) []string {
 	return out
 }
 
-// artifactIdentityKey produces a composite key for artifact deduplication that
+// artifactInstanceScopeKey produces a composite key for artifact deduplication that
 // distinguishes step-scoped from shared artifacts.
-func artifactIdentityKey(stepID *string, logicalPath string) string {
+func artifactInstanceScopeKey(stepID *string, logicalPath string) string {
 	if stepID != nil && *stepID != "" {
 		return "step:" + *stepID + ":" + logicalPath
 	}

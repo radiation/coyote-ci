@@ -145,6 +145,8 @@ export async function getBuildArtifacts(id: string): Promise<BuildArtifact[]> {
 export async function listArtifacts(input?: {
   q?: string;
   type?: ArtifactType | "";
+  limit?: number;
+  offset?: number;
 }): Promise<ArtifactBrowseItem[]> {
   const params = new URLSearchParams();
   const query = input?.q?.trim() ?? "";
@@ -155,6 +157,12 @@ export async function listArtifacts(input?: {
   }
   if (type) {
     params.set("type", type);
+  }
+  if (typeof input?.limit === "number" && input.limit > 0) {
+    params.set("limit", String(input.limit));
+  }
+  if (typeof input?.offset === "number" && input.offset > 0) {
+    params.set("offset", String(input.offset));
   }
 
   const suffix = params.size > 0 ? `?${params.toString()}` : "";

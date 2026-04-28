@@ -32,6 +32,8 @@ func (h *ArtifactHandler) SetVersionTagService(service *versiontagsvc.Service) {
 // @Produce json
 // @Param q query string false "Search artifacts by path, project, job, or version tag"
 // @Param type query string false "Artifact type filter" Enums(docker_image,npm_package,generic,unknown)
+// @Param limit query int false "Max logical artifacts to return"
+// @Param offset query int false "Number of logical artifacts to skip"
 // @Success 200 {object} api.ArtifactBrowseEnvelope
 // @Failure 400 {object} api.ErrorResponse
 // @Failure 500 {object} api.ErrorResponse
@@ -43,8 +45,10 @@ func (h *ArtifactHandler) ListArtifacts(w http.ResponseWriter, r *http.Request) 
 	}
 
 	items, err := h.service.ListArtifacts(r.Context(), artifactsvc.ListArtifactsInput{
-		Query: strings.TrimSpace(r.URL.Query().Get("q")),
-		Type:  strings.TrimSpace(r.URL.Query().Get("type")),
+		Query:  strings.TrimSpace(r.URL.Query().Get("q")),
+		Type:   strings.TrimSpace(r.URL.Query().Get("type")),
+		Limit:  parseQueryInt(r, "limit", 0),
+		Offset: parseQueryInt(r, "offset", 0),
 	})
 	if err != nil {
 		switch {
@@ -99,7 +103,7 @@ func toArtifactBrowseItemResponse(item domain.ArtifactBrowseItem) api.ArtifactBr
 		versions = append(versions, toArtifactBrowseVersionResponse(version))
 	}
 	return api.ArtifactBrowseItemResponse{
-		Key:             item.GroupKey,
+		Key:             item.Key,
 		Name:            item.Name,
 		Path:            item.Path,
 		ProjectID:       item.ProjectID,

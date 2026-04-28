@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
 type fakeBrowseRepo struct {
@@ -13,56 +14,20 @@ type fakeBrowseRepo struct {
 	err     error
 }
 
-func (r *fakeBrowseRepo) Create(_ context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
-	return artifact, nil
-}
-
-func (r *fakeBrowseRepo) ListByBuildID(_ context.Context, _ string) ([]domain.BuildArtifact, error) {
-	return nil, nil
-}
-
-func (r *fakeBrowseRepo) ListForBrowse(_ context.Context, _ string) ([]domain.ArtifactBrowseRecord, error) {
-	return r.records, r.err
-}
-
-func (r *fakeBrowseRepo) GetByID(_ context.Context, _ string, _ string) (domain.BuildArtifact, error) {
-	return domain.BuildArtifact{}, nil
-}
-
-func (r *fakeBrowseRepo) ListByStepID(_ context.Context, _ string) ([]domain.BuildArtifact, error) {
-	return nil, nil
-}
-
-func TestServiceListArtifactsGroupsVersionsByJobAndPath(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	jobID := "job-1"
-	svc := NewService(&fakeBrowseRepo{records: []domain.ArtifactBrowseRecord{
-		{
-			Artifact: domain.BuildArtifact{ID: "artifact-2", BuildID: "build-2", LogicalPath: "dist/app.tar", CreatedAt: now.Add(2 * time.Minute)},
-			Build:    domain.Build{ID: "build-2", BuildNumber: 12, JobID: &jobID, ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now.Add(2 * time.Minute)},
-		},
-		{
-			Artifact: domain.BuildArtifact{ID: "artifact-1", BuildID: "build-1", LogicalPath: "dist/app.tar", CreatedAt: now},
-			Build:    domain.Build{ID: "build-1", BuildNumber: 11, JobID: &jobID, ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
-		},
-	}})
-
-	items, err := svc.ListArtifacts(context.Background(), ListArtifactsInput{})
-	if err != nil {
-		t.Fatalf("ListArtifacts returned error: %v", err)
+func (r *fakeBrowseRepo) Browse(_ context.Context, params repository.BrowseArtifactsParams) ([]domain.ArtifactBrowseRecord, error) {
+	if r.err != nil {
+		return nil, r.err
 	}
-	if len(items) != 1 {
-		t.Fatalf("expected 1 artifact group, got %d", len(items))
+	if params.Type == "" {
+		return r.records, nil
 	}
-	if items[0].Path != "dist/app.tar" {
-		t.Fatalf("expected grouped path dist/app.tar, got %q", items[0].Path)
+	filtered := make([]domain.ArtifactBrowseRecord, 0, len(r.records))
+	for _, record := range r.records {
+		if domain.ResolveArtifactType(record.Artifact) == params.Type {
+			filtered = append(filtered, record)
+		}
 	}
-	if len(items[0].Versions) != 2 {
-		t.Fatalf("expected 2 versions, got %d", len(items[0].Versions))
-	}
-	if items[0].Versions[0].Artifact.ID != "artifact-2" {
-		t.Fatalf("expected newest artifact first, got %q", items[0].Versions[0].Artifact.ID)
-	}
+	return filtered, nil
 }
 
 func TestServiceListArtifactsFiltersByType(t *testing.T) {
