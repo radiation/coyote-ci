@@ -819,6 +819,14 @@ paths:
         in: query
         name: type
         type: string
+      - description: Max logical artifacts to return
+        in: query
+        name: limit
+        type: integer
+      - description: Number of logical artifacts to skip
+        in: query
+        name: offset
+        type: integer
       produces:
       - application/json
       responses:

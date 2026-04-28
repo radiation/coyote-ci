@@ -43,6 +43,18 @@ const docTemplate = `{
                         "description": "Artifact type filter",
                         "name": "type",
                         "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max logical artifacts to return",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of logical artifacts to skip",
+                        "name": "offset",
+                        "in": "query"
                     }
                 ],
                 "responses": {

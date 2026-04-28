@@ -4,6 +4,7 @@ import {
   getBuild,
   getBuildSteps,
   getBuildArtifacts,
+  listArtifacts,
   createJobVersionTags,
   artifactDownloadURL,
   listJobs,
@@ -68,6 +69,29 @@ describe("API client - types", () => {
   it("builds artifact download URL from API base path", () => {
     expect(artifactDownloadURL("/builds/build-1/artifacts/a1/download")).toBe(
       "/api/builds/build-1/artifacts/a1/download",
+    );
+  });
+
+  it("lists artifacts with search, type, and pagination params", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          artifacts: [],
+        },
+      }),
+    } as Response);
+
+    await listArtifacts({
+      q: "pkg",
+      type: "npm_package",
+      limit: 5,
+      offset: 10,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/artifacts?q=pkg&type=npm_package&limit=5&offset=10",
+      undefined,
     );
   });
 

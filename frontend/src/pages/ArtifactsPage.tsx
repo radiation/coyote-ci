@@ -1,9 +1,10 @@
-import { useDeferredValue, useState } from "react";
+import { useDeferredValue, useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createJobVersionTags, listArtifacts } from "../api";
 import { ArtifactBrowser } from "../components/ArtifactBrowser";
 import type { ArtifactBrowseVersion, ArtifactType } from "../types";
 import { formatTime } from "../utils/time";
+import { useLocation, useSearchParams } from "react-router-dom";
 
 const ARTIFACT_TYPE_OPTIONS: Array<{
   label: string;
@@ -16,25 +17,143 @@ const ARTIFACT_TYPE_OPTIONS: Array<{
   { label: "Unknown", value: "unknown" },
 ];
 
+const DEFAULT_ARTIFACTS_PAGE_SIZE = 10;
+const ARTIFACTS_PAGE_SIZE_OPTIONS = [10, 25, 50];
+const COPY_STATUS_RESET_MS = 2000;
+
+function parseArtifactTypeParam(value: string | null): ArtifactType | "" {
+  if (
+    value === "docker_image" ||
+    value === "npm_package" ||
+    value === "generic" ||
+    value === "unknown"
+  ) {
+    return value;
+  }
+  return "";
+}
+
+function parsePositiveInt(value: string | null, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function parsePageSizeParam(value: string | null): number {
+  const parsed = parsePositiveInt(value, DEFAULT_ARTIFACTS_PAGE_SIZE);
+  if (ARTIFACTS_PAGE_SIZE_OPTIONS.includes(parsed)) {
+    return parsed;
+  }
+  return DEFAULT_ARTIFACTS_PAGE_SIZE;
+}
+
 export function ArtifactsPage() {
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState<ArtifactType | "">("");
-  const deferredSearch = useDeferredValue(search.trim());
+  const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
+  const [typeFilter, setTypeFilter] = useState<ArtifactType | "">(() =>
+    parseArtifactTypeParam(searchParams.get("type")),
+  );
+  const [pageIndex, setPageIndex] = useState(
+    () => parsePositiveInt(searchParams.get("page"), 1) - 1,
+  );
+  const [pageSize, setPageSize] = useState(() =>
+    parsePageSizeParam(searchParams.get("pageSize")),
+  );
+  const [pageInput, setPageInput] = useState(() =>
+    String(parsePositiveInt(searchParams.get("page"), 1)),
+  );
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">(
+    "idle",
+  );
+  const trimmedSearch = search.trim();
+  const deferredSearch = useDeferredValue(trimmedSearch);
+
+  useEffect(() => {
+    const nextSearch = searchParams.get("q") ?? "";
+    const nextType = parseArtifactTypeParam(searchParams.get("type"));
+    const nextPageIndex = parsePositiveInt(searchParams.get("page"), 1) - 1;
+    const nextPageSize = parsePageSizeParam(searchParams.get("pageSize"));
+
+    setSearch((current) => (current === nextSearch ? current : nextSearch));
+    setTypeFilter((current) => (current === nextType ? current : nextType));
+    setPageIndex((current) =>
+      current === nextPageIndex ? current : nextPageIndex,
+    );
+    setPageSize((current) =>
+      current === nextPageSize ? current : nextPageSize,
+    );
+  }, [searchParams]);
+
+  useEffect(() => {
+    setPageInput(String(pageIndex + 1));
+  }, [pageIndex]);
+
+  useEffect(() => {
+    if (copyStatus === "idle") {
+      return undefined;
+    }
+
+    const timeoutID = globalThis.setTimeout(() => {
+      setCopyStatus("idle");
+    }, COPY_STATUS_RESET_MS);
+
+    return () => globalThis.clearTimeout(timeoutID);
+  }, [copyStatus]);
+
+  useEffect(() => {
+    const nextParams = new URLSearchParams();
+    if (trimmedSearch) {
+      nextParams.set("q", trimmedSearch);
+    }
+    if (typeFilter) {
+      nextParams.set("type", typeFilter);
+    }
+    if (pageIndex > 0) {
+      nextParams.set("page", String(pageIndex + 1));
+    }
+    if (pageSize !== DEFAULT_ARTIFACTS_PAGE_SIZE) {
+      nextParams.set("pageSize", String(pageSize));
+    }
+
+    if (nextParams.toString() !== searchParams.toString()) {
+      setSearchParams(nextParams);
+    }
+  }, [
+    pageIndex,
+    pageSize,
+    searchParams,
+    setSearchParams,
+    trimmedSearch,
+    typeFilter,
+  ]);
 
   const {
-    data: artifacts,
+    data: artifactResults,
     isLoading,
     error,
     dataUpdatedAt,
   } = useQuery({
-    queryKey: ["artifacts", deferredSearch, typeFilter],
+    queryKey: ["artifacts", deferredSearch, typeFilter, pageIndex, pageSize],
     queryFn: () =>
       listArtifacts({
         q: deferredSearch,
         type: typeFilter,
+        limit: pageSize + 1,
+        offset: pageIndex * pageSize,
       }),
   });
+
+  const artifacts = artifactResults?.slice(0, pageSize) ?? [];
+  const hasNextPage = (artifactResults?.length ?? 0) > pageSize;
+  const pageStart = pageIndex * pageSize + 1;
+  const pageEnd = pageIndex * pageSize + artifacts.length;
 
   const createVersionTagMutation = useMutation({
     mutationFn: ({
@@ -67,6 +186,51 @@ export function ArtifactsPage() {
     await createVersionTagMutation.mutateAsync({ artifact, version });
   }
 
+  function handleSearchChange(value: string) {
+    setSearch(value);
+    setPageIndex(0);
+  }
+
+  function handleTypeChange(value: ArtifactType | "") {
+    setTypeFilter(value);
+    setPageIndex(0);
+  }
+
+  function handlePageSizeChange(value: number) {
+    setPageSize(value);
+    setPageIndex(0);
+  }
+
+  function goToPage(nextPage: number) {
+    const safePage = Math.max(1, nextPage);
+    setPageIndex(safePage - 1);
+  }
+
+  function handlePageJumpSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const parsedPage = Number.parseInt(pageInput, 10);
+    if (!Number.isFinite(parsedPage) || parsedPage < 1) {
+      setPageInput(String(pageIndex + 1));
+      return;
+    }
+    goToPage(parsedPage);
+  }
+
+  async function handleCopyLink() {
+    const baseURL = globalThis.location?.origin ?? "";
+    const shareURL = `${baseURL}${location.pathname}${location.search}${location.hash}`;
+
+    try {
+      if (!globalThis.navigator?.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await globalThis.navigator.clipboard.writeText(shareURL);
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("failed");
+    }
+  }
+
   return (
     <>
       <div className="page-header-row">
@@ -81,6 +245,23 @@ export function ArtifactsPage() {
               : "—"}
           </p>
         </div>
+        <div className="page-header-actions">
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={handleCopyLink}
+          >
+            Copy link
+          </button>
+          {copyStatus === "copied" && (
+            <p className="subtle-text artifact-copy-status">Link copied.</p>
+          )}
+          {copyStatus === "failed" && (
+            <p className="error-text artifact-copy-status">
+              Unable to copy link.
+            </p>
+          )}
+        </div>
       </div>
 
       <section className="artifact-filters-panel">
@@ -89,7 +270,7 @@ export function ArtifactsPage() {
           <input
             type="search"
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => handleSearchChange(event.target.value)}
             placeholder="Search by path, project, job, or version"
           />
         </label>
@@ -98,7 +279,7 @@ export function ArtifactsPage() {
           <select
             value={typeFilter}
             onChange={(event) =>
-              setTypeFilter(event.target.value as ArtifactType | "")
+              handleTypeChange(event.target.value as ArtifactType | "")
             }
           >
             {ARTIFACT_TYPE_OPTIONS.map((option) => (
@@ -110,8 +291,79 @@ export function ArtifactsPage() {
         </label>
       </section>
 
+      <section
+        className="artifact-pagination-bar"
+        aria-label="Artifact pagination"
+      >
+        <p className="subtle-text artifact-pagination-status">
+          {artifacts.length > 0
+            ? `Showing ${pageStart}-${pageEnd}`
+            : pageIndex > 0
+              ? `Page ${pageIndex + 1}`
+              : "No artifacts in this view"}
+        </p>
+        <div className="artifact-pagination-actions">
+          <label className="artifact-pagination-field">
+            <span>Items per page</span>
+            <select
+              value={pageSize}
+              onChange={(event) =>
+                handlePageSizeChange(Number.parseInt(event.target.value, 10))
+              }
+              disabled={isLoading}
+            >
+              {ARTIFACTS_PAGE_SIZE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => goToPage(pageIndex)}
+            disabled={pageIndex === 0 || isLoading}
+          >
+            Previous
+          </button>
+          <span className="artifact-pagination-page">Page {pageIndex + 1}</span>
+          <form
+            className="artifact-pagination-jump-form"
+            onSubmit={handlePageJumpSubmit}
+          >
+            <label className="artifact-pagination-field">
+              <span>Jump to page</span>
+              <input
+                type="number"
+                min={1}
+                inputMode="numeric"
+                value={pageInput}
+                onChange={(event) => setPageInput(event.target.value)}
+                disabled={isLoading}
+              />
+            </label>
+            <button
+              type="submit"
+              className="secondary-button"
+              disabled={isLoading}
+            >
+              Go
+            </button>
+          </form>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => goToPage(pageIndex + 2)}
+            disabled={!hasNextPage || isLoading}
+          >
+            Next
+          </button>
+        </div>
+      </section>
+
       <ArtifactBrowser
-        artifacts={artifacts ?? []}
+        artifacts={artifacts}
         isLoading={isLoading}
         error={error}
         onAssignVersion={assignArtifactVersion}

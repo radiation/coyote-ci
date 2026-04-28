@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { ArtifactsPage } from "./ArtifactsPage";
 import { createJobVersionTags, listArtifacts } from "../api";
 
@@ -11,18 +17,32 @@ vi.mock("../api", () => ({
   artifactDownloadURL: (path: string) => `/api${path}`,
 }));
 
-function renderPage() {
+function LocationSearchProbe() {
+  const location = useLocation();
+  return <output data-testid="location-search">{location.search}</output>;
+}
+
+function renderPage(initialEntries = ["/artifacts"]) {
   const queryClient = new QueryClient({
     defaultOptions: {
-      queries: { retry: false },
+      queries: { retry: false, gcTime: Infinity },
+      mutations: { gcTime: Infinity },
     },
   });
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/artifacts"]}>
+      <MemoryRouter initialEntries={initialEntries}>
         <Routes>
-          <Route path="/artifacts" element={<ArtifactsPage />} />
+          <Route
+            path="/artifacts"
+            element={
+              <>
+                <LocationSearchProbe />
+                <ArtifactsPage />
+              </>
+            }
+          />
           <Route path="/builds/:id" element={<div>build detail</div>} />
         </Routes>
       </MemoryRouter>
@@ -33,13 +53,55 @@ function renderPage() {
 describe("ArtifactsPage", () => {
   const mockedListArtifacts = vi.mocked(listArtifacts);
   const mockedCreateJobVersionTags = vi.mocked(createJobVersionTags);
+  const writeText = vi.fn();
+
+  function buildArtifact(index: number) {
+    return {
+      key: `job-1::packages/pkg-${index}.tgz`,
+      name: `coyote-ci/package-${index}`,
+      path: `packages/pkg-${index}.tgz`,
+      project_id: "project-1",
+      job_id: "job-1",
+      artifact_type: "npm_package" as const,
+      latest_created_at: "2026-04-25T09:00:00Z",
+      versions: [
+        {
+          artifact_id: `artifact-pkg-${index}`,
+          name: `coyote-ci/package-${index}`,
+          build_id: `build-${index}`,
+          build_number: 40 + index,
+          build_status: "success" as const,
+          project_id: "project-1",
+          job_id: "job-1",
+          step_id: `step-${index}`,
+          step_index: 1,
+          step_name: "Publish package",
+          path: `packages/pkg-${index}.tgz`,
+          size_bytes: 1024,
+          content_type: "application/gzip",
+          checksum_sha256: `pkg-sha-${index}`,
+          storage_provider: "filesystem" as const,
+          download_url_path: `/builds/build-${index}/artifacts/artifact-pkg-${index}/download`,
+          version_tags: [],
+          created_at: "2026-04-25T09:00:00Z",
+        },
+      ],
+    };
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
+    writeText.mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
     mockedCreateJobVersionTags.mockResolvedValue([]);
     mockedListArtifacts.mockImplementation(async (input) => {
       const type = input?.type ?? "";
       const query = input?.q ?? "";
+      const limit = input?.limit ?? 0;
+      const offset = input?.offset ?? 0;
 
       if (type === "docker_image") {
         return [
@@ -121,6 +183,90 @@ describe("ArtifactsPage", () => {
               },
             ],
           },
+        ];
+      }
+
+      if (limit === 11) {
+        if (offset === 10) {
+          return [buildArtifact(11)];
+        }
+        return [
+          {
+            key: "job-1::packages/pkg-a.tgz",
+            name: "coyote-ci/package-a",
+            path: "packages/pkg-a.tgz",
+            project_id: "project-1",
+            job_id: "job-1",
+            artifact_type: "npm_package" as const,
+            latest_created_at: "2026-04-25T09:00:00Z",
+            versions: [
+              {
+                artifact_id: "artifact-pkg-1",
+                name: "coyote-ci/package-a",
+                build_id: "build-1",
+                build_number: 41,
+                build_status: "success" as const,
+                project_id: "project-1",
+                job_id: "job-1",
+                step_id: "step-1",
+                step_index: 1,
+                step_name: "Publish package",
+                path: "packages/pkg-a.tgz",
+                size_bytes: 1024,
+                content_type: "application/gzip",
+                checksum_sha256: "pkg-sha",
+                storage_provider: "filesystem" as const,
+                download_url_path:
+                  "/builds/build-1/artifacts/artifact-pkg-1/download",
+                version_tags: [
+                  {
+                    id: "tag-1",
+                    job_id: "job-1",
+                    version: "v1.2.3",
+                    target_type: "artifact",
+                    artifact_id: "artifact-pkg-1",
+                    created_at: "2026-04-25T09:05:00Z",
+                  },
+                ],
+                created_at: "2026-04-25T09:00:00Z",
+              },
+            ],
+          },
+          {
+            key: "job-1::images/backend-image.tar",
+            name: "coyote-ci/backend",
+            path: "images/backend-image.tar",
+            project_id: "project-1",
+            job_id: "job-1",
+            artifact_type: "docker_image" as const,
+            latest_created_at: "2026-04-25T10:00:00Z",
+            versions: [
+              {
+                artifact_id: "artifact-docker-1",
+                name: "coyote-ci/backend",
+                build_id: "build-2",
+                build_number: 42,
+                build_status: "success" as const,
+                project_id: "project-1",
+                job_id: "job-1",
+                step_id: "step-2",
+                step_index: 2,
+                step_name: "Publish image",
+                path: "images/backend-image.tar",
+                size_bytes: 4096,
+                content_type: "application/x-tar",
+                checksum_sha256: "docker-sha",
+                storage_provider: "filesystem" as const,
+                download_url_path:
+                  "/builds/build-2/artifacts/artifact-docker-1/download",
+                version_tags: [],
+                created_at: "2026-04-25T10:00:00Z",
+              },
+            ],
+          },
+          ...Array.from({ length: 9 }, (_value, index) =>
+            buildArtifact(index + 3),
+          ),
         ];
       }
 
@@ -225,7 +371,12 @@ describe("ArtifactsPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(mockedListArtifacts).toHaveBeenCalledWith({ q: "", type: "" });
+      expect(mockedListArtifacts).toHaveBeenCalledWith({
+        q: "",
+        type: "",
+        limit: 11,
+        offset: 0,
+      });
     });
 
     fireEvent.change(screen.getByLabelText("Search artifacts"), {
@@ -236,6 +387,8 @@ describe("ArtifactsPage", () => {
       expect(mockedListArtifacts).toHaveBeenLastCalledWith({
         q: "pkg-a",
         type: "",
+        limit: 11,
+        offset: 0,
       });
     });
 
@@ -247,9 +400,165 @@ describe("ArtifactsPage", () => {
       expect(mockedListArtifacts).toHaveBeenLastCalledWith({
         q: "pkg-a",
         type: "docker_image",
+        limit: 11,
+        offset: 0,
       });
     });
   });
+
+  it("moves to the next page and reflects it in the URL", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "",
+        type: "",
+        limit: 11,
+        offset: 0,
+      });
+    });
+
+    const nextButton = await screen.findByRole("button", { name: "Next" });
+    fireEvent.click(nextButton);
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "",
+        type: "",
+        limit: 11,
+        offset: 10,
+      });
+      expect(screen.getByText("Page 2")).toBeTruthy();
+      expect(screen.getByTestId("location-search").textContent).toBe("?page=2");
+    });
+  });
+
+  it("resets to the first page when filters change", async () => {
+    renderPage(["/artifacts?page=2"]);
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "",
+        type: "",
+        limit: 11,
+        offset: 10,
+      });
+      expect(screen.getByText("Page 2")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Search artifacts"), {
+      target: { value: "pkg-a" },
+    });
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "pkg-a",
+        type: "",
+        limit: 11,
+        offset: 0,
+      });
+      expect(screen.getByText("Page 1")).toBeTruthy();
+      expect(screen.getByTestId("location-search").textContent).toBe(
+        "?q=pkg-a",
+      );
+    });
+  });
+
+  it("updates page size and jumps directly to a requested page", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "",
+        type: "",
+        limit: 11,
+        offset: 0,
+      });
+    });
+
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "25" },
+    });
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "",
+        type: "",
+        limit: 26,
+        offset: 0,
+      });
+      expect(screen.getByText("Page 1")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Jump to page"), {
+      target: { value: "3" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "",
+        type: "",
+        limit: 26,
+        offset: 50,
+      });
+      expect(screen.getByText("Page 3")).toBeTruthy();
+      expect(screen.getByTestId("location-search").textContent).toBe(
+        "?page=3&pageSize=25",
+      );
+    });
+  });
+
+  it("hydrates filters and pagination from the URL", async () => {
+    renderPage(["/artifacts?q=pkg-a&type=docker_image&page=3&pageSize=25"]);
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "pkg-a",
+        type: "docker_image",
+        limit: 26,
+        offset: 50,
+      });
+    });
+
+    expect(screen.getByLabelText("Search artifacts")).toHaveValue("pkg-a");
+    expect(screen.getByLabelText("Type")).toHaveValue("docker_image");
+    expect(screen.getByLabelText("Items per page")).toHaveValue("25");
+    expect(screen.getByLabelText("Jump to page")).toHaveValue(3);
+    expect(screen.getByTestId("location-search").textContent).toBe(
+      "?q=pkg-a&type=docker_image&page=3&pageSize=25",
+    );
+  });
+
+  it("copies a shareable URL for the current artifact view", async () => {
+    renderPage(["/artifacts?q=pkg-a&page=2&pageSize=25"]);
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "pkg-a",
+        type: "",
+        limit: 26,
+        offset: 25,
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "http://localhost:3000/artifacts?q=pkg-a&page=2&pageSize=25",
+      );
+      expect(screen.getByText("Link copied.")).toBeTruthy();
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 2100));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Link copied.")).toBeNull();
+    });
+  }, 10000);
 
   it("preserves tag assignment actions inside the expanded version view", async () => {
     renderPage();
