@@ -99,7 +99,7 @@ func toArtifactBrowseItemResponse(item domain.ArtifactBrowseItem) api.ArtifactBr
 		versions = append(versions, toArtifactBrowseVersionResponse(version))
 	}
 	return api.ArtifactBrowseItemResponse{
-		Key:             item.GroupKey,
+		Key:             item.Key,
 		Name:            item.Name,
 		Path:            item.Path,
 		ProjectID:       item.ProjectID,

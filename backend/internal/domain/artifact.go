@@ -27,6 +27,11 @@ type BuildArtifact struct {
 	CreatedAt       time.Time
 }
 
+// ArtifactInstance is one produced artifact row/blob from one build.
+// BuildArtifact remains the persisted type to avoid broad churn while the
+// repository/browse identity is modeled separately as Artifact.
+type ArtifactInstance = BuildArtifact
+
 // ArtifactDeclaration describes one artifact path declaration from pipeline config.
 type ArtifactDeclaration struct {
 	Name string

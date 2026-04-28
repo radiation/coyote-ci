@@ -170,9 +170,9 @@ func TestArtifactRepository_ListForBrowse(t *testing.T) {
 		ORDER BY a.created_at DESC, a.logical_path ASC, b.created_at DESC
 	`)).WithArgs("pkg-a", "%pkg-a%").WillReturnRows(buildRows)
 
-	records, err := repo.ListForBrowse(context.Background(), "pkg-a")
+	records, err := repo.Browse(context.Background(), repository.BrowseArtifactsParams{Query: "pkg-a"})
 	if err != nil {
-		t.Fatalf("ListForBrowse failed: %v", err)
+		t.Fatalf("Browse failed: %v", err)
 	}
 	if len(records) != 1 {
 		t.Fatalf("expected 1 record, got %d", len(records))

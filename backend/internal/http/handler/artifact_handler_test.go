@@ -20,24 +20,8 @@ type fakeArtifactBrowseRepo struct {
 	err     error
 }
 
-func (r *fakeArtifactBrowseRepo) Create(_ context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
-	return artifact, nil
-}
-
-func (r *fakeArtifactBrowseRepo) ListByBuildID(_ context.Context, _ string) ([]domain.BuildArtifact, error) {
-	return nil, nil
-}
-
-func (r *fakeArtifactBrowseRepo) ListForBrowse(_ context.Context, _ string) ([]domain.ArtifactBrowseRecord, error) {
+func (r *fakeArtifactBrowseRepo) Browse(_ context.Context, _ repository.BrowseArtifactsParams) ([]domain.ArtifactBrowseRecord, error) {
 	return r.records, r.err
-}
-
-func (r *fakeArtifactBrowseRepo) GetByID(_ context.Context, _ string, _ string) (domain.BuildArtifact, error) {
-	return domain.BuildArtifact{}, repository.ErrArtifactNotFound
-}
-
-func (r *fakeArtifactBrowseRepo) ListByStepID(_ context.Context, _ string) ([]domain.BuildArtifact, error) {
-	return nil, nil
 }
 
 func TestArtifactHandlerListArtifacts(t *testing.T) {

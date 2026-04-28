@@ -537,8 +537,8 @@ func (r *fakeArtifactRepository) ListByBuildID(_ context.Context, buildID string
 	return out, nil
 }
 
-func (r *fakeArtifactRepository) ListForBrowse(_ context.Context, query string) ([]domain.ArtifactBrowseRecord, error) {
-	trimmedQuery := strings.TrimSpace(strings.ToLower(query))
+func (r *fakeArtifactRepository) Browse(_ context.Context, params repository.BrowseArtifactsParams) ([]domain.ArtifactBrowseRecord, error) {
+	trimmedQuery := strings.TrimSpace(strings.ToLower(params.Query))
 	out := make([]domain.ArtifactBrowseRecord, 0)
 	for buildID, items := range r.artifacts {
 		for _, item := range items {
@@ -553,6 +553,15 @@ func (r *fakeArtifactRepository) ListForBrowse(_ context.Context, query string) 
 			})
 		}
 	}
+	start := params.Offset
+	if start > len(out) {
+		start = len(out)
+	}
+	end := len(out)
+	if params.Limit > 0 && start+params.Limit < end {
+		end = start + params.Limit
+	}
+	out = out[start:end]
 	return out, nil
 }
 

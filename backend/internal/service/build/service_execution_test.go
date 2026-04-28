@@ -890,8 +890,8 @@ func TestBuildService_RunStep_AutoTagsOutputsAfterTerminalSuccess(t *testing.T) 
 	if len(tagger.input.ArtifactIDs) != 1 {
 		t.Fatalf("expected one collected artifact id, got %d", len(tagger.input.ArtifactIDs))
 	}
-	if got := artifactRepo.artifacts[buildID][0].ArtifactType; got != "" {
-		t.Fatalf("expected untyped collected artifact for legacy declaration, got %q", got)
+	if got := artifactRepo.artifacts[buildID][0].ArtifactType; got != domain.ArtifactTypeUnknown {
+		t.Fatalf("expected inferred unknown artifact type for legacy declaration, got %q", got)
 	}
 	if len(tagger.input.ManagedImageVersionIDs) != 1 || tagger.input.ManagedImageVersionIDs[0] != managedImageVersionID {
 		t.Fatalf("expected managed image version id %q, got %#v", managedImageVersionID, tagger.input.ManagedImageVersionIDs)

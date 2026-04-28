@@ -54,17 +54,17 @@ func (r *ArtifactRepository) ListByBuildID(_ context.Context, buildID string) ([
 	return out, nil
 }
 
-func (r *ArtifactRepository) ListForBrowse(_ context.Context, query string) ([]domain.ArtifactBrowseRecord, error) {
+func (r *ArtifactRepository) Browse(_ context.Context, params repository.BrowseArtifactsParams) ([]domain.ArtifactRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	trimmedQuery := strings.TrimSpace(strings.ToLower(query))
-	records := make([]domain.ArtifactBrowseRecord, 0, len(r.artifacts))
+	trimmedQuery := strings.TrimSpace(strings.ToLower(params.Query))
+	records := make([]domain.ArtifactRecord, 0, len(r.artifacts))
 	for _, artifact := range r.artifacts {
 		if trimmedQuery != "" && !strings.Contains(strings.ToLower(artifact.LogicalPath), trimmedQuery) {
 			continue
 		}
-		records = append(records, domain.ArtifactBrowseRecord{
+		records = append(records, domain.ArtifactRecord{
 			Artifact: artifact,
 			Build: domain.Build{
 				ID:        artifact.BuildID,
@@ -72,6 +72,15 @@ func (r *ArtifactRepository) ListForBrowse(_ context.Context, query string) ([]d
 			},
 		})
 	}
+	start := params.Offset
+	if start > len(records) {
+		start = len(records)
+	}
+	end := len(records)
+	if params.Limit > 0 && start+params.Limit < end {
+		end = start + params.Limit
+	}
+	records = records[start:end]
 	return records, nil
 }
 
