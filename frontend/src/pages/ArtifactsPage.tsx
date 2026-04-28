@@ -123,7 +123,7 @@ export function ArtifactsPage() {
     }
 
     if (nextParams.toString() !== searchParams.toString()) {
-      setSearchParams(nextParams);
+      setSearchParams(nextParams, { replace: true });
     }
   }, [
     pageIndex,

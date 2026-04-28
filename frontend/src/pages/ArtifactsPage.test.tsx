@@ -531,34 +531,40 @@ describe("ArtifactsPage", () => {
   });
 
   it("copies a shareable URL for the current artifact view", async () => {
-    renderPage(["/artifacts?q=pkg-a&page=2&pageSize=25"]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
 
-    await waitFor(() => {
-      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
-        q: "pkg-a",
-        type: "",
-        limit: 26,
-        offset: 25,
+    try {
+      renderPage(["/artifacts?q=pkg-a&page=2&pageSize=25"]);
+
+      await waitFor(() => {
+        expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+          q: "pkg-a",
+          type: "",
+          limit: 26,
+          offset: 25,
+        });
       });
-    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
+      fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
 
-    await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith(
-        "http://localhost:3000/artifacts?q=pkg-a&page=2&pageSize=25",
-      );
-      expect(screen.getByText("Link copied.")).toBeTruthy();
-    });
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith(
+          "http://localhost:3000/artifacts?q=pkg-a&page=2&pageSize=25",
+        );
+        expect(screen.getByText("Link copied.")).toBeTruthy();
+      });
 
-    await act(async () => {
-      await new Promise((resolve) => globalThis.setTimeout(resolve, 2100));
-    });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2100);
+      });
 
-    await waitFor(() => {
-      expect(screen.queryByText("Link copied.")).toBeNull();
-    });
-  }, 10000);
+      await waitFor(() => {
+        expect(screen.queryByText("Link copied.")).toBeNull();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("preserves tag assignment actions inside the expanded version view", async () => {
     renderPage();

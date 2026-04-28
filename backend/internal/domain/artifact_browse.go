@@ -129,7 +129,10 @@ func GroupArtifacts(records []ArtifactRecord) []Artifact {
 		if !items[i].LatestCreatedAt.Equal(items[j].LatestCreatedAt) {
 			return items[i].LatestCreatedAt.After(items[j].LatestCreatedAt)
 		}
-		return items[i].Path < items[j].Path
+		if items[i].Path != items[j].Path {
+			return items[i].Path < items[j].Path
+		}
+		return items[i].Key < items[j].Key
 	})
 
 	return items

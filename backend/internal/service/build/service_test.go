@@ -553,16 +553,23 @@ func (r *fakeArtifactRepository) Browse(_ context.Context, params repository.Bro
 			})
 		}
 	}
+	grouped := domain.GroupArtifacts(out)
 	start := params.Offset
-	if start > len(out) {
-		start = len(out)
+	if start > len(grouped) {
+		start = len(grouped)
 	}
-	end := len(out)
+	end := len(grouped)
 	if params.Limit > 0 && start+params.Limit < end {
 		end = start + params.Limit
 	}
-	out = out[start:end]
-	return out, nil
+	grouped = grouped[start:end]
+	var paged []domain.ArtifactBrowseRecord
+	for _, item := range grouped {
+		for _, v := range item.Versions {
+			paged = append(paged, domain.ArtifactBrowseRecord(v))
+		}
+	}
+	return paged, nil
 }
 
 func (r *fakeArtifactRepository) GetByID(_ context.Context, buildID string, artifactID string) (domain.BuildArtifact, error) {
