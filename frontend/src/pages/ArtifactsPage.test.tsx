@@ -10,6 +10,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { ArtifactsPage } from "./ArtifactsPage";
 import { createJobVersionTags, listArtifacts } from "../api";
+import { ThemeProvider } from "../theme";
+import { installMockLocalStorage } from "../test/browserMocks";
+import { THEME_STORAGE_KEY } from "../theme-context";
 
 vi.mock("../api", () => ({
   createJobVersionTags: vi.fn(),
@@ -31,22 +34,24 @@ function renderPage(initialEntries = ["/artifacts"]) {
   });
 
   return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={initialEntries}>
-        <Routes>
-          <Route
-            path="/artifacts"
-            element={
-              <>
-                <LocationSearchProbe />
-                <ArtifactsPage />
-              </>
-            }
-          />
-          <Route path="/builds/:id" element={<div>build detail</div>} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={initialEntries}>
+          <Routes>
+            <Route
+              path="/artifacts"
+              element={
+                <>
+                  <LocationSearchProbe />
+                  <ArtifactsPage />
+                </>
+              }
+            />
+            <Route path="/builds/:id" element={<div>build detail</div>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    </ThemeProvider>,
   );
 }
 
@@ -91,6 +96,8 @@ describe("ArtifactsPage", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    installMockLocalStorage();
+    window.localStorage.clear();
     writeText.mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -346,6 +353,19 @@ describe("ArtifactsPage", () => {
         },
       ];
     });
+  });
+
+  it("renders artifact results with a persisted dark theme", async () => {
+    window.localStorage.setItem(THEME_STORAGE_KEY, "dark");
+
+    renderPage();
+
+    await screen.findByText("coyote-ci/package-a");
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    fireEvent.click(
+      screen.getByRole("button", { name: /coyote-ci\/package-a/i }),
+    );
+    expect(screen.getByText("Build #41")).toBeTruthy();
   });
 
   it("renders the artifact list and expands a selected artifact", async () => {

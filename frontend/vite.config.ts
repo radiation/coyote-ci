@@ -1,8 +1,17 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { THEME_STORAGE_KEY } from "./src/theme-shared";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    {
+      name: "inject-theme-storage-key",
+      transformIndexHtml(html) {
+        return html.replace(/__THEME_STORAGE_KEY__/g, THEME_STORAGE_KEY);
+      },
+    },
+    react(),
+  ],
   server: {
     port: 3000,
     proxy: {
