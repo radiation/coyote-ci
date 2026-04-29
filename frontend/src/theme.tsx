@@ -5,6 +5,7 @@ import {
   THEME_MEDIA_QUERY,
   THEME_STORAGE_KEY,
   ThemeContext,
+  type ThemeContextValue,
 } from "./theme-context";
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
