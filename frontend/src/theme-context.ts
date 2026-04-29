@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import { THEME_STORAGE_KEY } from "./theme-shared";
 
 export type Theme = "light" | "dark";
 
@@ -10,7 +11,7 @@ export type ThemeContextValue = {
 
 export const THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
-export const THEME_STORAGE_KEY = "coyote-theme";
+export { THEME_STORAGE_KEY };
 
 export const ThemeContext = createContext<ThemeContextValue | null>(null);
 
