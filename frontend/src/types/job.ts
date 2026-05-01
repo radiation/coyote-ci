@@ -1,3 +1,5 @@
+import type { BuildStatus } from "./build";
+
 export interface JobManagedImageConfig {
   enabled: boolean;
   managed_image_name: string;
@@ -8,6 +10,15 @@ export interface JobManagedImageConfig {
   commit_author_email: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface JobLatestBuild {
+  id: string;
+  build_number: number;
+  status: BuildStatus;
+  created_at: string;
+  finished_at?: string | null;
+  error_message?: string | null;
 }
 
 export interface Job {
@@ -21,6 +32,7 @@ export interface Job {
   pipeline_yaml: string;
   pipeline_path?: string | null;
   managed_image?: JobManagedImageConfig | null;
+  latest_build?: JobLatestBuild | null;
   enabled: boolean;
   created_at: string;
   updated_at: string;

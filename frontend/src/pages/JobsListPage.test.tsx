@@ -58,6 +58,14 @@ describe("JobsListPage", () => {
         push_branch: "main",
         pipeline_yaml:
           "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+        latest_build: {
+          id: "build-9",
+          build_number: 9,
+          status: "failed",
+          created_at: "2026-03-30T01:00:00Z",
+          finished_at: "2026-03-30T01:02:00Z",
+          error_message: "tests failed",
+        },
         enabled: true,
         created_at: "2026-03-30T00:00:00Z",
         updated_at: "2026-03-30T00:00:00Z",
@@ -88,6 +96,12 @@ describe("JobsListPage", () => {
       expect(screen.getByText("main")).toBeTruthy();
       expect(screen.getAllByText("Enabled").length).toBeGreaterThan(0);
       expect(screen.getByText("On main")).toBeTruthy();
+      expect(screen.getByText("Failed")).toBeTruthy();
+      expect(screen.getByRole("link", { name: "Failed" })).toHaveAttribute(
+        "href",
+        "/builds/build-9",
+      );
+      expect(screen.getByText(/#9/)).toBeTruthy();
     });
   });
 

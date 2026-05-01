@@ -520,6 +520,21 @@ definitions:
           $ref: '#/definitions/api.VersionTagResponse'
         type: array
     type: object
+  api.JobBuildSummaryResponse:
+    properties:
+      build_number:
+        type: integer
+      created_at:
+        type: string
+      error_message:
+        type: string
+      finished_at:
+        type: string
+      id:
+        type: string
+      status:
+        type: string
+    type: object
   api.JobEnvelope:
     properties:
       data:
@@ -574,6 +589,8 @@ definitions:
         type: boolean
       id:
         type: string
+      latest_build:
+        $ref: '#/definitions/api.JobBuildSummaryResponse'
       managed_image:
         $ref: '#/definitions/api.JobManagedImageConfigResponse'
       name:
@@ -1559,7 +1576,7 @@ paths:
     post:
       consumes:
       - application/json
-      description: Creates a new job.
+      description: Creates a new job and queues an initial build by default.
       parameters:
       - description: Job create request
         in: body

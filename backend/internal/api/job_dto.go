@@ -128,6 +128,15 @@ type JobManagedImageConfigResponse struct {
 	UpdatedAt         string `json:"updated_at"`
 }
 
+type JobBuildSummaryResponse struct {
+	ID           string  `json:"id"`
+	BuildNumber  int64   `json:"build_number"`
+	Status       string  `json:"status"`
+	CreatedAt    string  `json:"created_at"`
+	FinishedAt   *string `json:"finished_at,omitempty"`
+	ErrorMessage *string `json:"error_message,omitempty"`
+}
+
 type JobResponse struct {
 	ID               string                         `json:"id"`
 	ProjectID        string                         `json:"project_id"`
@@ -143,6 +152,7 @@ type JobResponse struct {
 	PipelineYAML     string                         `json:"pipeline_yaml"`
 	PipelinePath     *string                        `json:"pipeline_path,omitempty"`
 	ManagedImage     *JobManagedImageConfigResponse `json:"managed_image,omitempty"`
+	LatestBuild      *JobBuildSummaryResponse       `json:"latest_build,omitempty"`
 	Enabled          bool                           `json:"enabled"`
 	CreatedAt        string                         `json:"created_at"`
 	UpdatedAt        string                         `json:"updated_at"`

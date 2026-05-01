@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -42,12 +44,35 @@ func TestJobService_CreateListGetUpdate(t *testing.T) {
 		t.Fatalf("expected created job push_branch=main, got %v", job.PushBranch)
 	}
 
+	builds, err := buildService.ListBuildsByJobID(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("list builds by job failed: %v", err)
+	}
+	if len(builds) != 1 {
+		t.Fatalf("expected one initial build, got %d", len(builds))
+	}
+	if builds[0].Status != domain.BuildStatusQueued {
+		t.Fatalf("expected initial build queued, got %q", builds[0].Status)
+	}
+	if builds[0].JobID == nil || *builds[0].JobID != job.ID {
+		t.Fatalf("expected initial build job_id=%q, got %v", job.ID, builds[0].JobID)
+	}
+
 	list, err := jobService.ListJobs(context.Background())
 	if err != nil {
 		t.Fatalf("list jobs failed: %v", err)
 	}
 	if len(list) != 1 {
 		t.Fatalf("expected 1 job, got %d", len(list))
+	}
+	if list[0].LatestBuild == nil {
+		t.Fatal("expected latest build summary on listed job")
+	}
+	if list[0].LatestBuild.Status != domain.BuildStatusQueued {
+		t.Fatalf("expected listed latest build queued, got %q", list[0].LatestBuild.Status)
+	}
+	if list[0].LatestBuild.BuildNumber != builds[0].BuildNumber {
+		t.Fatalf("expected listed latest build number %d, got %d", builds[0].BuildNumber, list[0].LatestBuild.BuildNumber)
 	}
 
 	got, err := jobService.GetJob(context.Background(), job.ID)
@@ -81,6 +106,85 @@ func TestJobService_CreateListGetUpdate(t *testing.T) {
 	}
 }
 
+func TestJobService_CreateJobDisabledSkipsInitialBuild(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService)
+
+	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-disabled",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       boolPtr(false),
+	})
+	if err != nil {
+		t.Fatalf("create disabled job failed: %v", err)
+	}
+
+	builds, err := buildService.ListBuildsByJobID(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("list builds by job failed: %v", err)
+	}
+	if len(builds) != 0 {
+		t.Fatalf("expected no initial build for disabled job, got %d", len(builds))
+	}
+}
+
+func TestJobService_CreateJobFailureQueuesNoInitialBuild(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService)
+
+	_, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-bad",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 2\nsteps:\n  - name: bad\n    run: echo bad\n",
+	})
+	if err == nil {
+		t.Fatal("expected invalid pipeline error")
+	}
+
+	builds, listErr := buildService.ListBuilds(context.Background())
+	if listErr != nil {
+		t.Fatalf("list builds failed: %v", listErr)
+	}
+	if len(builds) != 0 {
+		t.Fatalf("expected no builds after failed create, got %d", len(builds))
+	}
+}
+
+func TestJobService_CreateJobRepositoryErrorQueuesNoInitialBuild(t *testing.T) {
+	jobRepo := &failingCreateJobRepository{}
+	buildRepo := memory.NewBuildRepository()
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService)
+
+	_, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+	})
+	if !errors.Is(err, errJobCreateRejected) {
+		t.Fatalf("expected create rejection, got %v", err)
+	}
+
+	builds, listErr := buildService.ListBuilds(context.Background())
+	if listErr != nil {
+		t.Fatalf("list builds failed: %v", listErr)
+	}
+	if len(builds) != 0 {
+		t.Fatalf("expected no builds after rejected create, got %d", len(builds))
+	}
+}
+
 func TestJobService_CreateAndUpdateManagedImageConfig(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
@@ -104,7 +208,7 @@ func TestJobService_CreateAndUpdateManagedImageConfig(t *testing.T) {
 		Name:          "backend-ci",
 		RepositoryURL: "https://github.com/example/backend.git",
 		DefaultRef:    "main",
-		PipelinePath:  ".coyote/pipeline.yml",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
 		ManagedImage: &ManagedImageConfigInput{
 			Enabled:           true,
 			ManagedImageName:  "go",
@@ -174,7 +278,7 @@ func TestJobService_UpdateJobManagedImageDisabledDeletesConfig(t *testing.T) {
 		Name:          "backend-ci",
 		RepositoryURL: "https://github.com/example/backend.git",
 		DefaultRef:    "main",
-		PipelinePath:  ".coyote/pipeline.yml",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
 		ManagedImage: &ManagedImageConfigInput{
 			Enabled:           true,
 			ManagedImageName:  "go",
@@ -226,7 +330,7 @@ func TestJobService_UpdateJobManagedImageCreateDefaultsEnabledTrue(t *testing.T)
 		Name:          "backend-ci",
 		RepositoryURL: "https://github.com/example/backend.git",
 		DefaultRef:    "main",
-		PipelinePath:  ".coyote/pipeline.yml",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
 	})
 	if err != nil {
 		t.Fatalf("create job failed: %v", err)
@@ -281,7 +385,7 @@ func TestJobService_UpdateJobManagedImageNullDeletesConfigWithoutValidation(t *t
 		Name:          "backend-ci",
 		RepositoryURL: "https://github.com/example/backend.git",
 		DefaultRef:    "main",
-		PipelinePath:  ".coyote/pipeline.yml",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
 		ManagedImage: &ManagedImageConfigInput{
 			Enabled:           true,
 			ManagedImageName:  "go",
@@ -324,7 +428,9 @@ func TestJobService_CreateRejectsInvalidPipelineYAML(t *testing.T) {
 }
 
 func TestJobService_CreateAllowsRepoPipelinePathWithoutInlineYAML(t *testing.T) {
-	jobService := NewJobService(memory.NewJobRepository(), buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil))
+	buildService := buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)
+	buildService.SetRepoFetcher(&jobServiceRepoFetcher{localPath: writeTestPipelineRepo(t, "scenarios/success-basic/coyote.yml")})
+	jobService := NewJobService(memory.NewJobRepository(), buildService)
 
 	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
 		ProjectID:        "project-1",
@@ -670,4 +776,53 @@ func strPtr(v string) *string {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+var errJobCreateRejected = errors.New("job create rejected")
+
+type failingCreateJobRepository struct{}
+
+type jobServiceRepoFetcher struct {
+	localPath string
+}
+
+func (f *jobServiceRepoFetcher) Fetch(_ context.Context, _ string, _ string) (string, string, error) {
+	return f.localPath, "commit-sha", nil
+}
+
+func writeTestPipelineRepo(t *testing.T, pipelinePath string) string {
+	t.Helper()
+	repoRoot := t.TempDir()
+	fullPath := filepath.Join(repoRoot, filepath.FromSlash(pipelinePath))
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		t.Fatalf("create pipeline dir failed: %v", err)
+	}
+	if err := os.WriteFile(fullPath, []byte("version: 1\nsteps:\n  - name: test\n    run: go test ./...\n"), 0o644); err != nil {
+		t.Fatalf("write pipeline file failed: %v", err)
+	}
+	return repoRoot
+}
+
+func (r *failingCreateJobRepository) Create(_ context.Context, _ domain.Job) (domain.Job, error) {
+	return domain.Job{}, errJobCreateRejected
+}
+
+func (r *failingCreateJobRepository) List(_ context.Context) ([]domain.Job, error) {
+	return []domain.Job{}, nil
+}
+
+func (r *failingCreateJobRepository) ListPaged(_ context.Context, _ repository.ListParams) ([]domain.Job, error) {
+	return []domain.Job{}, nil
+}
+
+func (r *failingCreateJobRepository) ListPushEnabledByRepository(_ context.Context, _ string) ([]domain.Job, error) {
+	return []domain.Job{}, nil
+}
+
+func (r *failingCreateJobRepository) GetByID(_ context.Context, _ string) (domain.Job, error) {
+	return domain.Job{}, repository.ErrJobNotFound
+}
+
+func (r *failingCreateJobRepository) Update(_ context.Context, _ domain.Job) (domain.Job, error) {
+	return domain.Job{}, repository.ErrJobNotFound
 }

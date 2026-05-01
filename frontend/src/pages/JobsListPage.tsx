@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { listJobs, runJob } from "../api";
+import { StatusBadge } from "../components/StatusBadge";
 import { formatTime } from "../utils/time";
 
 export function JobsListPage() {
@@ -77,6 +78,7 @@ export function JobsListPage() {
               <th>Default Ref</th>
               <th>Enabled</th>
               <th>Push Trigger</th>
+              <th>Latest Build</th>
               <th>Updated</th>
               <th>Actions</th>
             </tr>
@@ -94,6 +96,21 @@ export function JobsListPage() {
                       ? `On ${job.push_branch}`
                       : "Any branch"
                     : "Off"}
+                </td>
+                <td>
+                  {job.latest_build ? (
+                    <div>
+                      <Link to={`/builds/${job.latest_build.id}`}>
+                        <StatusBadge status={job.latest_build.status} />
+                      </Link>
+                      <div className="subtle-text">
+                        #{job.latest_build.build_number} ·{" "}
+                        {formatTime(job.latest_build.created_at)}
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="subtle-text">No builds yet</span>
+                  )}
                 </td>
                 <td>{formatTime(job.updated_at)}</td>
                 <td>

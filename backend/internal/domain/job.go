@@ -26,7 +26,17 @@ type Job struct {
 	PipelineYAML       string
 	PipelinePath       *string
 	ManagedImageConfig *JobManagedImageConfig
+	LatestBuild        *JobBuildSummary
 	Enabled            bool
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+}
+
+type JobBuildSummary struct {
+	ID           string
+	BuildNumber  int64
+	Status       BuildStatus
+	CreatedAt    time.Time
+	FinishedAt   *time.Time
+	ErrorMessage *string
 }

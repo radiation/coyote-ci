@@ -135,8 +135,8 @@ func TestEventHandler_IngestGitHubWebhook_IdempotentDuplicateNoSecondBuild(t *te
 	if err != nil {
 		t.Fatalf("list builds failed: %v", err)
 	}
-	if len(builds) != 1 {
-		t.Fatalf("expected exactly one queued build for duplicate deliveries, got %d", len(builds))
+	if len(builds) != 2 {
+		t.Fatalf("expected one initial build plus one queued webhook build for duplicate deliveries, got %d", len(builds))
 	}
 
 	delivery, err := deliveryRepo.GetByProviderDeliveryID(context.Background(), "github", "delivery-1")

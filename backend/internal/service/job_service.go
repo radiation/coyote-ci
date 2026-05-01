@@ -179,24 +179,72 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 	if err != nil {
 		return domain.Job{}, err
 	}
-	if input.ManagedImage == nil || !input.ManagedImage.Enabled {
+	if input.ManagedImage != nil && input.ManagedImage.Enabled {
+		config, err := s.upsertManagedImageConfig(ctx, created, input.ManagedImage)
+		if err != nil {
+			return domain.Job{}, err
+		}
+		created.ManagedImageConfig = &config
+	}
+
+	if !created.Enabled {
 		return created, nil
 	}
 
-	config, err := s.upsertManagedImageConfig(ctx, created, input.ManagedImage)
-	if err != nil {
+	if _, err := s.createBuildForJob(ctx, created); err != nil {
 		return domain.Job{}, err
 	}
-	created.ManagedImageConfig = &config
+
 	return created, nil
 }
 
 func (s *JobService) ListJobs(ctx context.Context) ([]domain.Job, error) {
-	return s.jobRepo.List(ctx)
+	jobs, err := s.jobRepo.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if enrichErr := s.attachLatestBuilds(ctx, jobs); enrichErr != nil {
+		return nil, enrichErr
+	}
+	return jobs, nil
 }
 
 func (s *JobService) ListJobsPaged(ctx context.Context, params repository.ListParams) ([]domain.Job, error) {
-	return s.jobRepo.ListPaged(ctx, params)
+	jobs, err := s.jobRepo.ListPaged(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	if enrichErr := s.attachLatestBuilds(ctx, jobs); enrichErr != nil {
+		return nil, enrichErr
+	}
+	return jobs, nil
+}
+
+func (s *JobService) attachLatestBuilds(ctx context.Context, jobs []domain.Job) error {
+	if s.buildService == nil {
+		return nil
+	}
+
+	for i := range jobs {
+		builds, err := s.buildService.ListBuildsByJobID(ctx, jobs[i].ID)
+		if err != nil {
+			return err
+		}
+		if len(builds) == 0 {
+			jobs[i].LatestBuild = nil
+			continue
+		}
+		jobs[i].LatestBuild = &domain.JobBuildSummary{
+			ID:           builds[0].ID,
+			BuildNumber:  builds[0].BuildNumber,
+			Status:       builds[0].Status,
+			CreatedAt:    builds[0].CreatedAt,
+			FinishedAt:   builds[0].FinishedAt,
+			ErrorMessage: builds[0].ErrorMessage,
+		}
+	}
+
+	return nil
 }
 
 func (s *JobService) ListBuildsByJobID(ctx context.Context, jobID string) ([]domain.Build, error) {
@@ -329,10 +377,6 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 }
 
 func (s *JobService) RunJobNow(ctx context.Context, id string) (domain.Build, error) {
-	if s.buildService == nil {
-		return domain.Build{}, ErrJobBuildServiceNotConfigured
-	}
-
 	job, err := s.GetJob(ctx, id)
 	if err != nil {
 		return domain.Build{}, err
@@ -341,7 +385,16 @@ func (s *JobService) RunJobNow(ctx context.Context, id string) (domain.Build, er
 		return domain.Build{}, ErrJobDisabled
 	}
 
+	return s.createBuildForJob(ctx, job)
+}
+
+func (s *JobService) createBuildForJob(ctx context.Context, job domain.Job) (domain.Build, error) {
+	if s.buildService == nil {
+		return domain.Build{}, ErrJobBuildServiceNotConfigured
+	}
+
 	var build domain.Build
+	var err error
 	if job.PipelinePath != nil && strings.TrimSpace(*job.PipelinePath) != "" {
 		build, err = s.buildService.CreateBuildFromRepo(ctx, buildsvc.CreateRepoBuildInput{
 			ProjectID:    job.ProjectID,
