@@ -185,6 +185,51 @@ func TestJobService_CreateJobRepositoryErrorQueuesNoInitialBuild(t *testing.T) {
 	}
 }
 
+func TestJobService_CreateJobInitialBuildFailureRollsBackJobAndManagedImageConfig(t *testing.T) {
+	jobRepo := &recordingJobRepository{JobRepository: memory.NewJobRepository()}
+	configRepo := memory.NewJobManagedImageConfigRepository()
+	credentialRepo := memory.NewSourceCredentialRepository()
+	jobService := NewJobService(jobRepo, nil).WithManagedImageConfigRepository(configRepo, credentialRepo)
+
+	_, err := credentialRepo.Create(context.Background(), domain.SourceCredential{
+		ID:        "cred-1",
+		Name:      "github-bot",
+		Kind:      domain.SourceCredentialKindHTTPSToken,
+		SecretRef: "COYOTE_TOKEN",
+	})
+	if err != nil {
+		t.Fatalf("create credential failed: %v", err)
+	}
+
+	_, err = jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		ManagedImage: &ManagedImageConfigInput{
+			Enabled:           true,
+			ManagedImageName:  "go",
+			PipelinePath:      ".coyote/pipeline.yml",
+			WriteCredentialID: "cred-1",
+		},
+	})
+	if !errors.Is(err, ErrJobBuildServiceNotConfigured) {
+		t.Fatalf("expected build service not configured error, got %v", err)
+	}
+
+	jobs, listErr := jobService.ListJobs(context.Background())
+	if listErr != nil {
+		t.Fatalf("list jobs failed: %v", listErr)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("expected rolled back create to leave no jobs, got %d", len(jobs))
+	}
+	if _, configErr := configRepo.GetByJobID(context.Background(), jobRepo.lastCreatedID); !errors.Is(configErr, repository.ErrJobManagedImageConfigNotFound) {
+		t.Fatalf("expected managed image config rollback, got %v", configErr)
+	}
+}
+
 func TestJobService_CreateAndUpdateManagedImageConfig(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
@@ -782,12 +827,25 @@ var errJobCreateRejected = errors.New("job create rejected")
 
 type failingCreateJobRepository struct{}
 
+type recordingJobRepository struct {
+	repository.JobRepository
+	lastCreatedID string
+}
+
 type jobServiceRepoFetcher struct {
 	localPath string
 }
 
 func (f *jobServiceRepoFetcher) Fetch(_ context.Context, _ string, _ string) (string, string, error) {
 	return f.localPath, "commit-sha", nil
+}
+
+func (r *recordingJobRepository) Create(ctx context.Context, job domain.Job) (domain.Job, error) {
+	created, err := r.JobRepository.Create(ctx, job)
+	if err == nil {
+		r.lastCreatedID = created.ID
+	}
+	return created, err
 }
 
 func writeTestPipelineRepo(t *testing.T, pipelinePath string) string {
@@ -805,6 +863,10 @@ func writeTestPipelineRepo(t *testing.T, pipelinePath string) string {
 
 func (r *failingCreateJobRepository) Create(_ context.Context, _ domain.Job) (domain.Job, error) {
 	return domain.Job{}, errJobCreateRejected
+}
+
+func (r *failingCreateJobRepository) Delete(_ context.Context, _ string) error {
+	return repository.ErrJobNotFound
 }
 
 func (r *failingCreateJobRepository) List(_ context.Context) ([]domain.Job, error) {

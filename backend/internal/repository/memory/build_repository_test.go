@@ -105,6 +105,40 @@ func TestBuildRepository_GetByID(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_ListLatestByJobIDs(t *testing.T) {
+	repo := NewBuildRepository()
+	jobA := "job-a"
+	jobB := "job-b"
+	now := time.Now().UTC()
+
+	_, err := repo.Create(context.Background(), domain.Build{ID: "build-1", BuildNumber: 1, ProjectID: "project-1", JobID: &jobA, Status: domain.BuildStatusFailed, CreatedAt: now})
+	if err != nil {
+		t.Fatalf("setup create build-1 failed: %v", err)
+	}
+	_, err = repo.Create(context.Background(), domain.Build{ID: "build-2", BuildNumber: 2, ProjectID: "project-1", JobID: &jobA, Status: domain.BuildStatusSuccess, CreatedAt: now.Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("setup create build-2 failed: %v", err)
+	}
+	_, err = repo.Create(context.Background(), domain.Build{ID: "build-3", BuildNumber: 3, ProjectID: "project-1", JobID: &jobB, Status: domain.BuildStatusQueued, CreatedAt: now.Add(2 * time.Minute)})
+	if err != nil {
+		t.Fatalf("setup create build-3 failed: %v", err)
+	}
+
+	latest, err := repo.ListLatestByJobIDs(context.Background(), []string{jobA, jobB, jobA, ""})
+	if err != nil {
+		t.Fatalf("ListLatestByJobIDs returned error: %v", err)
+	}
+	if len(latest) != 2 {
+		t.Fatalf("expected latest builds for 2 jobs, got %d", len(latest))
+	}
+	if latest[jobA].ID != "build-2" {
+		t.Fatalf("expected latest build-2 for %s, got %s", jobA, latest[jobA].ID)
+	}
+	if latest[jobB].ID != "build-3" {
+		t.Fatalf("expected latest build-3 for %s, got %s", jobB, latest[jobB].ID)
+	}
+}
+
 func TestBuildRepository_UpdateStatus(t *testing.T) {
 	repo := NewBuildRepository()
 	created, err := repo.Create(context.Background(), domain.Build{

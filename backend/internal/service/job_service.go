@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -192,10 +193,25 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 	}
 
 	if _, err := s.createBuildForJob(ctx, created); err != nil {
+		if rollbackErr := s.rollbackCreatedJob(ctx, created); rollbackErr != nil {
+			return domain.Job{}, fmt.Errorf("creating initial build: %w; rollback failed: %v", err, rollbackErr)
+		}
 		return domain.Job{}, err
 	}
 
 	return created, nil
+}
+
+func (s *JobService) rollbackCreatedJob(ctx context.Context, job domain.Job) error {
+	if job.ManagedImageConfig != nil && s.managedImageConfigs != nil {
+		if err := s.managedImageConfigs.DeleteByJobID(ctx, job.ID); err != nil && !errors.Is(err, repository.ErrJobManagedImageConfigNotFound) {
+			return err
+		}
+	}
+	if err := s.jobRepo.Delete(ctx, job.ID); err != nil && !errors.Is(err, repository.ErrJobNotFound) {
+		return err
+	}
+	return nil
 }
 
 func (s *JobService) ListJobs(ctx context.Context) ([]domain.Job, error) {
@@ -224,23 +240,33 @@ func (s *JobService) attachLatestBuilds(ctx context.Context, jobs []domain.Job) 
 	if s.buildService == nil {
 		return nil
 	}
+	if len(jobs) == 0 {
+		return nil
+	}
+
+	jobIDs := make([]string, 0, len(jobs))
+	for i := range jobs {
+		jobIDs = append(jobIDs, jobs[i].ID)
+	}
+
+	latestBuilds, err := s.buildService.ListLatestBuildsByJobIDs(ctx, jobIDs)
+	if err != nil {
+		return err
+	}
 
 	for i := range jobs {
-		builds, err := s.buildService.ListBuildsByJobID(ctx, jobs[i].ID)
-		if err != nil {
-			return err
-		}
-		if len(builds) == 0 {
+		build, ok := latestBuilds[jobs[i].ID]
+		if !ok {
 			jobs[i].LatestBuild = nil
 			continue
 		}
 		jobs[i].LatestBuild = &domain.JobBuildSummary{
-			ID:           builds[0].ID,
-			BuildNumber:  builds[0].BuildNumber,
-			Status:       builds[0].Status,
-			CreatedAt:    builds[0].CreatedAt,
-			FinishedAt:   builds[0].FinishedAt,
-			ErrorMessage: builds[0].ErrorMessage,
+			ID:           build.ID,
+			BuildNumber:  build.BuildNumber,
+			Status:       build.Status,
+			CreatedAt:    build.CreatedAt,
+			FinishedAt:   build.FinishedAt,
+			ErrorMessage: build.ErrorMessage,
 		}
 	}
 

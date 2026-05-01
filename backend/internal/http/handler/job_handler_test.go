@@ -226,6 +226,93 @@ func TestJobHandler_CreateAcceptsPipelinePathWithoutInlineYAML(t *testing.T) {
 	}
 }
 
+func TestJobHandler_CreateRollsBackJobWhenInitialBuildFails(t *testing.T) {
+	jobRepo := repositorymemory.NewJobRepository()
+	h := NewJobHandler(service.NewJobService(jobRepo, nil))
+
+	body := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(body))
+	res := httptest.NewRecorder()
+	h.CreateJob(res, req)
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, res.Code)
+	}
+
+	var payload map[string]map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	errorBody, ok := payload["error"]
+	if !ok {
+		t.Fatalf("expected error object, got %v", payload)
+	}
+	if errorBody["message"] != "build service not configured" {
+		t.Fatalf("expected build service not configured message, got %v", errorBody["message"])
+	}
+
+	jobs, err := jobRepo.List(context.Background())
+	if err != nil {
+		t.Fatalf("list jobs failed: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("expected failed create to roll back job, got %d jobs", len(jobs))
+	}
+}
+
+func TestJobHandler_CreateReturnsRepoFetcherMisconfiguration(t *testing.T) {
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil)
+	h := NewJobHandler(service.NewJobService(jobRepo, buildSvc))
+
+	body := `{"project_id":"project-1","name":"path-job","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_path":"scenarios/success-basic/coyote.yml"}`
+	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(body))
+	res := httptest.NewRecorder()
+	h.CreateJob(res, req)
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, res.Code)
+	}
+
+	var payload map[string]map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	errorBody, ok := payload["error"]
+	if !ok {
+		t.Fatalf("expected error object, got %v", payload)
+	}
+	if errorBody["message"] != "repo fetcher not configured" {
+		t.Fatalf("expected repo fetcher not configured message, got %v", errorBody["message"])
+	}
+
+	jobs, err := jobRepo.List(context.Background())
+	if err != nil {
+		t.Fatalf("list jobs failed: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("expected failed create to roll back job, got %d jobs", len(jobs))
+	}
+}
+
+func TestJobHandler_WriteJobServiceErrorReturnsRepoFetcherMisconfiguration(t *testing.T) {
+	h := NewJobHandler(nil)
+	res := httptest.NewRecorder()
+
+	h.writeJobServiceError(res, buildsvc.ErrRepoFetcherNotConfigured)
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, res.Code)
+	}
+	var payload map[string]map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if payload["error"]["message"] != "repo fetcher not configured" {
+		t.Fatalf("expected repo fetcher not configured message, got %v", payload["error"]["message"])
+	}
+}
+
 type handlerTestRepoFetcher struct {
 	localPath string
 }

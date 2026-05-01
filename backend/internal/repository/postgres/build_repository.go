@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -219,6 +220,74 @@ func (r *BuildRepository) ListByJobID(ctx context.Context, jobID string) (builds
 	}
 
 	return builds, nil
+}
+
+func (r *BuildRepository) ListLatestByJobIDs(ctx context.Context, jobIDs []string) (latest map[string]domain.Build, err error) {
+	jobIDs = uniqueNonBlankStrings(jobIDs)
+	if len(jobIDs) == 0 {
+		return map[string]domain.Build{}, nil
+	}
+
+	args := make([]any, 0, len(jobIDs))
+	placeholders := make([]string, 0, len(jobIDs))
+	for idx, jobID := range jobIDs {
+		args = append(args, jobID)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", idx+1))
+	}
+
+	query := `
+		SELECT DISTINCT ON (b.job_id) ` + qualifyColumns("b", buildListColumns) + `
+		FROM builds b
+		WHERE b.job_id IN (` + strings.Join(placeholders, ", ") + `)
+		ORDER BY b.job_id, b.created_at DESC, b.id ASC
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	latest = make(map[string]domain.Build, len(jobIDs))
+	for rows.Next() {
+		build, scanErr := scanBuildList(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		if build.JobID != nil {
+			latest[*build.JobID] = build
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return latest, nil
+}
+
+func uniqueNonBlankStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		unique = append(unique, trimmed)
+	}
+	return unique
 }
 
 func (r *BuildRepository) GetByID(ctx context.Context, id string) (domain.Build, error) {

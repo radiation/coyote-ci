@@ -15,6 +15,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
 type JobHandler struct {
@@ -241,6 +242,14 @@ func (h *JobHandler) writeJobServiceError(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, service.ErrJobDisabled) {
 		writeErrorJSON(w, http.StatusConflict, "job_disabled", err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrJobBuildServiceNotConfigured) {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "build service not configured")
+		return
+	}
+	if errors.Is(err, buildsvc.ErrRepoFetcherNotConfigured) {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "repo fetcher not configured")
 		return
 	}
 	if isBadRequestError(err) {

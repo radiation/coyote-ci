@@ -104,6 +104,19 @@ func (r *fakeBuildRepository) ListByJobID(_ context.Context, jobID string) ([]do
 	return []domain.Build{}, nil
 }
 
+func (r *fakeBuildRepository) ListLatestByJobIDs(_ context.Context, jobIDs []string) (map[string]domain.Build, error) {
+	latest := map[string]domain.Build{}
+	if r.build.ID == "" || r.build.JobID == nil {
+		return latest, nil
+	}
+	for _, jobID := range jobIDs {
+		if *r.build.JobID == jobID {
+			latest[jobID] = r.build
+		}
+	}
+	return latest, nil
+}
+
 func (r *fakeBuildRepository) ListPaged(ctx context.Context, _ repository.ListParams) ([]domain.Build, error) {
 	return r.List(ctx)
 }
