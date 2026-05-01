@@ -976,6 +976,19 @@ h3 {
   );
 }
 
+.artifact-filter-toolbar {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.artifact-filter-toolbar h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
 .artifact-filter-field {
   display: flex;
   flex-direction: column;
@@ -1038,8 +1051,39 @@ h3 {
 }
 
 .artifact-card {
-  border-radius: 18px;
+  border-radius: 8px;
   overflow: hidden;
+}
+
+.artifact-card-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+}
+
+.artifact-skeleton-line {
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-muted),
+    var(--color-surface-strong),
+    var(--color-surface-muted)
+  );
+}
+
+.artifact-skeleton-title {
+  width: min(420px, 72%);
+  height: 18px;
+}
+
+.artifact-skeleton-meta {
+  width: min(620px, 86%);
+}
+
+.artifact-skeleton-short {
+  width: min(260px, 46%);
 }
 
 .artifact-card-toggle {
@@ -1055,6 +1099,10 @@ h3 {
   background: var(--color-surface-muted);
 }
 
+.artifact-card-toggle[aria-expanded="true"] {
+  background: var(--color-surface-raised);
+}
+
 .artifact-card-heading,
 .artifact-version-header {
   display: flex;
@@ -1065,6 +1113,29 @@ h3 {
 .artifact-card-title {
   margin: 0;
   font-size: 1rem;
+  word-break: break-word;
+}
+
+.artifact-card-kicker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.artifact-expand-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-weight: 700;
+  line-height: 1;
 }
 
 .artifact-card-meta {
@@ -1082,6 +1153,17 @@ h3 {
   color: var(--color-text-muted);
   font-size: 0.85rem;
   font-weight: 600;
+}
+
+.artifact-summary-primary {
+  color: var(--color-text);
+  font-weight: 800;
+}
+
+.artifact-latest-tag {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .artifact-card-body {
@@ -1111,7 +1193,20 @@ h3 {
 
 .artifact-version-row {
   padding: 16px;
-  border-radius: 16px;
+  border-radius: 8px;
+}
+
+.artifact-version-list-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.artifact-version-list-header h4 {
+  margin: 0;
+  font-size: 0.95rem;
 }
 
 .artifact-version-title-row {
@@ -1131,6 +1226,21 @@ h3 {
 
 .artifact-empty-state {
   margin-top: 8px;
+  padding: 18px 20px;
+  border: 1px dashed var(--color-border-dashed);
+  border-radius: 8px;
+  background: var(--color-surface-inset);
+}
+
+.artifact-empty-state .empty {
+  padding: 0;
+  color: var(--color-text-muted);
+  font-weight: 700;
+}
+
+.artifact-error-state {
+  border-color: var(--color-error-border);
+  background: var(--color-error-bg);
 }
 
 .sr-only {
@@ -1165,6 +1275,7 @@ h3 {
   }
 
   .artifact-pagination-bar,
+  .artifact-filter-toolbar,
   .artifact-pagination-actions,
   .artifact-pagination-jump-form {
     align-items: stretch;

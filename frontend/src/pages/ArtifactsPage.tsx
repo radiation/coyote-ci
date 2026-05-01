@@ -1,5 +1,10 @@
 import { useDeferredValue, useEffect, useState, type FormEvent } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { createJobVersionTags, listArtifacts } from "../api";
 import { ArtifactBrowser } from "../components/ArtifactBrowser";
 import type { ArtifactBrowseVersion, ArtifactType } from "../types";
@@ -74,6 +79,8 @@ export function ArtifactsPage() {
   );
   const trimmedSearch = search.trim();
   const deferredSearch = useDeferredValue(trimmedSearch);
+  const hasActiveFilters = Boolean(trimmedSearch || typeFilter);
+  const activeFilterCount = (trimmedSearch ? 1 : 0) + (typeFilter ? 1 : 0);
 
   useEffect(() => {
     const nextSearch = searchParams.get("q") ?? "";
@@ -137,6 +144,7 @@ export function ArtifactsPage() {
   const {
     data: artifactResults,
     isLoading,
+    isFetching,
     error,
     dataUpdatedAt,
   } = useQuery({
@@ -148,6 +156,7 @@ export function ArtifactsPage() {
         limit: pageSize + 1,
         offset: pageIndex * pageSize,
       }),
+    placeholderData: keepPreviousData,
   });
 
   const artifacts = artifactResults?.slice(0, pageSize) ?? [];
@@ -201,6 +210,13 @@ export function ArtifactsPage() {
     setPageIndex(0);
   }
 
+  function handleClearFilters() {
+    setSearch("");
+    setTypeFilter("");
+    setPageIndex(0);
+    setSearchParams(new URLSearchParams(), { replace: true });
+  }
+
   function goToPage(nextPage: number) {
     const safePage = Math.max(1, nextPage);
     setPageIndex(safePage - 1);
@@ -237,9 +253,7 @@ export function ArtifactsPage() {
         <div>
           <h2>Artifacts</h2>
           <p className="subtle-text">
-            Browse logical artifacts, inspect their published versions, and add
-            immutable version tags without leaving the repository view. Last
-            updated:{" "}
+            Latest repository refresh:{" "}
             {dataUpdatedAt > 0
               ? formatTime(new Date(dataUpdatedAt).toISOString())
               : "—"}
@@ -264,14 +278,33 @@ export function ArtifactsPage() {
         </div>
       </div>
 
-      <section className="artifact-filters-panel">
+      <section className="artifact-filters-panel" aria-label="Artifact filters">
+        <div className="artifact-filter-toolbar">
+          <div>
+            <h3>Repository Browse</h3>
+            <p className="subtle-text">
+              {activeFilterCount > 0
+                ? `${activeFilterCount} active filter${activeFilterCount === 1 ? "" : "s"}`
+                : "All logical artifacts"}
+              {isFetching && !isLoading ? " · Updating" : ""}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={handleClearFilters}
+            disabled={!hasActiveFilters || isLoading}
+          >
+            Clear filters
+          </button>
+        </div>
         <label className="artifact-filter-field">
           <span>Search artifacts</span>
           <input
             type="search"
             value={search}
             onChange={(event) => handleSearchChange(event.target.value)}
-            placeholder="Search by path, project, job, or version"
+            placeholder="Name, path, project, job, or version"
           />
         </label>
         <label className="artifact-filter-field artifact-filter-select">
@@ -297,10 +330,12 @@ export function ArtifactsPage() {
       >
         <p className="subtle-text artifact-pagination-status">
           {artifacts.length > 0
-            ? `Showing ${pageStart}-${pageEnd}`
+            ? `Showing ${pageStart}-${pageEnd}${hasNextPage ? "; more available" : ""}`
             : pageIndex > 0
-              ? `Page ${pageIndex + 1}`
-              : "No artifacts in this view"}
+              ? `No artifacts on page ${pageIndex + 1}`
+              : hasActiveFilters
+                ? "No matching artifacts"
+                : "No artifacts yet"}
         </p>
         <div className="artifact-pagination-actions">
           <label className="artifact-pagination-field">
@@ -323,7 +358,7 @@ export function ArtifactsPage() {
             type="button"
             className="secondary-button"
             onClick={() => goToPage(pageIndex)}
-            disabled={pageIndex === 0 || isLoading}
+            disabled={pageIndex === 0 || isFetching}
           >
             Previous
           </button>
@@ -340,13 +375,13 @@ export function ArtifactsPage() {
                 inputMode="numeric"
                 value={pageInput}
                 onChange={(event) => setPageInput(event.target.value)}
-                disabled={isLoading}
+                disabled={isFetching}
               />
             </label>
             <button
               type="submit"
               className="secondary-button"
-              disabled={isLoading}
+              disabled={isFetching}
             >
               Go
             </button>
@@ -355,7 +390,7 @@ export function ArtifactsPage() {
             type="button"
             className="secondary-button"
             onClick={() => goToPage(pageIndex + 2)}
-            disabled={!hasNextPage || isLoading}
+            disabled={!hasNextPage || isFetching}
           >
             Next
           </button>
@@ -366,6 +401,8 @@ export function ArtifactsPage() {
         artifacts={artifacts}
         isLoading={isLoading}
         error={error}
+        hasActiveFilters={hasActiveFilters}
+        pageIndex={pageIndex}
         onAssignVersion={assignArtifactVersion}
       />
     </>

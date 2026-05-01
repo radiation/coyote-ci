@@ -11,6 +11,8 @@ interface ArtifactBrowserProps {
   artifacts: ArtifactBrowseItem[];
   isLoading: boolean;
   error: unknown;
+  hasActiveFilters?: boolean;
+  pageIndex?: number;
   onAssignVersion?: (
     version: ArtifactBrowseVersion,
     releaseVersion: string,
@@ -49,27 +51,61 @@ function artifactHeading(artifact: ArtifactBrowseItem): string {
   return artifact.name?.trim() || artifact.path;
 }
 
+function versionCountLabel(count: number): string {
+  return `${count} version${count === 1 ? "" : "s"}`;
+}
+
+function firstVersionTag(
+  version: ArtifactBrowseVersion | undefined,
+): string | null {
+  const tag = version?.version_tags?.[0]?.version?.trim();
+  return tag || null;
+}
+
 export function ArtifactBrowser({
   artifacts,
   isLoading,
   error,
+  hasActiveFilters = false,
+  pageIndex = 0,
   onAssignVersion,
 }: ArtifactBrowserProps) {
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
 
-  if (isLoading) return <p>Loading artifacts…</p>;
+  if (isLoading) {
+    return (
+      <div className="artifact-browser-list" aria-label="Loading artifacts">
+        {Array.from({ length: 3 }, (_value, index) => (
+          <div key={index} className="artifact-card artifact-card-skeleton">
+            <div className="artifact-skeleton-line artifact-skeleton-title" />
+            <div className="artifact-skeleton-line artifact-skeleton-meta" />
+            <div className="artifact-skeleton-line artifact-skeleton-short" />
+          </div>
+        ))}
+      </div>
+    );
+  }
   if (error) {
     return (
-      <p className="error-text">Failed to load artifacts: {String(error)}</p>
+      <div className="empty-state artifact-empty-state artifact-error-state">
+        <p className="error-text">Failed to load artifacts: {String(error)}</p>
+      </div>
     );
   }
   if (!artifacts || artifacts.length === 0) {
     return (
       <div className="empty-state artifact-empty-state">
-        <p className="empty">No artifacts matched the current filters.</p>
+        <p className="empty">
+          {pageIndex > 0
+            ? "No artifacts on this page."
+            : hasActiveFilters
+              ? "No artifacts matched the current filters."
+              : "No artifacts have been published yet."}
+        </p>
         <p className="subtle-text">
-          Adjust the search or type filter, or run builds that publish
-          artifacts.
+          {hasActiveFilters
+            ? "Adjust the search or type filter, or clear filters to return to the repository view."
+            : "Run a build that publishes artifacts to populate this repository."}
         </p>
       </div>
     );
@@ -88,6 +124,7 @@ export function ArtifactBrowser({
       {artifacts.map((artifact) => {
         const isExpanded = expandedKeys.includes(artifact.key);
         const latestVersion = artifact.versions[0];
+        const latestTag = firstVersionTag(latestVersion);
 
         return (
           <section key={artifact.key} className="artifact-card">
@@ -99,6 +136,17 @@ export function ArtifactBrowser({
             >
               <div className="artifact-card-heading">
                 <div>
+                  <div className="artifact-card-kicker">
+                    <span
+                      className="artifact-expand-indicator"
+                      aria-hidden="true"
+                    >
+                      {isExpanded ? "-" : "+"}
+                    </span>
+                    <span className="artifact-type-pill">
+                      {TYPE_LABELS[artifact.artifact_type]}
+                    </span>
+                  </div>
                   <h3 className="artifact-card-title">
                     {artifactHeading(artifact)}
                   </h3>
@@ -108,9 +156,6 @@ export function ArtifactBrowser({
                     </p>
                   )}
                   <div className="artifact-card-meta">
-                    <span className="artifact-type-pill">
-                      {TYPE_LABELS[artifact.artifact_type]}
-                    </span>
                     <span className="artifact-secondary-pill">
                       Project {artifact.project_id}
                     </span>
@@ -122,10 +167,23 @@ export function ArtifactBrowser({
                   </div>
                 </div>
                 <div className="artifact-card-summary">
-                  <span>{artifact.versions.length} version(s)</span>
-                  <span>Latest {formatTime(artifact.latest_created_at)}</span>
+                  <span className="artifact-summary-primary">
+                    {latestVersion
+                      ? versionLabel(latestVersion)
+                      : "No versions"}
+                  </span>
+                  {latestVersion && (
+                    <StatusBadge status={latestVersion.build_status} />
+                  )}
+                  <span>{versionCountLabel(artifact.versions.length)}</span>
+                  <span>{formatTime(artifact.latest_created_at)}</span>
                   {latestVersion && (
                     <span>{formatFileSize(latestVersion.size_bytes)}</span>
+                  )}
+                  {latestTag && (
+                    <span className="version-tag-pill artifact-latest-tag">
+                      {latestTag}
+                    </span>
                   )}
                 </div>
               </div>
@@ -144,7 +202,7 @@ export function ArtifactBrowser({
                   </div>
                   <div>
                     <strong>Versions</strong>
-                    <span>{artifact.versions.length}</span>
+                    <span>{versionCountLabel(artifact.versions.length)}</span>
                   </div>
                   <div>
                     <strong>Project</strong>
@@ -158,6 +216,11 @@ export function ArtifactBrowser({
                     <strong>Path</strong>
                     <span className="artifact-mono">{artifact.path}</span>
                   </div>
+                </div>
+
+                <div className="artifact-version-list-header">
+                  <h4>Versions</h4>
+                  <span className="subtle-text">Most recent first</span>
                 </div>
 
                 <div className="artifact-version-list">
