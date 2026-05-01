@@ -201,6 +201,40 @@ func (r *BuildRepository) ListByJobID(_ context.Context, jobID string) ([]domain
 	return builds, nil
 }
 
+func (r *BuildRepository) ListLatestByJobIDs(_ context.Context, jobIDs []string) (map[string]domain.Build, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if len(jobIDs) == 0 {
+		return map[string]domain.Build{}, nil
+	}
+
+	wanted := make(map[string]struct{}, len(jobIDs))
+	for _, jobID := range jobIDs {
+		if strings.TrimSpace(jobID) == "" {
+			continue
+		}
+		wanted[jobID] = struct{}{}
+	}
+
+	latest := make(map[string]domain.Build, len(wanted))
+	for _, build := range r.builds {
+		if build.JobID == nil {
+			continue
+		}
+		jobID := *build.JobID
+		if _, ok := wanted[jobID]; !ok {
+			continue
+		}
+		existing, exists := latest[jobID]
+		if !exists || build.CreatedAt.After(existing.CreatedAt) || (build.CreatedAt.Equal(existing.CreatedAt) && build.ID < existing.ID) {
+			latest[jobID] = build
+		}
+	}
+
+	return latest, nil
+}
+
 func (r *BuildRepository) GetByID(_ context.Context, id string) (domain.Build, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

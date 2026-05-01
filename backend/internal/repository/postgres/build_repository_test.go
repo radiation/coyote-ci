@@ -131,6 +131,42 @@ func TestBuildRepository_GetByID(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_ListLatestByJobIDs(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewBuildRepository(db)
+	now := time.Now().UTC()
+	jobA := "job-a"
+	jobB := "job-b"
+
+	mock.ExpectQuery(`SELECT DISTINCT ON \(b.job_id\) b.id, b.build_number, b.project_id, b.job_id, b.status, b.created_at`).
+		WithArgs(jobA, jobB).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "build_number", "project_id", "job_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).
+			AddRow("build-2", 2, "project-1", jobA, "success", now, now, now, now, 1, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil).
+			AddRow("build-3", 3, "project-1", jobB, "queued", now.Add(time.Minute), now.Add(time.Minute), nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil))
+
+	latest, err := repo.ListLatestByJobIDs(context.Background(), []string{jobA, jobB, jobA, ""})
+	if err != nil {
+		t.Fatalf("ListLatestByJobIDs returned error: %v", err)
+	}
+	if len(latest) != 2 {
+		t.Fatalf("expected latest builds for 2 jobs, got %d", len(latest))
+	}
+	if latest[jobA].ID != "build-2" {
+		t.Fatalf("expected build-2 for %s, got %s", jobA, latest[jobA].ID)
+	}
+	if latest[jobB].ID != "build-3" {
+		t.Fatalf("expected build-3 for %s, got %s", jobB, latest[jobB].ID)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 func TestBuildRepository_UpdateStatus(t *testing.T) {
 	now := time.Now().UTC()
 	tests := []struct {

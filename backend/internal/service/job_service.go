@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -179,24 +180,97 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 	if err != nil {
 		return domain.Job{}, err
 	}
-	if input.ManagedImage == nil || !input.ManagedImage.Enabled {
+	if input.ManagedImage != nil && input.ManagedImage.Enabled {
+		config, err := s.upsertManagedImageConfig(ctx, created, input.ManagedImage)
+		if err != nil {
+			return domain.Job{}, err
+		}
+		created.ManagedImageConfig = &config
+	}
+
+	if !created.Enabled {
 		return created, nil
 	}
 
-	config, err := s.upsertManagedImageConfig(ctx, created, input.ManagedImage)
-	if err != nil {
+	if _, err := s.createBuildForJob(ctx, created); err != nil {
+		if rollbackErr := s.rollbackCreatedJob(ctx, created); rollbackErr != nil {
+			return domain.Job{}, fmt.Errorf("creating initial build: %w; rollback failed: %v", err, rollbackErr)
+		}
 		return domain.Job{}, err
 	}
-	created.ManagedImageConfig = &config
+
 	return created, nil
 }
 
+func (s *JobService) rollbackCreatedJob(ctx context.Context, job domain.Job) error {
+	if job.ManagedImageConfig != nil && s.managedImageConfigs != nil {
+		if err := s.managedImageConfigs.DeleteByJobID(ctx, job.ID); err != nil && !errors.Is(err, repository.ErrJobManagedImageConfigNotFound) {
+			return err
+		}
+	}
+	if err := s.jobRepo.Delete(ctx, job.ID); err != nil && !errors.Is(err, repository.ErrJobNotFound) {
+		return err
+	}
+	return nil
+}
+
 func (s *JobService) ListJobs(ctx context.Context) ([]domain.Job, error) {
-	return s.jobRepo.List(ctx)
+	jobs, err := s.jobRepo.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if enrichErr := s.attachLatestBuilds(ctx, jobs); enrichErr != nil {
+		return nil, enrichErr
+	}
+	return jobs, nil
 }
 
 func (s *JobService) ListJobsPaged(ctx context.Context, params repository.ListParams) ([]domain.Job, error) {
-	return s.jobRepo.ListPaged(ctx, params)
+	jobs, err := s.jobRepo.ListPaged(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	if enrichErr := s.attachLatestBuilds(ctx, jobs); enrichErr != nil {
+		return nil, enrichErr
+	}
+	return jobs, nil
+}
+
+func (s *JobService) attachLatestBuilds(ctx context.Context, jobs []domain.Job) error {
+	if s.buildService == nil {
+		return nil
+	}
+	if len(jobs) == 0 {
+		return nil
+	}
+
+	jobIDs := make([]string, 0, len(jobs))
+	for i := range jobs {
+		jobIDs = append(jobIDs, jobs[i].ID)
+	}
+
+	latestBuilds, err := s.buildService.ListLatestBuildsByJobIDs(ctx, jobIDs)
+	if err != nil {
+		return err
+	}
+
+	for i := range jobs {
+		build, ok := latestBuilds[jobs[i].ID]
+		if !ok {
+			jobs[i].LatestBuild = nil
+			continue
+		}
+		jobs[i].LatestBuild = &domain.JobBuildSummary{
+			ID:           build.ID,
+			BuildNumber:  build.BuildNumber,
+			Status:       build.Status,
+			CreatedAt:    build.CreatedAt,
+			FinishedAt:   build.FinishedAt,
+			ErrorMessage: build.ErrorMessage,
+		}
+	}
+
+	return nil
 }
 
 func (s *JobService) ListBuildsByJobID(ctx context.Context, jobID string) ([]domain.Build, error) {
@@ -329,10 +403,6 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 }
 
 func (s *JobService) RunJobNow(ctx context.Context, id string) (domain.Build, error) {
-	if s.buildService == nil {
-		return domain.Build{}, ErrJobBuildServiceNotConfigured
-	}
-
 	job, err := s.GetJob(ctx, id)
 	if err != nil {
 		return domain.Build{}, err
@@ -341,7 +411,16 @@ func (s *JobService) RunJobNow(ctx context.Context, id string) (domain.Build, er
 		return domain.Build{}, ErrJobDisabled
 	}
 
+	return s.createBuildForJob(ctx, job)
+}
+
+func (s *JobService) createBuildForJob(ctx context.Context, job domain.Job) (domain.Build, error) {
+	if s.buildService == nil {
+		return domain.Build{}, ErrJobBuildServiceNotConfigured
+	}
+
 	var build domain.Build
+	var err error
 	if job.PipelinePath != nil && strings.TrimSpace(*job.PipelinePath) != "" {
 		build, err = s.buildService.CreateBuildFromRepo(ctx, buildsvc.CreateRepoBuildInput{
 			ProjectID:    job.ProjectID,

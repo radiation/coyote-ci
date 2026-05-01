@@ -55,6 +55,26 @@ func (r *JobRepository) Create(ctx context.Context, job domain.Job) (domain.Job,
 	))
 }
 
+func (r *JobRepository) Delete(ctx context.Context, id string) error {
+	const query = `
+		DELETE FROM jobs
+		WHERE id = $1
+	`
+
+	result, err := r.db.ExecContext(ctx, query, id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return repository.ErrJobNotFound
+	}
+	return nil
+}
+
 func (r *JobRepository) List(ctx context.Context) (jobs []domain.Job, err error) {
 	const query = `
 		SELECT id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, pipeline_yaml, pipeline_path, enabled, created_at, updated_at

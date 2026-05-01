@@ -193,6 +193,10 @@ describe("ArtifactsPage", () => {
         ];
       }
 
+      if (query === "missing") {
+        return [];
+      }
+
       if (limit === 11) {
         if (offset === 10) {
           return [buildArtifact(11)];
@@ -365,7 +369,7 @@ describe("ArtifactsPage", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /coyote-ci\/package-a/i }),
     );
-    expect(screen.getByText("Build #41")).toBeTruthy();
+    expect(screen.getAllByText("Build #41").length).toBeGreaterThan(0);
   });
 
   it("renders the artifact list and expands a selected artifact", async () => {
@@ -376,14 +380,19 @@ describe("ArtifactsPage", () => {
       expect(screen.getByText("coyote-ci/backend")).toBeTruthy();
     });
 
+    expect(screen.getByText("Build #41")).toBeTruthy();
+    expect(screen.getAllByText("1 version").length).toBeGreaterThan(0);
+    expect(screen.getByText("v1.2.3")).toBeTruthy();
+
     fireEvent.click(
       screen.getByRole("button", { name: /coyote-ci\/package-a/i }),
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Build #41")).toBeTruthy();
+      expect(screen.getAllByText("Build #41").length).toBeGreaterThan(0);
       expect(screen.getByText(/Step 1: Publish package/)).toBeTruthy();
-      expect(screen.getByText("v1.2.3")).toBeTruthy();
+      expect(screen.getAllByText("v1.2.3").length).toBeGreaterThan(0);
+      expect(screen.getByText("Most recent first")).toBeTruthy();
     });
   });
 
@@ -481,6 +490,62 @@ describe("ArtifactsPage", () => {
       expect(screen.getByTestId("location-search").textContent).toBe(
         "?q=pkg-a",
       );
+    });
+  });
+
+  it("clears composed filters and returns to the default artifact view", async () => {
+    renderPage(["/artifacts?q=pkg-a&type=docker_image&page=2"]);
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "pkg-a",
+        type: "docker_image",
+        limit: 11,
+        offset: 10,
+      });
+    });
+
+    const clearFiltersButton = screen.getByRole("button", {
+      name: "Clear filters",
+    });
+    await waitFor(() => {
+      expect(clearFiltersButton).not.toHaveAttribute("disabled");
+    });
+    fireEvent.click(clearFiltersButton);
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "",
+        type: "",
+        limit: 11,
+        offset: 0,
+      });
+      expect(screen.getByLabelText("Search artifacts")).toHaveValue("");
+      expect(screen.getByLabelText("Type")).toHaveValue("");
+      expect(screen.getByTestId("location-search").textContent).toBe("");
+    });
+  });
+
+  it("shows a useful empty state for filtered artifact results", async () => {
+    renderPage();
+
+    await screen.findByText("coyote-ci/package-a");
+
+    fireEvent.change(screen.getByLabelText("Search artifacts"), {
+      target: { value: "missing" },
+    });
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "missing",
+        type: "",
+        limit: 11,
+        offset: 0,
+      });
+      expect(
+        screen.getByText("No artifacts matched the current filters."),
+      ).toBeTruthy();
+      expect(screen.getByText("No matching artifacts")).toBeTruthy();
     });
   });
 

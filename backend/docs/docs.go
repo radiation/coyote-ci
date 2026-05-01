@@ -1152,7 +1152,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Creates a new job.",
+                "description": "Creates a new job and queues an initial build by default.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2419,6 +2419,29 @@ const docTemplate = `{
                 }
             }
         },
+        "api.JobBuildSummaryResponse": {
+            "type": "object",
+            "properties": {
+                "build_number": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "api.JobEnvelope": {
             "type": "object",
             "properties": {
@@ -2501,6 +2524,9 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "string"
+                },
+                "latest_build": {
+                    "$ref": "#/definitions/api.JobBuildSummaryResponse"
                 },
                 "managed_image": {
                     "$ref": "#/definitions/api.JobManagedImageConfigResponse"

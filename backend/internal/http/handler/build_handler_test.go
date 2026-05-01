@@ -134,6 +134,40 @@ func (r *fakeRepo) ListByJobID(_ context.Context, jobID string) ([]domain.Build,
 	return builds, nil
 }
 
+func (r *fakeRepo) ListLatestByJobIDs(_ context.Context, jobIDs []string) (map[string]domain.Build, error) {
+	latest := make(map[string]domain.Build)
+	if len(jobIDs) == 0 {
+		return latest, nil
+	}
+	wanted := make(map[string]struct{}, len(jobIDs))
+	for _, jobID := range jobIDs {
+		if strings.TrimSpace(jobID) == "" {
+			continue
+		}
+		wanted[jobID] = struct{}{}
+	}
+	for _, build := range r.builds {
+		if build.JobID == nil {
+			continue
+		}
+		jobID := *build.JobID
+		if _, ok := wanted[jobID]; !ok {
+			continue
+		}
+		existing, exists := latest[jobID]
+		if !exists || build.CreatedAt.After(existing.CreatedAt) || (build.CreatedAt.Equal(existing.CreatedAt) && build.ID < existing.ID) {
+			latest[jobID] = build
+		}
+	}
+	if len(latest) == 0 && r.build.ID != "" && r.build.JobID != nil {
+		jobID := *r.build.JobID
+		if _, ok := wanted[jobID]; ok {
+			latest[jobID] = r.build
+		}
+	}
+	return latest, nil
+}
+
 func (r *fakeRepo) GetByID(_ context.Context, id string) (domain.Build, error) {
 	if r.getErr != nil {
 		return domain.Build{}, r.getErr

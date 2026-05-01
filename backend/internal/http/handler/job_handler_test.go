@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -53,6 +55,17 @@ func TestJobHandler_CreateListGetUpdateRunNow(t *testing.T) {
 		t.Fatalf("expected created job id, got %v", createData["id"])
 	}
 
+	initialBuilds, err := buildRepo.ListByJobID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("list initial builds failed: %v", err)
+	}
+	if len(initialBuilds) != 1 {
+		t.Fatalf("expected one initial build after create, got %d", len(initialBuilds))
+	}
+	if initialBuilds[0].Status != domain.BuildStatusQueued {
+		t.Fatalf("expected queued initial build, got %q", initialBuilds[0].Status)
+	}
+
 	listReq := httptest.NewRequest(http.MethodGet, "/jobs", nil)
 	listRes := httptest.NewRecorder()
 	h.ListJobs(listRes, listReq)
@@ -64,6 +77,17 @@ func TestJobHandler_CreateListGetUpdateRunNow(t *testing.T) {
 	jobs, ok := listData["jobs"].([]any)
 	if !ok || len(jobs) != 1 {
 		t.Fatalf("expected one job in list, got %v", listData["jobs"])
+	}
+	listedJob, ok := jobs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected job list item object, got %T", jobs[0])
+	}
+	latestBuild, ok := listedJob["latest_build"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected latest_build summary in list response, got %v", listedJob["latest_build"])
+	}
+	if latestBuild["status"] != "queued" {
+		t.Fatalf("expected latest_build queued, got %v", latestBuild["status"])
 	}
 
 	getReq := addURLParam(httptest.NewRequest(http.MethodGet, "/jobs/"+jobID, nil), "jobID", jobID)
@@ -114,6 +138,13 @@ func TestJobHandler_CreateListGetUpdateRunNow(t *testing.T) {
 	if runPayload["status"] != "queued" {
 		t.Fatalf("expected queued build from run-now, got %v", runPayload["status"])
 	}
+	updatedBuilds, err := buildRepo.ListByJobID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("list builds after run-now failed: %v", err)
+	}
+	if len(updatedBuilds) != 2 {
+		t.Fatalf("expected initial build plus run-now build, got %d", len(updatedBuilds))
+	}
 	source, ok := runPayload["source"].(map[string]interface{})
 	if !ok || source == nil {
 		t.Fatal("expected source object in run-now response")
@@ -163,12 +194,22 @@ func TestJobHandler_CreateRejectsInvalidPipeline(t *testing.T) {
 	if payload["error"] == nil {
 		t.Fatalf("expected error response, got %v", payload)
 	}
+
+	builds, err := buildRepo.List(context.Background())
+	if err != nil {
+		t.Fatalf("list builds failed: %v", err)
+	}
+	if len(builds) != 0 {
+		t.Fatalf("expected no builds after failed create, got %d", len(builds))
+	}
 }
 
 func TestJobHandler_CreateAcceptsPipelinePathWithoutInlineYAML(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
-	h := NewJobHandler(service.NewJobService(jobRepo, buildsvc.NewBuildService(buildRepo, nil, nil)))
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	buildSvc.SetRepoFetcher(&handlerTestRepoFetcher{localPath: writeHandlerTestPipelineRepo(t, "scenarios/success-basic/coyote.yml")})
+	h := NewJobHandler(service.NewJobService(jobRepo, buildSvc))
 
 	body := `{"project_id":"project-1","name":"path-job","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_path":"scenarios/success-basic/coyote.yml"}`
 	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(body))
@@ -183,4 +224,112 @@ func TestJobHandler_CreateAcceptsPipelinePathWithoutInlineYAML(t *testing.T) {
 	if data["pipeline_path"] != "scenarios/success-basic/coyote.yml" {
 		t.Fatalf("expected pipeline_path in response, got %v", data["pipeline_path"])
 	}
+}
+
+func TestJobHandler_CreateRollsBackJobWhenInitialBuildFails(t *testing.T) {
+	jobRepo := repositorymemory.NewJobRepository()
+	h := NewJobHandler(service.NewJobService(jobRepo, nil))
+
+	body := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(body))
+	res := httptest.NewRecorder()
+	h.CreateJob(res, req)
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, res.Code)
+	}
+
+	var payload map[string]map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	errorBody, ok := payload["error"]
+	if !ok {
+		t.Fatalf("expected error object, got %v", payload)
+	}
+	if errorBody["message"] != "build service not configured" {
+		t.Fatalf("expected build service not configured message, got %v", errorBody["message"])
+	}
+
+	jobs, err := jobRepo.List(context.Background())
+	if err != nil {
+		t.Fatalf("list jobs failed: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("expected failed create to roll back job, got %d jobs", len(jobs))
+	}
+}
+
+func TestJobHandler_CreateReturnsRepoFetcherMisconfiguration(t *testing.T) {
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil)
+	h := NewJobHandler(service.NewJobService(jobRepo, buildSvc))
+
+	body := `{"project_id":"project-1","name":"path-job","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_path":"scenarios/success-basic/coyote.yml"}`
+	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(body))
+	res := httptest.NewRecorder()
+	h.CreateJob(res, req)
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, res.Code)
+	}
+
+	var payload map[string]map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	errorBody, ok := payload["error"]
+	if !ok {
+		t.Fatalf("expected error object, got %v", payload)
+	}
+	if errorBody["message"] != "repo fetcher not configured" {
+		t.Fatalf("expected repo fetcher not configured message, got %v", errorBody["message"])
+	}
+
+	jobs, err := jobRepo.List(context.Background())
+	if err != nil {
+		t.Fatalf("list jobs failed: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("expected failed create to roll back job, got %d jobs", len(jobs))
+	}
+}
+
+func TestJobHandler_WriteJobServiceErrorReturnsRepoFetcherMisconfiguration(t *testing.T) {
+	h := NewJobHandler(nil)
+	res := httptest.NewRecorder()
+
+	h.writeJobServiceError(res, buildsvc.ErrRepoFetcherNotConfigured)
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, res.Code)
+	}
+	var payload map[string]map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if payload["error"]["message"] != "repo fetcher not configured" {
+		t.Fatalf("expected repo fetcher not configured message, got %v", payload["error"]["message"])
+	}
+}
+
+type handlerTestRepoFetcher struct {
+	localPath string
+}
+
+func (f *handlerTestRepoFetcher) Fetch(_ context.Context, _ string, _ string) (string, string, error) {
+	return f.localPath, "commit-sha", nil
+}
+
+func writeHandlerTestPipelineRepo(t *testing.T, pipelinePath string) string {
+	t.Helper()
+	repoRoot := t.TempDir()
+	fullPath := filepath.Join(repoRoot, filepath.FromSlash(pipelinePath))
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		t.Fatalf("create pipeline dir failed: %v", err)
+	}
+	if err := os.WriteFile(fullPath, []byte("version: 1\nsteps:\n  - name: test\n    run: go test ./...\n"), 0o644); err != nil {
+		t.Fatalf("write pipeline file failed: %v", err)
+	}
+	return repoRoot
 }

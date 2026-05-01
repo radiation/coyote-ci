@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
 type JobHandler struct {
@@ -26,7 +28,7 @@ func NewJobHandler(jobService *service.JobService) *JobHandler {
 
 // CreateJob godoc
 // @Summary Create job
-// @Description Creates a new job.
+// @Description Creates a new job and queues an initial build by default.
 // @Tags jobs
 // @Accept json
 // @Produce json
@@ -242,6 +244,14 @@ func (h *JobHandler) writeJobServiceError(w http.ResponseWriter, err error) {
 		writeErrorJSON(w, http.StatusConflict, "job_disabled", err.Error())
 		return
 	}
+	if errors.Is(err, service.ErrJobBuildServiceNotConfigured) {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "build service not configured")
+		return
+	}
+	if errors.Is(err, buildsvc.ErrRepoFetcherNotConfigured) {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "repo fetcher not configured")
+		return
+	}
 	if isBadRequestError(err) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
@@ -255,6 +265,7 @@ func (h *JobHandler) writeJobServiceError(w http.ResponseWriter, err error) {
 		return
 	}
 
+	log.Printf("ERROR job handler request failed: %v", err)
 	writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 }
 
@@ -281,6 +292,21 @@ func toJobResponse(job domain.Job) api.JobResponse {
 		triggerMode = string(domain.JobTriggerModeBranches)
 	}
 
+	var latestBuild *api.JobBuildSummaryResponse
+	if job.LatestBuild != nil {
+		latestBuild = &api.JobBuildSummaryResponse{
+			ID:           job.LatestBuild.ID,
+			BuildNumber:  job.LatestBuild.BuildNumber,
+			Status:       string(job.LatestBuild.Status),
+			CreatedAt:    job.LatestBuild.CreatedAt.Format(time.RFC3339),
+			ErrorMessage: job.LatestBuild.ErrorMessage,
+		}
+		if job.LatestBuild.FinishedAt != nil {
+			formatted := job.LatestBuild.FinishedAt.Format(time.RFC3339)
+			latestBuild.FinishedAt = &formatted
+		}
+	}
+
 	return api.JobResponse{
 		ID:               job.ID,
 		ProjectID:        job.ProjectID,
@@ -296,6 +322,7 @@ func toJobResponse(job domain.Job) api.JobResponse {
 		PipelineYAML:     job.PipelineYAML,
 		PipelinePath:     job.PipelinePath,
 		ManagedImage:     toManagedImageConfigResponse(job.ManagedImageConfig),
+		LatestBuild:      latestBuild,
 		Enabled:          job.Enabled,
 		CreatedAt:        job.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:        job.UpdatedAt.Format(time.RFC3339),

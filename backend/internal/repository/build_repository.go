@@ -92,6 +92,7 @@ type BuildRepository interface {
 	List(ctx context.Context) ([]domain.Build, error)
 	ListPaged(ctx context.Context, params ListParams) ([]domain.Build, error)
 	ListByJobID(ctx context.Context, jobID string) ([]domain.Build, error)
+	ListLatestByJobIDs(ctx context.Context, jobIDs []string) (map[string]domain.Build, error)
 	GetByID(ctx context.Context, id string) (domain.Build, error)
 	UpdateStatus(ctx context.Context, id string, status domain.BuildStatus, errorMessage *string) (domain.Build, error)
 	UpdateSourceCommitSHA(ctx context.Context, id string, commitSHA string) (domain.Build, error)

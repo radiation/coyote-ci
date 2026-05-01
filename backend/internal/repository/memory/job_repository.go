@@ -32,6 +32,17 @@ func (r *JobRepository) Create(_ context.Context, job domain.Job) (domain.Job, e
 	return job, nil
 }
 
+func (r *JobRepository) Delete(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, ok := r.jobs[id]; !ok {
+		return repository.ErrJobNotFound
+	}
+	delete(r.jobs, id)
+	return nil
+}
+
 func (r *JobRepository) List(_ context.Context) ([]domain.Job, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
