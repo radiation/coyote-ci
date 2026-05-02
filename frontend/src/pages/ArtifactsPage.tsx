@@ -110,19 +110,19 @@ export function ArtifactsPage() {
       nextParams.set("q", query);
     }
 
-    const type = params.get("type");
+    const type = parseArtifactTypeParam(params.get("type"));
     if (type) {
       nextParams.set("type", type);
     }
 
-    const page = params.get("page");
-    if (page) {
-      nextParams.set("page", page);
+    const page = parsePositiveInt(params.get("page"), 1);
+    if (page > 1) {
+      nextParams.set("page", String(page));
     }
 
-    const size = params.get("pageSize");
-    if (size) {
-      nextParams.set("pageSize", size);
+    const size = parsePageSizeParam(params.get("pageSize"));
+    if (size !== DEFAULT_ARTIFACTS_PAGE_SIZE) {
+      nextParams.set("pageSize", String(size));
     }
 
     return nextParams;
