@@ -1,4 +1,10 @@
-import { useDeferredValue, useEffect, useState, type FormEvent } from "react";
+import {
+  useDeferredValue,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   keepPreviousData,
   useMutation,
@@ -68,6 +74,7 @@ export function ArtifactsPage() {
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">(
     "idle",
   );
+  const pageInputRef = useRef<HTMLInputElement | null>(null);
   const trimmedSearch = search.trim();
   const deferredSearch = useDeferredValue(trimmedSearch);
   const hasActiveFilters = Boolean(trimmedSearch || typeFilter);
@@ -84,6 +91,12 @@ export function ArtifactsPage() {
 
     return () => globalThis.clearTimeout(timeoutID);
   }, [copyStatus]);
+
+  useEffect(() => {
+    if (pageInputRef.current) {
+      pageInputRef.current.value = String(pageIndex + 1);
+    }
+  }, [pageIndex]);
 
   function updateSearchParams(
     mutate: (nextParams: URLSearchParams) => void,
@@ -213,7 +226,9 @@ export function ArtifactsPage() {
     const parsedPage =
       typeof pageValue === "string" ? Number.parseInt(pageValue, 10) : NaN;
     if (!Number.isFinite(parsedPage) || parsedPage < 1) {
-      event.currentTarget.reset();
+      if (pageInputRef.current) {
+        pageInputRef.current.value = String(pageIndex + 1);
+      }
       return;
     }
     goToPage(parsedPage);
@@ -357,7 +372,7 @@ export function ArtifactsPage() {
             <label className="artifact-pagination-field">
               <span>Jump to page</span>
               <input
-                key={pageIndex}
+                ref={pageInputRef}
                 name="page"
                 type="number"
                 min={1}
