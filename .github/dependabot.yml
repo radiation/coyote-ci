@@ -4,16 +4,19 @@ updates:
     directory: "/backend"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 10
 
   - package-ecosystem: "npm"
     directory: "/frontend"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 10
 
   - package-ecosystem: "uv"
     directory: "/mcp"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 10
 
     groups:
       python-runtime:
@@ -29,3 +32,4 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 10
