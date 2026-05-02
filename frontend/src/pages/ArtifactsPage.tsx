@@ -64,6 +64,32 @@ function parsePageSizeParam(value: string | null): number {
   return DEFAULT_ARTIFACTS_PAGE_SIZE;
 }
 
+function buildCanonicalSearchParams(params: URLSearchParams) {
+  const nextParams = new URLSearchParams();
+
+  const query = params.get("q");
+  if (query) {
+    nextParams.set("q", query);
+  }
+
+  const type = parseArtifactTypeParam(params.get("type"));
+  if (type) {
+    nextParams.set("type", type);
+  }
+
+  const page = parsePositiveInt(params.get("page"), 1);
+  if (page > 1) {
+    nextParams.set("page", String(page));
+  }
+
+  const size = parsePageSizeParam(params.get("pageSize"));
+  if (size !== DEFAULT_ARTIFACTS_PAGE_SIZE) {
+    nextParams.set("pageSize", String(size));
+  }
+
+  return nextParams;
+}
+
 export function ArtifactsPage() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -80,7 +106,7 @@ export function ArtifactsPage() {
   const deferredSearch = useDeferredValue(trimmedSearch);
   const hasActiveFilters = Boolean(trimmedSearch || typeFilter);
   const activeFilterCount = (trimmedSearch ? 1 : 0) + (typeFilter ? 1 : 0);
-  const setPageInputRef = useCallback(
+  const updatePageInputRef = useCallback(
     (node: HTMLInputElement | null) => {
       pageInputRef.current = node;
       if (node) {
@@ -102,43 +128,18 @@ export function ArtifactsPage() {
     return () => globalThis.clearTimeout(timeoutID);
   }, [copyStatus]);
 
-  function buildCanonicalSearchParams(params: URLSearchParams) {
-    const nextParams = new URLSearchParams();
+  const updateSearchParams = useCallback(
+    (mutate: (nextParams: URLSearchParams) => void) => {
+      const draftParams = new URLSearchParams(searchParams);
+      mutate(draftParams);
+      const nextParams = buildCanonicalSearchParams(draftParams);
 
-    const query = params.get("q");
-    if (query) {
-      nextParams.set("q", query);
-    }
-
-    const type = parseArtifactTypeParam(params.get("type"));
-    if (type) {
-      nextParams.set("type", type);
-    }
-
-    const page = parsePositiveInt(params.get("page"), 1);
-    if (page > 1) {
-      nextParams.set("page", String(page));
-    }
-
-    const size = parsePageSizeParam(params.get("pageSize"));
-    if (size !== DEFAULT_ARTIFACTS_PAGE_SIZE) {
-      nextParams.set("pageSize", String(size));
-    }
-
-    return nextParams;
-  }
-
-  function updateSearchParams(
-    mutate: (nextParams: URLSearchParams) => void,
-  ) {
-    const draftParams = new URLSearchParams(searchParams);
-    mutate(draftParams);
-    const nextParams = buildCanonicalSearchParams(draftParams);
-
-    if (nextParams.toString() !== searchParams.toString()) {
-      setSearchParams(nextParams, { replace: true });
-    }
-  }
+      if (nextParams.toString() !== searchParams.toString()) {
+        setSearchParams(nextParams, { replace: true });
+      }
+    },
+    [searchParams, setSearchParams],
+  );
 
   const {
     data: artifactResults,
@@ -395,7 +396,7 @@ export function ArtifactsPage() {
             <label className="artifact-pagination-field">
               <span>Jump to page</span>
               <input
-                ref={setPageInputRef}
+                ref={updatePageInputRef}
                 name="page"
                 type="number"
                 min={1}
