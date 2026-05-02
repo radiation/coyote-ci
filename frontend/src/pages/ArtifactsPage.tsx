@@ -61,19 +61,10 @@ export function ArtifactsPage() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
-  const [typeFilter, setTypeFilter] = useState<ArtifactType | "">(() =>
-    parseArtifactTypeParam(searchParams.get("type")),
-  );
-  const [pageIndex, setPageIndex] = useState(
-    () => parsePositiveInt(searchParams.get("page"), 1) - 1,
-  );
-  const [pageSize, setPageSize] = useState(() =>
-    parsePageSizeParam(searchParams.get("pageSize")),
-  );
-  const [pageInput, setPageInput] = useState(() =>
-    String(parsePositiveInt(searchParams.get("page"), 1)),
-  );
+  const search = searchParams.get("q") ?? "";
+  const typeFilter = parseArtifactTypeParam(searchParams.get("type"));
+  const pageIndex = parsePositiveInt(searchParams.get("page"), 1) - 1;
+  const pageSize = parsePageSizeParam(searchParams.get("pageSize"));
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">(
     "idle",
   );
@@ -81,26 +72,6 @@ export function ArtifactsPage() {
   const deferredSearch = useDeferredValue(trimmedSearch);
   const hasActiveFilters = Boolean(trimmedSearch || typeFilter);
   const activeFilterCount = (trimmedSearch ? 1 : 0) + (typeFilter ? 1 : 0);
-
-  useEffect(() => {
-    const nextSearch = searchParams.get("q") ?? "";
-    const nextType = parseArtifactTypeParam(searchParams.get("type"));
-    const nextPageIndex = parsePositiveInt(searchParams.get("page"), 1) - 1;
-    const nextPageSize = parsePageSizeParam(searchParams.get("pageSize"));
-
-    setSearch((current) => (current === nextSearch ? current : nextSearch));
-    setTypeFilter((current) => (current === nextType ? current : nextType));
-    setPageIndex((current) =>
-      current === nextPageIndex ? current : nextPageIndex,
-    );
-    setPageSize((current) =>
-      current === nextPageSize ? current : nextPageSize,
-    );
-  }, [searchParams]);
-
-  useEffect(() => {
-    setPageInput(String(pageIndex + 1));
-  }, [pageIndex]);
 
   useEffect(() => {
     if (copyStatus === "idle") {
@@ -114,32 +85,24 @@ export function ArtifactsPage() {
     return () => globalThis.clearTimeout(timeoutID);
   }, [copyStatus]);
 
-  useEffect(() => {
+  function updateSearchParams(
+    mutate: (nextParams: URLSearchParams) => void,
+  ) {
+    const draftParams = new URLSearchParams(searchParams);
+    mutate(draftParams);
+
     const nextParams = new URLSearchParams();
-    if (trimmedSearch) {
-      nextParams.set("q", trimmedSearch);
-    }
-    if (typeFilter) {
-      nextParams.set("type", typeFilter);
-    }
-    if (pageIndex > 0) {
-      nextParams.set("page", String(pageIndex + 1));
-    }
-    if (pageSize !== DEFAULT_ARTIFACTS_PAGE_SIZE) {
-      nextParams.set("pageSize", String(pageSize));
+    for (const key of ["q", "type", "page", "pageSize"]) {
+      const value = draftParams.get(key);
+      if (value) {
+        nextParams.set(key, value);
+      }
     }
 
     if (nextParams.toString() !== searchParams.toString()) {
       setSearchParams(nextParams, { replace: true });
     }
-  }, [
-    pageIndex,
-    pageSize,
-    searchParams,
-    setSearchParams,
-    trimmedSearch,
-    typeFilter,
-  ]);
+  }
 
   const {
     data: artifactResults,
@@ -196,37 +159,61 @@ export function ArtifactsPage() {
   }
 
   function handleSearchChange(value: string) {
-    setSearch(value);
-    setPageIndex(0);
+    updateSearchParams((nextParams) => {
+      if (value) {
+        nextParams.set("q", value);
+      } else {
+        nextParams.delete("q");
+      }
+      nextParams.delete("page");
+    });
   }
 
   function handleTypeChange(value: ArtifactType | "") {
-    setTypeFilter(value);
-    setPageIndex(0);
+    updateSearchParams((nextParams) => {
+      if (value) {
+        nextParams.set("type", value);
+      } else {
+        nextParams.delete("type");
+      }
+      nextParams.delete("page");
+    });
   }
 
   function handlePageSizeChange(value: number) {
-    setPageSize(value);
-    setPageIndex(0);
+    updateSearchParams((nextParams) => {
+      if (value === DEFAULT_ARTIFACTS_PAGE_SIZE) {
+        nextParams.delete("pageSize");
+      } else {
+        nextParams.set("pageSize", String(value));
+      }
+      nextParams.delete("page");
+    });
   }
 
   function handleClearFilters() {
-    setSearch("");
-    setTypeFilter("");
-    setPageIndex(0);
     setSearchParams(new URLSearchParams(), { replace: true });
   }
 
   function goToPage(nextPage: number) {
     const safePage = Math.max(1, nextPage);
-    setPageIndex(safePage - 1);
+    updateSearchParams((nextParams) => {
+      if (safePage === 1) {
+        nextParams.delete("page");
+      } else {
+        nextParams.set("page", String(safePage));
+      }
+    });
   }
 
   function handlePageJumpSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const parsedPage = Number.parseInt(pageInput, 10);
+    const formData = new FormData(event.currentTarget);
+    const pageValue = formData.get("page");
+    const parsedPage =
+      typeof pageValue === "string" ? Number.parseInt(pageValue, 10) : NaN;
     if (!Number.isFinite(parsedPage) || parsedPage < 1) {
-      setPageInput(String(pageIndex + 1));
+      event.currentTarget.reset();
       return;
     }
     goToPage(parsedPage);
@@ -370,11 +357,12 @@ export function ArtifactsPage() {
             <label className="artifact-pagination-field">
               <span>Jump to page</span>
               <input
+                key={pageIndex}
+                name="page"
                 type="number"
                 min={1}
                 inputMode="numeric"
-                value={pageInput}
-                onChange={(event) => setPageInput(event.target.value)}
+                defaultValue={String(pageIndex + 1)}
                 disabled={isFetching}
               />
             </label>
