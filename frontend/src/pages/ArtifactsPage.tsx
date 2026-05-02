@@ -106,15 +106,9 @@ export function ArtifactsPage() {
   const deferredSearch = useDeferredValue(trimmedSearch);
   const hasActiveFilters = Boolean(trimmedSearch || typeFilter);
   const activeFilterCount = (trimmedSearch ? 1 : 0) + (typeFilter ? 1 : 0);
-  const updatePageInputRef = useCallback(
-    (node: HTMLInputElement | null) => {
-      pageInputRef.current = node;
-      if (node) {
-        node.value = String(pageIndex + 1);
-      }
-    },
-    [pageIndex],
-  );
+  const assignPageInputRef = useCallback((node: HTMLInputElement | null) => {
+    pageInputRef.current = node;
+  }, []);
 
   useEffect(() => {
     if (copyStatus === "idle") {
@@ -127,6 +121,15 @@ export function ArtifactsPage() {
 
     return () => globalThis.clearTimeout(timeoutID);
   }, [copyStatus]);
+
+  useEffect(() => {
+    if (
+      pageInputRef.current &&
+      globalThis.document?.activeElement !== pageInputRef.current
+    ) {
+      pageInputRef.current.value = String(pageIndex + 1);
+    }
+  }, [pageIndex]);
 
   const updateSearchParams = useCallback(
     (mutate: (nextParams: URLSearchParams) => void) => {
@@ -396,11 +399,12 @@ export function ArtifactsPage() {
             <label className="artifact-pagination-field">
               <span>Jump to page</span>
               <input
-                ref={updatePageInputRef}
+                ref={assignPageInputRef}
                 name="page"
                 type="number"
                 min={1}
                 inputMode="numeric"
+                defaultValue={String(pageIndex + 1)}
                 disabled={isFetching}
               />
             </label>
