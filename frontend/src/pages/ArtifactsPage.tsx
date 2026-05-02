@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useDeferredValue,
   useEffect,
   useRef,
@@ -79,6 +80,15 @@ export function ArtifactsPage() {
   const deferredSearch = useDeferredValue(trimmedSearch);
   const hasActiveFilters = Boolean(trimmedSearch || typeFilter);
   const activeFilterCount = (trimmedSearch ? 1 : 0) + (typeFilter ? 1 : 0);
+  const setPageInputRef = useCallback(
+    (node: HTMLInputElement | null) => {
+      pageInputRef.current = node;
+      if (node) {
+        node.value = String(pageIndex + 1);
+      }
+    },
+    [pageIndex],
+  );
 
   useEffect(() => {
     if (copyStatus === "idle") {
@@ -92,25 +102,38 @@ export function ArtifactsPage() {
     return () => globalThis.clearTimeout(timeoutID);
   }, [copyStatus]);
 
-  useEffect(() => {
-    if (pageInputRef.current) {
-      pageInputRef.current.value = String(pageIndex + 1);
+  function buildCanonicalSearchParams(params: URLSearchParams) {
+    const nextParams = new URLSearchParams();
+
+    const query = params.get("q");
+    if (query) {
+      nextParams.set("q", query);
     }
-  }, [pageIndex]);
+
+    const type = params.get("type");
+    if (type) {
+      nextParams.set("type", type);
+    }
+
+    const page = params.get("page");
+    if (page) {
+      nextParams.set("page", page);
+    }
+
+    const size = params.get("pageSize");
+    if (size) {
+      nextParams.set("pageSize", size);
+    }
+
+    return nextParams;
+  }
 
   function updateSearchParams(
     mutate: (nextParams: URLSearchParams) => void,
   ) {
     const draftParams = new URLSearchParams(searchParams);
     mutate(draftParams);
-
-    const nextParams = new URLSearchParams();
-    for (const key of ["q", "type", "page", "pageSize"]) {
-      const value = draftParams.get(key);
-      if (value) {
-        nextParams.set(key, value);
-      }
-    }
+    const nextParams = buildCanonicalSearchParams(draftParams);
 
     if (nextParams.toString() !== searchParams.toString()) {
       setSearchParams(nextParams, { replace: true });
@@ -372,12 +395,11 @@ export function ArtifactsPage() {
             <label className="artifact-pagination-field">
               <span>Jump to page</span>
               <input
-                ref={pageInputRef}
+                ref={setPageInputRef}
                 name="page"
                 type="number"
                 min={1}
                 inputMode="numeric"
-                defaultValue={String(pageIndex + 1)}
                 disabled={isFetching}
               />
             </label>
