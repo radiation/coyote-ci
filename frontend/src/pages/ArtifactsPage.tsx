@@ -12,7 +12,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { createJobVersionTags, listArtifacts } from "../api";
+import { createJobVersionTags, listArtifacts, listProjects } from "../api";
 import { ArtifactBrowser } from "../components/ArtifactBrowser";
 import type { ArtifactBrowseVersion, ArtifactType } from "../types";
 import { formatTime } from "../utils/time";
@@ -77,6 +77,11 @@ function buildCanonicalSearchParams(params: URLSearchParams) {
     nextParams.set("type", type);
   }
 
+  const projectID = params.get("project_id")?.trim() ?? "";
+  if (projectID) {
+    nextParams.set("project_id", projectID);
+  }
+
   const page = parsePositiveInt(params.get("page"), 1);
   if (page > 1) {
     nextParams.set("page", String(page));
@@ -96,6 +101,7 @@ export function ArtifactsPage() {
   const queryClient = useQueryClient();
   const search = searchParams.get("q") ?? "";
   const typeFilter = parseArtifactTypeParam(searchParams.get("type"));
+  const projectID = searchParams.get("project_id")?.trim() ?? "";
   const pageIndex = parsePositiveInt(searchParams.get("page"), 1) - 1;
   const pageSize = parsePageSizeParam(searchParams.get("pageSize"));
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">(
@@ -104,8 +110,9 @@ export function ArtifactsPage() {
   const pageInputRef = useRef<HTMLInputElement | null>(null);
   const trimmedSearch = search.trim();
   const deferredSearch = useDeferredValue(trimmedSearch);
-  const hasActiveFilters = Boolean(trimmedSearch || typeFilter);
-  const activeFilterCount = (trimmedSearch ? 1 : 0) + (typeFilter ? 1 : 0);
+  const hasActiveFilters = Boolean(trimmedSearch || typeFilter || projectID);
+  const activeFilterCount =
+    (trimmedSearch ? 1 : 0) + (typeFilter ? 1 : 0) + (projectID ? 1 : 0);
   const assignPageInputRef = useCallback((node: HTMLInputElement | null) => {
     pageInputRef.current = node;
   }, []);
@@ -151,15 +158,27 @@ export function ArtifactsPage() {
     error,
     dataUpdatedAt,
   } = useQuery({
-    queryKey: ["artifacts", deferredSearch, typeFilter, pageIndex, pageSize],
+    queryKey: [
+      "artifacts",
+      deferredSearch,
+      typeFilter,
+      projectID,
+      pageIndex,
+      pageSize,
+    ],
     queryFn: () =>
       listArtifacts({
         q: deferredSearch,
         type: typeFilter,
+        project_id: projectID || undefined,
         limit: pageSize + 1,
         offset: pageIndex * pageSize,
       }),
     placeholderData: keepPreviousData,
+  });
+  const { data: projects = [] } = useQuery({
+    queryKey: ["projects"],
+    queryFn: () => listProjects(),
   });
 
   const artifacts = artifactResults?.slice(0, pageSize) ?? [];
@@ -215,6 +234,17 @@ export function ArtifactsPage() {
         nextParams.set("type", value);
       } else {
         nextParams.delete("type");
+      }
+      nextParams.delete("page");
+    });
+  }
+
+  function handleProjectChange(value: string) {
+    updateSearchParams((nextParams) => {
+      if (value) {
+        nextParams.set("project_id", value);
+      } else {
+        nextParams.delete("project_id");
       }
       nextParams.delete("page");
     });
@@ -335,6 +365,20 @@ export function ArtifactsPage() {
             onChange={(event) => handleSearchChange(event.target.value)}
             placeholder="Name, path, project, job, or version"
           />
+        </label>
+        <label className="artifact-filter-field artifact-filter-select">
+          <span>Project</span>
+          <select
+            value={projectID}
+            onChange={(event) => handleProjectChange(event.target.value)}
+          >
+            <option value="">All projects</option>
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name} ({project.slug})
+              </option>
+            ))}
+          </select>
         </label>
         <label className="artifact-filter-field artifact-filter-select">
           <span>Type</span>

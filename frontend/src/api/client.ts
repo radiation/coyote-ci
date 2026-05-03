@@ -111,8 +111,33 @@ async function deleteNoContent(path: string): Promise<void> {
   }
 }
 
-export async function listBuilds(): Promise<Build[]> {
-  const envelope = await fetchJSON<DataEnvelope<BuildListResponse>>("/builds");
+export async function listBuilds(input?: {
+  project_id?: string;
+  project_slug?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<Build[]> {
+  const params = new URLSearchParams();
+  const projectID = input?.project_id?.trim() ?? "";
+  const projectSlug = input?.project_slug?.trim() ?? "";
+
+  if (projectID) {
+    params.set("project_id", projectID);
+  }
+  if (projectSlug) {
+    params.set("project_slug", projectSlug);
+  }
+  if (typeof input?.limit === "number" && input.limit > 0) {
+    params.set("limit", String(input.limit));
+  }
+  if (typeof input?.offset === "number" && input.offset > 0) {
+    params.set("offset", String(input.offset));
+  }
+
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const envelope = await fetchJSON<DataEnvelope<BuildListResponse>>(
+    `/builds${suffix}`,
+  );
   return envelope.data.builds;
 }
 
@@ -152,18 +177,28 @@ export async function getBuildArtifacts(id: string): Promise<BuildArtifact[]> {
 export async function listArtifacts(input?: {
   q?: string;
   type?: ArtifactType | "";
+  project_id?: string;
+  project_slug?: string;
   limit?: number;
   offset?: number;
 }): Promise<ArtifactBrowseItem[]> {
   const params = new URLSearchParams();
   const query = input?.q?.trim() ?? "";
   const type = input?.type?.trim() ?? "";
+  const projectID = input?.project_id?.trim() ?? "";
+  const projectSlug = input?.project_slug?.trim() ?? "";
 
   if (query) {
     params.set("q", query);
   }
   if (type) {
     params.set("type", type);
+  }
+  if (projectID) {
+    params.set("project_id", projectID);
+  }
+  if (projectSlug) {
+    params.set("project_slug", projectSlug);
   }
   if (typeof input?.limit === "number" && input.limit > 0) {
     params.set("limit", String(input.limit));

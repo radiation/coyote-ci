@@ -48,12 +48,20 @@ export function ProjectDetailPage() {
           <h2>{project.name}</h2>
           <p className="subtle-text">Slug: {project.slug}</p>
         </div>
-        <Link
-          className="action-link"
-          to={`/jobs/new?project_id=${encodeURIComponent(project.id)}`}
-        >
-          Create Job
-        </Link>
+        <div className="page-header-actions">
+          <Link
+            className="action-link"
+            to={`/jobs/new?project_id=${encodeURIComponent(project.id)}`}
+          >
+            Create Job
+          </Link>
+          <Link to={`/builds?project_id=${encodeURIComponent(project.id)}`}>
+            View Builds
+          </Link>
+          <Link to={`/artifacts?project_id=${encodeURIComponent(project.id)}`}>
+            Browse Artifacts
+          </Link>
+        </div>
       </div>
 
       <div className="detail-grid">

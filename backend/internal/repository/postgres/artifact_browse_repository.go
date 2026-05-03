@@ -23,7 +23,8 @@ const artifactBrowseFilterClause = `(
 				  AND vt.version_text ILIKE $2
 			)
 		)
-		AND ($3 = '' OR a.artifact_type = $3)`
+		AND ($3 = '' OR a.artifact_type = $3)
+		AND ($4 = '' OR b.project_id::text = $4)`
 
 func (r *ArtifactRepository) Browse(ctx context.Context, params repository.BrowseArtifactsParams) ([]domain.ArtifactRecord, error) {
 	pageKeys, err := r.listBrowseIdentityKeys(ctx, params)
@@ -49,11 +50,11 @@ func (r *ArtifactRepository) Browse(ctx context.Context, params repository.Brows
 		WHERE `+artifactBrowseIdentityExpression+` IN (%s)
 		  AND `+artifactBrowseFilterClause+`
 		ORDER BY a.created_at DESC, a.logical_path ASC, b.created_at DESC
-	`, 4, pageKeys)
+	`, 5, pageKeys)
 
 	trimmedQuery := strings.TrimSpace(params.Query)
 	likeQuery := "%" + trimmedQuery + "%"
-	args := append([]any{trimmedQuery, likeQuery, string(params.Type)}, identityArgs...)
+	args := append([]any{trimmedQuery, likeQuery, string(params.Type), strings.TrimSpace(params.ProjectID)}, identityArgs...)
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -95,16 +96,16 @@ func (r *ArtifactRepository) listBrowseIdentityKeys(ctx context.Context, params 
 
 	trimmedQuery := strings.TrimSpace(params.Query)
 	likeQuery := "%" + trimmedQuery + "%"
-	args := []any{trimmedQuery, likeQuery, string(params.Type)}
+	args := []any{trimmedQuery, likeQuery, string(params.Type), strings.TrimSpace(params.ProjectID)}
 	if params.Limit > 0 {
-		query += "\n\t\tLIMIT $4"
+		query += "\n\t\tLIMIT $5"
 		args = append(args, params.Limit)
 		if params.Offset > 0 {
-			query += "\n\t\tOFFSET $5"
+			query += "\n\t\tOFFSET $6"
 			args = append(args, params.Offset)
 		}
 	} else if params.Offset > 0 {
-		query += "\n\t\tOFFSET $4"
+		query += "\n\t\tOFFSET $5"
 		args = append(args, params.Offset)
 	}
 

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -130,6 +131,39 @@ func TestJobService_CreateJobDisabledSkipsInitialBuild(t *testing.T) {
 	}
 	if len(builds) != 0 {
 		t.Fatalf("expected no initial build for disabled job, got %d", len(builds))
+	}
+}
+
+func TestJobService_CreateJobAcceptsLegacyProjectSlugInProjectID(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService).WithProjectRepository(projectRepo)
+
+	project, err := projectRepo.Create(context.Background(), domain.Project{
+		ID:        "00000000-0000-0000-0000-000000000123",
+		Name:      "Fixtures",
+		Slug:      "fixtures",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+
+	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     "fixtures",
+		Name:          "fixture-job",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+	if job.ProjectID != project.ID {
+		t.Fatalf("expected resolved project id %q, got %q", project.ID, job.ProjectID)
 	}
 }
 

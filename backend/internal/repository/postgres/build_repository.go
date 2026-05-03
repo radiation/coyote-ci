@@ -158,11 +158,19 @@ func (r *BuildRepository) ListPaged(ctx context.Context, params repository.ListP
 	query := `
 		SELECT ` + buildListColumns + `
 		FROM builds
-		ORDER BY created_at DESC
-		LIMIT $1 OFFSET $2
 	`
+	args := make([]any, 0, 3)
+	if strings.TrimSpace(params.ProjectID) != "" {
+		query += `
+		WHERE project_id = $1`
+		args = append(args, params.ProjectID)
+	}
+	query += `
+		ORDER BY created_at DESC`
+	args = append(args, limit, offset)
+	query += fmt.Sprintf("\n\t\tLIMIT $%d OFFSET $%d", len(args)-1, len(args))
 
-	rows, err := r.db.QueryContext(ctx, query, limit, offset)
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

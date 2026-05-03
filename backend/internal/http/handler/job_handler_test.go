@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -201,6 +202,39 @@ func TestJobHandler_CreateRejectsInvalidPipeline(t *testing.T) {
 	}
 	if len(builds) != 0 {
 		t.Fatalf("expected no builds after failed create, got %d", len(builds))
+	}
+}
+
+func TestJobHandler_CreateAcceptsLegacyProjectSlugInProjectID(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
+	h := NewJobHandler(jobSvc)
+
+	project, err := projectRepo.Create(context.Background(), domain.Project{
+		ID:        "00000000-0000-0000-0000-000000000123",
+		Name:      "Fixtures",
+		Slug:      "fixtures",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+
+	body := `{"project_id":"fixtures","name":"fixture-job","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(body))
+	res := httptest.NewRecorder()
+	h.CreateJob(res, req)
+
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusCreated, res.Code, res.Body.String())
+	}
+	data := decodeDataMap(t, res)
+	if data["project_id"] != project.ID {
+		t.Fatalf("expected project_id %q, got %v", project.ID, data["project_id"])
 	}
 }
 

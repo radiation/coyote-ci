@@ -13,10 +13,11 @@ var ErrArtifactRepositoryNotConfigured = errors.New("artifact repository is not 
 var ErrInvalidArtifactTypeFilter = errors.New("invalid artifact type filter")
 
 type ListArtifactsInput struct {
-	Query  string
-	Type   string
-	Limit  int
-	Offset int
+	Query     string
+	Type      string
+	ProjectID string
+	Limit     int
+	Offset    int
 }
 
 type Service struct {
@@ -38,10 +39,11 @@ func (s *Service) ListArtifacts(ctx context.Context, input ListArtifactsInput) (
 	}
 
 	records, err := s.repo.Browse(ctx, repository.BrowseArtifactsParams{
-		Query:  strings.TrimSpace(input.Query),
-		Type:   wantedType,
-		Limit:  input.Limit,
-		Offset: input.Offset,
+		Query:     strings.TrimSpace(input.Query),
+		Type:      wantedType,
+		ProjectID: strings.TrimSpace(input.ProjectID),
+		Limit:     input.Limit,
+		Offset:    input.Offset,
 	})
 	if err != nil {
 		return nil, err

@@ -75,6 +75,13 @@ describe("ProjectDetailPage", () => {
         "href",
         "/jobs/new?project_id=project-1",
       );
+      expect(screen.getByRole("link", { name: "View Builds" })).toHaveAttribute(
+        "href",
+        "/builds?project_id=project-1",
+      );
+      expect(
+        screen.getByRole("link", { name: "Browse Artifacts" }),
+      ).toHaveAttribute("href", "/artifacts?project_id=project-1");
     });
   });
 });

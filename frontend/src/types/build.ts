@@ -32,7 +32,10 @@ export interface ImageExecution {
 /** Matches the backend api.BuildResponse JSON shape. */
 export interface Build {
   id: string;
+  build_number?: number;
   project_id: string;
+  project_name?: string | null;
+  project_slug?: string | null;
   job_id?: string | null;
   status: BuildStatus;
   created_at: string;

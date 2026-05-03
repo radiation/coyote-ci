@@ -11,6 +11,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
+	"github.com/radiation/coyote-ci/backend/internal/service"
 	artifactsvc "github.com/radiation/coyote-ci/backend/internal/service/artifact"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 )
@@ -42,11 +43,35 @@ func TestArtifactHandlerListArtifacts(t *testing.T) {
 		},
 	}}
 	handler := NewArtifactHandler(artifactsvc.NewService(repo))
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	project, err := projectService.CreateProject(context.Background(), service.CreateProjectInput{Name: "Platform", Slug: "platform"})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	repo.records[0].Build.ProjectID = project.ID
+	repo.records[1].Build.ProjectID = project.ID
+	if _, createErr := jobRepo.Create(context.Background(), domain.Job{
+		ID:            jobID,
+		ProjectID:     project.ID,
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1",
+		Enabled:       true,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); createErr != nil {
+		t.Fatalf("create job failed: %v", createErr)
+	}
+	handler.SetProjectService(projectService)
+	handler.SetJobService(service.NewJobService(jobRepo, nil))
 
 	versionTagRepo := repositorymemory.NewVersionTagRepository()
 	versionTagRepo.SeedBuilds(repo.records[0].Build, repo.records[1].Build)
 	versionTagRepo.SeedArtifacts(repo.records[0].Artifact, repo.records[1].Artifact)
-	_, err := versionTagRepo.CreateForTargets(context.Background(), repository.CreateVersionTagsParams{
+	_, err = versionTagRepo.CreateForTargets(context.Background(), repository.CreateVersionTagsParams{
 		JobID:       jobID,
 		Version:     "v1.2.3",
 		ArtifactIDs: []string{"artifact-2"},
@@ -79,6 +104,15 @@ func TestArtifactHandlerListArtifacts(t *testing.T) {
 	if first["artifact_type"] != "npm_package" {
 		t.Fatalf("expected npm_package type, got %v", first["artifact_type"])
 	}
+	if first["project_name"] != "Platform" {
+		t.Fatalf("expected project_name Platform, got %v", first["project_name"])
+	}
+	if first["project_slug"] != "platform" {
+		t.Fatalf("expected project_slug platform, got %v", first["project_slug"])
+	}
+	if first["job_name"] != "backend-ci" {
+		t.Fatalf("expected job_name backend-ci, got %v", first["job_name"])
+	}
 	versions, ok := first["versions"].([]any)
 	if !ok {
 		t.Fatalf("expected versions to be []any, got %T", first["versions"])
@@ -96,6 +130,9 @@ func TestArtifactHandlerListArtifacts(t *testing.T) {
 	}
 	if len(tags) != 1 {
 		t.Fatalf("expected 1 version tag, got %d", len(tags))
+	}
+	if version["job_name"] != "backend-ci" {
+		t.Fatalf("expected version job_name backend-ci, got %v", version["job_name"])
 	}
 	if version["step_name"] != "Publish package" {
 		t.Fatalf("expected step name, got %v", version["step_name"])
@@ -139,5 +176,32 @@ func TestArtifactHandlerListArtifactsForwardsPaginationParams(t *testing.T) {
 	}
 	if repo.params[0].Offset != 10 {
 		t.Fatalf("expected offset 10, got %d", repo.params[0].Offset)
+	}
+}
+
+func TestArtifactHandlerListArtifacts_ForwardsProjectFilterFromSlug(t *testing.T) {
+	repo := &fakeArtifactBrowseRepo{}
+	handler := NewArtifactHandler(artifactsvc.NewService(repo))
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	project, err := projectService.CreateProject(context.Background(), service.CreateProjectInput{Name: "Platform", Slug: "platform"})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	handler.SetProjectService(projectService)
+	req := httptest.NewRequest(http.MethodGet, "/artifacts?project_slug=platform", nil)
+	w := httptest.NewRecorder()
+
+	handler.ListArtifacts(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(repo.params) != 1 {
+		t.Fatalf("expected one browse call, got %d", len(repo.params))
+	}
+	if repo.params[0].ProjectID != project.ID {
+		t.Fatalf("expected project id %q, got %q", project.ID, repo.params[0].ProjectID)
 	}
 }

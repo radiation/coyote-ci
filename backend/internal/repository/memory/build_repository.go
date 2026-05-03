@@ -168,6 +168,15 @@ func (r *BuildRepository) ListPaged(ctx context.Context, params repository.ListP
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(params.ProjectID) != "" {
+		filtered := make([]domain.Build, 0, len(all))
+		for _, build := range all {
+			if build.ProjectID == params.ProjectID {
+				filtered = append(filtered, build)
+			}
+		}
+		all = filtered
+	}
 
 	limit, offset := clampMemoryPageParams(params)
 	if offset >= len(all) {

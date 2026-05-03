@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
-import { listBuilds } from "../api";
+import { Link, useSearchParams } from "react-router-dom";
+import { listBuilds, listProjects } from "../api";
 import { StatusBadge } from "../components/StatusBadge";
 import type { Build } from "../types/build";
 import {
@@ -35,14 +35,16 @@ function compactTriggerMetadata(build: Build): string {
 }
 
 export function BuildsListPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const projectID = searchParams.get("project_id")?.trim() ?? "";
   const {
     data: builds,
     isLoading,
     error,
     dataUpdatedAt,
   } = useQuery({
-    queryKey: ["builds"],
-    queryFn: listBuilds,
+    queryKey: ["builds", projectID],
+    queryFn: () => listBuilds({ project_id: projectID || undefined }),
     refetchInterval: (query) => {
       const nextBuilds = query.state.data as Build[] | undefined;
       if (!nextBuilds || nextBuilds.length === 0) {
@@ -54,6 +56,20 @@ export function BuildsListPage() {
         : SLOW_POLL_INTERVAL;
     },
   });
+  const { data: projects = [] } = useQuery({
+    queryKey: ["projects"],
+    queryFn: () => listProjects(),
+  });
+
+  function handleProjectChange(nextProjectID: string) {
+    const nextParams = new URLSearchParams(searchParams);
+    if (nextProjectID) {
+      nextParams.set("project_id", nextProjectID);
+    } else {
+      nextParams.delete("project_id");
+    }
+    setSearchParams(nextParams, { replace: true });
+  }
 
   return (
     <>
@@ -65,6 +81,21 @@ export function BuildsListPage() {
           ? formatTime(new Date(dataUpdatedAt).toISOString())
           : "—"}
       </p>
+
+      <label className="artifact-filter-field artifact-filter-select">
+        <span>Project</span>
+        <select
+          value={projectID}
+          onChange={(event) => handleProjectChange(event.target.value)}
+        >
+          <option value="">All projects</option>
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>
+              {project.name} ({project.slug})
+            </option>
+          ))}
+        </select>
+      </label>
 
       {isLoading && <p>Loading builds…</p>}
       {error && (
@@ -96,7 +127,13 @@ export function BuildsListPage() {
                 <td>
                   <Link to={`/builds/${b.id}`}>{b.id.slice(0, 8)}…</Link>
                 </td>
-                <td>{b.project_id}</td>
+                <td>
+                  <Link to={`/projects/${b.project_id}`}>
+                    {b.project_name?.trim() ||
+                      b.project_slug?.trim() ||
+                      b.project_id}
+                  </Link>
+                </td>
                 <td>
                   <StatusBadge status={b.status} />
                 </td>

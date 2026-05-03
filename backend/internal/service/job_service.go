@@ -542,11 +542,16 @@ func (s *JobService) resolveProjectID(ctx context.Context, projectID string, pro
 	}
 
 	if trimmedID != "" {
-		project, err := s.projects.GetByID(ctx, trimmedID)
-		if err != nil {
-			return "", err
+		if _, err := uuid.Parse(trimmedID); err == nil {
+			project, lookupErr := s.projects.GetByID(ctx, trimmedID)
+			if lookupErr != nil {
+				return "", lookupErr
+			}
+			return project.ID, nil
 		}
-		return project.ID, nil
+		if trimmedSlug == "" {
+			trimmedSlug = trimmedID
+		}
 	}
 	if trimmedSlug != "" {
 		project, err := s.projects.GetBySlug(ctx, normalizeProjectSlug(trimmedSlug))

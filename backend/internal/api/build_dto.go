@@ -110,6 +110,8 @@ type BuildResponse struct {
 	ID                 string                 `json:"id"`
 	BuildNumber        int64                  `json:"build_number"`
 	ProjectID          string                 `json:"project_id"`
+	ProjectName        *string                `json:"project_name,omitempty"`
+	ProjectSlug        *string                `json:"project_slug,omitempty"`
 	JobID              *string                `json:"job_id,omitempty"`
 	Status             string                 `json:"status"`
 	CreatedAt          string                 `json:"created_at"`

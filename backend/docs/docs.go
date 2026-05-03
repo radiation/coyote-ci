@@ -45,6 +45,18 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Filter artifacts by project id",
+                        "name": "project_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter artifacts by project slug",
+                        "name": "project_slug",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "Max logical artifacts to return",
                         "name": "limit",
@@ -66,6 +78,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/api.ErrorResponse"
                         }
@@ -122,7 +140,7 @@ const docTemplate = `{
         },
         "/builds": {
             "get": {
-                "description": "Lists builds sorted by newest first with optional pagination.",
+                "description": "Lists builds sorted by newest first with optional pagination and project filters.",
                 "produces": [
                     "application/json"
                 ],
@@ -142,6 +160,18 @@ const docTemplate = `{
                         "description": "Number of results to skip",
                         "name": "offset",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter builds by project id",
+                        "name": "project_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter builds by project slug",
+                        "name": "project_slug",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -149,6 +179,18 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/api.BuildListEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
                         }
                     },
                     "500": {
@@ -1901,6 +1943,9 @@ const docTemplate = `{
                 "job_id": {
                     "type": "string"
                 },
+                "job_name": {
+                    "type": "string"
+                },
                 "key": {
                     "type": "string"
                 },
@@ -1914,6 +1959,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "project_slug": {
                     "type": "string"
                 },
                 "versions": {
@@ -1965,6 +2016,9 @@ const docTemplate = `{
                 "job_id": {
                     "type": "string"
                 },
+                "job_name": {
+                    "type": "string"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -1972,6 +2026,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "project_slug": {
                     "type": "string"
                 },
                 "size_bytes": {
@@ -2178,6 +2238,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "project_slug": {
                     "type": "string"
                 },
                 "queued_at": {

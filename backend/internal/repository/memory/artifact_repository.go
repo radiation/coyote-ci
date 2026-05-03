@@ -77,6 +77,9 @@ func (r *ArtifactRepository) Browse(_ context.Context, params repository.BrowseA
 		if build.ID == "" {
 			build = domain.Build{ID: artifact.BuildID, CreatedAt: artifact.CreatedAt}
 		}
+		if strings.TrimSpace(params.ProjectID) != "" && build.ProjectID != params.ProjectID {
+			continue
+		}
 		if trimmedQuery != "" && !matchesBrowseQuery(trimmedQuery, artifact, build) {
 			continue
 		}

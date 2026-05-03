@@ -3,13 +3,14 @@ import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { BuildsListPage } from "./BuildsListPage";
-import { listBuilds } from "../api";
+import { listBuilds, listProjects } from "../api";
 
 vi.mock("../api", () => ({
   listBuilds: vi.fn(),
+  listProjects: vi.fn(),
 }));
 
-function renderPage() {
+function renderPage(initialEntries: string[] = ["/"]) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -18,7 +19,7 @@ function renderPage() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={initialEntries}>
         <BuildsListPage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -27,9 +28,20 @@ function renderPage() {
 
 describe("BuildsListPage", () => {
   const mockedListBuilds = vi.mocked(listBuilds);
+  const mockedListProjects = vi.mocked(listProjects);
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedListProjects.mockResolvedValue([
+      {
+        id: "project-1",
+        name: "Platform",
+        slug: "platform",
+        description: "Core platform pipelines",
+        created_at: "2026-03-24T00:00:00Z",
+        updated_at: "2026-03-24T00:00:00Z",
+      },
+    ]);
   });
 
   it("shows empty state when no builds exist", async () => {
@@ -46,6 +58,8 @@ describe("BuildsListPage", () => {
       {
         id: "aaaa-bbbb-cccc-dddd",
         project_id: "project-1",
+        project_name: "Platform",
+        project_slug: "platform",
         status: "success",
         created_at: "2026-03-24T00:00:00Z",
         queued_at: "2026-03-24T00:00:01Z",
@@ -63,9 +77,19 @@ describe("BuildsListPage", () => {
     renderPage();
 
     await screen.findByText("aaaa-bbb…");
-    expect(screen.getByText("project-1")).toBeTruthy();
+    expect(screen.getByText("Platform")).toBeTruthy();
     expect(screen.getByText("webhook")).toBeTruthy();
     expect(screen.getByText("github • main • abc1234 • octocat")).toBeTruthy();
+  });
+
+  it("forwards the project filter from the query string", async () => {
+    mockedListBuilds.mockResolvedValue([]);
+
+    renderPage(["/builds?project_id=project-1"]);
+
+    await screen.findByText("No builds yet.");
+    expect(mockedListBuilds).toHaveBeenCalledWith({ project_id: "project-1" });
+    expect(screen.getByLabelText("Project")).toHaveValue("project-1");
   });
 
   it("does not render any creation form", async () => {
