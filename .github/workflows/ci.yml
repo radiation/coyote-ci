@@ -73,12 +73,12 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          packages="$(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... | tr '\n' ' ')"
-          if [ -z "$packages" ]; then
+          mapfile -t packages < <(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... | sed '/^$/d')
+          if [ "${#packages[@]}" -eq 0 ]; then
             echo "No Go test packages found"
             exit 1
           fi
-          go test -covermode=atomic -coverprofile=coverage.out $packages
+          go test -covermode=atomic -coverprofile=coverage.out "${packages[@]}"
 
       - name: Verify coverage file
         run: |

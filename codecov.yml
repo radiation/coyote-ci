@@ -4,7 +4,10 @@
 # PRs that only touch one side still show a complete coverage picture.
 
 fixes:
+  # Go coverage profiles use the backend module import path; map it back to the
+  # repository-relative backend/ directory for Codecov.
   - "github.com/radiation/coyote-ci/backend/::backend/"
+  # Vitest lcov output is rooted at frontend/src, but reports files as src/*.
   - "src/::frontend/src/"
 
 coverage:
