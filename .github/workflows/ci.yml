@@ -26,6 +26,7 @@ jobs:
             backend:
               - 'backend/**'
               - 'Makefile'
+              - 'codecov.yml'
               - '.github/workflows/ci.yml'
               - '.github/workflows/codeql.yml'
             mcp:
@@ -71,7 +72,24 @@ jobs:
         run: go vet ./...
 
       - name: Run tests with coverage
-        run: go test -covermode=atomic -coverprofile=coverage.out ./...
+        working-directory: backend
+        shell: bash
+        run: |
+          # Avoid packages without test files here; Go 1.26 coverage can fail on
+          # those packages in this repo even though plain `go test ./...` passes.
+          mapfile -t packages < <(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... | sed '/^$/d')
+          if [ "${#packages[@]}" -eq 0 ]; then
+            echo "No Go test packages found"
+            exit 1
+          fi
+          go test -covermode=atomic -coverprofile=coverage.out "${packages[@]}"
+
+      - name: Verify coverage file
+        working-directory: backend
+        run: |
+          test -s coverage.out
+          ls -l coverage.out
+          head -n 5 coverage.out
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out
@@ -85,7 +103,9 @@ jobs:
           files: ./backend/coverage.out
           flags: backend
           name: backend
-          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+          disable_search: true
+          fail_ci_if_error: true
 
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v7
