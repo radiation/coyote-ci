@@ -72,6 +72,8 @@ jobs:
         run: go vet ./...
 
       - name: Run tests with coverage
+        working-directory: backend
+        shell: bash
         run: |
           # Avoid packages without test files here; Go 1.26 coverage can fail on
           # those packages in this repo even though plain `go test ./...` passes.

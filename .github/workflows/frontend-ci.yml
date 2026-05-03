@@ -47,6 +47,7 @@ jobs:
         run: npm run test:coverage
 
       - name: Verify coverage file
+        working-directory: frontend
         run: |
           test -s coverage/lcov.info
           ls -la coverage
