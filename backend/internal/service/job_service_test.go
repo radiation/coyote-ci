@@ -877,6 +877,10 @@ func (r *failingCreateJobRepository) ListPaged(_ context.Context, _ repository.L
 	return []domain.Job{}, nil
 }
 
+func (r *failingCreateJobRepository) ListByProjectID(_ context.Context, _ string) ([]domain.Job, error) {
+	return []domain.Job{}, nil
+}
+
 func (r *failingCreateJobRepository) ListPushEnabledByRepository(_ context.Context, _ string) ([]domain.Job, error) {
 	return []domain.Job{}, nil
 }

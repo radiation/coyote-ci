@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { JobsListPage } from "./JobsListPage";
-import { listJobs, runJob } from "../api";
+import { listJobs, listProjects, runJob } from "../api";
 
 const navigateMock = vi.fn();
 
@@ -20,6 +20,7 @@ vi.mock("react-router-dom", async () => {
 
 vi.mock("../api", () => ({
   listJobs: vi.fn(),
+  listProjects: vi.fn(),
   runJob: vi.fn(),
 }));
 
@@ -42,10 +43,22 @@ function renderPage() {
 
 describe("JobsListPage", () => {
   const mockedListJobs = vi.mocked(listJobs);
+  const mockedListProjects = vi.mocked(listProjects);
   const mockedRunJob = vi.mocked(runJob);
 
   beforeEach(() => {
     vi.clearAllMocks();
+
+    mockedListProjects.mockResolvedValue([
+      {
+        id: "project-1",
+        name: "Platform",
+        slug: "platform",
+        description: "Core platform pipelines",
+        created_at: "2026-03-30T00:00:00Z",
+        updated_at: "2026-03-30T00:00:00Z",
+      },
+    ]);
 
     mockedListJobs.mockResolvedValue([
       {
@@ -90,6 +103,7 @@ describe("JobsListPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("backend-ci")).toBeTruthy();
+      expect(screen.getByText("Platform")).toBeTruthy();
       expect(
         screen.getByText("https://github.com/example/backend.git"),
       ).toBeTruthy();

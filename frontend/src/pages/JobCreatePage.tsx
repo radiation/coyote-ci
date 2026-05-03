@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { createJob, listSourceCredentials } from "../api";
+import { createJob, listProjects, listSourceCredentials } from "../api";
 import {
   ManagedBuildImageFields,
   type ManagedBuildImageValue,
@@ -43,6 +43,13 @@ export function JobCreatePage() {
     queryFn: () => listSourceCredentials(),
   });
 
+  const { data: projects = [], isLoading: projectsLoading } = useQuery({
+    queryKey: ["projects"],
+    queryFn: () => listProjects(),
+  });
+
+  const selectedProjectID = projectID || projects[0]?.id || "";
+
   const createMutation = useMutation({
     mutationFn: createJob,
     onMutate: () => {
@@ -59,7 +66,7 @@ export function JobCreatePage() {
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    const trimmedProjectID = projectID.trim();
+    const trimmedProjectID = selectedProjectID.trim();
     const trimmedName = name.trim();
     const trimmedRepositoryURL = repositoryURL.trim();
     const trimmedDefaultRef = defaultRef.trim();
@@ -72,7 +79,7 @@ export function JobCreatePage() {
       !trimmedDefaultRef
     ) {
       setErrorMessage(
-        "Project ID, name, repository URL, and default ref are required.",
+        "Project, name, repository URL, and default ref are required.",
       );
       return;
     }
@@ -147,14 +154,26 @@ export function JobCreatePage() {
       </p>
 
       <form className="job-form" onSubmit={onSubmit}>
-        <label htmlFor="job-project-id">Project ID</label>
-        <input
+        <label htmlFor="job-project-id">Project</label>
+        <select
           id="job-project-id"
-          value={projectID}
+          value={selectedProjectID}
           onChange={(event) => setProjectID(event.target.value)}
-          disabled={createMutation.isPending}
-          placeholder="project-slug"
-        />
+          disabled={createMutation.isPending || projectsLoading}
+        >
+          <option value="">Select a project</option>
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>
+              {project.name} ({project.slug})
+            </option>
+          ))}
+        </select>
+        {projects.length === 0 && !projectsLoading && (
+          <p className="subtle-text">
+            No projects found.{" "}
+            <Link to="/projects">Create a project first.</Link>
+          </p>
+        )}
 
         <label htmlFor="job-name">Name</label>
         <input

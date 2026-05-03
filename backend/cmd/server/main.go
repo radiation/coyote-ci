@@ -54,6 +54,7 @@ func main() {
 	executionJobRepo := repositorypostgres.NewExecutionJobRepository(db)
 	executionJobOutputRepo := repositorypostgres.NewExecutionJobOutputRepository(db)
 	jobRepo := repositorypostgres.NewJobRepository(db)
+	projectRepo := repositorypostgres.NewProjectRepository(db)
 	jobManagedImageConfigRepo := repositorypostgres.NewJobManagedImageConfigRepository(db)
 	sourceCredentialRepo := repositorypostgres.NewSourceCredentialRepository(db)
 	managedImageCatalogRepo := repositorypostgres.NewManagedImageCatalogRepository(db)
@@ -95,7 +96,8 @@ func main() {
 		ExecutionWorkspace:    cfg.ExecutionWorkspaceRoot,
 		DefaultImage:          cfg.ExecutionDefaultImage,
 	})
-	jobService := service.NewJobService(jobRepo, buildService).WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo)
+	projectService := service.NewProjectService(projectRepo)
+	jobService := service.NewJobService(jobRepo, buildService).WithProjectRepository(projectRepo).WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo)
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
 	webhookService := webhooksvc.NewDeliveryIngressService(webhookDeliveryRepo, jobService)
 	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()
@@ -105,6 +107,7 @@ func main() {
 	artifactHandler := handler.NewArtifactHandler(artifactService)
 	artifactHandler.SetVersionTagService(versionTagService)
 	jobHandler := handler.NewJobHandler(jobService)
+	projectHandler := handler.NewProjectHandler(projectService, jobService)
 	versionTagHandler := handler.NewVersionTagHandler(versionTagService)
 	credentialHandler := handler.NewSourceCredentialHandler(sourceCredentialService)
 	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, cfg.GitHubWebhookSecret)
@@ -132,7 +135,7 @@ func main() {
 		return nil
 	}))
 
-	router := apphttp.NewRouter(buildHandler, artifactHandler, jobHandler, versionTagHandler, credentialHandler, eventHandler, cfg.PushEventSecret)
+	router := apphttp.NewRouter(buildHandler, artifactHandler, jobHandler, projectHandler, versionTagHandler, credentialHandler, eventHandler, cfg.PushEventSecret)
 	mux := nethttp.NewServeMux()
 	mux.Handle("/debug/vars", expvar.Handler())
 	mux.Handle("/swagger/", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))

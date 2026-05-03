@@ -143,6 +143,40 @@ func (r *JobRepository) ListPaged(ctx context.Context, params repository.ListPar
 	return jobs, nil
 }
 
+func (r *JobRepository) ListByProjectID(ctx context.Context, projectID string) (jobs []domain.Job, err error) {
+	const query = `
+		SELECT id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		FROM jobs
+		WHERE project_id = $1
+		ORDER BY created_at DESC
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	jobs = make([]domain.Job, 0)
+	for rows.Next() {
+		job, scanErr := scanJob(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		jobs = append(jobs, job)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return jobs, nil
+}
+
 func (r *JobRepository) ListPushEnabledByRepository(ctx context.Context, repositoryURL string) (jobs []domain.Job, err error) {
 	normalizedRepo := normalizeRepositoryURLForMatch(repositoryURL)
 	if normalizedRepo == "" {

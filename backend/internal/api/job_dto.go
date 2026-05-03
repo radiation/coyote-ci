@@ -7,6 +7,7 @@ import (
 
 type CreateJobRequest struct {
 	ProjectID        string                              `json:"project_id"`
+	ProjectSlug      string                              `json:"project_slug,omitempty"`
 	Name             string                              `json:"name"`
 	RepositoryURL    string                              `json:"repository_url"`
 	DefaultRef       string                              `json:"default_ref,omitempty"`

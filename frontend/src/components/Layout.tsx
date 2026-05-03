@@ -14,6 +14,14 @@ export function Layout() {
           <div className="header-actions">
             <nav className="main-nav" aria-label="Primary">
               <NavLink
+                to="/projects"
+                className={({ isActive }) =>
+                  isActive ? "main-nav-link is-active" : "main-nav-link"
+                }
+              >
+                Projects
+              </NavLink>
+              <NavLink
                 to="/jobs"
                 className={({ isActive }) =>
                   isActive ? "main-nav-link is-active" : "main-nav-link"

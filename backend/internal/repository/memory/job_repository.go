@@ -79,6 +79,27 @@ func (r *JobRepository) ListPaged(ctx context.Context, params repository.ListPar
 	return all[offset:end], nil
 }
 
+func (r *JobRepository) ListByProjectID(_ context.Context, projectID string) ([]domain.Job, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]domain.Job, 0)
+	for _, job := range r.jobs {
+		if job.ProjectID == projectID {
+			out = append(out, job)
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+
+	return out, nil
+}
+
 func (r *JobRepository) ListPushEnabledByRepository(_ context.Context, repositoryURL string) ([]domain.Job, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

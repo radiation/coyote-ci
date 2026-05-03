@@ -29,6 +29,13 @@ import type {
   SourceCredentialListResponse,
   UpdateSourceCredentialRequest,
 } from "../types/managedImageSettings";
+import type {
+  CreateProjectRequest,
+  Project,
+  ProjectJobsResponse,
+  ProjectListResponse,
+  UpdateProjectRequest,
+} from "../types/project";
 
 /**
  * Base URL for API requests.
@@ -200,6 +207,57 @@ export function buildStepLogStreamURL(
 
 export async function listJobs(): Promise<Job[]> {
   const envelope = await fetchJSON<DataEnvelope<JobListResponse>>("/jobs");
+  return envelope.data.jobs;
+}
+
+export async function listProjects(): Promise<Project[]> {
+  const envelope =
+    await fetchJSON<DataEnvelope<ProjectListResponse>>("/projects");
+  return envelope.data.projects;
+}
+
+export async function getProject(id: string): Promise<Project> {
+  const envelope = await fetchJSON<DataEnvelope<Project>>(
+    `/projects/${encodeURIComponent(id)}`,
+  );
+  return envelope.data;
+}
+
+export async function createProject(
+  input: CreateProjectRequest,
+): Promise<Project> {
+  const envelope = await postJSON<DataEnvelope<Project>, CreateProjectRequest>(
+    "/projects",
+    input,
+  );
+  return envelope.data;
+}
+
+export async function updateProject(
+  id: string,
+  input: UpdateProjectRequest,
+): Promise<Project> {
+  const envelope = await fetchJSON<DataEnvelope<Project>>(
+    `/projects/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  return envelope.data;
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  await deleteNoContent(`/projects/${encodeURIComponent(id)}`);
+}
+
+export async function listJobsByProject(projectId: string): Promise<Job[]> {
+  const envelope = await fetchJSON<DataEnvelope<ProjectJobsResponse>>(
+    `/projects/${encodeURIComponent(projectId)}/jobs`,
+  );
   return envelope.data.jobs;
 }
 

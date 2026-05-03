@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { JobDetailPage } from "./JobDetailPage";
 import {
+  getProject,
   getJob,
   listBuildsByJob,
   listSourceCredentials,
@@ -25,6 +26,7 @@ vi.mock("react-router-dom", async () => {
 });
 
 vi.mock("../api", () => ({
+  getProject: vi.fn(),
   getJob: vi.fn(),
   updateJob: vi.fn(),
   runJob: vi.fn(),
@@ -52,6 +54,7 @@ function renderPage() {
 }
 
 describe("JobDetailPage", () => {
+  const mockedGetProject = vi.mocked(getProject);
   const mockedGetJob = vi.mocked(getJob);
   const mockedUpdateJob = vi.mocked(updateJob);
   const mockedRunJob = vi.mocked(runJob);
@@ -62,6 +65,14 @@ describe("JobDetailPage", () => {
     vi.clearAllMocks();
 
     mockedListBuildsByJob.mockResolvedValue([]);
+    mockedGetProject.mockResolvedValue({
+      id: "project-1",
+      name: "Platform",
+      slug: "platform",
+      description: "Core platform pipelines",
+      created_at: "2026-03-30T00:00:00Z",
+      updated_at: "2026-03-30T00:00:00Z",
+    });
     mockedListSourceCredentials.mockResolvedValue([
       {
         id: "cred-1",
@@ -143,6 +154,12 @@ describe("JobDetailPage", () => {
     renderPage();
 
     await screen.findByDisplayValue("backend-ci");
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "Platform" })).toHaveAttribute(
+        "href",
+        "/projects/project-1",
+      );
+    });
 
     fireEvent.change(screen.getByLabelText("Name"), {
       target: { value: "backend-ci-updated" },
