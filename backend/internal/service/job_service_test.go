@@ -903,6 +903,10 @@ func (r *failingCreateJobRepository) Delete(_ context.Context, _ string) error {
 	return repository.ErrJobNotFound
 }
 
+func (r *failingCreateJobRepository) GetByIDs(_ context.Context, _ []string) ([]domain.Job, error) {
+	return []domain.Job{}, nil
+}
+
 func (r *failingCreateJobRepository) List(_ context.Context) ([]domain.Job, error) {
 	return []domain.Job{}, nil
 }

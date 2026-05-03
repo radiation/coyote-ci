@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -59,6 +61,52 @@ func (r *ProjectRepository) GetByID(ctx context.Context, id string) (domain.Proj
 		return domain.Project{}, err
 	}
 	return project, nil
+}
+
+func (r *ProjectRepository) GetByIDs(ctx context.Context, ids []string) (projects []domain.Project, err error) {
+	ids = uniqueProjectIDs(ids)
+	if len(ids) == 0 {
+		return []domain.Project{}, nil
+	}
+
+	args := make([]any, 0, len(ids))
+	placeholders := make([]string, 0, len(ids))
+	for idx, id := range ids {
+		args = append(args, id)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", idx+1))
+	}
+
+	query := `
+		SELECT id, name, slug, description, created_at, updated_at
+		FROM projects
+		WHERE id IN (` + strings.Join(placeholders, ", ") + `)
+		ORDER BY created_at ASC, id ASC
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	projects = make([]domain.Project, 0, len(ids))
+	for rows.Next() {
+		project, scanErr := scanProject(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		projects = append(projects, project)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return projects, nil
 }
 
 func (r *ProjectRepository) GetBySlug(ctx context.Context, slug string) (domain.Project, error) {
@@ -143,25 +191,15 @@ func (r *ProjectRepository) Update(ctx context.Context, project domain.Project) 
 }
 
 func (r *ProjectRepository) Delete(ctx context.Context, id string) error {
-	const countQuery = `
-		SELECT COUNT(1)
-		FROM jobs
-		WHERE project_id = $1
-	`
-	var jobCount int
-	if err := r.db.QueryRowContext(ctx, countQuery, id).Scan(&jobCount); err != nil {
-		return err
-	}
-	if jobCount > 0 {
-		return repository.ErrProjectHasJobs
-	}
-
 	const deleteQuery = `
 		DELETE FROM projects
 		WHERE id = $1
 	`
 	result, err := r.db.ExecContext(ctx, deleteQuery, id)
 	if err != nil {
+		if isProjectDeleteBlockedByJobs(err) {
+			return repository.ErrProjectHasJobs
+		}
 		return err
 	}
 	rowsAffected, err := result.RowsAffected()
@@ -200,4 +238,29 @@ func isProjectSlugConflict(err error) bool {
 		return pgErr.Code == "23505"
 	}
 	return false
+}
+
+func isProjectDeleteBlockedByJobs(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23503" && pgErr.ConstraintName == "fk_jobs_project_id"
+	}
+	return false
+}
+
+func uniqueProjectIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	result := make([]string, 0, len(ids))
+	for _, id := range ids {
+		trimmedID := strings.TrimSpace(id)
+		if trimmedID == "" {
+			continue
+		}
+		if _, ok := seen[trimmedID]; ok {
+			continue
+		}
+		seen[trimmedID] = struct{}{}
+		result = append(result, trimmedID)
+	}
+	return result
 }

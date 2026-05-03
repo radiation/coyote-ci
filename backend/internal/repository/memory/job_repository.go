@@ -62,6 +62,38 @@ func (r *JobRepository) List(_ context.Context) ([]domain.Job, error) {
 	return out, nil
 }
 
+func (r *JobRepository) GetByIDs(_ context.Context, ids []string) ([]domain.Job, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]domain.Job, 0, len(ids))
+	for _, id := range ids {
+		trimmedID := strings.TrimSpace(id)
+		if trimmedID == "" {
+			continue
+		}
+		if _, ok := seen[trimmedID]; ok {
+			continue
+		}
+		seen[trimmedID] = struct{}{}
+		job, ok := r.jobs[trimmedID]
+		if !ok {
+			continue
+		}
+		out = append(out, job)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+
+	return out, nil
+}
+
 func (r *JobRepository) ListPaged(ctx context.Context, params repository.ListParams) ([]domain.Job, error) {
 	all, err := r.List(ctx)
 	if err != nil {

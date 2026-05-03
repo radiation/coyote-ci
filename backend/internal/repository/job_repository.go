@@ -12,6 +12,7 @@ var ErrJobNotFound = errors.New("job not found")
 type JobRepository interface {
 	Create(ctx context.Context, job domain.Job) (domain.Job, error)
 	Delete(ctx context.Context, id string) error
+	GetByIDs(ctx context.Context, ids []string) ([]domain.Job, error)
 	List(ctx context.Context) ([]domain.Job, error)
 	ListPaged(ctx context.Context, params ListParams) ([]domain.Job, error)
 	ListByProjectID(ctx context.Context, projectID string) ([]domain.Job, error)

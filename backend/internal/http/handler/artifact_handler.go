@@ -236,10 +236,6 @@ func (h *ArtifactHandler) contextLookup(ctx context.Context, items []domain.Arti
 		}
 	}
 	if h.jobs != nil {
-		jobs, err := h.jobs.ListJobs(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
 		neededJobs := make(map[string]struct{})
 		for _, item := range items {
 			if item.JobID != nil && strings.TrimSpace(*item.JobID) != "" {
@@ -251,10 +247,16 @@ func (h *ArtifactHandler) contextLookup(ctx context.Context, items []domain.Arti
 				}
 			}
 		}
+		jobIDs := make([]string, 0, len(neededJobs))
+		for id := range neededJobs {
+			jobIDs = append(jobIDs, id)
+		}
+		jobs, err := h.jobs.GetJobsByIDs(ctx, jobIDs)
+		if err != nil {
+			return nil, nil, err
+		}
 		for _, job := range jobs {
-			if _, ok := neededJobs[job.ID]; ok {
-				jobLookup[job.ID] = job
-			}
+			jobLookup[job.ID] = job
 		}
 	}
 	return projectLookup, jobLookup, nil

@@ -74,6 +74,10 @@ func (s *ProjectService) GetProject(ctx context.Context, id string) (domain.Proj
 	return s.projects.GetByID(ctx, trimmed)
 }
 
+func (s *ProjectService) GetProjectsByIDs(ctx context.Context, ids []string) ([]domain.Project, error) {
+	return s.projects.GetByIDs(ctx, ids)
+}
+
 func (s *ProjectService) GetProjectBySlug(ctx context.Context, slug string) (domain.Project, error) {
 	trimmed := normalizeProjectSlug(slug)
 	if trimmed == "" {

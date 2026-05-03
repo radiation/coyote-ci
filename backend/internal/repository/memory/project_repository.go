@@ -50,6 +50,38 @@ func (r *ProjectRepository) GetByID(_ context.Context, id string) (domain.Projec
 	return project, nil
 }
 
+func (r *ProjectRepository) GetByIDs(_ context.Context, ids []string) ([]domain.Project, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]domain.Project, 0, len(ids))
+	for _, id := range ids {
+		trimmedID := strings.TrimSpace(id)
+		if trimmedID == "" {
+			continue
+		}
+		if _, ok := seen[trimmedID]; ok {
+			continue
+		}
+		seen[trimmedID] = struct{}{}
+		project, ok := r.projects[trimmedID]
+		if !ok {
+			continue
+		}
+		out = append(out, project)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+
+	return out, nil
+}
+
 func (r *ProjectRepository) GetBySlug(_ context.Context, slug string) (domain.Project, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

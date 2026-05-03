@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -93,6 +94,52 @@ func (r *JobRepository) List(ctx context.Context) (jobs []domain.Job, err error)
 	}()
 
 	jobs = make([]domain.Job, 0)
+	for rows.Next() {
+		job, scanErr := scanJob(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		jobs = append(jobs, job)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return jobs, nil
+}
+
+func (r *JobRepository) GetByIDs(ctx context.Context, ids []string) (jobs []domain.Job, err error) {
+	ids = uniqueJobIDs(ids)
+	if len(ids) == 0 {
+		return []domain.Job{}, nil
+	}
+
+	args := make([]any, 0, len(ids))
+	placeholders := make([]string, 0, len(ids))
+	for idx, id := range ids {
+		args = append(args, id)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", idx+1))
+	}
+
+	query := `
+		SELECT id, project_id, name, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		FROM jobs
+		WHERE id IN (` + strings.Join(placeholders, ", ") + `)
+		ORDER BY created_at DESC, id ASC
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	jobs = make([]domain.Job, 0, len(ids))
 	for rows.Next() {
 		job, scanErr := scanJob(rows)
 		if scanErr != nil {
@@ -303,6 +350,23 @@ func (r *JobRepository) Update(ctx context.Context, job domain.Job) (domain.Job,
 	}
 
 	return updated, nil
+}
+
+func uniqueJobIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	result := make([]string, 0, len(ids))
+	for _, id := range ids {
+		trimmedID := strings.TrimSpace(id)
+		if trimmedID == "" {
+			continue
+		}
+		if _, ok := seen[trimmedID]; ok {
+			continue
+		}
+		seen[trimmedID] = struct{}{}
+		result = append(result, trimmedID)
+	}
+	return result
 }
 
 func scanJob(scanner rowScanner) (domain.Job, error) {

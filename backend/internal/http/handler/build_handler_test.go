@@ -26,6 +26,28 @@ import (
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
+type trackingProjectRepo struct {
+	repositorymemory.ProjectRepository
+	listCalls     int
+	getByIDsCalls int
+	lastIDs       []string
+}
+
+func newTrackingProjectRepo(jobRepo repository.JobRepository) *trackingProjectRepo {
+	return &trackingProjectRepo{ProjectRepository: *repositorymemory.NewProjectRepository(jobRepo)}
+}
+
+func (r *trackingProjectRepo) List(ctx context.Context) ([]domain.Project, error) {
+	r.listCalls++
+	return r.ProjectRepository.List(ctx)
+}
+
+func (r *trackingProjectRepo) GetByIDs(ctx context.Context, ids []string) ([]domain.Project, error) {
+	r.getByIDsCalls++
+	r.lastIDs = append([]string(nil), ids...)
+	return r.ProjectRepository.GetByIDs(ctx, ids)
+}
+
 type fakeRepo struct {
 	build      domain.Build
 	builds     map[string]domain.Build
@@ -856,6 +878,40 @@ func TestBuildHandler_GetBuild_IncludesProjectContext(t *testing.T) {
 	}
 	if data["project_slug"] != "platform" {
 		t.Fatalf("expected project_slug platform, got %v", data["project_slug"])
+	}
+}
+
+func TestBuildHandler_ProjectLookupUsesBatchProjectFetch(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := newTrackingProjectRepo(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	project, err := projectService.CreateProject(context.Background(), service.CreateProjectInput{Name: "Platform", Slug: "platform"})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+
+	h := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{builds: map[string]domain.Build{
+		"build-1": {ID: "build-1", ProjectID: project.ID, Status: domain.BuildStatusQueued, CreatedAt: now},
+		"build-2": {ID: "build-2", ProjectID: project.ID, Status: domain.BuildStatusSuccess, CreatedAt: now.Add(time.Second)},
+	}}, nil, nil))
+	h.SetProjectService(projectService)
+	req := httptest.NewRequest(http.MethodGet, "/builds", nil)
+	rr := httptest.NewRecorder()
+
+	h.ListBuilds(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if projectRepo.listCalls != 0 {
+		t.Fatalf("expected List not to be called, got %d", projectRepo.listCalls)
+	}
+	if projectRepo.getByIDsCalls != 1 {
+		t.Fatalf("expected GetByIDs to be called once, got %d", projectRepo.getByIDsCalls)
+	}
+	if len(projectRepo.lastIDs) != 2 {
+		t.Fatalf("expected 2 raw project ids passed to GetByIDs, got %v", projectRepo.lastIDs)
 	}
 }
 

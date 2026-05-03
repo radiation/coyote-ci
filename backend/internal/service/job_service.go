@@ -237,6 +237,10 @@ func (s *JobService) ListJobs(ctx context.Context) ([]domain.Job, error) {
 	return jobs, nil
 }
 
+func (s *JobService) GetJobsByIDs(ctx context.Context, ids []string) ([]domain.Job, error) {
+	return s.jobRepo.GetByIDs(ctx, ids)
+}
+
 func (s *JobService) ListJobsPaged(ctx context.Context, params repository.ListParams) ([]domain.Job, error) {
 	jobs, err := s.jobRepo.ListPaged(ctx, params)
 	if err != nil {

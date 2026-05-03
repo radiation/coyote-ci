@@ -489,22 +489,23 @@ func (h *BuildHandler) projectLookup(ctx context.Context, builds []domain.Build)
 	if h.projects == nil || len(builds) == 0 {
 		return lookup, nil
 	}
-	projects, err := h.projects.ListProjects(ctx)
+	projectIDs := make([]string, 0, len(builds))
+	for _, build := range builds {
+		if strings.TrimSpace(build.ProjectID) != "" {
+			projectIDs = append(projectIDs, build.ProjectID)
+		}
+	}
+	if len(projectIDs) == 0 {
+		return lookup, nil
+	}
+	projects, err := h.projects.GetProjectsByIDs(ctx, projectIDs)
 	if err != nil {
 		return nil, err
 	}
-	needed := make(map[string]struct{}, len(builds))
-	for _, build := range builds {
-		if strings.TrimSpace(build.ProjectID) != "" {
-			needed[build.ProjectID] = struct{}{}
-		}
-	}
 	for idx := range projects {
 		project := projects[idx]
-		if _, ok := needed[project.ID]; ok {
-			copyProject := project
-			lookup[project.ID] = &copyProject
-		}
+		copyProject := project
+		lookup[project.ID] = &copyProject
 	}
 	return lookup, nil
 }

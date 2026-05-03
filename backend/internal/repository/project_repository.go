@@ -14,6 +14,7 @@ var ErrProjectHasJobs = errors.New("project has jobs")
 type ProjectRepository interface {
 	Create(ctx context.Context, project domain.Project) (domain.Project, error)
 	GetByID(ctx context.Context, id string) (domain.Project, error)
+	GetByIDs(ctx context.Context, ids []string) ([]domain.Project, error)
 	GetBySlug(ctx context.Context, slug string) (domain.Project, error)
 	List(ctx context.Context) ([]domain.Project, error)
 	Update(ctx context.Context, project domain.Project) (domain.Project, error)
