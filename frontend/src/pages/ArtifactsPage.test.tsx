@@ -9,7 +9,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { ArtifactsPage } from "./ArtifactsPage";
-import { createJobVersionTags, listArtifacts } from "../api";
+import { createJobVersionTags, listArtifacts, listProjects } from "../api";
 import { ThemeProvider } from "../theme";
 import { installMockLocalStorage } from "../test/browserMocks";
 import { THEME_STORAGE_KEY } from "../theme-context";
@@ -17,6 +17,7 @@ import { THEME_STORAGE_KEY } from "../theme-context";
 vi.mock("../api", () => ({
   createJobVersionTags: vi.fn(),
   listArtifacts: vi.fn(),
+  listProjects: vi.fn(),
   artifactDownloadURL: (path: string) => `/api${path}`,
 }));
 
@@ -58,6 +59,7 @@ function renderPage(initialEntries = ["/artifacts"]) {
 describe("ArtifactsPage", () => {
   const mockedListArtifacts = vi.mocked(listArtifacts);
   const mockedCreateJobVersionTags = vi.mocked(createJobVersionTags);
+  const mockedListProjects = vi.mocked(listProjects);
   const writeText = vi.fn();
 
   function buildArtifact(index: number) {
@@ -104,11 +106,73 @@ describe("ArtifactsPage", () => {
       value: { writeText },
     });
     mockedCreateJobVersionTags.mockResolvedValue([]);
+    mockedListProjects.mockResolvedValue([
+      {
+        id: "project-1",
+        name: "Platform",
+        slug: "platform",
+        description: "Core platform pipelines",
+        created_at: "2026-04-25T08:00:00Z",
+        updated_at: "2026-04-25T08:00:00Z",
+      },
+      {
+        id: "project-2",
+        name: "Release",
+        slug: "release",
+        description: "Release automation",
+        created_at: "2026-04-25T08:00:00Z",
+        updated_at: "2026-04-25T08:00:00Z",
+      },
+    ]);
     mockedListArtifacts.mockImplementation(async (input) => {
       const type = input?.type ?? "";
       const query = input?.q ?? "";
+      const projectID = input?.project_id ?? "";
       const limit = input?.limit ?? 0;
       const offset = input?.offset ?? 0;
+
+      if (projectID === "project-2") {
+        return [
+          {
+            key: "job-2::packages/release.tgz",
+            name: "release-package",
+            path: "packages/release.tgz",
+            project_id: "project-2",
+            project_name: "Release",
+            project_slug: "release",
+            job_id: "job-2",
+            job_name: "release-ci",
+            artifact_type: "npm_package",
+            latest_created_at: "2026-04-25T11:00:00Z",
+            versions: [
+              {
+                artifact_id: "artifact-release-1",
+                name: "release-package",
+                build_id: "build-release-1",
+                build_number: 55,
+                build_status: "success",
+                project_id: "project-2",
+                project_name: "Release",
+                project_slug: "release",
+                job_id: "job-2",
+                job_name: "release-ci",
+                step_id: "step-release-1",
+                step_index: 1,
+                step_name: "Publish package",
+                path: "packages/release.tgz",
+                size_bytes: 2048,
+                content_type: "application/gzip",
+                checksum_sha256: "release-sha",
+                storage_provider: "filesystem",
+                download_url_path:
+                  "/builds/build-release-1/artifacts/artifact-release-1/download",
+                version_tags: [],
+                created_at: "2026-04-25T11:00:00Z",
+              },
+            ],
+          },
+        ];
+      }
 
       if (type === "docker_image") {
         return [
@@ -432,6 +496,20 @@ describe("ArtifactsPage", () => {
         limit: 11,
         offset: 0,
       });
+    });
+  });
+
+  it("forwards the project filter from the query string", async () => {
+    renderPage(["/artifacts?project_id=project-2"]);
+
+    await screen.findByText("release-package");
+    expect(screen.getByLabelText("Project")).toHaveValue("project-2");
+    expect(mockedListArtifacts).toHaveBeenCalledWith({
+      q: "",
+      type: "",
+      project_id: "project-2",
+      limit: 11,
+      offset: 0,
     });
   });
 

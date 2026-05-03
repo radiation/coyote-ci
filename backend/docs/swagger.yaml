@@ -11,6 +11,8 @@ definitions:
         type: string
       job_id:
         type: string
+      job_name:
+        type: string
       key:
         type: string
       latest_created_at:
@@ -20,6 +22,10 @@ definitions:
       path:
         type: string
       project_id:
+        type: string
+      project_name:
+        type: string
+      project_slug:
         type: string
       versions:
         items:
@@ -53,11 +59,17 @@ definitions:
         type: string
       job_id:
         type: string
+      job_name:
+        type: string
       name:
         type: string
       path:
         type: string
       project_id:
+        type: string
+      project_name:
+        type: string
+      project_slug:
         type: string
       size_bytes:
         type: integer
@@ -192,6 +204,10 @@ definitions:
       pipeline_source:
         type: string
       project_id:
+        type: string
+      project_name:
+        type: string
+      project_slug:
         type: string
       queued_at:
         type: string
@@ -362,6 +378,8 @@ definitions:
         type: string
       project_id:
         type: string
+      project_slug:
+        type: string
       push_branch:
         type: string
       push_enabled:
@@ -383,6 +401,15 @@ definitions:
         type: string
       source:
         $ref: '#/definitions/api.BuildSourceInput'
+    type: object
+  api.CreateProjectRequest:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+      slug:
+        type: string
     type: object
   api.CreateRepoBuildRequest:
     properties:
@@ -616,6 +643,38 @@ definitions:
       updated_at:
         type: string
     type: object
+  api.ProjectEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.ProjectResponse'
+    type: object
+  api.ProjectListEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.ProjectListResponse'
+    type: object
+  api.ProjectListResponse:
+    properties:
+      projects:
+        items:
+          $ref: '#/definitions/api.ProjectResponse'
+        type: array
+    type: object
+  api.ProjectResponse:
+    properties:
+      created_at:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      slug:
+        type: string
+      updated_at:
+        type: string
+    type: object
   api.PushEventEnvelope:
     properties:
       data:
@@ -732,6 +791,13 @@ definitions:
       step_index:
         type: integer
     type: object
+  api.StringPatch:
+    properties:
+      set:
+        type: boolean
+      value:
+        type: string
+    type: object
   api.UpdateJobManagedImageConfigRequest:
     properties:
       bot_branch_prefix:
@@ -780,6 +846,15 @@ definitions:
           type: string
         type: array
       trigger_mode:
+        type: string
+    type: object
+  api.UpdateProjectRequest:
+    properties:
+      description:
+        $ref: '#/definitions/api.StringPatch'
+      name:
+        type: string
+      slug:
         type: string
     type: object
   api.VersionTagCreateRequest:
@@ -836,6 +911,14 @@ paths:
         in: query
         name: type
         type: string
+      - description: Filter artifacts by project id
+        in: query
+        name: project_id
+        type: string
+      - description: Filter artifacts by project slug
+        in: query
+        name: project_slug
+        type: string
       - description: Max logical artifacts to return
         in: query
         name: limit
@@ -853,6 +936,10 @@ paths:
             $ref: '#/definitions/api.ArtifactBrowseEnvelope'
         "400":
           description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
           schema:
             $ref: '#/definitions/api.ErrorResponse'
         "500":
@@ -891,7 +978,8 @@ paths:
       - version-tags
   /builds:
     get:
-      description: Lists builds sorted by newest first with optional pagination.
+      description: Lists builds sorted by newest first with optional pagination and
+        project filters.
       parameters:
       - description: Max results (default 50, max 200)
         in: query
@@ -901,6 +989,14 @@ paths:
         in: query
         name: offset
         type: integer
+      - description: Filter builds by project id
+        in: query
+        name: project_id
+        type: string
+      - description: Filter builds by project slug
+        in: query
+        name: project_slug
+        type: string
       produces:
       - application/json
       responses:
@@ -908,6 +1004,14 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/api.BuildListEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
@@ -1835,6 +1939,178 @@ paths:
       summary: List managed image version tags
       tags:
       - version-tags
+  /projects:
+    get:
+      description: Lists projects.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ProjectListEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List projects
+      tags:
+      - projects
+    post:
+      consumes:
+      - application/json
+      description: Creates a new project.
+      parameters:
+      - description: Project create request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.CreateProjectRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.ProjectEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Create project
+      tags:
+      - projects
+  /projects/{id}:
+    delete:
+      description: Deletes a project when it has no jobs.
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Delete project
+      tags:
+      - projects
+    get:
+      description: Returns one project.
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ProjectEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get project
+      tags:
+      - projects
+    patch:
+      consumes:
+      - application/json
+      description: Updates project metadata.
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Project update request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.UpdateProjectRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ProjectEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Update project
+      tags:
+      - projects
+  /projects/{id}/jobs:
+    get:
+      description: Lists jobs for one project.
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.JobListEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List project jobs
+      tags:
+      - projects
   /readyz:
     get:
       description: Returns a readiness response after database connectivity and schema

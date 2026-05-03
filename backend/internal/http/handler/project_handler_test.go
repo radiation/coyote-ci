@@ -1,0 +1,155 @@
+package handler
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
+	"github.com/radiation/coyote-ci/backend/internal/service"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+)
+
+func TestProjectHandler_CreateListGetUpdateDeleteAndJobs(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	buildRepo := memory.NewBuildRepository()
+	jobService := service.NewJobService(jobRepo, buildsvc.NewBuildService(buildRepo, nil, nil)).WithProjectRepository(projectRepo)
+	projectService := service.NewProjectService(projectRepo)
+	h := NewProjectHandler(projectService, jobService)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/projects", bytes.NewBufferString(`{"name":"Platform","slug":"platform","description":"Platform pipelines"}`))
+	createRes := httptest.NewRecorder()
+	h.CreateProject(createRes, createReq)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d", http.StatusCreated, createRes.Code)
+	}
+	created := decodeDataMap(t, createRes)
+	projectID, _ := created["id"].(string)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/projects", nil)
+	listRes := httptest.NewRecorder()
+	h.ListProjects(listRes, listReq)
+	if listRes.Code != http.StatusOK {
+		t.Fatalf("expected list status %d, got %d", http.StatusOK, listRes.Code)
+	}
+
+	getReq := addURLParam(httptest.NewRequest(http.MethodGet, "/projects/"+projectID, nil), "id", projectID)
+	getRes := httptest.NewRecorder()
+	h.GetProject(getRes, getReq)
+	if getRes.Code != http.StatusOK {
+		t.Fatalf("expected get status %d, got %d", http.StatusOK, getRes.Code)
+	}
+
+	_, err := jobService.CreateJob(context.Background(), service.CreateJobInput{
+		ProjectID:     projectID,
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	jobsReq := addURLParam(httptest.NewRequest(http.MethodGet, "/projects/"+projectID+"/jobs", nil), "id", projectID)
+	jobsRes := httptest.NewRecorder()
+	h.ListProjectJobs(jobsRes, jobsReq)
+	if jobsRes.Code != http.StatusOK {
+		t.Fatalf("expected project jobs status %d, got %d", http.StatusOK, jobsRes.Code)
+	}
+	var jobsPayload map[string]any
+	if err := json.Unmarshal(jobsRes.Body.Bytes(), &jobsPayload); err != nil {
+		t.Fatalf("decode project jobs response failed: %v", err)
+	}
+	data, ok := jobsPayload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected jobs response data object, got %T", jobsPayload["data"])
+	}
+	jobs, ok := data["jobs"].([]any)
+	if !ok {
+		t.Fatalf("expected jobs response list, got %T", data["jobs"])
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 project job, got %d", len(jobs))
+	}
+
+	deleteReq := addURLParam(httptest.NewRequest(http.MethodDelete, "/projects/"+projectID, nil), "id", projectID)
+	deleteRes := httptest.NewRecorder()
+	h.DeleteProject(deleteRes, deleteReq)
+	if deleteRes.Code != http.StatusConflict {
+		t.Fatalf("expected delete conflict status %d, got %d", http.StatusConflict, deleteRes.Code)
+	}
+
+	updateReq := addURLParam(httptest.NewRequest(http.MethodPatch, "/projects/"+projectID, bytes.NewBufferString(`{"name":"Platform CI","slug":"platform-ci"}`)), "id", projectID)
+	updateRes := httptest.NewRecorder()
+	h.UpdateProject(updateRes, updateReq)
+	if updateRes.Code != http.StatusOK {
+		t.Fatalf("expected update status %d, got %d", http.StatusOK, updateRes.Code)
+	}
+}
+
+func TestProjectHandler_CreateDuplicateSlugReturnsConflict(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	h := NewProjectHandler(projectService, service.NewJobService(jobRepo, buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)).WithProjectRepository(projectRepo))
+
+	body := `{"name":"Platform","slug":"platform"}`
+	firstReq := httptest.NewRequest(http.MethodPost, "/projects", bytes.NewBufferString(body))
+	firstRes := httptest.NewRecorder()
+	h.CreateProject(firstRes, firstReq)
+	if firstRes.Code != http.StatusCreated {
+		t.Fatalf("expected first create status %d, got %d", http.StatusCreated, firstRes.Code)
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/projects", bytes.NewBufferString(body))
+	secondRes := httptest.NewRecorder()
+	h.CreateProject(secondRes, secondReq)
+	if secondRes.Code != http.StatusConflict {
+		t.Fatalf("expected duplicate slug status %d, got %d", http.StatusConflict, secondRes.Code)
+	}
+}
+
+func TestProjectHandler_DeleteDefaultProjectReturnsConflict(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	h := NewProjectHandler(projectService, service.NewJobService(jobRepo, buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)).WithProjectRepository(projectRepo))
+
+	defaultProject, err := projectRepo.Create(context.Background(), serviceProject("00000000-0000-0000-0000-000000000001", "Default Project", domain.DefaultProjectSlug))
+	if err != nil {
+		t.Fatalf("create default project failed: %v", err)
+	}
+
+	deleteReq := addURLParam(httptest.NewRequest(http.MethodDelete, "/projects/"+defaultProject.ID, nil), "id", defaultProject.ID)
+	deleteRes := httptest.NewRecorder()
+	h.DeleteProject(deleteRes, deleteReq)
+	if deleteRes.Code != http.StatusConflict {
+		t.Fatalf("expected default project delete status %d, got %d", http.StatusConflict, deleteRes.Code)
+	}
+}
+
+func TestProjectHandler_GetProjectWithMissingIDReturnsBadRequest(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	h := NewProjectHandler(projectService, service.NewJobService(jobRepo, buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)).WithProjectRepository(projectRepo))
+
+	getReq := addURLParam(httptest.NewRequest(http.MethodGet, "/projects", nil), "id", "")
+	getRes := httptest.NewRecorder()
+	h.GetProject(getRes, getReq)
+	if getRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected missing id status %d, got %d", http.StatusBadRequest, getRes.Code)
+	}
+}
+
+func serviceProject(id string, name string, slug string) domain.Project {
+	now := time.Now().UTC()
+	return domain.Project{ID: id, Name: name, Slug: slug, CreatedAt: now, UpdatedAt: now}
+}

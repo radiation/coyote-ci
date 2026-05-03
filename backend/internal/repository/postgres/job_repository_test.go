@@ -111,3 +111,39 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
+
+func TestJobRepository_GetByIDs(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+
+	repo := NewJobRepository(db)
+	now := time.Now().UTC()
+	rows := sqlmock.NewRows([]string{"id", "project_id", "name", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}).
+		AddRow("job-1", "project-1", "backend-ci", "https://github.com/example/backend.git", "main", nil, false, nil, nil, `[]`, `[]`, "version: 1", nil, true, now, now).
+		AddRow("job-2", "project-1", "frontend-ci", "https://github.com/example/frontend.git", "main", nil, false, nil, nil, `[]`, `[]`, "version: 1", nil, true, now.Add(-time.Second), now.Add(-time.Second))
+
+	mock.ExpectQuery("SELECT id, project_id, name, repository_url").
+		WithArgs("job-1", "job-2").
+		WillReturnRows(rows)
+	mock.ExpectClose()
+
+	jobs, err := repo.GetByIDs(context.Background(), []string{"job-1", "", "job-2", "job-1"})
+	if err != nil {
+		t.Fatalf("GetByIDs failed: %v", err)
+	}
+	if len(jobs) != 2 {
+		t.Fatalf("expected 2 jobs, got %d", len(jobs))
+	}
+	if jobs[0].ID != "job-1" || jobs[1].ID != "job-2" {
+		t.Fatalf("unexpected jobs: %+v", jobs)
+	}
+	if closeErr := db.Close(); closeErr != nil {
+		t.Fatalf("failed to close sqlmock db: %v", closeErr)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}

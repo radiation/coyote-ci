@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { JobCreatePage } from "./JobCreatePage";
-import { createJob, listSourceCredentials } from "../api";
+import { createJob, listProjects, listSourceCredentials } from "../api";
 
 const navigateMock = vi.fn();
 
@@ -20,10 +20,11 @@ vi.mock("react-router-dom", async () => {
 
 vi.mock("../api", () => ({
   createJob: vi.fn(),
+  listProjects: vi.fn(),
   listSourceCredentials: vi.fn(),
 }));
 
-function renderPage() {
+function renderPage(initialEntries: string[] = ["/"]) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -33,7 +34,7 @@ function renderPage() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={initialEntries}>
         <JobCreatePage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -42,10 +43,21 @@ function renderPage() {
 
 describe("JobCreatePage", () => {
   const mockedCreateJob = vi.mocked(createJob);
+  const mockedListProjects = vi.mocked(listProjects);
   const mockedListSourceCredentials = vi.mocked(listSourceCredentials);
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedListProjects.mockResolvedValue([
+      {
+        id: "project-1",
+        name: "Platform",
+        slug: "platform",
+        description: "Core platform pipelines",
+        created_at: "2026-03-30T00:00:00Z",
+        updated_at: "2026-03-30T00:00:00Z",
+      },
+    ]);
     mockedListSourceCredentials.mockResolvedValue([
       {
         id: "cred-1",
@@ -88,9 +100,6 @@ describe("JobCreatePage", () => {
     fireEvent.change(screen.getByLabelText("Default Ref"), {
       target: { value: " main " },
     });
-    fireEvent.change(screen.getByLabelText("Project ID"), {
-      target: { value: " project-1 " },
-    });
     fireEvent.change(screen.getByLabelText("Pipeline YAML"), {
       target: {
         value: "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
@@ -130,5 +139,35 @@ describe("JobCreatePage", () => {
       });
       expect(navigateMock).toHaveBeenCalledWith("/jobs/job-1");
     });
+
+    expect(screen.getByText("Platform (platform)")).toBeTruthy();
+  });
+
+  it("prefers project_id from the query string when present", async () => {
+    mockedListProjects.mockResolvedValueOnce([
+      {
+        id: "project-1",
+        name: "Platform",
+        slug: "platform",
+        description: "Core platform pipelines",
+        created_at: "2026-03-30T00:00:00Z",
+        updated_at: "2026-03-30T00:00:00Z",
+      },
+      {
+        id: "project-2",
+        name: "Release",
+        slug: "release",
+        description: "Release automation",
+        created_at: "2026-03-30T00:00:00Z",
+        updated_at: "2026-03-30T00:00:00Z",
+      },
+    ]);
+
+    renderPage(["/jobs/new?project_id=project-2"]);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Project")).toHaveValue("project-2");
+    });
+    expect(screen.getByText("Release (release)")).toBeTruthy();
   });
 });

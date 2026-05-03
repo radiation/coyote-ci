@@ -5,6 +5,10 @@ import {
   getBuildSteps,
   getBuildArtifacts,
   listArtifacts,
+  listProjects,
+  getProject,
+  createProject,
+  listJobsByProject,
   createJobVersionTags,
   artifactDownloadURL,
   listJobs,
@@ -21,6 +25,10 @@ describe("API client - types", () => {
     expect(typeof getBuild).toBe("function");
     expect(typeof getBuildSteps).toBe("function");
     expect(typeof getBuildArtifacts).toBe("function");
+    expect(typeof listProjects).toBe("function");
+    expect(typeof getProject).toBe("function");
+    expect(typeof createProject).toBe("function");
+    expect(typeof listJobsByProject).toBe("function");
     expect(typeof createJobVersionTags).toBe("function");
     expect(typeof artifactDownloadURL).toBe("function");
     expect(typeof listJobs).toBe("function");
@@ -157,6 +165,60 @@ describe("API client - types", () => {
     const jobs = await listJobs();
     expect(jobs).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledWith("/api/jobs", undefined);
+  });
+
+  it("lists and creates projects from /projects", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            projects: [
+              {
+                id: "project-1",
+                name: "Platform",
+                slug: "platform",
+                description: "Core platform pipelines",
+                created_at: "2026-05-01T00:00:00Z",
+                updated_at: "2026-05-01T00:00:00Z",
+              },
+            ],
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            id: "project-2",
+            name: "Release",
+            slug: "release",
+            description: "Release automation",
+            created_at: "2026-05-01T00:00:00Z",
+            updated_at: "2026-05-01T00:00:00Z",
+          },
+        }),
+      } as Response);
+
+    const projects = await listProjects();
+    await createProject({
+      name: "Release",
+      slug: "release",
+      description: "Release automation",
+    });
+
+    expect(projects).toHaveLength(1);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/projects", undefined);
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Release",
+        slug: "release",
+        description: "Release automation",
+      }),
+    });
   });
 
   it("creates and runs job with expected endpoints", async () => {

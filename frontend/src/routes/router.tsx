@@ -7,6 +7,8 @@ import { JobsListPage } from "../pages/JobsListPage";
 import { JobCreatePage } from "../pages/JobCreatePage";
 import { JobDetailPage } from "../pages/JobDetailPage";
 import { CredentialsPage } from "../pages/CredentialsPage";
+import { ProjectsListPage } from "../pages/ProjectsListPage";
+import { ProjectDetailPage } from "../pages/ProjectDetailPage";
 
 export const router = createBrowserRouter([
   {
@@ -16,6 +18,8 @@ export const router = createBrowserRouter([
       { path: "/builds", element: <BuildsListPage /> },
       { path: "/builds/:id", element: <BuildDetailPage /> },
       { path: "/artifacts", element: <ArtifactsPage /> },
+      { path: "/projects", element: <ProjectsListPage /> },
+      { path: "/projects/:id", element: <ProjectDetailPage /> },
       { path: "/jobs", element: <JobsListPage /> },
       { path: "/jobs/new", element: <JobCreatePage /> },
       { path: "/jobs/:id", element: <JobDetailPage /> },

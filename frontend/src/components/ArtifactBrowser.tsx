@@ -55,6 +55,48 @@ function versionCountLabel(count: number): string {
   return `${count} version${count === 1 ? "" : "s"}`;
 }
 
+function artifactProjectLabel(artifact: ArtifactBrowseItem): string {
+  const name = artifact.project_name?.trim() ?? "";
+  const slug = artifact.project_slug?.trim() ?? "";
+  if (name && slug) {
+    return `${name} (${slug})`;
+  }
+  return name || slug || artifact.project_id;
+}
+
+function artifactJobLabel(artifact: ArtifactBrowseItem): string {
+  const name = artifact.job_name?.trim() ?? "";
+  if (name) {
+    return name;
+  }
+  const id = artifact.job_id?.trim() ?? "";
+  if (!id) {
+    return "";
+  }
+  return `${id.slice(0, 8)}…`;
+}
+
+function versionProjectLabel(version: ArtifactBrowseVersion): string {
+  const name = version.project_name?.trim() ?? "";
+  const slug = version.project_slug?.trim() ?? "";
+  if (name && slug) {
+    return `${name} (${slug})`;
+  }
+  return name || slug || version.project_id;
+}
+
+function versionJobLabel(version: ArtifactBrowseVersion): string {
+  const name = version.job_name?.trim() ?? "";
+  if (name) {
+    return name;
+  }
+  const id = version.job_id?.trim() ?? "";
+  if (!id) {
+    return "—";
+  }
+  return `${id.slice(0, 8)}…`;
+}
+
 function firstVersionTag(
   version: ArtifactBrowseVersion | undefined,
 ): string | null {
@@ -157,11 +199,11 @@ export function ArtifactBrowser({
                   )}
                   <div className="artifact-card-meta">
                     <span className="artifact-secondary-pill">
-                      Project {artifact.project_id}
+                      Project {artifactProjectLabel(artifact)}
                     </span>
                     {artifact.job_id && (
                       <span className="artifact-secondary-pill">
-                        Job {artifact.job_id.slice(0, 8)}…
+                        Job {artifactJobLabel(artifact)}
                       </span>
                     )}
                   </div>
@@ -206,7 +248,13 @@ export function ArtifactBrowser({
                   </div>
                   <div>
                     <strong>Project</strong>
-                    <span>{artifact.project_id}</span>
+                    <span>{artifactProjectLabel(artifact)}</span>
+                  </div>
+                  <div>
+                    <strong>Job</strong>
+                    <span>
+                      {artifact.job_id ? artifactJobLabel(artifact) : "—"}
+                    </span>
                   </div>
                   <div>
                     <strong>Latest Update</strong>
@@ -256,6 +304,22 @@ export function ArtifactBrowser({
                         <div>
                           <strong>Created</strong>
                           <span>{formatTime(version.created_at)}</span>
+                        </div>
+                        <div>
+                          <strong>Build</strong>
+                          <span>
+                            <Link to={`/builds/${version.build_id}`}>
+                              {versionLabel(version)}
+                            </Link>
+                          </span>
+                        </div>
+                        <div>
+                          <strong>Project</strong>
+                          <span>{versionProjectLabel(version)}</span>
+                        </div>
+                        <div>
+                          <strong>Job</strong>
+                          <span>{versionJobLabel(version)}</span>
                         </div>
                         <div>
                           <strong>Size</strong>

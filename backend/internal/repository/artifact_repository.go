@@ -11,10 +11,11 @@ var ErrArtifactNotFound = errors.New("artifact not found")
 var ErrArtifactConflict = errors.New("artifact already exists")
 
 type BrowseArtifactsParams struct {
-	Query  string
-	Type   domain.ArtifactType
-	Limit  int
-	Offset int
+	Query     string
+	Type      domain.ArtifactType
+	ProjectID string
+	Limit     int
+	Offset    int
 }
 
 type ArtifactBrowseRepository interface {

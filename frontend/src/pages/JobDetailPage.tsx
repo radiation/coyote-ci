@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
+  getProject,
   getJob,
   listBuildsByJob,
   listSourceCredentials,
@@ -41,6 +42,12 @@ export function JobDetailPage() {
     refetchInterval: 15_000,
   });
 
+  const { data: project } = useQuery({
+    queryKey: ["project", job?.project_id],
+    queryFn: () => getProject(job!.project_id),
+    enabled: Boolean(job?.project_id),
+  });
+
   if (isLoading) {
     return <p>Loading job…</p>;
   }
@@ -71,7 +78,13 @@ export function JobDetailPage() {
         </div>
         <div>
           <strong>Project</strong>
-          <span>{job.project_id}</span>
+          <span>
+            {project ? (
+              <Link to={`/projects/${project.id}`}>{project.name}</Link>
+            ) : (
+              job.project_id
+            )}
+          </span>
         </div>
         <div>
           <strong>Push Trigger</strong>

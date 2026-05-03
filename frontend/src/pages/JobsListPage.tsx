@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { listJobs, runJob } from "../api";
+import { listJobs, listProjects, runJob } from "../api";
 import { StatusBadge } from "../components/StatusBadge";
 import { formatTime } from "../utils/time";
 
@@ -18,6 +18,15 @@ export function JobsListPage() {
     queryKey: ["jobs"],
     queryFn: listJobs,
   });
+
+  const { data: projects = [] } = useQuery({
+    queryKey: ["projects"],
+    queryFn: listProjects,
+  });
+
+  const projectNames = new Map(
+    projects.map((project) => [project.id, project.name]),
+  );
 
   const runNowMutation = useMutation({
     mutationFn: (jobID: string) => runJob(jobID),
@@ -74,6 +83,7 @@ export function JobsListPage() {
           <thead>
             <tr>
               <th>Name</th>
+              <th>Project</th>
               <th>Repository</th>
               <th>Default Ref</th>
               <th>Enabled</th>
@@ -87,6 +97,7 @@ export function JobsListPage() {
             {jobs.map((job) => (
               <tr key={job.id}>
                 <td>{job.name}</td>
+                <td>{projectNames.get(job.project_id) ?? job.project_id}</td>
                 <td>{job.repository_url}</td>
                 <td>{job.default_ref}</td>
                 <td>{job.enabled ? "Enabled" : "Disabled"}</td>

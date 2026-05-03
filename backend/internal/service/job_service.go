@@ -37,6 +37,7 @@ var ErrJobManagedImageWriteCredentialIDRequired = errors.New("job managed image 
 
 type JobService struct {
 	jobRepo             repository.JobRepository
+	projects            repository.ProjectRepository
 	managedImageConfigs repository.JobManagedImageConfigRepository
 	credentials         repository.SourceCredentialRepository
 	buildService        *buildsvc.BuildService
@@ -44,6 +45,11 @@ type JobService struct {
 
 func NewJobService(jobRepo repository.JobRepository, buildService *buildsvc.BuildService) *JobService {
 	return &JobService{jobRepo: jobRepo, buildService: buildService}
+}
+
+func (s *JobService) WithProjectRepository(projects repository.ProjectRepository) *JobService {
+	s.projects = projects
+	return s
 }
 
 func (s *JobService) WithManagedImageConfigRepository(configs repository.JobManagedImageConfigRepository, credentials repository.SourceCredentialRepository) *JobService {
@@ -74,6 +80,7 @@ type ManagedImageConfigPatch struct {
 
 type CreateJobInput struct {
 	ProjectID        string
+	ProjectSlug      string
 	Name             string
 	RepositoryURL    string
 	DefaultRef       string
@@ -108,6 +115,11 @@ type UpdateJobInput struct {
 
 func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domain.Job, error) {
 	normalized, err := normalizeCreateJobInput(input)
+	if err != nil {
+		return domain.Job{}, err
+	}
+
+	projectID, err := s.resolveProjectID(ctx, normalized.ProjectID, normalized.ProjectSlug)
 	if err != nil {
 		return domain.Job{}, err
 	}
@@ -159,7 +171,7 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 	now := time.Now().UTC()
 	job := domain.Job{
 		ID:               uuid.NewString(),
-		ProjectID:        normalized.ProjectID,
+		ProjectID:        projectID,
 		Name:             normalized.Name,
 		RepositoryURL:    normalized.RepositoryURL,
 		DefaultRef:       normalized.DefaultRef,
@@ -225,8 +237,32 @@ func (s *JobService) ListJobs(ctx context.Context) ([]domain.Job, error) {
 	return jobs, nil
 }
 
+func (s *JobService) GetJobsByIDs(ctx context.Context, ids []string) ([]domain.Job, error) {
+	return s.jobRepo.GetByIDs(ctx, ids)
+}
+
 func (s *JobService) ListJobsPaged(ctx context.Context, params repository.ListParams) ([]domain.Job, error) {
 	jobs, err := s.jobRepo.ListPaged(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	if enrichErr := s.attachLatestBuilds(ctx, jobs); enrichErr != nil {
+		return nil, enrichErr
+	}
+	return jobs, nil
+}
+
+func (s *JobService) ListJobsByProject(ctx context.Context, projectID string) ([]domain.Job, error) {
+	trimmedID := strings.TrimSpace(projectID)
+	if trimmedID == "" {
+		return nil, ErrProjectIDRequired
+	}
+	if s.projects != nil {
+		if _, err := s.projects.GetByID(ctx, trimmedID); err != nil {
+			return nil, err
+		}
+	}
+	jobs, err := s.jobRepo.ListByProjectID(ctx, trimmedID)
 	if err != nil {
 		return nil, err
 	}
@@ -452,6 +488,7 @@ func (s *JobService) createBuildForJob(ctx context.Context, job domain.Job) (dom
 func normalizeCreateJobInput(input CreateJobInput) (CreateJobInput, error) {
 	normalized := input
 	normalized.ProjectID = strings.TrimSpace(normalized.ProjectID)
+	normalized.ProjectSlug = strings.TrimSpace(normalized.ProjectSlug)
 	normalized.Name = strings.TrimSpace(normalized.Name)
 	normalized.RepositoryURL = strings.TrimSpace(normalized.RepositoryURL)
 	normalized.DefaultRef = strings.TrimSpace(normalized.DefaultRef)
@@ -477,9 +514,6 @@ func normalizeCreateJobInput(input CreateJobInput) (CreateJobInput, error) {
 }
 
 func validateCreateJobRequiredFields(input CreateJobInput) error {
-	if input.ProjectID == "" {
-		return ErrJobProjectIDRequired
-	}
 	if input.Name == "" {
 		return ErrJobNameRequired
 	}
@@ -499,6 +533,43 @@ func validateCreateJobRequiredFields(input CreateJobInput) error {
 	}
 
 	return nil
+}
+
+func (s *JobService) resolveProjectID(ctx context.Context, projectID string, projectSlug string) (string, error) {
+	trimmedID := strings.TrimSpace(projectID)
+	trimmedSlug := strings.TrimSpace(projectSlug)
+	if s.projects == nil {
+		if trimmedID == "" {
+			return "", ErrJobProjectIDRequired
+		}
+		return trimmedID, nil
+	}
+
+	if trimmedID != "" {
+		if _, err := uuid.Parse(trimmedID); err == nil {
+			project, lookupErr := s.projects.GetByID(ctx, trimmedID)
+			if lookupErr != nil {
+				return "", lookupErr
+			}
+			return project.ID, nil
+		}
+		if trimmedSlug == "" {
+			trimmedSlug = trimmedID
+		}
+	}
+	if trimmedSlug != "" {
+		project, err := s.projects.GetBySlug(ctx, normalizeProjectSlug(trimmedSlug))
+		if err != nil {
+			return "", err
+		}
+		return project.ID, nil
+	}
+
+	project, err := s.projects.GetBySlug(ctx, domain.DefaultProjectSlug)
+	if err != nil {
+		return "", err
+	}
+	return project.ID, nil
 }
 
 func validateJobRequiredFields(job domain.Job) error {

@@ -45,6 +45,18 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Filter artifacts by project id",
+                        "name": "project_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter artifacts by project slug",
+                        "name": "project_slug",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "Max logical artifacts to return",
                         "name": "limit",
@@ -66,6 +78,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/api.ErrorResponse"
                         }
@@ -122,7 +140,7 @@ const docTemplate = `{
         },
         "/builds": {
             "get": {
-                "description": "Lists builds sorted by newest first with optional pagination.",
+                "description": "Lists builds sorted by newest first with optional pagination and project filters.",
                 "produces": [
                     "application/json"
                 ],
@@ -142,6 +160,18 @@ const docTemplate = `{
                         "description": "Number of results to skip",
                         "name": "offset",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter builds by project id",
+                        "name": "project_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter builds by project slug",
+                        "name": "project_slug",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -149,6 +179,18 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/api.BuildListEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
                         }
                     },
                     "500": {
@@ -1546,6 +1588,266 @@ const docTemplate = `{
                 }
             }
         },
+        "/projects": {
+            "get": {
+                "description": "Lists projects.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "projects"
+                ],
+                "summary": "List projects",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ProjectListEnvelope"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Creates a new project.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "projects"
+                ],
+                "summary": "Create project",
+                "parameters": [
+                    {
+                        "description": "Project create request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.CreateProjectRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/api.ProjectEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/projects/{id}": {
+            "get": {
+                "description": "Returns one project.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "projects"
+                ],
+                "summary": "Get project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ProjectEnvelope"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Deletes a project when it has no jobs.",
+                "tags": [
+                    "projects"
+                ],
+                "summary": "Delete project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "description": "Updates project metadata.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "projects"
+                ],
+                "summary": "Update project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Project update request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.UpdateProjectRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ProjectEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/projects/{id}/jobs": {
+            "get": {
+                "description": "Lists jobs for one project.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "projects"
+                ],
+                "summary": "List project jobs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.JobListEnvelope"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/readyz": {
             "get": {
                 "description": "Returns a readiness response after database connectivity and schema checks succeed.",
@@ -1641,6 +1943,9 @@ const docTemplate = `{
                 "job_id": {
                     "type": "string"
                 },
+                "job_name": {
+                    "type": "string"
+                },
                 "key": {
                     "type": "string"
                 },
@@ -1654,6 +1959,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "project_slug": {
                     "type": "string"
                 },
                 "versions": {
@@ -1705,6 +2016,9 @@ const docTemplate = `{
                 "job_id": {
                     "type": "string"
                 },
+                "job_name": {
+                    "type": "string"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -1712,6 +2026,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "project_slug": {
                     "type": "string"
                 },
                 "size_bytes": {
@@ -1918,6 +2238,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "project_slug": {
                     "type": "string"
                 },
                 "queued_at": {
@@ -2178,6 +2504,9 @@ const docTemplate = `{
                 "project_id": {
                     "type": "string"
                 },
+                "project_slug": {
+                    "type": "string"
+                },
                 "push_branch": {
                     "type": "string"
                 },
@@ -2209,6 +2538,20 @@ const docTemplate = `{
                 },
                 "source": {
                     "$ref": "#/definitions/api.BuildSourceInput"
+                }
+            }
+        },
+        "api.CreateProjectRequest": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
                 }
             }
         },
@@ -2566,6 +2909,56 @@ const docTemplate = `{
                 }
             }
         },
+        "api.ProjectEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.ProjectResponse"
+                }
+            }
+        },
+        "api.ProjectListEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.ProjectListResponse"
+                }
+            }
+        },
+        "api.ProjectListResponse": {
+            "type": "object",
+            "properties": {
+                "projects": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.ProjectResponse"
+                    }
+                }
+            }
+        },
+        "api.ProjectResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "api.PushEventEnvelope": {
             "type": "object",
             "properties": {
@@ -2746,6 +3139,17 @@ const docTemplate = `{
                 }
             }
         },
+        "api.StringPatch": {
+            "type": "object",
+            "properties": {
+                "set": {
+                    "type": "boolean"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
         "api.UpdateJobManagedImageConfigRequest": {
             "type": "object",
             "properties": {
@@ -2818,6 +3222,20 @@ const docTemplate = `{
                     }
                 },
                 "trigger_mode": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.UpdateProjectRequest": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "$ref": "#/definitions/api.StringPatch"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
                     "type": "string"
                 }
             }

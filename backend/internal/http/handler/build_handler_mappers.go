@@ -9,14 +9,22 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 )
 
-func toBuildResponse(build domain.Build) api.BuildResponse {
+func toBuildResponse(build domain.Build, project ...*domain.Project) api.BuildResponse {
 	trigger := domain.NormalizeBuildTrigger(build.Trigger)
 	sourceCommitSHA := buildSourceCommitSHA(build)
 	triggerCommitSHA := buildTriggerCommitSHA(build, trigger)
+	var projectName *string
+	var projectSlug *string
+	if len(project) > 0 && project[0] != nil {
+		projectName = &project[0].Name
+		projectSlug = &project[0].Slug
+	}
 	return api.BuildResponse{
 		ID:                 build.ID,
 		BuildNumber:        build.BuildNumber,
 		ProjectID:          build.ProjectID,
+		ProjectName:        projectName,
+		ProjectSlug:        projectSlug,
 		JobID:              build.JobID,
 		Status:             string(build.Status),
 		CreatedAt:          build.CreatedAt.Format(time.RFC3339),

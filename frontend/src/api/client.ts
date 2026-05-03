@@ -29,6 +29,13 @@ import type {
   SourceCredentialListResponse,
   UpdateSourceCredentialRequest,
 } from "../types/managedImageSettings";
+import type {
+  CreateProjectRequest,
+  Project,
+  ProjectJobsResponse,
+  ProjectListResponse,
+  UpdateProjectRequest,
+} from "../types/project";
 
 /**
  * Base URL for API requests.
@@ -104,8 +111,33 @@ async function deleteNoContent(path: string): Promise<void> {
   }
 }
 
-export async function listBuilds(): Promise<Build[]> {
-  const envelope = await fetchJSON<DataEnvelope<BuildListResponse>>("/builds");
+export async function listBuilds(input?: {
+  project_id?: string;
+  project_slug?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<Build[]> {
+  const params = new URLSearchParams();
+  const projectID = input?.project_id?.trim() ?? "";
+  const projectSlug = input?.project_slug?.trim() ?? "";
+
+  if (projectID) {
+    params.set("project_id", projectID);
+  }
+  if (projectSlug) {
+    params.set("project_slug", projectSlug);
+  }
+  if (typeof input?.limit === "number" && input.limit > 0) {
+    params.set("limit", String(input.limit));
+  }
+  if (typeof input?.offset === "number" && input.offset > 0) {
+    params.set("offset", String(input.offset));
+  }
+
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const envelope = await fetchJSON<DataEnvelope<BuildListResponse>>(
+    `/builds${suffix}`,
+  );
   return envelope.data.builds;
 }
 
@@ -145,18 +177,28 @@ export async function getBuildArtifacts(id: string): Promise<BuildArtifact[]> {
 export async function listArtifacts(input?: {
   q?: string;
   type?: ArtifactType | "";
+  project_id?: string;
+  project_slug?: string;
   limit?: number;
   offset?: number;
 }): Promise<ArtifactBrowseItem[]> {
   const params = new URLSearchParams();
   const query = input?.q?.trim() ?? "";
   const type = input?.type?.trim() ?? "";
+  const projectID = input?.project_id?.trim() ?? "";
+  const projectSlug = input?.project_slug?.trim() ?? "";
 
   if (query) {
     params.set("q", query);
   }
   if (type) {
     params.set("type", type);
+  }
+  if (projectID) {
+    params.set("project_id", projectID);
+  }
+  if (projectSlug) {
+    params.set("project_slug", projectSlug);
   }
   if (typeof input?.limit === "number" && input.limit > 0) {
     params.set("limit", String(input.limit));
@@ -200,6 +242,57 @@ export function buildStepLogStreamURL(
 
 export async function listJobs(): Promise<Job[]> {
   const envelope = await fetchJSON<DataEnvelope<JobListResponse>>("/jobs");
+  return envelope.data.jobs;
+}
+
+export async function listProjects(): Promise<Project[]> {
+  const envelope =
+    await fetchJSON<DataEnvelope<ProjectListResponse>>("/projects");
+  return envelope.data.projects;
+}
+
+export async function getProject(id: string): Promise<Project> {
+  const envelope = await fetchJSON<DataEnvelope<Project>>(
+    `/projects/${encodeURIComponent(id)}`,
+  );
+  return envelope.data;
+}
+
+export async function createProject(
+  input: CreateProjectRequest,
+): Promise<Project> {
+  const envelope = await postJSON<DataEnvelope<Project>, CreateProjectRequest>(
+    "/projects",
+    input,
+  );
+  return envelope.data;
+}
+
+export async function updateProject(
+  id: string,
+  input: UpdateProjectRequest,
+): Promise<Project> {
+  const envelope = await fetchJSON<DataEnvelope<Project>>(
+    `/projects/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  return envelope.data;
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  await deleteNoContent(`/projects/${encodeURIComponent(id)}`);
+}
+
+export async function listJobsByProject(projectId: string): Promise<Job[]> {
+  const envelope = await fetchJSON<DataEnvelope<ProjectJobsResponse>>(
+    `/projects/${encodeURIComponent(projectId)}/jobs`,
+  );
   return envelope.data.jobs;
 }
 

@@ -46,6 +46,7 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 
 	job, err := h.jobService.CreateJob(r.Context(), service.CreateJobInput{
 		ProjectID:        req.ProjectID,
+		ProjectSlug:      req.ProjectSlug,
 		Name:             req.Name,
 		RepositoryURL:    req.RepositoryURL,
 		DefaultRef:       req.DefaultRef,
@@ -273,6 +274,7 @@ func isBadRequestError(err error) bool {
 	return errors.Is(err, service.ErrJobIDRequired) ||
 		errors.Is(err, service.ErrJobNameRequired) ||
 		errors.Is(err, service.ErrJobProjectIDRequired) ||
+		errors.Is(err, repository.ErrProjectNotFound) ||
 		errors.Is(err, service.ErrJobManagedImageConfigNotConfigured) ||
 		errors.Is(err, service.ErrJobManagedImageNameRequired) ||
 		errors.Is(err, service.ErrJobManagedImagePipelinePathRequired) ||

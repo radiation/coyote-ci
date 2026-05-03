@@ -20,6 +20,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
+	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 )
@@ -27,6 +28,7 @@ import (
 type BuildHandler struct {
 	buildService *buildsvc.BuildService
 	versionTags  *versiontagsvc.Service
+	projects     *service.ProjectService
 }
 
 // GetBuildStepLogs godoc
@@ -200,6 +202,10 @@ func (h *BuildHandler) SetVersionTagService(service *versiontagsvc.Service) {
 	h.versionTags = service
 }
 
+func (h *BuildHandler) SetProjectService(projects *service.ProjectService) {
+	h.projects = projects
+}
+
 // CreateBuild godoc
 // @Summary Create build
 // @Description Creates a new build in pending status.
@@ -371,22 +377,36 @@ func (h *BuildHandler) CreateRepoBuild(w http.ResponseWriter, r *http.Request) {
 
 // ListBuilds godoc
 // @Summary List builds
-// @Description Lists builds sorted by newest first with optional pagination.
+// @Description Lists builds sorted by newest first with optional pagination and project filters.
 // @Tags builds
 // @Produce json
 // @Param limit query int false "Max results (default 50, max 200)"
 // @Param offset query int false "Number of results to skip"
+// @Param project_id query string false "Filter builds by project id"
+// @Param project_slug query string false "Filter builds by project slug"
 // @Success 200 {object} api.BuildListEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
 // @Failure 500 {object} api.ErrorResponse
 // @Router /builds [get]
 func (h *BuildHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
 	limit := parseQueryInt(r, "limit", 0)
 	offset := parseQueryInt(r, "offset", 0)
+	projectID, ok := h.resolveProjectFilter(w, r)
+	if !ok {
+		return
+	}
 
 	builds, err := h.buildService.ListBuildsPaged(r.Context(), repository.ListParams{
-		Limit:  limit,
-		Offset: offset,
+		Limit:     limit,
+		Offset:    offset,
+		ProjectID: projectID,
 	})
+	if err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+	projectLookup, err := h.projectLookup(r.Context(), builds)
 	if err != nil {
 		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		return
@@ -394,7 +414,7 @@ func (h *BuildHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
 
 	responses := make([]api.BuildResponse, 0, len(builds))
 	for _, build := range builds {
-		responses = append(responses, toBuildResponse(build))
+		responses = append(responses, toBuildResponse(build, projectLookup[build.ProjectID]))
 	}
 
 	writeDataJSON(w, http.StatusOK, api.BuildListResponse{Builds: responses})
@@ -424,7 +444,12 @@ func (h *BuildHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := toBuildResponse(build)
+	projectLookup, err := h.projectLookup(r.Context(), []domain.Build{build})
+	if err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+	resp := toBuildResponse(build, projectLookup[build.ProjectID])
 	if h.versionTags != nil && build.JobID != nil && build.ManagedImageVersionID != nil {
 		tags, listErr := h.versionTags.ListManagedImageVersionTags(r.Context(), *build.ManagedImageVersionID)
 		if listErr != nil {
@@ -435,6 +460,62 @@ func (h *BuildHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeDataJSON(w, http.StatusOK, resp)
+}
+
+func (h *BuildHandler) resolveProjectFilter(w http.ResponseWriter, r *http.Request) (string, bool) {
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	projectSlug := strings.TrimSpace(r.URL.Query().Get("project_slug"))
+	if projectSlug == "" {
+		return projectID, true
+	}
+	if h.projects == nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "project service not configured")
+		return "", false
+	}
+	project, err := h.projects.GetProjectBySlug(r.Context(), projectSlug)
+	if err != nil {
+		h.writeProjectLookupError(w, err)
+		return "", false
+	}
+	if projectID != "" && projectID != project.ID {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "project_id and project_slug must refer to the same project")
+		return "", false
+	}
+	return project.ID, true
+}
+
+func (h *BuildHandler) projectLookup(ctx context.Context, builds []domain.Build) (map[string]*domain.Project, error) {
+	lookup := make(map[string]*domain.Project)
+	if h.projects == nil || len(builds) == 0 {
+		return lookup, nil
+	}
+	projectIDs := make([]string, 0, len(builds))
+	for _, build := range builds {
+		if strings.TrimSpace(build.ProjectID) != "" {
+			projectIDs = append(projectIDs, build.ProjectID)
+		}
+	}
+	if len(projectIDs) == 0 {
+		return lookup, nil
+	}
+	projects, err := h.projects.GetProjectsByIDs(ctx, projectIDs)
+	if err != nil {
+		return nil, err
+	}
+	for idx := range projects {
+		project := projects[idx]
+		copyProject := project
+		lookup[project.ID] = &copyProject
+	}
+	return lookup, nil
+}
+
+func (h *BuildHandler) writeProjectLookupError(w http.ResponseWriter, err error) {
+	if errors.Is(err, repository.ErrProjectNotFound) {
+		writeErrorJSON(w, http.StatusNotFound, "not_found", err.Error())
+		return
+	}
+	writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 }
 
 // GetBuildSteps godoc

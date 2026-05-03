@@ -1,6 +1,12 @@
 export {
   listArtifacts,
   listBuilds,
+  listProjects,
+  getProject,
+  createProject,
+  updateProject,
+  deleteProject,
+  listJobsByProject,
   getBuild,
   getBuildSteps,
   getBuildArtifacts,

@@ -13,7 +13,10 @@ type ArtifactBrowseItemResponse struct {
 	Name            string                          `json:"name,omitempty"`
 	Path            string                          `json:"path"`
 	ProjectID       string                          `json:"project_id"`
+	ProjectName     *string                         `json:"project_name,omitempty"`
+	ProjectSlug     *string                         `json:"project_slug,omitempty"`
 	JobID           *string                         `json:"job_id,omitempty"`
+	JobName         *string                         `json:"job_name,omitempty"`
 	ArtifactType    string                          `json:"artifact_type"`
 	LatestCreatedAt string                          `json:"latest_created_at"`
 	Versions        []ArtifactBrowseVersionResponse `json:"versions"`
@@ -26,7 +29,10 @@ type ArtifactBrowseVersionResponse struct {
 	BuildNumber     int64                `json:"build_number"`
 	BuildStatus     string               `json:"build_status"`
 	ProjectID       string               `json:"project_id"`
+	ProjectName     *string              `json:"project_name,omitempty"`
+	ProjectSlug     *string              `json:"project_slug,omitempty"`
 	JobID           *string              `json:"job_id,omitempty"`
+	JobName         *string              `json:"job_name,omitempty"`
 	StepID          *string              `json:"step_id,omitempty"`
 	StepIndex       *int                 `json:"step_index,omitempty"`
 	StepName        *string              `json:"step_name,omitempty"`

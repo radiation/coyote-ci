@@ -13,7 +13,10 @@ export interface ArtifactBrowseVersion {
   build_number: number;
   build_status: BuildStatus;
   project_id: string;
+  project_name?: string | null;
+  project_slug?: string | null;
   job_id?: string | null;
+  job_name?: string | null;
   step_id?: string | null;
   step_index?: number | null;
   step_name?: string | null;
@@ -32,7 +35,10 @@ export interface ArtifactBrowseItem {
   name?: string;
   path: string;
   project_id: string;
+  project_name?: string | null;
+  project_slug?: string | null;
   job_id?: string | null;
+  job_name?: string | null;
   artifact_type: ArtifactType;
   latest_created_at: string;
   versions: ArtifactBrowseVersion[];

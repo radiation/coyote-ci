@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
 	"github.com/radiation/coyote-ci/backend/internal/observability"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
@@ -23,7 +24,7 @@ func TestNewRouter_HealthAndNotFound(t *testing.T) {
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
 	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
-	r := NewRouter(h, nil, jh, nil, nil, eh, "")
+	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
 	tests := []struct {
 		name       string
@@ -62,7 +63,7 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
 	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
-	r := NewRouter(h, nil, jh, nil, nil, eh, "")
+	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
 	createRes := httptest.NewRecorder()
@@ -137,7 +138,7 @@ func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
 	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
-	r := NewRouter(h, nil, jh, nil, nil, eh, "")
+	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
 	createRes := httptest.NewRecorder()
@@ -213,7 +214,7 @@ func TestNewRouter_QueueBuild_UnknownTemplate_FallsBackToDefaultStep(t *testing.
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
 	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
-	r := NewRouter(h, nil, jh, nil, nil, eh, "")
+	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
 	createRes := httptest.NewRecorder()
@@ -285,7 +286,7 @@ func TestNewRouter_JobRoutes(t *testing.T) {
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
 	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
-	r := NewRouter(h, nil, jh, nil, nil, eh, "")
+	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
 	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
 	createReq := httptest.NewRequest(http.MethodPost, "/api/jobs/", bytes.NewBufferString(createBody))
@@ -338,7 +339,7 @@ func TestNewRouter_PushEventRoute(t *testing.T) {
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
 	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
-	r := NewRouter(h, nil, jh, nil, nil, eh, "")
+	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
 	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"push_branch":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
 	createReq := httptest.NewRequest(http.MethodPost, "/api/jobs/", bytes.NewBufferString(createBody))
@@ -354,5 +355,117 @@ func TestNewRouter_PushEventRoute(t *testing.T) {
 	r.ServeHTTP(eventRes, eventReq)
 	if eventRes.Code != http.StatusOK {
 		t.Fatalf("expected push event status %d, got %d body=%s", http.StatusOK, eventRes.Code, eventRes.Body.String())
+	}
+}
+
+func TestNewRouter_ProjectRoutes(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	h := handler.NewBuildHandler(buildSvc)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
+	jh := handler.NewJobHandler(jobSvc)
+	ph := handler.NewProjectHandler(service.NewProjectService(projectRepo), jobSvc)
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	r := NewRouter(h, nil, jh, ph, nil, nil, eh, "")
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/projects/", bytes.NewBufferString(`{"name":"Platform","slug":"platform"}`))
+	createRes := httptest.NewRecorder()
+	r.ServeHTTP(createRes, createReq)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("expected create project status %d, got %d", http.StatusCreated, createRes.Code)
+	}
+
+	var createBody map[string]any
+	if err := json.Unmarshal(createRes.Body.Bytes(), &createBody); err != nil {
+		t.Fatalf("failed to parse create project response: %v", err)
+	}
+	createData, ok := createBody["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected create project data object, got %T", createBody["data"])
+	}
+	projectID, ok := createData["id"].(string)
+	if !ok || projectID == "" {
+		t.Fatalf("expected create project id, got %v", createData["id"])
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/projects/", nil)
+	listRes := httptest.NewRecorder()
+	r.ServeHTTP(listRes, listReq)
+	if listRes.Code != http.StatusOK {
+		t.Fatalf("expected list projects status %d, got %d", http.StatusOK, listRes.Code)
+	}
+
+	_, err := jobSvc.CreateJob(httptest.NewRequest(http.MethodGet, "/", nil).Context(), service.CreateJobInput{
+		ProjectID:     projectID,
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	jobsReq := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/jobs", nil)
+	jobsRes := httptest.NewRecorder()
+	r.ServeHTTP(jobsRes, jobsReq)
+	if jobsRes.Code != http.StatusOK {
+		t.Fatalf("expected project jobs status %d, got %d", http.StatusOK, jobsRes.Code)
+	}
+}
+
+func TestNewRouter_ProjectDuplicateSlugReturnsConflict(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	h := handler.NewBuildHandler(buildSvc)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
+	ph := handler.NewProjectHandler(service.NewProjectService(projectRepo), jobSvc)
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	r := NewRouter(h, nil, handler.NewJobHandler(jobSvc), ph, nil, nil, eh, "")
+
+	body := `{"name":"Platform","slug":"platform"}`
+	firstReq := httptest.NewRequest(http.MethodPost, "/api/projects/", bytes.NewBufferString(body))
+	firstRes := httptest.NewRecorder()
+	r.ServeHTTP(firstRes, firstReq)
+	if firstRes.Code != http.StatusCreated {
+		t.Fatalf("expected first project create status %d, got %d", http.StatusCreated, firstRes.Code)
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/api/projects/", bytes.NewBufferString(body))
+	secondRes := httptest.NewRecorder()
+	r.ServeHTTP(secondRes, secondReq)
+	if secondRes.Code != http.StatusConflict {
+		t.Fatalf("expected duplicate slug project status %d, got %d", http.StatusConflict, secondRes.Code)
+	}
+}
+
+func TestNewRouter_ProjectDeleteDefaultReturnsConflict(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
+	projectSvc := service.NewProjectService(projectRepo)
+	ph := handler.NewProjectHandler(projectSvc, jobSvc)
+	r := NewRouter(handler.NewBuildHandler(buildSvc), nil, handler.NewJobHandler(jobSvc), ph, nil, nil, handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), ""), "")
+
+	_, err := projectRepo.Create(httptest.NewRequest(http.MethodGet, "/", nil).Context(), domain.Project{
+		ID:   "00000000-0000-0000-0000-000000000001",
+		Name: "Default Project",
+		Slug: domain.DefaultProjectSlug,
+	})
+	if err != nil {
+		t.Fatalf("create default project failed: %v", err)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/projects/00000000-0000-0000-0000-000000000001", nil)
+	deleteRes := httptest.NewRecorder()
+	r.ServeHTTP(deleteRes, deleteReq)
+	if deleteRes.Code != http.StatusConflict {
+		t.Fatalf("expected default project delete status %d, got %d", http.StatusConflict, deleteRes.Code)
 	}
 }

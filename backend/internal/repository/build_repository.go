@@ -57,8 +57,9 @@ type CompleteStepResult struct {
 // ListParams controls pagination for list queries. Zero-value fields mean "use
 // defaults" (backend picks a sensible limit). Negative values are clamped.
 type ListParams struct {
-	Limit  int
-	Offset int
+	Limit     int
+	Offset    int
+	ProjectID string
 }
 
 const (
