@@ -3,6 +3,10 @@
 # Each side uploads separately with a flag. The carryforward setting ensures
 # PRs that only touch one side still show a complete coverage picture.
 
+fixes:
+  - "github.com/radiation/coyote-ci/backend/::backend/"
+  - "src/::frontend/src/"
+
 coverage:
   status:
     project:
