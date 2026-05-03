@@ -71,6 +71,10 @@ describe("ProjectDetailPage", () => {
       expect(
         screen.getByText("https://github.com/example/backend.git"),
       ).toBeTruthy();
+      expect(screen.getByRole("link", { name: "Create Job" })).toHaveAttribute(
+        "href",
+        "/jobs/new?project_id=project-1",
+      );
     });
   });
 });

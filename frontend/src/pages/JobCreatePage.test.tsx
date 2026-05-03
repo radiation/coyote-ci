@@ -24,7 +24,7 @@ vi.mock("../api", () => ({
   listSourceCredentials: vi.fn(),
 }));
 
-function renderPage() {
+function renderPage(initialEntries: string[] = ["/"]) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -34,7 +34,7 @@ function renderPage() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={initialEntries}>
         <JobCreatePage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -141,5 +141,33 @@ describe("JobCreatePage", () => {
     });
 
     expect(screen.getByText("Platform (platform)")).toBeTruthy();
+  });
+
+  it("prefers project_id from the query string when present", async () => {
+    mockedListProjects.mockResolvedValueOnce([
+      {
+        id: "project-1",
+        name: "Platform",
+        slug: "platform",
+        description: "Core platform pipelines",
+        created_at: "2026-03-30T00:00:00Z",
+        updated_at: "2026-03-30T00:00:00Z",
+      },
+      {
+        id: "project-2",
+        name: "Release",
+        slug: "release",
+        description: "Release automation",
+        created_at: "2026-03-30T00:00:00Z",
+        updated_at: "2026-03-30T00:00:00Z",
+      },
+    ]);
+
+    renderPage(["/jobs/new?project_id=project-2"]);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Project")).toHaveValue("project-2");
+    });
+    expect(screen.getByText("Release (release)")).toBeTruthy();
   });
 });

@@ -48,7 +48,10 @@ export function ProjectDetailPage() {
           <h2>{project.name}</h2>
           <p className="subtle-text">Slug: {project.slug}</p>
         </div>
-        <Link className="action-link" to="/jobs/new">
+        <Link
+          className="action-link"
+          to={`/jobs/new?project_id=${encodeURIComponent(project.id)}`}
+        >
           Create Job
         </Link>
       </div>

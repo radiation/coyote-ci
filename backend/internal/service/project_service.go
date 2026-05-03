@@ -17,6 +17,7 @@ var ErrProjectIDRequired = errors.New("project id is required")
 var ErrProjectNameRequired = errors.New("project name is required")
 var ErrProjectSlugRequired = errors.New("project slug is required")
 var ErrProjectSlugInvalid = errors.New("project slug must be lowercase kebab-case")
+var ErrDefaultProjectDeleteForbidden = errors.New("default project cannot be deleted")
 
 var projectSlugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
@@ -125,6 +126,13 @@ func (s *ProjectService) DeleteProject(ctx context.Context, id string) error {
 	trimmed := strings.TrimSpace(id)
 	if trimmed == "" {
 		return ErrProjectIDRequired
+	}
+	project, err := s.projects.GetByID(ctx, trimmed)
+	if err != nil {
+		return err
+	}
+	if project.Slug == domain.DefaultProjectSlug {
+		return ErrDefaultProjectDeleteForbidden
 	}
 	return s.projects.Delete(ctx, trimmed)
 }

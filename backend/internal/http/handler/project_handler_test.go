@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
@@ -90,4 +92,64 @@ func TestProjectHandler_CreateListGetUpdateDeleteAndJobs(t *testing.T) {
 	if updateRes.Code != http.StatusOK {
 		t.Fatalf("expected update status %d, got %d", http.StatusOK, updateRes.Code)
 	}
+}
+
+func TestProjectHandler_CreateDuplicateSlugReturnsConflict(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	h := NewProjectHandler(projectService, service.NewJobService(jobRepo, buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)).WithProjectRepository(projectRepo))
+
+	body := `{"name":"Platform","slug":"platform"}`
+	firstReq := httptest.NewRequest(http.MethodPost, "/projects", bytes.NewBufferString(body))
+	firstRes := httptest.NewRecorder()
+	h.CreateProject(firstRes, firstReq)
+	if firstRes.Code != http.StatusCreated {
+		t.Fatalf("expected first create status %d, got %d", http.StatusCreated, firstRes.Code)
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/projects", bytes.NewBufferString(body))
+	secondRes := httptest.NewRecorder()
+	h.CreateProject(secondRes, secondReq)
+	if secondRes.Code != http.StatusConflict {
+		t.Fatalf("expected duplicate slug status %d, got %d", http.StatusConflict, secondRes.Code)
+	}
+}
+
+func TestProjectHandler_DeleteDefaultProjectReturnsConflict(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	h := NewProjectHandler(projectService, service.NewJobService(jobRepo, buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)).WithProjectRepository(projectRepo))
+
+	defaultProject, err := projectRepo.Create(context.Background(), serviceProject("00000000-0000-0000-0000-000000000001", "Default Project", domain.DefaultProjectSlug))
+	if err != nil {
+		t.Fatalf("create default project failed: %v", err)
+	}
+
+	deleteReq := addURLParam(httptest.NewRequest(http.MethodDelete, "/projects/"+defaultProject.ID, nil), "id", defaultProject.ID)
+	deleteRes := httptest.NewRecorder()
+	h.DeleteProject(deleteRes, deleteReq)
+	if deleteRes.Code != http.StatusConflict {
+		t.Fatalf("expected default project delete status %d, got %d", http.StatusConflict, deleteRes.Code)
+	}
+}
+
+func TestProjectHandler_GetProjectWithMissingIDReturnsBadRequest(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	h := NewProjectHandler(projectService, service.NewJobService(jobRepo, buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)).WithProjectRepository(projectRepo))
+
+	getReq := addURLParam(httptest.NewRequest(http.MethodGet, "/projects", nil), "id", "")
+	getRes := httptest.NewRecorder()
+	h.GetProject(getRes, getReq)
+	if getRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected missing id status %d, got %d", http.StatusBadRequest, getRes.Code)
+	}
+}
+
+func serviceProject(id string, name string, slug string) domain.Project {
+	now := time.Now().UTC()
+	return domain.Project{ID: id, Name: name, Slug: slug, CreatedAt: now, UpdatedAt: now}
 }

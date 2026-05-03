@@ -113,6 +113,28 @@ func TestProjectService_DeleteProjectWithJobsReturnsConflict(t *testing.T) {
 	}
 }
 
+func TestProjectService_DeleteDefaultProjectReturnsConflict(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	projectService := NewProjectService(projectRepo)
+
+	defaultProject, err := projectRepo.Create(context.Background(), domain.Project{
+		ID:        "00000000-0000-0000-0000-000000000001",
+		Name:      "Default Project",
+		Slug:      domain.DefaultProjectSlug,
+		CreatedAt: projectService.now().UTC(),
+		UpdatedAt: projectService.now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create default project failed: %v", err)
+	}
+
+	err = projectService.DeleteProject(context.Background(), defaultProject.ID)
+	if !errors.Is(err, ErrDefaultProjectDeleteForbidden) {
+		t.Fatalf("expected ErrDefaultProjectDeleteForbidden, got %v", err)
+	}
+}
+
 func TestJobService_CreateJobAssociatesProject(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	projectRepo := memory.NewProjectRepository(jobRepo)

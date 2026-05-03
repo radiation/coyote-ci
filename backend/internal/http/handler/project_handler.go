@@ -178,15 +178,18 @@ func (h *ProjectHandler) ListProjectJobs(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *ProjectHandler) writeProjectError(w http.ResponseWriter, err error) {
-	if errors.Is(err, repository.ErrProjectNotFound) || errors.Is(err, service.ErrProjectIDRequired) {
+	if errors.Is(err, repository.ErrProjectNotFound) {
 		writeErrorJSON(w, http.StatusNotFound, "not_found", err.Error())
 		return
 	}
-	if errors.Is(err, repository.ErrProjectHasJobs) || errors.Is(err, repository.ErrProjectSlugConflict) {
+	if errors.Is(err, repository.ErrProjectHasJobs) ||
+		errors.Is(err, repository.ErrProjectSlugConflict) ||
+		errors.Is(err, service.ErrDefaultProjectDeleteForbidden) {
 		writeErrorJSON(w, http.StatusConflict, "conflict", err.Error())
 		return
 	}
-	if errors.Is(err, service.ErrProjectNameRequired) ||
+	if errors.Is(err, service.ErrProjectIDRequired) ||
+		errors.Is(err, service.ErrProjectNameRequired) ||
 		errors.Is(err, service.ErrProjectSlugRequired) ||
 		errors.Is(err, service.ErrProjectSlugInvalid) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())

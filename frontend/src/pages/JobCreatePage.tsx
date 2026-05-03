@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createJob, listProjects, listSourceCredentials } from "../api";
 import {
   ManagedBuildImageFields,
@@ -17,6 +17,7 @@ steps:
 
 export function JobCreatePage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [projectID, setProjectID] = useState("");
   const [name, setName] = useState("");
   const [repositoryURL, setRepositoryURL] = useState("");
@@ -48,7 +49,15 @@ export function JobCreatePage() {
     queryFn: () => listProjects(),
   });
 
-  const selectedProjectID = projectID || projects[0]?.id || "";
+  const requestedProjectID = searchParams.get("project_id")?.trim() ?? "";
+  const hasRequestedProject = projects.some(
+    (project) => project.id === requestedProjectID,
+  );
+  const selectedProjectID =
+    projectID ||
+    (hasRequestedProject ? requestedProjectID : "") ||
+    projects[0]?.id ||
+    "";
 
   const createMutation = useMutation({
     mutationFn: createJob,
