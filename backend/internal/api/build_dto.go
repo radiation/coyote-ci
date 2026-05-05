@@ -113,6 +113,7 @@ type BuildResponse struct {
 	ProjectName        *string                `json:"project_name,omitempty"`
 	ProjectSlug        *string                `json:"project_slug,omitempty"`
 	JobID              *string                `json:"job_id,omitempty"`
+	Priority           int                    `json:"priority"`
 	Status             string                 `json:"status"`
 	CreatedAt          string                 `json:"created_at"`
 	QueuedAt           *string                `json:"queued_at"`
@@ -145,6 +146,35 @@ type BuildResponse struct {
 
 type BuildListResponse struct {
 	Builds []BuildResponse `json:"builds"`
+}
+
+type QueueEntryResponse struct {
+	BuildID          string  `json:"build_id"`
+	BuildNumber      int64   `json:"build_number"`
+	ProjectID        string  `json:"project_id"`
+	ProjectName      *string `json:"project_name,omitempty"`
+	ProjectSlug      *string `json:"project_slug,omitempty"`
+	JobID            *string `json:"job_id,omitempty"`
+	JobName          *string `json:"job_name,omitempty"`
+	Priority         int     `json:"priority"`
+	Status           string  `json:"status"`
+	CreatedAt        string  `json:"created_at"`
+	QueuedAt         *string `json:"queued_at,omitempty"`
+	StartedAt        *string `json:"started_at,omitempty"`
+	WorkerID         *string `json:"worker_id,omitempty"`
+	LeaseExpiresAt   *string `json:"lease_expires_at,omitempty"`
+	RepositoryURL    *string `json:"repository_url,omitempty"`
+	TriggerRef       *string `json:"trigger_ref,omitempty"`
+	SourceCommitSHA  *string `json:"source_commit_sha,omitempty"`
+	TriggerCommitSHA *string `json:"trigger_commit_sha,omitempty"`
+}
+
+type QueueListResponse struct {
+	Entries []QueueEntryResponse `json:"entries"`
+}
+
+type QueueEnvelope struct {
+	Data QueueListResponse `json:"data"`
 }
 
 type BuildStepResponse struct {

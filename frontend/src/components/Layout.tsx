@@ -38,6 +38,14 @@ export function Layout() {
                 Builds
               </NavLink>
               <NavLink
+                to="/queue"
+                className={({ isActive }) =>
+                  isActive ? "main-nav-link is-active" : "main-nav-link"
+                }
+              >
+                Queue
+              </NavLink>
+              <NavLink
                 to="/artifacts"
                 className={({ isActive }) =>
                   isActive ? "main-nav-link is-active" : "main-nav-link"

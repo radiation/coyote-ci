@@ -1848,6 +1848,64 @@ const docTemplate = `{
                 }
             }
         },
+        "/queue": {
+            "get": {
+                "description": "Returns queued and running builds with project and job context.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "queue"
+                ],
+                "summary": "List queue",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID filter",
+                        "name": "project_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Project slug filter",
+                        "name": "project_slug",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Status filter (queued or running)",
+                        "name": "status",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.QueueEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/readyz": {
             "get": {
                 "description": "Returns a readiness response after database connectivity and schema checks succeed.",
@@ -2237,6 +2295,9 @@ const docTemplate = `{
                 "pipeline_source": {
                     "type": "string"
                 },
+                "priority": {
+                    "type": "integer"
+                },
                 "project_id": {
                     "type": "string"
                 },
@@ -2500,6 +2561,9 @@ const docTemplate = `{
                 },
                 "pipeline_yaml": {
                     "type": "string"
+                },
+                "priority": {
+                    "type": "integer"
                 },
                 "project_id": {
                     "type": "string"
@@ -2883,6 +2947,9 @@ const docTemplate = `{
                 "pipeline_yaml": {
                     "type": "string"
                 },
+                "priority": {
+                    "type": "integer"
+                },
                 "project_id": {
                     "type": "string"
                 },
@@ -3052,6 +3119,84 @@ const docTemplate = `{
                 }
             }
         },
+        "api.QueueEntryResponse": {
+            "type": "object",
+            "properties": {
+                "build_id": {
+                    "type": "string"
+                },
+                "build_number": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "job_name": {
+                    "type": "string"
+                },
+                "lease_expires_at": {
+                    "type": "string"
+                },
+                "priority": {
+                    "type": "integer"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "project_slug": {
+                    "type": "string"
+                },
+                "queued_at": {
+                    "type": "string"
+                },
+                "repository_url": {
+                    "type": "string"
+                },
+                "source_commit_sha": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "trigger_commit_sha": {
+                    "type": "string"
+                },
+                "trigger_ref": {
+                    "type": "string"
+                },
+                "worker_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.QueueEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.QueueListResponse"
+                }
+            }
+        },
+        "api.QueueListResponse": {
+            "type": "object",
+            "properties": {
+                "entries": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.QueueEntryResponse"
+                    }
+                }
+            }
+        },
         "api.RerunBuildFromStepRequest": {
             "type": "object",
             "properties": {
@@ -3205,6 +3350,9 @@ const docTemplate = `{
                 },
                 "pipeline_yaml": {
                     "type": "string"
+                },
+                "priority": {
+                    "type": "integer"
                 },
                 "push_branch": {
                     "type": "string"

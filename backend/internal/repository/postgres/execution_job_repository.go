@@ -216,7 +216,7 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(ctx context.Context, claim
 						)
 					)
 			  )
-			ORDER BY bj.created_at ASC, bj.step_index ASC, bj.attempt_number ASC, bj.id ASC
+			ORDER BY b.priority DESC, COALESCE(b.queued_at, b.created_at) ASC, bj.created_at ASC, bj.step_index ASC, bj.attempt_number ASC, bj.id ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)

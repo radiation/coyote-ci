@@ -25,6 +25,7 @@ export interface Job {
   id: string;
   project_id: string;
   name: string;
+  priority: number;
   repository_url: string;
   default_ref: string;
   push_enabled: boolean;
@@ -65,6 +66,7 @@ export interface JobListResponse {
 export interface CreateJobRequest {
   project_id: string;
   name: string;
+  priority?: number;
   repository_url: string;
   default_ref: string;
   push_enabled?: boolean;
@@ -77,6 +79,7 @@ export interface CreateJobRequest {
 
 export interface UpdateJobRequest {
   name?: string;
+  priority?: number;
   repository_url?: string;
   default_ref?: string;
   push_enabled?: boolean;

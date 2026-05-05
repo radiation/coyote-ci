@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate } from "react-router-dom";
 import { Layout } from "../components/Layout";
 import { BuildsListPage } from "../pages/BuildsListPage";
 import { BuildDetailPage } from "../pages/BuildDetailPage";
+import { QueuePage } from "../pages/QueuePage";
 import { ArtifactsPage } from "../pages/ArtifactsPage";
 import { JobsListPage } from "../pages/JobsListPage";
 import { JobCreatePage } from "../pages/JobCreatePage";
@@ -17,6 +18,7 @@ export const router = createBrowserRouter([
       { path: "/", element: <Navigate to="/jobs" replace /> },
       { path: "/builds", element: <BuildsListPage /> },
       { path: "/builds/:id", element: <BuildDetailPage /> },
+      { path: "/queue", element: <QueuePage /> },
       { path: "/artifacts", element: <ArtifactsPage /> },
       { path: "/projects", element: <ProjectsListPage /> },
       { path: "/projects/:id", element: <ProjectDetailPage /> },

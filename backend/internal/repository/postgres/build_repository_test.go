@@ -6,7 +6,9 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,7 +52,7 @@ func TestBuildRepository_Create(t *testing.T) {
 				exec.WillReturnError(errors.New("insert failed"))
 			} else {
 				now := time.Now().UTC()
-				exec.WillReturnRows(sqlmock.NewRows([]string{"id", "build_number", "project_id", "job_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).AddRow("build-1", 1, "project-1", nil, "pending", now, nil, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil))
+				exec.WillReturnRows(sqlmock.NewRows([]string{"id", "build_number", "project_id", "job_id", "priority", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).AddRow("build-1", 1, "project-1", nil, 5, "pending", now, nil, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil))
 			}
 
 			build := domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC()}
@@ -100,11 +102,11 @@ func TestBuildRepository_GetByID(t *testing.T) {
 			}
 
 			repo := NewBuildRepository(db)
-			exp := mock.ExpectQuery("SELECT id, build_number, project_id, job_id, status, created_at")
+			exp := mock.ExpectQuery("SELECT id, build_number, project_id, job_id, priority, status, created_at")
 			if tc.err != nil {
 				exp.WillReturnError(tc.err)
 			} else {
-				exp.WillReturnRows(sqlmock.NewRows([]string{"id", "build_number", "project_id", "job_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).AddRow("build-1", 1, "project-1", nil, "queued", now, now, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil))
+				exp.WillReturnRows(sqlmock.NewRows([]string{"id", "build_number", "project_id", "job_id", "priority", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).AddRow("build-1", 1, "project-1", nil, 5, "queued", now, now, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil))
 			}
 
 			got, err := repo.GetByID(context.Background(), "build-1")
@@ -141,12 +143,41 @@ func TestBuildRepository_ListLatestByJobIDs(t *testing.T) {
 	now := time.Now().UTC()
 	jobA := "job-a"
 	jobB := "job-b"
+	buildListRowColumns := strings.Split(strings.ReplaceAll(buildListColumns, " ", ""), ",")
+	buildA := make([]driver.Value, len(buildListRowColumns))
+	buildA[0] = "build-2"
+	buildA[1] = 2
+	buildA[2] = "project-1"
+	buildA[3] = jobA
+	buildA[4] = 5
+	buildA[5] = "success"
+	buildA[6] = now
+	buildA[7] = now
+	buildA[8] = now
+	buildA[9] = now
+	buildA[10] = 1
+	buildA[11] = 1
+	buildA[21] = "manual"
+	buildA[37] = "external"
+	buildB := make([]driver.Value, len(buildListRowColumns))
+	buildB[0] = "build-3"
+	buildB[1] = 3
+	buildB[2] = "project-1"
+	buildB[3] = jobB
+	buildB[4] = 5
+	buildB[5] = "queued"
+	buildB[6] = now.Add(time.Minute)
+	buildB[7] = now.Add(time.Minute)
+	buildB[10] = 0
+	buildB[11] = 1
+	buildB[21] = "manual"
+	buildB[37] = "external"
 
-	mock.ExpectQuery(`SELECT DISTINCT ON \(b.job_id\) b.id, b.build_number, b.project_id, b.job_id, b.status, b.created_at`).
+	mock.ExpectQuery(`SELECT DISTINCT ON \(b.job_id\) b.id, b.build_number, b.project_id, b.job_id, b.priority, b.status, b.created_at`).
 		WithArgs(jobA, jobB).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "build_number", "project_id", "job_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).
-			AddRow("build-2", 2, "project-1", jobA, "success", now, now, now, now, 1, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil).
-			AddRow("build-3", 3, "project-1", jobB, "queued", now.Add(time.Minute), now.Add(time.Minute), nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil))
+		WillReturnRows(sqlmock.NewRows(buildListRowColumns).
+			AddRow(buildA...).
+			AddRow(buildB...))
 
 	latest, err := repo.ListLatestByJobIDs(context.Background(), []string{jobA, jobB, jobA, ""})
 	if err != nil {
@@ -194,7 +225,7 @@ func TestBuildRepository_UpdateStatus(t *testing.T) {
 			if tc.err != nil {
 				exp.WillReturnError(tc.err)
 			} else {
-				exp.WillReturnRows(sqlmock.NewRows([]string{"id", "build_number", "project_id", "job_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).AddRow("build-1", 1, "project-1", nil, "running", now, now, now, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil))
+				exp.WillReturnRows(sqlmock.NewRows([]string{"id", "build_number", "project_id", "job_id", "priority", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).AddRow("build-1", 1, "project-1", nil, 5, "running", now, now, now, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil))
 			}
 
 			got, err := repo.UpdateStatus(context.Background(), "build-1", domain.BuildStatusRunning, nil)
@@ -232,8 +263,8 @@ func TestBuildRepository_QueueBuild_PersistsBuildAndSteps(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE builds").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_number", "project_id", "job_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).
-			AddRow("build-1", 1, "project-1", nil, "queued", now, now, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil),
+		sqlmock.NewRows([]string{"id", "build_number", "project_id", "job_id", "priority", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).
+			AddRow("build-1", 1, "project-1", nil, 5, "queued", now, now, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil),
 	)
 	mock.ExpectExec("DELETE FROM build_steps").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO build_steps").WillReturnResult(sqlmock.NewResult(1, 1))

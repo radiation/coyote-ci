@@ -7,6 +7,8 @@ import type {
   BuildStepsResponse,
   DataEnvelope,
   JobVersionTagsResponse,
+  QueueEntry,
+  QueueListResponse,
   StepLogsResponse,
   VersionTag,
   VersionTagCreateRequest,
@@ -146,6 +148,33 @@ export async function getBuild(id: string): Promise<Build> {
     `/builds/${encodeURIComponent(id)}`,
   );
   return envelope.data;
+}
+
+export async function listQueue(input?: {
+  project_id?: string;
+  project_slug?: string;
+  status?: "queued" | "running";
+}): Promise<QueueEntry[]> {
+  const params = new URLSearchParams();
+  const projectID = input?.project_id?.trim() ?? "";
+  const projectSlug = input?.project_slug?.trim() ?? "";
+  const status = input?.status?.trim() ?? "";
+
+  if (projectID) {
+    params.set("project_id", projectID);
+  }
+  if (projectSlug) {
+    params.set("project_slug", projectSlug);
+  }
+  if (status) {
+    params.set("status", status);
+  }
+
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const envelope = await fetchJSON<DataEnvelope<QueueListResponse>>(
+    `/queue${suffix}`,
+  );
+  return envelope.data.entries;
 }
 
 export async function getBuildSteps(id: string): Promise<BuildStep[]> {

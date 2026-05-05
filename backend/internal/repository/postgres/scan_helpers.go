@@ -13,10 +13,12 @@ type rowScanner interface {
 }
 
 // buildColumns is the canonical column list for build SELECT/RETURNING clauses (full detail).
-const buildColumns = `id, build_number, project_id, job_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
+const buildColumns = `id, build_number, project_id, job_id, priority, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
 
 // buildListColumns is a minimal column list used for list queries (omits large pipeline YAML).
-const buildListColumns = `id, build_number, project_id, job_id, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
+const buildListColumns = `id, build_number, project_id, job_id, priority, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
+
+var queueEntryColumns = qualifyColumns("b", buildListColumns) + `, p.name, p.slug, j.name, running_job.claimed_by, running_job.claim_expires_at`
 
 const executionJobColumns = `id, build_id, step_id, node_id, group_name, depends_on_node_ids, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir, command_json, env_json, timeout_seconds, pipeline_file_path, context_dir, source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest, spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at, created_at, started_at, finished_at, error_message, exit_code, output_refs_json`
 
@@ -44,6 +46,7 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 		&build.BuildNumber,
 		&build.ProjectID,
 		&nf.jobID,
+		&build.Priority,
 		&nf.status,
 		&build.CreatedAt,
 		&nf.queuedAt,
@@ -97,6 +100,7 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 		&build.BuildNumber,
 		&build.ProjectID,
 		&nf.jobID,
+		&build.Priority,
 		&nf.status,
 		&build.CreatedAt,
 		&nf.queuedAt,
@@ -184,6 +188,7 @@ type buildNullFields struct {
 
 func (nf *buildNullFields) applyTo(build *domain.Build) {
 	build.Status = domain.BuildStatus(nf.status)
+	build.Priority = domain.NormalizePriority(build.Priority)
 	if nf.jobID.Valid {
 		v := nf.jobID.String
 		build.JobID = &v
@@ -322,6 +327,91 @@ func (nf *buildNullFields) applyTo(build *domain.Build) {
 	}
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 	build.Source = domain.NewSourceSpec(readOptionalString(build.RepoURL), readOptionalString(build.Ref), readOptionalString(build.CommitSHA))
+}
+
+func scanQueueEntry(scanner rowScanner) (domain.QueueEntry, error) {
+	var entry domain.QueueEntry
+	var nf buildNullFields
+	var projectName sql.NullString
+	var projectSlug sql.NullString
+	var jobName sql.NullString
+	var workerID sql.NullString
+	var leaseExpiresAt sql.NullTime
+
+	err := scanner.Scan(
+		&entry.Build.ID,
+		&entry.Build.BuildNumber,
+		&entry.Build.ProjectID,
+		&nf.jobID,
+		&entry.Build.Priority,
+		&nf.status,
+		&entry.Build.CreatedAt,
+		&nf.queuedAt,
+		&nf.startedAt,
+		&nf.finishedAt,
+		&entry.Build.CurrentStepIndex,
+		&entry.Build.AttemptNumber,
+		&nf.rerunOfBuildID,
+		&nf.rerunFromStepIdx,
+		&nf.errorMessage,
+		&nf.pipelineName,
+		&nf.pipelineSource,
+		&nf.pipelinePath,
+		&nf.repoURL,
+		&nf.ref,
+		&nf.commitSHA,
+		&nf.triggerKind,
+		&nf.scmProvider,
+		&nf.eventType,
+		&nf.triggerRepositoryOwner,
+		&nf.triggerRepositoryName,
+		&nf.triggerRepositoryURL,
+		&nf.triggerRawRef,
+		&nf.triggerRef,
+		&nf.triggerRefType,
+		&nf.triggerRefName,
+		&nf.triggerDeleted,
+		&nf.triggerCommitSHA,
+		&nf.triggerDeliveryID,
+		&nf.triggerActor,
+		&nf.requestedImageRef,
+		&nf.resolvedImageRef,
+		&nf.imageSourceKind,
+		&nf.managedImageID,
+		&nf.managedImageVersionID,
+		&projectName,
+		&projectSlug,
+		&jobName,
+		&workerID,
+		&leaseExpiresAt,
+	)
+	if err != nil {
+		return domain.QueueEntry{}, err
+	}
+
+	nf.applyTo(&entry.Build)
+	if projectName.Valid {
+		v := projectName.String
+		entry.ProjectName = &v
+	}
+	if projectSlug.Valid {
+		v := projectSlug.String
+		entry.ProjectSlug = &v
+	}
+	if jobName.Valid {
+		v := jobName.String
+		entry.JobName = &v
+	}
+	if workerID.Valid {
+		v := workerID.String
+		entry.WorkerID = &v
+	}
+	if leaseExpiresAt.Valid {
+		v := leaseExpiresAt.Time
+		entry.LeaseExpiresAt = &v
+	}
+
+	return entry, nil
 }
 
 func readOptionalString(value *string) string {

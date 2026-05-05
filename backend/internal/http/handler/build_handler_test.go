@@ -149,6 +149,21 @@ func (r *fakeRepo) ListPaged(ctx context.Context, params repository.ListParams) 
 	return r.List(ctx)
 }
 
+func (r *fakeRepo) ListQueue(ctx context.Context, params repository.QueueListParams) ([]domain.QueueEntry, error) {
+	builds, err := r.ListPaged(ctx, repository.ListParams{ProjectID: params.ProjectID})
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]domain.QueueEntry, 0, len(builds))
+	for _, build := range builds {
+		if params.Status != "" && string(build.Status) != params.Status {
+			continue
+		}
+		entries = append(entries, domain.QueueEntry{Build: build})
+	}
+	return entries, nil
+}
+
 func (r *fakeRepo) ListByJobID(_ context.Context, jobID string) ([]domain.Build, error) {
 	builds := make([]domain.Build, 0)
 	for _, build := range r.builds {

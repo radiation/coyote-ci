@@ -25,6 +25,7 @@ var ErrJobRepositoryURLRequired = errors.New("job repository_url is required")
 var ErrJobSourceTargetRequired = errors.New("job default_ref or default_commit_sha is required")
 var ErrJobPipelineDefinitionRequired = errors.New("job pipeline_yaml or pipeline_path is required")
 var ErrJobInvalidTriggerMode = errors.New("job trigger_mode must be one of branches, tags, branches_and_tags")
+var ErrJobPriorityOutOfRange = errors.New("job priority must be between 1 and 10")
 var ErrPushEventRepositoryURLRequired = errors.New("push event repository_url is required")
 var ErrPushEventRefRequired = errors.New("push event ref is required")
 var ErrPushEventCommitSHARequired = errors.New("push event commit_sha is required")
@@ -82,6 +83,7 @@ type CreateJobInput struct {
 	ProjectID        string
 	ProjectSlug      string
 	Name             string
+	Priority         *int
 	RepositoryURL    string
 	DefaultRef       string
 	DefaultCommitSHA string
@@ -98,6 +100,7 @@ type CreateJobInput struct {
 
 type UpdateJobInput struct {
 	Name             *string
+	Priority         *int
 	RepositoryURL    *string
 	DefaultRef       *string
 	DefaultCommitSHA *string
@@ -173,6 +176,7 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 		ID:               uuid.NewString(),
 		ProjectID:        projectID,
 		Name:             normalized.Name,
+		Priority:         normalizedPriority(normalized.Priority),
 		RepositoryURL:    normalized.RepositoryURL,
 		DefaultRef:       normalized.DefaultRef,
 		DefaultCommitSHA: defaultCommitSHA,
@@ -344,6 +348,12 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 	if input.Name != nil {
 		job.Name = strings.TrimSpace(*input.Name)
 	}
+	if input.Priority != nil {
+		if !domain.ValidPriority(*input.Priority) {
+			return domain.Job{}, ErrJobPriorityOutOfRange
+		}
+		job.Priority = *input.Priority
+	}
 	if input.RepositoryURL != nil {
 		job.RepositoryURL = strings.TrimSpace(*input.RepositoryURL)
 	}
@@ -461,6 +471,7 @@ func (s *JobService) createBuildForJob(ctx context.Context, job domain.Job) (dom
 		build, err = s.buildService.CreateBuildFromRepo(ctx, buildsvc.CreateRepoBuildInput{
 			ProjectID:    job.ProjectID,
 			JobID:        &job.ID,
+			Priority:     job.Priority,
 			RepoURL:      job.RepositoryURL,
 			Ref:          job.DefaultRef,
 			CommitSHA:    readStringPtr(job.DefaultCommitSHA),
@@ -470,6 +481,7 @@ func (s *JobService) createBuildForJob(ctx context.Context, job domain.Job) (dom
 		build, err = s.buildService.CreateBuildFromPipeline(ctx, buildsvc.CreatePipelineBuildInput{
 			ProjectID:    job.ProjectID,
 			JobID:        &job.ID,
+			Priority:     job.Priority,
 			PipelineYAML: job.PipelineYAML,
 			Source: &buildsvc.CreateBuildSourceInput{
 				RepositoryURL: job.RepositoryURL,
@@ -531,6 +543,9 @@ func validateCreateJobRequiredFields(input CreateJobInput) error {
 			return ErrJobInvalidTriggerMode
 		}
 	}
+	if input.Priority != nil && !domain.ValidPriority(*input.Priority) {
+		return ErrJobPriorityOutOfRange
+	}
 
 	return nil
 }
@@ -576,6 +591,7 @@ func validateJobRequiredFields(job domain.Job) error {
 	return validateCreateJobRequiredFields(CreateJobInput{
 		ProjectID:        strings.TrimSpace(job.ProjectID),
 		Name:             strings.TrimSpace(job.Name),
+		Priority:         &job.Priority,
 		RepositoryURL:    strings.TrimSpace(job.RepositoryURL),
 		DefaultRef:       strings.TrimSpace(job.DefaultRef),
 		DefaultCommitSHA: strings.TrimSpace(readStringPtr(job.DefaultCommitSHA)),
@@ -590,6 +606,13 @@ func validatePipelineDefinition(pipelineYAML string, pipelinePath *string) error
 		return ErrJobPipelineDefinitionRequired
 	}
 	return nil
+}
+
+func normalizedPriority(priority *int) int {
+	if priority == nil {
+		return domain.DefaultPriority
+	}
+	return domain.NormalizePriority(*priority)
 }
 
 func validatePipelineYAML(yamlText string) error {

@@ -121,6 +121,18 @@ func (r *fakeBuildRepository) ListPaged(ctx context.Context, _ repository.ListPa
 	return r.List(ctx)
 }
 
+func (r *fakeBuildRepository) ListQueue(ctx context.Context, _ repository.QueueListParams) ([]domain.QueueEntry, error) {
+	builds, err := r.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]domain.QueueEntry, 0, len(builds))
+	for _, build := range builds {
+		entries = append(entries, domain.QueueEntry{Build: build})
+	}
+	return entries, nil
+}
+
 func (r *fakeBuildRepository) GetByID(_ context.Context, _ string) (domain.Build, error) {
 	if r.getErr != nil {
 		return domain.Build{}, r.getErr

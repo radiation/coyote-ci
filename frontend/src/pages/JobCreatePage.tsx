@@ -7,6 +7,9 @@ import {
   type ManagedBuildImageValue,
 } from "../components/ManagedBuildImageFields";
 
+const MIN_PRIORITY = 1;
+const MAX_PRIORITY = 10;
+
 type PipelineMode = "inline" | "repo";
 
 const DEFAULT_PIPELINE_YAML = `version: 1
@@ -20,6 +23,7 @@ export function JobCreatePage() {
   const [searchParams] = useSearchParams();
   const [projectID, setProjectID] = useState("");
   const [name, setName] = useState("");
+  const [priority, setPriority] = useState("5");
   const [repositoryURL, setRepositoryURL] = useState("");
   const [defaultRef, setDefaultRef] = useState("main");
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -77,6 +81,7 @@ export function JobCreatePage() {
 
     const trimmedProjectID = selectedProjectID.trim();
     const trimmedName = name.trim();
+    const parsedPriority = Number.parseInt(priority, 10);
     const trimmedRepositoryURL = repositoryURL.trim();
     const trimmedDefaultRef = defaultRef.trim();
     const trimmedPushBranch = pushBranch.trim();
@@ -90,6 +95,15 @@ export function JobCreatePage() {
       setErrorMessage(
         "Project, name, repository URL, and default ref are required.",
       );
+      return;
+    }
+
+    if (
+      Number.isNaN(parsedPriority) ||
+      parsedPriority < MIN_PRIORITY ||
+      parsedPriority > MAX_PRIORITY
+    ) {
+      setErrorMessage("Priority must be a number from 1 to 10.");
       return;
     }
 
@@ -126,6 +140,7 @@ export function JobCreatePage() {
       createMutation.mutate({
         project_id: trimmedProjectID,
         name: trimmedName,
+        priority: parsedPriority,
         repository_url: trimmedRepositoryURL,
         default_ref: trimmedDefaultRef,
         push_enabled: pushEnabled,
@@ -143,6 +158,7 @@ export function JobCreatePage() {
       createMutation.mutate({
         project_id: trimmedProjectID,
         name: trimmedName,
+        priority: parsedPriority,
         repository_url: trimmedRepositoryURL,
         default_ref: trimmedDefaultRef,
         push_enabled: pushEnabled,
@@ -192,6 +208,20 @@ export function JobCreatePage() {
           disabled={createMutation.isPending}
           placeholder="backend-ci"
         />
+
+        <label htmlFor="job-priority">Priority</label>
+        <input
+          id="job-priority"
+          type="number"
+          min={MIN_PRIORITY}
+          max={MAX_PRIORITY}
+          value={priority}
+          onChange={(event) => setPriority(event.target.value)}
+          disabled={createMutation.isPending}
+        />
+        <p className="subtle-text">
+          Higher priority builds are dispatched first. Default is 5.
+        </p>
 
         <label htmlFor="job-repository-url">Repository URL</label>
         <input

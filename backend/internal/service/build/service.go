@@ -183,6 +183,12 @@ func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository
 
 func (s *BuildService) SetExecutionJobRepository(repo repository.ExecutionJobRepository) {
 	s.executionJobRepo = repo
+	type buildRepoAware interface {
+		SetBuildRepository(repository.BuildRepository)
+	}
+	if aware, ok := repo.(buildRepoAware); ok {
+		aware.SetBuildRepository(s.buildRepo)
+	}
 }
 
 func (s *BuildService) SetExecutionJobOutputRepository(repo repository.ExecutionJobOutputRepository) {
@@ -200,6 +206,7 @@ func (s *BuildService) SetStepCacheStore(store cachepkg.Store, entryRepo reposit
 type CreateBuildInput struct {
 	ProjectID string
 	JobID     *string
+	Priority  int
 	Steps     []CreateBuildStepInput
 	Source    *CreateBuildSourceInput
 	Trigger   *CreateBuildTriggerInput
@@ -250,6 +257,7 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 		ID:               uuid.NewString(),
 		ProjectID:        input.ProjectID,
 		JobID:            input.JobID,
+		Priority:         domain.NormalizePriority(input.Priority),
 		Status:           domain.BuildStatusPending,
 		AttemptNumber:    1,
 		CreatedAt:        time.Now().UTC(),
@@ -304,6 +312,7 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 type CreatePipelineBuildInput struct {
 	ProjectID    string
 	JobID        *string
+	Priority     int
 	PipelineYAML string
 	Source       *CreateBuildSourceInput
 	Trigger      *CreateBuildTriggerInput
@@ -344,6 +353,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		ID:                 buildID,
 		ProjectID:          input.ProjectID,
 		JobID:              input.JobID,
+		Priority:           domain.NormalizePriority(input.Priority),
 		Status:             domain.BuildStatusQueued,
 		AttemptNumber:      1,
 		CreatedAt:          time.Now().UTC(),
@@ -375,6 +385,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 type CreateRepoBuildInput struct {
 	ProjectID    string
 	JobID        *string
+	Priority     int
 	RepoURL      string
 	Ref          string
 	CommitSHA    string
@@ -470,6 +481,7 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		ID:                 buildID,
 		ProjectID:          input.ProjectID,
 		JobID:              input.JobID,
+		Priority:           domain.NormalizePriority(input.Priority),
 		Status:             domain.BuildStatusQueued,
 		AttemptNumber:      1,
 		CreatedAt:          time.Now().UTC(),

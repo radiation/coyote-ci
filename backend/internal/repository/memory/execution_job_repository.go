@@ -16,6 +16,7 @@ type ExecutionJobRepository struct {
 	jobsByID    map[string]domain.ExecutionJob
 	jobsByStep  map[string][]string
 	jobsByBuild map[string][]string
+	builds      repository.BuildRepository
 }
 
 func NewExecutionJobRepository() *ExecutionJobRepository {
@@ -24,6 +25,12 @@ func NewExecutionJobRepository() *ExecutionJobRepository {
 		jobsByStep:  map[string][]string{},
 		jobsByBuild: map[string][]string{},
 	}
+}
+
+func (r *ExecutionJobRepository) SetBuildRepository(builds repository.BuildRepository) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.builds = builds
 }
 
 func (r *ExecutionJobRepository) CreateJobsForBuild(_ context.Context, jobs []domain.ExecutionJob) ([]domain.ExecutionJob, error) {
@@ -155,6 +162,14 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(_ context.Context, claim r
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
+		leftPriority, leftQueuedAt := r.buildOrder(candidates[i].BuildID)
+		rightPriority, rightQueuedAt := r.buildOrder(candidates[j].BuildID)
+		if leftPriority != rightPriority {
+			return leftPriority > rightPriority
+		}
+		if !leftQueuedAt.Equal(rightQueuedAt) {
+			return leftQueuedAt.Before(rightQueuedAt)
+		}
 		if candidates[i].CreatedAt.Equal(candidates[j].CreatedAt) {
 			if candidates[i].StepIndex == candidates[j].StepIndex {
 				if candidates[i].AttemptNumber == candidates[j].AttemptNumber {
@@ -178,6 +193,21 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(_ context.Context, claim r
 	}
 	r.jobsByID[job.ID] = job
 	return cloneExecutionJob(job), true, nil
+}
+
+func (r *ExecutionJobRepository) buildOrder(buildID string) (int, time.Time) {
+	if r.builds == nil {
+		return domain.DefaultPriority, time.Time{}
+	}
+	build, err := r.builds.GetByID(context.Background(), buildID)
+	if err != nil {
+		return domain.DefaultPriority, time.Time{}
+	}
+	queuedAt := build.CreatedAt
+	if build.QueuedAt != nil {
+		queuedAt = *build.QueuedAt
+	}
+	return domain.NormalizePriority(build.Priority), queuedAt
 }
 
 func (r *ExecutionJobRepository) ClaimJobByStepID(_ context.Context, stepID string, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {

@@ -48,6 +48,7 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		ProjectID:        req.ProjectID,
 		ProjectSlug:      req.ProjectSlug,
 		Name:             req.Name,
+		Priority:         req.Priority,
 		RepositoryURL:    req.RepositoryURL,
 		DefaultRef:       req.DefaultRef,
 		DefaultCommitSHA: req.DefaultCommitSHA,
@@ -155,6 +156,7 @@ func (h *JobHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.jobService.UpdateJob(r.Context(), jobID, service.UpdateJobInput{
 		Name:             req.Name,
+		Priority:         req.Priority,
 		RepositoryURL:    req.RepositoryURL,
 		DefaultRef:       req.DefaultRef,
 		DefaultCommitSHA: req.DefaultCommitSHA,
@@ -273,6 +275,7 @@ func (h *JobHandler) writeJobServiceError(w http.ResponseWriter, err error) {
 func isBadRequestError(err error) bool {
 	return errors.Is(err, service.ErrJobIDRequired) ||
 		errors.Is(err, service.ErrJobNameRequired) ||
+		errors.Is(err, service.ErrJobPriorityOutOfRange) ||
 		errors.Is(err, service.ErrJobProjectIDRequired) ||
 		errors.Is(err, repository.ErrProjectNotFound) ||
 		errors.Is(err, service.ErrJobManagedImageConfigNotConfigured) ||
@@ -313,6 +316,7 @@ func toJobResponse(job domain.Job) api.JobResponse {
 		ID:               job.ID,
 		ProjectID:        job.ProjectID,
 		Name:             job.Name,
+		Priority:         domain.NormalizePriority(job.Priority),
 		RepositoryURL:    job.RepositoryURL,
 		DefaultRef:       job.DefaultRef,
 		DefaultCommitSHA: job.DefaultCommitSHA,

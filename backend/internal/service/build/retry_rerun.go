@@ -178,6 +178,7 @@ func buildAttemptFromSource(source domain.Build, now time.Time, rerunFrom *int) 
 		ID:                 buildID,
 		ProjectID:          source.ProjectID,
 		JobID:              source.JobID,
+		Priority:           domain.NormalizePriority(source.Priority),
 		Status:             domain.BuildStatusQueued,
 		CreatedAt:          now,
 		QueuedAt:           &queuedAt,

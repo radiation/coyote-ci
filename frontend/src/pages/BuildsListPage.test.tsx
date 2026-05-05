@@ -57,6 +57,7 @@ describe("BuildsListPage", () => {
     mockedListBuilds.mockResolvedValue([
       {
         id: "aaaa-bbbb-cccc-dddd",
+        priority: 5,
         project_id: "project-1",
         project_name: "Platform",
         project_slug: "platform",

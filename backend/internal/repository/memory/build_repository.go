@@ -41,6 +41,7 @@ func (r *BuildRepository) Create(_ context.Context, build domain.Build) (domain.
 		r.nextNumber++
 		build.BuildNumber = r.nextNumber
 	}
+	build.Priority = domain.NormalizePriority(build.Priority)
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 
 	r.builds[build.ID] = build
@@ -114,6 +115,7 @@ func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Buil
 		r.nextNumber++
 		build.BuildNumber = r.nextNumber
 	}
+	build.Priority = domain.NormalizePriority(build.Priority)
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 
 	now := time.Now().UTC()
@@ -187,6 +189,83 @@ func (r *BuildRepository) ListPaged(ctx context.Context, params repository.ListP
 		end = len(all)
 	}
 	return all[offset:end], nil
+}
+
+func (r *BuildRepository) ListQueue(_ context.Context, params repository.QueueListParams) ([]domain.QueueEntry, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	entries := make([]domain.QueueEntry, 0)
+	statusFilter := strings.TrimSpace(params.Status)
+	projectIDFilter := strings.TrimSpace(params.ProjectID)
+	for _, build := range r.builds {
+		if build.Status != domain.BuildStatusQueued && build.Status != domain.BuildStatusRunning {
+			continue
+		}
+		if projectIDFilter != "" && build.ProjectID != projectIDFilter {
+			continue
+		}
+		if statusFilter != "" && string(build.Status) != statusFilter {
+			continue
+		}
+		entries = append(entries, domain.QueueEntry{Build: build})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		left := entries[i].Build
+		right := entries[j].Build
+		if left.Status != right.Status {
+			return queueStatusRank(left.Status) < queueStatusRank(right.Status)
+		}
+		if left.Status == domain.BuildStatusQueued {
+			if left.Priority != right.Priority {
+				return left.Priority > right.Priority
+			}
+			leftQueuedAt := queueOrderTime(left)
+			rightQueuedAt := queueOrderTime(right)
+			if !leftQueuedAt.Equal(rightQueuedAt) {
+				return leftQueuedAt.Before(rightQueuedAt)
+			}
+		}
+		if left.Status == domain.BuildStatusRunning {
+			leftStartedAt := runningOrderTime(left)
+			rightStartedAt := runningOrderTime(right)
+			if !leftStartedAt.Equal(rightStartedAt) {
+				return leftStartedAt.Before(rightStartedAt)
+			}
+		}
+		if !left.CreatedAt.Equal(right.CreatedAt) {
+			return left.CreatedAt.Before(right.CreatedAt)
+		}
+		return left.ID < right.ID
+	})
+
+	return entries, nil
+}
+
+func queueStatusRank(status domain.BuildStatus) int {
+	switch status {
+	case domain.BuildStatusQueued:
+		return 0
+	case domain.BuildStatusRunning:
+		return 1
+	default:
+		return 2
+	}
+}
+
+func queueOrderTime(build domain.Build) time.Time {
+	if build.QueuedAt != nil {
+		return *build.QueuedAt
+	}
+	return build.CreatedAt
+}
+
+func runningOrderTime(build domain.Build) time.Time {
+	if build.StartedAt != nil {
+		return *build.StartedAt
+	}
+	return build.CreatedAt
 }
 
 func (r *BuildRepository) ListByJobID(_ context.Context, jobID string) ([]domain.Build, error) {
