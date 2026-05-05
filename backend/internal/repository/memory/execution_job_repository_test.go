@@ -78,6 +78,73 @@ func TestExecutionJobRepository_ClaimRenewAndComplete(t *testing.T) {
 	}
 }
 
+func TestExecutionJobRepository_ClaimNextRunnableJob_PrioritizesBuildPriorityThenQueuedTime(t *testing.T) {
+	buildRepo := NewBuildRepository()
+	repo := NewExecutionJobRepository()
+	repo.SetBuildRepository(buildRepo)
+	now := time.Now().UTC()
+
+	queuedLow := now.Add(-3 * time.Minute)
+	queuedHighEarlier := now.Add(-2 * time.Minute)
+	queuedHighLater := now.Add(-1 * time.Minute)
+
+	builds := []domain.Build{
+		{ID: "build-low", ProjectID: "project-1", Priority: 2, Status: domain.BuildStatusQueued, CreatedAt: now.Add(-10 * time.Minute), QueuedAt: &queuedLow},
+		{ID: "build-high-earlier", ProjectID: "project-1", Priority: 9, Status: domain.BuildStatusQueued, CreatedAt: now.Add(-9 * time.Minute), QueuedAt: &queuedHighEarlier},
+		{ID: "build-high-later", ProjectID: "project-1", Priority: 9, Status: domain.BuildStatusQueued, CreatedAt: now.Add(-8 * time.Minute), QueuedAt: &queuedHighLater},
+	}
+	for _, build := range builds {
+		if _, err := buildRepo.Create(context.Background(), build); err != nil {
+			t.Fatalf("create build %s failed: %v", build.ID, err)
+		}
+	}
+
+	jobs := []domain.ExecutionJob{
+		{ID: "job-low", BuildID: "build-low", StepID: "step-low", NodeID: "node-low", Name: "low", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now.Add(-10 * time.Minute)},
+		{ID: "job-high-earlier", BuildID: "build-high-earlier", StepID: "step-high-earlier", NodeID: "node-high-earlier", Name: "high-earlier", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now.Add(-9 * time.Minute)},
+		{ID: "job-high-later", BuildID: "build-high-later", StepID: "step-high-later", NodeID: "node-high-later", Name: "high-later", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now.Add(-8 * time.Minute)},
+	}
+	if _, err := repo.CreateJobsForBuild(context.Background(), jobs); err != nil {
+		t.Fatalf("create jobs failed: %v", err)
+	}
+
+	claim := repository.StepClaim{WorkerID: "worker-1", ClaimToken: "claim-1", ClaimedAt: now, LeaseExpiresAt: now.Add(time.Minute)}
+	first, ok, err := repo.ClaimNextRunnableJob(context.Background(), claim)
+	if err != nil {
+		t.Fatalf("first claim failed: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected first claim to succeed")
+	}
+	if first.BuildID != "build-high-earlier" {
+		t.Fatalf("expected first claim from highest-priority earliest queued build, got %q", first.BuildID)
+	}
+
+	claim.ClaimToken = "claim-2"
+	second, ok, err := repo.ClaimNextRunnableJob(context.Background(), claim)
+	if err != nil {
+		t.Fatalf("second claim failed: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected second claim to succeed")
+	}
+	if second.BuildID != "build-high-later" {
+		t.Fatalf("expected second claim from same-priority later queued build, got %q", second.BuildID)
+	}
+
+	claim.ClaimToken = "claim-3"
+	third, ok, err := repo.ClaimNextRunnableJob(context.Background(), claim)
+	if err != nil {
+		t.Fatalf("third claim failed: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected third claim to succeed")
+	}
+	if third.BuildID != "build-low" {
+		t.Fatalf("expected lower-priority build last, got %q", third.BuildID)
+	}
+}
+
 func TestExecutionJobRepository_ImmutabilityForSpecFields(t *testing.T) {
 	repo := NewExecutionJobRepository()
 	now := time.Now().UTC()

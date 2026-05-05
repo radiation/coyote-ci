@@ -120,6 +120,37 @@ steps:
 		}
 	})
 
+	t.Run("priority zero defaults to five", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+
+		build, err := svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{
+			ProjectID:    "proj-1",
+			Priority:     0,
+			PipelineYAML: validYAML,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if build.Priority != domain.DefaultPriority {
+			t.Fatalf("expected default priority %d, got %d", domain.DefaultPriority, build.Priority)
+		}
+	})
+
+	t.Run("out of range priority is rejected", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+
+		_, err := svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{
+			ProjectID:    "proj-1",
+			Priority:     domain.MaxPriority + 1,
+			PipelineYAML: validYAML,
+		})
+		if !errors.Is(err, ErrBuildPriorityOutOfRange) {
+			t.Fatalf("expected ErrBuildPriorityOutOfRange, got %v", err)
+		}
+	})
+
 	t.Run("invalid yaml", func(t *testing.T) {
 		repo := &fakeBuildRepository{}
 		svc := NewBuildService(repo, nil, nil)
@@ -258,6 +289,9 @@ steps:
 		if build.Status != domain.BuildStatusQueued {
 			t.Errorf("expected queued, got %s", build.Status)
 		}
+		if build.Priority != domain.DefaultPriority {
+			t.Errorf("expected default priority %d, got %d", domain.DefaultPriority, build.Priority)
+		}
 		if build.RepoURL == nil || *build.RepoURL != "https://github.com/org/repo.git" {
 			t.Errorf("expected repo_url, got %v", build.RepoURL)
 		}
@@ -278,6 +312,26 @@ steps:
 		}
 		if build.PipelinePath == nil || *build.PipelinePath != ".coyote/pipeline.yml" {
 			t.Errorf("expected effective pipeline_path, got %v", build.PipelinePath)
+		}
+	})
+
+	t.Run("out of range priority is rejected", func(t *testing.T) {
+		tmpDir := setupTempRepo(t, validYAML)
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{
+			localPath: tmpDir,
+			commitSHA: "abc123def456",
+		})
+
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{
+			ProjectID: "proj-1",
+			Priority:  -1,
+			RepoURL:   "https://github.com/org/repo.git",
+			Ref:       "main",
+		})
+		if !errors.Is(err, ErrBuildPriorityOutOfRange) {
+			t.Fatalf("expected ErrBuildPriorityOutOfRange, got %v", err)
 		}
 	})
 

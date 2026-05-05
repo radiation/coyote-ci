@@ -51,6 +51,7 @@ var ErrExecutionJobRepoNotConfigured = errors.New("execution job repository not 
 var ErrExecutionJobNotFound = errors.New("execution job not found")
 var ErrExecutionJobNotRetryable = errors.New("execution job is not retryable")
 var ErrInvalidRerunStepIndex = errors.New("invalid rerun step index")
+var ErrBuildPriorityOutOfRange = errors.New("priority must be between 1 and 10")
 
 const (
 	BuildTemplateDefault = "default"
@@ -138,6 +139,16 @@ func NewBuildService(buildRepo repository.BuildRepository, stepRunner runner.Run
 		logSink:          logSink,
 		sourceResolver:   source.NewGitWorkspaceSourceResolver(),
 	}
+}
+
+func validateRequestedBuildPriority(priority int) error {
+	if priority == 0 {
+		return nil
+	}
+	if !domain.ValidPriority(priority) {
+		return ErrBuildPriorityOutOfRange
+	}
+	return nil
 }
 
 // SetRepoFetcher attaches a RepoFetcher for repo-backed build creation.
@@ -247,6 +258,9 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 	if input.ProjectID == "" {
 		return domain.Build{}, ErrProjectIDRequired
 	}
+	if err := validateRequestedBuildPriority(input.Priority); err != nil {
+		return domain.Build{}, err
+	}
 
 	sourceSpec, err := buildSourceSpecFromInput(input.Source)
 	if err != nil {
@@ -323,6 +337,9 @@ type CreatePipelineBuildInput struct {
 func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input CreatePipelineBuildInput) (domain.Build, error) {
 	if input.ProjectID == "" {
 		return domain.Build{}, ErrProjectIDRequired
+	}
+	if err := validateRequestedBuildPriority(input.Priority); err != nil {
+		return domain.Build{}, err
 	}
 	yamlText := strings.TrimSpace(input.PipelineYAML)
 	if yamlText == "" {
@@ -402,6 +419,9 @@ const pipelineSourceInline = "inline"
 func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepoBuildInput) (domain.Build, error) {
 	if input.ProjectID == "" {
 		return domain.Build{}, ErrProjectIDRequired
+	}
+	if err := validateRequestedBuildPriority(input.Priority); err != nil {
+		return domain.Build{}, err
 	}
 	if strings.TrimSpace(input.RepoURL) == "" {
 		return domain.Build{}, ErrRepoURLRequired

@@ -79,6 +79,7 @@ describe("BuildsListPage", () => {
 
     await screen.findByText("aaaa-bbb…");
     expect(screen.getByText("Platform")).toBeTruthy();
+    expect(screen.getByText("5")).toBeTruthy();
     expect(screen.getByText("webhook")).toBeTruthy();
     expect(screen.getByText("github • main • abc1234 • octocat")).toBeTruthy();
   });

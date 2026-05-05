@@ -152,6 +152,42 @@ func TestExecutionJobRepository_ClaimNextRunnableJob(t *testing.T) {
 	}
 }
 
+func TestExecutionJobRepository_ClaimNextRunnableJob_UsesBuildPriorityOrdering(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewExecutionJobRepository(db)
+	now := time.Now().UTC()
+	lease := now.Add(time.Minute)
+
+	mock.ExpectQuery(`ORDER BY\s+b\.priority DESC,\s+COALESCE\(b\.queued_at, b\.created_at\) ASC,\s+bj\.created_at ASC,\s+bj\.step_index ASC,\s+bj\.attempt_number ASC,\s+bj\.id ASC`).
+		WithArgs(now, "worker-1", "claim-1", lease).
+		WillReturnRows(sqlmock.NewRows(executionJobMockColumns).
+			AddRow("job-priority", "build-priority", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "running", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, 30, ".coyote/pipeline.yml", ".", "https://github.com/acme/repo.git", "abc123", "main", nil, nil, 1, "digest", `{"version":1}`, "claim-1", "worker-1", lease, now, now, nil, nil, nil, `[]`))
+
+	job, claimed, err := repo.ClaimNextRunnableJob(context.Background(), repository.StepClaim{
+		WorkerID:       "worker-1",
+		ClaimToken:     "claim-1",
+		ClaimedAt:      now,
+		LeaseExpiresAt: lease,
+	})
+	if err != nil {
+		t.Fatalf("claim next runnable job failed: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected claim to succeed")
+	}
+	if job.ID != "job-priority" {
+		t.Fatalf("expected job-priority, got %q", job.ID)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 func stringPtr(value string) *string {
 	return &value
 }

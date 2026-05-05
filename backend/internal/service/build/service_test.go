@@ -697,6 +697,23 @@ func TestBuildService_CreateBuild(t *testing.T) {
 			repo:  &fakeBuildRepository{},
 		},
 		{
+			name:  "priority zero defaults to five",
+			input: CreateBuildInput{ProjectID: "project-1", Priority: 0},
+			repo:  &fakeBuildRepository{},
+		},
+		{
+			name:      "priority above range rejected",
+			input:     CreateBuildInput{ProjectID: "project-1", Priority: domain.MaxPriority + 1},
+			repo:      &fakeBuildRepository{},
+			expectErr: ErrBuildPriorityOutOfRange,
+		},
+		{
+			name:      "priority below range rejected",
+			input:     CreateBuildInput{ProjectID: "project-1", Priority: -1},
+			repo:      &fakeBuildRepository{},
+			expectErr: ErrBuildPriorityOutOfRange,
+		},
+		{
 			name:      "source missing repository url",
 			input:     CreateBuildInput{ProjectID: "project-1", Source: &CreateBuildSourceInput{Ref: "main"}},
 			repo:      &fakeBuildRepository{},
@@ -752,6 +769,10 @@ func TestBuildService_CreateBuild(t *testing.T) {
 
 			if build.Status != domain.BuildStatusPending {
 				t.Fatalf("expected status %q, got %q", domain.BuildStatusPending, build.Status)
+			}
+
+			if build.Priority != domain.DefaultPriority {
+				t.Fatalf("expected priority %d, got %d", domain.DefaultPriority, build.Priority)
 			}
 
 			if build.CreatedAt.IsZero() {

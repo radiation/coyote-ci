@@ -35,6 +35,7 @@ type fakeExecutionWorkerBoundary struct {
 	renewedLeaseAt *time.Time
 	runStepDelay   time.Duration
 	prepareCalls   int
+	prepareIDs     []string
 	prepareErr     error
 	claimJobCalls  int
 
@@ -261,6 +262,7 @@ func (f *fakeExecutionWorkerBoundary) QueueBuild(_ context.Context, id string) (
 
 func (f *fakeExecutionWorkerBoundary) PrepareBuildExecution(_ context.Context, id string) (domain.Build, error) {
 	f.prepareCalls++
+	f.prepareIDs = append(f.prepareIDs, id)
 	f.lastBuildID = id
 	if f.prepareErr != nil {
 		return domain.Build{}, f.prepareErr
@@ -706,6 +708,42 @@ func TestExecutionWorkerService_ClaimRunnableStep_DoesNotBindPersistedJobSpecWhe
 	}
 	if runnable.Env["A"] != "step" {
 		t.Fatalf("expected env from step spec, got %#v", runnable.Env)
+	}
+}
+
+func TestExecutionWorkerService_ClaimRunnableStep_PreparesQueuedBuildsByPriorityThenFIFO(t *testing.T) {
+	now := time.Now().UTC()
+	queuedLow := now.Add(-3 * time.Minute)
+	queuedHighEarlier := now.Add(-2 * time.Minute)
+	queuedHighLater := now.Add(-1 * time.Minute)
+
+	boundary := &fakeExecutionWorkerBoundary{
+		listBuildsResp: []domain.Build{
+			{ID: "build-low", Status: domain.BuildStatusQueued, Priority: 2, CreatedAt: now.Add(-10 * time.Minute), QueuedAt: &queuedLow},
+			{ID: "build-high-later", Status: domain.BuildStatusQueued, Priority: 9, CreatedAt: now.Add(-9 * time.Minute), QueuedAt: &queuedHighLater},
+			{ID: "build-high-earlier", Status: domain.BuildStatusQueued, Priority: 9, CreatedAt: now.Add(-8 * time.Minute), QueuedAt: &queuedHighEarlier},
+		},
+	}
+
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	_, found, err := worker.ClaimRunnableStep(context.Background())
+	if err != nil {
+		t.Fatalf("claim runnable step failed: %v", err)
+	}
+	if found {
+		t.Fatal("expected no runnable job when only build preparation occurred")
+	}
+	if boundary.prepareCalls != 3 {
+		t.Fatalf("expected 3 prepare calls, got %d", boundary.prepareCalls)
+	}
+	wantOrder := []string{"build-high-earlier", "build-high-later", "build-low"}
+	if len(boundary.prepareIDs) != len(wantOrder) {
+		t.Fatalf("expected prepare order %v, got %v", wantOrder, boundary.prepareIDs)
+	}
+	for i, wantID := range wantOrder {
+		if boundary.prepareIDs[i] != wantID {
+			t.Fatalf("expected prepare order %v, got %v", wantOrder, boundary.prepareIDs)
+		}
 	}
 }
 
