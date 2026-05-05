@@ -26,6 +26,7 @@ func toBuildResponse(build domain.Build, project ...*domain.Project) api.BuildRe
 		ProjectName:        projectName,
 		ProjectSlug:        projectSlug,
 		JobID:              build.JobID,
+		Priority:           domain.NormalizePriority(build.Priority),
 		Status:             string(build.Status),
 		CreatedAt:          build.CreatedAt.Format(time.RFC3339),
 		QueuedAt:           formatOptionalTime(build.QueuedAt),
@@ -54,6 +55,30 @@ func toBuildResponse(build domain.Build, project ...*domain.Project) api.BuildRe
 		Actor:              trigger.Actor,
 		Source:             toBuildSourceResponse(build),
 		Image:              toImageExecutionResponse(build.RequestedImageRef, build.ResolvedImageRef, build.ImageSourceKind, build.ManagedImageID, build.ManagedImageVersionID),
+	}
+}
+
+func toQueueEntryResponse(entry domain.QueueEntry) api.QueueEntryResponse {
+	trigger := domain.NormalizeBuildTrigger(entry.Build.Trigger)
+	return api.QueueEntryResponse{
+		BuildID:          entry.Build.ID,
+		BuildNumber:      entry.Build.BuildNumber,
+		ProjectID:        entry.Build.ProjectID,
+		ProjectName:      entry.ProjectName,
+		ProjectSlug:      entry.ProjectSlug,
+		JobID:            entry.Build.JobID,
+		JobName:          entry.JobName,
+		Priority:         domain.NormalizePriority(entry.Build.Priority),
+		Status:           string(entry.Build.Status),
+		CreatedAt:        entry.Build.CreatedAt.Format(time.RFC3339),
+		QueuedAt:         formatOptionalTime(entry.Build.QueuedAt),
+		StartedAt:        formatOptionalTime(entry.Build.StartedAt),
+		WorkerID:         entry.WorkerID,
+		LeaseExpiresAt:   formatOptionalTime(entry.LeaseExpiresAt),
+		RepositoryURL:    trigger.RepositoryURL,
+		TriggerRef:       trigger.Ref,
+		SourceCommitSHA:  buildSourceCommitSHA(entry.Build),
+		TriggerCommitSHA: buildTriggerCommitSHA(entry.Build, trigger),
 	}
 }
 

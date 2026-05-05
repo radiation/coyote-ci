@@ -15,6 +15,7 @@ type Job struct {
 	ID                 string
 	ProjectID          string
 	Name               string
+	Priority           int
 	RepositoryURL      string
 	DefaultRef         string
 	DefaultCommitSHA   *string

@@ -57,6 +57,7 @@ describe("BuildsListPage", () => {
     mockedListBuilds.mockResolvedValue([
       {
         id: "aaaa-bbbb-cccc-dddd",
+        priority: 5,
         project_id: "project-1",
         project_name: "Platform",
         project_slug: "platform",
@@ -78,6 +79,7 @@ describe("BuildsListPage", () => {
 
     await screen.findByText("aaaa-bbb…");
     expect(screen.getByText("Platform")).toBeTruthy();
+    expect(screen.getByText("5")).toBeTruthy();
     expect(screen.getByText("webhook")).toBeTruthy();
     expect(screen.getByText("github • main • abc1234 • octocat")).toBeTruthy();
   });

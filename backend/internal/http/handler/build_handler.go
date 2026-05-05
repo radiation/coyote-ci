@@ -420,6 +420,47 @@ func (h *BuildHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
 	writeDataJSON(w, http.StatusOK, api.BuildListResponse{Builds: responses})
 }
 
+// ListQueue godoc
+// @Summary List queue
+// @Description Returns queued and running builds with project and job context.
+// @Tags queue
+// @Produce json
+// @Param project_id query string false "Project ID filter"
+// @Param project_slug query string false "Project slug filter"
+// @Param status query string false "Status filter (queued or running)"
+// @Success 200 {object} api.QueueEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /queue [get]
+func (h *BuildHandler) ListQueue(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := h.resolveProjectFilter(w, r)
+	if !ok {
+		return
+	}
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	if status != "" && status != string(domain.BuildStatusQueued) && status != string(domain.BuildStatusRunning) {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "status must be queued or running")
+		return
+	}
+
+	entries, err := h.buildService.ListQueue(r.Context(), repository.QueueListParams{
+		ProjectID: projectID,
+		Status:    status,
+	})
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+
+	responses := make([]api.QueueEntryResponse, 0, len(entries))
+	for _, entry := range entries {
+		responses = append(responses, toQueueEntryResponse(entry))
+	}
+
+	writeDataJSON(w, http.StatusOK, api.QueueListResponse{Entries: responses})
+}
+
 // GetBuild godoc
 // @Summary Get build
 // @Description Returns build details by id.

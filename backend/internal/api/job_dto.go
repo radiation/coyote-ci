@@ -9,6 +9,7 @@ type CreateJobRequest struct {
 	ProjectID        string                              `json:"project_id"`
 	ProjectSlug      string                              `json:"project_slug,omitempty"`
 	Name             string                              `json:"name"`
+	Priority         *int                                `json:"priority,omitempty"`
 	RepositoryURL    string                              `json:"repository_url"`
 	DefaultRef       string                              `json:"default_ref,omitempty"`
 	DefaultCommitSHA string                              `json:"default_commit_sha,omitempty"`
@@ -25,6 +26,7 @@ type CreateJobRequest struct {
 
 type UpdateJobRequest struct {
 	Name             *string                             `json:"name,omitempty"`
+	Priority         *int                                `json:"priority,omitempty"`
 	RepositoryURL    *string                             `json:"repository_url,omitempty"`
 	DefaultRef       *string                             `json:"default_ref,omitempty"`
 	DefaultCommitSHA *string                             `json:"default_commit_sha,omitempty"`
@@ -44,6 +46,7 @@ type UpdateJobRequest struct {
 func (r *UpdateJobRequest) UnmarshalJSON(data []byte) error {
 	type updateJobRequestAlias struct {
 		Name             *string                             `json:"name,omitempty"`
+		Priority         *int                                `json:"priority,omitempty"`
 		RepositoryURL    *string                             `json:"repository_url,omitempty"`
 		DefaultRef       *string                             `json:"default_ref,omitempty"`
 		DefaultCommitSHA *string                             `json:"default_commit_sha,omitempty"`
@@ -64,6 +67,7 @@ func (r *UpdateJobRequest) UnmarshalJSON(data []byte) error {
 	}
 
 	r.Name = alias.Name
+	r.Priority = alias.Priority
 	r.RepositoryURL = alias.RepositoryURL
 	r.DefaultRef = alias.DefaultRef
 	r.DefaultCommitSHA = alias.DefaultCommitSHA
@@ -142,6 +146,7 @@ type JobResponse struct {
 	ID               string                         `json:"id"`
 	ProjectID        string                         `json:"project_id"`
 	Name             string                         `json:"name"`
+	Priority         int                            `json:"priority"`
 	RepositoryURL    string                         `json:"repository_url"`
 	DefaultRef       string                         `json:"default_ref"`
 	DefaultCommitSHA *string                        `json:"default_commit_sha,omitempty"`

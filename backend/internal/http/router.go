@@ -32,6 +32,7 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", handler.Health)
 		r.Get("/healthz", handler.Health)
+		r.Get("/queue", buildHandler.ListQueue)
 
 		r.Route("/builds", func(r chi.Router) {
 			r.Post("/", buildHandler.CreateBuild)

@@ -18,6 +18,7 @@ type Build struct {
 	BuildNumber      int64
 	ProjectID        string
 	JobID            *string
+	Priority         int
 	Status           BuildStatus
 	CreatedAt        time.Time
 	QueuedAt         *time.Time

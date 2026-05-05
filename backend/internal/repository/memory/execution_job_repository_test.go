@@ -9,6 +9,22 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
+type buildLookupContextKey string
+
+type countingBuildRepository struct {
+	*BuildRepository
+	getByIDCalls int
+	ctxValues    []string
+}
+
+func (r *countingBuildRepository) GetByID(ctx context.Context, id string) (domain.Build, error) {
+	r.getByIDCalls++
+	if value, ok := ctx.Value(buildLookupContextKey("claim-next")).(string); ok {
+		r.ctxValues = append(r.ctxValues, value)
+	}
+	return r.BuildRepository.GetByID(ctx, id)
+}
+
 func TestExecutionJobRepository_ClaimRenewAndComplete(t *testing.T) {
 	repo := NewExecutionJobRepository()
 	now := time.Now().UTC()
@@ -75,6 +91,122 @@ func TestExecutionJobRepository_ClaimRenewAndComplete(t *testing.T) {
 	}
 	if len(completed.OutputRefs) != 1 {
 		t.Fatalf("expected one output ref, got %d", len(completed.OutputRefs))
+	}
+}
+
+func TestExecutionJobRepository_ClaimNextRunnableJob_PrioritizesBuildPriorityThenQueuedTime(t *testing.T) {
+	buildRepo := NewBuildRepository()
+	repo := NewExecutionJobRepository()
+	repo.SetBuildRepository(buildRepo)
+	now := time.Now().UTC()
+
+	queuedLow := now.Add(-3 * time.Minute)
+	queuedHighEarlier := now.Add(-2 * time.Minute)
+	queuedHighLater := now.Add(-1 * time.Minute)
+
+	builds := []domain.Build{
+		{ID: "build-low", ProjectID: "project-1", Priority: 2, Status: domain.BuildStatusQueued, CreatedAt: now.Add(-10 * time.Minute), QueuedAt: &queuedLow},
+		{ID: "build-high-earlier", ProjectID: "project-1", Priority: 9, Status: domain.BuildStatusQueued, CreatedAt: now.Add(-9 * time.Minute), QueuedAt: &queuedHighEarlier},
+		{ID: "build-high-later", ProjectID: "project-1", Priority: 9, Status: domain.BuildStatusQueued, CreatedAt: now.Add(-8 * time.Minute), QueuedAt: &queuedHighLater},
+	}
+	for _, build := range builds {
+		if _, err := buildRepo.Create(context.Background(), build); err != nil {
+			t.Fatalf("create build %s failed: %v", build.ID, err)
+		}
+	}
+
+	jobs := []domain.ExecutionJob{
+		{ID: "job-low", BuildID: "build-low", StepID: "step-low", NodeID: "node-low", Name: "low", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now.Add(-10 * time.Minute)},
+		{ID: "job-high-earlier", BuildID: "build-high-earlier", StepID: "step-high-earlier", NodeID: "node-high-earlier", Name: "high-earlier", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now.Add(-9 * time.Minute)},
+		{ID: "job-high-later", BuildID: "build-high-later", StepID: "step-high-later", NodeID: "node-high-later", Name: "high-later", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now.Add(-8 * time.Minute)},
+	}
+	if _, err := repo.CreateJobsForBuild(context.Background(), jobs); err != nil {
+		t.Fatalf("create jobs failed: %v", err)
+	}
+
+	claim := repository.StepClaim{WorkerID: "worker-1", ClaimToken: "claim-1", ClaimedAt: now, LeaseExpiresAt: now.Add(time.Minute)}
+	first, ok, err := repo.ClaimNextRunnableJob(context.Background(), claim)
+	if err != nil {
+		t.Fatalf("first claim failed: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected first claim to succeed")
+	}
+	if first.BuildID != "build-high-earlier" {
+		t.Fatalf("expected first claim from highest-priority earliest queued build, got %q", first.BuildID)
+	}
+
+	claim.ClaimToken = "claim-2"
+	second, ok, err := repo.ClaimNextRunnableJob(context.Background(), claim)
+	if err != nil {
+		t.Fatalf("second claim failed: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected second claim to succeed")
+	}
+	if second.BuildID != "build-high-later" {
+		t.Fatalf("expected second claim from same-priority later queued build, got %q", second.BuildID)
+	}
+
+	claim.ClaimToken = "claim-3"
+	third, ok, err := repo.ClaimNextRunnableJob(context.Background(), claim)
+	if err != nil {
+		t.Fatalf("third claim failed: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected third claim to succeed")
+	}
+	if third.BuildID != "build-low" {
+		t.Fatalf("expected lower-priority build last, got %q", third.BuildID)
+	}
+}
+
+func TestExecutionJobRepository_ClaimNextRunnableJob_UsesCallerContextAndCachesBuildLookups(t *testing.T) {
+	buildRepo := &countingBuildRepository{BuildRepository: NewBuildRepository()}
+	repo := NewExecutionJobRepository()
+	repo.SetBuildRepository(buildRepo)
+	now := time.Now().UTC()
+
+	queuedA := now.Add(-2 * time.Minute)
+	queuedB := now.Add(-1 * time.Minute)
+	for _, build := range []domain.Build{
+		{ID: "build-a", ProjectID: "project-1", Priority: 7, Status: domain.BuildStatusQueued, CreatedAt: now.Add(-10 * time.Minute), QueuedAt: &queuedA},
+		{ID: "build-b", ProjectID: "project-1", Priority: 3, Status: domain.BuildStatusQueued, CreatedAt: now.Add(-9 * time.Minute), QueuedAt: &queuedB},
+	} {
+		if _, err := buildRepo.Create(context.Background(), build); err != nil {
+			t.Fatalf("create build %s failed: %v", build.ID, err)
+		}
+	}
+
+	if _, err := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{
+		{ID: "job-a1", BuildID: "build-a", StepID: "step-a1", NodeID: "node-a1", Name: "a1", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now.Add(-8 * time.Minute)},
+		{ID: "job-a2", BuildID: "build-a", StepID: "step-a2", NodeID: "node-a2", Name: "a2", StepIndex: 1, AttemptNumber: 1, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now.Add(-7 * time.Minute)},
+		{ID: "job-b1", BuildID: "build-b", StepID: "step-b1", NodeID: "node-b1", Name: "b1", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now.Add(-6 * time.Minute)},
+	}); err != nil {
+		t.Fatalf("create jobs failed: %v", err)
+	}
+
+	ctx := context.WithValue(context.Background(), buildLookupContextKey("claim-next"), "claim-context")
+	job, ok, err := repo.ClaimNextRunnableJob(ctx, repository.StepClaim{WorkerID: "worker-1", ClaimToken: "claim-1", ClaimedAt: now, LeaseExpiresAt: now.Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("claim failed: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected a job to be claimed")
+	}
+	if job.BuildID != "build-a" {
+		t.Fatalf("expected higher-priority build to win, got %q", job.BuildID)
+	}
+	if buildRepo.getByIDCalls != 2 {
+		t.Fatalf("expected one build lookup per unique build, got %d", buildRepo.getByIDCalls)
+	}
+	if len(buildRepo.ctxValues) != 2 {
+		t.Fatalf("expected two context observations, got %d", len(buildRepo.ctxValues))
+	}
+	for _, value := range buildRepo.ctxValues {
+		if value != "claim-context" {
+			t.Fatalf("expected caller context value to be forwarded, got %q", value)
+		}
 	}
 }
 

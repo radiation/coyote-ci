@@ -31,6 +31,10 @@ func (s *BuildService) ListBuildsPaged(ctx context.Context, params repository.Li
 	return s.buildRepo.ListPaged(ctx, params)
 }
 
+func (s *BuildService) ListQueue(ctx context.Context, params repository.QueueListParams) ([]domain.QueueEntry, error) {
+	return s.buildRepo.ListQueue(ctx, params)
+}
+
 func (s *BuildService) ListBuildsByJobID(ctx context.Context, jobID string) ([]domain.Build, error) {
 	return s.buildRepo.ListByJobID(ctx, jobID)
 }

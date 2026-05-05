@@ -16,6 +16,12 @@ type ExecutionJobRepository struct {
 	jobsByID    map[string]domain.ExecutionJob
 	jobsByStep  map[string][]string
 	jobsByBuild map[string][]string
+	builds      repository.BuildRepository
+}
+
+type buildClaimOrder struct {
+	priority int
+	queuedAt time.Time
 }
 
 func NewExecutionJobRepository() *ExecutionJobRepository {
@@ -24,6 +30,12 @@ func NewExecutionJobRepository() *ExecutionJobRepository {
 		jobsByStep:  map[string][]string{},
 		jobsByBuild: map[string][]string{},
 	}
+}
+
+func (r *ExecutionJobRepository) SetBuildRepository(builds repository.BuildRepository) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.builds = builds
 }
 
 func (r *ExecutionJobRepository) CreateJobsForBuild(_ context.Context, jobs []domain.ExecutionJob) ([]domain.ExecutionJob, error) {
@@ -125,36 +137,26 @@ func (r *ExecutionJobRepository) GetJobByStepID(_ context.Context, stepID string
 	return cloneExecutionJob(job), nil
 }
 
-func (r *ExecutionJobRepository) ClaimNextRunnableJob(_ context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
+func (r *ExecutionJobRepository) ClaimNextRunnableJob(ctx context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	now := claim.ClaimedAt
-	candidates := make([]domain.ExecutionJob, 0)
-	runnableByBuild := make(map[string]map[string]domain.ExecutionJob)
-	for _, job := range r.jobsByID {
-		latestByNode, ok := runnableByBuild[job.BuildID]
-		if !ok {
-			latestByNode = latestJobsByNodeID(r.jobsByBuild[job.BuildID], r.jobsByID)
-			runnableByBuild[job.BuildID] = latestByNode
-		}
-		if !isJobRunnable(job, latestByNode) {
-			continue
-		}
-		if job.Status == domain.ExecutionJobStatusQueued {
-			candidates = append(candidates, job)
-			continue
-		}
-		if job.Status == domain.ExecutionJobStatusRunning && job.ClaimExpiresAt != nil && !job.ClaimExpiresAt.After(now) {
-			candidates = append(candidates, job)
-		}
-	}
+	builds := r.builds
+	candidates, buildIDs := r.claimCandidatesLocked(claim.ClaimedAt)
+	r.mu.Unlock()
 
 	if len(candidates) == 0 {
 		return domain.ExecutionJob{}, false, nil
 	}
 
+	buildOrders := loadBuildClaimOrders(ctx, builds, buildIDs)
 	sort.Slice(candidates, func(i, j int) bool {
+		left := buildOrders[candidates[i].BuildID]
+		right := buildOrders[candidates[j].BuildID]
+		if left.priority != right.priority {
+			return left.priority > right.priority
+		}
+		if !left.queuedAt.Equal(right.queuedAt) {
+			return left.queuedAt.Before(right.queuedAt)
+		}
 		if candidates[i].CreatedAt.Equal(candidates[j].CreatedAt) {
 			if candidates[i].StepIndex == candidates[j].StepIndex {
 				if candidates[i].AttemptNumber == candidates[j].AttemptNumber {
@@ -167,17 +169,89 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(_ context.Context, claim r
 		return candidates[i].CreatedAt.Before(candidates[j].CreatedAt)
 	})
 
-	job := candidates[0]
-	job.Status = domain.ExecutionJobStatusRunning
-	job.ClaimedBy = &claim.WorkerID
-	job.ClaimToken = &claim.ClaimToken
-	job.ClaimExpiresAt = &claim.LeaseExpiresAt
-	if job.StartedAt == nil {
-		started := claim.ClaimedAt
-		job.StartedAt = &started
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, candidate := range candidates {
+		job, ok := r.jobsByID[candidate.ID]
+		if !ok {
+			continue
+		}
+		latestByNode := latestJobsByNodeID(r.jobsByBuild[job.BuildID], r.jobsByID)
+		if !isClaimCandidate(job, latestByNode, claim.ClaimedAt) {
+			continue
+		}
+		job.Status = domain.ExecutionJobStatusRunning
+		job.ClaimedBy = &claim.WorkerID
+		job.ClaimToken = &claim.ClaimToken
+		job.ClaimExpiresAt = &claim.LeaseExpiresAt
+		if job.StartedAt == nil {
+			started := claim.ClaimedAt
+			job.StartedAt = &started
+		}
+		r.jobsByID[job.ID] = job
+		return cloneExecutionJob(job), true, nil
 	}
-	r.jobsByID[job.ID] = job
-	return cloneExecutionJob(job), true, nil
+
+	return domain.ExecutionJob{}, false, nil
+}
+
+func (r *ExecutionJobRepository) claimCandidatesLocked(now time.Time) ([]domain.ExecutionJob, map[string]struct{}) {
+	candidates := make([]domain.ExecutionJob, 0)
+	buildIDs := make(map[string]struct{})
+	runnableByBuild := make(map[string]map[string]domain.ExecutionJob)
+	for _, job := range r.jobsByID {
+		latestByNode, ok := runnableByBuild[job.BuildID]
+		if !ok {
+			latestByNode = latestJobsByNodeID(r.jobsByBuild[job.BuildID], r.jobsByID)
+			runnableByBuild[job.BuildID] = latestByNode
+		}
+		if !isClaimCandidate(job, latestByNode, now) {
+			continue
+		}
+		candidates = append(candidates, job)
+		buildIDs[job.BuildID] = struct{}{}
+	}
+	return candidates, buildIDs
+}
+
+func loadBuildClaimOrders(ctx context.Context, builds repository.BuildRepository, buildIDs map[string]struct{}) map[string]buildClaimOrder {
+	orders := make(map[string]buildClaimOrder, len(buildIDs))
+	for buildID := range buildIDs {
+		orders[buildID] = defaultBuildClaimOrder()
+	}
+	if builds == nil {
+		return orders
+	}
+	for buildID := range buildIDs {
+		build, err := builds.GetByID(ctx, buildID)
+		if err != nil {
+			continue
+		}
+		queuedAt := build.CreatedAt
+		if build.QueuedAt != nil {
+			queuedAt = *build.QueuedAt
+		}
+		orders[buildID] = buildClaimOrder{
+			priority: domain.NormalizePriority(build.Priority),
+			queuedAt: queuedAt,
+		}
+	}
+	return orders
+}
+
+func defaultBuildClaimOrder() buildClaimOrder {
+	return buildClaimOrder{priority: domain.DefaultPriority}
+}
+
+func isClaimCandidate(job domain.ExecutionJob, latestByNode map[string]domain.ExecutionJob, now time.Time) bool {
+	if !isJobRunnable(job, latestByNode) {
+		return false
+	}
+	if job.Status == domain.ExecutionJobStatusQueued {
+		return true
+	}
+	return job.Status == domain.ExecutionJobStatusRunning && job.ClaimExpiresAt != nil && !job.ClaimExpiresAt.After(now)
 }
 
 func (r *ExecutionJobRepository) ClaimJobByStepID(_ context.Context, stepID string, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {

@@ -17,6 +17,9 @@ import { StatusBadge } from "../components/StatusBadge";
 import type { Job } from "../types/job";
 import { formatTime } from "../utils/time";
 
+const MIN_PRIORITY = 1;
+const MAX_PRIORITY = 10;
+
 export function JobDetailPage() {
   const { id } = useParams<{ id: string }>();
 
@@ -85,6 +88,10 @@ export function JobDetailPage() {
               job.project_id
             )}
           </span>
+        </div>
+        <div>
+          <strong>Priority</strong>
+          <span>{job.priority}</span>
         </div>
         <div>
           <strong>Push Trigger</strong>
@@ -179,6 +186,7 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [name, setName] = useState(job.name);
+  const [priority, setPriority] = useState(String(job.priority));
   const [repositoryURL, setRepositoryURL] = useState(job.repository_url);
   const [defaultRef, setDefaultRef] = useState(job.default_ref);
   const [pushEnabled, setPushEnabled] = useState(job.push_enabled);
@@ -226,6 +234,7 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
 
       const base = {
         name: name.trim(),
+        priority: Number.parseInt(priority, 10),
         repository_url: repositoryURL.trim(),
         default_ref: defaultRef.trim(),
         push_enabled: pushEnabled,
@@ -287,6 +296,16 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
       return;
     }
 
+    const parsedPriority = Number.parseInt(priority, 10);
+    if (
+      Number.isNaN(parsedPriority) ||
+      parsedPriority < MIN_PRIORITY ||
+      parsedPriority > MAX_PRIORITY
+    ) {
+      setErrorMessage("Priority must be a number from 1 to 10.");
+      return;
+    }
+
     if (pipelineMode === "inline" && !pipelineYAML.trim()) {
       setErrorMessage("Pipeline YAML is required.");
       return;
@@ -322,6 +341,17 @@ function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
           id="job-name"
           value={name}
           onChange={(event) => setName(event.target.value)}
+          disabled={isSubmitting}
+        />
+
+        <label htmlFor="job-priority">Priority</label>
+        <input
+          id="job-priority"
+          type="number"
+          min={MIN_PRIORITY}
+          max={MAX_PRIORITY}
+          value={priority}
+          onChange={(event) => setPriority(event.target.value)}
           disabled={isSubmitting}
         />
 

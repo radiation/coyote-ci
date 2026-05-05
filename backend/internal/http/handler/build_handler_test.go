@@ -49,13 +49,15 @@ func (r *trackingProjectRepo) GetByIDs(ctx context.Context, ids []string) ([]dom
 }
 
 type fakeRepo struct {
-	build      domain.Build
-	builds     map[string]domain.Build
-	steps      map[string][]domain.BuildStep
-	listParams []repository.ListParams
-	createErr  error
-	getErr     error
-	updateErr  error
+	build        domain.Build
+	builds       map[string]domain.Build
+	steps        map[string][]domain.BuildStep
+	listParams   []repository.ListParams
+	queueEntries []domain.QueueEntry
+	queueParams  []repository.QueueListParams
+	createErr    error
+	getErr       error
+	updateErr    error
 }
 
 type fakeArtifactRepo struct {
@@ -147,6 +149,35 @@ func (r *fakeRepo) List(_ context.Context) ([]domain.Build, error) {
 func (r *fakeRepo) ListPaged(ctx context.Context, params repository.ListParams) ([]domain.Build, error) {
 	r.listParams = append(r.listParams, params)
 	return r.List(ctx)
+}
+
+func (r *fakeRepo) ListQueue(ctx context.Context, params repository.QueueListParams) ([]domain.QueueEntry, error) {
+	r.queueParams = append(r.queueParams, params)
+	if r.queueEntries != nil {
+		entries := make([]domain.QueueEntry, 0, len(r.queueEntries))
+		for _, entry := range r.queueEntries {
+			if params.ProjectID != "" && entry.Build.ProjectID != params.ProjectID {
+				continue
+			}
+			if params.Status != "" && string(entry.Build.Status) != params.Status {
+				continue
+			}
+			entries = append(entries, entry)
+		}
+		return entries, nil
+	}
+	builds, err := r.ListPaged(ctx, repository.ListParams{ProjectID: params.ProjectID})
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]domain.QueueEntry, 0, len(builds))
+	for _, build := range builds {
+		if params.Status != "" && string(build.Status) != params.Status {
+			continue
+		}
+		entries = append(entries, domain.QueueEntry{Build: build})
+	}
+	return entries, nil
 }
 
 func (r *fakeRepo) ListByJobID(_ context.Context, jobID string) ([]domain.Build, error) {
@@ -849,6 +880,192 @@ func TestBuildHandler_ListBuilds_ProjectFilterAndContext(t *testing.T) {
 	}
 	if buildMap["project_slug"] != "platform" {
 		t.Fatalf("expected project_slug platform, got %v", buildMap["project_slug"])
+	}
+}
+
+func TestBuildHandler_ListQueue(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	queuedAt := now.Add(10 * time.Second)
+	startedAt := now.Add(20 * time.Second)
+	leaseExpiresAt := now.Add(30 * time.Second)
+	jobID := "job-1"
+	workerID := "worker-1"
+	projectName := "Platform"
+	projectSlug := "platform"
+	jobName := "Backend CI"
+	repoURL := "https://github.com/acme/platform.git"
+	triggerRef := "refs/heads/main"
+	sourceCommit := "abc1234567890"
+	triggerCommit := "def9876543210"
+
+	repo := &fakeRepo{queueEntries: []domain.QueueEntry{
+		{
+			Build: domain.Build{
+				ID:          "build-queued",
+				BuildNumber: 101,
+				ProjectID:   "project-1",
+				JobID:       &jobID,
+				Priority:    9,
+				Status:      domain.BuildStatusQueued,
+				CreatedAt:   now,
+				QueuedAt:    &queuedAt,
+				Trigger: domain.BuildTrigger{
+					RepositoryURL: &repoURL,
+					Ref:           &triggerRef,
+					CommitSHA:     &triggerCommit,
+				},
+				Source: domain.NewSourceSpec(repoURL, "main", sourceCommit),
+			},
+			ProjectName: &projectName,
+			ProjectSlug: &projectSlug,
+			JobName:     &jobName,
+		},
+		{
+			Build: domain.Build{
+				ID:          "build-running",
+				BuildNumber: 102,
+				ProjectID:   "project-2",
+				Priority:    4,
+				Status:      domain.BuildStatusRunning,
+				CreatedAt:   now.Add(time.Minute),
+				QueuedAt:    &queuedAt,
+				StartedAt:   &startedAt,
+			},
+			WorkerID:       &workerID,
+			LeaseExpiresAt: &leaseExpiresAt,
+		},
+	}}
+
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, nil))
+	req := httptest.NewRequest(http.MethodGet, "/api/queue", nil)
+	rr := httptest.NewRecorder()
+
+	h.ListQueue(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if len(repo.queueParams) != 1 {
+		t.Fatalf("expected one queue call, got %d", len(repo.queueParams))
+	}
+	data := decodeDataMap(t, rr)
+	entries, ok := data["entries"].([]any)
+	if !ok {
+		t.Fatalf("expected entries array, got %T", data["entries"])
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 queue entries, got %d", len(entries))
+	}
+	first, ok := entries[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first entry object, got %T", entries[0])
+	}
+	if first["project_name"] != projectName {
+		t.Fatalf("expected project_name %q, got %v", projectName, first["project_name"])
+	}
+	if first["project_slug"] != projectSlug {
+		t.Fatalf("expected project_slug %q, got %v", projectSlug, first["project_slug"])
+	}
+	if first["job_name"] != jobName {
+		t.Fatalf("expected job_name %q, got %v", jobName, first["job_name"])
+	}
+	if first["priority"] != float64(9) {
+		t.Fatalf("expected priority 9, got %v", first["priority"])
+	}
+	if first["repository_url"] != repoURL {
+		t.Fatalf("expected repository_url %q, got %v", repoURL, first["repository_url"])
+	}
+	if first["trigger_ref"] != triggerRef {
+		t.Fatalf("expected trigger_ref %q, got %v", triggerRef, first["trigger_ref"])
+	}
+	if first["source_commit_sha"] != sourceCommit {
+		t.Fatalf("expected source_commit_sha %q, got %v", sourceCommit, first["source_commit_sha"])
+	}
+	if first["trigger_commit_sha"] != triggerCommit {
+		t.Fatalf("expected trigger_commit_sha %q, got %v", triggerCommit, first["trigger_commit_sha"])
+	}
+	second, ok := entries[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected second entry object, got %T", entries[1])
+	}
+	if second["worker_id"] != workerID {
+		t.Fatalf("expected worker_id %q, got %v", workerID, second["worker_id"])
+	}
+	if _, ok := second["lease_expires_at"].(string); !ok {
+		t.Fatalf("expected lease_expires_at string, got %T", second["lease_expires_at"])
+	}
+}
+
+func TestBuildHandler_ListQueue_StatusAndProjectFilters(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	repo := &fakeRepo{queueEntries: []domain.QueueEntry{
+		{Build: domain.Build{ID: "build-queued", ProjectID: "project-1", Priority: 8, Status: domain.BuildStatusQueued, CreatedAt: now}},
+		{Build: domain.Build{ID: "build-running", ProjectID: "project-2", Priority: 3, Status: domain.BuildStatusRunning, CreatedAt: now.Add(time.Second)}},
+	}}
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, nil))
+
+	tests := []struct {
+		name       string
+		url        string
+		wantIDs    []string
+		wantStatus string
+		wantProjID string
+	}{
+		{name: "queued only", url: "/api/queue?status=queued", wantIDs: []string{"build-queued"}, wantStatus: "queued"},
+		{name: "running only", url: "/api/queue?status=running", wantIDs: []string{"build-running"}, wantStatus: "running"},
+		{name: "project filter", url: "/api/queue?project_id=project-2", wantIDs: []string{"build-running"}, wantProjID: "project-2"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
+			rr := httptest.NewRecorder()
+
+			h.ListQueue(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+			}
+			lastCall := repo.queueParams[len(repo.queueParams)-1]
+			if lastCall.Status != tc.wantStatus {
+				t.Fatalf("expected status filter %q, got %q", tc.wantStatus, lastCall.Status)
+			}
+			if lastCall.ProjectID != tc.wantProjID {
+				t.Fatalf("expected project filter %q, got %q", tc.wantProjID, lastCall.ProjectID)
+			}
+			data := decodeDataMap(t, rr)
+			entries, ok := data["entries"].([]any)
+			if !ok {
+				t.Fatalf("expected entries array, got %T", data["entries"])
+			}
+			if len(entries) != len(tc.wantIDs) {
+				t.Fatalf("expected %d entries, got %d", len(tc.wantIDs), len(entries))
+			}
+			for i, wantID := range tc.wantIDs {
+				entry, ok := entries[i].(map[string]any)
+				if !ok {
+					t.Fatalf("expected entry object, got %T", entries[i])
+				}
+				if entry["build_id"] != wantID {
+					t.Fatalf("expected build_id %q, got %v", wantID, entry["build_id"])
+				}
+			}
+		})
+	}
+}
+
+func TestBuildHandler_ListQueue_InvalidStatus(t *testing.T) {
+	h := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{}, nil, nil))
+	req := httptest.NewRequest(http.MethodGet, "/api/queue?status=failed", nil)
+	rr := httptest.NewRecorder()
+
+	h.ListQueue(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rr.Code)
+	}
+	if got := decodeErrorMessage(t, rr); got != "status must be queued or running" {
+		t.Fatalf("expected invalid status message, got %q", got)
 	}
 }
 

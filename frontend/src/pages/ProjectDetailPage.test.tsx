@@ -48,6 +48,7 @@ describe("ProjectDetailPage", () => {
         id: "job-1",
         project_id: "project-1",
         name: "backend-ci",
+        priority: 5,
         repository_url: "https://github.com/example/backend.git",
         default_ref: "main",
         push_enabled: true,

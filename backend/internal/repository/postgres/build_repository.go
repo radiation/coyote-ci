@@ -22,8 +22,8 @@ func NewBuildRepository(db *sql.DB) *BuildRepository {
 
 func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domain.Build, error) {
 	const query = `
-		INSERT INTO builds (id, project_id, job_id, status, created_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)
+		INSERT INTO builds (id, project_id, job_id, priority, status, created_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)
 		RETURNING ` + buildColumns + `
 	`
 
@@ -33,6 +33,7 @@ func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domai
 	if build.AttemptNumber <= 0 {
 		build.AttemptNumber = 1
 	}
+	build.Priority = domain.NormalizePriority(build.Priority)
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 
 	build, err := scanBuild(r.db.QueryRowContext(
@@ -41,6 +42,7 @@ func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domai
 		build.ID,
 		build.ProjectID,
 		build.JobID,
+		build.Priority,
 		string(build.Status),
 		build.CreatedAt,
 		build.CurrentStepIndex,
@@ -93,16 +95,17 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 	}()
 
 	const createQuery = `
-		INSERT INTO builds (id, project_id, job_id, status, created_at, queued_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id)
-		VALUES ($1, $2, $3, 'queued', $4, COALESCE($5, NOW()), 0, $6, $7, $8, NULL, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)
+		INSERT INTO builds (id, project_id, job_id, priority, status, created_at, queued_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id)
+		VALUES ($1, $2, $3, $4, 'queued', $5, COALESCE($6, NOW()), 0, $7, $8, $9, NULL, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)
 		RETURNING ` + buildColumns + `
 	`
 	if build.AttemptNumber <= 0 {
 		build.AttemptNumber = 1
 	}
+	build.Priority = domain.NormalizePriority(build.Priority)
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 
-	build, err = scanBuild(tx.QueryRowContext(ctx, createQuery, build.ID, build.ProjectID, build.JobID, build.CreatedAt, build.QueuedAt, build.AttemptNumber, build.RerunOfBuildID, build.RerunFromStepIdx, build.PipelineConfigYAML, build.PipelineName, build.PipelineSource, build.PipelinePath, build.RepoURL, build.Ref, build.CommitSHA, string(build.Trigger.Kind), build.Trigger.SCMProvider, build.Trigger.EventType, build.Trigger.RepositoryOwner, build.Trigger.RepositoryName, build.Trigger.RepositoryURL, build.Trigger.RawRef, build.Trigger.Ref, build.Trigger.RefType, build.Trigger.RefName, build.Trigger.Deleted, build.Trigger.CommitSHA, build.Trigger.DeliveryID, build.Trigger.Actor, build.RequestedImageRef, build.ResolvedImageRef, string(defaultBuildImageSourceKind(build.ImageSourceKind)), build.ManagedImageID, build.ManagedImageVersionID))
+	build, err = scanBuild(tx.QueryRowContext(ctx, createQuery, build.ID, build.ProjectID, build.JobID, build.Priority, build.CreatedAt, build.QueuedAt, build.AttemptNumber, build.RerunOfBuildID, build.RerunFromStepIdx, build.PipelineConfigYAML, build.PipelineName, build.PipelineSource, build.PipelinePath, build.RepoURL, build.Ref, build.CommitSHA, string(build.Trigger.Kind), build.Trigger.SCMProvider, build.Trigger.EventType, build.Trigger.RepositoryOwner, build.Trigger.RepositoryName, build.Trigger.RepositoryURL, build.Trigger.RawRef, build.Trigger.Ref, build.Trigger.RefType, build.Trigger.RefName, build.Trigger.Deleted, build.Trigger.CommitSHA, build.Trigger.DeliveryID, build.Trigger.Actor, build.RequestedImageRef, build.ResolvedImageRef, string(defaultBuildImageSourceKind(build.ImageSourceKind)), build.ManagedImageID, build.ManagedImageVersionID))
 	if err != nil {
 		return domain.Build{}, err
 	}
@@ -118,6 +121,67 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 	}
 
 	return build, nil
+}
+
+func (r *BuildRepository) ListQueue(ctx context.Context, params repository.QueueListParams) (entries []domain.QueueEntry, err error) {
+	query := `
+		SELECT ` + queueEntryColumns + `
+		FROM builds AS b
+		LEFT JOIN projects AS p ON p.id::text = b.project_id
+		LEFT JOIN jobs AS j ON j.id = b.job_id
+		LEFT JOIN LATERAL (
+			SELECT bj.claimed_by, bj.claim_expires_at
+			FROM build_jobs AS bj
+			WHERE bj.build_id = b.id
+			  AND bj.status = 'running'
+			ORDER BY bj.started_at ASC NULLS LAST, bj.created_at ASC, bj.id ASC
+			LIMIT 1
+		) AS running_job ON TRUE
+		WHERE b.status IN ('queued', 'running')
+	`
+	args := make([]any, 0, 2)
+	if projectID := strings.TrimSpace(params.ProjectID); projectID != "" {
+		args = append(args, projectID)
+		query += fmt.Sprintf("\n\t\tAND b.project_id = $%d", len(args))
+	}
+	if status := strings.TrimSpace(params.Status); status != "" {
+		args = append(args, status)
+		query += fmt.Sprintf("\n\t\tAND b.status = $%d", len(args))
+	}
+	query += `
+		ORDER BY
+			CASE b.status WHEN 'queued' THEN 0 WHEN 'running' THEN 1 ELSE 2 END ASC,
+			CASE WHEN b.status = 'queued' THEN b.priority END DESC,
+			CASE WHEN b.status = 'queued' THEN COALESCE(b.queued_at, b.created_at) END ASC,
+			CASE WHEN b.status = 'running' THEN COALESCE(b.started_at, b.created_at) END ASC,
+			b.created_at ASC,
+			b.id ASC
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	entries = make([]domain.QueueEntry, 0)
+	for rows.Next() {
+		entry, scanErr := scanQueueEntry(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		entries = append(entries, entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return entries, nil
 }
 
 func (r *BuildRepository) List(ctx context.Context) (builds []domain.Build, err error) {

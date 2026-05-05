@@ -51,6 +51,7 @@ var ErrExecutionJobRepoNotConfigured = errors.New("execution job repository not 
 var ErrExecutionJobNotFound = errors.New("execution job not found")
 var ErrExecutionJobNotRetryable = errors.New("execution job is not retryable")
 var ErrInvalidRerunStepIndex = errors.New("invalid rerun step index")
+var ErrBuildPriorityOutOfRange = errors.New("priority must be between 1 and 10")
 
 const (
 	BuildTemplateDefault = "default"
@@ -140,6 +141,16 @@ func NewBuildService(buildRepo repository.BuildRepository, stepRunner runner.Run
 	}
 }
 
+func validateRequestedBuildPriority(priority int) error {
+	if priority == 0 {
+		return nil
+	}
+	if !domain.ValidPriority(priority) {
+		return ErrBuildPriorityOutOfRange
+	}
+	return nil
+}
+
 // SetRepoFetcher attaches a RepoFetcher for repo-backed build creation.
 func (s *BuildService) SetRepoFetcher(fetcher source.RepoFetcher) {
 	s.repoFetcher = fetcher
@@ -183,6 +194,12 @@ func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository
 
 func (s *BuildService) SetExecutionJobRepository(repo repository.ExecutionJobRepository) {
 	s.executionJobRepo = repo
+	type buildRepoAware interface {
+		SetBuildRepository(repository.BuildRepository)
+	}
+	if aware, ok := repo.(buildRepoAware); ok {
+		aware.SetBuildRepository(s.buildRepo)
+	}
 }
 
 func (s *BuildService) SetExecutionJobOutputRepository(repo repository.ExecutionJobOutputRepository) {
@@ -200,6 +217,7 @@ func (s *BuildService) SetStepCacheStore(store cachepkg.Store, entryRepo reposit
 type CreateBuildInput struct {
 	ProjectID string
 	JobID     *string
+	Priority  int
 	Steps     []CreateBuildStepInput
 	Source    *CreateBuildSourceInput
 	Trigger   *CreateBuildTriggerInput
@@ -240,6 +258,9 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 	if input.ProjectID == "" {
 		return domain.Build{}, ErrProjectIDRequired
 	}
+	if err := validateRequestedBuildPriority(input.Priority); err != nil {
+		return domain.Build{}, err
+	}
 
 	sourceSpec, err := buildSourceSpecFromInput(input.Source)
 	if err != nil {
@@ -250,6 +271,7 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 		ID:               uuid.NewString(),
 		ProjectID:        input.ProjectID,
 		JobID:            input.JobID,
+		Priority:         domain.NormalizePriority(input.Priority),
 		Status:           domain.BuildStatusPending,
 		AttemptNumber:    1,
 		CreatedAt:        time.Now().UTC(),
@@ -304,6 +326,7 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 type CreatePipelineBuildInput struct {
 	ProjectID    string
 	JobID        *string
+	Priority     int
 	PipelineYAML string
 	Source       *CreateBuildSourceInput
 	Trigger      *CreateBuildTriggerInput
@@ -314,6 +337,9 @@ type CreatePipelineBuildInput struct {
 func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input CreatePipelineBuildInput) (domain.Build, error) {
 	if input.ProjectID == "" {
 		return domain.Build{}, ErrProjectIDRequired
+	}
+	if err := validateRequestedBuildPriority(input.Priority); err != nil {
+		return domain.Build{}, err
 	}
 	yamlText := strings.TrimSpace(input.PipelineYAML)
 	if yamlText == "" {
@@ -344,6 +370,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		ID:                 buildID,
 		ProjectID:          input.ProjectID,
 		JobID:              input.JobID,
+		Priority:           domain.NormalizePriority(input.Priority),
 		Status:             domain.BuildStatusQueued,
 		AttemptNumber:      1,
 		CreatedAt:          time.Now().UTC(),
@@ -375,6 +402,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 type CreateRepoBuildInput struct {
 	ProjectID    string
 	JobID        *string
+	Priority     int
 	RepoURL      string
 	Ref          string
 	CommitSHA    string
@@ -391,6 +419,9 @@ const pipelineSourceInline = "inline"
 func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepoBuildInput) (domain.Build, error) {
 	if input.ProjectID == "" {
 		return domain.Build{}, ErrProjectIDRequired
+	}
+	if err := validateRequestedBuildPriority(input.Priority); err != nil {
+		return domain.Build{}, err
 	}
 	if strings.TrimSpace(input.RepoURL) == "" {
 		return domain.Build{}, ErrRepoURLRequired
@@ -470,6 +501,7 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		ID:                 buildID,
 		ProjectID:          input.ProjectID,
 		JobID:              input.JobID,
+		Priority:           domain.NormalizePriority(input.Priority),
 		Status:             domain.BuildStatusQueued,
 		AttemptNumber:      1,
 		CreatedAt:          time.Now().UTC(),

@@ -137,11 +137,11 @@ func TestArtifactRepository_ListForBrowse(t *testing.T) {
 	identityRows := sqlmock.NewRows([]string{"identity_key"}).AddRow(jobID + "::packages/pkg-a.tgz")
 	buildRows := sqlmock.NewRows([]string{
 		"id", "build_id", "step_id", "artifact_name", "logical_path", "artifact_type", "storage_key", "storage_provider", "size_bytes", "content_type", "checksum_sha256", "created_at",
-		"id", "build_number", "project_id", "job_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id",
+		"id", "build_number", "project_id", "job_id", "priority", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id",
 		"id", "step_index", "name",
 	}).AddRow(
 		"artifact-1", "build-1", "step-1", "coyote-ci/package-a", "packages/pkg-a.tgz", "npm_package", "build-1/pkg-a.tgz", "filesystem", int64(12), "application/gzip", "abc123", now,
-		"build-1", int64(42), "project-1", jobID, "success", now, nil, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, false, nil, nil, nil, nil, nil, "", nil, nil,
+		"build-1", int64(42), "project-1", jobID, 5, "success", now, nil, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, false, nil, nil, nil, nil, nil, "", nil, nil,
 		"step-1", 1, "Publish package",
 	)
 
@@ -176,7 +176,7 @@ func TestArtifactRepository_ListForBrowse(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT 
 			a.id, a.build_id, a.step_id, a.artifact_name, a.logical_path, a.artifact_type, a.storage_key, a.storage_provider, a.size_bytes, a.content_type, a.checksum_sha256, a.created_at,
-			b.id, b.build_number, b.project_id, b.job_id, b.status, b.created_at, b.queued_at, b.started_at, b.finished_at, b.current_step_index, b.attempt_number, b.rerun_of_build_id, b.rerun_from_step_index, b.error_message, b.pipeline_name, b.pipeline_source, b.pipeline_path, b.repo_url, b.ref, b.commit_sha, b.trigger_kind, b.scm_provider, b.event_type, b.trigger_repository_owner, b.trigger_repository_name, b.trigger_repository_url, b.trigger_raw_ref, b.trigger_ref, b.trigger_ref_type, b.trigger_ref_name, b.trigger_deleted, b.trigger_commit_sha, b.trigger_delivery_id, b.trigger_actor, b.requested_image_ref, b.resolved_image_ref, b.image_source_kind, b.managed_image_id, b.managed_image_version_id,
+			b.id, b.build_number, b.project_id, b.job_id, b.priority, b.status, b.created_at, b.queued_at, b.started_at, b.finished_at, b.current_step_index, b.attempt_number, b.rerun_of_build_id, b.rerun_from_step_index, b.error_message, b.pipeline_name, b.pipeline_source, b.pipeline_path, b.repo_url, b.ref, b.commit_sha, b.trigger_kind, b.scm_provider, b.event_type, b.trigger_repository_owner, b.trigger_repository_name, b.trigger_repository_url, b.trigger_raw_ref, b.trigger_ref, b.trigger_ref_type, b.trigger_ref_name, b.trigger_deleted, b.trigger_commit_sha, b.trigger_delivery_id, b.trigger_actor, b.requested_image_ref, b.resolved_image_ref, b.image_source_kind, b.managed_image_id, b.managed_image_version_id,
 			s.id,
 			s.step_index,
 			s.name
@@ -239,15 +239,15 @@ func TestArtifactRepository_BrowsePaginatesLogicalArtifacts(t *testing.T) {
 	identityRows := sqlmock.NewRows([]string{"identity_key"}).AddRow(jobID + "::packages/pkg-a.tgz")
 	buildRows := sqlmock.NewRows([]string{
 		"id", "build_id", "step_id", "artifact_name", "logical_path", "artifact_type", "storage_key", "storage_provider", "size_bytes", "content_type", "checksum_sha256", "created_at",
-		"id", "build_number", "project_id", "job_id", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id",
+		"id", "build_number", "project_id", "job_id", "priority", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id",
 		"id", "step_index", "name",
 	}).AddRow(
 		"artifact-2", "build-2", "step-2", "pkg-a", "packages/pkg-a.tgz", "npm_package", "build-2/pkg-a.tgz", "filesystem", int64(13), "application/gzip", "abc234", now.Add(time.Minute),
-		"build-2", int64(43), "project-1", jobID, "success", now.Add(time.Minute), nil, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, false, nil, nil, nil, nil, nil, "", nil, nil,
+		"build-2", int64(43), "project-1", jobID, 5, "success", now.Add(time.Minute), nil, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, false, nil, nil, nil, nil, nil, "", nil, nil,
 		"step-2", 1, "Publish package",
 	).AddRow(
 		"artifact-1", "build-1", "step-1", "pkg-a", "packages/pkg-a.tgz", "npm_package", "build-1/pkg-a.tgz", "filesystem", int64(12), "application/gzip", "abc123", now,
-		"build-1", int64(42), "project-1", jobID, "success", now, nil, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, false, nil, nil, nil, nil, nil, "", nil, nil,
+		"build-1", int64(42), "project-1", jobID, 5, "success", now, nil, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, false, nil, nil, nil, nil, nil, "", nil, nil,
 		"step-1", 1, "Publish package",
 	)
 

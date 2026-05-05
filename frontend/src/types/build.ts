@@ -37,6 +37,7 @@ export interface Build {
   project_name?: string | null;
   project_slug?: string | null;
   job_id?: string | null;
+  priority: number;
   status: BuildStatus;
   created_at: string;
   queued_at: string | null;
@@ -91,6 +92,31 @@ export type BuildStepStatus = "pending" | "running" | "success" | "failed";
 /** Envelope: { data: { builds: Build[] } } */
 export interface BuildListResponse {
   builds: Build[];
+}
+
+export interface QueueEntry {
+  build_id: string;
+  build_number: number;
+  project_id: string;
+  project_name?: string | null;
+  project_slug?: string | null;
+  job_id?: string | null;
+  job_name?: string | null;
+  priority: number;
+  status: Extract<BuildStatus, "queued" | "running">;
+  created_at: string;
+  queued_at?: string | null;
+  started_at?: string | null;
+  worker_id?: string | null;
+  lease_expires_at?: string | null;
+  repository_url?: string | null;
+  trigger_ref?: string | null;
+  source_commit_sha?: string | null;
+  trigger_commit_sha?: string | null;
+}
+
+export interface QueueListResponse {
+  entries: QueueEntry[];
 }
 
 /** Envelope: { data: { build_id: string; steps: BuildStep[] } } */

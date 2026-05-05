@@ -84,6 +84,7 @@ export function JobsListPage() {
             <tr>
               <th>Name</th>
               <th>Project</th>
+              <th>Priority</th>
               <th>Repository</th>
               <th>Default Ref</th>
               <th>Enabled</th>
@@ -98,6 +99,7 @@ export function JobsListPage() {
               <tr key={job.id}>
                 <td>{job.name}</td>
                 <td>{projectNames.get(job.project_id) ?? job.project_id}</td>
+                <td>{job.priority}</td>
                 <td>{job.repository_url}</td>
                 <td>{job.default_ref}</td>
                 <td>{job.enabled ? "Enabled" : "Disabled"}</td>

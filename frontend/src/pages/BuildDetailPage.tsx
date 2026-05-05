@@ -198,6 +198,10 @@ export function BuildDetailPage() {
           </span>
         </div>
         <div>
+          <strong>Priority</strong>
+          <span>{build.priority}</span>
+        </div>
+        <div>
           <strong>Current Step</strong>
           <span>{build.current_step_index}</span>
         </div>

@@ -49,6 +49,7 @@ describe("BuildDetailPage artifacts", () => {
       id: "build-1",
       project_id: "project-1",
       job_id: "job-1",
+      priority: 9,
       status: "success",
       created_at: "2026-03-30T00:00:00Z",
       queued_at: "2026-03-30T00:00:01Z",
@@ -126,6 +127,8 @@ describe("BuildDetailPage artifacts", () => {
     renderPage();
 
     await waitFor(() => {
+      expect(screen.getByText("Priority")).toBeTruthy();
+      expect(screen.getByText("9")).toBeTruthy();
       expect(screen.getByText("Pipeline Source")).toBeTruthy();
       expect(screen.getByText("repo")).toBeTruthy();
       expect(screen.getByText("Pipeline Path")).toBeTruthy();

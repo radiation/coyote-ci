@@ -1,6 +1,7 @@
 export {
   listArtifacts,
   listBuilds,
+  listQueue,
   listProjects,
   getProject,
   createProject,

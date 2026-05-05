@@ -5,6 +5,7 @@ import (
 	"errors"
 	"hash/fnv"
 	"log"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -291,6 +292,36 @@ func (w *ExecutionWorkerService) prepareQueuedBuilds(ctx context.Context) ([]dom
 	if err != nil {
 		return nil, err
 	}
+
+	sort.SliceStable(builds, func(i, j int) bool {
+		left := builds[i]
+		right := builds[j]
+		leftQueued := left.Status == domain.BuildStatusPending || left.Status == domain.BuildStatusQueued
+		rightQueued := right.Status == domain.BuildStatusPending || right.Status == domain.BuildStatusQueued
+		if leftQueued != rightQueued {
+			return leftQueued
+		}
+		if leftQueued {
+			if left.Priority != right.Priority {
+				return left.Priority > right.Priority
+			}
+			leftQueuedAt := left.CreatedAt
+			if left.QueuedAt != nil {
+				leftQueuedAt = *left.QueuedAt
+			}
+			rightQueuedAt := right.CreatedAt
+			if right.QueuedAt != nil {
+				rightQueuedAt = *right.QueuedAt
+			}
+			if !leftQueuedAt.Equal(rightQueuedAt) {
+				return leftQueuedAt.Before(rightQueuedAt)
+			}
+		}
+		if !left.CreatedAt.Equal(right.CreatedAt) {
+			return left.CreatedAt.Before(right.CreatedAt)
+		}
+		return left.ID < right.ID
+	})
 
 	for i, build := range builds {
 		if domain.IsTerminalBuildStatus(build.Status) {

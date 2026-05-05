@@ -111,6 +111,7 @@ export function BuildsListPage() {
             <tr>
               <th>ID</th>
               <th>Project</th>
+              <th>Priority</th>
               <th>Status</th>
               <th>Step</th>
               <th>Created</th>
@@ -134,6 +135,7 @@ export function BuildsListPage() {
                       b.project_id}
                   </Link>
                 </td>
+                <td>{b.priority}</td>
                 <td>
                   <StatusBadge status={b.status} />
                 </td>

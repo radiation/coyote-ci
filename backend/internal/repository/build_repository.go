@@ -62,6 +62,11 @@ type ListParams struct {
 	ProjectID string
 }
 
+type QueueListParams struct {
+	ProjectID string
+	Status    string
+}
+
 const (
 	DefaultPageLimit = 50
 	MaxPageLimit     = 200
@@ -92,6 +97,7 @@ type BuildRepository interface {
 	CreateQueuedBuild(ctx context.Context, build domain.Build, steps []domain.BuildStep) (domain.Build, error)
 	List(ctx context.Context) ([]domain.Build, error)
 	ListPaged(ctx context.Context, params ListParams) ([]domain.Build, error)
+	ListQueue(ctx context.Context, params QueueListParams) ([]domain.QueueEntry, error)
 	ListByJobID(ctx context.Context, jobID string) ([]domain.Build, error)
 	ListLatestByJobIDs(ctx context.Context, jobIDs []string) (map[string]domain.Build, error)
 	GetByID(ctx context.Context, id string) (domain.Build, error)

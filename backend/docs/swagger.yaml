@@ -203,6 +203,8 @@ definitions:
         type: string
       pipeline_source:
         type: string
+      priority:
+        type: integer
       project_id:
         type: string
       project_name:
@@ -376,6 +378,8 @@ definitions:
         type: string
       pipeline_yaml:
         type: string
+      priority:
+        type: integer
       project_id:
         type: string
       project_slug:
@@ -626,6 +630,8 @@ definitions:
         type: string
       pipeline_yaml:
         type: string
+      priority:
+        type: integer
       project_id:
         type: string
       push_branch:
@@ -735,6 +741,57 @@ definitions:
       name:
         type: string
     type: object
+  api.QueueEntryResponse:
+    properties:
+      build_id:
+        type: string
+      build_number:
+        type: integer
+      created_at:
+        type: string
+      job_id:
+        type: string
+      job_name:
+        type: string
+      lease_expires_at:
+        type: string
+      priority:
+        type: integer
+      project_id:
+        type: string
+      project_name:
+        type: string
+      project_slug:
+        type: string
+      queued_at:
+        type: string
+      repository_url:
+        type: string
+      source_commit_sha:
+        type: string
+      started_at:
+        type: string
+      status:
+        type: string
+      trigger_commit_sha:
+        type: string
+      trigger_ref:
+        type: string
+      worker_id:
+        type: string
+    type: object
+  api.QueueEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.QueueListResponse'
+    type: object
+  api.QueueListResponse:
+    properties:
+      entries:
+        items:
+          $ref: '#/definitions/api.QueueEntryResponse'
+        type: array
+    type: object
   api.RerunBuildFromStepRequest:
     properties:
       step_index:
@@ -835,6 +892,8 @@ definitions:
         type: string
       pipeline_yaml:
         type: string
+      priority:
+        type: integer
       push_branch:
         type: string
       push_enabled:
@@ -2111,6 +2170,44 @@ paths:
       summary: List project jobs
       tags:
       - projects
+  /queue:
+    get:
+      description: Returns queued and running builds with project and job context.
+      parameters:
+      - description: Project ID filter
+        in: query
+        name: project_id
+        type: string
+      - description: Project slug filter
+        in: query
+        name: project_slug
+        type: string
+      - description: Status filter (queued or running)
+        in: query
+        name: status
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.QueueEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List queue
+      tags:
+      - queue
   /readyz:
     get:
       description: Returns a readiness response after database connectivity and schema
