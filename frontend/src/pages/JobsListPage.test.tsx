@@ -65,6 +65,7 @@ describe("JobsListPage", () => {
         id: "job-1",
         project_id: "project-1",
         name: "backend-ci",
+        priority: 5,
         repository_url: "https://github.com/example/backend.git",
         default_ref: "main",
         push_enabled: true,
@@ -88,6 +89,7 @@ describe("JobsListPage", () => {
     mockedRunJob.mockResolvedValue({
       id: "build-123",
       project_id: "project-1",
+      priority: 5,
       status: "queued",
       created_at: "2026-03-30T00:00:00Z",
       queued_at: "2026-03-30T00:00:01Z",
