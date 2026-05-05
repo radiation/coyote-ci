@@ -10,6 +10,7 @@ import (
 
 	docs "github.com/radiation/coyote-ci/backend/docs"
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
+	"github.com/radiation/coyote-ci/backend/internal/auth"
 	apphttp "github.com/radiation/coyote-ci/backend/internal/http"
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
@@ -55,6 +56,8 @@ func main() {
 	executionJobOutputRepo := repositorypostgres.NewExecutionJobOutputRepository(db)
 	jobRepo := repositorypostgres.NewJobRepository(db)
 	projectRepo := repositorypostgres.NewProjectRepository(db)
+	userRepo := repositorypostgres.NewUserRepository(db)
+	projectMembershipRepo := repositorypostgres.NewProjectMembershipRepository(db)
 	jobManagedImageConfigRepo := repositorypostgres.NewJobManagedImageConfigRepository(db)
 	sourceCredentialRepo := repositorypostgres.NewSourceCredentialRepository(db)
 	managedImageCatalogRepo := repositorypostgres.NewManagedImageCatalogRepository(db)
@@ -97,6 +100,8 @@ func main() {
 		DefaultImage:          cfg.ExecutionDefaultImage,
 	})
 	projectService := service.NewProjectService(projectRepo)
+	userService := service.NewUserService(userRepo)
+	projectMembershipService := service.NewProjectMembershipService(projectRepo, projectMembershipRepo)
 	jobService := service.NewJobService(jobRepo, buildService).WithProjectRepository(projectRepo).WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo)
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
 	webhookService := webhooksvc.NewDeliveryIngressService(webhookDeliveryRepo, jobService)
@@ -111,6 +116,9 @@ func main() {
 	artifactHandler.SetJobService(jobService)
 	jobHandler := handler.NewJobHandler(jobService)
 	projectHandler := handler.NewProjectHandler(projectService, jobService)
+	authMode := auth.ParseMode(cfg.AuthMode)
+	userHandler := handler.NewUserHandler(userService, authMode)
+	projectMembershipHandler := handler.NewProjectMembershipHandler(projectMembershipService, authMode)
 	versionTagHandler := handler.NewVersionTagHandler(versionTagService)
 	credentialHandler := handler.NewSourceCredentialHandler(sourceCredentialService)
 	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, cfg.GitHubWebhookSecret)
@@ -138,7 +146,23 @@ func main() {
 		return nil
 	}))
 
-	router := apphttp.NewRouter(buildHandler, artifactHandler, jobHandler, projectHandler, versionTagHandler, credentialHandler, eventHandler, cfg.PushEventSecret)
+	authMiddleware := auth.Middleware(auth.MiddlewareConfig{
+		Mode:                 authMode,
+		BootstrapAdminEmails: auth.ParseBootstrapAdminEmails(cfg.BootstrapAdminEmails),
+	}, userService)
+	router := apphttp.NewRouter(
+		buildHandler,
+		artifactHandler,
+		jobHandler,
+		projectHandler,
+		versionTagHandler,
+		credentialHandler,
+		eventHandler,
+		cfg.PushEventSecret,
+		apphttp.WithAuthMiddleware(authMiddleware),
+		apphttp.WithUserHandler(userHandler),
+		apphttp.WithProjectMembershipHandler(projectMembershipHandler),
+	)
 	mux := nethttp.NewServeMux()
 	mux.Handle("/debug/vars", expvar.Handler())
 	mux.Handle("/swagger/", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))

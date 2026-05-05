@@ -41,6 +41,8 @@ func TestLoad(t *testing.T) {
 				"WORKER_CACHE_STORAGE_ROOT":       "",
 				"CACHE_MAX_SIZE_MB":               "",
 				"ARTIFACT_STORAGE_ROOT":           "",
+				"AUTH_MODE":                       "",
+				"BOOTSTRAP_ADMIN_EMAILS":          "",
 			},
 			expected: Config{
 				AppPort:                 "8080",
@@ -64,6 +66,7 @@ func TestLoad(t *testing.T) {
 				WorkerCacheMaxSizeMB:    10240,
 				ArtifactStorageRoot:     defaultArtifactRoot,
 				ArtifactStorageProvider: "filesystem",
+				AuthMode:                "disabled",
 			},
 		},
 		{
@@ -89,6 +92,8 @@ func TestLoad(t *testing.T) {
 				"WORKER_CACHE_STORAGE_ROOT":       "/var/tmp/coyote-cache",
 				"CACHE_MAX_SIZE_MB":               "2048",
 				"ARTIFACT_STORAGE_ROOT":           "/var/tmp/coyote-artifacts",
+				"AUTH_MODE":                       "header",
+				"BOOTSTRAP_ADMIN_EMAILS":          "Admin@Example.com,ops@example.com",
 			},
 			expected: Config{
 				AppPort:                 "9999",
@@ -112,6 +117,8 @@ func TestLoad(t *testing.T) {
 				WorkerCacheMaxSizeMB:    2048,
 				ArtifactStorageRoot:     "/var/tmp/coyote-artifacts",
 				ArtifactStorageProvider: "filesystem",
+				AuthMode:                "header",
+				BootstrapAdminEmails:    "Admin@Example.com,ops@example.com",
 			},
 		},
 		{
@@ -137,6 +144,8 @@ func TestLoad(t *testing.T) {
 				"WORKER_CACHE_STORAGE_ROOT":       "",
 				"CACHE_MAX_SIZE_MB":               "",
 				"ARTIFACT_STORAGE_ROOT":           "",
+				"AUTH_MODE":                       "",
+				"BOOTSTRAP_ADMIN_EMAILS":          "",
 			},
 			expected: Config{
 				AppPort:                 "8080",
@@ -160,6 +169,7 @@ func TestLoad(t *testing.T) {
 				WorkerCacheMaxSizeMB:    10240,
 				ArtifactStorageRoot:     defaultArtifactRoot,
 				ArtifactStorageProvider: "filesystem",
+				AuthMode:                "disabled",
 			},
 		},
 		{
@@ -168,6 +178,8 @@ func TestLoad(t *testing.T) {
 				"DB_CONN_MAX_LIFETIME":      "invalid",
 				"DB_CONN_MAX_IDLE_TIME":     "still-invalid",
 				"WORKER_CACHE_STORAGE_ROOT": "",
+				"AUTH_MODE":                 "",
+				"BOOTSTRAP_ADMIN_EMAILS":    "",
 			},
 			expected: Config{
 				AppPort:                 "8080",
@@ -191,6 +203,7 @@ func TestLoad(t *testing.T) {
 				WorkerCacheMaxSizeMB:    10240,
 				ArtifactStorageRoot:     defaultArtifactRoot,
 				ArtifactStorageProvider: "filesystem",
+				AuthMode:                "disabled",
 			},
 		},
 	}

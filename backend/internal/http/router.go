@@ -16,7 +16,38 @@ import (
 // bodies. Requests exceeding this size receive 413 Request Entity Too Large.
 const maxRequestBodySize = 1 << 20 // 1 MiB
 
-func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.ArtifactHandler, jobHandler *handler.JobHandler, projectHandler *handler.ProjectHandler, versionTagHandler *handler.VersionTagHandler, credentialHandler *handler.SourceCredentialHandler, eventHandler *handler.EventHandler, pushEventSecret string) nethttp.Handler {
+type routerConfig struct {
+	authMiddleware           func(nethttp.Handler) nethttp.Handler
+	userHandler              *handler.UserHandler
+	projectMembershipHandler *handler.ProjectMembershipHandler
+}
+
+type RouterOption func(*routerConfig)
+
+func WithAuthMiddleware(middleware func(nethttp.Handler) nethttp.Handler) RouterOption {
+	return func(cfg *routerConfig) {
+		cfg.authMiddleware = middleware
+	}
+}
+
+func WithUserHandler(userHandler *handler.UserHandler) RouterOption {
+	return func(cfg *routerConfig) {
+		cfg.userHandler = userHandler
+	}
+}
+
+func WithProjectMembershipHandler(projectMembershipHandler *handler.ProjectMembershipHandler) RouterOption {
+	return func(cfg *routerConfig) {
+		cfg.projectMembershipHandler = projectMembershipHandler
+	}
+}
+
+func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.ArtifactHandler, jobHandler *handler.JobHandler, projectHandler *handler.ProjectHandler, versionTagHandler *handler.VersionTagHandler, credentialHandler *handler.SourceCredentialHandler, eventHandler *handler.EventHandler, pushEventSecret string, options ...RouterOption) nethttp.Handler {
+	cfg := routerConfig{}
+	for _, option := range options {
+		option(&cfg)
+	}
+
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -30,9 +61,24 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 	r.Get("/healthz", handler.Health)
 
 	r.Route("/api", func(r chi.Router) {
+		if cfg.authMiddleware != nil {
+			r.Use(cfg.authMiddleware)
+		}
+
 		r.Get("/health", handler.Health)
 		r.Get("/healthz", handler.Health)
 		r.Get("/queue", buildHandler.ListQueue)
+
+		if cfg.userHandler != nil {
+			r.Get("/me", cfg.userHandler.GetMe)
+			r.Route("/users", func(r chi.Router) {
+				r.Get("/", cfg.userHandler.ListUsers)
+				r.Post("/", cfg.userHandler.CreateUser)
+				r.Get("/{id}", cfg.userHandler.GetUser)
+				r.Patch("/{id}", cfg.userHandler.UpdateUser)
+				r.Delete("/{id}", cfg.userHandler.DeleteUser)
+			})
+		}
 
 		r.Route("/builds", func(r chi.Router) {
 			r.Post("/", buildHandler.CreateBuild)
@@ -76,6 +122,12 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 				r.Patch("/{id}", projectHandler.UpdateProject)
 				r.Delete("/{id}", projectHandler.DeleteProject)
 				r.Get("/{id}/jobs", projectHandler.ListProjectJobs)
+				if cfg.projectMembershipHandler != nil {
+					r.Get("/{id}/members", cfg.projectMembershipHandler.ListProjectMembers)
+					r.Put("/{id}/members/{user_id}", cfg.projectMembershipHandler.UpsertProjectMember)
+					r.Patch("/{id}/members/{user_id}", cfg.projectMembershipHandler.UpdateProjectMember)
+					r.Delete("/{id}/members/{user_id}", cfg.projectMembershipHandler.DeleteProjectMember)
+				}
 			})
 		}
 

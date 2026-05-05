@@ -428,6 +428,15 @@ definitions:
       repo_url:
         type: string
     type: object
+  api.CreateUserRequest:
+    properties:
+      display_name:
+        type: string
+      email:
+        type: string
+      global_role:
+        type: string
+    type: object
   api.DataResponse:
     properties:
       data: {}
@@ -649,6 +658,18 @@ definitions:
       updated_at:
         type: string
     type: object
+  api.MeEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.MeResponse'
+    type: object
+  api.MeResponse:
+    properties:
+      auth_mode:
+        type: string
+      user:
+        $ref: '#/definitions/api.UserResponse'
+    type: object
   api.ProjectEnvelope:
     properties:
       data:
@@ -665,6 +686,40 @@ definitions:
         items:
           $ref: '#/definitions/api.ProjectResponse'
         type: array
+    type: object
+  api.ProjectMembershipEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.ProjectMembershipResponse'
+    type: object
+  api.ProjectMembershipListEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.ProjectMembershipListResponse'
+    type: object
+  api.ProjectMembershipListResponse:
+    properties:
+      members:
+        items:
+          $ref: '#/definitions/api.ProjectMembershipResponse'
+        type: array
+    type: object
+  api.ProjectMembershipResponse:
+    properties:
+      created_at:
+        type: string
+      display_name:
+        type: string
+      email:
+        type: string
+      project_id:
+        type: string
+      role:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
     type: object
   api.ProjectResponse:
     properties:
@@ -914,6 +969,52 @@ definitions:
       name:
         type: string
       slug:
+        type: string
+    type: object
+  api.UpdateUserRequest:
+    properties:
+      display_name:
+        $ref: '#/definitions/api.StringPatch'
+      email:
+        type: string
+      global_role:
+        type: string
+    type: object
+  api.UpsertProjectMembershipRequest:
+    properties:
+      role:
+        type: string
+    type: object
+  api.UserEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.UserResponse'
+    type: object
+  api.UserListEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.UserListResponse'
+    type: object
+  api.UserListResponse:
+    properties:
+      users:
+        items:
+          $ref: '#/definitions/api.UserResponse'
+        type: array
+    type: object
+  api.UserResponse:
+    properties:
+      created_at:
+        type: string
+      display_name:
+        type: string
+      email:
+        type: string
+      global_role:
+        type: string
+      id:
+        type: string
+      updated_at:
         type: string
     type: object
   api.VersionTagCreateRequest:
@@ -1998,6 +2099,24 @@ paths:
       summary: List managed image version tags
       tags:
       - version-tags
+  /me:
+    get:
+      description: Returns the resolved request identity, or a synthetic disabled-mode
+        user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.MeEnvelope'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get current user
+      tags:
+      - users
   /projects:
     get:
       description: Lists projects.
@@ -2170,6 +2289,163 @@ paths:
       summary: List project jobs
       tags:
       - projects
+  /projects/{id}/members:
+    get:
+      description: Lists project memberships with basic user fields.
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ProjectMembershipListEnvelope'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List project members
+      tags:
+      - project-memberships
+  /projects/{id}/members/{user_id}:
+    delete:
+      description: Removes a project membership.
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: User ID
+        in: path
+        name: user_id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Delete project member
+      tags:
+      - project-memberships
+    patch:
+      consumes:
+      - application/json
+      description: Updates a project membership role.
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: User ID
+        in: path
+        name: user_id
+        required: true
+        type: string
+      - description: Project membership request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.UpsertProjectMembershipRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ProjectMembershipEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Update project member
+      tags:
+      - project-memberships
+    put:
+      consumes:
+      - application/json
+      description: Creates or updates a project membership.
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: User ID
+        in: path
+        name: user_id
+        required: true
+        type: string
+      - description: Project membership request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.UpsertProjectMembershipRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ProjectMembershipEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Add or replace project member
+      tags:
+      - project-memberships
   /queue:
     get:
       description: Returns queued and running builds with project and job context.
@@ -2226,6 +2502,167 @@ paths:
       summary: Readiness check
       tags:
       - health
+  /users:
+    get:
+      description: Lists Coyote users.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.UserListEnvelope'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List users
+      tags:
+      - users
+    post:
+      consumes:
+      - application/json
+      description: Creates a user without storing credentials.
+      parameters:
+      - description: User create request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.CreateUserRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.UserEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Create user
+      tags:
+      - users
+  /users/{id}:
+    delete:
+      description: Deletes a user and cascades project memberships in durable storage.
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Delete user
+      tags:
+      - users
+    get:
+      description: Returns one user.
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.UserEnvelope'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get user
+      tags:
+      - users
+    patch:
+      consumes:
+      - application/json
+      description: Updates user metadata and global role.
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: User update request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.UpdateUserRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.UserEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Update user
+      tags:
+      - users
   /webhooks/github:
     post:
       description: Verifies a GitHub webhook signature and triggers builds for matching

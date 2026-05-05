@@ -37,6 +37,19 @@ See [backend/docs/state-machine.md](backend/docs/state-machine.md) for the full 
 
 For external/managed Postgres runtime configuration and Cloud SQL deployment guidance, see [deploy/docs/gcp-cloud-sql-postgres.md](deploy/docs/gcp-cloud-sql-postgres.md).
 
+## Identity and auth foundation
+
+Coyote CI has an internal user and project membership model for future OIDC/SAML/directory integrations. This slice intentionally does not add passwords, sessions, JWTs, API tokens, service accounts, or full endpoint-by-endpoint RBAC.
+
+Runtime auth mode is controlled by:
+
+- `AUTH_MODE=disabled|header` (default: `disabled`)
+- `BOOTSTRAP_ADMIN_EMAILS=` comma-separated emails promoted to global admin in header mode
+
+In `disabled` mode, local/dev behavior remains unchanged and `/api/me` returns a synthetic local development user. In `header` mode, Coyote trusts `X-Coyote-User-Email` and `X-Coyote-User-Name` from a reverse proxy or dev harness, auto-provisions users by normalized lowercase email, and rejects requests missing `X-Coyote-User-Email` with `401`.
+
+Authorization currently enforces only the management boundaries introduced with this foundation: user management requires a global admin in header mode, and project membership management requires a global admin or project owner. Build, job, artifact, and queue endpoint-level RBAC is intentionally deferred.
+
 ## Artifact storage model
 
 - Artifact metadata is persisted in PostgreSQL (`build_artifacts`).

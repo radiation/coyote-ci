@@ -54,6 +54,14 @@ export function Layout() {
                 Artifacts
               </NavLink>
               <NavLink
+                to="/settings/users"
+                className={({ isActive }) =>
+                  isActive ? "main-nav-link is-active" : "main-nav-link"
+                }
+              >
+                Users
+              </NavLink>
+              <NavLink
                 to="/settings/credentials"
                 className={({ isActive }) =>
                   isActive ? "main-nav-link is-active" : "main-nav-link"

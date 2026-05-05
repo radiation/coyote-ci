@@ -38,6 +38,17 @@ import type {
   ProjectListResponse,
   UpdateProjectRequest,
 } from "../types/project";
+import type {
+  CreateUserRequest,
+  MeResponse,
+  ProjectMember,
+  ProjectMemberListResponse,
+  ProjectMemberRole,
+  UpdateUserRequest,
+  UpsertProjectMemberRequest,
+  User,
+  UserListResponse,
+} from "../types/identity";
 
 /**
  * Base URL for API requests.
@@ -111,6 +122,99 @@ async function deleteNoContent(path: string): Promise<void> {
 
     throw new Error(`API ${res.status}: ${message}`);
   }
+}
+
+export async function getMe(): Promise<MeResponse> {
+  const envelope = await fetchJSON<DataEnvelope<MeResponse>>("/me");
+  return envelope.data;
+}
+
+export async function listUsers(): Promise<User[]> {
+  const envelope = await fetchJSON<DataEnvelope<UserListResponse>>("/users");
+  return envelope.data.users;
+}
+
+export async function createUser(input: CreateUserRequest): Promise<User> {
+  const envelope = await postJSON<DataEnvelope<User>, CreateUserRequest>(
+    "/users",
+    input,
+  );
+  return envelope.data;
+}
+
+export async function updateUser(
+  id: string,
+  input: UpdateUserRequest,
+): Promise<User> {
+  const envelope = await fetchJSON<DataEnvelope<User>>(
+    `/users/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  return envelope.data;
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  await deleteNoContent(`/users/${encodeURIComponent(id)}`);
+}
+
+export async function listProjectMembers(
+  projectId: string,
+): Promise<ProjectMember[]> {
+  const envelope = await fetchJSON<DataEnvelope<ProjectMemberListResponse>>(
+    `/projects/${encodeURIComponent(projectId)}/members`,
+  );
+  return envelope.data.members;
+}
+
+export async function upsertProjectMember(
+  projectId: string,
+  userId: string,
+  role: ProjectMemberRole,
+): Promise<ProjectMember> {
+  const envelope = await fetchJSON<DataEnvelope<ProjectMember>>(
+    `/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ role } satisfies UpsertProjectMemberRequest),
+    },
+  );
+  return envelope.data;
+}
+
+export async function updateProjectMember(
+  projectId: string,
+  userId: string,
+  role: ProjectMemberRole,
+): Promise<ProjectMember> {
+  const envelope = await fetchJSON<DataEnvelope<ProjectMember>>(
+    `/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ role } satisfies UpsertProjectMemberRequest),
+    },
+  );
+  return envelope.data;
+}
+
+export async function deleteProjectMember(
+  projectId: string,
+  userId: string,
+): Promise<void> {
+  await deleteNoContent(
+    `/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+  );
 }
 
 export async function listBuilds(input?: {
