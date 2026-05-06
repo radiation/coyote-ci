@@ -61,94 +61,8 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 	r.Get("/healthz", handler.Health)
 
 	r.Route("/api", func(r chi.Router) {
-		if cfg.authMiddleware != nil {
-			r.Use(cfg.authMiddleware)
-		}
-
 		r.Get("/health", handler.Health)
 		r.Get("/healthz", handler.Health)
-		r.Get("/queue", buildHandler.ListQueue)
-
-		if cfg.userHandler != nil {
-			r.Get("/me", cfg.userHandler.GetMe)
-			r.Route("/users", func(r chi.Router) {
-				r.Get("/", cfg.userHandler.ListUsers)
-				r.Post("/", cfg.userHandler.CreateUser)
-				r.Get("/{id}", cfg.userHandler.GetUser)
-				r.Patch("/{id}", cfg.userHandler.UpdateUser)
-				r.Delete("/{id}", cfg.userHandler.DeleteUser)
-			})
-		}
-
-		r.Route("/builds", func(r chi.Router) {
-			r.Post("/", buildHandler.CreateBuild)
-			r.Post("/pipeline", buildHandler.CreatePipelineBuild)
-			r.Post("/repo", buildHandler.CreateRepoBuild)
-			r.Post("/jobs/{jobID}/retry", buildHandler.RetryJob)
-			r.Get("/", buildHandler.ListBuilds)
-			r.Get("/{buildID}", buildHandler.GetBuild)
-			r.Post("/{buildID}/rerun", buildHandler.RerunBuildFromStep)
-			r.Get("/{buildID}/steps", buildHandler.GetBuildSteps)
-			r.Get("/{buildID}/steps/{stepIndex}/logs", buildHandler.GetBuildStepLogs)
-			r.Get("/{buildID}/steps/{stepIndex}/logs/stream", buildHandler.StreamBuildStepLogs)
-			r.Get("/{buildID}/logs", buildHandler.GetBuildLogs)
-			r.Get("/{buildID}/artifacts", buildHandler.GetBuildArtifacts)
-			r.Get("/{buildID}/artifacts/{artifactID}/download", buildHandler.DownloadBuildArtifact)
-			r.Post("/{buildID}/queue", buildHandler.QueueBuild)
-			r.Post("/{buildID}/start", buildHandler.StartBuild)
-			r.Post("/{buildID}/complete", buildHandler.CompleteBuild)
-			r.Post("/{buildID}/fail", buildHandler.FailBuild)
-			r.Post("/{buildID}/cancel", buildHandler.CancelBuild)
-		})
-
-		r.Route("/jobs", func(r chi.Router) {
-			r.Post("/", jobHandler.CreateJob)
-			r.Get("/", jobHandler.ListJobs)
-			r.Get("/{jobID}", jobHandler.GetJob)
-			r.Put("/{jobID}", jobHandler.UpdateJob)
-			r.Get("/{jobID}/builds", jobHandler.ListJobBuilds)
-			r.Post("/{jobID}/run", jobHandler.RunNow)
-			if versionTagHandler != nil {
-				r.Post("/{jobID}/version-tags", versionTagHandler.CreateJobVersionTags)
-				r.Get("/{jobID}/version-tags", versionTagHandler.ListJobVersionTags)
-			}
-		})
-
-		if projectHandler != nil {
-			r.Route("/projects", func(r chi.Router) {
-				r.Get("/", projectHandler.ListProjects)
-				r.Post("/", projectHandler.CreateProject)
-				r.Get("/{id}", projectHandler.GetProject)
-				r.Patch("/{id}", projectHandler.UpdateProject)
-				r.Delete("/{id}", projectHandler.DeleteProject)
-				r.Get("/{id}/jobs", projectHandler.ListProjectJobs)
-				if cfg.projectMembershipHandler != nil {
-					r.Get("/{id}/members", cfg.projectMembershipHandler.ListProjectMembers)
-					r.Put("/{id}/members/{user_id}", cfg.projectMembershipHandler.UpsertProjectMember)
-					r.Patch("/{id}/members/{user_id}", cfg.projectMembershipHandler.UpdateProjectMember)
-					r.Delete("/{id}/members/{user_id}", cfg.projectMembershipHandler.DeleteProjectMember)
-				}
-			})
-		}
-
-		if artifactHandler != nil {
-			r.Get("/artifacts", artifactHandler.ListArtifacts)
-		}
-
-		if versionTagHandler != nil {
-			r.Get("/artifacts/{artifactID}/version-tags", versionTagHandler.ListArtifactVersionTags)
-			r.Get("/managed-image-versions/{managedImageVersionID}/version-tags", versionTagHandler.ListManagedImageVersionTags)
-		}
-
-		if credentialHandler != nil {
-			r.Route("/source-credentials", func(r chi.Router) {
-				r.Post("/", credentialHandler.CreateSourceCredential)
-				r.Get("/", credentialHandler.ListSourceCredentials)
-				r.Get("/{credentialID}", credentialHandler.GetSourceCredential)
-				r.Put("/{credentialID}", credentialHandler.UpdateSourceCredential)
-				r.Delete("/{credentialID}", credentialHandler.DeleteSourceCredential)
-			})
-		}
 
 		r.Route("/events", func(r chi.Router) {
 			if pushEventSecret != "" {
@@ -159,6 +73,95 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 
 		r.Route("/webhooks", func(r chi.Router) {
 			r.Post("/github", eventHandler.IngestGitHubWebhook)
+		})
+
+		r.Group(func(r chi.Router) {
+			if cfg.authMiddleware != nil {
+				r.Use(cfg.authMiddleware)
+			}
+
+			r.Get("/queue", buildHandler.ListQueue)
+
+			if cfg.userHandler != nil {
+				r.Get("/me", cfg.userHandler.GetMe)
+				r.Route("/users", func(r chi.Router) {
+					r.Get("/", cfg.userHandler.ListUsers)
+					r.Post("/", cfg.userHandler.CreateUser)
+					r.Get("/{id}", cfg.userHandler.GetUser)
+					r.Patch("/{id}", cfg.userHandler.UpdateUser)
+					r.Delete("/{id}", cfg.userHandler.DeleteUser)
+				})
+			}
+
+			r.Route("/builds", func(r chi.Router) {
+				r.Post("/", buildHandler.CreateBuild)
+				r.Post("/pipeline", buildHandler.CreatePipelineBuild)
+				r.Post("/repo", buildHandler.CreateRepoBuild)
+				r.Post("/jobs/{jobID}/retry", buildHandler.RetryJob)
+				r.Get("/", buildHandler.ListBuilds)
+				r.Get("/{buildID}", buildHandler.GetBuild)
+				r.Post("/{buildID}/rerun", buildHandler.RerunBuildFromStep)
+				r.Get("/{buildID}/steps", buildHandler.GetBuildSteps)
+				r.Get("/{buildID}/steps/{stepIndex}/logs", buildHandler.GetBuildStepLogs)
+				r.Get("/{buildID}/steps/{stepIndex}/logs/stream", buildHandler.StreamBuildStepLogs)
+				r.Get("/{buildID}/logs", buildHandler.GetBuildLogs)
+				r.Get("/{buildID}/artifacts", buildHandler.GetBuildArtifacts)
+				r.Get("/{buildID}/artifacts/{artifactID}/download", buildHandler.DownloadBuildArtifact)
+				r.Post("/{buildID}/queue", buildHandler.QueueBuild)
+				r.Post("/{buildID}/start", buildHandler.StartBuild)
+				r.Post("/{buildID}/complete", buildHandler.CompleteBuild)
+				r.Post("/{buildID}/fail", buildHandler.FailBuild)
+				r.Post("/{buildID}/cancel", buildHandler.CancelBuild)
+			})
+
+			r.Route("/jobs", func(r chi.Router) {
+				r.Post("/", jobHandler.CreateJob)
+				r.Get("/", jobHandler.ListJobs)
+				r.Get("/{jobID}", jobHandler.GetJob)
+				r.Put("/{jobID}", jobHandler.UpdateJob)
+				r.Get("/{jobID}/builds", jobHandler.ListJobBuilds)
+				r.Post("/{jobID}/run", jobHandler.RunNow)
+				if versionTagHandler != nil {
+					r.Post("/{jobID}/version-tags", versionTagHandler.CreateJobVersionTags)
+					r.Get("/{jobID}/version-tags", versionTagHandler.ListJobVersionTags)
+				}
+			})
+
+			if projectHandler != nil {
+				r.Route("/projects", func(r chi.Router) {
+					r.Get("/", projectHandler.ListProjects)
+					r.Post("/", projectHandler.CreateProject)
+					r.Get("/{id}", projectHandler.GetProject)
+					r.Patch("/{id}", projectHandler.UpdateProject)
+					r.Delete("/{id}", projectHandler.DeleteProject)
+					r.Get("/{id}/jobs", projectHandler.ListProjectJobs)
+					if cfg.projectMembershipHandler != nil {
+						r.Get("/{id}/members", cfg.projectMembershipHandler.ListProjectMembers)
+						r.Put("/{id}/members/{user_id}", cfg.projectMembershipHandler.UpsertProjectMember)
+						r.Patch("/{id}/members/{user_id}", cfg.projectMembershipHandler.UpdateProjectMember)
+						r.Delete("/{id}/members/{user_id}", cfg.projectMembershipHandler.DeleteProjectMember)
+					}
+				})
+			}
+
+			if artifactHandler != nil {
+				r.Get("/artifacts", artifactHandler.ListArtifacts)
+			}
+
+			if versionTagHandler != nil {
+				r.Get("/artifacts/{artifactID}/version-tags", versionTagHandler.ListArtifactVersionTags)
+				r.Get("/managed-image-versions/{managedImageVersionID}/version-tags", versionTagHandler.ListManagedImageVersionTags)
+			}
+
+			if credentialHandler != nil {
+				r.Route("/source-credentials", func(r chi.Router) {
+					r.Post("/", credentialHandler.CreateSourceCredential)
+					r.Get("/", credentialHandler.ListSourceCredentials)
+					r.Get("/{credentialID}", credentialHandler.GetSourceCredential)
+					r.Put("/{credentialID}", credentialHandler.UpdateSourceCredential)
+					r.Delete("/{credentialID}", credentialHandler.DeleteSourceCredential)
+				})
+			}
 		})
 	})
 

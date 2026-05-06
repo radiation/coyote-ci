@@ -78,12 +78,28 @@ func TestProjectMembershipHandler_HeaderModeAuthorization(t *testing.T) {
 		t.Fatalf("expected viewer status %d, got %d", http.StatusForbidden, viewerRes.Code)
 	}
 
+	viewerListReq := addURLParams(httptest.NewRequest(http.MethodGet, "/projects/project-1/members", nil), map[string]string{"id": project.ID})
+	viewerListReq = viewerListReq.WithContext(auth.WithUser(viewerListReq.Context(), viewer))
+	viewerListRes := httptest.NewRecorder()
+	handler.ListProjectMembers(viewerListRes, viewerListReq)
+	if viewerListRes.Code != http.StatusForbidden {
+		t.Fatalf("expected viewer list status %d, got %d", http.StatusForbidden, viewerListRes.Code)
+	}
+
 	ownerReq := addURLParams(httptest.NewRequest(http.MethodPut, "/projects/project-1/members/target-1", bytes.NewBufferString(`{"role":"maintainer"}`)), map[string]string{"id": project.ID, "user_id": target.ID})
 	ownerReq = ownerReq.WithContext(auth.WithUser(ownerReq.Context(), owner))
 	ownerRes := httptest.NewRecorder()
 	handler.UpsertProjectMember(ownerRes, ownerReq)
 	if ownerRes.Code != http.StatusOK {
 		t.Fatalf("expected owner status %d, got %d body=%s", http.StatusOK, ownerRes.Code, ownerRes.Body.String())
+	}
+
+	ownerListReq := addURLParams(httptest.NewRequest(http.MethodGet, "/projects/project-1/members", nil), map[string]string{"id": project.ID})
+	ownerListReq = ownerListReq.WithContext(auth.WithUser(ownerListReq.Context(), owner))
+	ownerListRes := httptest.NewRecorder()
+	handler.ListProjectMembers(ownerListRes, ownerListReq)
+	if ownerListRes.Code != http.StatusOK {
+		t.Fatalf("expected owner list status %d, got %d body=%s", http.StatusOK, ownerListRes.Code, ownerListRes.Body.String())
 	}
 }
 

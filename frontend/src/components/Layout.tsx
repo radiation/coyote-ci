@@ -1,8 +1,17 @@
+import { useQuery } from "@tanstack/react-query";
 import { NavLink, Outlet } from "react-router-dom";
+import { getMe } from "../api";
 import { useTheme } from "../theme-context";
 
 export function Layout() {
   const { theme, toggleTheme } = useTheme();
+  const { data: me } = useQuery({
+    queryKey: ["me"],
+    queryFn: getMe,
+    retry: false,
+  });
+  const showUsersLink =
+    me?.auth_mode === "disabled" || me?.user.global_role === "admin";
 
   return (
     <div className="app">
@@ -53,14 +62,16 @@ export function Layout() {
               >
                 Artifacts
               </NavLink>
-              <NavLink
-                to="/settings/users"
-                className={({ isActive }) =>
-                  isActive ? "main-nav-link is-active" : "main-nav-link"
-                }
-              >
-                Users
-              </NavLink>
+              {showUsersLink && (
+                <NavLink
+                  to="/settings/users"
+                  className={({ isActive }) =>
+                    isActive ? "main-nav-link is-active" : "main-nav-link"
+                  }
+                >
+                  Users
+                </NavLink>
+              )}
               <NavLink
                 to="/settings/credentials"
                 className={({ isActive }) =>

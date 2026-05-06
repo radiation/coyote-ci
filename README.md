@@ -46,9 +46,17 @@ Runtime auth mode is controlled by:
 - `AUTH_MODE=disabled|header` (default: `disabled`)
 - `BOOTSTRAP_ADMIN_EMAILS=` comma-separated emails promoted to global admin in header mode
 
-In `disabled` mode, local/dev behavior remains unchanged and `/api/me` returns a synthetic local development user. In `header` mode, Coyote trusts `X-Coyote-User-Email` and `X-Coyote-User-Name` from a reverse proxy or dev harness, auto-provisions users by normalized lowercase email, and rejects requests missing `X-Coyote-User-Email` with `401`.
+In `disabled` mode, local/dev behavior remains unchanged and `/api/me` returns a synthetic local development user. In `header` mode, Coyote trusts `X-Coyote-User-Email` and `X-Coyote-User-Name` from a reverse proxy or dev harness, auto-provisions users by normalized lowercase email, promotes emails matching `BOOTSTRAP_ADMIN_EMAILS` to global admin, and rejects protected routes missing `X-Coyote-User-Email` with `401`.
 
-Authorization currently enforces only the management boundaries introduced with this foundation: user management requires a global admin in header mode, and project membership management requires a global admin or project owner. Build, job, artifact, and queue endpoint-level RBAC is intentionally deferred.
+Protected user-facing routes under `/api` require the trusted user header in `header` mode. Health and machine-ingress endpoints remain reachable without user headers: `/api/health`, `/api/healthz`, `/api/events/push`, and `/api/webhooks/github`. Push-event ingress still relies on `X-Coyote-Secret`, and GitHub webhooks still rely on their HMAC signature.
+
+Authorization currently enforces only the management boundaries introduced with this foundation: user management requires a global admin in header mode, and project membership listing and membership mutation require a global admin or project owner. Build, job, artifact, queue, and broader endpoint-level RBAC is intentionally deferred.
+
+Backend validation command for this slice:
+
+```bash
+cd backend && env -u GITHUB_WEBHOOK_SECRET -u PUSH_EVENT_SECRET go test ./...
+```
 
 ## Artifact storage model
 

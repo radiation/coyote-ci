@@ -2,11 +2,15 @@ package http
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
 	"github.com/radiation/coyote-ci/backend/internal/observability"
@@ -52,6 +56,100 @@ func TestNewRouter_HealthAndNotFound(t *testing.T) {
 				t.Fatalf("expected body %q, got %q", tc.body, rr.Body.String())
 			}
 		})
+	}
+}
+
+func TestNewRouter_HeaderModeUsersRouteRequiresIdentityHeader(t *testing.T) {
+	r := newIdentityTestRouter(auth.ModeHeader, "push-secret", "github-secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusUnauthorized, res.Code, res.Body.String())
+	}
+}
+
+func TestNewRouter_HeaderModeMeRouteResolvesUser(t *testing.T) {
+	r := newIdentityTestRouter(auth.ModeHeader, "push-secret", "github-secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	req.Header.Set("X-Coyote-User-Email", "ADMIN@Example.COM")
+	req.Header.Set("X-Coyote-User-Name", "Admin User")
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+
+	var body struct {
+		Data struct {
+			AuthMode string `json:"auth_mode"`
+			User     struct {
+				Email       string  `json:"email"`
+				DisplayName *string `json:"display_name"`
+				GlobalRole  string  `json:"global_role"`
+			} `json:"user"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if body.Data.AuthMode != string(auth.ModeHeader) {
+		t.Fatalf("expected auth mode %q, got %q", auth.ModeHeader, body.Data.AuthMode)
+	}
+	if body.Data.User.Email != "admin@example.com" {
+		t.Fatalf("expected normalized email, got %q", body.Data.User.Email)
+	}
+	if body.Data.User.DisplayName == nil || *body.Data.User.DisplayName != "Admin User" {
+		t.Fatalf("expected display name to be preserved, got %v", body.Data.User.DisplayName)
+	}
+	if body.Data.User.GlobalRole != string(domain.GlobalRoleUser) {
+		t.Fatalf("expected default global role %q, got %q", domain.GlobalRoleUser, body.Data.User.GlobalRole)
+	}
+}
+
+func TestNewRouter_DisabledModePreservesNormalAPIRoutes(t *testing.T) {
+	r := newIdentityTestRouter(auth.ModeDisabled, "push-secret", "github-secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+}
+
+func TestNewRouter_HeaderModeHealthAndIngressBypassIdentityHeaders(t *testing.T) {
+	r := newIdentityTestRouter(auth.ModeHeader, "push-secret", "github-secret")
+
+	healthReq := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	healthRes := httptest.NewRecorder()
+	r.ServeHTTP(healthRes, healthReq)
+	if healthRes.Code != http.StatusOK {
+		t.Fatalf("expected api health status %d, got %d", http.StatusOK, healthRes.Code)
+	}
+
+	pushReq := httptest.NewRequest(http.MethodPost, "/api/events/push", bytes.NewBufferString(`{"repository_url":"https://github.com/example/backend.git","ref":"refs/heads/main","commit_sha":"abc123"}`))
+	pushReq.Header.Set("X-Coyote-Secret", "push-secret")
+	pushRes := httptest.NewRecorder()
+	r.ServeHTTP(pushRes, pushReq)
+	if pushRes.Code != http.StatusOK {
+		t.Fatalf("expected push ingress status %d, got %d body=%s", http.StatusOK, pushRes.Code, pushRes.Body.String())
+	}
+
+	body := []byte(`{}`)
+	webhookReq := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewReader(body))
+	webhookReq.Header.Set("X-GitHub-Event", "pull_request")
+	webhookReq.Header.Set("X-GitHub-Delivery", "delivery-router-test")
+	webhookReq.Header.Set("X-Hub-Signature-256", githubRouterTestSignature("github-secret", body))
+	webhookRes := httptest.NewRecorder()
+	r.ServeHTTP(webhookRes, webhookReq)
+	if webhookRes.Code != http.StatusAccepted {
+		t.Fatalf("expected webhook ingress status %d, got %d body=%s", http.StatusAccepted, webhookRes.Code, webhookRes.Body.String())
 	}
 }
 
@@ -204,6 +302,39 @@ func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
 			t.Fatalf("expected step name %q, got %v", expectedName, step["name"])
 		}
 	}
+}
+
+func newIdentityTestRouter(mode auth.Mode, pushEventSecret string, githubWebhookSecret string) http.Handler {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	buildHandler := handler.NewBuildHandler(buildSvc)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jobHandler := handler.NewJobHandler(jobSvc)
+	webhookSvc := webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc)
+	eventHandler := handler.NewEventHandler(jobSvc, webhookSvc, observability.NewNoopWebhookIngressMetrics(), githubWebhookSecret)
+	userService := service.NewUserService(repositorymemory.NewUserRepository())
+	userHandler := handler.NewUserHandler(userService, mode)
+	authMiddleware := auth.Middleware(auth.MiddlewareConfig{Mode: mode}, userService)
+
+	return NewRouter(
+		buildHandler,
+		nil,
+		jobHandler,
+		nil,
+		nil,
+		nil,
+		eventHandler,
+		pushEventSecret,
+		WithAuthMiddleware(authMiddleware),
+		WithUserHandler(userHandler),
+	)
+}
+
+func githubRouterTestSignature(secret string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func TestNewRouter_QueueBuild_UnknownTemplate_FallsBackToDefaultStep(t *testing.T) {
