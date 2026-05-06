@@ -17,6 +17,15 @@ import {
   updateJob,
   runJob,
   listSourceCredentials,
+  getMe,
+  listUsers,
+  createUser,
+  updateUser,
+  deleteUser,
+  listProjectMembers,
+  upsertProjectMember,
+  updateProjectMember,
+  deleteProjectMember,
 } from "../api/client";
 
 describe("API client - types", () => {
@@ -37,6 +46,15 @@ describe("API client - types", () => {
     expect(typeof updateJob).toBe("function");
     expect(typeof runJob).toBe("function");
     expect(typeof listSourceCredentials).toBe("function");
+    expect(typeof getMe).toBe("function");
+    expect(typeof listUsers).toBe("function");
+    expect(typeof createUser).toBe("function");
+    expect(typeof updateUser).toBe("function");
+    expect(typeof deleteUser).toBe("function");
+    expect(typeof listProjectMembers).toBe("function");
+    expect(typeof upsertProjectMember).toBe("function");
+    expect(typeof updateProjectMember).toBe("function");
+    expect(typeof deleteProjectMember).toBe("function");
   });
 
   beforeEach(() => {
@@ -358,6 +376,121 @@ describe("API client - types", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/source-credentials",
       undefined,
+    );
+  });
+
+  it("fetches disabled-mode current user from /me", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          auth_mode: "disabled",
+          user: {
+            id: "disabled-mode-user",
+            email: "dev@local.coyote-ci",
+            global_role: "admin",
+          },
+        },
+      }),
+    } as Response);
+
+    const me = await getMe();
+    expect(me.auth_mode).toBe("disabled");
+    expect(fetchMock).toHaveBeenCalledWith("/api/me", undefined);
+  });
+
+  it("uses identity and project membership endpoints", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: { users: [] } }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: { id: "user-1", email: "dev@example.com", global_role: "user" },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            id: "user-1",
+            email: "dev@example.com",
+            global_role: "admin",
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({ ok: true, text: async () => "" } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: { members: [] } }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: { project_id: "project-1", user_id: "user-1", role: "viewer" },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: { project_id: "project-1", user_id: "user-1", role: "owner" },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({ ok: true, text: async () => "" } as Response);
+
+    await listUsers();
+    await createUser({ email: "dev@example.com", global_role: "user" });
+    await updateUser("user-1", { global_role: "admin" });
+    await deleteUser("user-1");
+    await listProjectMembers("project-1");
+    await upsertProjectMember("project-1", "user-1", "viewer");
+    await updateProjectMember("project-1", "user-1", "owner");
+    await deleteProjectMember("project-1", "user-1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/users", undefined);
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "dev@example.com", global_role: "user" }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/users/user-1", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ global_role: "admin" }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/users/user-1", {
+      method: "DELETE",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "/api/projects/project-1/members",
+      undefined,
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      6,
+      "/api/projects/project-1/members/user-1",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "viewer" }),
+      },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      7,
+      "/api/projects/project-1/members/user-1",
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "owner" }),
+      },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      8,
+      "/api/projects/project-1/members/user-1",
+      { method: "DELETE" },
     );
   });
 });

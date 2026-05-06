@@ -25,4 +25,13 @@ export {
   createSourceCredential,
   updateSourceCredential,
   deleteSourceCredential,
+  getMe,
+  listUsers,
+  createUser,
+  updateUser,
+  deleteUser,
+  listProjectMembers,
+  upsertProjectMember,
+  updateProjectMember,
+  deleteProjectMember,
 } from "./client";

@@ -44,6 +44,8 @@ type Config struct {
 	ArtifactGCSProject         string
 	PushEventSecret            string
 	GitHubWebhookSecret        string
+	AuthMode                   string
+	BootstrapAdminEmails       string
 }
 
 func Load() Config {
@@ -82,6 +84,8 @@ func Load() Config {
 		ArtifactGCSProject:         getEnv("ARTIFACT_GCS_PROJECT", ""),
 		PushEventSecret:            getEnv("PUSH_EVENT_SECRET", ""),
 		GitHubWebhookSecret:        getEnv("GITHUB_WEBHOOK_SECRET", getEnv("PUSH_EVENT_SECRET", "")),
+		AuthMode:                   getEnv("AUTH_MODE", "disabled"),
+		BootstrapAdminEmails:       getEnv("BOOTSTRAP_ADMIN_EMAILS", ""),
 	}
 }
 

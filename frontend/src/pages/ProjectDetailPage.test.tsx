@@ -1,13 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ProjectDetailPage } from "./ProjectDetailPage";
-import { getProject, listJobsByProject } from "../api";
+import {
+  deleteProjectMember,
+  getProject,
+  listJobsByProject,
+  listProjectMembers,
+  listUsers,
+  updateProjectMember,
+  upsertProjectMember,
+} from "../api";
 
 vi.mock("../api", () => ({
+  deleteProjectMember: vi.fn(),
   getProject: vi.fn(),
   listJobsByProject: vi.fn(),
+  listProjectMembers: vi.fn(),
+  listUsers: vi.fn(),
+  updateProjectMember: vi.fn(),
+  upsertProjectMember: vi.fn(),
 }));
 
 function renderPage() {
@@ -32,6 +45,11 @@ function renderPage() {
 describe("ProjectDetailPage", () => {
   const mockedGetProject = vi.mocked(getProject);
   const mockedListJobsByProject = vi.mocked(listJobsByProject);
+  const mockedListProjectMembers = vi.mocked(listProjectMembers);
+  const mockedListUsers = vi.mocked(listUsers);
+  const mockedUpsertProjectMember = vi.mocked(upsertProjectMember);
+  const mockedUpdateProjectMember = vi.mocked(updateProjectMember);
+  const mockedDeleteProjectMember = vi.mocked(deleteProjectMember);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -60,14 +78,48 @@ describe("ProjectDetailPage", () => {
         updated_at: "2026-05-01T00:00:00Z",
       },
     ]);
+    mockedListProjectMembers.mockResolvedValue([
+      {
+        project_id: "project-1",
+        user_id: "user-1",
+        email: "maintainer@example.com",
+        display_name: "Maintainer",
+        role: "maintainer",
+        created_at: "2026-05-01T00:00:00Z",
+        updated_at: "2026-05-01T00:00:00Z",
+      },
+    ]);
+    mockedListUsers.mockResolvedValue([
+      {
+        id: "user-2",
+        email: "viewer@example.com",
+        global_role: "user",
+      },
+    ]);
+    mockedUpsertProjectMember.mockResolvedValue({
+      project_id: "project-1",
+      user_id: "user-2",
+      role: "viewer",
+      created_at: "2026-05-01T00:00:00Z",
+      updated_at: "2026-05-01T00:00:00Z",
+    });
+    mockedUpdateProjectMember.mockResolvedValue({
+      project_id: "project-1",
+      user_id: "user-1",
+      role: "owner",
+      created_at: "2026-05-01T00:00:00Z",
+      updated_at: "2026-05-01T00:00:00Z",
+    });
+    mockedDeleteProjectMember.mockResolvedValue();
   });
 
-  it("renders project details and jobs", async () => {
+  it("renders project details, members, and jobs", async () => {
     renderPage();
 
     await waitFor(() => {
       expect(screen.getByText("Platform")).toBeTruthy();
       expect(screen.getByText("Core platform pipelines")).toBeTruthy();
+      expect(screen.getByText("maintainer@example.com")).toBeTruthy();
       expect(screen.getByText("backend-ci")).toBeTruthy();
       expect(
         screen.getByText("https://github.com/example/backend.git"),
@@ -83,6 +135,49 @@ describe("ProjectDetailPage", () => {
       expect(
         screen.getByRole("link", { name: "Browse Artifacts" }),
       ).toHaveAttribute("href", "/artifacts?project_id=project-1");
+    });
+  });
+
+  it("adds, updates, and removes project members", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("maintainer@example.com")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("User ID"), {
+      target: { value: "user-2" },
+    });
+    fireEvent.change(screen.getByLabelText("Role"), {
+      target: { value: "viewer" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Member" }));
+
+    await waitFor(() => {
+      expect(mockedUpsertProjectMember).toHaveBeenCalledWith(
+        "project-1",
+        "user-2",
+        "viewer",
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText("Role for maintainer@example.com"), {
+      target: { value: "owner" },
+    });
+    await waitFor(() => {
+      expect(mockedUpdateProjectMember).toHaveBeenCalledWith(
+        "project-1",
+        "user-1",
+        "owner",
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => {
+      expect(mockedDeleteProjectMember).toHaveBeenCalledWith(
+        "project-1",
+        "user-1",
+      );
     });
   });
 });
