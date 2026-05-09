@@ -2,6 +2,7 @@ package http
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -150,6 +152,56 @@ func TestNewRouter_HeaderModeHealthAndIngressBypassIdentityHeaders(t *testing.T)
 	r.ServeHTTP(webhookRes, webhookReq)
 	if webhookRes.Code != http.StatusAccepted {
 		t.Fatalf("expected webhook ingress status %d, got %d body=%s", http.StatusAccepted, webhookRes.Code, webhookRes.Body.String())
+	}
+}
+
+func TestNewRouter_HeaderModeProjectMembershipRouteRequiresIdentityHeader(t *testing.T) {
+	r := newProjectMembershipTestRouter(t, auth.ModeHeader)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/project-1/members", nil)
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusUnauthorized, res.Code, res.Body.String())
+	}
+}
+
+func TestNewRouter_HeaderModeUsersRouteForbiddenForNonAdmin(t *testing.T) {
+	r := newIdentityTestRouter(auth.ModeHeader, "push-secret", "github-secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	req.Header.Set("X-Coyote-User-Email", "user@example.com")
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusForbidden, res.Code, res.Body.String())
+	}
+}
+
+func TestNewRouter_HeaderModeProjectMembershipMutationForbiddenForViewer(t *testing.T) {
+	r := newProjectMembershipTestRouter(t, auth.ModeHeader)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/projects/project-1/members/target-1", bytes.NewBufferString(`{"role":"viewer"}`))
+	req.Header.Set("X-Coyote-User-Email", "viewer@example.com")
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusForbidden, res.Code, res.Body.String())
+	}
+}
+
+func TestNewRouter_DisabledModeProjectMembershipRouteUsesSyntheticIdentity(t *testing.T) {
+	r := newProjectMembershipTestRouter(t, auth.ModeDisabled)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/project-1/members", nil)
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
 	}
 }
 
@@ -328,6 +380,62 @@ func newIdentityTestRouter(mode auth.Mode, pushEventSecret string, githubWebhook
 		pushEventSecret,
 		WithAuthMiddleware(authMiddleware),
 		WithUserHandler(userHandler),
+	)
+}
+
+func newProjectMembershipTestRouter(t *testing.T, mode auth.Mode) http.Handler {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	buildHandler := handler.NewBuildHandler(buildSvc)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
+	jobHandler := handler.NewJobHandler(jobSvc)
+	projectHandler := handler.NewProjectHandler(service.NewProjectService(projectRepo), jobSvc)
+	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "github-secret")
+	userRepo := repositorymemory.NewUserRepository()
+	userService := service.NewUserService(userRepo)
+	membershipRepo := repositorymemory.NewProjectMembershipRepository(projectRepo, userRepo)
+	membershipService := service.NewProjectMembershipService(projectRepo, membershipRepo)
+	membershipHandler := handler.NewProjectMembershipHandler(membershipService, mode)
+	authMiddleware := auth.Middleware(auth.MiddlewareConfig{Mode: mode}, userService)
+
+	if _, err := projectRepo.Create(ctx, domain.Project{ID: "project-1", Name: "Platform", Slug: "platform", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	viewer, err := userRepo.Create(ctx, domain.User{ID: "viewer-1", Email: "viewer@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("create viewer failed: %v", err)
+	}
+	owner, err := userRepo.Create(ctx, domain.User{ID: "owner-1", Email: "owner@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("create owner failed: %v", err)
+	}
+	if _, err := userRepo.Create(ctx, domain.User{ID: "target-1", Email: "target@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create target failed: %v", err)
+	}
+	if _, err := membershipService.UpsertProjectMembership(ctx, service.UpsertProjectMembershipInput{ProjectID: "project-1", UserID: viewer.ID, Role: "viewer"}); err != nil {
+		t.Fatalf("create viewer membership failed: %v", err)
+	}
+	if _, err := membershipService.UpsertProjectMembership(ctx, service.UpsertProjectMembershipInput{ProjectID: "project-1", UserID: owner.ID, Role: "owner"}); err != nil {
+		t.Fatalf("create owner membership failed: %v", err)
+	}
+
+	return NewRouter(
+		buildHandler,
+		nil,
+		jobHandler,
+		projectHandler,
+		nil,
+		nil,
+		eventHandler,
+		"push-secret",
+		WithAuthMiddleware(authMiddleware),
+		WithProjectMembershipHandler(membershipHandler),
 	)
 }
 

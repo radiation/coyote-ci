@@ -38,7 +38,7 @@ func NewProjectMembershipHandler(memberships *service.ProjectMembershipService, 
 // @Router /projects/{id}/members [get]
 func (h *ProjectMembershipHandler) ListProjectMembers(w http.ResponseWriter, r *http.Request) {
 	projectID := projectIDParam(r)
-	if !h.canManageProjectMembers(w, r, projectID) {
+	if !h.canViewProjectMembers(w, r, projectID) {
 		return
 	}
 
@@ -137,6 +137,20 @@ func (h *ProjectMembershipHandler) DeleteProjectMember(w http.ResponseWriter, r 
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *ProjectMembershipHandler) canViewProjectMembers(w http.ResponseWriter, r *http.Request, projectID string) bool {
+	user, _ := auth.CurrentUser(r.Context())
+	allowed, err := auth.CanViewProjectMembers(r.Context(), h.memberships, h.authMode, user, projectID)
+	if err != nil {
+		h.writeMembershipError(w, err)
+		return false
+	}
+	if !allowed {
+		writeErrorJSON(w, http.StatusForbidden, "forbidden", "project membership visibility requires a project membership or global admin")
+		return false
+	}
+	return true
 }
 
 func (h *ProjectMembershipHandler) canManageProjectMembers(w http.ResponseWriter, r *http.Request, projectID string) bool {

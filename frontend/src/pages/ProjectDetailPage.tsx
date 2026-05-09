@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import {
   deleteProjectMember,
+  formatAPIErrorMessage,
   getProject,
   listJobsByProject,
   listProjectMembers,
@@ -64,7 +65,13 @@ export function ProjectDetailPage() {
       setMemberUserID("");
       setSelectedRole("viewer");
     },
-    onError: (mutationError) => setMemberError(String(mutationError)),
+    onError: (mutationError) =>
+      setMemberError(
+        formatAPIErrorMessage(
+          mutationError,
+          "You do not have permission to manage project members.",
+        ),
+      ),
   });
 
   const updateMemberMutation = useMutation({
@@ -79,7 +86,13 @@ export function ProjectDetailPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["projectMembers", id] });
     },
-    onError: (mutationError) => setMemberError(String(mutationError)),
+    onError: (mutationError) =>
+      setMemberError(
+        formatAPIErrorMessage(
+          mutationError,
+          "You do not have permission to manage project members.",
+        ),
+      ),
   });
 
   const deleteMemberMutation = useMutation({
@@ -88,7 +101,13 @@ export function ProjectDetailPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["projectMembers", id] });
     },
-    onError: (mutationError) => setMemberError(String(mutationError)),
+    onError: (mutationError) =>
+      setMemberError(
+        formatAPIErrorMessage(
+          mutationError,
+          "You do not have permission to manage project members.",
+        ),
+      ),
   });
 
   const onAddMember = (event: FormEvent<HTMLFormElement>) => {
@@ -198,7 +217,11 @@ export function ProjectDetailPage() {
         {membersLoading && <p>Loading members…</p>}
         {membersError && (
           <p className="error-text">
-            Failed to load members: {String(membersError)}
+            {formatAPIErrorMessage(
+              membersError,
+              "You do not have permission to view project members.",
+              "Failed to load members",
+            )}
           </p>
         )}
         {members && members.length === 0 && (

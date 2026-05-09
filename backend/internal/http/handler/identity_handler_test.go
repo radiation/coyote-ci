@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,8 +83,17 @@ func TestProjectMembershipHandler_HeaderModeAuthorization(t *testing.T) {
 	viewerListReq = viewerListReq.WithContext(auth.WithUser(viewerListReq.Context(), viewer))
 	viewerListRes := httptest.NewRecorder()
 	handler.ListProjectMembers(viewerListRes, viewerListReq)
-	if viewerListRes.Code != http.StatusForbidden {
-		t.Fatalf("expected viewer list status %d, got %d", http.StatusForbidden, viewerListRes.Code)
+	if viewerListRes.Code != http.StatusOK {
+		t.Fatalf("expected viewer list status %d, got %d body=%s", http.StatusOK, viewerListRes.Code, viewerListRes.Body.String())
+	}
+
+	nonMember := domain.User{ID: "outsider-1", Email: "outsider@example.com", GlobalRole: domain.GlobalRoleUser}
+	nonMemberListReq := addURLParams(httptest.NewRequest(http.MethodGet, "/projects/project-1/members", nil), map[string]string{"id": project.ID})
+	nonMemberListReq = nonMemberListReq.WithContext(auth.WithUser(nonMemberListReq.Context(), nonMember))
+	nonMemberListRes := httptest.NewRecorder()
+	handler.ListProjectMembers(nonMemberListRes, nonMemberListReq)
+	if nonMemberListRes.Code != http.StatusForbidden {
+		t.Fatalf("expected non-member list status %d, got %d", http.StatusForbidden, nonMemberListRes.Code)
 	}
 
 	ownerReq := addURLParams(httptest.NewRequest(http.MethodPut, "/projects/project-1/members/target-1", bytes.NewBufferString(`{"role":"maintainer"}`)), map[string]string{"id": project.ID, "user_id": target.ID})
@@ -100,6 +110,40 @@ func TestProjectMembershipHandler_HeaderModeAuthorization(t *testing.T) {
 	handler.ListProjectMembers(ownerListRes, ownerListReq)
 	if ownerListRes.Code != http.StatusOK {
 		t.Fatalf("expected owner list status %d, got %d body=%s", http.StatusOK, ownerListRes.Code, ownerListRes.Body.String())
+	}
+}
+
+func TestProjectMembershipHandler_MissingProjectErrors(t *testing.T) {
+	ctx := context.Background()
+	projectRepo := memory.NewProjectRepository(memory.NewJobRepository())
+	userRepo := memory.NewUserRepository()
+	membershipRepo := memory.NewProjectMembershipRepository(projectRepo, userRepo)
+	membershipService := service.NewProjectMembershipService(projectRepo, membershipRepo)
+	handler := NewProjectMembershipHandler(membershipService, auth.ModeHeader)
+	now := time.Now().UTC()
+
+	admin, err := userRepo.Create(ctx, domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("create admin failed: %v", err)
+	}
+
+	listReq := addURLParams(httptest.NewRequest(http.MethodGet, "/projects/missing/members", nil), map[string]string{"id": "missing"})
+	listReq = listReq.WithContext(auth.WithUser(listReq.Context(), admin))
+	listRes := httptest.NewRecorder()
+	handler.ListProjectMembers(listRes, listReq)
+	if listRes.Code != http.StatusNotFound {
+		t.Fatalf("expected list status %d, got %d body=%s", http.StatusNotFound, listRes.Code, listRes.Body.String())
+	}
+	if !strings.Contains(listRes.Body.String(), "project not found") {
+		t.Fatalf("expected project-not-found body, got %s", listRes.Body.String())
+	}
+
+	upsertReq := addURLParams(httptest.NewRequest(http.MethodPut, "/projects/missing/members/admin-1", bytes.NewBufferString(`{"role":"viewer"}`)), map[string]string{"id": "missing", "user_id": admin.ID})
+	upsertReq = upsertReq.WithContext(auth.WithUser(upsertReq.Context(), admin))
+	upsertRes := httptest.NewRecorder()
+	handler.UpsertProjectMember(upsertRes, upsertReq)
+	if upsertRes.Code != http.StatusNotFound {
+		t.Fatalf("expected upsert status %d, got %d body=%s", http.StatusNotFound, upsertRes.Code, upsertRes.Body.String())
 	}
 }
 

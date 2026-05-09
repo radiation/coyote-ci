@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ProjectDetailPage } from "./ProjectDetailPage";
 import {
+  APIError,
   deleteProjectMember,
   getProject,
   listJobsByProject,
@@ -13,15 +14,19 @@ import {
   upsertProjectMember,
 } from "../api";
 
-vi.mock("../api", () => ({
-  deleteProjectMember: vi.fn(),
-  getProject: vi.fn(),
-  listJobsByProject: vi.fn(),
-  listProjectMembers: vi.fn(),
-  listUsers: vi.fn(),
-  updateProjectMember: vi.fn(),
-  upsertProjectMember: vi.fn(),
-}));
+vi.mock("../api", async () => {
+  const actual = await vi.importActual<typeof import("../api")>("../api");
+  return {
+    ...actual,
+    deleteProjectMember: vi.fn(),
+    getProject: vi.fn(),
+    listJobsByProject: vi.fn(),
+    listProjectMembers: vi.fn(),
+    listUsers: vi.fn(),
+    updateProjectMember: vi.fn(),
+    upsertProjectMember: vi.fn(),
+  };
+});
 
 function renderPage() {
   const queryClient = new QueryClient({
@@ -178,6 +183,90 @@ describe("ProjectDetailPage", () => {
         "project-1",
         "user-1",
       );
+    });
+  });
+
+  it("shows a friendly permission message when project members are forbidden", async () => {
+    mockedListProjectMembers.mockRejectedValue(
+      new APIError(
+        403,
+        "project membership visibility requires a project membership or global admin",
+      ),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("You do not have permission to view project members."),
+      ).toBeTruthy();
+    });
+  });
+
+  it("keeps a load prefix for generic member list failures", async () => {
+    mockedListProjectMembers.mockRejectedValue(
+      new Error("backend unavailable"),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Failed to load members: backend unavailable"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows friendly mutation errors for member changes", async () => {
+    mockedUpsertProjectMember.mockRejectedValueOnce(
+      new APIError(403, "global admin or project owner is required"),
+    );
+    mockedUpdateProjectMember.mockRejectedValueOnce(
+      new APIError(401, "missing user email header"),
+    );
+    mockedDeleteProjectMember.mockRejectedValueOnce(
+      new APIError(403, "global admin or project owner is required"),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("maintainer@example.com")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("User ID"), {
+      target: { value: "user-2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Member" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "You do not have permission to manage project members.",
+        ),
+      ).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Role for maintainer@example.com"), {
+      target: { value: "owner" },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "Coyote is configured for external authentication. Sign in through the configured gateway or proxy, then retry.",
+        ),
+      ).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "You do not have permission to manage project members.",
+        ),
+      ).toBeTruthy();
     });
   });
 });

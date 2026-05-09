@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  APIError,
+  formatAPIErrorMessage,
   listBuilds,
   getBuild,
   getBuildSteps,
@@ -26,6 +28,7 @@ import {
   upsertProjectMember,
   updateProjectMember,
   deleteProjectMember,
+  isAPIErrorStatus,
 } from "../api/client";
 
 describe("API client - types", () => {
@@ -492,5 +495,58 @@ describe("API client - types", () => {
       "/api/projects/project-1/members/user-1",
       { method: "DELETE" },
     );
+  });
+
+  it("formats API auth and forbidden errors for small UI surfaces", () => {
+    const unauthorized = new APIError(401, "missing user email header");
+    const forbidden = new APIError(403, "global admin is required");
+    const generic = new APIError(500, "internal server error");
+
+    expect(isAPIErrorStatus(unauthorized, 401)).toBe(true);
+    expect(isAPIErrorStatus(unauthorized, 403)).toBe(false);
+    expect(isAPIErrorStatus(new Error("boom"), 401)).toBe(false);
+
+    expect(
+      formatAPIErrorMessage(unauthorized, "fallback forbidden message"),
+    ).toContain("configured for external authentication");
+    expect(formatAPIErrorMessage(forbidden, "fallback forbidden message")).toBe(
+      "fallback forbidden message",
+    );
+    expect(
+      formatAPIErrorMessage(
+        generic,
+        "fallback forbidden message",
+        "Failed to load users",
+      ),
+    ).toBe("Failed to load users: API 500: internal server error");
+    expect(
+      formatAPIErrorMessage("raw failure", "fallback forbidden message"),
+    ).toBe("raw failure");
+  });
+
+  it("throws APIError for JSON and plain-text error responses", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () =>
+          JSON.stringify({ error: { message: "global admin is required" } }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: async () => "internal server error",
+      } as Response);
+
+    await expect(listUsers()).rejects.toMatchObject({
+      name: "APIError",
+      status: 403,
+      message: "API 403: global admin is required",
+    });
+    await expect(deleteUser("user-1")).rejects.toMatchObject({
+      name: "APIError",
+      status: 500,
+      message: "API 500: internal server error",
+    });
   });
 });

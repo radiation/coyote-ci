@@ -2,11 +2,13 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 )
@@ -99,4 +101,54 @@ func TestMiddleware_DisabledModePreservesRequest(t *testing.T) {
 	if !called || res.Code != http.StatusNoContent {
 		t.Fatalf("expected request to pass through, called=%v status=%d", called, res.Code)
 	}
+}
+
+func TestCanViewProjectMembers(t *testing.T) {
+	lookup := stubProjectRoleLookup{
+		membership: domain.ProjectMembership{
+			ProjectID: "project-1",
+			UserID:    "user-1",
+			Role:      domain.ProjectMemberRoleViewer,
+		},
+	}
+	viewer := domain.User{ID: "user-1", GlobalRole: domain.GlobalRoleUser}
+	admin := domain.User{ID: "admin-1", GlobalRole: domain.GlobalRoleAdmin}
+
+	allowed, err := CanViewProjectMembers(context.Background(), lookup, ModeDisabled, domain.User{}, "project-1")
+	if err != nil || !allowed {
+		t.Fatalf("expected disabled mode to allow access, allowed=%v err=%v", allowed, err)
+	}
+
+	allowed, err = CanViewProjectMembers(context.Background(), lookup, ModeHeader, admin, "project-1")
+	if err != nil || !allowed {
+		t.Fatalf("expected admin to allow access, allowed=%v err=%v", allowed, err)
+	}
+
+	allowed, err = CanViewProjectMembers(context.Background(), lookup, ModeHeader, viewer, "project-1")
+	if err != nil || !allowed {
+		t.Fatalf("expected viewer membership to allow access, allowed=%v err=%v", allowed, err)
+	}
+
+	allowed, err = CanViewProjectMembers(context.Background(), stubProjectRoleLookup{err: repository.ErrProjectMembershipNotFound}, ModeHeader, viewer, "project-1")
+	if err != nil || allowed {
+		t.Fatalf("expected missing membership to deny without error, allowed=%v err=%v", allowed, err)
+	}
+
+	expectedErr := errors.New("lookup failed")
+	allowed, err = CanViewProjectMembers(context.Background(), stubProjectRoleLookup{err: expectedErr}, ModeHeader, viewer, "project-1")
+	if !errors.Is(err, expectedErr) || allowed {
+		t.Fatalf("expected lookup error to bubble, allowed=%v err=%v", allowed, err)
+	}
+}
+
+type stubProjectRoleLookup struct {
+	membership domain.ProjectMembership
+	err        error
+}
+
+func (s stubProjectRoleLookup) GetProjectMembership(_ context.Context, _ string, _ string) (domain.ProjectMembership, error) {
+	if s.err != nil {
+		return domain.ProjectMembership{}, s.err
+	}
+	return s.membership, nil
 }

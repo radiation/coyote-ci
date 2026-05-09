@@ -50,7 +50,11 @@ In `disabled` mode, local/dev behavior remains unchanged and `/api/me` returns a
 
 Protected user-facing routes under `/api` require the trusted user header in `header` mode. Health and machine-ingress endpoints remain reachable without user headers: `/api/health`, `/api/healthz`, `/api/events/push`, and `/api/webhooks/github`. Push-event ingress still relies on `X-Coyote-Secret`, and GitHub webhooks still rely on their HMAC signature.
 
-Authorization currently enforces only the management boundaries introduced with this foundation: user management requires a global admin in header mode, and project membership listing and membership mutation require a global admin or project owner. Build, job, artifact, queue, and broader endpoint-level RBAC is intentionally deferred.
+Header mode must only be used behind a trusted authentication proxy or identity-aware gateway that authenticates the caller, strips any caller-supplied identity headers, and injects `X-Coyote-User-Email` and `X-Coyote-User-Name` on Coyote's behalf. Do not expose header mode directly to the public internet without that sanitizing proxy layer.
+
+`BOOTSTRAP_ADMIN_EMAILS` is a comma-separated list evaluated when users are provisioned or seen through trusted-header auth. Matching emails are promoted to global admin to avoid first-admin bootstrap deadlock. It is a bootstrap seam only, not a replacement for future group or directory sync.
+
+Authorization currently enforces only the management boundaries introduced with this foundation: user management requires a global admin in header mode, project membership listing is visible to global admins and project members, and project membership mutation requires a global admin or project owner. Build, job, artifact, queue, and broader endpoint-level RBAC is intentionally deferred.
 
 Backend validation command for this slice:
 

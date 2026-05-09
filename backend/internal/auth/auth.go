@@ -135,6 +135,16 @@ func HasProjectRole(ctx context.Context, lookup ProjectRoleLookup, user domain.U
 	return projectRoleRank(membership.Role) >= projectRoleRank(minimum), nil
 }
 
+func CanViewProjectMembers(ctx context.Context, lookup ProjectRoleLookup, mode Mode, user domain.User, projectID string) (bool, error) {
+	if mode == ModeDisabled {
+		return true, nil
+	}
+	if IsGlobalAdmin(user) {
+		return true, nil
+	}
+	return HasProjectRole(ctx, lookup, user, projectID, domain.ProjectMemberRoleViewer)
+}
+
 func CanManageProjectMembers(ctx context.Context, lookup ProjectRoleLookup, mode Mode, user domain.User, projectID string) (bool, error) {
 	if mode == ModeDisabled {
 		return true, nil

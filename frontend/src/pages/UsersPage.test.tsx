@@ -2,14 +2,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { UsersPage } from "./UsersPage";
-import { createUser, deleteUser, listUsers, updateUser } from "../api";
+import {
+  APIError,
+  createUser,
+  deleteUser,
+  listUsers,
+  updateUser,
+} from "../api";
 
-vi.mock("../api", () => ({
-  createUser: vi.fn(),
-  deleteUser: vi.fn(),
-  listUsers: vi.fn(),
-  updateUser: vi.fn(),
-}));
+vi.mock("../api", async () => {
+  const actual = await vi.importActual<typeof import("../api")>("../api");
+  return {
+    ...actual,
+    createUser: vi.fn(),
+    deleteUser: vi.fn(),
+    listUsers: vi.fn(),
+    updateUser: vi.fn(),
+  };
+});
 
 function renderPage() {
   const queryClient = new QueryClient({
@@ -108,6 +118,79 @@ describe("UsersPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => {
       expect(mockedDeleteUser).toHaveBeenCalledWith("user-1");
+    });
+  });
+
+  it("shows a friendly forbidden message for non-admin access", async () => {
+    mockedListUsers.mockRejectedValue(
+      new APIError(403, "global admin is required"),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("You do not have permission to manage users."),
+      ).toBeTruthy();
+    });
+  });
+
+  it("keeps a load prefix for generic user list failures", async () => {
+    mockedListUsers.mockRejectedValue(new Error("backend unavailable"));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Failed to load users: backend unavailable"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows friendly mutation errors for create, update, and delete", async () => {
+    mockedCreateUser.mockRejectedValueOnce(
+      new APIError(403, "global admin is required"),
+    );
+    mockedUpdateUser.mockRejectedValueOnce(
+      new APIError(401, "missing user email header"),
+    );
+    mockedDeleteUser.mockRejectedValueOnce(
+      new APIError(403, "global admin is required"),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("admin@example.com")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "dev@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create User" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("You do not have permission to manage users."),
+      ).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "Coyote is configured for external authentication. Sign in through the configured gateway or proxy, then retry.",
+        ),
+      ).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("You do not have permission to manage users."),
+      ).toBeTruthy();
     });
   });
 });
