@@ -202,4 +202,57 @@ describe("ProjectDetailPage", () => {
       ).toBeTruthy();
     });
   });
+
+  it("shows friendly mutation errors for member changes", async () => {
+    mockedUpsertProjectMember.mockRejectedValueOnce(
+      new APIError(403, "global admin or project owner is required"),
+    );
+    mockedUpdateProjectMember.mockRejectedValueOnce(
+      new APIError(401, "missing user email header"),
+    );
+    mockedDeleteProjectMember.mockRejectedValueOnce(
+      new APIError(403, "global admin or project owner is required"),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("maintainer@example.com")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("User ID"), {
+      target: { value: "user-2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Member" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "You do not have permission to manage project members.",
+        ),
+      ).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Role for maintainer@example.com"), {
+      target: { value: "owner" },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "Coyote is configured for external authentication. Sign in through the configured gateway or proxy, then retry.",
+        ),
+      ).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "You do not have permission to manage project members.",
+        ),
+      ).toBeTruthy();
+    });
+  });
 });

@@ -134,4 +134,51 @@ describe("UsersPage", () => {
       ).toBeTruthy();
     });
   });
+
+  it("shows friendly mutation errors for create, update, and delete", async () => {
+    mockedCreateUser.mockRejectedValueOnce(
+      new APIError(403, "global admin is required"),
+    );
+    mockedUpdateUser.mockRejectedValueOnce(
+      new APIError(401, "missing user email header"),
+    );
+    mockedDeleteUser.mockRejectedValueOnce(
+      new APIError(403, "global admin is required"),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("admin@example.com")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "dev@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create User" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("You do not have permission to manage users."),
+      ).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "Coyote is configured for external authentication. Sign in through the configured gateway or proxy, then retry.",
+        ),
+      ).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("You do not have permission to manage users."),
+      ).toBeTruthy();
+    });
+  });
 });

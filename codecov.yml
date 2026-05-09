@@ -21,7 +21,7 @@ coverage:
         flags: [frontend]
     patch:
       default:
-        target: auto
+        target: 80%
 
 flags:
   backend:

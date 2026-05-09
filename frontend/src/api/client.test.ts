@@ -515,5 +515,34 @@ describe("API client - types", () => {
     expect(formatAPIErrorMessage(generic, "fallback forbidden message")).toBe(
       "API 500: internal server error",
     );
+    expect(
+      formatAPIErrorMessage("raw failure", "fallback forbidden message"),
+    ).toBe("raw failure");
+  });
+
+  it("throws APIError for JSON and plain-text error responses", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () =>
+          JSON.stringify({ error: { message: "global admin is required" } }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: async () => "internal server error",
+      } as Response);
+
+    await expect(listUsers()).rejects.toMatchObject({
+      name: "APIError",
+      status: 403,
+      message: "API 403: global admin is required",
+    });
+    await expect(deleteUser("user-1")).rejects.toMatchObject({
+      name: "APIError",
+      status: 500,
+      message: "API 500: internal server error",
+    });
   });
 });
