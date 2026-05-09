@@ -18,6 +18,7 @@ const maxRequestBodySize = 1 << 20 // 1 MiB
 
 type routerConfig struct {
 	authMiddleware           func(nethttp.Handler) nethttp.Handler
+	authHandler              *handler.AuthHandler
 	userHandler              *handler.UserHandler
 	projectMembershipHandler *handler.ProjectMembershipHandler
 }
@@ -33,6 +34,12 @@ func WithAuthMiddleware(middleware func(nethttp.Handler) nethttp.Handler) Router
 func WithUserHandler(userHandler *handler.UserHandler) RouterOption {
 	return func(cfg *routerConfig) {
 		cfg.userHandler = userHandler
+	}
+}
+
+func WithAuthHandler(authHandler *handler.AuthHandler) RouterOption {
+	return func(cfg *routerConfig) {
+		cfg.authHandler = authHandler
 	}
 }
 
@@ -59,6 +66,11 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 	// Keep bare health endpoints for simple infra probes.
 	r.Get("/health", handler.Health)
 	r.Get("/healthz", handler.Health)
+	if cfg.authHandler != nil {
+		r.Get("/auth/login", cfg.authHandler.Login)
+		r.Get("/auth/callback", cfg.authHandler.Callback)
+		r.Post("/auth/logout", cfg.authHandler.Logout)
+	}
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", handler.Health)

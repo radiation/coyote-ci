@@ -103,6 +103,65 @@ func TestMiddleware_DisabledModePreservesRequest(t *testing.T) {
 	}
 }
 
+func TestMiddleware_OIDCModeRequiresSession(t *testing.T) {
+	userService := service.NewUserService(memory.NewUserRepository())
+	sessions, err := NewCookieSessionManager(CookieSessionConfig{Secret: "test-session-secret"})
+	if err != nil {
+		t.Fatalf("create session manager failed: %v", err)
+	}
+	middleware := Middleware(MiddlewareConfig{Mode: ModeOIDC, Sessions: sessions}, userService)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/", nil))
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, res.Code)
+	}
+}
+
+func TestMiddleware_OIDCModeLoadsSessionUser(t *testing.T) {
+	userRepo := memory.NewUserRepository()
+	userService := service.NewUserService(userRepo)
+	created, err := userService.CreateUser(context.Background(), service.CreateUserInput{Email: "dev@example.com"})
+	if err != nil {
+		t.Fatalf("create user failed: %v", err)
+	}
+	sessions, err := NewCookieSessionManager(CookieSessionConfig{Secret: "test-session-secret"})
+	if err != nil {
+		t.Fatalf("create session manager failed: %v", err)
+	}
+	loginRes := httptest.NewRecorder()
+	if err := sessions.CreateSession(loginRes, created.ID); err != nil {
+		t.Fatalf("create session failed: %v", err)
+	}
+
+	var got domain.User
+	middleware := Middleware(MiddlewareConfig{Mode: ModeOIDC, Sessions: sessions}, userService)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ok bool
+		got, ok = CurrentUser(r.Context())
+		if !ok {
+			t.Fatalf("expected current user in context")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	for _, cookie := range loginRes.Result().Cookies() {
+		req.AddCookie(cookie)
+	}
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, res.Code)
+	}
+	if got.ID != created.ID {
+		t.Fatalf("expected session user %q, got %q", created.ID, got.ID)
+	}
+}
+
 func TestCanViewProjectMembers(t *testing.T) {
 	lookup := stubProjectRoleLookup{
 		membership: domain.ProjectMembership{
@@ -138,6 +197,27 @@ func TestCanViewProjectMembers(t *testing.T) {
 	allowed, err = CanViewProjectMembers(context.Background(), stubProjectRoleLookup{err: expectedErr}, ModeHeader, viewer, "project-1")
 	if !errors.Is(err, expectedErr) || allowed {
 		t.Fatalf("expected lookup error to bubble, allowed=%v err=%v", allowed, err)
+	}
+}
+
+func TestProjectRoleCapabilities(t *testing.T) {
+	maintainerLookup := stubProjectRoleLookup{membership: domain.ProjectMembership{ProjectID: "project-1", UserID: "user-1", Role: domain.ProjectMemberRoleMaintainer}}
+	viewerLookup := stubProjectRoleLookup{membership: domain.ProjectMembership{ProjectID: "project-1", UserID: "user-1", Role: domain.ProjectMemberRoleViewer}}
+	user := domain.User{ID: "user-1", GlobalRole: domain.GlobalRoleUser}
+
+	allowed, err := CanManageProjectJobs(context.Background(), maintainerLookup, ModeHeader, user, "project-1")
+	if err != nil || !allowed {
+		t.Fatalf("expected maintainer to manage jobs, allowed=%v err=%v", allowed, err)
+	}
+
+	allowed, err = CanManageProjectJobs(context.Background(), viewerLookup, ModeHeader, user, "project-1")
+	if err != nil || allowed {
+		t.Fatalf("expected viewer to be denied job management, allowed=%v err=%v", allowed, err)
+	}
+
+	allowed, err = CanDownloadArtifact(context.Background(), viewerLookup, ModeHeader, user, "project-1")
+	if err != nil || !allowed {
+		t.Fatalf("expected viewer to download artifacts, allowed=%v err=%v", allowed, err)
 	}
 }
 

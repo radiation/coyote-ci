@@ -20,6 +20,8 @@ import {
   runJob,
   listSourceCredentials,
   getMe,
+  authLoginURL,
+  logoutSession,
   listUsers,
   createUser,
   updateUser,
@@ -50,6 +52,8 @@ describe("API client - types", () => {
     expect(typeof runJob).toBe("function");
     expect(typeof listSourceCredentials).toBe("function");
     expect(typeof getMe).toBe("function");
+    expect(typeof authLoginURL).toBe("function");
+    expect(typeof logoutSession).toBe("function");
     expect(typeof listUsers).toBe("function");
     expect(typeof createUser).toBe("function");
     expect(typeof updateUser).toBe("function");
@@ -400,6 +404,21 @@ describe("API client - types", () => {
     const me = await getMe();
     expect(me.auth_mode).toBe("disabled");
     expect(fetchMock).toHaveBeenCalledWith("/api/me", undefined);
+  });
+
+  it("uses auth login and logout endpoints outside /api", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      text: async () => "",
+    } as Response);
+
+    expect(authLoginURL()).toBe("/auth/login");
+    await logoutSession();
+
+    expect(fetchMock).toHaveBeenCalledWith("/auth/logout", {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    });
   });
 
   it("uses identity and project membership endpoints", async () => {

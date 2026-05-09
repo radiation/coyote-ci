@@ -81,6 +81,57 @@ func TestUserService_DuplicateEmailConflict(t *testing.T) {
 	}
 }
 
+func TestUserService_ResolveOIDCUserProvisioningAndBootstrap(t *testing.T) {
+	service := NewUserService(memory.NewUserRepository())
+	displayName := "Admin User"
+
+	user, err := service.ResolveOIDCUser(context.Background(), "ADMIN@example.com", &displayName, map[string]struct{}{"admin@example.com": {}})
+	if err != nil {
+		t.Fatalf("resolve oidc user failed: %v", err)
+	}
+	if user.Email != "admin@example.com" {
+		t.Fatalf("expected normalized email, got %q", user.Email)
+	}
+	if user.DisplayName == nil || *user.DisplayName != displayName {
+		t.Fatalf("expected display name %q, got %v", displayName, user.DisplayName)
+	}
+	if user.GlobalRole != domain.GlobalRoleAdmin {
+		t.Fatalf("expected bootstrap admin, got %q", user.GlobalRole)
+	}
+}
+
+func TestUserService_ResolveOIDCUserUpdatesDisplayNameWithoutDemoting(t *testing.T) {
+	service := NewUserService(memory.NewUserRepository())
+	created, err := service.CreateUser(context.Background(), CreateUserInput{Email: "admin@example.com", GlobalRole: "admin"})
+	if err != nil {
+		t.Fatalf("create admin failed: %v", err)
+	}
+	displayName := "Updated Admin"
+
+	resolved, err := service.ResolveOIDCUser(context.Background(), "admin@example.com", &displayName, nil)
+	if err != nil {
+		t.Fatalf("resolve oidc user failed: %v", err)
+	}
+	if resolved.ID != created.ID {
+		t.Fatalf("expected existing user %q, got %q", created.ID, resolved.ID)
+	}
+	if resolved.GlobalRole != domain.GlobalRoleAdmin {
+		t.Fatalf("expected existing admin not to be demoted, got %q", resolved.GlobalRole)
+	}
+	if resolved.DisplayName == nil || *resolved.DisplayName != displayName {
+		t.Fatalf("expected updated display name, got %v", resolved.DisplayName)
+	}
+}
+
+func TestUserService_ResolveOIDCUserRequiresEmail(t *testing.T) {
+	service := NewUserService(memory.NewUserRepository())
+
+	_, err := service.ResolveOIDCUser(context.Background(), " ", nil, nil)
+	if !errors.Is(err, ErrUserEmailRequired) {
+		t.Fatalf("expected ErrUserEmailRequired, got %v", err)
+	}
+}
+
 func TestUserService_Validation(t *testing.T) {
 	service := NewUserService(memory.NewUserRepository())
 

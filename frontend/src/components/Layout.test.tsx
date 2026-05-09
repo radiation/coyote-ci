@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { Layout } from "./Layout";
 import { APIError, getMe } from "../api";
+import { AuthProvider } from "../auth";
 import { ThemeProvider } from "../theme";
 import { installMockLocalStorage } from "../test/browserMocks";
 import { THEME_STORAGE_KEY } from "../theme-context";
@@ -33,6 +34,32 @@ function installMatchMedia(initialMatches: boolean) {
   });
 }
 
+function renderLayout(navigate = vi.fn()) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  });
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <AuthProvider navigate={navigate}>
+          <MemoryRouter initialEntries={["/artifacts"]}>
+            <Routes>
+              <Route element={<Layout />}>
+                <Route path="/artifacts" element={<div>Artifacts page</div>} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </AuthProvider>
+      </ThemeProvider>
+    </QueryClientProvider>,
+  );
+
+  return { navigate };
+}
+
 describe("Layout", () => {
   const mockedGetMe = vi.mocked(getMe);
 
@@ -53,27 +80,9 @@ describe("Layout", () => {
   });
 
   it("renders a persistent theme toggle and updates the preference", async () => {
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-      },
-    });
+    renderLayout();
 
-    render(
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider>
-          <MemoryRouter initialEntries={["/artifacts"]}>
-            <Routes>
-              <Route element={<Layout />}>
-                <Route path="/artifacts" element={<div>Artifacts page</div>} />
-              </Route>
-            </Routes>
-          </MemoryRouter>
-        </ThemeProvider>
-      </QueryClientProvider>,
-    );
-
-    const toggle = screen.getByRole("button", {
+    const toggle = await screen.findByRole("button", {
       name: "Switch to dark theme",
     });
 
@@ -105,59 +114,25 @@ describe("Layout", () => {
         global_role: "user",
       },
     });
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-      },
-    });
-
-    render(
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider>
-          <MemoryRouter initialEntries={["/artifacts"]}>
-            <Routes>
-              <Route element={<Layout />}>
-                <Route path="/artifacts" element={<div>Artifacts page</div>} />
-              </Route>
-            </Routes>
-          </MemoryRouter>
-        </ThemeProvider>
-      </QueryClientProvider>,
-    );
+    renderLayout();
 
     await waitFor(() => {
       expect(screen.queryByRole("link", { name: "Users" })).toBeNull();
     });
   });
 
-  it("shows an external-auth message when /me returns 401", async () => {
+  it("shows sign-in UI when /me returns 401", async () => {
     mockedGetMe.mockRejectedValue(
       new APIError(401, "missing user email header"),
     );
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-      },
-    });
 
-    render(
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider>
-          <MemoryRouter initialEntries={["/artifacts"]}>
-            <Routes>
-              <Route element={<Layout />}>
-                <Route path="/artifacts" element={<div>Artifacts page</div>} />
-              </Route>
-            </Routes>
-          </MemoryRouter>
-        </ThemeProvider>
-      </QueryClientProvider>,
-    );
+    const { navigate } = renderLayout();
 
     await waitFor(() => {
-      expect(
-        screen.getByText(/configured for external authentication/i),
-      ).toBeTruthy();
+      expect(screen.getByText("Sign in to Coyote CI")).toBeTruthy();
     });
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(navigate).toHaveBeenCalledWith("/auth/login");
   });
 });

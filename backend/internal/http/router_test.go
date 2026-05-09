@@ -113,6 +113,69 @@ func TestNewRouter_HeaderModeMeRouteResolvesUser(t *testing.T) {
 	}
 }
 
+func TestNewRouter_OIDCModeMeRouteRequiresSession(t *testing.T) {
+	r, _ := newOIDCTestRouter(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusUnauthorized, res.Code, res.Body.String())
+	}
+}
+
+func TestNewRouter_OIDCModeMeRouteUsesSession(t *testing.T) {
+	r, sessions := newOIDCTestRouter(t)
+	loginRes := httptest.NewRecorder()
+	if err := sessions.CreateSession(loginRes, "user-1"); err != nil {
+		t.Fatalf("create session failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	for _, cookie := range loginRes.Result().Cookies() {
+		req.AddCookie(cookie)
+	}
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+	var body struct {
+		Data struct {
+			AuthMode string `json:"auth_mode"`
+			User     struct {
+				Email string `json:"email"`
+			} `json:"user"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if body.Data.AuthMode != string(auth.ModeOIDC) || body.Data.User.Email != "user@example.com" {
+		t.Fatalf("unexpected me response: %+v", body.Data)
+	}
+}
+
+func TestNewRouter_OIDCModeHealthAndIngressBypassSession(t *testing.T) {
+	r, _ := newOIDCTestRouter(t)
+
+	healthReq := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	healthRes := httptest.NewRecorder()
+	r.ServeHTTP(healthRes, healthReq)
+	if healthRes.Code != http.StatusOK {
+		t.Fatalf("expected api health status %d, got %d", http.StatusOK, healthRes.Code)
+	}
+
+	pushReq := httptest.NewRequest(http.MethodPost, "/api/events/push", bytes.NewBufferString(`{"repository_url":"https://github.com/example/backend.git","ref":"refs/heads/main","commit_sha":"abc123"}`))
+	pushRes := httptest.NewRecorder()
+	r.ServeHTTP(pushRes, pushReq)
+	if pushRes.Code != http.StatusOK {
+		t.Fatalf("expected push ingress status %d, got %d body=%s", http.StatusOK, pushRes.Code, pushRes.Body.String())
+	}
+}
+
 func TestNewRouter_DisabledModePreservesNormalAPIRoutes(t *testing.T) {
 	r := newIdentityTestRouter(auth.ModeDisabled, "push-secret", "github-secret")
 
@@ -193,6 +256,19 @@ func TestNewRouter_HeaderModeProjectMembershipMutationForbiddenForViewer(t *test
 	}
 }
 
+func TestNewRouter_HeaderModeProjectMembershipMutationForbiddenForMaintainer(t *testing.T) {
+	r := newProjectMembershipTestRouter(t, auth.ModeHeader)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/projects/project-1/members/target-1", bytes.NewBufferString(`{"role":"viewer"}`))
+	req.Header.Set("X-Coyote-User-Email", "maintainer@example.com")
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusForbidden, res.Code, res.Body.String())
+	}
+}
+
 func TestNewRouter_DisabledModeProjectMembershipRouteUsesSyntheticIdentity(t *testing.T) {
 	r := newProjectMembershipTestRouter(t, auth.ModeDisabled)
 
@@ -202,6 +278,83 @@ func TestNewRouter_DisabledModeProjectMembershipRouteUsesSyntheticIdentity(t *te
 
 	if res.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+}
+
+func TestNewRouter_RBACJobMutationRequiresMaintainer(t *testing.T) {
+	fixture := newRBACTestRouter(t)
+	body := `{"project_id":"` + fixture.projectID + `","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
+
+	viewerReq := httptest.NewRequest(http.MethodPost, "/api/jobs/", bytes.NewBufferString(body))
+	viewerReq.Header.Set("X-Coyote-User-Email", "viewer@example.com")
+	viewerRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(viewerRes, viewerReq)
+	if viewerRes.Code != http.StatusForbidden {
+		t.Fatalf("expected viewer create status %d, got %d body=%s", http.StatusForbidden, viewerRes.Code, viewerRes.Body.String())
+	}
+
+	maintainerReq := httptest.NewRequest(http.MethodPost, "/api/jobs/", bytes.NewBufferString(body))
+	maintainerReq.Header.Set("X-Coyote-User-Email", "maintainer@example.com")
+	maintainerRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(maintainerRes, maintainerReq)
+	if maintainerRes.Code != http.StatusCreated {
+		t.Fatalf("expected maintainer create status %d, got %d body=%s", http.StatusCreated, maintainerRes.Code, maintainerRes.Body.String())
+	}
+}
+
+func TestNewRouter_RBACBuildMutationRequiresMaintainer(t *testing.T) {
+	fixture := newRBACTestRouter(t)
+
+	viewerReq := httptest.NewRequest(http.MethodPost, "/api/builds/"+fixture.buildID+"/queue", bytes.NewBufferString(`{}`))
+	viewerReq.Header.Set("X-Coyote-User-Email", "viewer@example.com")
+	viewerRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(viewerRes, viewerReq)
+	if viewerRes.Code != http.StatusForbidden {
+		t.Fatalf("expected viewer queue status %d, got %d body=%s", http.StatusForbidden, viewerRes.Code, viewerRes.Body.String())
+	}
+
+	maintainerReq := httptest.NewRequest(http.MethodPost, "/api/builds/"+fixture.buildID+"/queue", bytes.NewBufferString(`{}`))
+	maintainerReq.Header.Set("X-Coyote-User-Email", "maintainer@example.com")
+	maintainerRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(maintainerRes, maintainerReq)
+	if maintainerRes.Code != http.StatusOK {
+		t.Fatalf("expected maintainer queue status %d, got %d body=%s", http.StatusOK, maintainerRes.Code, maintainerRes.Body.String())
+	}
+}
+
+func TestNewRouter_RBACProjectAndArtifactReadsRequireMembership(t *testing.T) {
+	fixture := newRBACTestRouter(t)
+
+	outsiderProjectReq := httptest.NewRequest(http.MethodGet, "/api/projects/"+fixture.projectID, nil)
+	outsiderProjectReq.Header.Set("X-Coyote-User-Email", "outsider@example.com")
+	outsiderProjectRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(outsiderProjectRes, outsiderProjectReq)
+	if outsiderProjectRes.Code != http.StatusForbidden {
+		t.Fatalf("expected outsider project status %d, got %d body=%s", http.StatusForbidden, outsiderProjectRes.Code, outsiderProjectRes.Body.String())
+	}
+
+	viewerProjectReq := httptest.NewRequest(http.MethodGet, "/api/projects/"+fixture.projectID, nil)
+	viewerProjectReq.Header.Set("X-Coyote-User-Email", "viewer@example.com")
+	viewerProjectRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(viewerProjectRes, viewerProjectReq)
+	if viewerProjectRes.Code != http.StatusOK {
+		t.Fatalf("expected viewer project status %d, got %d body=%s", http.StatusOK, viewerProjectRes.Code, viewerProjectRes.Body.String())
+	}
+
+	outsiderArtifactReq := httptest.NewRequest(http.MethodGet, "/api/builds/"+fixture.buildID+"/artifacts/missing/download", nil)
+	outsiderArtifactReq.Header.Set("X-Coyote-User-Email", "outsider@example.com")
+	outsiderArtifactRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(outsiderArtifactRes, outsiderArtifactReq)
+	if outsiderArtifactRes.Code != http.StatusForbidden {
+		t.Fatalf("expected outsider artifact status %d, got %d body=%s", http.StatusForbidden, outsiderArtifactRes.Code, outsiderArtifactRes.Body.String())
+	}
+
+	viewerArtifactReq := httptest.NewRequest(http.MethodGet, "/api/builds/"+fixture.buildID+"/artifacts/missing/download", nil)
+	viewerArtifactReq.Header.Set("X-Coyote-User-Email", "viewer@example.com")
+	viewerArtifactRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(viewerArtifactRes, viewerArtifactReq)
+	if viewerArtifactRes.Code != http.StatusNotFound {
+		t.Fatalf("expected viewer artifact status %d, got %d body=%s", http.StatusNotFound, viewerArtifactRes.Code, viewerArtifactRes.Body.String())
 	}
 }
 
@@ -383,6 +536,42 @@ func newIdentityTestRouter(mode auth.Mode, pushEventSecret string, githubWebhook
 	)
 }
 
+func newOIDCTestRouter(t *testing.T) (http.Handler, *auth.CookieSessionManager) {
+	t.Helper()
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	buildHandler := handler.NewBuildHandler(buildSvc)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jobHandler := handler.NewJobHandler(jobSvc)
+	webhookSvc := webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc)
+	eventHandler := handler.NewEventHandler(jobSvc, webhookSvc, observability.NewNoopWebhookIngressMetrics(), "")
+	userRepo := repositorymemory.NewUserRepository()
+	if _, err := userRepo.Create(context.Background(), domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("create user failed: %v", err)
+	}
+	userService := service.NewUserService(userRepo)
+	sessions, err := auth.NewCookieSessionManager(auth.CookieSessionConfig{Secret: "test-session-secret"})
+	if err != nil {
+		t.Fatalf("create session manager failed: %v", err)
+	}
+	authMiddleware := auth.Middleware(auth.MiddlewareConfig{Mode: auth.ModeOIDC, Sessions: sessions}, userService)
+	userHandler := handler.NewUserHandler(userService, auth.ModeOIDC)
+
+	return NewRouter(
+		buildHandler,
+		nil,
+		jobHandler,
+		nil,
+		nil,
+		nil,
+		eventHandler,
+		"",
+		WithAuthMiddleware(authMiddleware),
+		WithUserHandler(userHandler),
+	), sessions
+}
+
 func newProjectMembershipTestRouter(t *testing.T, mode auth.Mode) http.Handler {
 	t.Helper()
 	ctx := context.Background()
@@ -415,6 +604,10 @@ func newProjectMembershipTestRouter(t *testing.T, mode auth.Mode) http.Handler {
 	if err != nil {
 		t.Fatalf("create owner failed: %v", err)
 	}
+	maintainer, err := userRepo.Create(ctx, domain.User{ID: "maintainer-1", Email: "maintainer@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("create maintainer failed: %v", err)
+	}
 	if _, err := userRepo.Create(ctx, domain.User{ID: "target-1", Email: "target@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatalf("create target failed: %v", err)
 	}
@@ -423,6 +616,9 @@ func newProjectMembershipTestRouter(t *testing.T, mode auth.Mode) http.Handler {
 	}
 	if _, err := membershipService.UpsertProjectMembership(ctx, service.UpsertProjectMembershipInput{ProjectID: "project-1", UserID: owner.ID, Role: "owner"}); err != nil {
 		t.Fatalf("create owner membership failed: %v", err)
+	}
+	if _, err := membershipService.UpsertProjectMembership(ctx, service.UpsertProjectMembershipInput{ProjectID: "project-1", UserID: maintainer.ID, Role: "maintainer"}); err != nil {
+		t.Fatalf("create maintainer membership failed: %v", err)
 	}
 
 	return NewRouter(
@@ -437,6 +633,82 @@ func newProjectMembershipTestRouter(t *testing.T, mode auth.Mode) http.Handler {
 		WithAuthMiddleware(authMiddleware),
 		WithProjectMembershipHandler(membershipHandler),
 	)
+}
+
+type rbacRouterFixture struct {
+	router    http.Handler
+	projectID string
+	buildID   string
+}
+
+func newRBACTestRouter(t *testing.T) rbacRouterFixture {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	userRepo := repositorymemory.NewUserRepository()
+	membershipRepo := repositorymemory.NewProjectMembershipRepository(projectRepo, userRepo)
+	membershipService := service.NewProjectMembershipService(projectRepo, membershipRepo)
+	projectService := service.NewProjectService(projectRepo)
+	userService := service.NewUserService(userRepo)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
+
+	project, err := projectRepo.Create(ctx, domain.Project{ID: "11111111-1111-1111-1111-111111111111", Name: "Platform", Slug: "platform-rbac", CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	users := []domain.User{
+		{ID: "owner-rbac", Email: "owner@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now},
+		{ID: "maintainer-rbac", Email: "maintainer@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now},
+		{ID: "viewer-rbac", Email: "viewer@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now},
+		{ID: "outsider-rbac", Email: "outsider@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now},
+	}
+	for _, user := range users {
+		if _, createErr := userRepo.Create(ctx, user); createErr != nil {
+			t.Fatalf("create user %s failed: %v", user.Email, createErr)
+		}
+	}
+	memberships := []service.UpsertProjectMembershipInput{
+		{ProjectID: project.ID, UserID: "owner-rbac", Role: "owner"},
+		{ProjectID: project.ID, UserID: "maintainer-rbac", Role: "maintainer"},
+		{ProjectID: project.ID, UserID: "viewer-rbac", Role: "viewer"},
+	}
+	for _, membership := range memberships {
+		if _, membershipErr := membershipService.UpsertProjectMembership(ctx, membership); membershipErr != nil {
+			t.Fatalf("create membership failed: %v", membershipErr)
+		}
+	}
+	build, err := buildSvc.CreateBuild(ctx, buildsvc.CreateBuildInput{ProjectID: project.ID})
+	if err != nil {
+		t.Fatalf("create build failed: %v", err)
+	}
+
+	buildHandler := handler.NewBuildHandler(buildSvc)
+	buildHandler.SetProjectService(projectService)
+	buildHandler.SetAuthorization(auth.ModeHeader, membershipService)
+	jobHandler := handler.NewJobHandler(jobSvc)
+	jobHandler.SetAuthorization(auth.ModeHeader, membershipService)
+	projectHandler := handler.NewProjectHandler(projectService, jobSvc)
+	projectHandler.SetAuthorization(auth.ModeHeader, membershipService)
+	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	authMiddleware := auth.Middleware(auth.MiddlewareConfig{Mode: auth.ModeHeader}, userService)
+
+	router := NewRouter(
+		buildHandler,
+		nil,
+		jobHandler,
+		projectHandler,
+		nil,
+		nil,
+		eventHandler,
+		"",
+		WithAuthMiddleware(authMiddleware),
+	)
+	return rbacRouterFixture{router: router, projectID: project.ID, buildID: build.ID}
 }
 
 func githubRouterTestSignature(secret string, body []byte) string {

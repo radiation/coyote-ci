@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
+	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
@@ -17,13 +18,22 @@ import (
 
 type SourceCredentialHandler struct {
 	credentials *service.SourceCredentialService
+	authMode    auth.Mode
 }
 
 func NewSourceCredentialHandler(credentials *service.SourceCredentialService) *SourceCredentialHandler {
 	return &SourceCredentialHandler{credentials: credentials}
 }
 
+func (h *SourceCredentialHandler) SetAuthorization(mode auth.Mode) {
+	h.authMode = mode
+}
+
 func (h *SourceCredentialHandler) CreateSourceCredential(w http.ResponseWriter, r *http.Request) {
+	if !authorizeGlobalAdmin(w, r, h.authMode, "global admin is required") {
+		return
+	}
+
 	var req api.CreateSourceCredentialRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
@@ -45,6 +55,10 @@ func (h *SourceCredentialHandler) CreateSourceCredential(w http.ResponseWriter, 
 }
 
 func (h *SourceCredentialHandler) ListSourceCredentials(w http.ResponseWriter, r *http.Request) {
+	if !authorizeGlobalAdmin(w, r, h.authMode, "global admin is required") {
+		return
+	}
+
 	credentials, err := h.credentials.ListSourceCredentials(r.Context())
 	if err != nil {
 		h.writeSourceCredentialError(w, err)
@@ -59,6 +73,10 @@ func (h *SourceCredentialHandler) ListSourceCredentials(w http.ResponseWriter, r
 }
 
 func (h *SourceCredentialHandler) GetSourceCredential(w http.ResponseWriter, r *http.Request) {
+	if !authorizeGlobalAdmin(w, r, h.authMode, "global admin is required") {
+		return
+	}
+
 	id := strings.TrimSpace(chi.URLParam(r, "credentialID"))
 	credential, err := h.credentials.GetSourceCredential(r.Context(), id)
 	if err != nil {
@@ -70,6 +88,10 @@ func (h *SourceCredentialHandler) GetSourceCredential(w http.ResponseWriter, r *
 }
 
 func (h *SourceCredentialHandler) UpdateSourceCredential(w http.ResponseWriter, r *http.Request) {
+	if !authorizeGlobalAdmin(w, r, h.authMode, "global admin is required") {
+		return
+	}
+
 	id := strings.TrimSpace(chi.URLParam(r, "credentialID"))
 	var req api.UpdateSourceCredentialRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -92,6 +114,10 @@ func (h *SourceCredentialHandler) UpdateSourceCredential(w http.ResponseWriter, 
 }
 
 func (h *SourceCredentialHandler) DeleteSourceCredential(w http.ResponseWriter, r *http.Request) {
+	if !authorizeGlobalAdmin(w, r, h.authMode, "global admin is required") {
+		return
+	}
+
 	id := strings.TrimSpace(chi.URLParam(r, "credentialID"))
 	if err := h.credentials.DeleteSourceCredential(r.Context(), id); err != nil {
 		h.writeSourceCredentialError(w, err)

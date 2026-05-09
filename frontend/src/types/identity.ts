@@ -15,7 +15,7 @@ export interface UserListResponse {
 }
 
 export interface MeResponse {
-  auth_mode: "disabled" | "header";
+  auth_mode: "disabled" | "header" | "oidc";
   user: User;
 }
 

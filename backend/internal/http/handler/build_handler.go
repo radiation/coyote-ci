@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
+	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -29,6 +30,8 @@ type BuildHandler struct {
 	buildService *buildsvc.BuildService
 	versionTags  *versiontagsvc.Service
 	projects     *service.ProjectService
+	authMode     auth.Mode
+	projectRoles auth.ProjectRoleLookup
 }
 
 // GetBuildStepLogs godoc
@@ -49,6 +52,9 @@ func (h *BuildHandler) GetBuildStepLogs(w http.ResponseWriter, r *http.Request) 
 	buildID := chi.URLParam(r, "buildID")
 	if buildID == "" {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "build id is required")
+		return
+	}
+	if _, ok := h.authorizeBuildRead(w, r, buildID); !ok {
 		return
 	}
 
@@ -129,6 +135,9 @@ func (h *BuildHandler) StreamBuildStepLogs(w http.ResponseWriter, r *http.Reques
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "build id is required")
 		return
 	}
+	if _, ok := h.authorizeBuildRead(w, r, buildID); !ok {
+		return
+	}
 
 	stepIndex, ok := parseStepIndex(w, r)
 	if !ok {
@@ -206,6 +215,11 @@ func (h *BuildHandler) SetProjectService(projects *service.ProjectService) {
 	h.projects = projects
 }
 
+func (h *BuildHandler) SetAuthorization(mode auth.Mode, projectRoles auth.ProjectRoleLookup) {
+	h.authMode = mode
+	h.projectRoles = projectRoles
+}
+
 // CreateBuild godoc
 // @Summary Create build
 // @Description Creates a new build in pending status.
@@ -221,6 +235,9 @@ func (h *BuildHandler) CreateBuild(w http.ResponseWriter, r *http.Request) {
 	var req api.CreateBuildRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, req.ProjectID, auth.CanTriggerBuild, "project owner or maintainer is required") {
 		return
 	}
 
@@ -293,6 +310,9 @@ func (h *BuildHandler) CreatePipelineBuild(w http.ResponseWriter, r *http.Reques
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, req.ProjectID, auth.CanTriggerBuild, "project owner or maintainer is required") {
+		return
+	}
 
 	build, err := h.buildService.CreateBuildFromPipeline(r.Context(), buildsvc.CreatePipelineBuildInput{
 		ProjectID:    req.ProjectID,
@@ -336,6 +356,9 @@ func (h *BuildHandler) CreateRepoBuild(w http.ResponseWriter, r *http.Request) {
 	var req api.CreateRepoBuildRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, req.ProjectID, auth.CanTriggerBuild, "project owner or maintainer is required") {
 		return
 	}
 
@@ -396,12 +419,20 @@ func (h *BuildHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if projectID != "" && !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
 
 	builds, err := h.buildService.ListBuildsPaged(r.Context(), repository.ListParams{
 		Limit:     limit,
 		Offset:    offset,
 		ProjectID: projectID,
 	})
+	if err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+	builds, err = h.filterBuildsForRead(r.Context(), builds)
 	if err != nil {
 		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		return
@@ -438,6 +469,9 @@ func (h *BuildHandler) ListQueue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if projectID != "" && !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
 	if status != "" && status != string(domain.BuildStatusQueued) && status != string(domain.BuildStatusRunning) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "status must be queued or running")
@@ -450,6 +484,11 @@ func (h *BuildHandler) ListQueue(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		h.writeServiceError(w, err)
+		return
+	}
+	entries, err = h.filterQueueEntriesForRead(r.Context(), entries)
+	if err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		return
 	}
 
@@ -482,6 +521,9 @@ func (h *BuildHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 	build, err := h.buildService.GetBuild(r.Context(), id)
 	if err != nil {
 		h.writeServiceError(w, err)
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, build.ProjectID, auth.CanReadProjectResources, "project membership is required") {
 		return
 	}
 
@@ -576,6 +618,9 @@ func (h *BuildHandler) GetBuildSteps(w http.ResponseWriter, r *http.Request) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "build id is required")
 		return
 	}
+	if _, ok := h.authorizeBuildRead(w, r, id); !ok {
+		return
+	}
 
 	steps, err := h.buildService.GetBuildSteps(r.Context(), id)
 	if err != nil {
@@ -639,6 +684,9 @@ func (h *BuildHandler) GetBuildLogs(w http.ResponseWriter, r *http.Request) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "build id is required")
 		return
 	}
+	if _, ok := h.authorizeBuildRead(w, r, id); !ok {
+		return
+	}
 
 	logs, err := h.buildService.GetBuildLogs(r.Context(), id)
 	if err != nil {
@@ -676,6 +724,9 @@ func (h *BuildHandler) GetBuildArtifacts(w http.ResponseWriter, r *http.Request)
 	buildID := chi.URLParam(r, "buildID")
 	if buildID == "" {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "build id is required")
+		return
+	}
+	if _, ok := h.authorizeBuildRead(w, r, buildID); !ok {
 		return
 	}
 
@@ -733,6 +784,9 @@ func (h *BuildHandler) DownloadBuildArtifact(w http.ResponseWriter, r *http.Requ
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "artifact id is required")
 		return
 	}
+	if _, ok := h.authorizeBuildDownload(w, r, buildID); !ok {
+		return
+	}
 
 	meta, reader, err := h.buildService.OpenBuildArtifact(r.Context(), buildID, artifactID)
 	if err != nil {
@@ -788,7 +842,7 @@ func (h *BuildHandler) QueueBuild(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	h.transitionBuild(w, r, func(ctx context.Context, id string) (domain.Build, error) {
+	h.transitionBuild(w, r, auth.CanTriggerBuild, func(ctx context.Context, id string) (domain.Build, error) {
 		return h.buildService.QueueBuildWithTemplateAndCustomSteps(ctx, id, req.Template, customSteps)
 	})
 }
@@ -806,7 +860,7 @@ func (h *BuildHandler) QueueBuild(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} api.ErrorResponse
 // @Router /builds/{buildID}/start [post]
 func (h *BuildHandler) StartBuild(w http.ResponseWriter, r *http.Request) {
-	h.transitionBuild(w, r, h.buildService.StartBuild)
+	h.transitionBuild(w, r, auth.CanTriggerBuild, h.buildService.StartBuild)
 }
 
 // CompleteBuild godoc
@@ -822,7 +876,7 @@ func (h *BuildHandler) StartBuild(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} api.ErrorResponse
 // @Router /builds/{buildID}/complete [post]
 func (h *BuildHandler) CompleteBuild(w http.ResponseWriter, r *http.Request) {
-	h.transitionBuild(w, r, h.buildService.CompleteBuild)
+	h.transitionBuild(w, r, auth.CanTriggerBuild, h.buildService.CompleteBuild)
 }
 
 // FailBuild godoc
@@ -838,7 +892,7 @@ func (h *BuildHandler) CompleteBuild(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} api.ErrorResponse
 // @Router /builds/{buildID}/fail [post]
 func (h *BuildHandler) FailBuild(w http.ResponseWriter, r *http.Request) {
-	h.transitionBuild(w, r, h.buildService.FailBuild)
+	h.transitionBuild(w, r, auth.CanTriggerBuild, h.buildService.FailBuild)
 }
 
 // CancelBuild godoc
@@ -853,13 +907,16 @@ func (h *BuildHandler) FailBuild(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} api.ErrorResponse
 // @Router /builds/{buildID}/cancel [post]
 func (h *BuildHandler) CancelBuild(w http.ResponseWriter, r *http.Request) {
-	h.transitionBuild(w, r, h.buildService.CancelBuild)
+	h.transitionBuild(w, r, auth.CanCancelBuild, h.buildService.CancelBuild)
 }
 
-func (h *BuildHandler) transitionBuild(w http.ResponseWriter, r *http.Request, transition func(ctx context.Context, id string) (domain.Build, error)) {
+func (h *BuildHandler) transitionBuild(w http.ResponseWriter, r *http.Request, check projectAuthorizer, transition func(ctx context.Context, id string) (domain.Build, error)) {
 	id := chi.URLParam(r, "buildID")
 	if id == "" {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "build id is required")
+		return
+	}
+	if _, ok := h.authorizeBuildAction(w, r, id, check); !ok {
 		return
 	}
 
@@ -940,6 +997,9 @@ func (h *BuildHandler) RerunBuildFromStep(w http.ResponseWriter, r *http.Request
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
+	if _, ok := h.authorizeBuildAction(w, r, buildID, auth.CanTriggerBuild); !ok {
+		return
+	}
 
 	build, err := h.buildService.RerunBuildFromStep(r.Context(), buildID, req.StepIndex)
 	if err != nil {
@@ -948,6 +1008,76 @@ func (h *BuildHandler) RerunBuildFromStep(w http.ResponseWriter, r *http.Request
 	}
 
 	writeDataJSON(w, http.StatusOK, toBuildResponse(build))
+}
+
+func (h *BuildHandler) authorizeBuildRead(w http.ResponseWriter, r *http.Request, buildID string) (domain.Build, bool) {
+	build, err := h.buildService.GetBuild(r.Context(), buildID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return domain.Build{}, false
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, build.ProjectID, auth.CanReadProjectResources, "project membership is required") {
+		return domain.Build{}, false
+	}
+	return build, true
+}
+
+func (h *BuildHandler) authorizeBuildDownload(w http.ResponseWriter, r *http.Request, buildID string) (domain.Build, bool) {
+	build, err := h.buildService.GetBuild(r.Context(), buildID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return domain.Build{}, false
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, build.ProjectID, auth.CanDownloadArtifact, "project membership is required") {
+		return domain.Build{}, false
+	}
+	return build, true
+}
+
+func (h *BuildHandler) authorizeBuildAction(w http.ResponseWriter, r *http.Request, buildID string, check projectAuthorizer) (domain.Build, bool) {
+	build, err := h.buildService.GetBuild(r.Context(), buildID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return domain.Build{}, false
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, build.ProjectID, check, "project owner or maintainer is required") {
+		return domain.Build{}, false
+	}
+	return build, true
+}
+
+func (h *BuildHandler) filterBuildsForRead(ctx context.Context, builds []domain.Build) ([]domain.Build, error) {
+	if normalizedAuthMode(h.authMode) == auth.ModeDisabled {
+		return builds, nil
+	}
+	filtered := make([]domain.Build, 0, len(builds))
+	for _, build := range builds {
+		allowed, err := projectAllowed(ctx, h.authMode, h.projectRoles, build.ProjectID, auth.CanReadProjectResources)
+		if err != nil {
+			return nil, err
+		}
+		if allowed {
+			filtered = append(filtered, build)
+		}
+	}
+	return filtered, nil
+}
+
+func (h *BuildHandler) filterQueueEntriesForRead(ctx context.Context, entries []domain.QueueEntry) ([]domain.QueueEntry, error) {
+	if normalizedAuthMode(h.authMode) == auth.ModeDisabled {
+		return entries, nil
+	}
+	filtered := make([]domain.QueueEntry, 0, len(entries))
+	for _, entry := range entries {
+		allowed, err := projectAllowed(ctx, h.authMode, h.projectRoles, entry.Build.ProjectID, auth.CanReadProjectResources)
+		if err != nil {
+			return nil, err
+		}
+		if allowed {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered, nil
 }
 
 func (h *BuildHandler) writeServiceError(w http.ResponseWriter, err error) {

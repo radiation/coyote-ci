@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
+	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
@@ -16,10 +17,12 @@ import (
 )
 
 type ArtifactHandler struct {
-	service     *artifactsvc.Service
-	versionTags *versiontagsvc.Service
-	projects    *service.ProjectService
-	jobs        *service.JobService
+	service      *artifactsvc.Service
+	versionTags  *versiontagsvc.Service
+	projects     *service.ProjectService
+	jobs         *service.JobService
+	authMode     auth.Mode
+	projectRoles auth.ProjectRoleLookup
 }
 
 func NewArtifactHandler(service *artifactsvc.Service) *ArtifactHandler {
@@ -36,6 +39,11 @@ func (h *ArtifactHandler) SetProjectService(projects *service.ProjectService) {
 
 func (h *ArtifactHandler) SetJobService(jobs *service.JobService) {
 	h.jobs = jobs
+}
+
+func (h *ArtifactHandler) SetAuthorization(mode auth.Mode, projectRoles auth.ProjectRoleLookup) {
+	h.authMode = mode
+	h.projectRoles = projectRoles
 }
 
 // ListArtifacts godoc
@@ -63,6 +71,9 @@ func (h *ArtifactHandler) ListArtifacts(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	if projectID != "" && !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
 
 	items, err := h.service.ListArtifacts(r.Context(), artifactsvc.ListArtifactsInput{
 		Query:     strings.TrimSpace(r.URL.Query().Get("q")),
@@ -80,6 +91,11 @@ func (h *ArtifactHandler) ListArtifacts(w http.ResponseWriter, r *http.Request) 
 		default:
 			writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		}
+		return
+	}
+	items, err = h.filterArtifactsForRead(r.Context(), items)
+	if err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		return
 	}
 
@@ -111,6 +127,23 @@ func (h *ArtifactHandler) ListArtifacts(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeDataJSON(w, http.StatusOK, api.ArtifactBrowseResponse{Artifacts: response})
+}
+
+func (h *ArtifactHandler) filterArtifactsForRead(ctx context.Context, items []domain.ArtifactBrowseItem) ([]domain.ArtifactBrowseItem, error) {
+	if normalizedAuthMode(h.authMode) == auth.ModeDisabled {
+		return items, nil
+	}
+	filtered := make([]domain.ArtifactBrowseItem, 0, len(items))
+	for _, item := range items {
+		allowed, err := projectAllowed(ctx, h.authMode, h.projectRoles, item.ProjectID, auth.CanReadProjectResources)
+		if err != nil {
+			return nil, err
+		}
+		if allowed {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered, nil
 }
 
 func collectArtifactBrowseArtifactIDs(items []domain.ArtifactBrowseItem) []string {

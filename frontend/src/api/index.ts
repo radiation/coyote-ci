@@ -29,6 +29,8 @@ export {
   updateSourceCredential,
   deleteSourceCredential,
   getMe,
+  authLoginURL,
+  logoutSession,
   listUsers,
   createUser,
   updateUser,

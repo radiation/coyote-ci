@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,18 +11,26 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
+	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 )
 
 type ProjectHandler struct {
-	projects *service.ProjectService
-	jobs     *service.JobService
+	projects     *service.ProjectService
+	jobs         *service.JobService
+	authMode     auth.Mode
+	projectRoles auth.ProjectRoleLookup
 }
 
 func NewProjectHandler(projects *service.ProjectService, jobs *service.JobService) *ProjectHandler {
 	return &ProjectHandler{projects: projects, jobs: jobs}
+}
+
+func (h *ProjectHandler) SetAuthorization(mode auth.Mode, projectRoles auth.ProjectRoleLookup) {
+	h.authMode = mode
+	h.projectRoles = projectRoles
 }
 
 // ListProjects godoc
@@ -36,6 +45,11 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	projects, err := h.projects.ListProjects(r.Context())
 	if err != nil {
 		h.writeProjectError(w, err)
+		return
+	}
+	projects, err = h.filterProjectsForRead(r.Context(), projects)
+	if err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		return
 	}
 
@@ -59,6 +73,10 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} api.ErrorResponse
 // @Router /projects [post]
 func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
+	if !authorizeGlobalAdmin(w, r, h.authMode, "global admin is required") {
+		return
+	}
+
 	var req api.CreateProjectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
@@ -95,6 +113,9 @@ func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
 		h.writeProjectError(w, err)
 		return
 	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, project.ID, auth.CanReadProject, "project membership is required") {
+		return
+	}
 	writeDataJSON(w, http.StatusOK, toProjectResponse(project))
 }
 
@@ -114,6 +135,9 @@ func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
 // @Router /projects/{id} [patch]
 func (h *ProjectHandler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, id, auth.CanUpdateProject, "project owner is required") {
+		return
+	}
 	var req api.UpdateProjectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
@@ -144,6 +168,9 @@ func (h *ProjectHandler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} api.ErrorResponse
 // @Router /projects/{id} [delete]
 func (h *ProjectHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
+	if !authorizeGlobalAdmin(w, r, h.authMode, "global admin is required") {
+		return
+	}
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
 	if err := h.projects.DeleteProject(r.Context(), id); err != nil {
 		h.writeProjectError(w, err)
@@ -164,6 +191,9 @@ func (h *ProjectHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 // @Router /projects/{id}/jobs [get]
 func (h *ProjectHandler) ListProjectJobs(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, id, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
 	jobs, err := h.jobs.ListJobsByProject(r.Context(), id)
 	if err != nil {
 		h.writeProjectError(w, err)
@@ -175,6 +205,23 @@ func (h *ProjectHandler) ListProjectJobs(w http.ResponseWriter, r *http.Request)
 		responses = append(responses, toJobResponse(job))
 	}
 	writeDataJSON(w, http.StatusOK, api.JobListResponse{Jobs: responses})
+}
+
+func (h *ProjectHandler) filterProjectsForRead(ctx context.Context, projects []domain.Project) ([]domain.Project, error) {
+	if normalizedAuthMode(h.authMode) == auth.ModeDisabled {
+		return projects, nil
+	}
+	filtered := make([]domain.Project, 0, len(projects))
+	for _, project := range projects {
+		allowed, err := projectAllowed(ctx, h.authMode, h.projectRoles, project.ID, auth.CanReadProject)
+		if err != nil {
+			return nil, err
+		}
+		if allowed {
+			filtered = append(filtered, project)
+		}
+	}
+	return filtered, nil
 }
 
 func (h *ProjectHandler) writeProjectError(w http.ResponseWriter, err error) {

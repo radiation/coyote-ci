@@ -1,23 +1,22 @@
-import { useQuery } from "@tanstack/react-query";
 import { NavLink, Outlet } from "react-router-dom";
-import { formatAPIErrorMessage, getMe, isAPIErrorStatus } from "../api";
+import { useAuth } from "../auth-context";
 import { useTheme } from "../theme-context";
 
 export function Layout() {
   const { theme, toggleTheme } = useTheme();
-  const { data: me, error: meError } = useQuery({
-    queryKey: ["me"],
-    queryFn: getMe,
-    retry: false,
-  });
-  const showUsersLink =
-    me?.auth_mode === "disabled" || me?.user.global_role === "admin";
-  const meMessage = isAPIErrorStatus(meError, 401)
-    ? formatAPIErrorMessage(
-        meError,
-        "Coyote is configured for external authentication.",
-      )
-    : null;
+  const {
+    currentUser,
+    authMode,
+    authStatus,
+    error,
+    isGlobalAdmin,
+    login,
+    logout,
+    refreshCurrentUser,
+  } = useAuth();
+  const showNavigation = authStatus === "authenticated";
+  const showUsersLink = authMode === "disabled" || isGlobalAdmin;
+  const displayName = currentUser?.display_name || currentUser?.email;
 
   return (
     <div className="app">
@@ -27,66 +26,82 @@ export function Layout() {
             Coyote CI
           </NavLink>
           <div className="header-actions">
-            <nav className="main-nav" aria-label="Primary">
-              <NavLink
-                to="/projects"
-                className={({ isActive }) =>
-                  isActive ? "main-nav-link is-active" : "main-nav-link"
-                }
-              >
-                Projects
-              </NavLink>
-              <NavLink
-                to="/jobs"
-                className={({ isActive }) =>
-                  isActive ? "main-nav-link is-active" : "main-nav-link"
-                }
-              >
-                Jobs
-              </NavLink>
-              <NavLink
-                to="/builds"
-                className={({ isActive }) =>
-                  isActive ? "main-nav-link is-active" : "main-nav-link"
-                }
-              >
-                Builds
-              </NavLink>
-              <NavLink
-                to="/queue"
-                className={({ isActive }) =>
-                  isActive ? "main-nav-link is-active" : "main-nav-link"
-                }
-              >
-                Queue
-              </NavLink>
-              <NavLink
-                to="/artifacts"
-                className={({ isActive }) =>
-                  isActive ? "main-nav-link is-active" : "main-nav-link"
-                }
-              >
-                Artifacts
-              </NavLink>
-              {showUsersLink && (
+            {showNavigation && (
+              <nav className="main-nav" aria-label="Primary">
                 <NavLink
-                  to="/settings/users"
+                  to="/projects"
                   className={({ isActive }) =>
                     isActive ? "main-nav-link is-active" : "main-nav-link"
                   }
                 >
-                  Users
+                  Projects
                 </NavLink>
-              )}
-              <NavLink
-                to="/settings/credentials"
-                className={({ isActive }) =>
-                  isActive ? "main-nav-link is-active" : "main-nav-link"
-                }
-              >
-                Credentials
-              </NavLink>
-            </nav>
+                <NavLink
+                  to="/jobs"
+                  className={({ isActive }) =>
+                    isActive ? "main-nav-link is-active" : "main-nav-link"
+                  }
+                >
+                  Jobs
+                </NavLink>
+                <NavLink
+                  to="/builds"
+                  className={({ isActive }) =>
+                    isActive ? "main-nav-link is-active" : "main-nav-link"
+                  }
+                >
+                  Builds
+                </NavLink>
+                <NavLink
+                  to="/queue"
+                  className={({ isActive }) =>
+                    isActive ? "main-nav-link is-active" : "main-nav-link"
+                  }
+                >
+                  Queue
+                </NavLink>
+                <NavLink
+                  to="/artifacts"
+                  className={({ isActive }) =>
+                    isActive ? "main-nav-link is-active" : "main-nav-link"
+                  }
+                >
+                  Artifacts
+                </NavLink>
+                {showUsersLink && (
+                  <NavLink
+                    to="/settings/users"
+                    className={({ isActive }) =>
+                      isActive ? "main-nav-link is-active" : "main-nav-link"
+                    }
+                  >
+                    Users
+                  </NavLink>
+                )}
+                <NavLink
+                  to="/settings/credentials"
+                  className={({ isActive }) =>
+                    isActive ? "main-nav-link is-active" : "main-nav-link"
+                  }
+                >
+                  Credentials
+                </NavLink>
+              </nav>
+            )}
+            {authStatus === "authenticated" && displayName && (
+              <div className="identity-chip">
+                <span>{displayName}</span>
+                {authMode === "oidc" && (
+                  <button
+                    type="button"
+                    className="header-secondary-button"
+                    onClick={() => void logout()}
+                  >
+                    Logout
+                  </button>
+                )}
+              </div>
+            )}
             <button
               type="button"
               className="theme-toggle"
@@ -100,10 +115,57 @@ export function Layout() {
           </div>
         </div>
       </header>
-      {meMessage && <p className="error-text">{meMessage}</p>}
       <main className="main">
-        <Outlet />
+        {authStatus === "loading" && (
+          <AuthStatePanel
+            title="Loading session"
+            message="Checking your Coyote CI session."
+          />
+        )}
+        {authStatus === "unauthenticated" && (
+          <AuthStatePanel
+            title="Sign in to Coyote CI"
+            message="Use your configured identity provider to continue."
+            actionLabel="Sign in"
+            onAction={login}
+          />
+        )}
+        {authStatus === "error" && (
+          <AuthStatePanel
+            title="Unable to load session"
+            message={
+              error?.message ?? "The current session could not be loaded."
+            }
+            actionLabel="Retry"
+            onAction={() => void refreshCurrentUser()}
+          />
+        )}
+        {authStatus === "authenticated" && <Outlet />}
       </main>
     </div>
+  );
+}
+
+function AuthStatePanel({
+  title,
+  message,
+  actionLabel,
+  onAction,
+}: {
+  title: string;
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  return (
+    <section className="panel auth-state-panel">
+      <h2>{title}</h2>
+      <p className="subtle-text">{message}</p>
+      {actionLabel && onAction && (
+        <button type="button" onClick={onAction}>
+          {actionLabel}
+        </button>
+      )}
+    </section>
   );
 }

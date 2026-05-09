@@ -37,24 +37,52 @@ See [backend/docs/state-machine.md](backend/docs/state-machine.md) for the full 
 
 For external/managed Postgres runtime configuration and Cloud SQL deployment guidance, see [deploy/docs/gcp-cloud-sql-postgres.md](deploy/docs/gcp-cloud-sql-postgres.md).
 
-## Identity and auth foundation
+## Identity, sessions, and RBAC V1
 
-Coyote CI has an internal user and project membership model for future OIDC/SAML/directory integrations. This slice intentionally does not add passwords, sessions, JWTs, API tokens, service accounts, or full endpoint-by-endpoint RBAC.
+Coyote CI has an internal user and project membership model for OIDC/SAML/directory integrations over time. The current implementation supports local development identity, trusted-header identity, native OIDC login, and a code-owned RBAC V1 capability model. It intentionally does not add password login, SAML, directory group sync, API tokens, service accounts, a dynamic policy engine, permissions UI, or per-artifact ACLs.
 
 Runtime auth mode is controlled by:
 
-- `AUTH_MODE=disabled|header` (default: `disabled`)
-- `BOOTSTRAP_ADMIN_EMAILS=` comma-separated emails promoted to global admin in header mode
+- `AUTH_MODE=disabled|header|oidc` (default: `disabled`)
+- `BOOTSTRAP_ADMIN_EMAILS=` comma-separated emails promoted to global admin when users are provisioned or seen
 
-In `disabled` mode, local/dev behavior remains unchanged and `/api/me` returns a synthetic local development user. In `header` mode, Coyote trusts `X-Coyote-User-Email` and `X-Coyote-User-Name` from a reverse proxy or dev harness, auto-provisions users by normalized lowercase email, promotes emails matching `BOOTSTRAP_ADMIN_EMAILS` to global admin, and rejects protected routes missing `X-Coyote-User-Email` with `401`.
+Auth modes:
 
-Protected user-facing routes under `/api` require the trusted user header in `header` mode. Health and machine-ingress endpoints remain reachable without user headers: `/api/health`, `/api/healthz`, `/api/events/push`, and `/api/webhooks/github`. Push-event ingress still relies on `X-Coyote-Secret`, and GitHub webhooks still rely on their HMAC signature.
+- `disabled`: local/dev only. `/api/me` returns a synthetic local development admin and existing developer UX remains unchanged.
+- `header`: trusted reverse-proxy mode. Coyote trusts `X-Coyote-User-Email` and `X-Coyote-User-Name`, auto-provisions users by normalized lowercase email, promotes `BOOTSTRAP_ADMIN_EMAILS`, and rejects protected routes missing `X-Coyote-User-Email` with `401`.
+- `oidc`: native OIDC authorization-code login. `/auth/login` starts the provider redirect, `/auth/callback` validates state/nonce and the ID token, provisions or updates the local user by email, creates an HTTP-only signed session cookie, and `/auth/logout` clears the local session. `/api/me` returns `401` when no valid session is present.
 
-Header mode must only be used behind a trusted authentication proxy or identity-aware gateway that authenticates the caller, strips any caller-supplied identity headers, and injects `X-Coyote-User-Email` and `X-Coyote-User-Name` on Coyote's behalf. Do not expose header mode directly to the public internet without that sanitizing proxy layer.
+OIDC/session configuration:
 
-`BOOTSTRAP_ADMIN_EMAILS` is a comma-separated list evaluated when users are provisioned or seen through trusted-header auth. Matching emails are promoted to global admin to avoid first-admin bootstrap deadlock. It is a bootstrap seam only, not a replacement for future group or directory sync.
+- `OIDC_ISSUER_URL`
+- `OIDC_CLIENT_ID`
+- `OIDC_CLIENT_SECRET`
+- `OIDC_REDIRECT_URL` (for example, `https://ci.example.com/auth/callback`)
+- `OIDC_SCOPES` (default: `openid email profile`)
+- `SESSION_SECRET` (required for `AUTH_MODE=oidc`; keep it private and random)
+- `SESSION_COOKIE_NAME` (default: `coyote_session`)
+- `SESSION_COOKIE_SECURE` (defaults to secure except localhost HTTP redirect URLs; set explicitly for local dev if needed)
+- `SESSION_COOKIE_SAME_SITE` (default: `lax`; supported values: `lax`, `strict`, `none`)
 
-Authorization currently enforces only the management boundaries introduced with this foundation: user management requires a global admin in header mode, project membership listing is visible to global admins and project members, and project membership mutation requires a global admin or project owner. Build, job, artifact, queue, and broader endpoint-level RBAC is intentionally deferred.
+Security notes:
+
+- Coyote CI does not implement password login.
+- Provider tokens are not exposed to the frontend and are not stored in browser localStorage.
+- Use HTTPS in production, configure the provider redirect URL exactly, and keep `SESSION_SECRET` private.
+- Header mode must only be used behind a trusted authentication proxy or identity-aware gateway that authenticates the caller, strips any caller-supplied identity headers, and injects trusted identity headers on Coyote's behalf.
+- Health and machine-ingress endpoints remain reachable without user auth: `/api/health`, `/api/healthz`, `/api/events/push`, and `/api/webhooks/github`. Push-event ingress still relies on `X-Coyote-Secret`, and GitHub webhooks still rely on HMAC signature validation.
+
+RBAC V1 roles:
+
+- Global admin: user management; all projects and project memberships; jobs, builds, artifacts, queues, and global source credentials.
+- Project owner: read/update the project, manage project memberships, manage project jobs, trigger/cancel builds, and read/download artifacts.
+- Project maintainer: read the project, manage project jobs, trigger/cancel builds, and read/download artifacts. Maintainers cannot manage project memberships.
+- Project viewer: read project jobs/builds/queues and read/download artifacts. Viewers cannot mutate jobs, builds, memberships, users, or credentials.
+- Non-member: no project resource access in authenticated modes.
+
+V1 enforcement currently covers user management, project membership list/mutation, project visibility/update, project job listing, job create/update/run, build create/rerun/queue/status/cancel, queue/build listing filters, artifact browsing/download, and global source credential management. Smaller endpoints may still be tightened in future branches as the API surface grows.
+
+Known deferred auth items: SAML, directory group sync, service accounts/API tokens, a full policy engine, a full permissions UI, project-scoped credential ACLs, and fine-grained artifact ACLs.
 
 Backend validation command for this slice:
 
@@ -335,7 +363,7 @@ docker compose up --build db backend-dev worker
 Backend:
 
 ```bash
-cd backend && go test ./...
+cd backend && env -u GITHUB_WEBHOOK_SECRET -u PUSH_EVENT_SECRET go test ./...
 ```
 
 Frontend:

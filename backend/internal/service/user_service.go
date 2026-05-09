@@ -110,15 +110,37 @@ func (s *UserService) DeleteUser(ctx context.Context, id string) error {
 }
 
 func (s *UserService) ResolveHeaderUser(ctx context.Context, email string, displayName *string, bootstrapAdmins map[string]struct{}) (domain.User, error) {
+	return s.resolveExternalUser(ctx, email, displayName, bootstrapAdmins, false)
+}
+
+func (s *UserService) ResolveOIDCUser(ctx context.Context, email string, displayName *string, bootstrapAdmins map[string]struct{}) (domain.User, error) {
+	return s.resolveExternalUser(ctx, email, displayName, bootstrapAdmins, true)
+}
+
+func (s *UserService) resolveExternalUser(ctx context.Context, email string, displayName *string, bootstrapAdmins map[string]struct{}, updateDisplayName bool) (domain.User, error) {
 	normalizedEmail := NormalizeEmail(email)
 	if normalizedEmail == "" {
 		return domain.User{}, ErrUserEmailRequired
 	}
+	if bootstrapAdmins == nil {
+		bootstrapAdmins = map[string]struct{}{}
+	}
 
 	user, err := s.users.GetByEmail(ctx, normalizedEmail)
 	if err == nil {
+		needsUpdate := false
 		if _, ok := bootstrapAdmins[normalizedEmail]; ok && user.GlobalRole != domain.GlobalRoleAdmin {
 			user.GlobalRole = domain.GlobalRoleAdmin
+			needsUpdate = true
+		}
+		if updateDisplayName && displayName != nil {
+			normalizedName := normalizeStringPtr(displayName)
+			if normalizedName != nil && (user.DisplayName == nil || *user.DisplayName != *normalizedName) {
+				user.DisplayName = normalizedName
+				needsUpdate = true
+			}
+		}
+		if needsUpdate {
 			user.UpdatedAt = s.now().UTC()
 			return s.users.Update(ctx, user)
 		}

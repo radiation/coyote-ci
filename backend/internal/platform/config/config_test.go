@@ -67,6 +67,10 @@ func TestLoad(t *testing.T) {
 				ArtifactStorageRoot:     defaultArtifactRoot,
 				ArtifactStorageProvider: "filesystem",
 				AuthMode:                "disabled",
+				OIDCScopes:              "openid email profile",
+				SessionCookieName:       "coyote_session",
+				SessionCookieSecure:     true,
+				SessionCookieSameSite:   "lax",
 			},
 		},
 		{
@@ -94,6 +98,15 @@ func TestLoad(t *testing.T) {
 				"ARTIFACT_STORAGE_ROOT":           "/var/tmp/coyote-artifacts",
 				"AUTH_MODE":                       "header",
 				"BOOTSTRAP_ADMIN_EMAILS":          "Admin@Example.com,ops@example.com",
+				"OIDC_ISSUER_URL":                 "https://issuer.example.com",
+				"OIDC_CLIENT_ID":                  "coyote",
+				"OIDC_CLIENT_SECRET":              "secret",
+				"OIDC_REDIRECT_URL":               "http://localhost:8080/auth/callback",
+				"OIDC_SCOPES":                     "openid email",
+				"SESSION_SECRET":                  "session-secret",
+				"SESSION_COOKIE_NAME":             "custom_session",
+				"SESSION_COOKIE_SECURE":           "false",
+				"SESSION_COOKIE_SAME_SITE":        "strict",
 			},
 			expected: Config{
 				AppPort:                 "9999",
@@ -119,6 +132,15 @@ func TestLoad(t *testing.T) {
 				ArtifactStorageProvider: "filesystem",
 				AuthMode:                "header",
 				BootstrapAdminEmails:    "Admin@Example.com,ops@example.com",
+				OIDCIssuerURL:           "https://issuer.example.com",
+				OIDCClientID:            "coyote",
+				OIDCClientSecret:        "secret",
+				OIDCRedirectURL:         "http://localhost:8080/auth/callback",
+				OIDCScopes:              "openid email",
+				SessionSecret:           "session-secret",
+				SessionCookieName:       "custom_session",
+				SessionCookieSecure:     false,
+				SessionCookieSameSite:   "strict",
 			},
 		},
 		{
@@ -170,6 +192,10 @@ func TestLoad(t *testing.T) {
 				ArtifactStorageRoot:     defaultArtifactRoot,
 				ArtifactStorageProvider: "filesystem",
 				AuthMode:                "disabled",
+				OIDCScopes:              "openid email profile",
+				SessionCookieName:       "coyote_session",
+				SessionCookieSecure:     true,
+				SessionCookieSameSite:   "lax",
 			},
 		},
 		{
@@ -204,13 +230,32 @@ func TestLoad(t *testing.T) {
 				ArtifactStorageRoot:     defaultArtifactRoot,
 				ArtifactStorageProvider: "filesystem",
 				AuthMode:                "disabled",
+				OIDCScopes:              "openid email profile",
+				SessionCookieName:       "coyote_session",
+				SessionCookieSecure:     true,
+				SessionCookieSameSite:   "lax",
 			},
 		},
+	}
+
+	managedEnvKeys := []string{
+		"OIDC_ISSUER_URL",
+		"OIDC_CLIENT_ID",
+		"OIDC_CLIENT_SECRET",
+		"OIDC_REDIRECT_URL",
+		"OIDC_SCOPES",
+		"SESSION_SECRET",
+		"SESSION_COOKIE_NAME",
+		"SESSION_COOKIE_SECURE",
+		"SESSION_COOKIE_SAME_SITE",
 	}
 
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			for _, key := range managedEnvKeys {
+				t.Setenv(key, "")
+			}
 			for k, v := range tc.env {
 				t.Setenv(k, v)
 			}

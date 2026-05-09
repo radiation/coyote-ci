@@ -58,6 +58,8 @@ import type {
  * Override with VITE_API_BASE_PATH when needed (e.g. direct backend testing).
  */
 const BASE = import.meta.env.VITE_API_BASE_PATH ?? "/api";
+const AUTH_BASE =
+  import.meta.env.VITE_AUTH_BASE_PATH ?? BASE.replace(/\/api\/?$/, "");
 
 export class APIError extends Error {
   status: number;
@@ -161,6 +163,23 @@ async function deleteNoContent(path: string): Promise<void> {
 export async function getMe(): Promise<MeResponse> {
   const envelope = await fetchJSON<DataEnvelope<MeResponse>>("/me");
   return envelope.data;
+}
+
+export function authLoginURL(): string {
+  return `${AUTH_BASE}/auth/login`;
+}
+
+export async function logoutSession(): Promise<void> {
+  const res = await fetch(`${AUTH_BASE}/auth/logout`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new APIError(res.status, body || "logout failed");
+  }
 }
 
 export async function listUsers(): Promise<User[]> {
