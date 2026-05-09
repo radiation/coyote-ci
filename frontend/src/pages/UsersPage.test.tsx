@@ -135,6 +135,18 @@ describe("UsersPage", () => {
     });
   });
 
+  it("keeps a load prefix for generic user list failures", async () => {
+    mockedListUsers.mockRejectedValue(new Error("backend unavailable"));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Failed to load users: backend unavailable"),
+      ).toBeTruthy();
+    });
+  });
+
   it("shows friendly mutation errors for create, update, and delete", async () => {
     mockedCreateUser.mockRejectedValueOnce(
       new APIError(403, "global admin is required"),

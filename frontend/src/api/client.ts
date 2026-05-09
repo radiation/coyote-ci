@@ -76,6 +76,7 @@ export function isAPIErrorStatus(error: unknown, status: number): boolean {
 export function formatAPIErrorMessage(
   error: unknown,
   forbiddenFallback: string,
+  operationPrefix?: string,
 ): string {
   if (error instanceof APIError) {
     if (error.status === 401) {
@@ -85,10 +86,11 @@ export function formatAPIErrorMessage(
       return forbiddenFallback;
     }
   }
-  if (error instanceof Error) {
-    return error.message;
+  const message = error instanceof Error ? error.message : String(error);
+  if (operationPrefix) {
+    return `${operationPrefix}: ${message}`;
   }
-  return String(error);
+  return message;
 }
 
 export async function checkReadiness(): Promise<void> {

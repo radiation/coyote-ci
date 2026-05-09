@@ -512,9 +512,13 @@ describe("API client - types", () => {
     expect(formatAPIErrorMessage(forbidden, "fallback forbidden message")).toBe(
       "fallback forbidden message",
     );
-    expect(formatAPIErrorMessage(generic, "fallback forbidden message")).toBe(
-      "API 500: internal server error",
-    );
+    expect(
+      formatAPIErrorMessage(
+        generic,
+        "fallback forbidden message",
+        "Failed to load users",
+      ),
+    ).toBe("Failed to load users: API 500: internal server error");
     expect(
       formatAPIErrorMessage("raw failure", "fallback forbidden message"),
     ).toBe("raw failure");

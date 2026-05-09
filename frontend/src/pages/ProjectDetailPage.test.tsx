@@ -203,6 +203,20 @@ describe("ProjectDetailPage", () => {
     });
   });
 
+  it("keeps a load prefix for generic member list failures", async () => {
+    mockedListProjectMembers.mockRejectedValue(
+      new Error("backend unavailable"),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Failed to load members: backend unavailable"),
+      ).toBeTruthy();
+    });
+  });
+
   it("shows friendly mutation errors for member changes", async () => {
     mockedUpsertProjectMember.mockRejectedValueOnce(
       new APIError(403, "global admin or project owner is required"),

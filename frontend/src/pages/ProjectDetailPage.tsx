@@ -220,6 +220,7 @@ export function ProjectDetailPage() {
             {formatAPIErrorMessage(
               membersError,
               "You do not have permission to view project members.",
+              "Failed to load members",
             )}
           </p>
         )}

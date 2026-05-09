@@ -155,6 +155,7 @@ export function UsersPage() {
           {formatAPIErrorMessage(
             error,
             "You do not have permission to manage users.",
+            "Failed to load users",
           )}
         </p>
       )}
