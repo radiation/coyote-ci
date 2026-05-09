@@ -1,17 +1,11 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { APIError, authLoginURL, getMe, logoutSession } from "./api";
 import {
   AuthContext,
   type AuthContextValue,
   type AuthStatus,
 } from "./auth-context";
-import type { MeResponse, User } from "./types/identity";
 
 export function AuthProvider({
   children,
@@ -20,48 +14,57 @@ export function AuthProvider({
   children: ReactNode;
   navigate?: (url: string) => void;
 }) {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [authMode, setAuthMode] = useState<MeResponse["auth_mode"] | null>(
-    null,
-  );
-  const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
-  const [error, setError] = useState<Error | null>(null);
+  const {
+    data,
+    error: queryError,
+    isError,
+    isPending,
+    refetch,
+  } = useQuery({
+    queryKey: ["me", "auth-provider"],
+    queryFn: getMe,
+    retry: false,
+  });
+
+  const { authMode, authStatus, currentUser, error } = useMemo(() => {
+    const nextError =
+      queryError instanceof APIError && queryError.status === 401
+        ? null
+        : queryError instanceof Error
+          ? queryError
+          : queryError
+            ? new Error(String(queryError))
+            : null;
+    const nextAuthStatus: AuthStatus = isPending
+      ? "loading"
+      : isError
+        ? queryError instanceof APIError && queryError.status === 401
+          ? "unauthenticated"
+          : "error"
+        : "authenticated";
+
+    return {
+      authMode:
+        nextAuthStatus === "authenticated" ? (data?.auth_mode ?? null) : null,
+      authStatus: nextAuthStatus,
+      currentUser:
+        nextAuthStatus === "authenticated" ? (data?.user ?? null) : null,
+      error: nextError,
+    };
+  }, [data, isError, isPending, queryError]);
 
   const refreshCurrentUser = useCallback(async () => {
-    setAuthStatus("loading");
-    setError(null);
-    try {
-      const me = await getMe();
-      setCurrentUser(me.user);
-      setAuthMode(me.auth_mode);
-      setAuthStatus("authenticated");
-    } catch (loadError) {
-      setCurrentUser(null);
-      if (loadError instanceof APIError && loadError.status === 401) {
-        setAuthStatus("unauthenticated");
-        return;
-      }
-      setError(
-        loadError instanceof Error ? loadError : new Error(String(loadError)),
-      );
-      setAuthStatus("error");
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshCurrentUser();
-  }, [refreshCurrentUser]);
+    await refetch();
+  }, [refetch]);
 
   const login = useCallback(() => {
     navigate(authLoginURL());
   }, [navigate]);
 
   const logout = useCallback(async () => {
-    setError(null);
     await logoutSession();
-    setCurrentUser(null);
-    setAuthStatus("unauthenticated");
-  }, []);
+    await refetch();
+  }, [refetch]);
 
   const value = useMemo<AuthContextValue>(
     () => ({

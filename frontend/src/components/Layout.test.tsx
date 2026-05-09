@@ -87,10 +87,10 @@ describe("Layout", () => {
     });
 
     expect(toggle).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Artifacts" })).toHaveClass(
-      "is-active",
-    );
     await waitFor(() => {
+      expect(screen.getByRole("link", { name: "Artifacts" })).toHaveClass(
+        "is-active",
+      );
       expect(screen.getByRole("link", { name: "Users" })).toBeTruthy();
     });
 

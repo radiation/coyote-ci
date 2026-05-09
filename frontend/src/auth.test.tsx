@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider } from "./auth";
 import { useAuth } from "./auth-context";
 import { APIError, authLoginURL, getMe, logoutSession } from "./api";
@@ -31,6 +32,25 @@ function AuthConsumer() {
   );
 }
 
+function renderWithAuthProvider(
+  ui: React.ReactNode,
+  navigate?: (url: string) => void,
+) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider navigate={navigate}>{ui}</AuthProvider>
+    </QueryClientProvider>,
+  );
+}
+
 describe("AuthProvider", () => {
   const mockedGetMe = vi.mocked(getMe);
   const mockedLogoutSession = vi.mocked(logoutSession);
@@ -50,11 +70,7 @@ describe("AuthProvider", () => {
   });
 
   it("loads the current user", async () => {
-    render(
-      <AuthProvider>
-        <AuthConsumer />
-      </AuthProvider>,
-    );
+    renderWithAuthProvider(<AuthConsumer />);
 
     await waitFor(() => {
       expect(screen.getByText("Status: authenticated")).toBeTruthy();
@@ -66,11 +82,7 @@ describe("AuthProvider", () => {
   it("sets unauthenticated state when /api/me returns 401", async () => {
     mockedGetMe.mockRejectedValue(new APIError(401, "authentication required"));
 
-    render(
-      <AuthProvider>
-        <AuthConsumer />
-      </AuthProvider>,
-    );
+    renderWithAuthProvider(<AuthConsumer />);
 
     await waitFor(() => {
       expect(screen.getByText("Status: unauthenticated")).toBeTruthy();
@@ -80,11 +92,7 @@ describe("AuthProvider", () => {
 
   it("navigates to login", async () => {
     const navigate = vi.fn();
-    render(
-      <AuthProvider navigate={navigate}>
-        <AuthConsumer />
-      </AuthProvider>,
-    );
+    renderWithAuthProvider(<AuthConsumer />, navigate);
 
     await waitFor(() => {
       expect(screen.getByText("Status: authenticated")).toBeTruthy();
@@ -97,11 +105,18 @@ describe("AuthProvider", () => {
   });
 
   it("logs out and clears auth state", async () => {
-    render(
-      <AuthProvider>
-        <AuthConsumer />
-      </AuthProvider>,
-    );
+    mockedGetMe
+      .mockResolvedValueOnce({
+        auth_mode: "oidc",
+        user: {
+          id: "user-1",
+          email: "admin@example.com",
+          global_role: "admin",
+        },
+      })
+      .mockRejectedValueOnce(new APIError(401, "authentication required"));
+
+    renderWithAuthProvider(<AuthConsumer />);
 
     await waitFor(() => {
       expect(screen.getByText("Status: authenticated")).toBeTruthy();
