@@ -85,6 +85,9 @@ export function formatAPIErrorMessage(
       return forbiddenFallback;
     }
   }
+  if (error instanceof Error) {
+    return error.message;
+  }
   return String(error);
 }
 
