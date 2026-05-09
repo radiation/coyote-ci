@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { MeResponse, User } from "./types/identity";
+import type { AuthConfigResponse, MeResponse, User } from "./types/identity";
 
 export type AuthStatus =
   | "loading"
@@ -9,10 +9,11 @@ export type AuthStatus =
 
 export interface AuthContextValue {
   currentUser: User | null;
-  authMode: MeResponse["auth_mode"] | null;
+  authMode: AuthConfigResponse["auth_mode"] | MeResponse["auth_mode"] | null;
   authStatus: AuthStatus;
   error: Error | null;
   isGlobalAdmin: boolean;
+  loginAvailable: boolean;
   login: () => void;
   logout: () => Promise<void>;
   refreshCurrentUser: () => Promise<void>;

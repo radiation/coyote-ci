@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/auth"
@@ -123,6 +124,29 @@ func TestAuthHandler_CallbackRejectsMissingEmail(t *testing.T) {
 	h.Callback(callbackRes, callbackReq)
 	if callbackRes.Code != http.StatusUnauthorized {
 		t.Fatalf("expected missing email status %d, got %d", http.StatusUnauthorized, callbackRes.Code)
+	}
+}
+
+func TestAuthHandler_CallbackRejectsUnverifiedEmail(t *testing.T) {
+	userService := service.NewUserService(memory.NewUserRepository())
+	sessions := newTestSessionManager(t)
+	fakeOIDC := &fakeOIDCAuthenticator{err: auth.ErrOIDCEmailNotVerified}
+	h := NewAuthHandler(fakeOIDC, sessions, userService, AuthHandlerConfig{})
+
+	loginRes := httptest.NewRecorder()
+	h.Login(loginRes, httptest.NewRequest(http.MethodGet, "/auth/login", nil))
+
+	callbackReq := httptest.NewRequest(http.MethodGet, "/auth/callback?state="+fakeOIDC.lastState+"&code=code", nil)
+	for _, cookie := range loginRes.Result().Cookies() {
+		callbackReq.AddCookie(cookie)
+	}
+	callbackRes := httptest.NewRecorder()
+	h.Callback(callbackRes, callbackReq)
+	if callbackRes.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unverified email status %d, got %d", http.StatusUnauthorized, callbackRes.Code)
+	}
+	if !strings.Contains(callbackRes.Body.String(), "verified") {
+		t.Fatalf("expected verified-email error message, got %q", callbackRes.Body.String())
 	}
 }
 

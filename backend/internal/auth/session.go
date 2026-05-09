@@ -71,6 +71,9 @@ func NewCookieSessionManager(cfg CookieSessionConfig) (*CookieSessionManager, er
 	if sameSite == http.SameSiteDefaultMode {
 		sameSite = http.SameSiteLaxMode
 	}
+	if sameSite == http.SameSiteNoneMode && !cfg.Secure {
+		return nil, errors.New("SESSION_COOKIE_SECURE must be true when SESSION_COOKIE_SAME_SITE=none")
+	}
 	now := cfg.Now
 	if now == nil {
 		now = time.Now

@@ -75,6 +75,9 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", handler.Health)
 		r.Get("/healthz", handler.Health)
+		if cfg.userHandler != nil {
+			r.Get("/auth/config", cfg.userHandler.GetAuthConfig)
+		}
 
 		r.Route("/events", func(r chi.Router) {
 			if pushEventSecret != "" {

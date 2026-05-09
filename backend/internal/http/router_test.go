@@ -113,6 +113,47 @@ func TestNewRouter_HeaderModeMeRouteResolvesUser(t *testing.T) {
 	}
 }
 
+func TestNewRouter_AuthConfigRouteIsPublic(t *testing.T) {
+	tests := []struct {
+		name          string
+		mode          auth.Mode
+		expectedLogin *string
+	}{
+		{name: "disabled mode", mode: auth.ModeDisabled},
+		{name: "header mode", mode: auth.ModeHeader},
+		{name: "oidc mode", mode: auth.ModeOIDC, expectedLogin: stringPointer("/auth/login")},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			r := newIdentityTestRouter(tc.mode, "push-secret", "github-secret")
+			res := httptest.NewRecorder()
+			r.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/auth/config", nil))
+
+			if res.Code != http.StatusOK {
+				t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+			}
+
+			var body struct {
+				Data struct {
+					AuthMode string  `json:"auth_mode"`
+					LoginURL *string `json:"login_url"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+				t.Fatalf("failed to decode response: %v", err)
+			}
+			if body.Data.AuthMode != string(tc.mode) {
+				t.Fatalf("expected auth mode %q, got %q", tc.mode, body.Data.AuthMode)
+			}
+			if !equalStringPointers(body.Data.LoginURL, tc.expectedLogin) {
+				t.Fatalf("expected login url %v, got %v", tc.expectedLogin, body.Data.LoginURL)
+			}
+		})
+	}
+}
+
 func TestNewRouter_OIDCModeMeRouteRequiresSession(t *testing.T) {
 	r, _ := newOIDCTestRouter(t)
 
@@ -715,6 +756,17 @@ func githubRouterTestSignature(secret string, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write(body)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
+
+func equalStringPointers(left *string, right *string) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
 }
 
 func TestNewRouter_QueueBuild_UnknownTemplate_FallsBackToDefaultStep(t *testing.T) {

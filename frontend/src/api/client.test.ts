@@ -19,6 +19,7 @@ import {
   updateJob,
   runJob,
   listSourceCredentials,
+  getAuthConfig,
   getMe,
   authLoginURL,
   logoutSession,
@@ -51,6 +52,7 @@ describe("API client - types", () => {
     expect(typeof updateJob).toBe("function");
     expect(typeof runJob).toBe("function");
     expect(typeof listSourceCredentials).toBe("function");
+    expect(typeof getAuthConfig).toBe("function");
     expect(typeof getMe).toBe("function");
     expect(typeof authLoginURL).toBe("function");
     expect(typeof logoutSession).toBe("function");
@@ -404,6 +406,23 @@ describe("API client - types", () => {
     const me = await getMe();
     expect(me.auth_mode).toBe("disabled");
     expect(fetchMock).toHaveBeenCalledWith("/api/me", undefined);
+  });
+
+  it("fetches public auth config from /auth/config", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          auth_mode: "oidc",
+          login_url: "/auth/login",
+        },
+      }),
+    } as Response);
+
+    const config = await getAuthConfig();
+    expect(config.auth_mode).toBe("oidc");
+    expect(config.login_url).toBe("/auth/login");
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/config", undefined);
   });
 
   it("uses auth login and logout endpoints outside /api", async () => {

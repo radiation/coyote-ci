@@ -1,6 +1,6 @@
 import { useCallback, useMemo, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { APIError, authLoginURL, getMe, logoutSession } from "./api";
+import { APIError, getAuthConfig, getMe, logoutSession } from "./api";
 import {
   AuthContext,
   type AuthContextValue,
@@ -15,6 +15,18 @@ export function AuthProvider({
   navigate?: (url: string) => void;
 }) {
   const {
+    data: authConfig,
+    error: authConfigError,
+    isError: isAuthConfigError,
+    isPending: isAuthConfigPending,
+    refetch: refetchAuthConfig,
+  } = useQuery({
+    queryKey: ["auth-config"],
+    queryFn: getAuthConfig,
+    retry: false,
+  });
+
+  const {
     data,
     error: queryError,
     isError,
@@ -26,7 +38,32 @@ export function AuthProvider({
     retry: false,
   });
 
-  const { authMode, authStatus, currentUser, error } = useMemo(() => {
+  const { authMode, authStatus, currentUser, error, loginUrl } = useMemo(() => {
+    if (isAuthConfigPending) {
+      return {
+        authMode: null,
+        authStatus: "loading" as const,
+        currentUser: null,
+        error: null,
+        loginUrl: null,
+      };
+    }
+
+    if (isAuthConfigError) {
+      return {
+        authMode: null,
+        authStatus: "error" as const,
+        currentUser: null,
+        error:
+          authConfigError instanceof Error
+            ? authConfigError
+            : new Error(String(authConfigError)),
+        loginUrl: null,
+      };
+    }
+
+    const nextAuthMode = authConfig?.auth_mode ?? null;
+    const nextLoginURL = authConfig?.login_url ?? null;
     const nextError =
       queryError instanceof APIError && queryError.status === 401
         ? null
@@ -45,26 +82,40 @@ export function AuthProvider({
 
     return {
       authMode:
-        nextAuthStatus === "authenticated" ? (data?.auth_mode ?? null) : null,
+        nextAuthStatus === "authenticated"
+          ? (data?.auth_mode ?? nextAuthMode)
+          : nextAuthMode,
       authStatus: nextAuthStatus,
       currentUser:
         nextAuthStatus === "authenticated" ? (data?.user ?? null) : null,
       error: nextError,
+      loginUrl: nextLoginURL,
     };
-  }, [data, isError, isPending, queryError]);
+  }, [
+    authConfig,
+    authConfigError,
+    data,
+    isAuthConfigError,
+    isAuthConfigPending,
+    isError,
+    isPending,
+    queryError,
+  ]);
 
   const refreshCurrentUser = useCallback(async () => {
-    await refetch();
-  }, [refetch]);
+    await Promise.all([refetchAuthConfig(), refetch()]);
+  }, [refetch, refetchAuthConfig]);
 
   const login = useCallback(() => {
-    navigate(authLoginURL());
-  }, [navigate]);
+    if (loginUrl) {
+      navigate(loginUrl);
+    }
+  }, [loginUrl, navigate]);
 
   const logout = useCallback(async () => {
     await logoutSession();
-    await refetch();
-  }, [refetch]);
+    await Promise.all([refetchAuthConfig(), refetch()]);
+  }, [refetch, refetchAuthConfig]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -73,6 +124,7 @@ export function AuthProvider({
       authStatus,
       error,
       isGlobalAdmin: currentUser?.global_role === "admin",
+      loginAvailable: loginUrl !== null,
       login,
       logout,
       refreshCurrentUser,
@@ -82,6 +134,7 @@ export function AuthProvider({
       authStatus,
       currentUser,
       error,
+      loginUrl,
       login,
       logout,
       refreshCurrentUser,

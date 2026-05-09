@@ -19,6 +19,11 @@ export interface MeResponse {
   user: User;
 }
 
+export interface AuthConfigResponse {
+  auth_mode: "disabled" | "header" | "oidc";
+  login_url: string | null;
+}
+
 export interface CreateUserRequest {
   email: string;
   display_name?: string;

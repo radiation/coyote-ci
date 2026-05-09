@@ -10,6 +10,7 @@ import (
 )
 
 var ErrOIDCEmailRequired = errors.New("oidc email claim is required")
+var ErrOIDCEmailNotVerified = errors.New("oidc email claim is not verified")
 
 type OIDCConfig struct {
 	IssuerURL    string
@@ -35,6 +36,7 @@ type CoreOSOIDCAuthenticator struct {
 }
 
 type oidcClaims struct {
+	EmailVerified     *bool  `json:"email_verified"`
 	Email             string `json:"email"`
 	Name              string `json:"name"`
 	PreferredUsername string `json:"preferred_username"`
@@ -112,9 +114,16 @@ func (a *CoreOSOIDCAuthenticator) Exchange(ctx context.Context, code string, non
 	if claimsErr := idToken.Claims(&claims); claimsErr != nil {
 		return OIDCIdentity{}, claimsErr
 	}
+	return identityFromOIDCClaims(claims)
+}
+
+func identityFromOIDCClaims(claims oidcClaims) (OIDCIdentity, error) {
 	email := strings.TrimSpace(claims.Email)
 	if email == "" {
 		return OIDCIdentity{}, ErrOIDCEmailRequired
+	}
+	if claims.EmailVerified != nil && !*claims.EmailVerified {
+		return OIDCIdentity{}, ErrOIDCEmailNotVerified
 	}
 
 	var displayName *string

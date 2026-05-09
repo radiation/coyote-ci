@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { Layout } from "./Layout";
-import { APIError, getMe } from "../api";
+import { APIError, getAuthConfig, getMe } from "../api";
 import { AuthProvider } from "../auth";
 import { ThemeProvider } from "../theme";
 import { installMockLocalStorage } from "../test/browserMocks";
@@ -13,6 +13,7 @@ vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
   return {
     ...actual,
+    getAuthConfig: vi.fn(),
     getMe: vi.fn(),
   };
 });
@@ -61,6 +62,7 @@ function renderLayout(navigate = vi.fn()) {
 }
 
 describe("Layout", () => {
+  const mockedGetAuthConfig = vi.mocked(getAuthConfig);
   const mockedGetMe = vi.mocked(getMe);
 
   beforeEach(() => {
@@ -69,6 +71,10 @@ describe("Layout", () => {
     document.documentElement.removeAttribute("data-theme");
     document.documentElement.style.colorScheme = "";
     installMatchMedia(false);
+    mockedGetAuthConfig.mockResolvedValue({
+      auth_mode: "disabled",
+      login_url: null,
+    });
     mockedGetMe.mockResolvedValue({
       auth_mode: "disabled",
       user: {
@@ -122,6 +128,10 @@ describe("Layout", () => {
   });
 
   it("shows sign-in UI when /me returns 401", async () => {
+    mockedGetAuthConfig.mockResolvedValue({
+      auth_mode: "oidc",
+      login_url: "/auth/login",
+    });
     mockedGetMe.mockRejectedValue(
       new APIError(401, "missing user email header"),
     );
@@ -134,5 +144,24 @@ describe("Layout", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(navigate).toHaveBeenCalledWith("/auth/login");
+  });
+
+  it("shows proxy guidance without sign-in button for header-mode 401", async () => {
+    mockedGetAuthConfig.mockResolvedValue({
+      auth_mode: "header",
+      login_url: null,
+    });
+    mockedGetMe.mockRejectedValue(
+      new APIError(401, "missing user email header"),
+    );
+
+    renderLayout();
+
+    await waitFor(() => {
+      expect(screen.getByText("External authentication required")).toBeTruthy();
+      expect(screen.getByText(/trusted proxy authentication/i)).toBeTruthy();
+    });
+
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   });
 });

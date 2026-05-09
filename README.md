@@ -50,7 +50,7 @@ Auth modes:
 
 - `disabled`: local/dev only. `/api/me` returns a synthetic local development admin and existing developer UX remains unchanged.
 - `header`: trusted reverse-proxy mode. Coyote trusts `X-Coyote-User-Email` and `X-Coyote-User-Name`, auto-provisions users by normalized lowercase email, promotes `BOOTSTRAP_ADMIN_EMAILS`, and rejects protected routes missing `X-Coyote-User-Email` with `401`.
-- `oidc`: native OIDC authorization-code login. `/auth/login` starts the provider redirect, `/auth/callback` validates state/nonce and the ID token, provisions or updates the local user by email, creates an HTTP-only signed session cookie, and `/auth/logout` clears the local session. `/api/me` returns `401` when no valid session is present.
+- `oidc`: native OIDC authorization-code login. `/auth/login` starts the provider redirect, `/auth/callback` validates state/nonce and the ID token, provisions or updates the local user by email, requires `email_verified=true` when the provider includes that claim, creates an HTTP-only signed session cookie, and `/auth/logout` clears the local session. `/api/me` returns `401` when no valid session is present.
 
 OIDC/session configuration:
 
@@ -62,7 +62,7 @@ OIDC/session configuration:
 - `SESSION_SECRET` (required for `AUTH_MODE=oidc`; keep it private and random)
 - `SESSION_COOKIE_NAME` (default: `coyote_session`)
 - `SESSION_COOKIE_SECURE` (defaults to secure except localhost HTTP redirect URLs; set explicitly for local dev if needed)
-- `SESSION_COOKIE_SAME_SITE` (default: `lax`; supported values: `lax`, `strict`, `none`)
+- `SESSION_COOKIE_SAME_SITE` (default: `lax`; supported values: `lax`, `strict`, `none`; `none` requires `SESSION_COOKIE_SECURE=true`)
 
 Security notes:
 

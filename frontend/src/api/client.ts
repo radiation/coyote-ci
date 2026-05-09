@@ -40,6 +40,7 @@ import type {
 } from "../types/project";
 import type {
   CreateUserRequest,
+  AuthConfigResponse,
   MeResponse,
   ProjectMember,
   ProjectMemberListResponse,
@@ -162,6 +163,12 @@ async function deleteNoContent(path: string): Promise<void> {
 
 export async function getMe(): Promise<MeResponse> {
   const envelope = await fetchJSON<DataEnvelope<MeResponse>>("/me");
+  return envelope.data;
+}
+
+export async function getAuthConfig(): Promise<AuthConfigResponse> {
+  const envelope =
+    await fetchJSON<DataEnvelope<AuthConfigResponse>>("/auth/config");
   return envelope.data;
 }
 

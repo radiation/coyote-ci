@@ -93,6 +93,8 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		message := "oidc login failed"
 		if errors.Is(exchangeErr, auth.ErrOIDCEmailRequired) || errors.Is(exchangeErr, service.ErrUserEmailRequired) {
 			message = "email claim is required"
+		} else if errors.Is(exchangeErr, auth.ErrOIDCEmailNotVerified) {
+			message = "email must be verified by the oidc provider"
 		}
 		writeErrorJSON(w, status, "unauthorized", message)
 		return

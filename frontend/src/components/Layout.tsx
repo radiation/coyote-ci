@@ -10,6 +10,7 @@ export function Layout() {
     authStatus,
     error,
     isGlobalAdmin,
+    loginAvailable,
     login,
     logout,
     refreshCurrentUser,
@@ -124,10 +125,18 @@ export function Layout() {
         )}
         {authStatus === "unauthenticated" && (
           <AuthStatePanel
-            title="Sign in to Coyote CI"
-            message="Use your configured identity provider to continue."
-            actionLabel="Sign in"
-            onAction={login}
+            title={
+              authMode === "header"
+                ? "External authentication required"
+                : "Sign in to Coyote CI"
+            }
+            message={
+              authMode === "header"
+                ? "Coyote CI is configured for trusted proxy authentication. Sign in through the configured gateway or proxy, then retry."
+                : "Use your configured identity provider to continue."
+            }
+            actionLabel={loginAvailable ? "Sign in" : undefined}
+            onAction={loginAvailable ? login : undefined}
           />
         )}
         {authStatus === "error" && (
