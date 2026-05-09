@@ -154,6 +154,23 @@ func TestNewRouter_AuthConfigRouteIsPublic(t *testing.T) {
 	}
 }
 
+func TestNewRouter_AuthRoutesAreRegisteredWhenHandlerIsInjected(t *testing.T) {
+	sessions, err := auth.NewCookieSessionManager(auth.CookieSessionConfig{Secret: "test-session-secret"})
+	if err != nil {
+		t.Fatalf("create session manager failed: %v", err)
+	}
+	userService := service.NewUserService(repositorymemory.NewUserRepository())
+	authHandler := handler.NewAuthHandler(nil, sessions, userService, handler.AuthHandlerConfig{})
+	r := newIdentityTestRouter(auth.ModeDisabled, "push-secret", "github-secret", WithAuthHandler(authHandler))
+	request := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	response := httptest.NewRecorder()
+
+	r.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected auth logout route status %d, got %d body=%s", http.StatusOK, response.Code, response.Body.String())
+	}
+}
+
 func TestNewRouter_OIDCModeMeRouteRequiresSession(t *testing.T) {
 	r, _ := newOIDCTestRouter(t)
 
@@ -550,7 +567,7 @@ func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
 	}
 }
 
-func newIdentityTestRouter(mode auth.Mode, pushEventSecret string, githubWebhookSecret string) http.Handler {
+func newIdentityTestRouter(mode auth.Mode, pushEventSecret string, githubWebhookSecret string, opts ...RouterOption) http.Handler {
 	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
 	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
@@ -562,6 +579,11 @@ func newIdentityTestRouter(mode auth.Mode, pushEventSecret string, githubWebhook
 	userService := service.NewUserService(repositorymemory.NewUserRepository())
 	userHandler := handler.NewUserHandler(userService, mode)
 	authMiddleware := auth.Middleware(auth.MiddlewareConfig{Mode: mode}, userService)
+	routerOptions := []RouterOption{
+		WithAuthMiddleware(authMiddleware),
+		WithUserHandler(userHandler),
+	}
+	routerOptions = append(routerOptions, opts...)
 
 	return NewRouter(
 		buildHandler,
@@ -572,8 +594,7 @@ func newIdentityTestRouter(mode auth.Mode, pushEventSecret string, githubWebhook
 		nil,
 		eventHandler,
 		pushEventSecret,
-		WithAuthMiddleware(authMiddleware),
-		WithUserHandler(userHandler),
+		routerOptions...,
 	)
 }
 

@@ -20,6 +20,7 @@ function AuthConsumer() {
     authMode,
     authStatus,
     currentUser,
+    error,
     isGlobalAdmin,
     login,
     loginAvailable,
@@ -30,6 +31,7 @@ function AuthConsumer() {
       <p>Mode: {authMode ?? "none"}</p>
       <p>Status: {authStatus}</p>
       <p>User: {currentUser?.email ?? "none"}</p>
+      <p>Error: {error?.message ?? "none"}</p>
       <p>Admin: {isGlobalAdmin ? "yes" : "no"}</p>
       <p>Can login: {loginAvailable ? "yes" : "no"}</p>
       <button type="button" onClick={login}>
@@ -122,6 +124,25 @@ describe("AuthProvider", () => {
       expect(screen.getByText("Can login: no")).toBeTruthy();
       expect(screen.getByText("User: none")).toBeTruthy();
     });
+
+    expect(mockedGetAuthConfig).toHaveBeenCalledTimes(1);
+    expect(mockedGetMe).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces auth config failures without keeping stale user state", async () => {
+    mockedGetAuthConfig.mockRejectedValue(
+      new Error("failed to load auth config"),
+    );
+
+    renderWithAuthProvider(<AuthConsumer />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Status: error")).toBeTruthy();
+      expect(screen.getByText("User: none")).toBeTruthy();
+      expect(
+        screen.getByText("Error: failed to load auth config"),
+      ).toBeTruthy();
+    });
   });
 
   it("navigates to login", async () => {
@@ -162,5 +183,25 @@ describe("AuthProvider", () => {
       expect(screen.getByText("Status: unauthenticated")).toBeTruthy();
       expect(screen.getByText("User: none")).toBeTruthy();
     });
+  });
+
+  it("does not persist auth state in browser storage", async () => {
+    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const removeItemSpy = vi.spyOn(Storage.prototype, "removeItem");
+
+    renderWithAuthProvider(<AuthConsumer />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Status: authenticated")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Logout" }));
+
+    await waitFor(() => {
+      expect(mockedLogoutSession).toHaveBeenCalled();
+    });
+
+    expect(setItemSpy).not.toHaveBeenCalled();
+    expect(removeItemSpy).not.toHaveBeenCalled();
   });
 });

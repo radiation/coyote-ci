@@ -146,6 +146,17 @@ describe("Layout", () => {
     expect(navigate).toHaveBeenCalledWith("/auth/login");
   });
 
+  it("shows loading state while auth config is still loading", () => {
+    mockedGetAuthConfig.mockImplementation(
+      () => new Promise(() => undefined) as Promise<never>,
+    );
+
+    renderLayout();
+
+    expect(screen.getByText("Loading session")).toBeTruthy();
+    expect(screen.getByText("Checking your Coyote CI session.")).toBeTruthy();
+  });
+
   it("shows proxy guidance without sign-in button for header-mode 401", async () => {
     mockedGetAuthConfig.mockResolvedValue({
       auth_mode: "header",
@@ -163,5 +174,24 @@ describe("Layout", () => {
     });
 
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+  });
+
+  it("shows retry UI when the current session cannot be loaded", async () => {
+    mockedGetMe.mockRejectedValue(new APIError(500, "session backend failed"));
+
+    renderLayout();
+
+    await waitFor(() => {
+      expect(screen.getByText("Unable to load session")).toBeTruthy();
+      expect(screen.getByText("API 500: session backend failed")).toBeTruthy();
+    });
+
+    const initialCalls = mockedGetMe.mock.calls.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(mockedGetMe.mock.calls.length).toBeGreaterThan(initialCalls);
+    });
   });
 });

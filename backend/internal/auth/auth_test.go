@@ -221,6 +221,82 @@ func TestProjectRoleCapabilities(t *testing.T) {
 	}
 }
 
+func TestParseModeAndBootstrapAdminEmails(t *testing.T) {
+	if ParseMode(" OIDC ") != ModeOIDC {
+		t.Fatalf("expected oidc mode")
+	}
+	if ParseMode("header") != ModeHeader {
+		t.Fatalf("expected header mode")
+	}
+	if ParseMode("unknown") != ModeDisabled {
+		t.Fatalf("expected unknown mode to disable auth")
+	}
+
+	emails := ParseBootstrapAdminEmails(" admin@example.com, ,OWNER@example.com ")
+	if _, ok := emails["admin@example.com"]; !ok {
+		t.Fatalf("expected normalized admin email in bootstrap set")
+	}
+	if _, ok := emails["owner@example.com"]; !ok {
+		t.Fatalf("expected normalized owner email in bootstrap set")
+	}
+}
+
+func TestCurrentUserHelpersAndPermissionChecks(t *testing.T) {
+	admin := domain.User{ID: "admin-1", GlobalRole: domain.GlobalRoleAdmin}
+	viewer := domain.User{ID: "user-1", GlobalRole: domain.GlobalRoleUser}
+	lookup := stubProjectRoleLookup{membership: domain.ProjectMembership{ProjectID: "project-1", UserID: "user-1", Role: domain.ProjectMemberRoleViewer}}
+	maintainerLookup := stubProjectRoleLookup{membership: domain.ProjectMembership{ProjectID: "project-1", UserID: "user-1", Role: domain.ProjectMemberRoleMaintainer}}
+	ownerLookup := stubProjectRoleLookup{membership: domain.ProjectMembership{ProjectID: "project-1", UserID: "user-1", Role: domain.ProjectMemberRoleOwner}}
+
+	ctx := WithUser(context.Background(), viewer)
+	current, ok := CurrentUser(ctx)
+	if !ok || current.ID != viewer.ID {
+		t.Fatalf("expected current user %q, got %+v ok=%v", viewer.ID, current, ok)
+	}
+	disabled := DisabledModeUser()
+	if disabled.GlobalRole != domain.GlobalRoleAdmin {
+		t.Fatalf("expected disabled mode user to be admin, got %q", disabled.GlobalRole)
+	}
+	if !IsGlobalAdmin(admin) || IsGlobalAdmin(viewer) {
+		t.Fatalf("unexpected global admin detection")
+	}
+	if !CanManageUsers(ModeDisabled, viewer) || CanManageUsers(ModeHeader, viewer) {
+		t.Fatalf("unexpected user management permissions")
+	}
+	if !CanManageCredentials(ModeHeader, admin) || CanManageCredentials(ModeHeader, viewer) {
+		t.Fatalf("unexpected credential permissions")
+	}
+
+	allowed, err := CanReadProject(context.Background(), lookup, ModeHeader, viewer, "project-1")
+	if err != nil || !allowed {
+		t.Fatalf("expected viewer read access, allowed=%v err=%v", allowed, err)
+	}
+	allowed, err = CanUpdateProject(context.Background(), lookup, ModeHeader, viewer, "project-1")
+	if err != nil || allowed {
+		t.Fatalf("expected viewer update denied, allowed=%v err=%v", allowed, err)
+	}
+	allowed, err = CanTriggerBuild(context.Background(), maintainerLookup, ModeHeader, viewer, "project-1")
+	if err != nil || !allowed {
+		t.Fatalf("expected maintainer trigger access, allowed=%v err=%v", allowed, err)
+	}
+	allowed, err = CanCancelBuild(context.Background(), maintainerLookup, ModeHeader, viewer, "project-1")
+	if err != nil || !allowed {
+		t.Fatalf("expected maintainer cancel access, allowed=%v err=%v", allowed, err)
+	}
+	allowed, err = CanReadProjectResources(context.Background(), lookup, ModeHeader, viewer, "project-1")
+	if err != nil || !allowed {
+		t.Fatalf("expected viewer resource access, allowed=%v err=%v", allowed, err)
+	}
+	allowed, err = CanManageProjectMembers(context.Background(), ownerLookup, ModeHeader, viewer, "project-1")
+	if err != nil || !allowed {
+		t.Fatalf("expected owner membership management access, allowed=%v err=%v", allowed, err)
+	}
+	allowed, err = CanManageProjectMembers(context.Background(), ownerLookup, ModeHeader, admin, "project-1")
+	if err != nil || !allowed {
+		t.Fatalf("expected global admin membership management access, allowed=%v err=%v", allowed, err)
+	}
+}
+
 type stubProjectRoleLookup struct {
 	membership domain.ProjectMembership
 	err        error
