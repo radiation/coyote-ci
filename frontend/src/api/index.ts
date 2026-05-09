@@ -1,4 +1,7 @@
 export {
+  APIError,
+  formatAPIErrorMessage,
+  isAPIErrorStatus,
   listArtifacts,
   listBuilds,
   listQueue,

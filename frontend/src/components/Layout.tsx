@@ -1,17 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
 import { NavLink, Outlet } from "react-router-dom";
-import { getMe } from "../api";
+import { formatAPIErrorMessage, getMe, isAPIErrorStatus } from "../api";
 import { useTheme } from "../theme-context";
 
 export function Layout() {
   const { theme, toggleTheme } = useTheme();
-  const { data: me } = useQuery({
+  const { data: me, error: meError } = useQuery({
     queryKey: ["me"],
     queryFn: getMe,
     retry: false,
   });
   const showUsersLink =
     me?.auth_mode === "disabled" || me?.user.global_role === "admin";
+  const meMessage = isAPIErrorStatus(meError, 401)
+    ? formatAPIErrorMessage(
+        meError,
+        "Coyote is configured for external authentication.",
+      )
+    : null;
 
   return (
     <div className="app">
@@ -94,6 +100,7 @@ export function Layout() {
           </div>
         </div>
       </header>
+      {meMessage && <p className="error-text">{meMessage}</p>}
       <main className="main">
         <Outlet />
       </main>

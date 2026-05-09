@@ -3,14 +3,18 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { Layout } from "./Layout";
-import { getMe } from "../api";
+import { APIError, getMe } from "../api";
 import { ThemeProvider } from "../theme";
 import { installMockLocalStorage } from "../test/browserMocks";
 import { THEME_STORAGE_KEY } from "../theme-context";
 
-vi.mock("../api", () => ({
-  getMe: vi.fn(),
-}));
+vi.mock("../api", async () => {
+  const actual = await vi.importActual<typeof import("../api")>("../api");
+  return {
+    ...actual,
+    getMe: vi.fn(),
+  };
+});
 
 function installMatchMedia(initialMatches: boolean) {
   Object.defineProperty(window, "matchMedia", {
@@ -123,6 +127,37 @@ describe("Layout", () => {
 
     await waitFor(() => {
       expect(screen.queryByRole("link", { name: "Users" })).toBeNull();
+    });
+  });
+
+  it("shows an external-auth message when /me returns 401", async () => {
+    mockedGetMe.mockRejectedValue(
+      new APIError(401, "missing user email header"),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider>
+          <MemoryRouter initialEntries={["/artifacts"]}>
+            <Routes>
+              <Route element={<Layout />}>
+                <Route path="/artifacts" element={<div>Artifacts page</div>} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/configured for external authentication/i),
+      ).toBeTruthy();
     });
   });
 });

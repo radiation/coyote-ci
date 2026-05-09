@@ -59,6 +59,35 @@ import type {
  */
 const BASE = import.meta.env.VITE_API_BASE_PATH ?? "/api";
 
+export class APIError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(`API ${status}: ${message}`);
+    this.name = "APIError";
+    this.status = status;
+  }
+}
+
+export function isAPIErrorStatus(error: unknown, status: number): boolean {
+  return error instanceof APIError && error.status === status;
+}
+
+export function formatAPIErrorMessage(
+  error: unknown,
+  forbiddenFallback: string,
+): string {
+  if (error instanceof APIError) {
+    if (error.status === 401) {
+      return "Coyote is configured for external authentication. Sign in through the configured gateway or proxy, then retry.";
+    }
+    if (error.status === 403) {
+      return forbiddenFallback;
+    }
+  }
+  return String(error);
+}
+
 export async function checkReadiness(): Promise<void> {
   const res = await fetch(`${BASE}/readyz`);
   if (!res.ok) {
@@ -81,7 +110,7 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
       // Keep raw body when response is not JSON.
     }
 
-    throw new Error(`API ${res.status}: ${message}`);
+    throw new APIError(res.status, message);
   }
   return res.json() as Promise<T>;
 }
@@ -120,7 +149,7 @@ async function deleteNoContent(path: string): Promise<void> {
       // Keep raw body when response is not JSON.
     }
 
-    throw new Error(`API ${res.status}: ${message}`);
+    throw new APIError(res.status, message);
   }
 }
 

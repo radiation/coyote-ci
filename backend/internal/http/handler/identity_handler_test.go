@@ -82,8 +82,17 @@ func TestProjectMembershipHandler_HeaderModeAuthorization(t *testing.T) {
 	viewerListReq = viewerListReq.WithContext(auth.WithUser(viewerListReq.Context(), viewer))
 	viewerListRes := httptest.NewRecorder()
 	handler.ListProjectMembers(viewerListRes, viewerListReq)
-	if viewerListRes.Code != http.StatusForbidden {
-		t.Fatalf("expected viewer list status %d, got %d", http.StatusForbidden, viewerListRes.Code)
+	if viewerListRes.Code != http.StatusOK {
+		t.Fatalf("expected viewer list status %d, got %d body=%s", http.StatusOK, viewerListRes.Code, viewerListRes.Body.String())
+	}
+
+	nonMember := domain.User{ID: "outsider-1", Email: "outsider@example.com", GlobalRole: domain.GlobalRoleUser}
+	nonMemberListReq := addURLParams(httptest.NewRequest(http.MethodGet, "/projects/project-1/members", nil), map[string]string{"id": project.ID})
+	nonMemberListReq = nonMemberListReq.WithContext(auth.WithUser(nonMemberListReq.Context(), nonMember))
+	nonMemberListRes := httptest.NewRecorder()
+	handler.ListProjectMembers(nonMemberListRes, nonMemberListReq)
+	if nonMemberListRes.Code != http.StatusForbidden {
+		t.Fatalf("expected non-member list status %d, got %d", http.StatusForbidden, nonMemberListRes.Code)
 	}
 
 	ownerReq := addURLParams(httptest.NewRequest(http.MethodPut, "/projects/project-1/members/target-1", bytes.NewBufferString(`{"role":"maintainer"}`)), map[string]string{"id": project.ID, "user_id": target.ID})

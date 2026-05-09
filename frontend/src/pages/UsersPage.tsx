@@ -1,6 +1,12 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createUser, deleteUser, listUsers, updateUser } from "../api";
+import {
+  createUser,
+  deleteUser,
+  formatAPIErrorMessage,
+  listUsers,
+  updateUser,
+} from "../api";
 import type { GlobalRole, User } from "../types/identity";
 import { formatTime } from "../utils/time";
 
@@ -29,7 +35,13 @@ export function UsersPage() {
       setDisplayName("");
       setGlobalRole("user");
     },
-    onError: (mutationError) => setErrorMessage(String(mutationError)),
+    onError: (mutationError) =>
+      setErrorMessage(
+        formatAPIErrorMessage(
+          mutationError,
+          "You do not have permission to manage users.",
+        ),
+      ),
   });
 
   const updateMutation = useMutation({
@@ -43,7 +55,13 @@ export function UsersPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["users"] });
     },
-    onError: (mutationError) => setErrorMessage(String(mutationError)),
+    onError: (mutationError) =>
+      setErrorMessage(
+        formatAPIErrorMessage(
+          mutationError,
+          "You do not have permission to manage users.",
+        ),
+      ),
   });
 
   const deleteMutation = useMutation({
@@ -52,7 +70,13 @@ export function UsersPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["users"] });
     },
-    onError: (mutationError) => setErrorMessage(String(mutationError)),
+    onError: (mutationError) =>
+      setErrorMessage(
+        formatAPIErrorMessage(
+          mutationError,
+          "You do not have permission to manage users.",
+        ),
+      ),
   });
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -127,7 +151,12 @@ export function UsersPage() {
       {errorMessage && <p className="error-text">{errorMessage}</p>}
       {isLoading && <p>Loading users…</p>}
       {error && (
-        <p className="error-text">Failed to load users: {String(error)}</p>
+        <p className="error-text">
+          {formatAPIErrorMessage(
+            error,
+            "You do not have permission to manage users.",
+          )}
+        </p>
       )}
       {users && users.length === 0 && (
         <p className="subtle-text">No users have been created yet.</p>

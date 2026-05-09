@@ -2,14 +2,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { UsersPage } from "./UsersPage";
-import { createUser, deleteUser, listUsers, updateUser } from "../api";
+import {
+  APIError,
+  createUser,
+  deleteUser,
+  listUsers,
+  updateUser,
+} from "../api";
 
-vi.mock("../api", () => ({
-  createUser: vi.fn(),
-  deleteUser: vi.fn(),
-  listUsers: vi.fn(),
-  updateUser: vi.fn(),
-}));
+vi.mock("../api", async () => {
+  const actual = await vi.importActual<typeof import("../api")>("../api");
+  return {
+    ...actual,
+    createUser: vi.fn(),
+    deleteUser: vi.fn(),
+    listUsers: vi.fn(),
+    updateUser: vi.fn(),
+  };
+});
 
 function renderPage() {
   const queryClient = new QueryClient({
@@ -108,6 +118,20 @@ describe("UsersPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => {
       expect(mockedDeleteUser).toHaveBeenCalledWith("user-1");
+    });
+  });
+
+  it("shows a friendly forbidden message for non-admin access", async () => {
+    mockedListUsers.mockRejectedValue(
+      new APIError(403, "global admin is required"),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("You do not have permission to manage users."),
+      ).toBeTruthy();
     });
   });
 });

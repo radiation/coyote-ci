@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ProjectDetailPage } from "./ProjectDetailPage";
 import {
+  APIError,
   deleteProjectMember,
   getProject,
   listJobsByProject,
@@ -13,15 +14,19 @@ import {
   upsertProjectMember,
 } from "../api";
 
-vi.mock("../api", () => ({
-  deleteProjectMember: vi.fn(),
-  getProject: vi.fn(),
-  listJobsByProject: vi.fn(),
-  listProjectMembers: vi.fn(),
-  listUsers: vi.fn(),
-  updateProjectMember: vi.fn(),
-  upsertProjectMember: vi.fn(),
-}));
+vi.mock("../api", async () => {
+  const actual = await vi.importActual<typeof import("../api")>("../api");
+  return {
+    ...actual,
+    deleteProjectMember: vi.fn(),
+    getProject: vi.fn(),
+    listJobsByProject: vi.fn(),
+    listProjectMembers: vi.fn(),
+    listUsers: vi.fn(),
+    updateProjectMember: vi.fn(),
+    upsertProjectMember: vi.fn(),
+  };
+});
 
 function renderPage() {
   const queryClient = new QueryClient({
@@ -178,6 +183,23 @@ describe("ProjectDetailPage", () => {
         "project-1",
         "user-1",
       );
+    });
+  });
+
+  it("shows a friendly permission message when project members are forbidden", async () => {
+    mockedListProjectMembers.mockRejectedValue(
+      new APIError(
+        403,
+        "project membership visibility requires a project membership or global admin",
+      ),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("You do not have permission to view project members."),
+      ).toBeTruthy();
     });
   });
 });
