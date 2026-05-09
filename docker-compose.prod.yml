@@ -9,7 +9,7 @@ services:
     restart: unless-stopped
 
   migrate:
-    image: golang:${GO_VERSION:-1.26.2}
+    image: golang:${GO_VERSION:-1.26.3}
     container_name: coyote-ci-migrate
     depends_on:
       - cloudsql-proxy
@@ -28,7 +28,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
       args:
-        GO_VERSION: ${GO_VERSION:-1.26.2}
+        GO_VERSION: ${GO_VERSION:-1.26.3}
     container_name: coyote-ci-server
     depends_on:
       migrate:
@@ -55,7 +55,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
       args:
-        GO_VERSION: ${GO_VERSION:-1.26.2}
+        GO_VERSION: ${GO_VERSION:-1.26.3}
     depends_on:
       migrate:
         condition: service_completed_successfully

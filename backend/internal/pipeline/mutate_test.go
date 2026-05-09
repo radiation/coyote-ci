@@ -6,7 +6,7 @@ import (
 )
 
 func TestUpdatePipelineImageRef_DeterministicAndScoped(t *testing.T) {
-	input := []byte("version: 1\npipeline:\n  name: demo\n  image: golang:1.26.2\nsteps:\n  - name: test\n    run: go test ./...\n")
+	input := []byte("version: 1\npipeline:\n  name: demo\n  image: golang:1.26.3\nsteps:\n  - name: test\n    run: go test ./...\n")
 
 	updated1, changed1, err := UpdatePipelineImageRef(input, "registry.example.com/coyote/managed/go@sha256:1111")
 	if err != nil {
