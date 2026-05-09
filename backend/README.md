@@ -162,7 +162,7 @@ Preset shorthand:
 ```yaml
 version: 1
 pipeline:
-  image: golang:1.26.1
+  image: golang:1.26.3
   cache:
     preset: golang
     scope: job
