@@ -133,13 +133,17 @@ func (h *ArtifactHandler) filterArtifactsForRead(ctx context.Context, items []do
 	if normalizedAuthMode(h.authMode) == auth.ModeDisabled {
 		return items, nil
 	}
+	projectIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		projectIDs = append(projectIDs, item.ProjectID)
+	}
+	allowedProjects, err := allowedProjectsForUser(ctx, h.authMode, h.projectRoles, projectIDs, auth.CanReadProjectResources)
+	if err != nil {
+		return nil, err
+	}
 	filtered := make([]domain.ArtifactBrowseItem, 0, len(items))
 	for _, item := range items {
-		allowed, err := projectAllowed(ctx, h.authMode, h.projectRoles, item.ProjectID, auth.CanReadProjectResources)
-		if err != nil {
-			return nil, err
-		}
-		if allowed {
+		if _, ok := allowedProjects[item.ProjectID]; ok {
 			filtered = append(filtered, item)
 		}
 	}

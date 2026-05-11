@@ -153,12 +153,12 @@ func (m *CookieSessionManager) CreateAuthRequest(w http.ResponseWriter, state st
 	if encodeErr != nil {
 		return encodeErr
 	}
-	http.SetCookie(w, m.cookieWithName(m.authCookieName, value, m.authRequestTTL, "/auth"))
+	http.SetCookie(w, m.cookieWithNameAndSameSite(m.authCookieName, value, m.authRequestTTL, "/auth", m.authRequestSameSite()))
 	return nil
 }
 
 func (m *CookieSessionManager) VerifyAuthRequest(w http.ResponseWriter, r *http.Request, receivedState string) (string, error) {
-	defer http.SetCookie(w, m.expiredCookie(m.authCookieName, "/auth"))
+	defer http.SetCookie(w, m.expiredCookieWithSameSite(m.authCookieName, "/auth", m.authRequestSameSite()))
 	cookie, cookieErr := r.Cookie(m.authCookieName)
 	if cookieErr != nil {
 		return "", ErrSessionNotFound
@@ -184,6 +184,10 @@ func (m *CookieSessionManager) cookie(value string, maxAge time.Duration, path s
 }
 
 func (m *CookieSessionManager) cookieWithName(name string, value string, maxAge time.Duration, path string) *http.Cookie {
+	return m.cookieWithNameAndSameSite(name, value, maxAge, path, m.sameSite)
+}
+
+func (m *CookieSessionManager) cookieWithNameAndSameSite(name string, value string, maxAge time.Duration, path string, sameSite http.SameSite) *http.Cookie {
 	return &http.Cookie{
 		Name:     name,
 		Value:    value,
@@ -191,11 +195,15 @@ func (m *CookieSessionManager) cookieWithName(name string, value string, maxAge 
 		MaxAge:   int(maxAge.Seconds()),
 		HttpOnly: true,
 		Secure:   m.secure,
-		SameSite: m.sameSite,
+		SameSite: sameSite,
 	}
 }
 
 func (m *CookieSessionManager) expiredCookie(name string, path string) *http.Cookie {
+	return m.expiredCookieWithSameSite(name, path, m.sameSite)
+}
+
+func (m *CookieSessionManager) expiredCookieWithSameSite(name string, path string, sameSite http.SameSite) *http.Cookie {
 	return &http.Cookie{
 		Name:     name,
 		Value:    "",
@@ -203,8 +211,15 @@ func (m *CookieSessionManager) expiredCookie(name string, path string) *http.Coo
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   m.secure,
-		SameSite: m.sameSite,
+		SameSite: sameSite,
 	}
+}
+
+func (m *CookieSessionManager) authRequestSameSite() http.SameSite {
+	if m.sameSite == http.SameSiteStrictMode {
+		return http.SameSiteLaxMode
+	}
+	return m.sameSite
 }
 
 func (m *CookieSessionManager) encode(payload any) (string, error) {

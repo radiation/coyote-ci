@@ -200,6 +200,12 @@ func TestCookieSessionManager_CreateAndVerifyAuthRequest(t *testing.T) {
 	if cookie.MaxAge != int(defaultAuthRequestTTL.Seconds()) {
 		t.Fatalf("expected auth max age %d, got %d", int(defaultAuthRequestTTL.Seconds()), cookie.MaxAge)
 	}
+	if cookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("expected auth request cookie to relax strict same-site to lax, got %v", cookie.SameSite)
+	}
+	if cookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("expected auth request cookie to relax strict same-site to lax, got %v", cookie.SameSite)
+	}
 
 	request := httptest.NewRequest(http.MethodGet, "/auth/callback?state=state-1", nil)
 	request.AddCookie(cookie)
@@ -214,6 +220,12 @@ func TestCookieSessionManager_CreateAndVerifyAuthRequest(t *testing.T) {
 	clearingCookies := verifyResponse.Result().Cookies()
 	if len(clearingCookies) != 1 || clearingCookies[0].Name != manager.authCookieName || clearingCookies[0].MaxAge != -1 {
 		t.Fatalf("expected expired auth cookie, got %#v", clearingCookies)
+	}
+	if clearingCookies[0].SameSite != http.SameSiteLaxMode {
+		t.Fatalf("expected auth cleanup cookie to use lax same-site, got %v", clearingCookies[0].SameSite)
+	}
+	if clearingCookies[0].SameSite != http.SameSiteLaxMode {
+		t.Fatalf("expected auth cleanup cookie to use lax same-site, got %v", clearingCookies[0].SameSite)
 	}
 
 	if err := manager.CreateAuthRequest(httptest.NewRecorder(), " ", "nonce"); !errors.Is(err, ErrSessionInvalid) {

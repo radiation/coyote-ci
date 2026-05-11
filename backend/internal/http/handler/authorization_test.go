@@ -57,7 +57,7 @@ func TestAuthorizeGlobalAdmin(t *testing.T) {
 }
 
 func TestAuthorizeProject(t *testing.T) {
-	lookup := stubProjectRoleLookup{membership: domain.ProjectMembership{ProjectID: "project-1", UserID: "user-1", Role: domain.ProjectMemberRoleViewer}}
+	lookup := &stubProjectRoleLookup{membership: domain.ProjectMembership{ProjectID: "project-1", UserID: "user-1", Role: domain.ProjectMemberRoleViewer}}
 	user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
 	checkErr := errors.New("lookup failed")
 
@@ -100,7 +100,7 @@ func TestAuthorizeProject(t *testing.T) {
 
 func TestProjectAllowed(t *testing.T) {
 	user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
-	lookup := stubProjectRoleLookup{membership: domain.ProjectMembership{ProjectID: "project-1", UserID: "user-1", Role: domain.ProjectMemberRoleMaintainer}}
+	lookup := &stubProjectRoleLookup{membership: domain.ProjectMembership{ProjectID: "project-1", UserID: "user-1", Role: domain.ProjectMemberRoleMaintainer}}
 	checkErr := errors.New("boom")
 
 	allowed, err := projectAllowed(context.Background(), auth.ModeDisabled, nil, "", auth.CanReadProject)
@@ -136,19 +136,81 @@ func TestProjectAllowed(t *testing.T) {
 	}
 }
 
-type stubProjectRoleLookup struct {
-	membership domain.ProjectMembership
-	err        error
+func TestAllowedProjectsForUserUsesBatchedMembershipLookup(t *testing.T) {
+	user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+	lookup := &stubProjectRoleLookup{
+		membershipsByProject: map[string]domain.ProjectMembership{
+			"project-1": {ProjectID: "project-1", UserID: "user-1", Role: domain.ProjectMemberRoleViewer},
+			"project-2": {ProjectID: "project-2", UserID: "user-1", Role: domain.ProjectMemberRoleMaintainer},
+		},
+		batched: true,
+	}
+
+	allowed, err := allowedProjectsForUser(
+		auth.WithUser(context.Background(), user),
+		auth.ModeOIDC,
+		lookup,
+		[]string{"project-1", "project-2", "project-2"},
+		auth.CanManageProjectJobs,
+	)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if _, ok := allowed["project-2"]; !ok {
+		t.Fatalf("expected project-2 to be allowed, got %v", allowed)
+	}
+	if _, ok := allowed["project-1"]; ok {
+		t.Fatalf("expected project-1 to be denied, got %v", allowed)
+	}
+	if lookup.listCalls != 1 {
+		t.Fatalf("expected one batched membership lookup, got %d", lookup.listCalls)
+	}
+	if lookup.getCalls != 0 {
+		t.Fatalf("expected no per-project membership lookups during batching, got %d", lookup.getCalls)
+	}
 }
 
-func (s stubProjectRoleLookup) GetProjectMembership(_ context.Context, projectID string, userID string) (domain.ProjectMembership, error) {
+type stubProjectRoleLookup struct {
+	membership           domain.ProjectMembership
+	membershipsByProject map[string]domain.ProjectMembership
+	err                  error
+	getCalls             int
+	listCalls            int
+	batched              bool
+}
+
+func (s *stubProjectRoleLookup) GetProjectMembership(_ context.Context, projectID string, userID string) (domain.ProjectMembership, error) {
+	s.getCalls++
 	if s.err != nil {
 		return domain.ProjectMembership{}, s.err
+	}
+	if membership, ok := s.membershipsByProject[projectID]; ok {
+		if membership.UserID != userID {
+			return domain.ProjectMembership{}, repository.ErrProjectMembershipNotFound
+		}
+		return membership, nil
 	}
 	if s.membership.ProjectID != projectID || s.membership.UserID != userID {
 		return domain.ProjectMembership{}, repository.ErrProjectMembershipNotFound
 	}
 	return s.membership, nil
+}
+
+func (s *stubProjectRoleLookup) ListProjectMembershipsByUser(_ context.Context, userID string) ([]domain.ProjectMembership, error) {
+	s.listCalls++
+	if !s.batched {
+		return nil, errors.New("unexpected batched membership lookup")
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	memberships := make([]domain.ProjectMembership, 0, len(s.membershipsByProject))
+	for _, membership := range s.membershipsByProject {
+		if membership.UserID == userID {
+			memberships = append(memberships, membership)
+		}
+	}
+	return memberships, nil
 }
 
 func decodeErrorResponse(t *testing.T, response *httptest.ResponseRecorder) api.ErrorResponse {

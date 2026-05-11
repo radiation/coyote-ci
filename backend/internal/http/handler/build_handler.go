@@ -1050,13 +1050,17 @@ func (h *BuildHandler) filterBuildsForRead(ctx context.Context, builds []domain.
 	if normalizedAuthMode(h.authMode) == auth.ModeDisabled {
 		return builds, nil
 	}
+	projectIDs := make([]string, 0, len(builds))
+	for _, build := range builds {
+		projectIDs = append(projectIDs, build.ProjectID)
+	}
+	allowedProjects, err := allowedProjectsForUser(ctx, h.authMode, h.projectRoles, projectIDs, auth.CanReadProjectResources)
+	if err != nil {
+		return nil, err
+	}
 	filtered := make([]domain.Build, 0, len(builds))
 	for _, build := range builds {
-		allowed, err := projectAllowed(ctx, h.authMode, h.projectRoles, build.ProjectID, auth.CanReadProjectResources)
-		if err != nil {
-			return nil, err
-		}
-		if allowed {
+		if _, ok := allowedProjects[build.ProjectID]; ok {
 			filtered = append(filtered, build)
 		}
 	}
@@ -1067,13 +1071,17 @@ func (h *BuildHandler) filterQueueEntriesForRead(ctx context.Context, entries []
 	if normalizedAuthMode(h.authMode) == auth.ModeDisabled {
 		return entries, nil
 	}
+	projectIDs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		projectIDs = append(projectIDs, entry.Build.ProjectID)
+	}
+	allowedProjects, err := allowedProjectsForUser(ctx, h.authMode, h.projectRoles, projectIDs, auth.CanReadProjectResources)
+	if err != nil {
+		return nil, err
+	}
 	filtered := make([]domain.QueueEntry, 0, len(entries))
 	for _, entry := range entries {
-		allowed, err := projectAllowed(ctx, h.authMode, h.projectRoles, entry.Build.ProjectID, auth.CanReadProjectResources)
-		if err != nil {
-			return nil, err
-		}
-		if allowed {
+		if _, ok := allowedProjects[entry.Build.ProjectID]; ok {
 			filtered = append(filtered, entry)
 		}
 	}

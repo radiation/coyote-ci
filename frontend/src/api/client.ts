@@ -104,7 +104,7 @@ export async function checkReadiness(): Promise<void> {
 }
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, init);
+  const res = await fetch(`${BASE}${path}`, withCredentials(init));
   if (!res.ok) {
     const body = await res.text();
     let message = body;
@@ -143,7 +143,7 @@ async function postNoBodyJSON<TResponse>(path: string): Promise<TResponse> {
 }
 
 async function deleteNoContent(path: string): Promise<void> {
-  const res = await fetch(`${BASE}${path}`, { method: "DELETE" });
+  const res = await fetch(`${BASE}${path}`, withCredentials({ method: "DELETE" }));
   if (!res.ok) {
     const body = await res.text();
     let message = body;
@@ -177,16 +177,23 @@ export function authLoginURL(): string {
 }
 
 export async function logoutSession(): Promise<void> {
-  const res = await fetch(`${AUTH_BASE}/auth/logout`, {
+  const res = await fetch(`${AUTH_BASE}/auth/logout`, withCredentials({
     method: "POST",
     headers: {
       Accept: "application/json",
     },
-  });
+  }));
   if (!res.ok) {
     const body = await res.text();
     throw new APIError(res.status, body || "logout failed");
   }
+}
+
+function withCredentials(init?: RequestInit): RequestInit {
+  return {
+    ...init,
+    credentials: init?.credentials ?? "include",
+  };
 }
 
 export async function listUsers(): Promise<User[]> {

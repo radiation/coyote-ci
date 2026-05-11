@@ -290,13 +290,17 @@ func (h *JobHandler) filterJobsForRead(ctx context.Context, jobs []domain.Job) (
 	if normalizedAuthMode(h.authMode) == auth.ModeDisabled {
 		return jobs, nil
 	}
+	projectIDs := make([]string, 0, len(jobs))
+	for _, job := range jobs {
+		projectIDs = append(projectIDs, job.ProjectID)
+	}
+	allowedProjects, err := allowedProjectsForUser(ctx, h.authMode, h.projectRoles, projectIDs, auth.CanReadProjectResources)
+	if err != nil {
+		return nil, err
+	}
 	filtered := make([]domain.Job, 0, len(jobs))
 	for _, job := range jobs {
-		allowed, err := projectAllowed(ctx, h.authMode, h.projectRoles, job.ProjectID, auth.CanReadProjectResources)
-		if err != nil {
-			return nil, err
-		}
-		if allowed {
+		if _, ok := allowedProjects[job.ProjectID]; ok {
 			filtered = append(filtered, job)
 		}
 	}

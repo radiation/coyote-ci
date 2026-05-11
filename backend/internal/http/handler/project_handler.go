@@ -211,13 +211,17 @@ func (h *ProjectHandler) filterProjectsForRead(ctx context.Context, projects []d
 	if normalizedAuthMode(h.authMode) == auth.ModeDisabled {
 		return projects, nil
 	}
+	projectIDs := make([]string, 0, len(projects))
+	for _, project := range projects {
+		projectIDs = append(projectIDs, project.ID)
+	}
+	allowedProjects, err := allowedProjectsForUser(ctx, h.authMode, h.projectRoles, projectIDs, auth.CanReadProject)
+	if err != nil {
+		return nil, err
+	}
 	filtered := make([]domain.Project, 0, len(projects))
 	for _, project := range projects {
-		allowed, err := projectAllowed(ctx, h.authMode, h.projectRoles, project.ID, auth.CanReadProject)
-		if err != nil {
-			return nil, err
-		}
-		if allowed {
+		if _, ok := allowedProjects[project.ID]; ok {
 			filtered = append(filtered, project)
 		}
 	}

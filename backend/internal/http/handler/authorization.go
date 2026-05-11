@@ -7,9 +7,16 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
 type projectAuthorizer func(context.Context, auth.ProjectRoleLookup, auth.Mode, domain.User, string) (bool, error)
+type projectMembershipBatchLookup interface {
+	ListProjectMembershipsByUser(context.Context, string) ([]domain.ProjectMembership, error)
+}
+type staticProjectRoleLookup struct {
+	memberships map[string]domain.ProjectMembership
+}
 
 func normalizedAuthMode(mode auth.Mode) auth.Mode {
 	if mode == "" {
@@ -78,4 +85,65 @@ func projectAllowed(ctx context.Context, mode auth.Mode, lookup auth.ProjectRole
 		return false, nil
 	}
 	return check(ctx, lookup, mode, user, projectID)
+}
+
+func allowedProjectsForUser(ctx context.Context, mode auth.Mode, lookup auth.ProjectRoleLookup, projectIDs []string, check projectAuthorizer) (map[string]struct{}, error) {
+	mode = normalizedAuthMode(mode)
+	if mode == auth.ModeDisabled {
+		return nil, nil
+	}
+	if lookup == nil {
+		return map[string]struct{}{}, nil
+	}
+	user, ok := auth.CurrentUser(ctx)
+	if !ok {
+		return map[string]struct{}{}, nil
+	}
+
+	uniqueProjectIDs := make(map[string]struct{}, len(projectIDs))
+	for _, projectID := range projectIDs {
+		trimmedProjectID := strings.TrimSpace(projectID)
+		if trimmedProjectID != "" {
+			uniqueProjectIDs[trimmedProjectID] = struct{}{}
+		}
+	}
+	if len(uniqueProjectIDs) == 0 {
+		return map[string]struct{}{}, nil
+	}
+	if auth.IsGlobalAdmin(user) {
+		return uniqueProjectIDs, nil
+	}
+
+	effectiveLookup := lookup
+	if batchLookup, ok := lookup.(projectMembershipBatchLookup); ok {
+		memberships, err := batchLookup.ListProjectMembershipsByUser(ctx, user.ID)
+		if err != nil {
+			return nil, err
+		}
+		cachedMemberships := make(map[string]domain.ProjectMembership, len(memberships))
+		for _, membership := range memberships {
+			cachedMemberships[membership.ProjectID] = membership
+		}
+		effectiveLookup = staticProjectRoleLookup{memberships: cachedMemberships}
+	}
+
+	allowed := make(map[string]struct{}, len(uniqueProjectIDs))
+	for projectID := range uniqueProjectIDs {
+		projectAllowed, err := check(ctx, effectiveLookup, mode, user, projectID)
+		if err != nil {
+			return nil, err
+		}
+		if projectAllowed {
+			allowed[projectID] = struct{}{}
+		}
+	}
+	return allowed, nil
+}
+
+func (s staticProjectRoleLookup) GetProjectMembership(_ context.Context, projectID string, userID string) (domain.ProjectMembership, error) {
+	membership, ok := s.memberships[projectID]
+	if !ok || membership.UserID != userID {
+		return domain.ProjectMembership{}, repository.ErrProjectMembershipNotFound
+	}
+	return membership, nil
 }

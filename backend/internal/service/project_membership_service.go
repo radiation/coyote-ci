@@ -56,6 +56,14 @@ func (s *ProjectMembershipService) GetProjectMembership(ctx context.Context, pro
 	return s.memberships.Get(ctx, strings.TrimSpace(projectID), strings.TrimSpace(userID))
 }
 
+func (s *ProjectMembershipService) ListProjectMembershipsByUser(ctx context.Context, userID string) ([]domain.ProjectMembership, error) {
+	trimmedUserID := strings.TrimSpace(userID)
+	if trimmedUserID == "" {
+		return []domain.ProjectMembership{}, nil
+	}
+	return s.memberships.ListByUserID(ctx, trimmedUserID)
+}
+
 func (s *ProjectMembershipService) ListProjectMembers(ctx context.Context, projectID string) ([]domain.ProjectMembershipWithUser, error) {
 	trimmedProjectID := strings.TrimSpace(projectID)
 	if trimmedProjectID == "" {
