@@ -181,7 +181,9 @@ func main() {
 			log.Fatalf("failed to configure OIDC: %v", oidcErr)
 		}
 		authHandler = handler.NewAuthHandler(oidcAuthenticator, sessionManager, userService, handler.AuthHandlerConfig{
-			BootstrapAdminEmails: bootstrapAdmins,
+			BootstrapAdminEmails:  bootstrapAdmins,
+			PostLoginRedirectURL:  cfg.AuthPostLoginRedirectURL,
+			PostLogoutRedirectURL: cfg.AuthPostLogoutRedirectURL,
 		})
 	}
 

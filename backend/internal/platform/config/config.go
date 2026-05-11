@@ -56,6 +56,8 @@ type Config struct {
 	SessionCookieName          string
 	SessionCookieSecure        bool
 	SessionCookieSameSite      string
+	AuthPostLoginRedirectURL   string
+	AuthPostLogoutRedirectURL  string
 }
 
 func Load() Config {
@@ -106,6 +108,8 @@ func Load() Config {
 		SessionCookieName:          getEnv("SESSION_COOKIE_NAME", "coyote_session"),
 		SessionCookieSecure:        getEnvBool("SESSION_COOKIE_SECURE", defaultSessionCookieSecure(oidcRedirectURL)),
 		SessionCookieSameSite:      getEnv("SESSION_COOKIE_SAME_SITE", "lax"),
+		AuthPostLoginRedirectURL:   getEnv("AUTH_POST_LOGIN_REDIRECT_URL", ""),
+		AuthPostLogoutRedirectURL:  getEnv("AUTH_POST_LOGOUT_REDIRECT_URL", ""),
 	}
 }
 

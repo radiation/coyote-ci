@@ -62,6 +62,9 @@ func TestAuthHandler_CallbackProvisionsUserAndSession(t *testing.T) {
 	if callbackRes.Code != http.StatusFound {
 		t.Fatalf("expected callback redirect, got %d body=%s", callbackRes.Code, callbackRes.Body.String())
 	}
+	if location := callbackRes.Result().Header.Get("Location"); location != "/" {
+		t.Fatalf("expected default post-login redirect to /, got %q", location)
+	}
 
 	users, err := userService.ListUsers(context.Background())
 	if err != nil {
@@ -84,6 +87,31 @@ func TestAuthHandler_CallbackProvisionsUserAndSession(t *testing.T) {
 	}
 	if userID != users[0].ID {
 		t.Fatalf("expected session user %q, got %q", users[0].ID, userID)
+	}
+}
+
+func TestAuthHandler_CallbackRedirectsConfiguredFrontend(t *testing.T) {
+	userService := service.NewUserService(memory.NewUserRepository())
+	sessions := newTestSessionManager(t)
+	fakeOIDC := &fakeOIDCAuthenticator{email: "user@example.com"}
+	h := NewAuthHandler(fakeOIDC, sessions, userService, AuthHandlerConfig{
+		PostLoginRedirectURL: "http://localhost:3000/",
+	})
+
+	loginRes := httptest.NewRecorder()
+	h.Login(loginRes, httptest.NewRequest(http.MethodGet, "/auth/login", nil))
+
+	callbackReq := httptest.NewRequest(http.MethodGet, "/auth/callback?state="+fakeOIDC.lastState+"&code=code", nil)
+	for _, cookie := range loginRes.Result().Cookies() {
+		callbackReq.AddCookie(cookie)
+	}
+	callbackRes := httptest.NewRecorder()
+	h.Callback(callbackRes, callbackReq)
+	if callbackRes.Code != http.StatusFound {
+		t.Fatalf("expected status %d, got %d", http.StatusFound, callbackRes.Code)
+	}
+	if location := callbackRes.Result().Header.Get("Location"); location != "http://localhost:3000/" {
+		t.Fatalf("expected redirect to configured frontend, got %q", location)
 	}
 }
 
