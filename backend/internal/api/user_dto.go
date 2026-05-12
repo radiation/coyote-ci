@@ -26,8 +26,33 @@ type UserListResponse struct {
 }
 
 type MeResponse struct {
-	AuthMode string       `json:"auth_mode"`
-	User     UserResponse `json:"user"`
+	AuthMode   string       `json:"auth_mode"`
+	AuthMethod string       `json:"auth_method,omitempty"`
+	User       UserResponse `json:"user"`
+}
+
+type CreateAPITokenRequest struct {
+	Name      string  `json:"name"`
+	ExpiresAt *string `json:"expires_at,omitempty"`
+}
+
+type APITokenResponse struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	TokenPrefix string `json:"token_prefix"`
+	ExpiresAt   string `json:"expires_at,omitempty"`
+	LastUsedAt  string `json:"last_used_at,omitempty"`
+	CreatedAt   string `json:"created_at"`
+	RevokedAt   string `json:"revoked_at,omitempty"`
+}
+
+type APITokenListResponse struct {
+	Tokens []APITokenResponse `json:"tokens"`
+}
+
+type CreatedAPITokenResponse struct {
+	APITokenResponse
+	Token string `json:"token"`
 }
 
 type AuthConfigResponse struct {
@@ -45,6 +70,14 @@ type UserListEnvelope struct {
 
 type MeEnvelope struct {
 	Data MeResponse `json:"data"`
+}
+
+type APITokenEnvelope struct {
+	Data CreatedAPITokenResponse `json:"data"`
+}
+
+type APITokenListEnvelope struct {
+	Data APITokenListResponse `json:"data"`
 }
 
 type AuthConfigEnvelope struct {

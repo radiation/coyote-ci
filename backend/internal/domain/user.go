@@ -26,6 +26,19 @@ type User struct {
 	UpdatedAt   time.Time
 }
 
+type APIToken struct {
+	ID          string
+	UserID      string
+	Name        string
+	TokenHash   string
+	TokenPrefix string
+	ExpiresAt   *time.Time
+	LastUsedAt  *time.Time
+	RevokedAt   *time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 type ProjectMembership struct {
 	ProjectID string
 	UserID    string

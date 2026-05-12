@@ -187,7 +187,11 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		user = auth.DisabledModeUser()
 	}
-	writeDataJSON(w, http.StatusOK, api.MeResponse{AuthMode: string(h.authMode), User: toUserResponse(user)})
+	authMethod := ""
+	if method, ok := auth.CurrentAuthMethod(r.Context()); ok {
+		authMethod = string(method)
+	}
+	writeDataJSON(w, http.StatusOK, api.MeResponse{AuthMode: string(h.authMode), AuthMethod: authMethod, User: toUserResponse(user)})
 }
 
 func (h *UserHandler) GetAuthConfig(w http.ResponseWriter, _ *http.Request) {

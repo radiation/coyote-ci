@@ -95,10 +95,9 @@ describe("API client - types", () => {
 
     const artifacts = await getBuildArtifacts("build-1");
     expect(artifacts).toHaveLength(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/builds/build-1/artifacts",
-      { credentials: "include" },
-    );
+    expect(fetchMock).toHaveBeenCalledWith("/api/builds/build-1/artifacts", {
+      credentials: "include",
+    });
   });
 
   it("builds artifact download URL from API base path", () => {
@@ -391,10 +390,9 @@ describe("API client - types", () => {
 
     const credentials = await listSourceCredentials();
     expect(credentials).toHaveLength(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/source-credentials",
-      { credentials: "include" },
-    );
+    expect(fetchMock).toHaveBeenCalledWith("/api/source-credentials", {
+      credentials: "include",
+    });
   });
 
   it("fetches disabled-mode current user from /me", async () => {

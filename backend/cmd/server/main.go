@@ -57,6 +57,7 @@ func main() {
 	jobRepo := repositorypostgres.NewJobRepository(db)
 	projectRepo := repositorypostgres.NewProjectRepository(db)
 	userRepo := repositorypostgres.NewUserRepository(db)
+	apiTokenRepo := repositorypostgres.NewAPITokenRepository(db)
 	projectMembershipRepo := repositorypostgres.NewProjectMembershipRepository(db)
 	jobManagedImageConfigRepo := repositorypostgres.NewJobManagedImageConfigRepository(db)
 	sourceCredentialRepo := repositorypostgres.NewSourceCredentialRepository(db)
@@ -101,6 +102,7 @@ func main() {
 	})
 	projectService := service.NewProjectService(projectRepo)
 	userService := service.NewUserService(userRepo)
+	apiTokenService := service.NewAPITokenService(apiTokenRepo, userRepo)
 	projectMembershipService := service.NewProjectMembershipService(projectRepo, projectMembershipRepo)
 	jobService := service.NewJobService(jobRepo, buildService).WithProjectRepository(projectRepo).WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo)
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
@@ -123,6 +125,7 @@ func main() {
 	jobHandler.SetAuthorization(authMode, projectMembershipService)
 	projectHandler.SetAuthorization(authMode, projectMembershipService)
 	userHandler := handler.NewUserHandler(userService, authMode)
+	apiTokenHandler := handler.NewAPITokenHandler(apiTokenService)
 	projectMembershipHandler := handler.NewProjectMembershipHandler(projectMembershipService, authMode)
 	versionTagHandler := handler.NewVersionTagHandler(versionTagService)
 	credentialHandler := handler.NewSourceCredentialHandler(sourceCredentialService)
@@ -191,6 +194,7 @@ func main() {
 		Mode:                 authMode,
 		BootstrapAdminEmails: bootstrapAdmins,
 		Sessions:             sessionManager,
+		APITokens:            apiTokenService,
 	}, userService)
 	router := apphttp.NewRouter(
 		buildHandler,
@@ -204,6 +208,7 @@ func main() {
 		apphttp.WithAuthHandler(authHandler),
 		apphttp.WithAuthMiddleware(authMiddleware),
 		apphttp.WithUserHandler(userHandler),
+		apphttp.WithAPITokenHandler(apiTokenHandler),
 		apphttp.WithProjectMembershipHandler(projectMembershipHandler),
 	)
 	mux := nethttp.NewServeMux()
