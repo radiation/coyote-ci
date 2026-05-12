@@ -2,9 +2,20 @@ name: CodeQL
 
 on:
   push:
-    branches: [main]
+    branches:
+      - '**'
+    paths:
+      - 'backend/**'
+      - 'Makefile'
+      - 'codecov.yml'
+      - '.github/workflows/codeql.yml'
   pull_request:
     branches: [main]
+    paths:
+      - 'backend/**'
+      - 'Makefile'
+      - 'codecov.yml'
+      - '.github/workflows/codeql.yml'
   schedule:
     - cron: '0 9 * * 1'
 
