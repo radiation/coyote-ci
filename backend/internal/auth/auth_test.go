@@ -97,7 +97,9 @@ func TestMiddleware_DisabledModePreservesRequest(t *testing.T) {
 	}))
 
 	res := httptest.NewRecorder()
-	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/", nil))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer coyote_pat_ignored_in_disabled_mode")
+	handler.ServeHTTP(res, req)
 	if !called || res.Code != http.StatusNoContent {
 		t.Fatalf("expected request to pass through, called=%v status=%d", called, res.Code)
 	}

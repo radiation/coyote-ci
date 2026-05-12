@@ -110,7 +110,7 @@ that require Postgres are gated behind `DB_HOST` being set.
 
 With the server running, visit http://localhost:8080/swagger/ for the Swagger UI.
 
-For programmatic access, use user-owned API tokens with `Authorization: Bearer`.
+For programmatic access, use user-owned API tokens with `Authorization: Bearer <token>`.
 Tokens inherit the owning user's RBAC permissions, are stored hashed, and raw token
 values are shown only once at creation. See [docs/api-tokens.md](docs/api-tokens.md).
 

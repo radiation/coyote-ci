@@ -84,6 +84,31 @@ func TestAPITokenService_AuthenticateAndRejectInvalidStates(t *testing.T) {
 		t.Fatalf("expected last_used_at %s, got %v", now, stored.LastUsedAt)
 	}
 
+	tokenService.now = func() time.Time { return now.Add(apiTokenLastUsedUpdateInterval / 2) }
+	if _, authErr := tokenService.AuthenticateAPIToken(ctx, created.PlaintextToken); authErr != nil {
+		t.Fatalf("authenticate token inside touch interval failed: %v", authErr)
+	}
+	stored, err = tokenRepo.GetByHash(ctx, HashAPIToken(created.PlaintextToken))
+	if err != nil {
+		t.Fatalf("get stored token after throttled auth failed: %v", err)
+	}
+	if stored.LastUsedAt == nil || !stored.LastUsedAt.Equal(now) {
+		t.Fatalf("expected throttled last_used_at to remain %s, got %v", now, stored.LastUsedAt)
+	}
+
+	staleAt := now.Add(apiTokenLastUsedUpdateInterval)
+	tokenService.now = func() time.Time { return staleAt }
+	if _, authErr := tokenService.AuthenticateAPIToken(ctx, created.PlaintextToken); authErr != nil {
+		t.Fatalf("authenticate token after touch interval failed: %v", authErr)
+	}
+	stored, err = tokenRepo.GetByHash(ctx, HashAPIToken(created.PlaintextToken))
+	if err != nil {
+		t.Fatalf("get stored token after stale auth failed: %v", err)
+	}
+	if stored.LastUsedAt == nil || !stored.LastUsedAt.Equal(staleAt) {
+		t.Fatalf("expected stale last_used_at update %s, got %v", staleAt, stored.LastUsedAt)
+	}
+
 	if _, err := tokenService.AuthenticateAPIToken(ctx, APITokenPrefix+"missing"); !errors.Is(err, ErrAPITokenInvalid) {
 		t.Fatalf("expected invalid token error, got %v", err)
 	}
@@ -197,10 +222,13 @@ func TestAPITokenService_AuthenticateDependencyErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create user failed: %v", err)
 	}
-	touchErr := errors.New("touch failed")
-	tokenService := NewAPITokenService(touchErrorAPITokenRepository{token: domain.APIToken{ID: "token-1", UserID: user.ID, Name: "cli", TokenHash: HashAPIToken(plaintext), CreatedAt: now, UpdatedAt: now}, err: touchErr}, userRepo)
-	if _, authErr := tokenService.AuthenticateAPIToken(ctx, plaintext); !errors.Is(authErr, touchErr) {
-		t.Fatalf("expected touch error, got %v", authErr)
+	tokenService := NewAPITokenService(touchErrorAPITokenRepository{token: domain.APIToken{ID: "token-1", UserID: user.ID, Name: "cli", TokenHash: HashAPIToken(plaintext), CreatedAt: now, UpdatedAt: now}, err: errors.New("touch failed")}, userRepo)
+	authenticated, authErr := tokenService.AuthenticateAPIToken(ctx, plaintext)
+	if authErr != nil {
+		t.Fatalf("expected touch failure to be ignored, got %v", authErr)
+	}
+	if authenticated.ID != user.ID {
+		t.Fatalf("expected authenticated user %q, got %q", user.ID, authenticated.ID)
 	}
 }
 

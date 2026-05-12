@@ -83,6 +83,11 @@ func Middleware(cfg MiddlewareConfig, resolver UserResolver) func(http.Handler) 
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if mode == ModeDisabled {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			if token, attempted := bearerToken(r); attempted {
 				if token == "" {
 					writeUnauthorized(w, "invalid api token")
@@ -101,11 +106,6 @@ func Middleware(cfg MiddlewareConfig, resolver UserResolver) func(http.Handler) 
 				ctx := WithUser(r.Context(), user)
 				ctx = WithAuthMethod(ctx, MethodAPIToken)
 				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-
-			if mode == ModeDisabled {
-				next.ServeHTTP(w, r)
 				return
 			}
 

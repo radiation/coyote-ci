@@ -19,6 +19,8 @@ import (
 
 const APITokenPrefix = "coyote_pat_"
 
+const apiTokenLastUsedUpdateInterval = 5 * time.Minute
+
 var ErrAPITokenNameRequired = errors.New("api token name is required")
 var ErrAPITokenInvalid = errors.New("api token is invalid")
 var ErrAPITokenExpirationInvalid = errors.New("expires_at must be in the future")
@@ -128,10 +130,14 @@ func (s *APITokenService) AuthenticateAPIToken(ctx context.Context, plaintext st
 	if err != nil {
 		return domain.User{}, err
 	}
-	if err := s.tokens.TouchLastUsed(ctx, token.ID, now); err != nil {
-		return domain.User{}, err
+	if shouldTouchAPITokenLastUsed(token, now) {
+		_ = s.tokens.TouchLastUsed(ctx, token.ID, now)
 	}
 	return user, nil
+}
+
+func shouldTouchAPITokenLastUsed(token domain.APIToken, now time.Time) bool {
+	return token.LastUsedAt == nil || !token.LastUsedAt.After(now.Add(-apiTokenLastUsedUpdateInterval))
 }
 
 func HashAPIToken(plaintext string) string {
