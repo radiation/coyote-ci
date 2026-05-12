@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
 )
@@ -136,4 +137,97 @@ func TestAPITokenService_RevokeMissingToken(t *testing.T) {
 	if err := tokenService.RevokeAPIToken(context.Background(), "user-1", "missing"); !errors.Is(err, repository.ErrAPITokenNotFound) {
 		t.Fatalf("expected ErrAPITokenNotFound, got %v", err)
 	}
+}
+
+func TestAPITokenService_ValidationAndDependencyErrors(t *testing.T) {
+	ctx := context.Background()
+	userRepo := memory.NewUserRepository()
+	userService := NewUserService(userRepo)
+	user, err := userService.CreateUser(ctx, CreateUserInput{Email: "dev@example.com"})
+	if err != nil {
+		t.Fatalf("create user failed: %v", err)
+	}
+	tokenService := NewAPITokenService(memory.NewAPITokenRepository(), userRepo)
+
+	if _, createErr := tokenService.CreateAPIToken(ctx, CreateAPITokenInput{Name: "missing-user"}); !errors.Is(createErr, repository.ErrUserNotFound) {
+		t.Fatalf("expected missing user id error, got %v", createErr)
+	}
+	if _, createErr := tokenService.CreateAPIToken(ctx, CreateAPITokenInput{UserID: "missing-user", Name: "cli"}); !errors.Is(createErr, repository.ErrUserNotFound) {
+		t.Fatalf("expected unknown user error, got %v", createErr)
+	}
+	if _, createErr := tokenService.CreateAPIToken(ctx, CreateAPITokenInput{UserID: user.ID, Name: "   "}); !errors.Is(createErr, ErrAPITokenNameRequired) {
+		t.Fatalf("expected name required error, got %v", createErr)
+	}
+
+	tokenService.random = strings.NewReader("short")
+	if _, createErr := tokenService.CreateAPIToken(ctx, CreateAPITokenInput{UserID: user.ID, Name: "cli"}); createErr == nil {
+		t.Fatal("expected random reader error, got nil")
+	}
+
+	if _, listErr := tokenService.ListAPITokens(ctx, "   "); !errors.Is(listErr, repository.ErrUserNotFound) {
+		t.Fatalf("expected empty list user error, got %v", listErr)
+	}
+	if revokeErr := tokenService.RevokeAPIToken(ctx, user.ID, "   "); !errors.Is(revokeErr, repository.ErrAPITokenNotFound) {
+		t.Fatalf("expected empty revoke token error, got %v", revokeErr)
+	}
+
+	short := APITokenPrefix + "short"
+	if got := DisplayAPITokenPrefix(short); got != short {
+		t.Fatalf("expected short display prefix %q, got %q", short, got)
+	}
+}
+
+func TestAPITokenService_AuthenticateDependencyErrors(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 5, 12, 10, 0, 0, 0, time.UTC)
+	plaintext := APITokenPrefix + "abcdefghijklmnopqrstuvwxyz"
+
+	missingUserTokenRepo := memory.NewAPITokenRepository()
+	if _, err := missingUserTokenRepo.Create(ctx, domain.APIToken{ID: "token-1", UserID: "missing-user", Name: "cli", TokenHash: HashAPIToken(plaintext), CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create token fixture failed: %v", err)
+	}
+	missingUserService := NewAPITokenService(missingUserTokenRepo, memory.NewUserRepository())
+	if _, authErr := missingUserService.AuthenticateAPIToken(ctx, plaintext); !errors.Is(authErr, repository.ErrUserNotFound) {
+		t.Fatalf("expected missing owner error, got %v", authErr)
+	}
+
+	userRepo := memory.NewUserRepository()
+	userService := NewUserService(userRepo)
+	user, err := userService.CreateUser(ctx, CreateUserInput{Email: "dev@example.com"})
+	if err != nil {
+		t.Fatalf("create user failed: %v", err)
+	}
+	touchErr := errors.New("touch failed")
+	tokenService := NewAPITokenService(touchErrorAPITokenRepository{token: domain.APIToken{ID: "token-1", UserID: user.ID, Name: "cli", TokenHash: HashAPIToken(plaintext), CreatedAt: now, UpdatedAt: now}, err: touchErr}, userRepo)
+	if _, authErr := tokenService.AuthenticateAPIToken(ctx, plaintext); !errors.Is(authErr, touchErr) {
+		t.Fatalf("expected touch error, got %v", authErr)
+	}
+}
+
+type touchErrorAPITokenRepository struct {
+	token domain.APIToken
+	err   error
+}
+
+func (r touchErrorAPITokenRepository) Create(context.Context, domain.APIToken) (domain.APIToken, error) {
+	return domain.APIToken{}, errors.New("create failed")
+}
+
+func (r touchErrorAPITokenRepository) ListByUserID(context.Context, string) ([]domain.APIToken, error) {
+	return nil, errors.New("list failed")
+}
+
+func (r touchErrorAPITokenRepository) GetByHash(_ context.Context, tokenHash string) (domain.APIToken, error) {
+	if tokenHash != r.token.TokenHash {
+		return domain.APIToken{}, repository.ErrAPITokenNotFound
+	}
+	return r.token, nil
+}
+
+func (r touchErrorAPITokenRepository) RevokeByID(context.Context, string, string, time.Time) error {
+	return repository.ErrAPITokenNotFound
+}
+
+func (r touchErrorAPITokenRepository) TouchLastUsed(context.Context, string, time.Time) error {
+	return r.err
 }

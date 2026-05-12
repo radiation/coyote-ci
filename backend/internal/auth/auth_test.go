@@ -168,6 +168,22 @@ func TestMiddleware_InvalidBearerTokenReturnsUnauthorized(t *testing.T) {
 	}
 }
 
+func TestMiddleware_BearerTokenWithoutAuthenticatorReturnsUnauthorized(t *testing.T) {
+	userService := service.NewUserService(memory.NewUserRepository())
+	middleware := Middleware(MiddlewareConfig{Mode: ModeHeader}, userService)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer coyote_pat_missing")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, res.Code)
+	}
+}
+
 func TestMiddleware_OIDCModeRequiresSession(t *testing.T) {
 	userService := service.NewUserService(memory.NewUserRepository())
 	sessions, err := NewCookieSessionManager(CookieSessionConfig{Secret: "test-session-secret"})
