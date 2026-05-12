@@ -3,7 +3,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { Layout } from "./Layout";
-import { APIError, getMe } from "../api";
+import { APIError, getAuthConfig, getMe } from "../api";
+import { AuthProvider } from "../auth";
 import { ThemeProvider } from "../theme";
 import { installMockLocalStorage } from "../test/browserMocks";
 import { THEME_STORAGE_KEY } from "../theme-context";
@@ -12,6 +13,7 @@ vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
   return {
     ...actual,
+    getAuthConfig: vi.fn(),
     getMe: vi.fn(),
   };
 });
@@ -33,7 +35,34 @@ function installMatchMedia(initialMatches: boolean) {
   });
 }
 
+function renderLayout(navigate = vi.fn()) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  });
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <AuthProvider navigate={navigate}>
+          <MemoryRouter initialEntries={["/artifacts"]}>
+            <Routes>
+              <Route element={<Layout />}>
+                <Route path="/artifacts" element={<div>Artifacts page</div>} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </AuthProvider>
+      </ThemeProvider>
+    </QueryClientProvider>,
+  );
+
+  return { navigate };
+}
+
 describe("Layout", () => {
+  const mockedGetAuthConfig = vi.mocked(getAuthConfig);
   const mockedGetMe = vi.mocked(getMe);
 
   beforeEach(() => {
@@ -42,6 +71,10 @@ describe("Layout", () => {
     document.documentElement.removeAttribute("data-theme");
     document.documentElement.style.colorScheme = "";
     installMatchMedia(false);
+    mockedGetAuthConfig.mockResolvedValue({
+      auth_mode: "disabled",
+      login_url: null,
+    });
     mockedGetMe.mockResolvedValue({
       auth_mode: "disabled",
       user: {
@@ -53,35 +86,17 @@ describe("Layout", () => {
   });
 
   it("renders a persistent theme toggle and updates the preference", async () => {
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-      },
-    });
+    renderLayout();
 
-    render(
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider>
-          <MemoryRouter initialEntries={["/artifacts"]}>
-            <Routes>
-              <Route element={<Layout />}>
-                <Route path="/artifacts" element={<div>Artifacts page</div>} />
-              </Route>
-            </Routes>
-          </MemoryRouter>
-        </ThemeProvider>
-      </QueryClientProvider>,
-    );
-
-    const toggle = screen.getByRole("button", {
+    const toggle = await screen.findByRole("button", {
       name: "Switch to dark theme",
     });
 
     expect(toggle).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Artifacts" })).toHaveClass(
-      "is-active",
-    );
     await waitFor(() => {
+      expect(screen.getByRole("link", { name: "Artifacts" })).toHaveClass(
+        "is-active",
+      );
       expect(screen.getByRole("link", { name: "Users" })).toBeTruthy();
     });
 
@@ -105,59 +120,78 @@ describe("Layout", () => {
         global_role: "user",
       },
     });
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-      },
-    });
-
-    render(
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider>
-          <MemoryRouter initialEntries={["/artifacts"]}>
-            <Routes>
-              <Route element={<Layout />}>
-                <Route path="/artifacts" element={<div>Artifacts page</div>} />
-              </Route>
-            </Routes>
-          </MemoryRouter>
-        </ThemeProvider>
-      </QueryClientProvider>,
-    );
+    renderLayout();
 
     await waitFor(() => {
       expect(screen.queryByRole("link", { name: "Users" })).toBeNull();
     });
   });
 
-  it("shows an external-auth message when /me returns 401", async () => {
+  it("shows sign-in UI when /me returns 401", async () => {
+    mockedGetAuthConfig.mockResolvedValue({
+      auth_mode: "oidc",
+      login_url: "/auth/login",
+    });
     mockedGetMe.mockRejectedValue(
       new APIError(401, "missing user email header"),
     );
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-      },
-    });
 
-    render(
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider>
-          <MemoryRouter initialEntries={["/artifacts"]}>
-            <Routes>
-              <Route element={<Layout />}>
-                <Route path="/artifacts" element={<div>Artifacts page</div>} />
-              </Route>
-            </Routes>
-          </MemoryRouter>
-        </ThemeProvider>
-      </QueryClientProvider>,
-    );
+    const { navigate } = renderLayout();
 
     await waitFor(() => {
-      expect(
-        screen.getByText(/configured for external authentication/i),
-      ).toBeTruthy();
+      expect(screen.getByText("Sign in to Coyote CI")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(navigate).toHaveBeenCalledWith("/auth/login");
+  });
+
+  it("shows loading state while auth config is still loading", () => {
+    mockedGetAuthConfig.mockImplementation(
+      () => new Promise(() => undefined) as Promise<never>,
+    );
+
+    renderLayout();
+
+    expect(screen.getByText("Loading session")).toBeTruthy();
+    expect(screen.getByText("Checking your Coyote CI session.")).toBeTruthy();
+  });
+
+  it("shows proxy guidance without sign-in button for header-mode 401", async () => {
+    mockedGetAuthConfig.mockResolvedValue({
+      auth_mode: "header",
+      login_url: null,
+    });
+    mockedGetMe.mockRejectedValue(
+      new APIError(401, "missing user email header"),
+    );
+
+    renderLayout();
+
+    await waitFor(() => {
+      expect(screen.getByText("External authentication required")).toBeTruthy();
+      expect(screen.getByText(/trusted proxy authentication/i)).toBeTruthy();
+    });
+
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+  });
+
+  it("shows retry UI when the current session cannot be loaded", async () => {
+    mockedGetMe.mockRejectedValue(new APIError(500, "session backend failed"));
+
+    renderLayout();
+
+    await waitFor(() => {
+      expect(screen.getByText("Unable to load session")).toBeTruthy();
+      expect(screen.getByText("API 500: session backend failed")).toBeTruthy();
+    });
+
+    const initialCalls = mockedGetMe.mock.calls.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(mockedGetMe.mock.calls.length).toBeGreaterThan(initialCalls);
     });
   });
 });

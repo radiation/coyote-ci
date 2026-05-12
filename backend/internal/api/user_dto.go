@@ -30,6 +30,11 @@ type MeResponse struct {
 	User     UserResponse `json:"user"`
 }
 
+type AuthConfigResponse struct {
+	AuthMode string  `json:"auth_mode"`
+	LoginURL *string `json:"login_url"`
+}
+
 type UserEnvelope struct {
 	Data UserResponse `json:"data"`
 }
@@ -40,6 +45,10 @@ type UserListEnvelope struct {
 
 type MeEnvelope struct {
 	Data MeResponse `json:"data"`
+}
+
+type AuthConfigEnvelope struct {
+	Data AuthConfigResponse `json:"data"`
 }
 
 type UpsertProjectMembershipRequest struct {

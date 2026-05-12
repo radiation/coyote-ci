@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -46,9 +47,21 @@ type Config struct {
 	GitHubWebhookSecret        string
 	AuthMode                   string
 	BootstrapAdminEmails       string
+	OIDCIssuerURL              string
+	OIDCClientID               string
+	OIDCClientSecret           string
+	OIDCRedirectURL            string
+	OIDCScopes                 string
+	SessionSecret              string
+	SessionCookieName          string
+	SessionCookieSecure        bool
+	SessionCookieSameSite      string
+	AuthPostLoginRedirectURL   string
+	AuthPostLogoutRedirectURL  string
 }
 
 func Load() Config {
+	oidcRedirectURL := getEnv("OIDC_REDIRECT_URL", "")
 	return Config{
 		AppPort:           getEnv("APP_PORT", "8080"),
 		DatabaseURLValue:  getEnv("DATABASE_URL", ""),
@@ -86,6 +99,17 @@ func Load() Config {
 		GitHubWebhookSecret:        getEnv("GITHUB_WEBHOOK_SECRET", getEnv("PUSH_EVENT_SECRET", "")),
 		AuthMode:                   getEnv("AUTH_MODE", "disabled"),
 		BootstrapAdminEmails:       getEnv("BOOTSTRAP_ADMIN_EMAILS", ""),
+		OIDCIssuerURL:              getEnv("OIDC_ISSUER_URL", ""),
+		OIDCClientID:               getEnv("OIDC_CLIENT_ID", ""),
+		OIDCClientSecret:           getEnv("OIDC_CLIENT_SECRET", ""),
+		OIDCRedirectURL:            oidcRedirectURL,
+		OIDCScopes:                 getEnv("OIDC_SCOPES", "openid email profile"),
+		SessionSecret:              getEnv("SESSION_SECRET", ""),
+		SessionCookieName:          getEnv("SESSION_COOKIE_NAME", "coyote_session"),
+		SessionCookieSecure:        getEnvBool("SESSION_COOKIE_SECURE", defaultSessionCookieSecure(oidcRedirectURL)),
+		SessionCookieSameSite:      getEnv("SESSION_COOKIE_SAME_SITE", "lax"),
+		AuthPostLoginRedirectURL:   getEnv("AUTH_POST_LOGIN_REDIRECT_URL", ""),
+		AuthPostLogoutRedirectURL:  getEnv("AUTH_POST_LOGOUT_REDIRECT_URL", ""),
 	}
 }
 
@@ -153,4 +177,16 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+func defaultSessionCookieSecure(redirectURL string) bool {
+	parsed, parseErr := url.Parse(strings.TrimSpace(redirectURL))
+	if parseErr != nil || parsed == nil {
+		return true
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if parsed.Scheme == "http" && (host == "localhost" || host == "127.0.0.1" || host == "::1") {
+		return false
+	}
+	return true
 }

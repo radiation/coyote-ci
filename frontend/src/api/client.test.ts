@@ -19,7 +19,10 @@ import {
   updateJob,
   runJob,
   listSourceCredentials,
+  getAuthConfig,
   getMe,
+  authLoginURL,
+  logoutSession,
   listUsers,
   createUser,
   updateUser,
@@ -49,7 +52,10 @@ describe("API client - types", () => {
     expect(typeof updateJob).toBe("function");
     expect(typeof runJob).toBe("function");
     expect(typeof listSourceCredentials).toBe("function");
+    expect(typeof getAuthConfig).toBe("function");
     expect(typeof getMe).toBe("function");
+    expect(typeof authLoginURL).toBe("function");
+    expect(typeof logoutSession).toBe("function");
     expect(typeof listUsers).toBe("function");
     expect(typeof createUser).toBe("function");
     expect(typeof updateUser).toBe("function");
@@ -91,7 +97,7 @@ describe("API client - types", () => {
     expect(artifacts).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/builds/build-1/artifacts",
-      undefined,
+      { credentials: "include" },
     );
   });
 
@@ -120,7 +126,7 @@ describe("API client - types", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/artifacts?q=pkg&type=npm_package&limit=5&offset=10",
-      undefined,
+      { credentials: "include" },
     );
   });
 
@@ -152,6 +158,7 @@ describe("API client - types", () => {
 
     expect(tags).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledWith("/api/jobs/job-1/version-tags", {
+      credentials: "include",
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ version: "v1", artifact_ids: ["artifact-1"] }),
@@ -185,7 +192,9 @@ describe("API client - types", () => {
 
     const jobs = await listJobs();
     expect(jobs).toHaveLength(1);
-    expect(fetchMock).toHaveBeenCalledWith("/api/jobs", undefined);
+    expect(fetchMock).toHaveBeenCalledWith("/api/jobs", {
+      credentials: "include",
+    });
   });
 
   it("lists and creates projects from /projects", async () => {
@@ -230,8 +239,11 @@ describe("API client - types", () => {
     });
 
     expect(projects).toHaveLength(1);
-    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/projects", undefined);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/projects", {
+      credentials: "include",
+    });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/projects", {
+      credentials: "include",
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -300,6 +312,7 @@ describe("API client - types", () => {
     await runJob("job-1");
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/jobs", {
+      credentials: "include",
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -320,6 +333,7 @@ describe("API client - types", () => {
       }),
     });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/jobs/job-1/run", {
+      credentials: "include",
       method: "POST",
     });
   });
@@ -348,6 +362,7 @@ describe("API client - types", () => {
     await updateJob("job-1", { enabled: false });
 
     expect(fetchMock).toHaveBeenCalledWith("/api/jobs/job-1", {
+      credentials: "include",
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: false }),
@@ -378,7 +393,7 @@ describe("API client - types", () => {
     expect(credentials).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/source-credentials",
-      undefined,
+      { credentials: "include" },
     );
   });
 
@@ -399,7 +414,44 @@ describe("API client - types", () => {
 
     const me = await getMe();
     expect(me.auth_mode).toBe("disabled");
-    expect(fetchMock).toHaveBeenCalledWith("/api/me", undefined);
+    expect(fetchMock).toHaveBeenCalledWith("/api/me", {
+      credentials: "include",
+    });
+  });
+
+  it("fetches public auth config from /auth/config", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          auth_mode: "oidc",
+          login_url: "/auth/login",
+        },
+      }),
+    } as Response);
+
+    const config = await getAuthConfig();
+    expect(config.auth_mode).toBe("oidc");
+    expect(config.login_url).toBe("/auth/login");
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/config", {
+      credentials: "include",
+    });
+  });
+
+  it("uses auth login and logout endpoints outside /api", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      text: async () => "",
+    } as Response);
+
+    expect(authLoginURL()).toBe("/auth/login");
+    await logoutSession();
+
+    expect(fetchMock).toHaveBeenCalledWith("/auth/logout", {
+      credentials: "include",
+      method: "POST",
+      headers: { Accept: "application/json" },
+    });
   });
 
   it("uses identity and project membership endpoints", async () => {
@@ -453,29 +505,35 @@ describe("API client - types", () => {
     await updateProjectMember("project-1", "user-1", "owner");
     await deleteProjectMember("project-1", "user-1");
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/users", undefined);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/users", {
+      credentials: "include",
+    });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/users", {
+      credentials: "include",
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: "dev@example.com", global_role: "user" }),
     });
     expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/users/user-1", {
+      credentials: "include",
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ global_role: "admin" }),
     });
     expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/users/user-1", {
+      credentials: "include",
       method: "DELETE",
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
       5,
       "/api/projects/project-1/members",
-      undefined,
+      { credentials: "include" },
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       6,
       "/api/projects/project-1/members/user-1",
       {
+        credentials: "include",
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role: "viewer" }),
@@ -485,6 +543,7 @@ describe("API client - types", () => {
       7,
       "/api/projects/project-1/members/user-1",
       {
+        credentials: "include",
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role: "owner" }),
@@ -493,7 +552,7 @@ describe("API client - types", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       8,
       "/api/projects/project-1/members/user-1",
-      { method: "DELETE" },
+      { credentials: "include", method: "DELETE" },
     );
   });
 

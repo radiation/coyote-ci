@@ -320,6 +320,10 @@ func (s *JobService) ListBuildsByJobID(ctx context.Context, jobID string) ([]dom
 	return s.buildService.ListBuildsByJobID(ctx, jobID)
 }
 
+func (s *JobService) ResolveProjectID(ctx context.Context, projectID string, projectSlug string) (string, error) {
+	return s.resolveProjectID(ctx, projectID, projectSlug)
+}
+
 func (s *JobService) GetJob(ctx context.Context, id string) (domain.Job, error) {
 	if strings.TrimSpace(id) == "" {
 		return domain.Job{}, ErrJobIDRequired

@@ -172,6 +172,25 @@ func (r *ProjectMembershipRepository) Get(_ context.Context, projectID string, u
 	return membership, nil
 }
 
+func (r *ProjectMembershipRepository) ListByUserID(_ context.Context, userID string) ([]domain.ProjectMembership, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	memberships := make([]domain.ProjectMembership, 0)
+	for _, membership := range r.memberships {
+		if membership.UserID == userID {
+			memberships = append(memberships, membership)
+		}
+	}
+	sort.Slice(memberships, func(i, j int) bool {
+		if memberships[i].ProjectID == memberships[j].ProjectID {
+			return memberships[i].CreatedAt.Before(memberships[j].CreatedAt)
+		}
+		return memberships[i].ProjectID < memberships[j].ProjectID
+	})
+	return memberships, nil
+}
+
 func (r *ProjectMembershipRepository) ListByProjectID(ctx context.Context, projectID string) ([]domain.ProjectMembershipWithUser, error) {
 	if r.projects != nil {
 		if _, err := r.projects.GetByID(ctx, projectID); err != nil {

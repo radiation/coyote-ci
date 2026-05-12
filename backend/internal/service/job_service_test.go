@@ -167,6 +167,30 @@ func TestJobService_CreateJobAcceptsLegacyProjectSlugInProjectID(t *testing.T) {
 	}
 }
 
+func TestJobService_ResolveProjectIDUsesWrapper(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	jobService := NewJobService(jobRepo, buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)).WithProjectRepository(projectRepo)
+	project, err := projectRepo.Create(context.Background(), domain.Project{
+		ID:        "00000000-0000-0000-0000-000000000999",
+		Name:      "Fixtures",
+		Slug:      "fixtures",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+
+	resolved, err := jobService.ResolveProjectID(context.Background(), "fixtures", "")
+	if err != nil {
+		t.Fatalf("resolve project id failed: %v", err)
+	}
+	if resolved != project.ID {
+		t.Fatalf("expected resolved project id %q, got %q", project.ID, resolved)
+	}
+}
+
 func TestJobService_CreateJobFailureQueuesNoInitialBuild(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()

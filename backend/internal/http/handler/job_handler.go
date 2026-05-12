@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
+	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -19,11 +21,18 @@ import (
 )
 
 type JobHandler struct {
-	jobService *service.JobService
+	jobService   *service.JobService
+	authMode     auth.Mode
+	projectRoles auth.ProjectRoleLookup
 }
 
 func NewJobHandler(jobService *service.JobService) *JobHandler {
 	return &JobHandler{jobService: jobService}
+}
+
+func (h *JobHandler) SetAuthorization(mode auth.Mode, projectRoles auth.ProjectRoleLookup) {
+	h.authMode = mode
+	h.projectRoles = projectRoles
 }
 
 // CreateJob godoc
@@ -43,10 +52,17 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
+	projectID, projectErr := h.jobService.ResolveProjectID(r.Context(), req.ProjectID, req.ProjectSlug)
+	if projectErr != nil {
+		h.writeJobServiceError(w, projectErr)
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanManageProjectJobs, "project owner or maintainer is required") {
+		return
+	}
 
 	job, err := h.jobService.CreateJob(r.Context(), service.CreateJobInput{
-		ProjectID:        req.ProjectID,
-		ProjectSlug:      req.ProjectSlug,
+		ProjectID:        projectID,
 		Name:             req.Name,
 		Priority:         req.Priority,
 		RepositoryURL:    req.RepositoryURL,
@@ -92,6 +108,11 @@ func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
 		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		return
 	}
+	jobs, err = h.filterJobsForRead(r.Context(), jobs)
+	if err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
 
 	responses := make([]api.JobResponse, 0, len(jobs))
 	for _, job := range jobs {
@@ -124,6 +145,9 @@ func (h *JobHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 		h.writeJobServiceError(w, err)
 		return
 	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, job.ProjectID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
 
 	writeDataJSON(w, http.StatusOK, toJobResponse(job))
 }
@@ -151,6 +175,14 @@ func (h *JobHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 	var req api.UpdateJobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+	current, currentErr := h.jobService.GetJob(r.Context(), jobID)
+	if currentErr != nil {
+		h.writeJobServiceError(w, currentErr)
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, current.ProjectID, auth.CanManageProjectJobs, "project owner or maintainer is required") {
 		return
 	}
 
@@ -197,6 +229,14 @@ func (h *JobHandler) RunNow(w http.ResponseWriter, r *http.Request) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "job id is required")
 		return
 	}
+	job, jobErr := h.jobService.GetJob(r.Context(), jobID)
+	if jobErr != nil {
+		h.writeJobServiceError(w, jobErr)
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, job.ProjectID, auth.CanTriggerBuild, "project owner or maintainer is required") {
+		return
+	}
 
 	build, err := h.jobService.RunJobNow(r.Context(), jobID)
 	if err != nil {
@@ -223,6 +263,14 @@ func (h *JobHandler) ListJobBuilds(w http.ResponseWriter, r *http.Request) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "job id is required")
 		return
 	}
+	job, jobErr := h.jobService.GetJob(r.Context(), jobID)
+	if jobErr != nil {
+		h.writeJobServiceError(w, jobErr)
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, job.ProjectID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
 
 	builds, err := h.jobService.ListBuildsByJobID(r.Context(), jobID)
 	if err != nil {
@@ -236,6 +284,27 @@ func (h *JobHandler) ListJobBuilds(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeDataJSON(w, http.StatusOK, api.BuildListResponse{Builds: responses})
+}
+
+func (h *JobHandler) filterJobsForRead(ctx context.Context, jobs []domain.Job) ([]domain.Job, error) {
+	if normalizedAuthMode(h.authMode) == auth.ModeDisabled {
+		return jobs, nil
+	}
+	projectIDs := make([]string, 0, len(jobs))
+	for _, job := range jobs {
+		projectIDs = append(projectIDs, job.ProjectID)
+	}
+	allowedProjects, err := allowedProjectsForUser(ctx, h.authMode, h.projectRoles, projectIDs, auth.CanReadProjectResources)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]domain.Job, 0, len(jobs))
+	for _, job := range jobs {
+		if _, ok := allowedProjects[job.ProjectID]; ok {
+			filtered = append(filtered, job)
+		}
+	}
+	return filtered, nil
 }
 
 func (h *JobHandler) writeJobServiceError(w http.ResponseWriter, err error) {

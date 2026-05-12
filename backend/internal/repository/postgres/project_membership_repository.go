@@ -59,6 +59,38 @@ func (r *ProjectMembershipRepository) Get(ctx context.Context, projectID string,
 	return membership, nil
 }
 
+func (r *ProjectMembershipRepository) ListByUserID(ctx context.Context, userID string) (memberships []domain.ProjectMembership, err error) {
+	const query = `
+		SELECT project_id, user_id, role, created_at, updated_at
+		FROM project_memberships
+		WHERE user_id = $1
+		ORDER BY project_id ASC
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	memberships = make([]domain.ProjectMembership, 0)
+	for rows.Next() {
+		membership, scanErr := scanProjectMembership(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		memberships = append(memberships, membership)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return memberships, nil
+}
+
 func (r *ProjectMembershipRepository) ListByProjectID(ctx context.Context, projectID string) (memberships []domain.ProjectMembershipWithUser, err error) {
 	const query = `
 		SELECT pm.project_id, pm.user_id, pm.role, pm.created_at, pm.updated_at, u.email, u.display_name

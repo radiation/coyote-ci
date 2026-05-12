@@ -190,6 +190,15 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	writeDataJSON(w, http.StatusOK, api.MeResponse{AuthMode: string(h.authMode), User: toUserResponse(user)})
 }
 
+func (h *UserHandler) GetAuthConfig(w http.ResponseWriter, _ *http.Request) {
+	var loginURL *string
+	if h.authMode == auth.ModeOIDC {
+		url := "/auth/login"
+		loginURL = &url
+	}
+	writeDataJSON(w, http.StatusOK, api.AuthConfigResponse{AuthMode: string(h.authMode), LoginURL: loginURL})
+}
+
 func (h *UserHandler) canManageUsers(r *http.Request) bool {
 	user, _ := auth.CurrentUser(r.Context())
 	return auth.CanManageUsers(h.authMode, user)

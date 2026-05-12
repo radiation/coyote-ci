@@ -117,10 +117,16 @@ func main() {
 	jobHandler := handler.NewJobHandler(jobService)
 	projectHandler := handler.NewProjectHandler(projectService, jobService)
 	authMode := auth.ParseMode(cfg.AuthMode)
+	bootstrapAdmins := auth.ParseBootstrapAdminEmails(cfg.BootstrapAdminEmails)
+	buildHandler.SetAuthorization(authMode, projectMembershipService)
+	artifactHandler.SetAuthorization(authMode, projectMembershipService)
+	jobHandler.SetAuthorization(authMode, projectMembershipService)
+	projectHandler.SetAuthorization(authMode, projectMembershipService)
 	userHandler := handler.NewUserHandler(userService, authMode)
 	projectMembershipHandler := handler.NewProjectMembershipHandler(projectMembershipService, authMode)
 	versionTagHandler := handler.NewVersionTagHandler(versionTagService)
 	credentialHandler := handler.NewSourceCredentialHandler(sourceCredentialService)
+	credentialHandler.SetAuthorization(authMode)
 	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, cfg.GitHubWebhookSecret)
 	readyHandler := handler.NewReadinessHandler(handler.ReadinessCheckFunc(func(ctx context.Context) error {
 		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -146,9 +152,45 @@ func main() {
 		return nil
 	}))
 
+	var sessionManager *auth.CookieSessionManager
+	var authHandler *handler.AuthHandler
+	if authMode == auth.ModeOIDC {
+		sameSite, sameSiteErr := auth.ParseSameSite(cfg.SessionCookieSameSite)
+		if sameSiteErr != nil {
+			log.Fatalf("invalid session cookie same-site setting: %v", sameSiteErr)
+		}
+		createdSessionManager, sessionErr := auth.NewCookieSessionManager(auth.CookieSessionConfig{
+			Secret:     cfg.SessionSecret,
+			CookieName: cfg.SessionCookieName,
+			Secure:     cfg.SessionCookieSecure,
+			SameSite:   sameSite,
+		})
+		if sessionErr != nil {
+			log.Fatalf("failed to configure sessions: %v", sessionErr)
+		}
+		sessionManager = createdSessionManager
+
+		oidcAuthenticator, oidcErr := auth.NewOIDCAuthenticator(context.Background(), auth.OIDCConfig{
+			IssuerURL:    cfg.OIDCIssuerURL,
+			ClientID:     cfg.OIDCClientID,
+			ClientSecret: cfg.OIDCClientSecret,
+			RedirectURL:  cfg.OIDCRedirectURL,
+			Scopes:       auth.ParseOIDCScopes(cfg.OIDCScopes),
+		})
+		if oidcErr != nil {
+			log.Fatalf("failed to configure OIDC: %v", oidcErr)
+		}
+		authHandler = handler.NewAuthHandler(oidcAuthenticator, sessionManager, userService, handler.AuthHandlerConfig{
+			BootstrapAdminEmails:  bootstrapAdmins,
+			PostLoginRedirectURL:  cfg.AuthPostLoginRedirectURL,
+			PostLogoutRedirectURL: cfg.AuthPostLogoutRedirectURL,
+		})
+	}
+
 	authMiddleware := auth.Middleware(auth.MiddlewareConfig{
 		Mode:                 authMode,
-		BootstrapAdminEmails: auth.ParseBootstrapAdminEmails(cfg.BootstrapAdminEmails),
+		BootstrapAdminEmails: bootstrapAdmins,
+		Sessions:             sessionManager,
 	}, userService)
 	router := apphttp.NewRouter(
 		buildHandler,
@@ -159,6 +201,7 @@ func main() {
 		credentialHandler,
 		eventHandler,
 		cfg.PushEventSecret,
+		apphttp.WithAuthHandler(authHandler),
 		apphttp.WithAuthMiddleware(authMiddleware),
 		apphttp.WithUserHandler(userHandler),
 		apphttp.WithProjectMembershipHandler(projectMembershipHandler),

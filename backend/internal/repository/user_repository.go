@@ -23,6 +23,7 @@ type UserRepository interface {
 type ProjectMembershipRepository interface {
 	Upsert(ctx context.Context, membership domain.ProjectMembership) (domain.ProjectMembership, error)
 	Get(ctx context.Context, projectID string, userID string) (domain.ProjectMembership, error)
+	ListByUserID(ctx context.Context, userID string) ([]domain.ProjectMembership, error)
 	ListByProjectID(ctx context.Context, projectID string) ([]domain.ProjectMembershipWithUser, error)
 	Delete(ctx context.Context, projectID string, userID string) error
 }

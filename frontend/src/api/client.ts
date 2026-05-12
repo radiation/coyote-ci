@@ -40,6 +40,7 @@ import type {
 } from "../types/project";
 import type {
   CreateUserRequest,
+  AuthConfigResponse,
   MeResponse,
   ProjectMember,
   ProjectMemberListResponse,
@@ -58,6 +59,8 @@ import type {
  * Override with VITE_API_BASE_PATH when needed (e.g. direct backend testing).
  */
 const BASE = import.meta.env.VITE_API_BASE_PATH ?? "/api";
+const AUTH_BASE =
+  import.meta.env.VITE_AUTH_BASE_PATH ?? BASE.replace(/\/api\/?$/, "");
 
 export class APIError extends Error {
   status: number;
@@ -101,7 +104,7 @@ export async function checkReadiness(): Promise<void> {
 }
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, init);
+  const res = await fetch(`${BASE}${path}`, withCredentials(init));
   if (!res.ok) {
     const body = await res.text();
     let message = body;
@@ -140,7 +143,7 @@ async function postNoBodyJSON<TResponse>(path: string): Promise<TResponse> {
 }
 
 async function deleteNoContent(path: string): Promise<void> {
-  const res = await fetch(`${BASE}${path}`, { method: "DELETE" });
+  const res = await fetch(`${BASE}${path}`, withCredentials({ method: "DELETE" }));
   if (!res.ok) {
     const body = await res.text();
     let message = body;
@@ -161,6 +164,36 @@ async function deleteNoContent(path: string): Promise<void> {
 export async function getMe(): Promise<MeResponse> {
   const envelope = await fetchJSON<DataEnvelope<MeResponse>>("/me");
   return envelope.data;
+}
+
+export async function getAuthConfig(): Promise<AuthConfigResponse> {
+  const envelope =
+    await fetchJSON<DataEnvelope<AuthConfigResponse>>("/auth/config");
+  return envelope.data;
+}
+
+export function authLoginURL(): string {
+  return `${AUTH_BASE}/auth/login`;
+}
+
+export async function logoutSession(): Promise<void> {
+  const res = await fetch(`${AUTH_BASE}/auth/logout`, withCredentials({
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+    },
+  }));
+  if (!res.ok) {
+    const body = await res.text();
+    throw new APIError(res.status, body || "logout failed");
+  }
+}
+
+function withCredentials(init?: RequestInit): RequestInit {
+  return {
+    ...init,
+    credentials: init?.credentials ?? "include",
+  };
 }
 
 export async function listUsers(): Promise<User[]> {
