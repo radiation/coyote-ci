@@ -97,6 +97,7 @@ describe("Layout", () => {
       expect(screen.getByRole("link", { name: "Artifacts" })).toHaveClass(
         "is-active",
       );
+      expect(screen.queryByRole("link", { name: "Tokens" })).toBeNull();
       expect(screen.getByRole("link", { name: "Users" })).toBeTruthy();
     });
 
@@ -124,6 +125,7 @@ describe("Layout", () => {
 
     await waitFor(() => {
       expect(screen.queryByRole("link", { name: "Users" })).toBeNull();
+      expect(screen.getByRole("link", { name: "Tokens" })).toBeTruthy();
     });
   });
 

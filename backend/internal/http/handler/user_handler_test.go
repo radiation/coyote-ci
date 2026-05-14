@@ -16,7 +16,9 @@ import (
 func TestUserHandler_GetMeUsesCurrentUser(t *testing.T) {
 	handler := NewUserHandler(service.NewUserService(memory.NewUserRepository()), auth.ModeOIDC)
 	user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
-	request := httptest.NewRequest(http.MethodGet, "/api/me", nil).WithContext(auth.WithUser(httptest.NewRequest(http.MethodGet, "/api/me", nil).Context(), user))
+	ctx := auth.WithUser(httptest.NewRequest(http.MethodGet, "/api/me", nil).Context(), user)
+	ctx = auth.WithAuthMethod(ctx, auth.MethodOIDC)
+	request := httptest.NewRequest(http.MethodGet, "/api/me", nil).WithContext(ctx)
 	response := httptest.NewRecorder()
 
 	handler.GetMe(response, request)
@@ -30,6 +32,9 @@ func TestUserHandler_GetMeUsesCurrentUser(t *testing.T) {
 	}
 	if payload.Data.User.Email != user.Email {
 		t.Fatalf("expected current user email %q, got %q", user.Email, payload.Data.User.Email)
+	}
+	if payload.Data.AuthMethod != string(auth.MethodOIDC) {
+		t.Fatalf("expected auth method oidc, got %q", payload.Data.AuthMethod)
 	}
 }
 

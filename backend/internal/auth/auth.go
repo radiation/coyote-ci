@@ -22,6 +22,15 @@ const (
 )
 
 type contextKey struct{}
+type authMethodContextKey struct{}
+
+type Method string
+
+const (
+	MethodHeader   Method = "header"
+	MethodOIDC     Method = "oidc"
+	MethodAPIToken Method = "api_token"
+)
 
 type UserResolver interface {
 	ResolveHeaderUser(ctx context.Context, email string, displayName *string, bootstrapAdmins map[string]struct{}) (domain.User, error)
@@ -32,6 +41,11 @@ type MiddlewareConfig struct {
 	Mode                 Mode
 	BootstrapAdminEmails map[string]struct{}
 	Sessions             SessionManager
+	APITokens            APITokenAuthenticator
+}
+
+type APITokenAuthenticator interface {
+	AuthenticateAPIToken(ctx context.Context, plaintext string) (domain.User, error)
 }
 
 func ParseMode(value string) Mode {
@@ -74,6 +88,27 @@ func Middleware(cfg MiddlewareConfig, resolver UserResolver) func(http.Handler) 
 				return
 			}
 
+			if token, attempted := bearerToken(r); attempted {
+				if token == "" {
+					writeUnauthorized(w, "invalid api token")
+					return
+				}
+				if cfg.APITokens == nil {
+					writeUnauthorized(w, "api token auth is not configured")
+					return
+				}
+				user, err := cfg.APITokens.AuthenticateAPIToken(r.Context(), token)
+				if err != nil {
+					writeUnauthorized(w, "invalid api token")
+					return
+				}
+
+				ctx := WithUser(r.Context(), user)
+				ctx = WithAuthMethod(ctx, MethodAPIToken)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
 			if mode == ModeOIDC {
 				if cfg.Sessions == nil {
 					writeUnauthorized(w, "session auth is not configured")
@@ -92,7 +127,9 @@ func Middleware(cfg MiddlewareConfig, resolver UserResolver) func(http.Handler) 
 					return
 				}
 
-				next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
+				ctx := WithUser(r.Context(), user)
+				ctx = WithAuthMethod(ctx, MethodOIDC)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
@@ -112,7 +149,9 @@ func Middleware(cfg MiddlewareConfig, resolver UserResolver) func(http.Handler) 
 				return
 			}
 
-			next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
+			ctx := WithUser(r.Context(), user)
+			ctx = WithAuthMethod(ctx, MethodHeader)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
@@ -124,6 +163,30 @@ func WithUser(ctx context.Context, user domain.User) context.Context {
 func CurrentUser(ctx context.Context) (domain.User, bool) {
 	user, ok := ctx.Value(contextKey{}).(domain.User)
 	return user, ok
+}
+
+func WithAuthMethod(ctx context.Context, method Method) context.Context {
+	return context.WithValue(ctx, authMethodContextKey{}, method)
+}
+
+func CurrentAuthMethod(ctx context.Context) (Method, bool) {
+	method, ok := ctx.Value(authMethodContextKey{}).(Method)
+	return method, ok
+}
+
+func bearerToken(r *http.Request) (string, bool) {
+	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+	if authorization == "" {
+		return "", false
+	}
+	parts := strings.Fields(authorization)
+	if len(parts) == 0 || !strings.EqualFold(parts[0], "Bearer") {
+		return "", false
+	}
+	if len(parts) != 2 {
+		return "", true
+	}
+	return parts[1], true
 }
 
 func DisabledModeUser() domain.User {

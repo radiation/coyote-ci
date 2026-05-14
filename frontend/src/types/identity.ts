@@ -24,6 +24,29 @@ export interface AuthConfigResponse {
   login_url: string | null;
 }
 
+export interface APIToken {
+  id: string;
+  name: string;
+  token_prefix: string;
+  expires_at?: string;
+  last_used_at?: string;
+  created_at: string;
+  revoked_at?: string;
+}
+
+export interface APITokenListResponse {
+  tokens: APIToken[];
+}
+
+export interface CreatedAPIToken extends APIToken {
+  token: string;
+}
+
+export interface CreateAPITokenRequest {
+  name: string;
+  expires_at?: string;
+}
+
 export interface CreateUserRequest {
   email: string;
   display_name?: string;

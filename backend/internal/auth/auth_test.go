@@ -97,9 +97,92 @@ func TestMiddleware_DisabledModePreservesRequest(t *testing.T) {
 	}))
 
 	res := httptest.NewRecorder()
-	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/", nil))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer coyote_pat_ignored_in_disabled_mode")
+	handler.ServeHTTP(res, req)
 	if !called || res.Code != http.StatusNoContent {
 		t.Fatalf("expected request to pass through, called=%v status=%d", called, res.Code)
+	}
+}
+
+func TestMiddleware_BearerTokenAuthenticatesAsOwner(t *testing.T) {
+	ctx := context.Background()
+	userRepo := memory.NewUserRepository()
+	tokenRepo := memory.NewAPITokenRepository()
+	userService := service.NewUserService(userRepo)
+	user, err := userService.CreateUser(ctx, service.CreateUserInput{Email: "dev@example.com"})
+	if err != nil {
+		t.Fatalf("create user failed: %v", err)
+	}
+	tokenService := service.NewAPITokenService(tokenRepo, userRepo)
+	created, err := tokenService.CreateAPIToken(ctx, service.CreateAPITokenInput{UserID: user.ID, Name: "cli"})
+	if err != nil {
+		t.Fatalf("create token failed: %v", err)
+	}
+
+	var got domain.User
+	var method Method
+	middleware := Middleware(MiddlewareConfig{Mode: ModeOIDC, APITokens: tokenService}, userService)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ok bool
+		got, ok = CurrentUser(r.Context())
+		if !ok {
+			t.Fatalf("expected current user in context")
+		}
+		method, ok = CurrentAuthMethod(r.Context())
+		if !ok {
+			t.Fatalf("expected auth method in context")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+created.PlaintextToken)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+	if got.ID != user.ID {
+		t.Fatalf("expected token owner %q, got %q", user.ID, got.ID)
+	}
+	if method != MethodAPIToken {
+		t.Fatalf("expected api_token auth method, got %q", method)
+	}
+}
+
+func TestMiddleware_InvalidBearerTokenReturnsUnauthorized(t *testing.T) {
+	userService := service.NewUserService(memory.NewUserRepository())
+	tokenService := service.NewAPITokenService(memory.NewAPITokenRepository(), memory.NewUserRepository())
+	middleware := Middleware(MiddlewareConfig{Mode: ModeHeader, APITokens: tokenService}, userService)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, authorization := range []string{"Bearer coyote_pat_missing", "Bearer"} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Authorization", authorization)
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status %d for %q, got %d", http.StatusUnauthorized, authorization, res.Code)
+		}
+	}
+}
+
+func TestMiddleware_BearerTokenWithoutAuthenticatorReturnsUnauthorized(t *testing.T) {
+	userService := service.NewUserService(memory.NewUserRepository())
+	middleware := Middleware(MiddlewareConfig{Mode: ModeHeader}, userService)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer coyote_pat_missing")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, res.Code)
 	}
 }
 

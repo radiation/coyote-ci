@@ -20,6 +20,7 @@ type routerConfig struct {
 	authMiddleware           func(nethttp.Handler) nethttp.Handler
 	authHandler              *handler.AuthHandler
 	userHandler              *handler.UserHandler
+	apiTokenHandler          *handler.APITokenHandler
 	projectMembershipHandler *handler.ProjectMembershipHandler
 }
 
@@ -34,6 +35,12 @@ func WithAuthMiddleware(middleware func(nethttp.Handler) nethttp.Handler) Router
 func WithUserHandler(userHandler *handler.UserHandler) RouterOption {
 	return func(cfg *routerConfig) {
 		cfg.userHandler = userHandler
+	}
+}
+
+func WithAPITokenHandler(apiTokenHandler *handler.APITokenHandler) RouterOption {
+	return func(cfg *routerConfig) {
+		cfg.apiTokenHandler = apiTokenHandler
 	}
 }
 
@@ -99,6 +106,11 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 
 			if cfg.userHandler != nil {
 				r.Get("/me", cfg.userHandler.GetMe)
+				if cfg.apiTokenHandler != nil {
+					r.Get("/me/tokens", cfg.apiTokenHandler.ListMyTokens)
+					r.Post("/me/tokens", cfg.apiTokenHandler.CreateMyToken)
+					r.Delete("/me/tokens/{token_id}", cfg.apiTokenHandler.RevokeMyToken)
+				}
 				r.Route("/users", func(r chi.Router) {
 					r.Get("/", cfg.userHandler.ListUsers)
 					r.Post("/", cfg.userHandler.CreateUser)

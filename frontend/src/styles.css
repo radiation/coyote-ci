@@ -527,6 +527,29 @@ fieldset {
   gap: 8px;
 }
 
+.api-token-created-panel {
+  margin-top: 16px;
+}
+
+.api-token-created-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.api-token-created-value input {
+  flex: 1;
+  min-width: 0;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+}
+
+.api-token-copy-status {
+  margin-bottom: 0;
+}
+
 .table-action-button {
   min-height: 32px;
   padding: 6px 10px;
@@ -1366,13 +1389,20 @@ h3 {
   .main-nav,
   .main-nav-link,
   .queue-build-form,
+  .api-token-created-value,
   .job-form-actions {
     width: 100%;
   }
 
   .main-nav-link,
-  .theme-toggle {
+  .theme-toggle,
+  .api-token-created-value {
     justify-content: center;
+  }
+
+  .api-token-created-value {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .managed-image-grid {

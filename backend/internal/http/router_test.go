@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -701,6 +702,8 @@ type rbacRouterFixture struct {
 	router    http.Handler
 	projectID string
 	buildID   string
+	tokens    map[string]string
+	tokenIDs  map[string]string
 }
 
 func newRBACTestRouter(t *testing.T) rbacRouterFixture {
@@ -716,6 +719,7 @@ func newRBACTestRouter(t *testing.T) rbacRouterFixture {
 	membershipService := service.NewProjectMembershipService(projectRepo, membershipRepo)
 	projectService := service.NewProjectService(projectRepo)
 	userService := service.NewUserService(userRepo)
+	apiTokenService := service.NewAPITokenService(repositorymemory.NewAPITokenRepository(), userRepo)
 	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
 	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
 
@@ -744,6 +748,16 @@ func newRBACTestRouter(t *testing.T) rbacRouterFixture {
 			t.Fatalf("create membership failed: %v", membershipErr)
 		}
 	}
+	tokens := map[string]string{}
+	tokenIDs := map[string]string{}
+	for _, user := range users {
+		created, tokenErr := apiTokenService.CreateAPIToken(ctx, service.CreateAPITokenInput{UserID: user.ID, Name: "test-token"})
+		if tokenErr != nil {
+			t.Fatalf("create api token for %s failed: %v", user.ID, tokenErr)
+		}
+		tokens[user.ID] = created.PlaintextToken
+		tokenIDs[user.ID] = created.Token.ID
+	}
 	build, err := buildSvc.CreateBuild(ctx, buildsvc.CreateBuildInput{ProjectID: project.ID})
 	if err != nil {
 		t.Fatalf("create build failed: %v", err)
@@ -757,7 +771,7 @@ func newRBACTestRouter(t *testing.T) rbacRouterFixture {
 	projectHandler := handler.NewProjectHandler(projectService, jobSvc)
 	projectHandler.SetAuthorization(auth.ModeHeader, membershipService)
 	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
-	authMiddleware := auth.Middleware(auth.MiddlewareConfig{Mode: auth.ModeHeader}, userService)
+	authMiddleware := auth.Middleware(auth.MiddlewareConfig{Mode: auth.ModeHeader, APITokens: apiTokenService}, userService)
 
 	router := NewRouter(
 		buildHandler,
@@ -769,8 +783,165 @@ func newRBACTestRouter(t *testing.T) rbacRouterFixture {
 		eventHandler,
 		"",
 		WithAuthMiddleware(authMiddleware),
+		WithUserHandler(handler.NewUserHandler(userService, auth.ModeHeader)),
+		WithAPITokenHandler(handler.NewAPITokenHandler(apiTokenService)),
 	)
-	return rbacRouterFixture{router: router, projectID: project.ID, buildID: build.ID}
+	return rbacRouterFixture{router: router, projectID: project.ID, buildID: build.ID, tokens: tokens, tokenIDs: tokenIDs}
+}
+
+func TestNewRouter_APITokenCannotManageAPITokens(t *testing.T) {
+	fixture := newRBACTestRouter(t)
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "list", method: http.MethodGet, path: "/api/me/tokens"},
+		{name: "create", method: http.MethodPost, path: "/api/me/tokens", body: `{"name":"chained"}`},
+		{name: "revoke", method: http.MethodDelete, path: "/api/me/tokens/" + fixture.tokenIDs["viewer-rbac"]},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, bytes.NewBufferString(tc.body))
+			req.Header.Set("Authorization", "Bearer "+fixture.tokens["viewer-rbac"])
+			res := httptest.NewRecorder()
+			fixture.router.ServeHTTP(res, req)
+			if res.Code != http.StatusForbidden {
+				t.Fatalf("expected status %d, got %d body=%s", http.StatusForbidden, res.Code, res.Body.String())
+			}
+			if !strings.Contains(res.Body.String(), "api tokens cannot manage api tokens") {
+				t.Fatalf("expected clear token-management error, got %s", res.Body.String())
+			}
+		})
+	}
+}
+
+func TestNewRouter_HeaderUserCanManageOwnAPITokens(t *testing.T) {
+	fixture := newRBACTestRouter(t)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/me/tokens", bytes.NewBufferString(`{"name":"header-managed"}`))
+	createReq.Header.Set("X-Coyote-User-Email", "viewer@example.com")
+	createRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(createRes, createReq)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d body=%s", http.StatusCreated, createRes.Code, createRes.Body.String())
+	}
+	var createBody struct {
+		Data struct {
+			ID    string `json:"id"`
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(createRes.Body.Bytes(), &createBody); err != nil {
+		t.Fatalf("decode create response failed: %v", err)
+	}
+	if createBody.Data.ID == "" || createBody.Data.Token == "" {
+		t.Fatalf("expected created token id and raw token, got %+v", createBody.Data)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/me/tokens", nil)
+	listReq.Header.Set("X-Coyote-User-Email", "viewer@example.com")
+	listRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(listRes, listReq)
+	if listRes.Code != http.StatusOK {
+		t.Fatalf("expected list status %d, got %d body=%s", http.StatusOK, listRes.Code, listRes.Body.String())
+	}
+
+	revokeReq := httptest.NewRequest(http.MethodDelete, "/api/me/tokens/"+createBody.Data.ID, nil)
+	revokeReq.Header.Set("X-Coyote-User-Email", "viewer@example.com")
+	revokeRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(revokeRes, revokeReq)
+	if revokeRes.Code != http.StatusNoContent {
+		t.Fatalf("expected revoke status %d, got %d body=%s", http.StatusNoContent, revokeRes.Code, revokeRes.Body.String())
+	}
+}
+
+func TestNewRouter_APITokenUserInheritsRBACPermissions(t *testing.T) {
+	fixture := newRBACTestRouter(t)
+
+	adminReq := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	adminReq.Header.Set("Authorization", "Bearer "+fixture.tokens["viewer-rbac"])
+	adminRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(adminRes, adminReq)
+	if adminRes.Code != http.StatusForbidden {
+		t.Fatalf("expected non-admin token status %d, got %d body=%s", http.StatusForbidden, adminRes.Code, adminRes.Body.String())
+	}
+
+	projectReq := httptest.NewRequest(http.MethodGet, "/api/projects/"+fixture.projectID, nil)
+	projectReq.Header.Set("Authorization", "Bearer "+fixture.tokens["viewer-rbac"])
+	projectRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(projectRes, projectReq)
+	if projectRes.Code != http.StatusOK {
+		t.Fatalf("expected viewer token project read status %d, got %d body=%s", http.StatusOK, projectRes.Code, projectRes.Body.String())
+	}
+	headerProjectReq := httptest.NewRequest(http.MethodGet, "/api/projects/"+fixture.projectID, nil)
+	headerProjectReq.Header.Set("X-Coyote-User-Email", "viewer@example.com")
+	headerProjectRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(headerProjectRes, headerProjectReq)
+	if headerProjectRes.Code != projectRes.Code {
+		t.Fatalf("expected bearer and header auth to share RBAC result, bearer=%d header=%d", projectRes.Code, headerProjectRes.Code)
+	}
+
+	outsiderReq := httptest.NewRequest(http.MethodGet, "/api/projects/"+fixture.projectID, nil)
+	outsiderReq.Header.Set("Authorization", "Bearer "+fixture.tokens["outsider-rbac"])
+	outsiderRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(outsiderRes, outsiderReq)
+	if outsiderRes.Code != http.StatusForbidden {
+		t.Fatalf("expected outsider token status %d, got %d body=%s", http.StatusForbidden, outsiderRes.Code, outsiderRes.Body.String())
+	}
+}
+
+func TestNewRouter_APITokenViewerCannotMutateProjectJobOrBuild(t *testing.T) {
+	fixture := newRBACTestRouter(t)
+	jobBody := `{"project_id":"` + fixture.projectID + `","name":"viewer-job","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
+
+	projectReq := httptest.NewRequest(http.MethodPatch, "/api/projects/"+fixture.projectID, bytes.NewBufferString(`{"name":"blocked"}`))
+	projectReq.Header.Set("Authorization", "Bearer "+fixture.tokens["viewer-rbac"])
+	projectRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(projectRes, projectReq)
+	if projectRes.Code != http.StatusForbidden {
+		t.Fatalf("expected viewer project mutation status %d, got %d body=%s", http.StatusForbidden, projectRes.Code, projectRes.Body.String())
+	}
+
+	jobReq := httptest.NewRequest(http.MethodPost, "/api/jobs/", bytes.NewBufferString(jobBody))
+	jobReq.Header.Set("Authorization", "Bearer "+fixture.tokens["viewer-rbac"])
+	jobRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(jobRes, jobReq)
+	if jobRes.Code != http.StatusForbidden {
+		t.Fatalf("expected viewer job mutation status %d, got %d body=%s", http.StatusForbidden, jobRes.Code, jobRes.Body.String())
+	}
+
+	buildReq := httptest.NewRequest(http.MethodPost, "/api/builds/"+fixture.buildID+"/queue", bytes.NewBufferString(`{}`))
+	buildReq.Header.Set("Authorization", "Bearer "+fixture.tokens["viewer-rbac"])
+	buildRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(buildRes, buildReq)
+	if buildRes.Code != http.StatusForbidden {
+		t.Fatalf("expected viewer build mutation status %d, got %d body=%s", http.StatusForbidden, buildRes.Code, buildRes.Body.String())
+	}
+}
+
+func TestNewRouter_APITokenMaintainerCanMutateAllowedProjectRoutes(t *testing.T) {
+	fixture := newRBACTestRouter(t)
+	body := `{"project_id":"` + fixture.projectID + `","name":"maintainer-job","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
+
+	jobReq := httptest.NewRequest(http.MethodPost, "/api/jobs/", bytes.NewBufferString(body))
+	jobReq.Header.Set("Authorization", "Bearer "+fixture.tokens["maintainer-rbac"])
+	jobRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(jobRes, jobReq)
+	if jobRes.Code != http.StatusCreated {
+		t.Fatalf("expected maintainer token job create status %d, got %d body=%s", http.StatusCreated, jobRes.Code, jobRes.Body.String())
+	}
+
+	buildReq := httptest.NewRequest(http.MethodPost, "/api/builds/"+fixture.buildID+"/queue", bytes.NewBufferString(`{}`))
+	buildReq.Header.Set("Authorization", "Bearer "+fixture.tokens["maintainer-rbac"])
+	buildRes := httptest.NewRecorder()
+	fixture.router.ServeHTTP(buildRes, buildReq)
+	if buildRes.Code != http.StatusOK {
+		t.Fatalf("expected maintainer token build queue status %d, got %d body=%s", http.StatusOK, buildRes.Code, buildRes.Body.String())
+	}
 }
 
 func githubRouterTestSignature(secret string, body []byte) string {

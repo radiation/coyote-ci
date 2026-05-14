@@ -1,5 +1,39 @@
 basePath: /api
 definitions:
+  api.APITokenEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.CreatedAPITokenResponse'
+    type: object
+  api.APITokenListEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.APITokenListResponse'
+    type: object
+  api.APITokenListResponse:
+    properties:
+      tokens:
+        items:
+          $ref: '#/definitions/api.APITokenResponse'
+        type: array
+    type: object
+  api.APITokenResponse:
+    properties:
+      created_at:
+        type: string
+      expires_at:
+        type: string
+      id:
+        type: string
+      last_used_at:
+        type: string
+      name:
+        type: string
+      revoked_at:
+        type: string
+      token_prefix:
+        type: string
+    type: object
   api.ArtifactBrowseEnvelope:
     properties:
       data:
@@ -309,6 +343,13 @@ definitions:
           $ref: '#/definitions/api.BuildStepResponse'
         type: array
     type: object
+  api.CreateAPITokenRequest:
+    properties:
+      expires_at:
+        type: string
+      name:
+        type: string
+    type: object
   api.CreateBuildRequest:
     properties:
       project_id:
@@ -435,6 +476,25 @@ definitions:
       email:
         type: string
       global_role:
+        type: string
+    type: object
+  api.CreatedAPITokenResponse:
+    properties:
+      created_at:
+        type: string
+      expires_at:
+        type: string
+      id:
+        type: string
+      last_used_at:
+        type: string
+      name:
+        type: string
+      revoked_at:
+        type: string
+      token:
+        type: string
+      token_prefix:
         type: string
     type: object
   api.DataResponse:
@@ -665,6 +725,8 @@ definitions:
     type: object
   api.MeResponse:
     properties:
+      auth_method:
+        type: string
       auth_mode:
         type: string
       user:
@@ -2115,6 +2177,99 @@ paths:
           schema:
             $ref: '#/definitions/api.ErrorResponse'
       summary: Get current user
+      tags:
+      - users
+  /me/tokens:
+    get:
+      description: Lists API token metadata for the authenticated user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.APITokenListEnvelope'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List my API tokens
+      tags:
+      - users
+    post:
+      consumes:
+      - application/json
+      description: Creates a user-owned API token and returns the raw token only once.
+      parameters:
+      - description: API token create request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.CreateAPITokenRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.APITokenEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Create my API token
+      tags:
+      - users
+  /me/tokens/{token_id}:
+    delete:
+      description: Revokes one API token owned by the authenticated user.
+      parameters:
+      - description: API token ID
+        in: path
+        name: token_id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Revoke my API token
       tags:
       - users
   /projects:

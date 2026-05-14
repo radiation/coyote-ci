@@ -17,6 +17,7 @@ export function Layout() {
   } = useAuth();
   const showNavigation = authStatus === "authenticated";
   const showUsersLink = authMode === "disabled" || isGlobalAdmin;
+  const showTokensLink = authMode !== "disabled";
   const displayName = currentUser?.display_name || currentUser?.email;
 
   return (
@@ -77,6 +78,16 @@ export function Layout() {
                     }
                   >
                     Users
+                  </NavLink>
+                )}
+                {showTokensLink && (
+                  <NavLink
+                    to="/settings/tokens"
+                    className={({ isActive }) =>
+                      isActive ? "main-nav-link is-active" : "main-nav-link"
+                    }
+                  >
+                    Tokens
                   </NavLink>
                 )}
                 <NavLink

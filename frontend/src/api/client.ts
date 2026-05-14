@@ -40,6 +40,10 @@ import type {
 } from "../types/project";
 import type {
   CreateUserRequest,
+  APIToken,
+  APITokenListResponse,
+  CreateAPITokenRequest,
+  CreatedAPIToken,
   AuthConfigResponse,
   MeResponse,
   ProjectMember,
@@ -143,7 +147,10 @@ async function postNoBodyJSON<TResponse>(path: string): Promise<TResponse> {
 }
 
 async function deleteNoContent(path: string): Promise<void> {
-  const res = await fetch(`${BASE}${path}`, withCredentials({ method: "DELETE" }));
+  const res = await fetch(
+    `${BASE}${path}`,
+    withCredentials({ method: "DELETE" }),
+  );
   if (!res.ok) {
     const body = await res.text();
     let message = body;
@@ -177,12 +184,15 @@ export function authLoginURL(): string {
 }
 
 export async function logoutSession(): Promise<void> {
-  const res = await fetch(`${AUTH_BASE}/auth/logout`, withCredentials({
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-    },
-  }));
+  const res = await fetch(
+    `${AUTH_BASE}/auth/logout`,
+    withCredentials({
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+      },
+    }),
+  );
   if (!res.ok) {
     const body = await res.text();
     throw new APIError(res.status, body || "logout failed");
@@ -228,6 +238,26 @@ export async function updateUser(
 
 export async function deleteUser(id: string): Promise<void> {
   await deleteNoContent(`/users/${encodeURIComponent(id)}`);
+}
+
+export async function listAPITokens(): Promise<APIToken[]> {
+  const envelope =
+    await fetchJSON<DataEnvelope<APITokenListResponse>>("/me/tokens");
+  return envelope.data.tokens;
+}
+
+export async function createAPIToken(
+  input: CreateAPITokenRequest,
+): Promise<CreatedAPIToken> {
+  const envelope = await postJSON<
+    DataEnvelope<CreatedAPIToken>,
+    CreateAPITokenRequest
+  >("/me/tokens", input);
+  return envelope.data;
+}
+
+export async function revokeAPIToken(id: string): Promise<void> {
+  await deleteNoContent(`/me/tokens/${encodeURIComponent(id)}`);
 }
 
 export async function listProjectMembers(
