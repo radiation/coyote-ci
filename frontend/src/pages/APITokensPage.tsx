@@ -6,12 +6,14 @@ import {
   listAPITokens,
   revokeAPIToken,
 } from "../api";
+import { useAuth } from "../auth-context";
 import type { CreatedAPIToken } from "../types/identity";
 import { formatTime } from "../utils/time";
 
 const TOKEN_COPY_STATUS_RESET_MS = 2000;
 
 export function APITokensPage() {
+  const { authMode } = useAuth();
   const queryClient = useQueryClient();
   const [name, setName] = useState("fixture populator");
   const [expiresAt, setExpiresAt] = useState("");
@@ -30,6 +32,7 @@ export function APITokensPage() {
   } = useQuery({
     queryKey: ["api-tokens"],
     queryFn: listAPITokens,
+    enabled: authMode !== "disabled",
   });
 
   const createMutation = useMutation({
@@ -112,6 +115,30 @@ export function APITokensPage() {
     } catch {
       setCopyStatus("failed");
     }
+  }
+
+  if (authMode === "disabled") {
+    return (
+      <>
+        <div className="page-header-row">
+          <div>
+            <h2>API Tokens</h2>
+            <p className="subtle-text">
+              User-owned tokens for scripts, fixtures, and CLI access.
+            </p>
+          </div>
+        </div>
+
+        <section className="settings-panel" style={{ marginTop: 14 }}>
+          <h3>Unavailable in disabled auth mode</h3>
+          <p className="subtle-text">
+            API tokens require an authenticated user identity. Disabled auth
+            mode uses a synthetic local-development identity, so token
+            management is not available.
+          </p>
+        </section>
+      </>
+    );
   }
 
   return (
@@ -207,35 +234,43 @@ export function APITokensPage() {
                 <th>Created</th>
                 <th>Last Used</th>
                 <th>Expires</th>
+                <th>Status</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {tokens.map((token) => (
-                <tr key={token.id}>
-                  <td>{token.name}</td>
-                  <td>
-                    <code>{token.token_prefix}</code>
-                  </td>
-                  <td>{formatTime(token.created_at)}</td>
-                  <td>
-                    {token.last_used_at ? formatTime(token.last_used_at) : "-"}
-                  </td>
-                  <td>
-                    {token.expires_at ? formatTime(token.expires_at) : "-"}
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="table-action-button"
-                      onClick={() => revokeMutation.mutate(token.id)}
-                      disabled={revokeMutation.isPending}
-                    >
-                      Revoke
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {tokens.map((token) => {
+                const isRevoked = Boolean(token.revoked_at);
+
+                return (
+                  <tr key={token.id}>
+                    <td>{token.name}</td>
+                    <td>
+                      <code>{token.token_prefix}</code>
+                    </td>
+                    <td>{formatTime(token.created_at)}</td>
+                    <td>
+                      {token.last_used_at
+                        ? formatTime(token.last_used_at)
+                        : "-"}
+                    </td>
+                    <td>
+                      {token.expires_at ? formatTime(token.expires_at) : "-"}
+                    </td>
+                    <td>{isRevoked ? "Revoked" : "Active"}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="table-action-button"
+                        onClick={() => revokeMutation.mutate(token.id)}
+                        disabled={revokeMutation.isPending || isRevoked}
+                      >
+                        {isRevoked ? "Revoked" : "Revoke"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

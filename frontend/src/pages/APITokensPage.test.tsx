@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { APITokensPage } from "./APITokensPage";
 import { createAPIToken, listAPITokens, revokeAPIToken } from "../api";
+import { AuthContext, type AuthContextValue } from "../auth-context";
 
 vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
@@ -14,7 +15,28 @@ vi.mock("../api", async () => {
   };
 });
 
-function renderPage() {
+function buildAuthValue(
+  overrides: Partial<AuthContextValue> = {},
+): AuthContextValue {
+  return {
+    currentUser: {
+      id: "user-1",
+      email: "user@example.com",
+      global_role: "user",
+    },
+    authMode: "header",
+    authStatus: "authenticated",
+    error: null,
+    isGlobalAdmin: false,
+    loginAvailable: false,
+    login: vi.fn(),
+    logout: vi.fn().mockResolvedValue(undefined),
+    refreshCurrentUser: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+function renderPage(authValue?: Partial<AuthContextValue>) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -24,7 +46,9 @@ function renderPage() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <APITokensPage />
+      <AuthContext.Provider value={buildAuthValue(authValue)}>
+        <APITokensPage />
+      </AuthContext.Provider>
     </QueryClientProvider>,
   );
 }
@@ -105,5 +129,46 @@ describe("APITokensPage", () => {
 
     expect(screen.getByText("Token name is required.")).toBeTruthy();
     expect(mockedCreateAPIToken).not.toHaveBeenCalled();
+  });
+
+  it("shows a disabled-mode message and skips token loading", () => {
+    renderPage({
+      authMode: "disabled",
+      currentUser: {
+        id: "disabled-mode-user",
+        email: "dev@local.coyote-ci",
+        global_role: "admin",
+      },
+      isGlobalAdmin: true,
+    });
+
+    expect(screen.getByText("Unavailable in disabled auth mode")).toBeTruthy();
+    expect(mockedListAPITokens).not.toHaveBeenCalled();
+    expect(screen.getByText(/token management is not available/i)).toBeTruthy();
+  });
+
+  it("shows revoked tokens as revoked and disables their action", async () => {
+    mockedListAPITokens.mockResolvedValue([
+      {
+        id: "token-2",
+        name: "old-token",
+        token_prefix: "coyote_pat_revoked",
+        created_at: "2026-05-10T00:00:00Z",
+        revoked_at: "2026-05-12T00:00:00Z",
+      },
+    ]);
+
+    renderPage();
+
+    expect(await screen.findByText("old-token")).toBeTruthy();
+    expect(screen.getByText("Status")).toBeTruthy();
+    expect(screen.getAllByText("Revoked")).toHaveLength(2);
+
+    const revokedButton = screen.getByRole("button", { name: "Revoked" });
+    expect(revokedButton).toBeDisabled();
+
+    fireEvent.click(revokedButton);
+
+    expect(mockedRevokeAPIToken).not.toHaveBeenCalled();
   });
 });
