@@ -27,6 +27,9 @@ import {
   createUser,
   updateUser,
   deleteUser,
+  listAPITokens,
+  createAPIToken,
+  revokeAPIToken,
   listProjectMembers,
   upsertProjectMember,
   updateProjectMember,
@@ -60,6 +63,9 @@ describe("API client - types", () => {
     expect(typeof createUser).toBe("function");
     expect(typeof updateUser).toBe("function");
     expect(typeof deleteUser).toBe("function");
+    expect(typeof listAPITokens).toBe("function");
+    expect(typeof createAPIToken).toBe("function");
+    expect(typeof revokeAPIToken).toBe("function");
     expect(typeof listProjectMembers).toBe("function");
     expect(typeof upsertProjectMember).toBe("function");
     expect(typeof updateProjectMember).toBe("function");
@@ -250,6 +256,59 @@ describe("API client - types", () => {
         slug: "release",
         description: "Release automation",
       }),
+    });
+  });
+
+  it("manages API tokens through /me/tokens", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            tokens: [
+              {
+                id: "token-1",
+                name: "fixtures",
+                token_prefix: "coyote_pat_abcd1234",
+                created_at: "2026-05-12T00:00:00Z",
+              },
+            ],
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            id: "token-2",
+            name: "cli",
+            token_prefix: "coyote_pat_efgh5678",
+            token: "coyote_pat_raw",
+            created_at: "2026-05-12T00:00:00Z",
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const tokens = await listAPITokens();
+    const created = await createAPIToken({ name: "cli" });
+    await revokeAPIToken("token-1");
+
+    expect(tokens).toHaveLength(1);
+    expect(created.token).toBe("coyote_pat_raw");
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/me/tokens", {
+      credentials: "include",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/me/tokens", {
+      credentials: "include",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "cli" }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/me/tokens/token-1", {
+      credentials: "include",
+      method: "DELETE",
     });
   });
 

@@ -80,6 +80,14 @@ export function Layout() {
                   </NavLink>
                 )}
                 <NavLink
+                  to="/settings/tokens"
+                  className={({ isActive }) =>
+                    isActive ? "main-nav-link is-active" : "main-nav-link"
+                  }
+                >
+                  Tokens
+                </NavLink>
+                <NavLink
                   to="/settings/credentials"
                   className={({ isActive }) =>
                     isActive ? "main-nav-link is-active" : "main-nav-link"

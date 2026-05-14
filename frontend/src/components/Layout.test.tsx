@@ -97,6 +97,7 @@ describe("Layout", () => {
       expect(screen.getByRole("link", { name: "Artifacts" })).toHaveClass(
         "is-active",
       );
+      expect(screen.getByRole("link", { name: "Tokens" })).toBeTruthy();
       expect(screen.getByRole("link", { name: "Users" })).toBeTruthy();
     });
 
