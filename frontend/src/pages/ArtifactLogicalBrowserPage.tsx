@@ -23,6 +23,19 @@ const ARTIFACT_TYPE_OPTIONS: Array<{
   { value: "unknown", label: "Unknown" },
 ];
 
+function parseArtifactTypeParam(value: string | null): "" | ArtifactType {
+  const trimmed = value?.trim() ?? "";
+  switch (trimmed) {
+    case "docker_image":
+    case "npm_package":
+    case "generic":
+    case "unknown":
+      return trimmed;
+    default:
+      return "";
+  }
+}
+
 function parsePositiveInt(value: string | null, fallback: number): number {
   if (!value) {
     return fallback;
@@ -65,7 +78,7 @@ export function ArtifactLogicalBrowserPage() {
   const queryClient = useQueryClient();
 
   const search = searchParams.get("q") ?? "";
-  const type = searchParams.get("type")?.trim() ?? "";
+  const type = parseArtifactTypeParam(searchParams.get("type"));
   const projectID = searchParams.get("project_id")?.trim() ?? "";
   const pageIndex = parsePositiveInt(searchParams.get("page"), 1) - 1;
   const trimmedSearch = search.trim();
