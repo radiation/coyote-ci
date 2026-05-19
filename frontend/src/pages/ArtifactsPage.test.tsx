@@ -123,6 +123,10 @@ describe("ArtifactsPage", () => {
   it("renders artifact rows with build, job, detail, and download links", async () => {
     renderPage();
 
+    expect(
+      await screen.findByRole("link", { name: "Open logical browser" }),
+    ).toHaveAttribute("href", "/artifacts/logical");
+
     const artifactLink = await screen.findByRole("link", {
       name: "coyote-ci/package-a",
     });

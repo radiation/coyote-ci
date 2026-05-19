@@ -49,8 +49,8 @@ func (h *ArtifactHandler) SetAuthorization(mode auth.Mode, projectRoles auth.Pro
 }
 
 // ListArtifactCatalog godoc
-// @Summary List persisted artifacts
-// @Description Returns persisted artifact metadata rows across builds for artifact repository catalog browsing.
+// @Summary List persisted artifact instances
+// @Description Returns persisted artifact metadata rows across builds for artifact catalog browsing. Use /artifacts for the grouped logical artifact browser.
 // @Tags artifacts
 // @Produce json
 // @Param q query string false "Search artifacts by path, name, artifact id, build id, build number, or job id"
@@ -95,6 +95,9 @@ func (h *ArtifactHandler) ListArtifactCatalog(w http.ResponseWriter, r *http.Req
 		}
 		return
 	}
+	// TODO: Catalog pagination currently happens before per-project authorization
+	// filtering, so mixed-access result sets can produce sparse pages. Revisit
+	// with auth-aware paging if that becomes user-visible.
 	records, err = h.filterArtifactRecordsForRead(r.Context(), records)
 	if err != nil {
 		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
@@ -117,7 +120,7 @@ func (h *ArtifactHandler) ListArtifactCatalog(w http.ResponseWriter, r *http.Req
 
 // GetArtifact godoc
 // @Summary Get artifact detail
-// @Description Returns one persisted artifact with build, job, step, and storage metadata.
+// @Description Returns one persisted artifact instance with build, job, step, and stable download metadata.
 // @Tags artifacts
 // @Produce json
 // @Param artifactID path string true "Artifact ID"
@@ -345,7 +348,7 @@ func toArtifactBrowseVersionResponse(version domain.ArtifactBrowseVersion, proje
 		ContentType:     version.Artifact.ContentType,
 		ChecksumSHA256:  version.Artifact.ChecksumSHA256,
 		StorageProvider: provider,
-		DownloadURLPath: "/api/builds/" + version.Build.ID + "/artifacts/" + version.Artifact.ID + "/download",
+		DownloadURLPath: "/builds/" + version.Build.ID + "/artifacts/" + version.Artifact.ID + "/download",
 		VersionTags:     toVersionTagResponses(version.Artifact.VersionTags),
 		CreatedAt:       version.Artifact.CreatedAt.Format(time.RFC3339),
 	}
@@ -384,7 +387,7 @@ func toArtifactCatalogItemResponse(record domain.ArtifactRecord, projects map[st
 		ContentType:     record.Artifact.ContentType,
 		ChecksumSHA256:  record.Artifact.ChecksumSHA256,
 		StorageProvider: provider,
-		DownloadURLPath: "/api/builds/" + record.Build.ID + "/artifacts/" + record.Artifact.ID + "/download",
+		DownloadURLPath: "/builds/" + record.Build.ID + "/artifacts/" + record.Artifact.ID + "/download",
 		CreatedAt:       record.Artifact.CreatedAt.Format(time.RFC3339),
 	}
 }
@@ -422,8 +425,7 @@ func toArtifactDetailResponse(record domain.ArtifactRecord, projects map[string]
 		ContentType:     record.Artifact.ContentType,
 		ChecksumSHA256:  record.Artifact.ChecksumSHA256,
 		StorageProvider: provider,
-		StorageKey:      record.Artifact.StorageKey,
-		DownloadURLPath: "/api/builds/" + record.Build.ID + "/artifacts/" + record.Artifact.ID + "/download",
+		DownloadURLPath: "/builds/" + record.Build.ID + "/artifacts/" + record.Artifact.ID + "/download",
 		CreatedAt:       record.Artifact.CreatedAt.Format(time.RFC3339),
 	}
 }

@@ -224,8 +224,6 @@ definitions:
         type: integer
       step_name:
         type: string
-      storage_key:
-        type: string
       storage_provider:
         type: string
     type: object
@@ -1282,8 +1280,8 @@ paths:
       - artifacts
   /artifacts/{artifactID}:
     get:
-      description: Returns one persisted artifact with build, job, step, and storage
-        metadata.
+      description: Returns one persisted artifact instance with build, job, step,
+        and stable download metadata.
       parameters:
       - description: Artifact ID
         in: path
@@ -1338,7 +1336,7 @@ paths:
   /artifacts/catalog:
     get:
       description: Returns persisted artifact metadata rows across builds for artifact
-        repository catalog browsing.
+        catalog browsing. Use /artifacts for the grouped logical artifact browser.
       parameters:
       - description: Search artifacts by path, name, artifact id, build id, build
           number, or job id
@@ -1388,7 +1386,7 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/api.ErrorResponse'
-      summary: List persisted artifacts
+      summary: List persisted artifact instances
       tags:
       - artifacts
   /builds:

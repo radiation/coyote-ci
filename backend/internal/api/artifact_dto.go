@@ -102,7 +102,6 @@ type ArtifactDetailResponse struct {
 	ContentType     *string `json:"content_type"`
 	ChecksumSHA256  *string `json:"checksum_sha256"`
 	StorageProvider string  `json:"storage_provider"`
-	StorageKey      string  `json:"storage_key"`
 	DownloadURLPath string  `json:"download_url_path"`
 	CreatedAt       string  `json:"created_at"`
 }

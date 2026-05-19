@@ -99,14 +99,14 @@ const docTemplate = `{
         },
         "/artifacts/catalog": {
             "get": {
-                "description": "Returns persisted artifact metadata rows across builds for artifact repository catalog browsing.",
+                "description": "Returns persisted artifact metadata rows across builds for artifact catalog browsing. Use /artifacts for the grouped logical artifact browser.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "artifacts"
                 ],
-                "summary": "List persisted artifacts",
+                "summary": "List persisted artifact instances",
                 "parameters": [
                     {
                         "type": "string",
@@ -181,7 +181,7 @@ const docTemplate = `{
         },
         "/artifacts/{artifactID}": {
             "get": {
-                "description": "Returns one persisted artifact with build, job, step, and storage metadata.",
+                "description": "Returns one persisted artifact instance with build, job, step, and stable download metadata.",
                 "produces": [
                     "application/json"
                 ],
@@ -3092,9 +3092,6 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "step_name": {
-                    "type": "string"
-                },
-                "storage_key": {
                     "type": "string"
                 },
                 "storage_provider": {

@@ -184,6 +184,9 @@ func TestArtifactHandlerListArtifacts(t *testing.T) {
 	if version["step_name"] != "Publish package" {
 		t.Fatalf("expected step name, got %v", version["step_name"])
 	}
+	if version["download_url_path"] != "/builds/build-2/artifacts/artifact-2/download" {
+		t.Fatalf("expected route-relative download path, got %v", version["download_url_path"])
+	}
 }
 
 func TestArtifactHandlerListArtifactsRejectsInvalidType(t *testing.T) {
@@ -384,7 +387,7 @@ func TestArtifactHandlerListArtifactCatalog(t *testing.T) {
 	if first["step_name"] != "Publish package" {
 		t.Fatalf("expected step_name Publish package, got %v", first["step_name"])
 	}
-	if first["download_url_path"] != "/api/builds/build-1/artifacts/artifact-1/download" {
+	if first["download_url_path"] != "/builds/build-1/artifacts/artifact-1/download" {
 		t.Fatalf("unexpected download path: %v", first["download_url_path"])
 	}
 }
@@ -446,11 +449,11 @@ func TestArtifactHandlerGetArtifact(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	if response.Data["storage_key"] != "build-1/packages/pkg-a.tgz" {
-		t.Fatalf("expected storage key, got %v", response.Data["storage_key"])
-	}
 	if response.Data["job_name"] != "backend-ci" {
 		t.Fatalf("expected job name backend-ci, got %v", response.Data["job_name"])
+	}
+	if response.Data["download_url_path"] != "/builds/build-1/artifacts/artifact-1/download" {
+		t.Fatalf("expected route-relative download path, got %v", response.Data["download_url_path"])
 	}
 	if len(repo.ids) != 1 || repo.ids[0] != "artifact-1" {
 		t.Fatalf("expected artifact lookup for artifact-1, got %v", repo.ids)

@@ -353,6 +353,9 @@ func TestBuildHandler_GetBuildArtifacts(t *testing.T) {
 	if artifactData["path"] != "dist/app" {
 		t.Fatalf("expected path dist/app, got %v", artifactData["path"])
 	}
+	if artifactData["download_url_path"] != "/builds/build-1/artifacts/artifact-1/download" {
+		t.Fatalf("expected route-relative download path, got %v", artifactData["download_url_path"])
+	}
 	tags, ok := artifactData["version_tags"].([]any)
 	if !ok || len(tags) != 1 {
 		t.Fatalf("expected 1 version tag, got %v", artifactData["version_tags"])

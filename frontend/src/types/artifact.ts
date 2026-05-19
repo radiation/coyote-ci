@@ -76,9 +76,7 @@ export interface ArtifactCatalogResponse {
   artifacts: ArtifactCatalogItem[];
 }
 
-export interface ArtifactDetail extends ArtifactCatalogItem {
-  storage_key: string;
-}
+export type ArtifactDetail = ArtifactCatalogItem;
 
 export interface DataEnvelope<T> {
   data: T;

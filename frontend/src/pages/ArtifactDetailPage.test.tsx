@@ -55,7 +55,6 @@ describe("ArtifactDetailPage", () => {
       content_type: "application/gzip",
       checksum_sha256: "pkg-sha",
       storage_provider: "filesystem",
-      storage_key: "build-1/packages/pkg-a.tgz",
       download_url_path: "/builds/build-1/artifacts/artifact-1/download",
       created_at: "2026-04-25T09:00:00Z",
     });
@@ -77,7 +76,6 @@ describe("ArtifactDetailPage", () => {
       "href",
       "/api/builds/build-1/artifacts/artifact-1/download",
     );
-    expect(screen.getByText("build-1/packages/pkg-a.tgz")).toBeTruthy();
     expect(screen.getByText("pkg-sha")).toBeTruthy();
     expect(screen.getAllByText("Step 1: Publish package").length).toBe(2);
   });

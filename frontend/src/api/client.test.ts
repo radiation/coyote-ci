@@ -180,7 +180,6 @@ describe("API client - types", () => {
           content_type: null,
           checksum_sha256: null,
           storage_provider: "filesystem",
-          storage_key: "build-1/dist/app.tar",
           download_url_path: "/builds/build-1/artifacts/artifact-1/download",
           created_at: "2026-03-24T00:00:01Z",
         },

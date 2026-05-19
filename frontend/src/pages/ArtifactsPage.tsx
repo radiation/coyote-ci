@@ -246,8 +246,12 @@ export function ArtifactsPage() {
         <div>
           <h2>Artifacts</h2>
           <p className="subtle-text">
-            Persisted artifact catalog across builds.
+            Persisted artifact instance catalog across builds.
             {isFetching && !isLoading ? " Updating…" : ""}
+          </p>
+          <p className="subtle-text">
+            Need grouped versions or version tag assignment?{" "}
+            <Link to="/artifacts/logical">Open logical browser</Link>.
           </p>
           <p className="subtle-text">
             Latest refresh:{" "}

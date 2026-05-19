@@ -169,10 +169,6 @@ export function ArtifactDetailPage() {
             <strong>Checksum</strong>
             <span className="artifact-mono">{data.checksum_sha256 ?? "—"}</span>
           </div>
-          <div className="artifact-version-meta-full">
-            <strong>Storage Key</strong>
-            <span className="artifact-mono">{data.storage_key || "—"}</span>
-          </div>
         </div>
       </section>
     </>
