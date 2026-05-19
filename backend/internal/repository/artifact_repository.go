@@ -18,6 +18,15 @@ type BrowseArtifactsParams struct {
 	Offset    int
 }
 
+type ArtifactCatalogParams struct {
+	Query     string
+	ProjectID string
+	JobID     string
+	BuildID   string
+	Limit     int
+	Offset    int
+}
+
 type ArtifactBrowseRepository interface {
 	// Browse paginates logical artifact identities rather than raw artifact
 	// instance rows so each returned artifact includes its complete grouped
@@ -25,9 +34,17 @@ type ArtifactBrowseRepository interface {
 	Browse(ctx context.Context, params BrowseArtifactsParams) ([]domain.ArtifactRecord, error)
 }
 
+// ArtifactCatalogRepository lists persisted artifact instances with build and
+// optional step context for repository catalog and detail views.
+type ArtifactCatalogRepository interface {
+	ListCatalog(ctx context.Context, params ArtifactCatalogParams) ([]domain.ArtifactRecord, error)
+	GetCatalogByID(ctx context.Context, artifactID string) (domain.ArtifactRecord, error)
+}
+
 // ArtifactRepository persists and queries build artifact metadata.
 type ArtifactRepository interface {
 	ArtifactBrowseRepository
+	ArtifactCatalogRepository
 	Create(ctx context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error)
 	ListByBuildID(ctx context.Context, buildID string) ([]domain.BuildArtifact, error)
 	GetByID(ctx context.Context, buildID string, artifactID string) (domain.BuildArtifact, error)

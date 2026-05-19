@@ -1,4 +1,5 @@
 import { artifactDownloadURL } from "../api";
+import { Link } from "react-router-dom";
 import type { BuildArtifact, BuildStep } from "../types";
 import { formatFileSize } from "../utils/format";
 import { formatTime } from "../utils/time";
@@ -18,6 +19,18 @@ function stepLabel(stepId: string, steps: BuildStep[] | undefined): string {
     if (step) return `Step ${step.step_index}: ${step.name}`;
   }
   return `Step ${stepId.slice(0, 8)}…`;
+}
+
+function artifactTitle(item: BuildArtifact): string {
+  return item.name?.trim() || item.path;
+}
+
+function artifactSecondaryPath(item: BuildArtifact): string | null {
+  const trimmedName = item.name?.trim() ?? "";
+  if (!trimmedName || trimmedName === item.path) {
+    return null;
+  }
+  return item.path;
 }
 
 function ArtifactTable({
@@ -42,9 +55,13 @@ function ArtifactTable({
         {items.map((item) => (
           <tr key={item.id}>
             <td className="artifact-path">
-              <div>{item.name?.trim() || item.path}</div>
-              {item.name && item.name !== item.path && (
-                <div className="subtle-text artifact-mono">{item.path}</div>
+              <div>
+                <Link to={`/artifacts/${item.id}`}>{artifactTitle(item)}</Link>
+              </div>
+              {artifactSecondaryPath(item) && (
+                <div className="subtle-text artifact-mono">
+                  {artifactSecondaryPath(item)}
+                </div>
               )}
             </td>
             <td>{formatFileSize(item.size_bytes)}</td>

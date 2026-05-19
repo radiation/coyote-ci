@@ -244,7 +244,7 @@ func toBuildArtifactResponse(item domain.BuildArtifact) api.BuildArtifactRespons
 		ContentType:     item.ContentType,
 		ChecksumSHA256:  item.ChecksumSHA256,
 		StorageProvider: provider,
-		DownloadURLPath: "/api/builds/" + item.BuildID + "/artifacts/" + item.ID + "/download",
+		DownloadURLPath: "/builds/" + item.BuildID + "/artifacts/" + item.ID + "/download",
 		VersionTags:     toVersionTagResponses(item.VersionTags),
 		CreatedAt:       item.CreatedAt.Format(time.RFC3339),
 	}

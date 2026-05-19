@@ -1,49 +1,14 @@
-import {
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useRef,
-  useState,
-  type FormEvent,
-} from "react";
-import {
-  keepPreviousData,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
-import { createJobVersionTags, listArtifacts, listProjects } from "../api";
-import { ArtifactBrowser } from "../components/ArtifactBrowser";
-import type { ArtifactBrowseVersion, ArtifactType } from "../types";
+import { useCallback } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { Link, useSearchParams } from "react-router-dom";
+import { artifactDownloadURL, listArtifactCatalog, listProjects } from "../api";
+import { StatusBadge } from "../components/StatusBadge";
+import type { ArtifactCatalogItem } from "../types";
+import { formatFileSize } from "../utils/format";
 import { formatTime } from "../utils/time";
-import { useLocation, useSearchParams } from "react-router-dom";
 
-const ARTIFACT_TYPE_OPTIONS: Array<{
-  label: string;
-  value: ArtifactType | "";
-}> = [
-  { label: "All types", value: "" },
-  { label: "Docker image", value: "docker_image" },
-  { label: "npm package", value: "npm_package" },
-  { label: "Generic artifact", value: "generic" },
-  { label: "Unknown", value: "unknown" },
-];
-
-const DEFAULT_ARTIFACTS_PAGE_SIZE = 10;
-const ARTIFACTS_PAGE_SIZE_OPTIONS = [10, 25, 50];
-const COPY_STATUS_RESET_MS = 2000;
-
-function parseArtifactTypeParam(value: string | null): ArtifactType | "" {
-  if (
-    value === "docker_image" ||
-    value === "npm_package" ||
-    value === "generic" ||
-    value === "unknown"
-  ) {
-    return value;
-  }
-  return "";
-}
+const DEFAULT_ARTIFACTS_PAGE_SIZE = 20;
+const ARTIFACTS_PAGE_SIZE_OPTIONS = [20, 50, 100];
 
 function parsePositiveInt(value: string | null, fallback: number): number {
   if (!value) {
@@ -67,19 +32,24 @@ function parsePageSizeParam(value: string | null): number {
 function buildCanonicalSearchParams(params: URLSearchParams) {
   const nextParams = new URLSearchParams();
 
-  const query = params.get("q");
+  const query = params.get("q")?.trim() ?? "";
   if (query) {
     nextParams.set("q", query);
-  }
-
-  const type = parseArtifactTypeParam(params.get("type"));
-  if (type) {
-    nextParams.set("type", type);
   }
 
   const projectID = params.get("project_id")?.trim() ?? "";
   if (projectID) {
     nextParams.set("project_id", projectID);
+  }
+
+  const jobID = params.get("job_id")?.trim() ?? "";
+  if (jobID) {
+    nextParams.set("job_id", jobID);
+  }
+
+  const buildID = params.get("build_id")?.trim() ?? "";
+  if (buildID) {
+    nextParams.set("build_id", buildID);
   }
 
   const page = parsePositiveInt(params.get("page"), 1);
@@ -95,48 +65,60 @@ function buildCanonicalSearchParams(params: URLSearchParams) {
   return nextParams;
 }
 
+function artifactTitle(artifact: ArtifactCatalogItem): string {
+  return artifact.name?.trim() || artifact.path;
+}
+
+function buildLabel(artifact: ArtifactCatalogItem): string {
+  if (artifact.build_number > 0) {
+    return `Build #${artifact.build_number}`;
+  }
+  return `Build ${artifact.build_id.slice(0, 8)}…`;
+}
+
+function jobLabel(artifact: ArtifactCatalogItem): string {
+  const name = artifact.job_name?.trim() ?? "";
+  if (name) {
+    return name;
+  }
+  const id = artifact.job_id?.trim() ?? "";
+  if (!id) {
+    return "—";
+  }
+  return `${id.slice(0, 8)}…`;
+}
+
+function stepLabel(artifact: ArtifactCatalogItem): string {
+  if (
+    typeof artifact.step_index === "number" &&
+    artifact.step_name &&
+    artifact.step_name.trim()
+  ) {
+    return `Step ${artifact.step_index}: ${artifact.step_name}`;
+  }
+  if (typeof artifact.step_index === "number") {
+    return `Step ${artifact.step_index}`;
+  }
+  return "Build-level artifact";
+}
+
 export function ArtifactsPage() {
-  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const queryClient = useQueryClient();
   const search = searchParams.get("q") ?? "";
-  const typeFilter = parseArtifactTypeParam(searchParams.get("type"));
   const projectID = searchParams.get("project_id")?.trim() ?? "";
+  const jobID = searchParams.get("job_id")?.trim() ?? "";
+  const buildID = searchParams.get("build_id")?.trim() ?? "";
   const pageIndex = parsePositiveInt(searchParams.get("page"), 1) - 1;
   const pageSize = parsePageSizeParam(searchParams.get("pageSize"));
-  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">(
-    "idle",
-  );
-  const pageInputRef = useRef<HTMLInputElement | null>(null);
   const trimmedSearch = search.trim();
-  const deferredSearch = useDeferredValue(trimmedSearch);
-  const hasActiveFilters = Boolean(trimmedSearch || typeFilter || projectID);
+  const hasActiveFilters = Boolean(
+    trimmedSearch || projectID || jobID || buildID,
+  );
   const activeFilterCount =
-    (trimmedSearch ? 1 : 0) + (typeFilter ? 1 : 0) + (projectID ? 1 : 0);
-  const assignPageInputRef = useCallback((node: HTMLInputElement | null) => {
-    pageInputRef.current = node;
-  }, []);
-
-  useEffect(() => {
-    if (copyStatus === "idle") {
-      return undefined;
-    }
-
-    const timeoutID = globalThis.setTimeout(() => {
-      setCopyStatus("idle");
-    }, COPY_STATUS_RESET_MS);
-
-    return () => globalThis.clearTimeout(timeoutID);
-  }, [copyStatus]);
-
-  useEffect(() => {
-    if (
-      pageInputRef.current &&
-      globalThis.document?.activeElement !== pageInputRef.current
-    ) {
-      pageInputRef.current.value = String(pageIndex + 1);
-    }
-  }, [pageIndex]);
+    (trimmedSearch ? 1 : 0) +
+    (projectID ? 1 : 0) +
+    (jobID ? 1 : 0) +
+    (buildID ? 1 : 0);
 
   const updateSearchParams = useCallback(
     (mutate: (nextParams: URLSearchParams) => void) => {
@@ -159,18 +141,20 @@ export function ArtifactsPage() {
     dataUpdatedAt,
   } = useQuery({
     queryKey: [
-      "artifacts",
-      deferredSearch,
-      typeFilter,
+      "artifactCatalog",
+      trimmedSearch,
       projectID,
+      jobID,
+      buildID,
       pageIndex,
       pageSize,
     ],
     queryFn: () =>
-      listArtifacts({
-        q: deferredSearch,
-        type: typeFilter,
+      listArtifactCatalog({
+        q: trimmedSearch,
         project_id: projectID || undefined,
+        job_id: jobID || undefined,
+        build_id: buildID || undefined,
         limit: pageSize + 1,
         offset: pageIndex * pageSize,
       }),
@@ -186,37 +170,6 @@ export function ArtifactsPage() {
   const pageStart = pageIndex * pageSize + 1;
   const pageEnd = pageIndex * pageSize + artifacts.length;
 
-  const createVersionTagMutation = useMutation({
-    mutationFn: ({
-      version,
-      artifact,
-    }: {
-      version: string;
-      artifact: ArtifactBrowseVersion;
-    }) => {
-      if (!artifact.job_id) {
-        throw new Error("Artifact version is not associated with a job.");
-      }
-      return createJobVersionTags(artifact.job_id, {
-        version,
-        artifact_ids: [artifact.artifact_id],
-      });
-    },
-    onSuccess: async (_data, variables) => {
-      await queryClient.invalidateQueries({ queryKey: ["artifacts"] });
-      await queryClient.invalidateQueries({
-        queryKey: ["buildArtifacts", variables.artifact.build_id],
-      });
-    },
-  });
-
-  async function assignArtifactVersion(
-    artifact: ArtifactBrowseVersion,
-    version: string,
-  ) {
-    await createVersionTagMutation.mutateAsync({ artifact, version });
-  }
-
   function handleSearchChange(value: string) {
     updateSearchParams((nextParams) => {
       if (value) {
@@ -228,23 +181,34 @@ export function ArtifactsPage() {
     });
   }
 
-  function handleTypeChange(value: ArtifactType | "") {
-    updateSearchParams((nextParams) => {
-      if (value) {
-        nextParams.set("type", value);
-      } else {
-        nextParams.delete("type");
-      }
-      nextParams.delete("page");
-    });
-  }
-
   function handleProjectChange(value: string) {
     updateSearchParams((nextParams) => {
       if (value) {
         nextParams.set("project_id", value);
       } else {
         nextParams.delete("project_id");
+      }
+      nextParams.delete("page");
+    });
+  }
+
+  function handleJobChange(value: string) {
+    updateSearchParams((nextParams) => {
+      if (value) {
+        nextParams.set("job_id", value);
+      } else {
+        nextParams.delete("job_id");
+      }
+      nextParams.delete("page");
+    });
+  }
+
+  function handleBuildChange(value: string) {
+    updateSearchParams((nextParams) => {
+      if (value) {
+        nextParams.set("build_id", value);
+      } else {
+        nextParams.delete("build_id");
       }
       nextParams.delete("page");
     });
@@ -276,76 +240,36 @@ export function ArtifactsPage() {
     });
   }
 
-  function handlePageJumpSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    const pageValue = formData.get("page");
-    const parsedPage =
-      typeof pageValue === "string" ? Number.parseInt(pageValue, 10) : NaN;
-    if (!Number.isFinite(parsedPage) || parsedPage < 1) {
-      if (pageInputRef.current) {
-        pageInputRef.current.value = String(pageIndex + 1);
-      }
-      return;
-    }
-    goToPage(parsedPage);
-  }
-
-  async function handleCopyLink() {
-    const baseURL = globalThis.location?.origin ?? "";
-    const shareURL = `${baseURL}${location.pathname}${location.search}${location.hash}`;
-
-    try {
-      if (!globalThis.navigator?.clipboard?.writeText) {
-        throw new Error("Clipboard API unavailable");
-      }
-      await globalThis.navigator.clipboard.writeText(shareURL);
-      setCopyStatus("copied");
-    } catch {
-      setCopyStatus("failed");
-    }
-  }
-
   return (
     <>
       <div className="page-header-row">
         <div>
           <h2>Artifacts</h2>
           <p className="subtle-text">
-            Latest repository refresh:{" "}
+            Persisted artifact instance catalog across builds.
+            {isFetching && !isLoading ? " Updating…" : ""}
+          </p>
+          <p className="subtle-text">
+            Need grouped versions or version tag assignment?{" "}
+            <Link to="/artifacts/logical">Open logical browser</Link>.
+          </p>
+          <p className="subtle-text">
+            Latest refresh:{" "}
             {dataUpdatedAt > 0
               ? formatTime(new Date(dataUpdatedAt).toISOString())
               : "—"}
           </p>
-        </div>
-        <div className="page-header-actions">
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={handleCopyLink}
-          >
-            Copy link
-          </button>
-          {copyStatus === "copied" && (
-            <p className="subtle-text artifact-copy-status">Link copied.</p>
-          )}
-          {copyStatus === "failed" && (
-            <p className="error-text artifact-copy-status">
-              Unable to copy link.
-            </p>
-          )}
         </div>
       </div>
 
       <section className="artifact-filters-panel" aria-label="Artifact filters">
         <div className="artifact-filter-toolbar">
           <div>
-            <h3>Repository Browse</h3>
+            <h3>Artifact Catalog</h3>
             <p className="subtle-text">
               {activeFilterCount > 0
                 ? `${activeFilterCount} active filter${activeFilterCount === 1 ? "" : "s"}`
-                : "All logical artifacts"}
-              {isFetching && !isLoading ? " · Updating" : ""}
+                : "All persisted artifacts"}
             </p>
           </div>
           <button
@@ -363,7 +287,7 @@ export function ArtifactsPage() {
             type="search"
             value={search}
             onChange={(event) => handleSearchChange(event.target.value)}
-            placeholder="Name, path, project, job, or version"
+            placeholder="Name, path, build, or artifact id"
           />
         </label>
         <label className="artifact-filter-field artifact-filter-select">
@@ -380,20 +304,23 @@ export function ArtifactsPage() {
             ))}
           </select>
         </label>
-        <label className="artifact-filter-field artifact-filter-select">
-          <span>Type</span>
-          <select
-            value={typeFilter}
-            onChange={(event) =>
-              handleTypeChange(event.target.value as ArtifactType | "")
-            }
-          >
-            {ARTIFACT_TYPE_OPTIONS.map((option) => (
-              <option key={option.value || "all"} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+        <label className="artifact-filter-field">
+          <span>Job ID</span>
+          <input
+            type="search"
+            value={jobID}
+            onChange={(event) => handleJobChange(event.target.value)}
+            placeholder="job-123"
+          />
+        </label>
+        <label className="artifact-filter-field">
+          <span>Build ID</span>
+          <input
+            type="search"
+            value={buildID}
+            onChange={(event) => handleBuildChange(event.target.value)}
+            placeholder="build-123"
+          />
         </label>
       </section>
 
@@ -436,30 +363,6 @@ export function ArtifactsPage() {
             Previous
           </button>
           <span className="artifact-pagination-page">Page {pageIndex + 1}</span>
-          <form
-            className="artifact-pagination-jump-form"
-            onSubmit={handlePageJumpSubmit}
-          >
-            <label className="artifact-pagination-field">
-              <span>Jump to page</span>
-              <input
-                ref={assignPageInputRef}
-                name="page"
-                type="number"
-                min={1}
-                inputMode="numeric"
-                defaultValue={String(pageIndex + 1)}
-                disabled={isFetching}
-              />
-            </label>
-            <button
-              type="submit"
-              className="secondary-button"
-              disabled={isFetching}
-            >
-              Go
-            </button>
-          </form>
           <button
             type="button"
             className="secondary-button"
@@ -471,14 +374,93 @@ export function ArtifactsPage() {
         </div>
       </section>
 
-      <ArtifactBrowser
-        artifacts={artifacts}
-        isLoading={isLoading}
-        error={error}
-        hasActiveFilters={hasActiveFilters}
-        pageIndex={pageIndex}
-        onAssignVersion={assignArtifactVersion}
-      />
+      {isLoading ? (
+        <p>Loading artifacts…</p>
+      ) : error ? (
+        <div className="empty-state artifact-empty-state artifact-error-state">
+          <p className="error-text">
+            Failed to load artifacts: {String(error)}
+          </p>
+        </div>
+      ) : artifacts.length === 0 ? (
+        <div className="empty-state artifact-empty-state">
+          <p className="empty">
+            {pageIndex > 0
+              ? "No artifacts on this page."
+              : hasActiveFilters
+                ? "No artifacts matched the current filters."
+                : "No artifacts have been published yet."}
+          </p>
+        </div>
+      ) : (
+        <section className="panel">
+          <table className="table artifacts-table artifact-catalog-table">
+            <thead>
+              <tr>
+                <th>Artifact</th>
+                <th>Build</th>
+                <th>Job</th>
+                <th>Step</th>
+                <th>Size</th>
+                <th>Checksum</th>
+                <th>Created</th>
+                <th>
+                  <span className="sr-only">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {artifacts.map((artifact) => (
+                <tr key={artifact.id}>
+                  <td className="artifact-path">
+                    <div className="artifact-catalog-primary">
+                      <Link to={`/artifacts/${artifact.id}`}>
+                        {artifactTitle(artifact)}
+                      </Link>
+                      {artifact.name && artifact.name !== artifact.path && (
+                        <span className="subtle-text artifact-mono">
+                          {artifact.path}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td>
+                    <div className="artifact-catalog-primary">
+                      <Link to={`/builds/${artifact.build_id}`}>
+                        {buildLabel(artifact)}
+                      </Link>
+                      <StatusBadge status={artifact.build_status} />
+                    </div>
+                  </td>
+                  <td>
+                    {artifact.job_id ? (
+                      <Link to={`/jobs/${artifact.job_id}`}>
+                        {jobLabel(artifact)}
+                      </Link>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td>{stepLabel(artifact)}</td>
+                  <td>{formatFileSize(artifact.size_bytes)}</td>
+                  <td className="artifact-mono">
+                    {artifact.checksum_sha256 ?? "—"}
+                  </td>
+                  <td>{formatTime(artifact.created_at)}</td>
+                  <td>
+                    <div className="artifact-actions">
+                      <Link to={`/artifacts/${artifact.id}`}>Details</Link>
+                      <a href={artifactDownloadURL(artifact.download_url_path)}>
+                        Download
+                      </a>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
     </>
   );
 }

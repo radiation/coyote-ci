@@ -597,6 +597,52 @@ func (r *fakeArtifactRepository) Browse(_ context.Context, params repository.Bro
 	return paged, nil
 }
 
+func (r *fakeArtifactRepository) ListCatalog(_ context.Context, params repository.ArtifactCatalogParams) ([]domain.ArtifactRecord, error) {
+	trimmedQuery := strings.TrimSpace(strings.ToLower(params.Query))
+	out := make([]domain.ArtifactRecord, 0)
+	for buildID, items := range r.artifacts {
+		if params.BuildID != "" && buildID != params.BuildID {
+			continue
+		}
+		for _, item := range items {
+			if trimmedQuery != "" && !strings.Contains(strings.ToLower(item.LogicalPath), trimmedQuery) {
+				continue
+			}
+			out = append(out, domain.ArtifactRecord{
+				Artifact: item,
+				Build: domain.Build{
+					ID: buildID,
+				},
+			})
+		}
+	}
+	start := params.Offset
+	if start > len(out) {
+		start = len(out)
+	}
+	end := len(out)
+	if params.Limit > 0 && start+params.Limit < end {
+		end = start + params.Limit
+	}
+	return out[start:end], nil
+}
+
+func (r *fakeArtifactRepository) GetCatalogByID(_ context.Context, artifactID string) (domain.ArtifactRecord, error) {
+	for buildID, items := range r.artifacts {
+		for _, item := range items {
+			if item.ID == artifactID {
+				return domain.ArtifactRecord{
+					Artifact: item,
+					Build: domain.Build{
+						ID: buildID,
+					},
+				}, nil
+			}
+		}
+	}
+	return domain.ArtifactRecord{}, repository.ErrArtifactNotFound
+}
+
 func (r *fakeArtifactRepository) GetByID(_ context.Context, buildID string, artifactID string) (domain.BuildArtifact, error) {
 	for _, item := range r.artifacts[buildID] {
 		if item.ID == artifactID {

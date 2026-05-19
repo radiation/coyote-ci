@@ -120,6 +120,113 @@ definitions:
           $ref: '#/definitions/api.VersionTagResponse'
         type: array
     type: object
+  api.ArtifactCatalogEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.ArtifactCatalogResponse'
+    type: object
+  api.ArtifactCatalogItemResponse:
+    properties:
+      artifact_type:
+        type: string
+      build_id:
+        type: string
+      build_number:
+        type: integer
+      build_status:
+        type: string
+      checksum_sha256:
+        type: string
+      content_type:
+        type: string
+      created_at:
+        type: string
+      download_url_path:
+        type: string
+      id:
+        type: string
+      job_id:
+        type: string
+      job_name:
+        type: string
+      name:
+        type: string
+      path:
+        type: string
+      project_id:
+        type: string
+      project_name:
+        type: string
+      project_slug:
+        type: string
+      size_bytes:
+        type: integer
+      step_id:
+        type: string
+      step_index:
+        type: integer
+      step_name:
+        type: string
+      storage_provider:
+        type: string
+    type: object
+  api.ArtifactCatalogResponse:
+    properties:
+      artifacts:
+        items:
+          $ref: '#/definitions/api.ArtifactCatalogItemResponse'
+        type: array
+    type: object
+  api.ArtifactDetailEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.ArtifactDetailResponse'
+    type: object
+  api.ArtifactDetailResponse:
+    properties:
+      artifact_type:
+        type: string
+      build_id:
+        type: string
+      build_number:
+        type: integer
+      build_status:
+        type: string
+      checksum_sha256:
+        type: string
+      content_type:
+        type: string
+      created_at:
+        type: string
+      download_url_path:
+        type: string
+      id:
+        type: string
+      job_id:
+        type: string
+      job_name:
+        type: string
+      name:
+        type: string
+      path:
+        type: string
+      project_id:
+        type: string
+      project_name:
+        type: string
+      project_slug:
+        type: string
+      size_bytes:
+        type: integer
+      step_id:
+        type: string
+      step_index:
+        type: integer
+      step_name:
+        type: string
+      storage_provider:
+        type: string
+    type: object
   api.BuildArtifactResponse:
     properties:
       build_id:
@@ -1171,6 +1278,34 @@ paths:
       summary: List logical artifacts
       tags:
       - artifacts
+  /artifacts/{artifactID}:
+    get:
+      description: Returns one persisted artifact instance with build, job, step,
+        and stable download metadata.
+      parameters:
+      - description: Artifact ID
+        in: path
+        name: artifactID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ArtifactDetailEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get artifact detail
+      tags:
+      - artifacts
   /artifacts/{artifactID}/version-tags:
     get:
       description: Returns immutable version tags attached to one artifact.
@@ -1198,6 +1333,62 @@ paths:
       summary: List artifact version tags
       tags:
       - version-tags
+  /artifacts/catalog:
+    get:
+      description: Returns persisted artifact metadata rows across builds for artifact
+        catalog browsing. Use /artifacts for the grouped logical artifact browser.
+      parameters:
+      - description: Search artifacts by path, name, artifact id, build id, build
+          number, or job id
+        in: query
+        name: q
+        type: string
+      - description: Filter artifacts by project id
+        in: query
+        name: project_id
+        type: string
+      - description: Filter artifacts by project slug
+        in: query
+        name: project_slug
+        type: string
+      - description: Filter artifacts by producing job id
+        in: query
+        name: job_id
+        type: string
+      - description: Filter artifacts by producing build id
+        in: query
+        name: build_id
+        type: string
+      - description: Max artifacts to return
+        in: query
+        name: limit
+        type: integer
+      - description: Number of artifacts to skip
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ArtifactCatalogEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List persisted artifact instances
+      tags:
+      - artifacts
   /builds:
     get:
       description: Lists builds sorted by newest first with optional pagination and

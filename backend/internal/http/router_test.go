@@ -17,11 +17,38 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
 	"github.com/radiation/coyote-ci/backend/internal/observability"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	artifactsvc "github.com/radiation/coyote-ci/backend/internal/service/artifact"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
 )
+
+type routeArtifactRepo struct {
+	records      []domain.ArtifactRecord
+	record       domain.ArtifactRecord
+	catalogCalls int
+	lookedUpIDs  []string
+}
+
+func (r *routeArtifactRepo) Browse(_ context.Context, _ repository.BrowseArtifactsParams) ([]domain.ArtifactRecord, error) {
+	return nil, nil
+}
+
+func (r *routeArtifactRepo) ListCatalog(_ context.Context, _ repository.ArtifactCatalogParams) ([]domain.ArtifactRecord, error) {
+	r.catalogCalls++
+	return r.records, nil
+}
+
+func (r *routeArtifactRepo) GetCatalogByID(_ context.Context, artifactID string) (domain.ArtifactRecord, error) {
+	r.lookedUpIDs = append(r.lookedUpIDs, artifactID)
+	if r.record.Artifact.ID == "" {
+		return domain.ArtifactRecord{}, repository.ErrArtifactNotFound
+	}
+	return r.record, nil
+}
 
 func TestNewRouter_HealthAndNotFound(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
@@ -59,6 +86,72 @@ func TestNewRouter_HealthAndNotFound(t *testing.T) {
 				t.Fatalf("expected body %q, got %q", tc.body, rr.Body.String())
 			}
 		})
+	}
+}
+
+func TestNewRouter_ArtifactRoutesPreferCatalogAndVersionTags(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	buildHandler := handler.NewBuildHandler(buildSvc)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jobHandler := handler.NewJobHandler(jobSvc)
+	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	jobID := "job-1"
+	artifactRepo := &routeArtifactRepo{
+		records: []domain.ArtifactRecord{{
+			Artifact: domain.BuildArtifact{ID: "artifact-1", BuildID: "build-1", LogicalPath: "packages/pkg-a.tgz", SizeBytes: 128, StorageProvider: domain.StorageProviderFilesystem, CreatedAt: now},
+			Build:    domain.Build{ID: "build-1", BuildNumber: 41, JobID: &jobID, ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
+		}},
+		record: domain.ArtifactRecord{
+			Artifact: domain.BuildArtifact{ID: "artifact-1", BuildID: "build-1", LogicalPath: "packages/pkg-a.tgz", SizeBytes: 128, StorageProvider: domain.StorageProviderFilesystem, CreatedAt: now},
+			Build:    domain.Build{ID: "build-1", BuildNumber: 41, JobID: &jobID, ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
+		},
+	}
+	artifactHandler := handler.NewArtifactHandler(artifactsvc.NewService(artifactRepo))
+	versionTagRepo := repositorymemory.NewVersionTagRepository()
+	versionTagRepo.SeedBuilds(domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, CreatedAt: now})
+	versionTagRepo.SeedArtifacts(domain.BuildArtifact{ID: "artifact-1", BuildID: "build-1", CreatedAt: now})
+	_, err := versionTagRepo.CreateForTargets(context.Background(), repository.CreateVersionTagsParams{JobID: jobID, Version: "v1", ArtifactIDs: []string{"artifact-1"}})
+	if err != nil {
+		t.Fatalf("seed version tags failed: %v", err)
+	}
+	versionTagHandler := handler.NewVersionTagHandler(versiontagsvc.NewService(versionTagRepo))
+
+	r := NewRouter(buildHandler, artifactHandler, jobHandler, nil, versionTagHandler, nil, eventHandler, "")
+
+	catalogReq := httptest.NewRequest(http.MethodGet, "/api/artifacts/catalog", nil)
+	catalogRes := httptest.NewRecorder()
+	r.ServeHTTP(catalogRes, catalogReq)
+	if catalogRes.Code != http.StatusOK {
+		t.Fatalf("expected catalog status %d, got %d body=%s", http.StatusOK, catalogRes.Code, catalogRes.Body.String())
+	}
+	if artifactRepo.catalogCalls != 1 {
+		t.Fatalf("expected catalog route to call ListCatalog once, got %d", artifactRepo.catalogCalls)
+	}
+	if len(artifactRepo.lookedUpIDs) != 0 {
+		t.Fatalf("expected catalog route not to hit detail lookup, got %v", artifactRepo.lookedUpIDs)
+	}
+
+	tagsReq := httptest.NewRequest(http.MethodGet, "/api/artifacts/artifact-1/version-tags", nil)
+	tagsRes := httptest.NewRecorder()
+	r.ServeHTTP(tagsRes, tagsReq)
+	if tagsRes.Code != http.StatusOK {
+		t.Fatalf("expected version tags status %d, got %d body=%s", http.StatusOK, tagsRes.Code, tagsRes.Body.String())
+	}
+	if len(artifactRepo.lookedUpIDs) != 0 {
+		t.Fatalf("expected version-tags route not to hit detail lookup, got %v", artifactRepo.lookedUpIDs)
+	}
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/api/artifacts/artifact-1", nil)
+	detailRes := httptest.NewRecorder()
+	r.ServeHTTP(detailRes, detailReq)
+	if detailRes.Code != http.StatusOK {
+		t.Fatalf("expected detail status %d, got %d body=%s", http.StatusOK, detailRes.Code, detailRes.Body.String())
+	}
+	if len(artifactRepo.lookedUpIDs) != 1 || artifactRepo.lookedUpIDs[0] != "artifact-1" {
+		t.Fatalf("expected detail route lookup for artifact-1, got %v", artifactRepo.lookedUpIDs)
 	}
 }
 

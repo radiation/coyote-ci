@@ -1046,7 +1046,7 @@ h3 {
 
 .artifact-filters-panel {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(180px, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
   margin: 18px 0;
   padding: 16px;
@@ -1258,6 +1258,29 @@ h3 {
   );
 }
 
+.artifact-catalog-primary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.artifact-catalog-table td {
+  vertical-align: top;
+}
+
+.artifact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.artifact-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .artifact-detail-grid,
 .artifact-version-meta-grid {
   display: grid;
@@ -1361,6 +1384,10 @@ h3 {
   .artifact-pagination-actions,
   .artifact-pagination-jump-form {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .artifact-detail-header {
     flex-direction: column;
   }
 

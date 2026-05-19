@@ -83,6 +83,24 @@ func (r *fakeArtifactRepo) Browse(_ context.Context, _ repository.BrowseArtifact
 	return nil, nil
 }
 
+func (r *fakeArtifactRepo) ListCatalog(_ context.Context, _ repository.ArtifactCatalogParams) ([]domain.ArtifactRecord, error) {
+	return nil, nil
+}
+
+func (r *fakeArtifactRepo) GetCatalogByID(_ context.Context, artifactID string) (domain.ArtifactRecord, error) {
+	for buildID, items := range r.artifactsByBuild {
+		for _, item := range items {
+			if item.ID == artifactID {
+				return domain.ArtifactRecord{
+					Artifact: item,
+					Build:    domain.Build{ID: buildID},
+				}, nil
+			}
+		}
+	}
+	return domain.ArtifactRecord{}, repository.ErrArtifactNotFound
+}
+
 func (r *fakeArtifactRepo) GetByID(_ context.Context, buildID string, artifactID string) (domain.BuildArtifact, error) {
 	for _, item := range r.artifactsByBuild[buildID] {
 		if item.ID == artifactID {
