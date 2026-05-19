@@ -55,7 +55,7 @@ function buildCanonicalSearchParams(params: URLSearchParams) {
     nextParams.set("q", query);
   }
 
-  const type = params.get("type")?.trim() ?? "";
+  const type = parseArtifactTypeParam(params.get("type"));
   if (type) {
     nextParams.set("type", type);
   }

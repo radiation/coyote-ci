@@ -313,6 +313,53 @@ func TestArtifactHandlerListArtifactsForwardsPaginationParams(t *testing.T) {
 	}
 }
 
+func TestArtifactHandlerListArtifactsRejectsNegativePaginationParams(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		message string
+	}{
+		{name: "negative limit", query: "/artifacts?limit=-1", message: "limit must be a non-negative integer"},
+		{name: "negative offset", query: "/artifacts?offset=-1", message: "offset must be a non-negative integer"},
+		{name: "invalid limit", query: "/artifacts?limit=abc", message: "limit must be a non-negative integer"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := NewArtifactHandler(artifactsvc.NewService(&fakeArtifactBrowseRepo{}))
+			w := httptest.NewRecorder()
+
+			handler.ListArtifacts(w, httptest.NewRequest(http.MethodGet, tc.query, nil))
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+			}
+			if got := decodeErrorMessage(t, w); got != tc.message {
+				t.Fatalf("expected %q, got %q", tc.message, got)
+			}
+		})
+	}
+}
+
+func TestArtifactHandlerListArtifactsCapsLimit(t *testing.T) {
+	repo := &fakeArtifactBrowseRepo{}
+	handler := NewArtifactHandler(artifactsvc.NewService(repo))
+	req := httptest.NewRequest(http.MethodGet, "/artifacts?limit=999&offset=10", nil)
+	w := httptest.NewRecorder()
+
+	handler.ListArtifacts(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(repo.params) != 1 {
+		t.Fatalf("expected one browse call, got %d", len(repo.params))
+	}
+	if repo.params[0].Limit != repository.MaxPageLimit {
+		t.Fatalf("expected limit capped to %d, got %d", repository.MaxPageLimit, repo.params[0].Limit)
+	}
+}
+
 func TestArtifactHandlerListArtifactsUsesBatchJobLookup(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	jobID := "job-1"
@@ -476,6 +523,53 @@ func TestArtifactHandlerListArtifactCatalog(t *testing.T) {
 	}
 	if _, ok := first["storage_key"]; ok {
 		t.Fatalf("expected storage_key to be omitted, got %v", first["storage_key"])
+	}
+}
+
+func TestArtifactHandlerListArtifactCatalogRejectsNegativePaginationParams(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		message string
+	}{
+		{name: "negative limit", query: "/artifacts/catalog?limit=-1", message: "limit must be a non-negative integer"},
+		{name: "negative offset", query: "/artifacts/catalog?offset=-1", message: "offset must be a non-negative integer"},
+		{name: "invalid offset", query: "/artifacts/catalog?offset=abc", message: "offset must be a non-negative integer"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := NewArtifactHandler(artifactsvc.NewService(&fakeArtifactCatalogRepo{}))
+			w := httptest.NewRecorder()
+
+			handler.ListArtifactCatalog(w, httptest.NewRequest(http.MethodGet, tc.query, nil))
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+			}
+			if got := decodeErrorMessage(t, w); got != tc.message {
+				t.Fatalf("expected %q, got %q", tc.message, got)
+			}
+		})
+	}
+}
+
+func TestArtifactHandlerListArtifactCatalogCapsLimit(t *testing.T) {
+	repo := &fakeArtifactCatalogRepo{}
+	handler := NewArtifactHandler(artifactsvc.NewService(repo))
+	req := httptest.NewRequest(http.MethodGet, "/artifacts/catalog?limit=999&offset=10", nil)
+	w := httptest.NewRecorder()
+
+	handler.ListArtifactCatalog(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(repo.params) != 1 {
+		t.Fatalf("expected one catalog call, got %d", len(repo.params))
+	}
+	if repo.params[0].Limit != repository.MaxPageLimit {
+		t.Fatalf("expected limit capped to %d, got %d", repository.MaxPageLimit, repo.params[0].Limit)
 	}
 }
 

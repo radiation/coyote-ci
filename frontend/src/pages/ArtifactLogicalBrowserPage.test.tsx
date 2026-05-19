@@ -172,6 +172,29 @@ describe("ArtifactLogicalBrowserPage", () => {
     });
   });
 
+  it("drops an invalid type param when canonical search params are rewritten", async () => {
+    mockedListArtifacts.mockResolvedValue([]);
+
+    renderPage(["/artifacts/logical?q=pkg&type=bad-type&page=2"]);
+
+    expect(await screen.findByText("No artifacts on page 2")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Search artifacts"), {
+      target: { value: "pkg two" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search").textContent).toBe(
+        "?q=pkg+two",
+      );
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "pkg two",
+        limit: 21,
+        offset: 0,
+      });
+    });
+  });
+
   it("forwards filters and pagination to the logical browser query", async () => {
     mockedListArtifacts.mockResolvedValue(
       Array.from({ length: 21 }, (_value, index) => buildBrowseItem(index + 1)),

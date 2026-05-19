@@ -10,6 +10,14 @@ function artifactTitle(artifact: ArtifactDetail): string {
   return artifact.name?.trim() || artifact.path;
 }
 
+function artifactHeaderPath(artifact: ArtifactDetail): string | null {
+  const trimmedName = artifact.name?.trim() ?? "";
+  if (!trimmedName || trimmedName === artifact.path) {
+    return null;
+  }
+  return artifact.path;
+}
+
 function buildLabel(artifact: ArtifactDetail): string {
   if (artifact.build_number > 0) {
     return `Build #${artifact.build_number}`;
@@ -79,8 +87,10 @@ export function ArtifactDetailPage() {
       <section className="detail-panel artifact-detail-header">
         <div>
           <h2>{artifactTitle(data)}</h2>
-          {data.name && data.name !== data.path && (
-            <p className="subtle-text artifact-mono">{data.path}</p>
+          {artifactHeaderPath(data) && (
+            <p className="subtle-text artifact-mono">
+              {artifactHeaderPath(data)}
+            </p>
           )}
         </div>
         <div className="artifact-actions">

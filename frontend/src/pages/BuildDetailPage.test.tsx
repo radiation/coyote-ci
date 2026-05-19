@@ -126,6 +126,36 @@ describe("BuildDetailPage artifacts", () => {
     );
   });
 
+  it("does not render a duplicate path line for whitespace-equivalent artifact names", async () => {
+    mockedGetBuildArtifacts.mockResolvedValueOnce([
+      {
+        id: "artifact-1",
+        build_id: "build-1",
+        step_id: null,
+        name: "   dist/app   ",
+        path: "dist/app",
+        size_bytes: 128,
+        content_type: null,
+        checksum_sha256: null,
+        storage_provider: "filesystem",
+        download_url_path: "/builds/build-1/artifacts/artifact-1/download",
+        version_tags: [],
+        created_at: "2026-03-30T00:00:04Z",
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "dist/app" })).toBeTruthy();
+    });
+
+    const subtlePathLines = screen.queryAllByText("dist/app", {
+      selector: "div.subtle-text.artifact-mono",
+    });
+    expect(subtlePathLines).toHaveLength(0);
+  });
+
   it("shows pipeline metadata when present", async () => {
     renderPage();
 

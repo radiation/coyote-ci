@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,6 +71,10 @@ func (h *ArtifactHandler) ListArtifactCatalog(w http.ResponseWriter, r *http.Req
 		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "artifact service not configured")
 		return
 	}
+	limit, offset, ok := parseArtifactPaginationParams(w, r)
+	if !ok {
+		return
+	}
 	projectID, ok := h.resolveProjectFilter(w, r)
 	if !ok {
 		return
@@ -83,8 +88,8 @@ func (h *ArtifactHandler) ListArtifactCatalog(w http.ResponseWriter, r *http.Req
 		ProjectID: projectID,
 		JobID:     strings.TrimSpace(r.URL.Query().Get("job_id")),
 		BuildID:   strings.TrimSpace(r.URL.Query().Get("build_id")),
-		Limit:     parseQueryInt(r, "limit", 0),
-		Offset:    parseQueryInt(r, "offset", 0),
+		Limit:     limit,
+		Offset:    offset,
 	})
 	if err != nil {
 		switch {
@@ -180,6 +185,10 @@ func (h *ArtifactHandler) ListArtifacts(w http.ResponseWriter, r *http.Request) 
 		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "artifact service not configured")
 		return
 	}
+	limit, offset, ok := parseArtifactPaginationParams(w, r)
+	if !ok {
+		return
+	}
 	projectID, ok := h.resolveProjectFilter(w, r)
 	if !ok {
 		return
@@ -192,8 +201,8 @@ func (h *ArtifactHandler) ListArtifacts(w http.ResponseWriter, r *http.Request) 
 		Query:     strings.TrimSpace(r.URL.Query().Get("q")),
 		Type:      strings.TrimSpace(r.URL.Query().Get("type")),
 		ProjectID: projectID,
-		Limit:     parseQueryInt(r, "limit", 0),
-		Offset:    parseQueryInt(r, "offset", 0),
+		Limit:     limit,
+		Offset:    offset,
 	})
 	if err != nil {
 		switch {
@@ -579,4 +588,38 @@ func (h *ArtifactHandler) writeProjectLookupError(w http.ResponseWriter, err err
 		return
 	}
 	writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+}
+
+func parseArtifactPaginationParams(w http.ResponseWriter, r *http.Request) (int, int, bool) {
+	limit, err := parseNonNegativeQueryInt(r, "limit", 0)
+	if err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return 0, 0, false
+	}
+	if limit > repository.MaxPageLimit {
+		limit = repository.MaxPageLimit
+	}
+
+	offset, err := parseNonNegativeQueryInt(r, "offset", 0)
+	if err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return 0, 0, false
+	}
+
+	return limit, offset, true
+}
+
+func parseNonNegativeQueryInt(r *http.Request, key string, fallback int) (int, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, errors.New(key + " must be a non-negative integer")
+	}
+	if parsed < 0 {
+		return 0, errors.New(key + " must be a non-negative integer")
+	}
+	return parsed, nil
 }

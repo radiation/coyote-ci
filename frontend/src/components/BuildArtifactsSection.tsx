@@ -21,6 +21,18 @@ function stepLabel(stepId: string, steps: BuildStep[] | undefined): string {
   return `Step ${stepId.slice(0, 8)}…`;
 }
 
+function artifactTitle(item: BuildArtifact): string {
+  return item.name?.trim() || item.path;
+}
+
+function artifactSecondaryPath(item: BuildArtifact): string | null {
+  const trimmedName = item.name?.trim() ?? "";
+  if (!trimmedName || trimmedName === item.path) {
+    return null;
+  }
+  return item.path;
+}
+
 function ArtifactTable({
   items,
   onAssignVersion,
@@ -44,12 +56,12 @@ function ArtifactTable({
           <tr key={item.id}>
             <td className="artifact-path">
               <div>
-                <Link to={`/artifacts/${item.id}`}>
-                  {item.name?.trim() || item.path}
-                </Link>
+                <Link to={`/artifacts/${item.id}`}>{artifactTitle(item)}</Link>
               </div>
-              {item.name && item.name !== item.path && (
-                <div className="subtle-text artifact-mono">{item.path}</div>
+              {artifactSecondaryPath(item) && (
+                <div className="subtle-text artifact-mono">
+                  {artifactSecondaryPath(item)}
+                </div>
               )}
             </td>
             <td>{formatFileSize(item.size_bytes)}</td>

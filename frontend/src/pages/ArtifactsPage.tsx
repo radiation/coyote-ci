@@ -404,7 +404,9 @@ export function ArtifactsPage() {
                 <th>Size</th>
                 <th>Checksum</th>
                 <th>Created</th>
-                <th></th>
+                <th>
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>

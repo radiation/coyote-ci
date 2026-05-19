@@ -156,6 +156,7 @@ describe("ArtifactsPage", () => {
     const artifactLink = await screen.findByRole("link", {
       name: "coyote-ci/package-a",
     });
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeTruthy();
     expect(artifactLink.getAttribute("href")).toBe("/artifacts/artifact-1");
 
     const row = artifactLink.closest("tr");

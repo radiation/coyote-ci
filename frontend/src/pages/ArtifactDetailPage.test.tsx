@@ -194,4 +194,26 @@ describe("ArtifactDetailPage", () => {
       screen.getAllByRole("link", { name: "Build build-1…" })[0],
     ).toHaveAttribute("href", "/builds/build-1");
   });
+
+  it("does not duplicate the header path line for whitespace-only or whitespace-equivalent names", async () => {
+    mockedGetArtifact.mockResolvedValueOnce(
+      buildArtifactDetail({
+        name: "   packages/pkg-a.tgz   ",
+      }),
+    );
+
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 2,
+        name: "packages/pkg-a.tgz",
+      }),
+    ).toBeTruthy();
+
+    const subtlePathLines = screen.getAllByText("packages/pkg-a.tgz", {
+      selector: "p.subtle-text.artifact-mono, span",
+    });
+    expect(subtlePathLines).toHaveLength(1);
+  });
 });
