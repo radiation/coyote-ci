@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -390,6 +391,48 @@ func TestArtifactHandlerListArtifactCatalog(t *testing.T) {
 	if first["download_url_path"] != "/builds/build-1/artifacts/artifact-1/download" {
 		t.Fatalf("unexpected download path: %v", first["download_url_path"])
 	}
+	if _, ok := first["storage_key"]; ok {
+		t.Fatalf("expected storage_key to be omitted, got %v", first["storage_key"])
+	}
+}
+
+func TestArtifactHandlerListArtifactCatalog_ForwardsProjectFilterFromSlug(t *testing.T) {
+	repo := &fakeArtifactCatalogRepo{}
+	handler := NewArtifactHandler(artifactsvc.NewService(repo))
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	project, err := projectService.CreateProject(context.Background(), service.CreateProjectInput{Name: "Platform", Slug: "platform"})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	handler.SetProjectService(projectService)
+	req := httptest.NewRequest(http.MethodGet, "/artifacts/catalog?project_slug=platform", nil)
+	w := httptest.NewRecorder()
+
+	handler.ListArtifactCatalog(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(repo.params) != 1 || repo.params[0].ProjectID != project.ID {
+		t.Fatalf("expected project id %q, got %#v", project.ID, repo.params)
+	}
+}
+
+func TestArtifactHandlerListArtifactCatalog_InternalError(t *testing.T) {
+	handler := NewArtifactHandler(artifactsvc.NewService(&fakeArtifactCatalogRepo{err: errors.New("boom")}))
+	req := httptest.NewRequest(http.MethodGet, "/artifacts/catalog", nil)
+	w := httptest.NewRecorder()
+
+	handler.ListArtifactCatalog(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := decodeErrorMessage(t, w); got != "internal server error" {
+		t.Fatalf("expected internal server error, got %q", got)
+	}
 }
 
 func TestArtifactHandlerGetArtifact(t *testing.T) {
@@ -455,8 +498,26 @@ func TestArtifactHandlerGetArtifact(t *testing.T) {
 	if response.Data["download_url_path"] != "/builds/build-1/artifacts/artifact-1/download" {
 		t.Fatalf("expected route-relative download path, got %v", response.Data["download_url_path"])
 	}
+	if _, ok := response.Data["storage_key"]; ok {
+		t.Fatalf("expected storage_key to be omitted, got %v", response.Data["storage_key"])
+	}
 	if len(repo.ids) != 1 || repo.ids[0] != "artifact-1" {
 		t.Fatalf("expected artifact lookup for artifact-1, got %v", repo.ids)
+	}
+}
+
+func TestArtifactHandlerGetArtifact_InternalError(t *testing.T) {
+	handler := NewArtifactHandler(artifactsvc.NewService(&fakeArtifactCatalogRepo{err: errors.New("boom")}))
+	req := addURLParams(httptest.NewRequest(http.MethodGet, "/artifacts/artifact-1", nil), map[string]string{"artifactID": "artifact-1"})
+	w := httptest.NewRecorder()
+
+	handler.GetArtifact(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := decodeErrorMessage(t, w); got != "internal server error" {
+		t.Fatalf("expected internal server error, got %q", got)
 	}
 }
 

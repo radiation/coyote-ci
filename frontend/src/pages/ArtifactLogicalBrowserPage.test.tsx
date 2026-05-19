@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { ThemeProvider } from "../theme";
 import { ArtifactLogicalBrowserPage } from "./ArtifactLogicalBrowserPage";
 import { createJobVersionTags, listArtifacts, listProjects } from "../api";
@@ -13,7 +13,52 @@ vi.mock("../api", () => ({
   artifactDownloadURL: (path: string) => `/api${path}`,
 }));
 
-function renderPage() {
+function LocationSearchProbe() {
+  const location = useLocation();
+  return <output data-testid="location-search">{location.search}</output>;
+}
+
+function buildBrowseItem(index: number) {
+  return {
+    key: `project-1:packages/pkg-${index}.tgz`,
+    name: `coyote-ci/package-${index}`,
+    path: `packages/pkg-${index}.tgz`,
+    project_id: "project-1",
+    project_name: "Platform",
+    project_slug: "platform",
+    job_id: "job-1",
+    job_name: "backend-ci",
+    artifact_type: "npm_package" as const,
+    latest_created_at: "2026-04-25T09:00:00Z",
+    versions: [
+      {
+        artifact_id: `artifact-${index}`,
+        name: `coyote-ci/package-${index}`,
+        build_id: `build-${index}`,
+        build_number: 40 + index,
+        build_status: "success" as const,
+        project_id: "project-1",
+        project_name: "Platform",
+        project_slug: "platform",
+        job_id: "job-1",
+        job_name: "backend-ci",
+        step_id: `step-${index}`,
+        step_index: 1,
+        step_name: "Publish package",
+        path: `packages/pkg-${index}.tgz`,
+        size_bytes: 1024,
+        content_type: "application/gzip",
+        checksum_sha256: `sha-${index}`,
+        storage_provider: "filesystem",
+        download_url_path: `/builds/build-${index}/artifacts/artifact-${index}/download`,
+        version_tags: [],
+        created_at: "2026-04-25T09:00:00Z",
+      },
+    ],
+  };
+}
+
+function renderPage(initialEntries = ["/artifacts/logical"]) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: Infinity },
@@ -24,11 +69,16 @@ function renderPage() {
   return render(
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={["/artifacts/logical"]}>
+        <MemoryRouter initialEntries={initialEntries}>
           <Routes>
             <Route
               path="/artifacts/logical"
-              element={<ArtifactLogicalBrowserPage />}
+              element={
+                <>
+                  <LocationSearchProbe />
+                  <ArtifactLogicalBrowserPage />
+                </>
+              }
             />
             <Route path="/artifacts" element={<div>artifact catalog</div>} />
             <Route path="/builds/:id" element={<div>build detail</div>} />
@@ -56,45 +106,7 @@ describe("ArtifactLogicalBrowserPage", () => {
         updated_at: "2026-04-25T08:00:00Z",
       },
     ]);
-    mockedListArtifacts.mockResolvedValue([
-      {
-        key: "project-1:packages/pkg-a.tgz",
-        name: "coyote-ci/package-a",
-        path: "packages/pkg-a.tgz",
-        project_id: "project-1",
-        project_name: "Platform",
-        project_slug: "platform",
-        job_id: "job-1",
-        job_name: "backend-ci",
-        artifact_type: "npm_package",
-        latest_created_at: "2026-04-25T09:00:00Z",
-        versions: [
-          {
-            artifact_id: "artifact-1",
-            name: "coyote-ci/package-a",
-            build_id: "build-1",
-            build_number: 41,
-            build_status: "success",
-            project_id: "project-1",
-            project_name: "Platform",
-            project_slug: "platform",
-            job_id: "job-1",
-            job_name: "backend-ci",
-            step_id: "step-1",
-            step_index: 1,
-            step_name: "Publish package",
-            path: "packages/pkg-a.tgz",
-            size_bytes: 1024,
-            content_type: "application/gzip",
-            checksum_sha256: "pkg-sha",
-            storage_provider: "filesystem",
-            download_url_path: "/builds/build-1/artifacts/artifact-1/download",
-            version_tags: [],
-            created_at: "2026-04-25T09:00:00Z",
-          },
-        ],
-      },
-    ]);
+    mockedListArtifacts.mockResolvedValue([buildBrowseItem(1)]);
     mockedCreateJobVersionTags.mockResolvedValue([
       {
         id: "tag-1",
@@ -115,7 +127,7 @@ describe("ArtifactLogicalBrowserPage", () => {
     ).toHaveAttribute("href", "/artifacts");
 
     const toggle = await screen.findByRole("button", {
-      name: /coyote-ci\/package-a/i,
+      name: /coyote-ci\/package-1/i,
     });
     fireEvent.click(toggle);
 
@@ -133,5 +145,66 @@ describe("ArtifactLogicalBrowserPage", () => {
         artifact_ids: ["artifact-1"],
       });
     });
+  });
+
+  it("renders logical browser metadata and sanitizes invalid type params", async () => {
+    renderPage(["/artifacts/logical?type=bad-type"]);
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 2,
+        name: "Logical Artifact Browser",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Grouped logical artifacts and their published versions/,
+      ),
+    ).toBeTruthy();
+    expect(screen.getByDisplayValue("All types")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenCalledWith({
+        q: "",
+        limit: 21,
+        offset: 0,
+      });
+    });
+  });
+
+  it("forwards filters and pagination to the logical browser query", async () => {
+    mockedListArtifacts.mockResolvedValue(
+      Array.from({ length: 21 }, (_value, index) => buildBrowseItem(index + 1)),
+    );
+
+    renderPage([
+      "/artifacts/logical?q=pkg&type=npm_package&project_id=project-1&page=2",
+    ]);
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          q: "pkg",
+          type: "npm_package",
+          project_id: "project-1",
+          limit: 21,
+          offset: 20,
+        }),
+      );
+    });
+    expect(screen.getByTestId("location-search").textContent).toContain(
+      "page=2",
+    );
+    expect(screen.getByText("Page 2")).toBeTruthy();
+  });
+
+  it("shows an error state when the logical browser request fails", async () => {
+    mockedListArtifacts.mockRejectedValueOnce(new Error("boom"));
+
+    renderPage();
+
+    expect(
+      await screen.findByText("Failed to load artifacts: Error: boom"),
+    ).toBeTruthy();
   });
 });

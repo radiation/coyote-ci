@@ -14,6 +14,14 @@ type fakeBrowseRepo struct {
 	err     error
 }
 
+type fakeCatalogRepo struct {
+	records []domain.ArtifactRecord
+	record  domain.ArtifactRecord
+	err     error
+	params  []repository.ArtifactCatalogParams
+	ids     []string
+}
+
 func (r *fakeBrowseRepo) Browse(_ context.Context, params repository.BrowseArtifactsParams) ([]domain.ArtifactBrowseRecord, error) {
 	if r.err != nil {
 		return nil, r.err
@@ -28,6 +36,22 @@ func (r *fakeBrowseRepo) Browse(_ context.Context, params repository.BrowseArtif
 		}
 	}
 	return filtered, nil
+}
+
+func (r *fakeCatalogRepo) ListCatalog(_ context.Context, params repository.ArtifactCatalogParams) ([]domain.ArtifactRecord, error) {
+	r.params = append(r.params, params)
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.records, nil
+}
+
+func (r *fakeCatalogRepo) GetCatalogByID(_ context.Context, artifactID string) (domain.ArtifactRecord, error) {
+	r.ids = append(r.ids, artifactID)
+	if r.err != nil {
+		return domain.ArtifactRecord{}, r.err
+	}
+	return r.record, nil
 }
 
 func TestServiceListArtifactsFiltersByType(t *testing.T) {
@@ -75,5 +99,78 @@ func TestServiceListArtifactsFiltersByType(t *testing.T) {
 
 	if _, err := svc.ListArtifacts(context.Background(), ListArtifactsInput{Type: "bad-type"}); err != ErrInvalidArtifactTypeFilter {
 		t.Fatalf("expected ErrInvalidArtifactTypeFilter, got %v", err)
+	}
+}
+
+func TestServiceListCatalogDelegatesAndTrimsParams(t *testing.T) {
+	repo := &fakeCatalogRepo{records: []domain.ArtifactRecord{{Artifact: domain.BuildArtifact{ID: "artifact-1"}}}}
+	svc := &Service{catalogRepo: repo}
+
+	records, err := svc.ListCatalog(context.Background(), ListCatalogInput{
+		Query:     "  pkg  ",
+		ProjectID: "  project-1  ",
+		JobID:     "  job-1  ",
+		BuildID:   "  build-1  ",
+		Limit:     5,
+		Offset:    10,
+	})
+	if err != nil {
+		t.Fatalf("ListCatalog returned error: %v", err)
+	}
+	if len(records) != 1 || records[0].Artifact.ID != "artifact-1" {
+		t.Fatalf("unexpected records: %#v", records)
+	}
+	if len(repo.params) != 1 {
+		t.Fatalf("expected one catalog call, got %d", len(repo.params))
+	}
+	if repo.params[0].Query != "pkg" || repo.params[0].ProjectID != "project-1" || repo.params[0].JobID != "job-1" || repo.params[0].BuildID != "build-1" || repo.params[0].Limit != 5 || repo.params[0].Offset != 10 {
+		t.Fatalf("unexpected params: %#v", repo.params[0])
+	}
+}
+
+func TestServiceListCatalogReturnsRepositoryError(t *testing.T) {
+	wantErr := repository.ErrArtifactNotFound
+	svc := &Service{catalogRepo: &fakeCatalogRepo{err: wantErr}}
+
+	_, err := svc.ListCatalog(context.Background(), ListCatalogInput{})
+	if err != wantErr {
+		t.Fatalf("expected %v, got %v", wantErr, err)
+	}
+}
+
+func TestServiceGetArtifactDelegatesAndTrimsID(t *testing.T) {
+	repo := &fakeCatalogRepo{record: domain.ArtifactRecord{Artifact: domain.BuildArtifact{ID: "artifact-1"}}}
+	svc := &Service{catalogRepo: repo}
+
+	record, err := svc.GetArtifact(context.Background(), "  artifact-1  ")
+	if err != nil {
+		t.Fatalf("GetArtifact returned error: %v", err)
+	}
+	if record.Artifact.ID != "artifact-1" {
+		t.Fatalf("expected artifact-1, got %#v", record)
+	}
+	if len(repo.ids) != 1 || repo.ids[0] != "artifact-1" {
+		t.Fatalf("expected trimmed artifact id lookup, got %v", repo.ids)
+	}
+}
+
+func TestServiceGetArtifactReturnsRepositoryError(t *testing.T) {
+	wantErr := repository.ErrArtifactNotFound
+	svc := &Service{catalogRepo: &fakeCatalogRepo{err: wantErr}}
+
+	_, err := svc.GetArtifact(context.Background(), "artifact-1")
+	if err != wantErr {
+		t.Fatalf("expected %v, got %v", wantErr, err)
+	}
+}
+
+func TestServiceCatalogMethodsRequireCatalogRepository(t *testing.T) {
+	svc := NewService(&fakeBrowseRepo{})
+
+	if _, err := svc.ListCatalog(context.Background(), ListCatalogInput{}); err != ErrArtifactRepositoryNotConfigured {
+		t.Fatalf("expected ErrArtifactRepositoryNotConfigured from ListCatalog, got %v", err)
+	}
+	if _, err := svc.GetArtifact(context.Background(), "artifact-1"); err != ErrArtifactRepositoryNotConfigured {
+		t.Fatalf("expected ErrArtifactRepositoryNotConfigured from GetArtifact, got %v", err)
 	}
 }

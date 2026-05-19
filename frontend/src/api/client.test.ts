@@ -116,6 +116,12 @@ describe("API client - types", () => {
     );
   });
 
+  it("builds artifact download URL from a relative path without duplicating /api", () => {
+    expect(artifactDownloadURL("builds/build-1/artifacts/a1/download")).toBe(
+      "/api/builds/build-1/artifacts/a1/download",
+    );
+  });
+
   it("lists artifacts with search, type, and pagination params", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
@@ -162,6 +168,23 @@ describe("API client - types", () => {
       "/api/artifacts/catalog?q=pkg&project_id=project-1&job_id=job-1&build_id=build-1&limit=5&offset=10",
       { credentials: "include" },
     );
+  });
+
+  it("lists artifact catalog entries without optional params", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          artifacts: [],
+        },
+      }),
+    } as Response);
+
+    await listArtifactCatalog();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/artifacts/catalog", {
+      credentials: "include",
+    });
   });
 
   it("fetches artifact detail from /artifacts/{id}", async () => {

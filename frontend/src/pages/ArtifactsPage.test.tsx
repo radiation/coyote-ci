@@ -58,6 +58,32 @@ describe("ArtifactsPage", () => {
   const mockedListArtifactCatalog = vi.mocked(listArtifactCatalog);
   const mockedListProjects = vi.mocked(listProjects);
 
+  function buildArtifact(index: number) {
+    return {
+      id: `artifact-${index}`,
+      name: `coyote-ci/package-${index}`,
+      path: `packages/pkg-${index}.tgz`,
+      artifact_type: "npm_package" as const,
+      build_id: `build-${index}`,
+      build_number: index,
+      build_status: "success" as const,
+      project_id: "project-1",
+      project_name: "Platform",
+      project_slug: "platform",
+      job_id: "job-1",
+      job_name: "backend-ci",
+      step_id: `step-${index}`,
+      step_index: 1,
+      step_name: "Publish package",
+      size_bytes: 1024 + index,
+      content_type: "application/gzip",
+      checksum_sha256: `sha-${index}`,
+      storage_provider: "filesystem",
+      download_url_path: `/builds/build-${index}/artifacts/artifact-${index}/download`,
+      created_at: "2026-04-25T09:00:00Z",
+    };
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockedListProjects.mockResolvedValue([
@@ -198,5 +224,57 @@ describe("ArtifactsPage", () => {
         offset: 0,
       });
     });
+  });
+
+  it("shows an error state when the catalog request fails", async () => {
+    mockedListArtifactCatalog.mockRejectedValueOnce(new Error("boom"));
+
+    renderPage();
+
+    expect(
+      await screen.findByText("Failed to load artifacts: Error: boom"),
+    ).toBeTruthy();
+  });
+
+  it("paginates forward and backward and updates page size", async () => {
+    mockedListArtifactCatalog.mockResolvedValue(
+      Array.from({ length: 21 }, (_value, index) => buildArtifact(index + 1)),
+    );
+
+    renderPage(["/artifacts?page=2"]);
+
+    expect(
+      await screen.findByText("Showing 21-40; more available"),
+    ).toBeTruthy();
+
+    await waitFor(() => {
+      expect(mockedListArtifactCatalog).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          q: "",
+          limit: 21,
+          offset: 20,
+        }),
+      );
+    });
+    expect(screen.getByTestId("location-search").textContent).toBe("?page=2");
+    expect(screen.getByText("Page 2")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Previous" })).not.toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "50" },
+    });
+
+    await waitFor(() => {
+      expect(mockedListArtifactCatalog).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          q: "",
+          limit: 51,
+          offset: 0,
+        }),
+      );
+    });
+    expect(screen.getByTestId("location-search").textContent).toBe(
+      "?pageSize=50",
+    );
   });
 });
