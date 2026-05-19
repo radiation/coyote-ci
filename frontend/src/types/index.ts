@@ -11,6 +11,9 @@ export {
 } from "./build";
 
 export {
+  type ArtifactCatalogItem,
+  type ArtifactCatalogResponse,
+  type ArtifactDetail,
   type ArtifactBrowseItem,
   type ArtifactBrowseResponse,
   type ArtifactBrowseVersion,

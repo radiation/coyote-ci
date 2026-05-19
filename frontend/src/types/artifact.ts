@@ -48,6 +48,38 @@ export interface ArtifactBrowseResponse {
   artifacts: ArtifactBrowseItem[];
 }
 
+export interface ArtifactCatalogItem {
+  id: string;
+  name?: string;
+  path: string;
+  artifact_type: ArtifactType;
+  build_id: string;
+  build_number: number;
+  build_status: BuildStatus;
+  project_id: string;
+  project_name?: string | null;
+  project_slug?: string | null;
+  job_id?: string | null;
+  job_name?: string | null;
+  step_id?: string | null;
+  step_index?: number | null;
+  step_name?: string | null;
+  size_bytes: number;
+  content_type: string | null;
+  checksum_sha256: string | null;
+  storage_provider: string;
+  download_url_path: string;
+  created_at: string;
+}
+
+export interface ArtifactCatalogResponse {
+  artifacts: ArtifactCatalogItem[];
+}
+
+export interface ArtifactDetail extends ArtifactCatalogItem {
+  storage_key: string;
+}
+
 export interface DataEnvelope<T> {
   data: T;
 }

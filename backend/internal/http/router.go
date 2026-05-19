@@ -172,7 +172,9 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 			}
 
 			if artifactHandler != nil {
+				r.Get("/artifacts/catalog", artifactHandler.ListArtifactCatalog)
 				r.Get("/artifacts", artifactHandler.ListArtifacts)
+				r.Get("/artifacts/{artifactID}", artifactHandler.GetArtifact)
 			}
 
 			if versionTagHandler != nil {

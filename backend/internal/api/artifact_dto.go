@@ -4,8 +4,20 @@ type ArtifactBrowseEnvelope struct {
 	Data ArtifactBrowseResponse `json:"data"`
 }
 
+type ArtifactCatalogEnvelope struct {
+	Data ArtifactCatalogResponse `json:"data"`
+}
+
+type ArtifactDetailEnvelope struct {
+	Data ArtifactDetailResponse `json:"data"`
+}
+
 type ArtifactBrowseResponse struct {
 	Artifacts []ArtifactBrowseItemResponse `json:"artifacts"`
+}
+
+type ArtifactCatalogResponse struct {
+	Artifacts []ArtifactCatalogItemResponse `json:"artifacts"`
 }
 
 type ArtifactBrowseItemResponse struct {
@@ -44,4 +56,53 @@ type ArtifactBrowseVersionResponse struct {
 	DownloadURLPath string               `json:"download_url_path"`
 	VersionTags     []VersionTagResponse `json:"version_tags,omitempty"`
 	CreatedAt       string               `json:"created_at"`
+}
+
+type ArtifactCatalogItemResponse struct {
+	ID              string  `json:"id"`
+	Name            string  `json:"name,omitempty"`
+	Path            string  `json:"path"`
+	ArtifactType    string  `json:"artifact_type"`
+	BuildID         string  `json:"build_id"`
+	BuildNumber     int64   `json:"build_number"`
+	BuildStatus     string  `json:"build_status"`
+	ProjectID       string  `json:"project_id"`
+	ProjectName     *string `json:"project_name,omitempty"`
+	ProjectSlug     *string `json:"project_slug,omitempty"`
+	JobID           *string `json:"job_id,omitempty"`
+	JobName         *string `json:"job_name,omitempty"`
+	StepID          *string `json:"step_id,omitempty"`
+	StepIndex       *int    `json:"step_index,omitempty"`
+	StepName        *string `json:"step_name,omitempty"`
+	SizeBytes       int64   `json:"size_bytes"`
+	ContentType     *string `json:"content_type"`
+	ChecksumSHA256  *string `json:"checksum_sha256"`
+	StorageProvider string  `json:"storage_provider"`
+	DownloadURLPath string  `json:"download_url_path"`
+	CreatedAt       string  `json:"created_at"`
+}
+
+type ArtifactDetailResponse struct {
+	ID              string  `json:"id"`
+	Name            string  `json:"name,omitempty"`
+	Path            string  `json:"path"`
+	ArtifactType    string  `json:"artifact_type"`
+	BuildID         string  `json:"build_id"`
+	BuildNumber     int64   `json:"build_number"`
+	BuildStatus     string  `json:"build_status"`
+	ProjectID       string  `json:"project_id"`
+	ProjectName     *string `json:"project_name,omitempty"`
+	ProjectSlug     *string `json:"project_slug,omitempty"`
+	JobID           *string `json:"job_id,omitempty"`
+	JobName         *string `json:"job_name,omitempty"`
+	StepID          *string `json:"step_id,omitempty"`
+	StepIndex       *int    `json:"step_index,omitempty"`
+	StepName        *string `json:"step_name,omitempty"`
+	SizeBytes       int64   `json:"size_bytes"`
+	ContentType     *string `json:"content_type"`
+	ChecksumSHA256  *string `json:"checksum_sha256"`
+	StorageProvider string  `json:"storage_provider"`
+	StorageKey      string  `json:"storage_key"`
+	DownloadURLPath string  `json:"download_url_path"`
+	CreatedAt       string  `json:"created_at"`
 }

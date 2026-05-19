@@ -117,6 +117,9 @@ describe("BuildDetailPage artifacts", () => {
       expect(screen.getByText("dist/app")).toBeTruthy();
     });
 
+    const artifactLink = screen.getByRole("link", { name: "dist/app" });
+    expect(artifactLink.getAttribute("href")).toBe("/artifacts/artifact-1");
+
     const link = screen.getByRole("link", { name: "Download" });
     expect(link.getAttribute("href")).toBe(
       "/api/builds/build-1/artifacts/artifact-1/download",

@@ -93,6 +93,129 @@
                 }
             }
         },
+        "/artifacts/catalog": {
+            "get": {
+                "description": "Returns persisted artifact metadata rows across builds for artifact repository catalog browsing.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "artifacts"
+                ],
+                "summary": "List persisted artifacts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Search artifacts by path, name, artifact id, build id, build number, or job id",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter artifacts by project id",
+                        "name": "project_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter artifacts by project slug",
+                        "name": "project_slug",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter artifacts by producing job id",
+                        "name": "job_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter artifacts by producing build id",
+                        "name": "build_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max artifacts to return",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of artifacts to skip",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ArtifactCatalogEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/artifacts/{artifactID}": {
+            "get": {
+                "description": "Returns one persisted artifact with build, job, step, and storage metadata.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "artifacts"
+                ],
+                "summary": "Get artifact detail",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Artifact ID",
+                        "name": "artifactID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ArtifactDetailEnvelope"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/artifacts/{artifactID}/version-tags": {
             "get": {
                 "description": "Returns immutable version tags attached to one artifact.",
@@ -2806,6 +2929,172 @@
                     "items": {
                         "$ref": "#/definitions/api.VersionTagResponse"
                     }
+                }
+            }
+        },
+        "api.ArtifactCatalogEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.ArtifactCatalogResponse"
+                }
+            }
+        },
+        "api.ArtifactCatalogItemResponse": {
+            "type": "object",
+            "properties": {
+                "artifact_type": {
+                    "type": "string"
+                },
+                "build_id": {
+                    "type": "string"
+                },
+                "build_number": {
+                    "type": "integer"
+                },
+                "build_status": {
+                    "type": "string"
+                },
+                "checksum_sha256": {
+                    "type": "string"
+                },
+                "content_type": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "download_url_path": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "job_name": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "project_slug": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                },
+                "step_id": {
+                    "type": "string"
+                },
+                "step_index": {
+                    "type": "integer"
+                },
+                "step_name": {
+                    "type": "string"
+                },
+                "storage_provider": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.ArtifactCatalogResponse": {
+            "type": "object",
+            "properties": {
+                "artifacts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.ArtifactCatalogItemResponse"
+                    }
+                }
+            }
+        },
+        "api.ArtifactDetailEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.ArtifactDetailResponse"
+                }
+            }
+        },
+        "api.ArtifactDetailResponse": {
+            "type": "object",
+            "properties": {
+                "artifact_type": {
+                    "type": "string"
+                },
+                "build_id": {
+                    "type": "string"
+                },
+                "build_number": {
+                    "type": "integer"
+                },
+                "build_status": {
+                    "type": "string"
+                },
+                "checksum_sha256": {
+                    "type": "string"
+                },
+                "content_type": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "download_url_path": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "job_name": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "project_slug": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                },
+                "step_id": {
+                    "type": "string"
+                },
+                "step_index": {
+                    "type": "integer"
+                },
+                "step_name": {
+                    "type": "string"
+                },
+                "storage_key": {
+                    "type": "string"
+                },
+                "storage_provider": {
+                    "type": "string"
                 }
             }
         },

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -44,6 +46,114 @@ func (h *ArtifactHandler) SetJobService(jobs *service.JobService) {
 func (h *ArtifactHandler) SetAuthorization(mode auth.Mode, projectRoles auth.ProjectRoleLookup) {
 	h.authMode = mode
 	h.projectRoles = projectRoles
+}
+
+// ListArtifactCatalog godoc
+// @Summary List persisted artifacts
+// @Description Returns persisted artifact metadata rows across builds for artifact repository catalog browsing.
+// @Tags artifacts
+// @Produce json
+// @Param q query string false "Search artifacts by path, name, artifact id, build id, build number, or job id"
+// @Param project_id query string false "Filter artifacts by project id"
+// @Param project_slug query string false "Filter artifacts by project slug"
+// @Param job_id query string false "Filter artifacts by producing job id"
+// @Param build_id query string false "Filter artifacts by producing build id"
+// @Param limit query int false "Max artifacts to return"
+// @Param offset query int false "Number of artifacts to skip"
+// @Success 200 {object} api.ArtifactCatalogEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /artifacts/catalog [get]
+func (h *ArtifactHandler) ListArtifactCatalog(w http.ResponseWriter, r *http.Request) {
+	if h.service == nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "artifact service not configured")
+		return
+	}
+	projectID, ok := h.resolveProjectFilter(w, r)
+	if !ok {
+		return
+	}
+	if projectID != "" && !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
+
+	records, err := h.service.ListCatalog(r.Context(), artifactsvc.ListCatalogInput{
+		Query:     strings.TrimSpace(r.URL.Query().Get("q")),
+		ProjectID: projectID,
+		JobID:     strings.TrimSpace(r.URL.Query().Get("job_id")),
+		BuildID:   strings.TrimSpace(r.URL.Query().Get("build_id")),
+		Limit:     parseQueryInt(r, "limit", 0),
+		Offset:    parseQueryInt(r, "offset", 0),
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, artifactsvc.ErrArtifactRepositoryNotConfigured):
+			writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "artifact repository not configured")
+		default:
+			writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	records, err = h.filterArtifactRecordsForRead(r.Context(), records)
+	if err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+
+	projectLookup, jobLookup, err := h.catalogContextLookup(r.Context(), records)
+	if err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+
+	response := make([]api.ArtifactCatalogItemResponse, 0, len(records))
+	for _, record := range records {
+		response = append(response, toArtifactCatalogItemResponse(record, projectLookup, jobLookup))
+	}
+
+	writeDataJSON(w, http.StatusOK, api.ArtifactCatalogResponse{Artifacts: response})
+}
+
+// GetArtifact godoc
+// @Summary Get artifact detail
+// @Description Returns one persisted artifact with build, job, step, and storage metadata.
+// @Tags artifacts
+// @Produce json
+// @Param artifactID path string true "Artifact ID"
+// @Success 200 {object} api.ArtifactDetailEnvelope
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /artifacts/{artifactID} [get]
+func (h *ArtifactHandler) GetArtifact(w http.ResponseWriter, r *http.Request) {
+	if h.service == nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "artifact service not configured")
+		return
+	}
+
+	record, err := h.service.GetArtifact(r.Context(), strings.TrimSpace(chi.URLParam(r, "artifactID")))
+	if err != nil {
+		switch {
+		case errors.Is(err, repository.ErrArtifactNotFound):
+			writeErrorJSON(w, http.StatusNotFound, "not_found", "artifact not found")
+		case errors.Is(err, artifactsvc.ErrArtifactRepositoryNotConfigured):
+			writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "artifact repository not configured")
+		default:
+			writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, record.Build.ProjectID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
+
+	projectLookup, jobLookup, err := h.catalogContextLookup(r.Context(), []domain.ArtifactRecord{record})
+	if err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+
+	writeDataJSON(w, http.StatusOK, toArtifactDetailResponse(record, projectLookup, jobLookup))
 }
 
 // ListArtifacts godoc
@@ -150,6 +260,27 @@ func (h *ArtifactHandler) filterArtifactsForRead(ctx context.Context, items []do
 	return filtered, nil
 }
 
+func (h *ArtifactHandler) filterArtifactRecordsForRead(ctx context.Context, records []domain.ArtifactRecord) ([]domain.ArtifactRecord, error) {
+	if normalizedAuthMode(h.authMode) == auth.ModeDisabled {
+		return records, nil
+	}
+	projectIDs := make([]string, 0, len(records))
+	for _, record := range records {
+		projectIDs = append(projectIDs, record.Build.ProjectID)
+	}
+	allowedProjects, err := allowedProjectsForUser(ctx, h.authMode, h.projectRoles, projectIDs, auth.CanReadProjectResources)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]domain.ArtifactRecord, 0, len(records))
+	for _, record := range records {
+		if _, ok := allowedProjects[record.Build.ProjectID]; ok {
+			filtered = append(filtered, record)
+		}
+	}
+	return filtered, nil
+}
+
 func collectArtifactBrowseArtifactIDs(items []domain.ArtifactBrowseItem) []string {
 	artifactIDs := make([]string, 0)
 	for _, item := range items {
@@ -220,6 +351,83 @@ func toArtifactBrowseVersionResponse(version domain.ArtifactBrowseVersion, proje
 	}
 }
 
+func toArtifactCatalogItemResponse(record domain.ArtifactRecord, projects map[string]domain.Project, jobs map[string]domain.Job) api.ArtifactCatalogItemResponse {
+	provider := string(record.Artifact.StorageProvider)
+	if provider == "" {
+		provider = string(domain.StorageProviderFilesystem)
+	}
+	var stepIndex *int
+	var stepName *string
+	if record.Step != nil {
+		stepIndex = &record.Step.StepIndex
+		stepName = &record.Step.Name
+	}
+	projectName, projectSlug := projectContext(projects, record.Build.ProjectID)
+	jobName := jobContext(jobs, record.Build.JobID)
+	return api.ArtifactCatalogItemResponse{
+		ID:              record.Artifact.ID,
+		Name:            record.Artifact.Name,
+		Path:            record.Artifact.LogicalPath,
+		ArtifactType:    string(domain.ResolveArtifactType(record.Artifact)),
+		BuildID:         record.Build.ID,
+		BuildNumber:     record.Build.BuildNumber,
+		BuildStatus:     string(record.Build.Status),
+		ProjectID:       record.Build.ProjectID,
+		ProjectName:     projectName,
+		ProjectSlug:     projectSlug,
+		JobID:           record.Build.JobID,
+		JobName:         jobName,
+		StepID:          record.Artifact.StepID,
+		StepIndex:       stepIndex,
+		StepName:        stepName,
+		SizeBytes:       record.Artifact.SizeBytes,
+		ContentType:     record.Artifact.ContentType,
+		ChecksumSHA256:  record.Artifact.ChecksumSHA256,
+		StorageProvider: provider,
+		DownloadURLPath: "/api/builds/" + record.Build.ID + "/artifacts/" + record.Artifact.ID + "/download",
+		CreatedAt:       record.Artifact.CreatedAt.Format(time.RFC3339),
+	}
+}
+
+func toArtifactDetailResponse(record domain.ArtifactRecord, projects map[string]domain.Project, jobs map[string]domain.Job) api.ArtifactDetailResponse {
+	provider := string(record.Artifact.StorageProvider)
+	if provider == "" {
+		provider = string(domain.StorageProviderFilesystem)
+	}
+	var stepIndex *int
+	var stepName *string
+	if record.Step != nil {
+		stepIndex = &record.Step.StepIndex
+		stepName = &record.Step.Name
+	}
+	projectName, projectSlug := projectContext(projects, record.Build.ProjectID)
+	jobName := jobContext(jobs, record.Build.JobID)
+	return api.ArtifactDetailResponse{
+		ID:              record.Artifact.ID,
+		Name:            record.Artifact.Name,
+		Path:            record.Artifact.LogicalPath,
+		ArtifactType:    string(domain.ResolveArtifactType(record.Artifact)),
+		BuildID:         record.Build.ID,
+		BuildNumber:     record.Build.BuildNumber,
+		BuildStatus:     string(record.Build.Status),
+		ProjectID:       record.Build.ProjectID,
+		ProjectName:     projectName,
+		ProjectSlug:     projectSlug,
+		JobID:           record.Build.JobID,
+		JobName:         jobName,
+		StepID:          record.Artifact.StepID,
+		StepIndex:       stepIndex,
+		StepName:        stepName,
+		SizeBytes:       record.Artifact.SizeBytes,
+		ContentType:     record.Artifact.ContentType,
+		ChecksumSHA256:  record.Artifact.ChecksumSHA256,
+		StorageProvider: provider,
+		StorageKey:      record.Artifact.StorageKey,
+		DownloadURLPath: "/api/builds/" + record.Build.ID + "/artifacts/" + record.Artifact.ID + "/download",
+		CreatedAt:       record.Artifact.CreatedAt.Format(time.RFC3339),
+	}
+}
+
 func (h *ArtifactHandler) resolveProjectFilter(w http.ResponseWriter, r *http.Request) (string, bool) {
 	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
 	projectSlug := strings.TrimSpace(r.URL.Query().Get("project_slug"))
@@ -282,6 +490,51 @@ func (h *ArtifactHandler) contextLookup(ctx context.Context, items []domain.Arti
 				if version.Build.JobID != nil && strings.TrimSpace(*version.Build.JobID) != "" {
 					neededJobs[*version.Build.JobID] = struct{}{}
 				}
+			}
+		}
+		jobIDs := make([]string, 0, len(neededJobs))
+		for id := range neededJobs {
+			jobIDs = append(jobIDs, id)
+		}
+		jobs, err := h.jobs.GetJobsByIDs(ctx, jobIDs)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, job := range jobs {
+			jobLookup[job.ID] = job
+		}
+	}
+	return projectLookup, jobLookup, nil
+}
+
+func (h *ArtifactHandler) catalogContextLookup(ctx context.Context, records []domain.ArtifactRecord) (map[string]domain.Project, map[string]domain.Job, error) {
+	projectLookup := make(map[string]domain.Project)
+	jobLookup := make(map[string]domain.Job)
+	if len(records) == 0 {
+		return projectLookup, jobLookup, nil
+	}
+	if h.projects != nil {
+		projects, err := h.projects.ListProjects(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		neededProjects := make(map[string]struct{}, len(records))
+		for _, record := range records {
+			if strings.TrimSpace(record.Build.ProjectID) != "" {
+				neededProjects[record.Build.ProjectID] = struct{}{}
+			}
+		}
+		for _, project := range projects {
+			if _, ok := neededProjects[project.ID]; ok {
+				projectLookup[project.ID] = project
+			}
+		}
+	}
+	if h.jobs != nil {
+		neededJobs := make(map[string]struct{})
+		for _, record := range records {
+			if record.Build.JobID != nil && strings.TrimSpace(*record.Build.JobID) != "" {
+				neededJobs[*record.Build.JobID] = struct{}{}
 			}
 		}
 		jobIDs := make([]string, 0, len(neededJobs))

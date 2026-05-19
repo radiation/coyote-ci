@@ -1,4 +1,5 @@
 import { artifactDownloadURL } from "../api";
+import { Link } from "react-router-dom";
 import type { BuildArtifact, BuildStep } from "../types";
 import { formatFileSize } from "../utils/format";
 import { formatTime } from "../utils/time";
@@ -42,7 +43,11 @@ function ArtifactTable({
         {items.map((item) => (
           <tr key={item.id}>
             <td className="artifact-path">
-              <div>{item.name?.trim() || item.path}</div>
+              <div>
+                <Link to={`/artifacts/${item.id}`}>
+                  {item.name?.trim() || item.path}
+                </Link>
+              </div>
               {item.name && item.name !== item.path && (
                 <div className="subtle-text artifact-mono">{item.path}</div>
               )}

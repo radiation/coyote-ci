@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   APIError,
   formatAPIErrorMessage,
+  getArtifact,
   listBuilds,
   getBuild,
   getBuildSteps,
   getBuildArtifacts,
+  listArtifactCatalog,
   listArtifacts,
   listProjects,
   getProject,
@@ -43,6 +45,8 @@ describe("API client - types", () => {
     expect(typeof getBuild).toBe("function");
     expect(typeof getBuildSteps).toBe("function");
     expect(typeof getBuildArtifacts).toBe("function");
+    expect(typeof listArtifactCatalog).toBe("function");
+    expect(typeof getArtifact).toBe("function");
     expect(typeof listProjects).toBe("function");
     expect(typeof getProject).toBe("function");
     expect(typeof createProject).toBe("function");
@@ -133,6 +137,61 @@ describe("API client - types", () => {
       "/api/artifacts?q=pkg&type=npm_package&limit=5&offset=10",
       { credentials: "include" },
     );
+  });
+
+  it("lists artifact catalog entries with project, job, build, and pagination params", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          artifacts: [],
+        },
+      }),
+    } as Response);
+
+    await listArtifactCatalog({
+      q: "pkg",
+      project_id: "project-1",
+      job_id: "job-1",
+      build_id: "build-1",
+      limit: 5,
+      offset: 10,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/artifacts/catalog?q=pkg&project_id=project-1&job_id=job-1&build_id=build-1&limit=5&offset=10",
+      { credentials: "include" },
+    );
+  });
+
+  it("fetches artifact detail from /artifacts/{id}", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          id: "artifact-1",
+          build_id: "build-1",
+          build_number: 41,
+          build_status: "success",
+          project_id: "project-1",
+          path: "dist/app.tar",
+          artifact_type: "generic",
+          size_bytes: 128,
+          content_type: null,
+          checksum_sha256: null,
+          storage_provider: "filesystem",
+          storage_key: "build-1/dist/app.tar",
+          download_url_path: "/builds/build-1/artifacts/artifact-1/download",
+          created_at: "2026-03-24T00:00:01Z",
+        },
+      }),
+    } as Response);
+
+    const artifact = await getArtifact("artifact-1");
+    expect(artifact.id).toBe("artifact-1");
+    expect(fetchMock).toHaveBeenCalledWith("/api/artifacts/artifact-1", {
+      credentials: "include",
+    });
   });
 
   it("creates immutable job version tags", async () => {

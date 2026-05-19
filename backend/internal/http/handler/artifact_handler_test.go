@@ -49,6 +49,31 @@ func (r *fakeArtifactBrowseRepo) Browse(_ context.Context, params repository.Bro
 	return r.records, r.err
 }
 
+type fakeArtifactCatalogRepo struct {
+	records []domain.ArtifactRecord
+	record  domain.ArtifactRecord
+	err     error
+	params  []repository.ArtifactCatalogParams
+	ids     []string
+}
+
+func (r *fakeArtifactCatalogRepo) Browse(_ context.Context, _ repository.BrowseArtifactsParams) ([]domain.ArtifactBrowseRecord, error) {
+	return nil, nil
+}
+
+func (r *fakeArtifactCatalogRepo) ListCatalog(_ context.Context, params repository.ArtifactCatalogParams) ([]domain.ArtifactRecord, error) {
+	r.params = append(r.params, params)
+	return r.records, r.err
+}
+
+func (r *fakeArtifactCatalogRepo) GetCatalogByID(_ context.Context, artifactID string) (domain.ArtifactRecord, error) {
+	r.ids = append(r.ids, artifactID)
+	if r.err != nil {
+		return domain.ArtifactRecord{}, r.err
+	}
+	return r.record, nil
+}
+
 func TestArtifactHandlerListArtifacts(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	jobID := "job-1"
@@ -278,4 +303,172 @@ func TestArtifactHandlerListArtifacts_ForwardsProjectFilterFromSlug(t *testing.T
 	if repo.params[0].ProjectID != project.ID {
 		t.Fatalf("expected project id %q, got %q", project.ID, repo.params[0].ProjectID)
 	}
+}
+
+func TestArtifactHandlerListArtifactCatalog(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	jobID := "job-1"
+	repo := &fakeArtifactCatalogRepo{records: []domain.ArtifactRecord{{
+		Artifact: domain.BuildArtifact{
+			ID:              "artifact-1",
+			BuildID:         "build-1",
+			StepID:          ptrString("step-1"),
+			Name:            "coyote-ci/package-a",
+			LogicalPath:     "packages/pkg-a.tgz",
+			ArtifactType:    domain.ArtifactTypeNPMPackage,
+			StorageKey:      "build-1/packages/pkg-a.tgz",
+			StorageProvider: domain.StorageProviderFilesystem,
+			SizeBytes:       128,
+			CreatedAt:       now,
+		},
+		Build: domain.Build{ID: "build-1", BuildNumber: 41, JobID: &jobID, ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
+		Step:  &domain.BuildStep{ID: "step-1", BuildID: "build-1", StepIndex: 1, Name: "Publish package"},
+	}}}
+	handler := NewArtifactHandler(artifactsvc.NewService(repo))
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	project, err := projectService.CreateProject(context.Background(), service.CreateProjectInput{Name: "Platform", Slug: "platform"})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	repo.records[0].Build.ProjectID = project.ID
+	if _, err := jobRepo.Create(context.Background(), domain.Job{
+		ID:            jobID,
+		ProjectID:     project.ID,
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1",
+		Enabled:       true,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+	handler.SetProjectService(projectService)
+	handler.SetJobService(service.NewJobService(jobRepo, nil))
+
+	req := httptest.NewRequest(http.MethodGet, "/artifacts/catalog?q=pkg&job_id=job-1&build_id=build-1&limit=5&offset=10", nil)
+	w := httptest.NewRecorder()
+	handler.ListArtifactCatalog(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(repo.params) != 1 {
+		t.Fatalf("expected one catalog call, got %d", len(repo.params))
+	}
+	if repo.params[0].Query != "pkg" || repo.params[0].JobID != "job-1" || repo.params[0].BuildID != "build-1" {
+		t.Fatalf("unexpected params: %#v", repo.params[0])
+	}
+
+	var response struct {
+		Data struct {
+			Artifacts []map[string]any `json:"artifacts"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(response.Data.Artifacts) != 1 {
+		t.Fatalf("expected 1 artifact, got %d", len(response.Data.Artifacts))
+	}
+	first := response.Data.Artifacts[0]
+	if first["job_name"] != "backend-ci" {
+		t.Fatalf("expected job_name backend-ci, got %v", first["job_name"])
+	}
+	if first["project_name"] != "Platform" {
+		t.Fatalf("expected project_name Platform, got %v", first["project_name"])
+	}
+	if first["step_name"] != "Publish package" {
+		t.Fatalf("expected step_name Publish package, got %v", first["step_name"])
+	}
+	if first["download_url_path"] != "/api/builds/build-1/artifacts/artifact-1/download" {
+		t.Fatalf("unexpected download path: %v", first["download_url_path"])
+	}
+}
+
+func TestArtifactHandlerGetArtifact(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	jobID := "job-1"
+	repo := &fakeArtifactCatalogRepo{record: domain.ArtifactRecord{
+		Artifact: domain.BuildArtifact{
+			ID:              "artifact-1",
+			BuildID:         "build-1",
+			StepID:          ptrString("step-1"),
+			Name:            "coyote-ci/package-a",
+			LogicalPath:     "packages/pkg-a.tgz",
+			ArtifactType:    domain.ArtifactTypeNPMPackage,
+			StorageKey:      "build-1/packages/pkg-a.tgz",
+			StorageProvider: domain.StorageProviderFilesystem,
+			SizeBytes:       128,
+			CreatedAt:       now,
+		},
+		Build: domain.Build{ID: "build-1", BuildNumber: 41, JobID: &jobID, ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
+		Step:  &domain.BuildStep{ID: "step-1", BuildID: "build-1", StepIndex: 1, Name: "Publish package"},
+	}}
+	handler := NewArtifactHandler(artifactsvc.NewService(repo))
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	project, err := projectService.CreateProject(context.Background(), service.CreateProjectInput{Name: "Platform", Slug: "platform"})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	repo.record.Build.ProjectID = project.ID
+	if _, err := jobRepo.Create(context.Background(), domain.Job{
+		ID:            jobID,
+		ProjectID:     project.ID,
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1",
+		Enabled:       true,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+	handler.SetProjectService(projectService)
+	handler.SetJobService(service.NewJobService(jobRepo, nil))
+
+	req := addURLParams(httptest.NewRequest(http.MethodGet, "/artifacts/artifact-1", nil), map[string]string{"artifactID": "artifact-1"})
+	w := httptest.NewRecorder()
+	handler.GetArtifact(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if response.Data["storage_key"] != "build-1/packages/pkg-a.tgz" {
+		t.Fatalf("expected storage key, got %v", response.Data["storage_key"])
+	}
+	if response.Data["job_name"] != "backend-ci" {
+		t.Fatalf("expected job name backend-ci, got %v", response.Data["job_name"])
+	}
+	if len(repo.ids) != 1 || repo.ids[0] != "artifact-1" {
+		t.Fatalf("expected artifact lookup for artifact-1, got %v", repo.ids)
+	}
+}
+
+func TestArtifactHandlerGetArtifact_NotFound(t *testing.T) {
+	handler := NewArtifactHandler(artifactsvc.NewService(&fakeArtifactCatalogRepo{err: repository.ErrArtifactNotFound}))
+	req := addURLParams(httptest.NewRequest(http.MethodGet, "/artifacts/missing", nil), map[string]string{"artifactID": "missing"})
+	w := httptest.NewRecorder()
+
+	handler.GetArtifact(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func ptrString(value string) *string {
+	return &value
 }

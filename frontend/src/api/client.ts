@@ -14,6 +14,9 @@ import type {
   VersionTagCreateRequest,
 } from "../types/build";
 import type {
+  ArtifactCatalogItem,
+  ArtifactCatalogResponse,
+  ArtifactDetail,
   ArtifactBrowseItem,
   ArtifactBrowseResponse,
   ArtifactType,
@@ -442,6 +445,58 @@ export async function listArtifacts(input?: {
     `/artifacts${suffix}`,
   );
   return envelope.data.artifacts;
+}
+
+export async function listArtifactCatalog(input?: {
+  q?: string;
+  project_id?: string;
+  project_slug?: string;
+  job_id?: string;
+  build_id?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<ArtifactCatalogItem[]> {
+  const params = new URLSearchParams();
+  const query = input?.q?.trim() ?? "";
+  const projectID = input?.project_id?.trim() ?? "";
+  const projectSlug = input?.project_slug?.trim() ?? "";
+  const jobID = input?.job_id?.trim() ?? "";
+  const buildID = input?.build_id?.trim() ?? "";
+
+  if (query) {
+    params.set("q", query);
+  }
+  if (projectID) {
+    params.set("project_id", projectID);
+  }
+  if (projectSlug) {
+    params.set("project_slug", projectSlug);
+  }
+  if (jobID) {
+    params.set("job_id", jobID);
+  }
+  if (buildID) {
+    params.set("build_id", buildID);
+  }
+  if (typeof input?.limit === "number" && input.limit > 0) {
+    params.set("limit", String(input.limit));
+  }
+  if (typeof input?.offset === "number" && input.offset > 0) {
+    params.set("offset", String(input.offset));
+  }
+
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const envelope = await fetchJSON<ArtifactEnvelope<ArtifactCatalogResponse>>(
+    `/artifacts/catalog${suffix}`,
+  );
+  return envelope.data.artifacts;
+}
+
+export async function getArtifact(id: string): Promise<ArtifactDetail> {
+  const envelope = await fetchJSON<ArtifactEnvelope<ArtifactDetail>>(
+    `/artifacts/${encodeURIComponent(id)}`,
+  );
+  return envelope.data;
 }
 
 export async function createJobVersionTags(

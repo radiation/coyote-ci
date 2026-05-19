@@ -271,3 +271,79 @@ func TestArtifactRepository_BrowsePaginatesLogicalArtifacts(t *testing.T) {
 		t.Fatalf("sql expectations failed: %v", err)
 	}
 }
+
+func TestArtifactRepository_ListCatalog(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	repo := NewArtifactRepository(db)
+	now := time.Now().UTC()
+	jobID := "2c1d3f58-ecfe-4bbc-8dc0-5863767db4e7"
+	rows := sqlmock.NewRows([]string{
+		"id", "build_id", "step_id", "artifact_name", "logical_path", "artifact_type", "storage_key", "storage_provider", "size_bytes", "content_type", "checksum_sha256", "created_at",
+		"id", "build_number", "project_id", "job_id", "priority", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id",
+		"id", "step_index", "name",
+	}).AddRow(
+		"artifact-1", "build-1", "step-1", "coyote-ci/package-a", "packages/pkg-a.tgz", "npm_package", "build-1/pkg-a.tgz", "filesystem", int64(12), "application/gzip", "abc123", now,
+		"build-1", int64(42), "project-1", jobID, 5, "success", now, nil, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, false, nil, nil, nil, nil, nil, "", nil, nil,
+		"step-1", 1, "Publish package",
+	)
+
+	mock.ExpectQuery("SELECT ").WithArgs("pkg-a", "%pkg-a%", "project-1", jobID, "build-1", 5, 10).WillReturnRows(rows)
+
+	records, err := repo.ListCatalog(context.Background(), repository.ArtifactCatalogParams{
+		Query:     "pkg-a",
+		ProjectID: "project-1",
+		JobID:     jobID,
+		BuildID:   "build-1",
+		Limit:     5,
+		Offset:    10,
+	})
+	if err != nil {
+		t.Fatalf("ListCatalog failed: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if records[0].Build.ID != "build-1" {
+		t.Fatalf("expected build id build-1, got %q", records[0].Build.ID)
+	}
+	if records[0].Artifact.StorageKey != "build-1/pkg-a.tgz" {
+		t.Fatalf("expected storage key, got %q", records[0].Artifact.StorageKey)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations failed: %v", err)
+	}
+}
+
+func TestArtifactRepository_GetCatalogByID_NotFound(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	repo := NewArtifactRepository(db)
+	mock.ExpectQuery("SELECT ").WithArgs("missing").WillReturnRows(sqlmock.NewRows([]string{
+		"id", "build_id", "step_id", "artifact_name", "logical_path", "artifact_type", "storage_key", "storage_provider", "size_bytes", "content_type", "checksum_sha256", "created_at",
+		"id", "build_number", "project_id", "job_id", "priority", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id",
+		"id", "step_index", "name",
+	}))
+
+	_, err = repo.GetCatalogByID(context.Background(), "missing")
+	if err != repository.ErrArtifactNotFound {
+		t.Fatalf("expected ErrArtifactNotFound, got %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations failed: %v", err)
+	}
+}
