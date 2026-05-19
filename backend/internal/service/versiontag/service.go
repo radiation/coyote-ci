@@ -3,7 +3,6 @@ package versiontag
 import (
 	"context"
 	"errors"
-	"regexp"
 	"strings"
 	"unicode"
 
@@ -21,10 +20,9 @@ var ErrVersionTooLong = errors.New("version exceeds maximum length")
 var ErrVersionContainsControlChars = errors.New("version contains unsupported control characters")
 var ErrVersionTagRepositoryNotConfigured = errors.New("version tag repository not configured")
 var ErrVersionTagKindInvalid = errors.New("label kind must be version or channel")
-var ErrVersionTagKindInferenceFailed = errors.New("label kind could not be inferred; specify kind explicitly")
+var ErrArtifactChannelsRequireArtifactLabelRepository = errors.New("artifact channel labels require artifact label repository")
 var ErrManagedImageVersionChannelsUnsupported = errors.New("managed image version labels only support kind=version")
 
-var semverLikePattern = regexp.MustCompile(`^v?\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z][0-9A-Za-z.-]*)?$`)
 var inferredChannelNames = map[string]struct{}{
 	"latest":            {},
 	"stable":            {},
@@ -102,7 +100,7 @@ func (s *Service) CreateVersionTags(ctx context.Context, jobID string, input Cre
 				return nil, ErrVersionTagRepositoryNotConfigured
 			}
 			if kind != domain.VersionTagKindVersion {
-				return nil, ErrVersionTagRepositoryNotConfigured
+				return nil, ErrArtifactChannelsRequireArtifactLabelRepository
 			}
 			artifactTags, createErr := s.repo.CreateForTargets(ctx, repository.CreateVersionTagsParams{
 				JobID:       trimmedJobID,
@@ -270,9 +268,6 @@ func inferKind(value string) (domain.VersionTagKind, error) {
 	trimmed := strings.ToLower(strings.TrimSpace(value))
 	if _, ok := inferredChannelNames[trimmed]; ok {
 		return domain.VersionTagKindChannel, nil
-	}
-	if semverLikePattern.MatchString(strings.TrimSpace(value)) {
-		return domain.VersionTagKindVersion, nil
 	}
 	return domain.VersionTagKindVersion, nil
 }

@@ -139,7 +139,7 @@ func (h *VersionTagHandler) writeServiceError(w http.ResponseWriter, err error) 
 		errors.Is(err, versiontagsvc.ErrVersionRequired),
 		errors.Is(err, versiontagsvc.ErrTargetRequired),
 		errors.Is(err, versiontagsvc.ErrVersionTagKindInvalid),
-		errors.Is(err, versiontagsvc.ErrVersionTagKindInferenceFailed),
+		errors.Is(err, versiontagsvc.ErrArtifactChannelsRequireArtifactLabelRepository),
 		errors.Is(err, versiontagsvc.ErrManagedImageVersionChannelsUnsupported),
 		errors.Is(err, versiontagsvc.ErrVersionTooLong),
 		errors.Is(err, versiontagsvc.ErrVersionContainsControlChars):

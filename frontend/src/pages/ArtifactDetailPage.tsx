@@ -366,8 +366,8 @@ export function ArtifactDetailPage() {
         {submitError && <p className="error-text">{submitError}</p>}
         {!data.job_id && (
           <p className="subtle-text">
-            This artifact is not associated with a job, so new version / tags
-            cannot be assigned.
+            This artifact is not associated with a job, so new versions or
+            channels cannot be assigned.
           </p>
         )}
       </section>

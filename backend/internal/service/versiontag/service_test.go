@@ -165,3 +165,21 @@ func TestService_CreateVersionTags_InfersKnownChannels(t *testing.T) {
 		t.Fatalf("expected inferred channel tag, got %#v", tags)
 	}
 }
+
+func TestService_CreateVersionTags_ArtifactChannelsRequireArtifactLabelRepository(t *testing.T) {
+	repo := repositorymemory.NewVersionTagRepository()
+	jobID := "job-1"
+	buildID := "build-1"
+	repo.SeedBuilds(domain.Build{ID: buildID, JobID: &jobID})
+	repo.SeedArtifacts(domain.BuildArtifact{ID: "artifact-1", BuildID: buildID})
+
+	svc := NewService(repo)
+	_, err := svc.CreateVersionTags(context.Background(), jobID, CreateVersionTagsInput{
+		Kind:        "channel",
+		Version:     "prod",
+		ArtifactIDs: []string{"artifact-1"},
+	})
+	if !errors.Is(err, ErrArtifactChannelsRequireArtifactLabelRepository) {
+		t.Fatalf("expected ErrArtifactChannelsRequireArtifactLabelRepository, got %v", err)
+	}
+}

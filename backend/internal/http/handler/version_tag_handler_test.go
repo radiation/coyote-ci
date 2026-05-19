@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -122,5 +123,28 @@ func TestVersionTagHandler_Create_DefaultsUnknownOmittedKindToVersion(t *testing
 	firstTag, ok := tags[0].(map[string]any)
 	if !ok || firstTag["kind"] != "version" {
 		t.Fatalf("expected inferred version kind, got %v", tags[0])
+	}
+}
+
+func TestVersionTagHandler_Create_ArtifactChannelsRequireArtifactLabelRepository(t *testing.T) {
+	repo := repositorymemory.NewVersionTagRepository()
+	jobID := "job-1"
+	buildID := "build-1"
+	repo.SeedBuilds(domain.Build{ID: buildID, JobID: &jobID})
+	repo.SeedArtifacts(domain.BuildArtifact{ID: "artifact-1", BuildID: buildID})
+	h := NewVersionTagHandler(versiontagsvc.NewService(repo))
+
+	req := httptest.NewRequest(http.MethodPost, "/jobs/job-1/version-tags", bytes.NewBufferString(`{"kind":"channel","version":"prod","artifact_ids":["artifact-1"]}`))
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("jobID", jobID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	res := httptest.NewRecorder()
+	h.CreateJobVersionTags(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "artifact channel labels require artifact label repository") {
+		t.Fatalf("expected specific artifact channel error, got %s", res.Body.String())
 	}
 }

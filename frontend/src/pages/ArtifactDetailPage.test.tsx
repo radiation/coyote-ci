@@ -400,7 +400,7 @@ describe("ArtifactDetailPage", () => {
     expect(screen.queryByRole("link", { name: "backend-ci" })).toBeNull();
     expect(
       screen.getByText(
-        "This artifact is not associated with a job, so new version / tags cannot be assigned.",
+        "This artifact is not associated with a job, so new versions or channels cannot be assigned.",
       ),
     ).toBeTruthy();
     expect(
