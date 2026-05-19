@@ -1,4 +1,8 @@
-import { createBrowserRouter, Navigate } from "react-router-dom";
+import {
+  createBrowserRouter,
+  Navigate,
+  type RouteObject,
+} from "react-router-dom";
 import { Layout } from "../components/Layout";
 import { BuildsListPage } from "../pages/BuildsListPage";
 import { BuildDetailPage } from "../pages/BuildDetailPage";
@@ -14,12 +18,14 @@ import { APITokensPage } from "../pages/APITokensPage";
 import { UsersPage } from "../pages/UsersPage";
 import { ProjectsListPage } from "../pages/ProjectsListPage";
 import { ProjectDetailPage } from "../pages/ProjectDetailPage";
+import { DashboardPage } from "../pages/DashboardPage";
 
-export const router = createBrowserRouter([
+export const appRoutes: RouteObject[] = [
   {
     element: <Layout />,
     children: [
-      { path: "/", element: <Navigate to="/jobs" replace /> },
+      { path: "/", element: <Navigate to="/dashboard" replace /> },
+      { path: "/dashboard", element: <DashboardPage /> },
       { path: "/builds", element: <BuildsListPage /> },
       { path: "/builds/:id", element: <BuildDetailPage /> },
       { path: "/queue", element: <QueuePage /> },
@@ -36,4 +42,6 @@ export const router = createBrowserRouter([
       { path: "/settings/credentials", element: <CredentialsPage /> },
     ],
   },
-]);
+];
+
+export const router = createBrowserRouter(appRoutes);

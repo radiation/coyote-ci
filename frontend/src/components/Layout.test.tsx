@@ -196,4 +196,23 @@ describe("Layout", () => {
       expect(mockedGetMe.mock.calls.length).toBeGreaterThan(initialCalls);
     });
   });
+
+  it("shows the logout control for authenticated oidc users", async () => {
+    mockedGetMe.mockResolvedValue({
+      auth_mode: "oidc",
+      user: {
+        id: "user-1",
+        email: "user@example.com",
+        display_name: "User Example",
+        global_role: "admin",
+      },
+    });
+
+    renderLayout();
+
+    await waitFor(() => {
+      expect(screen.getByText("User Example")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Logout" })).toBeTruthy();
+    });
+  });
 });

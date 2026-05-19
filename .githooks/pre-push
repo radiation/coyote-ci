@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 #
-# pre-push: run test suites before pushing.
+# pre-push: run test suites and frontend build verification before pushing.
 # Install: make install-hooks
 # Bypass:  git push --no-verify
 #
@@ -19,13 +19,18 @@ else
 fi
 
 # ── Frontend ─────────────────────────────────────────────────────────────────
-if [ -f frontend/package.json ] && command -v npx >/dev/null 2>&1; then
+if [ -f frontend/package.json ] && command -v npx >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
 	echo "== Frontend tests =="
 	if ! (cd frontend && npx --no-install vitest run 2>/dev/null) ; then
 		failed=1
 	fi
+
+	echo "== Frontend build =="
+	if ! (cd frontend && npm run build) ; then
+		failed=1
+	fi
 else
-	echo "== Frontend tests (skipped: npx not found or no package.json) =="
+	echo "== Frontend checks (skipped: npm/npx not found or no package.json) =="
 fi
 
 # ── Result ───────────────────────────────────────────────────────────────────
