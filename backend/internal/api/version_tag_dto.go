@@ -3,6 +3,7 @@ package api
 type VersionTagResponse struct {
 	ID                    string  `json:"id"`
 	JobID                 string  `json:"job_id"`
+	Kind                  string  `json:"kind,omitempty"`
 	Version               string  `json:"version"`
 	TargetType            string  `json:"target_type"`
 	ArtifactID            *string `json:"artifact_id,omitempty"`
@@ -11,6 +12,7 @@ type VersionTagResponse struct {
 }
 
 type VersionTagCreateRequest struct {
+	Kind                   string   `json:"kind,omitempty"`
 	Version                string   `json:"version"`
 	ArtifactIDs            []string `json:"artifact_ids,omitempty"`
 	ManagedImageVersionIDs []string `json:"managed_image_version_ids,omitempty"`

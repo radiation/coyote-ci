@@ -233,6 +233,7 @@ describe("API client - types", () => {
             {
               id: "tag-1",
               job_id: "job-1",
+              kind: "version",
               version: "1.2.3",
               target_type: "artifact",
               artifact_id: "artifact-1",
@@ -250,6 +251,7 @@ describe("API client - types", () => {
       {
         id: "tag-1",
         job_id: "job-1",
+        kind: "version",
         version: "1.2.3",
         target_type: "artifact",
         artifact_id: "artifact-1",
@@ -272,6 +274,7 @@ describe("API client - types", () => {
             {
               id: "tag-1",
               job_id: "job-1",
+              kind: "version",
               version: "v1",
               target_type: "artifact",
               artifact_id: "artifact-1",

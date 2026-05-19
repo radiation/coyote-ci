@@ -125,3 +125,43 @@ func TestService_ResolveReleaseVersion(t *testing.T) {
 		t.Fatalf("expected template version 0.1.12, got %q", templateResolved)
 	}
 }
+
+func TestService_CreateVersionTags_DefaultsUnknownOmittedKindToVersion(t *testing.T) {
+	artifactRepo := repositorymemory.NewArtifactLabelRepository()
+	jobID := "job-1"
+	buildID := "build-1"
+	artifactRepo.SeedBuilds(domain.Build{ID: buildID, JobID: &jobID})
+	artifactRepo.SeedArtifacts(domain.BuildArtifact{ID: "artifact-1", BuildID: buildID, LogicalPath: "packages/pkg-a.tgz"})
+
+	svc := NewService(nil).WithArtifactLabels(artifactRepo)
+	tags, err := svc.CreateVersionTags(context.Background(), jobID, CreateVersionTagsInput{
+		Version:     "release-42",
+		ArtifactIDs: []string{"artifact-1"},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(tags) != 1 || tags[0].Kind != domain.VersionTagKindVersion {
+		t.Fatalf("expected inferred version tag, got %#v", tags)
+	}
+}
+
+func TestService_CreateVersionTags_InfersKnownChannels(t *testing.T) {
+	artifactRepo := repositorymemory.NewArtifactLabelRepository()
+	jobID := "job-1"
+	buildID := "build-1"
+	artifactRepo.SeedBuilds(domain.Build{ID: buildID, JobID: &jobID})
+	artifactRepo.SeedArtifacts(domain.BuildArtifact{ID: "artifact-1", BuildID: buildID, LogicalPath: "packages/pkg-a.tgz"})
+
+	svc := NewService(nil).WithArtifactLabels(artifactRepo)
+	tags, err := svc.CreateVersionTags(context.Background(), jobID, CreateVersionTagsInput{
+		Version:     "prod",
+		ArtifactIDs: []string{"artifact-1"},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(tags) != 1 || tags[0].Kind != domain.VersionTagKindChannel {
+		t.Fatalf("expected inferred channel tag, got %#v", tags)
+	}
+}

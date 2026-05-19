@@ -4588,6 +4588,9 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "kind": {
+                    "type": "string"
+                },
                 "managed_image_version_ids": {
                     "type": "array",
                     "items": {
@@ -4612,6 +4615,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "job_id": {
+                    "type": "string"
+                },
+                "kind": {
                     "type": "string"
                 },
                 "managed_image_version_id": {

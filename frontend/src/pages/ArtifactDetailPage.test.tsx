@@ -17,6 +17,7 @@ function buildVersionTag(overrides: Partial<VersionTag> = {}): VersionTag {
   return {
     id: "tag-1",
     job_id: "job-1",
+    kind: "version",
     version: "1.2.3",
     target_type: "artifact",
     artifact_id: "artifact-1",
@@ -140,7 +141,7 @@ describe("ArtifactDetailPage", () => {
     expect(screen.getByText("Platform (platform)")).toBeTruthy();
     expect(screen.getByText("pkg-sha")).toBeTruthy();
     expect(screen.getAllByText("Step 1: Publish package").length).toBe(2);
-    expect(screen.getByText("No version / tags yet.")).toBeTruthy();
+    expect(screen.getAllByText("None")).toHaveLength(2);
     expect(screen.queryByText("Storage Key")).toBeNull();
     expect(screen.queryByText("build-1/packages/pkg-a.tgz")).toBeNull();
   });
@@ -150,7 +151,7 @@ describe("ArtifactDetailPage", () => {
       buildArtifactDetail({
         version_tags: [
           buildVersionTag(),
-          buildVersionTag({ id: "tag-2", version: "latest" }),
+          buildVersionTag({ id: "tag-2", kind: "channel", version: "latest" }),
         ],
       }),
     );
@@ -164,22 +165,51 @@ describe("ArtifactDetailPage", () => {
   it("creates a version tag from the artifact detail page", async () => {
     renderPage();
 
-    const input = await screen.findByLabelText(
-      "artifact-detail-version-artifact-1",
-    );
+    const input = await screen.findByLabelText("Artifact label");
     fireEvent.change(input, {
-      target: { value: "release-42" },
+      target: { value: "1.2.4" },
     });
     fireEvent.submit(input.closest("form") as HTMLFormElement);
 
     await waitFor(() => {
       expect(mockedCreateJobVersionTags).toHaveBeenCalledWith("job-1", {
-        version: "release-42",
+        kind: "version",
+        version: "1.2.4",
         artifact_ids: ["artifact-1"],
       });
     });
 
     expect(await screen.findByText("1.2.3")).toBeTruthy();
+  });
+
+  it("creates a channel from the artifact detail page", async () => {
+    mockedCreateJobVersionTags.mockResolvedValueOnce([
+      buildVersionTag({ id: "tag-channel", kind: "channel", version: "prod" }),
+    ]);
+
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText("Artifact label kind"), {
+      target: { value: "channel" },
+    });
+    fireEvent.change(screen.getByLabelText("Artifact label"), {
+      target: { value: "prod" },
+    });
+    fireEvent.submit(
+      screen
+        .getByLabelText("Artifact label")
+        .closest("form") as HTMLFormElement,
+    );
+
+    await waitFor(() => {
+      expect(mockedCreateJobVersionTags).toHaveBeenCalledWith("job-1", {
+        kind: "channel",
+        version: "prod",
+        artifact_ids: ["artifact-1"],
+      });
+    });
+
+    expect(await screen.findByText("prod")).toBeTruthy();
   });
 
   it("shows duplicate or conflict errors when assigning a version tag fails", async () => {
@@ -189,9 +219,7 @@ describe("ArtifactDetailPage", () => {
 
     renderPage();
 
-    const input = await screen.findByLabelText(
-      "artifact-detail-version-artifact-1",
-    );
+    const input = await screen.findByLabelText("Artifact label");
     fireEvent.change(input, {
       target: { value: "1.2.3" },
     });
@@ -215,11 +243,9 @@ describe("ArtifactDetailPage", () => {
       routePath: "/artifacts/detail",
     });
 
-    const input = await screen.findByLabelText(
-      "artifact-detail-version-artifact-1",
-    );
+    const input = await screen.findByLabelText("Artifact label");
     fireEvent.change(input, {
-      target: { value: "release-42" },
+      target: { value: "1.2.4" },
     });
     fireEvent.submit(input.closest("form") as HTMLFormElement);
 
@@ -236,16 +262,14 @@ describe("ArtifactDetailPage", () => {
 
     renderPage();
 
-    const input = await screen.findByLabelText(
-      "artifact-detail-version-artifact-1",
-    );
+    const input = await screen.findByLabelText("Artifact label");
     fireEvent.change(input, {
-      target: { value: "release-42" },
+      target: { value: "1.2.4" },
     });
     fireEvent.submit(input.closest("form") as HTMLFormElement);
 
-    expect(await screen.findByText("No version / tags yet.")).toBeTruthy();
-    expect(screen.queryByText("release-42")).toBeNull();
+    expect(screen.getAllByText("None")).toHaveLength(2);
+    expect(screen.queryByText("1.2.4")).toBeNull();
   });
 
   it("does not duplicate an existing tag when the same tag id is returned again", async () => {
@@ -258,9 +282,7 @@ describe("ArtifactDetailPage", () => {
 
     renderPage();
 
-    const input = await screen.findByLabelText(
-      "artifact-detail-version-artifact-1",
-    );
+    const input = await screen.findByLabelText("Artifact label");
     fireEvent.change(input, {
       target: { value: "1.2.3" },
     });
@@ -282,7 +304,7 @@ describe("ArtifactDetailPage", () => {
         queryKey: ["artifact", "artifact-1"],
         exact: true,
       });
-      return [buildVersionTag({ id: "tag-2", version: "release-42" })];
+      return [buildVersionTag({ id: "tag-2", version: "1.2.4" })];
     });
 
     renderPageWithClient(queryClient);
@@ -293,15 +315,12 @@ describe("ArtifactDetailPage", () => {
     });
     expect(input).toBeTruthy();
 
-    fireEvent.change(
-      screen.getByLabelText("artifact-detail-version-artifact-1"),
-      {
-        target: { value: "release-42" },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Artifact label"), {
+      target: { value: "1.2.4" },
+    });
     fireEvent.submit(
       screen
-        .getByLabelText("artifact-detail-version-artifact-1")
+        .getByLabelText("Artifact label")
         .closest("form") as HTMLFormElement,
     );
 

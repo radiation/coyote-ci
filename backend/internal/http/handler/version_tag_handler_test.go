@@ -24,7 +24,7 @@ func TestVersionTagHandler_CreateAndList(t *testing.T) {
 	repo.SeedManagedImageVersions(domain.ManagedImageVersion{ID: "image-version-1", ManagedImageID: "image-1"})
 	h := NewVersionTagHandler(versiontagsvc.NewService(repo))
 
-	createReq := httptest.NewRequest(http.MethodPost, "/jobs/job-1/version-tags", bytes.NewBufferString(`{"version":"v1","artifact_ids":["artifact-1"],"managed_image_version_ids":["image-version-1"]}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/jobs/job-1/version-tags", bytes.NewBufferString(`{"kind":"version","version":"1.2.3","artifact_ids":["artifact-1"],"managed_image_version_ids":["image-version-1"]}`))
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("jobID", jobID)
 	createReq = createReq.WithContext(context.WithValue(createReq.Context(), chi.RouteCtxKey, rctx))
@@ -37,6 +37,10 @@ func TestVersionTagHandler_CreateAndList(t *testing.T) {
 	tags, ok := createData["tags"].([]any)
 	if !ok || len(tags) != 2 {
 		t.Fatalf("expected 2 created tags, got %v", createData["tags"])
+	}
+	firstTag, ok := tags[0].(map[string]any)
+	if !ok || firstTag["kind"] != "version" {
+		t.Fatalf("expected created tag kind version, got %v", tags[0])
 	}
 
 	listReq := httptest.NewRequest(http.MethodGet, "/artifacts/artifact-1/version-tags", nil)
@@ -62,10 +66,10 @@ func TestVersionTagHandler_CreateConflict(t *testing.T) {
 	repo.SeedBuilds(domain.Build{ID: buildID, JobID: &jobID})
 	repo.SeedArtifacts(domain.BuildArtifact{ID: "artifact-1", BuildID: buildID})
 	service := versiontagsvc.NewService(repo)
-	_, _ = service.CreateVersionTags(context.Background(), jobID, versiontagsvc.CreateVersionTagsInput{Version: "v1", ArtifactIDs: []string{"artifact-1"}})
+	_, _ = service.CreateVersionTags(context.Background(), jobID, versiontagsvc.CreateVersionTagsInput{Kind: "version", Version: "1.2.3", ArtifactIDs: []string{"artifact-1"}})
 	h := NewVersionTagHandler(service)
 
-	req := httptest.NewRequest(http.MethodPost, "/jobs/job-1/version-tags", bytes.NewBufferString(`{"version":"v1","artifact_ids":["artifact-1"]}`))
+	req := httptest.NewRequest(http.MethodPost, "/jobs/job-1/version-tags", bytes.NewBufferString(`{"kind":"version","version":"1.2.3","artifact_ids":["artifact-1"]}`))
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("jobID", jobID)
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
@@ -80,7 +84,7 @@ func TestVersionTagHandler_CreateNotFound(t *testing.T) {
 	repo := repositorymemory.NewVersionTagRepository()
 	h := NewVersionTagHandler(versiontagsvc.NewService(repo))
 
-	req := httptest.NewRequest(http.MethodPost, "/jobs/job-1/version-tags", bytes.NewBufferString(`{"version":"v1","artifact_ids":["missing-artifact"]}`))
+	req := httptest.NewRequest(http.MethodPost, "/jobs/job-1/version-tags", bytes.NewBufferString(`{"kind":"version","version":"1.2.3","artifact_ids":["missing-artifact"]}`))
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("jobID", "job-1")
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
@@ -89,5 +93,34 @@ func TestVersionTagHandler_CreateNotFound(t *testing.T) {
 
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", res.Code, res.Body.String())
+	}
+}
+
+func TestVersionTagHandler_Create_DefaultsUnknownOmittedKindToVersion(t *testing.T) {
+	artifactRepo := repositorymemory.NewArtifactLabelRepository()
+	jobID := "job-1"
+	buildID := "build-1"
+	artifactRepo.SeedBuilds(domain.Build{ID: buildID, JobID: &jobID})
+	artifactRepo.SeedArtifacts(domain.BuildArtifact{ID: "artifact-1", BuildID: buildID, LogicalPath: "packages/pkg-a.tgz"})
+	h := NewVersionTagHandler(versiontagsvc.NewService(nil).WithArtifactLabels(artifactRepo))
+
+	req := httptest.NewRequest(http.MethodPost, "/jobs/job-1/version-tags", bytes.NewBufferString(`{"version":"release-42","artifact_ids":["artifact-1"]}`))
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("jobID", jobID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	res := httptest.NewRecorder()
+	h.CreateJobVersionTags(res, req)
+
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", res.Code, res.Body.String())
+	}
+	data := decodeDataMap(t, res)
+	tags, ok := data["tags"].([]any)
+	if !ok || len(tags) != 1 {
+		t.Fatalf("expected 1 created tag, got %v", data["tags"])
+	}
+	firstTag, ok := tags[0].(map[string]any)
+	if !ok || firstTag["kind"] != "version" {
+		t.Fatalf("expected inferred version kind, got %v", tags[0])
 	}
 }

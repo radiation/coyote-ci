@@ -1,6 +1,7 @@
 export interface VersionTag {
   id: string;
   job_id: string;
+  kind?: "version" | "channel";
   version: string;
   target_type: string;
   artifact_id?: string | null;
@@ -9,6 +10,7 @@ export interface VersionTag {
 }
 
 export interface VersionTagCreateRequest {
+  kind?: "version" | "channel";
   version: string;
   artifact_ids?: string[];
   managed_image_version_ids?: string[];

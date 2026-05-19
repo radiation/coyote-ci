@@ -1196,6 +1196,8 @@ definitions:
         items:
           type: string
         type: array
+      kind:
+        type: string
       managed_image_version_ids:
         items:
           type: string
@@ -1212,6 +1214,8 @@ definitions:
       id:
         type: string
       job_id:
+        type: string
+      kind:
         type: string
       managed_image_version_id:
         type: string

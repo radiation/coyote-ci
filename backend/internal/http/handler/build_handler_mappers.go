@@ -259,6 +259,7 @@ func toVersionTagResponses(tags []domain.VersionTag) []api.VersionTagResponse {
 		resp = append(resp, api.VersionTagResponse{
 			ID:                    tag.ID,
 			JobID:                 tag.JobID,
+			Kind:                  string(tag.Kind),
 			Version:               tag.Version,
 			TargetType:            string(tag.TargetType),
 			ArtifactID:            tag.ArtifactID,

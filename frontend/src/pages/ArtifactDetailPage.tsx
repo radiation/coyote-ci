@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { createJobVersionTags, getArtifact, artifactDownloadURL } from "../api";
 import { StatusBadge } from "../components/StatusBadge";
-import { VersionTagEditor } from "../components/VersionTagEditor";
 import type { ArtifactDetail, VersionTag } from "../types";
 import { formatFileSize } from "../utils/format";
 import { formatTime } from "../utils/time";
@@ -84,9 +84,31 @@ function projectLabel(artifact: ArtifactDetail): string {
   return name || slug || artifact.project_id;
 }
 
+function tagKind(tag: VersionTag): "version" | "channel" {
+  return tag.kind === "channel" ? "channel" : "version";
+}
+
+function tagLabelList(tags: VersionTag[]) {
+  if (tags.length === 0) {
+    return <span className="subtle-text">None</span>;
+  }
+  return (
+    <>
+      {tags.map((tag) => (
+        <span key={tag.id} className="version-tag-pill">
+          {tag.version}
+        </span>
+      ))}
+    </>
+  );
+}
+
 export function ArtifactDetailPage() {
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
+  const [labelValue, setLabelValue] = useState("");
+  const [labelKind, setLabelKind] = useState<"version" | "channel">("version");
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const { data, isLoading, error } = useQuery({
     queryKey: ["artifact", id],
     queryFn: () => getArtifact(id!),
@@ -94,7 +116,13 @@ export function ArtifactDetailPage() {
   });
 
   const createVersionTagMutation = useMutation({
-    mutationFn: async (version: string) => {
+    mutationFn: async ({
+      version,
+      kind,
+    }: {
+      version: string;
+      kind: "version" | "channel";
+    }) => {
       if (!id) {
         throw new Error("Artifact ID is required.");
       }
@@ -102,6 +130,7 @@ export function ArtifactDetailPage() {
         throw new Error("Artifact is not associated with a job.");
       }
       return createJobVersionTags(data.job_id, {
+        kind,
         version,
         artifact_ids: [id],
       });
@@ -128,14 +157,25 @@ export function ArtifactDetailPage() {
           };
         },
       );
+      setLabelValue("");
+      setSubmitError(null);
     },
   });
 
-  async function handleAssignVersionTag(version: string) {
+  async function handleAssignVersionTag() {
+    const trimmed = labelValue.trim();
+    if (!trimmed) {
+      setSubmitError("Label is required.");
+      return;
+    }
     try {
-      await createVersionTagMutation.mutateAsync(version);
+      setSubmitError(null);
+      await createVersionTagMutation.mutateAsync({
+        version: trimmed,
+        kind: labelKind,
+      });
     } catch (mutationError) {
-      throw formatVersionTagError(mutationError);
+      setSubmitError(formatVersionTagError(mutationError).message);
     }
   }
 
@@ -150,6 +190,13 @@ export function ArtifactDetailPage() {
   if (!data) {
     return <p className="error-text">Artifact not found.</p>;
   }
+
+  const versionTags = (data.version_tags ?? []).filter(
+    (tag) => tagKind(tag) === "version",
+  );
+  const channelTags = (data.version_tags ?? []).filter(
+    (tag) => tagKind(tag) === "channel",
+  );
 
   return (
     <>
@@ -254,18 +301,69 @@ export function ArtifactDetailPage() {
       </section>
 
       <section className="detail-panel">
-        <h3>Version / Tags</h3>
+        <h3>Versions / Channels</h3>
         <p className="subtle-text">
-          Durable labels attached to this artifact for repository browsing and
-          promotion-style workflows.
+          Versions are immutable releases. Channels are movable aliases such as
+          latest or prod.
         </p>
-        <VersionTagEditor
-          tags={data.version_tags ?? []}
-          emptyText="No version / tags yet."
-          inputLabel={`artifact-detail-version-${data.id}`}
-          submitLabel="Assign tag"
-          onAssign={data.job_id ? handleAssignVersionTag : undefined}
-        />
+        <div className="artifact-detail-grid">
+          <div>
+            <strong>Current Versions</strong>
+            <div className="version-tag-list" aria-label="Artifact versions">
+              {tagLabelList(versionTags)}
+            </div>
+          </div>
+          <div>
+            <strong>Current Channels</strong>
+            <div className="version-tag-list" aria-label="Artifact channels">
+              {tagLabelList(channelTags)}
+            </div>
+          </div>
+        </div>
+        {data.job_id && (
+          <form
+            className="version-tag-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleAssignVersionTag();
+            }}
+          >
+            <label
+              className="sr-only"
+              htmlFor={`artifact-detail-kind-${data.id}`}
+            >
+              Artifact label kind
+            </label>
+            <select
+              id={`artifact-detail-kind-${data.id}`}
+              value={labelKind}
+              onChange={(event) =>
+                setLabelKind(event.target.value as "version" | "channel")
+              }
+              disabled={createVersionTagMutation.isPending}
+            >
+              <option value="version">Version</option>
+              <option value="channel">Channel</option>
+            </select>
+            <label
+              className="sr-only"
+              htmlFor={`artifact-detail-label-${data.id}`}
+            >
+              Artifact label
+            </label>
+            <input
+              id={`artifact-detail-label-${data.id}`}
+              value={labelValue}
+              onChange={(event) => setLabelValue(event.target.value)}
+              placeholder={labelKind === "channel" ? "prod" : "1.2.3"}
+              disabled={createVersionTagMutation.isPending}
+            />
+            <button type="submit" disabled={createVersionTagMutation.isPending}>
+              {createVersionTagMutation.isPending ? "Saving…" : "Assign label"}
+            </button>
+          </form>
+        )}
+        {submitError && <p className="error-text">{submitError}</p>}
         {!data.job_id && (
           <p className="subtle-text">
             This artifact is not associated with a job, so new version / tags

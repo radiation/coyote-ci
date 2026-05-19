@@ -383,6 +383,7 @@ func scanVersionTag(scanner rowScanner) (domain.VersionTag, error) {
 		return domain.VersionTag{}, err
 	}
 	tag.TargetType = domain.VersionTagTargetType(targetType)
+	tag.Kind = domain.VersionTagKindVersion
 	if artifactID.Valid {
 		tag.ArtifactID = versionTagStringPtr(artifactID.String)
 	}

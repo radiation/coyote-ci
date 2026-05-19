@@ -14,6 +14,7 @@ type ArtifactRepository struct {
 	mu        sync.RWMutex
 	artifacts []domain.BuildArtifact
 	builds    map[string]domain.Build
+	packages  map[string]string
 }
 
 func NewArtifactRepository() *ArtifactRepository {
@@ -47,6 +48,9 @@ func (r *ArtifactRepository) Create(_ context.Context, artifact domain.BuildArti
 		if existing.StepID == nil && artifact.StepID == nil {
 			return domain.BuildArtifact{}, repository.ErrArtifactConflict
 		}
+	}
+	if artifact.PackageID == "" {
+		artifact.PackageID = r.packageIDLocked(artifact.BuildID, artifact.LogicalPath)
 	}
 
 	r.artifacts = append(r.artifacts, artifact)
@@ -157,4 +161,22 @@ func (r *ArtifactRepository) ListByStepID(_ context.Context, stepID string) ([]d
 		}
 	}
 	return out, nil
+}
+
+func (r *ArtifactRepository) packageIDLocked(buildID string, logicalPath string) string {
+	if r.packages == nil {
+		r.packages = make(map[string]string)
+	}
+	build := r.builds[buildID]
+	scopeID := buildID
+	if build.JobID != nil && strings.TrimSpace(*build.JobID) != "" {
+		scopeID = strings.TrimSpace(*build.JobID)
+	}
+	key := scopeID + "::" + strings.TrimSpace(logicalPath)
+	if packageID, ok := r.packages[key]; ok {
+		return packageID
+	}
+	packageID := key
+	r.packages[key] = packageID
+	return packageID
 }
