@@ -22,6 +22,11 @@ type fakeCatalogRepo struct {
 	ids     []string
 }
 
+type fakeBrowseCatalogRepo struct {
+	fakeBrowseRepo
+	fakeCatalogRepo
+}
+
 func (r *fakeBrowseRepo) Browse(_ context.Context, params repository.BrowseArtifactsParams) ([]domain.ArtifactBrowseRecord, error) {
 	if r.err != nil {
 		return nil, r.err
@@ -102,6 +107,18 @@ func TestServiceListArtifactsFiltersByType(t *testing.T) {
 	}
 }
 
+func TestNewServiceAssignsCatalogRepositoryWhenAvailable(t *testing.T) {
+	repo := &fakeBrowseCatalogRepo{}
+	svc := NewService(repo)
+
+	if svc.repo != repo {
+		t.Fatalf("expected browse repo to be wired")
+	}
+	if svc.catalogRepo != repo {
+		t.Fatalf("expected catalog repo to be wired from browse repo")
+	}
+}
+
 func TestServiceListCatalogDelegatesAndTrimsParams(t *testing.T) {
 	repo := &fakeCatalogRepo{records: []domain.ArtifactRecord{{Artifact: domain.BuildArtifact{ID: "artifact-1"}}}}
 	svc := &Service{catalogRepo: repo}
@@ -125,6 +142,25 @@ func TestServiceListCatalogDelegatesAndTrimsParams(t *testing.T) {
 	}
 	if repo.params[0].Query != "pkg" || repo.params[0].ProjectID != "project-1" || repo.params[0].JobID != "job-1" || repo.params[0].BuildID != "build-1" || repo.params[0].Limit != 5 || repo.params[0].Offset != 10 {
 		t.Fatalf("unexpected params: %#v", repo.params[0])
+	}
+}
+
+func TestServiceListArtifactsRequiresRepository(t *testing.T) {
+	svc := &Service{}
+
+	_, err := svc.ListArtifacts(context.Background(), ListArtifactsInput{})
+	if err != ErrArtifactRepositoryNotConfigured {
+		t.Fatalf("expected ErrArtifactRepositoryNotConfigured, got %v", err)
+	}
+}
+
+func TestServiceListArtifactsReturnsRepositoryError(t *testing.T) {
+	wantErr := repository.ErrArtifactNotFound
+	svc := NewService(&fakeBrowseRepo{err: wantErr})
+
+	_, err := svc.ListArtifacts(context.Background(), ListArtifactsInput{})
+	if err != wantErr {
+		t.Fatalf("expected %v, got %v", wantErr, err)
 	}
 }
 

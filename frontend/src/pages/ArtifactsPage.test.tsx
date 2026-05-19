@@ -236,6 +236,95 @@ describe("ArtifactsPage", () => {
     ).toBeTruthy();
   });
 
+  it("renders fallback labels when optional artifact metadata is sparse", async () => {
+    mockedListArtifactCatalog.mockResolvedValueOnce([
+      {
+        ...buildArtifact(1),
+        name: "   ",
+        build_number: 0,
+        job_name: "   ",
+        step_name: "   ",
+        step_index: 3,
+      },
+    ]);
+
+    renderPage();
+
+    const artifactLink = await screen.findByRole("link", {
+      name: "packages/pkg-1.tgz",
+    });
+    const row = artifactLink.closest("tr");
+    expect(row).toBeTruthy();
+
+    const scope = within(row as HTMLTableRowElement);
+    expect(scope.getByRole("link", { name: "Build build-1…" })).toHaveAttribute(
+      "href",
+      "/builds/build-1",
+    );
+    expect(scope.getByRole("link", { name: "job-1…" })).toHaveAttribute(
+      "href",
+      "/jobs/job-1",
+    );
+    expect(scope.getByText("Step 3")).toBeTruthy();
+  });
+
+  it("canonicalizes artifact filters and clears them", async () => {
+    mockedListArtifactCatalog.mockResolvedValue([]);
+
+    renderPage([
+      "/artifacts?q=%20pkg%20&project_id=project-1&job_id=job-1&build_id=build-1&page=2&pageSize=50",
+    ]);
+
+    expect(await screen.findByText("No artifacts on page 2")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Search artifacts"), {
+      target: { value: "   " },
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search").textContent).toBe(
+        "?project_id=project-1&job_id=job-1&build_id=build-1&pageSize=50",
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText("Project"), {
+      target: { value: "" },
+    });
+    fireEvent.change(screen.getByLabelText("Job ID"), {
+      target: { value: "" },
+    });
+    fireEvent.change(screen.getByLabelText("Build ID"), {
+      target: { value: "" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search").textContent).toBe(
+        "?pageSize=50",
+      );
+      expect(mockedListArtifactCatalog).toHaveBeenLastCalledWith({
+        q: "",
+        limit: 51,
+        offset: 0,
+      });
+    });
+  });
+
+  it("shows the filtered empty state and invalid page size falls back to default", async () => {
+    mockedListArtifactCatalog.mockResolvedValue([]);
+
+    renderPage(["/artifacts?q=pkg&pageSize=999"]);
+
+    expect(
+      await screen.findByText("No artifacts matched the current filters."),
+    ).toBeTruthy();
+    expect(screen.getByDisplayValue("20")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search").textContent).toBe("");
+    });
+  });
+
   it("paginates forward and backward and updates page size", async () => {
     mockedListArtifactCatalog.mockResolvedValue(
       Array.from({ length: 21 }, (_value, index) => buildArtifact(index + 1)),

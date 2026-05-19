@@ -162,4 +162,36 @@ describe("ArtifactDetailPage", () => {
       screen.getAllByRole("link", { name: "Build build-1…" })[0],
     ).toHaveAttribute("href", "/builds/build-1");
   });
+
+  it("renders id and slug fallbacks when names are blank", async () => {
+    mockedGetArtifact.mockResolvedValueOnce(
+      buildArtifactDetail({
+        name: "   ",
+        build_number: 0,
+        project_name: "   ",
+        project_slug: "platform",
+        job_name: "   ",
+        step_name: "   ",
+        step_index: 2,
+      }),
+    );
+
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 2,
+        name: "packages/pkg-a.tgz",
+      }),
+    ).toBeTruthy();
+    expect(screen.getByText("platform")).toBeTruthy();
+    expect(screen.getAllByText("Step 2").length).toBe(2);
+    expect(screen.getAllByRole("link", { name: "job-1…" })[0]).toHaveAttribute(
+      "href",
+      "/jobs/job-1",
+    );
+    expect(
+      screen.getAllByRole("link", { name: "Build build-1…" })[0],
+    ).toHaveAttribute("href", "/builds/build-1");
+  });
 });

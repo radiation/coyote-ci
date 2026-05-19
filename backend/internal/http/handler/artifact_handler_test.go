@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
@@ -190,6 +191,21 @@ func TestArtifactHandlerListArtifacts(t *testing.T) {
 	}
 }
 
+type artifactStubProjectRoleLookup struct {
+	membership domain.ProjectMembership
+	err        error
+}
+
+func (s artifactStubProjectRoleLookup) GetProjectMembership(_ context.Context, projectID string, userID string) (domain.ProjectMembership, error) {
+	if s.err != nil {
+		return domain.ProjectMembership{}, s.err
+	}
+	if s.membership.ProjectID != projectID || s.membership.UserID != userID {
+		return domain.ProjectMembership{}, repository.ErrProjectMembershipNotFound
+	}
+	return s.membership, nil
+}
+
 func TestArtifactHandlerListArtifactsRejectsInvalidType(t *testing.T) {
 	handler := NewArtifactHandler(artifactsvc.NewService(&fakeArtifactBrowseRepo{}))
 	req := httptest.NewRequest(http.MethodGet, "/artifacts?type=not-real", nil)
@@ -199,6 +215,73 @@ func TestArtifactHandlerListArtifactsRejectsInvalidType(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestArtifactHandlerListArtifactsRequiresService(t *testing.T) {
+	handler := &ArtifactHandler{}
+	req := httptest.NewRequest(http.MethodGet, "/artifacts", nil)
+	w := httptest.NewRecorder()
+
+	handler.ListArtifacts(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestArtifactHandlerListArtifactCatalogRequiresCatalogRepository(t *testing.T) {
+	handler := NewArtifactHandler(artifactsvc.NewService(&fakeArtifactBrowseRepo{}))
+	req := httptest.NewRequest(http.MethodGet, "/artifacts/catalog", nil)
+	w := httptest.NewRecorder()
+
+	handler.ListArtifactCatalog(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := decodeErrorMessage(t, w); got != "artifact repository not configured" {
+		t.Fatalf("expected repository not configured error, got %q", got)
+	}
+}
+
+func TestArtifactHandlerGetArtifactRequiresConfiguredService(t *testing.T) {
+	handler := &ArtifactHandler{}
+	req := addURLParams(httptest.NewRequest(http.MethodGet, "/artifacts/artifact-1", nil), map[string]string{"artifactID": "artifact-1"})
+	w := httptest.NewRecorder()
+
+	handler.GetArtifact(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestArtifactHandlerGetArtifactRequiresCatalogRepository(t *testing.T) {
+	handler := NewArtifactHandler(artifactsvc.NewService(&fakeArtifactBrowseRepo{}))
+	req := addURLParams(httptest.NewRequest(http.MethodGet, "/artifacts/artifact-1", nil), map[string]string{"artifactID": "artifact-1"})
+	w := httptest.NewRecorder()
+
+	handler.GetArtifact(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := decodeErrorMessage(t, w); got != "artifact repository not configured" {
+		t.Fatalf("expected repository not configured error, got %q", got)
+	}
+}
+
+func TestArtifactHandlerListArtifactCatalogRequiresAuthorizedProjectUser(t *testing.T) {
+	handler := NewArtifactHandler(artifactsvc.NewService(&fakeArtifactCatalogRepo{}))
+	handler.SetAuthorization(auth.ModeHeader, artifactStubProjectRoleLookup{})
+	req := httptest.NewRequest(http.MethodGet, "/artifacts/catalog?project_id=project-1", nil)
+	w := httptest.NewRecorder()
+
+	handler.ListArtifactCatalog(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -530,6 +613,159 @@ func TestArtifactHandlerGetArtifact_NotFound(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestArtifactHandlerResolveProjectFilterBranches(t *testing.T) {
+	handler := &ArtifactHandler{}
+
+	projectID, ok := handler.resolveProjectFilter(
+		httptest.NewRecorder(),
+		httptest.NewRequest(http.MethodGet, "/artifacts?project_id=%20project-1%20", nil),
+	)
+	if !ok || projectID != "project-1" {
+		t.Fatalf("expected trimmed project id, got %q ok=%v", projectID, ok)
+	}
+
+	w := httptest.NewRecorder()
+	_, ok = handler.resolveProjectFilter(w, httptest.NewRequest(http.MethodGet, "/artifacts?project_slug=platform", nil))
+	if ok || w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected missing project service to fail with 500, got ok=%v code=%d", ok, w.Code)
+	}
+
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	project, err := projectService.CreateProject(context.Background(), service.CreateProjectInput{Name: "Platform", Slug: "platform"})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	handler.SetProjectService(projectService)
+
+	w = httptest.NewRecorder()
+	_, ok = handler.resolveProjectFilter(w, httptest.NewRequest(http.MethodGet, "/artifacts?project_slug=missing", nil))
+	if ok || w.Code != http.StatusNotFound {
+		t.Fatalf("expected missing slug to fail with 404, got ok=%v code=%d", ok, w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	_, ok = handler.resolveProjectFilter(
+		w,
+		httptest.NewRequest(http.MethodGet, "/artifacts?project_id=other&project_slug=platform", nil),
+	)
+	if ok || w.Code != http.StatusBadRequest {
+		t.Fatalf("expected mismatched id and slug to fail with 400, got ok=%v code=%d", ok, w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	resolvedProjectID, ok := handler.resolveProjectFilter(
+		w,
+		httptest.NewRequest(http.MethodGet, "/artifacts?project_slug=platform", nil),
+	)
+	if !ok || resolvedProjectID != project.ID {
+		t.Fatalf("expected slug to resolve to %q, got %q ok=%v", project.ID, resolvedProjectID, ok)
+	}
+}
+
+func TestArtifactHandlerFiltersArtifactsByProjectAccess(t *testing.T) {
+	handler := &ArtifactHandler{
+		authMode: auth.ModeHeader,
+		projectRoles: artifactStubProjectRoleLookup{membership: domain.ProjectMembership{
+			ProjectID: "project-1",
+			UserID:    "user-1",
+			Role:      domain.ProjectMemberRoleViewer,
+		}},
+	}
+	ctx := auth.WithUser(context.Background(), domain.User{ID: "user-1", GlobalRole: domain.GlobalRoleUser})
+	jobID := "job-1"
+	items, err := handler.filterArtifactsForRead(ctx, []domain.ArtifactBrowseItem{
+		{Key: "one", ProjectID: "project-1", Versions: []domain.ArtifactBrowseVersion{{Artifact: domain.BuildArtifact{ID: "artifact-1"}, Build: domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID}}}},
+		{Key: "two", ProjectID: "project-2", Versions: []domain.ArtifactBrowseVersion{{Artifact: domain.BuildArtifact{ID: "artifact-2"}, Build: domain.Build{ID: "build-2", ProjectID: "project-2"}}}},
+	})
+	if err != nil {
+		t.Fatalf("filterArtifactsForRead returned error: %v", err)
+	}
+	if len(items) != 1 || items[0].ProjectID != "project-1" {
+		t.Fatalf("expected only allowed project artifacts, got %#v", items)
+	}
+
+	records, err := handler.filterArtifactRecordsForRead(ctx, []domain.ArtifactRecord{
+		{Artifact: domain.BuildArtifact{ID: "artifact-1"}, Build: domain.Build{ID: "build-1", ProjectID: "project-1"}},
+		{Artifact: domain.BuildArtifact{ID: "artifact-2"}, Build: domain.Build{ID: "build-2", ProjectID: "project-2"}},
+	})
+	if err != nil {
+		t.Fatalf("filterArtifactRecordsForRead returned error: %v", err)
+	}
+	if len(records) != 1 || records[0].Build.ProjectID != "project-1" {
+		t.Fatalf("expected only allowed project records, got %#v", records)
+	}
+}
+
+func TestArtifactHandlerResponseHelpersUseFallbacks(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	jobID := "job-1"
+	browseVersion := domain.ArtifactBrowseVersion{
+		Artifact: domain.BuildArtifact{
+			ID:          "artifact-1",
+			BuildID:     "build-1",
+			LogicalPath: "packages/pkg-a.tgz",
+			CreatedAt:   now,
+		},
+		Build: domain.Build{
+			ID:        "build-1",
+			ProjectID: "project-1",
+			JobID:     &jobID,
+			Status:    domain.BuildStatusSuccess,
+			CreatedAt: now,
+		},
+	}
+	browseResponse := toArtifactBrowseVersionResponse(browseVersion, map[string]domain.Project{}, map[string]domain.Job{})
+	if browseResponse.StorageProvider != string(domain.StorageProviderFilesystem) {
+		t.Fatalf("expected default filesystem provider, got %q", browseResponse.StorageProvider)
+	}
+	if browseResponse.StepIndex != nil || browseResponse.StepName != nil {
+		t.Fatalf("expected nil step metadata, got %#v %#v", browseResponse.StepIndex, browseResponse.StepName)
+	}
+	if browseResponse.ProjectName != nil || browseResponse.ProjectSlug != nil || browseResponse.JobName != nil {
+		t.Fatalf("expected missing lookup metadata to remain nil, got %#v %#v %#v", browseResponse.ProjectName, browseResponse.ProjectSlug, browseResponse.JobName)
+	}
+
+	record := domain.ArtifactRecord{
+		Artifact: domain.BuildArtifact{ID: "artifact-1", BuildID: "build-1", LogicalPath: "packages/pkg-a.tgz", CreatedAt: now},
+		Build:    domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, Status: domain.BuildStatusSuccess, CreatedAt: now},
+	}
+	catalogResponse := toArtifactCatalogItemResponse(record, map[string]domain.Project{}, map[string]domain.Job{})
+	detailResponse := toArtifactDetailResponse(record, map[string]domain.Project{}, map[string]domain.Job{})
+	if catalogResponse.StorageProvider != string(domain.StorageProviderFilesystem) {
+		t.Fatalf("expected catalog default filesystem provider, got %q", catalogResponse.StorageProvider)
+	}
+	if detailResponse.StorageProvider != string(domain.StorageProviderFilesystem) {
+		t.Fatalf("expected detail default filesystem provider, got %q", detailResponse.StorageProvider)
+	}
+
+	projectName, projectSlug := projectContext(map[string]domain.Project{}, "missing")
+	if projectName != nil || projectSlug != nil {
+		t.Fatalf("expected missing project context to return nils, got %#v %#v", projectName, projectSlug)
+	}
+	if jobName := jobContext(map[string]domain.Job{}, nil); jobName != nil {
+		t.Fatalf("expected nil job context for nil id, got %#v", jobName)
+	}
+	if jobName := jobContext(map[string]domain.Job{}, &jobID); jobName != nil {
+		t.Fatalf("expected nil job context for missing lookup, got %#v", jobName)
+	}
+}
+
+func TestArtifactHandlerWriteProjectLookupErrorInternal(t *testing.T) {
+	handler := &ArtifactHandler{}
+	w := httptest.NewRecorder()
+
+	handler.writeProjectLookupError(w, errors.New("boom"))
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", w.Code)
+	}
+	if got := decodeErrorMessage(t, w); got != "internal server error" {
+		t.Fatalf("expected internal server error, got %q", got)
 	}
 }
 

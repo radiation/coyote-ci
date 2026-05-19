@@ -198,6 +198,116 @@ describe("ArtifactLogicalBrowserPage", () => {
     expect(screen.getByText("Page 2")).toBeTruthy();
   });
 
+  it("updates logical filters canonically and resets page state", async () => {
+    mockedListArtifacts.mockResolvedValue([]);
+
+    renderPage([
+      "/artifacts/logical?q=%20pkg%20&type=npm_package&project_id=project-1&page=2",
+    ]);
+
+    expect(await screen.findByText("No artifacts on page 2")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Search artifacts"), {
+      target: { value: "   " },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search").textContent).toBe(
+        "?type=npm_package&project_id=project-1",
+      );
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "",
+        type: "npm_package",
+        project_id: "project-1",
+        limit: 21,
+        offset: 0,
+      });
+    });
+
+    fireEvent.change(screen.getByLabelText("Type"), {
+      target: { value: "" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search").textContent).toBe(
+        "?project_id=project-1",
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText("Project"), {
+      target: { value: "" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search").textContent).toBe("");
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "",
+        limit: 21,
+        offset: 0,
+      });
+    });
+  });
+
+  it("navigates between logical artifact pages and clears filters", async () => {
+    mockedListArtifacts
+      .mockResolvedValueOnce(
+        Array.from({ length: 21 }, (_value, index) =>
+          buildBrowseItem(index + 1),
+        ),
+      )
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(
+        Array.from({ length: 21 }, (_value, index) =>
+          buildBrowseItem(index + 1),
+        ),
+      )
+      .mockResolvedValue([]);
+
+    renderPage(["/artifacts/logical?q=pkg"]);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Next" })).not.toBeDisabled();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search").textContent).toBe(
+        "?q=pkg&page=2",
+      );
+      expect(screen.getByText("No artifacts on page 2")).toBeTruthy();
+      expect(screen.getByText("No artifacts on this page.")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search").textContent).toBe("?q=pkg");
+      expect(screen.getByText("Showing 1-20; more available")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search").textContent).toBe("");
+      expect(
+        screen.getByText("No artifacts have been published yet."),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows the filtered empty state when no logical artifacts match", async () => {
+    mockedListArtifacts.mockResolvedValue([]);
+
+    renderPage(["/artifacts/logical?q=pkg&type=npm_package"]);
+
+    expect(await screen.findByText("No matching artifacts")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Loading artifacts")).toBeNull();
+    });
+    expect(screen.getByText(/Adjust the search or type filter/)).toBeTruthy();
+  });
+
   it("shows an error state when the logical browser request fails", async () => {
     mockedListArtifacts.mockRejectedValueOnce(new Error("boom"));
 

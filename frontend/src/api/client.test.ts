@@ -187,6 +187,31 @@ describe("API client - types", () => {
     });
   });
 
+  it("trims project slug filters for artifact browse and catalog requests", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          artifacts: [],
+        },
+      }),
+    } as Response);
+
+    await listArtifacts({ q: "  pkg  ", project_slug: "  platform  " });
+    await listArtifactCatalog({ project_slug: "  platform  " });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/artifacts?q=pkg&project_slug=platform",
+      { credentials: "include" },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/artifacts/catalog?project_slug=platform",
+      { credentials: "include" },
+    );
+  });
+
   it("fetches artifact detail from /artifacts/{id}", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
