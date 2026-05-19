@@ -63,6 +63,7 @@ func main() {
 	sourceCredentialRepo := repositorypostgres.NewSourceCredentialRepository(db)
 	managedImageCatalogRepo := repositorypostgres.NewManagedImageCatalogRepository(db)
 	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
+	artifactLabelRepo := repositorypostgres.NewArtifactLabelRepository(db)
 	webhookDeliveryRepo := repositorypostgres.NewWebhookDeliveryRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	managedImageRefresher := managedimagesvc.NewService(
@@ -86,7 +87,7 @@ func main() {
 		log.Fatalf("failed to resolve artifact stores: %v", err)
 	}
 	logSink := logs.NewPostgresSink(db)
-	versionTagService := versiontagsvc.NewService(versionTagRepo)
+	versionTagService := versiontagsvc.NewService(versionTagRepo).WithArtifactLabels(artifactLabelRepo)
 	artifactService := artifactsvc.NewService(artifactRepo)
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, nil, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:      executionJobRepo,

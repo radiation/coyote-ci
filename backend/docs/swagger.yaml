@@ -226,6 +226,10 @@ definitions:
         type: string
       storage_provider:
         type: string
+      version_tags:
+        items:
+          $ref: '#/definitions/api.VersionTagResponse'
+        type: array
     type: object
   api.BuildArtifactResponse:
     properties:
@@ -1192,6 +1196,8 @@ definitions:
         items:
           type: string
         type: array
+      kind:
+        type: string
       managed_image_version_ids:
         items:
           type: string
@@ -1208,6 +1214,8 @@ definitions:
       id:
         type: string
       job_id:
+        type: string
+      kind:
         type: string
       managed_image_version_id:
         type: string

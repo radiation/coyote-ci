@@ -95,6 +95,7 @@ func (h *VersionTagHandler) CreateJobVersionTags(w http.ResponseWriter, r *http.
 		return
 	}
 	tags, err := h.service.CreateVersionTags(r.Context(), jobID, versiontagsvc.CreateVersionTagsInput{
+		Kind:                   req.Kind,
 		Version:                req.Version,
 		ArtifactIDs:            req.ArtifactIDs,
 		ManagedImageVersionIDs: req.ManagedImageVersionIDs,
@@ -137,6 +138,9 @@ func (h *VersionTagHandler) writeServiceError(w http.ResponseWriter, err error) 
 	case errors.Is(err, versiontagsvc.ErrJobIDRequired),
 		errors.Is(err, versiontagsvc.ErrVersionRequired),
 		errors.Is(err, versiontagsvc.ErrTargetRequired),
+		errors.Is(err, versiontagsvc.ErrVersionTagKindInvalid),
+		errors.Is(err, versiontagsvc.ErrArtifactChannelsRequireArtifactLabelRepository),
+		errors.Is(err, versiontagsvc.ErrManagedImageVersionChannelsUnsupported),
 		errors.Is(err, versiontagsvc.ErrVersionTooLong),
 		errors.Is(err, versiontagsvc.ErrVersionContainsControlChars):
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())

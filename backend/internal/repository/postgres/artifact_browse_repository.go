@@ -20,9 +20,15 @@ const artifactBrowseFilterClause = `(
 			OR COALESCE(b.job_id::text, '') ILIKE $2
 			OR EXISTS (
 				SELECT 1
-				FROM version_tags vt
-				WHERE vt.artifact_id = a.id
-				  AND vt.version_text ILIKE $2
+				FROM artifact_versions av
+				WHERE av.artifact_id = a.id
+				  AND av.version_text ILIKE $2
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM artifact_channels ac
+				WHERE ac.current_artifact_id = a.id
+				  AND ac.channel_name ILIKE $2
 			)
 		)
 		AND ($3 = '' OR a.artifact_type = $3)

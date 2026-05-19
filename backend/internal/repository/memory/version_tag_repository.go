@@ -172,6 +172,7 @@ func (r *VersionTagRepository) CreateForTargets(_ context.Context, params reposi
 		tag := domain.VersionTag{
 			ID:         uuid.NewString(),
 			JobID:      jobID,
+			Kind:       domain.VersionTagKindVersion,
 			Version:    version,
 			TargetType: domain.VersionTagTargetArtifact,
 			ArtifactID: &artifactID,
@@ -185,6 +186,7 @@ func (r *VersionTagRepository) CreateForTargets(_ context.Context, params reposi
 		tag := domain.VersionTag{
 			ID:                    uuid.NewString(),
 			JobID:                 jobID,
+			Kind:                  domain.VersionTagKindVersion,
 			Version:               version,
 			TargetType:            domain.VersionTagTargetManagedImageVersion,
 			ManagedImageVersionID: &managedImageVersionID,

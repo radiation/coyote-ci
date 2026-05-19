@@ -154,6 +154,14 @@ func (h *ArtifactHandler) GetArtifact(w http.ResponseWriter, r *http.Request) {
 	if !authorizeProject(w, r, h.authMode, h.projectRoles, record.Build.ProjectID, auth.CanReadProjectResources, "project membership is required") {
 		return
 	}
+	if h.versionTags != nil {
+		tags, listErr := h.versionTags.ListArtifactTags(r.Context(), record.Artifact.ID)
+		if listErr != nil {
+			writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+			return
+		}
+		record.Artifact.VersionTags = tags
+	}
 
 	projectLookup, jobLookup, err := h.catalogContextLookup(r.Context(), []domain.ArtifactRecord{record})
 	if err != nil {
@@ -435,6 +443,7 @@ func toArtifactDetailResponse(record domain.ArtifactRecord, projects map[string]
 		ChecksumSHA256:  record.Artifact.ChecksumSHA256,
 		StorageProvider: provider,
 		DownloadURLPath: "/builds/" + record.Build.ID + "/artifacts/" + record.Artifact.ID + "/download",
+		VersionTags:     toVersionTagResponses(record.Artifact.VersionTags),
 		CreatedAt:       record.Artifact.CreatedAt.Format(time.RFC3339),
 	}
 }

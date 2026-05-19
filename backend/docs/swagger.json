@@ -3092,6 +3092,12 @@
                 },
                 "storage_provider": {
                     "type": "string"
+                },
+                "version_tags": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.VersionTagResponse"
+                    }
                 }
             }
         },
@@ -4578,6 +4584,9 @@
                         "type": "string"
                     }
                 },
+                "kind": {
+                    "type": "string"
+                },
                 "managed_image_version_ids": {
                     "type": "array",
                     "items": {
@@ -4602,6 +4611,9 @@
                     "type": "string"
                 },
                 "job_id": {
+                    "type": "string"
+                },
+                "kind": {
                     "type": "string"
                 },
                 "managed_image_version_id": {

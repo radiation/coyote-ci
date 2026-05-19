@@ -2,9 +2,12 @@ package postgres
 
 import (
 	"context"
+	"crypto/md5"
 	"database/sql"
 	"errors"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -18,13 +21,31 @@ func NewArtifactRepository(db *sql.DB) *ArtifactRepository {
 	return &ArtifactRepository{db: db}
 }
 
-const artifactColumns = `id, build_id, step_id, artifact_name, logical_path, artifact_type, storage_key, storage_provider, size_bytes, content_type, checksum_sha256, created_at`
+const artifactColumns = `id, build_id, package_id, step_id, artifact_name, logical_path, artifact_type, storage_key, storage_provider, size_bytes, content_type, checksum_sha256, created_at`
 
 func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
-	const query = `
+	const buildScopeQuery = `
+		SELECT project_id::text, job_id
+		FROM builds
+		WHERE id = $1
+	`
+	const insertPackageQuery = `
+		INSERT INTO artifact_packages (
+			id,
+			project_id,
+			job_id,
+			scope_build_id,
+			logical_path,
+			created_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT DO NOTHING
+	`
+	const insertArtifactQuery = `
 		INSERT INTO build_artifacts (
 			id,
 			build_id,
+			package_id,
 			step_id,
 			artifact_name,
 			logical_path,
@@ -36,7 +57,7 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 			checksum_sha256,
 			created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, NOW()))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE($13, NOW()))
 		RETURNING ` + artifactColumns
 
 	var createdAt any
@@ -54,11 +75,44 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 		artifactType = string(artifact.ArtifactType)
 	}
 
-	return scanArtifact(r.db.QueryRowContext(
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.BuildArtifact{}, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var projectID string
+	var jobID sql.NullString
+	if queryErr := tx.QueryRowContext(ctx, buildScopeQuery, artifact.BuildID).Scan(&projectID, &jobID); queryErr != nil {
+		if errors.Is(queryErr, sql.ErrNoRows) {
+			return domain.BuildArtifact{}, repository.ErrArtifactNotFound
+		}
+		return domain.BuildArtifact{}, queryErr
+	}
+
+	scopeID := artifact.BuildID
+	var packageJobID any
+	var scopeBuildID any = artifact.BuildID
+	if jobID.Valid && strings.TrimSpace(jobID.String) != "" {
+		scopeID = strings.TrimSpace(jobID.String)
+		packageJobID = scopeID
+		scopeBuildID = nil
+	}
+	packageID := md5UUID(scopeID + "::" + artifact.LogicalPath)
+	artifact.PackageID = packageID
+
+	if _, insertErr := tx.ExecContext(ctx, insertPackageQuery, packageID, projectID, packageJobID, scopeBuildID, artifact.LogicalPath, createdAt); insertErr != nil {
+		return domain.BuildArtifact{}, insertErr
+	}
+
+	created, err := scanArtifact(tx.QueryRowContext(
 		ctx,
-		query,
+		insertArtifactQuery,
 		artifact.ID,
 		artifact.BuildID,
+		artifact.PackageID,
 		artifact.StepID,
 		nullableTrimmedString(artifact.Name),
 		artifact.LogicalPath,
@@ -70,6 +124,13 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 		artifact.ChecksumSHA256,
 		createdAt,
 	))
+	if err != nil {
+		return domain.BuildArtifact{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.BuildArtifact{}, err
+	}
+	return created, nil
 }
 
 func (r *ArtifactRepository) ListByBuildID(ctx context.Context, buildID string) ([]domain.BuildArtifact, error) {
@@ -147,6 +208,7 @@ func scanArtifact(scanner rowScanner) (domain.BuildArtifact, error) {
 	err := scanner.Scan(
 		&artifact.ID,
 		&artifact.BuildID,
+		&artifact.PackageID,
 		&stepID,
 		&artifactName,
 		&artifact.LogicalPath,
@@ -201,6 +263,7 @@ func scanArtifactBrowseRecord(scanner rowScanner) (domain.ArtifactBrowseRecord, 
 	err := scanner.Scan(
 		&record.Artifact.ID,
 		&record.Artifact.BuildID,
+		&record.Artifact.PackageID,
 		&artifactStepID,
 		&artifactName,
 		&record.Artifact.LogicalPath,
@@ -289,6 +352,21 @@ func scanArtifactBrowseRecord(scanner rowScanner) (domain.ArtifactBrowseRecord, 
 	}
 
 	return record, nil
+}
+
+func md5UUID(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "00000000-0000-4000-a000-000000000000"
+	}
+	hash := md5.Sum([]byte(trimmed))
+	hash[6] = (hash[6] & 0x0f) | 0x40
+	hash[8] = (hash[8] & 0x0f) | 0xa0
+	generated, err := uuid.FromBytes(hash[:])
+	if err != nil {
+		return "00000000-0000-4000-a000-000000000000"
+	}
+	return generated.String()
 }
 
 func nullableTrimmedString(value string) any {

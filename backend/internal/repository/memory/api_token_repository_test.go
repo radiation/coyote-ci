@@ -14,6 +14,7 @@ func TestNewAPITokenRepository(t *testing.T) {
 	repo := NewAPITokenRepository()
 	if repo == nil {
 		t.Fatal("expected repository, got nil")
+		return
 	}
 	if repo.tokens == nil {
 		t.Fatal("expected token map to be initialized")

@@ -14,6 +14,7 @@ const (
 type BuildArtifact struct {
 	ID              string
 	BuildID         string
+	PackageID       string
 	StepID          *string // nullable; set when artifact came from a specific step
 	Name            string
 	LogicalPath     string

@@ -15,6 +15,7 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"../../../db/migrations/00008_add_version_tags.sql",
 		"../../../db/migrations/00010_add_build_artifact_types.sql",
 		"../../../db/migrations/00011_add_build_artifact_names.sql",
+		"../../../db/migrations/00017_add_artifact_packages.sql",
 	}
 
 	var builder strings.Builder
@@ -29,6 +30,7 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 
 	sql := builder.String()
 	required := []string{
+		"CREATE TABLE IF NOT EXISTS builds (\n    id UUID PRIMARY KEY,\n    project_id TEXT NOT NULL,",
 		"current_step_index",
 		"pipeline_config_yaml",
 		"pipeline_name",
@@ -62,6 +64,11 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"target_type",
 		"artifact_id",
 		"managed_image_version_id",
+		"CREATE TABLE IF NOT EXISTS artifact_packages (\n    id UUID PRIMARY KEY,\n    project_id TEXT NOT NULL,",
+		"CREATE TABLE IF NOT EXISTS artifact_packages",
+		"package_id",
+		"CREATE TABLE IF NOT EXISTS artifact_versions",
+		"CREATE TABLE IF NOT EXISTS artifact_channels",
 	}
 	for _, token := range required {
 		if !strings.Contains(sql, token) {

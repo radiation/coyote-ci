@@ -205,13 +205,13 @@ describe("BuildDetailPage artifacts", () => {
 
     const input = screen.getByLabelText("artifact-version-artifact-1");
     fireEvent.change(input, {
-      target: { value: "release-42" },
+      target: { value: "1.2.4" },
     });
     fireEvent.submit(input.closest("form") as HTMLFormElement);
 
     await waitFor(() => {
       expect(mockedCreateJobVersionTags).toHaveBeenCalledWith("job-1", {
-        version: "release-42",
+        version: "1.2.4",
         artifact_ids: ["artifact-1"],
         managed_image_version_ids: undefined,
       });
