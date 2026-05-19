@@ -76,6 +76,32 @@ function renderPage(initialEntries = ["/artifacts/artifact-1"]) {
   );
 }
 
+function renderPageWithClient(
+  queryClient: QueryClient,
+  options: {
+    initialEntries?: string[];
+    routePath?: string;
+  } = {},
+) {
+  const {
+    initialEntries = ["/artifacts/artifact-1"],
+    routePath = "/artifacts/:id",
+  } = options;
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={initialEntries}>
+        <Routes>
+          <Route path="/artifacts" element={<div>artifact catalog</div>} />
+          <Route path={routePath} element={<ArtifactDetailPage />} />
+          <Route path="/builds/:id" element={<div>build detail</div>} />
+          <Route path="/jobs/:id" element={<div>job detail</div>} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
 describe("ArtifactDetailPage", () => {
   const mockedCreateJobVersionTags = vi.mocked(createJobVersionTags);
   const mockedGetArtifact = vi.mocked(getArtifact);
@@ -174,6 +200,116 @@ describe("ArtifactDetailPage", () => {
     expect(
       await screen.findByText("version tag already exists for target"),
     ).toBeTruthy();
+  });
+
+  it("shows an artifact id required error when the route param is missing", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    queryClient.setQueryData(["artifact", undefined], buildArtifactDetail());
+
+    renderPageWithClient(queryClient, {
+      initialEntries: ["/artifacts/detail"],
+      routePath: "/artifacts/detail",
+    });
+
+    const input = await screen.findByLabelText(
+      "artifact-detail-version-artifact-1",
+    );
+    fireEvent.change(input, {
+      target: { value: "release-42" },
+    });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    expect(await screen.findByText("Artifact ID is required."));
+  });
+
+  it("keeps the empty state when a successful response returns tags for a different artifact", async () => {
+    mockedCreateJobVersionTags.mockResolvedValueOnce([
+      buildVersionTag({
+        id: "tag-foreign",
+        artifact_id: "artifact-2",
+      }),
+    ]);
+
+    renderPage();
+
+    const input = await screen.findByLabelText(
+      "artifact-detail-version-artifact-1",
+    );
+    fireEvent.change(input, {
+      target: { value: "release-42" },
+    });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    expect(await screen.findByText("No version / tags yet.")).toBeTruthy();
+    expect(screen.queryByText("release-42")).toBeNull();
+  });
+
+  it("does not duplicate an existing tag when the same tag id is returned again", async () => {
+    mockedGetArtifact.mockResolvedValueOnce(
+      buildArtifactDetail({
+        version_tags: [buildVersionTag()],
+      }),
+    );
+    mockedCreateJobVersionTags.mockResolvedValueOnce([buildVersionTag()]);
+
+    renderPage();
+
+    const input = await screen.findByLabelText(
+      "artifact-detail-version-artifact-1",
+    );
+    fireEvent.change(input, {
+      target: { value: "1.2.3" },
+    });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("1.2.3")).toHaveLength(1);
+    });
+  });
+
+  it("skips cache updates when the artifact query cache entry is removed before success", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    mockedCreateJobVersionTags.mockImplementationOnce(async () => {
+      queryClient.removeQueries({
+        queryKey: ["artifact", "artifact-1"],
+        exact: true,
+      });
+      return [buildVersionTag({ id: "tag-2", version: "release-42" })];
+    });
+
+    renderPageWithClient(queryClient);
+
+    const input = await screen.findByRole("heading", {
+      level: 2,
+      name: "coyote-ci/package-a",
+    });
+    expect(input).toBeTruthy();
+
+    fireEvent.change(
+      screen.getByLabelText("artifact-detail-version-artifact-1"),
+      {
+        target: { value: "release-42" },
+      },
+    );
+    fireEvent.submit(
+      screen
+        .getByLabelText("artifact-detail-version-artifact-1")
+        .closest("form") as HTMLFormElement,
+    );
+
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryData(["artifact", "artifact-1"]),
+      ).toBeUndefined();
+    });
   });
 
   it("shows a loading state while artifact detail is in flight", () => {
