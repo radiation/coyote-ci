@@ -268,8 +268,18 @@ describe("ArtifactDetailPage", () => {
     });
     fireEvent.submit(input.closest("form") as HTMLFormElement);
 
-    expect(screen.getAllByText("None")).toHaveLength(2);
-    expect(screen.queryByText("1.2.4")).toBeNull();
+    await waitFor(() => {
+      expect(mockedCreateJobVersionTags).toHaveBeenCalledWith("job-1", {
+        kind: "version",
+        version: "1.2.4",
+        artifact_ids: ["artifact-1"],
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("None")).toHaveLength(2);
+      expect(screen.queryByText("1.2.4")).toBeNull();
+    });
   });
 
   it("does not duplicate an existing tag when the same tag id is returned again", async () => {
