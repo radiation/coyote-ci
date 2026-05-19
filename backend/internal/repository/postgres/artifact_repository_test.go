@@ -151,6 +151,53 @@ func TestArtifactRepository_GetByID_NotFound(t *testing.T) {
 	}
 }
 
+func TestArtifactRepository_ListByBuildIDAndStepID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	repo := NewArtifactRepository(db)
+	now := time.Now().UTC()
+	contentType := "application/gzip"
+	checksum := "abc123"
+
+	buildRows := sqlmock.NewRows([]string{"id", "build_id", "package_id", "step_id", "artifact_name", "logical_path", "artifact_type", "storage_key", "storage_provider", "size_bytes", "content_type", "checksum_sha256", "created_at"}).
+		AddRow("artifact-1", "build-1", "package-1", "step-1", "pkg-a", "packages/pkg-a.tgz", "npm_package", "build-1/pkg-a.tgz", "filesystem", int64(12), contentType, checksum, now)
+	stepRows := sqlmock.NewRows([]string{"id", "build_id", "package_id", "step_id", "artifact_name", "logical_path", "artifact_type", "storage_key", "storage_provider", "size_bytes", "content_type", "checksum_sha256", "created_at"}).
+		AddRow("artifact-2", "build-1", "package-2", "step-1", "pkg-b", "packages/pkg-b.tgz", "npm_package", "build-1/pkg-b.tgz", "filesystem", int64(18), nil, nil, now.Add(time.Minute))
+
+	mock.ExpectQuery("SELECT id, build_id, package_id, step_id, artifact_name, logical_path, artifact_type, storage_key, storage_provider, size_bytes, content_type, checksum_sha256, created_at").
+		WithArgs("build-1").
+		WillReturnRows(buildRows)
+	mock.ExpectQuery("SELECT id, build_id, package_id, step_id, artifact_name, logical_path, artifact_type, storage_key, storage_provider, size_bytes, content_type, checksum_sha256, created_at").
+		WithArgs("step-1").
+		WillReturnRows(stepRows)
+
+	buildArtifacts, err := repo.ListByBuildID(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("ListByBuildID returned error: %v", err)
+	}
+	if len(buildArtifacts) != 1 || buildArtifacts[0].ID != "artifact-1" {
+		t.Fatalf("expected one build artifact, got %#v", buildArtifacts)
+	}
+
+	stepArtifacts, err := repo.ListByStepID(context.Background(), "step-1")
+	if err != nil {
+		t.Fatalf("ListByStepID returned error: %v", err)
+	}
+	if len(stepArtifacts) != 1 || stepArtifacts[0].ID != "artifact-2" {
+		t.Fatalf("expected one step artifact, got %#v", stepArtifacts)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations failed: %v", err)
+	}
+}
+
 func TestArtifactRepository_ListForBrowse(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
