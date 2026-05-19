@@ -1,10 +1,34 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { artifactDownloadURL, getArtifact } from "../api";
+import { createJobVersionTags, getArtifact, artifactDownloadURL } from "../api";
 import { StatusBadge } from "../components/StatusBadge";
-import type { ArtifactDetail } from "../types";
+import { VersionTagEditor } from "../components/VersionTagEditor";
+import type { ArtifactDetail, VersionTag } from "../types";
 import { formatFileSize } from "../utils/format";
 import { formatTime } from "../utils/time";
+
+function mergeVersionTags(
+  existing: VersionTag[] | undefined,
+  created: VersionTag[],
+): VersionTag[] {
+  const merged = [...(existing ?? [])];
+  const seenIDs = new Set(merged.map((tag) => tag.id));
+
+  for (const tag of created) {
+    if (seenIDs.has(tag.id)) {
+      continue;
+    }
+    merged.push(tag);
+    seenIDs.add(tag.id);
+  }
+
+  return merged;
+}
+
+function formatVersionTagError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  return new Error(message.replace(/^API\s+\d+:\s*/, ""));
+}
 
 function artifactTitle(artifact: ArtifactDetail): string {
   return artifact.name?.trim() || artifact.path;
@@ -62,11 +86,58 @@ function projectLabel(artifact: ArtifactDetail): string {
 
 export function ArtifactDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const queryClient = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["artifact", id],
     queryFn: () => getArtifact(id!),
     enabled: !!id,
   });
+
+  const createVersionTagMutation = useMutation({
+    mutationFn: async (version: string) => {
+      if (!id) {
+        throw new Error("Artifact ID is required.");
+      }
+      if (!data?.job_id) {
+        throw new Error("Artifact is not associated with a job.");
+      }
+      return createJobVersionTags(data.job_id, {
+        version,
+        artifact_ids: [id],
+      });
+    },
+    onSuccess: (createdTags) => {
+      if (!id) {
+        return;
+      }
+      queryClient.setQueryData<ArtifactDetail | undefined>(
+        ["artifact", id],
+        (current) => {
+          if (!current) {
+            return current;
+          }
+          const artifactTags = createdTags.filter(
+            (tag) => tag.artifact_id === current.id,
+          );
+          if (artifactTags.length === 0) {
+            return current;
+          }
+          return {
+            ...current,
+            version_tags: mergeVersionTags(current.version_tags, artifactTags),
+          };
+        },
+      );
+    },
+  });
+
+  async function handleAssignVersionTag(version: string) {
+    try {
+      await createVersionTagMutation.mutateAsync(version);
+    } catch (mutationError) {
+      throw formatVersionTagError(mutationError);
+    }
+  }
 
   if (isLoading) {
     return <p>Loading artifact…</p>;
@@ -180,6 +251,27 @@ export function ArtifactDetailPage() {
             <span className="artifact-mono">{data.checksum_sha256 ?? "—"}</span>
           </div>
         </div>
+      </section>
+
+      <section className="detail-panel">
+        <h3>Version / Tags</h3>
+        <p className="subtle-text">
+          Durable labels attached to this artifact for repository browsing and
+          promotion-style workflows.
+        </p>
+        <VersionTagEditor
+          tags={data.version_tags ?? []}
+          emptyText="No version / tags yet."
+          inputLabel={`artifact-detail-version-${data.id}`}
+          submitLabel="Assign tag"
+          onAssign={data.job_id ? handleAssignVersionTag : undefined}
+        />
+        {!data.job_id && (
+          <p className="subtle-text">
+            This artifact is not associated with a job, so new version / tags
+            cannot be assigned.
+          </p>
+        )}
       </section>
     </>
   );

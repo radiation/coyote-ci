@@ -76,7 +76,9 @@ export interface ArtifactCatalogResponse {
   artifacts: ArtifactCatalogItem[];
 }
 
-export type ArtifactDetail = ArtifactCatalogItem;
+export interface ArtifactDetail extends ArtifactCatalogItem {
+  version_tags?: VersionTag[];
+}
 
 export interface DataEnvelope<T> {
   data: T;

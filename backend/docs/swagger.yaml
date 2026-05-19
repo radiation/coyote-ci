@@ -226,6 +226,10 @@ definitions:
         type: string
       storage_provider:
         type: string
+      version_tags:
+        items:
+          $ref: '#/definitions/api.VersionTagResponse'
+        type: array
     type: object
   api.BuildArtifactResponse:
     properties:

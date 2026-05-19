@@ -1,15 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ArtifactDetailPage } from "./ArtifactDetailPage";
-import { getArtifact } from "../api";
-import type { ArtifactDetail } from "../types";
+import { createJobVersionTags, getArtifact } from "../api";
+import type { ArtifactDetail, VersionTag } from "../types";
 
 vi.mock("../api", () => ({
   getArtifact: vi.fn(),
+  createJobVersionTags: vi.fn(),
   artifactDownloadURL: (path: string) => `/api${path}`,
 }));
+
+function buildVersionTag(overrides: Partial<VersionTag> = {}): VersionTag {
+  return {
+    id: "tag-1",
+    job_id: "job-1",
+    version: "1.2.3",
+    target_type: "artifact",
+    artifact_id: "artifact-1",
+    created_at: "2026-04-25T09:15:00Z",
+    ...overrides,
+  };
+}
 
 function buildArtifactDetail(
   overrides: Partial<ArtifactDetail> = {},
@@ -35,6 +49,7 @@ function buildArtifactDetail(
     checksum_sha256: "pkg-sha",
     storage_provider: "filesystem",
     download_url_path: "/builds/build-1/artifacts/artifact-1/download",
+    version_tags: [],
     created_at: "2026-04-25T09:00:00Z",
     ...overrides,
   };
@@ -62,11 +77,13 @@ function renderPage(initialEntries = ["/artifacts/artifact-1"]) {
 }
 
 describe("ArtifactDetailPage", () => {
+  const mockedCreateJobVersionTags = vi.mocked(createJobVersionTags);
   const mockedGetArtifact = vi.mocked(getArtifact);
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockedGetArtifact.mockResolvedValue(buildArtifactDetail());
+    mockedCreateJobVersionTags.mockResolvedValue([buildVersionTag()]);
   });
 
   it("renders artifact metadata and build, job, and download links", async () => {
@@ -97,8 +114,66 @@ describe("ArtifactDetailPage", () => {
     expect(screen.getByText("Platform (platform)")).toBeTruthy();
     expect(screen.getByText("pkg-sha")).toBeTruthy();
     expect(screen.getAllByText("Step 1: Publish package").length).toBe(2);
+    expect(screen.getByText("No version / tags yet.")).toBeTruthy();
     expect(screen.queryByText("Storage Key")).toBeNull();
     expect(screen.queryByText("build-1/packages/pkg-a.tgz")).toBeNull();
+  });
+
+  it("renders existing version tags", async () => {
+    mockedGetArtifact.mockResolvedValueOnce(
+      buildArtifactDetail({
+        version_tags: [
+          buildVersionTag(),
+          buildVersionTag({ id: "tag-2", version: "latest" }),
+        ],
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("1.2.3")).toBeTruthy();
+    expect(screen.getByText("latest")).toBeTruthy();
+  });
+
+  it("creates a version tag from the artifact detail page", async () => {
+    renderPage();
+
+    const input = await screen.findByLabelText(
+      "artifact-detail-version-artifact-1",
+    );
+    fireEvent.change(input, {
+      target: { value: "release-42" },
+    });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(mockedCreateJobVersionTags).toHaveBeenCalledWith("job-1", {
+        version: "release-42",
+        artifact_ids: ["artifact-1"],
+      });
+    });
+
+    expect(await screen.findByText("1.2.3")).toBeTruthy();
+  });
+
+  it("shows duplicate or conflict errors when assigning a version tag fails", async () => {
+    mockedCreateJobVersionTags.mockRejectedValueOnce(
+      new Error("API 409: version tag already exists for target"),
+    );
+
+    renderPage();
+
+    const input = await screen.findByLabelText(
+      "artifact-detail-version-artifact-1",
+    );
+    fireEvent.change(input, {
+      target: { value: "1.2.3" },
+    });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    expect(
+      await screen.findByText("version tag already exists for target"),
+    ).toBeTruthy();
   });
 
   it("shows a loading state while artifact detail is in flight", () => {
@@ -158,6 +233,11 @@ describe("ArtifactDetailPage", () => {
     expect(screen.getByText("project-1")).toBeTruthy();
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
     expect(screen.queryByRole("link", { name: "backend-ci" })).toBeNull();
+    expect(
+      screen.getByText(
+        "This artifact is not associated with a job, so new version / tags cannot be assigned.",
+      ),
+    ).toBeTruthy();
     expect(
       screen.getAllByRole("link", { name: "Build build-1…" })[0],
     ).toHaveAttribute("href", "/builds/build-1");

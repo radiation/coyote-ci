@@ -75,3 +75,19 @@ func TestVersionTagHandler_CreateConflict(t *testing.T) {
 		t.Fatalf("expected 409, got %d", res.Code)
 	}
 }
+
+func TestVersionTagHandler_CreateNotFound(t *testing.T) {
+	repo := repositorymemory.NewVersionTagRepository()
+	h := NewVersionTagHandler(versiontagsvc.NewService(repo))
+
+	req := httptest.NewRequest(http.MethodPost, "/jobs/job-1/version-tags", bytes.NewBufferString(`{"version":"v1","artifact_ids":["missing-artifact"]}`))
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("jobID", "job-1")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	res := httptest.NewRecorder()
+	h.CreateJobVersionTags(res, req)
+
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", res.Code, res.Body.String())
+	}
+}

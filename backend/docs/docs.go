@@ -3096,6 +3096,12 @@ const docTemplate = `{
                 },
                 "storage_provider": {
                     "type": "string"
+                },
+                "version_tags": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.VersionTagResponse"
+                    }
                 }
             }
         },

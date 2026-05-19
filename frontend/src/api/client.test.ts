@@ -229,6 +229,16 @@ describe("API client - types", () => {
           checksum_sha256: null,
           storage_provider: "filesystem",
           download_url_path: "/builds/build-1/artifacts/artifact-1/download",
+          version_tags: [
+            {
+              id: "tag-1",
+              job_id: "job-1",
+              version: "1.2.3",
+              target_type: "artifact",
+              artifact_id: "artifact-1",
+              created_at: "2026-03-24T00:00:02Z",
+            },
+          ],
           created_at: "2026-03-24T00:00:01Z",
         },
       }),
@@ -236,6 +246,16 @@ describe("API client - types", () => {
 
     const artifact = await getArtifact("artifact-1");
     expect(artifact.id).toBe("artifact-1");
+    expect(artifact.version_tags).toEqual([
+      {
+        id: "tag-1",
+        job_id: "job-1",
+        version: "1.2.3",
+        target_type: "artifact",
+        artifact_id: "artifact-1",
+        created_at: "2026-03-24T00:00:02Z",
+      },
+    ]);
     expect(fetchMock).toHaveBeenCalledWith("/api/artifacts/artifact-1", {
       credentials: "include",
     });

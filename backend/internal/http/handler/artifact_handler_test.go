@@ -378,7 +378,7 @@ func TestArtifactHandlerListArtifactsUsesBatchJobLookup(t *testing.T) {
 		t.Fatalf("create project failed: %v", err)
 	}
 	repo.records[0].Build.ProjectID = project.ID
-	if _, err := jobRepo.Create(context.Background(), domain.Job{
+	if _, createErr := jobRepo.Create(context.Background(), domain.Job{
 		ID:            jobID,
 		ProjectID:     project.ID,
 		Name:          "backend-ci",
@@ -388,8 +388,8 @@ func TestArtifactHandlerListArtifactsUsesBatchJobLookup(t *testing.T) {
 		Enabled:       true,
 		CreatedAt:     now,
 		UpdatedAt:     now,
-	}); err != nil {
-		t.Fatalf("create job failed: %v", err)
+	}); createErr != nil {
+		t.Fatalf("create job failed: %v", createErr)
 	}
 	handler.SetProjectService(projectService)
 	handler.SetJobService(service.NewJobService(jobRepo, nil))
@@ -467,7 +467,7 @@ func TestArtifactHandlerListArtifactCatalog(t *testing.T) {
 		t.Fatalf("create project failed: %v", err)
 	}
 	repo.records[0].Build.ProjectID = project.ID
-	if _, err := jobRepo.Create(context.Background(), domain.Job{
+	if _, createErr := jobRepo.Create(context.Background(), domain.Job{
 		ID:            jobID,
 		ProjectID:     project.ID,
 		Name:          "backend-ci",
@@ -477,8 +477,8 @@ func TestArtifactHandlerListArtifactCatalog(t *testing.T) {
 		Enabled:       true,
 		CreatedAt:     now,
 		UpdatedAt:     now,
-	}); err != nil {
-		t.Fatalf("create job failed: %v", err)
+	}); createErr != nil {
+		t.Fatalf("create job failed: %v", createErr)
 	}
 	handler.SetProjectService(projectService)
 	handler.SetJobService(service.NewJobService(jobRepo, nil))
@@ -640,7 +640,7 @@ func TestArtifactHandlerGetArtifact(t *testing.T) {
 		t.Fatalf("create project failed: %v", err)
 	}
 	repo.record.Build.ProjectID = project.ID
-	if _, err := jobRepo.Create(context.Background(), domain.Job{
+	if _, createErr := jobRepo.Create(context.Background(), domain.Job{
 		ID:            jobID,
 		ProjectID:     project.ID,
 		Name:          "backend-ci",
@@ -650,11 +650,23 @@ func TestArtifactHandlerGetArtifact(t *testing.T) {
 		Enabled:       true,
 		CreatedAt:     now,
 		UpdatedAt:     now,
-	}); err != nil {
-		t.Fatalf("create job failed: %v", err)
+	}); createErr != nil {
+		t.Fatalf("create job failed: %v", createErr)
 	}
 	handler.SetProjectService(projectService)
 	handler.SetJobService(service.NewJobService(jobRepo, nil))
+	versionTagRepo := repositorymemory.NewVersionTagRepository()
+	versionTagRepo.SeedBuilds(repo.record.Build)
+	versionTagRepo.SeedArtifacts(repo.record.Artifact)
+	_, err = versionTagRepo.CreateForTargets(context.Background(), repository.CreateVersionTagsParams{
+		JobID:       jobID,
+		Version:     "release-2026.05.19",
+		ArtifactIDs: []string{"artifact-1"},
+	})
+	if err != nil {
+		t.Fatalf("seed version tags failed: %v", err)
+	}
+	handler.SetVersionTagService(versiontagsvc.NewService(versionTagRepo))
 
 	req := addURLParams(httptest.NewRequest(http.MethodGet, "/artifacts/artifact-1", nil), map[string]string{"artifactID": "artifact-1"})
 	w := httptest.NewRecorder()
@@ -675,11 +687,37 @@ func TestArtifactHandlerGetArtifact(t *testing.T) {
 	if response.Data["download_url_path"] != "/builds/build-1/artifacts/artifact-1/download" {
 		t.Fatalf("expected route-relative download path, got %v", response.Data["download_url_path"])
 	}
+	versionTags, ok := response.Data["version_tags"].([]any)
+	if !ok || len(versionTags) != 1 {
+		t.Fatalf("expected one version tag, got %v", response.Data["version_tags"])
+	}
 	if _, ok := response.Data["storage_key"]; ok {
 		t.Fatalf("expected storage_key to be omitted, got %v", response.Data["storage_key"])
 	}
 	if len(repo.ids) != 1 || repo.ids[0] != "artifact-1" {
 		t.Fatalf("expected artifact lookup for artifact-1, got %v", repo.ids)
+	}
+}
+
+func TestArtifactHandlerGetArtifact_VersionTagError(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	jobID := "job-1"
+	repo := &fakeArtifactCatalogRepo{record: domain.ArtifactRecord{
+		Artifact: domain.BuildArtifact{ID: "artifact-1", BuildID: "build-1", LogicalPath: "packages/pkg-a.tgz", CreatedAt: now},
+		Build:    domain.Build{ID: "build-1", BuildNumber: 41, JobID: &jobID, ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
+	}}
+	handler := NewArtifactHandler(artifactsvc.NewService(repo))
+	handler.SetVersionTagService(versiontagsvc.NewService(errorVersionTagRepo{err: errors.New("boom")}))
+
+	req := addURLParams(httptest.NewRequest(http.MethodGet, "/artifacts/artifact-1", nil), map[string]string{"artifactID": "artifact-1"})
+	w := httptest.NewRecorder()
+	handler.GetArtifact(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := decodeErrorMessage(t, w); got != "internal server error" {
+		t.Fatalf("expected internal server error, got %q", got)
 	}
 }
 
@@ -865,4 +903,32 @@ func TestArtifactHandlerWriteProjectLookupErrorInternal(t *testing.T) {
 
 func ptrString(value string) *string {
 	return &value
+}
+
+type errorVersionTagRepo struct {
+	err error
+}
+
+func (r errorVersionTagRepo) ListByArtifactID(_ context.Context, _ string) ([]domain.VersionTag, error) {
+	return nil, r.err
+}
+
+func (r errorVersionTagRepo) ListByArtifactIDs(_ context.Context, _ []string) ([]domain.VersionTag, error) {
+	return nil, r.err
+}
+
+func (r errorVersionTagRepo) ListByManagedImageVersionID(_ context.Context, _ string) ([]domain.VersionTag, error) {
+	return nil, r.err
+}
+
+func (r errorVersionTagRepo) ListByJobID(_ context.Context, _ string) ([]domain.VersionTag, error) {
+	return nil, r.err
+}
+
+func (r errorVersionTagRepo) CreateForTargets(_ context.Context, _ repository.CreateVersionTagsParams) ([]domain.VersionTag, error) {
+	return nil, r.err
+}
+
+func (r errorVersionTagRepo) ListByJobIDAndVersion(_ context.Context, _, _ string) ([]domain.VersionTag, error) {
+	return nil, r.err
 }
