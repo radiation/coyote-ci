@@ -1,4 +1,8 @@
-import { createBrowserRouter, Navigate } from "react-router-dom";
+import {
+  createBrowserRouter,
+  Navigate,
+  type RouteObject,
+} from "react-router-dom";
 import { Layout } from "../components/Layout";
 import { BuildsListPage } from "../pages/BuildsListPage";
 import { BuildDetailPage } from "../pages/BuildDetailPage";
@@ -16,7 +20,7 @@ import { ProjectsListPage } from "../pages/ProjectsListPage";
 import { ProjectDetailPage } from "../pages/ProjectDetailPage";
 import { DashboardPage } from "../pages/DashboardPage";
 
-export const appRoutes = [
+export const appRoutes: RouteObject[] = [
   {
     element: <Layout />,
     children: [
@@ -38,6 +42,6 @@ export const appRoutes = [
       { path: "/settings/credentials", element: <CredentialsPage /> },
     ],
   },
-] as const;
+];
 
 export const router = createBrowserRouter(appRoutes);

@@ -49,12 +49,9 @@ function renderRouter(initialEntries: string[]) {
       queries: { retry: false },
     },
   });
-  const router = createMemoryRouter(
-    appRoutes as Parameters<typeof createMemoryRouter>[0],
-    {
-      initialEntries,
-    },
-  );
+  const router = createMemoryRouter(appRoutes, {
+    initialEntries,
+  });
 
   return render(
     <QueryClientProvider client={queryClient}>
