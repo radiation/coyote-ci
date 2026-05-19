@@ -521,6 +521,11 @@ input[type="radio"] {
   padding: 32px 20px;
 }
 
+.auth-panel-shell {
+  display: grid;
+  justify-items: center;
+}
+
 .panel,
 .settings-panel,
 .detail-grid,
@@ -722,6 +727,8 @@ fieldset {
 .activity-list {
   display: grid;
   gap: 12px;
+  margin: 0;
+  padding: 0;
   list-style: none;
 }
 

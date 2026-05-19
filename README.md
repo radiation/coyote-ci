@@ -391,7 +391,7 @@ This sets `core.hooksPath` for this clone. Hooks are `#!/usr/bin/env sh` and wor
 | `pre-commit` | `git commit`     | `gofmt` auto-fix and staging, `go vet`, `golangci-lint`, ESLint, swagger doc regeneration  | Seconds |
 | `pre-push`   | `git push`       | `go test ./...`, `vitest run`, `npm run build`                        | Minutes |
 
-Both hooks gracefully skip checks when the required tool is not installed.
+Both hooks gracefully skip checks when the required tools are not installed.
 
 ### Bypass
 

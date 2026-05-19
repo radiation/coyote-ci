@@ -5,7 +5,6 @@ import { useTheme } from "../theme-context";
 type NavigationItem = {
   to: string;
   label: string;
-  matchPrefix?: string;
   visible?: boolean;
 };
 
@@ -78,36 +77,42 @@ export function Layout() {
       </header>
       <main className="main">
         {authStatus === "loading" && (
-          <AuthStatePanel
-            title="Loading session"
-            message="Checking your Coyote CI session."
-          />
+          <div className="auth-panel-shell">
+            <AuthStatePanel
+              title="Loading session"
+              message="Checking your Coyote CI session."
+            />
+          </div>
         )}
         {authStatus === "unauthenticated" && (
-          <AuthStatePanel
-            title={
-              authMode === "header"
-                ? "External authentication required"
-                : "Sign in to Coyote CI"
-            }
-            message={
-              authMode === "header"
-                ? "Coyote CI is configured for trusted proxy authentication. Sign in through the configured gateway or proxy, then retry."
-                : "Use your configured identity provider to continue."
-            }
-            actionLabel={loginAvailable ? "Sign in" : undefined}
-            onAction={loginAvailable ? login : undefined}
-          />
+          <div className="auth-panel-shell">
+            <AuthStatePanel
+              title={
+                authMode === "header"
+                  ? "External authentication required"
+                  : "Sign in to Coyote CI"
+              }
+              message={
+                authMode === "header"
+                  ? "Coyote CI is configured for trusted proxy authentication. Sign in through the configured gateway or proxy, then retry."
+                  : "Use your configured identity provider to continue."
+              }
+              actionLabel={loginAvailable ? "Sign in" : undefined}
+              onAction={loginAvailable ? login : undefined}
+            />
+          </div>
         )}
         {authStatus === "error" && (
-          <AuthStatePanel
-            title="Unable to load session"
-            message={
-              error?.message ?? "The current session could not be loaded."
-            }
-            actionLabel="Retry"
-            onAction={() => void refreshCurrentUser()}
-          />
+          <div className="auth-panel-shell">
+            <AuthStatePanel
+              title="Unable to load session"
+              message={
+                error?.message ?? "The current session could not be loaded."
+              }
+              actionLabel="Retry"
+              onAction={() => void refreshCurrentUser()}
+            />
+          </div>
         )}
         {authStatus === "authenticated" && (
           <div className="app-shell">
