@@ -19,6 +19,23 @@ type BuildActivityPanelProps = {
   contextMode?: BuildActivityContextMode;
 };
 
+function jobContextLabel(
+  jobName: string | null | undefined,
+  jobID: string | null | undefined,
+): string | null {
+  const nextJobName = jobName?.trim();
+  if (nextJobName) {
+    return nextJobName;
+  }
+
+  const nextJobID = jobID?.trim();
+  if (!nextJobID) {
+    return null;
+  }
+
+  return `Job ${nextJobID.slice(0, 8)}`;
+}
+
 function renderQueueContext(
   entry: QueueEntry,
   contextMode: BuildActivityContextMode,
@@ -27,9 +44,8 @@ function renderQueueContext(
     entry.project_name?.trim() ||
     entry.project_slug?.trim() ||
     entry.project_id;
-  const hasJobName = Boolean(entry.job_name?.trim());
   const hasJobID = Boolean(entry.job_id?.trim());
-  const jobLabel = hasJobName ? entry.job_name!.trim() : null;
+  const jobLabel = jobContextLabel(entry.job_name, entry.job_id);
 
   if (contextMode === "job") {
     return null;
@@ -61,9 +77,8 @@ function renderBuildContext(
     build.project_name?.trim() ||
     build.project_slug?.trim() ||
     build.project_id;
-  const hasJobName = Boolean(build.job_name?.trim());
   const hasJobID = Boolean(build.job_id?.trim());
-  const jobLabel = hasJobName ? build.job_name!.trim() : null;
+  const jobLabel = jobContextLabel(build.job_name, build.job_id);
   const triggerRef = build.trigger_ref?.trim();
 
   if (contextMode === "job") {

@@ -90,6 +90,7 @@ describe("ScopedBuildActivityPanels", () => {
       expect(mockedListQueue).toHaveBeenCalledWith({ project_id: "project-1" });
       expect(mockedListBuilds).toHaveBeenCalledWith({
         project_id: "project-1",
+        limit: 6,
       });
       expect(mockedListJobsByProject).toHaveBeenCalledWith("project-1");
       expect(screen.getByRole("link", { name: "Build #101" })).toHaveAttribute(
@@ -265,5 +266,34 @@ describe("ScopedBuildActivityPanels", () => {
         screen.getByText("Failed to load builds: Error: backend unavailable"),
       ).toBeTruthy();
     });
+  });
+
+  it("supports custom poll interval override", async () => {
+    mockedListQueue.mockResolvedValue([
+      {
+        build_id: "build-queue-fast",
+        build_number: 301,
+        project_id: "project-1",
+        project_name: "Platform",
+        priority: 5,
+        status: "running",
+        created_at: "2026-05-01T00:00:00Z",
+      },
+    ]);
+
+    renderWithProviders(
+      <QueueActivityPanel scope={{ type: "global" }} pollInterval={20} />,
+    );
+
+    await waitFor(() => {
+      expect(mockedListQueue).toHaveBeenCalledTimes(1);
+    });
+
+    await waitFor(
+      () => {
+        expect(mockedListQueue.mock.calls.length).toBeGreaterThan(1);
+      },
+      { timeout: 1200 },
+    );
   });
 });

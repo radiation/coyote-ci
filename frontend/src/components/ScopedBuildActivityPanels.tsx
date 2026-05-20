@@ -7,6 +7,11 @@ import {
 } from "../api";
 import type { Build, QueueEntry } from "../types/build";
 import {
+  FAST_POLL_INTERVAL,
+  SLOW_POLL_INTERVAL,
+  isActiveBuild,
+} from "../utils/build";
+import {
   BuildActivityPanel,
   type BuildActivityItem,
 } from "./BuildActivityList";
@@ -125,29 +130,34 @@ function listQueueForScope(scope: BuildActivityScope): Promise<QueueEntry[]> {
   return listQueue();
 }
 
-function listRecentBuildsForScope(scope: BuildActivityScope): Promise<Build[]> {
+function listRecentBuildsForScope(
+  scope: BuildActivityScope,
+  limit?: number,
+): Promise<Build[]> {
   if (scope.type === "project") {
-    return listBuilds({ project_id: scope.projectId });
+    return listBuilds({ project_id: scope.projectId, limit });
   }
   if (scope.type === "job") {
     return listBuildsByJob(scope.jobId);
   }
-  return listBuilds();
+  return listBuilds({ limit });
 }
 
 export function QueueActivityPanel({
   scope,
   title = "Queue activity",
   limit = DEFAULT_ACTIVITY_LIMIT,
+  pollInterval,
 }: {
   scope: BuildActivityScope;
   title?: string;
   limit?: number;
+  pollInterval?: number | false;
 }) {
   const projectID = scope.type === "project" ? scope.projectId : null;
 
   const { data: projectJobs } = useQuery({
-    queryKey: ["activity", "projectJobs", projectID ?? "disabled"],
+    queryKey: ["projectJobs", projectID],
     queryFn: () =>
       projectID ? listJobsByProject(projectID) : Promise.resolve([]),
     enabled: Boolean(projectID),
@@ -160,6 +170,20 @@ export function QueueActivityPanel({
   } = useQuery({
     queryKey: ["activity", "queue", scopeQuerySuffix(scope), limit],
     queryFn: () => listQueueForScope(scope),
+    refetchInterval: (query) => {
+      if (pollInterval === false || typeof pollInterval === "number") {
+        return pollInterval;
+      }
+
+      const nextEntries = query.state.data as QueueEntry[] | undefined;
+      if (!nextEntries || nextEntries.length === 0) {
+        return SLOW_POLL_INTERVAL;
+      }
+
+      return nextEntries.some((entry) => isActiveBuild(entry.status))
+        ? FAST_POLL_INTERVAL
+        : SLOW_POLL_INTERVAL;
+    },
   });
 
   const projectJobNames = new Map(
@@ -187,15 +211,17 @@ export function RecentBuildsPanel({
   scope,
   title = "Recent builds",
   limit = DEFAULT_ACTIVITY_LIMIT,
+  pollInterval,
 }: {
   scope: BuildActivityScope;
   title?: string;
   limit?: number;
+  pollInterval?: number | false;
 }) {
   const projectID = scope.type === "project" ? scope.projectId : null;
 
   const { data: projectJobs } = useQuery({
-    queryKey: ["activity", "projectJobs", projectID ?? "disabled"],
+    queryKey: ["projectJobs", projectID],
     queryFn: () =>
       projectID ? listJobsByProject(projectID) : Promise.resolve([]),
     enabled: Boolean(projectID),
@@ -207,7 +233,21 @@ export function RecentBuildsPanel({
     error,
   } = useQuery({
     queryKey: ["activity", "recent", scopeQuerySuffix(scope), limit],
-    queryFn: () => listRecentBuildsForScope(scope),
+    queryFn: () => listRecentBuildsForScope(scope, limit),
+    refetchInterval: (query) => {
+      if (pollInterval === false || typeof pollInterval === "number") {
+        return pollInterval;
+      }
+
+      const nextBuilds = query.state.data as Build[] | undefined;
+      if (!nextBuilds || nextBuilds.length === 0) {
+        return SLOW_POLL_INTERVAL;
+      }
+
+      return nextBuilds.some((build) => isActiveBuild(build.status))
+        ? FAST_POLL_INTERVAL
+        : SLOW_POLL_INTERVAL;
+    },
   });
 
   const projectJobNames = new Map(
@@ -236,14 +276,24 @@ export function RecentBuildsPanel({
 export function BuildActivityRail({
   scope,
   limit = DEFAULT_ACTIVITY_LIMIT,
+  pollInterval,
 }: {
   scope: BuildActivityScope;
   limit?: number;
+  pollInterval?: number | false;
 }) {
   return (
     <div className="dashboard-activity-column">
-      <QueueActivityPanel scope={scope} limit={limit} />
-      <RecentBuildsPanel scope={scope} limit={limit} />
+      <QueueActivityPanel
+        scope={scope}
+        limit={limit}
+        pollInterval={pollInterval}
+      />
+      <RecentBuildsPanel
+        scope={scope}
+        limit={limit}
+        pollInterval={pollInterval}
+      />
     </div>
   );
 }

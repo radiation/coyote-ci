@@ -24,8 +24,8 @@ export function DashboardPage() {
     isLoading: buildsLoading,
     error: buildsError,
   } = useQuery({
-    queryKey: ["dashboardBuilds"],
-    queryFn: () => listBuilds(),
+    queryKey: ["activity", "recent", "global", DASHBOARD_RECENT_LIMIT],
+    queryFn: () => listBuilds({ limit: DASHBOARD_RECENT_LIMIT }),
   });
 
   const {
