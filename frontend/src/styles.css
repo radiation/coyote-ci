@@ -662,22 +662,6 @@ fieldset {
   margin-top: 8px;
 }
 
-.summary-card-info {
-  border-color: var(--color-info-border);
-}
-
-.summary-card-warning {
-  border-color: var(--color-warning-border);
-}
-
-.summary-card-danger {
-  border-color: var(--color-error-border);
-}
-
-.summary-card-success {
-  border-color: var(--color-success-border);
-}
-
 .dashboard-layout-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.9fr);
