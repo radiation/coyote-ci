@@ -181,6 +181,25 @@ describe("ArtifactsPage", () => {
     expect(scope.getByText("pkg-sha")).toBeTruthy();
   });
 
+  it("truncates long checksum display and keeps full checksum in title", async () => {
+    mockedListArtifactCatalog.mockResolvedValueOnce([
+      {
+        ...buildArtifact(1),
+        checksum_sha256:
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      },
+    ]);
+
+    renderPage();
+
+    const checksum =
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const truncated = "0123456789ab…89abcdef";
+
+    const checksumDisplay = await screen.findByText(truncated);
+    expect(checksumDisplay).toHaveAttribute("title", checksum);
+  });
+
   it("shows an empty state when the catalog has no artifacts", async () => {
     mockedListArtifactCatalog.mockResolvedValueOnce([]);
 

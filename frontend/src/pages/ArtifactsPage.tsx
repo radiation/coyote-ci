@@ -102,6 +102,14 @@ function stepLabel(artifact: ArtifactCatalogItem): string {
   return "Build-level artifact";
 }
 
+function formatChecksumDisplay(checksum: string): string {
+  const trimmed = checksum.trim();
+  if (trimmed.length <= 24) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 12)}…${trimmed.slice(-8)}`;
+}
+
 export function ArtifactsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const search = searchParams.get("q") ?? "";
@@ -393,7 +401,7 @@ export function ArtifactsPage() {
           </p>
         </div>
       ) : (
-        <section className="panel">
+        <section className="panel artifacts-catalog-panel">
           <table className="table artifacts-table artifact-catalog-table">
             <thead>
               <tr>
@@ -443,8 +451,17 @@ export function ArtifactsPage() {
                   </td>
                   <td>{stepLabel(artifact)}</td>
                   <td>{formatFileSize(artifact.size_bytes)}</td>
-                  <td className="artifact-mono">
-                    {artifact.checksum_sha256 ?? "—"}
+                  <td className="artifact-mono artifact-checksum-cell">
+                    {artifact.checksum_sha256 ? (
+                      <span
+                        className="artifact-checksum-value"
+                        title={artifact.checksum_sha256}
+                      >
+                        {formatChecksumDisplay(artifact.checksum_sha256)}
+                      </span>
+                    ) : (
+                      "—"
+                    )}
                   </td>
                   <td>{formatTime(artifact.created_at)}</td>
                   <td>
