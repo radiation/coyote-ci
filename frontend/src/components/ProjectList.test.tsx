@@ -26,7 +26,7 @@ describe("ProjectList", () => {
       "href",
       "/projects/project/one",
     );
-    expect(screen.getByText("No project description yet.")).toBeTruthy();
+    expect(screen.getByText("No description.")).toBeTruthy();
     expect(screen.getByRole("link", { name: "View builds" })).toHaveAttribute(
       "href",
       "/builds?project_id=project%2Fone",

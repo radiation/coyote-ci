@@ -254,15 +254,15 @@ export function ArtifactsPage() {
         <div>
           <h2>Artifacts</h2>
           <p className="subtle-text">
-            Persisted artifact instance catalog across builds.
+            Persisted artifact catalog.
             {isFetching && !isLoading ? " Updating…" : ""}
           </p>
           <p className="subtle-text">
-            Need grouped versions or version tag assignment?{" "}
-            <Link to="/artifacts/logical">Open logical browser</Link>.
+            <Link to="/artifacts/logical">Open logical browser</Link> for
+            grouped versions and tags.
           </p>
           <p className="subtle-text">
-            Latest refresh:{" "}
+            Updated{" "}
             {dataUpdatedAt > 0
               ? formatTime(new Date(dataUpdatedAt).toISOString())
               : "—"}
@@ -277,7 +277,7 @@ export function ArtifactsPage() {
             <p className="subtle-text">
               {activeFilterCount > 0
                 ? `${activeFilterCount} active filter${activeFilterCount === 1 ? "" : "s"}`
-                : "All persisted artifacts"}
+                : "All artifacts"}
             </p>
           </div>
           <button

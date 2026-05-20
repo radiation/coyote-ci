@@ -19,7 +19,7 @@ export function ProjectList({ projects }: { projects: Project[] }) {
             </Link>
           </div>
           <p className="project-card-description">
-            {project.description?.trim() || "No project description yet."}
+            {project.description?.trim() || "No description."}
           </p>
           <div className="project-card-footer">
             <span className="subtle-text">
