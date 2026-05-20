@@ -114,7 +114,7 @@ services:
       - /tmp/coyote-builds:/tmp/coyote-builds
 
   frontend:
-    image: node:22-alpine
+    image: node:22
     container_name: coyote-ci-frontend
     working_dir: /app
     depends_on:

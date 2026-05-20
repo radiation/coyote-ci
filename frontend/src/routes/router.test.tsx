@@ -101,7 +101,23 @@ describe("router dashboard home", () => {
       expect(screen.getByRole("link", { name: "Dashboard" })).toHaveClass(
         "is-active",
       );
-      expect(screen.getByText("Where should I look right now?")).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Dashboard" })).toBeTruthy();
+    });
+  });
+
+  it("renders the projects route inside the shared shell", async () => {
+    renderRouter(["/projects"]);
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "Projects" })).toHaveClass(
+        "is-active",
+      );
+      expect(
+        screen.getByRole("complementary", {
+          name: "Application navigation",
+        }),
+      ).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Projects" })).toBeTruthy();
     });
   });
 });

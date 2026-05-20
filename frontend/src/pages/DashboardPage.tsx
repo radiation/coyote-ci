@@ -66,9 +66,8 @@ export function DashboardPage() {
   return (
     <div className="page-content page-dashboard">
       <PageHeader
-        eyebrow="Dashboard"
-        title="Where should I look right now?"
-        description="Projects are the main entry point. Queue activity and recent builds surface the work that needs attention next."
+        title="Dashboard"
+        description="Queue, failures, and recent activity across your projects."
         actions={
           <>
             <Link className="secondary-button" to="/projects">
@@ -91,7 +90,7 @@ export function DashboardPage() {
           description={
             projectsError
               ? `Unable to load projects: ${String(projectsError)}`
-              : "Projects group jobs, builds, and artifact history."
+              : "Projects in scope."
           }
         />
         <SummaryCard
@@ -101,7 +100,7 @@ export function DashboardPage() {
           description={
             queueError
               ? `Unable to load queue: ${String(queueError)}`
-              : "Current work in dispatch or execution."
+              : "Builds currently queued or running."
           }
           footer={<Link to="/queue">Open queue</Link>}
         />
@@ -113,8 +112,8 @@ export function DashboardPage() {
             buildsError
               ? `Unable to load recent builds: ${String(buildsError)}`
               : failedBuilds.length > 0
-                ? "Recent builds that need attention."
-                : "No recent failed builds in the current result set."
+                ? "Failures in recent activity."
+                : "No recent failures."
           }
           footer={<Link to="/builds">Open builds</Link>}
         />
@@ -125,7 +124,7 @@ export function DashboardPage() {
           <div className="dashboard-panel-header">
             <div>
               <h3>Projects</h3>
-              <p className="subtle-text">Projects you can access right now.</p>
+              <p className="subtle-text">Projects in scope.</p>
             </div>
           </div>
           {projectsLoading ? <p>Loading projects…</p> : null}
@@ -142,7 +141,7 @@ export function DashboardPage() {
             <div className="empty-state">
               <p className="empty">No projects available yet.</p>
               <p className="subtle-text">
-                Create a project before grouping jobs and durable build history.
+                Create a project to organize jobs and build history.
               </p>
             </div>
           ) : null}
@@ -180,7 +179,7 @@ export function DashboardPage() {
                   kind: "queue" as const,
                   entry,
                 }))}
-              emptyMessage="No queued or running builds right now."
+              emptyMessage="No builds in queue."
             />
           )}
 
@@ -207,7 +206,7 @@ export function DashboardPage() {
                 kind: "build" as const,
                 build,
               }))}
-              emptyMessage="No recent builds yet."
+              emptyMessage="No recent build activity."
             />
           )}
         </div>

@@ -1,14 +1,9 @@
 import { NavLink, Outlet } from "react-router-dom";
+import { AppShell, type AppShellNavigationItem } from "./AppShell";
 import { useAuth } from "../auth-context";
 import { useTheme } from "../theme-context";
 
-type NavigationItem = {
-  to: string;
-  label: string;
-  visible?: boolean;
-};
-
-const primaryNavigation: NavigationItem[] = [
+const primaryNavigation: AppShellNavigationItem[] = [
   { to: "/dashboard", label: "Dashboard" },
   { to: "/projects", label: "Projects" },
   { to: "/jobs", label: "Jobs" },
@@ -34,7 +29,7 @@ export function Layout() {
   const showUsersLink = authMode === "disabled" || isGlobalAdmin;
   const showTokensLink = authMode !== "disabled";
   const displayName = currentUser?.display_name || currentUser?.email;
-  const settingsNavigation: NavigationItem[] = [
+  const settingsNavigation: AppShellNavigationItem[] = [
     { to: "/settings/credentials", label: "Credentials" },
     { to: "/settings/tokens", label: "Tokens", visible: showTokensLink },
     { to: "/settings/users", label: "Users", visible: showUsersLink },
@@ -115,57 +110,15 @@ export function Layout() {
           </div>
         )}
         {authStatus === "authenticated" && (
-          <div className="app-shell">
-            {showNavigation ? (
-              <aside className="sidebar" aria-label="Application navigation">
-                <nav className="sidebar-nav" aria-label="Primary">
-                  <div className="sidebar-section">
-                    <p className="sidebar-section-label">Overview</p>
-                    {primaryNavigation.map((item) => (
-                      <SidebarLink
-                        key={item.to}
-                        to={item.to}
-                        label={item.label}
-                      />
-                    ))}
-                  </div>
-                  <div className="sidebar-section">
-                    <p className="sidebar-section-label">Settings</p>
-                    {settingsNavigation
-                      .filter((item) => item.visible ?? true)
-                      .map((item) => (
-                        <SidebarLink
-                          key={item.to}
-                          to={item.to}
-                          label={item.label}
-                        />
-                      ))}
-                  </div>
-                </nav>
-              </aside>
-            ) : null}
-            <section className="content-shell">
-              <div className="page-container">
-                <Outlet />
-              </div>
-            </section>
-          </div>
+          <AppShell
+            primaryNavigation={showNavigation ? primaryNavigation : []}
+            settingsNavigation={showNavigation ? settingsNavigation : []}
+          >
+            <Outlet />
+          </AppShell>
         )}
       </main>
     </div>
-  );
-}
-
-function SidebarLink({ to, label }: { to: string; label: string }) {
-  return (
-    <NavLink
-      to={to}
-      className={({ isActive }) =>
-        isActive ? "sidebar-link is-active" : "sidebar-link"
-      }
-    >
-      {label}
-    </NavLink>
   );
 }
 
