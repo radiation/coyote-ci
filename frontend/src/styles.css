@@ -1498,8 +1498,31 @@ h3 {
   gap: 4px;
 }
 
+.artifacts-catalog-panel {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.artifact-catalog-table {
+  min-width: 980px;
+}
+
 .artifact-catalog-table td {
   vertical-align: top;
+}
+
+.artifact-checksum-cell {
+  max-width: 260px;
+}
+
+.artifact-checksum-value {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
 .artifact-actions {

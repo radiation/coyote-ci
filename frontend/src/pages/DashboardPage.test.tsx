@@ -82,7 +82,7 @@ describe("DashboardPage", () => {
   it("renders accessible projects and recent activity", async () => {
     renderPage();
 
-    expect(screen.getByText("Where should I look right now?")).toBeTruthy();
+    expect(screen.getByText("Dashboard")).toBeTruthy();
 
     await waitFor(() => {
       const projectLinks = screen.getAllByRole("link", { name: "Platform" });
@@ -114,10 +114,8 @@ describe("DashboardPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Platform")).toBeTruthy();
-      expect(
-        screen.getByText("No queued or running builds right now."),
-      ).toBeTruthy();
-      expect(screen.getByText("No recent builds yet.")).toBeTruthy();
+      expect(screen.getByText("No builds in queue.")).toBeTruthy();
+      expect(screen.getByText("No recent build activity.")).toBeTruthy();
     });
   });
 
@@ -158,9 +156,7 @@ describe("DashboardPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("No projects available yet.")).toBeTruthy();
-      expect(
-        screen.getByText("No recent failed builds in the current result set."),
-      ).toBeTruthy();
+      expect(screen.getByText("No recent failures.")).toBeTruthy();
     });
   });
 
