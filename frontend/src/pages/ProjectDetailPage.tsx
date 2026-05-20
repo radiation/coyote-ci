@@ -11,6 +11,7 @@ import {
   updateProjectMember,
   upsertProjectMember,
 } from "../api";
+import { BuildActivityRail } from "../components/ScopedBuildActivityPanels";
 import type { ProjectMemberRole } from "../types/identity";
 import { formatTime } from "../utils/time";
 
@@ -175,6 +176,8 @@ export function ProjectDetailPage() {
           <span>{formatTime(project.updated_at)}</span>
         </div>
       </div>
+
+      <BuildActivityRail scope={{ type: "project", projectId: project.id }} />
 
       <section className="settings-panel" style={{ marginTop: 16 }}>
         <h3>Members</h3>

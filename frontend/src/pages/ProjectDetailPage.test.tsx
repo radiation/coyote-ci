@@ -7,8 +7,10 @@ import {
   APIError,
   deleteProjectMember,
   getProject,
+  listBuilds,
   listJobsByProject,
   listProjectMembers,
+  listQueue,
   listUsers,
   updateProjectMember,
   upsertProjectMember,
@@ -20,8 +22,10 @@ vi.mock("../api", async () => {
     ...actual,
     deleteProjectMember: vi.fn(),
     getProject: vi.fn(),
+    listBuilds: vi.fn(),
     listJobsByProject: vi.fn(),
     listProjectMembers: vi.fn(),
+    listQueue: vi.fn(),
     listUsers: vi.fn(),
     updateProjectMember: vi.fn(),
     upsertProjectMember: vi.fn(),
@@ -49,8 +53,10 @@ function renderPage() {
 
 describe("ProjectDetailPage", () => {
   const mockedGetProject = vi.mocked(getProject);
+  const mockedListBuilds = vi.mocked(listBuilds);
   const mockedListJobsByProject = vi.mocked(listJobsByProject);
   const mockedListProjectMembers = vi.mocked(listProjectMembers);
+  const mockedListQueue = vi.mocked(listQueue);
   const mockedListUsers = vi.mocked(listUsers);
   const mockedUpsertProjectMember = vi.mocked(upsertProjectMember);
   const mockedUpdateProjectMember = vi.mocked(updateProjectMember);
@@ -101,6 +107,8 @@ describe("ProjectDetailPage", () => {
         global_role: "user",
       },
     ]);
+    mockedListQueue.mockResolvedValue([]);
+    mockedListBuilds.mockResolvedValue([]);
     mockedUpsertProjectMember.mockResolvedValue({
       project_id: "project-1",
       user_id: "user-2",

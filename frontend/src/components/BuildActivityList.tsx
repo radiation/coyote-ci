@@ -3,25 +3,39 @@ import { StatusBadge } from "./StatusBadge";
 import type { Build, QueueEntry } from "../types/build";
 import { formatTime } from "../utils/time";
 
-type ActivityItem =
+export type BuildActivityItem =
   | { kind: "queue"; entry: QueueEntry }
   | { kind: "build"; build: Build };
 
-export function BuildActivityList({
+type BuildActivityPanelProps = {
+  title: string;
+  items: BuildActivityItem[];
+  emptyMessage: string;
+  loadingMessage?: string;
+  error?: unknown;
+  errorPrefix?: string;
+};
+
+export function BuildActivityPanel({
   title,
   items,
   emptyMessage,
-}: {
-  title: string;
-  items: ActivityItem[];
-  emptyMessage: string;
-}) {
+  loadingMessage,
+  error,
+  errorPrefix = "Failed to load activity",
+}: BuildActivityPanelProps) {
   return (
     <section className="panel dashboard-panel">
       <div className="dashboard-panel-header">
         <h3>{title}</h3>
       </div>
-      {items.length === 0 ? (
+      {loadingMessage ? (
+        <p>{loadingMessage}</p>
+      ) : error ? (
+        <p className="error-text">
+          {errorPrefix}: {String(error)}
+        </p>
+      ) : items.length === 0 ? (
         <div className="empty-state">
           <p className="empty">{emptyMessage}</p>
         </div>
@@ -62,7 +76,10 @@ export function BuildActivityList({
 
             const build = item.build;
             return (
-              <li key={`build-${build.id}`} className="activity-list-item">
+              <li
+                key={`build-${build.id}`}
+                className={`activity-list-item${build.status === "failed" ? " is-failed" : ""}`}
+              >
                 <div className="activity-list-main">
                   <div className="activity-list-title-row">
                     <Link to={`/builds/${build.id}`}>
@@ -99,4 +116,8 @@ export function BuildActivityList({
       )}
     </section>
   );
+}
+
+export function BuildActivityList(props: BuildActivityPanelProps) {
+  return <BuildActivityPanel {...props} />;
 }

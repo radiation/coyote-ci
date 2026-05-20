@@ -4,16 +4,15 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   getProject,
   getJob,
-  listBuildsByJob,
   listSourceCredentials,
   runJob,
   updateJob,
 } from "../api";
+import { BuildActivityRail } from "../components/ScopedBuildActivityPanels";
 import {
   ManagedBuildImageFields,
   type ManagedBuildImageValue,
 } from "../components/ManagedBuildImageFields";
-import { StatusBadge } from "../components/StatusBadge";
 import type { Job } from "../types/job";
 import { formatTime } from "../utils/time";
 
@@ -32,17 +31,6 @@ export function JobDetailPage() {
     queryKey: ["job", id],
     queryFn: () => getJob(id!),
     enabled: Boolean(id),
-  });
-
-  const {
-    data: builds,
-    isLoading: buildsLoading,
-    error: buildsError,
-  } = useQuery({
-    queryKey: ["jobBuilds", id],
-    queryFn: () => listBuildsByJob(id!),
-    enabled: Boolean(id),
-    refetchInterval: 15_000,
   });
 
   const { data: project } = useQuery({
@@ -140,42 +128,7 @@ export function JobDetailPage() {
 
       <JobDetailForm key={`${job.id}:${job.updated_at}`} job={job} jobID={id} />
 
-      <h3>Recent Builds</h3>
-      {buildsLoading && <p>Loading builds…</p>}
-      {buildsError && (
-        <p className="error-text">
-          Failed to load builds: {String(buildsError)}
-        </p>
-      )}
-      {!buildsLoading && !buildsError && (!builds || builds.length === 0) && (
-        <p className="subtle-text">No builds yet for this job.</p>
-      )}
-      {builds && builds.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Build</th>
-              <th>Status</th>
-              <th>Created</th>
-              <th>Finished</th>
-            </tr>
-          </thead>
-          <tbody>
-            {builds.map((b) => (
-              <tr key={b.id}>
-                <td>
-                  <Link to={`/builds/${b.id}`}>{b.id.slice(0, 8)}…</Link>
-                </td>
-                <td>
-                  <StatusBadge status={b.status} />
-                </td>
-                <td>{formatTime(b.created_at)}</td>
-                <td>{formatTime(b.finished_at)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <BuildActivityRail scope={{ type: "job", jobId: id }} />
     </>
   );
 }
