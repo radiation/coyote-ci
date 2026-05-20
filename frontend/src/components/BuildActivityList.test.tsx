@@ -87,6 +87,39 @@ describe("BuildActivityList", () => {
     ).toContain("Platform · release");
   });
 
+  it("falls back to truncated job id in project context for queue entries", () => {
+    render(
+      <MemoryRouter>
+        <BuildActivityList
+          title="Queue activity"
+          emptyMessage="Nothing running"
+          contextMode="project"
+          items={[
+            {
+              kind: "queue",
+              entry: {
+                build_id: "build-3",
+                build_number: 16,
+                project_id: "project-2",
+                project_name: "Platform",
+                job_id: "job-release-main",
+                priority: 1,
+                status: "running",
+                created_at: "2026-05-01T00:00:00Z",
+              },
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("link", { name: "Job job-rele" })).toHaveAttribute(
+      "href",
+      "/jobs/job-release-main",
+    );
+    expect(screen.queryByRole("link", { name: "Platform" })).toBeNull();
+  });
+
   it("renders builds using id and project-id fallbacks plus trigger ref", () => {
     render(
       <MemoryRouter>
@@ -123,5 +156,42 @@ describe("BuildActivityList", () => {
       "/projects/project-9",
     );
     expect(screen.getByText(/release\/1.0/)).toBeTruthy();
+  });
+
+  it("falls back to truncated job id in project context for recent builds", () => {
+    render(
+      <MemoryRouter>
+        <BuildActivityList
+          title="Recent builds"
+          emptyMessage="No builds"
+          contextMode="project"
+          items={[
+            {
+              kind: "build",
+              build: {
+                id: "build-project-1",
+                build_number: 77,
+                project_id: "project-9",
+                job_id: "job-hotfix-main",
+                priority: 1,
+                status: "success",
+                created_at: "2026-05-01T00:00:00Z",
+                queued_at: null,
+                started_at: null,
+                finished_at: null,
+                current_step_index: 0,
+                error_message: null,
+              },
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("link", { name: "Job job-hotf" })).toHaveAttribute(
+      "href",
+      "/jobs/job-hotfix-main",
+    );
+    expect(screen.queryByRole("link", { name: /project-9/i })).toBeNull();
   });
 });

@@ -64,7 +64,39 @@ describe("JobDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    mockedListBuildsByJob.mockResolvedValue([]);
+    mockedListBuildsByJob.mockResolvedValue([
+      {
+        id: "build-queued-1",
+        build_number: 21,
+        project_id: "project-1",
+        project_name: "Platform",
+        job_id: "job-1",
+        priority: 5,
+        status: "queued",
+        created_at: "2026-03-30T00:00:00Z",
+        queued_at: "2026-03-30T00:00:01Z",
+        started_at: null,
+        finished_at: null,
+        current_step_index: 0,
+        error_message: null,
+      },
+      {
+        id: "build-recent-1",
+        build_number: 20,
+        project_id: "project-1",
+        project_name: "Platform",
+        job_id: "job-1",
+        priority: 5,
+        status: "success",
+        created_at: "2026-03-30T00:00:00Z",
+        queued_at: "2026-03-30T00:00:01Z",
+        started_at: "2026-03-30T00:00:10Z",
+        finished_at: "2026-03-30T00:01:10Z",
+        current_step_index: 0,
+        error_message: null,
+        trigger_ref: "main",
+      },
+    ]);
     mockedGetProject.mockResolvedValue({
       id: "project-1",
       name: "Platform",
@@ -158,11 +190,16 @@ describe("JobDetailPage", () => {
 
     await screen.findByDisplayValue("backend-ci");
     await waitFor(() => {
-      expect(screen.getByRole("link", { name: "Platform" })).toHaveAttribute(
-        "href",
-        "/projects/project-1",
-      );
+      expect(mockedListBuildsByJob).toHaveBeenCalledWith("job-1");
     });
+
+    const platformLinks = screen.getAllByRole("link", { name: "Platform" });
+    const buildLinks = screen.getAllByRole("link", { name: /Build\s*#21/i });
+
+    expect(platformLinks).toHaveLength(1);
+    expect(platformLinks[0]).toHaveAttribute("href", "/projects/project-1");
+    expect(buildLinks.length).toBeGreaterThan(0);
+    expect(screen.queryByRole("link", { name: /^Job\s/i })).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Name"), {
       target: { value: "backend-ci-updated" },

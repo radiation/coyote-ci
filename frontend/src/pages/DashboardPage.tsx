@@ -1,30 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { listBuilds, listProjects, listQueue } from "../api";
-import { BuildActivityList } from "../components/BuildActivityList";
 import { PageHeader } from "../components/PageHeader";
 import { ProjectList } from "../components/ProjectList";
+import { BuildActivityRail } from "../components/ScopedBuildActivityPanels";
 import { SummaryCard } from "../components/SummaryCard";
-import type { Build } from "../types/build";
 
 const DASHBOARD_RECENT_LIMIT = 6;
 const DASHBOARD_PROJECT_LIMIT = 6;
-
-function sortByNewest(builds: Build[]): Build[] {
-  return [...builds].sort((left, right) => {
-    const leftTime = Date.parse(
-      left.finished_at ?? left.started_at ?? left.queued_at ?? left.created_at,
-    );
-    const rightTime = Date.parse(
-      right.finished_at ??
-        right.started_at ??
-        right.queued_at ??
-        right.created_at,
-    );
-
-    return rightTime - leftTime;
-  });
-}
 
 export function DashboardPage() {
   const {
@@ -37,27 +20,23 @@ export function DashboardPage() {
   });
 
   const {
-    data: queueEntries,
-    isLoading: queueLoading,
-    error: queueError,
-  } = useQuery({
-    queryKey: ["dashboardQueue"],
-    queryFn: () => listQueue(),
-  });
-
-  const {
     data: builds,
     isLoading: buildsLoading,
     error: buildsError,
   } = useQuery({
-    queryKey: ["dashboardBuilds"],
-    queryFn: () => listBuilds(),
+    queryKey: ["activity", "recent", "global", DASHBOARD_RECENT_LIMIT],
+    queryFn: () => listBuilds({ limit: DASHBOARD_RECENT_LIMIT }),
   });
 
-  const recentBuilds = sortByNewest(builds ?? []).slice(
-    0,
-    DASHBOARD_RECENT_LIMIT,
-  );
+  const {
+    data: queueEntries,
+    isLoading: queueLoading,
+    error: queueError,
+  } = useQuery({
+    queryKey: ["activity", "queue", "global", DASHBOARD_RECENT_LIMIT],
+    queryFn: () => listQueue(),
+  });
+
   const failedBuilds = (builds ?? []).filter(
     (build) => build.status === "failed",
   );
@@ -148,63 +127,10 @@ export function DashboardPage() {
           ) : null}
         </section>
 
-        <div className="dashboard-activity-column">
-          {queueLoading ? (
-            <section className="panel dashboard-panel">
-              <div className="dashboard-panel-header">
-                <h3>Queue activity</h3>
-              </div>
-              <p>Loading queue…</p>
-            </section>
-          ) : queueError ? (
-            <section className="panel dashboard-panel">
-              <div className="dashboard-panel-header">
-                <h3>Queue activity</h3>
-              </div>
-              <p className="error-text">
-                Failed to load queue: {String(queueError)}
-              </p>
-            </section>
-          ) : (
-            <BuildActivityList
-              title="Queue activity"
-              items={(queueEntries ?? [])
-                .slice(0, DASHBOARD_RECENT_LIMIT)
-                .map((entry) => ({
-                  kind: "queue" as const,
-                  entry,
-                }))}
-              emptyMessage="No builds in queue."
-            />
-          )}
-
-          {buildsLoading ? (
-            <section className="panel dashboard-panel">
-              <div className="dashboard-panel-header">
-                <h3>Recent builds</h3>
-              </div>
-              <p>Loading recent builds…</p>
-            </section>
-          ) : buildsError ? (
-            <section className="panel dashboard-panel">
-              <div className="dashboard-panel-header">
-                <h3>Recent builds</h3>
-              </div>
-              <p className="error-text">
-                Failed to load builds: {String(buildsError)}
-              </p>
-            </section>
-          ) : (
-            <BuildActivityList
-              title="Recent builds"
-              items={recentBuilds.map((build) => ({
-                kind: "build" as const,
-                build,
-              }))}
-              emptyMessage="No recent build activity."
-            />
-          )}
-        </div>
+        <BuildActivityRail
+          scope={{ type: "global" }}
+          limit={DASHBOARD_RECENT_LIMIT}
+        />
       </div>
     </div>
   );

@@ -7,8 +7,10 @@ import {
   APIError,
   deleteProjectMember,
   getProject,
+  listBuilds,
   listJobsByProject,
   listProjectMembers,
+  listQueue,
   listUsers,
   updateProjectMember,
   upsertProjectMember,
@@ -20,8 +22,10 @@ vi.mock("../api", async () => {
     ...actual,
     deleteProjectMember: vi.fn(),
     getProject: vi.fn(),
+    listBuilds: vi.fn(),
     listJobsByProject: vi.fn(),
     listProjectMembers: vi.fn(),
+    listQueue: vi.fn(),
     listUsers: vi.fn(),
     updateProjectMember: vi.fn(),
     upsertProjectMember: vi.fn(),
@@ -49,8 +53,10 @@ function renderPage() {
 
 describe("ProjectDetailPage", () => {
   const mockedGetProject = vi.mocked(getProject);
+  const mockedListBuilds = vi.mocked(listBuilds);
   const mockedListJobsByProject = vi.mocked(listJobsByProject);
   const mockedListProjectMembers = vi.mocked(listProjectMembers);
+  const mockedListQueue = vi.mocked(listQueue);
   const mockedListUsers = vi.mocked(listUsers);
   const mockedUpsertProjectMember = vi.mocked(upsertProjectMember);
   const mockedUpdateProjectMember = vi.mocked(updateProjectMember);
@@ -101,6 +107,37 @@ describe("ProjectDetailPage", () => {
         global_role: "user",
       },
     ]);
+    mockedListQueue.mockResolvedValue([
+      {
+        build_id: "build-queue-1",
+        build_number: 42,
+        project_id: "project-1",
+        project_name: "Platform",
+        job_id: "job-queue-1",
+        job_name: "release",
+        priority: 5,
+        status: "running",
+        created_at: "2026-05-01T00:00:00Z",
+      },
+    ]);
+    mockedListBuilds.mockResolvedValue([
+      {
+        id: "build-recent-1",
+        build_number: 41,
+        project_id: "project-1",
+        project_name: "Platform",
+        job_id: "job-recent-1",
+        job_name: "release-history",
+        priority: 5,
+        status: "failed",
+        created_at: "2026-05-01T00:00:00Z",
+        queued_at: null,
+        started_at: null,
+        finished_at: null,
+        current_step_index: 0,
+        error_message: null,
+      },
+    ]);
     mockedUpsertProjectMember.mockResolvedValue({
       project_id: "project-1",
       user_id: "user-2",
@@ -140,6 +177,13 @@ describe("ProjectDetailPage", () => {
       expect(
         screen.getByRole("link", { name: "Browse Artifacts" }),
       ).toHaveAttribute("href", "/artifacts?project_id=project-1");
+      expect(screen.getByRole("link", { name: "release" })).toHaveAttribute(
+        "href",
+        "/jobs/job-queue-1",
+      );
+      expect(
+        screen.getByRole("link", { name: "release-history" }),
+      ).toHaveAttribute("href", "/jobs/job-recent-1");
     });
   });
 
