@@ -187,6 +187,30 @@ describe("ProjectDetailPage", () => {
     });
   });
 
+  it("renders the responsive two-column activity rail layout", async () => {
+    const { container } = renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Platform")).toBeTruthy();
+    });
+
+    expect(container.querySelector(".detail-page-with-rail")).toBeTruthy();
+  });
+
+  it("shows job name links in project-scoped activity rows", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      const queueJobLink = screen.getByRole("link", { name: "release" });
+      expect(queueJobLink).toHaveAttribute("href", "/jobs/job-queue-1");
+
+      const recentJobLink = screen.getByRole("link", {
+        name: "release-history",
+      });
+      expect(recentJobLink).toHaveAttribute("href", "/jobs/job-recent-1");
+    });
+  });
+
   it("adds, updates, and removes project members", async () => {
     renderPage();
 

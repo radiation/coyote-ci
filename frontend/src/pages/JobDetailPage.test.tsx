@@ -235,6 +235,29 @@ describe("JobDetailPage", () => {
     });
   });
 
+  it("renders the responsive two-column activity rail layout", async () => {
+    const { container } = renderPage();
+
+    await screen.findByDisplayValue("backend-ci");
+
+    expect(container.querySelector(".detail-page-with-rail")).toBeTruthy();
+  });
+
+  it("job-scoped activity rows show trigger ref and no redundant job link", async () => {
+    renderPage();
+
+    await screen.findByDisplayValue("backend-ci");
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByRole("link", { name: /Build\s*#20/i }).length,
+      ).toBeGreaterThan(0);
+      // trigger_ref "main" appears as context in job-scoped recent build row
+      expect(screen.getAllByText("main").length).toBeGreaterThan(0);
+      expect(screen.queryByRole("link", { name: /^Job\s/i })).toBeNull();
+    });
+  });
+
   it("sends managed_image null when automation is disabled", async () => {
     renderPage();
 
