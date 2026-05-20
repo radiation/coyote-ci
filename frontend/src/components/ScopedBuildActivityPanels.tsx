@@ -1,5 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { listBuilds, listBuildsByJob, listQueue } from "../api";
+import {
+  listBuilds,
+  listBuildsByJob,
+  listJobsByProject,
+  listQueue,
+} from "../api";
 import type { Build, QueueEntry } from "../types/build";
 import {
   BuildActivityPanel,
@@ -13,6 +18,12 @@ type BuildActivityScope =
   | { type: "project"; projectId: string }
   | { type: "job"; jobId: string };
 
+function isQueueStatus(
+  status: Build["status"],
+): status is QueueEntry["status"] {
+  return status === "queued" || status === "running";
+}
+
 function scopeQuerySuffix(scope: BuildActivityScope): string {
   if (scope.type === "global") {
     return "global";
@@ -21,6 +32,10 @@ function scopeQuerySuffix(scope: BuildActivityScope): string {
     return `project:${scope.projectId}`;
   }
   return `job:${scope.jobId}`;
+}
+
+function contextModeForScope(scope: BuildActivityScope) {
+  return scope.type;
 }
 
 function sortByNewest(builds: Build[]): Build[] {
@@ -46,6 +61,28 @@ function mapQueueEntries(entries: QueueEntry[]): BuildActivityItem[] {
   }));
 }
 
+function withProjectJobNames<
+  T extends { job_id?: string | null; job_name?: string | null },
+>(items: T[], projectJobNames: Map<string, string>): T[] {
+  return items.map((item) => {
+    const currentName = item.job_name?.trim();
+    const jobID = item.job_id?.trim();
+    if (currentName || !jobID) {
+      return item;
+    }
+
+    const resolvedName = projectJobNames.get(jobID);
+    if (!resolvedName) {
+      return item;
+    }
+
+    return {
+      ...item,
+      job_name: resolvedName,
+    };
+  });
+}
+
 function mapBuilds(builds: Build[]): BuildActivityItem[] {
   return builds.map((build) => ({
     kind: "build" as const,
@@ -62,8 +99,8 @@ function listQueueForScope(scope: BuildActivityScope): Promise<QueueEntry[]> {
     // TODO: Replace this with a backend queue endpoint that supports job_id filtering.
     return listBuildsByJob(scope.jobId).then((builds) =>
       builds
-        .filter(
-          (build) => build.status === "queued" || build.status === "running",
+        .filter((build): build is Build & { status: QueueEntry["status"] } =>
+          isQueueStatus(build.status),
         )
         .map((build) => ({
           build_id: build.id,
@@ -72,6 +109,7 @@ function listQueueForScope(scope: BuildActivityScope): Promise<QueueEntry[]> {
           project_name: build.project_name,
           project_slug: build.project_slug,
           job_id: build.job_id,
+          job_name: build.job_name,
           priority: build.priority,
           status: build.status,
           created_at: build.created_at,
@@ -106,6 +144,15 @@ export function QueueActivityPanel({
   title?: string;
   limit?: number;
 }) {
+  const projectID = scope.type === "project" ? scope.projectId : null;
+
+  const { data: projectJobs } = useQuery({
+    queryKey: ["activity", "projectJobs", projectID ?? "disabled"],
+    queryFn: () =>
+      projectID ? listJobsByProject(projectID) : Promise.resolve([]),
+    enabled: Boolean(projectID),
+  });
+
   const {
     data: queueEntries,
     isLoading,
@@ -115,14 +162,23 @@ export function QueueActivityPanel({
     queryFn: () => listQueueForScope(scope),
   });
 
+  const projectJobNames = new Map(
+    (projectJobs ?? []).map((job) => [job.id, job.name]),
+  );
+  const normalizedQueueEntries =
+    scope.type === "project"
+      ? withProjectJobNames(queueEntries ?? [], projectJobNames)
+      : (queueEntries ?? []);
+
   return (
     <BuildActivityPanel
       title={title}
-      items={mapQueueEntries((queueEntries ?? []).slice(0, limit))}
+      items={mapQueueEntries(normalizedQueueEntries.slice(0, limit))}
       loadingMessage={isLoading ? "Loading queue…" : undefined}
       error={error}
       errorPrefix="Failed to load queue"
       emptyMessage="No builds in queue."
+      contextMode={contextModeForScope(scope)}
     />
   );
 }
@@ -136,6 +192,15 @@ export function RecentBuildsPanel({
   title?: string;
   limit?: number;
 }) {
+  const projectID = scope.type === "project" ? scope.projectId : null;
+
+  const { data: projectJobs } = useQuery({
+    queryKey: ["activity", "projectJobs", projectID ?? "disabled"],
+    queryFn: () =>
+      projectID ? listJobsByProject(projectID) : Promise.resolve([]),
+    enabled: Boolean(projectID),
+  });
+
   const {
     data: builds,
     isLoading,
@@ -145,7 +210,15 @@ export function RecentBuildsPanel({
     queryFn: () => listRecentBuildsForScope(scope),
   });
 
-  const items = mapBuilds(sortByNewest(builds ?? []).slice(0, limit));
+  const projectJobNames = new Map(
+    (projectJobs ?? []).map((job) => [job.id, job.name]),
+  );
+  const normalizedBuilds =
+    scope.type === "project"
+      ? withProjectJobNames(builds ?? [], projectJobNames)
+      : (builds ?? []);
+
+  const items = mapBuilds(sortByNewest(normalizedBuilds).slice(0, limit));
 
   return (
     <BuildActivityPanel
@@ -155,6 +228,7 @@ export function RecentBuildsPanel({
       error={error}
       errorPrefix="Failed to load builds"
       emptyMessage="No recent build activity."
+      contextMode={contextModeForScope(scope)}
     />
   );
 }

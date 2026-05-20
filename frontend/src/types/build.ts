@@ -39,6 +39,7 @@ export interface Build {
   project_name?: string | null;
   project_slug?: string | null;
   job_id?: string | null;
+  job_name?: string | null;
   priority: number;
   status: BuildStatus;
   created_at: string;

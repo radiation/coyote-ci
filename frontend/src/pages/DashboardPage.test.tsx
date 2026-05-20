@@ -101,6 +101,10 @@ describe("DashboardPage", () => {
         "href",
         "/builds/build-2",
       );
+      expect(screen.getByRole("link", { name: "main" })).toHaveAttribute(
+        "href",
+        "/jobs/job-1",
+      );
       expect(screen.getByText("Failures")).toBeTruthy();
       expect(screen.getByText("Core platform pipelines")).toBeTruthy();
     });

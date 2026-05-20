@@ -3,6 +3,8 @@ import { StatusBadge } from "./StatusBadge";
 import type { Build, QueueEntry } from "../types/build";
 import { formatTime } from "../utils/time";
 
+type BuildActivityContextMode = "global" | "project" | "job";
+
 export type BuildActivityItem =
   | { kind: "queue"; entry: QueueEntry }
   | { kind: "build"; build: Build };
@@ -14,7 +16,78 @@ type BuildActivityPanelProps = {
   loadingMessage?: string;
   error?: unknown;
   errorPrefix?: string;
+  contextMode?: BuildActivityContextMode;
 };
+
+function renderQueueContext(
+  entry: QueueEntry,
+  contextMode: BuildActivityContextMode,
+) {
+  const projectLabel =
+    entry.project_name?.trim() ||
+    entry.project_slug?.trim() ||
+    entry.project_id;
+  const hasJobName = Boolean(entry.job_name?.trim());
+  const hasJobID = Boolean(entry.job_id?.trim());
+  const jobLabel = hasJobName ? entry.job_name!.trim() : null;
+
+  if (contextMode === "job") {
+    return null;
+  }
+
+  if (contextMode === "project") {
+    if (jobLabel && hasJobID) {
+      return <Link to={`/jobs/${entry.job_id!}`}>{jobLabel}</Link>;
+    }
+    return jobLabel;
+  }
+
+  return (
+    <>
+      <Link to={`/projects/${entry.project_id}`}>{projectLabel}</Link>
+      {jobLabel ? (hasJobID ? ` · ` : ` · ${jobLabel}`) : null}
+      {jobLabel && hasJobID ? (
+        <Link to={`/jobs/${entry.job_id!}`}>{jobLabel}</Link>
+      ) : null}
+    </>
+  );
+}
+
+function renderBuildContext(
+  build: Build,
+  contextMode: BuildActivityContextMode,
+) {
+  const projectLabel =
+    build.project_name?.trim() ||
+    build.project_slug?.trim() ||
+    build.project_id;
+  const hasJobName = Boolean(build.job_name?.trim());
+  const hasJobID = Boolean(build.job_id?.trim());
+  const jobLabel = hasJobName ? build.job_name!.trim() : null;
+  const triggerRef = build.trigger_ref?.trim();
+
+  if (contextMode === "job") {
+    return triggerRef ?? null;
+  }
+
+  if (contextMode === "project") {
+    if (jobLabel && hasJobID) {
+      return <Link to={`/jobs/${build.job_id!}`}>{jobLabel}</Link>;
+    }
+    return triggerRef ?? null;
+  }
+
+  return (
+    <>
+      <Link to={`/projects/${build.project_id}`}>{projectLabel}</Link>
+      {jobLabel ? (hasJobID ? ` · ` : ` · ${jobLabel}`) : null}
+      {jobLabel && hasJobID ? (
+        <Link to={`/jobs/${build.job_id!}`}>{jobLabel}</Link>
+      ) : null}
+      {triggerRef ? ` · ${triggerRef}` : null}
+    </>
+  );
+}
 
 export function BuildActivityPanel({
   title,
@@ -23,6 +96,7 @@ export function BuildActivityPanel({
   loadingMessage,
   error,
   errorPrefix = "Failed to load activity",
+  contextMode = "global",
 }: BuildActivityPanelProps) {
   return (
     <section className="panel dashboard-panel">
@@ -44,6 +118,7 @@ export function BuildActivityPanel({
           {items.map((item) => {
             if (item.kind === "queue") {
               const entry = item.entry;
+              const context = renderQueueContext(entry, contextMode);
               return (
                 <li
                   key={`queue-${entry.build_id}`}
@@ -56,14 +131,7 @@ export function BuildActivityPanel({
                       </Link>
                       <StatusBadge status={entry.status} />
                     </div>
-                    <p className="subtle-text">
-                      <Link to={`/projects/${entry.project_id}`}>
-                        {entry.project_name?.trim() ||
-                          entry.project_slug?.trim() ||
-                          entry.project_id}
-                      </Link>
-                      {entry.job_name?.trim() ? ` · ${entry.job_name}` : ""}
-                    </p>
+                    {context ? <p className="subtle-text">{context}</p> : null}
                   </div>
                   <div className="activity-list-meta subtle-text">
                     {formatTime(
@@ -75,6 +143,7 @@ export function BuildActivityPanel({
             }
 
             const build = item.build;
+            const context = renderBuildContext(build, contextMode);
             return (
               <li
                 key={`build-${build.id}`}
@@ -90,16 +159,7 @@ export function BuildActivityPanel({
                     </Link>
                     <StatusBadge status={build.status} />
                   </div>
-                  <p className="subtle-text">
-                    <Link to={`/projects/${build.project_id}`}>
-                      {build.project_name?.trim() ||
-                        build.project_slug?.trim() ||
-                        build.project_id}
-                    </Link>
-                    {build.trigger_ref?.trim()
-                      ? ` · ${build.trigger_ref.trim()}`
-                      : ""}
-                  </p>
+                  {context ? <p className="subtle-text">{context}</p> : null}
                 </div>
                 <div className="activity-list-meta subtle-text">
                   {formatTime(

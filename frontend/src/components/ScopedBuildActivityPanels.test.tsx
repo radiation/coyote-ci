@@ -7,11 +7,17 @@ import {
   QueueActivityPanel,
   RecentBuildsPanel,
 } from "./ScopedBuildActivityPanels";
-import { listBuilds, listBuildsByJob, listQueue } from "../api";
+import {
+  listBuilds,
+  listBuildsByJob,
+  listJobsByProject,
+  listQueue,
+} from "../api";
 
 vi.mock("../api", () => ({
   listBuilds: vi.fn(),
   listBuildsByJob: vi.fn(),
+  listJobsByProject: vi.fn(),
   listQueue: vi.fn(),
 }));
 
@@ -32,6 +38,7 @@ function renderWithProviders(ui: React.ReactNode) {
 describe("ScopedBuildActivityPanels", () => {
   const mockedListBuilds = vi.mocked(listBuilds);
   const mockedListBuildsByJob = vi.mocked(listBuildsByJob);
+  const mockedListJobsByProject = vi.mocked(listJobsByProject);
   const mockedListQueue = vi.mocked(listQueue);
 
   beforeEach(() => {
@@ -39,6 +46,7 @@ describe("ScopedBuildActivityPanels", () => {
     mockedListQueue.mockResolvedValue([]);
     mockedListBuilds.mockResolvedValue([]);
     mockedListBuildsByJob.mockResolvedValue([]);
+    mockedListJobsByProject.mockResolvedValue([]);
   });
 
   it("uses project filters for queue and recent builds", async () => {
@@ -48,6 +56,8 @@ describe("ScopedBuildActivityPanels", () => {
         build_number: 101,
         project_id: "project-1",
         project_name: "Platform",
+        job_id: "job-queue-1",
+        job_name: "release",
         priority: 5,
         status: "queued",
         created_at: "2026-05-01T00:00:00Z",
@@ -59,6 +69,8 @@ describe("ScopedBuildActivityPanels", () => {
         build_number: 100,
         project_id: "project-1",
         project_name: "Platform",
+        job_id: "job-recent-1",
+        job_name: "release-history",
         priority: 5,
         status: "failed",
         created_at: "2026-05-01T00:00:00Z",
@@ -79,6 +91,7 @@ describe("ScopedBuildActivityPanels", () => {
       expect(mockedListBuilds).toHaveBeenCalledWith({
         project_id: "project-1",
       });
+      expect(mockedListJobsByProject).toHaveBeenCalledWith("project-1");
       expect(screen.getByRole("link", { name: "Build #101" })).toHaveAttribute(
         "href",
         "/builds/build-queue-1",
@@ -86,6 +99,101 @@ describe("ScopedBuildActivityPanels", () => {
       expect(screen.getByRole("link", { name: "Build #100" })).toHaveAttribute(
         "href",
         "/builds/build-recent-1",
+      );
+      expect(screen.getByRole("link", { name: "release" })).toHaveAttribute(
+        "href",
+        "/jobs/job-queue-1",
+      );
+      expect(
+        screen.getByRole("link", { name: "release-history" }),
+      ).toHaveAttribute("href", "/jobs/job-recent-1");
+      expect(screen.queryByRole("link", { name: "Platform" })).toBeNull();
+    });
+  });
+
+  it("hydrates missing project-scoped job names from project jobs", async () => {
+    mockedListQueue.mockResolvedValue([
+      {
+        build_id: "build-queue-2",
+        build_number: 102,
+        project_id: "project-1",
+        project_name: "Platform",
+        job_id: "job-release",
+        priority: 5,
+        status: "queued",
+        created_at: "2026-05-01T00:00:00Z",
+      },
+    ]);
+    mockedListBuilds.mockResolvedValue([
+      {
+        id: "build-recent-2",
+        build_number: 99,
+        project_id: "project-1",
+        project_name: "Platform",
+        job_id: "job-release",
+        priority: 5,
+        status: "success",
+        created_at: "2026-05-01T00:00:00Z",
+        queued_at: null,
+        started_at: null,
+        finished_at: null,
+        current_step_index: 0,
+        error_message: null,
+      },
+    ]);
+    mockedListJobsByProject.mockResolvedValue([
+      {
+        id: "job-release",
+        project_id: "project-1",
+        name: "release",
+        priority: 5,
+        repository_url: "https://github.com/example/repo.git",
+        default_ref: "main",
+        push_enabled: true,
+        push_branch: "main",
+        pipeline_yaml: "version: 1",
+        managed_image: null,
+        enabled: true,
+        created_at: "2026-05-01T00:00:00Z",
+        updated_at: "2026-05-01T00:00:00Z",
+      },
+    ]);
+
+    renderWithProviders(
+      <BuildActivityRail scope={{ type: "project", projectId: "project-1" }} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("link", { name: "release" })).toHaveLength(2);
+      expect(screen.queryByRole("link", { name: /job-release/i })).toBeNull();
+    });
+  });
+
+  it("shows project and job context at global scope", async () => {
+    mockedListQueue.mockResolvedValue([
+      {
+        build_id: "build-queue-global",
+        build_number: 201,
+        project_id: "project-2",
+        project_name: "Payments",
+        job_id: "job-global-1",
+        job_name: "nightly",
+        priority: 5,
+        status: "running",
+        created_at: "2026-05-01T00:00:00Z",
+      },
+    ]);
+
+    renderWithProviders(<QueueActivityPanel scope={{ type: "global" }} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "Payments" })).toHaveAttribute(
+        "href",
+        "/projects/project-2",
+      );
+      expect(screen.getByRole("link", { name: "nightly" })).toHaveAttribute(
+        "href",
+        "/jobs/job-global-1",
       );
     });
   });
@@ -142,6 +250,8 @@ describe("ScopedBuildActivityPanels", () => {
       expect(screen.getByRole("link", { name: "Build #51" })).toBeTruthy();
       expect(screen.getByRole("link", { name: "Build #52" })).toBeTruthy();
       expect(screen.queryByRole("link", { name: "Build #53" })).toBeNull();
+      expect(screen.queryByRole("link", { name: /project-/i })).toBeNull();
+      expect(screen.queryByText(/^Job /i)).toBeNull();
     });
   });
 
