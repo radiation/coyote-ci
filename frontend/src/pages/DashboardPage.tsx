@@ -67,7 +67,6 @@ export function DashboardPage() {
     <div className="page-content page-dashboard">
       <PageHeader
         title="Dashboard"
-        description="Queue, failures, and recent activity across your projects."
         actions={
           <>
             <Link className="secondary-button" to="/projects">
@@ -85,34 +84,34 @@ export function DashboardPage() {
         aria-label="Dashboard summary"
       >
         <SummaryCard
-          title="Accessible projects"
+          title="Projects"
           value={projectsLoading ? "Loading…" : String(projects?.length ?? 0)}
           description={
             projectsError
               ? `Unable to load projects: ${String(projectsError)}`
-              : "Projects in scope."
+              : undefined
           }
         />
         <SummaryCard
-          title="Queued or running"
+          title="Queue"
           value={queueLoading ? "Loading…" : String(queueEntries?.length ?? 0)}
           tone={queueEntries && queueEntries.length > 0 ? "warning" : "info"}
           description={
             queueError
               ? `Unable to load queue: ${String(queueError)}`
-              : "Builds currently queued or running."
+              : undefined
           }
           footer={<Link to="/queue">Open queue</Link>}
         />
         <SummaryCard
-          title="Recent failures"
+          title="Failures"
           value={buildsLoading ? "Loading…" : String(failedBuilds.length)}
           tone={failedBuilds.length > 0 ? "danger" : "success"}
           description={
             buildsError
               ? `Unable to load recent builds: ${String(buildsError)}`
               : failedBuilds.length > 0
-                ? "Failures in recent activity."
+                ? undefined
                 : "No recent failures."
           }
           footer={<Link to="/builds">Open builds</Link>}
@@ -124,7 +123,6 @@ export function DashboardPage() {
           <div className="dashboard-panel-header">
             <div>
               <h3>Projects</h3>
-              <p className="subtle-text">Projects in scope.</p>
             </div>
           </div>
           {projectsLoading ? <p>Loading projects…</p> : null}
@@ -140,9 +138,6 @@ export function DashboardPage() {
           (!projects || projects.length === 0) ? (
             <div className="empty-state">
               <p className="empty">No projects available yet.</p>
-              <p className="subtle-text">
-                Create a project to organize jobs and build history.
-              </p>
             </div>
           ) : null}
           {!projectsLoading &&

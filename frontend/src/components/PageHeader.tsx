@@ -13,7 +13,7 @@ export function PageHeader({
 }) {
   return (
     <div className="page-header-row">
-      <div>
+      <div className="page-header-copy">
         {eyebrow ? <div className="page-eyebrow">{eyebrow}</div> : null}
         <h2>{title}</h2>
         {description ? <div className="subtle-text">{description}</div> : null}

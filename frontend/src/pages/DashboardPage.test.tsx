@@ -101,7 +101,7 @@ describe("DashboardPage", () => {
         "href",
         "/builds/build-2",
       );
-      expect(screen.getByText("Recent failures")).toBeTruthy();
+      expect(screen.getByText("Failures")).toBeTruthy();
       expect(screen.getByText("Core platform pipelines")).toBeTruthy();
     });
   });
