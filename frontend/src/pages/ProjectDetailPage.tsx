@@ -208,6 +208,27 @@ export function ProjectDetailPage() {
             </div>
           </section>
 
+          <section className="detail-panel" aria-label="Artifacts and releases">
+            <h3>Artifacts and Releases</h3>
+            <p className="subtle-text">
+              Use artifact views for published build outputs. The logical view
+              is the lightweight entry point for versioned releases and
+              channels.
+            </p>
+            <div className="detail-actions-row">
+              <Link
+                to={`/artifacts?project_id=${encodeURIComponent(project.id)}`}
+              >
+                Browse Project Artifacts
+              </Link>
+              <Link
+                to={`/artifacts/logical?project_id=${encodeURIComponent(project.id)}`}
+              >
+                Open Release View
+              </Link>
+            </div>
+          </section>
+
           <section className="settings-panel" style={{ marginTop: 16 }}>
             <h3>Project Members</h3>
             {memberError && <p className="error-text">{memberError}</p>}

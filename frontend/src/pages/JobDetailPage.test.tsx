@@ -4,9 +4,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { JobDetailPage } from "./JobDetailPage";
 import {
+  getBuildArtifacts,
   getProject,
   getJob,
-  listArtifactCatalog,
   listBuildsByJob,
   listSourceCredentials,
   runJob,
@@ -27,9 +27,10 @@ vi.mock("react-router-dom", async () => {
 });
 
 vi.mock("../api", () => ({
+  artifactDownloadURL: (path: string) => `/api${path}`,
+  getBuildArtifacts: vi.fn(),
   getProject: vi.fn(),
   getJob: vi.fn(),
-  listArtifactCatalog: vi.fn(),
   updateJob: vi.fn(),
   runJob: vi.fn(),
   listBuildsByJob: vi.fn(),
@@ -58,9 +59,9 @@ function renderPage(seed?: (queryClient: QueryClient) => void) {
 }
 
 describe("JobDetailPage", () => {
+  const mockedGetBuildArtifacts = vi.mocked(getBuildArtifacts);
   const mockedGetProject = vi.mocked(getProject);
   const mockedGetJob = vi.mocked(getJob);
-  const mockedListArtifactCatalog = vi.mocked(listArtifactCatalog);
   const mockedUpdateJob = vi.mocked(updateJob);
   const mockedRunJob = vi.mocked(runJob);
   const mockedListBuildsByJob = vi.mocked(listBuildsByJob);
@@ -102,28 +103,28 @@ describe("JobDetailPage", () => {
         trigger_ref: "main",
       },
     ]);
-    mockedListArtifactCatalog.mockResolvedValue([
+    mockedGetBuildArtifacts.mockResolvedValue([
       {
         id: "artifact-1",
+        build_id: "build-recent-1",
+        step_id: null,
         name: "backend-binary",
         path: "dist/backend",
-        artifact_type: "generic",
-        build_id: "build-recent-1",
-        build_number: 20,
-        build_status: "success",
-        project_id: "project-1",
-        project_name: "Platform",
-        project_slug: "platform",
-        job_id: "job-1",
-        job_name: "backend-ci",
-        step_id: null,
-        step_index: null,
-        step_name: null,
         size_bytes: 1024,
         content_type: "application/octet-stream",
         checksum_sha256: null,
         storage_provider: "filesystem",
         download_url_path: "/artifacts/download/artifact-1",
+        version_tags: [
+          {
+            id: "version-1",
+            job_id: "job-1",
+            version: "2026.03.30",
+            target_type: "artifact",
+            artifact_id: "artifact-1",
+            created_at: "2026-03-30T00:01:11Z",
+          },
+        ],
         created_at: "2026-03-30T00:01:10Z",
       },
     ]);
@@ -233,11 +234,28 @@ describe("JobDetailPage", () => {
       screen.getByRole("link", { name: "View Project Builds" }),
     ).toHaveAttribute("href", "/builds?project_id=project-1");
     expect(
-      screen.getByRole("link", { name: "Browse Job Artifacts" }),
-    ).toHaveAttribute("href", "/artifacts?project_id=project-1&job_id=job-1");
+      screen
+        .getAllByRole("link", { name: "Browse Job Artifacts" })
+        .every(
+          (link) =>
+            link.getAttribute("href") ===
+            "/artifacts?project_id=project-1&job_id=job-1",
+        ),
+    ).toBe(true);
+    expect(
+      screen.getByRole("link", { name: "View Latest Build" }),
+    ).toHaveAttribute("href", "/builds/build-recent-1");
     expect(
       screen.getByRole("link", { name: "backend-binary" }),
     ).toHaveAttribute("href", "/artifacts/artifact-1");
+    expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute(
+      "href",
+      "/artifacts/artifact-1",
+    );
+    expect(
+      screen.getByText("Artifact Count:", { selector: "strong" }).parentElement,
+    ).toHaveTextContent("1");
+    expect(screen.getByText("2026.03.30")).toBeTruthy();
     expect(screen.queryByRole("link", { name: /^Job\s/i })).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Name"), {
@@ -307,7 +325,7 @@ describe("JobDetailPage", () => {
   });
 
   it("shows inline pipeline and disabled job detail fallbacks", async () => {
-    mockedListArtifactCatalog.mockResolvedValueOnce([]);
+    mockedGetBuildArtifacts.mockResolvedValueOnce([]);
     mockedGetJob.mockResolvedValueOnce({
       id: "job-1",
       project_id: "project-1",
@@ -341,7 +359,9 @@ describe("JobDetailPage", () => {
       expect(
         screen.getAllByText("Managed Build Image")[0].parentElement,
       ).toHaveTextContent("Disabled");
-      expect(screen.getByText("No artifacts yet for this job.")).toBeTruthy();
+      expect(
+        screen.getByText("Latest successful build did not publish artifacts."),
+      ).toBeTruthy();
     });
   });
 
@@ -708,9 +728,8 @@ describe("JobDetailPage", () => {
     });
   });
 
-  it("shows error states for builds and artifacts queries", async () => {
-    mockedListBuildsByJob.mockRejectedValue(new Error("builds failed"));
-    mockedListArtifactCatalog.mockRejectedValueOnce(
+  it("shows error state for latest successful build outputs", async () => {
+    mockedGetBuildArtifacts.mockRejectedValueOnce(
       new Error("artifacts failed"),
     );
 
@@ -718,11 +737,8 @@ describe("JobDetailPage", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText("Failed to load latest builds: Error: builds failed"),
-      ).toBeTruthy();
-      expect(
         screen.getByText(
-          "Failed to load latest artifacts: Error: artifacts failed",
+          "Failed to load latest successful build outputs: Error: artifacts failed",
         ),
       ).toBeTruthy();
     });

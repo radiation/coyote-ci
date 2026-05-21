@@ -184,6 +184,9 @@ describe("ProjectDetailPage", () => {
       expect(
         screen.getByRole("link", { name: "Browse Artifacts" }),
       ).toHaveAttribute("href", "/artifacts?project_id=project-1");
+      expect(
+        screen.getByRole("link", { name: "Open Release View" }),
+      ).toHaveAttribute("href", "/artifacts/logical?project_id=project-1");
       expect(screen.getByRole("link", { name: "Open Job" })).toHaveAttribute(
         "href",
         "/jobs/job-1",
