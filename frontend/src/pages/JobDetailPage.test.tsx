@@ -34,13 +34,15 @@ vi.mock("../api", () => ({
   listSourceCredentials: vi.fn(),
 }));
 
-function renderPage() {
+function renderPage(seed?: (queryClient: QueryClient) => void) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   });
+
+  seed?.(queryClient);
 
   return render(
     <QueryClientProvider client={queryClient}>
@@ -301,6 +303,173 @@ describe("JobDetailPage", () => {
       expect(
         screen.getAllByText("Managed Build Image")[0].parentElement,
       ).toHaveTextContent("Disabled");
+    });
+  });
+
+  it("shows repository pipeline and any-branch fallback details", async () => {
+    mockedGetJob.mockResolvedValueOnce({
+      id: "job-1",
+      project_id: "project-1",
+      name: "backend-ci",
+      priority: 5,
+      repository_url: "https://github.com/example/backend.git",
+      default_ref: "main",
+      push_enabled: true,
+      push_branch: "",
+      pipeline_yaml: "",
+      pipeline_path: ".coyote/repo-pipeline.yml",
+      managed_image: {
+        enabled: true,
+        managed_image_name: "go",
+        pipeline_path: ".coyote/repo-pipeline.yml",
+        write_credential_id: "cred-1",
+        bot_branch_prefix: "coyote/managed-image-refresh",
+        commit_author_name: "Coyote CI Bot",
+        commit_author_email: "bot@coyote-ci.local",
+        created_at: "2026-03-30T00:00:00Z",
+        updated_at: "2026-03-30T00:00:00Z",
+      },
+      enabled: true,
+      created_at: "2026-03-30T00:00:00Z",
+      updated_at: "2026-03-30T00:00:00Z",
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Push Branch", { selector: "strong" }).parentElement,
+      ).toHaveTextContent("Any branch");
+      expect(
+        screen.getByText("Pipeline Source", { selector: "strong" })
+          .parentElement,
+      ).toHaveTextContent("Repository file");
+      expect(
+        screen.getByText("Pipeline Path", { selector: "strong" }).parentElement,
+      ).toHaveTextContent(".coyote/repo-pipeline.yml");
+    });
+  });
+
+  it("shows last-loaded fallback when query timestamp is unavailable", async () => {
+    mockedGetJob.mockImplementationOnce(
+      () => new Promise(() => {}) as Promise<never>,
+    );
+
+    renderPage((queryClient) => {
+      queryClient.setQueryData(
+        ["job", "job-1"],
+        {
+          id: "job-1",
+          project_id: "project-1",
+          name: "backend-ci",
+          priority: 5,
+          repository_url: "https://github.com/example/backend.git",
+          default_ref: "main",
+          push_enabled: true,
+          push_branch: "main",
+          pipeline_yaml: "steps:\n  - run: echo hi",
+          pipeline_path: null,
+          managed_image: null,
+          enabled: true,
+          created_at: "2026-03-30T00:00:00Z",
+          updated_at: "2026-03-30T00:00:00Z",
+        },
+        { updatedAt: 0 },
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Last loaded: —")).toBeTruthy();
+    });
+  });
+
+  it("starts in repo mode and saves empty push branch when push trigger is disabled", async () => {
+    mockedGetJob.mockResolvedValueOnce({
+      id: "job-1",
+      project_id: "project-1",
+      name: "backend-ci",
+      priority: 5,
+      repository_url: "https://github.com/example/backend.git",
+      default_ref: "main",
+      push_enabled: true,
+      push_branch: "main",
+      pipeline_yaml: "",
+      pipeline_path: ".coyote/repo-pipeline.yml",
+      managed_image: null,
+      enabled: true,
+      created_at: "2026-03-30T00:00:00Z",
+      updated_at: "2026-03-30T00:00:00Z",
+    });
+
+    renderPage();
+
+    await screen.findByDisplayValue("backend-ci");
+    expect(
+      (
+        screen.getByRole("radio", {
+          name: "File in repository",
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+
+    fireEvent.click(screen.getByLabelText("Enable push trigger"));
+    fireEvent.click(screen.getByRole("button", { name: "Save Job" }));
+
+    await waitFor(() => {
+      expect(mockedUpdateJob).toHaveBeenCalledWith("job-1", {
+        name: "backend-ci",
+        priority: 5,
+        repository_url: "https://github.com/example/backend.git",
+        default_ref: "main",
+        push_enabled: false,
+        push_branch: "",
+        pipeline_yaml: "",
+        pipeline_path: ".coyote/repo-pipeline.yml",
+        managed_image: null,
+        enabled: true,
+      });
+    });
+  });
+
+  it("shows managed image required field validation when enabled and incomplete", async () => {
+    mockedGetJob.mockResolvedValueOnce({
+      id: "job-1",
+      project_id: "project-1",
+      name: "backend-ci",
+      priority: 5,
+      repository_url: "https://github.com/example/backend.git",
+      default_ref: "main",
+      push_enabled: true,
+      push_branch: "main",
+      pipeline_yaml: "",
+      pipeline_path: ".coyote/repo-pipeline.yml",
+      managed_image: {
+        enabled: true,
+        managed_image_name: "",
+        pipeline_path: "",
+        write_credential_id: "",
+        bot_branch_prefix: "coyote/managed-image-refresh",
+        commit_author_name: "Coyote CI Bot",
+        commit_author_email: "bot@coyote-ci.local",
+        created_at: "2026-03-30T00:00:00Z",
+        updated_at: "2026-03-30T00:00:00Z",
+      },
+      enabled: true,
+      created_at: "2026-03-30T00:00:00Z",
+      updated_at: "2026-03-30T00:00:00Z",
+    });
+
+    renderPage();
+
+    await screen.findByDisplayValue("backend-ci");
+    fireEvent.click(screen.getByRole("button", { name: "Save Job" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "Managed build image name, pipeline path, and write credential are required when automation is enabled.",
+        ),
+      ).toBeTruthy();
     });
   });
 
