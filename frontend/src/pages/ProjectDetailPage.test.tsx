@@ -160,16 +160,23 @@ describe("ProjectDetailPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Platform")).toBeTruthy();
+      expect(screen.getByText("Project Summary")).toBeTruthy();
+      expect(screen.getByText("Project Actions")).toBeTruthy();
+      expect(screen.getByText("Jobs in This Project")).toBeTruthy();
       expect(screen.getByText("Core platform pipelines")).toBeTruthy();
       expect(screen.getByText("maintainer@example.com")).toBeTruthy();
       expect(screen.getByText("backend-ci")).toBeTruthy();
       expect(
         screen.getByText("https://github.com/example/backend.git"),
       ).toBeTruthy();
-      expect(screen.getByRole("link", { name: "Create Job" })).toHaveAttribute(
-        "href",
-        "/jobs/new?project_id=project-1",
-      );
+      expect(
+        screen
+          .getAllByRole("link", { name: "Create Job" })
+          .every(
+            (link) =>
+              link.getAttribute("href") === "/jobs/new?project_id=project-1",
+          ),
+      ).toBe(true);
       expect(screen.getByRole("link", { name: "View Builds" })).toHaveAttribute(
         "href",
         "/builds?project_id=project-1",
@@ -177,6 +184,18 @@ describe("ProjectDetailPage", () => {
       expect(
         screen.getByRole("link", { name: "Browse Artifacts" }),
       ).toHaveAttribute("href", "/artifacts?project_id=project-1");
+      expect(screen.getByRole("link", { name: "Open Job" })).toHaveAttribute(
+        "href",
+        "/jobs/job-1",
+      );
+      expect(screen.getByRole("link", { name: "Builds" })).toHaveAttribute(
+        "href",
+        "/builds?project_id=project-1",
+      );
+      expect(screen.getByRole("link", { name: "Artifacts" })).toHaveAttribute(
+        "href",
+        "/artifacts?project_id=project-1&job_id=job-1",
+      );
       expect(screen.getByRole("link", { name: "release" })).toHaveAttribute(
         "href",
         "/jobs/job-queue-1",
@@ -454,6 +473,35 @@ describe("ProjectDetailPage", () => {
           "You do not have permission to manage project members.",
         ),
       ).toBeTruthy();
+    });
+  });
+
+  it("shows slug and description in job row when provided", async () => {
+    mockedListJobsByProject.mockResolvedValueOnce([
+      {
+        id: "job-1",
+        project_id: "project-1",
+        name: "backend-ci",
+        priority: 5,
+        repository_url: "https://github.com/example/backend.git",
+        default_ref: "main",
+        push_enabled: true,
+        push_branch: "main",
+        pipeline_yaml: "version: 1",
+        managed_image: null,
+        enabled: true,
+        created_at: "2026-05-01T00:00:00Z",
+        updated_at: "2026-05-01T00:00:00Z",
+        slug: "backend-ci",
+        description: "Runs backend tests",
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Slug: backend-ci")).toBeTruthy();
+      expect(screen.getByText("Runs backend tests")).toBeTruthy();
     });
   });
 });

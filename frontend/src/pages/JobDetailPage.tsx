@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   getProject,
   getJob,
+  listArtifactCatalog,
   listSourceCredentials,
   runJob,
   updateJob,
@@ -13,11 +14,36 @@ import {
   ManagedBuildImageFields,
   type ManagedBuildImageValue,
 } from "../components/ManagedBuildImageFields";
+import { jobBuildsQueryOptions } from "../queries/jobBuilds";
+import { StatusBadge } from "../components/StatusBadge";
 import type { Job } from "../types/job";
 import { formatTime } from "../utils/time";
 
 const MIN_PRIORITY = 1;
 const MAX_PRIORITY = 10;
+
+function sortBuildsByNewest<
+  T extends {
+    finished_at: string | null;
+    started_at: string | null;
+    queued_at: string | null;
+    created_at: string;
+  },
+>(builds: T[]): T[] {
+  return [...builds].sort((left, right) => {
+    const leftTime = Date.parse(
+      left.finished_at ?? left.started_at ?? left.queued_at ?? left.created_at,
+    );
+    const rightTime = Date.parse(
+      right.finished_at ??
+        right.started_at ??
+        right.queued_at ??
+        right.created_at,
+    );
+
+    return rightTime - leftTime;
+  });
+}
 
 export function JobDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -39,6 +65,30 @@ export function JobDetailPage() {
     enabled: Boolean(job?.project_id),
   });
 
+  const {
+    data: jobBuilds,
+    isLoading: jobBuildsLoading,
+    error: jobBuildsError,
+  } = useQuery(
+    id
+      ? jobBuildsQueryOptions(id)
+      : {
+          queryKey: ["jobBuilds", "disabled", "detail"],
+          queryFn: async () => [],
+          enabled: false,
+        },
+  );
+
+  const {
+    data: latestArtifacts,
+    isLoading: latestArtifactsLoading,
+    error: latestArtifactsError,
+  } = useQuery({
+    queryKey: ["jobArtifacts", id],
+    queryFn: () => listArtifactCatalog({ job_id: id!, limit: 1 }),
+    enabled: Boolean(id),
+  });
+
   if (isLoading) {
     return <p>Loading job…</p>;
   }
@@ -51,90 +101,210 @@ export function JobDetailPage() {
     return <p className="error-text">Job not found.</p>;
   }
 
+  const sortedBuilds = sortBuildsByNewest(jobBuilds ?? []);
+  const latestBuild = sortedBuilds[0] ?? job.latest_build ?? null;
+  const latestSuccessfulBuild =
+    sortedBuilds.find((build) => build.status === "success") ?? null;
+  const latestArtifact = latestArtifacts?.[0] ?? null;
+
   return (
     <>
       <Link to="/jobs">← Back to jobs</Link>
       <div className="detail-page-with-rail">
-        <div>
-          <h2>Job: {job.name}</h2>
-          <p className="subtle-text">
-            Last loaded:{" "}
-            {dataUpdatedAt > 0
-              ? formatTime(new Date(dataUpdatedAt).toISOString())
-              : "—"}
-          </p>
-
-          <div className="detail-grid">
-            <div>
-              <strong>ID</strong>
-              <span>{job.id}</span>
+        <div className="detail-main-column">
+          <div className="page-header-row">
+            <div className="page-header-copy">
+              <h2>Job: {job.name}</h2>
+              <p className="subtle-text">ID: {job.id}</p>
             </div>
-            <div>
-              <strong>Project</strong>
-              <span>
-                {project ? (
-                  <Link to={`/projects/${project.id}`}>{project.name}</Link>
-                ) : (
-                  job.project_id
-                )}
-              </span>
-            </div>
-            <div>
-              <strong>Priority</strong>
-              <span>{job.priority}</span>
-            </div>
-            <div>
-              <strong>Push Trigger</strong>
-              <span>{job.push_enabled ? "Enabled" : "Disabled"}</span>
-            </div>
-            <div>
-              <strong>Push Branch</strong>
-              <span>
-                {job.push_enabled ? job.push_branch || "Any branch" : "—"}
-              </span>
-            </div>
-            <div>
-              <strong>Pipeline Source</strong>
-              <span>
-                {job.pipeline_path ? "Repository file" : "Inline YAML"}
-              </span>
-            </div>
-            {job.pipeline_path && (
-              <div>
-                <strong>Pipeline Path</strong>
-                <span>{job.pipeline_path}</span>
-              </div>
-            )}
-            <div>
-              <strong>Managed Build Image</strong>
-              <span>{job.managed_image?.enabled ? "Enabled" : "Disabled"}</span>
-            </div>
-            {job.managed_image && (
-              <div>
-                <strong>Managed Image Name</strong>
-                <span>{job.managed_image.managed_image_name}</span>
-              </div>
-            )}
-            <div>
-              <strong>Created</strong>
-              <span>{formatTime(job.created_at)}</span>
-            </div>
-            <div>
-              <strong>Updated</strong>
-              <span>{formatTime(job.updated_at)}</span>
+            <div className="page-header-actions">
+              <Link
+                to={`/builds?project_id=${encodeURIComponent(job.project_id)}`}
+              >
+                View Project Builds
+              </Link>
+              <Link
+                to={`/artifacts?project_id=${encodeURIComponent(job.project_id)}&job_id=${encodeURIComponent(job.id)}`}
+              >
+                Browse Job Artifacts
+              </Link>
+              <a href="#job-configuration">Edit Configuration</a>
             </div>
           </div>
 
-          <p className="subtle-text">
-            Internal push events can be sent to POST /events/push with
-            repository_url, ref, and commit_sha.
-          </p>
+          <section className="detail-panel" aria-label="Job summary">
+            <h3>Job Summary</h3>
+            <div className="detail-grid">
+              <div>
+                <strong>Project</strong>
+                <span>
+                  {project ? (
+                    <Link to={`/projects/${project.id}`}>{project.name}</Link>
+                  ) : (
+                    job.project_id
+                  )}
+                </span>
+              </div>
+              <div>
+                <strong>Enabled</strong>
+                <span>{job.enabled ? "Enabled" : "Disabled"}</span>
+              </div>
+              <div>
+                <strong>Priority</strong>
+                <span>{job.priority}</span>
+              </div>
+              <div>
+                <strong>Push Trigger</strong>
+                <span>{job.push_enabled ? "Enabled" : "Disabled"}</span>
+              </div>
+              <div>
+                <strong>Push Branch</strong>
+                <span>
+                  {job.push_enabled ? job.push_branch || "Any branch" : "—"}
+                </span>
+              </div>
+              <div>
+                <strong>Created</strong>
+                <span>{formatTime(job.created_at)}</span>
+              </div>
+              <div>
+                <strong>Updated</strong>
+                <span>{formatTime(job.updated_at)}</span>
+              </div>
+              <div>
+                <strong>Last Loaded</strong>
+                <span>
+                  {dataUpdatedAt > 0
+                    ? formatTime(new Date(dataUpdatedAt).toISOString())
+                    : "—"}
+                </span>
+              </div>
+            </div>
+          </section>
 
-          <JobDetailForm
-            key={`${job.id}:${job.updated_at}`}
-            job={job}
-            jobID={id}
-          />
+          <section className="detail-panel" aria-label="Source and pipeline">
+            <h3>Source and Pipeline</h3>
+            <div className="detail-grid">
+              <div>
+                <strong>Repository</strong>
+                <span>{job.repository_url}</span>
+              </div>
+              <div>
+                <strong>Default Ref</strong>
+                <span>{job.default_ref}</span>
+              </div>
+              <div>
+                <strong>Pipeline Source</strong>
+                <span>
+                  {job.pipeline_path ? "Repository file" : "Inline YAML"}
+                </span>
+              </div>
+              <div>
+                <strong>Pipeline Path</strong>
+                <span>{job.pipeline_path || "—"}</span>
+              </div>
+              <div>
+                <strong>Managed Build Image</strong>
+                <span>
+                  {job.managed_image?.enabled ? "Enabled" : "Disabled"}
+                </span>
+              </div>
+              <div>
+                <strong>Managed Image Name</strong>
+                <span>{job.managed_image?.managed_image_name || "—"}</span>
+              </div>
+            </div>
+            <p className="subtle-text">
+              Internal push events can be sent to POST /events/push with
+              repository_url, ref, and commit_sha.
+            </p>
+          </section>
+
+          <section className="detail-panel" aria-label="Latest outputs">
+            <h3>Latest Outputs</h3>
+
+            {jobBuildsLoading && <p>Loading latest builds…</p>}
+            {jobBuildsError && (
+              <p className="error-text">
+                Failed to load latest builds: {String(jobBuildsError)}
+              </p>
+            )}
+            {!jobBuildsLoading && !jobBuildsError && !latestBuild && (
+              <p className="subtle-text">No builds yet for this job.</p>
+            )}
+            {latestBuild && (
+              <div className="detail-summary">
+                <span>
+                  <strong>Latest Build:</strong>{" "}
+                  <Link to={`/builds/${latestBuild.id}`}>
+                    {typeof latestBuild.build_number === "number"
+                      ? `#${latestBuild.build_number}`
+                      : latestBuild.id.slice(0, 8)}
+                  </Link>
+                </span>
+                <span>
+                  <StatusBadge status={latestBuild.status} />
+                </span>
+                <span>
+                  <strong>Created:</strong> {formatTime(latestBuild.created_at)}
+                </span>
+                {latestSuccessfulBuild &&
+                  latestSuccessfulBuild.id !== latestBuild.id && (
+                    <span>
+                      <strong>Latest Success:</strong>{" "}
+                      <Link to={`/builds/${latestSuccessfulBuild.id}`}>
+                        #{latestSuccessfulBuild.build_number ?? "—"}
+                      </Link>
+                    </span>
+                  )}
+              </div>
+            )}
+
+            {latestArtifactsLoading && <p>Loading latest artifacts…</p>}
+            {latestArtifactsError && (
+              <p className="error-text">
+                Failed to load latest artifacts: {String(latestArtifactsError)}
+              </p>
+            )}
+            {!latestArtifactsLoading &&
+              !latestArtifactsError &&
+              !latestArtifact && (
+                <p className="subtle-text">No artifacts yet for this job.</p>
+              )}
+            {latestArtifact && (
+              <div className="detail-summary">
+                <span>
+                  <strong>Latest Artifact:</strong>{" "}
+                  <Link to={`/artifacts/${latestArtifact.id}`}>
+                    {latestArtifact.name || latestArtifact.path}
+                  </Link>
+                </span>
+                <span>
+                  <strong>Build:</strong>{" "}
+                  <Link to={`/builds/${latestArtifact.build_id}`}>
+                    #{latestArtifact.build_number}
+                  </Link>
+                </span>
+                <span>
+                  <strong>Created:</strong>{" "}
+                  {formatTime(latestArtifact.created_at)}
+                </span>
+              </div>
+            )}
+          </section>
+
+          <section
+            id="job-configuration"
+            className="detail-panel"
+            aria-label="Job configuration"
+          >
+            <h3>Job Configuration</h3>
+            <JobDetailForm
+              key={`${job.id}:${job.updated_at}`}
+              job={job}
+              jobID={id}
+            />
+          </section>
         </div>
         <BuildActivityRail scope={{ type: "job", jobId: id }} />
       </div>

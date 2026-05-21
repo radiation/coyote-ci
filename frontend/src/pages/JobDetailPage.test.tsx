@@ -6,6 +6,7 @@ import { JobDetailPage } from "./JobDetailPage";
 import {
   getProject,
   getJob,
+  listArtifactCatalog,
   listBuildsByJob,
   listSourceCredentials,
   runJob,
@@ -28,6 +29,7 @@ vi.mock("react-router-dom", async () => {
 vi.mock("../api", () => ({
   getProject: vi.fn(),
   getJob: vi.fn(),
+  listArtifactCatalog: vi.fn(),
   updateJob: vi.fn(),
   runJob: vi.fn(),
   listBuildsByJob: vi.fn(),
@@ -58,6 +60,7 @@ function renderPage(seed?: (queryClient: QueryClient) => void) {
 describe("JobDetailPage", () => {
   const mockedGetProject = vi.mocked(getProject);
   const mockedGetJob = vi.mocked(getJob);
+  const mockedListArtifactCatalog = vi.mocked(listArtifactCatalog);
   const mockedUpdateJob = vi.mocked(updateJob);
   const mockedRunJob = vi.mocked(runJob);
   const mockedListBuildsByJob = vi.mocked(listBuildsByJob);
@@ -97,6 +100,31 @@ describe("JobDetailPage", () => {
         current_step_index: 0,
         error_message: null,
         trigger_ref: "main",
+      },
+    ]);
+    mockedListArtifactCatalog.mockResolvedValue([
+      {
+        id: "artifact-1",
+        name: "backend-binary",
+        path: "dist/backend",
+        artifact_type: "generic",
+        build_id: "build-recent-1",
+        build_number: 20,
+        build_status: "success",
+        project_id: "project-1",
+        project_name: "Platform",
+        project_slug: "platform",
+        job_id: "job-1",
+        job_name: "backend-ci",
+        step_id: null,
+        step_index: null,
+        step_name: null,
+        size_bytes: 1024,
+        content_type: "application/octet-stream",
+        checksum_sha256: null,
+        storage_provider: "filesystem",
+        download_url_path: "/artifacts/download/artifact-1",
+        created_at: "2026-03-30T00:01:10Z",
       },
     ]);
     mockedGetProject.mockResolvedValue({
@@ -201,6 +229,15 @@ describe("JobDetailPage", () => {
     expect(platformLinks).toHaveLength(1);
     expect(platformLinks[0]).toHaveAttribute("href", "/projects/project-1");
     expect(buildLinks.length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("link", { name: "View Project Builds" }),
+    ).toHaveAttribute("href", "/builds?project_id=project-1");
+    expect(
+      screen.getByRole("link", { name: "Browse Job Artifacts" }),
+    ).toHaveAttribute("href", "/artifacts?project_id=project-1&job_id=job-1");
+    expect(
+      screen.getByRole("link", { name: "backend-binary" }),
+    ).toHaveAttribute("href", "/artifacts/artifact-1");
     expect(screen.queryByRole("link", { name: /^Job\s/i })).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Name"), {
@@ -270,6 +307,7 @@ describe("JobDetailPage", () => {
   });
 
   it("shows inline pipeline and disabled job detail fallbacks", async () => {
+    mockedListArtifactCatalog.mockResolvedValueOnce([]);
     mockedGetJob.mockResolvedValueOnce({
       id: "job-1",
       project_id: "project-1",
@@ -303,6 +341,7 @@ describe("JobDetailPage", () => {
       expect(
         screen.getAllByText("Managed Build Image")[0].parentElement,
       ).toHaveTextContent("Disabled");
+      expect(screen.getByText("No artifacts yet for this job.")).toBeTruthy();
     });
   });
 
@@ -379,7 +418,9 @@ describe("JobDetailPage", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Last loaded: —")).toBeTruthy();
+      expect(
+        screen.getByText("Last Loaded", { selector: "strong" }).parentElement,
+      ).toHaveTextContent("—");
     });
   });
 
@@ -664,6 +705,99 @@ describe("JobDetailPage", () => {
     await waitFor(() => {
       expect(screen.getByText(/Failed to run job/)).toBeTruthy();
       expect(screen.getByText(/job is disabled/)).toBeTruthy();
+    });
+  });
+
+  it("shows error states for builds and artifacts queries", async () => {
+    mockedListBuildsByJob.mockRejectedValue(new Error("builds failed"));
+    mockedListArtifactCatalog.mockRejectedValueOnce(
+      new Error("artifacts failed"),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Failed to load latest builds: Error: builds failed"),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(
+          "Failed to load latest artifacts: Error: artifacts failed",
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows latest success link when latest build is not yet successful", async () => {
+    mockedListBuildsByJob.mockResolvedValueOnce([
+      {
+        id: "build-running-1",
+        build_number: 22,
+        project_id: "project-1",
+        project_name: "Platform",
+        job_id: "job-1",
+        priority: 5,
+        status: "running",
+        created_at: "2026-03-30T00:00:00Z",
+        queued_at: "2026-03-30T00:00:01Z",
+        started_at: "2026-03-30T00:01:00Z",
+        finished_at: "2026-03-30T00:02:00Z",
+        current_step_index: 0,
+        error_message: null,
+      },
+      {
+        id: "build-success-1",
+        build_number: 21,
+        project_id: "project-1",
+        project_name: "Platform",
+        job_id: "job-1",
+        priority: 5,
+        status: "success",
+        created_at: "2026-03-30T00:00:00Z",
+        queued_at: "2026-03-30T00:00:01Z",
+        started_at: "2026-03-30T00:00:10Z",
+        finished_at: "2026-03-30T00:01:10Z",
+        current_step_index: 0,
+        error_message: null,
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      // latestBuild = running #22, latestSuccessfulBuild = success #21 (different id)
+      expect(
+        screen.getByText("Latest Success:", { selector: "strong" }),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows build id slice as fallback when build has no build number", async () => {
+    mockedListBuildsByJob.mockResolvedValueOnce([
+      {
+        id: "build-no-num-1",
+        project_id: "project-1",
+        project_name: "Platform",
+        job_id: "job-1",
+        priority: 5,
+        status: "queued",
+        created_at: "2026-03-30T00:00:00Z",
+        queued_at: "2026-03-30T00:00:01Z",
+        started_at: null,
+        finished_at: null,
+        current_step_index: 0,
+        error_message: null,
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      // build_number is undefined → shows first 8 chars of id
+      expect(screen.getByRole("link", { name: "build-no" })).toHaveAttribute(
+        "href",
+        "/builds/build-no-num-1",
+      );
     });
   });
 });
