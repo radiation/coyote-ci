@@ -707,4 +707,97 @@ describe("JobDetailPage", () => {
       expect(screen.getByText(/job is disabled/)).toBeTruthy();
     });
   });
+
+  it("shows error states for builds and artifacts queries", async () => {
+    mockedListBuildsByJob.mockRejectedValueOnce(new Error("builds failed"));
+    mockedListArtifactCatalog.mockRejectedValueOnce(
+      new Error("artifacts failed"),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Failed to load latest builds: Error: builds failed"),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(
+          "Failed to load latest artifacts: Error: artifacts failed",
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows latest success link when latest build is not yet successful", async () => {
+    mockedListBuildsByJob.mockResolvedValueOnce([
+      {
+        id: "build-running-1",
+        build_number: 22,
+        project_id: "project-1",
+        project_name: "Platform",
+        job_id: "job-1",
+        priority: 5,
+        status: "running",
+        created_at: "2026-03-30T00:00:00Z",
+        queued_at: "2026-03-30T00:00:01Z",
+        started_at: "2026-03-30T00:01:00Z",
+        finished_at: "2026-03-30T00:02:00Z",
+        current_step_index: 0,
+        error_message: null,
+      },
+      {
+        id: "build-success-1",
+        build_number: 21,
+        project_id: "project-1",
+        project_name: "Platform",
+        job_id: "job-1",
+        priority: 5,
+        status: "success",
+        created_at: "2026-03-30T00:00:00Z",
+        queued_at: "2026-03-30T00:00:01Z",
+        started_at: "2026-03-30T00:00:10Z",
+        finished_at: "2026-03-30T00:01:10Z",
+        current_step_index: 0,
+        error_message: null,
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      // latestBuild = running #22, latestSuccessfulBuild = success #21 (different id)
+      expect(
+        screen.getByText("Latest Success:", { selector: "strong" }),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows build id slice as fallback when build has no build number", async () => {
+    mockedListBuildsByJob.mockResolvedValueOnce([
+      {
+        id: "build-no-num-1",
+        project_id: "project-1",
+        project_name: "Platform",
+        job_id: "job-1",
+        priority: 5,
+        status: "queued",
+        created_at: "2026-03-30T00:00:00Z",
+        queued_at: "2026-03-30T00:00:01Z",
+        started_at: null,
+        finished_at: null,
+        current_step_index: 0,
+        error_message: null,
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      // build_number is undefined → shows first 8 chars of id
+      expect(screen.getByRole("link", { name: "build-no" })).toHaveAttribute(
+        "href",
+        "/builds/build-no-num-1",
+      );
+    });
+  });
 });

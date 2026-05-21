@@ -475,4 +475,34 @@ describe("ProjectDetailPage", () => {
       ).toBeTruthy();
     });
   });
+
+  it("shows slug and description in job row when provided", async () => {
+    mockedListJobsByProject.mockResolvedValueOnce([
+      {
+        id: "job-1",
+        project_id: "project-1",
+        name: "backend-ci",
+        priority: 5,
+        repository_url: "https://github.com/example/backend.git",
+        default_ref: "main",
+        push_enabled: true,
+        push_branch: "main",
+        pipeline_yaml: "version: 1",
+        managed_image: null,
+        enabled: true,
+        created_at: "2026-05-01T00:00:00Z",
+        updated_at: "2026-05-01T00:00:00Z",
+        slug: "backend-ci",
+        description: "Runs backend tests",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Slug: backend-ci")).toBeTruthy();
+      expect(screen.getByText("Runs backend tests")).toBeTruthy();
+    });
+  });
 });

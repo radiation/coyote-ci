@@ -1668,10 +1668,30 @@ h3 {
   border: 0;
 }
 
+@media (max-width: 1100px) {
+  /* Collapse detail pages with activity rail: rail stacks above main content */
+  .detail-page-with-rail {
+    grid-template-columns: 1fr;
+  }
+
+  /* Move the activity rail above the main column */
+  .detail-page-with-rail > .dashboard-activity-column {
+    order: -1;
+    /* Let the two activity panels sit side by side at medium widths */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  /* Stack the two activity panels vertically on small screens */
+  .detail-page-with-rail > .dashboard-activity-column {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 900px) {
   .app-shell,
   .dashboard-layout-grid,
-  .detail-page-with-rail,
   .dashboard-summary-grid,
   .settings-grid,
   .artifact-filters-panel,
