@@ -187,6 +187,59 @@ describe("ProjectDetailPage", () => {
     });
   });
 
+  it("shows the project loading state", () => {
+    mockedGetProject.mockImplementationOnce(
+      () => new Promise(() => {}) as Promise<never>,
+    );
+
+    renderPage();
+
+    expect(screen.getByText("Loading project…")).toBeTruthy();
+  });
+
+  it("shows the project error state", async () => {
+    mockedGetProject.mockRejectedValueOnce(new Error("backend unavailable"));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Failed to load project: Error: backend unavailable"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows the project not found state", async () => {
+    mockedGetProject.mockResolvedValueOnce(null as never);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Project not found.")).toBeTruthy();
+    });
+  });
+
+  it("shows empty project activity and detail fallbacks", async () => {
+    mockedGetProject.mockResolvedValueOnce({
+      id: "project-1",
+      name: "Platform",
+      slug: "platform",
+      description: "",
+      created_at: "2026-05-01T00:00:00Z",
+      updated_at: "2026-05-01T00:00:00Z",
+    });
+    mockedListProjectMembers.mockResolvedValueOnce([]);
+    mockedListJobsByProject.mockResolvedValueOnce([]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("—")).toBeTruthy();
+      expect(screen.getByText("No project members yet.")).toBeTruthy();
+      expect(screen.getByText("No jobs in this project yet.")).toBeTruthy();
+    });
+  });
+
   it("renders the responsive two-column activity rail layout", async () => {
     const { container } = renderPage();
 

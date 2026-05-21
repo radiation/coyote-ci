@@ -235,6 +235,191 @@ describe("JobDetailPage", () => {
     });
   });
 
+  it("shows the job loading state", () => {
+    mockedGetJob.mockImplementationOnce(
+      () => new Promise(() => {}) as Promise<never>,
+    );
+
+    renderPage();
+
+    expect(screen.getByText("Loading job…")).toBeTruthy();
+  });
+
+  it("shows the job error state", async () => {
+    mockedGetJob.mockRejectedValueOnce(new Error("backend unavailable"));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Failed to load job: Error: backend unavailable"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows the job not found state", async () => {
+    mockedGetJob.mockResolvedValueOnce(null as never);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Job not found.")).toBeTruthy();
+    });
+  });
+
+  it("shows inline pipeline and disabled job detail fallbacks", async () => {
+    mockedGetJob.mockResolvedValueOnce({
+      id: "job-1",
+      project_id: "project-1",
+      name: "backend-ci",
+      priority: 5,
+      repository_url: "https://github.com/example/backend.git",
+      default_ref: "main",
+      push_enabled: false,
+      push_branch: null,
+      pipeline_yaml: "version: 1\n",
+      pipeline_path: null,
+      managed_image: null,
+      enabled: true,
+      created_at: "2026-03-30T00:00:00Z",
+      updated_at: "2026-03-30T00:00:00Z",
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "Platform" })).toHaveAttribute(
+        "href",
+        "/projects/project-1",
+      );
+      expect(
+        screen.getAllByText("Push Branch")[0].parentElement,
+      ).toHaveTextContent("—");
+      expect(
+        screen.getAllByText("Pipeline Source")[0].parentElement,
+      ).toHaveTextContent("Inline YAML");
+      expect(
+        screen.getAllByText("Managed Build Image")[0].parentElement,
+      ).toHaveTextContent("Disabled");
+    });
+  });
+
+  it("covers job form validation, repo saves, and run-now fallback", async () => {
+    const { container } = renderPage();
+
+    await screen.findByDisplayValue("backend-ci");
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Job" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Name, repository URL, and default ref are required."),
+      ).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "backend-ci" },
+    });
+    fireEvent.change(screen.getByLabelText("Priority"), {
+      target: { value: "0" },
+    });
+    fireEvent.submit(container.querySelector(".job-form") as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Priority must be a number from 1 to 10."),
+      ).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Priority"), {
+      target: { value: "5" },
+    });
+    fireEvent.change(screen.getByLabelText("Pipeline YAML"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Job" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Pipeline YAML is required.")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: "File in repository" }));
+    await waitFor(() => {
+      expect(
+        (
+          screen.getByRole("radio", {
+            name: "File in repository",
+          }) as HTMLInputElement
+        ).checked,
+      ).toBe(true);
+    });
+    fireEvent.change(screen.getByLabelText("Pipeline File Path"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Job" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Pipeline file path is required.")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Pipeline File Path"), {
+      target: { value: ".coyote/pipeline.yml" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Job" }));
+
+    await waitFor(() => {
+      expect(mockedUpdateJob).toHaveBeenCalledWith("job-1", {
+        name: "backend-ci",
+        priority: 5,
+        repository_url: "https://github.com/example/backend.git",
+        default_ref: "main",
+        push_enabled: true,
+        push_branch: "main",
+        pipeline_yaml: "",
+        pipeline_path: ".coyote/pipeline.yml",
+        managed_image: {
+          enabled: true,
+          managed_image_name: "go",
+          pipeline_path: ".coyote/pipeline.yml",
+          write_credential_id: "cred-1",
+          bot_branch_prefix: "coyote/managed-image-refresh",
+          commit_author_name: "Coyote CI Bot",
+          commit_author_email: "bot@coyote-ci.local",
+        },
+        enabled: true,
+      });
+    });
+
+    mockedRunJob.mockResolvedValueOnce({
+      id: "",
+      priority: 5,
+      project_id: "project-1",
+      status: "queued",
+      created_at: "2026-03-30T00:00:00Z",
+      queued_at: "2026-03-30T00:00:01Z",
+      started_at: null,
+      finished_at: null,
+      current_step_index: 0,
+      error_message: null,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Run Now" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Job run started.")).toBeTruthy();
+    });
+
+    mockedUpdateJob.mockRejectedValueOnce(new Error("save failed"));
+    fireEvent.click(screen.getByRole("button", { name: "Save Job" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to save job/)).toBeTruthy();
+      expect(screen.getByText(/save failed/)).toBeTruthy();
+    });
+  });
   it("renders the responsive two-column activity rail layout", async () => {
     const { container } = renderPage();
 
