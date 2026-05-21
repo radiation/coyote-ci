@@ -797,6 +797,77 @@ describe("JobDetailPage", () => {
     });
   });
 
+  it("shows only the first three latest outputs and the overflow message", async () => {
+    mockedGetBuildArtifacts.mockResolvedValueOnce([
+      {
+        id: "artifact-1",
+        build_id: "build-recent-1",
+        step_id: null,
+        name: "artifact-1",
+        path: "dist/artifact-1",
+        size_bytes: 100,
+        content_type: null,
+        checksum_sha256: null,
+        storage_provider: "filesystem",
+        download_url_path: "/artifacts/download/artifact-1",
+        created_at: "2026-03-30T00:01:10Z",
+      },
+      {
+        id: "artifact-2",
+        build_id: "build-recent-1",
+        step_id: null,
+        name: "artifact-2",
+        path: "dist/artifact-2",
+        size_bytes: 200,
+        content_type: null,
+        checksum_sha256: null,
+        storage_provider: "filesystem",
+        download_url_path: "/artifacts/download/artifact-2",
+        created_at: "2026-03-30T00:01:11Z",
+      },
+      {
+        id: "artifact-3",
+        build_id: "build-recent-1",
+        step_id: null,
+        name: "artifact-3",
+        path: "dist/artifact-3",
+        size_bytes: 300,
+        content_type: null,
+        checksum_sha256: null,
+        storage_provider: "filesystem",
+        download_url_path: "/artifacts/download/artifact-3",
+        created_at: "2026-03-30T00:01:12Z",
+      },
+      {
+        id: "artifact-4",
+        build_id: "build-recent-1",
+        step_id: null,
+        name: "artifact-4",
+        path: "dist/artifact-4",
+        size_bytes: 400,
+        content_type: null,
+        checksum_sha256: null,
+        storage_provider: "filesystem",
+        download_url_path: "/artifacts/download/artifact-4",
+        created_at: "2026-03-30T00:01:13Z",
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("artifact-1")).toBeTruthy();
+      expect(screen.getByText("artifact-2")).toBeTruthy();
+      expect(screen.getByText("artifact-3")).toBeTruthy();
+      expect(screen.queryByText("artifact-4")).toBeNull();
+      expect(
+        screen.getByText(
+          "Showing 3 of 4 artifacts from the latest successful build.",
+        ),
+      ).toBeTruthy();
+    });
+  });
+
   it("shows build id slice as fallback when build has no build number", async () => {
     mockedListBuildsByJob.mockResolvedValueOnce([
       {
