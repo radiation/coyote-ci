@@ -250,10 +250,11 @@ func TestArtifactRepository_ListForBrowse(t *testing.T) {
 			)
 			AND ($3 = '' OR a.artifact_type = $3)
 			AND ($4 = '' OR b.project_id::text = $4)
+			AND ($5 = '' OR COALESCE(b.job_id::text, '') = $5)
 			GROUP BY identity_key, a.logical_path
 		) page
 		ORDER BY page.latest_created_at DESC, page.logical_path ASC, page.identity_key ASC
-	`)).WithArgs("pkg-a", "%pkg-a%", "", "").WillReturnRows(identityRows)
+	`)).WithArgs("pkg-a", "%pkg-a%", "", "", "").WillReturnRows(identityRows)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT 
@@ -265,7 +266,7 @@ func TestArtifactRepository_ListForBrowse(t *testing.T) {
 		FROM build_artifacts a
 		JOIN builds b ON b.id = a.build_id
 		LEFT JOIN build_steps s ON s.id = a.step_id
-		WHERE COALESCE(b.job_id::text, b.id::text) || '::' || a.logical_path IN ($5)
+		WHERE COALESCE(b.job_id::text, b.id::text) || '::' || a.logical_path IN ($6)
 		  AND (
 			$1 = ''
 			OR COALESCE(a.artifact_name, '') ILIKE $2
@@ -287,8 +288,9 @@ func TestArtifactRepository_ListForBrowse(t *testing.T) {
 		)
 		  AND ($3 = '' OR a.artifact_type = $3)
 		  AND ($4 = '' OR b.project_id::text = $4)
+		  AND ($5 = '' OR COALESCE(b.job_id::text, '') = $5)
 		ORDER BY a.created_at DESC, a.logical_path ASC, b.created_at DESC
-	`)).WithArgs("pkg-a", "%pkg-a%", "", "", jobID+"::packages/pkg-a.tgz").WillReturnRows(buildRows)
+	`)).WithArgs("pkg-a", "%pkg-a%", "", "", "", jobID+"::packages/pkg-a.tgz").WillReturnRows(buildRows)
 
 	records, err := repo.Browse(context.Background(), repository.BrowseArtifactsParams{Query: "pkg-a"})
 	if err != nil {
@@ -339,8 +341,8 @@ func TestArtifactRepository_BrowsePaginatesLogicalArtifacts(t *testing.T) {
 		"step-1", 1, "Publish package",
 	)
 
-	mock.ExpectQuery("SELECT page.identity_key").WithArgs("", "%%", "", "", 1, 1).WillReturnRows(identityRows)
-	mock.ExpectQuery("SELECT ").WithArgs("", "%%", "", "", jobID+"::packages/pkg-a.tgz").WillReturnRows(buildRows)
+	mock.ExpectQuery("SELECT page.identity_key").WithArgs("", "%%", "", "", "", 1, 1).WillReturnRows(identityRows)
+	mock.ExpectQuery("SELECT ").WithArgs("", "%%", "", "", "", jobID+"::packages/pkg-a.tgz").WillReturnRows(buildRows)
 
 	records, err := repo.Browse(context.Background(), repository.BrowseArtifactsParams{Limit: 1, Offset: 1})
 	if err != nil {
@@ -412,10 +414,11 @@ func TestArtifactRepository_Browse_ChannelSearchMatchesCurrentArtifactOnly(t *te
 			)
 			AND ($3 = '' OR a.artifact_type = $3)
 			AND ($4 = '' OR b.project_id::text = $4)
+			AND ($5 = '' OR COALESCE(b.job_id::text, '') = $5)
 			GROUP BY identity_key, a.logical_path
 		) page
 		ORDER BY page.latest_created_at DESC, page.logical_path ASC, page.identity_key ASC
-	`)).WithArgs("prod", "%prod%", "", "").WillReturnRows(identityRows)
+	`)).WithArgs("prod", "%prod%", "", "", "").WillReturnRows(identityRows)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT 
@@ -427,7 +430,7 @@ func TestArtifactRepository_Browse_ChannelSearchMatchesCurrentArtifactOnly(t *te
 		FROM build_artifacts a
 		JOIN builds b ON b.id = a.build_id
 		LEFT JOIN build_steps s ON s.id = a.step_id
-		WHERE COALESCE(b.job_id::text, b.id::text) || '::' || a.logical_path IN ($5)
+		WHERE COALESCE(b.job_id::text, b.id::text) || '::' || a.logical_path IN ($6)
 		  AND (
 			$1 = ''
 			OR COALESCE(a.artifact_name, '') ILIKE $2
@@ -449,8 +452,9 @@ func TestArtifactRepository_Browse_ChannelSearchMatchesCurrentArtifactOnly(t *te
 		)
 		  AND ($3 = '' OR a.artifact_type = $3)
 		  AND ($4 = '' OR b.project_id::text = $4)
+		  AND ($5 = '' OR COALESCE(b.job_id::text, '') = $5)
 		ORDER BY a.created_at DESC, a.logical_path ASC, b.created_at DESC
-	`)).WithArgs("prod", "%prod%", "", "", jobID+"::packages/pkg-a.tgz").WillReturnRows(buildRows)
+	`)).WithArgs("prod", "%prod%", "", "", "", jobID+"::packages/pkg-a.tgz").WillReturnRows(buildRows)
 
 	records, err := repo.Browse(context.Background(), repository.BrowseArtifactsParams{Query: "prod"})
 	if err != nil {

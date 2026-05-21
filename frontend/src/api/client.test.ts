@@ -145,6 +145,27 @@ describe("API client - types", () => {
     );
   });
 
+  it("lists artifacts with project and job scope params", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          artifacts: [],
+        },
+      }),
+    } as Response);
+
+    await listArtifacts({
+      project_id: "project-1",
+      job_id: "job-1",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/artifacts?project_id=project-1&job_id=job-1",
+      { credentials: "include" },
+    );
+  });
+
   it("lists artifact catalog entries with project, job, build, and pagination params", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,

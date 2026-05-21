@@ -181,6 +181,7 @@ func (h *ArtifactHandler) GetArtifact(w http.ResponseWriter, r *http.Request) {
 // @Param type query string false "Artifact type filter" Enums(docker_image,npm_package,generic,unknown)
 // @Param project_id query string false "Filter artifacts by project id"
 // @Param project_slug query string false "Filter artifacts by project slug"
+// @Param job_id query string false "Filter artifacts by producing job id"
 // @Param limit query int false "Max logical artifacts to return"
 // @Param offset query int false "Number of logical artifacts to skip"
 // @Success 200 {object} api.ArtifactBrowseEnvelope
@@ -209,6 +210,7 @@ func (h *ArtifactHandler) ListArtifacts(w http.ResponseWriter, r *http.Request) 
 		Query:     strings.TrimSpace(r.URL.Query().Get("q")),
 		Type:      strings.TrimSpace(r.URL.Query().Get("type")),
 		ProjectID: projectID,
+		JobID:     strings.TrimSpace(r.URL.Query().Get("job_id")),
 		Limit:     limit,
 		Offset:    offset,
 	})

@@ -1256,6 +1256,10 @@ paths:
         in: query
         name: project_slug
         type: string
+      - description: Filter artifacts by producing job id
+        in: query
+        name: job_id
+        type: string
       - description: Max logical artifacts to return
         in: query
         name: limit

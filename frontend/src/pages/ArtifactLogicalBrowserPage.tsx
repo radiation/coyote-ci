@@ -65,6 +65,11 @@ function buildCanonicalSearchParams(params: URLSearchParams) {
     nextParams.set("project_id", projectID);
   }
 
+  const jobID = params.get("job_id")?.trim() ?? "";
+  if (jobID) {
+    nextParams.set("job_id", jobID);
+  }
+
   const page = parsePositiveInt(params.get("page"), 1);
   if (page > 1) {
     nextParams.set("page", String(page));
@@ -80,9 +85,10 @@ export function ArtifactLogicalBrowserPage() {
   const search = searchParams.get("q") ?? "";
   const type = parseArtifactTypeParam(searchParams.get("type"));
   const projectID = searchParams.get("project_id")?.trim() ?? "";
+  const jobID = searchParams.get("job_id")?.trim() ?? "";
   const pageIndex = parsePositiveInt(searchParams.get("page"), 1) - 1;
   const trimmedSearch = search.trim();
-  const hasActiveFilters = Boolean(trimmedSearch || type || projectID);
+  const hasActiveFilters = Boolean(trimmedSearch || type || projectID || jobID);
 
   const updateSearchParams = useCallback(
     (mutate: (nextParams: URLSearchParams) => void) => {
@@ -108,6 +114,7 @@ export function ArtifactLogicalBrowserPage() {
       trimmedSearch,
       type,
       projectID,
+      jobID,
       pageIndex,
     ],
     queryFn: () =>
@@ -115,6 +122,7 @@ export function ArtifactLogicalBrowserPage() {
         q: trimmedSearch,
         type: type || undefined,
         project_id: projectID || undefined,
+        job_id: jobID || undefined,
         limit: DEFAULT_LOGICAL_PAGE_SIZE + 1,
         offset: pageIndex * DEFAULT_LOGICAL_PAGE_SIZE,
       }),
@@ -183,6 +191,13 @@ export function ArtifactLogicalBrowserPage() {
     });
   }
 
+  function handleClearJobScope() {
+    updateSearchParams((nextParams) => {
+      nextParams.delete("job_id");
+      nextParams.delete("page");
+    });
+  }
+
   function handleClearFilters() {
     setSearchParams(new URLSearchParams(), { replace: true });
   }
@@ -218,8 +233,9 @@ export function ArtifactLogicalBrowserPage() {
         <div>
           <h2>Logical Artifact Browser</h2>
           <p className="subtle-text">
-            Grouped logical artifacts and their published versions. Use this
-            view to inspect version history and assign version tags.
+            Grouped release view for artifact versions and channels. Use this
+            view to see what exists, what channels resolve today, and which
+            build produced each artifact.
             {isFetching && !isLoading ? " Updating…" : ""}
           </p>
         </div>
@@ -237,7 +253,7 @@ export function ArtifactLogicalBrowserPage() {
             <h3>Logical Artifact Browser</h3>
             <p className="subtle-text">
               {hasActiveFilters
-                ? "Filtered grouped artifact view"
+                ? "Filtered release view"
                 : "Grouped logical artifacts"}
             </p>
           </div>
@@ -256,7 +272,7 @@ export function ArtifactLogicalBrowserPage() {
             type="search"
             value={search}
             onChange={(event) => handleSearchChange(event.target.value)}
-            placeholder="Path, project, job, or version tag"
+            placeholder="Path, project, job, version, or channel"
           />
         </label>
         <label className="artifact-filter-field artifact-filter-select">
@@ -286,6 +302,24 @@ export function ArtifactLogicalBrowserPage() {
             ))}
           </select>
         </label>
+        {jobID && (
+          <div className="artifact-filter-field artifact-filter-scope-field">
+            <span>Scope</span>
+            <div className="artifact-filter-scope-row">
+              <span className="artifact-secondary-pill">
+                Job scope: {jobID}
+              </span>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleClearJobScope}
+                disabled={isLoading}
+              >
+                Clear scope
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section

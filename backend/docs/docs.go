@@ -57,6 +57,12 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Filter artifacts by producing job id",
+                        "name": "job_id",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "Max logical artifacts to return",
                         "name": "limit",

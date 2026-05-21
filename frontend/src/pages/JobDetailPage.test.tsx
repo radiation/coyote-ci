@@ -244,6 +244,12 @@ describe("JobDetailPage", () => {
         ),
     ).toBe(true);
     expect(
+      screen.getByRole("link", { name: "Open Release View" }),
+    ).toHaveAttribute(
+      "href",
+      "/artifacts/logical?project_id=project-1&job_id=job-1",
+    );
+    expect(
       screen.getByRole("link", { name: "View Latest Build" }),
     ).toHaveAttribute("href", "/builds/build-recent-1");
     expect(

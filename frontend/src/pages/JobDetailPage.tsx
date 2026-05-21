@@ -340,6 +340,11 @@ export function JobDetailPage() {
                     >
                       Browse Job Artifacts
                     </Link>
+                    <Link
+                      to={`/artifacts/logical?project_id=${encodeURIComponent(job.project_id)}&job_id=${encodeURIComponent(job.id)}`}
+                    >
+                      Open Release View
+                    </Link>
                   </div>
 
                   {latestOutputArtifacts.length === 0 ? (
