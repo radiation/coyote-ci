@@ -28,7 +28,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Search artifacts by path, project, job, or version tag",
+                        "description": "Search artifacts by path, project, job, version label, or channel",
                         "name": "q",
                         "in": "query"
                     },

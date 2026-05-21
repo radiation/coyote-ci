@@ -210,10 +210,14 @@ export function ArtifactBrowser({
         const isExpanded = expandedKeys.includes(artifact.key);
         const latestVersion = artifact.versions[0];
         const latestTag = firstVersionTag(latestVersion);
-        const channels = artifact.versions.flatMap((version) =>
-          channelTags(version).map((tag) => ({ tag, version })),
-        );
-        const channelCount = totalChannelCount(artifact);
+        const channels = isExpanded
+          ? artifact.versions.flatMap((version) =>
+              channelTags(version).map((tag) => ({ tag, version })),
+            )
+          : [];
+        const channelCount = isExpanded
+          ? channels.length
+          : totalChannelCount(artifact);
 
         return (
           <section key={artifact.key} className="artifact-card">
