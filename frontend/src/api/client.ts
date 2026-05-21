@@ -411,6 +411,7 @@ export async function listArtifacts(input?: {
   q?: string;
   type?: ArtifactType | "";
   project_id?: string;
+  job_id?: string;
   project_slug?: string;
   limit?: number;
   offset?: number;
@@ -419,6 +420,7 @@ export async function listArtifacts(input?: {
   const query = input?.q?.trim() ?? "";
   const type = input?.type?.trim() ?? "";
   const projectID = input?.project_id?.trim() ?? "";
+  const jobID = input?.job_id?.trim() ?? "";
   const projectSlug = input?.project_slug?.trim() ?? "";
 
   if (query) {
@@ -429,6 +431,9 @@ export async function listArtifacts(input?: {
   }
   if (projectID) {
     params.set("project_id", projectID);
+  }
+  if (jobID) {
+    params.set("job_id", jobID);
   }
   if (projectSlug) {
     params.set("project_slug", projectSlug);

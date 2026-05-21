@@ -288,7 +288,7 @@ func TestArtifactHandlerListArtifactCatalogRequiresAuthorizedProjectUser(t *test
 func TestArtifactHandlerListArtifactsForwardsPaginationParams(t *testing.T) {
 	repo := &fakeArtifactBrowseRepo{}
 	handler := NewArtifactHandler(artifactsvc.NewService(repo))
-	req := httptest.NewRequest(http.MethodGet, "/artifacts?q=pkg&type=npm_package&limit=5&offset=10", nil)
+	req := httptest.NewRequest(http.MethodGet, "/artifacts?q=pkg&type=npm_package&job_id=job-1&limit=5&offset=10", nil)
 	w := httptest.NewRecorder()
 
 	handler.ListArtifacts(w, req)
@@ -304,6 +304,9 @@ func TestArtifactHandlerListArtifactsForwardsPaginationParams(t *testing.T) {
 	}
 	if repo.params[0].Type != domain.ArtifactTypeNPMPackage {
 		t.Fatalf("expected npm_package type, got %q", repo.params[0].Type)
+	}
+	if repo.params[0].JobID != "job-1" {
+		t.Fatalf("expected job id job-1, got %q", repo.params[0].JobID)
 	}
 	if repo.params[0].Limit != 5 {
 		t.Fatalf("expected limit 5, got %d", repo.params[0].Limit)

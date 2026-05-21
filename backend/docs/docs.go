@@ -28,7 +28,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Search artifacts by path, project, job, or version tag",
+                        "description": "Search artifacts by path, project, job, version label, or channel",
                         "name": "q",
                         "in": "query"
                     },
@@ -54,6 +54,12 @@ const docTemplate = `{
                         "type": "string",
                         "description": "Filter artifacts by project slug",
                         "name": "project_slug",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter artifacts by producing job id",
+                        "name": "job_id",
                         "in": "query"
                     },
                     {

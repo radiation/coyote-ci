@@ -16,6 +16,7 @@ type ListArtifactsInput struct {
 	Query     string
 	Type      string
 	ProjectID string
+	JobID     string
 	Limit     int
 	Offset    int
 }
@@ -56,6 +57,7 @@ func (s *Service) ListArtifacts(ctx context.Context, input ListArtifactsInput) (
 		Query:     strings.TrimSpace(input.Query),
 		Type:      wantedType,
 		ProjectID: strings.TrimSpace(input.ProjectID),
+		JobID:     strings.TrimSpace(input.JobID),
 		Limit:     input.Limit,
 		Offset:    input.Offset,
 	})

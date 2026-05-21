@@ -14,6 +14,7 @@ type BrowseArtifactsParams struct {
 	Query     string
 	Type      domain.ArtifactType
 	ProjectID string
+	JobID     string
 	Limit     int
 	Offset    int
 }

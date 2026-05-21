@@ -32,7 +32,8 @@ const artifactBrowseFilterClause = `(
 			)
 		)
 		AND ($3 = '' OR a.artifact_type = $3)
-		AND ($4 = '' OR b.project_id::text = $4)`
+		AND ($4 = '' OR b.project_id::text = $4)
+		AND ($5 = '' OR COALESCE(b.job_id::text, '') = $5)`
 
 const artifactCatalogFilterClause = `(
 			$1 = ''
@@ -71,11 +72,11 @@ func (r *ArtifactRepository) Browse(ctx context.Context, params repository.Brows
 		WHERE `+artifactBrowseIdentityExpression+` IN (%s)
 		  AND `+artifactBrowseFilterClause+`
 		ORDER BY a.created_at DESC, a.logical_path ASC, b.created_at DESC
-	`, 5, pageKeys)
+	`, 6, pageKeys)
 
 	trimmedQuery := strings.TrimSpace(params.Query)
 	likeQuery := "%" + trimmedQuery + "%"
-	args := append([]any{trimmedQuery, likeQuery, string(params.Type), strings.TrimSpace(params.ProjectID)}, identityArgs...)
+	args := append([]any{trimmedQuery, likeQuery, string(params.Type), strings.TrimSpace(params.ProjectID), strings.TrimSpace(params.JobID)}, identityArgs...)
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -117,16 +118,16 @@ func (r *ArtifactRepository) listBrowseIdentityKeys(ctx context.Context, params 
 
 	trimmedQuery := strings.TrimSpace(params.Query)
 	likeQuery := "%" + trimmedQuery + "%"
-	args := []any{trimmedQuery, likeQuery, string(params.Type), strings.TrimSpace(params.ProjectID)}
+	args := []any{trimmedQuery, likeQuery, string(params.Type), strings.TrimSpace(params.ProjectID), strings.TrimSpace(params.JobID)}
 	if params.Limit > 0 {
-		query += "\n\t\tLIMIT $5"
+		query += "\n\t\tLIMIT $6"
 		args = append(args, params.Limit)
 		if params.Offset > 0 {
-			query += "\n\t\tOFFSET $6"
+			query += "\n\t\tOFFSET $7"
 			args = append(args, params.Offset)
 		}
 	} else if params.Offset > 0 {
-		query += "\n\t\tOFFSET $5"
+		query += "\n\t\tOFFSET $6"
 		args = append(args, params.Offset)
 	}
 

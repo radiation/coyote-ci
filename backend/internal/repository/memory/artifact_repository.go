@@ -84,6 +84,11 @@ func (r *ArtifactRepository) Browse(_ context.Context, params repository.BrowseA
 		if strings.TrimSpace(params.ProjectID) != "" && build.ProjectID != params.ProjectID {
 			continue
 		}
+		if strings.TrimSpace(params.JobID) != "" {
+			if build.JobID == nil || strings.TrimSpace(*build.JobID) != strings.TrimSpace(params.JobID) {
+				continue
+			}
+		}
 		if trimmedQuery != "" && !matchesBrowseQuery(trimmedQuery, artifact, build) {
 			continue
 		}

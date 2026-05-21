@@ -51,7 +51,26 @@ function buildBrowseItem(index: number) {
         checksum_sha256: `sha-${index}`,
         storage_provider: "filesystem",
         download_url_path: `/builds/build-${index}/artifacts/artifact-${index}/download`,
-        version_tags: [],
+        version_tags: [
+          {
+            id: `version-${index}`,
+            job_id: "job-1",
+            kind: "version" as const,
+            version: `2026.04.${24 + index}`,
+            target_type: "artifact",
+            artifact_id: `artifact-${index}`,
+            created_at: "2026-04-25T09:00:00Z",
+          },
+          {
+            id: `channel-${index}`,
+            job_id: "job-1",
+            kind: "channel" as const,
+            version: index === 1 ? "latest" : "beta",
+            target_type: "artifact",
+            artifact_id: `artifact-${index}`,
+            created_at: "2026-04-25T09:00:00Z",
+          },
+        ],
         created_at: "2026-04-25T09:00:00Z",
       },
     ],
@@ -81,6 +100,7 @@ function renderPage(initialEntries = ["/artifacts/logical"]) {
               }
             />
             <Route path="/artifacts" element={<div>artifact catalog</div>} />
+            <Route path="/artifacts/:id" element={<div>artifact detail</div>} />
             <Route path="/builds/:id" element={<div>build detail</div>} />
           </Routes>
         </MemoryRouter>
@@ -131,6 +151,22 @@ describe("ArtifactLogicalBrowserPage", () => {
     });
     fireEvent.click(toggle);
 
+    expect(
+      screen.getByRole("heading", { level: 4, name: "Channels" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Mutable aliases")).toBeTruthy();
+    expect(screen.getByText("Points to 2026.04.25")).toBeTruthy();
+    expect(screen.getAllByRole("link", { name: "Open" })[0]).toHaveAttribute(
+      "href",
+      "/artifacts/artifact-1",
+    );
+    expect(
+      screen.getAllByRole("link", { name: "Download" })[0],
+    ).toHaveAttribute(
+      "href",
+      "/api/builds/build-1/artifacts/artifact-1/download",
+    );
+
     fireEvent.change(
       await screen.findByLabelText("artifact-browser-version-artifact-1"),
       {
@@ -158,7 +194,7 @@ describe("ArtifactLogicalBrowserPage", () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        /Grouped logical artifacts and their published versions/,
+        /Grouped release view for artifact versions and channels/,
       ),
     ).toBeTruthy();
     expect(screen.getByDisplayValue("All types")).toBeTruthy();
@@ -271,6 +307,54 @@ describe("ArtifactLogicalBrowserPage", () => {
     });
   });
 
+  it("forwards a job scope filter to the logical browser query", async () => {
+    renderPage(["/artifacts/logical?project_id=project-1&job_id=job-1"]);
+
+    await waitFor(() => {
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "",
+        project_id: "project-1",
+        job_id: "job-1",
+        limit: 21,
+        offset: 0,
+      });
+    });
+
+    expect(screen.getByText("Job scope: job-1")).toBeTruthy();
+    expect(screen.queryByLabelText("Job ID")).toBeNull();
+  });
+
+  it("clears the job scope chip without disturbing other filters", async () => {
+    renderPage([
+      "/artifacts/logical?project_id=project-1&job_id=job-1&type=npm_package",
+    ]);
+
+    expect(await screen.findByText("Job scope: job-1")).toBeTruthy();
+
+    const clearScopeButton = screen.getByRole("button", {
+      name: "Clear scope",
+    });
+
+    await waitFor(() => {
+      expect(clearScopeButton).not.toBeDisabled();
+    });
+
+    fireEvent.click(clearScopeButton);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search").textContent).toBe(
+        "?type=npm_package&project_id=project-1",
+      );
+      expect(mockedListArtifacts).toHaveBeenLastCalledWith({
+        q: "",
+        type: "npm_package",
+        project_id: "project-1",
+        limit: 21,
+        offset: 0,
+      });
+    });
+  });
+
   it("navigates between logical artifact pages and clears filters", async () => {
     mockedListArtifacts
       .mockResolvedValueOnce(
@@ -314,7 +398,7 @@ describe("ArtifactLogicalBrowserPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("location-search").textContent).toBe("");
       expect(
-        screen.getByText("No artifacts have been published yet."),
+        screen.getByText("No versioned artifacts or channels yet."),
       ).toBeTruthy();
     });
   });
@@ -324,11 +408,28 @@ describe("ArtifactLogicalBrowserPage", () => {
 
     renderPage(["/artifacts/logical?q=pkg&type=npm_package"]);
 
-    expect(await screen.findByText("No matching artifacts")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "No release artifacts matched the current filters.",
+      ),
+    ).toBeTruthy();
     await waitFor(() => {
       expect(screen.queryByLabelText("Loading artifacts")).toBeNull();
     });
-    expect(screen.getByText(/Adjust the search or type filter/)).toBeTruthy();
+    expect(screen.getByText(/Adjust the search or filters/)).toBeTruthy();
+  });
+
+  it("shows the base empty state when no versioned artifacts exist", async () => {
+    mockedListArtifacts.mockResolvedValue([]);
+
+    renderPage();
+
+    expect(
+      await screen.findByText("No versioned artifacts or channels yet."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/Publish artifact versions or channels/),
+    ).toBeTruthy();
   });
 
   it("shows an error state when the logical browser request fails", async () => {

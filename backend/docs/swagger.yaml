@@ -1235,7 +1235,7 @@ paths:
       description: Returns logical artifacts grouped with their available versions
         for artifact repository browsing.
       parameters:
-      - description: Search artifacts by path, project, job, or version tag
+      - description: Search artifacts by path, project, job, version label, or channel
         in: query
         name: q
         type: string
@@ -1255,6 +1255,10 @@ paths:
       - description: Filter artifacts by project slug
         in: query
         name: project_slug
+        type: string
+      - description: Filter artifacts by producing job id
+        in: query
+        name: job_id
         type: string
       - description: Max logical artifacts to return
         in: query

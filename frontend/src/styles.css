@@ -1364,6 +1364,17 @@ h3 {
   font-size: 0.9rem;
 }
 
+.artifact-filter-scope-field {
+  min-width: 0;
+}
+
+.artifact-filter-scope-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .artifact-pagination-bar {
   display: flex;
   justify-content: space-between;
@@ -1660,6 +1671,63 @@ h3 {
   font-size: 0.95rem;
 }
 
+.artifact-release-section {
+  margin-top: 18px;
+}
+
+.artifact-release-section-header {
+  margin-top: 0;
+}
+
+.artifact-channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.artifact-channel-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+}
+
+.artifact-channel-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.artifact-channel-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+
+.artifact-channel-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 8px;
+}
+
+.artifact-channel-pill {
+  background: var(--color-surface-inset);
+  border-color: var(--color-border);
+}
+
+.artifact-channel-actions {
+  flex: 0 0 auto;
+}
+
+.artifact-release-empty {
+  margin: 0;
+}
+
 .artifact-version-title-row {
   display: flex;
   align-items: center;
@@ -1669,6 +1737,19 @@ h3 {
 .artifact-version-actions {
   display: flex;
   align-items: center;
+}
+
+.artifact-version-badge-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.artifact-version-badge-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .artifact-version-meta-full {
