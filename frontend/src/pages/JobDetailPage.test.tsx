@@ -112,7 +112,8 @@ describe("JobDetailPage", () => {
         path: "dist/backend",
         size_bytes: 1024,
         content_type: "application/octet-stream",
-        checksum_sha256: null,
+        checksum_sha256:
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         storage_provider: "filesystem",
         download_url_path: "/artifacts/download/artifact-1",
         version_tags: [
@@ -252,10 +253,18 @@ describe("JobDetailPage", () => {
       "href",
       "/artifacts/artifact-1",
     );
+    expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute(
+      "href",
+      "/api/artifacts/download/artifact-1",
+    );
     expect(
       screen.getByText("Artifact Count:", { selector: "strong" }).parentElement,
     ).toHaveTextContent("1");
-    expect(screen.getByText("2026.03.30")).toBeTruthy();
+    const checksumPreview = screen.getByText("sha256 0123456789ab…89abcdef");
+    expect(checksumPreview).toHaveAttribute(
+      "title",
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    );
     expect(screen.queryByRole("link", { name: /^Job\s/i })).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Name"), {

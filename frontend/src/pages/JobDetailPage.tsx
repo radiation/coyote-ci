@@ -15,13 +15,13 @@ import {
   ManagedBuildImageFields,
   type ManagedBuildImageValue,
 } from "../components/ManagedBuildImageFields";
-import { VersionTagEditor } from "../components/VersionTagEditor";
 import { jobBuildsQueryOptions } from "../queries/jobBuilds";
 import { StatusBadge } from "../components/StatusBadge";
 import type { Job } from "../types/job";
 import {
   artifactSecondaryPath,
   artifactTitle,
+  formatChecksumDisplay,
   formatFileSize,
 } from "../utils/format";
 import { formatTime } from "../utils/time";
@@ -336,60 +336,55 @@ export function JobDetailPage() {
                       Latest successful build did not publish artifacts.
                     </p>
                   ) : (
-                    <table className="table artifacts-table">
-                      <thead>
-                        <tr>
-                          <th>Artifact</th>
-                          <th>Size</th>
-                          <th>Version Tags</th>
-                          <th>Created</th>
-                          <th>
-                            <span className="sr-only">Actions</span>
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {latestOutputArtifacts.map((artifact) => (
-                          <tr key={artifact.id}>
-                            <td className="artifact-path">
-                              <div className="artifact-catalog-primary">
-                                <Link to={`/artifacts/${artifact.id}`}>
-                                  {artifactTitle(artifact)}
-                                </Link>
-                                {artifactSecondaryPath(artifact) && (
-                                  <div className="subtle-text artifact-mono">
-                                    {artifactSecondaryPath(artifact)}
-                                  </div>
-                                )}
-                              </div>
-                            </td>
-                            <td>{formatFileSize(artifact.size_bytes)}</td>
-                            <td>
-                              <VersionTagEditor
-                                tags={artifact.version_tags ?? []}
-                                emptyText="No version tags yet."
-                                inputLabel={`job-latest-output-${artifact.id}`}
-                              />
-                            </td>
-                            <td>{formatTime(artifact.created_at)}</td>
-                            <td>
-                              <div className="artifact-actions">
-                                <Link to={`/artifacts/${artifact.id}`}>
-                                  Open
-                                </Link>
-                                <a
-                                  href={artifactDownloadURL(
-                                    artifact.download_url_path,
-                                  )}
+                    <div className="job-latest-outputs-list" role="list">
+                      {latestOutputArtifacts.map((artifact) => (
+                        <article
+                          key={artifact.id}
+                          className="job-latest-output-item"
+                          role="listitem"
+                        >
+                          <div className="job-latest-output-copy artifact-path">
+                            <div className="artifact-catalog-primary">
+                              <Link to={`/artifacts/${artifact.id}`}>
+                                {artifactTitle(artifact)}
+                              </Link>
+                              {artifactSecondaryPath(artifact) && (
+                                <div className="subtle-text artifact-mono">
+                                  {artifactSecondaryPath(artifact)}
+                                </div>
+                              )}
+                            </div>
+                            <div className="job-latest-output-meta subtle-text">
+                              <span>{formatFileSize(artifact.size_bytes)}</span>
+                              {artifact.checksum_sha256 && (
+                                <span
+                                  className="artifact-mono artifact-checksum-value"
+                                  title={artifact.checksum_sha256}
                                 >
-                                  Download
-                                </a>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                                  sha256{" "}
+                                  {formatChecksumDisplay(
+                                    artifact.checksum_sha256,
+                                  )}
+                                </span>
+                              )}
+                              <span>{formatTime(artifact.created_at)}</span>
+                            </div>
+                          </div>
+                          <div className="job-latest-output-actions">
+                            <div className="artifact-actions">
+                              <Link to={`/artifacts/${artifact.id}`}>Open</Link>
+                              <a
+                                href={artifactDownloadURL(
+                                  artifact.download_url_path,
+                                )}
+                              >
+                                Download
+                              </a>
+                            </div>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
                   )}
 
                   {latestOutputOverflow > 0 && (
