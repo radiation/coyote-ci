@@ -4,9 +4,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { JobDetailPage } from "./JobDetailPage";
 import {
+  getBuildArtifacts,
   getProject,
   getJob,
-  listArtifactCatalog,
   listBuildsByJob,
   listSourceCredentials,
   runJob,
@@ -27,9 +27,10 @@ vi.mock("react-router-dom", async () => {
 });
 
 vi.mock("../api", () => ({
+  artifactDownloadURL: (path: string) => `/api${path}`,
+  getBuildArtifacts: vi.fn(),
   getProject: vi.fn(),
   getJob: vi.fn(),
-  listArtifactCatalog: vi.fn(),
   updateJob: vi.fn(),
   runJob: vi.fn(),
   listBuildsByJob: vi.fn(),
@@ -58,9 +59,9 @@ function renderPage(seed?: (queryClient: QueryClient) => void) {
 }
 
 describe("JobDetailPage", () => {
+  const mockedGetBuildArtifacts = vi.mocked(getBuildArtifacts);
   const mockedGetProject = vi.mocked(getProject);
   const mockedGetJob = vi.mocked(getJob);
-  const mockedListArtifactCatalog = vi.mocked(listArtifactCatalog);
   const mockedUpdateJob = vi.mocked(updateJob);
   const mockedRunJob = vi.mocked(runJob);
   const mockedListBuildsByJob = vi.mocked(listBuildsByJob);
@@ -102,28 +103,29 @@ describe("JobDetailPage", () => {
         trigger_ref: "main",
       },
     ]);
-    mockedListArtifactCatalog.mockResolvedValue([
+    mockedGetBuildArtifacts.mockResolvedValue([
       {
         id: "artifact-1",
+        build_id: "build-recent-1",
+        step_id: null,
         name: "backend-binary",
         path: "dist/backend",
-        artifact_type: "generic",
-        build_id: "build-recent-1",
-        build_number: 20,
-        build_status: "success",
-        project_id: "project-1",
-        project_name: "Platform",
-        project_slug: "platform",
-        job_id: "job-1",
-        job_name: "backend-ci",
-        step_id: null,
-        step_index: null,
-        step_name: null,
         size_bytes: 1024,
         content_type: "application/octet-stream",
-        checksum_sha256: null,
+        checksum_sha256:
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         storage_provider: "filesystem",
         download_url_path: "/artifacts/download/artifact-1",
+        version_tags: [
+          {
+            id: "version-1",
+            job_id: "job-1",
+            version: "2026.03.30",
+            target_type: "artifact",
+            artifact_id: "artifact-1",
+            created_at: "2026-03-30T00:01:11Z",
+          },
+        ],
         created_at: "2026-03-30T00:01:10Z",
       },
     ]);
@@ -233,11 +235,34 @@ describe("JobDetailPage", () => {
       screen.getByRole("link", { name: "View Project Builds" }),
     ).toHaveAttribute("href", "/builds?project_id=project-1");
     expect(
-      screen.getByRole("link", { name: "Browse Job Artifacts" }),
-    ).toHaveAttribute("href", "/artifacts?project_id=project-1&job_id=job-1");
+      screen
+        .getAllByRole("link", { name: "Browse Job Artifacts" })
+        .every(
+          (link) =>
+            link.getAttribute("href") ===
+            "/artifacts?project_id=project-1&job_id=job-1",
+        ),
+    ).toBe(true);
+    expect(
+      screen.getByRole("link", { name: "View Latest Build" }),
+    ).toHaveAttribute("href", "/builds/build-recent-1");
     expect(
       screen.getByRole("link", { name: "backend-binary" }),
     ).toHaveAttribute("href", "/artifacts/artifact-1");
+    expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute(
+      "href",
+      "/artifacts/artifact-1",
+    );
+    expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute(
+      "href",
+      "/api/artifacts/download/artifact-1",
+    );
+    expect(screen.getByText("1 artifact")).toBeTruthy();
+    const checksumPreview = screen.getByText("sha256 0123456789ab…89abcdef");
+    expect(checksumPreview).toHaveAttribute(
+      "title",
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    );
     expect(screen.queryByRole("link", { name: /^Job\s/i })).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Name"), {
@@ -307,7 +332,7 @@ describe("JobDetailPage", () => {
   });
 
   it("shows inline pipeline and disabled job detail fallbacks", async () => {
-    mockedListArtifactCatalog.mockResolvedValueOnce([]);
+    mockedGetBuildArtifacts.mockResolvedValueOnce([]);
     mockedGetJob.mockResolvedValueOnce({
       id: "job-1",
       project_id: "project-1",
@@ -341,7 +366,9 @@ describe("JobDetailPage", () => {
       expect(
         screen.getAllByText("Managed Build Image")[0].parentElement,
       ).toHaveTextContent("Disabled");
-      expect(screen.getByText("No artifacts yet for this job.")).toBeTruthy();
+      expect(
+        screen.getByText("Latest successful build did not publish artifacts."),
+      ).toBeTruthy();
     });
   });
 
@@ -708,9 +735,8 @@ describe("JobDetailPage", () => {
     });
   });
 
-  it("shows error states for builds and artifacts queries", async () => {
-    mockedListBuildsByJob.mockRejectedValue(new Error("builds failed"));
-    mockedListArtifactCatalog.mockRejectedValueOnce(
+  it("shows error state for latest successful build outputs", async () => {
+    mockedGetBuildArtifacts.mockRejectedValueOnce(
       new Error("artifacts failed"),
     );
 
@@ -718,18 +744,15 @@ describe("JobDetailPage", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText("Failed to load latest builds: Error: builds failed"),
-      ).toBeTruthy();
-      expect(
         screen.getByText(
-          "Failed to load latest artifacts: Error: artifacts failed",
+          "Failed to load latest successful build outputs: Error: artifacts failed",
         ),
       ).toBeTruthy();
     });
   });
 
-  it("shows latest success link when latest build is not yet successful", async () => {
-    mockedListBuildsByJob.mockResolvedValueOnce([
+  it("shows a compact latest-build note when the newest build is not yet successful", async () => {
+    mockedListBuildsByJob.mockResolvedValue([
       {
         id: "build-running-1",
         build_number: 22,
@@ -765,9 +788,84 @@ describe("JobDetailPage", () => {
     renderPage();
 
     await waitFor(() => {
-      // latestBuild = running #22, latestSuccessfulBuild = success #21 (different id)
+      expect(screen.getByText("Build", { selector: "strong" })).toBeTruthy();
       expect(
-        screen.getByText("Latest Success:", { selector: "strong" }),
+        screen.queryByText("Latest Success:", { selector: "strong" }),
+      ).toBeNull();
+      expect(screen.getByRole("link", { name: "#22" })).toHaveAttribute(
+        "href",
+        "/builds/build-running-1",
+      );
+    });
+  });
+
+  it("shows only the first three latest outputs and the overflow message", async () => {
+    mockedGetBuildArtifacts.mockResolvedValueOnce([
+      {
+        id: "artifact-1",
+        build_id: "build-recent-1",
+        step_id: null,
+        name: "artifact-1",
+        path: "dist/artifact-1",
+        size_bytes: 100,
+        content_type: null,
+        checksum_sha256: null,
+        storage_provider: "filesystem",
+        download_url_path: "/artifacts/download/artifact-1",
+        created_at: "2026-03-30T00:01:10Z",
+      },
+      {
+        id: "artifact-2",
+        build_id: "build-recent-1",
+        step_id: null,
+        name: "artifact-2",
+        path: "dist/artifact-2",
+        size_bytes: 200,
+        content_type: null,
+        checksum_sha256: null,
+        storage_provider: "filesystem",
+        download_url_path: "/artifacts/download/artifact-2",
+        created_at: "2026-03-30T00:01:11Z",
+      },
+      {
+        id: "artifact-3",
+        build_id: "build-recent-1",
+        step_id: null,
+        name: "artifact-3",
+        path: "dist/artifact-3",
+        size_bytes: 300,
+        content_type: null,
+        checksum_sha256: null,
+        storage_provider: "filesystem",
+        download_url_path: "/artifacts/download/artifact-3",
+        created_at: "2026-03-30T00:01:12Z",
+      },
+      {
+        id: "artifact-4",
+        build_id: "build-recent-1",
+        step_id: null,
+        name: "artifact-4",
+        path: "dist/artifact-4",
+        size_bytes: 400,
+        content_type: null,
+        checksum_sha256: null,
+        storage_provider: "filesystem",
+        download_url_path: "/artifacts/download/artifact-4",
+        created_at: "2026-03-30T00:01:13Z",
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("artifact-1")).toBeTruthy();
+      expect(screen.getByText("artifact-2")).toBeTruthy();
+      expect(screen.getByText("artifact-3")).toBeTruthy();
+      expect(screen.queryByText("artifact-4")).toBeNull();
+      expect(
+        screen.getByText(
+          "Showing 3 of 4 artifacts from the latest successful build.",
+        ),
       ).toBeTruthy();
     });
   });

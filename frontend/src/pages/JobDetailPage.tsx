@@ -2,9 +2,10 @@ import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
+  artifactDownloadURL,
+  getBuildArtifacts,
   getProject,
   getJob,
-  listArtifactCatalog,
   listSourceCredentials,
   runJob,
   updateJob,
@@ -17,6 +18,12 @@ import {
 import { jobBuildsQueryOptions } from "../queries/jobBuilds";
 import { StatusBadge } from "../components/StatusBadge";
 import type { Job } from "../types/job";
+import {
+  artifactSecondaryPath,
+  artifactTitle,
+  formatChecksumDisplay,
+  formatFileSize,
+} from "../utils/format";
 import { formatTime } from "../utils/time";
 
 const MIN_PRIORITY = 1;
@@ -43,6 +50,10 @@ function sortBuildsByNewest<
 
     return rightTime - leftTime;
   });
+}
+
+function artifactCountLabel(count: number): string {
+  return `${count} artifact${count === 1 ? "" : "s"}`;
 }
 
 export function JobDetailPage() {
@@ -79,14 +90,19 @@ export function JobDetailPage() {
         },
   );
 
+  const sortedBuilds = sortBuildsByNewest(jobBuilds ?? []);
+  const latestBuild = sortedBuilds[0] ?? job?.latest_build ?? null;
+  const latestSuccessfulBuild =
+    sortedBuilds.find((build) => build.status === "success") ?? null;
+
   const {
-    data: latestArtifacts,
-    isLoading: latestArtifactsLoading,
-    error: latestArtifactsError,
+    data: latestSuccessfulArtifacts,
+    isLoading: latestSuccessfulArtifactsLoading,
+    error: latestSuccessfulArtifactsError,
   } = useQuery({
-    queryKey: ["jobArtifacts", id],
-    queryFn: () => listArtifactCatalog({ job_id: id!, limit: 1 }),
-    enabled: Boolean(id),
+    queryKey: ["jobLatestSuccessfulArtifacts", latestSuccessfulBuild?.id],
+    queryFn: () => getBuildArtifacts(latestSuccessfulBuild!.id),
+    enabled: Boolean(latestSuccessfulBuild?.id),
   });
 
   if (isLoading) {
@@ -101,11 +117,20 @@ export function JobDetailPage() {
     return <p className="error-text">Job not found.</p>;
   }
 
-  const sortedBuilds = sortBuildsByNewest(jobBuilds ?? []);
-  const latestBuild = sortedBuilds[0] ?? job.latest_build ?? null;
-  const latestSuccessfulBuild =
-    sortedBuilds.find((build) => build.status === "success") ?? null;
-  const latestArtifact = latestArtifacts?.[0] ?? null;
+  const latestOutputArtifacts = (latestSuccessfulArtifacts ?? []).slice(0, 3);
+  const latestOutputArtifactCount = latestSuccessfulArtifacts?.length ?? 0;
+  const latestOutputOverflow = Math.max(
+    latestOutputArtifactCount - latestOutputArtifacts.length,
+    0,
+  );
+  const latestBuildLabel =
+    typeof latestBuild?.build_number === "number"
+      ? `#${latestBuild.build_number}`
+      : (latestBuild?.id.slice(0, 8) ?? "—");
+  const latestSuccessfulBuildLabel =
+    typeof latestSuccessfulBuild?.build_number === "number"
+      ? `#${latestSuccessfulBuild.build_number}`
+      : (latestSuccessfulBuild?.id.slice(0, 8) ?? "—");
 
   return (
     <>
@@ -232,65 +257,156 @@ export function JobDetailPage() {
             {!jobBuildsLoading && !jobBuildsError && !latestBuild && (
               <p className="subtle-text">No builds yet for this job.</p>
             )}
-            {latestBuild && (
-              <div className="detail-summary">
-                <span>
-                  <strong>Latest Build:</strong>{" "}
+            {latestBuild && !latestSuccessfulBuild && (
+              <>
+                <div className="detail-summary">
+                  <span>
+                    <strong>Build</strong>{" "}
+                    <Link to={`/builds/${latestBuild.id}`}>
+                      {latestBuildLabel}
+                    </Link>
+                  </span>
+                  <span>
+                    <StatusBadge status={latestBuild.status} />
+                  </span>
+                  <span>Created {formatTime(latestBuild.created_at)}</span>
+                </div>
+                <div className="detail-actions-row">
                   <Link to={`/builds/${latestBuild.id}`}>
-                    {typeof latestBuild.build_number === "number"
-                      ? `#${latestBuild.build_number}`
-                      : latestBuild.id.slice(0, 8)}
+                    View Latest Build
                   </Link>
-                </span>
-                <span>
-                  <StatusBadge status={latestBuild.status} />
-                </span>
-                <span>
-                  <strong>Created:</strong> {formatTime(latestBuild.created_at)}
-                </span>
-                {latestSuccessfulBuild &&
-                  latestSuccessfulBuild.id !== latestBuild.id && (
-                    <span>
-                      <strong>Latest Success:</strong>{" "}
-                      <Link to={`/builds/${latestSuccessfulBuild.id}`}>
-                        #{latestSuccessfulBuild.build_number ?? "—"}
-                      </Link>
-                    </span>
-                  )}
-              </div>
+                  <Link
+                    to={`/artifacts?project_id=${encodeURIComponent(job.project_id)}&job_id=${encodeURIComponent(job.id)}`}
+                  >
+                    Browse Job Artifacts
+                  </Link>
+                </div>
+              </>
             )}
 
-            {latestArtifactsLoading && <p>Loading latest artifacts…</p>}
-            {latestArtifactsError && (
+            {latestBuild && !latestSuccessfulBuild && (
+              <p className="subtle-text">No successful build outputs yet.</p>
+            )}
+
+            {latestSuccessfulBuild && latestSuccessfulArtifactsLoading && (
+              <p>Loading latest successful build outputs…</p>
+            )}
+            {latestSuccessfulArtifactsError && (
               <p className="error-text">
-                Failed to load latest artifacts: {String(latestArtifactsError)}
+                Failed to load latest successful build outputs:{" "}
+                {String(latestSuccessfulArtifactsError)}
               </p>
             )}
-            {!latestArtifactsLoading &&
-              !latestArtifactsError &&
-              !latestArtifact && (
-                <p className="subtle-text">No artifacts yet for this job.</p>
+            {latestSuccessfulBuild &&
+              !latestSuccessfulArtifactsLoading &&
+              !latestSuccessfulArtifactsError && (
+                <>
+                  <div className="detail-summary">
+                    <span>
+                      <strong>Build</strong>{" "}
+                      <Link to={`/builds/${latestSuccessfulBuild.id}`}>
+                        {latestSuccessfulBuildLabel}
+                      </Link>
+                    </span>
+                    <span>
+                      <StatusBadge status={latestSuccessfulBuild.status} />
+                    </span>
+                    <span>{artifactCountLabel(latestOutputArtifactCount)}</span>
+                    <span>
+                      Finished{" "}
+                      {formatTime(
+                        latestSuccessfulBuild.finished_at ??
+                          latestSuccessfulBuild.created_at,
+                      )}
+                    </span>
+                  </div>
+
+                  {latestBuild.id !== latestSuccessfulBuild.id && (
+                    <p className="subtle-text">
+                      Latest build{" "}
+                      <Link to={`/builds/${latestBuild.id}`}>
+                        {latestBuildLabel}
+                      </Link>{" "}
+                      is <StatusBadge status={latestBuild.status} />.
+                    </p>
+                  )}
+
+                  <div className="detail-actions-row">
+                    <Link to={`/builds/${latestSuccessfulBuild.id}`}>
+                      View Latest Build
+                    </Link>
+                    <Link
+                      to={`/artifacts?project_id=${encodeURIComponent(job.project_id)}&job_id=${encodeURIComponent(job.id)}`}
+                    >
+                      Browse Job Artifacts
+                    </Link>
+                  </div>
+
+                  {latestOutputArtifacts.length === 0 ? (
+                    <p className="subtle-text">
+                      Latest successful build did not publish artifacts.
+                    </p>
+                  ) : (
+                    <div className="job-latest-outputs-list" role="list">
+                      {latestOutputArtifacts.map((artifact) => (
+                        <article
+                          key={artifact.id}
+                          className="job-latest-output-item"
+                          role="listitem"
+                        >
+                          <div className="job-latest-output-copy artifact-path">
+                            <div className="artifact-catalog-primary">
+                              <Link to={`/artifacts/${artifact.id}`}>
+                                {artifactTitle(artifact)}
+                              </Link>
+                              {artifactSecondaryPath(artifact) && (
+                                <div className="subtle-text artifact-mono">
+                                  {artifactSecondaryPath(artifact)}
+                                </div>
+                              )}
+                            </div>
+                            <div className="job-latest-output-meta subtle-text">
+                              <span>{formatFileSize(artifact.size_bytes)}</span>
+                              {artifact.checksum_sha256 && (
+                                <span
+                                  className="artifact-mono artifact-checksum-value"
+                                  title={artifact.checksum_sha256}
+                                >
+                                  sha256{" "}
+                                  {formatChecksumDisplay(
+                                    artifact.checksum_sha256,
+                                  )}
+                                </span>
+                              )}
+                              <span>{formatTime(artifact.created_at)}</span>
+                            </div>
+                          </div>
+                          <div className="job-latest-output-actions">
+                            <div className="artifact-actions">
+                              <Link to={`/artifacts/${artifact.id}`}>Open</Link>
+                              <a
+                                href={artifactDownloadURL(
+                                  artifact.download_url_path,
+                                )}
+                              >
+                                Download
+                              </a>
+                            </div>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+
+                  {latestOutputOverflow > 0 && (
+                    <p className="subtle-text">
+                      Showing {latestOutputArtifacts.length} of{" "}
+                      {latestOutputArtifactCount} artifacts from the latest
+                      successful build.
+                    </p>
+                  )}
+                </>
               )}
-            {latestArtifact && (
-              <div className="detail-summary">
-                <span>
-                  <strong>Latest Artifact:</strong>{" "}
-                  <Link to={`/artifacts/${latestArtifact.id}`}>
-                    {latestArtifact.name || latestArtifact.path}
-                  </Link>
-                </span>
-                <span>
-                  <strong>Build:</strong>{" "}
-                  <Link to={`/builds/${latestArtifact.build_id}`}>
-                    #{latestArtifact.build_number}
-                  </Link>
-                </span>
-                <span>
-                  <strong>Created:</strong>{" "}
-                  {formatTime(latestArtifact.created_at)}
-                </span>
-              </div>
-            )}
           </section>
 
           <section

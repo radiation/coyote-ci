@@ -286,7 +286,12 @@ export function BuildDetailPage() {
 
       {build.image?.managed_image_version_id && (
         <section className="detail-panel">
-          <h3>Managed Build Image</h3>
+          <h3>
+            Managed Build Image{" "}
+            <span className="artifact-secondary-pill">
+              Managed image output
+            </span>
+          </h3>
           <div className="detail-grid">
             <div>
               <strong>Source Kind</strong>
@@ -314,6 +319,7 @@ export function BuildDetailPage() {
       {steps && <StepList buildID={build.id} steps={steps} />}
 
       <h3>Artifacts</h3>
+      {/* TODO: The build artifacts endpoint does not currently expose artifact_type, so this view stays path-focused until that existing payload includes it. */}
       <BuildArtifactsSection
         artifacts={artifacts ?? []}
         steps={steps}

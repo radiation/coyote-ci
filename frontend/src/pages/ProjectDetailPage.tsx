@@ -208,6 +208,27 @@ export function ProjectDetailPage() {
             </div>
           </section>
 
+          <section className="detail-panel" aria-label="Artifacts and releases">
+            <h3>Artifacts and Releases</h3>
+            <p className="subtle-text">
+              Use artifact views for published build outputs. The logical view
+              is the lightweight entry point for versioned releases and
+              channels.
+            </p>
+            <div className="detail-actions-row">
+              <Link
+                to={`/artifacts?project_id=${encodeURIComponent(project.id)}`}
+              >
+                Browse Project Artifacts
+              </Link>
+              <Link
+                to={`/artifacts/logical?project_id=${encodeURIComponent(project.id)}`}
+              >
+                Open Release View
+              </Link>
+            </div>
+          </section>
+
           <section className="settings-panel" style={{ marginTop: 16 }}>
             <h3>Project Members</h3>
             {memberError && <p className="error-text">{memberError}</p>}
@@ -312,9 +333,6 @@ export function ProjectDetailPage() {
 
           <section className="detail-panel" aria-label="Jobs in this project">
             <h3>Jobs in This Project</h3>
-            <p className="subtle-text">
-              Job descriptions are shown when provided by the job API.
-            </p>
             {jobsLoading && <p>Loading jobs…</p>}
             {jobsError && (
               <p className="error-text">
@@ -337,45 +355,32 @@ export function ProjectDetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {jobs.map((job) => {
-                    const slug = job.slug?.trim();
-                    const description = job.description?.trim();
-
-                    return (
-                      <tr key={job.id}>
-                        <td>
-                          <div>
-                            <Link to={`/jobs/${job.id}`}>{job.name}</Link>
-                            <div className="subtle-text">
-                              {slug ? `Slug: ${slug}` : `ID: ${job.id}`}
-                            </div>
-                            <div className="subtle-text">
-                              {description || "Description unavailable."}
-                            </div>
-                          </div>
-                        </td>
-                        <td>{job.repository_url}</td>
-                        <td>{job.default_ref}</td>
-                        <td>{formatTime(job.updated_at)}</td>
-                        <td>{formatTime(job.created_at)}</td>
-                        <td>
-                          <div className="table-actions">
-                            <Link to={`/jobs/${job.id}`}>Open Job</Link>
-                            <Link
-                              to={`/builds?project_id=${encodeURIComponent(project.id)}`}
-                            >
-                              Builds
-                            </Link>
-                            <Link
-                              to={`/artifacts?project_id=${encodeURIComponent(project.id)}&job_id=${encodeURIComponent(job.id)}`}
-                            >
-                              Artifacts
-                            </Link>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {jobs.map((job) => (
+                    <tr key={job.id}>
+                      <td>
+                        <Link to={`/jobs/${job.id}`}>{job.name}</Link>
+                      </td>
+                      <td>{job.repository_url}</td>
+                      <td>{job.default_ref}</td>
+                      <td>{formatTime(job.updated_at)}</td>
+                      <td>{formatTime(job.created_at)}</td>
+                      <td>
+                        <div className="table-actions">
+                          <Link to={`/jobs/${job.id}`}>Open Job</Link>
+                          <Link
+                            to={`/builds?project_id=${encodeURIComponent(project.id)}`}
+                          >
+                            Builds
+                          </Link>
+                          <Link
+                            to={`/artifacts?project_id=${encodeURIComponent(project.id)}&job_id=${encodeURIComponent(job.id)}`}
+                          >
+                            Artifacts
+                          </Link>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             )}

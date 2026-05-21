@@ -184,6 +184,9 @@ describe("ProjectDetailPage", () => {
       expect(
         screen.getByRole("link", { name: "Browse Artifacts" }),
       ).toHaveAttribute("href", "/artifacts?project_id=project-1");
+      expect(
+        screen.getByRole("link", { name: "Open Release View" }),
+      ).toHaveAttribute("href", "/artifacts/logical?project_id=project-1");
       expect(screen.getByRole("link", { name: "Open Job" })).toHaveAttribute(
         "href",
         "/jobs/job-1",
@@ -476,7 +479,7 @@ describe("ProjectDetailPage", () => {
     });
   });
 
-  it("shows slug and description in job row when provided", async () => {
+  it("keeps the job row compact when slug and description are provided", async () => {
     mockedListJobsByProject.mockResolvedValueOnce([
       {
         id: "job-1",
@@ -500,8 +503,9 @@ describe("ProjectDetailPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText("Slug: backend-ci")).toBeTruthy();
-      expect(screen.getByText("Runs backend tests")).toBeTruthy();
+      expect(screen.getByRole("link", { name: "backend-ci" })).toBeTruthy();
+      expect(screen.queryByText("Slug: backend-ci")).toBeNull();
+      expect(screen.queryByText("Runs backend tests")).toBeNull();
     });
   });
 });

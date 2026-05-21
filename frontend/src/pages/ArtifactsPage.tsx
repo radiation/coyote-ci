@@ -4,7 +4,12 @@ import { Link, useSearchParams } from "react-router-dom";
 import { artifactDownloadURL, listArtifactCatalog, listProjects } from "../api";
 import { StatusBadge } from "../components/StatusBadge";
 import type { ArtifactCatalogItem } from "../types";
-import { formatFileSize } from "../utils/format";
+import {
+  artifactSecondaryPath,
+  artifactTitle,
+  formatChecksumDisplay,
+  formatFileSize,
+} from "../utils/format";
 import { formatTime } from "../utils/time";
 
 const DEFAULT_ARTIFACTS_PAGE_SIZE = 20;
@@ -65,10 +70,6 @@ function buildCanonicalSearchParams(params: URLSearchParams) {
   return nextParams;
 }
 
-function artifactTitle(artifact: ArtifactCatalogItem): string {
-  return artifact.name?.trim() || artifact.path;
-}
-
 function buildLabel(artifact: ArtifactCatalogItem): string {
   if (artifact.build_number > 0) {
     return `Build #${artifact.build_number}`;
@@ -100,14 +101,6 @@ function stepLabel(artifact: ArtifactCatalogItem): string {
     return `Step ${artifact.step_index}`;
   }
   return "Build-level artifact";
-}
-
-function formatChecksumDisplay(checksum: string): string {
-  const trimmed = checksum.trim();
-  if (trimmed.length <= 24) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, 12)}…${trimmed.slice(-8)}`;
 }
 
 export function ArtifactsPage() {
@@ -425,9 +418,9 @@ export function ArtifactsPage() {
                       <Link to={`/artifacts/${artifact.id}`}>
                         {artifactTitle(artifact)}
                       </Link>
-                      {artifact.name && artifact.name !== artifact.path && (
+                      {artifactSecondaryPath(artifact) && (
                         <span className="subtle-text artifact-mono">
-                          {artifact.path}
+                          {artifactSecondaryPath(artifact)}
                         </span>
                       )}
                     </div>
