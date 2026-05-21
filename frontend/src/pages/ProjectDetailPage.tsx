@@ -12,14 +12,8 @@ import {
   upsertProjectMember,
 } from "../api";
 import { BuildActivityRail } from "../components/ScopedBuildActivityPanels";
-import type { Job } from "../types/job";
 import type { ProjectMemberRole } from "../types/identity";
 import { formatTime } from "../utils/time";
-
-type JobWithOptionalMetadata = Job & {
-  slug?: string | null;
-  description?: string | null;
-};
 
 export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -344,10 +338,8 @@ export function ProjectDetailPage() {
                 </thead>
                 <tbody>
                   {jobs.map((job) => {
-                    // TODO: Remove fallback once job description/slug are guaranteed in project job responses.
-                    const metadataJob = job as JobWithOptionalMetadata;
-                    const slug = metadataJob.slug?.trim();
-                    const description = metadataJob.description?.trim();
+                    const slug = job.slug?.trim();
+                    const description = job.description?.trim();
 
                     return (
                       <tr key={job.id}>

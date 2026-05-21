@@ -494,8 +494,7 @@ describe("ProjectDetailPage", () => {
         updated_at: "2026-05-01T00:00:00Z",
         slug: "backend-ci",
         description: "Runs backend tests",
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
+      },
     ]);
 
     renderPage();

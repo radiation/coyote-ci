@@ -25,6 +25,8 @@ export interface Job {
   id: string;
   project_id: string;
   name: string;
+  slug?: string | null;
+  description?: string | null;
   priority: number;
   repository_url: string;
   default_ref: string;

@@ -5,6 +5,7 @@ import {
   listJobsByProject,
   listQueue,
 } from "../api";
+import { jobBuildsQueryOptions } from "../queries/jobBuilds";
 import type { Build, QueueEntry } from "../types/build";
 import {
   FAST_POLL_INTERVAL,
@@ -95,6 +96,30 @@ function mapBuilds(builds: Build[]): BuildActivityItem[] {
   }));
 }
 
+function mapQueuedBuilds(builds: Build[]): QueueEntry[] {
+  return builds
+    .filter((build): build is Build & { status: QueueEntry["status"] } =>
+      isQueueStatus(build.status),
+    )
+    .map((build) => ({
+      build_id: build.id,
+      build_number: build.build_number ?? 0,
+      project_id: build.project_id,
+      project_name: build.project_name,
+      project_slug: build.project_slug,
+      job_id: build.job_id,
+      job_name: build.job_name,
+      priority: build.priority,
+      status: build.status,
+      created_at: build.created_at,
+      queued_at: build.queued_at,
+      started_at: build.started_at,
+      trigger_ref: build.trigger_ref,
+      source_commit_sha: build.source_commit_sha,
+      trigger_commit_sha: build.trigger_commit_sha,
+    }));
+}
+
 function listQueueForScope(scope: BuildActivityScope): Promise<QueueEntry[]> {
   if (scope.type === "project") {
     return listQueue({ project_id: scope.projectId });
@@ -102,29 +127,7 @@ function listQueueForScope(scope: BuildActivityScope): Promise<QueueEntry[]> {
 
   if (scope.type === "job") {
     // TODO: Replace this with a backend queue endpoint that supports job_id filtering.
-    return listBuildsByJob(scope.jobId).then((builds) =>
-      builds
-        .filter((build): build is Build & { status: QueueEntry["status"] } =>
-          isQueueStatus(build.status),
-        )
-        .map((build) => ({
-          build_id: build.id,
-          build_number: build.build_number ?? 0,
-          project_id: build.project_id,
-          project_name: build.project_name,
-          project_slug: build.project_slug,
-          job_id: build.job_id,
-          job_name: build.job_name,
-          priority: build.priority,
-          status: build.status,
-          created_at: build.created_at,
-          queued_at: build.queued_at,
-          started_at: build.started_at,
-          trigger_ref: build.trigger_ref,
-          source_commit_sha: build.source_commit_sha,
-          trigger_commit_sha: build.trigger_commit_sha,
-        })),
-    );
+    return listBuildsByJob(scope.jobId).then(mapQueuedBuilds);
   }
 
   return listQueue();
@@ -164,12 +167,28 @@ export function QueueActivityPanel({
   });
 
   const {
-    data: queueEntries,
-    isLoading,
-    error,
+    data: jobQueueEntries,
+    isLoading: jobQueueLoading,
+    error: jobQueueError,
+  } = useQuery({
+    ...(scope.type === "job"
+      ? jobBuildsQueryOptions(scope.jobId)
+      : {
+          queryKey: ["jobBuilds", "disabled", "queue"],
+          queryFn: async () => [] as Build[],
+          enabled: false,
+        }),
+    select: mapQueuedBuilds,
+  });
+
+  const {
+    data: scopedQueueEntries,
+    isLoading: scopedQueueLoading,
+    error: scopedQueueError,
   } = useQuery({
     queryKey: ["activity", "queue", scopeQuerySuffix(scope), limit],
     queryFn: () => listQueueForScope(scope),
+    enabled: scope.type !== "job",
     refetchInterval: (query) => {
       if (pollInterval === false || typeof pollInterval === "number") {
         return pollInterval;
@@ -189,6 +208,10 @@ export function QueueActivityPanel({
   const projectJobNames = new Map(
     (projectJobs ?? []).map((job) => [job.id, job.name]),
   );
+  const queueEntries =
+    scope.type === "job" ? jobQueueEntries : scopedQueueEntries;
+  const isLoading = scope.type === "job" ? jobQueueLoading : scopedQueueLoading;
+  const error = scope.type === "job" ? jobQueueError : scopedQueueError;
   const normalizedQueueEntries =
     scope.type === "project"
       ? withProjectJobNames(queueEntries ?? [], projectJobNames)
@@ -228,12 +251,27 @@ export function RecentBuildsPanel({
   });
 
   const {
-    data: builds,
-    isLoading,
-    error,
+    data: jobBuilds,
+    isLoading: jobBuildsLoading,
+    error: jobBuildsError,
+  } = useQuery(
+    scope.type === "job"
+      ? jobBuildsQueryOptions(scope.jobId)
+      : {
+          queryKey: ["jobBuilds", "disabled", "recent"],
+          queryFn: async () => [] as Build[],
+          enabled: false,
+        },
+  );
+
+  const {
+    data: scopedBuilds,
+    isLoading: scopedBuildsLoading,
+    error: scopedBuildsError,
   } = useQuery({
     queryKey: ["activity", "recent", scopeQuerySuffix(scope), limit],
     queryFn: () => listRecentBuildsForScope(scope, limit),
+    enabled: scope.type !== "job",
     refetchInterval: (query) => {
       if (pollInterval === false || typeof pollInterval === "number") {
         return pollInterval;
@@ -253,6 +291,10 @@ export function RecentBuildsPanel({
   const projectJobNames = new Map(
     (projectJobs ?? []).map((job) => [job.id, job.name]),
   );
+  const builds = scope.type === "job" ? jobBuilds : scopedBuilds;
+  const isLoading =
+    scope.type === "job" ? jobBuildsLoading : scopedBuildsLoading;
+  const error = scope.type === "job" ? jobBuildsError : scopedBuildsError;
   const normalizedBuilds =
     scope.type === "project"
       ? withProjectJobNames(builds ?? [], projectJobNames)

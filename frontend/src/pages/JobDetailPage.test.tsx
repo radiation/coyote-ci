@@ -709,7 +709,7 @@ describe("JobDetailPage", () => {
   });
 
   it("shows error states for builds and artifacts queries", async () => {
-    mockedListBuildsByJob.mockRejectedValueOnce(new Error("builds failed"));
+    mockedListBuildsByJob.mockRejectedValue(new Error("builds failed"));
     mockedListArtifactCatalog.mockRejectedValueOnce(
       new Error("artifacts failed"),
     );

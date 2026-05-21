@@ -5,7 +5,6 @@ import {
   getProject,
   getJob,
   listArtifactCatalog,
-  listBuildsByJob,
   listSourceCredentials,
   runJob,
   updateJob,
@@ -15,6 +14,7 @@ import {
   ManagedBuildImageFields,
   type ManagedBuildImageValue,
 } from "../components/ManagedBuildImageFields";
+import { jobBuildsQueryOptions } from "../queries/jobBuilds";
 import { StatusBadge } from "../components/StatusBadge";
 import type { Job } from "../types/job";
 import { formatTime } from "../utils/time";
@@ -69,11 +69,15 @@ export function JobDetailPage() {
     data: jobBuilds,
     isLoading: jobBuildsLoading,
     error: jobBuildsError,
-  } = useQuery({
-    queryKey: ["jobBuilds", id],
-    queryFn: () => listBuildsByJob(id!),
-    enabled: Boolean(id),
-  });
+  } = useQuery(
+    id
+      ? jobBuildsQueryOptions(id)
+      : {
+          queryKey: ["jobBuilds", "disabled", "detail"],
+          queryFn: async () => [],
+          enabled: false,
+        },
+  );
 
   const {
     data: latestArtifacts,
