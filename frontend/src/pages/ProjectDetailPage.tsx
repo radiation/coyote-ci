@@ -12,8 +12,14 @@ import {
   upsertProjectMember,
 } from "../api";
 import { BuildActivityRail } from "../components/ScopedBuildActivityPanels";
+import type { Job } from "../types/job";
 import type { ProjectMemberRole } from "../types/identity";
 import { formatTime } from "../utils/time";
+
+type JobWithOptionalMetadata = Job & {
+  slug?: string | null;
+  description?: string | null;
+};
 
 export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -138,9 +144,9 @@ export function ProjectDetailPage() {
     <>
       <Link to="/projects">← Back to projects</Link>
       <div className="detail-page-with-rail">
-        <div>
+        <div className="detail-main-column">
           <div className="page-header-row">
-            <div>
+            <div className="page-header-copy">
               <h2>{project.name}</h2>
               <p className="subtle-text">Slug: {project.slug}</p>
             </div>
@@ -162,27 +168,54 @@ export function ProjectDetailPage() {
             </div>
           </div>
 
-          <div className="detail-grid">
-            <div>
-              <strong>ID</strong>
-              <span>{project.id}</span>
+          <section className="detail-panel" aria-label="Project summary">
+            <h3>Project Summary</h3>
+            <div className="detail-grid">
+              <div>
+                <strong>ID</strong>
+                <span>{project.id}</span>
+              </div>
+              <div>
+                <strong>Slug</strong>
+                <span>{project.slug}</span>
+              </div>
+              <div>
+                <strong>Description</strong>
+                <span>{project.description || "—"}</span>
+              </div>
+              <div>
+                <strong>Created</strong>
+                <span>{formatTime(project.created_at)}</span>
+              </div>
+              <div>
+                <strong>Updated</strong>
+                <span>{formatTime(project.updated_at)}</span>
+              </div>
             </div>
-            <div>
-              <strong>Description</strong>
-              <span>{project.description || "—"}</span>
+          </section>
+
+          <section className="detail-panel" aria-label="Project actions">
+            <h3>Project Actions</h3>
+            <div className="detail-actions-row">
+              <Link
+                className="action-link"
+                to={`/jobs/new?project_id=${encodeURIComponent(project.id)}`}
+              >
+                Create Job
+              </Link>
+              <Link to={`/builds?project_id=${encodeURIComponent(project.id)}`}>
+                View Project Builds
+              </Link>
+              <Link
+                to={`/artifacts?project_id=${encodeURIComponent(project.id)}`}
+              >
+                Browse Project Artifacts
+              </Link>
             </div>
-            <div>
-              <strong>Created</strong>
-              <span>{formatTime(project.created_at)}</span>
-            </div>
-            <div>
-              <strong>Updated</strong>
-              <span>{formatTime(project.updated_at)}</span>
-            </div>
-          </div>
+          </section>
 
           <section className="settings-panel" style={{ marginTop: 16 }}>
-            <h3>Members</h3>
+            <h3>Project Members</h3>
             {memberError && <p className="error-text">{memberError}</p>}
             <form className="queue-build-form" onSubmit={onAddMember}>
               <label htmlFor="project-member-user">User ID</label>
@@ -283,40 +316,78 @@ export function ProjectDetailPage() {
             )}
           </section>
 
-          <h3>Jobs</h3>
-          {jobsLoading && <p>Loading jobs…</p>}
-          {jobsError && (
-            <p className="error-text">
-              Failed to load jobs: {String(jobsError)}
+          <section className="detail-panel" aria-label="Jobs in this project">
+            <h3>Jobs in This Project</h3>
+            <p className="subtle-text">
+              Job descriptions are shown when provided by the job API.
             </p>
-          )}
-          {!jobsLoading && !jobsError && jobs && jobs.length === 0 && (
-            <p className="subtle-text">No jobs in this project yet.</p>
-          )}
-          {jobs && jobs.length > 0 && (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Repository</th>
-                  <th>Default Ref</th>
-                  <th>Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.map((job) => (
-                  <tr key={job.id}>
-                    <td>
-                      <Link to={`/jobs/${job.id}`}>{job.name}</Link>
-                    </td>
-                    <td>{job.repository_url}</td>
-                    <td>{job.default_ref}</td>
-                    <td>{formatTime(job.updated_at)}</td>
+            {jobsLoading && <p>Loading jobs…</p>}
+            {jobsError && (
+              <p className="error-text">
+                Failed to load jobs: {String(jobsError)}
+              </p>
+            )}
+            {!jobsLoading && !jobsError && jobs && jobs.length === 0 && (
+              <p className="subtle-text">No jobs in this project yet.</p>
+            )}
+            {jobs && jobs.length > 0 && (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Job</th>
+                    <th>Repository</th>
+                    <th>Default Ref</th>
+                    <th>Updated</th>
+                    <th>Created</th>
+                    <th>Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+                </thead>
+                <tbody>
+                  {jobs.map((job) => {
+                    // TODO: Remove fallback once job description/slug are guaranteed in project job responses.
+                    const metadataJob = job as JobWithOptionalMetadata;
+                    const slug = metadataJob.slug?.trim();
+                    const description = metadataJob.description?.trim();
+
+                    return (
+                      <tr key={job.id}>
+                        <td>
+                          <div>
+                            <Link to={`/jobs/${job.id}`}>{job.name}</Link>
+                            <div className="subtle-text">
+                              {slug ? `Slug: ${slug}` : `ID: ${job.id}`}
+                            </div>
+                            <div className="subtle-text">
+                              {description || "Description unavailable."}
+                            </div>
+                          </div>
+                        </td>
+                        <td>{job.repository_url}</td>
+                        <td>{job.default_ref}</td>
+                        <td>{formatTime(job.updated_at)}</td>
+                        <td>{formatTime(job.created_at)}</td>
+                        <td>
+                          <div className="table-actions">
+                            <Link to={`/jobs/${job.id}`}>Open Job</Link>
+                            <Link
+                              to={`/builds?project_id=${encodeURIComponent(project.id)}`}
+                            >
+                              Builds
+                            </Link>
+                            <Link
+                              to={`/artifacts?project_id=${encodeURIComponent(project.id)}&job_id=${encodeURIComponent(job.id)}`}
+                            >
+                              Artifacts
+                            </Link>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </section>
         </div>
         <BuildActivityRail scope={{ type: "project", projectId: project.id }} />
       </div>
