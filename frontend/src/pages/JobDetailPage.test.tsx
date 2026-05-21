@@ -257,9 +257,7 @@ describe("JobDetailPage", () => {
       "href",
       "/api/artifacts/download/artifact-1",
     );
-    expect(
-      screen.getByText("Artifact Count:", { selector: "strong" }).parentElement,
-    ).toHaveTextContent("1");
+    expect(screen.getByText("1 artifact")).toBeTruthy();
     const checksumPreview = screen.getByText("sha256 0123456789ab…89abcdef");
     expect(checksumPreview).toHaveAttribute(
       "title",
@@ -753,8 +751,8 @@ describe("JobDetailPage", () => {
     });
   });
 
-  it("shows latest success link when latest build is not yet successful", async () => {
-    mockedListBuildsByJob.mockResolvedValueOnce([
+  it("shows a compact latest-build note when the newest build is not yet successful", async () => {
+    mockedListBuildsByJob.mockResolvedValue([
       {
         id: "build-running-1",
         build_number: 22,
@@ -790,10 +788,14 @@ describe("JobDetailPage", () => {
     renderPage();
 
     await waitFor(() => {
-      // latestBuild = running #22, latestSuccessfulBuild = success #21 (different id)
+      expect(screen.getByText("Build", { selector: "strong" })).toBeTruthy();
       expect(
-        screen.getByText("Latest Success:", { selector: "strong" }),
-      ).toBeTruthy();
+        screen.queryByText("Latest Success:", { selector: "strong" }),
+      ).toBeNull();
+      expect(screen.getByRole("link", { name: "#22" })).toHaveAttribute(
+        "href",
+        "/builds/build-running-1",
+      );
     });
   });
 

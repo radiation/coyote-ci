@@ -52,6 +52,10 @@ function sortBuildsByNewest<
   });
 }
 
+function artifactCountLabel(count: number): string {
+  return `${count} artifact${count === 1 ? "" : "s"}`;
+}
+
 export function JobDetailPage() {
   const { id } = useParams<{ id: string }>();
 
@@ -114,8 +118,9 @@ export function JobDetailPage() {
   }
 
   const latestOutputArtifacts = (latestSuccessfulArtifacts ?? []).slice(0, 3);
+  const latestOutputArtifactCount = latestSuccessfulArtifacts?.length ?? 0;
   const latestOutputOverflow = Math.max(
-    (latestSuccessfulArtifacts?.length ?? 0) - latestOutputArtifacts.length,
+    latestOutputArtifactCount - latestOutputArtifacts.length,
     0,
   );
   const latestBuildLabel =
@@ -252,11 +257,11 @@ export function JobDetailPage() {
             {!jobBuildsLoading && !jobBuildsError && !latestBuild && (
               <p className="subtle-text">No builds yet for this job.</p>
             )}
-            {latestBuild && (
+            {latestBuild && !latestSuccessfulBuild && (
               <>
                 <div className="detail-summary">
                   <span>
-                    <strong>Latest Build:</strong>{" "}
+                    <strong>Build</strong>{" "}
                     <Link to={`/builds/${latestBuild.id}`}>
                       {latestBuildLabel}
                     </Link>
@@ -264,19 +269,7 @@ export function JobDetailPage() {
                   <span>
                     <StatusBadge status={latestBuild.status} />
                   </span>
-                  <span>
-                    <strong>Created:</strong>{" "}
-                    {formatTime(latestBuild.created_at)}
-                  </span>
-                  {latestSuccessfulBuild &&
-                    latestSuccessfulBuild.id !== latestBuild.id && (
-                      <span>
-                        <strong>Latest Success:</strong>{" "}
-                        <Link to={`/builds/${latestSuccessfulBuild.id}`}>
-                          {latestSuccessfulBuildLabel}
-                        </Link>
-                      </span>
-                    )}
+                  <span>Created {formatTime(latestBuild.created_at)}</span>
                 </div>
                 <div className="detail-actions-row">
                   <Link to={`/builds/${latestBuild.id}`}>
@@ -310,7 +303,7 @@ export function JobDetailPage() {
                 <>
                   <div className="detail-summary">
                     <span>
-                      <strong>Output Build:</strong>{" "}
+                      <strong>Build</strong>{" "}
                       <Link to={`/builds/${latestSuccessfulBuild.id}`}>
                         {latestSuccessfulBuildLabel}
                       </Link>
@@ -318,17 +311,35 @@ export function JobDetailPage() {
                     <span>
                       <StatusBadge status={latestSuccessfulBuild.status} />
                     </span>
+                    <span>{artifactCountLabel(latestOutputArtifactCount)}</span>
                     <span>
-                      <strong>Artifact Count:</strong>{" "}
-                      {latestSuccessfulArtifacts?.length ?? 0}
-                    </span>
-                    <span>
-                      <strong>Finished:</strong>{" "}
+                      Finished{" "}
                       {formatTime(
                         latestSuccessfulBuild.finished_at ??
                           latestSuccessfulBuild.created_at,
                       )}
                     </span>
+                  </div>
+
+                  {latestBuild.id !== latestSuccessfulBuild.id && (
+                    <p className="subtle-text">
+                      Latest build{" "}
+                      <Link to={`/builds/${latestBuild.id}`}>
+                        {latestBuildLabel}
+                      </Link>{" "}
+                      is <StatusBadge status={latestBuild.status} />.
+                    </p>
+                  )}
+
+                  <div className="detail-actions-row">
+                    <Link to={`/builds/${latestSuccessfulBuild.id}`}>
+                      View Latest Build
+                    </Link>
+                    <Link
+                      to={`/artifacts?project_id=${encodeURIComponent(job.project_id)}&job_id=${encodeURIComponent(job.id)}`}
+                    >
+                      Browse Job Artifacts
+                    </Link>
                   </div>
 
                   {latestOutputArtifacts.length === 0 ? (
@@ -390,8 +401,8 @@ export function JobDetailPage() {
                   {latestOutputOverflow > 0 && (
                     <p className="subtle-text">
                       Showing {latestOutputArtifacts.length} of{" "}
-                      {latestSuccessfulArtifacts?.length ?? 0} artifacts from
-                      the latest successful build.
+                      {latestOutputArtifactCount} artifacts from the latest
+                      successful build.
                     </p>
                   )}
                 </>
