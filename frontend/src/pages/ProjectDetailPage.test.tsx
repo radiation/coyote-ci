@@ -187,6 +187,149 @@ describe("ProjectDetailPage", () => {
     });
   });
 
+  it("shows the project loading state", () => {
+    mockedGetProject.mockImplementationOnce(
+      () => new Promise(() => {}) as Promise<never>,
+    );
+
+    renderPage();
+
+    expect(screen.getByText("Loading project…")).toBeTruthy();
+  });
+
+  it("shows the project error state", async () => {
+    mockedGetProject.mockRejectedValueOnce(new Error("backend unavailable"));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Failed to load project: Error: backend unavailable"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows the project not found state", async () => {
+    mockedGetProject.mockResolvedValueOnce(null as never);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Project not found.")).toBeTruthy();
+    });
+  });
+
+  it("shows empty project activity and detail fallbacks", async () => {
+    mockedGetProject.mockResolvedValueOnce({
+      id: "project-1",
+      name: "Platform",
+      slug: "platform",
+      description: "",
+      created_at: "2026-05-01T00:00:00Z",
+      updated_at: "2026-05-01T00:00:00Z",
+    });
+    mockedListProjectMembers.mockResolvedValueOnce([]);
+    mockedListJobsByProject.mockResolvedValueOnce([]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("—")).toBeTruthy();
+      expect(screen.getByText("No project members yet.")).toBeTruthy();
+      expect(screen.getByText("No jobs in this project yet.")).toBeTruthy();
+    });
+  });
+
+  it("requires user id before adding a project member", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Platform")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("User ID"), {
+      target: { value: "   " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Member" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("User ID is required.")).toBeTruthy();
+    });
+    expect(mockedUpsertProjectMember).not.toHaveBeenCalled();
+  });
+
+  it("shows members and jobs loading states", async () => {
+    mockedListProjectMembers.mockImplementationOnce(
+      () => new Promise(() => {}) as Promise<never>,
+    );
+    mockedListJobsByProject.mockImplementationOnce(
+      () => new Promise(() => {}) as Promise<never>,
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Loading members…")).toBeTruthy();
+      expect(screen.getByText("Loading jobs…")).toBeTruthy();
+    });
+  });
+
+  it("shows jobs error state when jobs query fails", async () => {
+    mockedListJobsByProject.mockRejectedValue(new Error("jobs exploded"));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to load jobs:/)).toBeTruthy();
+    });
+  });
+
+  it("shows user id and display-name fallbacks in member rows", async () => {
+    mockedListProjectMembers.mockResolvedValueOnce([
+      {
+        project_id: "project-1",
+        user_id: "user-raw",
+        email: "",
+        display_name: "",
+        role: "viewer",
+        created_at: "2026-05-01T00:00:00Z",
+        updated_at: "2026-05-01T00:00:00Z",
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("user-raw")).toBeTruthy();
+      expect(screen.getByText("—")).toBeTruthy();
+      expect(screen.getByLabelText("Role for user-raw")).toBeTruthy();
+    });
+  });
+
+  it("renders the responsive two-column activity rail layout", async () => {
+    const { container } = renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Platform")).toBeTruthy();
+    });
+
+    expect(container.querySelector(".detail-page-with-rail")).toBeTruthy();
+  });
+
+  it("shows job name links in project-scoped activity rows", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      const queueJobLink = screen.getByRole("link", { name: "release" });
+      expect(queueJobLink).toHaveAttribute("href", "/jobs/job-queue-1");
+
+      const recentJobLink = screen.getByRole("link", {
+        name: "release-history",
+      });
+      expect(recentJobLink).toHaveAttribute("href", "/jobs/job-recent-1");
+    });
+  });
+
   it("adds, updates, and removes project members", async () => {
     renderPage();
 

@@ -54,81 +54,90 @@ export function JobDetailPage() {
   return (
     <>
       <Link to="/jobs">← Back to jobs</Link>
-      <h2>Job: {job.name}</h2>
-      <p className="subtle-text">
-        Last loaded:{" "}
-        {dataUpdatedAt > 0
-          ? formatTime(new Date(dataUpdatedAt).toISOString())
-          : "—"}
-      </p>
+      <div className="detail-page-with-rail">
+        <div>
+          <h2>Job: {job.name}</h2>
+          <p className="subtle-text">
+            Last loaded:{" "}
+            {dataUpdatedAt > 0
+              ? formatTime(new Date(dataUpdatedAt).toISOString())
+              : "—"}
+          </p>
 
-      <div className="detail-grid">
-        <div>
-          <strong>ID</strong>
-          <span>{job.id}</span>
-        </div>
-        <div>
-          <strong>Project</strong>
-          <span>
-            {project ? (
-              <Link to={`/projects/${project.id}`}>{project.name}</Link>
-            ) : (
-              job.project_id
+          <div className="detail-grid">
+            <div>
+              <strong>ID</strong>
+              <span>{job.id}</span>
+            </div>
+            <div>
+              <strong>Project</strong>
+              <span>
+                {project ? (
+                  <Link to={`/projects/${project.id}`}>{project.name}</Link>
+                ) : (
+                  job.project_id
+                )}
+              </span>
+            </div>
+            <div>
+              <strong>Priority</strong>
+              <span>{job.priority}</span>
+            </div>
+            <div>
+              <strong>Push Trigger</strong>
+              <span>{job.push_enabled ? "Enabled" : "Disabled"}</span>
+            </div>
+            <div>
+              <strong>Push Branch</strong>
+              <span>
+                {job.push_enabled ? job.push_branch || "Any branch" : "—"}
+              </span>
+            </div>
+            <div>
+              <strong>Pipeline Source</strong>
+              <span>
+                {job.pipeline_path ? "Repository file" : "Inline YAML"}
+              </span>
+            </div>
+            {job.pipeline_path && (
+              <div>
+                <strong>Pipeline Path</strong>
+                <span>{job.pipeline_path}</span>
+              </div>
             )}
-          </span>
-        </div>
-        <div>
-          <strong>Priority</strong>
-          <span>{job.priority}</span>
-        </div>
-        <div>
-          <strong>Push Trigger</strong>
-          <span>{job.push_enabled ? "Enabled" : "Disabled"}</span>
-        </div>
-        <div>
-          <strong>Push Branch</strong>
-          <span>
-            {job.push_enabled ? job.push_branch || "Any branch" : "—"}
-          </span>
-        </div>
-        <div>
-          <strong>Pipeline Source</strong>
-          <span>{job.pipeline_path ? "Repository file" : "Inline YAML"}</span>
-        </div>
-        {job.pipeline_path && (
-          <div>
-            <strong>Pipeline Path</strong>
-            <span>{job.pipeline_path}</span>
+            <div>
+              <strong>Managed Build Image</strong>
+              <span>{job.managed_image?.enabled ? "Enabled" : "Disabled"}</span>
+            </div>
+            {job.managed_image && (
+              <div>
+                <strong>Managed Image Name</strong>
+                <span>{job.managed_image.managed_image_name}</span>
+              </div>
+            )}
+            <div>
+              <strong>Created</strong>
+              <span>{formatTime(job.created_at)}</span>
+            </div>
+            <div>
+              <strong>Updated</strong>
+              <span>{formatTime(job.updated_at)}</span>
+            </div>
           </div>
-        )}
-        <div>
-          <strong>Managed Build Image</strong>
-          <span>{job.managed_image?.enabled ? "Enabled" : "Disabled"}</span>
+
+          <p className="subtle-text">
+            Internal push events can be sent to POST /events/push with
+            repository_url, ref, and commit_sha.
+          </p>
+
+          <JobDetailForm
+            key={`${job.id}:${job.updated_at}`}
+            job={job}
+            jobID={id}
+          />
         </div>
-        {job.managed_image && (
-          <div>
-            <strong>Managed Image Name</strong>
-            <span>{job.managed_image.managed_image_name}</span>
-          </div>
-        )}
-        <div>
-          <strong>Created</strong>
-          <span>{formatTime(job.created_at)}</span>
-        </div>
-        <div>
-          <strong>Updated</strong>
-          <span>{formatTime(job.updated_at)}</span>
-        </div>
+        <BuildActivityRail scope={{ type: "job", jobId: id }} />
       </div>
-
-      <p className="subtle-text">
-        Internal push events can be sent to POST /events/push with
-        repository_url, ref, and commit_sha.
-      </p>
-
-      <JobDetailForm key={`${job.id}:${job.updated_at}`} job={job} jobID={id} />
-
-      <BuildActivityRail scope={{ type: "job", jobId: id }} />
     </>
   );
 }

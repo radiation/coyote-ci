@@ -434,7 +434,7 @@ input[type="radio"] {
   grid-template-columns: 240px minmax(0, 1fr);
   gap: 24px;
   align-items: start;
-  max-width: 1360px;
+  max-width: 1520px;
   margin: 0 auto;
 }
 
@@ -665,6 +665,13 @@ fieldset {
 .dashboard-layout-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.9fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.detail-page-with-rail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 360px);
   gap: 16px;
   align-items: start;
 }
@@ -1634,6 +1641,7 @@ h3 {
 @media (max-width: 900px) {
   .app-shell,
   .dashboard-layout-grid,
+  .detail-page-with-rail,
   .dashboard-summary-grid,
   .settings-grid,
   .artifact-filters-panel,

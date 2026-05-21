@@ -137,182 +137,189 @@ export function ProjectDetailPage() {
   return (
     <>
       <Link to="/projects">← Back to projects</Link>
-      <div className="page-header-row">
+      <div className="detail-page-with-rail">
         <div>
-          <h2>{project.name}</h2>
-          <p className="subtle-text">Slug: {project.slug}</p>
-        </div>
-        <div className="page-header-actions">
-          <Link
-            className="action-link"
-            to={`/jobs/new?project_id=${encodeURIComponent(project.id)}`}
-          >
-            Create Job
-          </Link>
-          <Link to={`/builds?project_id=${encodeURIComponent(project.id)}`}>
-            View Builds
-          </Link>
-          <Link to={`/artifacts?project_id=${encodeURIComponent(project.id)}`}>
-            Browse Artifacts
-          </Link>
-        </div>
-      </div>
+          <div className="page-header-row">
+            <div>
+              <h2>{project.name}</h2>
+              <p className="subtle-text">Slug: {project.slug}</p>
+            </div>
+            <div className="page-header-actions">
+              <Link
+                className="action-link"
+                to={`/jobs/new?project_id=${encodeURIComponent(project.id)}`}
+              >
+                Create Job
+              </Link>
+              <Link to={`/builds?project_id=${encodeURIComponent(project.id)}`}>
+                View Builds
+              </Link>
+              <Link
+                to={`/artifacts?project_id=${encodeURIComponent(project.id)}`}
+              >
+                Browse Artifacts
+              </Link>
+            </div>
+          </div>
 
-      <div className="detail-grid">
-        <div>
-          <strong>ID</strong>
-          <span>{project.id}</span>
-        </div>
-        <div>
-          <strong>Description</strong>
-          <span>{project.description || "—"}</span>
-        </div>
-        <div>
-          <strong>Created</strong>
-          <span>{formatTime(project.created_at)}</span>
-        </div>
-        <div>
-          <strong>Updated</strong>
-          <span>{formatTime(project.updated_at)}</span>
-        </div>
-      </div>
+          <div className="detail-grid">
+            <div>
+              <strong>ID</strong>
+              <span>{project.id}</span>
+            </div>
+            <div>
+              <strong>Description</strong>
+              <span>{project.description || "—"}</span>
+            </div>
+            <div>
+              <strong>Created</strong>
+              <span>{formatTime(project.created_at)}</span>
+            </div>
+            <div>
+              <strong>Updated</strong>
+              <span>{formatTime(project.updated_at)}</span>
+            </div>
+          </div>
 
-      <BuildActivityRail scope={{ type: "project", projectId: project.id }} />
+          <section className="settings-panel" style={{ marginTop: 16 }}>
+            <h3>Members</h3>
+            {memberError && <p className="error-text">{memberError}</p>}
+            <form className="queue-build-form" onSubmit={onAddMember}>
+              <label htmlFor="project-member-user">User ID</label>
+              <input
+                id="project-member-user"
+                list="project-member-users"
+                value={memberUserID}
+                onChange={(event) => setMemberUserID(event.target.value)}
+                disabled={addMemberMutation.isPending}
+                placeholder="Existing user id"
+              />
+              <datalist id="project-member-users">
+                {users?.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.email}
+                  </option>
+                ))}
+              </datalist>
+              <label htmlFor="project-member-role">Role</label>
+              <select
+                id="project-member-role"
+                value={selectedRole}
+                onChange={(event) =>
+                  setSelectedRole(event.target.value as ProjectMemberRole)
+                }
+                disabled={addMemberMutation.isPending}
+              >
+                <option value="viewer">viewer</option>
+                <option value="maintainer">maintainer</option>
+                <option value="owner">owner</option>
+              </select>
+              <button type="submit" disabled={addMemberMutation.isPending}>
+                {addMemberMutation.isPending ? "Adding…" : "Add Member"}
+              </button>
+            </form>
 
-      <section className="settings-panel" style={{ marginTop: 16 }}>
-        <h3>Members</h3>
-        {memberError && <p className="error-text">{memberError}</p>}
-        <form className="queue-build-form" onSubmit={onAddMember}>
-          <label htmlFor="project-member-user">User ID</label>
-          <input
-            id="project-member-user"
-            list="project-member-users"
-            value={memberUserID}
-            onChange={(event) => setMemberUserID(event.target.value)}
-            disabled={addMemberMutation.isPending}
-            placeholder="Existing user id"
-          />
-          <datalist id="project-member-users">
-            {users?.map((user) => (
-              <option key={user.id} value={user.id}>
-                {user.email}
-              </option>
-            ))}
-          </datalist>
-          <label htmlFor="project-member-role">Role</label>
-          <select
-            id="project-member-role"
-            value={selectedRole}
-            onChange={(event) =>
-              setSelectedRole(event.target.value as ProjectMemberRole)
-            }
-            disabled={addMemberMutation.isPending}
-          >
-            <option value="viewer">viewer</option>
-            <option value="maintainer">maintainer</option>
-            <option value="owner">owner</option>
-          </select>
-          <button type="submit" disabled={addMemberMutation.isPending}>
-            {addMemberMutation.isPending ? "Adding…" : "Add Member"}
-          </button>
-        </form>
-
-        {membersLoading && <p>Loading members…</p>}
-        {membersError && (
-          <p className="error-text">
-            {formatAPIErrorMessage(
-              membersError,
-              "You do not have permission to view project members.",
-              "Failed to load members",
+            {membersLoading && <p>Loading members…</p>}
+            {membersError && (
+              <p className="error-text">
+                {formatAPIErrorMessage(
+                  membersError,
+                  "You do not have permission to view project members.",
+                  "Failed to load members",
+                )}
+              </p>
             )}
-          </p>
-        )}
-        {members && members.length === 0 && (
-          <p className="subtle-text">No project members yet.</p>
-        )}
-        {members && members.length > 0 && (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>User</th>
-                <th>Display Name</th>
-                <th>Role</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {members.map((member) => (
-                <tr key={member.user_id}>
-                  <td>{member.email || member.user_id}</td>
-                  <td>{member.display_name || "—"}</td>
-                  <td>
-                    <select
-                      aria-label={`Role for ${member.email || member.user_id}`}
-                      value={member.role}
-                      onChange={(event) =>
-                        updateMemberMutation.mutate({
-                          userID: member.user_id,
-                          role: event.target.value as ProjectMemberRole,
-                        })
-                      }
-                      disabled={updateMemberMutation.isPending}
-                    >
-                      <option value="viewer">viewer</option>
-                      <option value="maintainer">maintainer</option>
-                      <option value="owner">owner</option>
-                    </select>
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="table-action-button"
-                      onClick={() =>
-                        deleteMemberMutation.mutate(member.user_id)
-                      }
-                      disabled={deleteMemberMutation.isPending}
-                    >
-                      Remove
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+            {members && members.length === 0 && (
+              <p className="subtle-text">No project members yet.</p>
+            )}
+            {members && members.length > 0 && (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>User</th>
+                    <th>Display Name</th>
+                    <th>Role</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {members.map((member) => (
+                    <tr key={member.user_id}>
+                      <td>{member.email || member.user_id}</td>
+                      <td>{member.display_name || "—"}</td>
+                      <td>
+                        <select
+                          aria-label={`Role for ${member.email || member.user_id}`}
+                          value={member.role}
+                          onChange={(event) =>
+                            updateMemberMutation.mutate({
+                              userID: member.user_id,
+                              role: event.target.value as ProjectMemberRole,
+                            })
+                          }
+                          disabled={updateMemberMutation.isPending}
+                        >
+                          <option value="viewer">viewer</option>
+                          <option value="maintainer">maintainer</option>
+                          <option value="owner">owner</option>
+                        </select>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="table-action-button"
+                          onClick={() =>
+                            deleteMemberMutation.mutate(member.user_id)
+                          }
+                          disabled={deleteMemberMutation.isPending}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
 
-      <h3>Jobs</h3>
-      {jobsLoading && <p>Loading jobs…</p>}
-      {jobsError && (
-        <p className="error-text">Failed to load jobs: {String(jobsError)}</p>
-      )}
-      {!jobsLoading && !jobsError && jobs && jobs.length === 0 && (
-        <p className="subtle-text">No jobs in this project yet.</p>
-      )}
-      {jobs && jobs.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Repository</th>
-              <th>Default Ref</th>
-              <th>Updated</th>
-            </tr>
-          </thead>
-          <tbody>
-            {jobs.map((job) => (
-              <tr key={job.id}>
-                <td>
-                  <Link to={`/jobs/${job.id}`}>{job.name}</Link>
-                </td>
-                <td>{job.repository_url}</td>
-                <td>{job.default_ref}</td>
-                <td>{formatTime(job.updated_at)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+          <h3>Jobs</h3>
+          {jobsLoading && <p>Loading jobs…</p>}
+          {jobsError && (
+            <p className="error-text">
+              Failed to load jobs: {String(jobsError)}
+            </p>
+          )}
+          {!jobsLoading && !jobsError && jobs && jobs.length === 0 && (
+            <p className="subtle-text">No jobs in this project yet.</p>
+          )}
+          {jobs && jobs.length > 0 && (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Repository</th>
+                  <th>Default Ref</th>
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {jobs.map((job) => (
+                  <tr key={job.id}>
+                    <td>
+                      <Link to={`/jobs/${job.id}`}>{job.name}</Link>
+                    </td>
+                    <td>{job.repository_url}</td>
+                    <td>{job.default_ref}</td>
+                    <td>{formatTime(job.updated_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <BuildActivityRail scope={{ type: "project", projectId: project.id }} />
+      </div>
     </>
   );
 }
