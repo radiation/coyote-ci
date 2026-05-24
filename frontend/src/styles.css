@@ -781,8 +781,26 @@ fieldset {
   min-width: 0;
 }
 
+.activity-list-context {
+  margin: 6px 0 0;
+}
+
+.activity-list-detail-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 8px;
+}
+
 .activity-list-title-row {
   justify-content: flex-start;
+}
+
+.queue-sections-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
 }
 
 .artifact-copy-status {
@@ -1812,6 +1830,7 @@ h3 {
   .app-shell,
   .dashboard-layout-grid,
   .dashboard-summary-grid,
+  .queue-sections-grid,
   .settings-grid,
   .artifact-filters-panel,
   .artifact-detail-grid,
@@ -1836,6 +1855,11 @@ h3 {
   .page-header-actions,
   .activity-list-title-row {
     align-items: flex-start;
+  }
+
+  .activity-list-detail-grid {
+    flex-direction: column;
+    gap: 4px;
   }
 
   .artifact-pagination-bar,
