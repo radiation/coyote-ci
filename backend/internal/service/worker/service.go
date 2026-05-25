@@ -71,6 +71,7 @@ type WorkerLeaseRecoveryStats struct {
 
 type ExecutionWorkerService struct {
 	builds        workerExecutionBoundary
+	workerRepo    repository.WorkerRepository
 	workerID      string
 	leaseDuration time.Duration
 	clock         func() time.Time
@@ -103,7 +104,13 @@ func NewExecutionWorkerServiceWithLease(builds workerExecutionBoundary, workerID
 	}
 }
 
+func (w *ExecutionWorkerService) SetWorkerRepository(repo repository.WorkerRepository) {
+	w.workerRepo = repo
+}
+
 func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerRunnableStep, bool, error) {
+	w.recordHeartbeat(ctx)
+
 	// prepareQueuedBuilds returns the full build list it already fetched so the
 	// transitional fallback below can reuse it without a second ListBuilds call.
 	builds, err := w.prepareQueuedBuilds(ctx)
@@ -557,6 +564,8 @@ func workerMaxInt(value int, minimum int) int {
 }
 
 func (w *ExecutionWorkerService) ExecuteRunnableStep(ctx context.Context, step WorkerRunnableStep) (WorkerStepExecutionReport, error) {
+	w.recordHeartbeat(ctx)
+
 	log.Printf("claimed runnable work: build_id=%s step=%s", step.BuildID, step.StepName)
 	log.Printf("starting execution: build_id=%s step=%s", step.BuildID, step.StepName)
 
@@ -585,6 +594,7 @@ func (w *ExecutionWorkerService) ExecuteRunnableStep(ctx context.Context, step W
 			case <-heartbeatCtx.Done():
 				return
 			case <-ticker.C:
+				w.recordHeartbeat(heartbeatCtx)
 				cont, renewErr := w.renewStepLease(heartbeatCtx, step)
 				if renewErr != nil {
 					log.Printf("lease renewal error: build_id=%s step=%s err=%v", step.BuildID, step.StepName, renewErr)
@@ -654,6 +664,21 @@ func (w *ExecutionWorkerService) ExecuteRunnableStep(ctx context.Context, step W
 
 	report.Step.Status = domain.BuildStepStatusFailed
 	return report, nil
+}
+
+func (w *ExecutionWorkerService) recordHeartbeat(ctx context.Context) {
+	if w.workerRepo == nil {
+		return
+	}
+
+	_, err := w.workerRepo.UpsertHeartbeat(ctx, domain.WorkerHeartbeat{
+		ID:          w.workerID,
+		Name:        w.workerID,
+		HeartbeatAt: w.clock().UTC(),
+	})
+	if err != nil {
+		log.Printf("worker heartbeat update failed: worker_id=%s err=%v", w.workerID, err)
+	}
 }
 
 func (w *ExecutionWorkerService) bindRunnableStepFromJob(ctx context.Context, step WorkerRunnableStep, claim repository.StepClaim) WorkerRunnableStep {

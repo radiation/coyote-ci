@@ -60,6 +60,7 @@ func main() {
 	executionJobOutputRepo := repositorypostgres.NewExecutionJobOutputRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	cacheEntryRepo := repositorypostgres.NewCacheEntryRepository(db)
+	workerRepo := repositorypostgres.NewWorkerRepository(db)
 	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
 	artifactResolver, err := artifact.ResolveStores(artifact.StoreConfig{
 		Provider:    cfg.ArtifactStorageProvider,
@@ -101,6 +102,7 @@ func main() {
 	})
 	leaseDuration := time.Duration(cfg.StepLeaseSeconds) * time.Second
 	workerService := workersvc.NewExecutionWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)
+	workerService.SetWorkerRepository(workerRepo)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

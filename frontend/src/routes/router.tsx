@@ -7,6 +7,7 @@ import { Layout } from "../components/Layout";
 import { BuildsListPage } from "../pages/BuildsListPage";
 import { BuildDetailPage } from "../pages/BuildDetailPage";
 import { QueuePage } from "../pages/QueuePage";
+import { WorkersPage } from "../pages/WorkersPage";
 import { ArtifactDetailPage } from "../pages/ArtifactDetailPage";
 import { ArtifactLogicalBrowserPage } from "../pages/ArtifactLogicalBrowserPage";
 import { ArtifactsPage } from "../pages/ArtifactsPage";
@@ -29,6 +30,7 @@ export const appRoutes: RouteObject[] = [
       { path: "/builds", element: <BuildsListPage /> },
       { path: "/builds/:id", element: <BuildDetailPage /> },
       { path: "/queue", element: <QueuePage /> },
+      { path: "/workers", element: <WorkersPage /> },
       { path: "/artifacts", element: <ArtifactsPage /> },
       { path: "/artifacts/logical", element: <ArtifactLogicalBrowserPage /> },
       { path: "/artifacts/:id", element: <ArtifactDetailPage /> },

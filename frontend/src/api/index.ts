@@ -7,6 +7,7 @@ export {
   listArtifactCatalog,
   listBuilds,
   listQueue,
+  listWorkers,
   listProjects,
   getProject,
   createProject,

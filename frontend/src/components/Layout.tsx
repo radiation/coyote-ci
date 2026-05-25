@@ -9,6 +9,7 @@ const primaryNavigation: AppShellNavigationItem[] = [
   { to: "/jobs", label: "Jobs" },
   { to: "/builds", label: "Builds" },
   { to: "/queue", label: "Queue" },
+  { to: "/workers", label: "Workers" },
   { to: "/artifacts", label: "Artifacts" },
 ];
 
