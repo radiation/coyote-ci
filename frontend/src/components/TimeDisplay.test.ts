@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatTime } from "../utils/time";
+import { formatCompactTime, formatTime } from "../utils/time";
 
 describe("formatTime", () => {
   it("should format ISO string to local datetime", () => {
@@ -20,5 +20,22 @@ describe("formatTime", () => {
 
   it("should handle empty string", () => {
     expect(formatTime("")).toBe("—");
+  });
+});
+
+describe("formatCompactTime", () => {
+  it("should format ISO string without seconds", () => {
+    const iso = "2026-03-24T12:00:00Z";
+    const result = formatCompactTime(iso);
+
+    expect(result).not.toBe("—");
+    expect(result.length).toBeGreaterThan(0);
+    expect(result).not.toContain(":00:");
+  });
+
+  it("should return dash for invalid values", () => {
+    expect(formatCompactTime(null)).toBe("—");
+    expect(formatCompactTime(undefined)).toBe("—");
+    expect(formatCompactTime("")).toBe("—");
   });
 });

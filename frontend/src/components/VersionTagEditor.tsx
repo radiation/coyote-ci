@@ -72,7 +72,11 @@ export function VersionTagEditor({
             placeholder="2026.04.22"
             disabled={isSubmitting}
           />
-          <button type="submit" disabled={isSubmitting}>
+          <button
+            type="submit"
+            className="inline-action-button version-tag-submit-button"
+            disabled={isSubmitting}
+          >
             {isSubmitting ? "Saving…" : submitLabel}
           </button>
         </form>
