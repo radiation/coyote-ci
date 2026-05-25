@@ -1,8 +1,8 @@
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { buildStepLogStreamURL, getStepLogs } from "../api";
 import type { BuildStep } from "../types";
 import { StatusBadge } from "./StatusBadge";
-import { formatTime } from "../utils/time";
+import { formatDuration, formatTime } from "../utils/time";
 
 const COMMAND_PREVIEW_LIMIT = 72;
 
@@ -50,9 +50,11 @@ function bucketSteps(steps: BuildStep[]): StepBucket[] {
 export function StepList({
   buildID,
   steps,
+  activeStepIndex,
 }: {
   buildID: string;
   steps: BuildStep[];
+  activeStepIndex?: number;
 }) {
   const [openStepIndex, setOpenStepIndex] = useState<number | null>(null);
   const [logChunks, setLogChunks] = useState<Record<number, StepLogChunk[]>>(
@@ -151,82 +153,79 @@ export function StepList({
   const buckets = bucketSteps(steps);
 
   return (
-    <table className="table">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Name</th>
-          <th>Command</th>
-          <th>Status</th>
-          <th>Worker</th>
-          <th>Started</th>
-          <th>Finished</th>
-          <th>Exit Code</th>
-          <th>Logs</th>
-          <th>Error</th>
-        </tr>
-      </thead>
-      <tbody>
-        {buckets.map((bucket) => {
-          const runningCount = bucket.steps.filter(
-            (step) => step.status === "running",
-          ).length;
+    <div className="step-timeline">
+      {buckets.map((bucket) => {
+        const runningCount = bucket.steps.filter(
+          (step) => step.status === "running",
+        ).length;
 
-          return (
-            <Fragment key={`bucket-${bucket.key}`}>
-              {bucket.groupName && (
-                <tr className="step-group-row">
-                  <td colSpan={10}>
-                    <div className="step-group-header">
-                      <strong>{bucket.groupName}</strong>
-                      <span className="step-group-meta">
-                        {runningCount > 1
-                          ? `${runningCount} steps running concurrently`
-                          : runningCount === 1
-                            ? "1 step running"
-                            : `${bucket.steps.length} parallel steps`}
-                      </span>
-                    </div>
-                  </td>
-                </tr>
-              )}
+        return (
+          <section key={`bucket-${bucket.key}`} className="step-bucket">
+            {bucket.groupName ? (
+              <div className="step-group-header">
+                <strong>{bucket.groupName}</strong>
+                <span className="step-group-meta">
+                  {runningCount > 1
+                    ? `${runningCount} steps running concurrently`
+                    : runningCount === 1
+                      ? "1 step running"
+                      : `${bucket.steps.length} parallel steps`}
+                </span>
+              </div>
+            ) : null}
 
+            <div className="step-bucket-list">
               {bucket.steps.map((step) => {
                 const isOpen = openStepIndex === step.step_index;
                 const chunks = logChunks[step.step_index] ?? [];
                 const loading = logLoading[step.step_index] ?? false;
                 const error = logError[step.step_index];
+                const isCurrent = activeStepIndex === step.step_index;
+                const duration = formatDuration(
+                  step.started_at,
+                  step.finished_at,
+                );
 
                 return (
-                  <Fragment key={`step-row-${step.step_index}`}>
-                    <tr
-                      className={
-                        bucket.groupName ? "step-row-grouped" : undefined
-                      }
-                    >
-                      <td>{step.step_index}</td>
-                      <td>
-                        <span
-                          className={
-                            bucket.groupName ? "step-name-grouped" : undefined
-                          }
-                        >
-                          {step.name}
-                        </span>
-                      </td>
-                      <td>
+                  <article
+                    key={`step-card-${step.step_index}`}
+                    id={`step-${step.step_index}`}
+                    className={`step-card${step.status === "failed" ? " is-failed" : ""}${isCurrent ? " is-current" : ""}`}
+                  >
+                    <div className="step-card-rail" aria-hidden="true" />
+                    <div className="step-card-body">
+                      <div className="step-card-header">
+                        <div>
+                          <div className="step-card-kicker subtle-text">
+                            Step {step.step_index}
+                            {isCurrent ? " · Current step" : ""}
+                          </div>
+                          <h4>{step.name}</h4>
+                        </div>
+                        <StatusBadge status={step.status} />
+                      </div>
+
+                      <p className="subtle-text step-card-command-row">
                         <code className="step-command" title={step.command}>
                           {commandPreview(step.command)}
                         </code>
-                      </td>
-                      <td>
-                        <StatusBadge status={step.status} />
-                      </td>
-                      <td>{step.worker_id ?? "—"}</td>
-                      <td>{formatTime(step.started_at)}</td>
-                      <td>{formatTime(step.finished_at)}</td>
-                      <td>{step.exit_code ?? "—"}</td>
-                      <td>
+                      </p>
+
+                      <div className="step-card-meta-grid subtle-text">
+                        <span>Started {formatTime(step.started_at)}</span>
+                        <span>Finished {formatTime(step.finished_at)}</span>
+                        <span>Duration {duration}</span>
+                        <span>Worker {step.worker_id ?? "—"}</span>
+                        <span>Exit code {step.exit_code ?? "—"}</span>
+                      </div>
+
+                      {step.error_message ? (
+                        <p className="step-card-error error-text">
+                          {step.error_message}
+                        </p>
+                      ) : null}
+
+                      <div className="detail-actions-row">
                         <button
                           type="button"
                           className="logs-toggle"
@@ -236,49 +235,44 @@ export function StepList({
                             )
                           }
                         >
-                          {isOpen ? "Hide" : "View"}
+                          {isOpen ? "Hide logs" : "Open logs"}
                         </button>
-                      </td>
-                      <td className="error-text">
-                        {step.error_message ?? "—"}
-                      </td>
-                    </tr>
-                    {isOpen && (
-                      <tr key={`logs-${step.step_index}`}>
-                        <td colSpan={10}>
-                          <div className="step-log-panel">
-                            {loading && (
-                              <p className="subtle-text">Loading logs...</p>
-                            )}
-                            {error && (
-                              <p className="error-text">
-                                Failed to load logs: {error}
-                              </p>
-                            )}
-                            {!loading && !error && chunks.length === 0 && (
-                              <p className="subtle-text">No logs yet.</p>
-                            )}
-                            {!error && chunks.length > 0 && (
-                              <pre className="step-log-pre">
-                                {chunks
-                                  .map(
-                                    (chunk) =>
-                                      `[${chunk.stream}] ${chunk.chunk_text}`,
-                                  )
-                                  .join("\n")}
-                              </pre>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
+                      </div>
+
+                      {isOpen ? (
+                        <div className="step-log-panel">
+                          <p className="step-log-heading">Logs</p>
+                          {loading ? (
+                            <p className="subtle-text">Loading logs...</p>
+                          ) : null}
+                          {error ? (
+                            <p className="error-text">
+                              Failed to load logs: {error}
+                            </p>
+                          ) : null}
+                          {!loading && !error && chunks.length === 0 ? (
+                            <p className="subtle-text">No logs yet.</p>
+                          ) : null}
+                          {!error && chunks.length > 0 ? (
+                            <pre className="step-log-pre">
+                              {chunks
+                                .map(
+                                  (chunk) =>
+                                    `[${chunk.stream}] ${chunk.chunk_text}`,
+                                )
+                                .join("\n")}
+                            </pre>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  </article>
                 );
               })}
-            </Fragment>
-          );
-        })}
-      </tbody>
-    </table>
+            </div>
+          </section>
+        );
+      })}
+    </div>
   );
 }

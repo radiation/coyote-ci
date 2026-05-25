@@ -70,7 +70,9 @@ function ArtifactTable({
                 )}
               </div>
             </td>
-            <td>{formatFileSize(item.size_bytes)}</td>
+            <td className="artifact-size-cell">
+              {formatFileSize(item.size_bytes)}
+            </td>
             <td className="artifact-mono artifact-checksum-cell">
               {item.checksum_sha256 ? (
                 <span

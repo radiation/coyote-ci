@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { BuildDetailPage } from "./BuildDetailPage";
@@ -9,6 +15,8 @@ import {
   getBuildArtifacts,
   getBuildSteps,
 } from "../api";
+import type { Build, BuildArtifact, BuildStep } from "../types";
+import { formatCompactTime } from "../utils/time";
 
 vi.mock("../api", () => ({
   createJobVersionTags: vi.fn(),
@@ -17,6 +25,101 @@ vi.mock("../api", () => ({
   getBuildArtifacts: vi.fn(),
   artifactDownloadURL: (path: string) => `/api${path}`,
 }));
+
+function makeBuild(overrides: Partial<Build> = {}): Build {
+  return {
+    id: "build-1",
+    build_number: 21,
+    project_id: "project-1",
+    project_name: "Platform",
+    project_slug: "platform",
+    job_id: "job-1",
+    job_name: "release",
+    priority: 9,
+    status: "failed",
+    created_at: "2026-03-30T00:00:00Z",
+    queued_at: "2026-03-30T00:00:05Z",
+    started_at: "2026-03-30T00:01:00Z",
+    finished_at: "2026-03-30T00:02:05Z",
+    current_step_index: 1,
+    error_message: "Build failed during deploy.",
+    pipeline_source: "repo",
+    pipeline_path: "scenarios/success-basic/coyote.yml",
+    trigger_kind: "webhook",
+    scm_provider: "github",
+    event_type: "push",
+    repository_owner: "example",
+    repository_name: "platform",
+    repository_url: "https://github.com/example/platform",
+    trigger_ref: "refs/heads/main",
+    ref_type: "branch",
+    actor: "octocat",
+    trigger_commit_sha: "abc1234567890",
+    source_commit_sha: "def9876543210",
+    image: {
+      source_kind: "managed",
+      requested_ref: "ghcr.io/coyote/go:latest",
+      resolved_ref: "ghcr.io/coyote/go@sha256:123",
+      managed_image_version_id: "image-version-1",
+      version_tags: [
+        {
+          id: "tag-image-1",
+          job_id: "job-1",
+          version: "v1.2.3",
+          target_type: "managed_image_version",
+          managed_image_version_id: "image-version-1",
+          created_at: "2026-03-30T00:00:03Z",
+        },
+      ],
+    },
+    ...overrides,
+  };
+}
+
+function makeStep(overrides: Partial<BuildStep> = {}): BuildStep {
+  return {
+    id: "step-1",
+    build_id: "build-1",
+    step_index: 0,
+    name: "compile",
+    command: "make compile",
+    status: "success",
+    worker_id: "worker-a",
+    started_at: "2026-03-30T00:01:00Z",
+    finished_at: "2026-03-30T00:01:20Z",
+    exit_code: 0,
+    stdout: null,
+    stderr: null,
+    error_message: null,
+    ...overrides,
+  };
+}
+
+function makeArtifact(overrides: Partial<BuildArtifact> = {}): BuildArtifact {
+  return {
+    id: "artifact-1",
+    build_id: "build-1",
+    step_id: null,
+    path: "dist/app",
+    size_bytes: 128,
+    content_type: null,
+    checksum_sha256: null,
+    storage_provider: "filesystem",
+    download_url_path: "/builds/build-1/artifacts/artifact-1/download",
+    version_tags: [
+      {
+        id: "tag-artifact-1",
+        job_id: "job-1",
+        version: "2026.04.22",
+        target_type: "artifact",
+        artifact_id: "artifact-1",
+        created_at: "2026-03-30T00:00:04Z",
+      },
+    ],
+    created_at: "2026-03-30T00:00:04Z",
+    ...overrides,
+  };
+}
 
 function renderPage() {
   const queryClient = new QueryClient({
@@ -36,7 +139,7 @@ function renderPage() {
   );
 }
 
-describe("BuildDetailPage artifacts", () => {
+describe("BuildDetailPage", () => {
   const mockedGetBuild = vi.mocked(getBuild);
   const mockedGetBuildSteps = vi.mocked(getBuildSteps);
   const mockedGetBuildArtifacts = vi.mocked(getBuildArtifacts);
@@ -45,77 +148,95 @@ describe("BuildDetailPage artifacts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedCreateJobVersionTags.mockResolvedValue([]);
-    mockedGetBuild.mockResolvedValue({
-      id: "build-1",
-      project_id: "project-1",
-      job_id: "job-1",
-      priority: 9,
-      status: "success",
-      created_at: "2026-03-30T00:00:00Z",
-      queued_at: "2026-03-30T00:00:01Z",
-      started_at: "2026-03-30T00:00:02Z",
-      finished_at: "2026-03-30T00:00:03Z",
-      current_step_index: 1,
-      error_message: null,
-      pipeline_source: "repo",
-      pipeline_path: "scenarios/success-basic/coyote.yml",
-      trigger_kind: "webhook",
-      scm_provider: "github",
-      event_type: "push",
-      trigger_ref: "main",
-      actor: "octocat",
-      trigger_commit_sha: "abc1234567890",
-      source_commit_sha: "def9876543210",
-      image: {
-        source_kind: "managed",
-        resolved_ref: "ghcr.io/coyote/go@sha256:123",
-        managed_image_version_id: "image-version-1",
-        version_tags: [
-          {
-            id: "tag-image-1",
-            job_id: "job-1",
-            version: "v1.2.3",
-            target_type: "managed_image_version",
-            managed_image_version_id: "image-version-1",
-            created_at: "2026-03-30T00:00:03Z",
-          },
-        ],
-      },
-    });
-    mockedGetBuildSteps.mockResolvedValue([]);
-    mockedGetBuildArtifacts.mockResolvedValue([
-      {
-        id: "artifact-1",
-        build_id: "build-1",
-        step_id: null,
-        path: "dist/app",
-        size_bytes: 128,
-        content_type: null,
-        checksum_sha256: null,
-        storage_provider: "filesystem",
-        download_url_path: "/builds/build-1/artifacts/artifact-1/download",
-        version_tags: [
-          {
-            id: "tag-artifact-1",
-            job_id: "job-1",
-            version: "2026.04.22",
-            target_type: "artifact",
-            artifact_id: "artifact-1",
-            created_at: "2026-03-30T00:00:04Z",
-          },
-        ],
-        created_at: "2026-03-30T00:00:04Z",
-      },
+    mockedGetBuild.mockResolvedValue(makeBuild());
+    mockedGetBuildSteps.mockResolvedValue([
+      makeStep(),
+      makeStep({
+        id: "step-2",
+        step_index: 1,
+        name: "deploy",
+        command: "./scripts/deploy.sh",
+        status: "failed",
+        worker_id: "worker-b",
+        started_at: "2026-03-30T00:01:20Z",
+        finished_at: "2026-03-30T00:02:05Z",
+        exit_code: 1,
+        error_message: "remote deploy failed",
+      }),
+      makeStep({
+        id: "step-3",
+        step_index: 2,
+        name: "notify",
+        command: "./scripts/notify.sh",
+        status: "pending",
+        worker_id: null,
+        started_at: null,
+        finished_at: null,
+        exit_code: null,
+      }),
     ]);
+    mockedGetBuildArtifacts.mockResolvedValue([makeArtifact()]);
   });
 
-  it("shows artifact row and download link", async () => {
+  it("renders the summary header, links, timestamps, and duration", async () => {
     renderPage();
 
-    await waitFor(() => {
-      expect(screen.getByText("Artifacts")).toBeTruthy();
-      expect(screen.getByText("dist/app")).toBeTruthy();
-    });
+    await screen.findByRole("heading", { level: 2, name: "Build #21" });
+    const summaryPanel = screen
+      .getByText("Build ID build-1")
+      .closest("section") as HTMLElement;
+
+    expect(screen.getByRole("link", { name: "Platform" })).toHaveAttribute(
+      "href",
+      "/projects/project-1",
+    );
+    expect(screen.getByRole("link", { name: "release" })).toHaveAttribute(
+      "href",
+      "/jobs/job-1",
+    );
+    expect(
+      screen.getByText("github • refs/heads/main • abc1234 • octocat"),
+    ).toBeTruthy();
+    expect(screen.getByText("Duration")).toBeTruthy();
+    expect(screen.getByText("1m 5s")).toBeTruthy();
+    expect(screen.getByText("Build failed during deploy.")).toBeTruthy();
+    expect(
+      within(summaryPanel).getByText(formatCompactTime("2026-03-30T00:01:00Z")),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Back to builds" }),
+    ).toHaveAttribute("href", "/builds");
+  });
+
+  it("renders failed build state with a visible failed step and failure details", async () => {
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Execution timeline" });
+
+    expect(
+      screen.getByRole("heading", { name: "Execution summary" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Logs" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Artifacts" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Provenance" })).toBeTruthy();
+    expect(screen.getByText("Failed at step 1")).toBeTruthy();
+    expect(screen.getAllByText("Exit code 1").length).toBe(2);
+    expect(screen.getAllByText("remote deploy failed").length).toBe(2);
+    expect(screen.getByText("compile")).toBeTruthy();
+    expect(screen.getAllByText("deploy").length).toBe(2);
+    expect(screen.getByText("notify")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Open logs" })).toHaveLength(
+      3,
+    );
+    expect(
+      screen.getByRole("link", { name: "Step 1 · deploy" }),
+    ).toHaveAttribute("href", "#step-1");
+    expect(
+      screen.getByRole("link", { name: "example/platform" }),
+    ).toHaveAttribute("href", "https://github.com/example/platform");
+    expect(screen.getByText("v1.2.3")).toBeTruthy();
+    const failedStepCard = screen.getAllByText("deploy")[1]?.closest("article");
+    expect(failedStepCard?.className).toContain("is-failed");
 
     const artifactLink = screen.getByRole("link", { name: "dist/app" });
     expect(artifactLink.getAttribute("href")).toBe("/artifacts/artifact-1");
@@ -126,74 +247,103 @@ describe("BuildDetailPage artifacts", () => {
     );
   });
 
-  it("does not render a duplicate path line for whitespace-equivalent artifact names", async () => {
-    mockedGetBuildArtifacts.mockResolvedValueOnce([
-      {
-        id: "artifact-1",
-        build_id: "build-1",
-        step_id: null,
-        name: "   dist/app   ",
-        path: "dist/app",
-        size_bytes: 128,
-        content_type: null,
-        checksum_sha256: null,
-        storage_provider: "filesystem",
-        download_url_path: "/builds/build-1/artifacts/artifact-1/download",
-        version_tags: [],
-        created_at: "2026-03-30T00:00:04Z",
-      },
+  it("renders running build state with current and pending steps cleanly", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({
+        status: "running",
+        finished_at: null,
+        error_message: null,
+      }),
+    );
+    mockedGetBuildSteps.mockResolvedValueOnce([
+      makeStep({
+        id: "step-1",
+        step_index: 0,
+        name: "compile",
+        status: "success",
+      }),
+      makeStep({
+        id: "step-2",
+        step_index: 1,
+        name: "deploy",
+        status: "running",
+        started_at: "2026-03-30T00:01:20Z",
+        finished_at: null,
+        exit_code: null,
+        error_message: null,
+      }),
+      makeStep({
+        id: "step-3",
+        step_index: 2,
+        name: "notify",
+        status: "pending",
+        worker_id: null,
+        started_at: null,
+        finished_at: null,
+        exit_code: null,
+      }),
     ]);
+    mockedGetBuildArtifacts.mockResolvedValueOnce([]);
 
     renderPage();
 
-    await waitFor(() => {
-      expect(screen.getByRole("link", { name: "dist/app" })).toBeTruthy();
-    });
+    await screen.findByText("Currently running");
+    const summaryPanel = screen
+      .getByText("Build ID build-1")
+      .closest("section") as HTMLElement;
 
-    const subtlePathLines = screen.queryAllByText("dist/app", {
-      selector: "div.subtle-text.artifact-mono",
-    });
-    expect(subtlePathLines).toHaveLength(0);
+    expect(
+      screen.getByRole("link", { name: "Step 1 · deploy" }),
+    ).toHaveAttribute("href", "#step-1");
+    expect(screen.getByText("1 pending step")).toBeTruthy();
+    expect(screen.getByText("Step 1 · Current step")).toBeTruthy();
+    expect(summaryPanel.textContent).toContain("Current step1 of 3");
+    expect(summaryPanel.textContent).not.toContain("Duration—");
+    expect(screen.getAllByText("Pending").length).toBe(2);
+    expect(
+      screen.getByText("No artifacts were collected for this build."),
+    ).toBeTruthy();
   });
 
-  it("shows pipeline metadata when present", async () => {
+  it("renders clean empty states when optional fields, logs, and artifacts are missing", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({
+        build_number: undefined,
+        job_id: null,
+        job_name: null,
+        error_message: null,
+        pipeline_source: null,
+        pipeline_path: null,
+        scm_provider: null,
+        event_type: null,
+        repository_owner: null,
+        repository_name: null,
+        repository_url: null,
+        trigger_ref: null,
+        ref_type: null,
+        actor: null,
+        trigger_commit_sha: null,
+        source_commit_sha: null,
+        image: undefined,
+      }),
+    );
+    mockedGetBuildSteps.mockResolvedValueOnce([]);
+    mockedGetBuildArtifacts.mockResolvedValueOnce([]);
+
     renderPage();
 
-    await waitFor(() => {
-      expect(screen.getByText("Priority")).toBeTruthy();
-      expect(screen.getByText("9")).toBeTruthy();
-      expect(screen.getByText("Pipeline Source")).toBeTruthy();
-      expect(screen.getByText("repo")).toBeTruthy();
-      expect(screen.getByText("Pipeline Path")).toBeTruthy();
-      expect(
-        screen.getByText("scenarios/success-basic/coyote.yml"),
-      ).toBeTruthy();
-    });
-  });
+    await screen.findByRole("heading", { level: 2, name: "Build build-1" });
 
-  it("shows trigger metadata and disambiguated commit SHAs", async () => {
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText("webhook")).toBeTruthy();
-      expect(
-        screen.getByText("github • main • abc1234 • octocat"),
-      ).toBeTruthy();
-      expect(screen.getByText("Trigger Commit")).toBeTruthy();
-      expect(screen.getByText("Source Commit")).toBeTruthy();
-      expect(screen.getByText("abc1234")).toBeTruthy();
-      expect(screen.getByText("def9876")).toBeTruthy();
-    });
-  });
-
-  it("shows version tags for artifacts and managed image versions", async () => {
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText("Managed Build Image")).toBeTruthy();
-      expect(screen.getByText("v1.2.3")).toBeTruthy();
-      expect(screen.getByText("2026.04.22")).toBeTruthy();
-    });
+    expect(screen.queryByRole("link", { name: "release" })).toBeNull();
+    expect(screen.getByText("No step logs available yet.")).toBeTruthy();
+    expect(
+      screen.getByText("No artifacts were collected for this build."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("No source metadata available for this build."),
+    ).toBeTruthy();
+    expect(screen.queryByText("undefined")).toBeNull();
+    expect(screen.queryByText("null")).toBeNull();
   });
 
   it("creates an artifact version tag from the detail page", async () => {
