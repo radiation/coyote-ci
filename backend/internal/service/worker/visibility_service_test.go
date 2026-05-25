@@ -39,6 +39,95 @@ func TestVisibilityService_ListWorkers_Empty(t *testing.T) {
 	}
 }
 
+func TestVisibilityService_ListWorkers_IgnoresCompletedClaims(t *testing.T) {
+	now := time.Date(2026, time.May, 25, 12, 0, 0, 0, time.UTC)
+	workerRepo := memoryrepo.NewWorkerRepository()
+	_, _ = workerRepo.UpsertHeartbeat(context.Background(), domain.WorkerHeartbeat{ID: "worker-a", Name: "worker-a", HeartbeatAt: now.Add(-5 * time.Second)})
+
+	svc := NewVisibilityService(workerRepo, fakeVisibilityBuildBoundary{
+		builds: []domain.Build{{ID: "build-1", BuildNumber: 1, ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now.Add(-time.Minute)}},
+		jobs: map[string][]domain.ExecutionJob{
+			"build-1": {
+				{ID: "job-1", BuildID: "build-1", StepID: "step-1", Name: "compile", StepIndex: 0, Status: domain.ExecutionJobStatusSuccess, ClaimedBy: stringPtr("worker-a"), ClaimExpiresAt: timePtr(now.Add(30 * time.Second)), CreatedAt: now.Add(-time.Minute)},
+			},
+		},
+		steps: map[string][]domain.BuildStep{
+			"build-1": {
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "compile", Status: domain.BuildStepStatusSuccess, WorkerID: stringPtr("worker-a"), LeaseExpiresAt: timePtr(now.Add(30 * time.Second))},
+			},
+		},
+	})
+	svc.clock = func() time.Time { return now }
+
+	workers, err := svc.ListWorkers(context.Background())
+	if err != nil {
+		t.Fatalf("ListWorkers returned error: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("expected 1 worker, got %d", len(workers))
+	}
+	if workers[0].Status != domain.WorkerStatusIdle {
+		t.Fatalf("expected completed claims to be ignored and worker to be idle, got %q", workers[0].Status)
+	}
+	if workers[0].CurrentBuildID != nil {
+		t.Fatalf("expected no current build for completed claims, got %#v", workers[0].CurrentBuildID)
+	}
+}
+
+func TestVisibilityService_ListWorkers_ActiveRunningClaimWithoutLeaseIsStale(t *testing.T) {
+	now := time.Date(2026, time.May, 25, 12, 0, 0, 0, time.UTC)
+	workerRepo := memoryrepo.NewWorkerRepository()
+	_, _ = workerRepo.UpsertHeartbeat(context.Background(), domain.WorkerHeartbeat{ID: "worker-a", Name: "worker-a", HeartbeatAt: now.Add(-5 * time.Second)})
+
+	svc := NewVisibilityService(workerRepo, fakeVisibilityBuildBoundary{
+		builds: []domain.Build{{ID: "build-1", BuildNumber: 1, ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now.Add(-time.Minute)}},
+		steps: map[string][]domain.BuildStep{
+			"build-1": {
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "compile", Status: domain.BuildStepStatusRunning, WorkerID: stringPtr("worker-a"), ClaimedAt: timePtr(now.Add(-20 * time.Second))},
+			},
+		},
+	})
+	svc.clock = func() time.Time { return now }
+
+	workers, err := svc.ListWorkers(context.Background())
+	if err != nil {
+		t.Fatalf("ListWorkers returned error: %v", err)
+	}
+	if workers[0].Status != domain.WorkerStatusStale || !workers[0].StaleLease {
+		t.Fatalf("expected running claim without lease to be stale, got %#v", workers[0])
+	}
+}
+
+func TestVisibilityService_ListWorkers_OrphanClaimStillVisible(t *testing.T) {
+	now := time.Date(2026, time.May, 25, 12, 0, 0, 0, time.UTC)
+	svc := NewVisibilityService(memoryrepo.NewWorkerRepository(), fakeVisibilityBuildBoundary{
+		builds: []domain.Build{{ID: "build-1", BuildNumber: 7, ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now.Add(-time.Minute)}},
+		jobs: map[string][]domain.ExecutionJob{
+			"build-1": {
+				{ID: "job-1", BuildID: "build-1", StepID: "step-1", Name: "compile", StepIndex: 0, Status: domain.ExecutionJobStatusRunning, ClaimedBy: stringPtr("orphan-worker"), ClaimExpiresAt: timePtr(now.Add(30 * time.Second)), CreatedAt: now.Add(-50 * time.Second), StartedAt: timePtr(now.Add(-40 * time.Second)), Image: "alpine", WorkingDir: ".", Command: []string{"sh"}, Environment: map[string]string{}, SpecVersion: 1, ResolvedSpecJSON: `{}`},
+			},
+		},
+	})
+	svc.clock = func() time.Time { return now }
+
+	workers, err := svc.ListWorkers(context.Background())
+	if err != nil {
+		t.Fatalf("ListWorkers returned error: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("expected 1 orphan worker, got %d", len(workers))
+	}
+	if workers[0].ID != "orphan-worker" {
+		t.Fatalf("expected orphan worker id, got %q", workers[0].ID)
+	}
+	if workers[0].Status != domain.WorkerStatusStale || !workers[0].StaleHeartbeat {
+		t.Fatalf("expected orphan worker to be surfaced as stale without heartbeat, got %#v", workers[0])
+	}
+	if !workers[0].LastHeartbeatAt.IsZero() {
+		t.Fatalf("expected orphan worker to have no heartbeat timestamp, got %s", workers[0].LastHeartbeatAt)
+	}
+}
+
 func TestVisibilityService_ListWorkers_StatusSemantics(t *testing.T) {
 	now := time.Date(2026, time.May, 24, 12, 0, 0, 0, time.UTC)
 	workerRepo := memoryrepo.NewWorkerRepository()

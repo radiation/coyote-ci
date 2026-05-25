@@ -44,17 +44,18 @@ func (s *VisibilityService) ListWorkers(ctx context.Context) ([]domain.WorkerVis
 	if err != nil {
 		return nil, err
 	}
-	if len(workers) == 0 {
-		return []domain.WorkerVisibility{}, nil
-	}
 
 	claims, err := s.collectClaims(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if len(workers) == 0 && len(claims) == 0 {
+		return []domain.WorkerVisibility{}, nil
+	}
 
 	now := s.clock().UTC()
-	visible := make([]domain.WorkerVisibility, 0, len(workers))
+	visible := make([]domain.WorkerVisibility, 0, len(workers)+len(claims))
+	seen := make(map[string]struct{}, len(workers))
 	for _, worker := range workers {
 		item := domain.WorkerVisibility{
 			ID:              worker.ID,
@@ -93,6 +94,35 @@ func (s *VisibilityService) ListWorkers(ctx context.Context) ([]domain.WorkerVis
 		}
 
 		visible = append(visible, item)
+		seen[worker.ID] = struct{}{}
+	}
+
+	for workerID, claim := range claims {
+		if _, ok := seen[workerID]; ok {
+			continue
+		}
+
+		visible = append(visible, domain.WorkerVisibility{
+			ID:               workerID,
+			Name:             workerID,
+			Status:           orphanClaimStatus(claim, now),
+			CreatedAt:        claim.updatedAt,
+			UpdatedAt:        claim.updatedAt,
+			CurrentBuildID:   claim.BuildID,
+			CurrentBuildNum:  claim.BuildNumber,
+			CurrentStepID:    claim.StepID,
+			CurrentStepIndex: claim.StepIndex,
+			CurrentStepName:  claim.StepName,
+			LeaseExpiresAt:   claim.LeaseExpiresAt,
+			ClaimedAt:        claim.ClaimedAt,
+			ProjectID:        claim.ProjectID,
+			ProjectName:      claim.ProjectName,
+			ProjectSlug:      claim.ProjectSlug,
+			JobID:            claim.JobID,
+			JobName:          claim.JobName,
+			StaleLease:       claim.LeaseExpiresAt == nil || !claim.LeaseExpiresAt.After(now),
+			StaleHeartbeat:   true,
+		})
 	}
 
 	sort.Slice(visible, func(i, j int) bool {
@@ -126,6 +156,9 @@ type workerClaim struct {
 }
 
 func (s *VisibilityService) collectClaims(ctx context.Context) (map[string]workerClaim, error) {
+	// TODO: If the active build set grows, add a repository-level read optimized
+	// for active worker visibility instead of walking all builds and loading
+	// jobs/steps per active build.
 	builds, err := s.builds.ListBuilds(ctx)
 	if err != nil {
 		return nil, err
@@ -142,7 +175,7 @@ func (s *VisibilityService) collectClaims(ctx context.Context) (map[string]worke
 			return nil, err
 		}
 		for _, job := range jobs {
-			if job.ClaimedBy == nil {
+			if !isActiveJobClaim(job) {
 				continue
 			}
 			claim := workerClaim{
@@ -165,7 +198,7 @@ func (s *VisibilityService) collectClaims(ctx context.Context) (map[string]worke
 			return nil, err
 		}
 		for _, step := range steps {
-			if step.WorkerID == nil {
+			if !isActiveStepClaim(step) {
 				continue
 			}
 			claim := workerClaim{
@@ -208,6 +241,23 @@ func buildNumberPtr(value int64) *int64 {
 
 func intPtr(value int) *int {
 	return &value
+}
+
+func isActiveJobClaim(job domain.ExecutionJob) bool {
+	return job.Status == domain.ExecutionJobStatusRunning && job.ClaimedBy != nil
+}
+
+func isActiveStepClaim(step domain.BuildStep) bool {
+	return step.Status == domain.BuildStepStatusRunning && step.WorkerID != nil
+}
+
+func orphanClaimStatus(claim workerClaim, now time.Time) domain.WorkerStatus {
+	// A claim without a heartbeat registry row is surfaced as stale so partial
+	// rollout/backfill still exposes owned work without implying health.
+	if claim.LeaseExpiresAt == nil || !claim.LeaseExpiresAt.After(now) {
+		return domain.WorkerStatusStale
+	}
+	return domain.WorkerStatusStale
 }
 
 func workerStatusRank(status domain.WorkerStatus) int {

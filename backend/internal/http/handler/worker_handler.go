@@ -33,11 +33,17 @@ func (h *WorkerHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 }
 
 func toWorkerResponse(worker domain.WorkerVisibility) api.WorkerResponse {
+	var lastHeartbeatAt *string
+	if !worker.LastHeartbeatAt.IsZero() {
+		value := worker.LastHeartbeatAt.Format(time.RFC3339)
+		lastHeartbeatAt = &value
+	}
+
 	return api.WorkerResponse{
 		ID:               worker.ID,
 		Name:             worker.Name,
 		Status:           string(worker.Status),
-		LastHeartbeatAt:  worker.LastHeartbeatAt.Format(time.RFC3339),
+		LastHeartbeatAt:  lastHeartbeatAt,
 		CreatedAt:        worker.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:        worker.UpdatedAt.Format(time.RFC3339),
 		CurrentBuildID:   worker.CurrentBuildID,

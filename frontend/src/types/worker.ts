@@ -4,7 +4,7 @@ export interface Worker {
   id: string;
   name: string;
   status: WorkerStatus;
-  last_heartbeat_at: string;
+  last_heartbeat_at?: string | null;
   created_at: string;
   updated_at: string;
   current_build_id?: string | null;

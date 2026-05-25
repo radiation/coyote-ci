@@ -56,6 +56,23 @@ type fakeExecutionWorkerBoundary struct {
 	lastRequest runner.RunStepRequest
 }
 
+type fakeWorkerRepository struct {
+	heartbeats []domain.WorkerHeartbeat
+	err        error
+}
+
+func (f *fakeWorkerRepository) UpsertHeartbeat(_ context.Context, heartbeat domain.WorkerHeartbeat) (domain.Worker, error) {
+	f.heartbeats = append(f.heartbeats, heartbeat)
+	if f.err != nil {
+		return domain.Worker{}, f.err
+	}
+	return domain.Worker{ID: heartbeat.ID, Name: heartbeat.Name, LastHeartbeatAt: heartbeat.HeartbeatAt, CreatedAt: heartbeat.HeartbeatAt, UpdatedAt: heartbeat.HeartbeatAt}, nil
+}
+
+func (f *fakeWorkerRepository) List(_ context.Context) ([]domain.Worker, error) {
+	return []domain.Worker{}, nil
+}
+
 func (f *fakeExecutionWorkerBoundary) ClaimNextRunnableJob(_ context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
 	f.claimJobCalls++
 	if len(f.jobsQueue) == 0 {
@@ -1256,6 +1273,28 @@ func TestExecutionWorkerService_HeartbeatIntervalForStep_AddsBoundedJitter(t *te
 	}
 	if intervalA == intervalB {
 		t.Fatalf("expected jittered intervals to differ for different claim tokens, got %s and %s", intervalA, intervalB)
+	}
+}
+
+func TestExecutionWorkerService_ClaimRunnableStep_RecordsIdleHeartbeatAndIgnoresHeartbeatErrors(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{}
+	workerRepo := &fakeWorkerRepository{err: errors.New("heartbeat down")}
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-a", 45*time.Second)
+	worker.clock = func() time.Time { return time.Date(2026, time.May, 25, 12, 0, 0, 0, time.UTC) }
+	worker.SetWorkerRepository(workerRepo)
+
+	step, found, err := worker.ClaimRunnableStep(context.Background())
+	if err != nil {
+		t.Fatalf("ClaimRunnableStep returned error: %v", err)
+	}
+	if found {
+		t.Fatalf("expected no runnable step, got %#v", step)
+	}
+	if len(workerRepo.heartbeats) != 1 {
+		t.Fatalf("expected 1 heartbeat during idle polling, got %d", len(workerRepo.heartbeats))
+	}
+	if workerRepo.heartbeats[0].ID != "worker-a" {
+		t.Fatalf("expected heartbeat for worker-a, got %q", workerRepo.heartbeats[0].ID)
 	}
 }
 

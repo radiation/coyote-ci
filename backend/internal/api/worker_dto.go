@@ -4,7 +4,7 @@ type WorkerResponse struct {
 	ID               string  `json:"id"`
 	Name             string  `json:"name"`
 	Status           string  `json:"status"`
-	LastHeartbeatAt  string  `json:"last_heartbeat_at"`
+	LastHeartbeatAt  *string `json:"last_heartbeat_at,omitempty"`
 	CreatedAt        string  `json:"created_at"`
 	UpdatedAt        string  `json:"updated_at"`
 	CurrentBuildID   *string `json:"current_build_id,omitempty"`
