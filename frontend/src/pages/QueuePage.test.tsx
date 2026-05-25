@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { QueuePage } from "./QueuePage";
-import { listBuilds, listProjects, listQueue } from "../api";
+import { listBuilds, listJobsByProject, listProjects, listQueue } from "../api";
 
 vi.mock("../api", () => ({
   listBuilds: vi.fn(),
+  listJobsByProject: vi.fn(),
   listProjects: vi.fn(),
   listQueue: vi.fn(),
 }));
@@ -29,6 +30,7 @@ function renderPage(initialEntries: string[] = ["/"]) {
 
 describe("QueuePage", () => {
   const mockedListBuilds = vi.mocked(listBuilds);
+  const mockedListJobsByProject = vi.mocked(listJobsByProject);
   const mockedListProjects = vi.mocked(listProjects);
   const mockedListQueue = vi.mocked(listQueue);
 
@@ -45,6 +47,7 @@ describe("QueuePage", () => {
       },
     ]);
     mockedListBuilds.mockResolvedValue([]);
+    mockedListJobsByProject.mockResolvedValue([]);
   });
 
   it("shows clean empty states for each operational section", async () => {
@@ -204,5 +207,67 @@ describe("QueuePage", () => {
 
     await screen.findAllByText("Unable to load.");
     expect(screen.getAllByText("Unable to load.").length).toBe(4);
+  });
+
+  it("hydrates missing job names from project jobs across queue sections", async () => {
+    mockedListQueue.mockResolvedValue([
+      {
+        build_id: "build-running-2",
+        build_number: 21,
+        project_id: "project-1",
+        project_name: "Platform",
+        project_slug: "platform",
+        job_id: "job-release",
+        priority: 8,
+        status: "running",
+        created_at: "2026-03-24T00:00:00Z",
+        queued_at: "2026-03-24T00:00:01Z",
+        started_at: "2026-03-24T00:01:00Z",
+      },
+    ]);
+    mockedListBuilds.mockResolvedValue([
+      {
+        id: "build-failed-2",
+        build_number: 20,
+        project_id: "project-1",
+        project_name: "Platform",
+        project_slug: "platform",
+        job_id: "job-release",
+        priority: 7,
+        status: "failed",
+        created_at: "2026-03-24T00:00:00Z",
+        queued_at: "2026-03-24T00:00:05Z",
+        started_at: "2026-03-24T00:01:00Z",
+        finished_at: "2026-03-24T00:02:05Z",
+        current_step_index: 0,
+        error_message: "boom",
+      },
+    ]);
+    mockedListJobsByProject.mockResolvedValue([
+      {
+        id: "job-release",
+        project_id: "project-1",
+        name: "release",
+        priority: 5,
+        repository_url: "https://github.com/example/backend.git",
+        default_ref: "main",
+        push_enabled: true,
+        push_branch: "main",
+        pipeline_yaml: "version: 1",
+        managed_image: null,
+        enabled: true,
+        created_at: "2026-03-24T00:00:00Z",
+        updated_at: "2026-03-24T00:00:00Z",
+      },
+    ]);
+
+    renderPage(["/queue"]);
+
+    await screen.findByRole("link", { name: "Build #21" });
+    await waitFor(() => {
+      expect(mockedListJobsByProject).toHaveBeenCalledWith("project-1");
+      expect(screen.getAllByRole("link", { name: "release" }).length).toBe(2);
+      expect(screen.queryByRole("link", { name: "job-release" })).toBeNull();
+    });
   });
 });

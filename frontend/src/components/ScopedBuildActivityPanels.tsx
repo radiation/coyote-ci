@@ -89,6 +89,26 @@ function withProjectJobNames<
   });
 }
 
+function missingJobNameProjectIDs(
+  items: Array<{
+    project_id: string;
+    job_id?: string | null;
+    job_name?: string | null;
+  }>,
+): string[] {
+  return [
+    ...new Set(
+      items
+        .filter((item) => {
+          const jobID = item.job_id?.trim();
+          const jobName = item.job_name?.trim();
+          return Boolean(item.project_id && jobID && !jobName);
+        })
+        .map((item) => item.project_id),
+    ),
+  ].sort();
+}
+
 function mapBuilds(builds: Build[]): BuildActivityItem[] {
   return builds.map((build) => ({
     kind: "build" as const,
@@ -288,15 +308,36 @@ export function RecentBuildsPanel({
     },
   });
 
+  const globalProjectIDs =
+    scope.type === "global" ? missingJobNameProjectIDs(scopedBuilds ?? []) : [];
+  const { data: globalProjectJobs } = useQuery({
+    queryKey: [
+      "activity",
+      "recent",
+      "global",
+      "projectJobs",
+      ...globalProjectIDs,
+    ],
+    queryFn: async () => {
+      const responses = await Promise.all(
+        globalProjectIDs.map((projectID) => listJobsByProject(projectID)),
+      );
+      return responses.flat();
+    },
+    enabled: scope.type === "global" && globalProjectIDs.length > 0,
+  });
+
+  const hydratedJobs =
+    scope.type === "project" ? (projectJobs ?? []) : (globalProjectJobs ?? []);
   const projectJobNames = new Map(
-    (projectJobs ?? []).map((job) => [job.id, job.name]),
+    hydratedJobs.map((job) => [job.id, job.name]),
   );
   const builds = scope.type === "job" ? jobBuilds : scopedBuilds;
   const isLoading =
     scope.type === "job" ? jobBuildsLoading : scopedBuildsLoading;
   const error = scope.type === "job" ? jobBuildsError : scopedBuildsError;
   const normalizedBuilds =
-    scope.type === "project"
+    scope.type === "project" || scope.type === "global"
       ? withProjectJobNames(builds ?? [], projectJobNames)
       : (builds ?? []);
 

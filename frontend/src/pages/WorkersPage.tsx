@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { listWorkers } from "../api";
@@ -6,7 +7,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { SummaryCard } from "../components/SummaryCard";
 import type { Worker } from "../types/worker";
 import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL } from "../utils/build";
-import { formatTime } from "../utils/time";
+import { formatCompactTime, formatTime } from "../utils/time";
 
 function buildLabel(worker: Worker): string {
   if (typeof worker.current_build_number === "number") {
@@ -44,10 +45,14 @@ function currentStepLabel(worker: Worker): string {
 }
 
 export function WorkersPage() {
+  const [manualRefreshPending, setManualRefreshPending] = useState(false);
   const {
     data: workers,
     isLoading,
+    isFetching,
+    dataUpdatedAt,
     error,
+    refetch,
   } = useQuery({
     queryKey: ["workers"],
     queryFn: listWorkers,
@@ -65,6 +70,21 @@ export function WorkersPage() {
     },
   });
 
+  const isRefreshing = manualRefreshPending || (isFetching && !isLoading);
+  const lastRefreshed =
+    dataUpdatedAt > 0
+      ? formatCompactTime(new Date(dataUpdatedAt).toISOString())
+      : null;
+
+  async function handleRefresh() {
+    setManualRefreshPending(true);
+    try {
+      await refetch();
+    } finally {
+      setManualRefreshPending(false);
+    }
+  }
+
   const total = workers?.length ?? 0;
   const idle =
     workers?.filter((worker) => worker.status === "idle").length ?? 0;
@@ -78,6 +98,27 @@ export function WorkersPage() {
       <PageHeader
         title="Workers"
         description="Current worker heartbeats, leases, and claimed build execution."
+        actions={
+          <div className="operational-refresh-controls">
+            <button
+              type="button"
+              className="secondary-button operational-refresh-button"
+              onClick={() => {
+                void handleRefresh();
+              }}
+              disabled={isLoading || isRefreshing}
+            >
+              {isRefreshing ? "Refreshing…" : "Refresh"}
+            </button>
+            <div className="subtle-text operational-refresh-meta">
+              {isRefreshing
+                ? "Refreshing worker state…"
+                : lastRefreshed
+                  ? `Last refreshed ${lastRefreshed}`
+                  : "Not refreshed yet"}
+            </div>
+          </div>
+        }
       />
 
       <section className="dashboard-summary-grid" aria-label="Workers summary">

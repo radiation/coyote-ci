@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { WorkersPage } from "./WorkersPage";
 import { listWorkers } from "../api";
+import type { Worker } from "../types/worker";
 
 vi.mock("../api", () => ({
   listWorkers: vi.fn(),
@@ -23,6 +24,16 @@ function renderPage(initialEntries: string[] = ["/workers"]) {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+function deferredPromise<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("WorkersPage", () => {
@@ -142,5 +153,53 @@ describe("WorkersPage", () => {
     await screen.findByText("busy-worker");
     expect(screen.getByText("project-1")).toBeTruthy();
     expect(screen.getByText("job-1")).toBeTruthy();
+  });
+
+  it("keeps current data visible while manually refreshing", async () => {
+    const refreshResult = deferredPromise<Worker[]>();
+
+    mockedListWorkers
+      .mockResolvedValueOnce([
+        {
+          id: "worker-idle",
+          name: "idle-worker",
+          status: "idle",
+          last_heartbeat_at: "2026-05-24T12:00:00Z",
+          created_at: "2026-05-24T11:00:00Z",
+          updated_at: "2026-05-24T12:00:00Z",
+          stale_lease: false,
+          stale_heartbeat: false,
+        },
+      ])
+      .mockImplementationOnce(() => refreshResult.promise);
+
+    renderPage();
+
+    await screen.findByText("idle-worker");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(screen.getByText("idle-worker")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Refreshing…" })).toBeDisabled();
+    expect(screen.getByText("Refreshing worker state…")).toBeTruthy();
+
+    refreshResult.resolve([
+      {
+        id: "worker-idle",
+        name: "idle-worker",
+        status: "idle",
+        last_heartbeat_at: "2026-05-24T12:00:05Z",
+        created_at: "2026-05-24T11:00:00Z",
+        updated_at: "2026-05-24T12:00:05Z",
+        stale_lease: false,
+        stale_heartbeat: false,
+      },
+    ]);
+
+    await waitFor(() => {
+      expect(mockedListWorkers).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Refresh" })).toBeTruthy();
+    });
   });
 });
