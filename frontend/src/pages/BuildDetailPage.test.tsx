@@ -346,6 +346,25 @@ describe("BuildDetailPage", () => {
     expect(screen.queryByText("null")).toBeNull();
   });
 
+  it("renders non-http repository urls as plain text instead of clickable links", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({
+        repository_owner: null,
+        repository_name: null,
+        repository_url: "javascript:alert(1)",
+      }),
+    );
+
+    renderPage();
+
+    await screen.findByRole("heading", { level: 2, name: "Build #21" });
+
+    expect(screen.getByText("javascript:alert(1)")).toBeTruthy();
+    expect(
+      screen.queryByRole("link", { name: "javascript:alert(1)" }),
+    ).toBeNull();
+  });
+
   it("creates an artifact version tag from the detail page", async () => {
     renderPage();
 

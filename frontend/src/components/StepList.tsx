@@ -160,7 +160,15 @@ export function StepList({
         ).length;
 
         return (
-          <section key={`bucket-${bucket.key}`} className="step-bucket">
+          <section
+            key={`bucket-${bucket.key}`}
+            className="step-bucket"
+            aria-label={
+              bucket.groupName
+                ? `Step group ${bucket.groupName}`
+                : `Step bucket starting at step ${bucket.steps[0]?.step_index ?? 0}`
+            }
+          >
             {bucket.groupName ? (
               <div className="step-group-header">
                 <strong>{bucket.groupName}</strong>

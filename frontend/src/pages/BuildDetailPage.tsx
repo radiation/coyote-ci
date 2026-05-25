@@ -112,6 +112,24 @@ function metadataItem(label: string, value: ReactNode) {
   return { label, value };
 }
 
+function repositoryDisplayLabel(build: Build): string {
+  return `${build.repository_owner ?? ""}${build.repository_owner && build.repository_name ? "/" : ""}${build.repository_name ?? build.repository_url ?? ""}`;
+}
+
+function isSafeExternalURL(value: string | null | undefined): boolean {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function BuildDetailPage() {
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
@@ -204,19 +222,19 @@ export function BuildDetailPage() {
     buildUpdatedAt > 0
       ? formatTime(new Date(buildUpdatedAt).toISOString())
       : "—";
+  const repositoryLabel = repositoryDisplayLabel(build);
   const provenanceItems = [
     build.repository_url
       ? metadataItem(
           "Repository",
-          <a
-            href={build.repository_url}
-          >{`${build.repository_owner ?? ""}${build.repository_owner && build.repository_name ? "/" : ""}${build.repository_name ?? build.repository_url}`}</a>,
+          isSafeExternalURL(build.repository_url) ? (
+            <a href={build.repository_url}>{repositoryLabel}</a>
+          ) : (
+            repositoryLabel
+          ),
         )
       : build.repository_owner || build.repository_name
-        ? metadataItem(
-            "Repository",
-            `${build.repository_owner ?? ""}${build.repository_owner && build.repository_name ? "/" : ""}${build.repository_name ?? ""}`,
-          )
+        ? metadataItem("Repository", repositoryLabel)
         : null,
     build.pipeline_source
       ? metadataItem("Pipeline source", build.pipeline_source)
