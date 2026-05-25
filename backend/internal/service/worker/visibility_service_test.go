@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 )
 
@@ -13,6 +14,86 @@ type fakeVisibilityBuildBoundary struct {
 	builds []domain.Build
 	steps  map[string][]domain.BuildStep
 	jobs   map[string][]domain.ExecutionJob
+}
+
+type fakeVisibilityProjectRepository struct {
+	projects map[string]domain.Project
+}
+
+func (f fakeVisibilityProjectRepository) Create(context.Context, domain.Project) (domain.Project, error) {
+	panic("unexpected call")
+}
+
+func (f fakeVisibilityProjectRepository) GetByID(_ context.Context, id string) (domain.Project, error) {
+	project, ok := f.projects[id]
+	if !ok {
+		return domain.Project{}, repository.ErrProjectNotFound
+	}
+	return project, nil
+}
+
+func (f fakeVisibilityProjectRepository) GetByIDs(context.Context, []string) ([]domain.Project, error) {
+	panic("unexpected call")
+}
+
+func (f fakeVisibilityProjectRepository) GetBySlug(context.Context, string) (domain.Project, error) {
+	panic("unexpected call")
+}
+
+func (f fakeVisibilityProjectRepository) List(context.Context) ([]domain.Project, error) {
+	panic("unexpected call")
+}
+
+func (f fakeVisibilityProjectRepository) Update(context.Context, domain.Project) (domain.Project, error) {
+	panic("unexpected call")
+}
+
+func (f fakeVisibilityProjectRepository) Delete(context.Context, string) error {
+	panic("unexpected call")
+}
+
+type fakeVisibilityJobRepository struct {
+	jobs map[string]domain.Job
+}
+
+func (f fakeVisibilityJobRepository) Create(context.Context, domain.Job) (domain.Job, error) {
+	panic("unexpected call")
+}
+
+func (f fakeVisibilityJobRepository) Delete(context.Context, string) error {
+	panic("unexpected call")
+}
+
+func (f fakeVisibilityJobRepository) GetByIDs(context.Context, []string) ([]domain.Job, error) {
+	panic("unexpected call")
+}
+
+func (f fakeVisibilityJobRepository) List(context.Context) ([]domain.Job, error) {
+	panic("unexpected call")
+}
+
+func (f fakeVisibilityJobRepository) ListPaged(context.Context, repository.ListParams) ([]domain.Job, error) {
+	panic("unexpected call")
+}
+
+func (f fakeVisibilityJobRepository) ListByProjectID(context.Context, string) ([]domain.Job, error) {
+	panic("unexpected call")
+}
+
+func (f fakeVisibilityJobRepository) ListPushEnabledByRepository(context.Context, string) ([]domain.Job, error) {
+	panic("unexpected call")
+}
+
+func (f fakeVisibilityJobRepository) GetByID(_ context.Context, id string) (domain.Job, error) {
+	job, ok := f.jobs[id]
+	if !ok {
+		return domain.Job{}, repository.ErrJobNotFound
+	}
+	return job, nil
+}
+
+func (f fakeVisibilityJobRepository) Update(context.Context, domain.Job) (domain.Job, error) {
+	panic("unexpected call")
 }
 
 func (f fakeVisibilityBuildBoundary) ListBuilds(_ context.Context) ([]domain.Build, error) {
@@ -218,6 +299,38 @@ func TestVisibilityService_ListWorkers_StatusSemantics(t *testing.T) {
 	}
 	if byID["expired-worker"].Status != domain.WorkerStatusStale || !byID["expired-worker"].StaleLease {
 		t.Fatalf("expected expired-worker to be stale from lease, got %#v", byID["expired-worker"])
+	}
+}
+
+func TestVisibilityService_ListWorkers_EnrichesProjectAndJobNamesWhenAvailable(t *testing.T) {
+	now := time.Date(2026, time.May, 25, 12, 0, 0, 0, time.UTC)
+	workerRepo := memoryrepo.NewWorkerRepository()
+	_, _ = workerRepo.UpsertHeartbeat(context.Background(), domain.WorkerHeartbeat{ID: "busy-worker", Name: "busy-worker", HeartbeatAt: now.Add(-5 * time.Second)})
+
+	svc := NewVisibilityService(workerRepo, fakeVisibilityBuildBoundary{
+		builds: []domain.Build{{ID: "build-1", BuildNumber: 17, ProjectID: "project-a", JobID: stringPtr("job-a"), Status: domain.BuildStatusRunning, CreatedAt: now.Add(-time.Minute)}},
+		jobs: map[string][]domain.ExecutionJob{
+			"build-1": {
+				{ID: "exec-job-1", BuildID: "build-1", StepID: "step-job-1", Name: "compile", StepIndex: 0, Status: domain.ExecutionJobStatusRunning, ClaimedBy: stringPtr("busy-worker"), ClaimExpiresAt: timePtr(now.Add(30 * time.Second)), CreatedAt: now.Add(-40 * time.Second), StartedAt: timePtr(now.Add(-30 * time.Second)), Image: "alpine", WorkingDir: ".", Command: []string{"sh"}, Environment: map[string]string{}, SpecVersion: 1, ResolvedSpecJSON: `{}`},
+			},
+		},
+	})
+	svc.clock = func() time.Time { return now }
+	svc.SetProjectRepository(fakeVisibilityProjectRepository{projects: map[string]domain.Project{"project-a": {ID: "project-a", Name: "Platform", Slug: "platform"}}})
+	svc.SetJobRepository(fakeVisibilityJobRepository{jobs: map[string]domain.Job{"job-a": {ID: "job-a", ProjectID: "project-a", Name: "release"}}})
+
+	workers, err := svc.ListWorkers(context.Background())
+	if err != nil {
+		t.Fatalf("ListWorkers returned error: %v", err)
+	}
+	if workers[0].ProjectName == nil || *workers[0].ProjectName != "Platform" {
+		t.Fatalf("expected project name enrichment, got %#v", workers[0].ProjectName)
+	}
+	if workers[0].ProjectSlug == nil || *workers[0].ProjectSlug != "platform" {
+		t.Fatalf("expected project slug enrichment, got %#v", workers[0].ProjectSlug)
+	}
+	if workers[0].JobName == nil || *workers[0].JobName != "release" {
+		t.Fatalf("expected job name enrichment, got %#v", workers[0].JobName)
 	}
 }
 

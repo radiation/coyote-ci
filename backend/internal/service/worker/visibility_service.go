@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
 
@@ -20,6 +21,8 @@ type visibilityBuildBoundary interface {
 type VisibilityService struct {
 	workers    repository.WorkerRepository
 	builds     visibilityBuildBoundary
+	projects   repository.ProjectRepository
+	jobs       repository.JobRepository
 	staleAfter time.Duration
 	clock      func() time.Time
 }
@@ -37,6 +40,14 @@ func (s *VisibilityService) SetStaleAfter(staleAfter time.Duration) {
 	if staleAfter > 0 {
 		s.staleAfter = staleAfter
 	}
+}
+
+func (s *VisibilityService) SetProjectRepository(projects repository.ProjectRepository) {
+	s.projects = projects
+}
+
+func (s *VisibilityService) SetJobRepository(jobs repository.JobRepository) {
+	s.jobs = jobs
 }
 
 func (s *VisibilityService) ListWorkers(ctx context.Context) ([]domain.WorkerVisibility, error) {
@@ -165,6 +176,8 @@ func (s *VisibilityService) collectClaims(ctx context.Context) (map[string]worke
 	}
 
 	claims := map[string]workerClaim{}
+	projectCache := map[string]projectMeta{}
+	jobCache := map[string]jobMeta{}
 	for _, build := range builds {
 		if build.Status != domain.BuildStatusPreparing && build.Status != domain.BuildStatusQueued && build.Status != domain.BuildStatusRunning {
 			continue
@@ -178,6 +191,16 @@ func (s *VisibilityService) collectClaims(ctx context.Context) (map[string]worke
 			if !isActiveJobClaim(job) {
 				continue
 			}
+			var projectInfo projectMeta
+			projectInfo, err = s.loadProjectMeta(ctx, build.ProjectID, projectCache)
+			if err != nil {
+				return nil, err
+			}
+			var jobInfo jobMeta
+			jobInfo, err = s.loadJobMeta(ctx, build.JobID, jobCache)
+			if err != nil {
+				return nil, err
+			}
 			claim := workerClaim{
 				BuildID:        &build.ID,
 				BuildNumber:    buildNumberPtr(build.BuildNumber),
@@ -186,7 +209,10 @@ func (s *VisibilityService) collectClaims(ctx context.Context) (map[string]worke
 				StepName:       &job.Name,
 				LeaseExpiresAt: job.ClaimExpiresAt,
 				ProjectID:      &build.ProjectID,
+				ProjectName:    projectInfo.name,
+				ProjectSlug:    projectInfo.slug,
 				JobID:          build.JobID,
+				JobName:        jobInfo.name,
 				priority:       2,
 				updatedAt:      claimSortTime(job.StartedAt, job.CreatedAt),
 			}
@@ -201,6 +227,16 @@ func (s *VisibilityService) collectClaims(ctx context.Context) (map[string]worke
 			if !isActiveStepClaim(step) {
 				continue
 			}
+			var projectInfo projectMeta
+			projectInfo, err = s.loadProjectMeta(ctx, build.ProjectID, projectCache)
+			if err != nil {
+				return nil, err
+			}
+			var jobInfo jobMeta
+			jobInfo, err = s.loadJobMeta(ctx, build.JobID, jobCache)
+			if err != nil {
+				return nil, err
+			}
 			claim := workerClaim{
 				BuildID:        &build.ID,
 				BuildNumber:    buildNumberPtr(build.BuildNumber),
@@ -210,7 +246,10 @@ func (s *VisibilityService) collectClaims(ctx context.Context) (map[string]worke
 				LeaseExpiresAt: step.LeaseExpiresAt,
 				ClaimedAt:      step.ClaimedAt,
 				ProjectID:      &build.ProjectID,
+				ProjectName:    projectInfo.name,
+				ProjectSlug:    projectInfo.slug,
 				JobID:          build.JobID,
+				JobName:        jobInfo.name,
 				priority:       1,
 				updatedAt:      claimSortTime(step.ClaimedAt, build.CreatedAt),
 			}
@@ -258,6 +297,67 @@ func orphanClaimStatus(claim workerClaim, now time.Time) domain.WorkerStatus {
 		return domain.WorkerStatusStale
 	}
 	return domain.WorkerStatusStale
+}
+
+type projectMeta struct {
+	name *string
+	slug *string
+}
+
+type jobMeta struct {
+	name *string
+}
+
+func (s *VisibilityService) loadProjectMeta(ctx context.Context, projectID string, cache map[string]projectMeta) (projectMeta, error) {
+	if projectID == "" || s.projects == nil {
+		return projectMeta{}, nil
+	}
+	if meta, ok := cache[projectID]; ok {
+		return meta, nil
+	}
+
+	project, err := s.projects.GetByID(ctx, projectID)
+	if err != nil {
+		if errors.Is(err, repository.ErrProjectNotFound) {
+			cache[projectID] = projectMeta{}
+			return projectMeta{}, nil
+		}
+		return projectMeta{}, err
+	}
+
+	meta := projectMeta{name: stringPointer(project.Name), slug: stringPointer(project.Slug)}
+	cache[projectID] = meta
+	return meta, nil
+}
+
+func (s *VisibilityService) loadJobMeta(ctx context.Context, jobID *string, cache map[string]jobMeta) (jobMeta, error) {
+	if jobID == nil || *jobID == "" || s.jobs == nil {
+		return jobMeta{}, nil
+	}
+	if meta, ok := cache[*jobID]; ok {
+		return meta, nil
+	}
+
+	job, err := s.jobs.GetByID(ctx, *jobID)
+	if err != nil {
+		if errors.Is(err, repository.ErrJobNotFound) {
+			cache[*jobID] = jobMeta{}
+			return jobMeta{}, nil
+		}
+		return jobMeta{}, err
+	}
+
+	meta := jobMeta{name: stringPointer(job.Name)}
+	cache[*jobID] = meta
+	return meta, nil
+}
+
+func stringPointer(value string) *string {
+	if value == "" {
+		return nil
+	}
+	copy := value
+	return &copy
 }
 
 func workerStatusRank(status domain.WorkerStatus) int {

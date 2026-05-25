@@ -114,6 +114,8 @@ func main() {
 	webhookService.SetMetrics(webhookMetrics)
 	buildHandler := handler.NewBuildHandler(buildService)
 	workerVisibilityService := workersvc.NewVisibilityService(workerRepo, buildService)
+	workerVisibilityService.SetProjectRepository(projectRepo)
+	workerVisibilityService.SetJobRepository(jobRepo)
 	workerHandler := handler.NewWorkerHandler(workerVisibilityService)
 	buildHandler.SetVersionTagService(versionTagService)
 	buildHandler.SetProjectService(projectService)

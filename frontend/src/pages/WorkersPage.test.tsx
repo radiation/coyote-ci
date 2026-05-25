@@ -115,4 +115,32 @@ describe("WorkersPage", () => {
 
     await screen.findByText("Unable to load workers.");
   });
+
+  it("falls back to durable project and job ids when names are missing", async () => {
+    mockedListWorkers.mockResolvedValue([
+      {
+        id: "worker-busy",
+        name: "busy-worker",
+        status: "busy",
+        last_heartbeat_at: "2026-05-24T12:00:05Z",
+        created_at: "2026-05-24T11:00:00Z",
+        updated_at: "2026-05-24T12:00:05Z",
+        current_build_id: "build-1",
+        current_build_number: 18,
+        current_step_id: "step-1",
+        current_step_index: 0,
+        current_step_name: "compile",
+        project_id: "project-1",
+        job_id: "job-1",
+        stale_lease: false,
+        stale_heartbeat: false,
+      },
+    ]);
+
+    renderPage();
+
+    await screen.findByText("busy-worker");
+    expect(screen.getByText("project-1")).toBeTruthy();
+    expect(screen.getByText("job-1")).toBeTruthy();
+  });
 });
