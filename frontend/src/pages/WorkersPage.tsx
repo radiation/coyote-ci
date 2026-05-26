@@ -9,6 +9,8 @@ import type { Worker } from "../types/worker";
 import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL } from "../utils/build";
 import { formatCompactTime, formatTime } from "../utils/time";
 
+const STALE_WORKER_DISPLAY_RETENTION_MS = 24 * 60 * 60 * 1000;
+
 function buildLabel(worker: Worker): string {
   if (typeof worker.current_build_number === "number") {
     return `Build #${worker.current_build_number}`;
@@ -44,8 +46,51 @@ function currentStepLabel(worker: Worker): string {
   return parts.join(" · ");
 }
 
+function parseTimestamp(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function hasCurrentClaimContext(worker: Worker): boolean {
+  return Boolean(
+    worker.current_build_id ||
+    typeof worker.current_build_number === "number" ||
+    worker.current_step_id ||
+    worker.current_step_name ||
+    typeof worker.current_step_index === "number" ||
+    worker.claimed_at ||
+    worker.lease_expires_at ||
+    worker.project_id ||
+    worker.project_name ||
+    worker.job_id ||
+    worker.job_name,
+  );
+}
+
+function shouldHideStaleWorker(worker: Worker, now: number): boolean {
+  if (worker.status !== "stale") {
+    return false;
+  }
+
+  if (worker.stale_lease || hasCurrentClaimContext(worker)) {
+    return false;
+  }
+
+  const lastHeartbeat = parseTimestamp(worker.last_heartbeat_at);
+  if (lastHeartbeat === null) {
+    return true;
+  }
+
+  return now - lastHeartbeat > STALE_WORKER_DISPLAY_RETENTION_MS;
+}
+
 export function WorkersPage() {
   const [manualRefreshPending, setManualRefreshPending] = useState(false);
+  const [showHiddenStaleWorkers, setShowHiddenStaleWorkers] = useState(false);
   const {
     data: workers,
     isLoading,
@@ -85,13 +130,28 @@ export function WorkersPage() {
     }
   }
 
-  const total = workers?.length ?? 0;
-  const idle =
-    workers?.filter((worker) => worker.status === "idle").length ?? 0;
-  const busy =
-    workers?.filter((worker) => worker.status === "busy").length ?? 0;
-  const stale =
-    workers?.filter((worker) => worker.status === "stale").length ?? 0;
+  const visibilityReferenceTime = dataUpdatedAt;
+  const hiddenOlderStaleWorkers =
+    workers?.filter((worker) =>
+      shouldHideStaleWorker(worker, visibilityReferenceTime),
+    ) ?? [];
+  const visibleWorkers =
+    showHiddenStaleWorkers || hiddenOlderStaleWorkers.length === 0
+      ? (workers ?? [])
+      : (workers?.filter(
+          (worker) => !shouldHideStaleWorker(worker, visibilityReferenceTime),
+        ) ?? []);
+
+  const total = visibleWorkers.length;
+  const idle = visibleWorkers.filter(
+    (worker) => worker.status === "idle",
+  ).length;
+  const busy = visibleWorkers.filter(
+    (worker) => worker.status === "busy",
+  ).length;
+  const stale = visibleWorkers.filter(
+    (worker) => worker.status === "stale",
+  ).length;
 
   return (
     <div className="page-content page-workers">
@@ -148,6 +208,24 @@ export function WorkersPage() {
           <div>
             <h3>Worker activity</h3>
           </div>
+          {hiddenOlderStaleWorkers.length > 0 ? (
+            <div className="workers-hidden-notice">
+              <span className="subtle-text">
+                {hiddenOlderStaleWorkers.length} older stale workers hidden
+              </span>
+              <button
+                type="button"
+                className="secondary-button workers-hidden-toggle"
+                onClick={() => {
+                  setShowHiddenStaleWorkers((current) => !current);
+                }}
+              >
+                {showHiddenStaleWorkers
+                  ? "Hide older stale workers"
+                  : "Show hidden stale workers"}
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {isLoading ? <p>Loading workers…</p> : null}
@@ -162,7 +240,7 @@ export function WorkersPage() {
           </div>
         ) : null}
 
-        {!isLoading && !error && workers && workers.length > 0 ? (
+        {!isLoading && !error && visibleWorkers.length > 0 ? (
           <table className="table workers-table">
             <thead>
               <tr>
@@ -178,7 +256,7 @@ export function WorkersPage() {
               </tr>
             </thead>
             <tbody>
-              {workers.map((worker) => (
+              {visibleWorkers.map((worker) => (
                 <tr
                   key={worker.id}
                   className={

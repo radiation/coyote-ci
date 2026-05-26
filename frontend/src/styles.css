@@ -1324,6 +1324,18 @@ fieldset legend {
   background: color-mix(in srgb, var(--color-error-bg) 55%, transparent);
 }
 
+.workers-hidden-notice {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.workers-hidden-toggle {
+  padding: 6px 10px;
+}
+
 .trigger-manual {
   color: var(--color-neutral-text);
   border-color: var(--color-neutral-border);

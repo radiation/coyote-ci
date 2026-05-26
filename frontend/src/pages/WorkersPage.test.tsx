@@ -39,28 +39,40 @@ function deferredPromise<T>() {
 describe("WorkersPage", () => {
   const mockedListWorkers = vi.mocked(listWorkers);
 
+  function worker(overrides: Partial<Worker>): Worker {
+    return {
+      id: "worker-default",
+      name: "worker-default",
+      status: "idle",
+      last_heartbeat_at: "2026-05-24T12:00:00Z",
+      created_at: "2026-05-24T11:00:00Z",
+      updated_at: "2026-05-24T12:00:00Z",
+      stale_lease: false,
+      stale_heartbeat: false,
+      ...overrides,
+    };
+  }
+
+  function hoursAgo(hours: number): string {
+    return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  }
+
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
   it("renders workers and summary counts", async () => {
     mockedListWorkers.mockResolvedValue([
-      {
+      worker({
         id: "worker-idle",
         name: "idle-worker",
-        status: "idle",
-        last_heartbeat_at: "2026-05-24T12:00:00Z",
-        created_at: "2026-05-24T11:00:00Z",
-        updated_at: "2026-05-24T12:00:00Z",
-        stale_lease: false,
-        stale_heartbeat: false,
-      },
-      {
+      }),
+      worker({
         id: "worker-busy",
         name: "busy-worker",
         status: "busy",
         last_heartbeat_at: "2026-05-24T12:00:05Z",
-        created_at: "2026-05-24T11:00:00Z",
         updated_at: "2026-05-24T12:00:05Z",
         current_build_id: "build-1",
         current_build_number: 18,
@@ -73,9 +85,7 @@ describe("WorkersPage", () => {
         project_name: "Platform",
         job_id: "job-1",
         job_name: "release",
-        stale_lease: false,
-        stale_heartbeat: false,
-      },
+      }),
     ]);
 
     renderPage();
@@ -91,16 +101,15 @@ describe("WorkersPage", () => {
 
   it("renders status badges including stale workers", async () => {
     mockedListWorkers.mockResolvedValue([
-      {
+      worker({
         id: "worker-stale",
         name: "stale-worker",
         status: "stale",
         last_heartbeat_at: "2026-05-24T11:55:00Z",
-        created_at: "2026-05-24T11:00:00Z",
         updated_at: "2026-05-24T11:55:00Z",
         stale_lease: true,
         stale_heartbeat: true,
-      },
+      }),
     ]);
 
     renderPage();
@@ -129,12 +138,11 @@ describe("WorkersPage", () => {
 
   it("falls back to durable project and job ids when names are missing", async () => {
     mockedListWorkers.mockResolvedValue([
-      {
+      worker({
         id: "worker-busy",
         name: "busy-worker",
         status: "busy",
         last_heartbeat_at: "2026-05-24T12:00:05Z",
-        created_at: "2026-05-24T11:00:00Z",
         updated_at: "2026-05-24T12:00:05Z",
         current_build_id: "build-1",
         current_build_number: 18,
@@ -143,9 +151,7 @@ describe("WorkersPage", () => {
         current_step_name: "compile",
         project_id: "project-1",
         job_id: "job-1",
-        stale_lease: false,
-        stale_heartbeat: false,
-      },
+      }),
     ]);
 
     renderPage();
@@ -160,16 +166,10 @@ describe("WorkersPage", () => {
 
     mockedListWorkers
       .mockResolvedValueOnce([
-        {
+        worker({
           id: "worker-idle",
           name: "idle-worker",
-          status: "idle",
-          last_heartbeat_at: "2026-05-24T12:00:00Z",
-          created_at: "2026-05-24T11:00:00Z",
-          updated_at: "2026-05-24T12:00:00Z",
-          stale_lease: false,
-          stale_heartbeat: false,
-        },
+        }),
       ])
       .mockImplementationOnce(() => refreshResult.promise);
 
@@ -183,16 +183,12 @@ describe("WorkersPage", () => {
     expect(screen.getByText("Refreshing worker state…")).toBeTruthy();
 
     refreshResult.resolve([
-      {
+      worker({
         id: "worker-idle",
         name: "idle-worker",
-        status: "idle",
         last_heartbeat_at: "2026-05-24T12:00:05Z",
-        created_at: "2026-05-24T11:00:00Z",
         updated_at: "2026-05-24T12:00:05Z",
-        stale_lease: false,
-        stale_heartbeat: false,
-      },
+      }),
     ]);
 
     await waitFor(() => {
@@ -201,5 +197,117 @@ describe("WorkersPage", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Refresh" })).toBeTruthy();
     });
+  });
+
+  it("shows recent stale workers by default", async () => {
+    mockedListWorkers.mockResolvedValue([
+      worker({
+        id: "worker-stale-recent",
+        name: "recent-stale-worker",
+        status: "stale",
+        last_heartbeat_at: hoursAgo(12),
+        updated_at: hoursAgo(12),
+        stale_heartbeat: true,
+      }),
+    ]);
+
+    renderPage();
+
+    await screen.findByText("recent-stale-worker");
+    expect(screen.queryByText(/older stale workers hidden/i)).not.toBeTruthy();
+  });
+
+  it("hides older stale workers by default and shows the hidden count", async () => {
+    mockedListWorkers.mockResolvedValue([
+      worker({
+        id: "worker-idle",
+        name: "idle-worker",
+      }),
+      worker({
+        id: "worker-stale-old",
+        name: "old-stale-worker",
+        status: "stale",
+        last_heartbeat_at: hoursAgo(50),
+        updated_at: hoursAgo(50),
+        stale_heartbeat: true,
+      }),
+    ]);
+
+    renderPage();
+
+    await screen.findByText("idle-worker");
+    expect(screen.queryByText("old-stale-worker")).toBeNull();
+    expect(screen.getByText("1 older stale workers hidden")).toBeTruthy();
+  });
+
+  it("reveals older stale workers when toggled", async () => {
+    mockedListWorkers.mockResolvedValue([
+      worker({
+        id: "worker-stale-old",
+        name: "old-stale-worker",
+        status: "stale",
+        last_heartbeat_at: hoursAgo(50),
+        updated_at: hoursAgo(50),
+        stale_heartbeat: true,
+      }),
+    ]);
+
+    renderPage();
+
+    await screen.findByText("1 older stale workers hidden");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show hidden stale workers" }),
+    );
+
+    expect(await screen.findByText("old-stale-worker")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Hide older stale workers" }),
+    ).toBeTruthy();
+  });
+
+  it("keeps stale workers with expired leases visible", async () => {
+    mockedListWorkers.mockResolvedValue([
+      worker({
+        id: "worker-expired-lease",
+        name: "expired-lease-worker",
+        status: "stale",
+        last_heartbeat_at: hoursAgo(50),
+        updated_at: hoursAgo(50),
+        lease_expires_at: hoursAgo(49),
+        stale_lease: true,
+        stale_heartbeat: true,
+      }),
+    ]);
+
+    renderPage();
+
+    await screen.findByText("expired-lease-worker");
+    expect(screen.queryByText(/older stale workers hidden/i)).not.toBeTruthy();
+  });
+
+  it("keeps stale workers with current claim context visible", async () => {
+    mockedListWorkers.mockResolvedValue([
+      worker({
+        id: "worker-claimed",
+        name: "claimed-stale-worker",
+        status: "stale",
+        last_heartbeat_at: hoursAgo(50),
+        updated_at: hoursAgo(50),
+        current_build_id: "build-2",
+        current_build_number: 22,
+        current_step_name: "publish",
+        claimed_at: hoursAgo(49),
+        stale_heartbeat: true,
+      }),
+    ]);
+
+    renderPage();
+
+    await screen.findByText("claimed-stale-worker");
+    expect(screen.getByRole("link", { name: "Build #22" })).toHaveAttribute(
+      "href",
+      "/builds/build-2",
+    );
+    expect(screen.queryByText(/older stale workers hidden/i)).not.toBeTruthy();
   });
 });
