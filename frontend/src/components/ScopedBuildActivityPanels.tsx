@@ -12,6 +12,7 @@ import {
   SLOW_POLL_INTERVAL,
   isActiveBuild,
 } from "../utils/build";
+import { hydrateJobNames, missingJobNameProjectIDs } from "../utils/jobNames";
 import {
   BuildActivityPanel,
   type BuildActivityItem,
@@ -65,48 +66,6 @@ function mapQueueEntries(entries: QueueEntry[]): BuildActivityItem[] {
     kind: "queue" as const,
     entry,
   }));
-}
-
-function withProjectJobNames<
-  T extends { job_id?: string | null; job_name?: string | null },
->(items: T[], projectJobNames: Map<string, string>): T[] {
-  return items.map((item) => {
-    const currentName = item.job_name?.trim();
-    const jobID = item.job_id?.trim();
-    if (currentName || !jobID) {
-      return item;
-    }
-
-    const resolvedName = projectJobNames.get(jobID);
-    if (!resolvedName) {
-      return item;
-    }
-
-    return {
-      ...item,
-      job_name: resolvedName,
-    };
-  });
-}
-
-function missingJobNameProjectIDs(
-  items: Array<{
-    project_id: string;
-    job_id?: string | null;
-    job_name?: string | null;
-  }>,
-): string[] {
-  return [
-    ...new Set(
-      items
-        .filter((item) => {
-          const jobID = item.job_id?.trim();
-          const jobName = item.job_name?.trim();
-          return Boolean(item.project_id && jobID && !jobName);
-        })
-        .map((item) => item.project_id),
-    ),
-  ].sort();
 }
 
 function mapBuilds(builds: Build[]): BuildActivityItem[] {
@@ -234,7 +193,7 @@ export function QueueActivityPanel({
   const error = scope.type === "job" ? jobQueueError : scopedQueueError;
   const normalizedQueueEntries =
     scope.type === "project"
-      ? withProjectJobNames(queueEntries ?? [], projectJobNames)
+      ? hydrateJobNames(queueEntries ?? [], projectJobNames)
       : (queueEntries ?? []);
 
   return (
@@ -338,7 +297,7 @@ export function RecentBuildsPanel({
   const error = scope.type === "job" ? jobBuildsError : scopedBuildsError;
   const normalizedBuilds =
     scope.type === "project" || scope.type === "global"
-      ? withProjectJobNames(builds ?? [], projectJobNames)
+      ? hydrateJobNames(builds ?? [], projectJobNames)
       : (builds ?? []);
 
   const items = mapBuilds(sortByNewest(normalizedBuilds).slice(0, limit));
