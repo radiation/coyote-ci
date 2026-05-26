@@ -336,6 +336,48 @@ describe("BuildDetailPage", () => {
     confirmSpy.mockRestore();
   });
 
+  it.each([
+    ["queued", true],
+    ["preparing", true],
+    ["running", true],
+    ["pending", false],
+    ["success", false],
+    ["failed", false],
+    ["canceled", false],
+  ] as const)(
+    "shows Cancel for %s only when cancelable",
+    async (status, shouldShowCancel) => {
+      mockedGetBuild.mockResolvedValueOnce(
+        makeBuild({
+          status,
+          finished_at:
+            status === "success" || status === "failed" || status === "canceled"
+              ? "2026-03-30T00:02:05Z"
+              : null,
+          error_message: null,
+        }),
+      );
+      mockedGetBuildSteps.mockResolvedValueOnce([
+        makeStep({
+          status: status === "running" ? "running" : "pending",
+          finished_at: null,
+          exit_code: null,
+        }),
+      ]);
+      mockedGetBuildArtifacts.mockResolvedValueOnce([]);
+
+      renderPage();
+
+      await screen.findByRole("heading", { level: 2, name: "Build #21" });
+      const button = screen.queryByRole("button", { name: "Cancel" });
+      if (shouldShowCancel) {
+        expect(button).toBeTruthy();
+      } else {
+        expect(button).toBeNull();
+      }
+    },
+  );
+
   it("renders clean empty states when optional fields, logs, and artifacts are missing", async () => {
     mockedGetBuild.mockResolvedValueOnce(
       makeBuild({

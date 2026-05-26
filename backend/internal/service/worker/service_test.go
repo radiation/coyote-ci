@@ -447,6 +447,26 @@ func TestExecutionWorkerService_ExecuteRunnableStep_CommandFailed(t *testing.T) 
 	}
 }
 
+func TestExecutionWorkerService_ExecuteRunnableStep_SkipsCanceledBuild(t *testing.T) {
+	now := time.Now().UTC()
+	boundary := &fakeExecutionWorkerBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-canceled", Status: domain.BuildStatusCanceled, CreatedAt: now, FinishedAt: &now}},
+		runStepResp:    runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, StartedAt: now, FinishedAt: now},
+	}
+	worker := NewExecutionWorkerService(boundary)
+
+	report, err := worker.ExecuteRunnableStep(context.Background(), WorkerRunnableStep{BuildID: "build-canceled", StepIndex: 0, StepName: "test", Command: "echo", ClaimToken: "claim-1"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if boundary.runStepCalls != 0 {
+		t.Fatalf("expected worker to skip runner for canceled build, got %d calls", boundary.runStepCalls)
+	}
+	if report.Step.Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected canceled step report, got %q", report.Step.Status)
+	}
+}
+
 func TestExecutionWorkerService_ExecuteRunnableStep_RunStepError(t *testing.T) {
 	boundary := &fakeExecutionWorkerBoundary{runStepErr: errors.New("startup failed")}
 	worker := NewExecutionWorkerService(boundary)

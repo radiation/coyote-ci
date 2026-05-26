@@ -13,6 +13,11 @@ describe("StatusBadge", () => {
     expect(screen.getByText("Success")).toBeTruthy();
   });
 
+  it("should render canceled status", () => {
+    render(<StatusBadge status="canceled" />);
+    expect(screen.getByText("Canceled")).toBeTruthy();
+  });
+
   it("should render span element", () => {
     const { container } = render(<StatusBadge status="queued" />);
     const span = container.querySelector("span");

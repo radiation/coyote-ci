@@ -260,7 +260,7 @@ func isClaimCandidate(job domain.ExecutionJob, latestByNode map[string]domain.Ex
 	return job.Status == domain.ExecutionJobStatusRunning && job.ClaimExpiresAt != nil && !job.ClaimExpiresAt.After(now)
 }
 
-func (r *ExecutionJobRepository) ClaimJobByStepID(_ context.Context, stepID string, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
+func (r *ExecutionJobRepository) ClaimJobByStepID(ctx context.Context, stepID string, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -275,6 +275,15 @@ func (r *ExecutionJobRepository) ClaimJobByStepID(_ context.Context, stepID stri
 	}
 	if job.Status != domain.ExecutionJobStatusQueued && job.Status != domain.ExecutionJobStatusRunning {
 		return cloneExecutionJob(job), false, nil
+	}
+	if r.builds != nil {
+		build, err := r.builds.GetByID(ctx, job.BuildID)
+		if err != nil {
+			return cloneExecutionJob(job), false, nil
+		}
+		if build.Status != domain.BuildStatusRunning {
+			return cloneExecutionJob(job), false, nil
+		}
 	}
 
 	job.Status = domain.ExecutionJobStatusRunning

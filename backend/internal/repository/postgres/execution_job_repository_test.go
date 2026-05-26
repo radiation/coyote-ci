@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -181,6 +182,72 @@ func TestExecutionJobRepository_ClaimNextRunnableJob_UsesBuildPriorityOrdering(t
 	}
 	if job.ID != "job-priority" {
 		t.Fatalf("expected job-priority, got %q", job.ID)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestExecutionJobRepository_ClaimJobByStepID_RequiresRunningBuild(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewExecutionJobRepository(db)
+	now := time.Now().UTC()
+	lease := now.Add(time.Minute)
+
+	mock.ExpectQuery(`INNER JOIN builds AS b ON b\.id = bj\.build_id[\s\S]*AND b\.status = 'running'`).
+		WithArgs("step-1", "worker-1", "claim-1", lease, now).
+		WillReturnError(sql.ErrNoRows)
+
+	_, claimed, err := repo.ClaimJobByStepID(context.Background(), "step-1", repository.StepClaim{
+		WorkerID:       "worker-1",
+		ClaimToken:     "claim-1",
+		ClaimedAt:      now,
+		LeaseExpiresAt: lease,
+	})
+	if err != nil {
+		t.Fatalf("claim job by step failed: %v", err)
+	}
+	if claimed {
+		t.Fatal("expected claim to be skipped when no running build candidate exists")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestExecutionJobRepository_CompleteJobSuccess_CanceledJobIsDuplicateTerminal(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewExecutionJobRepository(db)
+	now := time.Now().UTC()
+	finished := now.Add(2 * time.Minute)
+
+	mock.ExpectQuery(`UPDATE build_jobs\s+SET status = \$3`).
+		WithArgs("job-1", "claim-1", "success", finished, nil, 0, `[]`).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1`).WithArgs("job-1").WillReturnRows(
+		sqlmock.NewRows(executionJobMockColumns).
+			AddRow("job-1", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "canceled", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, nil, nil, nil, "https://github.com/acme/repo.git", "abc123", nil, nil, nil, 1, nil, `{}`, nil, nil, nil, now, now, finished, "operator canceled", nil, `[]`),
+	)
+
+	job, outcome, err := repo.CompleteJobSuccess(context.Background(), "job-1", "claim-1", finished, 0, nil)
+	if err != nil {
+		t.Fatalf("complete job success failed: %v", err)
+	}
+	if outcome != repository.StepCompletionDuplicateTerminal {
+		t.Fatalf("expected duplicate terminal outcome, got %q", outcome)
+	}
+	if job.Status != domain.ExecutionJobStatusCanceled {
+		t.Fatalf("expected job to remain canceled, got %q", job.Status)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

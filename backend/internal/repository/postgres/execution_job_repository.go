@@ -246,7 +246,9 @@ func (r *ExecutionJobRepository) ClaimJobByStepID(ctx context.Context, stepID st
 		WITH candidate AS (
 			SELECT bj.id
 			FROM build_jobs AS bj
+			INNER JOIN builds AS b ON b.id = bj.build_id
 			WHERE bj.step_id = $1
+			  AND b.status = 'running'
 			  AND bj.status IN ('queued', 'running')
 			ORDER BY bj.attempt_number DESC, bj.created_at DESC
 			LIMIT 1
