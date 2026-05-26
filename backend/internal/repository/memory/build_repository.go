@@ -48,7 +48,7 @@ func (r *BuildRepository) Create(_ context.Context, build domain.Build) (domain.
 	return build, nil
 }
 
-// CancelBuild terminalizes a non-terminal build and cancellable steps atomically under lock.
+// CancelBuild terminalizes a cancelable build and cancellable steps atomically under lock.
 func (r *BuildRepository) CancelBuild(_ context.Context, id string, reason string, canceledAt time.Time) (domain.Build, int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -58,8 +58,8 @@ func (r *BuildRepository) CancelBuild(_ context.Context, id string, reason strin
 		return domain.Build{}, 0, repository.ErrBuildNotFound
 	}
 
-	if domain.IsTerminalBuildStatus(build.Status) {
-		return build, 0, nil
+	if !domain.CanCancelBuild(build.Status) {
+		return domain.Build{}, 0, repository.ErrInvalidBuildStatusTransition
 	}
 
 	trimmedReason := strings.TrimSpace(reason)
@@ -71,10 +71,10 @@ func (r *BuildRepository) CancelBuild(_ context.Context, id string, reason strin
 	updatedSteps := 0
 	steps := r.buildSteps[id]
 	for idx := range steps {
-		if !domain.CanCancelStepToFailed(steps[idx].Status) {
+		if !domain.CanCancelStep(steps[idx].Status) {
 			continue
 		}
-		steps[idx].Status = domain.BuildStepStatusFailed
+		steps[idx].Status = domain.BuildStepStatusCanceled
 		steps[idx].ClaimToken = nil
 		steps[idx].ClaimedAt = nil
 		steps[idx].LeaseExpiresAt = nil
@@ -91,7 +91,7 @@ func (r *BuildRepository) CancelBuild(_ context.Context, id string, reason strin
 	}
 	r.buildSteps[id] = steps
 
-	build.Status = domain.BuildStatusFailed
+	build.Status = domain.BuildStatusCanceled
 	if build.FinishedAt == nil {
 		build.FinishedAt = &canceledAt
 	}
@@ -374,10 +374,10 @@ func (r *BuildRepository) UpdateStatus(_ context.Context, id string, status doma
 	if status == domain.BuildStatusRunning && build.StartedAt == nil {
 		build.StartedAt = &now
 	}
-	if status == domain.BuildStatusSuccess || status == domain.BuildStatusFailed {
+	if domain.IsTerminalBuildStatus(status) {
 		build.FinishedAt = &now
 	}
-	if status == domain.BuildStatusFailed {
+	if status == domain.BuildStatusFailed || status == domain.BuildStatusCanceled {
 		build.ErrorMessage = errorMessage
 	} else {
 		build.ErrorMessage = nil
@@ -786,7 +786,7 @@ func (r *BuildRepository) CompleteStep(_ context.Context, request repository.Com
 		if request.Update.FinishedAt != nil {
 			steps[idx].FinishedAt = request.Update.FinishedAt
 		}
-		if request.Update.Status == domain.BuildStepStatusSuccess || request.Update.Status == domain.BuildStepStatusFailed {
+		if domain.IsTerminalStepStatus(request.Update.Status) {
 			steps[idx].ClaimToken = nil
 			steps[idx].ClaimedAt = nil
 			steps[idx].LeaseExpiresAt = nil

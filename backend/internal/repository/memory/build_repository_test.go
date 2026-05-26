@@ -363,8 +363,8 @@ func TestBuildRepository_CancelBuild_AtomicallyTerminalizesBuildAndCancellableSt
 	if err != nil {
 		t.Fatalf("cancel build failed: %v", err)
 	}
-	if updatedBuild.Status != domain.BuildStatusFailed {
-		t.Fatalf("expected build failed after cancel, got %q", updatedBuild.Status)
+	if updatedBuild.Status != domain.BuildStatusCanceled {
+		t.Fatalf("expected build canceled after cancel, got %q", updatedBuild.Status)
 	}
 	if updatedSteps != 2 {
 		t.Fatalf("expected 2 cancellable steps to be updated, got %d", updatedSteps)
@@ -377,11 +377,11 @@ func TestBuildRepository_CancelBuild_AtomicallyTerminalizesBuildAndCancellableSt
 	if currentSteps[0].Status != domain.BuildStepStatusSuccess {
 		t.Fatalf("expected terminal success step unchanged, got %q", currentSteps[0].Status)
 	}
-	if currentSteps[1].Status != domain.BuildStepStatusFailed {
-		t.Fatalf("expected running step terminalized to failed, got %q", currentSteps[1].Status)
+	if currentSteps[1].Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected running step terminalized to canceled, got %q", currentSteps[1].Status)
 	}
-	if currentSteps[2].Status != domain.BuildStepStatusFailed {
-		t.Fatalf("expected pending step terminalized to failed, got %q", currentSteps[2].Status)
+	if currentSteps[2].Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected pending step terminalized to canceled, got %q", currentSteps[2].Status)
 	}
 }
 

@@ -11,6 +11,7 @@ const (
 	BuildStatusRunning   BuildStatus = "running"
 	BuildStatusSuccess   BuildStatus = "success"
 	BuildStatusFailed    BuildStatus = "failed"
+	BuildStatusCanceled  BuildStatus = "canceled"
 )
 
 type Build struct {

@@ -22,6 +22,7 @@ type ExecutionJobRepository struct {
 type buildClaimOrder struct {
 	priority int
 	queuedAt time.Time
+	status   domain.BuildStatus
 }
 
 func NewExecutionJobRepository() *ExecutionJobRepository {
@@ -173,6 +174,10 @@ func (r *ExecutionJobRepository) ClaimNextRunnableJob(ctx context.Context, claim
 	defer r.mu.Unlock()
 
 	for _, candidate := range candidates {
+		buildStatus := buildOrders[candidate.BuildID].status
+		if buildStatus != domain.BuildStatusQueued && buildStatus != domain.BuildStatusRunning {
+			continue
+		}
 		job, ok := r.jobsByID[candidate.ID]
 		if !ok {
 			continue
@@ -235,13 +240,14 @@ func loadBuildClaimOrders(ctx context.Context, builds repository.BuildRepository
 		orders[buildID] = buildClaimOrder{
 			priority: domain.NormalizePriority(build.Priority),
 			queuedAt: queuedAt,
+			status:   build.Status,
 		}
 	}
 	return orders
 }
 
 func defaultBuildClaimOrder() buildClaimOrder {
-	return buildClaimOrder{priority: domain.DefaultPriority}
+	return buildClaimOrder{priority: domain.DefaultPriority, status: domain.BuildStatusRunning}
 }
 
 func isClaimCandidate(job domain.ExecutionJob, latestByNode map[string]domain.ExecutionJob, now time.Time) bool {
@@ -291,7 +297,7 @@ func (r *ExecutionJobRepository) RenewJobLease(_ context.Context, jobID string, 
 	if !ok {
 		return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, repository.ErrExecutionJobNotFound
 	}
-	if job.Status == domain.ExecutionJobStatusSuccess || job.Status == domain.ExecutionJobStatusFailed {
+	if domain.IsTerminalExecutionJobStatus(job.Status) {
 		return cloneExecutionJob(job), repository.StepCompletionDuplicateTerminal, nil
 	}
 	if job.Status != domain.ExecutionJobStatusRunning {
@@ -328,7 +334,7 @@ func (r *ExecutionJobRepository) completeJobLocked(jobID string, claimToken stri
 	if !ok {
 		return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, repository.ErrExecutionJobNotFound
 	}
-	if job.Status == domain.ExecutionJobStatusSuccess || job.Status == domain.ExecutionJobStatusFailed {
+	if domain.IsTerminalExecutionJobStatus(job.Status) {
 		return cloneExecutionJob(job), repository.StepCompletionDuplicateTerminal, nil
 	}
 	if job.Status != domain.ExecutionJobStatusRunning {
@@ -348,6 +354,39 @@ func (r *ExecutionJobRepository) completeJobLocked(jobID string, claimToken stri
 	job.ClaimExpiresAt = nil
 	r.jobsByID[jobID] = job
 	return cloneExecutionJob(job), repository.StepCompletionCompleted, nil
+}
+
+func (r *ExecutionJobRepository) CancelJobsForBuild(_ context.Context, buildID string, reason string, canceledAt time.Time) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	updated := 0
+	for _, id := range r.jobsByBuild[buildID] {
+		job, ok := r.jobsByID[id]
+		if !ok || !domain.CanCancelExecutionJob(job.Status) {
+			continue
+		}
+		job.Status = domain.ExecutionJobStatusCanceled
+		job.ClaimToken = nil
+		job.ClaimedBy = nil
+		job.ClaimExpiresAt = nil
+		if job.StartedAt == nil {
+			started := canceledAt
+			job.StartedAt = &started
+		}
+		if job.FinishedAt == nil {
+			finished := canceledAt
+			job.FinishedAt = &finished
+		}
+		if strings.TrimSpace(reason) != "" {
+			message := strings.TrimSpace(reason)
+			job.ErrorMessage = &message
+		}
+		r.jobsByID[id] = job
+		updated++
+	}
+
+	return updated, nil
 }
 
 func cloneExecutionJob(job domain.ExecutionJob) domain.ExecutionJob {

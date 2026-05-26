@@ -210,6 +210,66 @@ func TestExecutionJobRepository_ClaimNextRunnableJob_UsesCallerContextAndCachesB
 	}
 }
 
+func TestExecutionJobRepository_ClaimNextRunnableJob_SkipsCanceledBuild(t *testing.T) {
+	buildRepo := NewBuildRepository()
+	repo := NewExecutionJobRepository()
+	repo.SetBuildRepository(buildRepo)
+	now := time.Now().UTC()
+
+	if _, err := buildRepo.Create(context.Background(), domain.Build{ID: "build-canceled", ProjectID: "project-1", Status: domain.BuildStatusCanceled, CreatedAt: now}); err != nil {
+		t.Fatalf("create build failed: %v", err)
+	}
+	if _, err := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{{ID: "job-canceled", BuildID: "build-canceled", StepID: "step-canceled", NodeID: "node-canceled", Name: "canceled", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now}}); err != nil {
+		t.Fatalf("create jobs failed: %v", err)
+	}
+
+	_, ok, err := repo.ClaimNextRunnableJob(context.Background(), repository.StepClaim{WorkerID: "worker-1", ClaimToken: "claim-1", ClaimedAt: now, LeaseExpiresAt: now.Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("claim failed: %v", err)
+	}
+	if ok {
+		t.Fatal("expected canceled build job to be skipped")
+	}
+}
+
+func TestExecutionJobRepository_CancelJobsForBuild_CancelsQueuedAndRunningJobs(t *testing.T) {
+	repo := NewExecutionJobRepository()
+	now := time.Now().UTC()
+	claimToken := "claim-1"
+	workerID := "worker-1"
+	expiresAt := now.Add(time.Minute)
+	finishedAt := now.Add(2 * time.Minute)
+
+	if _, err := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{
+		{ID: "job-queued", BuildID: "build-1", StepID: "step-queued", Name: "queued", StepIndex: 0, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now},
+		{ID: "job-running", BuildID: "build-1", StepID: "step-running", Name: "running", StepIndex: 1, Status: domain.ExecutionJobStatusRunning, ClaimToken: &claimToken, ClaimedBy: &workerID, ClaimExpiresAt: &expiresAt, ResolvedSpecJSON: "{}", CreatedAt: now},
+		{ID: "job-success", BuildID: "build-1", StepID: "step-success", Name: "success", StepIndex: 2, Status: domain.ExecutionJobStatusSuccess, FinishedAt: &finishedAt, ResolvedSpecJSON: "{}", CreatedAt: now},
+	}); err != nil {
+		t.Fatalf("create jobs failed: %v", err)
+	}
+
+	updated, err := repo.CancelJobsForBuild(context.Background(), "build-1", "operator canceled", finishedAt)
+	if err != nil {
+		t.Fatalf("cancel jobs failed: %v", err)
+	}
+	if updated != 2 {
+		t.Fatalf("expected 2 updated jobs, got %d", updated)
+	}
+
+	queued, _ := repo.GetJobByID(context.Background(), "job-queued")
+	running, _ := repo.GetJobByID(context.Background(), "job-running")
+	success, _ := repo.GetJobByID(context.Background(), "job-success")
+	if queued.Status != domain.ExecutionJobStatusCanceled || running.Status != domain.ExecutionJobStatusCanceled {
+		t.Fatalf("expected queued/running jobs canceled, got %q/%q", queued.Status, running.Status)
+	}
+	if running.ClaimToken != nil || running.ClaimedBy != nil || running.ClaimExpiresAt != nil {
+		t.Fatalf("expected running claim fields cleared, got %#v", running)
+	}
+	if success.Status != domain.ExecutionJobStatusSuccess {
+		t.Fatalf("expected success job unchanged, got %q", success.Status)
+	}
+}
+
 func TestExecutionJobRepository_ImmutabilityForSpecFields(t *testing.T) {
 	repo := NewExecutionJobRepository()
 	now := time.Now().UTC()

@@ -15,6 +15,7 @@ export {
   deleteProject,
   listJobsByProject,
   getBuild,
+  cancelBuild,
   getBuildSteps,
   getBuildArtifacts,
   createJobVersionTags,

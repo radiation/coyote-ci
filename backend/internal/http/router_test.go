@@ -580,8 +580,39 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 	cancelReq := httptest.NewRequest(http.MethodPost, "/api/builds/"+id+"/cancel", nil)
 	cancelRes := httptest.NewRecorder()
 	r.ServeHTTP(cancelRes, cancelReq)
-	if cancelRes.Code != http.StatusOK {
-		t.Fatalf("expected cancel status %d, got %d", http.StatusOK, cancelRes.Code)
+	if cancelRes.Code != http.StatusConflict {
+		t.Fatalf("expected cancel status %d after completion, got %d", http.StatusConflict, cancelRes.Code)
+	}
+
+	cancelableCreateReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
+	cancelableCreateRes := httptest.NewRecorder()
+	r.ServeHTTP(cancelableCreateRes, cancelableCreateReq)
+	if cancelableCreateRes.Code != http.StatusCreated {
+		t.Fatalf("expected cancelable create status %d, got %d", http.StatusCreated, cancelableCreateRes.Code)
+	}
+	var cancelableCreateBody map[string]any
+	if err := json.Unmarshal(cancelableCreateRes.Body.Bytes(), &cancelableCreateBody); err != nil {
+		t.Fatalf("failed to parse cancelable create response: %v", err)
+	}
+	cancelableData, ok := cancelableCreateBody["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected cancelable create data envelope, got %v", cancelableCreateBody)
+	}
+	cancelableID, ok := cancelableData["id"].(string)
+	if !ok || cancelableID == "" {
+		t.Fatalf("expected cancelable create response id, got %v", cancelableData["id"])
+	}
+	queueCancelableReq := httptest.NewRequest(http.MethodPost, "/api/builds/"+cancelableID+"/queue", nil)
+	queueCancelableRes := httptest.NewRecorder()
+	r.ServeHTTP(queueCancelableRes, queueCancelableReq)
+	if queueCancelableRes.Code != http.StatusOK {
+		t.Fatalf("expected queue status %d, got %d", http.StatusOK, queueCancelableRes.Code)
+	}
+	cancelQueuedReq := httptest.NewRequest(http.MethodPost, "/api/builds/"+cancelableID+"/cancel", nil)
+	cancelQueuedRes := httptest.NewRecorder()
+	r.ServeHTTP(cancelQueuedRes, cancelQueuedReq)
+	if cancelQueuedRes.Code != http.StatusOK {
+		t.Fatalf("expected queued cancel status %d, got %d", http.StatusOK, cancelQueuedRes.Code)
 	}
 }
 

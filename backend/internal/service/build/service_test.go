@@ -307,7 +307,7 @@ func (r *fakeBuildRepository) RenewStepLease(_ context.Context, _ string, stepIn
 		if r.steps[i].StepIndex != stepIndex {
 			continue
 		}
-		if r.steps[i].Status == domain.BuildStepStatusSuccess || r.steps[i].Status == domain.BuildStepStatusFailed {
+		if domain.IsTerminalStepStatus(r.steps[i].Status) {
 			return r.steps[i], repository.StepCompletionDuplicateTerminal, nil
 		}
 		if r.steps[i].Status != domain.BuildStepStatusRunning {
@@ -408,7 +408,7 @@ func (r *fakeBuildRepository) CompleteStep(_ context.Context, request repository
 				continue
 			}
 
-			if r.steps[i].Status == domain.BuildStepStatusSuccess || r.steps[i].Status == domain.BuildStepStatusFailed {
+			if domain.IsTerminalStepStatus(r.steps[i].Status) {
 				return repository.CompleteStepResult{Step: r.steps[i], Outcome: repository.StepCompletionDuplicateTerminal}, nil
 			}
 			if r.steps[i].Status != domain.BuildStepStatusRunning {
@@ -427,7 +427,7 @@ func (r *fakeBuildRepository) CompleteStep(_ context.Context, request repository
 		return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, err
 	}
 	if !completed {
-		if step.Status == domain.BuildStepStatusSuccess || step.Status == domain.BuildStepStatusFailed {
+		if domain.IsTerminalStepStatus(step.Status) {
 			return repository.CompleteStepResult{Step: step, Outcome: repository.StepCompletionDuplicateTerminal}, nil
 		}
 		if step.ID == "" && step.Name == "" {
@@ -1244,26 +1244,26 @@ func TestBuildService_CancelBuild_TerminalizesBuildAndNonTerminalSteps(t *testin
 	if err != nil {
 		t.Fatalf("cancel build failed: %v", err)
 	}
-	if canceled.Status != domain.BuildStatusFailed {
-		t.Fatalf("expected canceled build status failed, got %q", canceled.Status)
+	if canceled.Status != domain.BuildStatusCanceled {
+		t.Fatalf("expected canceled build status canceled, got %q", canceled.Status)
 	}
 
 	if repo.steps[0].Status != domain.BuildStepStatusSuccess {
 		t.Fatalf("expected already terminal step to remain success, got %q", repo.steps[0].Status)
 	}
-	if repo.steps[1].Status != domain.BuildStepStatusFailed {
-		t.Fatalf("expected running step to be terminalized as failed, got %q", repo.steps[1].Status)
+	if repo.steps[1].Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected running step to be terminalized as canceled, got %q", repo.steps[1].Status)
 	}
-	if repo.steps[2].Status != domain.BuildStepStatusFailed {
-		t.Fatalf("expected pending step to be terminalized as failed, got %q", repo.steps[2].Status)
+	if repo.steps[2].Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected pending step to be terminalized as canceled, got %q", repo.steps[2].Status)
 	}
 }
 
-func TestBuildService_CancelBuild_TerminalBuildIsNoop(t *testing.T) {
+func TestBuildService_CancelBuild_QueuedBuildSucceeds(t *testing.T) {
 	now := time.Now().UTC()
 	repo := &fakeBuildRepository{
-		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
-		steps: []domain.BuildStep{{ID: "step-0", BuildID: "build-1", StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusSuccess}},
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusQueued, CreatedAt: now},
+		steps: []domain.BuildStep{{ID: "step-0", BuildID: "build-1", StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusPending}},
 	}
 	svc := NewBuildService(repo, nil, nil)
 
@@ -1271,11 +1271,43 @@ func TestBuildService_CancelBuild_TerminalBuildIsNoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cancel build failed: %v", err)
 	}
-	if canceled.Status != domain.BuildStatusSuccess {
-		t.Fatalf("expected terminal build status unchanged, got %q", canceled.Status)
+	if canceled.Status != domain.BuildStatusCanceled {
+		t.Fatalf("expected canceled build status, got %q", canceled.Status)
 	}
-	if repo.updateCalls != 0 {
-		t.Fatalf("expected no update status call for terminal build, got %d", repo.updateCalls)
+	if repo.steps[0].Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected pending step to be canceled, got %q", repo.steps[0].Status)
+	}
+}
+
+func TestBuildService_CancelBuild_NonCancelableBuildIsRejected(t *testing.T) {
+	tests := []struct {
+		name   string
+		status domain.BuildStatus
+	}{
+		{name: "pending", status: domain.BuildStatusPending},
+		{name: "success", status: domain.BuildStatusSuccess},
+		{name: "failed", status: domain.BuildStatusFailed},
+		{name: "canceled", status: domain.BuildStatusCanceled},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			repo := &fakeBuildRepository{
+				build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: tc.status, CreatedAt: now},
+				steps: []domain.BuildStep{{ID: "step-0", BuildID: "build-1", StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusSuccess}},
+			}
+			svc := NewBuildService(repo, nil, nil)
+
+			_, err := svc.CancelBuild(context.Background(), "build-1")
+			if !errors.Is(err, ErrInvalidBuildStatusTransition) {
+				t.Fatalf("expected invalid transition, got %v", err)
+			}
+			if repo.updateCalls != 0 {
+				t.Fatalf("expected no update status call for terminal build, got %d", repo.updateCalls)
+			}
+		})
 	}
 }
 

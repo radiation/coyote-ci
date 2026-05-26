@@ -10,10 +10,13 @@ func TestCanTransitionBuild_Valid(t *testing.T) {
 	}{
 		{name: "pending to queued", from: BuildStatusPending, to: BuildStatusQueued},
 		{name: "queued to preparing", from: BuildStatusQueued, to: BuildStatusPreparing},
+		{name: "queued to canceled", from: BuildStatusQueued, to: BuildStatusCanceled},
 		{name: "preparing to running", from: BuildStatusPreparing, to: BuildStatusRunning},
 		{name: "preparing to failed", from: BuildStatusPreparing, to: BuildStatusFailed},
+		{name: "preparing to canceled", from: BuildStatusPreparing, to: BuildStatusCanceled},
 		{name: "running to success", from: BuildStatusRunning, to: BuildStatusSuccess},
 		{name: "running to failed", from: BuildStatusRunning, to: BuildStatusFailed},
+		{name: "running to canceled", from: BuildStatusRunning, to: BuildStatusCanceled},
 	}
 
 	for _, tc := range tests {
@@ -104,8 +107,8 @@ func TestCanTransitionStep_Invalid(t *testing.T) {
 }
 
 func TestTerminalBuildStatesRejectFurtherTransitions(t *testing.T) {
-	terminalStates := []BuildStatus{BuildStatusSuccess, BuildStatusFailed}
-	allTargets := []BuildStatus{BuildStatusPending, BuildStatusQueued, BuildStatusRunning, BuildStatusSuccess, BuildStatusFailed}
+	terminalStates := []BuildStatus{BuildStatusSuccess, BuildStatusFailed, BuildStatusCanceled}
+	allTargets := []BuildStatus{BuildStatusPending, BuildStatusQueued, BuildStatusRunning, BuildStatusSuccess, BuildStatusFailed, BuildStatusCanceled}
 
 	for _, from := range terminalStates {
 		if !IsTerminalBuildStatus(from) {
@@ -121,8 +124,8 @@ func TestTerminalBuildStatesRejectFurtherTransitions(t *testing.T) {
 }
 
 func TestTerminalStepStatesRejectFurtherTransitions(t *testing.T) {
-	terminalStates := []BuildStepStatus{BuildStepStatusSuccess, BuildStepStatusFailed}
-	allTargets := []BuildStepStatus{BuildStepStatusPending, BuildStepStatusRunning, BuildStepStatusSuccess, BuildStepStatusFailed}
+	terminalStates := []BuildStepStatus{BuildStepStatusSuccess, BuildStepStatusFailed, BuildStepStatusCanceled}
+	allTargets := []BuildStepStatus{BuildStepStatusPending, BuildStepStatusRunning, BuildStepStatusSuccess, BuildStepStatusFailed, BuildStepStatusCanceled}
 
 	for _, from := range terminalStates {
 		if !IsTerminalStepStatus(from) {
@@ -147,6 +150,7 @@ func TestCanCancelStepToFailed(t *testing.T) {
 		{name: "running is cancel-terminalizable", status: BuildStepStatusRunning, want: true},
 		{name: "success is already terminal", status: BuildStepStatusSuccess, want: false},
 		{name: "failed is already terminal", status: BuildStepStatusFailed, want: false},
+		{name: "canceled is already terminal", status: BuildStepStatusCanceled, want: false},
 	}
 
 	for _, tc := range tests {
@@ -155,6 +159,32 @@ func TestCanCancelStepToFailed(t *testing.T) {
 			t.Parallel()
 			if got := CanCancelStepToFailed(tc.status); got != tc.want {
 				t.Fatalf("expected CanCancelStepToFailed(%q)=%v, got %v", tc.status, tc.want, got)
+			}
+		})
+	}
+}
+
+func TestCanCancelBuild(t *testing.T) {
+	tests := []struct {
+		name   string
+		status BuildStatus
+		want   bool
+	}{
+		{name: "pending is not cancelable", status: BuildStatusPending, want: false},
+		{name: "queued is cancelable", status: BuildStatusQueued, want: true},
+		{name: "preparing is cancelable", status: BuildStatusPreparing, want: true},
+		{name: "running is cancelable", status: BuildStatusRunning, want: true},
+		{name: "success is not cancelable", status: BuildStatusSuccess, want: false},
+		{name: "failed is not cancelable", status: BuildStatusFailed, want: false},
+		{name: "canceled is not cancelable", status: BuildStatusCanceled, want: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := CanCancelBuild(tc.status); got != tc.want {
+				t.Fatalf("expected CanCancelBuild(%q)=%v, got %v", tc.status, tc.want, got)
 			}
 		})
 	}

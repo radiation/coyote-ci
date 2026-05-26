@@ -323,6 +323,18 @@ input[type="radio"] {
   transform: translateY(-1px);
 }
 
+.danger-button {
+  border-color: var(--color-error-border);
+  color: var(--color-error-text);
+  background: var(--color-error-bg);
+}
+
+.danger-button:hover:not(:disabled) {
+  border-color: var(--color-error-text);
+  color: var(--color-error-text);
+  background: var(--color-error-bg);
+}
+
 .theme-toggle {
   min-width: 124px;
   justify-content: space-between;
@@ -1292,6 +1304,12 @@ fieldset legend {
   border-color: var(--color-error-border);
 }
 
+.status-canceled {
+  color: var(--color-neutral-text);
+  background: var(--color-neutral-bg);
+  border-color: var(--color-neutral-border);
+}
+
 .trigger-cell {
   display: flex;
   flex-direction: column;
@@ -1671,6 +1689,12 @@ h3 {
   border-color: var(--color-border-strong);
   color: var(--color-accent);
   transform: translateY(-1px);
+}
+
+.inline-action-button.danger-button:hover:not(:disabled) {
+  background: var(--color-error-bg);
+  border-color: var(--color-error-text);
+  color: var(--color-error-text);
 }
 
 .inline-action-button:disabled {

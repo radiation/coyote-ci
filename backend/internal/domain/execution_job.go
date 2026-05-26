@@ -11,10 +11,11 @@ import (
 type ExecutionJobStatus string
 
 const (
-	ExecutionJobStatusQueued  ExecutionJobStatus = "queued"
-	ExecutionJobStatusRunning ExecutionJobStatus = "running"
-	ExecutionJobStatusSuccess ExecutionJobStatus = "success"
-	ExecutionJobStatusFailed  ExecutionJobStatus = "failed"
+	ExecutionJobStatusQueued   ExecutionJobStatus = "queued"
+	ExecutionJobStatusRunning  ExecutionJobStatus = "running"
+	ExecutionJobStatusSuccess  ExecutionJobStatus = "success"
+	ExecutionJobStatusFailed   ExecutionJobStatus = "failed"
+	ExecutionJobStatusCanceled ExecutionJobStatus = "canceled"
 )
 
 // SourceSnapshotRef is the durable source identity for a queued execution job.

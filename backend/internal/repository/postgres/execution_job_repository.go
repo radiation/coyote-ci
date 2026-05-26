@@ -298,7 +298,7 @@ func (r *ExecutionJobRepository) RenewJobLease(ctx context.Context, jobID string
 		}
 		return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, currentErr
 	}
-	if existing.Status == domain.ExecutionJobStatusSuccess || existing.Status == domain.ExecutionJobStatusFailed {
+	if domain.IsTerminalExecutionJobStatus(existing.Status) {
 		return existing, repository.StepCompletionDuplicateTerminal, nil
 	}
 	if existing.Status == domain.ExecutionJobStatusRunning {
@@ -356,13 +356,42 @@ func (r *ExecutionJobRepository) completeJob(ctx context.Context, jobID string, 
 		}
 		return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, currentErr
 	}
-	if existing.Status == domain.ExecutionJobStatusSuccess || existing.Status == domain.ExecutionJobStatusFailed {
+	if domain.IsTerminalExecutionJobStatus(existing.Status) {
 		return existing, repository.StepCompletionDuplicateTerminal, nil
 	}
 	if existing.Status == domain.ExecutionJobStatusRunning {
 		return existing, repository.StepCompletionStaleClaim, nil
 	}
 	return existing, repository.StepCompletionInvalidTransition, nil
+}
+
+func (r *ExecutionJobRepository) CancelJobsForBuild(ctx context.Context, buildID string, reason string, canceledAt time.Time) (int, error) {
+	trimmedReason := strings.TrimSpace(reason)
+	var reasonPtr *string
+	if trimmedReason != "" {
+		reasonPtr = &trimmedReason
+	}
+
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE build_jobs
+		SET status = 'canceled',
+			claim_token = NULL,
+			claimed_by = NULL,
+			claim_expires_at = NULL,
+			started_at = COALESCE(started_at, $2),
+			finished_at = COALESCE(finished_at, $2),
+			error_message = COALESCE($3::text, error_message)
+		WHERE build_id = $1
+		  AND status IN ('queued', 'running')
+	`, buildID, canceledAt, reasonPtr)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(affected), nil
 }
 
 func nullableString(value string) *string {

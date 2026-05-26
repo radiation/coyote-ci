@@ -5,6 +5,7 @@ import {
   getArtifact,
   listBuilds,
   getBuild,
+  cancelBuild,
   getBuildSteps,
   getBuildArtifacts,
   listArtifactCatalog,
@@ -43,6 +44,7 @@ describe("API client - types", () => {
   it("should export API functions", () => {
     expect(typeof listBuilds).toBe("function");
     expect(typeof getBuild).toBe("function");
+    expect(typeof cancelBuild).toBe("function");
     expect(typeof getBuildSteps).toBe("function");
     expect(typeof getBuildArtifacts).toBe("function");
     expect(typeof listArtifactCatalog).toBe("function");
@@ -74,6 +76,34 @@ describe("API client - types", () => {
     expect(typeof upsertProjectMember).toBe("function");
     expect(typeof updateProjectMember).toBe("function");
     expect(typeof deleteProjectMember).toBe("function");
+  });
+
+  it("cancels a build via /builds/{id}/cancel", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          id: "build-1",
+          project_id: "project-1",
+          priority: 5,
+          status: "canceled",
+          created_at: "2026-03-24T00:00:00Z",
+          queued_at: "2026-03-24T00:00:01Z",
+          started_at: null,
+          finished_at: "2026-03-24T00:00:30Z",
+          current_step_index: 0,
+          error_message: "build canceled by operator request",
+        },
+      }),
+    } as Response);
+
+    const build = await cancelBuild("build-1");
+
+    expect(build.status).toBe("canceled");
+    expect(fetchMock).toHaveBeenCalledWith("/api/builds/build-1/cancel", {
+      credentials: "include",
+      method: "POST",
+    });
   });
 
   beforeEach(() => {

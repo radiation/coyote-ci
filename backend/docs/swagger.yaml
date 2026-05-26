@@ -1573,8 +1573,8 @@ paths:
       - builds
   /builds/{buildID}/cancel:
     post:
-      description: Marks a non-terminal build as failed and terminalizes non-terminal
-        steps.
+      description: Marks a queued or running build as canceled and terminalizes cancellable
+        steps/jobs.
       parameters:
       - description: Build ID
         in: path
@@ -1594,6 +1594,10 @@ paths:
             $ref: '#/definitions/api.ErrorResponse'
         "404":
           description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
           schema:
             $ref: '#/definitions/api.ErrorResponse'
         "500":
