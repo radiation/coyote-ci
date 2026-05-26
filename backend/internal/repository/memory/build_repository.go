@@ -165,6 +165,28 @@ func (r *BuildRepository) List(_ context.Context) ([]domain.Build, error) {
 	return builds, nil
 }
 
+func (r *BuildRepository) ListActive(_ context.Context) ([]domain.Build, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	builds := make([]domain.Build, 0)
+	for _, build := range r.builds {
+		if build.Status != domain.BuildStatusPreparing && build.Status != domain.BuildStatusQueued && build.Status != domain.BuildStatusRunning {
+			continue
+		}
+		builds = append(builds, build)
+	}
+
+	sort.Slice(builds, func(i, j int) bool {
+		if builds[i].CreatedAt.Equal(builds[j].CreatedAt) {
+			return builds[i].ID < builds[j].ID
+		}
+		return builds[i].CreatedAt.After(builds[j].CreatedAt)
+	})
+
+	return builds, nil
+}
+
 func (r *BuildRepository) ListPaged(ctx context.Context, params repository.ListParams) ([]domain.Build, error) {
 	all, err := r.List(ctx)
 	if err != nil {

@@ -139,6 +139,33 @@ func TestBuildRepository_ListLatestByJobIDs(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_ListActive(t *testing.T) {
+	repo := NewBuildRepository()
+	now := time.Now().UTC()
+
+	for _, build := range []domain.Build{
+		{ID: "build-success", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now.Add(-3 * time.Minute)},
+		{ID: "build-queued", ProjectID: "project-1", Status: domain.BuildStatusQueued, CreatedAt: now.Add(-2 * time.Minute)},
+		{ID: "build-running", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now.Add(-time.Minute)},
+		{ID: "build-preparing", ProjectID: "project-1", Status: domain.BuildStatusPreparing, CreatedAt: now},
+	} {
+		if _, err := repo.Create(context.Background(), build); err != nil {
+			t.Fatalf("setup create %s failed: %v", build.ID, err)
+		}
+	}
+
+	builds, err := repo.ListActive(context.Background())
+	if err != nil {
+		t.Fatalf("ListActive returned error: %v", err)
+	}
+	if len(builds) != 3 {
+		t.Fatalf("expected 3 active builds, got %d", len(builds))
+	}
+	if builds[0].ID != "build-preparing" || builds[1].ID != "build-running" || builds[2].ID != "build-queued" {
+		t.Fatalf("expected active builds ordered by created_at desc, got %#v", builds)
+	}
+}
+
 func TestBuildRepository_UpdateStatus(t *testing.T) {
 	repo := NewBuildRepository()
 	created, err := repo.Create(context.Background(), domain.Build{

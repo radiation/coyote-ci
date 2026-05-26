@@ -15,7 +15,7 @@ import (
 
 type workerHandlerBuildBoundary struct{}
 
-func (workerHandlerBuildBoundary) ListBuilds(_ context.Context) ([]domain.Build, error) {
+func (workerHandlerBuildBoundary) ListActiveBuilds(_ context.Context) ([]domain.Build, error) {
 	return []domain.Build{}, nil
 }
 

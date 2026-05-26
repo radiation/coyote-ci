@@ -11,9 +11,12 @@ import (
 )
 
 type fakeVisibilityBuildBoundary struct {
-	builds []domain.Build
-	steps  map[string][]domain.BuildStep
-	jobs   map[string][]domain.ExecutionJob
+	builds        []domain.Build
+	activeBuilds  []domain.Build
+	steps         map[string][]domain.BuildStep
+	jobs          map[string][]domain.ExecutionJob
+	listBuildsErr error
+	listActiveErr error
 }
 
 type fakeVisibilityProjectRepository struct {
@@ -97,6 +100,19 @@ func (f fakeVisibilityJobRepository) Update(context.Context, domain.Job) (domain
 }
 
 func (f fakeVisibilityBuildBoundary) ListBuilds(_ context.Context) ([]domain.Build, error) {
+	if f.listBuildsErr != nil {
+		return nil, f.listBuildsErr
+	}
+	return append([]domain.Build(nil), f.builds...), nil
+}
+
+func (f fakeVisibilityBuildBoundary) ListActiveBuilds(_ context.Context) ([]domain.Build, error) {
+	if f.listActiveErr != nil {
+		return nil, f.listActiveErr
+	}
+	if f.activeBuilds != nil {
+		return append([]domain.Build(nil), f.activeBuilds...), nil
+	}
 	return append([]domain.Build(nil), f.builds...), nil
 }
 
@@ -117,6 +133,31 @@ func TestVisibilityService_ListWorkers_Empty(t *testing.T) {
 	}
 	if len(workers) != 0 {
 		t.Fatalf("expected no workers, got %d", len(workers))
+	}
+}
+
+func TestVisibilityService_ListWorkers_UsesActiveBuildsBoundary(t *testing.T) {
+	now := time.Date(2026, time.May, 25, 12, 0, 0, 0, time.UTC)
+	svc := NewVisibilityService(memoryrepo.NewWorkerRepository(), fakeVisibilityBuildBoundary{
+		activeBuilds: []domain.Build{{ID: "build-1", BuildNumber: 7, ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now.Add(-time.Minute)}},
+		jobs: map[string][]domain.ExecutionJob{
+			"build-1": {
+				{ID: "job-1", BuildID: "build-1", StepID: "step-1", Name: "compile", StepIndex: 0, Status: domain.ExecutionJobStatusRunning, ClaimedBy: stringPtr("orphan-worker"), ClaimExpiresAt: timePtr(now.Add(30 * time.Second)), CreatedAt: now.Add(-50 * time.Second), StartedAt: timePtr(now.Add(-40 * time.Second)), Image: "alpine", WorkingDir: ".", Command: []string{"sh"}, Environment: map[string]string{}, SpecVersion: 1, ResolvedSpecJSON: `{}`},
+			},
+		},
+		listBuildsErr: context.DeadlineExceeded,
+	})
+	svc.clock = func() time.Time { return now }
+
+	workers, err := svc.ListWorkers(context.Background())
+	if err != nil {
+		t.Fatalf("ListWorkers returned error: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("expected 1 orphan worker from active builds, got %d", len(workers))
+	}
+	if workers[0].ID != "orphan-worker" {
+		t.Fatalf("expected orphan worker id, got %q", workers[0].ID)
 	}
 }
 

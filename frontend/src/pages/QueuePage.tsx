@@ -9,6 +9,7 @@ import {
   SLOW_POLL_INTERVAL,
   isActiveBuild,
 } from "../utils/build";
+import { hydrateJobNames, missingJobNameProjectIDs } from "../utils/jobNames";
 import { formatTime } from "../utils/time";
 
 const RECENT_BUILD_FETCH_LIMIT = 24;
@@ -84,51 +85,6 @@ function sortByNewest(builds: Build[]): Build[] {
     );
 
     return rightTime - leftTime;
-  });
-}
-
-function missingJobNameProjectIDs(
-  items: Array<{
-    project_id: string;
-    job_id?: string | null;
-    job_name?: string | null;
-  }>,
-): string[] {
-  return [
-    ...new Set(
-      items
-        .filter((item) => {
-          const jobID = item.job_id?.trim();
-          const jobName = item.job_name?.trim();
-          return Boolean(item.project_id && jobID && !jobName);
-        })
-        .map((item) => item.project_id),
-    ),
-  ].sort();
-}
-
-function hydrateJobNames<
-  T extends {
-    job_id?: string | null;
-    job_name?: string | null;
-  },
->(items: T[], jobNames: Map<string, string>): T[] {
-  return items.map((item) => {
-    const currentName = item.job_name?.trim();
-    const jobID = item.job_id?.trim();
-    if (currentName || !jobID) {
-      return item;
-    }
-
-    const resolvedName = jobNames.get(jobID);
-    if (!resolvedName) {
-      return item;
-    }
-
-    return {
-      ...item,
-      job_name: resolvedName,
-    };
   });
 }
 

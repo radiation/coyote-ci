@@ -198,6 +198,46 @@ func TestBuildRepository_ListLatestByJobIDs(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_ListActive(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewBuildRepository(db)
+	now := time.Now().UTC()
+	buildListRowColumns := strings.Split(strings.ReplaceAll(buildListColumns, " ", ""), ",")
+	row := make([]driver.Value, len(buildListRowColumns))
+	row[0] = "build-running"
+	row[1] = 3
+	row[2] = "project-1"
+	row[4] = 5
+	row[5] = "running"
+	row[6] = now
+	row[10] = 0
+	row[11] = 1
+	row[21] = "manual"
+	row[37] = "external"
+
+	mock.ExpectQuery(`SELECT id, build_number, project_id, job_id, priority, status, created_at`).
+		WithArgs(string(domain.BuildStatusPreparing), string(domain.BuildStatusQueued), string(domain.BuildStatusRunning)).
+		WillReturnRows(sqlmock.NewRows(buildListRowColumns).AddRow(row...))
+
+	builds, err := repo.ListActive(context.Background())
+	if err != nil {
+		t.Fatalf("ListActive returned error: %v", err)
+	}
+	if len(builds) != 1 {
+		t.Fatalf("expected 1 active build, got %d", len(builds))
+	}
+	if builds[0].Status != domain.BuildStatusRunning {
+		t.Fatalf("expected running status, got %q", builds[0].Status)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 func TestBuildRepository_ListQueue_FiltersAndScansContext(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
