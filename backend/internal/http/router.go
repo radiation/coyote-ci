@@ -22,6 +22,7 @@ type routerConfig struct {
 	userHandler              *handler.UserHandler
 	apiTokenHandler          *handler.APITokenHandler
 	projectMembershipHandler *handler.ProjectMembershipHandler
+	workerHandler            *handler.WorkerHandler
 }
 
 type RouterOption func(*routerConfig)
@@ -53,6 +54,12 @@ func WithAuthHandler(authHandler *handler.AuthHandler) RouterOption {
 func WithProjectMembershipHandler(projectMembershipHandler *handler.ProjectMembershipHandler) RouterOption {
 	return func(cfg *routerConfig) {
 		cfg.projectMembershipHandler = projectMembershipHandler
+	}
+}
+
+func WithWorkerHandler(workerHandler *handler.WorkerHandler) RouterOption {
+	return func(cfg *routerConfig) {
+		cfg.workerHandler = workerHandler
 	}
 }
 
@@ -103,6 +110,9 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 			}
 
 			r.Get("/queue", buildHandler.ListQueue)
+			if cfg.workerHandler != nil {
+				r.Get("/workers", cfg.workerHandler.ListWorkers)
+			}
 
 			if cfg.userHandler != nil {
 				r.Get("/me", cfg.userHandler.GetMe)

@@ -628,6 +628,21 @@ fieldset {
   gap: 4px;
 }
 
+.operational-refresh-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.operational-refresh-button {
+  min-width: 108px;
+}
+
+.operational-refresh-meta {
+  text-align: right;
+}
+
 .dashboard-summary-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1247,6 +1262,24 @@ fieldset legend {
   border-color: var(--color-warning-border);
 }
 
+.status-idle {
+  color: var(--color-info-text);
+  background: var(--color-info-bg);
+  border-color: var(--color-info-border);
+}
+
+.status-busy {
+  color: var(--color-warning-text);
+  background: var(--color-warning-bg);
+  border-color: var(--color-warning-border);
+}
+
+.status-stale {
+  color: var(--color-error-text);
+  background: var(--color-error-bg);
+  border-color: var(--color-error-border);
+}
+
 .status-success {
   color: var(--color-success-text);
   background: var(--color-success-bg);
@@ -1281,6 +1314,14 @@ fieldset legend {
   color: var(--color-success-text);
   border-color: var(--color-success-border);
   background: var(--color-success-bg);
+}
+
+.workers-table td strong {
+  display: block;
+}
+
+.workers-row-stale {
+  background: color-mix(in srgb, var(--color-error-bg) 55%, transparent);
 }
 
 .trigger-manual {

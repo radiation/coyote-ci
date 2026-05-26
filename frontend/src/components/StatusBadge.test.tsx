@@ -21,4 +21,9 @@ describe("StatusBadge", () => {
       expect(span.textContent).toBe("Queued");
     }
   });
+
+  it("should accept worker statuses", () => {
+    render(<StatusBadge status="stale" />);
+    expect(screen.getByText("Stale")).toBeTruthy();
+  });
 });

@@ -25,6 +25,7 @@ import (
 	managedimagesvc "github.com/radiation/coyote-ci/backend/internal/service/managedimage"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
+	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
@@ -66,6 +67,7 @@ func main() {
 	artifactLabelRepo := repositorypostgres.NewArtifactLabelRepository(db)
 	webhookDeliveryRepo := repositorypostgres.NewWebhookDeliveryRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
+	workerRepo := repositorypostgres.NewWorkerRepository(db)
 	managedImageRefresher := managedimagesvc.NewService(
 		source.NewGitFetcher(),
 		jobManagedImageConfigRepo,
@@ -111,6 +113,10 @@ func main() {
 	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()
 	webhookService.SetMetrics(webhookMetrics)
 	buildHandler := handler.NewBuildHandler(buildService)
+	workerVisibilityService := workersvc.NewVisibilityService(workerRepo, buildService)
+	workerVisibilityService.SetProjectRepository(projectRepo)
+	workerVisibilityService.SetJobRepository(jobRepo)
+	workerHandler := handler.NewWorkerHandler(workerVisibilityService)
 	buildHandler.SetVersionTagService(versionTagService)
 	buildHandler.SetProjectService(projectService)
 	artifactHandler := handler.NewArtifactHandler(artifactService)
@@ -211,6 +217,7 @@ func main() {
 		apphttp.WithUserHandler(userHandler),
 		apphttp.WithAPITokenHandler(apiTokenHandler),
 		apphttp.WithProjectMembershipHandler(projectMembershipHandler),
+		apphttp.WithWorkerHandler(workerHandler),
 	)
 	mux := nethttp.NewServeMux()
 	mux.Handle("/debug/vars", expvar.Handler())

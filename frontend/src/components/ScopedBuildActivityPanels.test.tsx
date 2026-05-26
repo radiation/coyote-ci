@@ -199,6 +199,58 @@ describe("ScopedBuildActivityPanels", () => {
     });
   });
 
+  it("hydrates missing global recent-build job names from project jobs", async () => {
+    mockedListBuilds.mockResolvedValue([
+      {
+        id: "build-global-recent-1",
+        build_number: 202,
+        project_id: "project-2",
+        project_name: "Payments",
+        job_id: "job-global-release",
+        priority: 5,
+        status: "failed",
+        created_at: "2026-05-01T00:00:00Z",
+        queued_at: null,
+        started_at: null,
+        finished_at: null,
+        current_step_index: 0,
+        error_message: null,
+      },
+    ]);
+    mockedListJobsByProject.mockResolvedValue([
+      {
+        id: "job-global-release",
+        project_id: "project-2",
+        name: "release",
+        priority: 5,
+        repository_url: "https://github.com/example/repo.git",
+        default_ref: "main",
+        push_enabled: true,
+        push_branch: "main",
+        pipeline_yaml: "version: 1",
+        managed_image: null,
+        enabled: true,
+        created_at: "2026-05-01T00:00:00Z",
+        updated_at: "2026-05-01T00:00:00Z",
+      },
+    ]);
+
+    renderWithProviders(<RecentBuildsPanel scope={{ type: "global" }} />);
+
+    await waitFor(() => {
+      expect(mockedListJobsByProject).toHaveBeenCalledWith("project-2");
+      expect(screen.getByRole("link", { name: "Payments" })).toHaveAttribute(
+        "href",
+        "/projects/project-2",
+      );
+      expect(screen.getByRole("link", { name: "release" })).toHaveAttribute(
+        "href",
+        "/jobs/job-global-release",
+      );
+      expect(screen.queryByText(/Job job-glob/i)).toBeNull();
+    });
+  });
+
   it("filters job queue activity from job build history", async () => {
     mockedListBuildsByJob.mockResolvedValue([
       {

@@ -34,6 +34,7 @@ import type {
   SourceCredentialListResponse,
   UpdateSourceCredentialRequest,
 } from "../types/managedImageSettings";
+import type { Worker, WorkerListResponse } from "../types/worker";
 import type {
   CreateProjectRequest,
   Project,
@@ -379,6 +380,12 @@ export async function listQueue(input?: {
     `/queue${suffix}`,
   );
   return envelope.data.entries;
+}
+
+export async function listWorkers(): Promise<Worker[]> {
+  const envelope =
+    await fetchJSON<DataEnvelope<WorkerListResponse>>("/workers");
+  return envelope.data.workers;
 }
 
 export async function getBuildSteps(id: string): Promise<BuildStep[]> {

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import { listBuilds, listProjects, listQueue } from "../api";
+import { listBuilds, listJobsByProject, listProjects, listQueue } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { StatusBadge } from "../components/StatusBadge";
 import type { Build, QueueEntry } from "../types/build";
@@ -84,6 +84,51 @@ function sortByNewest(builds: Build[]): Build[] {
     );
 
     return rightTime - leftTime;
+  });
+}
+
+function missingJobNameProjectIDs(
+  items: Array<{
+    project_id: string;
+    job_id?: string | null;
+    job_name?: string | null;
+  }>,
+): string[] {
+  return [
+    ...new Set(
+      items
+        .filter((item) => {
+          const jobID = item.job_id?.trim();
+          const jobName = item.job_name?.trim();
+          return Boolean(item.project_id && jobID && !jobName);
+        })
+        .map((item) => item.project_id),
+    ),
+  ].sort();
+}
+
+function hydrateJobNames<
+  T extends {
+    job_id?: string | null;
+    job_name?: string | null;
+  },
+>(items: T[], jobNames: Map<string, string>): T[] {
+  return items.map((item) => {
+    const currentName = item.job_name?.trim();
+    const jobID = item.job_id?.trim();
+    if (currentName || !jobID) {
+      return item;
+    }
+
+    const resolvedName = jobNames.get(jobID);
+    if (!resolvedName) {
+      return item;
+    }
+
+    return {
+      ...item,
+      job_name: resolvedName,
+    };
   });
 }
 
@@ -229,6 +274,23 @@ export function QueuePage() {
     queryFn: () => listProjects(),
   });
 
+  const projectIDsNeedingJobs = missingJobNameProjectIDs([
+    ...(entries ?? []),
+    ...(recentBuilds ?? []),
+  ]);
+  const { data: projectJobs = [] } = useQuery({
+    queryKey: ["queue-page", "project-jobs", ...projectIDsNeedingJobs],
+    queryFn: async () => {
+      const responses = await Promise.all(
+        projectIDsNeedingJobs.map((nextProjectID) =>
+          listJobsByProject(nextProjectID),
+        ),
+      );
+      return responses.flat();
+    },
+    enabled: projectIDsNeedingJobs.length > 0,
+  });
+
   function updateFilters(next: { projectID?: string }) {
     const nextParams = new URLSearchParams(searchParams);
     const nextProjectID = next.projectID ?? projectID;
@@ -243,14 +305,21 @@ export function QueuePage() {
     setSearchParams(nextParams, { replace: true });
   }
 
-  const runningEntries = (entries ?? []).filter(
+  const projectJobNames = new Map(projectJobs.map((job) => [job.id, job.name]));
+  const normalizedEntries = hydrateJobNames(entries ?? [], projectJobNames);
+  const normalizedRecentBuilds = hydrateJobNames(
+    recentBuilds ?? [],
+    projectJobNames,
+  );
+
+  const runningEntries = normalizedEntries.filter(
     (entry) => entry.status === "running",
   );
-  const queuedEntries = (entries ?? []).filter(
+  const queuedEntries = normalizedEntries.filter(
     (entry) => entry.status === "queued",
   );
   const terminalBuilds = sortByNewest(
-    (recentBuilds ?? []).filter(
+    normalizedRecentBuilds.filter(
       (build) => build.status === "success" || build.status === "failed",
     ),
   );
