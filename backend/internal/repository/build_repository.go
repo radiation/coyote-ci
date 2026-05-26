@@ -96,6 +96,7 @@ type BuildRepository interface {
 	Create(ctx context.Context, build domain.Build) (domain.Build, error)
 	CreateQueuedBuild(ctx context.Context, build domain.Build, steps []domain.BuildStep) (domain.Build, error)
 	List(ctx context.Context) ([]domain.Build, error)
+	ListActive(ctx context.Context) ([]domain.Build, error)
 	ListPaged(ctx context.Context, params ListParams) ([]domain.Build, error)
 	ListQueue(ctx context.Context, params QueueListParams) ([]domain.QueueEntry, error)
 	ListByJobID(ctx context.Context, jobID string) ([]domain.Build, error)

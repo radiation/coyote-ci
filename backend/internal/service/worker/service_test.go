@@ -1298,6 +1298,84 @@ func TestExecutionWorkerService_ClaimRunnableStep_RecordsIdleHeartbeatAndIgnores
 	}
 }
 
+func TestExecutionWorkerService_ClaimRunnableStep_RateLimitsIdleHeartbeatWrites(t *testing.T) {
+	boundary := &fakeExecutionWorkerBoundary{}
+	workerRepo := &fakeWorkerRepository{}
+	currentTime := time.Date(2026, time.May, 25, 12, 0, 0, 0, time.UTC)
+
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-a", 45*time.Second)
+	worker.clock = func() time.Time { return currentTime }
+	worker.heartbeatWriteInterval = 5 * time.Second
+	worker.SetWorkerRepository(workerRepo)
+
+	if _, found, err := worker.ClaimRunnableStep(context.Background()); err != nil {
+		t.Fatalf("first ClaimRunnableStep returned error: %v", err)
+	} else if found {
+		t.Fatal("expected no runnable step on first poll")
+	}
+
+	currentTime = currentTime.Add(time.Second)
+	if _, found, err := worker.ClaimRunnableStep(context.Background()); err != nil {
+		t.Fatalf("second ClaimRunnableStep returned error: %v", err)
+	} else if found {
+		t.Fatal("expected no runnable step on second poll")
+	}
+
+	currentTime = currentTime.Add(5 * time.Second)
+	if _, found, err := worker.ClaimRunnableStep(context.Background()); err != nil {
+		t.Fatalf("third ClaimRunnableStep returned error: %v", err)
+	} else if found {
+		t.Fatal("expected no runnable step on third poll")
+	}
+
+	if len(workerRepo.heartbeats) != 2 {
+		t.Fatalf("expected 2 idle heartbeat writes after rate limiting, got %d", len(workerRepo.heartbeats))
+	}
+	if !workerRepo.heartbeats[0].HeartbeatAt.Equal(time.Date(2026, time.May, 25, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected first heartbeat at initial poll time, got %s", workerRepo.heartbeats[0].HeartbeatAt)
+	}
+	if !workerRepo.heartbeats[1].HeartbeatAt.Equal(time.Date(2026, time.May, 25, 12, 0, 6, 0, time.UTC)) {
+		t.Fatalf("expected second heartbeat after interval elapsed, got %s", workerRepo.heartbeats[1].HeartbeatAt)
+	}
+}
+
+func TestExecutionWorkerService_ExecuteRunnableStep_HeartbeatBypassesIdleRateLimit(t *testing.T) {
+	claimToken := "claim-a"
+	workerID := "worker-a"
+	now := time.Now().UTC()
+	boundary := &fakeExecutionWorkerBoundary{
+		runStepDelay: 120 * time.Millisecond,
+		runStepResp: runner.RunStepResult{
+			Status:     runner.RunStepStatusSuccess,
+			ExitCode:   0,
+			StartedAt:  now,
+			FinishedAt: now.Add(120 * time.Millisecond),
+		},
+		stepsByBuildID: map[string][]domain.BuildStep{
+			"build-1": {
+				{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, WorkerID: &workerID, ClaimToken: &claimToken, LeaseExpiresAt: workerTestPtrTime(now.Add(50 * time.Millisecond))},
+			},
+		},
+	}
+	workerRepo := &fakeWorkerRepository{}
+
+	worker := NewExecutionWorkerServiceWithLease(boundary, workerID, 90*time.Millisecond)
+	worker.clock = time.Now
+	worker.heartbeatWriteInterval = time.Hour
+	worker.SetWorkerRepository(workerRepo)
+
+	_, err := worker.ExecuteRunnableStep(context.Background(), WorkerRunnableStep{BuildID: "build-1", StepIndex: 0, StepName: "test", WorkerID: workerID, ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if boundary.renewCalls == 0 {
+		t.Fatal("expected at least one lease renewal during execution")
+	}
+	if len(workerRepo.heartbeats) < 2 {
+		t.Fatalf("expected active execution heartbeats to bypass idle rate limit, got %d writes", len(workerRepo.heartbeats))
+	}
+}
+
 func TestExecutionWorkerService_RecoveryStatsSnapshot(t *testing.T) {
 	workerID := "worker-a"
 	now := time.Now().UTC()

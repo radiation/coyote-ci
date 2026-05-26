@@ -8,6 +8,7 @@ This repository uses Goose for PostgreSQL schema migrations.
 - Applied migrations are immutable.
 - Add new numbered migration files for schema changes.
 - Do not edit old applied migration files.
+- Prefer deterministic DDL in tracked migrations. Avoid `IF NOT EXISTS` / `IF EXISTS` on schema objects when the migration is asserting expected state; let durable deployments fail loudly on drift or partial manual changes instead of masking them.
 
 ## Core commands
 

@@ -94,6 +94,21 @@ func (r *fakeBuildRepository) List(_ context.Context) ([]domain.Build, error) {
 	return []domain.Build{r.build}, nil
 }
 
+func (r *fakeBuildRepository) ListActive(ctx context.Context) ([]domain.Build, error) {
+	builds, err := r.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	active := make([]domain.Build, 0, len(builds))
+	for _, build := range builds {
+		if build.Status != domain.BuildStatusPreparing && build.Status != domain.BuildStatusQueued && build.Status != domain.BuildStatusRunning {
+			continue
+		}
+		active = append(active, build)
+	}
+	return active, nil
+}
+
 func (r *fakeBuildRepository) ListByJobID(_ context.Context, jobID string) ([]domain.Build, error) {
 	if r.build.ID == "" {
 		return []domain.Build{}, nil

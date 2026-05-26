@@ -70,17 +70,19 @@ type WorkerLeaseRecoveryStats struct {
 }
 
 type ExecutionWorkerService struct {
-	builds        workerExecutionBoundary
-	workerRepo    repository.WorkerRepository
-	workerID      string
-	leaseDuration time.Duration
-	clock         func() time.Time
-	claimsWon     int64
-	reclaimsWon   int64
-	renewalsWon   int64
-	renewalsStale int64
-	staleComplete int64
-	reclaimMisses int64
+	builds                 workerExecutionBoundary
+	workerRepo             repository.WorkerRepository
+	workerID               string
+	leaseDuration          time.Duration
+	heartbeatWriteInterval time.Duration
+	clock                  func() time.Time
+	lastHeartbeatWriteAt   int64
+	claimsWon              int64
+	reclaimsWon            int64
+	renewalsWon            int64
+	renewalsStale          int64
+	staleComplete          int64
+	reclaimMisses          int64
 }
 
 func NewExecutionWorkerService(builds workerExecutionBoundary) *ExecutionWorkerService {
@@ -97,10 +99,11 @@ func NewExecutionWorkerServiceWithLease(builds workerExecutionBoundary, workerID
 	}
 
 	return &ExecutionWorkerService{
-		builds:        builds,
-		workerID:      resolvedWorkerID,
-		leaseDuration: leaseDuration,
-		clock:         time.Now,
+		builds:                 builds,
+		workerID:               resolvedWorkerID,
+		leaseDuration:          leaseDuration,
+		heartbeatWriteInterval: 5 * time.Second,
+		clock:                  time.Now,
 	}
 }
 
@@ -109,7 +112,7 @@ func (w *ExecutionWorkerService) SetWorkerRepository(repo repository.WorkerRepos
 }
 
 func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerRunnableStep, bool, error) {
-	w.recordHeartbeat(ctx)
+	w.recordHeartbeat(ctx, false)
 
 	// prepareQueuedBuilds returns the full build list it already fetched so the
 	// transitional fallback below can reuse it without a second ListBuilds call.
@@ -564,7 +567,7 @@ func workerMaxInt(value int, minimum int) int {
 }
 
 func (w *ExecutionWorkerService) ExecuteRunnableStep(ctx context.Context, step WorkerRunnableStep) (WorkerStepExecutionReport, error) {
-	w.recordHeartbeat(ctx)
+	w.recordHeartbeat(ctx, true)
 
 	log.Printf("claimed runnable work: build_id=%s step=%s", step.BuildID, step.StepName)
 	log.Printf("starting execution: build_id=%s step=%s", step.BuildID, step.StepName)
@@ -594,7 +597,7 @@ func (w *ExecutionWorkerService) ExecuteRunnableStep(ctx context.Context, step W
 			case <-heartbeatCtx.Done():
 				return
 			case <-ticker.C:
-				w.recordHeartbeat(heartbeatCtx)
+				w.recordHeartbeat(heartbeatCtx, true)
 				cont, renewErr := w.renewStepLease(heartbeatCtx, step)
 				if renewErr != nil {
 					log.Printf("lease renewal error: build_id=%s step=%s err=%v", step.BuildID, step.StepName, renewErr)
@@ -666,18 +669,42 @@ func (w *ExecutionWorkerService) ExecuteRunnableStep(ctx context.Context, step W
 	return report, nil
 }
 
-func (w *ExecutionWorkerService) recordHeartbeat(ctx context.Context) {
+func (w *ExecutionWorkerService) recordHeartbeat(ctx context.Context, force bool) {
 	if w.workerRepo == nil {
+		return
+	}
+
+	now := w.clock().UTC()
+	if !w.reserveHeartbeatWrite(now, force) {
 		return
 	}
 
 	_, err := w.workerRepo.UpsertHeartbeat(ctx, domain.WorkerHeartbeat{
 		ID:          w.workerID,
 		Name:        w.workerID,
-		HeartbeatAt: w.clock().UTC(),
+		HeartbeatAt: now,
 	})
 	if err != nil {
 		log.Printf("worker heartbeat update failed: worker_id=%s err=%v", w.workerID, err)
+	}
+}
+
+func (w *ExecutionWorkerService) reserveHeartbeatWrite(now time.Time, force bool) bool {
+	nowUnix := now.UnixNano()
+	if force || w.heartbeatWriteInterval <= 0 {
+		atomic.StoreInt64(&w.lastHeartbeatWriteAt, nowUnix)
+		return true
+	}
+
+	interval := int64(w.heartbeatWriteInterval)
+	for {
+		last := atomic.LoadInt64(&w.lastHeartbeatWriteAt)
+		if last != 0 && nowUnix-last < interval {
+			return false
+		}
+		if atomic.CompareAndSwapInt64(&w.lastHeartbeatWriteAt, last, nowUnix) {
+			return true
+		}
 	}
 }
 

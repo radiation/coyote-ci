@@ -27,6 +27,10 @@ func (s *BuildService) ListBuilds(ctx context.Context) ([]domain.Build, error) {
 	return s.buildRepo.List(ctx)
 }
 
+func (s *BuildService) ListActiveBuilds(ctx context.Context) ([]domain.Build, error) {
+	return s.buildRepo.ListActive(ctx)
+}
+
 func (s *BuildService) ListBuildsPaged(ctx context.Context, params repository.ListParams) ([]domain.Build, error) {
 	return s.buildRepo.ListPaged(ctx, params)
 }

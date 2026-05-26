@@ -13,7 +13,7 @@ import (
 const defaultWorkerStaleAfter = 90 * time.Second
 
 type visibilityBuildBoundary interface {
-	ListBuilds(ctx context.Context) ([]domain.Build, error)
+	ListActiveBuilds(ctx context.Context) ([]domain.Build, error)
 	GetBuildSteps(ctx context.Context, id string) ([]domain.BuildStep, error)
 	GetJobsByBuildID(ctx context.Context, buildID string) ([]domain.ExecutionJob, error)
 }
@@ -170,7 +170,7 @@ func (s *VisibilityService) collectClaims(ctx context.Context) (map[string]worke
 	// TODO: If the active build set grows, add a repository-level read optimized
 	// for active worker visibility instead of walking all builds and loading
 	// jobs/steps per active build.
-	builds, err := s.builds.ListBuilds(ctx)
+	builds, err := s.builds.ListActiveBuilds(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -179,10 +179,6 @@ func (s *VisibilityService) collectClaims(ctx context.Context) (map[string]worke
 	projectCache := map[string]projectMeta{}
 	jobCache := map[string]jobMeta{}
 	for _, build := range builds {
-		if build.Status != domain.BuildStatusPreparing && build.Status != domain.BuildStatusQueued && build.Status != domain.BuildStatusRunning {
-			continue
-		}
-
 		jobs, err := s.builds.GetJobsByBuildID(ctx, build.ID)
 		if err != nil {
 			return nil, err
@@ -293,9 +289,6 @@ func isActiveStepClaim(step domain.BuildStep) bool {
 func orphanClaimStatus(claim workerClaim, now time.Time) domain.WorkerStatus {
 	// A claim without a heartbeat registry row is surfaced as stale so partial
 	// rollout/backfill still exposes owned work without implying health.
-	if claim.LeaseExpiresAt == nil || !claim.LeaseExpiresAt.After(now) {
-		return domain.WorkerStatusStale
-	}
 	return domain.WorkerStatusStale
 }
 

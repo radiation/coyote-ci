@@ -164,6 +164,21 @@ func (r *fakeRepo) List(_ context.Context) ([]domain.Build, error) {
 	return builds, nil
 }
 
+func (r *fakeRepo) ListActive(ctx context.Context) ([]domain.Build, error) {
+	builds, err := r.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	active := make([]domain.Build, 0, len(builds))
+	for _, build := range builds {
+		if build.Status != domain.BuildStatusPreparing && build.Status != domain.BuildStatusQueued && build.Status != domain.BuildStatusRunning {
+			continue
+		}
+		active = append(active, build)
+	}
+	return active, nil
+}
+
 func (r *fakeRepo) ListPaged(ctx context.Context, params repository.ListParams) ([]domain.Build, error) {
 	r.listParams = append(r.listParams, params)
 	return r.List(ctx)
