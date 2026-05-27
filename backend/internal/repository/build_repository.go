@@ -9,6 +9,7 @@ import (
 )
 
 var ErrBuildNotFound = errors.New("build not found")
+var ErrInvalidBuildStatusTransition = errors.New("invalid build status transition")
 var ErrInvalidBuildStepTransition = errors.New("invalid build step transition")
 
 // StepUpdate contains the fields to update on a build step.

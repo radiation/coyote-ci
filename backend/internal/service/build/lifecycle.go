@@ -29,9 +29,9 @@ func (s *BuildService) CancelBuild(ctx context.Context, id string) (domain.Build
 		return domain.Build{}, mapRepoErr(err)
 	}
 
-	if domain.IsTerminalBuildStatus(build.Status) {
-		log.Printf("cancel ignored: build already terminal build_id=%s status=%s", id, build.Status)
-		return build, nil
+	if !domain.CanCancelBuild(build.Status) {
+		log.Printf("cancel rejected: build not cancelable build_id=%s status=%s", id, build.Status)
+		return domain.Build{}, ErrInvalidBuildStatusTransition
 	}
 
 	now := time.Now().UTC()
@@ -39,12 +39,15 @@ func (s *BuildService) CancelBuild(ctx context.Context, id string) (domain.Build
 	if repoWithAtomicCancel, ok := s.buildRepo.(interface {
 		CancelBuild(ctx context.Context, id string, reason string, canceledAt time.Time) (domain.Build, int, error)
 	}); ok {
-		failed, updatedSteps, cancelErr := repoWithAtomicCancel.CancelBuild(ctx, id, reason, now)
+		canceled, updatedSteps, cancelErr := repoWithAtomicCancel.CancelBuild(ctx, id, reason, now)
 		if cancelErr != nil {
 			return domain.Build{}, mapRepoErr(cancelErr)
 		}
-		log.Printf("cancel applied: build_id=%s status=%s updated_steps=%d", id, failed.Status, updatedSteps)
-		return failed, nil
+		if !cancelBuildIncludesExecutionJobs(s.buildRepo) {
+			s.cancelExecutionJobsForBuild(ctx, id, reason, now)
+		}
+		log.Printf("cancel applied: build_id=%s status=%s updated_steps=%d", id, canceled.Status, updatedSteps)
+		return canceled, nil
 	}
 
 	steps, err := s.buildRepo.GetStepsByBuildID(ctx, id)
@@ -54,14 +57,12 @@ func (s *BuildService) CancelBuild(ctx context.Context, id string) (domain.Build
 
 	updatedSteps := 0
 	for _, step := range steps {
-		// Cancellation uses explicit terminalization semantics rather than normal
-		// execution transitions; see domain.CanCancelStepToFailed.
-		if !domain.CanCancelStepToFailed(step.Status) {
+		if !domain.CanCancelStep(step.Status) {
 			continue
 		}
 
 		update := repository.StepUpdate{
-			Status:       domain.BuildStepStatusFailed,
+			Status:       domain.BuildStepStatusCanceled,
 			ErrorMessage: &reason,
 			FinishedAt:   &now,
 		}
@@ -75,13 +76,41 @@ func (s *BuildService) CancelBuild(ctx context.Context, id string) (domain.Build
 		updatedSteps++
 	}
 
-	failed, err := s.buildRepo.UpdateStatus(ctx, id, domain.BuildStatusFailed, &reason)
+	canceled, err := s.buildRepo.UpdateStatus(ctx, id, domain.BuildStatusCanceled, &reason)
 	if err != nil {
 		return domain.Build{}, mapRepoErr(err)
 	}
+	s.cancelExecutionJobsForBuild(ctx, id, reason, now)
 
-	log.Printf("cancel applied: build_id=%s status=%s updated_steps=%d", id, failed.Status, updatedSteps)
-	return failed, nil
+	log.Printf("cancel applied: build_id=%s status=%s updated_steps=%d", id, canceled.Status, updatedSteps)
+	return canceled, nil
+}
+
+func cancelBuildIncludesExecutionJobs(repo any) bool {
+	repoWithJobCancel, ok := repo.(interface {
+		CancelBuildIncludesExecutionJobs() bool
+	})
+	return ok && repoWithJobCancel.CancelBuildIncludesExecutionJobs()
+}
+
+func (s *BuildService) cancelExecutionJobsForBuild(ctx context.Context, id string, reason string, canceledAt time.Time) {
+	if s.executionJobRepo == nil {
+		return
+	}
+	repoWithCancel, ok := s.executionJobRepo.(interface {
+		CancelJobsForBuild(ctx context.Context, buildID string, reason string, canceledAt time.Time) (int, error)
+	})
+	if !ok {
+		return
+	}
+	updatedJobs, err := repoWithCancel.CancelJobsForBuild(ctx, id, reason, canceledAt)
+	if err != nil {
+		log.Printf("cancel jobs failed: build_id=%s err=%v", id, err)
+		return
+	}
+	if updatedJobs > 0 {
+		log.Printf("cancel jobs applied: build_id=%s updated_jobs=%d", id, updatedJobs)
+	}
 }
 
 func mapRepoErr(err error) error {
@@ -90,6 +119,9 @@ func mapRepoErr(err error) error {
 	}
 	if errors.Is(err, repository.ErrBuildNotFound) {
 		return ErrBuildNotFound
+	}
+	if errors.Is(err, repository.ErrInvalidBuildStatusTransition) {
+		return ErrInvalidBuildStatusTransition
 	}
 	if errors.Is(err, repository.ErrInvalidBuildStepTransition) {
 		return ErrInvalidBuildStepTransition

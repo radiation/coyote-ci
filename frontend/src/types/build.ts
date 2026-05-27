@@ -70,7 +70,8 @@ export type BuildStatus =
   | "preparing"
   | "running"
   | "success"
-  | "failed";
+  | "failed"
+  | "canceled";
 
 /** Matches the backend api.BuildStepResponse JSON shape. */
 export interface BuildStep {
@@ -90,7 +91,12 @@ export interface BuildStep {
   error_message: string | null;
 }
 
-export type BuildStepStatus = "pending" | "running" | "success" | "failed";
+export type BuildStepStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "failed"
+  | "canceled";
 
 /** Envelope: { data: { builds: Build[] } } */
 export interface BuildListResponse {

@@ -2,12 +2,22 @@ package domain
 
 // IsTerminalBuildStatus reports whether a build status cannot transition further.
 func IsTerminalBuildStatus(status BuildStatus) bool {
-	return status == BuildStatusSuccess || status == BuildStatusFailed
+	return status == BuildStatusSuccess || status == BuildStatusFailed || status == BuildStatusCanceled
 }
 
 // IsTerminalStepStatus reports whether a step status cannot transition further.
 func IsTerminalStepStatus(status BuildStepStatus) bool {
-	return status == BuildStepStatusSuccess || status == BuildStepStatusFailed
+	return status == BuildStepStatusSuccess || status == BuildStepStatusFailed || status == BuildStepStatusCanceled
+}
+
+// IsTerminalExecutionJobStatus reports whether a durable execution job cannot transition further.
+func IsTerminalExecutionJobStatus(status ExecutionJobStatus) bool {
+	return status == ExecutionJobStatusSuccess || status == ExecutionJobStatusFailed || status == ExecutionJobStatusCanceled
+}
+
+// CanCancelBuild reports whether an operator cancellation may terminalize a build.
+func CanCancelBuild(status BuildStatus) bool {
+	return status == BuildStatusQueued || status == BuildStatusPreparing || status == BuildStatusRunning
 }
 
 // CanTransitionBuild reports whether a build lifecycle transition is legal.
@@ -16,11 +26,11 @@ func CanTransitionBuild(from, to BuildStatus) bool {
 	case BuildStatusPending:
 		return to == BuildStatusQueued
 	case BuildStatusQueued:
-		return to == BuildStatusPreparing
+		return to == BuildStatusPreparing || to == BuildStatusCanceled
 	case BuildStatusPreparing:
-		return to == BuildStatusRunning || to == BuildStatusFailed
+		return to == BuildStatusRunning || to == BuildStatusFailed || to == BuildStatusCanceled
 	case BuildStatusRunning:
-		return to == BuildStatusSuccess || to == BuildStatusFailed
+		return to == BuildStatusSuccess || to == BuildStatusFailed || to == BuildStatusCanceled
 	default:
 		return false
 	}
@@ -38,8 +48,12 @@ func CanTransitionStep(from, to BuildStepStatus) bool {
 	}
 }
 
-// CanCancelStepToFailed reports whether cancellation/unstick semantics may
-// terminalize a step as failed.
-func CanCancelStepToFailed(from BuildStepStatus) bool {
+// CanCancelStep reports whether cancellation may terminalize a step as canceled.
+func CanCancelStep(from BuildStepStatus) bool {
 	return from == BuildStepStatusPending || from == BuildStepStatusRunning
+}
+
+// CanCancelExecutionJob reports whether cancellation may terminalize a durable job as canceled.
+func CanCancelExecutionJob(from ExecutionJobStatus) bool {
+	return from == ExecutionJobStatusQueued || from == ExecutionJobStatusRunning
 }

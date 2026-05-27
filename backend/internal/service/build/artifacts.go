@@ -80,7 +80,7 @@ func (s *BuildService) writeTerminalBuildSummary(ctx context.Context, request ru
 
 	completedSteps := 0
 	for _, step := range steps {
-		if step.Status == domain.BuildStepStatusSuccess || step.Status == domain.BuildStepStatusFailed {
+		if domain.IsTerminalStepStatus(step.Status) {
 			completedSteps++
 		}
 	}

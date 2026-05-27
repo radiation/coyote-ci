@@ -382,6 +382,46 @@ func TestBuildRepository_CompleteStep_DuplicateNoOp(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_CompleteStep_CanceledNoOp(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewBuildRepository(db)
+	now := time.Now().UTC()
+	exitCode := 0
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
+		sqlmock.NewRows(stepMockColumns).
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "canceled", nil, nil, nil, nil, now, now, nil, nil, nil, "operator canceled", "[]", nil, nil, nil, "external", nil, nil),
+	)
+	mock.ExpectCommit()
+
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:      "build-1",
+		StepIndex:    0,
+		ClaimToken:   "claim-1",
+		RequireClaim: true,
+		Update:       repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.Outcome != repository.StepCompletionDuplicateTerminal {
+		t.Fatalf("expected duplicate terminal outcome, got %q", result.Outcome)
+	}
+	if result.Step.Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected canceled terminal step state, got %q", result.Step.Status)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 func TestBuildRepository_CompleteStep_InvalidTransition(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

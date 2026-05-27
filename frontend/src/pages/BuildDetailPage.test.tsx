@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { BuildDetailPage } from "./BuildDetailPage";
 import {
+  cancelBuild,
   createJobVersionTags,
   getBuild,
   getBuildArtifacts,
@@ -19,6 +20,7 @@ import type { Build, BuildArtifact, BuildStep } from "../types";
 import { formatCompactTime } from "../utils/time";
 
 vi.mock("../api", () => ({
+  cancelBuild: vi.fn(),
   createJobVersionTags: vi.fn(),
   getBuild: vi.fn(),
   getBuildSteps: vi.fn(),
@@ -141,12 +143,16 @@ function renderPage() {
 
 describe("BuildDetailPage", () => {
   const mockedGetBuild = vi.mocked(getBuild);
+  const mockedCancelBuild = vi.mocked(cancelBuild);
   const mockedGetBuildSteps = vi.mocked(getBuildSteps);
   const mockedGetBuildArtifacts = vi.mocked(getBuildArtifacts);
   const mockedCreateJobVersionTags = vi.mocked(createJobVersionTags);
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedCancelBuild.mockResolvedValue(
+      makeBuild({ status: "canceled", finished_at: "2026-03-30T00:01:30Z" }),
+    );
     mockedCreateJobVersionTags.mockResolvedValue([]);
     mockedGetBuild.mockResolvedValue(makeBuild());
     mockedGetBuildSteps.mockResolvedValue([
@@ -206,6 +212,7 @@ describe("BuildDetailPage", () => {
     expect(
       screen.getByRole("link", { name: "Back to builds" }),
     ).toHaveAttribute("href", "/builds");
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
   });
 
   it("renders failed build state with a visible failed step and failure details", async () => {
@@ -303,7 +310,73 @@ describe("BuildDetailPage", () => {
     expect(
       screen.getByText("No artifacts were collected for this build."),
     ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
   });
+
+  it("confirms and cancels cancelable builds", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({ status: "running", finished_at: null, error_message: null }),
+    );
+    mockedGetBuildSteps.mockResolvedValueOnce([
+      makeStep({ status: "running", finished_at: null, exit_code: null }),
+    ]);
+    mockedGetBuildArtifacts.mockResolvedValueOnce([]);
+
+    renderPage();
+
+    const cancelButton = await screen.findByRole("button", { name: "Cancel" });
+    fireEvent.click(cancelButton);
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledWith("Cancel Build #21?");
+      expect(mockedCancelBuild).toHaveBeenCalledWith("build-1");
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  it.each([
+    ["queued", true],
+    ["preparing", true],
+    ["running", true],
+    ["pending", false],
+    ["success", false],
+    ["failed", false],
+    ["canceled", false],
+  ] as const)(
+    "shows Cancel for %s only when cancelable",
+    async (status, shouldShowCancel) => {
+      mockedGetBuild.mockResolvedValueOnce(
+        makeBuild({
+          status,
+          finished_at:
+            status === "success" || status === "failed" || status === "canceled"
+              ? "2026-03-30T00:02:05Z"
+              : null,
+          error_message: null,
+        }),
+      );
+      mockedGetBuildSteps.mockResolvedValueOnce([
+        makeStep({
+          status: status === "running" ? "running" : "pending",
+          finished_at: null,
+          exit_code: null,
+        }),
+      ]);
+      mockedGetBuildArtifacts.mockResolvedValueOnce([]);
+
+      renderPage();
+
+      await screen.findByRole("heading", { level: 2, name: "Build #21" });
+      const button = screen.queryByRole("button", { name: "Cancel" });
+      if (shouldShowCancel) {
+        expect(button).toBeTruthy();
+      } else {
+        expect(button).toBeNull();
+      }
+    },
+  );
 
   it("renders clean empty states when optional fields, logs, and artifacts are missing", async () => {
     mockedGetBuild.mockResolvedValueOnce(

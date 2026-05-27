@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import {
+  cancelBuild,
   createJobVersionTags,
   getBuild,
   getBuildArtifacts,
@@ -18,6 +19,7 @@ import {
   FAST_POLL_INTERVAL,
   SLOW_POLL_INTERVAL,
   isActiveBuild,
+  isCancelableBuild,
 } from "../utils/build";
 import { formatCompactTime, formatDuration, formatTime } from "../utils/time";
 
@@ -81,6 +83,7 @@ function buildStepCounts(steps: BuildStep[] | undefined) {
     total: 0,
     success: 0,
     failed: 0,
+    canceled: 0,
     running: 0,
     pending: 0,
   };
@@ -101,6 +104,9 @@ function summaryTone(
   }
   if (status === "failed") {
     return "danger";
+  }
+  if (status === "canceled") {
+    return "info";
   }
   if (status === "running") {
     return "warning";
@@ -197,6 +203,19 @@ export function BuildDetailPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["build", id] });
       await queryClient.invalidateQueries({ queryKey: ["buildArtifacts", id] });
+    },
+  });
+
+  const cancelBuildMutation = useMutation({
+    mutationFn: () => cancelBuild(id!),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["build", id] }),
+        queryClient.invalidateQueries({ queryKey: ["buildSteps", id] }),
+        queryClient.invalidateQueries({ queryKey: ["buildArtifacts", id] }),
+        queryClient.invalidateQueries({ queryKey: ["queue"] }),
+        queryClient.invalidateQueries({ queryKey: ["builds"] }),
+      ]);
     },
   });
 
@@ -299,6 +318,17 @@ export function BuildDetailPage() {
     });
   }
 
+  async function requestCancelBuild() {
+    if (!isCancelableBuild(currentBuild.status)) {
+      return;
+    }
+    const confirmed = window.confirm(`Cancel ${buildLabel(currentBuild)}?`);
+    if (!confirmed) {
+      return;
+    }
+    await cancelBuildMutation.mutateAsync();
+  }
+
   return (
     <div className="page-content page-build-detail">
       <PageHeader
@@ -336,9 +366,25 @@ export function BuildDetailPage() {
                 View job
               </Link>
             ) : null}
+            {isCancelableBuild(build.status) ? (
+              <button
+                className="secondary-button danger-button"
+                type="button"
+                onClick={() => void requestCancelBuild()}
+                disabled={cancelBuildMutation.isPending}
+              >
+                {cancelBuildMutation.isPending ? "Canceling…" : "Cancel"}
+              </button>
+            ) : null}
           </>
         }
       />
+
+      {cancelBuildMutation.error ? (
+        <p className="error-text">
+          Failed to cancel build: {String(cancelBuildMutation.error)}
+        </p>
+      ) : null}
 
       <section className="panel dashboard-panel build-summary-panel">
         <div className="build-summary-header">
@@ -422,6 +468,11 @@ export function BuildDetailPage() {
           title="Failed"
           value={stepsLoading ? "Loading…" : String(stepCounts.failed)}
           tone={stepCounts.failed > 0 ? "danger" : "default"}
+        />
+        <SummaryCard
+          title="Canceled"
+          value={stepsLoading ? "Loading…" : String(stepCounts.canceled)}
+          tone={stepCounts.canceled > 0 ? "info" : "default"}
         />
         <SummaryCard
           title="Running"

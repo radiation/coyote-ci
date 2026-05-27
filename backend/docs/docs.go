@@ -670,7 +670,7 @@ const docTemplate = `{
         },
         "/builds/{buildID}/cancel": {
             "post": {
-                "description": "Marks a non-terminal build as failed and terminalizes non-terminal steps.",
+                "description": "Marks a queued or running build as canceled and terminalizes cancellable steps/jobs.",
                 "produces": [
                     "application/json"
                 ],
@@ -702,6 +702,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/api.ErrorResponse"
                         }

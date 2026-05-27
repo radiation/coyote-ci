@@ -569,9 +569,6 @@ func workerMaxInt(value int, minimum int) int {
 func (w *ExecutionWorkerService) ExecuteRunnableStep(ctx context.Context, step WorkerRunnableStep) (WorkerStepExecutionReport, error) {
 	w.recordHeartbeat(ctx, true)
 
-	log.Printf("claimed runnable work: build_id=%s step=%s", step.BuildID, step.StepName)
-	log.Printf("starting execution: build_id=%s step=%s", step.BuildID, step.StepName)
-
 	report := WorkerStepExecutionReport{
 		BuildID: step.BuildID,
 		Step: domain.BuildStep{
@@ -579,6 +576,21 @@ func (w *ExecutionWorkerService) ExecuteRunnableStep(ctx context.Context, step W
 			Status: domain.BuildStepStatusPending,
 		},
 	}
+
+	build, buildErr := w.builds.GetBuild(ctx, step.BuildID)
+	if buildErr == nil && domain.IsTerminalBuildStatus(build.Status) {
+		finishedAt := time.Now().UTC()
+		report.Step.Status = domain.BuildStepStatusCanceled
+		report.Step.FinishedAt = &finishedAt
+		log.Printf("skipping execution for terminal build: build_id=%s step=%s status=%s", step.BuildID, step.StepName, build.Status)
+		return report, nil
+	}
+	if buildErr != nil && !errors.Is(buildErr, buildsvc.ErrBuildNotFound) {
+		return report, buildErr
+	}
+
+	log.Printf("claimed runnable work: build_id=%s step=%s", step.BuildID, step.StepName)
+	log.Printf("starting execution: build_id=%s step=%s", step.BuildID, step.StepName)
 
 	startedAt := time.Now().UTC()
 	report.Step.Status = domain.BuildStepStatusRunning

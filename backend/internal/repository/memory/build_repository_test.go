@@ -343,10 +343,16 @@ func TestBuildRepository_CancelBuild_AtomicallyTerminalizesBuildAndCancellableSt
 	if err != nil {
 		t.Fatalf("create build failed: %v", err)
 	}
+	claimToken := "claim-1"
+	claimedAt := createdAt.Add(time.Minute)
+	leaseExpiresAt := claimedAt.Add(time.Minute)
+	workerID := "worker-1"
+	finishedAt := createdAt.Add(90 * time.Second)
+	exitCode := 0
 
 	steps := []domain.BuildStep{
-		{ID: "step-0", BuildID: build.ID, StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusSuccess},
-		{ID: "step-1", BuildID: build.ID, StepIndex: 1, Name: "test", Status: domain.BuildStepStatusRunning},
+		{ID: "step-0", BuildID: build.ID, StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusSuccess, FinishedAt: &finishedAt, ExitCode: &exitCode},
+		{ID: "step-1", BuildID: build.ID, StepIndex: 1, Name: "test", Status: domain.BuildStepStatusRunning, WorkerID: &workerID, ClaimToken: &claimToken, ClaimedAt: &claimedAt, LeaseExpiresAt: &leaseExpiresAt, StartedAt: &claimedAt},
 		{ID: "step-2", BuildID: build.ID, StepIndex: 2, Name: "lint", Status: domain.BuildStepStatusPending},
 	}
 	_, err = repo.QueueBuild(context.Background(), build.ID, steps)
@@ -363,8 +369,8 @@ func TestBuildRepository_CancelBuild_AtomicallyTerminalizesBuildAndCancellableSt
 	if err != nil {
 		t.Fatalf("cancel build failed: %v", err)
 	}
-	if updatedBuild.Status != domain.BuildStatusFailed {
-		t.Fatalf("expected build failed after cancel, got %q", updatedBuild.Status)
+	if updatedBuild.Status != domain.BuildStatusCanceled {
+		t.Fatalf("expected build canceled after cancel, got %q", updatedBuild.Status)
 	}
 	if updatedSteps != 2 {
 		t.Fatalf("expected 2 cancellable steps to be updated, got %d", updatedSteps)
@@ -377,11 +383,85 @@ func TestBuildRepository_CancelBuild_AtomicallyTerminalizesBuildAndCancellableSt
 	if currentSteps[0].Status != domain.BuildStepStatusSuccess {
 		t.Fatalf("expected terminal success step unchanged, got %q", currentSteps[0].Status)
 	}
-	if currentSteps[1].Status != domain.BuildStepStatusFailed {
-		t.Fatalf("expected running step terminalized to failed, got %q", currentSteps[1].Status)
+	if currentSteps[0].FinishedAt == nil || !currentSteps[0].FinishedAt.Equal(finishedAt) {
+		t.Fatalf("expected completed step finished_at preserved, got %#v", currentSteps[0].FinishedAt)
 	}
-	if currentSteps[2].Status != domain.BuildStepStatusFailed {
-		t.Fatalf("expected pending step terminalized to failed, got %q", currentSteps[2].Status)
+	if currentSteps[0].ExitCode == nil || *currentSteps[0].ExitCode != 0 {
+		t.Fatalf("expected completed step exit code preserved, got %#v", currentSteps[0].ExitCode)
+	}
+	if currentSteps[1].Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected running step terminalized to canceled, got %q", currentSteps[1].Status)
+	}
+	if currentSteps[1].ClaimToken != nil || currentSteps[1].ClaimedAt != nil || currentSteps[1].LeaseExpiresAt != nil {
+		t.Fatalf("expected running step claim fields cleared, got %#v", currentSteps[1])
+	}
+	if currentSteps[2].Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected pending step terminalized to canceled, got %q", currentSteps[2].Status)
+	}
+}
+
+func TestBuildRepository_CompleteStepAfterCancelDoesNotResurrectState(t *testing.T) {
+	repo := NewBuildRepository()
+	now := time.Now().UTC()
+	claimToken := "claim-1"
+	claimedAt := now.Add(time.Minute)
+	leaseExpiresAt := claimedAt.Add(time.Minute)
+	workerID := "worker-1"
+
+	if _, err := repo.Create(context.Background(), domain.Build{ID: "build-race", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}); err != nil {
+		t.Fatalf("create build failed: %v", err)
+	}
+	if _, err := repo.QueueBuild(context.Background(), "build-race", []domain.BuildStep{{ID: "step-race", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, WorkerID: &workerID, ClaimToken: &claimToken, ClaimedAt: &claimedAt, LeaseExpiresAt: &leaseExpiresAt, StartedAt: &claimedAt}}); err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
+	if _, err := repo.UpdateStatus(context.Background(), "build-race", domain.BuildStatusRunning, nil); err != nil {
+		t.Fatalf("start build failed: %v", err)
+	}
+
+	canceledAt := now.Add(2 * time.Minute)
+	if _, _, err := repo.CancelBuild(context.Background(), "build-race", "operator canceled", canceledAt); err != nil {
+		t.Fatalf("cancel build failed: %v", err)
+	}
+
+	exitCode := 0
+	finishedAt := now.Add(3 * time.Minute)
+	result, err := repo.CompleteStep(context.Background(), repository.CompleteStepRequest{
+		BuildID:      "build-race",
+		StepIndex:    0,
+		ClaimToken:   claimToken,
+		RequireClaim: true,
+		Update: repository.StepUpdate{
+			Status:     domain.BuildStepStatusSuccess,
+			ExitCode:   &exitCode,
+			FinishedAt: &finishedAt,
+		},
+	})
+	if err != nil {
+		t.Fatalf("late complete step failed: %v", err)
+	}
+	if result.Outcome != repository.StepCompletionDuplicateTerminal {
+		t.Fatalf("expected duplicate terminal outcome, got %q", result.Outcome)
+	}
+	if result.Step.Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected reported step to remain canceled, got %q", result.Step.Status)
+	}
+
+	build, err := repo.GetByID(context.Background(), "build-race")
+	if err != nil {
+		t.Fatalf("get build failed: %v", err)
+	}
+	if build.Status != domain.BuildStatusCanceled {
+		t.Fatalf("expected build to remain canceled, got %q", build.Status)
+	}
+	steps, err := repo.GetStepsByBuildID(context.Background(), "build-race")
+	if err != nil {
+		t.Fatalf("get steps failed: %v", err)
+	}
+	if steps[0].Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected persisted step to remain canceled, got %q", steps[0].Status)
+	}
+	if steps[0].ExitCode != nil {
+		t.Fatalf("expected late exit code to be ignored, got %#v", steps[0].ExitCode)
 	}
 }
 

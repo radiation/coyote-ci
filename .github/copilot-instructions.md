@@ -281,6 +281,17 @@ Include:
 
 Do not add heavyweight observability platforms in generated code unless asked.
 
+## Go style and vet guidance
+
+Avoid `go vet` shadow warnings aggressively. This repo treats repeated `err`
+shadowing as a common commit blocker.
+
+Rules:
+- Once a function or test has an outer `err`, do not use `if _, err := ...; err != nil` or similar short declarations in an inner scope.
+- Use operation-specific error names for scoped checks, such as `createErr`, `queueErr`, `cancelErr`, `completeErr`, `writeErr`, `closeErr`, or `markErr`.
+- When assigning additional return values later in the same scope, prefer reassignment with the existing `err` only when it does not create a new inner scope shadow.
+- Before finishing Go edits, scan touched code for `if .* err :=` patterns inside functions that already declared `err`.
+
 ## Testing guidance
 
 Prefer:

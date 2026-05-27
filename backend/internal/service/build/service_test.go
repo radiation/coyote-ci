@@ -14,6 +14,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
+	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	steprunner "github.com/radiation/coyote-ci/backend/internal/runner"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	"github.com/radiation/coyote-ci/backend/internal/source"
@@ -63,6 +64,77 @@ type fakeBuildRepository struct {
 	updatedID     string
 	updatedStatus domain.BuildStatus
 	updatedCommit string
+}
+
+type fakeAtomicCancelBuildRepository struct {
+	*fakeBuildRepository
+	updatedSteps          int
+	cancelErr             error
+	includesExecutionJobs bool
+}
+
+func (r *fakeAtomicCancelBuildRepository) CancelBuild(_ context.Context, _ string, reason string, canceledAt time.Time) (domain.Build, int, error) {
+	if r.cancelErr != nil {
+		return domain.Build{}, 0, r.cancelErr
+	}
+	r.build.Status = domain.BuildStatusCanceled
+	r.build.FinishedAt = &canceledAt
+	r.build.ErrorMessage = &reason
+	return r.build, r.updatedSteps, nil
+}
+
+func (r *fakeAtomicCancelBuildRepository) CancelBuildIncludesExecutionJobs() bool {
+	return r.includesExecutionJobs
+}
+
+type fakeExecutionJobCancelRepository struct {
+	cancelCalls int
+	updatedJobs int
+	cancelErr   error
+}
+
+func (r *fakeExecutionJobCancelRepository) CreateJobsForBuild(_ context.Context, jobs []domain.ExecutionJob) ([]domain.ExecutionJob, error) {
+	return jobs, nil
+}
+
+func (r *fakeExecutionJobCancelRepository) GetJobsByBuildID(_ context.Context, _ string) ([]domain.ExecutionJob, error) {
+	return []domain.ExecutionJob{}, nil
+}
+
+func (r *fakeExecutionJobCancelRepository) GetJobByID(_ context.Context, _ string) (domain.ExecutionJob, error) {
+	return domain.ExecutionJob{}, repository.ErrExecutionJobNotFound
+}
+
+func (r *fakeExecutionJobCancelRepository) GetJobByStepID(_ context.Context, _ string) (domain.ExecutionJob, error) {
+	return domain.ExecutionJob{}, repository.ErrExecutionJobNotFound
+}
+
+func (r *fakeExecutionJobCancelRepository) ClaimNextRunnableJob(_ context.Context, _ repository.StepClaim) (domain.ExecutionJob, bool, error) {
+	return domain.ExecutionJob{}, false, nil
+}
+
+func (r *fakeExecutionJobCancelRepository) ClaimJobByStepID(_ context.Context, _ string, _ repository.StepClaim) (domain.ExecutionJob, bool, error) {
+	return domain.ExecutionJob{}, false, nil
+}
+
+func (r *fakeExecutionJobCancelRepository) RenewJobLease(_ context.Context, _ string, _ string, _ time.Time) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+	return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, nil
+}
+
+func (r *fakeExecutionJobCancelRepository) CompleteJobSuccess(_ context.Context, _ string, _ string, _ time.Time, _ int, _ []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+	return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, nil
+}
+
+func (r *fakeExecutionJobCancelRepository) CompleteJobFailure(_ context.Context, _ string, _ string, _ time.Time, _ string, _ *int, _ []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+	return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, nil
+}
+
+func (r *fakeExecutionJobCancelRepository) CancelJobsForBuild(_ context.Context, _ string, _ string, _ time.Time) (int, error) {
+	r.cancelCalls++
+	if r.cancelErr != nil {
+		return 0, r.cancelErr
+	}
+	return r.updatedJobs, nil
 }
 
 func (r *fakeBuildRepository) Create(_ context.Context, build domain.Build) (domain.Build, error) {
@@ -307,7 +379,7 @@ func (r *fakeBuildRepository) RenewStepLease(_ context.Context, _ string, stepIn
 		if r.steps[i].StepIndex != stepIndex {
 			continue
 		}
-		if r.steps[i].Status == domain.BuildStepStatusSuccess || r.steps[i].Status == domain.BuildStepStatusFailed {
+		if domain.IsTerminalStepStatus(r.steps[i].Status) {
 			return r.steps[i], repository.StepCompletionDuplicateTerminal, nil
 		}
 		if r.steps[i].Status != domain.BuildStepStatusRunning {
@@ -408,7 +480,7 @@ func (r *fakeBuildRepository) CompleteStep(_ context.Context, request repository
 				continue
 			}
 
-			if r.steps[i].Status == domain.BuildStepStatusSuccess || r.steps[i].Status == domain.BuildStepStatusFailed {
+			if domain.IsTerminalStepStatus(r.steps[i].Status) {
 				return repository.CompleteStepResult{Step: r.steps[i], Outcome: repository.StepCompletionDuplicateTerminal}, nil
 			}
 			if r.steps[i].Status != domain.BuildStepStatusRunning {
@@ -427,7 +499,7 @@ func (r *fakeBuildRepository) CompleteStep(_ context.Context, request repository
 		return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, err
 	}
 	if !completed {
-		if step.Status == domain.BuildStepStatusSuccess || step.Status == domain.BuildStepStatusFailed {
+		if domain.IsTerminalStepStatus(step.Status) {
 			return repository.CompleteStepResult{Step: step, Outcome: repository.StepCompletionDuplicateTerminal}, nil
 		}
 		if step.ID == "" && step.Name == "" {
@@ -1244,26 +1316,26 @@ func TestBuildService_CancelBuild_TerminalizesBuildAndNonTerminalSteps(t *testin
 	if err != nil {
 		t.Fatalf("cancel build failed: %v", err)
 	}
-	if canceled.Status != domain.BuildStatusFailed {
-		t.Fatalf("expected canceled build status failed, got %q", canceled.Status)
+	if canceled.Status != domain.BuildStatusCanceled {
+		t.Fatalf("expected canceled build status canceled, got %q", canceled.Status)
 	}
 
 	if repo.steps[0].Status != domain.BuildStepStatusSuccess {
 		t.Fatalf("expected already terminal step to remain success, got %q", repo.steps[0].Status)
 	}
-	if repo.steps[1].Status != domain.BuildStepStatusFailed {
-		t.Fatalf("expected running step to be terminalized as failed, got %q", repo.steps[1].Status)
+	if repo.steps[1].Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected running step to be terminalized as canceled, got %q", repo.steps[1].Status)
 	}
-	if repo.steps[2].Status != domain.BuildStepStatusFailed {
-		t.Fatalf("expected pending step to be terminalized as failed, got %q", repo.steps[2].Status)
+	if repo.steps[2].Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected pending step to be terminalized as canceled, got %q", repo.steps[2].Status)
 	}
 }
 
-func TestBuildService_CancelBuild_TerminalBuildIsNoop(t *testing.T) {
+func TestBuildService_CancelBuild_QueuedBuildSucceeds(t *testing.T) {
 	now := time.Now().UTC()
 	repo := &fakeBuildRepository{
-		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
-		steps: []domain.BuildStep{{ID: "step-0", BuildID: "build-1", StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusSuccess}},
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusQueued, CreatedAt: now},
+		steps: []domain.BuildStep{{ID: "step-0", BuildID: "build-1", StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusPending}},
 	}
 	svc := NewBuildService(repo, nil, nil)
 
@@ -1271,11 +1343,191 @@ func TestBuildService_CancelBuild_TerminalBuildIsNoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cancel build failed: %v", err)
 	}
-	if canceled.Status != domain.BuildStatusSuccess {
-		t.Fatalf("expected terminal build status unchanged, got %q", canceled.Status)
+	if canceled.Status != domain.BuildStatusCanceled {
+		t.Fatalf("expected canceled build status, got %q", canceled.Status)
 	}
-	if repo.updateCalls != 0 {
-		t.Fatalf("expected no update status call for terminal build, got %d", repo.updateCalls)
+	if repo.steps[0].Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected pending step to be canceled, got %q", repo.steps[0].Status)
+	}
+}
+
+func TestBuildService_CancelBuild_PreparingBuildSucceeds(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPreparing, CreatedAt: now},
+		steps: []domain.BuildStep{{ID: "step-0", BuildID: "build-1", StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusPending}},
+	}
+	svc := NewBuildService(repo, nil, nil)
+
+	canceled, err := svc.CancelBuild(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("cancel build failed: %v", err)
+	}
+	if canceled.Status != domain.BuildStatusCanceled {
+		t.Fatalf("expected canceled build status, got %q", canceled.Status)
+	}
+	if repo.steps[0].Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected pending step to be canceled, got %q", repo.steps[0].Status)
+	}
+}
+
+func TestBuildService_CancelBuild_AtomicRepoWithExecutionJobsSkipsFallback(t *testing.T) {
+	now := time.Now().UTC()
+	buildRepo := &fakeAtomicCancelBuildRepository{
+		fakeBuildRepository:   &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}},
+		updatedSteps:          1,
+		includesExecutionJobs: true,
+	}
+	jobRepo := &fakeExecutionJobCancelRepository{updatedJobs: 2}
+	svc := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{ExecutionJobRepo: jobRepo})
+
+	canceled, err := svc.CancelBuild(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("cancel build failed: %v", err)
+	}
+	if canceled.Status != domain.BuildStatusCanceled {
+		t.Fatalf("expected canceled build status, got %q", canceled.Status)
+	}
+	if jobRepo.cancelCalls != 0 {
+		t.Fatalf("expected execution job fallback to be skipped, got %d calls", jobRepo.cancelCalls)
+	}
+}
+
+func TestBuildService_CancelBuild_AtomicRepoWithoutExecutionJobsUsesFallback(t *testing.T) {
+	now := time.Now().UTC()
+	buildRepo := &fakeAtomicCancelBuildRepository{
+		fakeBuildRepository:   &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}},
+		updatedSteps:          1,
+		includesExecutionJobs: false,
+	}
+	jobRepo := &fakeExecutionJobCancelRepository{updatedJobs: 2}
+	svc := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{ExecutionJobRepo: jobRepo})
+
+	canceled, err := svc.CancelBuild(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("cancel build failed: %v", err)
+	}
+	if canceled.Status != domain.BuildStatusCanceled {
+		t.Fatalf("expected canceled build status, got %q", canceled.Status)
+	}
+	if jobRepo.cancelCalls != 1 {
+		t.Fatalf("expected execution job fallback to run once, got %d calls", jobRepo.cancelCalls)
+	}
+}
+
+func TestBuildService_LateWorkerReportAfterCancelDoesNotResurrectState(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	buildRepo := memoryrepo.NewBuildRepository()
+	jobRepo := memoryrepo.NewExecutionJobRepository()
+	jobRepo.SetBuildRepository(buildRepo)
+	svc := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{ExecutionJobRepo: jobRepo})
+
+	if _, err := buildRepo.Create(ctx, domain.Build{ID: "build-race", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}); err != nil {
+		t.Fatalf("create build failed: %v", err)
+	}
+	if _, err := buildRepo.QueueBuild(ctx, "build-race", []domain.BuildStep{{ID: "step-race", StepIndex: 0, Name: "test", Command: "go test ./...", Status: domain.BuildStepStatusPending}}); err != nil {
+		t.Fatalf("queue build failed: %v", err)
+	}
+	if _, err := buildRepo.UpdateStatus(ctx, "build-race", domain.BuildStatusRunning, nil); err != nil {
+		t.Fatalf("start build failed: %v", err)
+	}
+	if _, err := jobRepo.CreateJobsForBuild(ctx, []domain.ExecutionJob{{ID: "job-race", BuildID: "build-race", StepID: "step-race", NodeID: "step-race", Name: "test", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusQueued, Image: "golang:1.24", WorkingDir: ".", Command: []string{"go", "test", "./..."}, ResolvedSpecJSON: "{}", CreatedAt: now}}); err != nil {
+		t.Fatalf("create jobs failed: %v", err)
+	}
+
+	claim := repository.StepClaim{WorkerID: "worker-1", ClaimToken: "claim-1", ClaimedAt: now.Add(time.Minute), LeaseExpiresAt: now.Add(2 * time.Minute)}
+	step, stepClaimed, err := buildRepo.ClaimPendingStep(ctx, "build-race", 0, claim)
+	if err != nil {
+		t.Fatalf("claim step failed: %v", err)
+	}
+	if !stepClaimed {
+		t.Fatal("expected step claim to succeed")
+	}
+	job, jobClaimed, err := jobRepo.ClaimJobByStepID(ctx, step.ID, claim)
+	if err != nil {
+		t.Fatalf("claim job failed: %v", err)
+	}
+	if !jobClaimed {
+		t.Fatal("expected job claim to succeed")
+	}
+
+	if _, cancelErr := svc.CancelBuild(ctx, "build-race"); cancelErr != nil {
+		t.Fatalf("cancel build failed: %v", cancelErr)
+	}
+
+	result := steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok", StartedAt: claim.ClaimedAt, FinishedAt: now.Add(3 * time.Minute)}
+	report, err := svc.HandleStepResult(ctx, steprunner.RunStepRequest{BuildID: "build-race", JobID: job.ID, StepID: step.ID, StepIndex: step.StepIndex, StepName: step.Name, WorkerID: claim.WorkerID, ClaimToken: claim.ClaimToken}, result)
+	if err != nil {
+		t.Fatalf("late handle step result failed: %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionDuplicateTerminal {
+		t.Fatalf("expected duplicate terminal outcome, got %q", report.CompletionOutcome)
+	}
+
+	lateJob, outcome, err := jobRepo.CompleteJobSuccess(ctx, job.ID, claim.ClaimToken, result.FinishedAt, result.ExitCode, []domain.ArtifactRef{{Name: "dist/app", URI: "s3://bucket/dist/app"}})
+	if err != nil {
+		t.Fatalf("late complete job failed: %v", err)
+	}
+	if outcome != repository.StepCompletionDuplicateTerminal {
+		t.Fatalf("expected duplicate terminal job outcome, got %q", outcome)
+	}
+	if lateJob.Status != domain.ExecutionJobStatusCanceled {
+		t.Fatalf("expected job to remain canceled, got %q", lateJob.Status)
+	}
+
+	build, err := buildRepo.GetByID(ctx, "build-race")
+	if err != nil {
+		t.Fatalf("get build failed: %v", err)
+	}
+	if build.Status != domain.BuildStatusCanceled {
+		t.Fatalf("expected build to remain canceled, got %q", build.Status)
+	}
+	steps, err := buildRepo.GetStepsByBuildID(ctx, "build-race")
+	if err != nil {
+		t.Fatalf("get steps failed: %v", err)
+	}
+	if steps[0].Status != domain.BuildStepStatusCanceled {
+		t.Fatalf("expected step to remain canceled, got %q", steps[0].Status)
+	}
+	jobs, err := jobRepo.GetJobsByBuildID(ctx, "build-race")
+	if err != nil {
+		t.Fatalf("get jobs failed: %v", err)
+	}
+	if jobs[0].Status != domain.ExecutionJobStatusCanceled {
+		t.Fatalf("expected persisted job to remain canceled, got %q", jobs[0].Status)
+	}
+}
+
+func TestBuildService_CancelBuild_NonCancelableBuildIsRejected(t *testing.T) {
+	tests := []struct {
+		name   string
+		status domain.BuildStatus
+	}{
+		{name: "pending", status: domain.BuildStatusPending},
+		{name: "success", status: domain.BuildStatusSuccess},
+		{name: "failed", status: domain.BuildStatusFailed},
+		{name: "canceled", status: domain.BuildStatusCanceled},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			repo := &fakeBuildRepository{
+				build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: tc.status, CreatedAt: now},
+				steps: []domain.BuildStep{{ID: "step-0", BuildID: "build-1", StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusSuccess}},
+			}
+			svc := NewBuildService(repo, nil, nil)
+
+			_, err := svc.CancelBuild(context.Background(), "build-1")
+			if !errors.Is(err, ErrInvalidBuildStatusTransition) {
+				t.Fatalf("expected invalid transition, got %v", err)
+			}
+			if repo.updateCalls != 0 {
+				t.Fatalf("expected no update status call for terminal build, got %d", repo.updateCalls)
+			}
+		})
 	}
 }
 

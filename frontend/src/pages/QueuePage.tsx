@@ -1,6 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import { listBuilds, listJobsByProject, listProjects, listQueue } from "../api";
+import {
+  cancelBuild,
+  listBuilds,
+  listJobsByProject,
+  listProjects,
+  listQueue,
+} from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { StatusBadge } from "../components/StatusBadge";
 import type { Build, QueueEntry } from "../types/build";
@@ -8,6 +14,8 @@ import {
   FAST_POLL_INTERVAL,
   SLOW_POLL_INTERVAL,
   isActiveBuild,
+  isCancelableBuild,
+  isTerminalBuild,
 } from "../utils/build";
 import { hydrateJobNames, missingJobNameProjectIDs } from "../utils/jobNames";
 import { formatTime } from "../utils/time";
@@ -27,6 +35,8 @@ type QueueSectionRowProps = {
   queuedAt?: string | null;
   startedAt?: string | null;
   finishedAt?: string | null;
+  canceling?: boolean;
+  onCancel?: (buildID: string, buildLabel: string) => void;
 };
 
 function projectLabel(
@@ -100,6 +110,8 @@ function QueueSectionRow({
   queuedAt,
   startedAt,
   finishedAt,
+  canceling = false,
+  onCancel,
 }: QueueSectionRowProps) {
   const duration = formatDuration(startedAt, finishedAt);
   const buildLabel = buildNumber
@@ -137,6 +149,16 @@ function QueueSectionRow({
       </div>
       <div className="activity-list-meta subtle-text">
         <Link to={`/builds/${buildID}`}>Inspect</Link>
+        {isCancelableBuild(status) && onCancel ? (
+          <button
+            className="inline-action-button danger-button"
+            type="button"
+            onClick={() => onCancel(buildID, buildLabel)}
+            disabled={canceling}
+          >
+            {canceling ? "Canceling…" : "Cancel"}
+          </button>
+        ) : null}
       </div>
     </li>
   );
@@ -176,6 +198,7 @@ function QueueSection({
 
 export function QueuePage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
   const projectID = searchParams.get("project_id")?.trim() ?? "";
 
   const {
@@ -230,6 +253,28 @@ export function QueuePage() {
     queryFn: () => listProjects(),
   });
 
+  const cancelBuildMutation = useMutation({
+    mutationFn: (buildID: string) => cancelBuild(buildID),
+    onSuccess: async (_build, buildID) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["queue"] }),
+        queryClient.invalidateQueries({
+          queryKey: ["queue-page", "recent-builds"],
+        }),
+        queryClient.invalidateQueries({ queryKey: ["build", buildID] }),
+        queryClient.invalidateQueries({ queryKey: ["buildSteps", buildID] }),
+      ]);
+    },
+  });
+
+  function requestCancelBuild(buildID: string, label: string) {
+    const confirmed = window.confirm(`Cancel ${label}?`);
+    if (!confirmed) {
+      return;
+    }
+    cancelBuildMutation.mutate(buildID);
+  }
+
   const projectIDsNeedingJobs = missingJobNameProjectIDs([
     ...(entries ?? []),
     ...(recentBuilds ?? []),
@@ -275,15 +320,13 @@ export function QueuePage() {
     (entry) => entry.status === "queued",
   );
   const terminalBuilds = sortByNewest(
-    normalizedRecentBuilds.filter(
-      (build) => build.status === "success" || build.status === "failed",
-    ),
+    normalizedRecentBuilds.filter((build) => isTerminalBuild(build.status)),
   );
   const failedBuilds = terminalBuilds
     .filter((build) => build.status === "failed")
     .slice(0, SECTION_LIMIT);
-  const completedBuilds = terminalBuilds
-    .filter((build) => build.status === "success")
+  const recentTerminalBuilds = terminalBuilds
+    .filter((build) => build.status !== "failed")
     .slice(0, SECTION_LIMIT);
   const lastUpdatedAt = Math.max(queueUpdatedAt, recentBuildsUpdatedAt);
 
@@ -302,6 +345,11 @@ export function QueuePage() {
         jobName={entry.job_name}
         queuedAt={entry.queued_at ?? entry.created_at}
         startedAt={entry.started_at}
+        canceling={
+          cancelBuildMutation.isPending &&
+          cancelBuildMutation.variables === entry.build_id
+        }
+        onCancel={requestCancelBuild}
       />
     ));
 
@@ -320,6 +368,11 @@ export function QueuePage() {
         jobName={entry.job_name}
         queuedAt={entry.queued_at ?? entry.created_at}
         startedAt={entry.started_at}
+        canceling={
+          cancelBuildMutation.isPending &&
+          cancelBuildMutation.variables === entry.build_id
+        }
+        onCancel={requestCancelBuild}
       />
     ));
 
@@ -340,7 +393,7 @@ export function QueuePage() {
     />
   ));
 
-  const completedItems = completedBuilds.map((build) => (
+  const terminalItems = recentTerminalBuilds.map((build) => (
     <QueueSectionRow
       key={build.id}
       buildID={build.id}
@@ -372,6 +425,12 @@ export function QueuePage() {
           </>
         }
       />
+
+      {cancelBuildMutation.error ? (
+        <p className="error-text">
+          Failed to cancel build: {String(cancelBuildMutation.error)}
+        </p>
+      ) : null}
 
       <section className="artifact-filters-panel" aria-label="Queue filters">
         <div className="artifact-filters">
@@ -417,11 +476,11 @@ export function QueuePage() {
           emptyMessage="No recent failures."
         />
         <QueueSection
-          title="Recent completed"
-          items={completedItems}
+          title="Recent terminal"
+          items={terminalItems}
           loading={recentBuildsLoading}
           error={recentBuildsError}
-          emptyMessage="No recent completed builds."
+          emptyMessage="No recent terminal builds."
         />
       </div>
     </div>

@@ -11,7 +11,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
-// CancelBuild terminalizes a non-terminal build and any cancellable steps in one transaction.
+// CancelBuild terminalizes a cancelable build and any cancellable steps/jobs in one transaction.
 func (r *BuildRepository) CancelBuild(ctx context.Context, id string, reason string, canceledAt time.Time) (domain.Build, int, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -38,12 +38,8 @@ func (r *BuildRepository) CancelBuild(ctx context.Context, id string, reason str
 		return domain.Build{}, 0, err
 	}
 
-	if domain.IsTerminalBuildStatus(lockedBuild.Status) {
-		if commitErr := tx.Commit(); commitErr != nil {
-			return domain.Build{}, 0, commitErr
-		}
-		rollback = false
-		return lockedBuild, 0, nil
+	if !domain.CanCancelBuild(lockedBuild.Status) {
+		return domain.Build{}, 0, repository.ErrInvalidBuildStatusTransition
 	}
 
 	trimmedReason := strings.TrimSpace(reason)
@@ -54,7 +50,7 @@ func (r *BuildRepository) CancelBuild(ctx context.Context, id string, reason str
 
 	stepResult, err := tx.ExecContext(ctx, `
 		UPDATE build_steps
-		SET status = 'failed',
+		SET status = 'canceled',
 			claim_token = NULL,
 			claimed_at = NULL,
 			lease_expires_at = NULL,
@@ -68,6 +64,21 @@ func (r *BuildRepository) CancelBuild(ctx context.Context, id string, reason str
 		return domain.Build{}, 0, err
 	}
 
+	if _, updateJobsErr := tx.ExecContext(ctx, `
+		UPDATE build_jobs
+		SET status = 'canceled',
+			claim_token = NULL,
+			claimed_by = NULL,
+			claim_expires_at = NULL,
+			started_at = COALESCE(started_at, $2),
+			finished_at = COALESCE(finished_at, $2),
+			error_message = COALESCE($3::text, error_message)
+		WHERE build_id = $1
+		  AND status IN ('queued', 'running')
+	`, id, canceledAt, reasonPtr); updateJobsErr != nil {
+		return domain.Build{}, 0, updateJobsErr
+	}
+
 	updatedSteps := 0
 	affected, err := stepResult.RowsAffected()
 	if err != nil {
@@ -75,25 +86,31 @@ func (r *BuildRepository) CancelBuild(ctx context.Context, id string, reason str
 	}
 	updatedSteps = int(affected)
 
-	failedBuild, err := scanBuild(tx.QueryRowContext(ctx, `
+	canceledBuild, err := scanBuild(tx.QueryRowContext(ctx, `
 		UPDATE builds
-		SET status = 'failed',
+		SET status = 'canceled',
 			finished_at = COALESCE(finished_at, $2),
 			error_message = COALESCE($3::text, error_message)
 		WHERE id = $1
-		  AND status IN ('pending', 'queued', 'running')
+		  AND status IN ('queued', 'preparing', 'running')
 		RETURNING `+buildColumns+`
 	`, id, canceledAt, reasonPtr))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return domain.Build{}, 0, repository.ErrInvalidBuildStepTransition
+			return domain.Build{}, 0, repository.ErrInvalidBuildStatusTransition
 		}
 		return domain.Build{}, 0, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return domain.Build{}, 0, err
+	if commitErr := tx.Commit(); commitErr != nil {
+		return domain.Build{}, 0, commitErr
 	}
 	rollback = false
-	return failedBuild, updatedSteps, nil
+	return canceledBuild, updatedSteps, nil
+}
+
+// CancelBuildIncludesExecutionJobs reports that CancelBuild also cancels build_jobs
+// atomically, so callers do not need a second execution-job cancellation pass.
+func (r *BuildRepository) CancelBuildIncludesExecutionJobs() bool {
+	return true
 }

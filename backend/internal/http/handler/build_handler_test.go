@@ -429,7 +429,7 @@ func (r *fakeRepo) RenewStepLease(_ context.Context, buildID string, stepIndex i
 		if steps[idx].StepIndex != stepIndex {
 			continue
 		}
-		if steps[idx].Status == domain.BuildStepStatusSuccess || steps[idx].Status == domain.BuildStepStatusFailed {
+		if domain.IsTerminalStepStatus(steps[idx].Status) {
 			return steps[idx], repository.StepCompletionDuplicateTerminal, nil
 		}
 		if steps[idx].Status != domain.BuildStepStatusRunning {
@@ -598,7 +598,7 @@ func (r *fakeRepo) CompleteStep(_ context.Context, request repository.CompleteSt
 			if steps[idx].StepIndex != stepIndex {
 				continue
 			}
-			if steps[idx].Status == domain.BuildStepStatusSuccess || steps[idx].Status == domain.BuildStepStatusFailed {
+			if domain.IsTerminalStepStatus(steps[idx].Status) {
 				return repository.CompleteStepResult{Step: steps[idx], Outcome: repository.StepCompletionDuplicateTerminal}, nil
 			}
 			if steps[idx].Status != domain.BuildStepStatusRunning {
@@ -616,7 +616,7 @@ func (r *fakeRepo) CompleteStep(_ context.Context, request repository.CompleteSt
 		return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, err
 	}
 	if !completed {
-		if step.Status == domain.BuildStepStatusSuccess || step.Status == domain.BuildStepStatusFailed {
+		if domain.IsTerminalStepStatus(step.Status) {
 			return repository.CompleteStepResult{Step: step, Outcome: repository.StepCompletionDuplicateTerminal}, nil
 		}
 		if step.ID == "" && step.Name == "" {

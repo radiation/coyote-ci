@@ -1,11 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { QueuePage } from "./QueuePage";
-import { listBuilds, listJobsByProject, listProjects, listQueue } from "../api";
+import {
+  cancelBuild,
+  listBuilds,
+  listJobsByProject,
+  listProjects,
+  listQueue,
+} from "../api";
 
 vi.mock("../api", () => ({
+  cancelBuild: vi.fn(),
   listBuilds: vi.fn(),
   listJobsByProject: vi.fn(),
   listProjects: vi.fn(),
@@ -30,12 +43,26 @@ function renderPage(initialEntries: string[] = ["/"]) {
 
 describe("QueuePage", () => {
   const mockedListBuilds = vi.mocked(listBuilds);
+  const mockedCancelBuild = vi.mocked(cancelBuild);
   const mockedListJobsByProject = vi.mocked(listJobsByProject);
   const mockedListProjects = vi.mocked(listProjects);
   const mockedListQueue = vi.mocked(listQueue);
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedCancelBuild.mockResolvedValue({
+      id: "build-1",
+      build_number: 12,
+      project_id: "project-1",
+      priority: 9,
+      status: "canceled",
+      created_at: "2026-03-24T00:00:00Z",
+      queued_at: "2026-03-24T00:00:01Z",
+      started_at: null,
+      finished_at: "2026-03-24T00:00:30Z",
+      current_step_index: 0,
+      error_message: "build canceled by operator request",
+    });
     mockedListProjects.mockResolvedValue([
       {
         id: "project-1",
@@ -58,11 +85,11 @@ describe("QueuePage", () => {
     await screen.findByText("No running builds.");
     expect(screen.getByText("Nothing is queued.")).toBeTruthy();
     expect(screen.getByText("No recent failures.")).toBeTruthy();
-    expect(screen.getByText("No recent completed builds.")).toBeTruthy();
+    expect(screen.getByText("No recent terminal builds.")).toBeTruthy();
     expect(screen.getByLabelText("Project")).toHaveValue("");
   });
 
-  it("renders running, queued, failed, and completed sections with links", async () => {
+  it("renders running, queued, failed, and terminal sections with links", async () => {
     mockedListQueue.mockResolvedValue([
       {
         build_id: "build-running-1",
@@ -124,6 +151,23 @@ describe("QueuePage", () => {
         error_message: "boom",
       },
       {
+        id: "build-canceled-1",
+        build_number: 14,
+        project_id: "project-1",
+        project_name: "Platform",
+        project_slug: "platform",
+        job_id: "job-6",
+        job_name: "package",
+        priority: 6,
+        status: "canceled",
+        created_at: "2026-03-24T00:00:00Z",
+        queued_at: "2026-03-24T00:00:08Z",
+        started_at: "2026-03-24T00:01:15Z",
+        finished_at: "2026-03-24T00:03:00Z",
+        current_step_index: 0,
+        error_message: "build canceled by operator request",
+      },
+      {
         id: "build-success-1",
         build_number: 10,
         project_id: "project-1",
@@ -181,11 +225,15 @@ describe("QueuePage", () => {
       "href",
       "/builds/build-failed-1",
     );
+    expect(screen.getByRole("link", { name: "Build #14" })).toHaveAttribute(
+      "href",
+      "/builds/build-canceled-1",
+    );
     expect(screen.getByRole("link", { name: "Build #10" })).toHaveAttribute(
       "href",
       "/builds/build-success-1",
     );
-    expect(screen.getAllByRole("link", { name: "Platform" }).length).toBe(4);
+    expect(screen.getAllByRole("link", { name: "Platform" }).length).toBe(5);
     expect(screen.getByRole("link", { name: "backend-ci" })).toHaveAttribute(
       "href",
       "/jobs/job-1",
@@ -194,9 +242,52 @@ describe("QueuePage", () => {
       "href",
       "/jobs/job-2",
     );
+    expect(screen.getAllByRole("button", { name: "Cancel" }).length).toBe(2);
+    expect(screen.getByText("Canceled")).toBeTruthy();
     expect(screen.getByText("Duration 1m 5s")).toBeTruthy();
     expect(screen.getByText("Duration 30s")).toBeTruthy();
+    const terminalSection = screen
+      .getByRole("heading", { name: "Recent terminal" })
+      .closest("section");
+    expect(terminalSection).toBeTruthy();
+    expect(
+      within(terminalSection as HTMLElement)
+        .getAllByRole("link", { name: /^Build #/ })
+        .map((link) => link.textContent),
+    ).toEqual(["Build #14", "Build #10"]);
     expect(screen.queryByRole("link", { name: "Build #9" })).toBeNull();
+  });
+
+  it("confirms and cancels queued builds", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockedListQueue.mockResolvedValue([
+      {
+        build_id: "build-1",
+        build_number: 12,
+        project_id: "project-1",
+        project_name: "Platform",
+        project_slug: "platform",
+        job_id: "job-1",
+        job_name: "backend-ci",
+        priority: 9,
+        status: "queued",
+        created_at: "2026-03-24T00:00:00Z",
+        queued_at: "2026-03-24T00:00:01Z",
+        started_at: null,
+      },
+    ]);
+
+    renderPage(["/queue"]);
+
+    const cancelButton = await screen.findByRole("button", { name: "Cancel" });
+    fireEvent.click(cancelButton);
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledWith("Cancel Build #12?");
+      expect(mockedCancelBuild).toHaveBeenCalledWith("build-1");
+    });
+
+    confirmSpy.mockRestore();
   });
 
   it("shows concise section errors", async () => {
