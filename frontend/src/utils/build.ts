@@ -5,8 +5,12 @@ export const SLOW_POLL_INTERVAL = 15000;
 
 /** Returns true when a build is still in progress (not yet terminal). */
 export function isActiveBuild(status: BuildStatus | undefined): boolean {
+  return Boolean(status) && !isTerminalBuild(status);
+}
+
+export function isTerminalBuild(status: BuildStatus | undefined): boolean {
   if (!status) return false;
-  return !(["success", "failed", "canceled"] as BuildStatus[]).includes(status);
+  return (["success", "failed", "canceled"] as BuildStatus[]).includes(status);
 }
 
 export function isCancelableBuild(status: BuildStatus | undefined): boolean {

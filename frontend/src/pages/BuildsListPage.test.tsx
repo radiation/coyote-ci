@@ -74,11 +74,32 @@ describe("BuildsListPage", () => {
         trigger_commit_sha: "abc1234567890",
         actor: "octocat",
       },
+      {
+        id: "eeee-ffff-gggg-hhhh",
+        priority: 4,
+        project_id: "project-1",
+        project_name: "Platform",
+        project_slug: "platform",
+        status: "canceled",
+        created_at: "2026-03-24T00:00:20Z",
+        queued_at: "2026-03-24T00:00:21Z",
+        started_at: "2026-03-24T00:00:22Z",
+        finished_at: "2026-03-24T00:00:30Z",
+        current_step_index: 1,
+        error_message: "build canceled by operator request",
+        trigger_kind: "manual",
+        scm_provider: null,
+        trigger_ref: null,
+        trigger_commit_sha: null,
+        actor: null,
+      },
     ]);
     renderPage();
 
     await screen.findByText("aaaa-bbb…");
-    expect(screen.getByText("Platform")).toBeTruthy();
+    expect(screen.getByText("eeee-fff…")).toBeTruthy();
+    expect(screen.getByText("Canceled")).toBeTruthy();
+    expect(screen.getAllByText("Platform").length).toBe(2);
     expect(screen.getByText("5")).toBeTruthy();
     expect(screen.getByText("webhook")).toBeTruthy();
     expect(screen.getByText("github • main • abc1234 • octocat")).toBeTruthy();

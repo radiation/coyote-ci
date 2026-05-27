@@ -15,6 +15,7 @@ import {
   SLOW_POLL_INTERVAL,
   isActiveBuild,
   isCancelableBuild,
+  isTerminalBuild,
 } from "../utils/build";
 import { hydrateJobNames, missingJobNameProjectIDs } from "../utils/jobNames";
 import { formatTime } from "../utils/time";
@@ -319,15 +320,13 @@ export function QueuePage() {
     (entry) => entry.status === "queued",
   );
   const terminalBuilds = sortByNewest(
-    normalizedRecentBuilds.filter(
-      (build) => build.status === "success" || build.status === "failed",
-    ),
+    normalizedRecentBuilds.filter((build) => isTerminalBuild(build.status)),
   );
   const failedBuilds = terminalBuilds
     .filter((build) => build.status === "failed")
     .slice(0, SECTION_LIMIT);
-  const completedBuilds = terminalBuilds
-    .filter((build) => build.status === "success")
+  const recentTerminalBuilds = terminalBuilds
+    .filter((build) => build.status !== "failed")
     .slice(0, SECTION_LIMIT);
   const lastUpdatedAt = Math.max(queueUpdatedAt, recentBuildsUpdatedAt);
 
@@ -394,7 +393,7 @@ export function QueuePage() {
     />
   ));
 
-  const completedItems = completedBuilds.map((build) => (
+  const terminalItems = recentTerminalBuilds.map((build) => (
     <QueueSectionRow
       key={build.id}
       buildID={build.id}
@@ -477,11 +476,11 @@ export function QueuePage() {
           emptyMessage="No recent failures."
         />
         <QueueSection
-          title="Recent completed"
-          items={completedItems}
+          title="Recent terminal"
+          items={terminalItems}
           loading={recentBuildsLoading}
           error={recentBuildsError}
-          emptyMessage="No recent completed builds."
+          emptyMessage="No recent terminal builds."
         />
       </div>
     </div>
