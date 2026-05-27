@@ -15,6 +15,7 @@ import {
   getBuild,
   getBuildArtifacts,
   getBuildSteps,
+  rerunBuild,
 } from "../api";
 import type { Build, BuildArtifact, BuildStep } from "../types";
 import { formatCompactTime } from "../utils/time";
@@ -25,6 +26,7 @@ vi.mock("../api", () => ({
   getBuild: vi.fn(),
   getBuildSteps: vi.fn(),
   getBuildArtifacts: vi.fn(),
+  rerunBuild: vi.fn(),
   artifactDownloadURL: (path: string) => `/api${path}`,
 }));
 
@@ -144,6 +146,7 @@ function renderPage() {
 describe("BuildDetailPage", () => {
   const mockedGetBuild = vi.mocked(getBuild);
   const mockedCancelBuild = vi.mocked(cancelBuild);
+  const mockedRerunBuild = vi.mocked(rerunBuild);
   const mockedGetBuildSteps = vi.mocked(getBuildSteps);
   const mockedGetBuildArtifacts = vi.mocked(getBuildArtifacts);
   const mockedCreateJobVersionTags = vi.mocked(createJobVersionTags);
@@ -152,6 +155,17 @@ describe("BuildDetailPage", () => {
     vi.clearAllMocks();
     mockedCancelBuild.mockResolvedValue(
       makeBuild({ status: "canceled", finished_at: "2026-03-30T00:01:30Z" }),
+    );
+    mockedRerunBuild.mockResolvedValue(
+      makeBuild({
+        id: "build-rerun-1",
+        build_number: 22,
+        status: "queued",
+        started_at: null,
+        finished_at: null,
+        error_message: null,
+        rerun_of_build_id: "build-1",
+      }),
     );
     mockedCreateJobVersionTags.mockResolvedValue([]);
     mockedGetBuild.mockResolvedValue(makeBuild());
@@ -336,6 +350,54 @@ describe("BuildDetailPage", () => {
     confirmSpy.mockRestore();
   });
 
+  it("confirms rerun and navigates to the new build", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockedGetBuild.mockImplementation(async (buildID: string) => {
+      if (buildID === "build-rerun-1") {
+        return makeBuild({
+          id: "build-rerun-1",
+          build_number: 22,
+          status: "queued",
+          started_at: null,
+          finished_at: null,
+          error_message: null,
+          rerun_of_build_id: "build-1",
+        });
+      }
+      return makeBuild();
+    });
+    mockedGetBuildSteps.mockImplementation(async (buildID: string) => {
+      if (buildID === "build-rerun-1") {
+        return [
+          makeStep({
+            id: "rerun-step-1",
+            build_id: "build-rerun-1",
+            status: "pending",
+            started_at: null,
+            finished_at: null,
+            exit_code: null,
+            error_message: null,
+          }),
+        ];
+      }
+      return [makeStep({ status: "success" })];
+    });
+    mockedGetBuildArtifacts.mockImplementation(async () => []);
+
+    renderPage();
+
+    const rerunButton = await screen.findByRole("button", { name: "Rerun" });
+    fireEvent.click(rerunButton);
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledWith("Rerun Build #21?");
+      expect(mockedRerunBuild).toHaveBeenCalledWith("build-1");
+    });
+    await screen.findByRole("heading", { level: 2, name: "Build #22" });
+
+    confirmSpy.mockRestore();
+  });
+
   it.each([
     ["queued", true],
     ["preparing", true],
@@ -371,6 +433,48 @@ describe("BuildDetailPage", () => {
       await screen.findByRole("heading", { level: 2, name: "Build #21" });
       const button = screen.queryByRole("button", { name: "Cancel" });
       if (shouldShowCancel) {
+        expect(button).toBeTruthy();
+      } else {
+        expect(button).toBeNull();
+      }
+    },
+  );
+
+  it.each([
+    ["pending", false],
+    ["queued", false],
+    ["preparing", false],
+    ["running", false],
+    ["success", true],
+    ["failed", true],
+    ["canceled", true],
+  ] as const)(
+    "shows Rerun for %s only when terminal",
+    async (status, shouldShowRerun) => {
+      mockedGetBuild.mockResolvedValueOnce(
+        makeBuild({
+          status,
+          finished_at:
+            status === "success" || status === "failed" || status === "canceled"
+              ? "2026-03-30T00:02:05Z"
+              : null,
+          error_message: null,
+        }),
+      );
+      mockedGetBuildSteps.mockResolvedValueOnce([
+        makeStep({
+          status: status === "running" ? "running" : "pending",
+          finished_at: null,
+          exit_code: null,
+        }),
+      ]);
+      mockedGetBuildArtifacts.mockResolvedValueOnce([]);
+
+      renderPage();
+
+      await screen.findByRole("heading", { level: 2, name: "Build #21" });
+      const button = screen.queryByRole("button", { name: "Rerun" });
+      if (shouldShowRerun) {
         expect(button).toBeTruthy();
       } else {
         expect(button).toBeNull();

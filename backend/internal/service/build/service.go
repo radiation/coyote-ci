@@ -51,6 +51,7 @@ var ErrExecutionJobRepoNotConfigured = errors.New("execution job repository not 
 var ErrExecutionJobNotFound = errors.New("execution job not found")
 var ErrExecutionJobNotRetryable = errors.New("execution job is not retryable")
 var ErrInvalidRerunStepIndex = errors.New("invalid rerun step index")
+var ErrBuildRerunUnavailable = errors.New("build rerun context is unavailable")
 var ErrBuildPriorityOutOfRange = errors.New("priority must be between 1 and 10")
 
 const (

@@ -145,8 +145,9 @@ func (s *BuildService) RerunBuildFromStep(ctx context.Context, buildID string, s
 		jobsToCreate = append(jobsToCreate, fallback)
 	}
 
-	if _, err := s.executionJobRepo.CreateJobsForBuild(ctx, jobsToCreate); err != nil {
-		return domain.Build{}, err
+	_, createJobsErr := s.executionJobRepo.CreateJobsForBuild(ctx, jobsToCreate)
+	if createJobsErr != nil {
+		return domain.Build{}, createJobsErr
 	}
 
 	if cloneErr := s.cloneDeclaredOutputsForAttempts(ctx, sourceToCreatedJobID, createdBuild.ID); cloneErr != nil {
@@ -154,6 +155,56 @@ func (s *BuildService) RerunBuildFromStep(ctx context.Context, buildID string, s
 	}
 
 	return createdBuild, nil
+}
+
+func (s *BuildService) RerunBuild(ctx context.Context, buildID string) (domain.Build, error) {
+	sourceBuild, err := s.buildRepo.GetByID(ctx, buildID)
+	if err != nil {
+		return domain.Build{}, mapRepoErr(err)
+	}
+	sourceSteps, err := s.buildRepo.GetStepsByBuildID(ctx, buildID)
+	if err != nil {
+		return domain.Build{}, mapRepoErr(err)
+	}
+	validateErr := validateBuildRerunContext(sourceBuild, sourceSteps)
+	if validateErr != nil {
+		return domain.Build{}, validateErr
+	}
+
+	sort.Slice(sourceSteps, func(left, right int) bool {
+		return sourceSteps[left].StepIndex < sourceSteps[right].StepIndex
+	})
+
+	now := time.Now().UTC()
+	newBuild := buildAttemptFromSource(sourceBuild, now, nil)
+	newSteps := make([]domain.BuildStep, 0, len(sourceSteps))
+	for index, sourceStep := range sourceSteps {
+		newSteps = append(newSteps, cloneStepForAttempt(newBuild.ID, sourceStep, index))
+	}
+
+	createdBuild, err := s.buildRepo.CreateQueuedBuild(ctx, newBuild, newSteps)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	createJobsErr := s.createDurableJobsForBuild(ctx, createdBuild, newSteps)
+	if createJobsErr != nil {
+		return domain.Build{}, createJobsErr
+	}
+
+	return createdBuild, nil
+}
+
+func validateBuildRerunContext(sourceBuild domain.Build, sourceSteps []domain.BuildStep) error {
+	if strings.TrimSpace(sourceBuild.ID) == "" || strings.TrimSpace(sourceBuild.ProjectID) == "" {
+		return ErrBuildRerunUnavailable
+	}
+	if !domain.IsTerminalBuildStatus(sourceBuild.Status) {
+		return ErrInvalidBuildStatusTransition
+	}
+	if len(sourceSteps) == 0 {
+		return ErrBuildRerunUnavailable
+	}
+	return nil
 }
 
 func (s *BuildService) RerunBuildFromJob(ctx context.Context, jobID string) (domain.Build, error) {
@@ -175,26 +226,68 @@ func buildAttemptFromSource(source domain.Build, now time.Time, rerunFrom *int) 
 	buildID := uuid.NewString()
 	queuedAt := now
 	return domain.Build{
-		ID:                 buildID,
-		ProjectID:          source.ProjectID,
-		JobID:              source.JobID,
-		Priority:           domain.NormalizePriority(source.Priority),
-		Status:             domain.BuildStatusQueued,
-		CreatedAt:          now,
-		QueuedAt:           &queuedAt,
-		CurrentStepIndex:   0,
-		AttemptNumber:      attempt,
-		RerunOfBuildID:     &source.ID,
-		RerunFromStepIdx:   rerunFrom,
-		PipelineConfigYAML: source.PipelineConfigYAML,
-		PipelineName:       source.PipelineName,
-		PipelineSource:     source.PipelineSource,
-		PipelinePath:       source.PipelinePath,
-		Source:             cloneSourceSpec(source.Source),
-		RepoURL:            source.RepoURL,
-		Ref:                source.Ref,
-		CommitSHA:          source.CommitSHA,
+		ID:                    buildID,
+		ProjectID:             source.ProjectID,
+		JobID:                 cloneStringPtr(source.JobID),
+		Priority:              domain.NormalizePriority(source.Priority),
+		Status:                domain.BuildStatusQueued,
+		CreatedAt:             now,
+		QueuedAt:              &queuedAt,
+		CurrentStepIndex:      0,
+		AttemptNumber:         attempt,
+		RerunOfBuildID:        &source.ID,
+		RerunFromStepIdx:      rerunFrom,
+		PipelineConfigYAML:    cloneStringPtr(source.PipelineConfigYAML),
+		PipelineName:          cloneStringPtr(source.PipelineName),
+		PipelineSource:        cloneStringPtr(source.PipelineSource),
+		PipelinePath:          cloneStringPtr(source.PipelinePath),
+		Source:                cloneSourceSpec(source.Source),
+		RepoURL:               cloneStringPtr(source.RepoURL),
+		Ref:                   cloneStringPtr(source.Ref),
+		CommitSHA:             cloneStringPtr(source.CommitSHA),
+		Trigger:               cloneBuildTrigger(source.Trigger),
+		RequestedImageRef:     cloneStringPtr(source.RequestedImageRef),
+		ResolvedImageRef:      cloneStringPtr(source.ResolvedImageRef),
+		ImageSourceKind:       source.ImageSourceKind,
+		ManagedImageID:        cloneStringPtr(source.ManagedImageID),
+		ManagedImageVersionID: cloneStringPtr(source.ManagedImageVersionID),
 	}
+}
+
+func cloneBuildTrigger(source domain.BuildTrigger) domain.BuildTrigger {
+	normalized := domain.NormalizeBuildTrigger(source)
+	return domain.BuildTrigger{
+		Kind:            normalized.Kind,
+		SCMProvider:     cloneStringPtr(normalized.SCMProvider),
+		EventType:       cloneStringPtr(normalized.EventType),
+		RepositoryOwner: cloneStringPtr(normalized.RepositoryOwner),
+		RepositoryName:  cloneStringPtr(normalized.RepositoryName),
+		RepositoryURL:   cloneStringPtr(normalized.RepositoryURL),
+		RawRef:          cloneStringPtr(normalized.RawRef),
+		Ref:             cloneStringPtr(normalized.Ref),
+		RefType:         cloneStringPtr(normalized.RefType),
+		RefName:         cloneStringPtr(normalized.RefName),
+		Deleted:         cloneBoolPtr(normalized.Deleted),
+		CommitSHA:       cloneStringPtr(normalized.CommitSHA),
+		DeliveryID:      cloneStringPtr(normalized.DeliveryID),
+		Actor:           cloneStringPtr(normalized.Actor),
+	}
+}
+
+func cloneStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func cloneSourceSpec(spec *domain.SourceSpec) *domain.SourceSpec {
@@ -206,18 +299,27 @@ func cloneSourceSpec(spec *domain.SourceSpec) *domain.SourceSpec {
 
 func cloneStepForAttempt(buildID string, sourceStep domain.BuildStep, newStepIndex int) domain.BuildStep {
 	return domain.BuildStep{
-		ID:             uuid.NewString(),
-		BuildID:        buildID,
-		StepIndex:      newStepIndex,
-		Name:           sourceStep.Name,
-		Command:        sourceStep.Command,
-		Args:           append([]string(nil), sourceStep.Args...),
-		Env:            cloneEnv(sourceStep.Env),
-		WorkingDir:     defaultValue(sourceStep.WorkingDir, "."),
-		TimeoutSeconds: maxInt(sourceStep.TimeoutSeconds, 0),
-		ArtifactPaths:  append([]string{}, sourceStep.ArtifactPaths...),
-		Cache:          sourceStep.Cache.Clone(),
-		Status:         domain.BuildStepStatusPending,
+		ID:                    uuid.NewString(),
+		BuildID:               buildID,
+		StepIndex:             newStepIndex,
+		NodeID:                defaultValue(sourceStep.NodeID, domain.FallbackNodeID(newStepIndex)),
+		GroupName:             cloneStringPtr(sourceStep.GroupName),
+		DependsOnNodes:        append([]string(nil), sourceStep.DependsOnNodes...),
+		Name:                  sourceStep.Name,
+		Image:                 sourceStep.Image,
+		Command:               sourceStep.Command,
+		Args:                  append([]string(nil), sourceStep.Args...),
+		Env:                   cloneEnv(sourceStep.Env),
+		WorkingDir:            defaultValue(sourceStep.WorkingDir, "."),
+		TimeoutSeconds:        maxInt(sourceStep.TimeoutSeconds, 0),
+		ArtifactPaths:         append([]string(nil), sourceStep.ArtifactPaths...),
+		Cache:                 sourceStep.Cache.Clone(),
+		Status:                domain.BuildStepStatusPending,
+		RequestedImageRef:     cloneStringPtr(sourceStep.RequestedImageRef),
+		ResolvedImageRef:      cloneStringPtr(sourceStep.ResolvedImageRef),
+		ImageSourceKind:       sourceStep.ImageSourceKind,
+		ManagedImageID:        cloneStringPtr(sourceStep.ManagedImageID),
+		ManagedImageVersionID: cloneStringPtr(sourceStep.ManagedImageVersionID),
 	}
 }
 

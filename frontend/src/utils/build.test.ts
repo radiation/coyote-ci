@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isActiveBuild, isCancelableBuild, isTerminalBuild } from "./build";
+import {
+  isActiveBuild,
+  isCancelableBuild,
+  isRerunnableBuild,
+  isTerminalBuild,
+} from "./build";
 
 describe("build status helpers", () => {
   it.each([
@@ -41,5 +46,17 @@ describe("build status helpers", () => {
     ["canceled", true],
   ] as const)("classifies %s terminal=%s", (status, expected) => {
     expect(isTerminalBuild(status)).toBe(expected);
+  });
+
+  it.each([
+    ["pending", false],
+    ["queued", false],
+    ["preparing", false],
+    ["running", false],
+    ["success", true],
+    ["failed", true],
+    ["canceled", true],
+  ] as const)("classifies %s rerunnable=%s", (status, expected) => {
+    expect(isRerunnableBuild(status)).toBe(expected);
   });
 });

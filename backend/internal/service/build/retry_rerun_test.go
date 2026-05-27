@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/logs"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 )
 
@@ -41,8 +42,9 @@ func TestBuildService_RetryJob_CreatesNewAttemptAndPreservesHistory(t *testing.T
 		TimeoutSeconds: 120,
 		Status:         domain.BuildStepStatusFailed,
 	}}
-	if _, err := buildRepo.CreateQueuedBuild(context.Background(), sourceBuild, steps); err != nil {
-		t.Fatalf("create source build failed: %v", err)
+	_, createBuildErr := buildRepo.CreateQueuedBuild(context.Background(), sourceBuild, steps)
+	if createBuildErr != nil {
+		t.Fatalf("create source build failed: %v", createBuildErr)
 	}
 
 	lineageRoot := "job-1"
@@ -73,8 +75,9 @@ func TestBuildService_RetryJob_CreatesNewAttemptAndPreservesHistory(t *testing.T
 		ErrorMessage:     stringPtr("failed"),
 		ExitCode:         intPtr(1),
 	}
-	if _, err := execRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{failedJob}); err != nil {
-		t.Fatalf("seed failed job failed: %v", err)
+	_, createJobsErr := execRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{failedJob})
+	if createJobsErr != nil {
+		t.Fatalf("seed failed job failed: %v", createJobsErr)
 	}
 
 	retryResult, err := svc.RetryJob(context.Background(), failedJob.ID)
@@ -144,8 +147,9 @@ func TestBuildService_RetryJob_RejectsNonTerminalJobs(t *testing.T) {
 		ResolvedSpecJSON: `{"version":1}`,
 		CreatedAt:        now,
 	}
-	if _, err := execRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{queuedJob}); err != nil {
-		t.Fatalf("seed queued job failed: %v", err)
+	_, createJobsErr := execRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{queuedJob})
+	if createJobsErr != nil {
+		t.Fatalf("seed queued job failed: %v", createJobsErr)
 	}
 
 	_, err := svc.RetryJob(context.Background(), queuedJob.ID)
@@ -176,8 +180,9 @@ func TestBuildService_RerunBuildFromStep_CreatesLinkedBuildAttemptAndPreservesSp
 		{ID: "step-1", BuildID: sourceBuild.ID, StepIndex: 1, Name: "test", Command: "sh", Args: []string{"-c", "go test ./..."}, Env: map[string]string{"A": "1"}, WorkingDir: "backend", TimeoutSeconds: 120, Status: domain.BuildStepStatusFailed},
 		{ID: "step-2", BuildID: sourceBuild.ID, StepIndex: 2, Name: "package", Command: "sh", Args: []string{"-c", "go build ./..."}, Env: map[string]string{}, WorkingDir: "backend", TimeoutSeconds: 120, Status: domain.BuildStepStatusPending},
 	}
-	if _, err := buildRepo.CreateQueuedBuild(context.Background(), sourceBuild, sourceSteps); err != nil {
-		t.Fatalf("create source build failed: %v", err)
+	_, createBuildErr := buildRepo.CreateQueuedBuild(context.Background(), sourceBuild, sourceSteps)
+	if createBuildErr != nil {
+		t.Fatalf("create source build failed: %v", createBuildErr)
 	}
 
 	timeout := 120
@@ -189,8 +194,9 @@ func TestBuildService_RerunBuildFromStep_CreatesLinkedBuildAttemptAndPreservesSp
 		root := jobs[i].ID
 		jobs[i].LineageRootJobID = &root
 	}
-	if _, err := execRepo.CreateJobsForBuild(context.Background(), jobs); err != nil {
-		t.Fatalf("seed jobs failed: %v", err)
+	_, createJobsErr := execRepo.CreateJobsForBuild(context.Background(), jobs)
+	if createJobsErr != nil {
+		t.Fatalf("seed jobs failed: %v", createJobsErr)
 	}
 
 	newBuild, err := svc.RerunBuildFromStep(context.Background(), sourceBuild.ID, 1)
@@ -234,14 +240,277 @@ func TestBuildService_RerunBuildFromStep_RejectsInvalidStepIndex(t *testing.T) {
 	now := time.Now().UTC()
 	build := domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusFailed, AttemptNumber: 1, CreatedAt: now}
 	steps := []domain.BuildStep{{ID: "step-0", BuildID: build.ID, StepIndex: 0, Name: "only", Command: "sh", Args: []string{"-c", "echo only"}, Env: map[string]string{}, WorkingDir: ".", TimeoutSeconds: 10, Status: domain.BuildStepStatusFailed}}
-	if _, err := buildRepo.CreateQueuedBuild(context.Background(), build, steps); err != nil {
-		t.Fatalf("create build failed: %v", err)
+	_, createBuildErr := buildRepo.CreateQueuedBuild(context.Background(), build, steps)
+	if createBuildErr != nil {
+		t.Fatalf("create build failed: %v", createBuildErr)
 	}
 
 	_, err := svc.RerunBuildFromStep(context.Background(), build.ID, 5)
 	if !errors.Is(err, ErrInvalidRerunStepIndex) {
 		t.Fatalf("expected ErrInvalidRerunStepIndex, got %v", err)
 	}
+}
+
+func TestBuildService_RerunBuild_CreatesNewQueuedBuildForTerminalBuilds(t *testing.T) {
+	terminalStatuses := []domain.BuildStatus{
+		domain.BuildStatusSuccess,
+		domain.BuildStatusFailed,
+		domain.BuildStatusCanceled,
+	}
+
+	for _, terminalStatus := range terminalStatuses {
+		terminalStatus := terminalStatus
+		t.Run(string(terminalStatus), func(t *testing.T) {
+			buildRepo := memoryrepo.NewBuildRepository()
+			execRepo := memoryrepo.NewExecutionJobRepository()
+			svc := NewBuildService(buildRepo, nil, &fakeLogSink{})
+			svc.SetExecutionJobRepository(execRepo)
+
+			sourceBuild, sourceSteps := seedRerunnableBuild(t, buildRepo, terminalStatus)
+
+			newBuild, err := svc.RerunBuild(context.Background(), sourceBuild.ID)
+			if err != nil {
+				t.Fatalf("rerun build failed: %v", err)
+			}
+
+			if newBuild.ID == sourceBuild.ID {
+				t.Fatal("expected rerun to create a new build id")
+			}
+			if newBuild.Status != domain.BuildStatusQueued {
+				t.Fatalf("expected new build status queued, got %q", newBuild.Status)
+			}
+			if newBuild.QueuedAt == nil {
+				t.Fatal("expected new build to have queued_at")
+			}
+			if newBuild.StartedAt != nil || newBuild.FinishedAt != nil {
+				t.Fatalf("expected fresh timestamps without start/finish, got started=%v finished=%v", newBuild.StartedAt, newBuild.FinishedAt)
+			}
+			if newBuild.RerunOfBuildID == nil || *newBuild.RerunOfBuildID != sourceBuild.ID {
+				t.Fatalf("expected rerun_of_build_id=%s, got %v", sourceBuild.ID, newBuild.RerunOfBuildID)
+			}
+			if newBuild.RerunFromStepIdx != nil {
+				t.Fatalf("expected whole-build rerun to leave rerun_from_step_index empty, got %v", newBuild.RerunFromStepIdx)
+			}
+			if newBuild.AttemptNumber != 2 {
+				t.Fatalf("expected attempt number 2, got %d", newBuild.AttemptNumber)
+			}
+			if newBuild.ProjectID != sourceBuild.ProjectID || newBuild.JobID == nil || *newBuild.JobID != *sourceBuild.JobID {
+				t.Fatalf("expected project/job context to be preserved, got project=%q job=%v", newBuild.ProjectID, newBuild.JobID)
+			}
+			if newBuild.Source == nil || newBuild.Source.CommitSHA == nil || *newBuild.Source.CommitSHA != "abc123" {
+				t.Fatalf("expected source commit to be preserved, got %+v", newBuild.Source)
+			}
+			if newBuild.Trigger.Kind != domain.BuildTriggerKindWebhook || newBuild.Trigger.Ref == nil || *newBuild.Trigger.Ref != "refs/heads/main" {
+				t.Fatalf("expected trigger metadata to be preserved, got %+v", newBuild.Trigger)
+			}
+
+			newSteps, err := buildRepo.GetStepsByBuildID(context.Background(), newBuild.ID)
+			if err != nil {
+				t.Fatalf("get new steps failed: %v", err)
+			}
+			if len(newSteps) != len(sourceSteps) {
+				t.Fatalf("expected %d new steps, got %d", len(sourceSteps), len(newSteps))
+			}
+			for index, newStep := range newSteps {
+				if newStep.ID == sourceSteps[index].ID {
+					t.Fatalf("expected step %d to get a new id", index)
+				}
+				if newStep.Status != domain.BuildStepStatusPending {
+					t.Fatalf("expected step %d pending, got %q", index, newStep.Status)
+				}
+				if newStep.StartedAt != nil || newStep.FinishedAt != nil || newStep.ExitCode != nil || newStep.ErrorMessage != nil {
+					t.Fatalf("expected step %d execution fields to be fresh, got %+v", index, newStep)
+				}
+			}
+
+			newJobs, err := execRepo.GetJobsByBuildID(context.Background(), newBuild.ID)
+			if err != nil {
+				t.Fatalf("get new jobs failed: %v", err)
+			}
+			if len(newJobs) != len(sourceSteps) {
+				t.Fatalf("expected durable jobs for rerun build, got %d", len(newJobs))
+			}
+
+			reloadedSource, err := buildRepo.GetByID(context.Background(), sourceBuild.ID)
+			if err != nil {
+				t.Fatalf("reload source build failed: %v", err)
+			}
+			if reloadedSource.Status != terminalStatus || reloadedSource.ID != sourceBuild.ID {
+				t.Fatalf("expected source build unchanged, got %+v", reloadedSource)
+			}
+		})
+	}
+}
+
+func TestBuildService_RerunBuild_DoesNotCopyArtifactsOrLogs(t *testing.T) {
+	buildRepo := memoryrepo.NewBuildRepository()
+	artifactRepo := &fakeArtifactRepository{}
+	logSink := logs.NewMemorySink()
+	svc := NewBuildService(buildRepo, nil, logSink)
+	svc.SetArtifactPersistence(artifactRepo, nil, "")
+
+	sourceBuild, _ := seedRerunnableBuild(t, buildRepo, domain.BuildStatusSuccess)
+	createdArtifact, err := artifactRepo.Create(context.Background(), domain.BuildArtifact{
+		ID:              "artifact-1",
+		BuildID:         sourceBuild.ID,
+		Name:            "dist",
+		LogicalPath:     "dist/app.tar.gz",
+		StorageKey:      "build-1/dist/app.tar.gz",
+		StorageProvider: domain.StorageProviderFilesystem,
+		CreatedAt:       time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("seed artifact failed: %v", err)
+	}
+	if createdArtifact.ID == "" {
+		t.Fatal("expected seeded artifact id")
+	}
+	writeErr := logSink.WriteStepLog(context.Background(), sourceBuild.ID, "test", "original log line")
+	if writeErr != nil {
+		t.Fatalf("seed log failed: %v", writeErr)
+	}
+
+	newBuild, err := svc.RerunBuild(context.Background(), sourceBuild.ID)
+	if err != nil {
+		t.Fatalf("rerun build failed: %v", err)
+	}
+
+	originalArtifacts, err := svc.GetBuildArtifacts(context.Background(), sourceBuild.ID)
+	if err != nil {
+		t.Fatalf("get original artifacts failed: %v", err)
+	}
+	if len(originalArtifacts) != 1 {
+		t.Fatalf("expected original artifact to remain, got %d", len(originalArtifacts))
+	}
+	newArtifacts, err := svc.GetBuildArtifacts(context.Background(), newBuild.ID)
+	if err != nil {
+		t.Fatalf("get new artifacts failed: %v", err)
+	}
+	if len(newArtifacts) != 0 {
+		t.Fatalf("expected rerun build to start without copied artifacts, got %d", len(newArtifacts))
+	}
+
+	originalLogs, err := svc.GetBuildLogs(context.Background(), sourceBuild.ID)
+	if err != nil {
+		t.Fatalf("get original logs failed: %v", err)
+	}
+	if len(originalLogs) != 1 {
+		t.Fatalf("expected original log to remain, got %d", len(originalLogs))
+	}
+	newLogs, err := svc.GetBuildLogs(context.Background(), newBuild.ID)
+	if err != nil {
+		t.Fatalf("get new logs failed: %v", err)
+	}
+	if len(newLogs) != 0 {
+		t.Fatalf("expected rerun build to start without copied logs, got %d", len(newLogs))
+	}
+}
+
+func TestBuildService_RerunBuild_RejectsActiveBuilds(t *testing.T) {
+	activeStatuses := []domain.BuildStatus{
+		domain.BuildStatusPending,
+		domain.BuildStatusQueued,
+		domain.BuildStatusPreparing,
+		domain.BuildStatusRunning,
+	}
+
+	for _, activeStatus := range activeStatuses {
+		activeStatus := activeStatus
+		t.Run(string(activeStatus), func(t *testing.T) {
+			buildRepo := memoryrepo.NewBuildRepository()
+			svc := NewBuildService(buildRepo, nil, &fakeLogSink{})
+			sourceBuild, _ := seedRerunnableBuild(t, buildRepo, domain.BuildStatusSuccess)
+
+			updatedBuild, err := buildRepo.UpdateStatus(context.Background(), sourceBuild.ID, activeStatus, nil)
+			if err != nil {
+				t.Fatalf("set active build status failed: %v", err)
+			}
+			if updatedBuild.Status != activeStatus {
+				t.Fatalf("expected active status %q, got %q", activeStatus, updatedBuild.Status)
+			}
+
+			_, err = svc.RerunBuild(context.Background(), sourceBuild.ID)
+			if !errors.Is(err, ErrInvalidBuildStatusTransition) {
+				t.Fatalf("expected ErrInvalidBuildStatusTransition, got %v", err)
+			}
+		})
+	}
+}
+
+func TestBuildService_RerunBuild_RejectsMissingBuildContext(t *testing.T) {
+	buildRepo := memoryrepo.NewBuildRepository()
+	svc := NewBuildService(buildRepo, nil, &fakeLogSink{})
+
+	_, err := svc.RerunBuild(context.Background(), "missing")
+	if !errors.Is(err, ErrBuildNotFound) {
+		t.Fatalf("expected ErrBuildNotFound, got %v", err)
+	}
+
+	sourceBuild := domain.Build{ID: "build-empty", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: time.Now().UTC()}
+	_, createErr := buildRepo.Create(context.Background(), sourceBuild)
+	if createErr != nil {
+		t.Fatalf("seed empty build failed: %v", createErr)
+	}
+	_, err = svc.RerunBuild(context.Background(), sourceBuild.ID)
+	if !errors.Is(err, ErrBuildRerunUnavailable) {
+		t.Fatalf("expected ErrBuildRerunUnavailable, got %v", err)
+	}
+}
+
+func seedRerunnableBuild(t *testing.T, buildRepo *memoryrepo.BuildRepository, status domain.BuildStatus) (domain.Build, []domain.BuildStep) {
+	t.Helper()
+	now := time.Now().UTC()
+	jobID := "job-1"
+	pipelineConfig := "version: 1\nimage: golang:1.24\nsteps:\n  - name: setup\n    run: echo setup\n  - name: test\n    run: go test ./...\n"
+	pipelineName := "ci"
+	pipelineSource := "repo"
+	pipelinePath := ".coyote/pipeline.yml"
+	sourceBuild := domain.Build{
+		ID:                 "build-" + string(status),
+		ProjectID:          "project-1",
+		JobID:              &jobID,
+		Priority:           7,
+		Status:             domain.BuildStatusQueued,
+		AttemptNumber:      1,
+		CreatedAt:          now,
+		PipelineConfigYAML: &pipelineConfig,
+		PipelineName:       &pipelineName,
+		PipelineSource:     &pipelineSource,
+		PipelinePath:       &pipelinePath,
+		Source:             domain.NewSourceSpec("https://github.com/acme/repo.git", "refs/heads/main", "abc123"),
+		RepoURL:            stringPtr("https://github.com/acme/repo.git"),
+		Ref:                stringPtr("refs/heads/main"),
+		CommitSHA:          stringPtr("abc123"),
+		Trigger: domain.BuildTrigger{
+			Kind:          domain.BuildTriggerKindWebhook,
+			SCMProvider:   stringPtr("github"),
+			EventType:     stringPtr("push"),
+			RepositoryURL: stringPtr("https://github.com/acme/repo.git"),
+			Ref:           stringPtr("refs/heads/main"),
+			CommitSHA:     stringPtr("abc123"),
+			Actor:         stringPtr("octocat"),
+		},
+		RequestedImageRef: stringPtr("golang:1.24"),
+		ImageSourceKind:   domain.ImageSourceKindExternal,
+	}
+	sourceSteps := []domain.BuildStep{
+		{ID: "step-0", BuildID: sourceBuild.ID, StepIndex: 0, NodeID: "setup", Name: "setup", Command: "sh", Args: []string{"-c", "echo setup"}, Env: map[string]string{}, WorkingDir: ".", TimeoutSeconds: 60, Status: domain.BuildStepStatusSuccess},
+		{ID: "step-1", BuildID: sourceBuild.ID, StepIndex: 1, NodeID: "test", DependsOnNodes: []string{"setup"}, Name: "test", Command: "sh", Args: []string{"-c", "go test ./..."}, Env: map[string]string{"GOFLAGS": "-mod=readonly"}, WorkingDir: "backend", TimeoutSeconds: 120, ArtifactPaths: []string{"dist/*"}, Status: domain.BuildStepStatusFailed, StartedAt: timePtr(now.Add(time.Minute)), FinishedAt: timePtr(now.Add(2 * time.Minute)), ExitCode: intPtr(1), ErrorMessage: stringPtr("failed")},
+	}
+	createdBuild, err := buildRepo.CreateQueuedBuild(context.Background(), sourceBuild, sourceSteps)
+	if err != nil {
+		t.Fatalf("seed build failed: %v", err)
+	}
+	errorMessage := stringPtr("terminal source")
+	updatedBuild, err := buildRepo.UpdateStatus(context.Background(), createdBuild.ID, status, errorMessage)
+	if err != nil {
+		t.Fatalf("terminalize build failed: %v", err)
+	}
+	createdSteps, err := buildRepo.GetStepsByBuildID(context.Background(), createdBuild.ID)
+	if err != nil {
+		t.Fatalf("reload source steps failed: %v", err)
+	}
+	return updatedBuild, createdSteps
 }
 
 func timePtr(value time.Time) *time.Time {

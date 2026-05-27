@@ -936,17 +936,14 @@
         },
         "/builds/{buildID}/rerun": {
             "post": {
-                "description": "Creates a new build attempt rerunning from a selected step index.",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "Creates a new queued build using the source, trigger, job, and step context from an existing build.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "builds"
                 ],
-                "summary": "Rerun build from step",
+                "summary": "Rerun build",
                 "parameters": [
                     {
                         "type": "string",
@@ -954,15 +951,6 @@
                         "name": "buildID",
                         "in": "path",
                         "required": true
-                    },
-                    {
-                        "description": "Rerun request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/api.RerunBuildFromStepRequest"
-                        }
                     }
                 ],
                 "responses": {
@@ -4321,14 +4309,6 @@
                     "items": {
                         "$ref": "#/definitions/api.QueueEntryResponse"
                     }
-                }
-            }
-        },
-        "api.RerunBuildFromStepRequest": {
-            "type": "object",
-            "properties": {
-                "step_index": {
-                    "type": "integer"
                 }
             }
         },

@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   cancelBuild,
   createJobVersionTags,
   getBuild,
   getBuildArtifacts,
   getBuildSteps,
+  rerunBuild,
 } from "../api";
 import { BuildArtifactsSection } from "../components/BuildArtifactsSection";
 import { PageHeader } from "../components/PageHeader";
@@ -20,6 +21,7 @@ import {
   SLOW_POLL_INTERVAL,
   isActiveBuild,
   isCancelableBuild,
+  isRerunnableBuild,
 } from "../utils/build";
 import { formatCompactTime, formatDuration, formatTime } from "../utils/time";
 
@@ -138,6 +140,7 @@ function isSafeExternalURL(value: string | null | undefined): boolean {
 
 export function BuildDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const {
@@ -216,6 +219,19 @@ export function BuildDetailPage() {
         queryClient.invalidateQueries({ queryKey: ["queue"] }),
         queryClient.invalidateQueries({ queryKey: ["builds"] }),
       ]);
+    },
+  });
+
+  const rerunBuildMutation = useMutation({
+    mutationFn: () => rerunBuild(id!),
+    onSuccess: async (newBuild) => {
+      queryClient.setQueryData(["build", newBuild.id], newBuild);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["build", id] }),
+        queryClient.invalidateQueries({ queryKey: ["queue"] }),
+        queryClient.invalidateQueries({ queryKey: ["builds"] }),
+      ]);
+      navigate(`/builds/${newBuild.id}`);
     },
   });
 
@@ -329,6 +345,17 @@ export function BuildDetailPage() {
     await cancelBuildMutation.mutateAsync();
   }
 
+  async function requestRerunBuild() {
+    if (!isRerunnableBuild(currentBuild.status)) {
+      return;
+    }
+    const confirmed = window.confirm(`Rerun ${buildLabel(currentBuild)}?`);
+    if (!confirmed) {
+      return;
+    }
+    await rerunBuildMutation.mutateAsync();
+  }
+
   return (
     <div className="page-content page-build-detail">
       <PageHeader
@@ -366,6 +393,16 @@ export function BuildDetailPage() {
                 View job
               </Link>
             ) : null}
+            {isRerunnableBuild(build.status) ? (
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void requestRerunBuild()}
+                disabled={rerunBuildMutation.isPending}
+              >
+                {rerunBuildMutation.isPending ? "Rerunning…" : "Rerun"}
+              </button>
+            ) : null}
             {isCancelableBuild(build.status) ? (
               <button
                 className="secondary-button danger-button"
@@ -383,6 +420,11 @@ export function BuildDetailPage() {
       {cancelBuildMutation.error ? (
         <p className="error-text">
           Failed to cancel build: {String(cancelBuildMutation.error)}
+        </p>
+      ) : null}
+      {rerunBuildMutation.error ? (
+        <p className="error-text">
+          Failed to rerun build: {String(rerunBuildMutation.error)}
         </p>
       ) : null}
 

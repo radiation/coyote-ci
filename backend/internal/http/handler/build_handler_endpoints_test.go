@@ -303,6 +303,55 @@ func TestCreateRepoBuild(t *testing.T) {
 	})
 }
 
+func TestBuildHandler_RerunBuild_AcceptsBodylessPost(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	svc := buildsvc.NewBuildService(buildRepo, nil, logs.NewNoopSink())
+	h := NewBuildHandler(svc)
+
+	now := time.Now().UTC()
+	jobID := "job-1"
+	sourceBuild := domain.Build{
+		ID:            "build-1",
+		ProjectID:     "project-1",
+		JobID:         &jobID,
+		Status:        domain.BuildStatusQueued,
+		AttemptNumber: 1,
+		CreatedAt:     now,
+	}
+	sourceSteps := []domain.BuildStep{{ID: "step-1", BuildID: sourceBuild.ID, StepIndex: 0, Name: "test", Command: "sh", Args: []string{"-c", "go test ./..."}, Env: map[string]string{}, WorkingDir: ".", Status: domain.BuildStepStatusSuccess}}
+	createdBuild, err := buildRepo.CreateQueuedBuild(context.Background(), sourceBuild, sourceSteps)
+	if err != nil {
+		t.Fatalf("seed build failed: %v", err)
+	}
+	if _, err := buildRepo.UpdateStatus(context.Background(), createdBuild.ID, domain.BuildStatusSuccess, nil); err != nil {
+		t.Fatalf("terminalize build failed: %v", err)
+	}
+
+	router := chi.NewRouter()
+	router.Post("/builds/{buildID}/rerun", h.RerunBuild)
+	req := httptest.NewRequest(http.MethodPost, "/builds/build-1/rerun", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	data := resp["data"]
+	if data["id"] == sourceBuild.ID {
+		t.Fatalf("expected new build id, got %v", data["id"])
+	}
+	if data["status"] != string(domain.BuildStatusQueued) {
+		t.Fatalf("expected queued rerun build, got %v", data["status"])
+	}
+	if data["rerun_of_build_id"] != sourceBuild.ID {
+		t.Fatalf("expected rerun_of_build_id=%s, got %v", sourceBuild.ID, data["rerun_of_build_id"])
+	}
+}
+
 func TestBuildHandler_GetBuildArtifacts(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	jobID := "job-1"

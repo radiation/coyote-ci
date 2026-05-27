@@ -973,36 +973,29 @@ func (h *BuildHandler) RetryJob(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// RerunBuildFromStep godoc
-// @Summary Rerun build from step
-// @Description Creates a new build attempt rerunning from a selected step index.
+// RerunBuild godoc
+// @Summary Rerun build
+// @Description Creates a new queued build using the source, trigger, job, and step context from an existing build.
 // @Tags builds
-// @Accept json
 // @Produce json
 // @Param buildID path string true "Build ID"
-// @Param request body api.RerunBuildFromStepRequest true "Rerun request"
 // @Success 200 {object} api.BuildEnvelope
 // @Failure 400 {object} api.ErrorResponse
 // @Failure 404 {object} api.ErrorResponse
 // @Failure 500 {object} api.ErrorResponse
 // @Router /builds/{buildID}/rerun [post]
-func (h *BuildHandler) RerunBuildFromStep(w http.ResponseWriter, r *http.Request) {
+func (h *BuildHandler) RerunBuild(w http.ResponseWriter, r *http.Request) {
 	buildID := strings.TrimSpace(chi.URLParam(r, "buildID"))
 	if buildID == "" {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "build id is required")
 		return
 	}
 
-	var req api.RerunBuildFromStepRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
-		return
-	}
 	if _, ok := h.authorizeBuildAction(w, r, buildID, auth.CanTriggerBuild); !ok {
 		return
 	}
 
-	build, err := h.buildService.RerunBuildFromStep(r.Context(), buildID, req.StepIndex)
+	build, err := h.buildService.RerunBuild(r.Context(), buildID)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -1117,6 +1110,11 @@ func (h *BuildHandler) writeServiceError(w http.ResponseWriter, err error) {
 
 	if errors.Is(err, buildsvc.ErrInvalidRerunStepIndex) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_step_index", err.Error())
+		return
+	}
+
+	if errors.Is(err, buildsvc.ErrBuildRerunUnavailable) {
+		writeErrorJSON(w, http.StatusBadRequest, "rerun_unavailable", err.Error())
 		return
 	}
 
