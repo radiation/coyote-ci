@@ -43,11 +43,9 @@ func (s *BuildService) CancelBuild(ctx context.Context, id string) (domain.Build
 		if cancelErr != nil {
 			return domain.Build{}, mapRepoErr(cancelErr)
 		}
-		// Postgres cancels durable jobs in the same transaction as the build/step
-		// state. This extra call is a compatibility fallback for repositories that
-		// only provide the generic build methods above; it should be a no-op after
-		// an atomic repository cancellation.
-		s.cancelExecutionJobsForBuild(ctx, id, reason, now)
+		if !cancelBuildIncludesExecutionJobs(s.buildRepo) {
+			s.cancelExecutionJobsForBuild(ctx, id, reason, now)
+		}
 		log.Printf("cancel applied: build_id=%s status=%s updated_steps=%d", id, canceled.Status, updatedSteps)
 		return canceled, nil
 	}
@@ -86,6 +84,13 @@ func (s *BuildService) CancelBuild(ctx context.Context, id string) (domain.Build
 
 	log.Printf("cancel applied: build_id=%s status=%s updated_steps=%d", id, canceled.Status, updatedSteps)
 	return canceled, nil
+}
+
+func cancelBuildIncludesExecutionJobs(repo any) bool {
+	repoWithJobCancel, ok := repo.(interface {
+		CancelBuildIncludesExecutionJobs() bool
+	})
+	return ok && repoWithJobCancel.CancelBuildIncludesExecutionJobs()
 }
 
 func (s *BuildService) cancelExecutionJobsForBuild(ctx context.Context, id string, reason string, canceledAt time.Time) {

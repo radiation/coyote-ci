@@ -108,3 +108,9 @@ func (r *BuildRepository) CancelBuild(ctx context.Context, id string, reason str
 	rollback = false
 	return canceledBuild, updatedSteps, nil
 }
+
+// CancelBuildIncludesExecutionJobs reports that CancelBuild also cancels build_jobs
+// atomically, so callers do not need a second execution-job cancellation pass.
+func (r *BuildRepository) CancelBuildIncludesExecutionJobs() bool {
+	return true
+}

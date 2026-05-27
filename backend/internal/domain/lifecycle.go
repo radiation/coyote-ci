@@ -48,12 +48,6 @@ func CanTransitionStep(from, to BuildStepStatus) bool {
 	}
 }
 
-// CanCancelStepToFailed reports whether cancellation/unstick semantics may
-// terminalize a step as failed.
-func CanCancelStepToFailed(from BuildStepStatus) bool {
-	return from == BuildStepStatusPending || from == BuildStepStatusRunning
-}
-
 // CanCancelStep reports whether cancellation may terminalize a step as canceled.
 func CanCancelStep(from BuildStepStatus) bool {
 	return from == BuildStepStatusPending || from == BuildStepStatusRunning

@@ -140,14 +140,14 @@ func TestTerminalStepStatesRejectFurtherTransitions(t *testing.T) {
 	}
 }
 
-func TestCanCancelStepToFailed(t *testing.T) {
+func TestCanCancelStep(t *testing.T) {
 	tests := []struct {
 		name   string
 		status BuildStepStatus
 		want   bool
 	}{
-		{name: "pending is cancel-terminalizable", status: BuildStepStatusPending, want: true},
-		{name: "running is cancel-terminalizable", status: BuildStepStatusRunning, want: true},
+		{name: "pending is cancelable", status: BuildStepStatusPending, want: true},
+		{name: "running is cancelable", status: BuildStepStatusRunning, want: true},
 		{name: "success is already terminal", status: BuildStepStatusSuccess, want: false},
 		{name: "failed is already terminal", status: BuildStepStatusFailed, want: false},
 		{name: "canceled is already terminal", status: BuildStepStatusCanceled, want: false},
@@ -157,8 +157,8 @@ func TestCanCancelStepToFailed(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := CanCancelStepToFailed(tc.status); got != tc.want {
-				t.Fatalf("expected CanCancelStepToFailed(%q)=%v, got %v", tc.status, tc.want, got)
+			if got := CanCancelStep(tc.status); got != tc.want {
+				t.Fatalf("expected CanCancelStep(%q)=%v, got %v", tc.status, tc.want, got)
 			}
 		})
 	}
