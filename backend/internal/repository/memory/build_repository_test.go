@@ -166,6 +166,101 @@ func TestBuildRepository_ListActive(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_ListPagedFiltersProjectAndClampsParams(t *testing.T) {
+	repo := NewBuildRepository()
+	now := time.Now().UTC()
+	for _, build := range []domain.Build{
+		{ID: "build-old", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now.Add(-2 * time.Minute)},
+		{ID: "build-other", ProjectID: "project-2", Status: domain.BuildStatusSuccess, CreatedAt: now.Add(-time.Minute)},
+		{ID: "build-new", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now},
+	} {
+		if _, createErr := repo.Create(context.Background(), build); createErr != nil {
+			t.Fatalf("setup create %s failed: %v", build.ID, createErr)
+		}
+	}
+
+	builds, listErr := repo.ListPaged(context.Background(), repository.ListParams{ProjectID: "project-1", Limit: 1, Offset: 0})
+	if listErr != nil {
+		t.Fatalf("ListPaged returned error: %v", listErr)
+	}
+	if len(builds) != 1 || builds[0].ID != "build-new" {
+		t.Fatalf("expected newest project-1 build, got %#v", builds)
+	}
+
+	empty, emptyErr := repo.ListPaged(context.Background(), repository.ListParams{ProjectID: "project-1", Limit: 1, Offset: 3})
+	if emptyErr != nil {
+		t.Fatalf("ListPaged offset returned error: %v", emptyErr)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("expected empty page beyond result set, got %#v", empty)
+	}
+}
+
+func TestBuildRepository_ListQueueFiltersAndOrdersEntries(t *testing.T) {
+	repo := NewBuildRepository()
+	now := time.Now().UTC()
+	queuedEarly := now.Add(-5 * time.Minute)
+	queuedLate := now.Add(-2 * time.Minute)
+	runningStarted := now.Add(-10 * time.Minute)
+
+	for _, build := range []domain.Build{
+		{ID: "build-success", ProjectID: "project-1", Status: domain.BuildStatusSuccess, Priority: 10, CreatedAt: now.Add(-6 * time.Minute)},
+		{ID: "build-low", ProjectID: "project-1", Status: domain.BuildStatusQueued, Priority: 3, QueuedAt: &queuedEarly, CreatedAt: now.Add(-5 * time.Minute)},
+		{ID: "build-high-late", ProjectID: "project-1", Status: domain.BuildStatusQueued, Priority: 9, QueuedAt: &queuedLate, CreatedAt: now.Add(-2 * time.Minute)},
+		{ID: "build-high-early", ProjectID: "project-1", Status: domain.BuildStatusQueued, Priority: 9, QueuedAt: &queuedEarly, CreatedAt: now.Add(-4 * time.Minute)},
+		{ID: "build-running", ProjectID: "project-1", Status: domain.BuildStatusRunning, StartedAt: &runningStarted, CreatedAt: now.Add(-3 * time.Minute)},
+		{ID: "build-other-project", ProjectID: "project-2", Status: domain.BuildStatusQueued, Priority: 10, CreatedAt: now.Add(-time.Minute)},
+	} {
+		if _, createErr := repo.Create(context.Background(), build); createErr != nil {
+			t.Fatalf("setup create %s failed: %v", build.ID, createErr)
+		}
+	}
+
+	entries, listErr := repo.ListQueue(context.Background(), repository.QueueListParams{ProjectID: "project-1"})
+	if listErr != nil {
+		t.Fatalf("ListQueue returned error: %v", listErr)
+	}
+	gotIDs := queueEntryBuildIDs(entries)
+	wantIDs := []string{"build-high-early", "build-high-late", "build-low", "build-running"}
+	if !sameStringSlice(gotIDs, wantIDs) {
+		t.Fatalf("expected queue order %v, got %v", wantIDs, gotIDs)
+	}
+
+	queuedOnly, queuedErr := repo.ListQueue(context.Background(), repository.QueueListParams{ProjectID: "project-1", Status: string(domain.BuildStatusQueued)})
+	if queuedErr != nil {
+		t.Fatalf("ListQueue queued filter returned error: %v", queuedErr)
+	}
+	queuedIDs := queueEntryBuildIDs(queuedOnly)
+	wantQueuedIDs := []string{"build-high-early", "build-high-late", "build-low"}
+	if !sameStringSlice(queuedIDs, wantQueuedIDs) {
+		t.Fatalf("expected queued-only order %v, got %v", wantQueuedIDs, queuedIDs)
+	}
+}
+
+func TestBuildRepository_ListByJobIDOrdersNewestFirst(t *testing.T) {
+	repo := NewBuildRepository()
+	now := time.Now().UTC()
+	jobID := "job-1"
+	otherJobID := "job-2"
+	for _, build := range []domain.Build{
+		{ID: "build-old", ProjectID: "project-1", JobID: &jobID, CreatedAt: now.Add(-time.Minute)},
+		{ID: "build-new", ProjectID: "project-1", JobID: &jobID, CreatedAt: now},
+		{ID: "build-other", ProjectID: "project-1", JobID: &otherJobID, CreatedAt: now.Add(time.Minute)},
+	} {
+		if _, createErr := repo.Create(context.Background(), build); createErr != nil {
+			t.Fatalf("setup create %s failed: %v", build.ID, createErr)
+		}
+	}
+
+	builds, listErr := repo.ListByJobID(context.Background(), jobID)
+	if listErr != nil {
+		t.Fatalf("ListByJobID returned error: %v", listErr)
+	}
+	if len(builds) != 2 || builds[0].ID != "build-new" || builds[1].ID != "build-old" {
+		t.Fatalf("expected job builds newest first, got %#v", builds)
+	}
+}
+
 func TestBuildRepository_UpdateStatus(t *testing.T) {
 	repo := NewBuildRepository()
 	created, err := repo.Create(context.Background(), domain.Build{
@@ -256,6 +351,26 @@ func TestBuildRepository_QueueBuild_PersistsOrderedSteps(t *testing.T) {
 	if steps[1].StepIndex != 1 || steps[1].Name != "test" {
 		t.Fatalf("expected second step test@1, got %s@%d", steps[1].Name, steps[1].StepIndex)
 	}
+}
+
+func queueEntryBuildIDs(entries []domain.QueueEntry) []string {
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		ids = append(ids, entry.Build.ID)
+	}
+	return ids
+}
+
+func sameStringSlice(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestBuildRepository_PersistsBuildAndStepStatusUpdates(t *testing.T) {

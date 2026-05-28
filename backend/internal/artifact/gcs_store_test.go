@@ -16,6 +16,16 @@ func TestNewGCSStore_RequiresClient(t *testing.T) {
 	}
 }
 
+func TestNewGCSStore_RejectsBlankBucket(t *testing.T) {
+	_, err := NewGCSStore(nil, GCSStoreConfig{Bucket: " "})
+	if err == nil {
+		t.Fatal("expected error for missing bucket")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "bucket") {
+		t.Fatalf("expected bucket-related error, got %v", err)
+	}
+}
+
 func TestGCSStore_ResolveStorageKey_WithPrefix(t *testing.T) {
 	store := &GCSStore{bucket: "bucket", prefix: "prefix-root"}
 
@@ -44,6 +54,18 @@ func TestGCSStore_ResolveStorageKey_IsIdempotent(t *testing.T) {
 	}
 }
 
+func TestGCSStore_ResolveStorageKey_HandlesBlankPrefixAndExactPrefix(t *testing.T) {
+	withoutPrefix := &GCSStore{bucket: "bucket"}
+	if got := withoutPrefix.ResolveStorageKey(" builds/build-1/shared/a.txt "); got != "builds/build-1/shared/a.txt" {
+		t.Fatalf("expected trimmed unprefixed key, got %q", got)
+	}
+
+	withPrefix := &GCSStore{bucket: "bucket", prefix: "prefix-root"}
+	if got := withPrefix.ResolveStorageKey("prefix-root"); got != "prefix-root" {
+		t.Fatalf("expected exact prefix to remain stable, got %q", got)
+	}
+}
+
 func TestGCSStore_Exists_RejectsInvalidKey(t *testing.T) {
 	store := &GCSStore{bucket: "bucket", prefix: "prefix-root"}
 
@@ -53,5 +75,16 @@ func TestGCSStore_Exists_RejectsInvalidKey(t *testing.T) {
 	}
 	if err != ErrInvalidStorageKey {
 		t.Fatalf("expected ErrInvalidStorageKey, got %v", err)
+	}
+}
+
+func TestGCSStore_SaveAndOpenRejectInvalidKey(t *testing.T) {
+	store := &GCSStore{bucket: "bucket", prefix: "prefix-root"}
+
+	if _, err := store.Save(context.Background(), "../escape", strings.NewReader("x")); err != ErrInvalidStorageKey {
+		t.Fatalf("expected save invalid key error, got %v", err)
+	}
+	if _, err := store.Open(context.Background(), "../escape"); err != ErrInvalidStorageKey {
+		t.Fatalf("expected open invalid key error, got %v", err)
 	}
 }

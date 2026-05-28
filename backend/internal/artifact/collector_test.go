@@ -2,11 +2,14 @@ package artifact
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 func TestCollector_CollectsMatchingFiles(t *testing.T) {
@@ -160,6 +163,121 @@ func TestCollector_RejectsTraversalArtifactPath(t *testing.T) {
 	if !strings.Contains(strings.ToLower(err.Error()), "invalid artifact path") {
 		t.Fatalf("expected invalid artifact path error, got %v", err)
 	}
+}
+
+func TestCollector_NoOpAndWorkspaceValidationBranches(t *testing.T) {
+	if _, err := NewCollector(nil).Collect(context.Background(), CollectRequest{BuildID: "build-1", WorkspacePath: t.TempDir(), Patterns: []string{"dist/**"}}); err == nil {
+		t.Fatal("expected nil store error")
+	}
+
+	collector := NewCollector(NewFilesystemStore(t.TempDir()))
+	for _, request := range []CollectRequest{
+		{BuildID: " ", WorkspacePath: t.TempDir(), Patterns: []string{"dist/**"}},
+		{BuildID: "build-1", WorkspacePath: " ", Patterns: []string{"dist/**"}},
+		{BuildID: "build-1", WorkspacePath: t.TempDir()},
+		{BuildID: "build-1", WorkspacePath: t.TempDir(), Patterns: []string{" ", ""}},
+	} {
+		result, err := collector.Collect(context.Background(), request)
+		if err != nil {
+			t.Fatalf("expected no-op request to succeed, got %v", err)
+		}
+		if len(result.Artifacts) != 0 || len(result.Warnings) != 0 {
+			t.Fatalf("expected empty no-op result, got %+v", result)
+		}
+	}
+
+	workspaceFile := filepath.Join(t.TempDir(), "workspace-file")
+	if err := os.WriteFile(workspaceFile, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("write workspace file: %v", err)
+	}
+	_, err := collector.Collect(context.Background(), CollectRequest{BuildID: "build-1", WorkspacePath: workspaceFile, Patterns: []string{"dist/**"}})
+	if err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("expected workspace not-directory error, got %v", err)
+	}
+}
+
+func TestCollector_SkipLogicalPathsAndStoreFailures(t *testing.T) {
+	workspace := t.TempDir()
+	mustWriteFile(t, filepath.Join(workspace, "dist", "skip.txt"), []byte("skip"))
+	mustWriteFile(t, filepath.Join(workspace, "dist", "keep.txt"), []byte("keep"))
+
+	collector := NewCollector(NewFilesystemStore(t.TempDir()))
+	result, err := collector.Collect(context.Background(), CollectRequest{
+		BuildID:          "build-1",
+		WorkspacePath:    workspace,
+		Patterns:         []string{"dist/*.txt", "dist/*.txt"},
+		SkipLogicalPaths: map[string]struct{}{"dist/skip.txt": {}},
+	})
+	if err != nil {
+		t.Fatalf("collect with skip paths failed: %v", err)
+	}
+	if len(result.Artifacts) != 1 || result.Artifacts[0].LogicalPath != "dist/keep.txt" {
+		t.Fatalf("expected only keep artifact, got %+v", result.Artifacts)
+	}
+
+	saveErr := errors.New("store offline")
+	failingCollector := NewCollector(&failingArtifactStore{saveErr: saveErr})
+	result, err = failingCollector.Collect(context.Background(), CollectRequest{
+		BuildID:       "build-1",
+		WorkspacePath: workspace,
+		Patterns:      []string{"dist/*.txt"},
+	})
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("expected joined save error, got %v", err)
+	}
+	if len(result.Artifacts) != 0 {
+		t.Fatalf("expected no collected artifacts on store failure, got %+v", result.Artifacts)
+	}
+}
+
+func TestCollectorPatternHelpers(t *testing.T) {
+	workspace := workspaceForCollectorTest(t)
+	patterns, err := normalizePatterns([]string{" dist/** ", "dist/**", "reports/*.xml", ""}, workspace)
+	if err != nil {
+		t.Fatalf("normalize patterns failed: %v", err)
+	}
+	want := []string{"dist/**", "reports/*.xml"}
+	for i := range want {
+		if patterns[i] != want[i] {
+			t.Fatalf("patterns[%d]: expected %q, got %q", i, want[i], patterns[i])
+		}
+	}
+
+	matches := map[string]bool{
+		"dist/**|dist/app.bin":        true,
+		"dist/**|dist/nested/app.bin": true,
+		"reports/*.xml|reports/a.xml": true,
+		"reports/*.xml|reports/a.txt": false,
+		"dist/[|dist/app.bin":         false,
+		"dist/**/app|dist/app":        true,
+	}
+	for key, wantMatch := range matches {
+		parts := strings.Split(key, "|")
+		if got := matchPathPattern(parts[0], parts[1]); got != wantMatch {
+			t.Fatalf("matchPathPattern(%q, %q): expected %v, got %v", parts[0], parts[1], wantMatch, got)
+		}
+	}
+
+	if pathWithinBase(t.TempDir(), filepath.Join(t.TempDir(), "other")) {
+		t.Fatal("expected unrelated paths not to be within base")
+	}
+}
+
+type failingArtifactStore struct {
+	saveErr error
+}
+
+func (s *failingArtifactStore) Save(context.Context, string, io.Reader) (int64, error) {
+	return 0, s.saveErr
+}
+
+func (s *failingArtifactStore) Open(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
+func workspaceForCollectorTest(t *testing.T) workspace.Workspace {
+	t.Helper()
+	return workspace.New("build-1", t.TempDir())
 }
 
 func mustWriteFile(t *testing.T, path string, content []byte) {

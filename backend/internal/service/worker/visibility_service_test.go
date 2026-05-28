@@ -256,6 +256,37 @@ func TestVisibilityService_ListWorkers_ActiveRunningStepClaimWithFutureLeaseIsBu
 	}
 }
 
+func TestVisibilityService_ListWorkers_ActiveLeaseWithStaleHeartbeatStaysStale(t *testing.T) {
+	now := time.Date(2026, time.May, 25, 12, 0, 0, 0, time.UTC)
+	workerRepo := memoryrepo.NewWorkerRepository()
+	_, _ = workerRepo.UpsertHeartbeat(context.Background(), domain.WorkerHeartbeat{ID: "worker-a", Name: "worker-a", HeartbeatAt: now.Add(-3 * time.Minute)})
+
+	svc := NewVisibilityService(workerRepo, fakeVisibilityBuildBoundary{
+		builds: []domain.Build{{ID: "build-1", BuildNumber: 11, ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now.Add(-time.Minute)}},
+		steps: map[string][]domain.BuildStep{
+			"build-1": {
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "compile", Status: domain.BuildStepStatusRunning, WorkerID: stringPtr("worker-a"), ClaimedAt: timePtr(now.Add(-20 * time.Second)), LeaseExpiresAt: timePtr(now.Add(30 * time.Second))},
+			},
+		},
+	})
+	svc.clock = func() time.Time { return now }
+	svc.SetStaleAfter(90 * time.Second)
+
+	workers, err := svc.ListWorkers(context.Background())
+	if err != nil {
+		t.Fatalf("ListWorkers returned error: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("expected 1 worker, got %d", len(workers))
+	}
+	if workers[0].Status != domain.WorkerStatusStale || !workers[0].StaleHeartbeat || workers[0].StaleLease {
+		t.Fatalf("expected stale heartbeat with active lease to remain stale without stale lease, got %#v", workers[0])
+	}
+	if workers[0].CurrentBuildID == nil || *workers[0].CurrentBuildID != "build-1" {
+		t.Fatalf("expected stale worker to retain claim context, got %#v", workers[0].CurrentBuildID)
+	}
+}
+
 func TestVisibilityService_ListWorkers_OrphanClaimStillVisible(t *testing.T) {
 	now := time.Date(2026, time.May, 25, 12, 0, 0, 0, time.UTC)
 	svc := NewVisibilityService(memoryrepo.NewWorkerRepository(), fakeVisibilityBuildBoundary{

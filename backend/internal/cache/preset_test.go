@@ -6,6 +6,25 @@ import (
 	"testing"
 )
 
+func TestPresetHelpers(t *testing.T) {
+	supported := SupportedPresets()
+	if len(supported) != 3 {
+		t.Fatalf("expected three supported presets, got %v", supported)
+	}
+	if !IsSupportedPreset(" NODE ") || IsSupportedPreset("ruby") {
+		t.Fatalf("unexpected supported preset results")
+	}
+
+	for _, policy := range []string{"", " pull-push ", "pull", "push", "off"} {
+		if !IsSupportedPolicy(policy) {
+			t.Fatalf("expected policy %q to be supported", policy)
+		}
+	}
+	if IsSupportedPolicy("sometimes") {
+		t.Fatal("expected unsupported policy to be rejected")
+	}
+}
+
 func TestResolvePreset_Supported(t *testing.T) {
 	cases := []string{"node", "python-uv", "go"}
 	for _, preset := range cases {
