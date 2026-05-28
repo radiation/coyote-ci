@@ -318,7 +318,7 @@ func TestBuildService_RerunBuild_CreatesNewQueuedBuildForTerminalBuilds(t *testi
 				if newStep.Status != domain.BuildStepStatusPending {
 					t.Fatalf("expected step %d pending, got %q", index, newStep.Status)
 				}
-				if newStep.StartedAt != nil || newStep.FinishedAt != nil || newStep.ExitCode != nil || newStep.ErrorMessage != nil {
+				if newStep.StartedAt != nil || newStep.FinishedAt != nil || newStep.ExitCode != nil || newStep.Stdout != nil || newStep.Stderr != nil || newStep.ErrorMessage != nil {
 					t.Fatalf("expected step %d execution fields to be fresh, got %+v", index, newStep)
 				}
 			}
@@ -330,6 +330,14 @@ func TestBuildService_RerunBuild_CreatesNewQueuedBuildForTerminalBuilds(t *testi
 			if len(newJobs) != len(sourceSteps) {
 				t.Fatalf("expected durable jobs for rerun build, got %d", len(newJobs))
 			}
+			for _, newJob := range newJobs {
+				if newJob.Status != domain.ExecutionJobStatusQueued {
+					t.Fatalf("expected rerun job queued, got %q", newJob.Status)
+				}
+				if newJob.FinishedAt != nil || newJob.ExitCode != nil || newJob.ErrorMessage != nil || len(newJob.OutputRefs) != 0 {
+					t.Fatalf("expected rerun job execution result fields to be fresh, got %+v", newJob)
+				}
+			}
 
 			reloadedSource, err := buildRepo.GetByID(context.Background(), sourceBuild.ID)
 			if err != nil {
@@ -337,6 +345,13 @@ func TestBuildService_RerunBuild_CreatesNewQueuedBuildForTerminalBuilds(t *testi
 			}
 			if reloadedSource.Status != terminalStatus || reloadedSource.ID != sourceBuild.ID {
 				t.Fatalf("expected source build unchanged, got %+v", reloadedSource)
+			}
+			reloadedSourceSteps, err := buildRepo.GetStepsByBuildID(context.Background(), sourceBuild.ID)
+			if err != nil {
+				t.Fatalf("reload source steps failed: %v", err)
+			}
+			if reloadedSourceSteps[1].Status != sourceSteps[1].Status || reloadedSourceSteps[1].ExitCode == nil || *reloadedSourceSteps[1].ExitCode != 1 {
+				t.Fatalf("expected source step execution result unchanged, got %+v", reloadedSourceSteps[1])
 			}
 		})
 	}
@@ -495,7 +510,7 @@ func seedRerunnableBuild(t *testing.T, buildRepo *memoryrepo.BuildRepository, st
 	}
 	sourceSteps := []domain.BuildStep{
 		{ID: "step-0", BuildID: sourceBuild.ID, StepIndex: 0, NodeID: "setup", Name: "setup", Command: "sh", Args: []string{"-c", "echo setup"}, Env: map[string]string{}, WorkingDir: ".", TimeoutSeconds: 60, Status: domain.BuildStepStatusSuccess},
-		{ID: "step-1", BuildID: sourceBuild.ID, StepIndex: 1, NodeID: "test", DependsOnNodes: []string{"setup"}, Name: "test", Command: "sh", Args: []string{"-c", "go test ./..."}, Env: map[string]string{"GOFLAGS": "-mod=readonly"}, WorkingDir: "backend", TimeoutSeconds: 120, ArtifactPaths: []string{"dist/*"}, Status: domain.BuildStepStatusFailed, StartedAt: timePtr(now.Add(time.Minute)), FinishedAt: timePtr(now.Add(2 * time.Minute)), ExitCode: intPtr(1), ErrorMessage: stringPtr("failed")},
+		{ID: "step-1", BuildID: sourceBuild.ID, StepIndex: 1, NodeID: "test", DependsOnNodes: []string{"setup"}, Name: "test", Command: "sh", Args: []string{"-c", "go test ./..."}, Env: map[string]string{"GOFLAGS": "-mod=readonly"}, WorkingDir: "backend", TimeoutSeconds: 120, ArtifactPaths: []string{"dist/*"}, Status: domain.BuildStepStatusFailed, StartedAt: timePtr(now.Add(time.Minute)), FinishedAt: timePtr(now.Add(2 * time.Minute)), ExitCode: intPtr(1), Stdout: stringPtr("test output"), Stderr: stringPtr("test failure"), ErrorMessage: stringPtr("failed")},
 	}
 	createdBuild, err := buildRepo.CreateQueuedBuild(context.Background(), sourceBuild, sourceSteps)
 	if err != nil {

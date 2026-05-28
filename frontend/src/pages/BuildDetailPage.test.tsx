@@ -144,6 +144,16 @@ function renderPage() {
   );
 }
 
+function deferredPromise<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("BuildDetailPage", () => {
   const mockedGetBuild = vi.mocked(getBuild);
   const mockedCancelBuild = vi.mocked(cancelBuild);
@@ -351,6 +361,38 @@ describe("BuildDetailPage", () => {
     confirmSpy.mockRestore();
   });
 
+  it("disables the cancel control while cancellation is pending", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const cancelResult = deferredPromise<Build>();
+    mockedCancelBuild.mockImplementationOnce(() => cancelResult.promise);
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({ status: "running", finished_at: null, error_message: null }),
+    );
+    mockedGetBuildSteps.mockResolvedValueOnce([
+      makeStep({ status: "running", finished_at: null, exit_code: null }),
+    ]);
+    mockedGetBuildArtifacts.mockResolvedValueOnce([]);
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    const pendingButton = await screen.findByRole("button", {
+      name: "Canceling…",
+    });
+    expect(pendingButton).toBeDisabled();
+
+    cancelResult.resolve(
+      makeBuild({ status: "canceled", finished_at: "2026-03-30T00:01:30Z" }),
+    );
+
+    await waitFor(() => {
+      expect(mockedCancelBuild).toHaveBeenCalledWith("build-1");
+    });
+
+    confirmSpy.mockRestore();
+  });
+
   it("confirms rerun and navigates to the new build", async () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     mockedGetBuild.mockImplementation(async (buildID: string) => {
@@ -395,6 +437,39 @@ describe("BuildDetailPage", () => {
       expect(mockedRerunBuild).toHaveBeenCalledWith("build-1");
     });
     await screen.findByRole("heading", { level: 2, name: "Build #22" });
+
+    confirmSpy.mockRestore();
+  });
+
+  it("disables the rerun control while the new build is being created", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const rerunResult = deferredPromise<Build>();
+    mockedRerunBuild.mockImplementationOnce(() => rerunResult.promise);
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Rerun" }));
+
+    const pendingButton = await screen.findByRole("button", {
+      name: "Rerunning…",
+    });
+    expect(pendingButton).toBeDisabled();
+
+    rerunResult.resolve(
+      makeBuild({
+        id: "build-rerun-1",
+        build_number: 22,
+        status: "queued",
+        started_at: null,
+        finished_at: null,
+        error_message: null,
+        rerun_of_build_id: "build-1",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(mockedRerunBuild).toHaveBeenCalledWith("build-1");
+    });
 
     confirmSpy.mockRestore();
   });
