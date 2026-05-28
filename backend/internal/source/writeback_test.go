@@ -2,6 +2,7 @@ package source
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,6 +54,97 @@ func TestPushURLWithCredential_SSHNotImplemented(t *testing.T) {
 	_, _, _, err := pushAuthForCredential("git@github.com:example/repo.git", cred)
 	if err == nil || !strings.Contains(err.Error(), ErrSSHWriteNotImplemented.Error()) {
 		t.Fatalf("expected ssh not implemented, got: %v", err)
+	}
+}
+
+func TestPushAuthForCredential_ValidationUsernameAndCleanup(t *testing.T) {
+	username := " coyote-bot "
+	t.Setenv("COYOTE_GIT_TOKEN", "secret-token")
+	pushURL, env, cleanup, err := pushAuthForCredential("https://user:old-secret@github.com/example/repo.git", domain.SourceCredential{
+		Kind:      domain.SourceCredentialKindHTTPSToken,
+		SecretRef: " COYOTE_GIT_TOKEN ",
+		Username:  &username,
+	})
+	if err != nil {
+		t.Fatalf("push auth failed: %v", err)
+	}
+	askPassPath := envValue(env, "GIT_ASKPASS")
+	if askPassPath == "" {
+		t.Fatal("expected askpass path")
+	}
+	if pushURL != "https://github.com/example/repo.git" {
+		t.Fatalf("expected sanitized push URL, got %q", pushURL)
+	}
+	if got := envValue(env, "COYOTE_GIT_ASKPASS_USERNAME"); got != "coyote-bot" {
+		t.Fatalf("expected custom username, got %q", got)
+	}
+	cleanup()
+	if _, statErr := os.Stat(askPassPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected cleanup to remove askpass script, got %v", statErr)
+	}
+
+	tests := []struct {
+		name        string
+		repoURL     string
+		cred        domain.SourceCredential
+		wantErr     error
+		wantMessage string
+	}{
+		{name: "blank secret ref", repoURL: "https://github.com/example/repo.git", cred: domain.SourceCredential{Kind: domain.SourceCredentialKindHTTPSToken}, wantErr: ErrCredentialSecretMissing},
+		{name: "missing secret env", repoURL: "https://github.com/example/repo.git", cred: domain.SourceCredential{Kind: domain.SourceCredentialKindHTTPSToken, SecretRef: "MISSING_TOKEN"}, wantErr: ErrCredentialSecretMissing},
+		{name: "non https url", repoURL: "http://github.com/example/repo.git", cred: domain.SourceCredential{Kind: domain.SourceCredentialKindHTTPSToken, SecretRef: "COYOTE_GIT_TOKEN"}, wantMessage: "requires https"},
+		{name: "unsupported kind", repoURL: "https://github.com/example/repo.git", cred: domain.SourceCredential{Kind: "bearer", SecretRef: "COYOTE_GIT_TOKEN"}, wantMessage: "unsupported credential kind"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, authErr := pushAuthForCredential(tc.repoURL, tc.cred)
+			if tc.wantErr != nil && !errors.Is(authErr, tc.wantErr) {
+				t.Fatalf("expected %v, got %v", tc.wantErr, authErr)
+			}
+			if tc.wantMessage != "" && (authErr == nil || !strings.Contains(authErr.Error(), tc.wantMessage)) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantMessage, authErr)
+			}
+		})
+	}
+}
+
+func TestWritebackRedactionAndPathHelpers(t *testing.T) {
+	if isMissingRemoteBranchError(nil) {
+		t.Fatal("nil error should not be a missing remote branch")
+	}
+	for _, message := range []string{"fatal: couldn't find remote ref refs/heads/missing", "fatal: not our ref abc"} {
+		if !isMissingRemoteBranchError(errors.New(message)) {
+			t.Fatalf("expected missing branch error for %q", message)
+		}
+	}
+	if isMissingRemoteBranchError(errors.New("permission denied")) {
+		t.Fatal("permission errors should not be treated as missing remote branch")
+	}
+
+	redactedArgs, redactions := redactGitArgs([]string{"push", "https://token:secret@github.com/example/repo.git", "https://:secret@github.com/example/other.git", "origin"})
+	if strings.Contains(strings.Join(redactedArgs, " "), "secret") {
+		t.Fatalf("expected secrets to be redacted from args: %#v", redactedArgs)
+	}
+	if len(redactions) != 2 {
+		t.Fatalf("expected 2 arg redactions, got %#v", redactions)
+	}
+
+	envRedactions := redactSensitiveEnvValues([]string{"TOKEN=secret-token", "PASSWORD=hunter2", "EMPTY_SECRET=", "NORMAL=value", "MALFORMED"})
+	if len(envRedactions) != 2 {
+		t.Fatalf("expected 2 env redactions, got %#v", envRedactions)
+	}
+
+	abs, err := cleanAbsPath(" " + t.TempDir() + " ")
+	if err != nil {
+		t.Fatalf("clean absolute path failed: %v", err)
+	}
+	if !filepath.IsAbs(abs) {
+		t.Fatalf("expected absolute path, got %q", abs)
+	}
+	for _, value := range []string{" ", "relative/path"} {
+		if _, err := cleanAbsPath(value); err == nil {
+			t.Fatalf("expected cleanAbsPath to reject %q", value)
+		}
 	}
 }
 

@@ -3,10 +3,12 @@ package docker
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	"github.com/radiation/coyote-ci/backend/internal/source"
@@ -156,6 +158,37 @@ func TestRunner_PrepareBuild_WorkspaceFailurePropagatesError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("expected workspace error in message, got %v", err)
+	}
+}
+
+func TestRunner_ValidationBranchesAvoidDockerExecution(t *testing.T) {
+	r := New(Options{Workspace: &fakeWorkspace{preparePath: "/tmp/ws/build-1"}, DefaultImage: " alpine:3.20 ", Executor: &fakeExecutor{}})
+
+	if got := r.ResolveStepImage(" golang:1.26 "); got != "golang:1.26" {
+		t.Fatalf("expected step image to win, got %q", got)
+	}
+	if got := r.ResolveStepImage(" "); got != "alpine:3.20" {
+		t.Fatalf("expected trimmed default image, got %q", got)
+	}
+
+	if err := r.PrepareBuild(context.Background(), runner.PrepareBuildRequest{BuildID: " "}); err == nil {
+		t.Fatal("expected blank build id prepare error")
+	}
+	if err := New(Options{DefaultImage: "alpine"}).PrepareBuild(context.Background(), runner.PrepareBuildRequest{BuildID: "build-1"}); err == nil {
+		t.Fatal("expected missing workspace materializer error")
+	}
+
+	if _, err := r.RunStep(context.Background(), runner.RunStepRequest{Command: "echo hi"}); err == nil || !strings.Contains(err.Error(), "build id") {
+		t.Fatalf("expected build id validation error, got %v", err)
+	}
+	if _, err := r.RunStep(context.Background(), runner.RunStepRequest{BuildID: "build-1"}); err == nil || !strings.Contains(err.Error(), "command") {
+		t.Fatalf("expected command validation error, got %v", err)
+	}
+	if _, err := New(Options{Workspace: &fakeWorkspace{preparePath: "/tmp/ws/build-1"}}).RunStep(context.Background(), runner.RunStepRequest{BuildID: "build-1", Command: "echo hi"}); err == nil || !strings.Contains(err.Error(), "no execution image") {
+		t.Fatalf("expected missing image validation error, got %v", err)
+	}
+	if _, err := r.RunStep(context.Background(), runner.RunStepRequest{BuildID: "missing", Command: "echo hi"}); err == nil || !strings.Contains(err.Error(), "workspace not prepared") {
+		t.Fatalf("expected missing workspace validation error, got %v", err)
 	}
 }
 
@@ -368,6 +401,28 @@ func TestRunner_CleanupBuild_InvokesWorkspaceCleanup(t *testing.T) {
 	}
 }
 
+func TestRunner_CleanupBuild_HandlesBlankAndNilWorkspace(t *testing.T) {
+	workspace := &fakeWorkspace{}
+	r := New(Options{Workspace: workspace, DefaultImage: "alpine"})
+	r.setWorkspacePath("build-blank", "/tmp/ws/build-blank")
+
+	if err := r.CleanupBuild(context.Background(), " "); err != nil {
+		t.Fatalf("blank cleanup should be ignored: %v", err)
+	}
+	if workspace.cleanupCalls != 0 {
+		t.Fatalf("expected no cleanup call for blank build id, got %d", workspace.cleanupCalls)
+	}
+
+	withoutWorkspace := New(Options{DefaultImage: "alpine"})
+	withoutWorkspace.setWorkspacePath("build-1", "/tmp/ws/build-1")
+	if err := withoutWorkspace.CleanupBuild(context.Background(), " build-1 "); err != nil {
+		t.Fatalf("nil workspace cleanup should be ignored: %v", err)
+	}
+	if _, ok := withoutWorkspace.workspacePathForBuild("build-1"); ok {
+		t.Fatal("expected cleanup to clear stored workspace path")
+	}
+}
+
 func TestValidateCacheMounts_RejectsForbiddenContainerPath(t *testing.T) {
 	_, err := validateCacheMounts([]runner.CacheMount{{HostPath: t.TempDir(), ContainerPath: "/etc"}})
 	if err == nil {
@@ -390,5 +445,178 @@ func TestValidateCacheMounts_HostPathMustBeDirectory(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not a directory") {
 		t.Fatalf("expected not-a-directory error, got %v", err)
+	}
+}
+
+func TestValidateCacheMounts_NormalizesAndRejectsMalformedPaths(t *testing.T) {
+	hostPath := filepath.Join(t.TempDir(), "cache", "mod")
+	validated, err := validateCacheMounts([]runner.CacheMount{{HostPath: hostPath, ContainerPath: `\go\pkg\mod`}})
+	if err != nil {
+		t.Fatalf("expected valid cache mount, got %v", err)
+	}
+	if len(validated) != 1 || validated[0].HostPath != hostPath || validated[0].ContainerPath != "/go/pkg/mod" {
+		t.Fatalf("unexpected validated mounts: %#v", validated)
+	}
+	if info, statErr := os.Stat(hostPath); statErr != nil || !info.IsDir() {
+		t.Fatalf("expected host path to be created as directory: info=%v err=%v", info, statErr)
+	}
+
+	tests := []struct {
+		name  string
+		mount runner.CacheMount
+		want  string
+	}{
+		{name: "blank host", mount: runner.CacheMount{HostPath: " ", ContainerPath: "/cache"}, want: "host path is required"},
+		{name: "relative host", mount: runner.CacheMount{HostPath: "relative", ContainerPath: "/cache"}, want: "host path must be absolute"},
+		{name: "relative container", mount: runner.CacheMount{HostPath: t.TempDir(), ContainerPath: "cache"}, want: "container path must be absolute"},
+		{name: "workspace container", mount: runner.CacheMount{HostPath: t.TempDir(), ContainerPath: "/workspace/cache"}, want: "not allowed"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, validateErr := validateCacheMounts([]runner.CacheMount{tc.mount})
+			if validateErr == nil || !strings.Contains(validateErr.Error(), tc.want) {
+				t.Fatalf("expected error containing %q, got %v", tc.want, validateErr)
+			}
+		})
+	}
+}
+
+func TestRunner_WorkspacePathFallbackUsesMaterializerRoot(t *testing.T) {
+	root := t.TempDir()
+	workspacePath := filepath.Join(root, "build-1")
+	if mkdirErr := os.MkdirAll(workspacePath, 0o755); mkdirErr != nil {
+		t.Fatalf("mkdir workspace: %v", mkdirErr)
+	}
+
+	r := New(Options{Workspace: &fakeWorkspaceWithRoot{fakeWorkspace: fakeWorkspace{}, root: root}, DefaultImage: "alpine"})
+	got, ok := r.workspacePathForBuild(" build-1 ")
+	if !ok {
+		t.Fatal("expected fallback workspace path")
+	}
+	if got != canonicalizeHostPath(workspacePath) {
+		t.Fatalf("expected %q, got %q", canonicalizeHostPath(workspacePath), got)
+	}
+	if _, ok := r.workspacePathForBuild("missing"); ok {
+		t.Fatal("expected missing fallback workspace to be absent")
+	}
+	if _, ok := r.workspacePathForBuild(" "); ok {
+		t.Fatal("expected blank build id to be absent")
+	}
+}
+
+type fakeWorkspaceWithRoot struct {
+	fakeWorkspace
+	root string
+}
+
+func (f *fakeWorkspaceWithRoot) WorkspaceRoot() string { return f.root }
+
+func TestRunner_DockerHelpers(t *testing.T) {
+	longID := strings.Repeat("a", 80)
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{name: "step blank", got: containerNameForStep(" ", 3), want: "coyote-step-unknown-3"},
+		{name: "step normalized", got: containerNameForStep(" Build ID/Feature ", 4), want: "coyote-step-build-id-feature-4"},
+		{name: "step punctuation", got: containerNameForStep("***", 5), want: "coyote-step-unknown-5"},
+		{name: "build blank", got: containerNameForBuild(" "), want: "coyote-build-unknown"},
+		{name: "build normalized", got: containerNameForBuild(" Build ID/Feature "), want: "coyote-build-build-id-feature"},
+		{name: "build punctuation", got: containerNameForBuild("***"), want: "coyote-build-unknown"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, tc.got)
+			}
+		})
+	}
+	if got := containerNameForStep(longID, 1); len(strings.TrimPrefix(strings.TrimSuffix(got, "-1"), "coyote-step-")) != 48 {
+		t.Fatalf("expected normalized step id to be truncated to 48 chars, got %q", got)
+	}
+
+	if !isContainerNotFound(errors.New("No such container: coyote"), nil) {
+		t.Fatal("expected no-such-container error to be recognized")
+	}
+	if !isContainerNotFound(errors.New("docker failed"), []byte("No such object: coyote")) {
+		t.Fatal("expected no-such-object output to be recognized")
+	}
+	if isContainerNotFound(errors.New("permission denied"), nil) {
+		t.Fatal("expected unrelated error to be preserved")
+	}
+
+	if got := timeoutFailureReason(0); got != "step execution timed out" {
+		t.Fatalf("unexpected zero timeout reason: %q", got)
+	}
+	if got := timeoutFailureReason(2 * time.Second); got != "step execution timed out after 2s" {
+		t.Fatalf("unexpected timeout reason: %q", got)
+	}
+
+	redacted := redactDockerArgsForLogging([]string{"run", "-e", "TOKEN=secret", "--env=PASSWORD=hunter2", "--env", "NO_EQUALS", "alpine"})
+	want := []string{"run", "-e", "TOKEN=<redacted>", "--env=PASSWORD=<redacted>", "--env", "NO_EQUALS", "alpine"}
+	for idx := range want {
+		if redacted[idx] != want[idx] {
+			t.Fatalf("redacted[%d]: expected %q, got %q", idx, want[idx], redacted[idx])
+		}
+	}
+	if got := dockerCommandString([]string{"run", "alpine", "echo hi"}); got != `docker "run" "alpine" "echo hi"` {
+		t.Fatalf("unexpected command string: %q", got)
+	}
+}
+
+func TestStreamOutput_CollectsEmitsAndReturnsCallbackError(t *testing.T) {
+	chunks := make([]runner.StepOutputChunk, 0)
+	stdout, stderr, err := streamOutput(
+		io.NopCloser(strings.NewReader("out-1\nout-2\n")),
+		io.NopCloser(strings.NewReader("err-1\n")),
+		func(chunk runner.StepOutputChunk) error {
+			chunks = append(chunks, chunk)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("stream output failed: %v", err)
+	}
+	if stdout != "out-1\nout-2\n" || stderr != "err-1\n" {
+		t.Fatalf("unexpected stdout/stderr: %q %q", stdout, stderr)
+	}
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 chunks, got %d", len(chunks))
+	}
+
+	callbackErr := errors.New("sink closed")
+	_, _, err = streamOutput(
+		io.NopCloser(strings.NewReader("out\n")),
+		io.NopCloser(strings.NewReader("")),
+		func(runner.StepOutputChunk) error { return callbackErr },
+	)
+	if !errors.Is(err, callbackErr) {
+		t.Fatalf("expected callback error, got %v", err)
+	}
+}
+
+func TestRunner_DockerCommandHelpersUseExecutor(t *testing.T) {
+	exec := &fakeExecutor{responses: []executorResponse{
+		{output: []byte("No such container"), err: errors.New("docker rm failed")},
+		{output: []byte("boom"), err: errors.New("denied")},
+		{output: []byte("ok")},
+	}}
+	r := New(Options{Executor: exec})
+
+	r.removeContainer(context.Background(), "missing-container")
+	if len(exec.calls) != 1 || exec.calls[0].name != "docker" || strings.Join(exec.calls[0].args, " ") != "rm -f missing-container" {
+		t.Fatalf("unexpected remove call: %#v", exec.calls)
+	}
+
+	if _, err := r.runDockerCommand(context.Background(), "pull", "private/image"); err == nil || !strings.Contains(err.Error(), "docker command failed") {
+		t.Fatalf("expected run docker command error, got %v", err)
+	}
+	output, err := r.runDockerCommand(context.Background(), "version")
+	if err != nil {
+		t.Fatalf("expected successful docker command, got %v", err)
+	}
+	if string(output) != "ok" {
+		t.Fatalf("expected ok output, got %q", string(output))
 	}
 }
