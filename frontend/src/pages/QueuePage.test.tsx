@@ -53,6 +53,7 @@ describe("QueuePage", () => {
     mockedCancelBuild.mockResolvedValue({
       id: "build-1",
       build_number: 12,
+      attempt_number: 1,
       project_id: "project-1",
       priority: 9,
       status: "canceled",
@@ -136,6 +137,7 @@ describe("QueuePage", () => {
       {
         id: "build-failed-1",
         build_number: 11,
+        attempt_number: 1,
         project_id: "project-1",
         project_name: "Platform",
         project_slug: "platform",
@@ -153,6 +155,7 @@ describe("QueuePage", () => {
       {
         id: "build-canceled-1",
         build_number: 14,
+        attempt_number: 1,
         project_id: "project-1",
         project_name: "Platform",
         project_slug: "platform",
@@ -170,6 +173,7 @@ describe("QueuePage", () => {
       {
         id: "build-success-1",
         build_number: 10,
+        attempt_number: 1,
         project_id: "project-1",
         project_name: "Platform",
         project_slug: "platform",
@@ -187,6 +191,7 @@ describe("QueuePage", () => {
       {
         id: "build-ignored-1",
         build_number: 9,
+        attempt_number: 1,
         project_id: "project-1",
         project_name: "Platform",
         project_slug: "platform",
@@ -320,6 +325,7 @@ describe("QueuePage", () => {
       {
         id: "build-failed-2",
         build_number: 20,
+        attempt_number: 1,
         project_id: "project-1",
         project_name: "Platform",
         project_slug: "platform",

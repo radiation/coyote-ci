@@ -16,3 +16,7 @@ export function isTerminalBuild(status: BuildStatus | undefined): boolean {
 export function isCancelableBuild(status: BuildStatus | undefined): boolean {
   return status === "queued" || status === "preparing" || status === "running";
 }
+
+export function isRerunnableBuild(status: BuildStatus | undefined): boolean {
+  return isTerminalBuild(status);
+}

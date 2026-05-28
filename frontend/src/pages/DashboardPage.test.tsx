@@ -63,6 +63,7 @@ describe("DashboardPage", () => {
       {
         id: "build-2",
         build_number: 11,
+        attempt_number: 1,
         priority: 5,
         project_id: "project-1",
         project_name: "Platform",
@@ -144,6 +145,7 @@ describe("DashboardPage", () => {
       {
         id: "build-3",
         build_number: 9,
+        attempt_number: 1,
         priority: 1,
         project_id: "project-2",
         status: "success",
@@ -212,6 +214,7 @@ describe("DashboardPage", () => {
       {
         id: "build-old",
         build_number: 1,
+        attempt_number: 1,
         priority: 1,
         project_id: "project-1",
         project_name: "Platform",
@@ -226,6 +229,7 @@ describe("DashboardPage", () => {
       {
         id: "build-new",
         build_number: 2,
+        attempt_number: 1,
         priority: 1,
         project_id: "project-1",
         project_name: "Platform",

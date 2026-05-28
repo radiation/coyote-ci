@@ -47,6 +47,9 @@ export interface Build {
   started_at: string | null;
   finished_at: string | null;
   current_step_index: number;
+  attempt_number: number;
+  rerun_of_build_id?: string | null;
+  rerun_from_step_index?: number | null;
   error_message: string | null;
   pipeline_source?: string | null;
   pipeline_path?: string | null;

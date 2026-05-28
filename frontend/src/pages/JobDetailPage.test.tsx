@@ -74,6 +74,7 @@ describe("JobDetailPage", () => {
       {
         id: "build-queued-1",
         build_number: 21,
+        attempt_number: 1,
         project_id: "project-1",
         project_name: "Platform",
         job_id: "job-1",
@@ -89,6 +90,7 @@ describe("JobDetailPage", () => {
       {
         id: "build-recent-1",
         build_number: 20,
+        attempt_number: 1,
         project_id: "project-1",
         project_name: "Platform",
         job_id: "job-1",
@@ -205,6 +207,7 @@ describe("JobDetailPage", () => {
 
     mockedRunJob.mockResolvedValue({
       id: "build-123",
+      attempt_number: 1,
       priority: 5,
       project_id: "project-1",
       status: "queued",
@@ -638,6 +641,7 @@ describe("JobDetailPage", () => {
 
     mockedRunJob.mockResolvedValueOnce({
       id: "",
+      attempt_number: 1,
       priority: 5,
       project_id: "project-1",
       status: "queued",
@@ -762,6 +766,7 @@ describe("JobDetailPage", () => {
       {
         id: "build-running-1",
         build_number: 22,
+        attempt_number: 1,
         project_id: "project-1",
         project_name: "Platform",
         job_id: "job-1",
@@ -777,6 +782,7 @@ describe("JobDetailPage", () => {
       {
         id: "build-success-1",
         build_number: 21,
+        attempt_number: 1,
         project_id: "project-1",
         project_name: "Platform",
         job_id: "job-1",
@@ -880,6 +886,7 @@ describe("JobDetailPage", () => {
     mockedListBuildsByJob.mockResolvedValueOnce([
       {
         id: "build-no-num-1",
+        attempt_number: 1,
         project_id: "project-1",
         project_name: "Platform",
         job_id: "job-1",

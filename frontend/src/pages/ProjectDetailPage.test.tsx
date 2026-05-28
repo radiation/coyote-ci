@@ -124,6 +124,7 @@ describe("ProjectDetailPage", () => {
       {
         id: "build-recent-1",
         build_number: 41,
+        attempt_number: 1,
         project_id: "project-1",
         project_name: "Platform",
         job_id: "job-recent-1",

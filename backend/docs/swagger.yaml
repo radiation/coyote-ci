@@ -1020,11 +1020,6 @@ definitions:
           $ref: '#/definitions/api.QueueEntryResponse'
         type: array
     type: object
-  api.RerunBuildFromStepRequest:
-    properties:
-      step_index:
-        type: integer
-    type: object
   api.RetryJobEnvelope:
     properties:
       data:
@@ -1752,21 +1747,14 @@ paths:
       - builds
   /builds/{buildID}/rerun:
     post:
-      consumes:
-      - application/json
-      description: Creates a new build attempt rerunning from a selected step index.
+      description: Creates a new queued build using the source, trigger, job, and
+        step context from an existing build.
       parameters:
       - description: Build ID
         in: path
         name: buildID
         required: true
         type: string
-      - description: Rerun request
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/api.RerunBuildFromStepRequest'
       produces:
       - application/json
       responses:
@@ -1782,11 +1770,15 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             $ref: '#/definitions/api.ErrorResponse'
-      summary: Rerun build from step
+      summary: Rerun build
       tags:
       - builds
   /builds/{buildID}/start:

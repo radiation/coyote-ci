@@ -362,6 +362,13 @@ export async function cancelBuild(id: string): Promise<Build> {
   return envelope.data;
 }
 
+export async function rerunBuild(id: string): Promise<Build> {
+  const envelope = await postNoBodyJSON<DataEnvelope<Build>>(
+    `/builds/${encodeURIComponent(id)}/rerun`,
+  );
+  return envelope.data;
+}
+
 export async function listQueue(input?: {
   project_id?: string;
   project_slug?: string;
