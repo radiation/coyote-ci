@@ -62,3 +62,13 @@ func TestStoreResolver_ResolveMissingProvider(t *testing.T) {
 		t.Fatal("expected missing provider error")
 	}
 }
+
+func TestResolveStores_UnknownProviderFallsBackToFilesystem(t *testing.T) {
+	resolver, err := ResolveStores(StoreConfig{Provider: "unknown", StorageRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("resolve unknown provider failed: %v", err)
+	}
+	if resolver.DefaultProvider() != domain.StorageProviderFilesystem {
+		t.Fatalf("expected filesystem default provider, got %q", resolver.DefaultProvider())
+	}
+}

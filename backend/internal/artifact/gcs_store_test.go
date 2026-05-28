@@ -54,6 +54,18 @@ func TestGCSStore_ResolveStorageKey_IsIdempotent(t *testing.T) {
 	}
 }
 
+func TestGCSStore_ResolveStorageKey_HandlesBlankPrefixAndExactPrefix(t *testing.T) {
+	withoutPrefix := &GCSStore{bucket: "bucket"}
+	if got := withoutPrefix.ResolveStorageKey(" builds/build-1/shared/a.txt "); got != "builds/build-1/shared/a.txt" {
+		t.Fatalf("expected trimmed unprefixed key, got %q", got)
+	}
+
+	withPrefix := &GCSStore{bucket: "bucket", prefix: "prefix-root"}
+	if got := withPrefix.ResolveStorageKey("prefix-root"); got != "prefix-root" {
+		t.Fatalf("expected exact prefix to remain stable, got %q", got)
+	}
+}
+
 func TestGCSStore_Exists_RejectsInvalidKey(t *testing.T) {
 	store := &GCSStore{bucket: "bucket", prefix: "prefix-root"}
 

@@ -87,6 +87,32 @@ func TestFilesystemStore_Exists(t *testing.T) {
 	if exists {
 		t.Fatal("expected exists=false for missing artifact")
 	}
+
+	if _, err := NewFilesystemStore(" ").Exists(ctx, "build-1/dist/file.txt"); err == nil || !strings.Contains(err.Error(), "storage root") {
+		t.Fatalf("expected blank root exists error, got %v", err)
+	}
+	if _, err := store.Exists(ctx, `build-1\dist\file.txt`); !errors.Is(err, ErrInvalidStorageKey) {
+		t.Fatalf("expected invalid storage key from exists, got %v", err)
+	}
+}
+
+func TestFilesystemStore_OpenAndResolvePathValidation(t *testing.T) {
+	ctx := context.Background()
+	if _, err := NewFilesystemStore(" ").Open(ctx, "build-1/out.txt"); err == nil || !strings.Contains(err.Error(), "storage root") {
+		t.Fatalf("expected blank root open error, got %v", err)
+	}
+	store := NewFilesystemStore(t.TempDir())
+	for _, key := range []string{"", " ", "/absolute", "..", "../escape", `builds\escape`} {
+		if _, err := store.Open(ctx, key); !errors.Is(err, ErrInvalidStorageKey) {
+			t.Fatalf("expected invalid storage key for %q, got %v", key, err)
+		}
+	}
+	if got := store.RootPath(); got == "" {
+		t.Fatal("expected root path to be reported")
+	}
+	if got := store.ResolveStorageKey("builds/build-1/out.txt"); got != "builds/build-1/out.txt" {
+		t.Fatalf("expected filesystem storage key passthrough, got %q", got)
+	}
 }
 
 func TestExists_FallbackToOpen(t *testing.T) {
