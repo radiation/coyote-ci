@@ -21,6 +21,9 @@ func TestResolveStores_DefaultFilesystem(t *testing.T) {
 	if _, err := resolver.Resolve(domain.StorageProviderFilesystem); err != nil {
 		t.Fatalf("expected filesystem store configured: %v", err)
 	}
+	if resolver.Default() == nil {
+		t.Fatal("expected default filesystem store")
+	}
 }
 
 func TestResolveStores_GCSMissingBucketFallbackWhenNotStrict(t *testing.T) {
@@ -49,5 +52,13 @@ func TestResolveStores_GCSMissingBucketFailsWhenStrict(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error when strict gcs config is missing bucket")
+	}
+}
+
+func TestStoreResolver_ResolveMissingProvider(t *testing.T) {
+	resolver := NewStoreResolver(domain.StorageProviderFilesystem, map[domain.StorageProvider]Store{})
+	_, err := resolver.Resolve(domain.StorageProviderGCS)
+	if err == nil {
+		t.Fatal("expected missing provider error")
 	}
 }

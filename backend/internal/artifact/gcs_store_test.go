@@ -16,6 +16,16 @@ func TestNewGCSStore_RequiresClient(t *testing.T) {
 	}
 }
 
+func TestNewGCSStore_RejectsBlankBucket(t *testing.T) {
+	_, err := NewGCSStore(nil, GCSStoreConfig{Bucket: " "})
+	if err == nil {
+		t.Fatal("expected error for missing bucket")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "bucket") {
+		t.Fatalf("expected bucket-related error, got %v", err)
+	}
+}
+
 func TestGCSStore_ResolveStorageKey_WithPrefix(t *testing.T) {
 	store := &GCSStore{bucket: "bucket", prefix: "prefix-root"}
 
@@ -53,5 +63,16 @@ func TestGCSStore_Exists_RejectsInvalidKey(t *testing.T) {
 	}
 	if err != ErrInvalidStorageKey {
 		t.Fatalf("expected ErrInvalidStorageKey, got %v", err)
+	}
+}
+
+func TestGCSStore_SaveAndOpenRejectInvalidKey(t *testing.T) {
+	store := &GCSStore{bucket: "bucket", prefix: "prefix-root"}
+
+	if _, err := store.Save(context.Background(), "../escape", strings.NewReader("x")); err != ErrInvalidStorageKey {
+		t.Fatalf("expected save invalid key error, got %v", err)
+	}
+	if _, err := store.Open(context.Background(), "../escape"); err != ErrInvalidStorageKey {
+		t.Fatalf("expected open invalid key error, got %v", err)
 	}
 }
