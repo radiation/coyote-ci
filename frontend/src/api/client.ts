@@ -1,18 +1,4 @@
-import type {
-  Build,
-  BuildArtifact,
-  BuildArtifactsResponse,
-  BuildListResponse,
-  BuildStep,
-  BuildStepsResponse,
-  DataEnvelope,
-  JobVersionTagsResponse,
-  QueueEntry,
-  QueueListResponse,
-  StepLogsResponse,
-  VersionTag,
-  VersionTagCreateRequest,
-} from "../types/build";
+import type { Build, BuildListResponse, DataEnvelope } from "../types/build";
 import type {
   ArtifactCatalogItem,
   ArtifactCatalogResponse,
@@ -58,27 +44,30 @@ import type {
   User,
   UserListResponse,
 } from "../types/identity";
-
-/**
- * Base URL for API requests.
- *
- * In Docker (production-like), the nginx reverse-proxy exposes the backend at /api.
- * In local Vite dev, the Vite proxy forwards /api/* to the backend target.
- * Override with VITE_API_BASE_PATH when needed (e.g. direct backend testing).
- */
-const BASE = import.meta.env.VITE_API_BASE_PATH ?? "/api";
-const AUTH_BASE =
-  import.meta.env.VITE_AUTH_BASE_PATH ?? BASE.replace(/\/api\/?$/, "");
-
-export class APIError extends Error {
-  status: number;
-
-  constructor(status: number, message: string) {
-    super(`API ${status}: ${message}`);
-    this.name = "APIError";
-    this.status = status;
-  }
-}
+import {
+  APIError,
+  AUTH_BASE,
+  BASE,
+  deleteNoContent,
+  fetchJSON,
+  postJSON,
+  postNoBodyJSON,
+  withCredentials,
+} from "./request";
+export { APIError } from "./request";
+export {
+  artifactDownloadURL,
+  buildStepLogStreamURL,
+  cancelBuild,
+  createJobVersionTags,
+  getBuild,
+  getBuildArtifacts,
+  getBuildSteps,
+  getStepLogs,
+  listBuilds,
+  listQueue,
+  rerunBuild,
+} from "./buildClient";
 
 export function isAPIErrorStatus(error: unknown, status: number): boolean {
   return error instanceof APIError && error.status === status;
@@ -111,67 +100,6 @@ export async function checkReadiness(): Promise<void> {
   }
 }
 
-async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, withCredentials(init));
-  if (!res.ok) {
-    const body = await res.text();
-    let message = body;
-
-    try {
-      const parsed = JSON.parse(body) as { error?: { message?: string } };
-      if (parsed?.error?.message) {
-        message = parsed.error.message;
-      }
-    } catch {
-      // Keep raw body when response is not JSON.
-    }
-
-    throw new APIError(res.status, message);
-  }
-  return res.json() as Promise<T>;
-}
-
-async function postJSON<TResponse, TRequest>(
-  path: string,
-  body: TRequest,
-): Promise<TResponse> {
-  return fetchJSON<TResponse>(path, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-}
-
-async function postNoBodyJSON<TResponse>(path: string): Promise<TResponse> {
-  return fetchJSON<TResponse>(path, {
-    method: "POST",
-  });
-}
-
-async function deleteNoContent(path: string): Promise<void> {
-  const res = await fetch(
-    `${BASE}${path}`,
-    withCredentials({ method: "DELETE" }),
-  );
-  if (!res.ok) {
-    const body = await res.text();
-    let message = body;
-
-    try {
-      const parsed = JSON.parse(body) as { error?: { message?: string } };
-      if (parsed?.error?.message) {
-        message = parsed.error.message;
-      }
-    } catch {
-      // Keep raw body when response is not JSON.
-    }
-
-    throw new APIError(res.status, message);
-  }
-}
-
 export async function getMe(): Promise<MeResponse> {
   const envelope = await fetchJSON<DataEnvelope<MeResponse>>("/me");
   return envelope.data;
@@ -201,13 +129,6 @@ export async function logoutSession(): Promise<void> {
     const body = await res.text();
     throw new APIError(res.status, body || "logout failed");
   }
-}
-
-function withCredentials(init?: RequestInit): RequestInit {
-  return {
-    ...init,
-    credentials: init?.credentials ?? "include",
-  };
 }
 
 export async function listUsers(): Promise<User[]> {
@@ -318,114 +239,10 @@ export async function deleteProjectMember(
   );
 }
 
-export async function listBuilds(input?: {
-  project_id?: string;
-  project_slug?: string;
-  limit?: number;
-  offset?: number;
-}): Promise<Build[]> {
-  const params = new URLSearchParams();
-  const projectID = input?.project_id?.trim() ?? "";
-  const projectSlug = input?.project_slug?.trim() ?? "";
-
-  if (projectID) {
-    params.set("project_id", projectID);
-  }
-  if (projectSlug) {
-    params.set("project_slug", projectSlug);
-  }
-  if (typeof input?.limit === "number" && input.limit > 0) {
-    params.set("limit", String(input.limit));
-  }
-  if (typeof input?.offset === "number" && input.offset > 0) {
-    params.set("offset", String(input.offset));
-  }
-
-  const suffix = params.size > 0 ? `?${params.toString()}` : "";
-  const envelope = await fetchJSON<DataEnvelope<BuildListResponse>>(
-    `/builds${suffix}`,
-  );
-  return envelope.data.builds;
-}
-
-export async function getBuild(id: string): Promise<Build> {
-  const envelope = await fetchJSON<DataEnvelope<Build>>(
-    `/builds/${encodeURIComponent(id)}`,
-  );
-  return envelope.data;
-}
-
-export async function cancelBuild(id: string): Promise<Build> {
-  const envelope = await postNoBodyJSON<DataEnvelope<Build>>(
-    `/builds/${encodeURIComponent(id)}/cancel`,
-  );
-  return envelope.data;
-}
-
-export async function rerunBuild(id: string): Promise<Build> {
-  const envelope = await postNoBodyJSON<DataEnvelope<Build>>(
-    `/builds/${encodeURIComponent(id)}/rerun`,
-  );
-  return envelope.data;
-}
-
-export async function listQueue(input?: {
-  project_id?: string;
-  project_slug?: string;
-  status?: "queued" | "running";
-}): Promise<QueueEntry[]> {
-  const params = new URLSearchParams();
-  const projectID = input?.project_id?.trim() ?? "";
-  const projectSlug = input?.project_slug?.trim() ?? "";
-  const status = input?.status?.trim() ?? "";
-
-  if (projectID) {
-    params.set("project_id", projectID);
-  }
-  if (projectSlug) {
-    params.set("project_slug", projectSlug);
-  }
-  if (status) {
-    params.set("status", status);
-  }
-
-  const suffix = params.size > 0 ? `?${params.toString()}` : "";
-  const envelope = await fetchJSON<DataEnvelope<QueueListResponse>>(
-    `/queue${suffix}`,
-  );
-  return envelope.data.entries;
-}
-
 export async function listWorkers(): Promise<Worker[]> {
   const envelope =
     await fetchJSON<DataEnvelope<WorkerListResponse>>("/workers");
   return envelope.data.workers;
-}
-
-export async function getBuildSteps(id: string): Promise<BuildStep[]> {
-  const envelope = await fetchJSON<DataEnvelope<BuildStepsResponse>>(
-    `/builds/${encodeURIComponent(id)}/steps`,
-  );
-  return envelope.data.steps;
-}
-
-export async function getStepLogs(
-  buildID: string,
-  stepIndex: number,
-  after = 0,
-  limit = 300,
-): Promise<StepLogsResponse> {
-  const envelope = await fetchJSON<DataEnvelope<StepLogsResponse>>(
-    `/builds/${encodeURIComponent(buildID)}/steps/${stepIndex}/logs?after=${after}&limit=${limit}`,
-  );
-  return envelope.data;
-}
-
-export async function getBuildArtifacts(id: string): Promise<BuildArtifact[]> {
-  const envelope = await fetchJSON<DataEnvelope<BuildArtifactsResponse>>(
-    `/builds/${encodeURIComponent(id)}/artifacts`,
-  );
-  return envelope.data.artifacts;
 }
 
 export async function listArtifacts(input?: {
@@ -523,32 +340,6 @@ export async function getArtifact(id: string): Promise<ArtifactDetail> {
     `/artifacts/${encodeURIComponent(id)}`,
   );
   return envelope.data;
-}
-
-export async function createJobVersionTags(
-  jobID: string,
-  input: VersionTagCreateRequest,
-): Promise<VersionTag[]> {
-  const envelope = await postJSON<
-    DataEnvelope<JobVersionTagsResponse>,
-    VersionTagCreateRequest
-  >(`/jobs/${encodeURIComponent(jobID)}/version-tags`, input);
-  return envelope.data.tags;
-}
-
-export function artifactDownloadURL(downloadPath: string): string {
-  if (!downloadPath.startsWith("/")) {
-    return `${BASE}/${downloadPath}`;
-  }
-  return `${BASE}${downloadPath}`;
-}
-
-export function buildStepLogStreamURL(
-  buildID: string,
-  stepIndex: number,
-  after = 0,
-): string {
-  return `${BASE}/builds/${encodeURIComponent(buildID)}/steps/${stepIndex}/logs/stream?after=${after}`;
 }
 
 export async function listJobs(): Promise<Job[]> {
