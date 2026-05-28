@@ -982,6 +982,7 @@ func (h *BuildHandler) RetryJob(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} api.BuildEnvelope
 // @Failure 400 {object} api.ErrorResponse
 // @Failure 404 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
 // @Failure 500 {object} api.ErrorResponse
 // @Router /builds/{buildID}/rerun [post]
 func (h *BuildHandler) RerunBuild(w http.ResponseWriter, r *http.Request) {

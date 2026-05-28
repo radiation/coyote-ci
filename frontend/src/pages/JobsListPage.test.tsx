@@ -88,6 +88,7 @@ describe("JobsListPage", () => {
 
     mockedRunJob.mockResolvedValue({
       id: "build-123",
+      attempt_number: 1,
       project_id: "project-1",
       priority: 5,
       status: "queued",

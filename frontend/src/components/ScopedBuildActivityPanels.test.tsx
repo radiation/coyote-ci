@@ -67,6 +67,7 @@ describe("ScopedBuildActivityPanels", () => {
       {
         id: "build-recent-1",
         build_number: 100,
+        attempt_number: 1,
         project_id: "project-1",
         project_name: "Platform",
         job_id: "job-recent-1",
@@ -129,6 +130,7 @@ describe("ScopedBuildActivityPanels", () => {
       {
         id: "build-recent-2",
         build_number: 99,
+        attempt_number: 1,
         project_id: "project-1",
         project_name: "Platform",
         job_id: "job-release",
@@ -204,6 +206,7 @@ describe("ScopedBuildActivityPanels", () => {
       {
         id: "build-global-recent-1",
         build_number: 202,
+        attempt_number: 1,
         project_id: "project-2",
         project_name: "Payments",
         job_id: "job-global-release",
@@ -256,6 +259,7 @@ describe("ScopedBuildActivityPanels", () => {
       {
         id: "build-queued",
         build_number: 51,
+        attempt_number: 1,
         project_id: "project-1",
         priority: 5,
         status: "queued",
@@ -269,6 +273,7 @@ describe("ScopedBuildActivityPanels", () => {
       {
         id: "build-running",
         build_number: 52,
+        attempt_number: 1,
         project_id: "project-1",
         priority: 5,
         status: "running",
@@ -282,6 +287,7 @@ describe("ScopedBuildActivityPanels", () => {
       {
         id: "build-success",
         build_number: 53,
+        attempt_number: 1,
         project_id: "project-1",
         priority: 5,
         status: "success",

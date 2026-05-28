@@ -131,6 +131,7 @@ describe("BuildActivityList", () => {
               kind: "build",
               build: {
                 id: "1234567890abcdef",
+                attempt_number: 1,
                 project_id: "project-9",
                 priority: 1,
                 status: "failed",
@@ -171,6 +172,7 @@ describe("BuildActivityList", () => {
               build: {
                 id: "build-project-1",
                 build_number: 77,
+                attempt_number: 1,
                 project_id: "project-9",
                 job_id: "job-hotfix-main",
                 priority: 1,

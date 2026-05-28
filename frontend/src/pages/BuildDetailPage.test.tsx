@@ -77,6 +77,7 @@ function makeBuild(overrides: Partial<Build> = {}): Build {
       ],
     },
     ...overrides,
+    attempt_number: overrides.attempt_number ?? 1,
   };
 }
 

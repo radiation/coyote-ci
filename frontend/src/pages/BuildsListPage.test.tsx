@@ -57,6 +57,7 @@ describe("BuildsListPage", () => {
     mockedListBuilds.mockResolvedValue([
       {
         id: "aaaa-bbbb-cccc-dddd",
+        attempt_number: 1,
         priority: 5,
         project_id: "project-1",
         project_name: "Platform",
@@ -76,6 +77,7 @@ describe("BuildsListPage", () => {
       },
       {
         id: "eeee-ffff-gggg-hhhh",
+        attempt_number: 1,
         priority: 4,
         project_id: "project-1",
         project_name: "Platform",
