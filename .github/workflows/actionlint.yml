@@ -16,5 +16,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          checksums="actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          release_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+
+          curl -sSfL -o "${RUNNER_TEMP}/${archive}" "${release_url}/${archive}"
+          curl -sSfL -o "${RUNNER_TEMP}/${checksums}" "${release_url}/${checksums}"
+          cd "${RUNNER_TEMP}"
+          sha256sum --check --ignore-missing "${checksums}"
+          tar -xzf "${archive}" actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          actionlint -version
+
       - name: Run actionlint
-        uses: raven-actions/actionlint@v2
+        run: actionlint

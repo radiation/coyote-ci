@@ -59,8 +59,7 @@ jobs:
           files: ./frontend/coverage/lcov.info
           flags: frontend
           name: frontend
-          override_branch: ${{ github.head_ref || github.ref_name }}
-          override_pr: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || '' }}
           token: ${{ secrets.CODECOV_TOKEN }}
           disable_search: true
           fail_ci_if_error: true
+          verbose: true
