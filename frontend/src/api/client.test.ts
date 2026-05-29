@@ -1034,6 +1034,17 @@ describe("API client - types", () => {
       } as Response)
       .mockResolvedValueOnce({
         ok: false,
+        status: 404,
+        text: async () =>
+          JSON.stringify({
+            error: {
+              code: "artifact_not_found",
+              message: "artifact not found",
+            },
+          }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: false,
         status: 500,
         text: async () => "internal server error",
       } as Response);
@@ -1042,6 +1053,12 @@ describe("API client - types", () => {
       name: "APIError",
       status: 403,
       message: "API 403: global admin is required",
+    });
+    await expect(getArtifact("artifact-1")).rejects.toMatchObject({
+      name: "APIError",
+      status: 404,
+      code: "artifact_not_found",
+      message: "API 404: artifact not found",
     });
     await expect(deleteUser("user-1")).rejects.toMatchObject({
       name: "APIError",

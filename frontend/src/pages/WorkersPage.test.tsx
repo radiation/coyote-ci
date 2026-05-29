@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { WorkersPage } from "./WorkersPage";
 import { listWorkers } from "../api";
 import type { Worker } from "../types/worker";
+import { formatTime } from "../utils/time";
 
 vi.mock("../api", () => ({
   listWorkers: vi.fn(),
@@ -97,6 +98,7 @@ describe("WorkersPage", () => {
       "/builds/build-1",
     );
     expect(screen.getByText(/Step 1 .* compile/)).toBeTruthy();
+    expect(screen.getByText(formatTime("2026-05-24T12:00:01Z"))).toBeTruthy();
   });
 
   it("renders status badges including stale workers", async () => {
