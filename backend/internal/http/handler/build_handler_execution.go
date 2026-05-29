@@ -262,6 +262,15 @@ func (h *BuildHandler) RetryJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	job, err := h.buildService.GetJobByID(r.Context(), jobID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	if _, ok := h.authorizeBuildAction(w, r, job.BuildID, auth.CanTriggerBuild); !ok {
+		return
+	}
+
 	retryResult, err := h.buildService.RetryJob(r.Context(), jobID)
 	if err != nil {
 		h.writeServiceError(w, err)
