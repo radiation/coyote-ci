@@ -83,6 +83,109 @@ func TestSourceSpecAndBuildTriggerNormalization(t *testing.T) {
 	}
 }
 
+func TestNormalizeBuildMetadata(t *testing.T) {
+	rerunOfBuildID := "build-1"
+	actor := " octocat "
+
+	tests := []struct {
+		name                string
+		in                  Build
+		wantSourceRef       *string
+		wantSourceSHA       *string
+		wantTriggeredBy     *string
+		wantTriggerType     BuildTriggerType
+		wantNormalizedRef   *string
+		wantNormalizedActor *string
+	}{
+		{
+			name: "prefers explicit metadata and trims provided trigger type",
+			in: Build{
+				SourceRef:   stringPtr(" feature "),
+				SourceSHA:   stringPtr(" deadbeef "),
+				TriggeredBy: stringPtr(" cli-user "),
+				TriggerType: BuildTriggerType(" api "),
+				Trigger: BuildTrigger{
+					Kind:  BuildTriggerKindWebhook,
+					Actor: &actor,
+				},
+			},
+			wantSourceRef:       stringPtr("feature"),
+			wantSourceSHA:       stringPtr("deadbeef"),
+			wantTriggeredBy:     stringPtr("cli-user"),
+			wantTriggerType:     BuildTriggerTypeAPI,
+			wantNormalizedActor: stringPtr("octocat"),
+		},
+		{
+			name: "derives metadata from source spec first",
+			in: Build{
+				Source: NewSourceSpec("https://github.com/acme/repo.git", " main ", " abc123 "),
+				Trigger: BuildTrigger{
+					Kind:  BuildTriggerKindManual,
+					Actor: &actor,
+				},
+			},
+			wantSourceRef:       stringPtr("main"),
+			wantSourceSHA:       stringPtr("abc123"),
+			wantTriggeredBy:     stringPtr("octocat"),
+			wantTriggerType:     BuildTriggerTypeManual,
+			wantNormalizedActor: stringPtr("octocat"),
+		},
+		{
+			name: "falls back to repo ref and commit sha",
+			in: Build{
+				Ref:       stringPtr(" release/v1 "),
+				CommitSHA: stringPtr(" cafe123 "),
+				Trigger:   BuildTrigger{Kind: BuildTriggerKindWebhook},
+			},
+			wantSourceRef:   stringPtr("release/v1"),
+			wantSourceSHA:   stringPtr("cafe123"),
+			wantTriggerType: BuildTriggerTypeWebhook,
+		},
+		{
+			name: "falls back to trigger ref and commit and marks rerun",
+			in: Build{
+				RerunOfBuildID: &rerunOfBuildID,
+				Trigger: BuildTrigger{
+					Kind:      BuildTriggerKindWebhook,
+					Ref:       stringPtr(" refs/heads/main "),
+					CommitSHA: stringPtr(" ff00aa "),
+					Actor:     &actor,
+				},
+			},
+			wantSourceRef:       stringPtr("refs/heads/main"),
+			wantSourceSHA:       stringPtr("ff00aa"),
+			wantTriggeredBy:     stringPtr("octocat"),
+			wantTriggerType:     BuildTriggerTypeRerun,
+			wantNormalizedRef:   stringPtr("refs/heads/main"),
+			wantNormalizedActor: stringPtr("octocat"),
+		},
+		{
+			name:            "defaults to manual when no signal is available",
+			in:              Build{},
+			wantTriggerType: BuildTriggerTypeManual,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NormalizeBuildMetadata(tc.in)
+
+			assertOptionalStringEqual(t, "source_ref", got.SourceRef, tc.wantSourceRef)
+			assertOptionalStringEqual(t, "source_sha", got.SourceSHA, tc.wantSourceSHA)
+			assertOptionalStringEqual(t, "triggered_by", got.TriggeredBy, tc.wantTriggeredBy)
+			if got.TriggerType != tc.wantTriggerType {
+				t.Fatalf("expected trigger type %q, got %q", tc.wantTriggerType, got.TriggerType)
+			}
+			if tc.wantNormalizedRef != nil {
+				assertOptionalStringEqual(t, "trigger.ref", got.Trigger.Ref, tc.wantNormalizedRef)
+			}
+			if tc.wantNormalizedActor != nil {
+				assertOptionalStringEqual(t, "trigger.actor", got.Trigger.Actor, tc.wantNormalizedActor)
+			}
+		})
+	}
+}
+
 func TestPriorityNodeAndArtifactParsingHelpers(t *testing.T) {
 	if NormalizePriority(0) != DefaultPriority || NormalizePriority(9) != 9 {
 		t.Fatalf("unexpected priority normalization")
@@ -117,4 +220,21 @@ func TestExecutionJobSpecSerializationAndDigest(t *testing.T) {
 	if digest == nil || *digest == "" {
 		t.Fatalf("expected spec digest, got %+v", digest)
 	}
+}
+
+func assertOptionalStringEqual(t *testing.T, field string, got *string, want *string) {
+	t.Helper()
+	if want == nil {
+		if got != nil {
+			t.Fatalf("expected %s nil, got %v", field, got)
+		}
+		return
+	}
+	if got == nil || *got != *want {
+		t.Fatalf("expected %s=%q, got %v", field, *want, got)
+	}
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
