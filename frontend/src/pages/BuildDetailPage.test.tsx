@@ -279,6 +279,31 @@ describe("BuildDetailPage", () => {
     );
   });
 
+  it("shows rerun lineage with a link to the source build", async () => {
+    mockedGetBuild.mockImplementation(async (buildID: string) => {
+      if (buildID === "build-0") {
+        return makeBuild({
+          id: "build-0",
+          build_number: 20,
+          rerun_of_build_id: null,
+        });
+      }
+      return makeBuild({ rerun_of_build_id: "build-0" });
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(mockedGetBuild).toHaveBeenCalledWith("build-0");
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "build #20" })).toHaveAttribute(
+        "href",
+        "/builds/build-0",
+      );
+    });
+  });
+
   it("renders running build state with current and pending steps cleanly", async () => {
     mockedGetBuild.mockResolvedValueOnce(
       makeBuild({

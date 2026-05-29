@@ -112,19 +112,45 @@ func TestBuildRepository_AssignsSequentialBuildNumbersPerJob(t *testing.T) {
 	if rerun.BuildNumber != 3 {
 		t.Fatalf("expected rerun build number 3, got %d", rerun.BuildNumber)
 	}
+	if rerun.RerunOfBuildID == nil || *rerun.RerunOfBuildID != first.ID {
+		t.Fatalf("expected rerun_of_build_id=%s, got %v", first.ID, rerun.RerunOfBuildID)
+	}
+
+	secondRerun, err := repo.CreateQueuedBuild(context.Background(), domain.Build{
+		ID:             "build-4",
+		ProjectID:      "project-1",
+		JobID:          &jobA,
+		Status:         domain.BuildStatusPending,
+		CreatedAt:      now.Add(3 * time.Minute),
+		RerunOfBuildID: &rerunOf,
+	}, []domain.BuildStep{{ID: "step-2", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusPending}})
+	if err != nil {
+		t.Fatalf("create second rerun build failed: %v", err)
+	}
+	if secondRerun.BuildNumber != 4 {
+		t.Fatalf("expected second rerun build number 4, got %d", secondRerun.BuildNumber)
+	}
 
 	otherJob, err := repo.Create(context.Background(), domain.Build{
-		ID:        "build-4",
+		ID:        "build-5",
 		ProjectID: "project-1",
 		JobID:     &jobB,
 		Status:    domain.BuildStatusPending,
-		CreatedAt: now.Add(3 * time.Minute),
+		CreatedAt: now.Add(4 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("create other job build failed: %v", err)
 	}
 	if otherJob.BuildNumber != 1 {
 		t.Fatalf("expected first build for other job to be 1, got %d", otherJob.BuildNumber)
+	}
+
+	normal, err := repo.GetByID(context.Background(), first.ID)
+	if err != nil {
+		t.Fatalf("reload normal build failed: %v", err)
+	}
+	if normal.RerunOfBuildID != nil {
+		t.Fatalf("expected normal build rerun_of_build_id to be nil, got %v", normal.RerunOfBuildID)
 	}
 }
 

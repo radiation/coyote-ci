@@ -62,11 +62,13 @@ function isSafeExternalURL(value: string | null | undefined): boolean {
 
 export function BuildSummaryPanel({
   build,
+  rerunSourceBuild,
   steps,
   stepsLoading,
   buildUpdatedAt,
 }: {
   build: Build;
+  rerunSourceBuild?: Build;
   steps: BuildStep[] | undefined;
   stepsLoading: boolean;
   buildUpdatedAt: number;
@@ -92,6 +94,16 @@ export function BuildSummaryPanel({
           <p className="subtle-text build-summary-subtitle">
             Build ID {build.id}
           </p>
+          {build.rerun_of_build_id ? (
+            <p className="subtle-text build-summary-subtitle">
+              Rerun of{" "}
+              <Link to={`/builds/${build.rerun_of_build_id}`}>
+                {rerunSourceBuild?.build_number
+                  ? `build #${rerunSourceBuild.build_number}`
+                  : "earlier build"}
+              </Link>
+            </p>
+          ) : null}
         </div>
         <div className="build-summary-side subtle-text">
           Last updated {lastUpdatedLabel}

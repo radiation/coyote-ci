@@ -421,6 +421,76 @@ func TestBuildService_RerunBuild_DoesNotCopyArtifactsOrLogs(t *testing.T) {
 	}
 }
 
+func TestBuildService_RerunBuild_AssignsFreshPerJobNumbersAndImmediateLineage(t *testing.T) {
+	buildRepo := memoryrepo.NewBuildRepository()
+	execRepo := memoryrepo.NewExecutionJobRepository()
+	svc := NewBuildService(buildRepo, nil, &fakeLogSink{})
+	svc.SetExecutionJobRepository(execRepo)
+
+	sourceBuild, sourceSteps := seedRerunnableBuild(t, buildRepo, domain.BuildStatusSuccess)
+	if sourceBuild.BuildNumber != 1 {
+		t.Fatalf("expected source build number 1, got %d", sourceBuild.BuildNumber)
+	}
+
+	firstRerun, err := svc.RerunBuild(context.Background(), sourceBuild.ID)
+	if err != nil {
+		t.Fatalf("first rerun failed: %v", err)
+	}
+	secondRerun, err := svc.RerunBuild(context.Background(), sourceBuild.ID)
+	if err != nil {
+		t.Fatalf("second rerun failed: %v", err)
+	}
+	terminalizedFirstRerun, err := buildRepo.UpdateStatus(context.Background(), firstRerun.ID, domain.BuildStatusSuccess, nil)
+	if err != nil {
+		t.Fatalf("terminalize first rerun failed: %v", err)
+	}
+	chainedRerun, err := svc.RerunBuild(context.Background(), firstRerun.ID)
+	if err != nil {
+		t.Fatalf("rerun of rerun failed: %v", err)
+	}
+
+	if firstRerun.BuildNumber != 2 {
+		t.Fatalf("expected first rerun build number 2, got %d", firstRerun.BuildNumber)
+	}
+	if secondRerun.BuildNumber != 3 {
+		t.Fatalf("expected second rerun build number 3, got %d", secondRerun.BuildNumber)
+	}
+	if chainedRerun.BuildNumber != 4 {
+		t.Fatalf("expected chained rerun build number 4, got %d", chainedRerun.BuildNumber)
+	}
+	if firstRerun.RerunOfBuildID == nil || *firstRerun.RerunOfBuildID != sourceBuild.ID {
+		t.Fatalf("expected first rerun_of_build_id=%s, got %v", sourceBuild.ID, firstRerun.RerunOfBuildID)
+	}
+	if secondRerun.RerunOfBuildID == nil || *secondRerun.RerunOfBuildID != sourceBuild.ID {
+		t.Fatalf("expected second rerun_of_build_id=%s, got %v", sourceBuild.ID, secondRerun.RerunOfBuildID)
+	}
+	if chainedRerun.RerunOfBuildID == nil || *chainedRerun.RerunOfBuildID != terminalizedFirstRerun.ID {
+		t.Fatalf("expected chained rerun_of_build_id=%s, got %v", terminalizedFirstRerun.ID, chainedRerun.RerunOfBuildID)
+	}
+	if sourceBuild.BuildNumber == firstRerun.BuildNumber {
+		t.Fatalf("expected rerun to use a new build number, both were %d", firstRerun.BuildNumber)
+	}
+
+	reloadedSource, err := buildRepo.GetByID(context.Background(), sourceBuild.ID)
+	if err != nil {
+		t.Fatalf("reload source build failed: %v", err)
+	}
+	if reloadedSource.BuildNumber != sourceBuild.BuildNumber {
+		t.Fatalf("expected source build number to remain %d, got %d", sourceBuild.BuildNumber, reloadedSource.BuildNumber)
+	}
+	if reloadedSource.RerunOfBuildID != nil {
+		t.Fatalf("expected source rerun_of_build_id to remain nil, got %v", reloadedSource.RerunOfBuildID)
+	}
+
+	reloadedSteps, err := buildRepo.GetStepsByBuildID(context.Background(), sourceBuild.ID)
+	if err != nil {
+		t.Fatalf("reload source steps failed: %v", err)
+	}
+	if len(reloadedSteps) != len(sourceSteps) {
+		t.Fatalf("expected %d source steps, got %d", len(sourceSteps), len(reloadedSteps))
+	}
+}
+
 func TestBuildService_RerunBuild_RejectsActiveBuilds(t *testing.T) {
 	activeStatuses := []domain.BuildStatus{
 		domain.BuildStatusPending,
