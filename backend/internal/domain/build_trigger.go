@@ -37,8 +37,11 @@ type BuildTrigger struct {
 }
 
 func NormalizeBuildTrigger(in BuildTrigger) BuildTrigger {
-	if strings.TrimSpace(string(in.Kind)) == "" {
+	trimmedKind := strings.TrimSpace(string(in.Kind))
+	if trimmedKind == "" {
 		in.Kind = BuildTriggerKindManual
+	} else {
+		in.Kind = BuildTriggerKind(trimmedKind)
 	}
 	in.SCMProvider = trimOptional(in.SCMProvider)
 	in.EventType = trimOptional(in.EventType)

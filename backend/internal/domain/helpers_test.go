@@ -81,6 +81,12 @@ func TestSourceSpecAndBuildTriggerNormalization(t *testing.T) {
 	if trigger.Actor != nil {
 		t.Fatalf("expected blank actor to be cleared, got %+v", trigger.Actor)
 	}
+
+	webhookKind := BuildTriggerKind(" webhook ")
+	webhookTrigger := NormalizeBuildTrigger(BuildTrigger{Kind: webhookKind})
+	if webhookTrigger.Kind != BuildTriggerKindWebhook {
+		t.Fatalf("expected trimmed webhook trigger kind, got %q", webhookTrigger.Kind)
+	}
 }
 
 func TestNormalizeBuildMetadata(t *testing.T) {

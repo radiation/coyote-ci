@@ -11,7 +11,7 @@ import (
 
 func toBuildResponse(build domain.Build, project ...*domain.Project) api.BuildResponse {
 	build = domain.NormalizeBuildMetadata(build)
-	trigger := domain.NormalizeBuildTrigger(build.Trigger)
+	trigger := build.Trigger
 	sourceCommitSHA := buildSourceCommitSHA(build)
 	triggerCommitSHA := buildTriggerCommitSHA(build, trigger)
 	var projectName *string
