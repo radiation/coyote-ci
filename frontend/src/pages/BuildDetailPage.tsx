@@ -56,6 +56,12 @@ export function BuildDetailPage() {
     },
   });
 
+  const { data: rerunSourceBuild } = useQuery({
+    queryKey: ["build", build?.rerun_of_build_id],
+    queryFn: () => getBuild(build!.rerun_of_build_id!),
+    enabled: Boolean(build?.rerun_of_build_id),
+  });
+
   const {
     data: steps,
     isLoading: stepsLoading,
@@ -229,6 +235,7 @@ export function BuildDetailPage() {
 
       <BuildSummaryPanel
         build={build}
+        rerunSourceBuild={rerunSourceBuild}
         steps={steps}
         stepsLoading={stepsLoading}
         buildUpdatedAt={buildUpdatedAt}

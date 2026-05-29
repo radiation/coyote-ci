@@ -500,21 +500,25 @@ func TestBuildRepository_CreateQueuedBuild(t *testing.T) {
 
 	repo := NewBuildRepository(db)
 	now := time.Now().UTC()
+	jobID := "job-1"
+	rerunOfBuildID := "build-0"
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO builds").WillReturnRows(
 		sqlmock.NewRows([]string{"id", "build_number", "project_id", "job_id", "priority", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).
-			AddRow("build-1", 1, "project-1", nil, 5, "queued", now, now, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil),
+			AddRow("build-1", 2, "project-1", jobID, 5, "queued", now, now, nil, nil, 0, 1, rerunOfBuildID, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil),
 	)
 	mock.ExpectExec("INSERT INTO build_steps").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO build_steps").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	build, err := repo.CreateQueuedBuild(context.Background(), domain.Build{
-		ID:        "build-1",
-		ProjectID: "project-1",
-		Status:    domain.BuildStatusPending,
-		CreatedAt: now,
+		ID:             "build-1",
+		ProjectID:      "project-1",
+		JobID:          &jobID,
+		Status:         domain.BuildStatusPending,
+		CreatedAt:      now,
+		RerunOfBuildID: &rerunOfBuildID,
 	}, []domain.BuildStep{
 		{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "checkout", Status: domain.BuildStepStatusPending},
 		{ID: "step-2", BuildID: "build-1", StepIndex: 1, Name: "test", Status: domain.BuildStepStatusPending},
@@ -524,6 +528,12 @@ func TestBuildRepository_CreateQueuedBuild(t *testing.T) {
 	}
 	if build.Status != domain.BuildStatusQueued {
 		t.Fatalf("expected queued status, got %q", build.Status)
+	}
+	if build.BuildNumber != 2 {
+		t.Fatalf("expected build number 2, got %d", build.BuildNumber)
+	}
+	if build.RerunOfBuildID == nil || *build.RerunOfBuildID != rerunOfBuildID {
+		t.Fatalf("expected rerun_of_build_id=%s, got %v", rerunOfBuildID, build.RerunOfBuildID)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
