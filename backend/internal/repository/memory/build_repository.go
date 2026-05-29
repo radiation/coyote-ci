@@ -14,16 +14,19 @@ import (
 )
 
 type BuildRepository struct {
-	mu         sync.RWMutex
-	builds     map[string]domain.Build
-	buildSteps map[string][]domain.BuildStep
-	nextNumber int64
+	mu                  sync.RWMutex
+	builds              map[string]domain.Build
+	buildSteps          map[string][]domain.BuildStep
+	nextAnonymousNumber int64
+	nextNumberByJob     map[string]int64
 }
 
 func NewBuildRepository() *BuildRepository {
 	return &BuildRepository{
-		builds:     make(map[string]domain.Build),
-		buildSteps: make(map[string][]domain.BuildStep),
+		builds:              make(map[string]domain.Build),
+		buildSteps:          make(map[string][]domain.BuildStep),
+		nextAnonymousNumber: 1,
+		nextNumberByJob:     make(map[string]int64),
 	}
 }
 
@@ -37,10 +40,7 @@ func (r *BuildRepository) Create(_ context.Context, build domain.Build) (domain.
 	if build.AttemptNumber <= 0 {
 		build.AttemptNumber = 1
 	}
-	if build.BuildNumber <= 0 {
-		r.nextNumber++
-		build.BuildNumber = r.nextNumber
-	}
+	r.assignBuildNumberLocked(&build)
 	build.Priority = domain.NormalizePriority(build.Priority)
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 
@@ -111,10 +111,7 @@ func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Buil
 	if build.AttemptNumber <= 0 {
 		build.AttemptNumber = 1
 	}
-	if build.BuildNumber <= 0 {
-		r.nextNumber++
-		build.BuildNumber = r.nextNumber
-	}
+	r.assignBuildNumberLocked(&build)
 	build.Priority = domain.NormalizePriority(build.Priority)
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 
@@ -144,6 +141,59 @@ func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Buil
 	r.buildSteps[build.ID] = cloned
 
 	return build, nil
+}
+
+func (r *BuildRepository) assignBuildNumberLocked(build *domain.Build) {
+	if build.BuildNumber > 0 {
+		r.observeBuildNumberLocked(build.JobID, build.BuildNumber)
+		return
+	}
+
+	build.BuildNumber = r.nextBuildNumberLocked(build.JobID)
+}
+
+func (r *BuildRepository) nextBuildNumberLocked(jobID *string) int64 {
+	if normalizedJobID, ok := normalizeBuildJobID(jobID); ok {
+		next := r.nextNumberByJob[normalizedJobID]
+		if next <= 0 {
+			next = 1
+		}
+		r.nextNumberByJob[normalizedJobID] = next + 1
+		return next
+	}
+
+	if r.nextAnonymousNumber <= 0 {
+		r.nextAnonymousNumber = 1
+	}
+	next := r.nextAnonymousNumber
+	r.nextAnonymousNumber++
+	return next
+}
+
+func (r *BuildRepository) observeBuildNumberLocked(jobID *string, buildNumber int64) {
+	if buildNumber <= 0 {
+		return
+	}
+	if normalizedJobID, ok := normalizeBuildJobID(jobID); ok {
+		if buildNumber >= r.nextNumberByJob[normalizedJobID] {
+			r.nextNumberByJob[normalizedJobID] = buildNumber + 1
+		}
+		return
+	}
+	if buildNumber >= r.nextAnonymousNumber {
+		r.nextAnonymousNumber = buildNumber + 1
+	}
+}
+
+func normalizeBuildJobID(jobID *string) (string, bool) {
+	if jobID == nil {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(*jobID)
+	if trimmed == "" {
+		return "", false
+	}
+	return trimmed, true
 }
 
 func (r *BuildRepository) List(_ context.Context) ([]domain.Build, error) {

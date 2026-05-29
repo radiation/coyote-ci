@@ -63,6 +63,127 @@ func TestBuildRepository_Create(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_AssignsSequentialBuildNumbersPerJob(t *testing.T) {
+	repo := NewBuildRepository()
+	now := time.Now().UTC()
+	jobA := "job-a"
+	jobB := "job-b"
+
+	first, err := repo.Create(context.Background(), domain.Build{
+		ID:        "build-1",
+		ProjectID: "project-1",
+		JobID:     &jobA,
+		Status:    domain.BuildStatusPending,
+		CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create first build failed: %v", err)
+	}
+	if first.BuildNumber != 1 {
+		t.Fatalf("expected first build number 1, got %d", first.BuildNumber)
+	}
+
+	second, err := repo.Create(context.Background(), domain.Build{
+		ID:        "build-2",
+		ProjectID: "project-1",
+		JobID:     &jobA,
+		Status:    domain.BuildStatusPending,
+		CreatedAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create second build failed: %v", err)
+	}
+	if second.BuildNumber != 2 {
+		t.Fatalf("expected second build number 2, got %d", second.BuildNumber)
+	}
+
+	rerunOf := first.ID
+	rerun, err := repo.CreateQueuedBuild(context.Background(), domain.Build{
+		ID:             "build-3",
+		ProjectID:      "project-1",
+		JobID:          &jobA,
+		Status:         domain.BuildStatusPending,
+		CreatedAt:      now.Add(2 * time.Minute),
+		RerunOfBuildID: &rerunOf,
+	}, []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusPending}})
+	if err != nil {
+		t.Fatalf("create rerun build failed: %v", err)
+	}
+	if rerun.BuildNumber != 3 {
+		t.Fatalf("expected rerun build number 3, got %d", rerun.BuildNumber)
+	}
+
+	otherJob, err := repo.Create(context.Background(), domain.Build{
+		ID:        "build-4",
+		ProjectID: "project-1",
+		JobID:     &jobB,
+		Status:    domain.BuildStatusPending,
+		CreatedAt: now.Add(3 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create other job build failed: %v", err)
+	}
+	if otherJob.BuildNumber != 1 {
+		t.Fatalf("expected first build for other job to be 1, got %d", otherJob.BuildNumber)
+	}
+}
+
+func TestBuildRepository_ExplicitBuildNumbersAdvancePerJobCounters(t *testing.T) {
+	repo := NewBuildRepository()
+	now := time.Now().UTC()
+	jobID := "job-a"
+
+	_, err := repo.Create(context.Background(), domain.Build{
+		ID:          "build-explicit-job",
+		ProjectID:   "project-1",
+		JobID:       &jobID,
+		BuildNumber: 7,
+		Status:      domain.BuildStatusPending,
+		CreatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("create explicit job build failed: %v", err)
+	}
+
+	nextForJob, err := repo.Create(context.Background(), domain.Build{
+		ID:        "build-next-job",
+		ProjectID: "project-1",
+		JobID:     &jobID,
+		Status:    domain.BuildStatusPending,
+		CreatedAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create next job build failed: %v", err)
+	}
+	if nextForJob.BuildNumber != 8 {
+		t.Fatalf("expected next job build number 8, got %d", nextForJob.BuildNumber)
+	}
+
+	_, err = repo.Create(context.Background(), domain.Build{
+		ID:          "build-explicit-anon",
+		ProjectID:   "project-1",
+		BuildNumber: 11,
+		Status:      domain.BuildStatusPending,
+		CreatedAt:   now.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create explicit anonymous build failed: %v", err)
+	}
+
+	nextAnonymous, err := repo.Create(context.Background(), domain.Build{
+		ID:        "build-next-anon",
+		ProjectID: "project-1",
+		Status:    domain.BuildStatusPending,
+		CreatedAt: now.Add(3 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create next anonymous build failed: %v", err)
+	}
+	if nextAnonymous.BuildNumber != 12 {
+		t.Fatalf("expected next anonymous build number 12, got %d", nextAnonymous.BuildNumber)
+	}
+}
+
 func TestBuildRepository_GetByID(t *testing.T) {
 	repo := NewBuildRepository()
 	build, err := repo.Create(context.Background(), domain.Build{
