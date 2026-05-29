@@ -98,9 +98,13 @@ export function BuildSummaryPanel({
             <p className="subtle-text build-summary-subtitle">
               Rerun of{" "}
               <Link to={`/builds/${build.rerun_of_build_id}`}>
-                {rerunSourceBuild?.build_number
-                  ? `build #${rerunSourceBuild.build_number}`
-                  : "earlier build"}
+                {buildLabel(
+                  rerunSourceBuild ?? {
+                    ...build,
+                    id: build.rerun_of_build_id,
+                    build_number: undefined,
+                  },
+                )}
               </Link>
             </p>
           ) : null}

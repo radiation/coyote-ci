@@ -297,7 +297,7 @@ describe("BuildDetailPage", () => {
       expect(mockedGetBuild).toHaveBeenCalledWith("build-0");
     });
     await waitFor(() => {
-      expect(screen.getByRole("link", { name: "build #20" })).toHaveAttribute(
+      expect(screen.getByRole("link", { name: "Build #20" })).toHaveAttribute(
         "href",
         "/builds/build-0",
       );
