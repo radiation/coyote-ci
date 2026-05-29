@@ -59,6 +59,20 @@ func (s *BuildService) GetJobsByBuildID(ctx context.Context, buildID string) ([]
 	return s.executionJobRepo.GetJobsByBuildID(ctx, buildID)
 }
 
+func (s *BuildService) GetJobByID(ctx context.Context, jobID string) (domain.ExecutionJob, error) {
+	if s.executionJobRepo == nil {
+		return domain.ExecutionJob{}, ErrExecutionJobRepoNotConfigured
+	}
+	job, err := s.executionJobRepo.GetJobByID(ctx, jobID)
+	if err != nil {
+		if errors.Is(err, repository.ErrExecutionJobNotFound) {
+			return domain.ExecutionJob{}, ErrExecutionJobNotFound
+		}
+		return domain.ExecutionJob{}, err
+	}
+	return job, nil
+}
+
 func (s *BuildService) GetJobOutputsByBuildID(ctx context.Context, buildID string) ([]domain.ExecutionJobOutput, error) {
 	if s.executionOutputRepo == nil {
 		return []domain.ExecutionJobOutput{}, nil

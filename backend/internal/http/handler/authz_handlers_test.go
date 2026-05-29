@@ -381,6 +381,78 @@ func TestBuildHandler_HeaderModeAuthorizationAndFiltering(t *testing.T) {
 	}
 }
 
+func TestBuildHandler_RetryJobAuthorizesSourceBuildBeforeMutation(t *testing.T) {
+	fixture := newHandlerAuthzFixture(t)
+	ctx := context.Background()
+	sourceBuild, err := fixture.buildService.CreateBuild(ctx, buildsvc.CreateBuildInput{
+		ProjectID: fixture.projectOther.ID,
+		Steps:     []buildsvc.CreateBuildStepInput{{Name: "test", Command: "sh", Args: []string{"-c", "go test ./..."}}},
+	})
+	if err != nil {
+		t.Fatalf("create source build failed: %v", err)
+	}
+	if _, startErr := fixture.buildService.StartBuild(ctx, sourceBuild.ID); startErr != nil {
+		t.Fatalf("start source build failed: %v", startErr)
+	}
+	if _, failErr := fixture.buildService.FailBuild(ctx, sourceBuild.ID); failErr != nil {
+		t.Fatalf("fail source build failed: %v", failErr)
+	}
+	sourceSteps, err := fixture.buildService.GetBuildSteps(ctx, sourceBuild.ID)
+	if err != nil {
+		t.Fatalf("load source steps failed: %v", err)
+	}
+	if len(sourceSteps) != 1 {
+		t.Fatalf("expected one source step, got %d", len(sourceSteps))
+	}
+
+	execRepo := repositorymemory.NewExecutionJobRepository()
+	fixture.buildService.SetExecutionJobRepository(execRepo)
+	timeout := 120
+	failedJob := domain.ExecutionJob{
+		ID:               "job-retry-cross-project",
+		BuildID:          sourceBuild.ID,
+		StepID:           sourceSteps[0].ID,
+		Name:             sourceSteps[0].Name,
+		StepIndex:        sourceSteps[0].StepIndex,
+		AttemptNumber:    1,
+		Status:           domain.ExecutionJobStatusFailed,
+		Image:            "golang:1.24",
+		WorkingDir:       ".",
+		Command:          []string{"sh", "-c", "go test ./..."},
+		Environment:      map[string]string{},
+		TimeoutSeconds:   &timeout,
+		SpecVersion:      1,
+		ResolvedSpecJSON: `{"version":1}`,
+		CreatedAt:        fixture.now,
+	}
+	if _, createJobsErr := execRepo.CreateJobsForBuild(ctx, []domain.ExecutionJob{failedJob}); createJobsErr != nil {
+		t.Fatalf("seed failed execution job failed: %v", createJobsErr)
+	}
+
+	beforeBuilds, err := fixture.buildService.ListBuilds(ctx)
+	if err != nil {
+		t.Fatalf("list builds before retry failed: %v", err)
+	}
+	h := NewBuildHandler(fixture.buildService)
+	h.SetAuthorization(auth.ModeHeader, fixture.membershipService)
+
+	retryReq := addURLParam(httptest.NewRequest(http.MethodPost, "/builds/jobs/"+failedJob.ID+"/retry", nil), "jobID", failedJob.ID)
+	retryReq = retryReq.WithContext(auth.WithUser(retryReq.Context(), fixture.viewer))
+	retryRes := httptest.NewRecorder()
+	h.RetryJob(retryRes, retryReq)
+
+	if retryRes.Code != http.StatusForbidden {
+		t.Fatalf("expected forbidden retry status %d, got %d body=%s", http.StatusForbidden, retryRes.Code, retryRes.Body.String())
+	}
+	afterBuilds, err := fixture.buildService.ListBuilds(ctx)
+	if err != nil {
+		t.Fatalf("list builds after retry failed: %v", err)
+	}
+	if len(afterBuilds) != len(beforeBuilds) {
+		t.Fatalf("expected unauthorized retry not to create builds, before=%d after=%d", len(beforeBuilds), len(afterBuilds))
+	}
+}
+
 type handlerAuthzFixture struct {
 	now               time.Time
 	projectViewer     domain.Project

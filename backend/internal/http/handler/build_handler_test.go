@@ -1364,6 +1364,67 @@ func TestBuildHandler_GetBuildStepLogs(t *testing.T) {
 	}
 }
 
+func TestBuildHandler_GetBuildStepLogs_InvalidInputs(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}}
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, logs.NewMemorySink()))
+
+	tests := []struct {
+		name     string
+		buildID  string
+		stepID   string
+		url      string
+		wantText string
+	}{
+		{name: "missing build id", buildID: "", stepID: "0", url: "/builds//steps/0/logs", wantText: "build id is required"},
+		{name: "missing step index", buildID: "build-1", stepID: "", url: "/builds/build-1/steps//logs", wantText: "step index is required"},
+		{name: "invalid step index", buildID: "build-1", stepID: "nope", url: "/builds/build-1/steps/nope/logs", wantText: "step index must be a non-negative integer"},
+		{name: "negative step index", buildID: "build-1", stepID: "-1", url: "/builds/build-1/steps/-1/logs", wantText: "step index must be a non-negative integer"},
+		{name: "invalid after", buildID: "build-1", stepID: "0", url: "/builds/build-1/steps/0/logs?after=bad", wantText: "invalid 'after' query parameter"},
+		{name: "negative after", buildID: "build-1", stepID: "0", url: "/builds/build-1/steps/0/logs?after=-1", wantText: "invalid 'after' query parameter"},
+		{name: "invalid limit", buildID: "build-1", stepID: "0", url: "/builds/build-1/steps/0/logs?limit=bad", wantText: "invalid 'limit' query parameter"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := addStepIndexParam(addBuildIDParam(httptest.NewRequest(http.MethodGet, tc.url, nil), tc.buildID), tc.stepID)
+			res := httptest.NewRecorder()
+
+			h.GetBuildStepLogs(res, req)
+
+			if res.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d", http.StatusBadRequest, res.Code)
+			}
+			if got := decodeErrorMessage(t, res); got != tc.wantText {
+				t.Fatalf("expected message %q, got %q", tc.wantText, got)
+			}
+		})
+	}
+}
+
+func TestBuildHandler_LogQueryParsers(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/logs?after=12&limit=25&bad=nope", nil)
+
+	if got := parseQueryInt64(req, "after", 7); got != 12 {
+		t.Fatalf("expected parsed after 12, got %d", got)
+	}
+	if got := parseQueryInt64(req, "missing", 7); got != 7 {
+		t.Fatalf("expected int64 fallback 7, got %d", got)
+	}
+	if got := parseQueryInt64(req, "bad", 7); got != 7 {
+		t.Fatalf("expected invalid int64 fallback 7, got %d", got)
+	}
+	if got := parseQueryInt(req, "limit", 3); got != 25 {
+		t.Fatalf("expected parsed limit 25, got %d", got)
+	}
+	if got := parseQueryInt(req, "missing", 3); got != 3 {
+		t.Fatalf("expected int fallback 3, got %d", got)
+	}
+	if got := parseQueryInt(req, "bad", 3); got != 3 {
+		t.Fatalf("expected invalid int fallback 3, got %d", got)
+	}
+}
+
 func TestBuildHandler_QueueBuild_WithTemplate(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}}

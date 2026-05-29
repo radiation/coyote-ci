@@ -6,7 +6,10 @@ import {
   listBuilds,
   getBuild,
   cancelBuild,
+  rerunBuild,
+  listQueue,
   getBuildSteps,
+  getStepLogs,
   getBuildArtifacts,
   listArtifactCatalog,
   listArtifacts,
@@ -16,6 +19,7 @@ import {
   listJobsByProject,
   createJobVersionTags,
   artifactDownloadURL,
+  buildStepLogStreamURL,
   listJobs,
   getJob,
   createJob,
@@ -140,6 +144,200 @@ describe("API client - types", () => {
     });
   });
 
+  it("lists builds with trimmed project and pagination filters", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          builds: [
+            {
+              id: "build-1",
+              project_id: "project-1",
+              priority: 0,
+              status: "success",
+              created_at: "2026-03-24T00:00:00Z",
+              queued_at: "2026-03-24T00:00:01Z",
+              started_at: "2026-03-24T00:00:02Z",
+              finished_at: "2026-03-24T00:01:00Z",
+              current_step_index: 1,
+              attempt_number: 1,
+              error_message: null,
+            },
+          ],
+        },
+      }),
+    } as Response);
+
+    const builds = await listBuilds({
+      project_id: " project-1 ",
+      project_slug: " platform ",
+      limit: 50,
+      offset: 10,
+    });
+
+    expect(builds).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/builds?project_id=project-1&project_slug=platform&limit=50&offset=10",
+      { credentials: "include" },
+    );
+  });
+
+  it("lists builds without query parameters when filters are empty", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { builds: [] } }),
+    } as Response);
+
+    const builds = await listBuilds({
+      project_id: " ",
+      project_slug: " ",
+      limit: 0,
+      offset: -1,
+    });
+
+    expect(builds).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledWith("/api/builds", {
+      credentials: "include",
+    });
+  });
+
+  it("fetches build detail, steps, logs, queue entries, and reruns builds", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            id: "build-1",
+            project_id: "project-1",
+            priority: 5,
+            status: "running",
+            created_at: "2026-03-24T00:00:00Z",
+            queued_at: "2026-03-24T00:00:01Z",
+            started_at: "2026-03-24T00:00:02Z",
+            finished_at: null,
+            current_step_index: 1,
+            error_message: null,
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            build_id: "build-1",
+            steps: [
+              {
+                id: "step-1",
+                build_id: "build-1",
+                step_index: 0,
+                name: "test",
+                command: "go",
+                args: ["test", "./..."],
+                env: {},
+                working_dir: ".",
+                timeout_seconds: 0,
+                status: "success",
+                started_at: null,
+                finished_at: null,
+                exit_code: 0,
+                error_message: null,
+              },
+            ],
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            build_id: "build-1",
+            step_index: 0,
+            after: 2,
+            next_sequence: 3,
+            chunks: [],
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            entries: [
+              {
+                build: {
+                  id: "build-1",
+                  project_id: "project-1",
+                  priority: 5,
+                  status: "queued",
+                  created_at: "2026-03-24T00:00:00Z",
+                  queued_at: "2026-03-24T00:00:01Z",
+                  started_at: null,
+                  finished_at: null,
+                  current_step_index: 0,
+                  error_message: null,
+                },
+                queued_at: "2026-03-24T00:00:01Z",
+              },
+            ],
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            id: "build-2",
+            project_id: "project-1",
+            priority: 5,
+            status: "queued",
+            created_at: "2026-03-24T00:01:00Z",
+            queued_at: "2026-03-24T00:01:01Z",
+            started_at: null,
+            finished_at: null,
+            current_step_index: 0,
+            error_message: null,
+          },
+        }),
+      } as Response);
+
+    const build = await getBuild("build-1");
+    const steps = await getBuildSteps("build-1");
+    const logs = await getStepLogs("build-1", 0, 2, 25);
+    const queue = await listQueue({
+      project_id: " project-1 ",
+      project_slug: " platform ",
+      status: "queued",
+    });
+    const rerun = await rerunBuild("build-1");
+
+    expect(build.status).toBe("running");
+    expect(steps).toHaveLength(1);
+    expect(logs.next_sequence).toBe(3);
+    expect(queue).toHaveLength(1);
+    expect(rerun.id).toBe("build-2");
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/builds/build-1", {
+      credentials: "include",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/builds/build-1/steps", {
+      credentials: "include",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/builds/build-1/steps/0/logs?after=2&limit=25",
+      { credentials: "include" },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/queue?project_id=project-1&project_slug=platform&status=queued",
+      { credentials: "include" },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(5, "/api/builds/build-1/rerun", {
+      credentials: "include",
+      method: "POST",
+    });
+  });
+
   it("builds artifact download URL from API base path", () => {
     expect(artifactDownloadURL("/builds/build-1/artifacts/a1/download")).toBe(
       "/api/builds/build-1/artifacts/a1/download",
@@ -149,6 +347,12 @@ describe("API client - types", () => {
   it("builds artifact download URL from a relative path without duplicating /api", () => {
     expect(artifactDownloadURL("builds/build-1/artifacts/a1/download")).toBe(
       "/api/builds/build-1/artifacts/a1/download",
+    );
+  });
+
+  it("builds step log stream URLs with encoded build IDs", () => {
+    expect(buildStepLogStreamURL("build/one", 3, 12)).toBe(
+      "/api/builds/build%2Fone/steps/3/logs/stream?after=12",
     );
   });
 
