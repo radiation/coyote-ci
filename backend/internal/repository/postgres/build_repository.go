@@ -22,14 +22,20 @@ func NewBuildRepository(db *sql.DB) *BuildRepository {
 
 func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domain.Build, error) {
 	const query = `
-		WITH next_build_number AS (
+		WITH observed_build_number AS (
+			UPDATE jobs
+			SET next_build_number = GREATEST(next_build_number, $4 + 1)
+			WHERE id = $3 AND $4 > 0
+			RETURNING next_build_number
+		),
+		next_build_number AS (
 			UPDATE jobs
 			SET next_build_number = next_build_number + 1
-			WHERE id = $3
+			WHERE id = $3 AND $4 <= 0
 			RETURNING next_build_number - 1 AS build_number
 		)
 		INSERT INTO builds (id, build_number, project_id, job_id, priority, status, created_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id)
-		VALUES ($1, COALESCE((SELECT build_number FROM next_build_number), CASE WHEN $3 IS NULL THEN nextval('builds_build_number_seq') ELSE NULL END), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)
+		VALUES ($1, COALESCE(NULLIF($4, 0), (SELECT build_number FROM next_build_number), CASE WHEN $3 IS NULL THEN nextval('builds_build_number_seq') ELSE NULL END), $2, $3, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
 		RETURNING ` + buildColumns + `
 	`
 
@@ -49,6 +55,7 @@ func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domai
 		build.ID,
 		build.ProjectID,
 		build.JobID,
+		build.BuildNumber,
 		build.Priority,
 		string(build.Status),
 		build.CreatedAt,
@@ -102,14 +109,20 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 	}()
 
 	const createQuery = `
-		WITH next_build_number AS (
+		WITH observed_build_number AS (
+			UPDATE jobs
+			SET next_build_number = GREATEST(next_build_number, $4 + 1)
+			WHERE id = $3 AND $4 > 0
+			RETURNING next_build_number
+		),
+		next_build_number AS (
 			UPDATE jobs
 			SET next_build_number = next_build_number + 1
-			WHERE id = $3
+			WHERE id = $3 AND $4 <= 0
 			RETURNING next_build_number - 1 AS build_number
 		)
 		INSERT INTO builds (id, build_number, project_id, job_id, priority, status, created_at, queued_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id)
-		VALUES ($1, COALESCE((SELECT build_number FROM next_build_number), CASE WHEN $3 IS NULL THEN nextval('builds_build_number_seq') ELSE NULL END), $2, $3, $4, 'queued', $5, COALESCE($6, NOW()), 0, $7, $8, $9, NULL, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)
+		VALUES ($1, COALESCE(NULLIF($4, 0), (SELECT build_number FROM next_build_number), CASE WHEN $3 IS NULL THEN nextval('builds_build_number_seq') ELSE NULL END), $2, $3, $5, 'queued', $6, COALESCE($7, NOW()), 0, $8, $9, $10, NULL, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)
 		RETURNING ` + buildColumns + `
 	`
 	if build.AttemptNumber <= 0 {
@@ -119,7 +132,7 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 	build = domain.NormalizeBuildMetadata(build)
 
-	build, err = scanBuild(tx.QueryRowContext(ctx, createQuery, build.ID, build.ProjectID, build.JobID, build.Priority, build.CreatedAt, build.QueuedAt, build.AttemptNumber, build.RerunOfBuildID, build.RerunFromStepIdx, build.PipelineConfigYAML, build.PipelineName, build.PipelineSource, build.PipelinePath, build.RepoURL, build.Ref, build.CommitSHA, string(build.Trigger.Kind), build.Trigger.SCMProvider, build.Trigger.EventType, build.Trigger.RepositoryOwner, build.Trigger.RepositoryName, build.Trigger.RepositoryURL, build.Trigger.RawRef, build.Trigger.Ref, build.Trigger.RefType, build.Trigger.RefName, build.Trigger.Deleted, build.Trigger.CommitSHA, build.Trigger.DeliveryID, build.Trigger.Actor, build.RequestedImageRef, build.ResolvedImageRef, string(defaultBuildImageSourceKind(build.ImageSourceKind)), build.ManagedImageID, build.ManagedImageVersionID))
+	build, err = scanBuild(tx.QueryRowContext(ctx, createQuery, build.ID, build.ProjectID, build.JobID, build.BuildNumber, build.Priority, build.CreatedAt, build.QueuedAt, build.AttemptNumber, build.RerunOfBuildID, build.RerunFromStepIdx, build.PipelineConfigYAML, build.PipelineName, build.PipelineSource, build.PipelinePath, build.RepoURL, build.Ref, build.CommitSHA, string(build.Trigger.Kind), build.Trigger.SCMProvider, build.Trigger.EventType, build.Trigger.RepositoryOwner, build.Trigger.RepositoryName, build.Trigger.RepositoryURL, build.Trigger.RawRef, build.Trigger.Ref, build.Trigger.RefType, build.Trigger.RefName, build.Trigger.Deleted, build.Trigger.CommitSHA, build.Trigger.DeliveryID, build.Trigger.Actor, build.RequestedImageRef, build.ResolvedImageRef, string(defaultBuildImageSourceKind(build.ImageSourceKind)), build.ManagedImageID, build.ManagedImageVersionID))
 	if err != nil {
 		return domain.Build{}, err
 	}

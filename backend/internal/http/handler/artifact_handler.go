@@ -143,7 +143,7 @@ func (h *ArtifactHandler) GetArtifact(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, repository.ErrArtifactNotFound):
-			writeErrorJSON(w, http.StatusNotFound, "not_found", "artifact not found")
+			writeErrorJSON(w, http.StatusNotFound, "artifact_not_found", "artifact not found")
 		case errors.Is(err, artifactsvc.ErrArtifactRepositoryNotConfigured):
 			writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "artifact repository not configured")
 		default:

@@ -402,6 +402,9 @@ func TestVisibilityService_ListWorkers_StatusSemantics(t *testing.T) {
 	if byID["busy-worker"].CurrentStepName == nil || *byID["busy-worker"].CurrentStepName != "compile" {
 		t.Fatalf("expected busy-worker step compile, got %#v", byID["busy-worker"].CurrentStepName)
 	}
+	if byID["busy-worker"].ClaimedAt == nil || !byID["busy-worker"].ClaimedAt.Equal(now.Add(-20*time.Second)) {
+		t.Fatalf("expected busy-worker claimed_at %v, got %#v", now.Add(-20*time.Second), byID["busy-worker"].ClaimedAt)
+	}
 	if byID["stale-worker"].Status != domain.WorkerStatusStale || !byID["stale-worker"].StaleHeartbeat {
 		t.Fatalf("expected stale-worker to be stale from heartbeat, got %#v", byID["stale-worker"])
 	}
