@@ -10,7 +10,8 @@ import (
 )
 
 func toBuildResponse(build domain.Build, project ...*domain.Project) api.BuildResponse {
-	trigger := domain.NormalizeBuildTrigger(build.Trigger)
+	build = domain.NormalizeBuildMetadata(build)
+	trigger := build.Trigger
 	sourceCommitSHA := buildSourceCommitSHA(build)
 	triggerCommitSHA := buildTriggerCommitSHA(build, trigger)
 	var projectName *string
@@ -41,6 +42,10 @@ func toBuildResponse(build domain.Build, project ...*domain.Project) api.BuildRe
 		PipelineName:       build.PipelineName,
 		PipelineSource:     build.PipelineSource,
 		PipelinePath:       build.PipelinePath,
+		SourceRef:          build.SourceRef,
+		SourceSHA:          build.SourceSHA,
+		TriggerType:        string(build.TriggerType),
+		TriggeredBy:        build.TriggeredBy,
 		TriggerKind:        string(trigger.Kind),
 		SCMProvider:        trigger.SCMProvider,
 		EventType:          trigger.EventType,

@@ -45,6 +45,12 @@ type Build struct {
 	Ref       *string
 	CommitSHA *string
 
+	// Build metadata captures what source was run and why this build exists.
+	SourceRef   *string
+	SourceSHA   *string
+	TriggerType BuildTriggerType
+	TriggeredBy *string
+
 	// Trigger captures why/how this build was created (manual or webhook metadata).
 	Trigger BuildTrigger
 

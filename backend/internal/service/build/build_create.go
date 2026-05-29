@@ -72,6 +72,7 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 		Trigger:          toDomainBuildTrigger(input.Trigger),
 		ImageSourceKind:  domain.ImageSourceKindExternal,
 	}
+	build = domain.NormalizeBuildMetadata(build)
 
 	if len(input.Steps) > 0 {
 		steps := make([]domain.BuildStep, 0, len(input.Steps))
@@ -175,6 +176,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		RequestedImageRef:  buildOptionalStringPtr(strings.TrimSpace(resolved.Image)),
 		ImageSourceKind:    domain.ImageSourceKindExternal,
 	}
+	build = domain.NormalizeBuildMetadata(build)
 
 	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
 	if err != nil {

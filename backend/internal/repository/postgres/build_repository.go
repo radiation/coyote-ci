@@ -41,6 +41,7 @@ func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domai
 	}
 	build.Priority = domain.NormalizePriority(build.Priority)
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
+	build = domain.NormalizeBuildMetadata(build)
 
 	build, err := scanBuild(r.db.QueryRowContext(
 		ctx,
@@ -116,6 +117,7 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 	}
 	build.Priority = domain.NormalizePriority(build.Priority)
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
+	build = domain.NormalizeBuildMetadata(build)
 
 	build, err = scanBuild(tx.QueryRowContext(ctx, createQuery, build.ID, build.ProjectID, build.JobID, build.Priority, build.CreatedAt, build.QueuedAt, build.AttemptNumber, build.RerunOfBuildID, build.RerunFromStepIdx, build.PipelineConfigYAML, build.PipelineName, build.PipelineSource, build.PipelinePath, build.RepoURL, build.Ref, build.CommitSHA, string(build.Trigger.Kind), build.Trigger.SCMProvider, build.Trigger.EventType, build.Trigger.RepositoryOwner, build.Trigger.RepositoryName, build.Trigger.RepositoryURL, build.Trigger.RawRef, build.Trigger.Ref, build.Trigger.RefType, build.Trigger.RefName, build.Trigger.Deleted, build.Trigger.CommitSHA, build.Trigger.DeliveryID, build.Trigger.Actor, build.RequestedImageRef, build.ResolvedImageRef, string(defaultBuildImageSourceKind(build.ImageSourceKind)), build.ManagedImageID, build.ManagedImageVersionID))
 	if err != nil {

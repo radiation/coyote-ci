@@ -225,7 +225,7 @@ func buildAttemptFromSource(source domain.Build, now time.Time, rerunFrom *int) 
 	attempt := maxInt(source.AttemptNumber, 1) + 1
 	buildID := uuid.NewString()
 	queuedAt := now
-	return domain.Build{
+	build := domain.Build{
 		ID:                    buildID,
 		ProjectID:             source.ProjectID,
 		JobID:                 cloneStringPtr(source.JobID),
@@ -245,6 +245,9 @@ func buildAttemptFromSource(source domain.Build, now time.Time, rerunFrom *int) 
 		RepoURL:               cloneStringPtr(source.RepoURL),
 		Ref:                   cloneStringPtr(source.Ref),
 		CommitSHA:             cloneStringPtr(source.CommitSHA),
+		SourceRef:             cloneStringPtr(source.SourceRef),
+		SourceSHA:             cloneStringPtr(source.SourceSHA),
+		TriggerType:           domain.BuildTriggerTypeRerun,
 		Trigger:               cloneBuildTrigger(source.Trigger),
 		RequestedImageRef:     cloneStringPtr(source.RequestedImageRef),
 		ResolvedImageRef:      cloneStringPtr(source.ResolvedImageRef),
@@ -252,6 +255,7 @@ func buildAttemptFromSource(source domain.Build, now time.Time, rerunFrom *int) 
 		ManagedImageID:        cloneStringPtr(source.ManagedImageID),
 		ManagedImageVersionID: cloneStringPtr(source.ManagedImageVersionID),
 	}
+	return domain.NormalizeBuildMetadata(build)
 }
 
 func cloneBuildTrigger(source domain.BuildTrigger) domain.BuildTrigger {

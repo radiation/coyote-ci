@@ -142,6 +142,7 @@ func (r *fakeBuildRepository) Create(_ context.Context, build domain.Build) (dom
 		return domain.Build{}, r.createErr
 	}
 
+	build = domain.NormalizeBuildMetadata(build)
 	r.build = build
 	return build, nil
 }
@@ -152,6 +153,7 @@ func (r *fakeBuildRepository) CreateQueuedBuild(_ context.Context, build domain.
 	}
 
 	build.Status = domain.BuildStatusQueued
+	build = domain.NormalizeBuildMetadata(build)
 	r.build = build
 	r.steps = append([]domain.BuildStep(nil), steps...)
 
@@ -978,8 +980,41 @@ func TestBuildService_CreateBuild_DefaultsManualTrigger(t *testing.T) {
 	if build.Trigger.Kind != domain.BuildTriggerKindManual {
 		t.Fatalf("expected manual trigger kind, got %q", build.Trigger.Kind)
 	}
+	if build.TriggerType != domain.BuildTriggerTypeManual {
+		t.Fatalf("expected manual trigger type, got %q", build.TriggerType)
+	}
 	if build.Trigger.SCMProvider != nil {
 		t.Fatalf("expected nil scm_provider for manual build, got %v", build.Trigger.SCMProvider)
+	}
+	if build.SourceRef != nil || build.SourceSHA != nil || build.TriggeredBy != nil {
+		t.Fatalf("expected nil build metadata for local manual build, got source_ref=%v source_sha=%v triggered_by=%v", build.SourceRef, build.SourceSHA, build.TriggeredBy)
+	}
+}
+
+func TestBuildService_CreateBuild_PopulatesSourceMetadata(t *testing.T) {
+	repo := &fakeBuildRepository{}
+	svc := NewBuildService(repo, nil, nil)
+
+	build, err := svc.CreateBuild(context.Background(), CreateBuildInput{
+		ProjectID: "project-1",
+		Source: &CreateBuildSourceInput{
+			RepositoryURL: "https://github.com/acme/repo.git",
+			Ref:           "main",
+			CommitSHA:     "abc123",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if build.SourceRef == nil || *build.SourceRef != "main" {
+		t.Fatalf("expected source_ref main, got %v", build.SourceRef)
+	}
+	if build.SourceSHA == nil || *build.SourceSHA != "abc123" {
+		t.Fatalf("expected source_sha abc123, got %v", build.SourceSHA)
+	}
+	if build.TriggerType != domain.BuildTriggerTypeManual {
+		t.Fatalf("expected manual trigger type, got %q", build.TriggerType)
 	}
 }
 

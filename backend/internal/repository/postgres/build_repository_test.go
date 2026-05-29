@@ -72,6 +72,9 @@ func TestBuildRepository_Create(t *testing.T) {
 			if got.BuildNumber != 1 {
 				t.Fatalf("expected build number 1, got %d", got.BuildNumber)
 			}
+			if got.TriggerType != domain.BuildTriggerTypeManual {
+				t.Fatalf("expected manual trigger type, got %q", got.TriggerType)
+			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatalf("unmet sql expectations: %v", err)
 			}
@@ -106,7 +109,24 @@ func TestBuildRepository_GetByID(t *testing.T) {
 			if tc.err != nil {
 				exp.WillReturnError(tc.err)
 			} else {
-				exp.WillReturnRows(sqlmock.NewRows([]string{"id", "build_number", "project_id", "job_id", "priority", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).AddRow("build-1", 1, "project-1", nil, 5, "queued", now, now, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil))
+				columns := strings.Split(strings.ReplaceAll(buildColumns, " ", ""), ",")
+				row := make([]driver.Value, len(columns))
+				row[0] = "build-1"
+				row[1] = 1
+				row[2] = "project-1"
+				row[4] = 5
+				row[5] = "queued"
+				row[6] = now
+				row[7] = now
+				row[10] = 0
+				row[11] = 1
+				row[19] = "https://github.com/acme/repo.git"
+				row[20] = "main"
+				row[21] = "abc123"
+				row[22] = "webhook"
+				row[35] = "octocat"
+				row[38] = "external"
+				exp.WillReturnRows(sqlmock.NewRows(columns).AddRow(row...))
 			}
 
 			got, err := repo.GetByID(context.Background(), "build-1")
@@ -125,6 +145,18 @@ func TestBuildRepository_GetByID(t *testing.T) {
 			}
 			if got.Status != domain.BuildStatusQueued {
 				t.Fatalf("expected queued status, got %q", got.Status)
+			}
+			if got.SourceRef == nil || *got.SourceRef != "main" {
+				t.Fatalf("expected source_ref main, got %v", got.SourceRef)
+			}
+			if got.SourceSHA == nil || *got.SourceSHA != "abc123" {
+				t.Fatalf("expected source_sha abc123, got %v", got.SourceSHA)
+			}
+			if got.TriggerType != domain.BuildTriggerTypeWebhook {
+				t.Fatalf("expected webhook trigger type, got %q", got.TriggerType)
+			}
+			if got.TriggeredBy == nil || *got.TriggeredBy != "octocat" {
+				t.Fatalf("expected triggered_by octocat, got %v", got.TriggeredBy)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatalf("unmet sql expectations: %v", err)

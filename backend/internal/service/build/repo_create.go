@@ -135,6 +135,7 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		RequestedImageRef:  buildOptionalStringPtr(strings.TrimSpace(resolved.Image)),
 		ImageSourceKind:    domain.ImageSourceKindExternal,
 	}
+	build = domain.NormalizeBuildMetadata(build)
 
 	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
 	if err != nil {

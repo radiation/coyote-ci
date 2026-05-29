@@ -3333,6 +3333,12 @@ const docTemplate = `{
                 "source_commit_sha": {
                     "type": "string"
                 },
+                "source_ref": {
+                    "type": "string"
+                },
+                "source_sha": {
+                    "type": "string"
+                },
                 "started_at": {
                     "type": "string"
                 },
@@ -3346,6 +3352,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "trigger_ref": {
+                    "type": "string"
+                },
+                "trigger_type": {
+                    "type": "string"
+                },
+                "triggered_by": {
                     "type": "string"
                 }
             }

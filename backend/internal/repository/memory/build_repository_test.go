@@ -154,6 +154,43 @@ func TestBuildRepository_AssignsSequentialBuildNumbersPerJob(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_DerivesBuildMetadataFromSourceAndTrigger(t *testing.T) {
+	repo := NewBuildRepository()
+	now := time.Now().UTC()
+	actor := "octocat"
+	build, err := repo.Create(context.Background(), domain.Build{
+		ID:        "build-1",
+		ProjectID: "project-1",
+		Status:    domain.BuildStatusPending,
+		CreatedAt: now,
+		Ref:       stringPtr("main"),
+		CommitSHA: stringPtr("abc123"),
+		Trigger: domain.BuildTrigger{
+			Kind:  domain.BuildTriggerKindWebhook,
+			Actor: &actor,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create build failed: %v", err)
+	}
+	if build.SourceRef == nil || *build.SourceRef != "main" {
+		t.Fatalf("expected source_ref main, got %v", build.SourceRef)
+	}
+	if build.SourceSHA == nil || *build.SourceSHA != "abc123" {
+		t.Fatalf("expected source_sha abc123, got %v", build.SourceSHA)
+	}
+	if build.TriggerType != domain.BuildTriggerTypeWebhook {
+		t.Fatalf("expected webhook trigger type, got %q", build.TriggerType)
+	}
+	if build.TriggeredBy == nil || *build.TriggeredBy != actor {
+		t.Fatalf("expected triggered_by %q, got %v", actor, build.TriggeredBy)
+	}
+}
+
+func stringPtr(value string) *string {
+	return &value
+}
+
 func TestBuildRepository_ExplicitBuildNumbersAdvancePerJobCounters(t *testing.T) {
 	repo := NewBuildRepository()
 	now := time.Now().UTC()

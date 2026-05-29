@@ -160,6 +160,15 @@ func TestCreateRepoBuild(t *testing.T) {
 		if source["source_commit_sha"] != "abc123" {
 			t.Errorf("expected source.source_commit_sha in response, got %v", source["source_commit_sha"])
 		}
+		if data["source_ref"] != "main" {
+			t.Errorf("expected source_ref in response, got %v", data["source_ref"])
+		}
+		if data["source_sha"] != "abc123" {
+			t.Errorf("expected source_sha in response, got %v", data["source_sha"])
+		}
+		if data["trigger_type"] != "manual" {
+			t.Errorf("expected trigger_type manual in response, got %v", data["trigger_type"])
+		}
 		if data["pipeline_source"] != "repo" {
 			t.Errorf("expected pipeline_source in response, got %v", data["pipeline_source"])
 		}
@@ -349,6 +358,9 @@ func TestBuildHandler_RerunBuild_AcceptsBodylessPost(t *testing.T) {
 	}
 	if data["rerun_of_build_id"] != sourceBuild.ID {
 		t.Fatalf("expected rerun_of_build_id=%s, got %v", sourceBuild.ID, data["rerun_of_build_id"])
+	}
+	if data["trigger_type"] != "rerun" {
+		t.Fatalf("expected trigger_type=rerun, got %v", data["trigger_type"])
 	}
 }
 

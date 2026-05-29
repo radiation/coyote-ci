@@ -15,6 +15,10 @@ func TestBuildEnvelope_JSONShape(t *testing.T) {
 		ProjectID:        "project-1",
 		Status:           "running",
 		CreatedAt:        "2026-03-20T12:00:00Z",
+		SourceRef:        stringPtr("main"),
+		SourceSHA:        stringPtr("abc123"),
+		TriggerType:      "manual",
+		TriggeredBy:      stringPtr("octocat"),
 		QueuedAt:         &queuedAt,
 		StartedAt:        &startedAt,
 		FinishedAt:       &finishedAt,
@@ -42,11 +46,15 @@ func TestBuildEnvelope_JSONShape(t *testing.T) {
 	if _, ok := data["created_at"]; !ok {
 		t.Fatalf("expected created_at field in payload: %v", data)
 	}
-	for _, field := range []string{"queued_at", "started_at", "finished_at", "current_step_index", "error_message"} {
+	for _, field := range []string{"queued_at", "started_at", "finished_at", "current_step_index", "error_message", "source_ref", "source_sha", "trigger_type", "triggered_by"} {
 		if _, ok := data[field]; !ok {
 			t.Fatalf("expected %s field in payload: %v", field, data)
 		}
 	}
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func TestBuildStepsEnvelope_JSONOptionalAndEmptyCollections(t *testing.T) {
