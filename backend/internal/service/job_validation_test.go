@@ -101,3 +101,38 @@ func TestJobServiceResolveProjectID_DefaultsAndSlugLookup(t *testing.T) {
 		t.Fatalf("expected slug project %q, got %q err=%v", slugProject.ID, got, resolveErr)
 	}
 }
+
+func TestJobValidationHelperBranches(t *testing.T) {
+	if err := validatePipelineDefinition("", nil); !errors.Is(err, ErrJobPipelineDefinitionRequired) {
+		t.Fatalf("expected pipeline definition required, got %v", err)
+	}
+	pipelinePath := " .coyote/pipeline.yml "
+	if err := validatePipelineDefinition("", &pipelinePath); err != nil {
+		t.Fatalf("expected pipeline path to satisfy definition, got %v", err)
+	}
+	if got := normalizedPriority(nil); got != domain.DefaultPriority {
+		t.Fatalf("expected default priority, got %d", got)
+	}
+	outOfRangePriority := 99
+	if got := normalizedPriority(&outOfRangePriority); got != outOfRangePriority {
+		t.Fatalf("expected explicit priority to be preserved, got %d", got)
+	}
+	if got := optionalTrimmedStringPtr("  "); got != nil {
+		t.Fatalf("expected nil optional string for blank, got %v", got)
+	}
+	if got := optionalTrimmedStringPtr(" refs/heads/main "); got == nil || *got != "refs/heads/main" {
+		t.Fatalf("expected trimmed optional string, got %v", got)
+	}
+	if got := normalizeBranchAllowlist([]string{" ", "refs/heads/main", "main"}); len(got) != 1 || got[0] != "main" {
+		t.Fatalf("expected normalized single branch, got %+v", got)
+	}
+	if got := normalizeBranchAllowlist([]string{" ", "\t"}); got != nil {
+		t.Fatalf("expected nil branch allowlist, got %+v", got)
+	}
+	if got := normalizeTagAllowlist([]string{" refs/tags/v1 ", "v1", " "}); len(got) != 2 || got[0] != "refs/tags/v1" || got[1] != "v1" {
+		t.Fatalf("expected normalized tag allowlist preserving current trim-prefix behavior, got %+v", got)
+	}
+	if got := normalizeTagAllowlist([]string{" ", "\t"}); got != nil {
+		t.Fatalf("expected nil tag allowlist, got %+v", got)
+	}
+}

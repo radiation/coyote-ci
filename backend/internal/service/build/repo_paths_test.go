@@ -20,6 +20,7 @@ func TestResolveRepoPipelinePath(t *testing.T) {
 		{name: "custom relative path", requestedPath: " ci/coyote.yml ", wantEffective: "ci/coyote.yml"},
 		{name: "absolute path rejected", requestedPath: filepath.Join(repoRoot, "pipeline.yml"), wantErr: true},
 		{name: "parent traversal rejected", requestedPath: "../pipeline.yml", wantErr: true},
+		{name: "parent directory rejected", requestedPath: "..", wantErr: true},
 		{name: "empty after clean rejected", requestedPath: ".", wantErr: true},
 	}
 
@@ -57,8 +58,10 @@ func TestResolveRepoStepWorkingDirs(t *testing.T) {
 		{name: "relative working dir below pipeline directory", pipelinePath: "ci/pipeline.yml", workingDir: "scripts", wantWorkingDir: "ci/scripts"},
 		{name: "root pipeline defaults to dot", pipelinePath: "pipeline.yml", wantWorkingDir: "."},
 		{name: "dot working dir keeps pipeline directory", pipelinePath: "ci/pipeline.yml", workingDir: ".", wantWorkingDir: "ci"},
+		{name: "backslash working dir normalized", pipelinePath: "ci/pipeline.yml", workingDir: "scripts\\linux", wantWorkingDir: "ci/scripts/linux"},
 		{name: "absolute working dir rejected", pipelinePath: "ci/pipeline.yml", workingDir: "/tmp", wantErr: true},
 		{name: "escaping working dir rejected", pipelinePath: "ci/pipeline.yml", workingDir: "../outside", wantErr: true},
+		{name: "combined path escape rejected", pipelinePath: "ci/pipeline.yml", workingDir: "../../outside", wantErr: true},
 	}
 
 	for _, tc := range tests {
@@ -78,5 +81,11 @@ func TestResolveRepoStepWorkingDirs(t *testing.T) {
 				t.Fatalf("expected working dir %q, got %q", tc.wantWorkingDir, got.Steps[0].WorkingDir)
 			}
 		})
+	}
+}
+
+func TestResolveRepoStepWorkingDirs_NilPipeline(t *testing.T) {
+	if _, err := resolveRepoStepWorkingDirs("ci/pipeline.yml", nil); err == nil {
+		t.Fatal("expected nil pipeline error")
 	}
 }
