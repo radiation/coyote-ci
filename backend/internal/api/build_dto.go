@@ -128,6 +128,10 @@ type BuildResponse struct {
 	PipelineName       *string                `json:"pipeline_name,omitempty"`
 	PipelineSource     *string                `json:"pipeline_source,omitempty"`
 	PipelinePath       *string                `json:"pipeline_path,omitempty"`
+	SourceRef          *string                `json:"source_ref,omitempty"`
+	SourceSHA          *string                `json:"source_sha,omitempty"`
+	TriggerType        string                 `json:"trigger_type"`
+	TriggeredBy        *string                `json:"triggered_by,omitempty"`
 	TriggerKind        string                 `json:"trigger_kind"`
 	SCMProvider        *string                `json:"scm_provider,omitempty"`
 	EventType          *string                `json:"event_type,omitempty"`

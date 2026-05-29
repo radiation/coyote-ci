@@ -91,6 +91,9 @@ func TestBuildService_RetryJob_CreatesNewAttemptAndPreservesHistory(t *testing.T
 	if retryResult.Build.RerunOfBuildID == nil || *retryResult.Build.RerunOfBuildID != sourceBuild.ID {
 		t.Fatalf("expected rerun_of_build_id to reference source build, got %v", retryResult.Build.RerunOfBuildID)
 	}
+	if retryResult.Build.TriggerType != domain.BuildTriggerTypeRerun {
+		t.Fatalf("expected rerun trigger type, got %q", retryResult.Build.TriggerType)
+	}
 	if retryResult.Build.AttemptNumber != 2 {
 		t.Fatalf("expected build attempt number 2, got %d", retryResult.Build.AttemptNumber)
 	}
@@ -206,6 +209,9 @@ func TestBuildService_RerunBuildFromStep_CreatesLinkedBuildAttemptAndPreservesSp
 	if newBuild.RerunOfBuildID == nil || *newBuild.RerunOfBuildID != sourceBuild.ID {
 		t.Fatalf("expected rerun_of_build_id=%s, got %v", sourceBuild.ID, newBuild.RerunOfBuildID)
 	}
+	if newBuild.TriggerType != domain.BuildTriggerTypeRerun {
+		t.Fatalf("expected rerun trigger type, got %q", newBuild.TriggerType)
+	}
 	if newBuild.RerunFromStepIdx == nil || *newBuild.RerunFromStepIdx != 1 {
 		t.Fatalf("expected rerun_from_step_index=1, got %v", newBuild.RerunFromStepIdx)
 	}
@@ -287,6 +293,9 @@ func TestBuildService_RerunBuild_CreatesNewQueuedBuildForTerminalBuilds(t *testi
 			}
 			if newBuild.RerunOfBuildID == nil || *newBuild.RerunOfBuildID != sourceBuild.ID {
 				t.Fatalf("expected rerun_of_build_id=%s, got %v", sourceBuild.ID, newBuild.RerunOfBuildID)
+			}
+			if newBuild.TriggerType != domain.BuildTriggerTypeRerun {
+				t.Fatalf("expected rerun trigger type, got %q", newBuild.TriggerType)
 			}
 			if newBuild.RerunFromStepIdx != nil {
 				t.Fatalf("expected whole-build rerun to leave rerun_from_step_index empty, got %v", newBuild.RerunFromStepIdx)

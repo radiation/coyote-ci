@@ -327,6 +327,7 @@ func (nf *buildNullFields) applyTo(build *domain.Build) {
 	}
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 	build.Source = domain.NewSourceSpec(readOptionalString(build.RepoURL), readOptionalString(build.Ref), readOptionalString(build.CommitSHA))
+	*build = domain.NormalizeBuildMetadata(*build)
 }
 
 func scanQueueEntry(scanner rowScanner) (domain.QueueEntry, error) {

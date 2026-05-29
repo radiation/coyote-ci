@@ -376,6 +376,10 @@ definitions:
         $ref: '#/definitions/api.BuildSourceResponse'
       source_commit_sha:
         type: string
+      source_ref:
+        type: string
+      source_sha:
+        type: string
       started_at:
         type: string
       status:
@@ -385,6 +389,10 @@ definitions:
       trigger_kind:
         type: string
       trigger_ref:
+        type: string
+      trigger_type:
+        type: string
+      triggered_by:
         type: string
     type: object
   api.BuildSourceInput:
