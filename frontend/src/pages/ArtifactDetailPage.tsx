@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { createJobVersionTags, getArtifact, artifactDownloadURL } from "../api";
 import { StatusBadge } from "../components/StatusBadge";
+import { APIError } from "../api/request";
 import type { ArtifactDetail, VersionTag } from "../types";
 import { formatFileSize } from "../utils/format";
 import { formatTime } from "../utils/time";
@@ -86,6 +87,13 @@ function projectLabel(artifact: ArtifactDetail): string {
 
 function tagKind(tag: VersionTag): "version" | "channel" {
   return tag.kind === "channel" ? "channel" : "version";
+}
+
+function isArtifactNotFoundError(error: unknown): boolean {
+  return (
+    error instanceof APIError &&
+    (error.code === "artifact_not_found" || error.status === 404)
+  );
 }
 
 function tagLabelList(tags: VersionTag[]) {
@@ -181,6 +189,9 @@ export function ArtifactDetailPage() {
 
   if (isLoading) {
     return <p>Loading artifact…</p>;
+  }
+  if (isArtifactNotFoundError(error)) {
+    return <p className="error-text">Artifact not found.</p>;
   }
   if (error) {
     return (

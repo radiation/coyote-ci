@@ -4,12 +4,35 @@ export const AUTH_BASE =
 
 export class APIError extends Error {
   status: number;
+  code?: string;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code?: string) {
     super(`API ${status}: ${message}`);
     this.name = "APIError";
     this.status = status;
+    this.code = code;
   }
+}
+
+function parseAPIErrorBody(body: string): { message: string; code?: string } {
+  let message = body;
+  let code: string | undefined;
+
+  try {
+    const parsed = JSON.parse(body) as {
+      error?: { message?: string; code?: string };
+    };
+    if (parsed?.error?.message) {
+      message = parsed.error.message;
+    }
+    if (parsed?.error?.code) {
+      code = parsed.error.code;
+    }
+  } catch {
+    // Keep raw body when response is not JSON.
+  }
+
+  return { message, code };
 }
 
 export function withCredentials(init?: RequestInit): RequestInit {
@@ -26,18 +49,9 @@ export async function fetchJSON<T>(
   const res = await fetch(`${BASE}${path}`, withCredentials(init));
   if (!res.ok) {
     const body = await res.text();
-    let message = body;
+    const { message, code } = parseAPIErrorBody(body);
 
-    try {
-      const parsed = JSON.parse(body) as { error?: { message?: string } };
-      if (parsed?.error?.message) {
-        message = parsed.error.message;
-      }
-    } catch {
-      // Keep raw body when response is not JSON.
-    }
-
-    throw new APIError(res.status, message);
+    throw new APIError(res.status, message, code);
   }
   return res.json() as Promise<T>;
 }
@@ -70,17 +84,8 @@ export async function deleteNoContent(path: string): Promise<void> {
   );
   if (!res.ok) {
     const body = await res.text();
-    let message = body;
+    const { message, code } = parseAPIErrorBody(body);
 
-    try {
-      const parsed = JSON.parse(body) as { error?: { message?: string } };
-      if (parsed?.error?.message) {
-        message = parsed.error.message;
-      }
-    } catch {
-      // Keep raw body when response is not JSON.
-    }
-
-    throw new APIError(res.status, message);
+    throw new APIError(res.status, message, code);
   }
 }

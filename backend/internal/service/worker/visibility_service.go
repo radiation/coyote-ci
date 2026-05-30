@@ -204,6 +204,7 @@ func (s *VisibilityService) collectClaims(ctx context.Context) (map[string]worke
 				StepIndex:      intPtr(job.StepIndex),
 				StepName:       &job.Name,
 				LeaseExpiresAt: job.ClaimExpiresAt,
+				ClaimedAt:      firstNonNilTime(job.StartedAt, &job.CreatedAt),
 				ProjectID:      &build.ProjectID,
 				ProjectName:    projectInfo.name,
 				ProjectSlug:    projectInfo.slug,
@@ -276,6 +277,17 @@ func buildNumberPtr(value int64) *int64 {
 
 func intPtr(value int) *int {
 	return &value
+}
+
+func firstNonNilTime(values ...*time.Time) *time.Time {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		cloned := value.UTC()
+		return &cloned
+	}
+	return nil
 }
 
 func isActiveJobClaim(job domain.ExecutionJob) bool {

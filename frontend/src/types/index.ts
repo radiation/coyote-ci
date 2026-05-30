@@ -1,6 +1,7 @@
 export {
   type Build,
   type BuildArtifact,
+  type BuildSource,
   type ImageExecution,
   type JobVersionTagsResponse,
   type BuildStep,

@@ -31,6 +31,12 @@ export interface ImageExecution {
   version_tags?: VersionTag[];
 }
 
+export interface BuildSource {
+  repository_url: string;
+  ref?: string | null;
+  source_commit_sha?: string | null;
+}
+
 /** Matches the backend api.BuildResponse JSON shape. */
 export interface Build {
   id: string;
@@ -51,8 +57,14 @@ export interface Build {
   rerun_of_build_id?: string | null;
   rerun_from_step_index?: number | null;
   error_message: string | null;
+  pipeline_config_yaml?: string | null;
+  pipeline_name?: string | null;
   pipeline_source?: string | null;
   pipeline_path?: string | null;
+  source_ref?: string | null;
+  source_sha?: string | null;
+  trigger_type?: string | null;
+  triggered_by?: string | null;
   trigger_kind?: string | null;
   scm_provider?: string | null;
   event_type?: string | null;
@@ -63,7 +75,9 @@ export interface Build {
   ref_type?: string | null;
   source_commit_sha?: string | null;
   trigger_commit_sha?: string | null;
+  delivery_id?: string | null;
   actor?: string | null;
+  source?: BuildSource | null;
   image?: ImageExecution;
 }
 

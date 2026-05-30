@@ -749,6 +749,13 @@ func TestArtifactHandlerGetArtifact_NotFound(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
 	}
+	var payload map[string]map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode error payload: %v", err)
+	}
+	if payload["error"]["code"] != "artifact_not_found" {
+		t.Fatalf("expected artifact_not_found code, got %q", payload["error"]["code"])
+	}
 }
 
 func TestArtifactHandlerResolveProjectFilterBranches(t *testing.T) {

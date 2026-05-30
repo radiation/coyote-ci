@@ -82,6 +82,75 @@ func TestBuildRepository_Create(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_Create_ExplicitJobBuildNumber(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewBuildRepository(db)
+	now := time.Now().UTC()
+	jobID := "job-1"
+	mock.ExpectQuery(`GREATEST\(next_build_number, \$4 \+ 1\)[\s\S]*NULLIF\(\$4, 0\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "build_number", "project_id", "job_id", "priority", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).AddRow("build-1", 7, "project-1", jobID, 5, "pending", now, nil, nil, nil, 0, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil))
+
+	build := domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, BuildNumber: 7, Status: domain.BuildStatusPending, CreatedAt: now}
+	got, err := repo.Create(context.Background(), build)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if got.BuildNumber != 7 {
+		t.Fatalf("expected build number 7, got %d", got.BuildNumber)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestBuildRepository_CreateQueuedBuild_ExplicitJobBuildNumber(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewBuildRepository(db)
+	now := time.Now().UTC()
+	jobID := "job-1"
+	buildColumns := strings.Split(strings.ReplaceAll(buildColumns, " ", ""), ",")
+	buildRow := make([]driver.Value, len(buildColumns))
+	buildRow[0] = "build-queued"
+	buildRow[1] = 9
+	buildRow[2] = "project-1"
+	buildRow[3] = jobID
+	buildRow[4] = 5
+	buildRow[5] = "queued"
+	buildRow[6] = now
+	buildRow[7] = now
+	buildRow[10] = 0
+	buildRow[11] = 1
+	buildRow[21] = "manual"
+	buildRow[37] = "external"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`GREATEST\(next_build_number, \$4 \+ 1\)[\s\S]*NULLIF\(\$4, 0\)`).
+		WillReturnRows(sqlmock.NewRows(buildColumns).AddRow(buildRow...))
+	mock.ExpectExec(`INSERT INTO build_steps`).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	queuedAt := now
+	build := domain.Build{ID: "build-queued", ProjectID: "project-1", JobID: &jobID, BuildNumber: 9, CreatedAt: now, QueuedAt: &queuedAt}
+	got, err := repo.CreateQueuedBuild(context.Background(), build, []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusPending}})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if got.BuildNumber != 9 {
+		t.Fatalf("expected build number 9, got %d", got.BuildNumber)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 func TestBuildRepository_GetByID(t *testing.T) {
 	now := time.Now().UTC()
 	tests := []struct {

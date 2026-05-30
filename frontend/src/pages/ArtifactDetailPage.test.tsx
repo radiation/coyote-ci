@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ArtifactDetailPage } from "./ArtifactDetailPage";
 import { createJobVersionTags, getArtifact } from "../api";
+import { APIError } from "../api/request";
 import type { ArtifactDetail, VersionTag } from "../types";
 
 vi.mock("../api", () => ({
@@ -359,6 +360,16 @@ describe("ArtifactDetailPage", () => {
     expect(
       await screen.findByText("Failed to load artifact: Error: boom"),
     ).toBeTruthy();
+  });
+
+  it("shows a not found state when the backend returns artifact_not_found", async () => {
+    mockedGetArtifact.mockRejectedValueOnce(
+      new APIError(404, "artifact not found", "artifact_not_found"),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("Artifact not found.")).toBeTruthy();
   });
 
   it("shows a not found state when no artifact detail is returned", async () => {
