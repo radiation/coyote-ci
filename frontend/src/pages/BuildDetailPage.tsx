@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
@@ -5,6 +6,7 @@ import {
   createJobVersionTags,
   getBuild,
   getBuildArtifacts,
+  getJob,
   getBuildSteps,
   rerunBuild,
 } from "../api";
@@ -38,6 +40,7 @@ export function BuildDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [openStepIndex, setOpenStepIndex] = useState<number | null>(null);
 
   const {
     data: build,
@@ -60,6 +63,12 @@ export function BuildDetailPage() {
     queryKey: ["build", build?.rerun_of_build_id],
     queryFn: () => getBuild(build!.rerun_of_build_id!),
     enabled: Boolean(build?.rerun_of_build_id),
+  });
+
+  const { data: job } = useQuery({
+    queryKey: ["job", build?.job_id],
+    queryFn: () => getJob(build!.job_id!),
+    enabled: Boolean(build?.job_id && !build?.job_name?.trim()),
   });
 
   const {
@@ -144,7 +153,10 @@ export function BuildDetailPage() {
     );
   if (!build) return <p className="error-text">Build not found.</p>;
 
-  const currentBuild = build;
+  const currentBuild =
+    !build.job_name?.trim() && job?.name?.trim()
+      ? { ...build, job_name: job.name }
+      : build;
 
   async function assignArtifactVersion(artifactID: string, version: string) {
     if (!currentBuild.job_id) {
@@ -195,25 +207,27 @@ export function BuildDetailPage() {
       <PageHeader
         eyebrow={
           <>
-            <Link to={`/projects/${build.project_id}`}>
-              {projectLabel(build)}
+            <Link to={`/projects/${currentBuild.project_id}`}>
+              {projectLabel(currentBuild)}
             </Link>
-            {build.job_id ? (
+            {currentBuild.job_id ? (
               <>
                 {" · "}
-                <Link to={`/jobs/${build.job_id}`}>{jobLabel(build)}</Link>
+                <Link to={`/jobs/${currentBuild.job_id}`}>
+                  {jobLabel(currentBuild)}
+                </Link>
               </>
             ) : null}
           </>
         }
-        title={operationalBuildTitle(build)}
+        title={operationalBuildTitle(currentBuild)}
         description={
-          compactTriggerMetadata(build) ||
+          compactTriggerMetadata(currentBuild) ||
           "Execution details, logs, artifacts, and provenance."
         }
         actions={
           <BuildDetailHeaderActions
-            build={build}
+            build={currentBuild}
             cancelPending={cancelBuildMutation.isPending}
             rerunPending={rerunBuildMutation.isPending}
             onCancel={() => void requestCancelBuild()}
@@ -234,14 +248,14 @@ export function BuildDetailPage() {
       ) : null}
 
       <BuildSummaryPanel
-        build={build}
+        build={currentBuild}
         rerunSourceBuild={rerunSourceBuild}
         steps={steps}
         stepsLoading={stepsLoading}
         buildUpdatedAt={buildUpdatedAt}
       />
       <ExecutionSummaryPanel
-        build={build}
+        build={currentBuild}
         steps={steps}
         stepsLoading={stepsLoading}
         stepsError={stepsError}
@@ -250,15 +264,18 @@ export function BuildDetailPage() {
         steps={steps}
         stepsLoading={stepsLoading}
         stepsError={stepsError}
+        onOpenStep={setOpenStepIndex}
       />
       <StepTimelinePanel
-        build={build}
+        build={currentBuild}
         steps={steps}
         stepsLoading={stepsLoading}
         stepsError={stepsError}
+        openStepIndex={openStepIndex}
+        onOpenStepChange={setOpenStepIndex}
       />
       <ArtifactsPanel
-        build={build}
+        build={currentBuild}
         steps={steps}
         artifacts={artifacts}
         artifactsLoading={artifactsLoading}
@@ -266,7 +283,7 @@ export function BuildDetailPage() {
         onAssignVersion={assignArtifactVersion}
       />
       <ProvenancePanel
-        build={build}
+        build={currentBuild}
         onAssignManagedImageVersion={assignManagedImageVersion}
       />
     </div>

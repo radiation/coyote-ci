@@ -12,6 +12,11 @@ import {
 } from "../utils/build";
 import { formatCompactTime, formatTime } from "../utils/time";
 import {
+  buildGitHubCommitURL,
+  buildGitHubPipelinePathURL,
+  buildGitHubRefURL,
+  buildPrimaryCommitValue,
+  buildSourceRefValue,
   buildDuration,
   buildLabel,
   buildStepCounts,
@@ -97,6 +102,29 @@ function stepSummaryText(
     : "Steps: none recorded yet";
 }
 
+function displayStepNumber(stepIndex: number): number {
+  return stepIndex + 1;
+}
+
+function currentStepSummaryLabel(
+  currentStepIndex: number,
+  totalSteps: number,
+): string {
+  if (totalSteps <= 0) {
+    return `Step ${displayStepNumber(currentStepIndex)}`;
+  }
+
+  const clampedStepIndex = Math.min(
+    Math.max(currentStepIndex, 0),
+    totalSteps - 1,
+  );
+  return `Step ${displayStepNumber(clampedStepIndex)} of ${totalSteps}`;
+}
+
+function statusText(status: BuildStep["status"]): string {
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
 export function BuildSummaryPanel({
   build,
   rerunSourceBuild,
@@ -110,6 +138,7 @@ export function BuildSummaryPanel({
   stepsLoading: boolean;
   buildUpdatedAt: number;
 }) {
+  const provenanceAnchorID = "build-provenance";
   const stepCounts = buildStepCounts(steps);
   const failedStep = (steps ?? []).find((step) => step.status === "failed");
   const duration = buildDuration(build, buildUpdatedAt);
@@ -119,9 +148,7 @@ export function BuildSummaryPanel({
       : "—";
   const currentStepLabel = stepsLoading
     ? "Loading…"
-    : stepCounts.total > 0
-      ? `Step ${build.current_step_index + 1} of ${stepCounts.total}`
-      : `Step ${build.current_step_index + 1}`;
+    : currentStepSummaryLabel(build.current_step_index, stepCounts.total);
   const contextItems = [
     [
       textValue(build.trigger_kind),
@@ -259,7 +286,11 @@ export function BuildSummaryPanel({
       </div>
 
       {contextItems.length > 0 ? (
-        <div className="build-summary-context-strip subtle-text">
+        <a
+          className="build-summary-context-strip subtle-text"
+          href={`#${provenanceAnchorID}`}
+          aria-label="View full provenance details"
+        >
           {contextItems.map((item, index) => (
             <Fragment key={item.label}>
               {index > 0 ? (
@@ -271,12 +302,22 @@ export function BuildSummaryPanel({
                 </span>
               ) : null}
               <span className="build-summary-context-item">
-                <strong>{item.label}</strong>
-                <span>{item.value}</span>
+                <span className="build-summary-context-label">
+                  {item.label}
+                </span>
+                <span className="build-summary-context-value">
+                  {item.value}
+                </span>
               </span>
             </Fragment>
           ))}
-        </div>
+          <span className="build-summary-context-separator" aria-hidden="true">
+            ·
+          </span>
+          <span className="build-summary-context-link" aria-hidden="true">
+            View details ↓
+          </span>
+        </a>
       ) : null}
     </section>
   );
@@ -406,11 +447,15 @@ export function StepTimelinePanel({
   steps,
   stepsLoading,
   stepsError,
+  openStepIndex,
+  onOpenStepChange,
 }: {
   build: Build;
   steps: BuildStep[] | undefined;
   stepsLoading: boolean;
   stepsError: unknown;
+  openStepIndex: number | null;
+  onOpenStepChange: (stepIndex: number | null) => void;
 }) {
   return (
     <section className="detail-panel">
@@ -432,6 +477,8 @@ export function StepTimelinePanel({
           buildID={build.id}
           steps={steps}
           activeStepIndex={build.current_step_index}
+          openStepIndex={openStepIndex}
+          onOpenStepChange={onOpenStepChange}
         />
       ) : null}
     </section>
@@ -442,10 +489,12 @@ export function LogsPanel({
   steps,
   stepsLoading,
   stepsError,
+  onOpenStep,
 }: {
   steps: BuildStep[] | undefined;
   stepsLoading: boolean;
   stepsError: unknown;
+  onOpenStep: (stepIndex: number) => void;
 }) {
   const stepCount = (steps ?? []).length;
 
@@ -479,14 +528,15 @@ export function LogsPanel({
           {(steps ?? []).map((step) => (
             <a
               key={step.id}
-              className="build-log-link"
+              className={`build-log-link${step.status === "failed" ? " is-failed" : ""}`}
               href={`#step-${step.step_index}`}
+              onClick={() => onOpenStep(step.step_index)}
             >
               <strong>
-                Step {step.step_index} · {step.name}
+                Step {displayStepNumber(step.step_index)} · {step.name}
               </strong>
               <span className="subtle-text">
-                {step.status} · Open inline logs
+                {statusText(step.status)} · Open inline logs
               </span>
             </a>
           ))}
@@ -552,7 +602,17 @@ export function ProvenancePanel({
   onAssignManagedImageVersion: ((version: string) => Promise<void>) | undefined;
 }) {
   const repositoryLabel = repositoryDisplayLabel(build);
-  const provenanceItems = [
+  const sourceRef = buildSourceRefValue(build);
+  const sourceRefHref = buildGitHubRefURL(build, sourceRef);
+  const pipelinePathHref = buildGitHubPipelinePathURL(build);
+  const primaryCommit = buildPrimaryCommitValue(build);
+  const primaryCommitHref = buildGitHubCommitURL(build, primaryCommit);
+  const sourceCommit =
+    textValue(build.source_sha) ?? textValue(build.source_commit_sha);
+  const sourceCommitHref = buildGitHubCommitURL(build, sourceCommit);
+  const triggerCommit = textValue(build.trigger_commit_sha);
+  const triggerCommitHref = buildGitHubCommitURL(build, triggerCommit);
+  const sourceItems = [
     build.repository_url
       ? metadataItem(
           "Repository",
@@ -569,30 +629,61 @@ export function ProvenancePanel({
       ? metadataItem("Pipeline source", build.pipeline_source)
       : null,
     build.pipeline_path
-      ? metadataItem("Pipeline path", build.pipeline_path)
+      ? metadataItem(
+          "Pipeline path",
+          pipelinePathHref ? (
+            <a href={pipelinePathHref}>{build.pipeline_path}</a>
+          ) : (
+            build.pipeline_path
+          ),
+        )
       : null,
     build.scm_provider
       ? metadataItem("SCM provider", build.scm_provider)
       : null,
     build.event_type ? metadataItem("Event type", build.event_type) : null,
-    build.trigger_ref ? metadataItem("Ref", build.trigger_ref) : null,
+    sourceRef
+      ? metadataItem(
+          "Ref",
+          sourceRefHref ? <a href={sourceRefHref}>{sourceRef}</a> : sourceRef,
+        )
+      : null,
     build.ref_type ? metadataItem("Ref type", build.ref_type) : null,
     build.actor ? metadataItem("Actor", build.actor) : null,
-    build.trigger_commit_sha &&
-    build.source_commit_sha &&
-    build.trigger_commit_sha !== build.source_commit_sha
-      ? metadataItem("Trigger commit", shortSHA(build.trigger_commit_sha))
+    triggerCommit && sourceCommit && triggerCommit !== sourceCommit
+      ? metadataItem(
+          "Trigger commit",
+          triggerCommitHref ? (
+            <a href={triggerCommitHref}>{shortSHA(triggerCommit)}</a>
+          ) : (
+            shortSHA(triggerCommit)
+          ),
+        )
       : null,
-    build.trigger_commit_sha &&
-    build.source_commit_sha &&
-    build.trigger_commit_sha !== build.source_commit_sha
-      ? metadataItem("Source commit", shortSHA(build.source_commit_sha))
-      : build.source_commit_sha || build.trigger_commit_sha
+    triggerCommit && sourceCommit && triggerCommit !== sourceCommit
+      ? metadataItem(
+          "Source commit",
+          sourceCommitHref ? (
+            <a href={sourceCommitHref}>{shortSHA(sourceCommit)}</a>
+          ) : (
+            shortSHA(sourceCommit)
+          ),
+        )
+      : primaryCommit
         ? metadataItem(
             "Commit",
-            shortSHA(build.source_commit_sha ?? build.trigger_commit_sha),
+            primaryCommitHref ? (
+              <a href={primaryCommitHref}>{shortSHA(primaryCommit)}</a>
+            ) : (
+              shortSHA(primaryCommit)
+            ),
           )
         : null,
+  ].filter((item): item is { label: string; value: ReactNode } =>
+    Boolean(item),
+  );
+
+  const runtimeImageItems = [
     build.image?.source_kind
       ? metadataItem("Image source", build.image.source_kind)
       : null,
@@ -606,30 +697,53 @@ export function ProvenancePanel({
     Boolean(item),
   );
 
+  const provenanceGroups = [
+    sourceItems.length > 0 ? { title: "Source", items: sourceItems } : null,
+    runtimeImageItems.length > 0
+      ? { title: "Runtime image", items: runtimeImageItems }
+      : null,
+  ].filter(
+    (
+      group,
+    ): group is {
+      title: string;
+      items: { label: string; value: ReactNode }[];
+    } => Boolean(group),
+  );
+
   return (
-    <section className="detail-panel">
+    <section className="detail-panel" id="build-provenance">
       <div className="dashboard-panel-header">
         <div>
           <h3>Provenance</h3>
           <p className="subtle-text">
-            Source, trigger, repository, and image metadata for this build.
+            Source and runtime context for how this build was defined and run.
           </p>
         </div>
       </div>
 
-      {provenanceItems.length === 0 &&
+      {provenanceGroups.length === 0 &&
       !build.image?.managed_image_version_id ? (
         <p className="subtle-text">
           No source metadata is available for this build. Manual or
           fixture-driven runs may omit repository and trigger context.
         </p>
       ) : (
-        <div className="detail-grid build-provenance-grid">
-          {provenanceItems.map((item) => (
-            <div key={item.label}>
-              <strong>{item.label}</strong>
-              <span>{item.value}</span>
-            </div>
+        <div className="build-provenance-groups">
+          {provenanceGroups.map((group) => (
+            <section key={group.title} className="build-provenance-group">
+              <div className="build-provenance-group-header">
+                <h4>{group.title}</h4>
+              </div>
+              <div className="build-provenance-grid">
+                {group.items.map((item) => (
+                  <div key={item.label} className="build-provenance-item">
+                    <span className="build-provenance-label">{item.label}</span>
+                    <span className="build-provenance-value">{item.value}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
           ))}
         </div>
       )}

@@ -2,6 +2,55 @@ import type { Build, BuildStep } from "../types";
 import { isActiveBuild } from "../utils/build";
 import { formatDuration } from "../utils/time";
 
+function textValue(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function safeRepositoryURL(build: Build): URL | null {
+  const candidate =
+    textValue(build.repository_url) ?? textValue(build.source?.repository_url);
+  if (!candidate) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function githubRepositoryBaseURL(build: Build): string | null {
+  const repositoryURL = safeRepositoryURL(build);
+  if (!repositoryURL || repositoryURL.hostname.toLowerCase() !== "github.com") {
+    return null;
+  }
+
+  const [owner, repoWithSuffix] = repositoryURL.pathname
+    .split("/")
+    .filter(Boolean);
+  const repo = repoWithSuffix?.replace(/\.git$/i, "");
+
+  if (!owner || !repo) {
+    return null;
+  }
+
+  return `${repositoryURL.origin}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+}
+
+function encodePathSegments(value: string): string {
+  return value
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
 export function shortSHA(value: string | null | undefined): string {
   const trimmed = (value ?? "").trim();
   if (!trimmed) return "—";
@@ -86,4 +135,58 @@ export function buildStepCounts(steps: BuildStep[] | undefined) {
   }
 
   return counts;
+}
+
+export function buildSourceRefValue(build: Build): string | null {
+  return (
+    textValue(build.source_ref) ??
+    textValue(build.source?.ref) ??
+    textValue(build.trigger_ref)
+  );
+}
+
+export function buildPrimaryCommitValue(build: Build): string | null {
+  return (
+    textValue(build.source_sha) ??
+    textValue(build.source_commit_sha) ??
+    textValue(build.source?.source_commit_sha) ??
+    textValue(build.trigger_commit_sha)
+  );
+}
+
+export function buildGitHubCommitURL(
+  build: Build,
+  sha: string | null | undefined,
+): string | null {
+  const baseURL = githubRepositoryBaseURL(build);
+  const commitSHA = textValue(sha);
+  if (!baseURL || !commitSHA) {
+    return null;
+  }
+
+  return `${baseURL}/commit/${encodeURIComponent(commitSHA)}`;
+}
+
+export function buildGitHubRefURL(
+  build: Build,
+  ref: string | null | undefined,
+): string | null {
+  const baseURL = githubRepositoryBaseURL(build);
+  const refValue = textValue(ref);
+  if (!baseURL || !refValue) {
+    return null;
+  }
+
+  return `${baseURL}/tree/${encodePathSegments(refValue)}`;
+}
+
+export function buildGitHubPipelinePathURL(build: Build): string | null {
+  const baseURL = githubRepositoryBaseURL(build);
+  const pipelinePath = textValue(build.pipeline_path);
+  const revision = buildPrimaryCommitValue(build) ?? buildSourceRefValue(build);
+  if (!baseURL || !pipelinePath || !revision) {
+    return null;
+  }
+
+  return `${baseURL}/blob/${encodePathSegments(revision)}/${encodePathSegments(pipelinePath)}`;
 }

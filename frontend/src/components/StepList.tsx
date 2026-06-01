@@ -6,6 +6,10 @@ import { formatDuration, formatTime } from "../utils/time";
 
 const COMMAND_PREVIEW_LIMIT = 72;
 
+function displayStepNumber(stepIndex: number): number {
+  return stepIndex + 1;
+}
+
 function commandPreview(command: string): string {
   if (command.length <= COMMAND_PREVIEW_LIMIT) {
     return command;
@@ -51,12 +55,15 @@ export function StepList({
   buildID,
   steps,
   activeStepIndex,
+  openStepIndex,
+  onOpenStepChange,
 }: {
   buildID: string;
   steps: BuildStep[];
   activeStepIndex?: number;
+  openStepIndex: number | null;
+  onOpenStepChange: (stepIndex: number | null) => void;
 }) {
-  const [openStepIndex, setOpenStepIndex] = useState<number | null>(null);
   const [logChunks, setLogChunks] = useState<Record<number, StepLogChunk[]>>(
     {},
   );
@@ -166,7 +173,7 @@ export function StepList({
             aria-label={
               bucket.groupName
                 ? `Step group ${bucket.groupName}`
-                : `Step bucket starting at step ${bucket.steps[0]?.step_index ?? 0}`
+                : `Step bucket starting at step ${displayStepNumber(bucket.steps[0]?.step_index ?? 0)}`
             }
           >
             {bucket.groupName ? (
@@ -205,7 +212,7 @@ export function StepList({
                       <div className="step-card-header">
                         <div>
                           <div className="step-card-kicker subtle-text">
-                            Step {step.step_index}
+                            Step {displayStepNumber(step.step_index)}
                             {isCurrent ? " · Current step" : ""}
                           </div>
                           <h4>{step.name}</h4>
@@ -238,8 +245,10 @@ export function StepList({
                           type="button"
                           className="logs-toggle"
                           onClick={() =>
-                            setOpenStepIndex((prev) =>
-                              prev === step.step_index ? null : step.step_index,
+                            onOpenStepChange(
+                              openStepIndex === step.step_index
+                                ? null
+                                : step.step_index,
                             )
                           }
                         >
