@@ -133,7 +133,7 @@ describe("ArtifactsPage", () => {
     renderPage();
 
     expect(
-      await screen.findByRole("link", { name: "Open logical browser" }),
+      await screen.findByRole("link", { name: "Repository view" }),
     ).toHaveAttribute("href", "/artifacts/logical");
 
     const artifactLink = await screen.findByRole("link", {
@@ -156,8 +156,11 @@ describe("ArtifactsPage", () => {
       within(card).getByRole("link", { name: "Open artifact" }),
     ).toHaveAttribute("href", "/artifacts/artifact-1");
     expect(
-      within(card).getByRole("link", { name: "View build" }),
-    ).toHaveAttribute("href", "/builds/build-1");
+      within(card).getByRole("link", { name: "Repository view" }),
+    ).toHaveAttribute(
+      "href",
+      "/artifacts/logical?q=packages%2Fpkg-a.tgz&job_id=job-1",
+    );
     expect(
       within(card).getByRole("link", { name: "Download" }),
     ).toHaveAttribute(

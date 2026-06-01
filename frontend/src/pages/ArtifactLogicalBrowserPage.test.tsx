@@ -143,7 +143,7 @@ describe("ArtifactLogicalBrowserPage", () => {
     renderPage();
 
     expect(
-      await screen.findByRole("link", { name: "Open persisted catalog" }),
+      await screen.findByRole("link", { name: "Artifact listing" }),
     ).toHaveAttribute("href", "/artifacts");
 
     const toggle = await screen.findByRole("button", {
@@ -156,10 +156,9 @@ describe("ArtifactLogicalBrowserPage", () => {
     ).toBeTruthy();
     expect(screen.getByText("Mutable aliases")).toBeTruthy();
     expect(screen.getByText("Points to 2026.04.25")).toBeTruthy();
-    expect(screen.getAllByRole("link", { name: "Open" })[0]).toHaveAttribute(
-      "href",
-      "/artifacts/artifact-1",
-    );
+    expect(
+      screen.getAllByRole("link", { name: "Open artifact" })[0],
+    ).toHaveAttribute("href", "/artifacts/artifact-1");
     expect(
       screen.getAllByRole("link", { name: "Download" })[0],
     ).toHaveAttribute(
@@ -173,7 +172,7 @@ describe("ArtifactLogicalBrowserPage", () => {
         target: { value: "2026.04.25" },
       },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Assign" }));
+    fireEvent.click(screen.getByRole("button", { name: "Assign version" }));
 
     await waitFor(() => {
       expect(mockedCreateJobVersionTags).toHaveBeenCalledWith("job-1", {
@@ -189,12 +188,12 @@ describe("ArtifactLogicalBrowserPage", () => {
     expect(
       await screen.findByRole("heading", {
         level: 2,
-        name: "Logical Artifact Browser",
+        name: "Repository view",
       }),
     ).toBeTruthy();
     expect(
       screen.getByText(
-        /Grouped release view for artifact versions and channels/,
+        /Grouped artifact repository view for versions and channels/,
       ),
     ).toBeTruthy();
     expect(screen.getByDisplayValue("All types")).toBeTruthy();

@@ -179,8 +179,8 @@ describe("ArtifactDetailPage", () => {
       screen.getByRole("link", { name: "← Back to artifacts" }),
     ).toHaveAttribute("href", "/artifacts");
     expect(
-      screen.getByRole("link", { name: "View producing build" }),
-    ).toHaveAttribute("href", "/builds/build-1");
+      screen.getAllByRole("link", { name: "Build #41" }).length,
+    ).toBeGreaterThan(0);
     expect(screen.getByRole("link", { name: "Open build" })).toHaveAttribute(
       "href",
       "/builds/build-1",
@@ -202,7 +202,7 @@ describe("ArtifactDetailPage", () => {
     renderPage();
 
     const producedBy = (
-      await screen.findByRole("heading", { name: "Produced By" })
+      await screen.findByRole("heading", { name: "Produced by" })
     ).closest("section") as HTMLElement;
 
     await waitFor(() => {
@@ -222,7 +222,7 @@ describe("ArtifactDetailPage", () => {
     renderPage();
 
     const provenance = (
-      await screen.findByRole("heading", { name: "Source Provenance" })
+      await screen.findByRole("heading", { name: "Source provenance" })
     ).closest("section") as HTMLElement;
 
     await waitFor(() => {
@@ -247,7 +247,7 @@ describe("ArtifactDetailPage", () => {
     renderPage();
 
     const related = (
-      await screen.findByRole("heading", { name: "Related Artifacts" })
+      await screen.findByRole("heading", { name: "Related artifacts" })
     ).closest("section") as HTMLElement;
 
     await waitFor(() => {

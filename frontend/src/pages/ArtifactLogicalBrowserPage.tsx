@@ -231,30 +231,30 @@ export function ArtifactLogicalBrowserPage() {
     <>
       <div className="page-header-row">
         <div>
-          <h2>Logical Artifact Browser</h2>
+          <h2>Repository view</h2>
           <p className="subtle-text">
-            Grouped release view for artifact versions and channels. Use this
+            Grouped artifact repository view for versions and channels. Use this
             view to see what exists, what channels resolve today, and which
             build produced each artifact.
             {isFetching && !isLoading ? " Updating…" : ""}
           </p>
         </div>
         <Link className="secondary-button" to="/artifacts">
-          Open persisted catalog
+          Artifact listing
         </Link>
       </div>
 
       <section
         className="artifact-filters-panel"
-        aria-label="Logical artifact filters"
+        aria-label="Repository view filters"
       >
         <div className="artifact-filter-toolbar">
           <div>
-            <h3>Logical Artifact Browser</h3>
+            <h3>Repository view</h3>
             <p className="subtle-text">
               {hasActiveFilters
-                ? "Filtered release view"
-                : "Grouped logical artifacts"}
+                ? "Filtered repository view"
+                : "Grouped artifacts by path"}
             </p>
           </div>
           <button
@@ -324,7 +324,7 @@ export function ArtifactLogicalBrowserPage() {
 
       <section
         className="artifact-pagination-bar"
-        aria-label="Logical artifact pagination"
+        aria-label="Repository view pagination"
       >
         <p className="subtle-text artifact-pagination-status">
           {artifacts.length > 0

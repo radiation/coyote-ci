@@ -412,7 +412,7 @@ export function ArtifactBrowser({
                           </div>
                           <div className="artifact-actions artifact-version-actions">
                             <Link to={`/artifacts/${version.artifact_id}`}>
-                              Open
+                              Open artifact
                             </Link>
                             <a
                               href={artifactDownloadURL(
@@ -426,7 +426,7 @@ export function ArtifactBrowser({
 
                         <div className="artifact-version-badge-groups">
                           <div className="artifact-version-badge-group">
-                            <strong>Version labels</strong>
+                            <strong>Versions</strong>
                             <div
                               className="version-tag-list"
                               aria-label={`artifact-version-labels-${version.artifact_id}`}
@@ -442,13 +442,13 @@ export function ArtifactBrowser({
                                 ))
                               ) : (
                                 <span className="subtle-text">
-                                  No version labels
+                                  No versions yet
                                 </span>
                               )}
                             </div>
                           </div>
                           <div className="artifact-version-badge-group">
-                            <strong>Channels pointing here</strong>
+                            <strong>Channels</strong>
                             <div
                               className="version-tag-list"
                               aria-label={`artifact-version-channels-${version.artifact_id}`}
@@ -463,7 +463,9 @@ export function ArtifactBrowser({
                                   </span>
                                 ))
                               ) : (
-                                <span className="subtle-text">No channels</span>
+                                <span className="subtle-text">
+                                  No channels yet
+                                </span>
                               )}
                             </div>
                           </div>
@@ -503,7 +505,7 @@ export function ArtifactBrowser({
                             <span>{version.content_type ?? "—"}</span>
                           </div>
                           <div className="artifact-version-meta-full">
-                            <strong>Checksum</strong>
+                            <strong>Digest</strong>
                             <span
                               className="artifact-mono artifact-checksum-value"
                               title={version.checksum_sha256 ?? undefined}
@@ -515,8 +517,9 @@ export function ArtifactBrowser({
 
                         <VersionTagEditor
                           tags={releaseTags}
-                          emptyText="No version labels yet."
+                          emptyText="No versions yet."
                           inputLabel={`artifact-browser-version-${version.artifact_id}`}
+                          submitLabel="Assign version"
                           onAssign={
                             onAssignVersion && version.job_id
                               ? (releaseVersion) =>

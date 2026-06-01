@@ -320,7 +320,7 @@ function ArtifactTable({
                       )
                     }
                   >
-                    {showAssignEditor ? "Hide label" : "Assign label"}
+                    {showAssignEditor ? "Hide version" : "Assign version"}
                   </button>
                 ) : null}
               </div>
@@ -329,14 +329,14 @@ function ArtifactTable({
               <div className="artifact-build-card-footer artifact-build-card-editor">
                 {!hasLabels ? (
                   <p className="subtle-text artifact-build-empty-copy">
-                    No labels yet.
+                    No versions or channels yet.
                   </p>
                 ) : null}
                 <VersionTagEditor
                   tags={item.version_tags ?? []}
-                  emptyText="No labels yet."
+                  emptyText="No versions or channels yet."
                   inputLabel={`artifact-version-${item.id}`}
-                  submitLabel="Save label"
+                  submitLabel="Save version"
                   onAssign={
                     onAssignVersion
                       ? (version) => onAssignVersion(item.id, version)

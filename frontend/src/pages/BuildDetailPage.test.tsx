@@ -1173,7 +1173,7 @@ describe("BuildDetailPage", () => {
       expect(screen.getByText("Artifacts")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Assign label" }));
+    fireEvent.click(screen.getByRole("button", { name: "Assign version" }));
 
     const input = screen.getByLabelText("artifact-version-artifact-1");
     fireEvent.change(input, {

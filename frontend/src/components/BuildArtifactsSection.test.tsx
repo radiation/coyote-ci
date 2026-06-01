@@ -278,7 +278,7 @@ describe("BuildArtifactsSection", () => {
     expect(
       screen.queryByLabelText("artifact-version-artifact-assign"),
     ).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Assign label" }));
+    fireEvent.click(screen.getByRole("button", { name: "Assign version" }));
 
     const input = screen.getByLabelText("artifact-version-artifact-assign");
     fireEvent.change(input, { target: { value: "1.2.3" } });

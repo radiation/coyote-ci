@@ -120,6 +120,17 @@ function typeLabel(artifact: ArtifactCatalogItem): string {
   return TYPE_LABELS[artifact.artifact_type] ?? artifact.artifact_type;
 }
 
+function buildArtifactRepositoryPath(artifact: ArtifactCatalogItem): string {
+  const params = new URLSearchParams();
+  params.set("q", artifact.path);
+  if (artifact.job_id?.trim()) {
+    params.set("job_id", artifact.job_id);
+  } else {
+    params.set("project_id", artifact.project_id);
+  }
+  return `/artifacts/logical?${params.toString()}`;
+}
+
 export function ArtifactsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const search = searchParams.get("q") ?? "";
@@ -264,12 +275,12 @@ export function ArtifactsPage() {
         <div>
           <h2>Artifacts</h2>
           <p className="subtle-text">
-            Persisted artifact catalog.
+            Artifact listing with build lineage.
             {isFetching && !isLoading ? " Updating…" : ""}
           </p>
           <p className="subtle-text">
-            <Link to="/artifacts/logical">Open logical browser</Link> for
-            grouped versions and tags.
+            <Link to="/artifacts/logical">Repository view</Link> groups
+            artifacts by path with versions and channels.
           </p>
           <p className="subtle-text">
             Updated{" "}
@@ -283,7 +294,7 @@ export function ArtifactsPage() {
       <section className="artifact-filters-panel" aria-label="Artifact filters">
         <div className="artifact-filter-toolbar">
           <div>
-            <h3>Artifact Catalog</h3>
+            <h3>Artifact listing</h3>
             <p className="subtle-text">
               {activeFilterCount > 0
                 ? `${activeFilterCount} active filter${activeFilterCount === 1 ? "" : "s"}`
@@ -464,7 +475,7 @@ export function ArtifactsPage() {
 
                 <div className="artifact-detail-grid artifact-build-card-grid">
                   <div>
-                    <strong>Artifact path</strong>
+                    <strong>Path</strong>
                     <span className="artifact-mono">{artifact.path}</span>
                   </div>
                   <div>
@@ -521,7 +532,9 @@ export function ArtifactsPage() {
                 <div className="artifact-build-card-footer">
                   <div className="artifact-actions">
                     <Link to={`/artifacts/${artifact.id}`}>Open artifact</Link>
-                    <Link to={`/builds/${artifact.build_id}`}>View build</Link>
+                    <Link to={buildArtifactRepositoryPath(artifact)}>
+                      Repository view
+                    </Link>
                     <a href={artifactDownloadURL(artifact.download_url_path)}>
                       Download
                     </a>

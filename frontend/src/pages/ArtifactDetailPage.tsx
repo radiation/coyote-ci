@@ -104,9 +104,9 @@ function isArtifactNotFoundError(error: unknown): boolean {
   );
 }
 
-function tagLabelList(tags: VersionTag[]) {
+function tagLabelList(tags: VersionTag[], emptyText: string) {
   if (tags.length === 0) {
-    return <span className="subtle-text">None</span>;
+    return <span className="subtle-text">{emptyText}</span>;
   }
   return (
     <>
@@ -277,15 +277,15 @@ export function ArtifactDetailPage() {
             <span>{typeLabel(data.artifact_type)}</span>
           </div>
           <div>
-            <strong>Version labels</strong>
+            <strong>Versions</strong>
             <div className="version-tag-list" aria-label="Artifact versions">
-              {tagLabelList(versionTags)}
+              {tagLabelList(versionTags, "No versions yet.")}
             </div>
           </div>
           <div>
             <strong>Channels</strong>
             <div className="version-tag-list" aria-label="Artifact channels">
-              {tagLabelList(channelTags)}
+              {tagLabelList(channelTags, "No channels yet.")}
             </div>
           </div>
           <div>
@@ -323,7 +323,7 @@ export function ArtifactDetailPage() {
       </section>
 
       <section className="detail-panel">
-        <h3>Produced By</h3>
+        <h3>Produced by</h3>
         <div className="artifact-detail-grid">
           <div>
             <strong>Project</strong>
@@ -371,7 +371,7 @@ export function ArtifactDetailPage() {
       </section>
 
       <section className="detail-panel">
-        <h3>Source Provenance</h3>
+        <h3>Source provenance</h3>
         <div className="artifact-detail-grid">
           <div>
             <strong>Repository</strong>
@@ -386,7 +386,7 @@ export function ArtifactDetailPage() {
             </span>
           </div>
           <div>
-            <strong>Ref</strong>
+            <strong>Source ref</strong>
             <span>
               {sourceRef ? (
                 sourceRefHref ? (
@@ -426,7 +426,7 @@ export function ArtifactDetailPage() {
       </section>
 
       <section className="detail-panel">
-        <h3>Related Artifacts</h3>
+        <h3>Related artifacts</h3>
         {buildArtifactsLoading ? (
           <p className="subtle-text">Loading related artifacts…</p>
         ) : buildArtifactsError ? (
