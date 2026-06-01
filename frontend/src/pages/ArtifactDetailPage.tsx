@@ -1,20 +1,18 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import {
   artifactDownloadURL,
+  createJobVersionTags,
   getArtifact,
   getBuild,
   getBuildArtifacts,
 } from "../api";
+import { VersionTagEditor } from "../components/VersionTagEditor";
 import { StatusBadge } from "../components/StatusBadge";
 import { APIError } from "../api/request";
-import type {
-  ArtifactDetail,
-  ArtifactType,
-  BuildArtifact,
-  VersionTag,
-} from "../types";
+import type { ArtifactDetail, BuildArtifact, VersionTag } from "../types";
 import {
+  artifactTypeLabel,
   artifactSecondaryPath,
   artifactTitle as formatArtifactTitle,
   formatChecksumDisplay,
@@ -22,22 +20,17 @@ import {
 } from "../utils/format";
 import { formatTime } from "../utils/time";
 import {
-  buildGitHubCommitURL,
-  buildGitHubRefURL,
   buildLabel as buildPageLabel,
-  buildPrimaryCommitValue,
-  buildSourceRefValue,
   jobLabel as buildPageJobLabel,
   projectLabel as buildPageProjectLabel,
-  shortSHA,
 } from "./BuildDetailPage.helpers";
-
-const TYPE_LABELS: Record<ArtifactType, string> = {
-  docker_image: "Docker image",
-  npm_package: "npm package",
-  generic: "Generic artifact",
-  unknown: "Unknown",
-};
+import {
+  buildGitHubCommitURL,
+  buildGitHubRefURL,
+  buildPrimaryCommitValue,
+  buildSourceRefValue,
+  shortSHA,
+} from "../utils/provenance";
 
 function artifactTitle(artifact: ArtifactDetail): string {
   return formatArtifactTitle(artifact);
@@ -104,25 +97,6 @@ function isArtifactNotFoundError(error: unknown): boolean {
   );
 }
 
-function tagLabelList(tags: VersionTag[], emptyText: string) {
-  if (tags.length === 0) {
-    return <span className="subtle-text">{emptyText}</span>;
-  }
-  return (
-    <>
-      {tags.map((tag) => (
-        <span key={tag.id} className="version-tag-pill">
-          {tag.version}
-        </span>
-      ))}
-    </>
-  );
-}
-
-function typeLabel(value: ArtifactType): string {
-  return TYPE_LABELS[value] ?? value;
-}
-
 function safeExternalURL(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -151,6 +125,7 @@ function relatedArtifacts(
 
 export function ArtifactDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const queryClient = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["artifact", id],
     queryFn: () => getArtifact(id!),
@@ -170,6 +145,34 @@ export function ArtifactDetailPage() {
     queryFn: () => getBuildArtifacts(data!.build_id),
     enabled: Boolean(data?.build_id),
   });
+  const createVersionTagMutation = useMutation({
+    mutationFn: ({
+      jobID,
+      version,
+      kind,
+      artifactID,
+    }: {
+      jobID: string;
+      version: string;
+      kind?: "version" | "channel";
+      artifactID: string;
+    }) =>
+      createJobVersionTags(jobID, {
+        version,
+        kind,
+        artifact_ids: [artifactID],
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["artifact", id] }),
+        queryClient.invalidateQueries({
+          queryKey: ["buildArtifacts", data?.build_id],
+        }),
+        queryClient.invalidateQueries({ queryKey: ["artifactLogicalBrowse"] }),
+        queryClient.invalidateQueries({ queryKey: ["artifactCatalog"] }),
+      ]);
+    },
+  });
 
   if (isLoading) {
     return <p>Loading artifact…</p>;
@@ -186,6 +189,7 @@ export function ArtifactDetailPage() {
     return <p className="error-text">Artifact not found.</p>;
   }
 
+  const artifactID = data.id;
   const versionTags = (data.version_tags ?? []).filter(
     (tag) => tagKind(tag) === "version",
   );
@@ -204,6 +208,23 @@ export function ArtifactDetailPage() {
     null;
   const repositoryURL = safeExternalURL(repositoryText);
   const siblingArtifacts = relatedArtifacts(buildArtifacts, data.id);
+  const tagJobID = data.job_id ?? build?.job_id ?? null;
+
+  async function assignArtifactTag(
+    value: string,
+    kind?: "version" | "channel",
+  ) {
+    if (!tagJobID) {
+      throw new Error("Artifact is not associated with a job.");
+    }
+
+    await createVersionTagMutation.mutateAsync({
+      jobID: tagJobID,
+      version: value,
+      kind,
+      artifactID,
+    });
+  }
 
   return (
     <>
@@ -223,7 +244,7 @@ export function ArtifactDetailPage() {
           )}
           <div className="artifact-card-meta">
             <span className="artifact-type-pill">
-              {typeLabel(data.artifact_type)}
+              {artifactTypeLabel(data.artifact_type)}
             </span>
             <span className="artifact-secondary-pill">{stepLabel(data)}</span>
             <span className="artifact-secondary-pill">
@@ -274,19 +295,38 @@ export function ArtifactDetailPage() {
           </div>
           <div>
             <strong>Type</strong>
-            <span>{typeLabel(data.artifact_type)}</span>
+            <span>{artifactTypeLabel(data.artifact_type)}</span>
           </div>
           <div>
             <strong>Versions</strong>
-            <div className="version-tag-list" aria-label="Artifact versions">
-              {tagLabelList(versionTags, "No versions yet.")}
-            </div>
+            <VersionTagEditor
+              tags={versionTags}
+              emptyText="No versions yet."
+              inputLabel={`artifact-detail-version-${artifactID}`}
+              submitLabel="Assign version"
+              requiredMessage="Version is required."
+              onAssign={
+                tagJobID
+                  ? (value) => assignArtifactTag(value, "version")
+                  : undefined
+              }
+            />
           </div>
           <div>
             <strong>Channels</strong>
-            <div className="version-tag-list" aria-label="Artifact channels">
-              {tagLabelList(channelTags, "No channels yet.")}
-            </div>
+            <VersionTagEditor
+              tags={channelTags}
+              emptyText="No channels yet."
+              inputLabel={`artifact-detail-channel-${artifactID}`}
+              submitLabel="Assign channel"
+              placeholder="stable"
+              requiredMessage="Channel is required."
+              onAssign={
+                tagJobID
+                  ? (value) => assignArtifactTag(value, "channel")
+                  : undefined
+              }
+            />
           </div>
           <div>
             <strong>Size</strong>

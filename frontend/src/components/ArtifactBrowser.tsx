@@ -6,7 +6,7 @@ import type {
   ArtifactBrowseVersion,
   VersionTag,
 } from "../types";
-import { formatFileSize } from "../utils/format";
+import { artifactTypeLabel, formatFileSize } from "../utils/format";
 import { formatTime } from "../utils/time";
 import { StatusBadge } from "./StatusBadge";
 import { VersionTagEditor } from "./VersionTagEditor";
@@ -22,13 +22,6 @@ interface ArtifactBrowserProps {
     releaseVersion: string,
   ) => Promise<void>;
 }
-
-const TYPE_LABELS: Record<ArtifactBrowseItem["artifact_type"], string> = {
-  docker_image: "Docker image",
-  npm_package: "npm package",
-  generic: "Generic artifact",
-  unknown: "Unknown",
-};
 
 function tagKind(tag: VersionTag): "version" | "channel" {
   return tag.kind === "channel" ? "channel" : "version";
@@ -237,7 +230,7 @@ export function ArtifactBrowser({
                       {isExpanded ? "-" : "+"}
                     </span>
                     <span className="artifact-type-pill">
-                      {TYPE_LABELS[artifact.artifact_type]}
+                      {artifactTypeLabel(artifact.artifact_type)}
                     </span>
                   </div>
                   <h3 className="artifact-card-title">
@@ -292,7 +285,7 @@ export function ArtifactBrowser({
                   </div>
                   <div>
                     <strong>Type</strong>
-                    <span>{TYPE_LABELS[artifact.artifact_type]}</span>
+                    <span>{artifactTypeLabel(artifact.artifact_type)}</span>
                   </div>
                   <div>
                     <strong>Versions</strong>

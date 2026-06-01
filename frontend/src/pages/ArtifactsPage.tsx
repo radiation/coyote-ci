@@ -3,8 +3,9 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { artifactDownloadURL, listArtifactCatalog, listProjects } from "../api";
 import { StatusBadge } from "../components/StatusBadge";
-import type { ArtifactCatalogItem, ArtifactType } from "../types";
+import type { ArtifactCatalogItem } from "../types";
 import {
+  artifactTypeLabel,
   artifactSecondaryPath,
   artifactTitle,
   formatChecksumDisplay,
@@ -14,13 +15,6 @@ import { formatTime } from "../utils/time";
 
 const DEFAULT_ARTIFACTS_PAGE_SIZE = 20;
 const ARTIFACTS_PAGE_SIZE_OPTIONS = [20, 50, 100];
-
-const TYPE_LABELS: Record<ArtifactType, string> = {
-  docker_image: "Docker image",
-  npm_package: "npm package",
-  generic: "Generic artifact",
-  unknown: "Unknown",
-};
 
 function parsePositiveInt(value: string | null, fallback: number): number {
   if (!value) {
@@ -117,7 +111,7 @@ function projectLabel(artifact: ArtifactCatalogItem): string {
 }
 
 function typeLabel(artifact: ArtifactCatalogItem): string {
-  return TYPE_LABELS[artifact.artifact_type] ?? artifact.artifact_type;
+  return artifactTypeLabel(artifact.artifact_type);
 }
 
 function buildArtifactRepositoryPath(artifact: ArtifactCatalogItem): string {

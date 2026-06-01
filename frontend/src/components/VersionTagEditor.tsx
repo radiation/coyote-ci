@@ -6,6 +6,8 @@ interface VersionTagEditorProps {
   emptyText: string;
   inputLabel: string;
   submitLabel?: string;
+  placeholder?: string;
+  requiredMessage?: string;
   onAssign?: (version: string) => Promise<void>;
 }
 
@@ -14,6 +16,8 @@ export function VersionTagEditor({
   emptyText,
   inputLabel,
   submitLabel = "Assign",
+  placeholder = "2026.04.22",
+  requiredMessage = "Value is required.",
   onAssign,
 }: VersionTagEditorProps) {
   const [value, setValue] = useState("");
@@ -26,7 +30,7 @@ export function VersionTagEditor({
 
     const trimmed = value.trim();
     if (!trimmed) {
-      setError("Version is required.");
+      setError(requiredMessage);
       return;
     }
 
@@ -69,7 +73,7 @@ export function VersionTagEditor({
             id={inputLabel}
             value={value}
             onChange={(event) => setValue(event.target.value)}
-            placeholder="2026.04.22"
+            placeholder={placeholder}
             disabled={isSubmitting}
           />
           <button

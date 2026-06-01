@@ -1,27 +1,22 @@
 import { useState } from "react";
 import { artifactDownloadURL } from "../api";
 import { Link } from "react-router-dom";
-import type {
-  ArtifactType,
-  Build,
-  BuildArtifact,
-  BuildStep,
-  VersionTag,
-} from "../types";
+import type { Build, BuildArtifact, BuildStep, VersionTag } from "../types";
 import {
+  artifactTypeLabel,
   artifactSecondaryPath,
   artifactTitle,
   formatChecksumDisplay,
   formatFileSize,
 } from "../utils/format";
+import {
+  buildGitHubCommitURL,
+  buildGitHubRefURL,
+  buildPrimaryCommitValue,
+  buildSourceRefValue,
+  shortSHA,
+} from "../utils/provenance";
 import { VersionTagEditor } from "./VersionTagEditor";
-
-const TYPE_LABELS: Record<ArtifactType, string> = {
-  docker_image: "Docker image",
-  npm_package: "npm package",
-  generic: "Generic artifact",
-  unknown: "Unknown",
-};
 
 interface Props {
   build?: Build;
@@ -36,123 +31,11 @@ function tagKind(tag: VersionTag): "version" | "channel" {
   return tag.kind === "channel" ? "channel" : "version";
 }
 
-function textValue(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
-
-function shortSHA(value: string | null | undefined): string {
-  const trimmed = value?.trim() ?? "";
-  if (!trimmed) {
-    return "—";
-  }
-  return trimmed.slice(0, 12);
-}
-
-function sourceRefValue(build: Build | undefined): string | null {
-  if (!build) {
-    return null;
-  }
-  return (
-    textValue(build.source_ref) ??
-    textValue(build.source?.ref) ??
-    textValue(build.trigger_ref)
-  );
-}
-
-function sourceCommitValue(build: Build | undefined): string | null {
-  if (!build) {
-    return null;
-  }
-  return (
-    textValue(build.source_sha) ??
-    textValue(build.source_commit_sha) ??
-    textValue(build.source?.source_commit_sha) ??
-    textValue(build.trigger_commit_sha)
-  );
-}
-
-function safeRepositoryURL(build: Build | undefined): URL | null {
-  const candidate =
-    textValue(build?.repository_url) ??
-    textValue(build?.source?.repository_url);
-  if (!candidate) {
-    return null;
-  }
-
-  try {
-    const parsed = new URL(candidate);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function githubRepositoryBaseURL(build: Build | undefined): string | null {
-  const repositoryURL = safeRepositoryURL(build);
-  if (!repositoryURL || repositoryURL.hostname.toLowerCase() !== "github.com") {
-    return null;
-  }
-
-  const [owner, repoWithSuffix] = repositoryURL.pathname
-    .split("/")
-    .filter(Boolean);
-  const repo = repoWithSuffix?.replace(/\.git$/i, "");
-  if (!owner || !repo) {
-    return null;
-  }
-
-  return `${repositoryURL.origin}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-}
-
-function normalizeGitHubRef(ref: string): string {
-  if (ref.startsWith("refs/heads/")) {
-    return ref.slice("refs/heads/".length);
-  }
-  if (ref.startsWith("refs/tags/")) {
-    return ref.slice("refs/tags/".length);
-  }
-  return ref;
-}
-
-function encodePathSegments(value: string): string {
-  return value
-    .split("/")
-    .filter(Boolean)
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-}
-
-function buildCommitURL(
-  build: Build | undefined,
-  sha: string | null,
-): string | null {
-  const baseURL = githubRepositoryBaseURL(build);
-  if (!baseURL || !sha) {
-    return null;
-  }
-  return `${baseURL}/commit/${encodeURIComponent(sha)}`;
-}
-
-function buildRefURL(
-  build: Build | undefined,
-  ref: string | null,
-): string | null {
-  const baseURL = githubRepositoryBaseURL(build);
-  if (!baseURL || !ref) {
-    return null;
-  }
-  return `${baseURL}/tree/${encodePathSegments(normalizeGitHubRef(ref))}`;
-}
-
-function artifactTypeLabel(item: BuildArtifact): string | null {
+function buildArtifactTypeLabel(item: BuildArtifact): string | null {
   if (!item.artifact_type) {
     return null;
   }
-  return TYPE_LABELS[item.artifact_type] ?? item.artifact_type;
+  return artifactTypeLabel(item.artifact_type);
 }
 
 function stepScopeLabel(
@@ -220,11 +103,11 @@ function ArtifactTable({
       {sortArtifacts(items).map((item) => {
         const versions = tagValues(item, "version");
         const channels = tagValues(item, "channel");
-        const sourceRef = sourceRefValue(build);
-        const sourceRefHref = buildRefURL(build, sourceRef);
-        const sourceCommit = sourceCommitValue(build);
-        const sourceCommitHref = buildCommitURL(build, sourceCommit);
-        const typeLabel = artifactTypeLabel(item);
+        const sourceRef = buildSourceRefValue(build);
+        const sourceRefHref = buildGitHubRefURL(build, sourceRef);
+        const sourceCommit = buildPrimaryCommitValue(build);
+        const sourceCommitHref = buildGitHubCommitURL(build, sourceCommit);
+        const typeLabel = buildArtifactTypeLabel(item);
         const compactPath = artifactSecondaryPath(item) ?? item.path;
         const hasLabels = versions.length > 0 || channels.length > 0;
         const showAssignEditor =

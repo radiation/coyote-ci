@@ -1,13 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ArtifactDetailPage } from "./ArtifactDetailPage";
-import { getArtifact, getBuild, getBuildArtifacts } from "../api";
+import {
+  createJobVersionTags,
+  getArtifact,
+  getBuild,
+  getBuildArtifacts,
+} from "../api";
 import { APIError } from "../api/request";
 import type { ArtifactDetail, Build, BuildArtifact } from "../types";
 
 vi.mock("../api", () => ({
+  createJobVersionTags: vi.fn(),
   getArtifact: vi.fn(),
   getBuild: vi.fn(),
   getBuildArtifacts: vi.fn(),
@@ -156,9 +168,11 @@ describe("ArtifactDetailPage", () => {
   const mockedGetArtifact = vi.mocked(getArtifact);
   const mockedGetBuild = vi.mocked(getBuild);
   const mockedGetBuildArtifacts = vi.mocked(getBuildArtifacts);
+  const mockedCreateJobVersionTags = vi.mocked(createJobVersionTags);
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedCreateJobVersionTags.mockResolvedValue([]);
     mockedGetArtifact.mockResolvedValue(buildArtifactDetail());
     mockedGetBuild.mockResolvedValue(buildBuild());
     mockedGetBuildArtifacts.mockResolvedValue([
@@ -195,7 +209,49 @@ describe("ArtifactDetailPage", () => {
       "title",
       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     );
-    expect(screen.queryByLabelText("Artifact label")).toBeNull();
+    expect(screen.getByRole("button", { name: "Assign version" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Assign channel" })).toBeTruthy();
+  });
+
+  it("creates artifact version and channel tags from the detail page", async () => {
+    renderPage();
+
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "coyote-ci/package-a",
+    });
+
+    fireEvent.change(
+      screen.getByLabelText("artifact-detail-version-artifact-1"),
+      {
+        target: { value: "2.0.0" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Assign version" }));
+
+    await waitFor(() => {
+      expect(mockedCreateJobVersionTags).toHaveBeenCalledWith("job-1", {
+        version: "2.0.0",
+        kind: "version",
+        artifact_ids: ["artifact-1"],
+      });
+    });
+
+    fireEvent.change(
+      screen.getByLabelText("artifact-detail-channel-artifact-1"),
+      {
+        target: { value: "latest" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Assign channel" }));
+
+    await waitFor(() => {
+      expect(mockedCreateJobVersionTags).toHaveBeenCalledWith("job-1", {
+        version: "latest",
+        kind: "channel",
+        artifact_ids: ["artifact-1"],
+      });
+    });
   });
 
   it("renders produced-by context and links back to the producing build", async () => {
