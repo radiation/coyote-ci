@@ -40,7 +40,16 @@ export function BuildDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [openStepIndex, setOpenStepIndex] = useState<number | null>(null);
+  const [openStepState, setOpenStepState] = useState<{
+    buildID: string | null;
+    stepIndex: number | null;
+  }>({ buildID: id ?? null, stepIndex: null });
+  const openStepIndex =
+    openStepState.buildID === id ? openStepState.stepIndex : null;
+
+  function handleOpenStepChange(stepIndex: number | null) {
+    setOpenStepState({ buildID: id ?? null, stepIndex });
+  }
 
   const {
     data: build,
@@ -264,7 +273,7 @@ export function BuildDetailPage() {
         steps={steps}
         stepsLoading={stepsLoading}
         stepsError={stepsError}
-        onOpenStep={setOpenStepIndex}
+        onOpenStep={handleOpenStepChange}
       />
       <StepTimelinePanel
         build={currentBuild}
@@ -272,7 +281,7 @@ export function BuildDetailPage() {
         stepsLoading={stepsLoading}
         stepsError={stepsError}
         openStepIndex={openStepIndex}
-        onOpenStepChange={setOpenStepIndex}
+        onOpenStepChange={handleOpenStepChange}
       />
       <ArtifactsPanel
         build={currentBuild}

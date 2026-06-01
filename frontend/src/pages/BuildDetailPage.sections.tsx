@@ -255,7 +255,7 @@ export function BuildSummaryPanel({
               Compare this attempt against the original run from the same job.
               {build.rerun_from_step_index !== null &&
               build.rerun_from_step_index !== undefined
-                ? ` Restarted from step ${build.rerun_from_step_index}.`
+                ? ` Restarted from step ${displayStepNumber(build.rerun_from_step_index)}.`
                 : ""}
             </p>
           </div>
@@ -420,7 +420,8 @@ export function ExecutionSummaryPanel({
             <article className="build-callout build-callout-running">
               <strong>Currently running</strong>
               <span>
-                Step {runningStep.step_index} · {runningStep.name}
+                Step {displayStepNumber(runningStep.step_index)} ·{" "}
+                {runningStep.name}
               </span>
               {stepCounts.pending > 0 ? (
                 <span className="subtle-text">

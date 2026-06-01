@@ -144,10 +144,41 @@ describe("BuildDetailPage helpers", () => {
       "https://github.com/example/platform/commit/95f09eb123456789",
     );
     expect(buildGitHubRefURL(value, value.trigger_ref)).toBe(
-      "https://github.com/example/platform/tree/refs/heads/main",
+      "https://github.com/example/platform/tree/main",
     );
     expect(buildGitHubPipelinePathURL(value)).toBe(
       "https://github.com/example/platform/blob/95f09eb123456789/scenarios/multi-step-failure/coyote.yml",
+    );
+  });
+
+  it("normalizes common git ref prefixes for GitHub tree URLs", () => {
+    const value = build({
+      repository_url: "https://github.com/example/platform",
+    });
+
+    expect(buildGitHubRefURL(value, "refs/heads/release/2026.06")).toBe(
+      "https://github.com/example/platform/tree/release/2026.06",
+    );
+    expect(buildGitHubRefURL(value, "refs/tags/v1.2.3")).toBe(
+      "https://github.com/example/platform/tree/v1.2.3",
+    );
+    expect(buildGitHubRefURL(value, "main")).toBe(
+      "https://github.com/example/platform/tree/main",
+    );
+  });
+
+  it("normalizes common git ref prefixes for ref-only GitHub pipeline file URLs", () => {
+    const value = build({
+      repository_url: "https://github.com/example/platform",
+      trigger_ref: "refs/heads/main",
+      source_commit_sha: null,
+      trigger_commit_sha: null,
+      source_sha: null,
+      pipeline_path: "scenarios/multi-step-failure/coyote.yml",
+    });
+
+    expect(buildGitHubPipelinePathURL(value)).toBe(
+      "https://github.com/example/platform/blob/main/scenarios/multi-step-failure/coyote.yml",
     );
   });
 

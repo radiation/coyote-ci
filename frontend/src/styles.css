@@ -684,6 +684,19 @@ fieldset {
   text-decoration: none;
 }
 
+.build-detail-nav-action.danger-button {
+  border-color: var(--color-error-border);
+  color: var(--color-error-text);
+  background: var(--color-error-bg);
+}
+
+.build-detail-nav-action.danger-button:hover:not(:disabled) {
+  border-color: var(--color-error-text);
+  color: var(--color-error-text);
+  background: var(--color-error-bg);
+  text-decoration: none;
+}
+
 .build-detail-primary-action {
   border: 1px solid var(--color-accent);
   background: var(--color-accent);

@@ -7,7 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Outlet, Route, Routes } from "react-router-dom";
 import { BuildDetailPage } from "./BuildDetailPage";
 import {
   buildStepLogStreamURL,
@@ -158,6 +158,15 @@ function deferredPromise<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function BuildDetailTestLayout() {
+  return (
+    <>
+      <Link to="/builds/build-2">Go to build 2</Link>
+      <Outlet />
+    </>
+  );
 }
 
 describe("BuildDetailPage", () => {
@@ -527,6 +536,129 @@ describe("BuildDetailPage", () => {
     expect(document.querySelector("#step-1 .step-log-panel")).toBeTruthy();
   });
 
+  it("resets the open step when navigating to a different build", async () => {
+    mockedGetBuild.mockImplementation(async (buildID: string) => {
+      return makeBuild({
+        id: buildID,
+        build_number: buildID === "build-2" ? 22 : 21,
+        status: "running",
+        finished_at: null,
+        error_message: null,
+      });
+    });
+    mockedGetBuildSteps.mockImplementation(async (buildID: string) => {
+      if (buildID === "build-2") {
+        return [
+          makeStep({
+            id: "build-2-step-1",
+            build_id: "build-2",
+            step_index: 0,
+            name: "prepare",
+            status: "success",
+          }),
+          makeStep({
+            id: "build-2-step-2",
+            build_id: "build-2",
+            step_index: 1,
+            name: "package",
+            status: "running",
+            started_at: "2026-03-30T00:02:00Z",
+            finished_at: null,
+            exit_code: null,
+            error_message: null,
+          }),
+        ];
+      }
+
+      return [
+        makeStep({
+          id: "build-1-step-1",
+          build_id: "build-1",
+          step_index: 0,
+          name: "compile",
+          status: "success",
+        }),
+        makeStep({
+          id: "build-1-step-2",
+          build_id: "build-1",
+          step_index: 1,
+          name: "deploy",
+          status: "running",
+          started_at: "2026-03-30T00:01:20Z",
+          finished_at: null,
+          exit_code: null,
+          error_message: null,
+        }),
+      ];
+    });
+    mockedGetBuildArtifacts.mockResolvedValue([]);
+    mockedBuildStepLogStreamURL.mockImplementation(
+      (buildID: string, stepIndex: number, after?: number) =>
+        `/api/builds/${buildID}/steps/${stepIndex}/logs/stream?after=${after ?? 0}`,
+    );
+    mockedGetStepLogs.mockImplementation(
+      async (buildID: string, stepIndex) => ({
+        build_id: buildID,
+        step_index: stepIndex,
+        after: 0,
+        chunks: [
+          {
+            sequence_no: 1,
+            build_id: buildID,
+            step_id: `${buildID}-step-${stepIndex + 1}`,
+            step_index: stepIndex,
+            step_name: buildID === "build-2" ? "package" : "deploy",
+            stream: "stderr",
+            chunk_text: `logs for ${buildID}`,
+            created_at: "2026-03-30T00:02:04Z",
+          },
+        ],
+        next_sequence: 1,
+      }),
+    );
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/builds/build-1"]}>
+          <Routes>
+            <Route element={<BuildDetailTestLayout />}>
+              <Route path="/builds/:id" element={<BuildDetailPage />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByRole("heading", { name: "Logs" });
+
+    fireEvent.click(screen.getByRole("link", { name: /Step 2 · deploy/ }));
+
+    await waitFor(() => {
+      expect(mockedGetStepLogs).toHaveBeenCalledWith("build-1", 1, 0, 500);
+    });
+    expect(screen.getByRole("button", { name: "Hide logs" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("link", { name: "Go to build 2" }));
+
+    await waitFor(() => {
+      expect(document.querySelector(".page-header-copy h2")?.textContent).toBe(
+        "release #22",
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Hide logs" })).toBeNull();
+    });
+    expect(document.querySelector(".step-log-panel")).toBeNull();
+    expect(mockedGetStepLogs).toHaveBeenCalledTimes(1);
+  });
+
   it("shows rerun lineage with a link to the source build", async () => {
     mockedGetBuild.mockImplementation(async (buildID: string) => {
       if (buildID === "build-0") {
@@ -536,7 +668,10 @@ describe("BuildDetailPage", () => {
           rerun_of_build_id: null,
         });
       }
-      return makeBuild({ rerun_of_build_id: "build-0" });
+      return makeBuild({
+        rerun_of_build_id: "build-0",
+        rerun_from_step_index: 2,
+      });
     });
 
     renderPage();
@@ -545,6 +680,7 @@ describe("BuildDetailPage", () => {
       expect(mockedGetBuild).toHaveBeenCalledWith("build-0");
     });
     expect(screen.getByText(/Rerun of/)).toBeTruthy();
+    expect(document.body.textContent).toContain("Restarted from step 3.");
     await waitFor(() => {
       expect(screen.getByRole("link", { name: "Build #20" })).toHaveAttribute(
         "href",
@@ -594,6 +730,9 @@ describe("BuildDetailPage", () => {
     renderPage();
 
     await screen.findByText("Currently running");
+    const runningCallout = screen
+      .getByText("Currently running")
+      .closest("article") as HTMLElement;
     const summaryPanel = screen
       .getByText(/Build #21 · Build ID build-1 · Attempt 1/)
       .closest("section") as HTMLElement;
@@ -605,6 +744,7 @@ describe("BuildDetailPage", () => {
       "Steps: 1 succeeded · 1 running · 1 pending",
     );
     expect(screen.getByText("1 pending step")).toBeTruthy();
+    expect(runningCallout.textContent).toContain("Step 2 · deploy");
     expect(screen.getByText("Step 2 · Current step")).toBeTruthy();
     expect(summaryPanel.textContent).toContain("Current stepStep 2 of 3");
     expect(summaryPanel.textContent).not.toContain("Duration—");

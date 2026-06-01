@@ -51,6 +51,17 @@ function encodePathSegments(value: string): string {
     .join("/");
 }
 
+function normalizeGitHubRef(ref: string): string {
+  if (ref.startsWith("refs/heads/")) {
+    return ref.slice("refs/heads/".length);
+  }
+  if (ref.startsWith("refs/tags/")) {
+    return ref.slice("refs/tags/".length);
+  }
+
+  return ref;
+}
+
 export function shortSHA(value: string | null | undefined): string {
   const trimmed = (value ?? "").trim();
   if (!trimmed) return "—";
@@ -177,13 +188,18 @@ export function buildGitHubRefURL(
     return null;
   }
 
-  return `${baseURL}/tree/${encodePathSegments(refValue)}`;
+  return `${baseURL}/tree/${encodePathSegments(normalizeGitHubRef(refValue))}`;
 }
 
 export function buildGitHubPipelinePathURL(build: Build): string | null {
   const baseURL = githubRepositoryBaseURL(build);
   const pipelinePath = textValue(build.pipeline_path);
-  const revision = buildPrimaryCommitValue(build) ?? buildSourceRefValue(build);
+  const revision =
+    buildPrimaryCommitValue(build) ??
+    (() => {
+      const refValue = buildSourceRefValue(build);
+      return refValue ? normalizeGitHubRef(refValue) : null;
+    })();
   if (!baseURL || !pipelinePath || !revision) {
     return null;
   }
