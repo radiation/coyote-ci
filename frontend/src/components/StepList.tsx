@@ -10,6 +10,22 @@ function displayStepNumber(stepIndex: number): number {
   return stepIndex + 1;
 }
 
+function stepCardClassName(step: BuildStep): string {
+  if (step.status === "failed") {
+    return "step-card is-failed";
+  }
+
+  if (step.status === "running") {
+    return "step-card is-running";
+  }
+
+  if (step.status === "pending") {
+    return "step-card is-pending";
+  }
+
+  return "step-card";
+}
+
 function commandPreview(command: string): string {
   if (command.length <= COMMAND_PREVIEW_LIMIT) {
     return command;
@@ -54,13 +70,11 @@ function bucketSteps(steps: BuildStep[]): StepBucket[] {
 export function StepList({
   buildID,
   steps,
-  activeStepIndex,
   openStepIndex,
   onOpenStepChange,
 }: {
   buildID: string;
   steps: BuildStep[];
-  activeStepIndex?: number;
   openStepIndex: number | null;
   onOpenStepChange: (stepIndex: number | null) => void;
 }) {
@@ -195,7 +209,6 @@ export function StepList({
                 const chunks = logChunks[step.step_index] ?? [];
                 const loading = logLoading[step.step_index] ?? false;
                 const error = logError[step.step_index];
-                const isCurrent = activeStepIndex === step.step_index;
                 const duration = formatDuration(
                   step.started_at,
                   step.finished_at,
@@ -205,7 +218,7 @@ export function StepList({
                   <article
                     key={`step-card-${step.step_index}`}
                     id={`step-${step.step_index}`}
-                    className={`step-card${step.status === "failed" ? " is-failed" : ""}${isCurrent ? " is-current" : ""}`}
+                    className={stepCardClassName(step)}
                   >
                     <div className="step-card-rail" aria-hidden="true" />
                     <div className="step-card-body">
@@ -213,7 +226,6 @@ export function StepList({
                         <div>
                           <div className="step-card-kicker subtle-text">
                             Step {displayStepNumber(step.step_index)}
-                            {isCurrent ? " · Current step" : ""}
                           </div>
                           <h4>{step.name}</h4>
                         </div>

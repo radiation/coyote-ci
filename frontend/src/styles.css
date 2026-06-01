@@ -1189,7 +1189,7 @@ fieldset legend {
 
 .step-bucket-list {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .step-group-meta {
@@ -1199,9 +1199,9 @@ fieldset legend {
 
 .step-card {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr);
-  gap: 12px;
-  padding: 14px 16px;
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px 14px;
   border: 1px solid var(--color-border);
   border-radius: 16px;
   background: linear-gradient(
@@ -1215,13 +1215,29 @@ fieldset legend {
   border-color: var(--color-error-border);
 }
 
-.step-card.is-current {
-  border-color: var(--color-warning-border);
-  box-shadow: var(--color-shadow-soft);
+.step-card.is-running {
+  border-color: color-mix(
+    in srgb,
+    var(--color-warning-border) 55%,
+    var(--color-border)
+  );
+  background: color-mix(
+    in srgb,
+    var(--color-warning-bg) 35%,
+    var(--color-surface)
+  );
+}
+
+.step-card.is-pending {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-surface-raised) 88%, white) 0%,
+    var(--color-surface) 100%
+  );
 }
 
 .step-card-rail {
-  width: 10px;
+  width: 8px;
   border-radius: 999px;
   background: var(--color-border);
 }
@@ -1230,8 +1246,16 @@ fieldset legend {
   background: var(--color-error-border);
 }
 
-.step-card.is-current .step-card-rail {
+.step-card.is-running .step-card-rail {
   background: var(--color-warning-border);
+}
+
+.step-card.is-pending .step-card-rail {
+  background: color-mix(
+    in srgb,
+    var(--color-text-muted) 35%,
+    var(--color-border)
+  );
 }
 
 .step-card-body {
@@ -1251,6 +1275,9 @@ fieldset legend {
 
 .step-card-kicker {
   margin-top: 0;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .step-card-command-row {
@@ -1804,25 +1831,79 @@ fieldset legend {
   background: var(--color-success-bg);
 }
 
+.build-log-group-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.build-log-group {
+  display: grid;
+  gap: 8px;
+}
+
+.build-log-group-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.build-log-group-heading strong {
+  font-size: 0.95rem;
+}
+
+.build-log-group-meta {
+  white-space: nowrap;
+}
+
 .build-log-link-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  margin-top: 4px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
 }
 
 .build-log-link-list a {
   display: grid;
-  gap: 4px;
-  min-height: 34px;
-  padding: 10px 12px;
+  gap: 6px;
+  min-height: 0;
+  padding: 8px 10px;
   border-radius: 14px;
   border: 1px solid var(--color-border);
   background: var(--color-surface);
   font-size: 0.85rem;
 }
 
+.build-log-link-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .build-log-link strong {
-  font-size: 0.92rem;
+  font-size: 0.9rem;
+}
+
+.build-log-link.is-running {
+  border-color: color-mix(
+    in srgb,
+    var(--color-warning-border) 55%,
+    var(--color-border)
+  );
+  background: color-mix(
+    in srgb,
+    var(--color-warning-bg) 30%,
+    var(--color-surface)
+  );
+}
+
+.build-log-link.is-pending {
+  background: color-mix(
+    in srgb,
+    var(--color-surface-raised) 72%,
+    var(--color-surface)
+  );
 }
 
 .build-log-link.is-failed {
@@ -1847,6 +1928,17 @@ fieldset legend {
   text-decoration: none;
   background: var(--color-surface-raised);
   border-color: var(--color-border-strong);
+}
+
+@media (max-width: 720px) {
+  .build-log-group-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .build-log-group-meta {
+    white-space: normal;
+  }
 }
 
 .build-provenance-tags {

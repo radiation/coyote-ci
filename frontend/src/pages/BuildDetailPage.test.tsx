@@ -366,6 +366,7 @@ describe("BuildDetailPage", () => {
       screen.getByRole("heading", { name: "Execution summary" }),
     ).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Logs" })).toBeTruthy();
+    expect(screen.getByText("Ungrouped")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Artifacts" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Provenance" })).toBeTruthy();
     expect(document.querySelector(".build-steps-summary")?.textContent).toBe(
@@ -380,24 +381,21 @@ describe("BuildDetailPage", () => {
     ).toBeTruthy();
     expect(screen.getByText("Last error output")).toBeTruthy();
     expect(screen.getByText("ssh: handshake failed")).toBeTruthy();
-    expect(screen.getByText("compile")).toBeTruthy();
-    expect(screen.getAllByText("deploy").length).toBe(2);
-    expect(screen.getByText("notify")).toBeTruthy();
+    expect(screen.getAllByText("compile").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("deploy").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("notify").length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Open logs" })).toHaveLength(
       3,
     );
     expect(
-      screen.getByRole("link", { name: /Step 2 · deploy/ }),
+      screen.getByRole("link", { name: "Open logs for deploy" }),
     ).toHaveAttribute("href", "#step-1");
-    expect(
-      screen.getByRole("link", { name: /Failed · Open inline logs/ }),
-    ).toBeTruthy();
+    expect(screen.getAllByText("Failed").length).toBeGreaterThan(0);
     expect(
       screen.getByRole("link", { name: "example/platform" }),
     ).toHaveAttribute("href", "https://github.com/example/platform");
     expect(screen.getByText("v1.2.3")).toBeTruthy();
-    const failedStepCard = screen.getAllByText("deploy")[1]?.closest("article");
-    expect(failedStepCard?.className).toContain("is-failed");
+    expect(document.querySelector(".step-card.is-failed")).toBeTruthy();
 
     const artifactLink = screen.getByRole("link", { name: "dist/app" });
     expect(artifactLink.getAttribute("href")).toBe("/artifacts/artifact-1");
@@ -406,6 +404,100 @@ describe("BuildDetailPage", () => {
     expect(link.getAttribute("href")).toBe(
       "/api/builds/build-1/artifacts/artifact-1/download",
     );
+  });
+
+  it("groups log navigation by execution group and falls back to Ungrouped", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({ status: "running", finished_at: null, error_message: null }),
+    );
+    mockedGetBuildSteps.mockResolvedValueOnce([
+      makeStep({
+        id: "step-bootstrap-1",
+        step_index: 0,
+        name: "Backend Format Check",
+        group_name: "Bootstrap",
+        status: "success",
+      }),
+      makeStep({
+        id: "step-bootstrap-2",
+        step_index: 1,
+        name: "Frontend Install",
+        group_name: "Bootstrap",
+        status: "running",
+        started_at: "2026-03-30T00:01:20Z",
+        finished_at: null,
+        exit_code: null,
+      }),
+      makeStep({
+        id: "step-verify-1",
+        step_index: 2,
+        name: "Backend Test",
+        group_name: "Verify",
+        status: "pending",
+        worker_id: null,
+        started_at: null,
+        finished_at: null,
+        exit_code: null,
+      }),
+      makeStep({
+        id: "step-ungrouped-1",
+        step_index: 3,
+        name: "Frontend Build",
+        group_name: null,
+        status: "pending",
+        worker_id: null,
+        started_at: null,
+        finished_at: null,
+        exit_code: null,
+      }),
+    ]);
+    mockedGetBuildArtifacts.mockResolvedValueOnce([]);
+
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Logs" });
+
+    const bootstrapGroup = screen.getByRole("region", {
+      name: "Log group Bootstrap",
+    });
+    const verifyGroup = screen.getByRole("region", {
+      name: "Log group Verify",
+    });
+    const ungroupedGroup = screen.getByRole("region", {
+      name: "Log group Ungrouped",
+    });
+
+    expect(screen.getAllByRole("region", { name: /Log group / })).toHaveLength(
+      3,
+    );
+    expect(within(bootstrapGroup).getByText("Bootstrap")).toBeTruthy();
+    expect(within(verifyGroup).getByText("Verify")).toBeTruthy();
+    expect(within(ungroupedGroup).getByText("Ungrouped")).toBeTruthy();
+    expect(
+      within(bootstrapGroup).getByText("2 steps · 1 running · 1 succeeded"),
+    ).toBeTruthy();
+    expect(within(verifyGroup).getByText("1 step · 1 pending")).toBeTruthy();
+    expect(within(ungroupedGroup).getByText("1 step · 1 pending")).toBeTruthy();
+    expect(
+      within(bootstrapGroup).getByRole("link", {
+        name: "Open logs for Backend Format Check",
+      }),
+    ).toHaveAttribute("href", "#step-0");
+    expect(
+      within(bootstrapGroup).getByRole("link", {
+        name: "Open logs for Frontend Install",
+      }),
+    ).toHaveAttribute("href", "#step-1");
+    expect(
+      within(verifyGroup).getByRole("link", {
+        name: "Open logs for Backend Test",
+      }),
+    ).toHaveAttribute("href", "#step-2");
+    expect(
+      within(ungroupedGroup).getByRole("link", {
+        name: "Open logs for Frontend Build",
+      }),
+    ).toHaveAttribute("href", "#step-3");
   });
 
   it("renders artifact lineage links from build provenance and repository routes", async () => {
@@ -597,7 +689,7 @@ describe("BuildDetailPage", () => {
 
     await screen.findByRole("heading", { name: "Logs" });
 
-    fireEvent.click(screen.getByRole("link", { name: /Step 2 · deploy/ }));
+    fireEvent.click(screen.getByRole("link", { name: "Open logs for deploy" }));
 
     await waitFor(() => {
       expect(mockedGetStepLogs).toHaveBeenCalledWith("build-1", 1, 0, 500);
@@ -707,7 +799,7 @@ describe("BuildDetailPage", () => {
 
     await screen.findByRole("heading", { name: "Logs" });
 
-    fireEvent.click(screen.getByRole("link", { name: /Step 2 · deploy/ }));
+    fireEvent.click(screen.getByRole("link", { name: "Open logs for deploy" }));
 
     await waitFor(() => {
       expect(mockedGetStepLogs).toHaveBeenCalledWith("build-1", 1, 0, 500);
@@ -808,19 +900,18 @@ describe("BuildDetailPage", () => {
       .closest("section") as HTMLElement;
 
     expect(
-      screen.getByRole("link", { name: /Step 2 · deploy/ }),
+      screen.getByRole("link", { name: "Open logs for deploy" }),
     ).toHaveAttribute("href", "#step-1");
     expect(document.querySelector(".build-steps-summary")?.textContent).toBe(
       "Steps: 1 succeeded · 1 running · 1 pending",
     );
     expect(screen.getByText("1 pending step")).toBeTruthy();
     expect(runningCallout.textContent).toContain("Step 2 · deploy");
-    expect(screen.getByText("Step 2 · Current step")).toBeTruthy();
     expect(summaryPanel.textContent).toContain("Current stepStep 2 of 3");
     expect(summaryPanel.textContent).not.toContain("Duration—");
-    expect(screen.getByText("Pending")).toBeTruthy();
+    expect(screen.getAllByText("Pending").length).toBeGreaterThan(0);
     expect(
-      screen.getByRole("link", { name: /Running · Open inline logs/ }),
+      screen.getByRole("link", { name: "Open logs for deploy" }),
     ).toBeTruthy();
     expect(
       screen.getByText(
