@@ -585,6 +585,7 @@ export function ArtifactsPanel({
         </div>
       </div>
       <BuildArtifactsSection
+        build={build}
         artifacts={artifacts ?? []}
         steps={steps}
         isLoading={artifactsLoading}

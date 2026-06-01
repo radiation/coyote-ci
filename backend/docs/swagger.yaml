@@ -233,6 +233,8 @@ definitions:
     type: object
   api.BuildArtifactResponse:
     properties:
+      artifact_type:
+        type: string
       build_id:
         type: string
       checksum_sha256:

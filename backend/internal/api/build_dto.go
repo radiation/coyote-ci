@@ -291,6 +291,7 @@ type BuildArtifactResponse struct {
 	StepID          *string              `json:"step_id,omitempty"`
 	Name            string               `json:"name,omitempty"`
 	Path            string               `json:"path"`
+	ArtifactType    string               `json:"artifact_type,omitempty"`
 	SizeBytes       int64                `json:"size_bytes"`
 	ContentType     *string              `json:"content_type"`
 	ChecksumSHA256  *string              `json:"checksum_sha256"`

@@ -177,6 +177,7 @@ export interface BuildArtifact {
   step_id: string | null;
   name?: string;
   path: string;
+  artifact_type?: import("./artifact").ArtifactType;
   size_bytes: number;
   content_type: string | null;
   checksum_sha256: string | null;

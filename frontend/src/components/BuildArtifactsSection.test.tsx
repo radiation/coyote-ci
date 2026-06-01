@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { BuildArtifactsSection } from "./BuildArtifactsSection";
-import type { BuildArtifact, BuildStep } from "../types";
+import type { Build, BuildArtifact, BuildStep } from "../types";
 
 vi.mock("../api", () => ({
   artifactDownloadURL: (path: string) => `/api${path}`,
@@ -15,6 +15,7 @@ function makeArtifact(overrides: Partial<BuildArtifact> = {}): BuildArtifact {
     step_id: null,
     name: "artifact-1",
     path: "dist/artifact-1",
+    artifact_type: "generic",
     size_bytes: 1024,
     content_type: "application/octet-stream",
     checksum_sha256: null,
@@ -22,6 +23,32 @@ function makeArtifact(overrides: Partial<BuildArtifact> = {}): BuildArtifact {
     download_url_path: "/builds/build-1/artifacts/artifact-1/download",
     version_tags: [],
     created_at: "2026-04-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function makeBuild(overrides: Partial<Build> = {}): Build {
+  return {
+    id: "build-1",
+    build_number: 21,
+    project_id: "project-1",
+    project_name: "Platform",
+    project_slug: "platform",
+    job_id: "job-1",
+    job_name: "release",
+    priority: 5,
+    status: "success",
+    created_at: "2026-04-01T00:00:00Z",
+    queued_at: "2026-04-01T00:00:01Z",
+    started_at: "2026-04-01T00:00:02Z",
+    finished_at: "2026-04-01T00:01:00Z",
+    current_step_index: 1,
+    attempt_number: 1,
+    error_message: null,
+    repository_url: "https://github.com/example/platform",
+    source_ref: "refs/heads/main",
+    source_commit_sha: "abcdef1234567890",
+    trigger_commit_sha: "abcdef1234567890",
     ...overrides,
   };
 }
@@ -100,13 +127,34 @@ describe("BuildArtifactsSection", () => {
       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     renderSection({
+      build: makeBuild(),
       artifacts: [
         makeArtifact({
           id: "artifact-build",
           name: "  dist/app  ",
           path: "dist/app",
+          artifact_type: "npm_package",
           checksum_sha256: longChecksum,
           created_at: "2026-04-01T00:02:00Z",
+          version_tags: [
+            {
+              id: "tag-version-1",
+              job_id: "job-1",
+              version: "1.2.3",
+              target_type: "artifact",
+              artifact_id: "artifact-build",
+              created_at: "2026-04-01T00:02:00Z",
+            },
+            {
+              id: "tag-channel-1",
+              job_id: "job-1",
+              kind: "channel",
+              version: "latest",
+              target_type: "artifact",
+              artifact_id: "artifact-build",
+              created_at: "2026-04-01T00:02:00Z",
+            },
+          ],
           download_url_path:
             "/builds/build-1/artifacts/artifact-build/download",
         }),
@@ -129,16 +177,46 @@ describe("BuildArtifactsSection", () => {
     });
 
     expect(screen.getByText("Build-level")).toBeTruthy();
-    expect(screen.getByText("Step 2: package")).toBeTruthy();
-    expect(screen.getByText("Step step-unk…")).toBeTruthy();
+    expect(screen.getAllByText("Step 2: package").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Step step-unk…").length).toBeGreaterThan(0);
 
     const checksum = screen.getByText("0123456789ab…89abcdef");
     expect(checksum).toHaveAttribute("title", longChecksum);
+    expect(screen.getByText("npm package")).toBeTruthy();
+    expect(screen.getAllByText("1.2.3").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("latest").length).toBeGreaterThan(0);
 
     expect(screen.getByRole("link", { name: "dist/app" })).toHaveAttribute(
       "href",
       "/artifacts/artifact-build",
     );
+    expect(
+      screen
+        .getAllByRole("link", { name: "Repository view" })
+        .some(
+          (link) =>
+            link.getAttribute("href") ===
+            "/artifacts/logical?q=dist%2Fapp&job_id=job-1",
+        ),
+    ).toBe(true);
+    expect(
+      screen
+        .getAllByRole("link", { name: "refs/heads/main" })
+        .every(
+          (link) =>
+            link.getAttribute("href") ===
+            "https://github.com/example/platform/tree/main",
+        ),
+    ).toBe(true);
+    expect(
+      screen
+        .getAllByRole("link", { name: "abcdef123456" })
+        .every(
+          (link) =>
+            link.getAttribute("href") ===
+            "https://github.com/example/platform/commit/abcdef1234567890",
+        ),
+    ).toBe(true);
     expect(
       screen
         .getAllByRole("link", { name: "Download" })
@@ -153,6 +231,42 @@ describe("BuildArtifactsSection", () => {
       selector: "div.subtle-text.artifact-mono",
     });
     expect(subtlePathLines).toHaveLength(0);
+  });
+
+  it("falls back gracefully when optional metadata is missing", () => {
+    renderSection({
+      build: makeBuild({
+        job_id: null,
+        job_name: null,
+        repository_url: null,
+        source_ref: null,
+        source_commit_sha: null,
+        trigger_commit_sha: null,
+      }),
+      artifacts: [
+        makeArtifact({
+          id: "artifact-minimal",
+          name: undefined,
+          path: "out/manifest.json",
+          artifact_type: undefined,
+          checksum_sha256: null,
+          version_tags: [],
+        }),
+      ],
+    });
+
+    expect(
+      screen.getByRole("link", { name: "out/manifest.json" }),
+    ).toHaveAttribute("href", "/artifacts/artifact-minimal");
+    expect(screen.getByText("Build #21")).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Repository view" }),
+    ).toHaveAttribute(
+      "href",
+      "/artifacts/logical?q=out%2Fmanifest.json&project_id=project-1",
+    );
+    expect(screen.queryByRole("link", { name: "abcdef123456" })).toBeNull();
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
   });
 
   it("submits version assignments when enabled and hides the form otherwise", async () => {

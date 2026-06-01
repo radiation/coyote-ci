@@ -125,6 +125,7 @@ describe("API client - types", () => {
               id: "artifact-1",
               build_id: "build-1",
               path: "dist/app",
+              artifact_type: "generic",
               size_bytes: 128,
               content_type: null,
               checksum_sha256: null,
@@ -139,6 +140,7 @@ describe("API client - types", () => {
 
     const artifacts = await getBuildArtifacts("build-1");
     expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]?.artifact_type).toBe("generic");
     expect(fetchMock).toHaveBeenCalledWith("/api/builds/build-1/artifacts", {
       credentials: "include",
     });

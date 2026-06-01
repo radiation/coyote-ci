@@ -239,12 +239,14 @@ func toBuildArtifactResponse(item domain.BuildArtifact) api.BuildArtifactRespons
 	if provider == "" {
 		provider = string(domain.StorageProviderFilesystem)
 	}
+	artifactType := string(domain.ResolveArtifactType(item))
 	return api.BuildArtifactResponse{
 		ID:              item.ID,
 		BuildID:         item.BuildID,
 		StepID:          item.StepID,
 		Name:            item.Name,
 		Path:            item.LogicalPath,
+		ArtifactType:    artifactType,
 		SizeBytes:       item.SizeBytes,
 		ContentType:     item.ContentType,
 		ChecksumSHA256:  item.ChecksumSHA256,
