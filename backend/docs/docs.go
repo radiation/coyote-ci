@@ -3114,6 +3114,9 @@ const docTemplate = `{
         "api.BuildArtifactResponse": {
             "type": "object",
             "properties": {
+                "artifact_type": {
+                    "type": "string"
+                },
                 "build_id": {
                     "type": "string"
                 },

@@ -12,18 +12,20 @@ import {
 } from "../utils/build";
 import { formatCompactTime, formatTime } from "../utils/time";
 import {
+  buildDuration,
+  buildLabel,
+  buildStepCounts,
+  operationalBuildTitle,
+  triggerKind,
+} from "./BuildDetailPage.helpers";
+import {
   buildGitHubCommitURL,
   buildGitHubPipelinePathURL,
   buildGitHubRefURL,
   buildPrimaryCommitValue,
   buildSourceRefValue,
-  buildDuration,
-  buildLabel,
-  buildStepCounts,
-  operationalBuildTitle,
   shortSHA,
-  triggerKind,
-} from "./BuildDetailPage.helpers";
+} from "../utils/provenance";
 
 function metadataItem(label: string, value: ReactNode) {
   return { label, value };
@@ -585,6 +587,7 @@ export function ArtifactsPanel({
         </div>
       </div>
       <BuildArtifactsSection
+        build={build}
         artifacts={artifacts ?? []}
         steps={steps}
         isLoading={artifactsLoading}

@@ -1,21 +1,70 @@
+import { useState } from "react";
 import { artifactDownloadURL } from "../api";
 import { Link } from "react-router-dom";
-import type { BuildArtifact, BuildStep } from "../types";
+import type { Build, BuildArtifact, BuildStep, VersionTag } from "../types";
 import {
+  artifactTypeLabel,
   artifactSecondaryPath,
   artifactTitle,
   formatChecksumDisplay,
   formatFileSize,
 } from "../utils/format";
-import { formatTime } from "../utils/time";
+import {
+  buildGitHubCommitURL,
+  buildGitHubRefURL,
+  buildPrimaryCommitValue,
+  buildSourceRefValue,
+  shortSHA,
+} from "../utils/provenance";
 import { VersionTagEditor } from "./VersionTagEditor";
 
 interface Props {
+  build?: Build;
   artifacts: BuildArtifact[];
   steps?: BuildStep[];
   isLoading: boolean;
   error: unknown;
   onAssignVersion?: (artifactID: string, version: string) => Promise<void>;
+}
+
+function tagKind(tag: VersionTag): "version" | "channel" {
+  return tag.kind === "channel" ? "channel" : "version";
+}
+
+function buildArtifactTypeLabel(item: BuildArtifact): string | null {
+  if (!item.artifact_type) {
+    return null;
+  }
+  return artifactTypeLabel(item.artifact_type);
+}
+
+function stepScopeLabel(
+  item: BuildArtifact,
+  steps: BuildStep[] | undefined,
+): string {
+  return item.step_id ? stepLabel(item.step_id, steps) : "Build-level artifact";
+}
+
+function buildArtifactBrowserPath(
+  item: BuildArtifact,
+  build: Build | undefined,
+): string {
+  const params = new URLSearchParams();
+  params.set("q", item.path);
+  if (build?.job_id) {
+    params.set("job_id", build.job_id);
+  } else if (build?.project_id) {
+    params.set("project_id", build.project_id);
+  }
+  const query = params.toString();
+  return query ? `/artifacts/logical?${query}` : "/artifacts/logical";
+}
+
+function tagValues(item: BuildArtifact, kind: "version" | "channel"): string[] {
+  return (item.version_tags ?? [])
+    .filter((tag) => tagKind(tag) === kind)
+    .map((tag) => tag.version)
+    .filter(Boolean);
 }
 
 function stepLabel(stepId: string, steps: BuildStep[] | undefined): string {
@@ -37,95 +86,174 @@ function sortArtifacts(items: BuildArtifact[]): BuildArtifact[] {
 }
 
 function ArtifactTable({
+  build,
+  steps,
   items,
   onAssignVersion,
 }: {
+  build?: Build;
+  steps?: BuildStep[];
   items: BuildArtifact[];
   onAssignVersion?: (artifactID: string, version: string) => Promise<void>;
 }) {
+  const [openAssignID, setOpenAssignID] = useState<string | null>(null);
+
   return (
-    <table className="table artifacts-table">
-      <thead>
-        <tr>
-          <th>Artifact</th>
-          <th>Size</th>
-          <th>Checksum</th>
-          <th>Version Tags</th>
-          <th>Created</th>
-          <th>
-            <span className="sr-only">Actions</span>
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {sortArtifacts(items).map((item) => (
-          <tr key={item.id}>
-            <td className="artifact-path">
-              <div className="artifact-catalog-primary">
-                <Link to={`/artifacts/${item.id}`}>{artifactTitle(item)}</Link>
-                {artifactSecondaryPath(item) && (
-                  <div className="subtle-text artifact-mono">
-                    {artifactSecondaryPath(item)}
+    <div className="artifact-build-list">
+      {sortArtifacts(items).map((item) => {
+        const versions = tagValues(item, "version");
+        const channels = tagValues(item, "channel");
+        const sourceRef = buildSourceRefValue(build);
+        const sourceRefHref = buildGitHubRefURL(build, sourceRef);
+        const sourceCommit = buildPrimaryCommitValue(build);
+        const sourceCommitHref = buildGitHubCommitURL(build, sourceCommit);
+        const typeLabel = buildArtifactTypeLabel(item);
+        const compactPath = artifactSecondaryPath(item) ?? item.path;
+        const hasLabels = versions.length > 0 || channels.length > 0;
+        const showAssignEditor =
+          openAssignID === item.id && Boolean(onAssignVersion);
+        const provenanceLabel =
+          sourceRef ?? (sourceCommit ? shortSHA(sourceCommit) : null);
+        const provenanceHref = sourceRef ? sourceRefHref : sourceCommitHref;
+        const needsScopeBadge = !item.step_id;
+
+        return (
+          <article
+            key={item.id}
+            className="artifact-build-card artifact-build-card-compact"
+          >
+            <div className="artifact-build-card-header">
+              <div className="artifact-build-summary">
+                <div className="artifact-card-kicker">
+                  {typeLabel ? (
+                    <span className="artifact-type-pill">{typeLabel}</span>
+                  ) : null}
+                  {needsScopeBadge ? (
+                    <span className="artifact-secondary-pill">
+                      {stepScopeLabel(item, steps)}
+                    </span>
+                  ) : null}
+                  {versions.map((version) => (
+                    <span
+                      key={`${item.id}-version-${version}`}
+                      className="version-tag-pill"
+                    >
+                      {version}
+                    </span>
+                  ))}
+                  {channels.map((channel) => (
+                    <span
+                      key={`${item.id}-channel-${channel}`}
+                      className="version-tag-pill artifact-channel-pill"
+                    >
+                      {channel}
+                    </span>
+                  ))}
+                </div>
+                <div className="artifact-build-copy">
+                  <Link
+                    className="artifact-build-link"
+                    to={`/artifacts/${item.id}`}
+                  >
+                    {artifactTitle(item)}
+                  </Link>
+                  <div className="artifact-build-meta subtle-text">
+                    <span className="artifact-mono">{compactPath}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{formatFileSize(item.size_bytes)}</span>
+                    {item.checksum_sha256 ? (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span
+                          className="artifact-mono artifact-checksum-value"
+                          title={item.checksum_sha256}
+                        >
+                          {formatChecksumDisplay(item.checksum_sha256)}
+                        </span>
+                      </>
+                    ) : null}
+                    {provenanceLabel ? (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        {provenanceHref ? (
+                          <a href={provenanceHref}>{provenanceLabel}</a>
+                        ) : (
+                          <span>{provenanceLabel}</span>
+                        )}
+                      </>
+                    ) : null}
                   </div>
-                )}
+                </div>
               </div>
-            </td>
-            <td className="artifact-size-cell">
-              {formatFileSize(item.size_bytes)}
-            </td>
-            <td className="artifact-mono artifact-checksum-cell">
-              {item.checksum_sha256 ? (
-                <span
-                  className="artifact-checksum-value"
-                  title={item.checksum_sha256}
-                >
-                  {formatChecksumDisplay(item.checksum_sha256)}
-                </span>
-              ) : (
-                "—"
-              )}
-            </td>
-            <td>
-              <VersionTagEditor
-                tags={item.version_tags ?? []}
-                emptyText="No version tags yet."
-                inputLabel={`artifact-version-${item.id}`}
-                onAssign={
-                  onAssignVersion
-                    ? (version) => onAssignVersion(item.id, version)
-                    : undefined
-                }
-              />
-            </td>
-            <td>{formatTime(item.created_at)}</td>
-            <td>
-              <div className="artifact-actions">
-                <Link to={`/artifacts/${item.id}`}>Open</Link>
+              <div className="artifact-actions artifact-build-actions">
+                <Link to={`/artifacts/${item.id}`}>Open artifact</Link>
+                <Link to={buildArtifactBrowserPath(item, build)}>
+                  Repository view
+                </Link>
                 <a href={artifactDownloadURL(item.download_url_path)}>
                   Download
                 </a>
+                {onAssignVersion ? (
+                  <button
+                    type="button"
+                    className="inline-action-button artifact-assign-toggle"
+                    onClick={() =>
+                      setOpenAssignID((current) =>
+                        current === item.id ? null : item.id,
+                      )
+                    }
+                  >
+                    {showAssignEditor ? "Hide version" : "Assign version"}
+                  </button>
+                ) : null}
               </div>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+            </div>
+            {showAssignEditor ? (
+              <div className="artifact-build-card-footer artifact-build-card-editor">
+                {!hasLabels ? (
+                  <p className="subtle-text artifact-build-empty-copy">
+                    No versions or channels yet.
+                  </p>
+                ) : null}
+                <VersionTagEditor
+                  tags={item.version_tags ?? []}
+                  emptyText="No versions or channels yet."
+                  inputLabel={`artifact-version-${item.id}`}
+                  submitLabel="Save version"
+                  onAssign={
+                    onAssignVersion
+                      ? (version) => onAssignVersion(item.id, version)
+                      : undefined
+                  }
+                />
+              </div>
+            ) : null}
+          </article>
+        );
+      })}
+    </div>
   );
 }
 
 export function BuildArtifactsSection({
+  build,
   artifacts,
   steps,
   isLoading,
   error,
   onAssignVersion,
 }: Props) {
-  if (isLoading) return <p>Loading artifacts…</p>;
-  if (error)
+  if (isLoading) {
+    return <p className="subtle-text">Loading artifacts…</p>;
+  }
+
+  if (error) {
     return (
       <p className="error-text">Failed to load artifacts: {String(error)}</p>
     );
-  if (!artifacts || artifacts.length === 0) {
+  }
+
+  if (artifacts.length === 0) {
     return (
       <p className="subtle-text">
         No artifacts were collected for this build. Check packaging or upload
@@ -162,13 +290,23 @@ export function BuildArtifactsSection({
       {shared.length > 0 && (
         <div className="artifact-group">
           <h4 className="artifact-group-label">Build-level</h4>
-          <ArtifactTable items={shared} onAssignVersion={onAssignVersion} />
+          <ArtifactTable
+            build={build}
+            steps={steps}
+            items={shared}
+            onAssignVersion={onAssignVersion}
+          />
         </div>
       )}
       {stepEntries.map(([stepId, items]) => (
         <div key={stepId} className="artifact-group">
           <h4 className="artifact-group-label">{stepLabel(stepId, steps)}</h4>
-          <ArtifactTable items={items} onAssignVersion={onAssignVersion} />
+          <ArtifactTable
+            build={build}
+            steps={steps}
+            items={items}
+            onAssignVersion={onAssignVersion}
+          />
         </div>
       ))}
     </div>

@@ -112,6 +112,7 @@ function makeArtifact(overrides: Partial<BuildArtifact> = {}): BuildArtifact {
     build_id: "build-1",
     step_id: null,
     path: "dist/app",
+    artifact_type: "generic",
     size_bytes: 128,
     content_type: null,
     checksum_sha256: null,
@@ -289,14 +290,16 @@ describe("BuildDetailPage", () => {
       .getByText(/Build #21 · Build ID build-1 · Attempt 1/)
       .closest("section") as HTMLElement;
 
-    expect(screen.getByRole("link", { name: "Platform" })).toHaveAttribute(
-      "href",
-      "/projects/project-1",
-    );
-    expect(screen.getByRole("link", { name: "release" })).toHaveAttribute(
-      "href",
-      "/jobs/job-1",
-    );
+    expect(
+      screen
+        .getAllByRole("link", { name: "Platform" })
+        .some((link) => link.getAttribute("href") === "/projects/project-1"),
+    ).toBe(true);
+    expect(
+      screen
+        .getAllByRole("link", { name: "release" })
+        .some((link) => link.getAttribute("href") === "/jobs/job-1"),
+    ).toBe(true);
     expect(
       screen.getAllByText("github • refs/heads/main • abc1234 • octocat"),
     ).toHaveLength(1);
@@ -343,10 +346,11 @@ describe("BuildDetailPage", () => {
     await screen.findByRole("heading", { level: 2, name: "release #21" });
 
     expect(mockedGetJob).toHaveBeenCalledWith("job-1");
-    expect(screen.getByRole("link", { name: "release" })).toHaveAttribute(
-      "href",
-      "/jobs/job-1",
-    );
+    expect(
+      screen
+        .getAllByRole("link", { name: "release" })
+        .some((link) => link.getAttribute("href") === "/jobs/job-1"),
+    ).toBe(true);
     expect(screen.queryByText("Job job-1")).toBeNull();
   });
 
@@ -402,6 +406,72 @@ describe("BuildDetailPage", () => {
     expect(link.getAttribute("href")).toBe(
       "/api/builds/build-1/artifacts/artifact-1/download",
     );
+  });
+
+  it("renders artifact lineage links from build provenance and repository routes", async () => {
+    mockedGetBuildArtifacts.mockResolvedValueOnce([
+      makeArtifact({
+        id: "artifact-lineage",
+        artifact_type: "npm_package",
+        path: "packages/demo-1.2.3.tgz",
+        version_tags: [
+          {
+            id: "tag-version-1",
+            job_id: "job-1",
+            version: "1.2.3",
+            target_type: "artifact",
+            artifact_id: "artifact-lineage",
+            created_at: "2026-03-30T00:00:04Z",
+          },
+          {
+            id: "tag-channel-1",
+            job_id: "job-1",
+            kind: "channel",
+            version: "stable",
+            target_type: "artifact",
+            artifact_id: "artifact-lineage",
+            created_at: "2026-03-30T00:00:04Z",
+          },
+        ],
+      }),
+    ]);
+
+    renderPage();
+
+    await screen.findByRole("link", { name: "Open artifact" });
+
+    expect(screen.getByText("npm package")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open artifact" })).toHaveAttribute(
+      "href",
+      "/artifacts/artifact-lineage",
+    );
+    expect(
+      screen
+        .getAllByRole("link", { name: "Repository view" })
+        .some(
+          (link) =>
+            link.getAttribute("href") ===
+            "/artifacts/logical?q=packages%2Fdemo-1.2.3.tgz&job_id=job-1",
+        ),
+    ).toBe(true);
+    expect(
+      screen
+        .getAllByRole("link", { name: "refs/heads/main" })
+        .every(
+          (link) =>
+            link.getAttribute("href") ===
+            "https://github.com/example/platform/tree/main",
+        ),
+    ).toBe(true);
+    expect(
+      screen
+        .getAllByRole("link", { name: "def9876" })
+        .every(
+          (link) =>
+            link.getAttribute("href") ===
+            "https://github.com/example/platform/commit/def9876543210",
+        ),
+    ).toBe(true);
   });
 
   it("renders GitHub provenance links when repository metadata is available", async () => {
@@ -1102,6 +1172,8 @@ describe("BuildDetailPage", () => {
     await waitFor(() => {
       expect(screen.getByText("Artifacts")).toBeTruthy();
     });
+
+    fireEvent.click(screen.getByRole("button", { name: "Assign version" }));
 
     const input = screen.getByLabelText("artifact-version-artifact-1");
     fireEvent.change(input, {

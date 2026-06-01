@@ -414,6 +414,9 @@ func TestBuildHandler_GetBuildArtifacts(t *testing.T) {
 	if artifactData["path"] != "dist/app" {
 		t.Fatalf("expected path dist/app, got %v", artifactData["path"])
 	}
+	if artifactData["artifact_type"] != "unknown" {
+		t.Fatalf("expected artifact_type unknown, got %v", artifactData["artifact_type"])
+	}
 	if artifactData["download_url_path"] != "/builds/build-1/artifacts/artifact-1/download" {
 		t.Fatalf("expected route-relative download path, got %v", artifactData["download_url_path"])
 	}

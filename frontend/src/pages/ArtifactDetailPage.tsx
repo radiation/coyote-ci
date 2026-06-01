@@ -1,38 +1,39 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { createJobVersionTags, getArtifact, artifactDownloadURL } from "../api";
+import {
+  artifactDownloadURL,
+  createJobVersionTags,
+  getArtifact,
+  getBuild,
+  getBuildArtifacts,
+} from "../api";
+import { VersionTagEditor } from "../components/VersionTagEditor";
 import { StatusBadge } from "../components/StatusBadge";
 import { APIError } from "../api/request";
-import type { ArtifactDetail, VersionTag } from "../types";
-import { formatFileSize } from "../utils/format";
+import type { ArtifactDetail, BuildArtifact, VersionTag } from "../types";
+import {
+  artifactTypeLabel,
+  artifactSecondaryPath,
+  artifactTitle as formatArtifactTitle,
+  formatChecksumDisplay,
+  formatFileSize,
+} from "../utils/format";
 import { formatTime } from "../utils/time";
-
-function mergeVersionTags(
-  existing: VersionTag[] | undefined,
-  created: VersionTag[],
-): VersionTag[] {
-  const merged = [...(existing ?? [])];
-  const seenIDs = new Set(merged.map((tag) => tag.id));
-
-  for (const tag of created) {
-    if (seenIDs.has(tag.id)) {
-      continue;
-    }
-    merged.push(tag);
-    seenIDs.add(tag.id);
-  }
-
-  return merged;
-}
-
-function formatVersionTagError(error: unknown): Error {
-  const message = error instanceof Error ? error.message : String(error);
-  return new Error(message.replace(/^API\s+\d+:\s*/, ""));
-}
+import {
+  buildLabel as buildPageLabel,
+  jobLabel as buildPageJobLabel,
+  projectLabel as buildPageProjectLabel,
+} from "./BuildDetailPage.helpers";
+import {
+  buildGitHubCommitURL,
+  buildGitHubRefURL,
+  buildPrimaryCommitValue,
+  buildSourceRefValue,
+  shortSHA,
+} from "../utils/provenance";
 
 function artifactTitle(artifact: ArtifactDetail): string {
-  return artifact.name?.trim() || artifact.path;
+  return formatArtifactTitle(artifact);
 }
 
 function artifactHeaderPath(artifact: ArtifactDetail): string | null {
@@ -96,96 +97,82 @@ function isArtifactNotFoundError(error: unknown): boolean {
   );
 }
 
-function tagLabelList(tags: VersionTag[]) {
-  if (tags.length === 0) {
-    return <span className="subtle-text">None</span>;
+function safeExternalURL(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
   }
-  return (
-    <>
-      {tags.map((tag) => (
-        <span key={tag.id} className="version-tag-pill">
-          {tag.version}
-        </span>
-      ))}
-    </>
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function relatedArtifacts(
+  artifacts: BuildArtifact[] | undefined,
+  currentArtifactID: string,
+): BuildArtifact[] {
+  return (artifacts ?? []).filter(
+    (artifact) => artifact.id !== currentArtifactID,
   );
 }
 
 export function ArtifactDetailPage() {
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
-  const [labelValue, setLabelValue] = useState("");
-  const [labelKind, setLabelKind] = useState<"version" | "channel">("version");
-  const [submitError, setSubmitError] = useState<string | null>(null);
   const { data, isLoading, error } = useQuery({
     queryKey: ["artifact", id],
     queryFn: () => getArtifact(id!),
     enabled: !!id,
   });
-
+  const { data: build } = useQuery({
+    queryKey: ["build", data?.build_id],
+    queryFn: () => getBuild(data!.build_id),
+    enabled: Boolean(data?.build_id),
+  });
+  const {
+    data: buildArtifacts,
+    error: buildArtifactsError,
+    isLoading: buildArtifactsLoading,
+  } = useQuery({
+    queryKey: ["buildArtifacts", data?.build_id],
+    queryFn: () => getBuildArtifacts(data!.build_id),
+    enabled: Boolean(data?.build_id),
+  });
   const createVersionTagMutation = useMutation({
-    mutationFn: async ({
+    mutationFn: ({
+      jobID,
       version,
       kind,
+      artifactID,
     }: {
+      jobID: string;
       version: string;
-      kind: "version" | "channel";
-    }) => {
-      if (!id) {
-        throw new Error("Artifact ID is required.");
-      }
-      if (!data?.job_id) {
-        throw new Error("Artifact is not associated with a job.");
-      }
-      return createJobVersionTags(data.job_id, {
-        kind,
+      kind?: "version" | "channel";
+      artifactID: string;
+    }) =>
+      createJobVersionTags(jobID, {
         version,
-        artifact_ids: [id],
-      });
-    },
-    onSuccess: (createdTags) => {
-      if (!id) {
-        return;
-      }
-      queryClient.setQueryData<ArtifactDetail | undefined>(
-        ["artifact", id],
-        (current) => {
-          if (!current) {
-            return current;
-          }
-          const artifactTags = createdTags.filter(
-            (tag) => tag.artifact_id === current.id,
-          );
-          if (artifactTags.length === 0) {
-            return current;
-          }
-          return {
-            ...current,
-            version_tags: mergeVersionTags(current.version_tags, artifactTags),
-          };
-        },
-      );
-      setLabelValue("");
-      setSubmitError(null);
+        kind,
+        artifact_ids: [artifactID],
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["artifact", id] }),
+        queryClient.invalidateQueries({
+          queryKey: ["buildArtifacts", data?.build_id],
+        }),
+        queryClient.invalidateQueries({ queryKey: ["artifactLogicalBrowse"] }),
+        queryClient.invalidateQueries({ queryKey: ["artifactCatalog"] }),
+      ]);
     },
   });
-
-  async function handleAssignVersionTag() {
-    const trimmed = labelValue.trim();
-    if (!trimmed) {
-      setSubmitError("Label is required.");
-      return;
-    }
-    try {
-      setSubmitError(null);
-      await createVersionTagMutation.mutateAsync({
-        version: trimmed,
-        kind: labelKind,
-      });
-    } catch (mutationError) {
-      setSubmitError(formatVersionTagError(mutationError).message);
-    }
-  }
 
   if (isLoading) {
     return <p>Loading artifact…</p>;
@@ -202,16 +189,50 @@ export function ArtifactDetailPage() {
     return <p className="error-text">Artifact not found.</p>;
   }
 
+  const artifactID = data.id;
   const versionTags = (data.version_tags ?? []).filter(
     (tag) => tagKind(tag) === "version",
   );
   const channelTags = (data.version_tags ?? []).filter(
     (tag) => tagKind(tag) === "channel",
   );
+  const sourceRef = build ? buildSourceRefValue(build) : null;
+  const primaryCommit = build ? buildPrimaryCommitValue(build) : null;
+  const sourceRefHref = build ? buildGitHubRefURL(build, sourceRef) : null;
+  const primaryCommitHref = build
+    ? buildGitHubCommitURL(build, primaryCommit)
+    : null;
+  const repositoryText =
+    build?.repository_url?.trim() ||
+    build?.source?.repository_url?.trim() ||
+    null;
+  const repositoryURL = safeExternalURL(repositoryText);
+  const siblingArtifacts = relatedArtifacts(buildArtifacts, data.id);
+  const tagJobID = data.job_id ?? build?.job_id ?? null;
+
+  async function assignArtifactTag(
+    value: string,
+    kind?: "version" | "channel",
+  ) {
+    if (!tagJobID) {
+      throw new Error("Artifact is not associated with a job.");
+    }
+
+    await createVersionTagMutation.mutateAsync({
+      jobID: tagJobID,
+      version: value,
+      kind,
+      artifactID,
+    });
+  }
 
   return (
     <>
-      <Link to="/artifacts">← Back to artifacts</Link>
+      <div className="artifact-detail-back-links subtle-text">
+        <Link to="/artifacts">← Back to artifacts</Link>
+        <span aria-hidden="true">·</span>
+        <Link to={`/builds/${data.build_id}`}>View producing build</Link>
+      </div>
 
       <section className="detail-panel artifact-detail-header">
         <div>
@@ -221,8 +242,20 @@ export function ArtifactDetailPage() {
               {artifactHeaderPath(data)}
             </p>
           )}
+          <div className="artifact-card-meta">
+            <span className="artifact-type-pill">
+              {artifactTypeLabel(data.artifact_type)}
+            </span>
+            <span className="artifact-secondary-pill">{stepLabel(data)}</span>
+            <span className="artifact-secondary-pill">
+              {build ? buildPageLabel(build) : buildLabel(data)}
+            </span>
+          </div>
         </div>
         <div className="artifact-actions">
+          <Link className="secondary-button" to={`/builds/${data.build_id}`}>
+            Open build
+          </Link>
           <a
             className="secondary-button"
             href={artifactDownloadURL(data.download_url_path)}
@@ -254,7 +287,7 @@ export function ArtifactDetailPage() {
       </div>
 
       <section className="detail-panel">
-        <h3>Artifact Metadata</h3>
+        <h3>Identity</h3>
         <div className="artifact-detail-grid">
           <div>
             <strong>Name</strong>
@@ -262,7 +295,38 @@ export function ArtifactDetailPage() {
           </div>
           <div>
             <strong>Type</strong>
-            <span>{data.artifact_type}</span>
+            <span>{artifactTypeLabel(data.artifact_type)}</span>
+          </div>
+          <div>
+            <strong>Versions</strong>
+            <VersionTagEditor
+              tags={versionTags}
+              emptyText="No versions yet."
+              inputLabel={`artifact-detail-version-${artifactID}`}
+              submitLabel="Assign version"
+              requiredMessage="Version is required."
+              onAssign={
+                tagJobID
+                  ? (value) => assignArtifactTag(value, "version")
+                  : undefined
+              }
+            />
+          </div>
+          <div>
+            <strong>Channels</strong>
+            <VersionTagEditor
+              tags={channelTags}
+              emptyText="No channels yet."
+              inputLabel={`artifact-detail-channel-${artifactID}`}
+              submitLabel="Assign channel"
+              placeholder="stable"
+              requiredMessage="Channel is required."
+              onAssign={
+                tagJobID
+                  ? (value) => assignArtifactTag(value, "channel")
+                  : undefined
+              }
+            />
           </div>
           <div>
             <strong>Size</strong>
@@ -273,113 +337,178 @@ export function ArtifactDetailPage() {
             <span>{formatTime(data.created_at)}</span>
           </div>
           <div>
-            <strong>Project</strong>
-            <span>{projectLabel(data)}</span>
-          </div>
-          <div>
-            <strong>Build</strong>
-            <span>
-              <Link to={`/builds/${data.build_id}`}>{buildLabel(data)}</Link>
-            </span>
-          </div>
-          <div>
-            <strong>Job</strong>
-            <span>
-              {data.job_id ? (
-                <Link to={`/jobs/${data.job_id}`}>{jobLabel(data)}</Link>
-              ) : (
-                "—"
-              )}
-            </span>
-          </div>
-          <div>
-            <strong>Step</strong>
-            <span>{stepLabel(data)}</span>
-          </div>
-          <div>
             <strong>Storage</strong>
             <span>{data.storage_provider}</span>
+          </div>
+          <div>
+            <strong>Path</strong>
+            <span className="artifact-mono">{data.path}</span>
           </div>
           <div>
             <strong>Content Type</strong>
             <span>{data.content_type ?? "—"}</span>
           </div>
           <div className="artifact-version-meta-full">
-            <strong>Checksum</strong>
-            <span className="artifact-mono">{data.checksum_sha256 ?? "—"}</span>
+            <strong>Digest</strong>
+            <span
+              className="artifact-mono"
+              title={data.checksum_sha256 ?? undefined}
+            >
+              {data.checksum_sha256
+                ? formatChecksumDisplay(data.checksum_sha256)
+                : "—"}
+            </span>
           </div>
         </div>
       </section>
 
       <section className="detail-panel">
-        <h3>Versions / Channels</h3>
-        <p className="subtle-text">
-          Versions are immutable releases. Channels are movable aliases such as
-          latest or prod.
-        </p>
+        <h3>Produced by</h3>
         <div className="artifact-detail-grid">
           <div>
-            <strong>Current Versions</strong>
-            <div className="version-tag-list" aria-label="Artifact versions">
-              {tagLabelList(versionTags)}
-            </div>
+            <strong>Project</strong>
+            <span>
+              {build ? (
+                <Link to={`/projects/${build.project_id}`}>
+                  {buildPageProjectLabel(build)}
+                </Link>
+              ) : (
+                projectLabel(data)
+              )}
+            </span>
           </div>
           <div>
-            <strong>Current Channels</strong>
-            <div className="version-tag-list" aria-label="Artifact channels">
-              {tagLabelList(channelTags)}
-            </div>
+            <strong>Job</strong>
+            <span>
+              {data.job_id ? (
+                <Link to={`/jobs/${data.job_id}`}>
+                  {build ? buildPageJobLabel(build) : jobLabel(data)}
+                </Link>
+              ) : (
+                "—"
+              )}
+            </span>
+          </div>
+          <div>
+            <strong>Build</strong>
+            <span>
+              <Link to={`/builds/${data.build_id}`}>
+                {build ? buildPageLabel(build) : buildLabel(data)}
+              </Link>
+            </span>
+          </div>
+          <div>
+            <strong>Status</strong>
+            <span>
+              <StatusBadge status={data.build_status} />
+            </span>
+          </div>
+          <div>
+            <strong>Step</strong>
+            <span>{stepLabel(data)}</span>
           </div>
         </div>
-        {data.job_id && (
-          <form
-            className="version-tag-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void handleAssignVersionTag();
-            }}
-          >
-            <label
-              className="sr-only"
-              htmlFor={`artifact-detail-kind-${data.id}`}
-            >
-              Artifact label kind
-            </label>
-            <select
-              id={`artifact-detail-kind-${data.id}`}
-              value={labelKind}
-              onChange={(event) =>
-                setLabelKind(event.target.value as "version" | "channel")
-              }
-              disabled={createVersionTagMutation.isPending}
-            >
-              <option value="version">Version</option>
-              <option value="channel">Channel</option>
-            </select>
-            <label
-              className="sr-only"
-              htmlFor={`artifact-detail-label-${data.id}`}
-            >
-              Artifact label
-            </label>
-            <input
-              id={`artifact-detail-label-${data.id}`}
-              value={labelValue}
-              onChange={(event) => setLabelValue(event.target.value)}
-              placeholder={labelKind === "channel" ? "prod" : "1.2.3"}
-              disabled={createVersionTagMutation.isPending}
-            />
-            <button type="submit" disabled={createVersionTagMutation.isPending}>
-              {createVersionTagMutation.isPending ? "Saving…" : "Assign label"}
-            </button>
-          </form>
-        )}
-        {submitError && <p className="error-text">{submitError}</p>}
-        {!data.job_id && (
-          <p className="subtle-text">
-            This artifact is not associated with a job, so new versions or
-            channels cannot be assigned.
+      </section>
+
+      <section className="detail-panel">
+        <h3>Source provenance</h3>
+        <div className="artifact-detail-grid">
+          <div>
+            <strong>Repository</strong>
+            <span>
+              {repositoryURL ? (
+                <a href={repositoryURL}>{repositoryURL}</a>
+              ) : repositoryText ? (
+                repositoryText
+              ) : (
+                "—"
+              )}
+            </span>
+          </div>
+          <div>
+            <strong>Source ref</strong>
+            <span>
+              {sourceRef ? (
+                sourceRefHref ? (
+                  <a href={sourceRefHref}>{sourceRef}</a>
+                ) : (
+                  sourceRef
+                )
+              ) : (
+                "—"
+              )}
+            </span>
+          </div>
+          <div>
+            <strong>Commit</strong>
+            <span className="artifact-mono">
+              {primaryCommit ? (
+                primaryCommitHref ? (
+                  <a href={primaryCommitHref}>{shortSHA(primaryCommit)}</a>
+                ) : (
+                  shortSHA(primaryCommit)
+                )
+              ) : (
+                "—"
+              )}
+            </span>
+          </div>
+          <div>
+            <strong>Build trigger</strong>
+            <span>{build?.trigger_kind ?? "—"}</span>
+          </div>
+        </div>
+        {!build && !repositoryText && !sourceRef && !primaryCommit ? (
+          <p className="subtle-text artifact-detail-section-note">
+            Producing build provenance is not available yet.
           </p>
+        ) : null}
+      </section>
+
+      <section className="detail-panel">
+        <h3>Related artifacts</h3>
+        {buildArtifactsLoading ? (
+          <p className="subtle-text">Loading related artifacts…</p>
+        ) : buildArtifactsError ? (
+          <p className="subtle-text">
+            Related artifacts are unavailable: {String(buildArtifactsError)}
+          </p>
+        ) : siblingArtifacts.length === 0 ? (
+          <p className="subtle-text">
+            No other artifacts from this build were recorded.
+          </p>
+        ) : (
+          <div className="job-latest-outputs-list">
+            {siblingArtifacts.map((artifact) => (
+              <article key={artifact.id} className="job-latest-output-item">
+                <div className="job-latest-output-copy">
+                  <Link to={`/artifacts/${artifact.id}`}>
+                    {formatArtifactTitle(artifact)}
+                  </Link>
+                  {artifactSecondaryPath(artifact) ? (
+                    <div className="subtle-text artifact-mono">
+                      {artifactSecondaryPath(artifact)}
+                    </div>
+                  ) : null}
+                  <div className="job-latest-output-meta subtle-text">
+                    <span>{formatTime(artifact.created_at)}</span>
+                    <span>{formatFileSize(artifact.size_bytes)}</span>
+                    <span>
+                      {artifact.checksum_sha256
+                        ? formatChecksumDisplay(artifact.checksum_sha256)
+                        : "No digest"}
+                    </span>
+                  </div>
+                </div>
+                <div className="artifact-actions job-latest-output-actions">
+                  <Link to={`/artifacts/${artifact.id}`}>Open artifact</Link>
+                  <a href={artifactDownloadURL(artifact.download_url_path)}>
+                    Download
+                  </a>
+                </div>
+              </article>
+            ))}
+          </div>
         )}
       </section>
     </>

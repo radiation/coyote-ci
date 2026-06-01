@@ -6,7 +6,7 @@ import type {
   ArtifactBrowseVersion,
   VersionTag,
 } from "../types";
-import { formatFileSize } from "../utils/format";
+import { artifactTypeLabel, formatFileSize } from "../utils/format";
 import { formatTime } from "../utils/time";
 import { StatusBadge } from "./StatusBadge";
 import { VersionTagEditor } from "./VersionTagEditor";
@@ -22,13 +22,6 @@ interface ArtifactBrowserProps {
     releaseVersion: string,
   ) => Promise<void>;
 }
-
-const TYPE_LABELS: Record<ArtifactBrowseItem["artifact_type"], string> = {
-  docker_image: "Docker image",
-  npm_package: "npm package",
-  generic: "Generic artifact",
-  unknown: "Unknown",
-};
 
 function tagKind(tag: VersionTag): "version" | "channel" {
   return tag.kind === "channel" ? "channel" : "version";
@@ -237,7 +230,7 @@ export function ArtifactBrowser({
                       {isExpanded ? "-" : "+"}
                     </span>
                     <span className="artifact-type-pill">
-                      {TYPE_LABELS[artifact.artifact_type]}
+                      {artifactTypeLabel(artifact.artifact_type)}
                     </span>
                   </div>
                   <h3 className="artifact-card-title">
@@ -292,7 +285,7 @@ export function ArtifactBrowser({
                   </div>
                   <div>
                     <strong>Type</strong>
-                    <span>{TYPE_LABELS[artifact.artifact_type]}</span>
+                    <span>{artifactTypeLabel(artifact.artifact_type)}</span>
                   </div>
                   <div>
                     <strong>Versions</strong>
@@ -412,7 +405,7 @@ export function ArtifactBrowser({
                           </div>
                           <div className="artifact-actions artifact-version-actions">
                             <Link to={`/artifacts/${version.artifact_id}`}>
-                              Open
+                              Open artifact
                             </Link>
                             <a
                               href={artifactDownloadURL(
@@ -426,7 +419,7 @@ export function ArtifactBrowser({
 
                         <div className="artifact-version-badge-groups">
                           <div className="artifact-version-badge-group">
-                            <strong>Version labels</strong>
+                            <strong>Versions</strong>
                             <div
                               className="version-tag-list"
                               aria-label={`artifact-version-labels-${version.artifact_id}`}
@@ -442,13 +435,13 @@ export function ArtifactBrowser({
                                 ))
                               ) : (
                                 <span className="subtle-text">
-                                  No version labels
+                                  No versions yet
                                 </span>
                               )}
                             </div>
                           </div>
                           <div className="artifact-version-badge-group">
-                            <strong>Channels pointing here</strong>
+                            <strong>Channels</strong>
                             <div
                               className="version-tag-list"
                               aria-label={`artifact-version-channels-${version.artifact_id}`}
@@ -463,7 +456,9 @@ export function ArtifactBrowser({
                                   </span>
                                 ))
                               ) : (
-                                <span className="subtle-text">No channels</span>
+                                <span className="subtle-text">
+                                  No channels yet
+                                </span>
                               )}
                             </div>
                           </div>
@@ -503,7 +498,7 @@ export function ArtifactBrowser({
                             <span>{version.content_type ?? "—"}</span>
                           </div>
                           <div className="artifact-version-meta-full">
-                            <strong>Checksum</strong>
+                            <strong>Digest</strong>
                             <span
                               className="artifact-mono artifact-checksum-value"
                               title={version.checksum_sha256 ?? undefined}
@@ -515,8 +510,9 @@ export function ArtifactBrowser({
 
                         <VersionTagEditor
                           tags={releaseTags}
-                          emptyText="No version labels yet."
+                          emptyText="No versions yet."
                           inputLabel={`artifact-browser-version-${version.artifact_id}`}
+                          submitLabel="Assign version"
                           onAssign={
                             onAssignVersion && version.job_id
                               ? (releaseVersion) =>

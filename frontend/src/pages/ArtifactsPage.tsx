@@ -5,6 +5,7 @@ import { artifactDownloadURL, listArtifactCatalog, listProjects } from "../api";
 import { StatusBadge } from "../components/StatusBadge";
 import type { ArtifactCatalogItem } from "../types";
 import {
+  artifactTypeLabel,
   artifactSecondaryPath,
   artifactTitle,
   formatChecksumDisplay,
@@ -101,6 +102,27 @@ function stepLabel(artifact: ArtifactCatalogItem): string {
     return `Step ${artifact.step_index}`;
   }
   return "Build-level artifact";
+}
+
+function projectLabel(artifact: ArtifactCatalogItem): string {
+  const name = artifact.project_name?.trim() ?? "";
+  const slug = artifact.project_slug?.trim() ?? "";
+  return name || slug || artifact.project_id;
+}
+
+function typeLabel(artifact: ArtifactCatalogItem): string {
+  return artifactTypeLabel(artifact.artifact_type);
+}
+
+function buildArtifactRepositoryPath(artifact: ArtifactCatalogItem): string {
+  const params = new URLSearchParams();
+  params.set("q", artifact.path);
+  if (artifact.job_id?.trim()) {
+    params.set("job_id", artifact.job_id);
+  } else {
+    params.set("project_id", artifact.project_id);
+  }
+  return `/artifacts/logical?${params.toString()}`;
 }
 
 export function ArtifactsPage() {
@@ -247,12 +269,12 @@ export function ArtifactsPage() {
         <div>
           <h2>Artifacts</h2>
           <p className="subtle-text">
-            Persisted artifact catalog.
+            Artifact listing with build lineage.
             {isFetching && !isLoading ? " Updating…" : ""}
           </p>
           <p className="subtle-text">
-            <Link to="/artifacts/logical">Open logical browser</Link> for
-            grouped versions and tags.
+            <Link to="/artifacts/logical">Repository view</Link> groups
+            artifacts by path with versions and channels.
           </p>
           <p className="subtle-text">
             Updated{" "}
@@ -266,7 +288,7 @@ export function ArtifactsPage() {
       <section className="artifact-filters-panel" aria-label="Artifact filters">
         <div className="artifact-filter-toolbar">
           <div>
-            <h3>Artifact Catalog</h3>
+            <h3>Artifact listing</h3>
             <p className="subtle-text">
               {activeFilterCount > 0
                 ? `${activeFilterCount} active filter${activeFilterCount === 1 ? "" : "s"}`
@@ -392,83 +414,129 @@ export function ArtifactsPage() {
                 ? "No artifacts matched the current filters."
                 : "No artifacts have been published yet."}
           </p>
+          <p className="subtle-text">
+            {hasActiveFilters
+              ? "Adjust the search or clear filters to broaden the repository view."
+              : "Published build outputs will appear here with lineage back to their producing builds."}
+          </p>
         </div>
       ) : (
-        <section className="panel artifacts-catalog-panel">
-          <table className="table artifacts-table artifact-catalog-table">
-            <thead>
-              <tr>
-                <th>Artifact</th>
-                <th>Build</th>
-                <th>Job</th>
-                <th>Step</th>
-                <th>Size</th>
-                <th>Checksum</th>
-                <th>Created</th>
-                <th>
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {artifacts.map((artifact) => (
-                <tr key={artifact.id}>
-                  <td className="artifact-path">
-                    <div className="artifact-catalog-primary">
-                      <Link to={`/artifacts/${artifact.id}`}>
-                        {artifactTitle(artifact)}
-                      </Link>
-                      {artifactSecondaryPath(artifact) && (
-                        <span className="subtle-text artifact-mono">
-                          {artifactSecondaryPath(artifact)}
+        <section className="artifacts-catalog-panel">
+          <div className="artifact-build-list">
+            {artifacts.map((artifact) => (
+              <article key={artifact.id} className="artifact-build-card">
+                <div className="artifact-build-card-header">
+                  <div className="artifact-catalog-primary">
+                    <div className="artifact-card-kicker">
+                      <span className="artifact-type-pill">
+                        {typeLabel(artifact)}
+                      </span>
+                      <span className="artifact-secondary-pill">
+                        {stepLabel(artifact)}
+                      </span>
+                      <span className="artifact-secondary-pill">
+                        Project {projectLabel(artifact)}
+                      </span>
+                      {artifact.job_id ? (
+                        <span className="artifact-secondary-pill">
+                          Job {jobLabel(artifact)}
                         </span>
-                      )}
+                      ) : null}
                     </div>
-                  </td>
-                  <td>
-                    <div className="artifact-catalog-primary">
+                    <Link
+                      className="artifact-build-link"
+                      to={`/artifacts/${artifact.id}`}
+                    >
+                      {artifactTitle(artifact)}
+                    </Link>
+                    {artifactSecondaryPath(artifact) ? (
+                      <span className="subtle-text artifact-mono">
+                        {artifactSecondaryPath(artifact)}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="artifact-card-summary">
+                    <span className="artifact-summary-primary">
                       <Link to={`/builds/${artifact.build_id}`}>
                         {buildLabel(artifact)}
                       </Link>
-                      <StatusBadge status={artifact.build_status} />
-                    </div>
-                  </td>
-                  <td>
-                    {artifact.job_id ? (
-                      <Link to={`/jobs/${artifact.job_id}`}>
-                        {jobLabel(artifact)}
+                    </span>
+                    <StatusBadge status={artifact.build_status} />
+                    <span>{formatTime(artifact.created_at)}</span>
+                    <span>{formatFileSize(artifact.size_bytes)}</span>
+                  </div>
+                </div>
+
+                <div className="artifact-detail-grid artifact-build-card-grid">
+                  <div>
+                    <strong>Path</strong>
+                    <span className="artifact-mono">{artifact.path}</span>
+                  </div>
+                  <div>
+                    <strong>Build</strong>
+                    <span>
+                      <Link to={`/builds/${artifact.build_id}`}>
+                        {buildLabel(artifact)}
                       </Link>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td>{stepLabel(artifact)}</td>
-                  <td>{formatFileSize(artifact.size_bytes)}</td>
-                  <td className="artifact-mono artifact-checksum-cell">
-                    {artifact.checksum_sha256 ? (
-                      <span
-                        className="artifact-checksum-value"
-                        title={artifact.checksum_sha256}
-                      >
-                        {formatChecksumDisplay(artifact.checksum_sha256)}
-                      </span>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td>{formatTime(artifact.created_at)}</td>
-                  <td>
-                    <div className="artifact-actions">
-                      <Link to={`/artifacts/${artifact.id}`}>Details</Link>
-                      <a href={artifactDownloadURL(artifact.download_url_path)}>
-                        Download
-                      </a>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    </span>
+                  </div>
+                  <div>
+                    <strong>Build status</strong>
+                    <span>
+                      <StatusBadge status={artifact.build_status} />
+                    </span>
+                  </div>
+                  <div>
+                    <strong>Created</strong>
+                    <span>{formatTime(artifact.created_at)}</span>
+                  </div>
+                  <div>
+                    <strong>Job</strong>
+                    <span>
+                      {artifact.job_id ? (
+                        <Link to={`/jobs/${artifact.job_id}`}>
+                          {jobLabel(artifact)}
+                        </Link>
+                      ) : (
+                        "—"
+                      )}
+                    </span>
+                  </div>
+                  <div>
+                    <strong>Size</strong>
+                    <span>{formatFileSize(artifact.size_bytes)}</span>
+                  </div>
+                  <div>
+                    <strong>Content type</strong>
+                    <span>{artifact.content_type ?? "—"}</span>
+                  </div>
+                  <div className="artifact-version-meta-full">
+                    <strong>Digest</strong>
+                    <span
+                      className="artifact-mono artifact-checksum-value"
+                      title={artifact.checksum_sha256 ?? undefined}
+                    >
+                      {artifact.checksum_sha256
+                        ? formatChecksumDisplay(artifact.checksum_sha256)
+                        : "—"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="artifact-build-card-footer">
+                  <div className="artifact-actions">
+                    <Link to={`/artifacts/${artifact.id}`}>Open artifact</Link>
+                    <Link to={buildArtifactRepositoryPath(artifact)}>
+                      Repository view
+                    </Link>
+                    <a href={artifactDownloadURL(artifact.download_url_path)}>
+                      Download
+                    </a>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
         </section>
       )}
     </>

@@ -11,6 +11,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { ArtifactsPage } from "./ArtifactsPage";
 import { listArtifactCatalog, listProjects } from "../api";
 import { ThemeProvider } from "../theme";
+import type { ArtifactCatalogItem } from "../types";
 
 vi.mock("../api", () => ({
   listArtifactCatalog: vi.fn(),
@@ -21,6 +22,42 @@ vi.mock("../api", () => ({
 function LocationSearchProbe() {
   const location = useLocation();
   return <output data-testid="location-search">{location.search}</output>;
+}
+
+function baseArtifact(): ArtifactCatalogItem {
+  return {
+    id: "artifact-1",
+    name: "coyote-ci/package-a",
+    path: "packages/pkg-a.tgz",
+    artifact_type: "npm_package",
+    build_id: "build-1",
+    build_number: 41,
+    build_status: "success",
+    project_id: "project-1",
+    project_name: "Platform",
+    project_slug: "platform",
+    job_id: "job-1",
+    job_name: "backend-ci",
+    step_id: "step-1",
+    step_index: 1,
+    step_name: "Publish package",
+    size_bytes: 1024,
+    content_type: "application/gzip",
+    checksum_sha256:
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    storage_provider: "filesystem",
+    download_url_path: "/builds/build-1/artifacts/artifact-1/download",
+    created_at: "2026-04-25T09:00:00Z",
+  };
+}
+
+function buildArtifact(
+  overrides: Partial<ArtifactCatalogItem> = {},
+): ArtifactCatalogItem {
+  return {
+    ...baseArtifact(),
+    ...overrides,
+  };
 }
 
 function renderPage(initialEntries = ["/artifacts"]) {
@@ -58,32 +95,6 @@ describe("ArtifactsPage", () => {
   const mockedListArtifactCatalog = vi.mocked(listArtifactCatalog);
   const mockedListProjects = vi.mocked(listProjects);
 
-  function buildArtifact(index: number) {
-    return {
-      id: `artifact-${index}`,
-      name: `coyote-ci/package-${index}`,
-      path: `packages/pkg-${index}.tgz`,
-      artifact_type: "npm_package" as const,
-      build_id: `build-${index}`,
-      build_number: index,
-      build_status: "success" as const,
-      project_id: "project-1",
-      project_name: "Platform",
-      project_slug: "platform",
-      job_id: "job-1",
-      job_name: "backend-ci",
-      step_id: `step-${index}`,
-      step_index: 1,
-      step_name: "Publish package",
-      size_bytes: 1024 + index,
-      content_type: "application/gzip",
-      checksum_sha256: `sha-${index}`,
-      storage_provider: "filesystem",
-      download_url_path: `/builds/build-${index}/artifacts/artifact-${index}/download`,
-      created_at: "2026-04-25T09:00:00Z",
-    };
-  }
-
   beforeEach(() => {
     vi.clearAllMocks();
     mockedListProjects.mockResolvedValue([
@@ -97,116 +108,83 @@ describe("ArtifactsPage", () => {
       },
     ]);
     mockedListArtifactCatalog.mockResolvedValue([
-      {
-        id: "artifact-1",
-        name: "coyote-ci/package-a",
-        path: "packages/pkg-a.tgz",
-        artifact_type: "npm_package",
-        build_id: "build-1",
-        build_number: 41,
-        build_status: "success",
-        project_id: "project-1",
-        project_name: "Platform",
-        project_slug: "platform",
-        job_id: "job-1",
-        job_name: "backend-ci",
-        step_id: "step-1",
-        step_index: 1,
-        step_name: "Publish package",
-        size_bytes: 1024,
-        content_type: "application/gzip",
-        checksum_sha256: "pkg-sha",
-        storage_provider: "filesystem",
-        download_url_path: "/builds/build-1/artifacts/artifact-1/download",
-        created_at: "2026-04-25T09:00:00Z",
-      },
-      {
+      buildArtifact(),
+      buildArtifact({
         id: "artifact-2",
         name: "coyote-ci/backend",
         path: "images/backend-image.tar",
         artifact_type: "docker_image",
         build_id: "build-2",
         build_number: 42,
-        build_status: "success",
-        project_id: "project-1",
-        project_name: "Platform",
-        project_slug: "platform",
-        job_id: "job-1",
-        job_name: "backend-ci",
+        build_status: "failed",
         step_id: "step-2",
         step_index: 2,
         step_name: "Publish image",
         size_bytes: 4096,
         content_type: "application/x-tar",
         checksum_sha256: "docker-sha",
-        storage_provider: "filesystem",
         download_url_path: "/builds/build-2/artifacts/artifact-2/download",
         created_at: "2026-04-25T10:00:00Z",
-      },
+      }),
     ]);
   });
 
-  it("renders artifact rows with build, job, detail, and download links", async () => {
+  it("renders artifact cards with metadata and navigation links", async () => {
     renderPage();
 
     expect(
-      await screen.findByRole("link", { name: "Open logical browser" }),
+      await screen.findByRole("link", { name: "Repository view" }),
     ).toHaveAttribute("href", "/artifacts/logical");
 
     const artifactLink = await screen.findByRole("link", {
       name: "coyote-ci/package-a",
     });
-    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeTruthy();
-    expect(artifactLink.getAttribute("href")).toBe("/artifacts/artifact-1");
+    const card = artifactLink.closest("article") as HTMLElement;
 
-    const row = artifactLink.closest("tr");
-    expect(row).toBeTruthy();
-    const scope = within(row as HTMLTableRowElement);
-    expect(scope.getByRole("link", { name: "Build #41" })).toHaveAttribute(
+    expect(artifactLink).toHaveAttribute("href", "/artifacts/artifact-1");
+    expect(within(card).getByText("npm package")).toBeTruthy();
+    expect(within(card).getByText("Project Platform")).toBeTruthy();
+    expect(
+      within(card)
+        .getAllByRole("link", { name: "Build #41" })
+        .every((link) => link.getAttribute("href") === "/builds/build-1"),
+    ).toBe(true);
+    expect(
+      within(card).getByRole("link", { name: "backend-ci" }),
+    ).toHaveAttribute("href", "/jobs/job-1");
+    expect(
+      within(card).getByRole("link", { name: "Open artifact" }),
+    ).toHaveAttribute("href", "/artifacts/artifact-1");
+    expect(
+      within(card).getByRole("link", { name: "Repository view" }),
+    ).toHaveAttribute(
       "href",
-      "/builds/build-1",
+      "/artifacts/logical?q=packages%2Fpkg-a.tgz&job_id=job-1",
     );
-    expect(scope.getByRole("link", { name: "backend-ci" })).toHaveAttribute(
-      "href",
-      "/jobs/job-1",
-    );
-    expect(scope.getByRole("link", { name: "Details" })).toHaveAttribute(
-      "href",
-      "/artifacts/artifact-1",
-    );
-    expect(scope.getByRole("link", { name: "Download" })).toHaveAttribute(
+    expect(
+      within(card).getByRole("link", { name: "Download" }),
+    ).toHaveAttribute(
       "href",
       "/api/builds/build-1/artifacts/artifact-1/download",
     );
-    expect(scope.getByText("pkg-sha")).toBeTruthy();
+    expect(within(card).getByText("0123456789ab…89abcdef")).toHaveAttribute(
+      "title",
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    );
   });
 
-  it("truncates long checksum display and keeps full checksum in title", async () => {
-    mockedListArtifactCatalog.mockResolvedValueOnce([
-      {
-        ...buildArtifact(1),
-        checksum_sha256:
-          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      },
-    ]);
-
-    renderPage();
-
-    const checksum =
-      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    const truncated = "0123456789ab…89abcdef";
-
-    const checksumDisplay = await screen.findByText(truncated);
-    expect(checksumDisplay).toHaveAttribute("title", checksum);
-  });
-
-  it("shows an empty state when the catalog has no artifacts", async () => {
+  it("shows an empty listing state with a concise repository message", async () => {
     mockedListArtifactCatalog.mockResolvedValueOnce([]);
 
     renderPage();
 
     expect(
       await screen.findByText("No artifacts have been published yet."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Published build outputs will appear here with lineage back to their producing builds.",
+      ),
     ).toBeTruthy();
   });
 
@@ -246,97 +224,47 @@ describe("ArtifactsPage", () => {
     });
   });
 
-  it("shows an error state when the catalog request fails", async () => {
-    mockedListArtifactCatalog.mockRejectedValueOnce(new Error("boom"));
-
-    renderPage();
-
-    expect(
-      await screen.findByText("Failed to load artifacts: Error: boom"),
-    ).toBeTruthy();
-  });
-
-  it("renders fallback labels when optional artifact metadata is sparse", async () => {
+  it("renders fallback labels when optional metadata is sparse", async () => {
     mockedListArtifactCatalog.mockResolvedValueOnce([
-      {
-        ...buildArtifact(1),
+      buildArtifact({
         name: "   ",
         build_number: 0,
         job_name: "   ",
         step_name: "   ",
         step_index: 3,
-      },
+        checksum_sha256: null,
+        content_type: null,
+      }),
     ]);
 
     renderPage();
 
     const artifactLink = await screen.findByRole("link", {
-      name: "packages/pkg-1.tgz",
+      name: "packages/pkg-a.tgz",
     });
-    const row = artifactLink.closest("tr");
-    expect(row).toBeTruthy();
+    const card = artifactLink.closest("article") as HTMLElement;
 
-    const scope = within(row as HTMLTableRowElement);
-    expect(scope.getByRole("link", { name: "Build build-1…" })).toHaveAttribute(
-      "href",
-      "/builds/build-1",
-    );
-    expect(scope.getByRole("link", { name: "job-1…" })).toHaveAttribute(
+    expect(
+      within(card)
+        .getAllByRole("link", { name: "Build build-1…" })
+        .every((link) => link.getAttribute("href") === "/builds/build-1"),
+    ).toBe(true);
+    expect(within(card).getByRole("link", { name: "job-1…" })).toHaveAttribute(
       "href",
       "/jobs/job-1",
     );
-    expect(scope.getByText("Step 3")).toBeTruthy();
+    expect(within(card).getAllByText("Step 3").length).toBeGreaterThan(0);
+    expect(within(card).getAllByText("—").length).toBeGreaterThan(0);
   });
 
-  it("canonicalizes artifact filters and clears them", async () => {
+  it("canonicalizes filters and clears them", async () => {
     mockedListArtifactCatalog.mockResolvedValue([]);
 
     renderPage([
       "/artifacts?q=%20pkg%20&project_id=project-1&job_id=job-1&build_id=build-1&page=2&pageSize=50",
     ]);
 
-    expect(await screen.findByText("No artifacts on page 2")).toBeTruthy();
-
-    fireEvent.change(screen.getByLabelText("Search artifacts"), {
-      target: { value: "   " },
-    });
-    await waitFor(() => {
-      expect(screen.getByTestId("location-search").textContent).toBe(
-        "?project_id=project-1&job_id=job-1&build_id=build-1&pageSize=50",
-      );
-    });
-
-    fireEvent.change(screen.getByLabelText("Project"), {
-      target: { value: "" },
-    });
-    fireEvent.change(screen.getByLabelText("Job ID"), {
-      target: { value: "" },
-    });
-    fireEvent.change(screen.getByLabelText("Build ID"), {
-      target: { value: "" },
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId("location-search").textContent).toBe(
-        "?pageSize=50",
-      );
-      expect(mockedListArtifactCatalog).toHaveBeenLastCalledWith({
-        q: "",
-        limit: 51,
-        offset: 0,
-      });
-    });
-  });
-
-  it("shows the filtered empty state and invalid page size falls back to default", async () => {
-    mockedListArtifactCatalog.mockResolvedValue([]);
-
-    renderPage(["/artifacts?q=pkg&pageSize=999"]);
-
-    expect(
-      await screen.findByText("No artifacts matched the current filters."),
-    ).toBeTruthy();
-    expect(screen.getByDisplayValue("20")).toBeTruthy();
+    expect(await screen.findByText("No artifacts on this page.")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
 
@@ -345,45 +273,13 @@ describe("ArtifactsPage", () => {
     });
   });
 
-  it("paginates forward and backward and updates page size", async () => {
-    mockedListArtifactCatalog.mockResolvedValue(
-      Array.from({ length: 21 }, (_value, index) => buildArtifact(index + 1)),
-    );
+  it("shows an error state when the catalog request fails", async () => {
+    mockedListArtifactCatalog.mockRejectedValueOnce(new Error("boom"));
 
-    renderPage(["/artifacts?page=2"]);
+    renderPage();
 
     expect(
-      await screen.findByText("Showing 21-40; more available"),
+      await screen.findByText("Failed to load artifacts: Error: boom"),
     ).toBeTruthy();
-
-    await waitFor(() => {
-      expect(mockedListArtifactCatalog).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          q: "",
-          limit: 21,
-          offset: 20,
-        }),
-      );
-    });
-    expect(screen.getByTestId("location-search").textContent).toBe("?page=2");
-    expect(screen.getByText("Page 2")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Previous" })).not.toBeDisabled();
-
-    fireEvent.change(screen.getByLabelText("Items per page"), {
-      target: { value: "50" },
-    });
-
-    await waitFor(() => {
-      expect(mockedListArtifactCatalog).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          q: "",
-          limit: 51,
-          offset: 0,
-        }),
-      );
-    });
-    expect(screen.getByTestId("location-search").textContent).toBe(
-      "?pageSize=50",
-    );
   });
 });

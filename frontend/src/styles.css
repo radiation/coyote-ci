@@ -1912,6 +1912,92 @@ h3 {
   margin-top: 8px;
 }
 
+.artifact-build-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.artifact-build-card {
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: linear-gradient(
+    180deg,
+    var(--color-surface) 0%,
+    var(--color-surface-raised) 100%
+  );
+}
+
+.artifact-build-card-compact {
+  padding: 12px 14px;
+}
+
+.artifact-build-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.artifact-build-summary {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.artifact-build-copy {
+  min-width: 0;
+}
+
+.artifact-build-link {
+  font-size: 0.95rem;
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.artifact-build-actions {
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.artifact-build-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 4px;
+}
+
+.artifact-build-meta .artifact-checksum-value {
+  max-width: 140px;
+}
+
+.artifact-inline-tag-list {
+  display: inline-flex;
+}
+
+.artifact-build-card-footer {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border);
+}
+
+.artifact-build-card-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.artifact-build-empty-copy {
+  margin: 0;
+}
+
+.artifact-assign-toggle {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 0.78rem;
+}
+
 .artifact-group-label {
   font-size: 0.85rem;
   font-weight: 600;
@@ -2527,6 +2613,7 @@ h3 {
   }
 
   .artifact-card-heading,
+  .artifact-build-card-header,
   .artifact-version-header,
   .page-header-row,
   .build-summary-header,
@@ -2537,6 +2624,7 @@ h3 {
   }
 
   .artifact-card-summary,
+  .artifact-build-actions,
   .page-header-actions,
   .activity-list-title-row,
   .build-summary-header {
@@ -2546,6 +2634,10 @@ h3 {
   .activity-list-detail-grid {
     flex-direction: column;
     gap: 4px;
+  }
+
+  .artifact-build-actions {
+    justify-content: flex-start;
   }
 
   .artifact-pagination-bar,
