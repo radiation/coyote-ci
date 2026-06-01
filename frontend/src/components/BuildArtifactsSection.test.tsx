@@ -89,7 +89,9 @@ describe("BuildArtifactsSection", () => {
       </MemoryRouter>,
     );
     expect(
-      screen.getByText("No artifacts were collected for this build."),
+      screen.getByText(
+        "No artifacts were collected for this build. Check packaging or upload steps in the execution timeline, then rerun if you expected published outputs.",
+      ),
     ).toBeTruthy();
   });
 

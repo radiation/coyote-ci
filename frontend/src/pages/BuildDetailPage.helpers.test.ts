@@ -7,6 +7,7 @@ import {
   buildStepCounts,
   compactTriggerMetadata,
   jobLabel,
+  operationalBuildTitle,
   projectLabel,
   shortSHA,
   triggerKind,
@@ -67,6 +68,7 @@ describe("BuildDetailPage helpers", () => {
       "github • refs/heads/main • abcdef1 • dev@example.com",
     );
     expect(buildLabel(value)).toBe("Build #42");
+    expect(operationalBuildTitle(value)).toBe("release #42");
     expect(projectLabel(value)).toBe("Platform");
     expect(jobLabel(value)).toBe("release");
   });
@@ -80,6 +82,7 @@ describe("BuildDetailPage helpers", () => {
     expect(triggerKind(build({ trigger_kind: " " }))).toBe("manual");
     expect(compactTriggerMetadata(build())).toBe("");
     expect(buildLabel(value)).toBe("Build build-12");
+    expect(operationalBuildTitle(value)).toBe("Job job-1234 · build-12");
     expect(projectLabel(value)).toBe("platform");
     expect(jobLabel(value)).toBe("Job job-1234");
     expect(jobLabel(build())).toBe("Manual");

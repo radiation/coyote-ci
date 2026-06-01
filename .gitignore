@@ -29,7 +29,11 @@ go.work.sum
 # .idea/
 # .vscode/
 .vscode/settings.json
-.vscode/settings.json
+.vscode/tasks.json
+
+# Node / frontend dependencies
+node_modules/
+frontend/node_modules/
 
 # Local scratch/build temp directories (any depth)
 **/tmp/

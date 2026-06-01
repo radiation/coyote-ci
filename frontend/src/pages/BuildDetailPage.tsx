@@ -20,7 +20,6 @@ import {
 import {
   ArtifactsPanel,
   BuildDetailHeaderActions,
-  BuildStepSummaryGrid,
   BuildSummaryPanel,
   ExecutionSummaryPanel,
   LogsPanel,
@@ -30,6 +29,7 @@ import {
 import {
   buildLabel,
   compactTriggerMetadata,
+  operationalBuildTitle,
   jobLabel,
   projectLabel,
 } from "./BuildDetailPage.helpers";
@@ -206,7 +206,7 @@ export function BuildDetailPage() {
             ) : null}
           </>
         }
-        title={buildLabel(build)}
+        title={operationalBuildTitle(build)}
         description={
           compactTriggerMetadata(build) ||
           "Execution details, logs, artifacts, and provenance."
@@ -240,24 +240,19 @@ export function BuildDetailPage() {
         stepsLoading={stepsLoading}
         buildUpdatedAt={buildUpdatedAt}
       />
-      <BuildStepSummaryGrid
-        build={build}
-        steps={steps}
-        stepsLoading={stepsLoading}
-      />
       <ExecutionSummaryPanel
         build={build}
         steps={steps}
         stepsLoading={stepsLoading}
         stepsError={stepsError}
       />
-      <StepTimelinePanel
-        build={build}
+      <LogsPanel
         steps={steps}
         stepsLoading={stepsLoading}
         stepsError={stepsError}
       />
-      <LogsPanel
+      <StepTimelinePanel
+        build={build}
         steps={steps}
         stepsLoading={stepsLoading}
         stepsError={stepsError}

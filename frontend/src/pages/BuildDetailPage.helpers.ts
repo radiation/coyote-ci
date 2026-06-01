@@ -32,6 +32,19 @@ export function buildLabel(build: Build): string {
     : `Build ${build.id.slice(0, 8)}`;
 }
 
+export function operationalBuildTitle(build: Build): string {
+  const job = jobLabel(build);
+  if (build.build_number) {
+    return job !== "Manual"
+      ? `${job} #${build.build_number}`
+      : buildLabel(build);
+  }
+
+  return job !== "Manual"
+    ? `${job} · ${build.id.slice(0, 8)}`
+    : buildLabel(build);
+}
+
 export function projectLabel(build: Build): string {
   return (
     build.project_name?.trim() || build.project_slug?.trim() || build.project_id

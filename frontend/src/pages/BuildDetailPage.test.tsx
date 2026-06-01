@@ -192,6 +192,7 @@ describe("BuildDetailPage", () => {
         started_at: "2026-03-30T00:01:20Z",
         finished_at: "2026-03-30T00:02:05Z",
         exit_code: 1,
+        stderr: "connect timeout\nssh: handshake failed",
         error_message: "remote deploy failed",
       }),
       makeStep({
@@ -212,9 +213,9 @@ describe("BuildDetailPage", () => {
   it("renders the summary header, links, timestamps, and duration", async () => {
     renderPage();
 
-    await screen.findByRole("heading", { level: 2, name: "Build #21" });
+    await screen.findByRole("heading", { level: 2, name: "release #21" });
     const summaryPanel = screen
-      .getByText("Build ID build-1")
+      .getByText(/Build #21 · Build ID build-1 · Attempt 1/)
       .closest("section") as HTMLElement;
 
     expect(screen.getByRole("link", { name: "Platform" })).toHaveAttribute(
@@ -226,17 +227,30 @@ describe("BuildDetailPage", () => {
       "/jobs/job-1",
     );
     expect(
-      screen.getByText("github • refs/heads/main • abc1234 • octocat"),
-    ).toBeTruthy();
+      screen.getAllByText("github • refs/heads/main • abc1234 • octocat"),
+    ).toHaveLength(1);
+    expect(screen.getByText("Operational overview")).toBeTruthy();
     expect(screen.getByText("Duration")).toBeTruthy();
     expect(screen.getByText("1m 5s")).toBeTruthy();
-    expect(screen.getByText("Build failed during deploy.")).toBeTruthy();
+    expect(
+      within(summaryPanel).queryByText("Build failed during deploy."),
+    ).toBeNull();
+    expect(within(summaryPanel).getByText("Priority")).toBeTruthy();
+    expect(within(summaryPanel).getByText("9")).toBeTruthy();
     expect(
       within(summaryPanel).getByText(formatCompactTime("2026-03-30T00:01:00Z")),
     ).toBeTruthy();
     expect(
       screen.getByRole("link", { name: "Back to builds" }),
     ).toHaveAttribute("href", "/builds");
+    const headerActions = document.querySelector(
+      ".build-detail-header-actions",
+    ) as HTMLElement;
+    expect(
+      Array.from(headerActions.children).map((element) =>
+        element.textContent?.trim(),
+      ),
+    ).toEqual(["Back to builds", "View project", "View job", "Rerun"]);
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
   });
 
@@ -244,6 +258,9 @@ describe("BuildDetailPage", () => {
     renderPage();
 
     await screen.findByRole("heading", { name: "Execution timeline" });
+    const executionSummary = screen
+      .getByRole("heading", { name: "Execution summary" })
+      .closest("section") as HTMLElement;
 
     expect(
       screen.getByRole("heading", { name: "Execution summary" }),
@@ -251,9 +268,18 @@ describe("BuildDetailPage", () => {
     expect(screen.getByRole("heading", { name: "Logs" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Artifacts" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Provenance" })).toBeTruthy();
-    expect(screen.getByText("Failed at step 1")).toBeTruthy();
+    expect(document.querySelector(".build-steps-summary")?.textContent).toBe(
+      "Steps: 1 succeeded · 1 failed · 1 pending",
+    );
+    expect(screen.getByText("Failed step")).toBeTruthy();
+    expect(within(executionSummary).getByText("Step 2 of 3")).toBeTruthy();
     expect(screen.getAllByText("Exit code 1").length).toBe(2);
     expect(screen.getAllByText("remote deploy failed").length).toBe(2);
+    expect(
+      screen.getByText("Build stopped after this step failed."),
+    ).toBeTruthy();
+    expect(screen.getByText("Last error output")).toBeTruthy();
+    expect(screen.getByText("ssh: handshake failed")).toBeTruthy();
     expect(screen.getByText("compile")).toBeTruthy();
     expect(screen.getAllByText("deploy").length).toBe(2);
     expect(screen.getByText("notify")).toBeTruthy();
@@ -261,7 +287,7 @@ describe("BuildDetailPage", () => {
       3,
     );
     expect(
-      screen.getByRole("link", { name: "Step 1 · deploy" }),
+      screen.getByRole("link", { name: /Step 1 · deploy/ }),
     ).toHaveAttribute("href", "#step-1");
     expect(
       screen.getByRole("link", { name: "example/platform" }),
@@ -296,6 +322,7 @@ describe("BuildDetailPage", () => {
     await waitFor(() => {
       expect(mockedGetBuild).toHaveBeenCalledWith("build-0");
     });
+    expect(screen.getByText(/Rerun of/)).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByRole("link", { name: "Build #20" })).toHaveAttribute(
         "href",
@@ -346,19 +373,24 @@ describe("BuildDetailPage", () => {
 
     await screen.findByText("Currently running");
     const summaryPanel = screen
-      .getByText("Build ID build-1")
+      .getByText(/Build #21 · Build ID build-1 · Attempt 1/)
       .closest("section") as HTMLElement;
 
     expect(
-      screen.getByRole("link", { name: "Step 1 · deploy" }),
+      screen.getByRole("link", { name: /Step 1 · deploy/ }),
     ).toHaveAttribute("href", "#step-1");
+    expect(document.querySelector(".build-steps-summary")?.textContent).toBe(
+      "Steps: 1 succeeded · 1 running · 1 pending",
+    );
     expect(screen.getByText("1 pending step")).toBeTruthy();
     expect(screen.getByText("Step 1 · Current step")).toBeTruthy();
-    expect(summaryPanel.textContent).toContain("Current step1 of 3");
+    expect(summaryPanel.textContent).toContain("Current stepStep 2 of 3");
     expect(summaryPanel.textContent).not.toContain("Duration—");
-    expect(screen.getAllByText("Pending").length).toBe(2);
+    expect(screen.getByText("Pending")).toBeTruthy();
     expect(
-      screen.getByText("No artifacts were collected for this build."),
+      screen.getByText(
+        "No artifacts were collected for this build. Check packaging or upload steps in the execution timeline, then rerun if you expected published outputs.",
+      ),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
   });
@@ -461,7 +493,7 @@ describe("BuildDetailPage", () => {
       expect(confirmSpy).toHaveBeenCalledWith("Rerun Build #21?");
       expect(mockedRerunBuild).toHaveBeenCalledWith("build-1");
     });
-    await screen.findByRole("heading", { level: 2, name: "Build #22" });
+    await screen.findByRole("heading", { level: 2, name: "release #22" });
 
     confirmSpy.mockRestore();
   });
@@ -531,7 +563,7 @@ describe("BuildDetailPage", () => {
 
       renderPage();
 
-      await screen.findByRole("heading", { level: 2, name: "Build #21" });
+      await screen.findByRole("heading", { level: 2, name: "release #21" });
       const button = screen.queryByRole("button", { name: "Cancel" });
       if (shouldShowCancel) {
         expect(button).toBeTruthy();
@@ -573,7 +605,7 @@ describe("BuildDetailPage", () => {
 
       renderPage();
 
-      await screen.findByRole("heading", { level: 2, name: "Build #21" });
+      await screen.findByRole("heading", { level: 2, name: "release #21" });
       const button = screen.queryByRole("button", { name: "Rerun" });
       if (shouldShowRerun) {
         expect(button).toBeTruthy();
@@ -613,12 +645,20 @@ describe("BuildDetailPage", () => {
     await screen.findByRole("heading", { level: 2, name: "Build build-1" });
 
     expect(screen.queryByRole("link", { name: "release" })).toBeNull();
-    expect(screen.getByText("No step logs available yet.")).toBeTruthy();
     expect(
-      screen.getByText("No artifacts were collected for this build."),
+      screen.getByText(
+        "No step logs are available yet. When execution starts, open a step in the timeline to inspect stdout and stderr inline.",
+      ),
     ).toBeTruthy();
     expect(
-      screen.getByText("No source metadata available for this build."),
+      screen.getByText(
+        "No artifacts were collected for this build. Check packaging or upload steps in the execution timeline, then rerun if you expected published outputs.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "No source metadata is available for this build. Manual or fixture-driven runs may omit repository and trigger context.",
+      ),
     ).toBeTruthy();
     expect(screen.queryByText("undefined")).toBeNull();
     expect(screen.queryByText("null")).toBeNull();
@@ -635,7 +675,7 @@ describe("BuildDetailPage", () => {
 
     renderPage();
 
-    await screen.findByRole("heading", { level: 2, name: "Build #21" });
+    await screen.findByRole("heading", { level: 2, name: "release #21" });
 
     expect(screen.getByText("javascript:alert(1)")).toBeTruthy();
     expect(
