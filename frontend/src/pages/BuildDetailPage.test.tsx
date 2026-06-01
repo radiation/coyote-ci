@@ -10,10 +10,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { BuildDetailPage } from "./BuildDetailPage";
 import {
+  buildStepLogStreamURL,
   cancelBuild,
   createJobVersionTags,
   getBuild,
   getBuildArtifacts,
+  getJob,
+  getStepLogs,
   getBuildSteps,
   rerunBuild,
 } from "../api";
@@ -21,11 +24,14 @@ import type { Build, BuildArtifact, BuildStep } from "../types";
 import { formatCompactTime } from "../utils/time";
 
 vi.mock("../api", () => ({
+  buildStepLogStreamURL: vi.fn(),
   cancelBuild: vi.fn(),
   createJobVersionTags: vi.fn(),
   getBuild: vi.fn(),
   getBuildSteps: vi.fn(),
   getBuildArtifacts: vi.fn(),
+  getJob: vi.fn(),
+  getStepLogs: vi.fn(),
   rerunBuild: vi.fn(),
   artifactDownloadURL: (path: string) => `/api${path}`,
 }));
@@ -156,8 +162,11 @@ function deferredPromise<T>() {
 
 describe("BuildDetailPage", () => {
   const mockedGetBuild = vi.mocked(getBuild);
+  const mockedBuildStepLogStreamURL = vi.mocked(buildStepLogStreamURL);
   const mockedCancelBuild = vi.mocked(cancelBuild);
+  const mockedGetJob = vi.mocked(getJob);
   const mockedRerunBuild = vi.mocked(rerunBuild);
+  const mockedGetStepLogs = vi.mocked(getStepLogs);
   const mockedGetBuildSteps = vi.mocked(getBuildSteps);
   const mockedGetBuildArtifacts = vi.mocked(getBuildArtifacts);
   const mockedCreateJobVersionTags = vi.mocked(createJobVersionTags);
@@ -179,7 +188,47 @@ describe("BuildDetailPage", () => {
       }),
     );
     mockedCreateJobVersionTags.mockResolvedValue([]);
+    mockedBuildStepLogStreamURL.mockReturnValue(
+      "/api/builds/build-1/steps/1/logs/stream?after=1",
+    );
+    mockedGetJob.mockResolvedValue({
+      id: "job-1",
+      project_id: "project-1",
+      name: "release",
+      slug: "release",
+      description: null,
+      priority: 9,
+      repository_url: "https://github.com/example/platform",
+      default_ref: "refs/heads/main",
+      push_enabled: true,
+      push_branch: null,
+      pipeline_yaml: "steps: []",
+      pipeline_path: "scenarios/success-basic/coyote.yml",
+      managed_image: null,
+      latest_build: null,
+      enabled: true,
+      created_at: "2026-03-29T23:59:00Z",
+      updated_at: "2026-03-30T00:00:00Z",
+    });
     mockedGetBuild.mockResolvedValue(makeBuild());
+    mockedGetStepLogs.mockResolvedValue({
+      build_id: "build-1",
+      step_index: 1,
+      after: 0,
+      chunks: [
+        {
+          sequence_no: 1,
+          build_id: "build-1",
+          step_id: "step-2",
+          step_index: 1,
+          step_name: "deploy",
+          stream: "stderr",
+          chunk_text: "streamed deploy output",
+          created_at: "2026-03-30T00:02:04Z",
+        },
+      ],
+      next_sequence: 1,
+    });
     mockedGetBuildSteps.mockResolvedValue([
       makeStep(),
       makeStep({
@@ -192,6 +241,7 @@ describe("BuildDetailPage", () => {
         started_at: "2026-03-30T00:01:20Z",
         finished_at: "2026-03-30T00:02:05Z",
         exit_code: 1,
+        stderr: "connect timeout\nssh: handshake failed",
         error_message: "remote deploy failed",
       }),
       makeStep({
@@ -207,14 +257,27 @@ describe("BuildDetailPage", () => {
       }),
     ]);
     mockedGetBuildArtifacts.mockResolvedValue([makeArtifact()]);
+    class MockEventSource {
+      addEventListener = vi.fn();
+      close = vi.fn();
+      onerror: ((this: EventSource, ev: Event) => unknown) | null = null;
+
+      constructor() {}
+    }
+
+    Object.defineProperty(window, "EventSource", {
+      configurable: true,
+      writable: true,
+      value: MockEventSource,
+    });
   });
 
   it("renders the summary header, links, timestamps, and duration", async () => {
     renderPage();
 
-    await screen.findByRole("heading", { level: 2, name: "Build #21" });
+    await screen.findByRole("heading", { level: 2, name: "release #21" });
     const summaryPanel = screen
-      .getByText("Build ID build-1")
+      .getByText(/Build #21 · Build ID build-1 · Attempt 1/)
       .closest("section") as HTMLElement;
 
     expect(screen.getByRole("link", { name: "Platform" })).toHaveAttribute(
@@ -226,24 +289,65 @@ describe("BuildDetailPage", () => {
       "/jobs/job-1",
     );
     expect(
-      screen.getByText("github • refs/heads/main • abc1234 • octocat"),
-    ).toBeTruthy();
+      screen.getAllByText("github • refs/heads/main • abc1234 • octocat"),
+    ).toHaveLength(1);
+    expect(screen.getByText("Operational overview")).toBeTruthy();
     expect(screen.getByText("Duration")).toBeTruthy();
     expect(screen.getByText("1m 5s")).toBeTruthy();
-    expect(screen.getByText("Build failed during deploy.")).toBeTruthy();
+    expect(
+      within(summaryPanel).queryByText("Build failed during deploy."),
+    ).toBeNull();
+    expect(within(summaryPanel).getByText("Priority")).toBeTruthy();
+    expect(within(summaryPanel).getByText("9")).toBeTruthy();
+    expect(
+      within(summaryPanel).getByRole("link", {
+        name: "View full provenance details",
+      }),
+    ).toHaveAttribute("href", "#build-provenance");
     expect(
       within(summaryPanel).getByText(formatCompactTime("2026-03-30T00:01:00Z")),
     ).toBeTruthy();
     expect(
       screen.getByRole("link", { name: "Back to builds" }),
     ).toHaveAttribute("href", "/builds");
+    const headerActions = document.querySelector(
+      ".build-detail-header-actions",
+    ) as HTMLElement;
+    expect(
+      Array.from(headerActions.children).map((element) =>
+        element.textContent?.trim(),
+      ),
+    ).toEqual(["Back to builds", "View project", "View job", "Rerun"]);
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+  });
+
+  it("uses the fetched job name when the build payload omits job_name", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({
+        job_name: null,
+        job_id: "job-1",
+      }),
+    );
+
+    renderPage();
+
+    await screen.findByRole("heading", { level: 2, name: "release #21" });
+
+    expect(mockedGetJob).toHaveBeenCalledWith("job-1");
+    expect(screen.getByRole("link", { name: "release" })).toHaveAttribute(
+      "href",
+      "/jobs/job-1",
+    );
+    expect(screen.queryByText("Job job-1")).toBeNull();
   });
 
   it("renders failed build state with a visible failed step and failure details", async () => {
     renderPage();
 
     await screen.findByRole("heading", { name: "Execution timeline" });
+    const executionSummary = screen
+      .getByRole("heading", { name: "Execution summary" })
+      .closest("section") as HTMLElement;
 
     expect(
       screen.getByRole("heading", { name: "Execution summary" }),
@@ -251,9 +355,18 @@ describe("BuildDetailPage", () => {
     expect(screen.getByRole("heading", { name: "Logs" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Artifacts" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Provenance" })).toBeTruthy();
-    expect(screen.getByText("Failed at step 1")).toBeTruthy();
+    expect(document.querySelector(".build-steps-summary")?.textContent).toBe(
+      "Steps: 1 succeeded · 1 failed · 1 pending",
+    );
+    expect(screen.getByText("Failed step")).toBeTruthy();
+    expect(within(executionSummary).getByText("Step 2 of 3")).toBeTruthy();
     expect(screen.getAllByText("Exit code 1").length).toBe(2);
     expect(screen.getAllByText("remote deploy failed").length).toBe(2);
+    expect(
+      screen.getByText("Build stopped after this step failed."),
+    ).toBeTruthy();
+    expect(screen.getByText("Last error output")).toBeTruthy();
+    expect(screen.getByText("ssh: handshake failed")).toBeTruthy();
     expect(screen.getByText("compile")).toBeTruthy();
     expect(screen.getAllByText("deploy").length).toBe(2);
     expect(screen.getByText("notify")).toBeTruthy();
@@ -261,8 +374,11 @@ describe("BuildDetailPage", () => {
       3,
     );
     expect(
-      screen.getByRole("link", { name: "Step 1 · deploy" }),
+      screen.getByRole("link", { name: /Step 2 · deploy/ }),
     ).toHaveAttribute("href", "#step-1");
+    expect(
+      screen.getByRole("link", { name: /Failed · Open inline logs/ }),
+    ).toBeTruthy();
     expect(
       screen.getByRole("link", { name: "example/platform" }),
     ).toHaveAttribute("href", "https://github.com/example/platform");
@@ -277,6 +393,138 @@ describe("BuildDetailPage", () => {
     expect(link.getAttribute("href")).toBe(
       "/api/builds/build-1/artifacts/artifact-1/download",
     );
+  });
+
+  it("renders GitHub provenance links when repository metadata is available", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({
+        repository_url: "https://github.com/example/platform",
+        trigger_ref: "main",
+        source_commit_sha: "95f09eb123456789",
+        trigger_commit_sha: null,
+        pipeline_path: "scenarios/multi-step-failure/coyote.yml",
+      }),
+    );
+
+    renderPage();
+
+    const provenanceSection = (
+      await screen.findByRole("heading", {
+        name: "Provenance",
+      })
+    ).closest("section") as HTMLElement;
+
+    expect(
+      within(provenanceSection).getByRole("link", { name: "95f09eb" }),
+    ).toHaveAttribute(
+      "href",
+      "https://github.com/example/platform/commit/95f09eb123456789",
+    );
+    expect(
+      within(provenanceSection).getByRole("link", { name: "main" }),
+    ).toHaveAttribute("href", "https://github.com/example/platform/tree/main");
+    expect(
+      within(provenanceSection).getByRole("link", {
+        name: "scenarios/multi-step-failure/coyote.yml",
+      }),
+    ).toHaveAttribute(
+      "href",
+      "https://github.com/example/platform/blob/95f09eb123456789/scenarios/multi-step-failure/coyote.yml",
+    );
+  });
+
+  it("renders plain text provenance values when repository metadata is missing", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({
+        repository_url: null,
+        repository_owner: "example",
+        repository_name: "platform",
+        trigger_ref: "main",
+        source_commit_sha: "95f09eb123456789",
+        trigger_commit_sha: null,
+        pipeline_path: "scenarios/multi-step-failure/coyote.yml",
+      }),
+    );
+
+    renderPage();
+
+    const provenanceSection = (
+      await screen.findByRole("heading", {
+        name: "Provenance",
+      })
+    ).closest("section") as HTMLElement;
+
+    expect(within(provenanceSection).getByText("main")).toBeTruthy();
+    expect(within(provenanceSection).getByText("95f09eb")).toBeTruthy();
+    expect(
+      within(provenanceSection).getByText(
+        "scenarios/multi-step-failure/coyote.yml",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(provenanceSection).queryByRole("link", { name: "main" }),
+    ).toBeNull();
+    expect(
+      within(provenanceSection).queryByRole("link", { name: "95f09eb" }),
+    ).toBeNull();
+    expect(
+      within(provenanceSection).queryByRole("link", {
+        name: "scenarios/multi-step-failure/coyote.yml",
+      }),
+    ).toBeNull();
+  });
+
+  it("renders plain text provenance values for unsupported repository providers", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({
+        repository_url: "https://gitlab.com/example/platform",
+        trigger_ref: "main",
+        source_commit_sha: "95f09eb123456789",
+        trigger_commit_sha: null,
+        pipeline_path: "scenarios/multi-step-failure/coyote.yml",
+      }),
+    );
+
+    renderPage();
+
+    const provenanceSection = (
+      await screen.findByRole("heading", {
+        name: "Provenance",
+      })
+    ).closest("section") as HTMLElement;
+
+    expect(within(provenanceSection).getByText("main")).toBeTruthy();
+    expect(within(provenanceSection).getByText("95f09eb")).toBeTruthy();
+    expect(
+      within(provenanceSection).getByText(
+        "scenarios/multi-step-failure/coyote.yml",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(provenanceSection).queryByRole("link", { name: "main" }),
+    ).toBeNull();
+    expect(
+      within(provenanceSection).queryByRole("link", { name: "95f09eb" }),
+    ).toBeNull();
+    expect(
+      within(provenanceSection).queryByRole("link", {
+        name: "scenarios/multi-step-failure/coyote.yml",
+      }),
+    ).toBeNull();
+  });
+
+  it("opens the matching step logs when a log card is clicked", async () => {
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Logs" });
+
+    fireEvent.click(screen.getByRole("link", { name: /Step 2 · deploy/ }));
+
+    await waitFor(() => {
+      expect(mockedGetStepLogs).toHaveBeenCalledWith("build-1", 1, 0, 500);
+    });
+    expect(screen.getByRole("button", { name: "Hide logs" })).toBeTruthy();
+    expect(document.querySelector("#step-1 .step-log-panel")).toBeTruthy();
   });
 
   it("shows rerun lineage with a link to the source build", async () => {
@@ -296,6 +544,7 @@ describe("BuildDetailPage", () => {
     await waitFor(() => {
       expect(mockedGetBuild).toHaveBeenCalledWith("build-0");
     });
+    expect(screen.getByText(/Rerun of/)).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByRole("link", { name: "Build #20" })).toHaveAttribute(
         "href",
@@ -346,21 +595,77 @@ describe("BuildDetailPage", () => {
 
     await screen.findByText("Currently running");
     const summaryPanel = screen
-      .getByText("Build ID build-1")
+      .getByText(/Build #21 · Build ID build-1 · Attempt 1/)
       .closest("section") as HTMLElement;
 
     expect(
-      screen.getByRole("link", { name: "Step 1 · deploy" }),
+      screen.getByRole("link", { name: /Step 2 · deploy/ }),
     ).toHaveAttribute("href", "#step-1");
+    expect(document.querySelector(".build-steps-summary")?.textContent).toBe(
+      "Steps: 1 succeeded · 1 running · 1 pending",
+    );
     expect(screen.getByText("1 pending step")).toBeTruthy();
-    expect(screen.getByText("Step 1 · Current step")).toBeTruthy();
-    expect(summaryPanel.textContent).toContain("Current step1 of 3");
+    expect(screen.getByText("Step 2 · Current step")).toBeTruthy();
+    expect(summaryPanel.textContent).toContain("Current stepStep 2 of 3");
     expect(summaryPanel.textContent).not.toContain("Duration—");
-    expect(screen.getAllByText("Pending").length).toBe(2);
+    expect(screen.getByText("Pending")).toBeTruthy();
     expect(
-      screen.getByText("No artifacts were collected for this build."),
+      screen.getByRole("link", { name: /Running · Open inline logs/ }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "No artifacts were collected for this build. Check packaging or upload steps in the execution timeline, then rerun if you expected published outputs.",
+      ),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  });
+
+  it("clamps the current step summary to the recorded step count on completed builds", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({
+        status: "success",
+        current_step_index: 5,
+        error_message: null,
+      }),
+    );
+    mockedGetBuildSteps.mockResolvedValueOnce([
+      makeStep({ step_index: 0, status: "success", name: "compile" }),
+      makeStep({
+        step_index: 1,
+        id: "step-2",
+        status: "success",
+        name: "test",
+      }),
+      makeStep({
+        step_index: 2,
+        id: "step-3",
+        status: "success",
+        name: "package",
+      }),
+      makeStep({
+        step_index: 3,
+        id: "step-4",
+        status: "success",
+        name: "publish",
+      }),
+      makeStep({
+        step_index: 4,
+        id: "step-5",
+        status: "success",
+        name: "notify",
+      }),
+    ]);
+    mockedGetBuildArtifacts.mockResolvedValueOnce([]);
+
+    renderPage();
+
+    await screen.findByText("Completed successfully");
+    const summaryPanel = screen
+      .getByText(/Build #21 · Build ID build-1 · Attempt 1/)
+      .closest("section") as HTMLElement;
+
+    expect(summaryPanel.textContent).toContain("Current stepStep 5 of 5");
+    expect(summaryPanel.textContent).not.toContain("Step 6 of 5");
   });
 
   it("confirms and cancels cancelable builds", async () => {
@@ -461,7 +766,7 @@ describe("BuildDetailPage", () => {
       expect(confirmSpy).toHaveBeenCalledWith("Rerun Build #21?");
       expect(mockedRerunBuild).toHaveBeenCalledWith("build-1");
     });
-    await screen.findByRole("heading", { level: 2, name: "Build #22" });
+    await screen.findByRole("heading", { level: 2, name: "release #22" });
 
     confirmSpy.mockRestore();
   });
@@ -531,7 +836,7 @@ describe("BuildDetailPage", () => {
 
       renderPage();
 
-      await screen.findByRole("heading", { level: 2, name: "Build #21" });
+      await screen.findByRole("heading", { level: 2, name: "release #21" });
       const button = screen.queryByRole("button", { name: "Cancel" });
       if (shouldShowCancel) {
         expect(button).toBeTruthy();
@@ -573,7 +878,7 @@ describe("BuildDetailPage", () => {
 
       renderPage();
 
-      await screen.findByRole("heading", { level: 2, name: "Build #21" });
+      await screen.findByRole("heading", { level: 2, name: "release #21" });
       const button = screen.queryByRole("button", { name: "Rerun" });
       if (shouldShowRerun) {
         expect(button).toBeTruthy();
@@ -613,12 +918,20 @@ describe("BuildDetailPage", () => {
     await screen.findByRole("heading", { level: 2, name: "Build build-1" });
 
     expect(screen.queryByRole("link", { name: "release" })).toBeNull();
-    expect(screen.getByText("No step logs available yet.")).toBeTruthy();
     expect(
-      screen.getByText("No artifacts were collected for this build."),
+      screen.getByText(
+        "No step logs are available yet. When execution starts, open a step in the timeline to inspect stdout and stderr inline.",
+      ),
     ).toBeTruthy();
     expect(
-      screen.getByText("No source metadata available for this build."),
+      screen.getByText(
+        "No artifacts were collected for this build. Check packaging or upload steps in the execution timeline, then rerun if you expected published outputs.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "No source metadata is available for this build. Manual or fixture-driven runs may omit repository and trigger context.",
+      ),
     ).toBeTruthy();
     expect(screen.queryByText("undefined")).toBeNull();
     expect(screen.queryByText("null")).toBeNull();
@@ -635,7 +948,7 @@ describe("BuildDetailPage", () => {
 
     renderPage();
 
-    await screen.findByRole("heading", { level: 2, name: "Build #21" });
+    await screen.findByRole("heading", { level: 2, name: "release #21" });
 
     expect(screen.getByText("javascript:alert(1)")).toBeTruthy();
     expect(

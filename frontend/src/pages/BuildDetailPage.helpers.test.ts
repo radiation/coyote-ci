@@ -2,11 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import type { Build, BuildStep } from "../types";
 import {
+  buildGitHubCommitURL,
+  buildGitHubPipelinePathURL,
+  buildGitHubRefURL,
+  buildPrimaryCommitValue,
+  buildSourceRefValue,
   buildDuration,
   buildLabel,
   buildStepCounts,
   compactTriggerMetadata,
   jobLabel,
+  operationalBuildTitle,
   projectLabel,
   shortSHA,
   triggerKind,
@@ -67,6 +73,7 @@ describe("BuildDetailPage helpers", () => {
       "github • refs/heads/main • abcdef1 • dev@example.com",
     );
     expect(buildLabel(value)).toBe("Build #42");
+    expect(operationalBuildTitle(value)).toBe("release #42");
     expect(projectLabel(value)).toBe("Platform");
     expect(jobLabel(value)).toBe("release");
   });
@@ -80,6 +87,7 @@ describe("BuildDetailPage helpers", () => {
     expect(triggerKind(build({ trigger_kind: " " }))).toBe("manual");
     expect(compactTriggerMetadata(build())).toBe("");
     expect(buildLabel(value)).toBe("Build build-12");
+    expect(operationalBuildTitle(value)).toBe("Job job-1234 · build-12");
     expect(projectLabel(value)).toBe("platform");
     expect(jobLabel(value)).toBe("Job job-1234");
     expect(jobLabel(build())).toBe("Manual");
@@ -120,5 +128,53 @@ describe("BuildDetailPage helpers", () => {
         Date.parse("2026-03-24T00:00:45Z"),
       ),
     ).toBe("45s");
+  });
+
+  it("builds GitHub provenance URLs when repository metadata is supported", () => {
+    const value = build({
+      repository_url: "https://github.com/example/platform",
+      trigger_ref: "refs/heads/main",
+      source_commit_sha: "95f09eb123456789",
+      pipeline_path: "scenarios/multi-step-failure/coyote.yml",
+    });
+
+    expect(buildSourceRefValue(value)).toBe("refs/heads/main");
+    expect(buildPrimaryCommitValue(value)).toBe("95f09eb123456789");
+    expect(buildGitHubCommitURL(value, value.source_commit_sha)).toBe(
+      "https://github.com/example/platform/commit/95f09eb123456789",
+    );
+    expect(buildGitHubRefURL(value, value.trigger_ref)).toBe(
+      "https://github.com/example/platform/tree/refs/heads/main",
+    );
+    expect(buildGitHubPipelinePathURL(value)).toBe(
+      "https://github.com/example/platform/blob/95f09eb123456789/scenarios/multi-step-failure/coyote.yml",
+    );
+  });
+
+  it("returns null for unsupported or incomplete provenance link inputs", () => {
+    const missingRepository = build({
+      repository_url: null,
+      trigger_ref: "main",
+      source_commit_sha: "95f09eb123456789",
+      pipeline_path: "coyote.yml",
+    });
+    const unsupportedRepository = build({
+      repository_url: "https://gitlab.com/example/platform",
+      trigger_ref: "main",
+      source_commit_sha: "95f09eb123456789",
+      pipeline_path: "coyote.yml",
+    });
+
+    expect(
+      buildGitHubCommitURL(missingRepository, "95f09eb123456789"),
+    ).toBeNull();
+    expect(buildGitHubRefURL(missingRepository, "main")).toBeNull();
+    expect(buildGitHubPipelinePathURL(missingRepository)).toBeNull();
+
+    expect(
+      buildGitHubCommitURL(unsupportedRepository, "95f09eb123456789"),
+    ).toBeNull();
+    expect(buildGitHubRefURL(unsupportedRepository, "main")).toBeNull();
+    expect(buildGitHubPipelinePathURL(unsupportedRepository)).toBeNull();
   });
 });

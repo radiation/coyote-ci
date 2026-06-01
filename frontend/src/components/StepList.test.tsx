@@ -28,6 +28,8 @@ describe("StepList", () => {
       <StepList
         buildID="build-1"
         activeStepIndex={2}
+        openStepIndex={null}
+        onOpenStepChange={() => {}}
         steps={[
           makeStep({
             step_index: 2,
@@ -42,7 +44,7 @@ describe("StepList", () => {
       />,
     );
 
-    expect(screen.getByText("Step 2 · Current step")).toBeTruthy();
+    expect(screen.getByText("Step 3 · Current step")).toBeTruthy();
     expect(screen.getByText("Duration 1m 5s")).toBeTruthy();
     expect(screen.getByText("command exited with status 1")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open logs" })).toBeTruthy();
@@ -52,6 +54,8 @@ describe("StepList", () => {
     render(
       <StepList
         buildID="build-1"
+        openStepIndex={null}
+        onOpenStepChange={() => {}}
         steps={[makeStep({ command: "echo hello" })]}
       />,
     );
@@ -66,6 +70,8 @@ describe("StepList", () => {
     render(
       <StepList
         buildID="build-1"
+        openStepIndex={null}
+        onOpenStepChange={() => {}}
         steps={[makeStep({ command: longCommand })]}
       />,
     );

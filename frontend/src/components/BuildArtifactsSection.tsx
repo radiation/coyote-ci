@@ -127,7 +127,11 @@ export function BuildArtifactsSection({
     );
   if (!artifacts || artifacts.length === 0) {
     return (
-      <p className="subtle-text">No artifacts were collected for this build.</p>
+      <p className="subtle-text">
+        No artifacts were collected for this build. Check packaging or upload
+        steps in the execution timeline, then rerun if you expected published
+        outputs.
+      </p>
     );
   }
 
