@@ -1915,7 +1915,7 @@ h3 {
 .artifact-build-list {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
 }
 
 .artifact-build-card {
@@ -1929,26 +1929,48 @@ h3 {
   );
 }
 
+.artifact-build-card-compact {
+  padding: 12px 14px;
+}
+
 .artifact-build-card-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
 }
 
+.artifact-build-summary {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.artifact-build-copy {
+  min-width: 0;
+}
+
 .artifact-build-link {
-  font-size: 1rem;
+  font-size: 0.95rem;
   font-weight: 700;
   word-break: break-word;
 }
 
 .artifact-build-actions {
   flex: 0 0 auto;
+  align-items: center;
   justify-content: flex-end;
 }
 
-.artifact-build-card-grid {
-  margin-top: 14px;
+.artifact-build-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 4px;
+}
+
+.artifact-build-meta .artifact-checksum-value {
+  max-width: 140px;
 }
 
 .artifact-inline-tag-list {
@@ -1956,9 +1978,24 @@ h3 {
 }
 
 .artifact-build-card-footer {
-  margin-top: 16px;
-  padding-top: 14px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid var(--color-border);
+}
+
+.artifact-build-card-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.artifact-build-empty-copy {
+  margin: 0;
+}
+
+.artifact-assign-toggle {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 0.78rem;
 }
 
 .artifact-group-label {
@@ -2597,6 +2634,10 @@ h3 {
   .activity-list-detail-grid {
     flex-direction: column;
     gap: 4px;
+  }
+
+  .artifact-build-actions {
+    justify-content: flex-start;
   }
 
   .artifact-pagination-bar,

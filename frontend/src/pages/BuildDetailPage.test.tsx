@@ -465,7 +465,7 @@ describe("BuildDetailPage", () => {
     ).toBe(true);
     expect(
       screen
-        .getAllByRole("link", { name: "def987654321" })
+        .getAllByRole("link", { name: "def9876" })
         .every(
           (link) =>
             link.getAttribute("href") ===
@@ -1172,6 +1172,8 @@ describe("BuildDetailPage", () => {
     await waitFor(() => {
       expect(screen.getByText("Artifacts")).toBeTruthy();
     });
+
+    fireEvent.click(screen.getByRole("button", { name: "Assign label" }));
 
     const input = screen.getByLabelText("artifact-version-artifact-1");
     fireEvent.change(input, {

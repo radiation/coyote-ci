@@ -185,6 +185,7 @@ describe("BuildArtifactsSection", () => {
     expect(screen.getByText("npm package")).toBeTruthy();
     expect(screen.getAllByText("1.2.3").length).toBeGreaterThan(0);
     expect(screen.getAllByText("latest").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("1.0 KB").length).toBeGreaterThan(0);
 
     expect(screen.getByRole("link", { name: "dist/app" })).toHaveAttribute(
       "href",
@@ -206,15 +207,6 @@ describe("BuildArtifactsSection", () => {
           (link) =>
             link.getAttribute("href") ===
             "https://github.com/example/platform/tree/main",
-        ),
-    ).toBe(true);
-    expect(
-      screen
-        .getAllByRole("link", { name: "abcdef123456" })
-        .every(
-          (link) =>
-            link.getAttribute("href") ===
-            "https://github.com/example/platform/commit/abcdef1234567890",
         ),
     ).toBe(true);
     expect(
@@ -258,7 +250,7 @@ describe("BuildArtifactsSection", () => {
     expect(
       screen.getByRole("link", { name: "out/manifest.json" }),
     ).toHaveAttribute("href", "/artifacts/artifact-minimal");
-    expect(screen.getByText("Build #21")).toBeTruthy();
+    expect(screen.getByText("1.0 KB")).toBeTruthy();
     expect(
       screen.getByRole("link", { name: "Repository view" }),
     ).toHaveAttribute(
@@ -266,7 +258,7 @@ describe("BuildArtifactsSection", () => {
       "/artifacts/logical?q=out%2Fmanifest.json&project_id=project-1",
     );
     expect(screen.queryByRole("link", { name: "abcdef123456" })).toBeNull();
-    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Unknown")).toBeNull();
   });
 
   it("submits version assignments when enabled and hides the form otherwise", async () => {
@@ -282,6 +274,11 @@ describe("BuildArtifactsSection", () => {
         />
       </MemoryRouter>,
     );
+
+    expect(
+      screen.queryByLabelText("artifact-version-artifact-assign"),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Assign label" }));
 
     const input = screen.getByLabelText("artifact-version-artifact-assign");
     fireEvent.change(input, { target: { value: "1.2.3" } });

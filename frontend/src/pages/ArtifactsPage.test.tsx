@@ -11,6 +11,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { ArtifactsPage } from "./ArtifactsPage";
 import { listArtifactCatalog, listProjects } from "../api";
 import { ThemeProvider } from "../theme";
+import type { ArtifactCatalogItem } from "../types";
 
 vi.mock("../api", () => ({
   listArtifactCatalog: vi.fn(),
@@ -23,15 +24,15 @@ function LocationSearchProbe() {
   return <output data-testid="location-search">{location.search}</output>;
 }
 
-function baseArtifact() {
+function baseArtifact(): ArtifactCatalogItem {
   return {
     id: "artifact-1",
     name: "coyote-ci/package-a",
     path: "packages/pkg-a.tgz",
-    artifact_type: "npm_package" as const,
+    artifact_type: "npm_package",
     build_id: "build-1",
     build_number: 41,
-    build_status: "success" as const,
+    build_status: "success",
     project_id: "project-1",
     project_name: "Platform",
     project_slug: "platform",
@@ -51,8 +52,8 @@ function baseArtifact() {
 }
 
 function buildArtifact(
-  overrides: Partial<ReturnType<typeof baseArtifact>> = {},
-) {
+  overrides: Partial<ArtifactCatalogItem> = {},
+): ArtifactCatalogItem {
   return {
     ...baseArtifact(),
     ...overrides,

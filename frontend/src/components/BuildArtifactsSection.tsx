@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState } from "react";
 import { artifactDownloadURL } from "../api";
 import { Link } from "react-router-dom";
 import type {
@@ -14,7 +14,6 @@ import {
   formatChecksumDisplay,
   formatFileSize,
 } from "../utils/format";
-import { formatTime } from "../utils/time";
 import { VersionTagEditor } from "./VersionTagEditor";
 
 const TYPE_LABELS: Record<ArtifactType, string> = {
@@ -48,30 +47,6 @@ function shortSHA(value: string | null | undefined): string {
     return "—";
   }
   return trimmed.slice(0, 12);
-}
-
-function buildLabel(build: Build | undefined, artifact: BuildArtifact): string {
-  if (build?.build_number) {
-    return `Build #${build.build_number}`;
-  }
-  return `Build ${artifact.build_id.slice(0, 8)}…`;
-}
-
-function projectLabel(build: Build | undefined): string {
-  if (!build) {
-    return "—";
-  }
-  const name = build.project_name?.trim() ?? "";
-  const slug = build.project_slug?.trim() ?? "";
-  return name || slug || build.project_id;
-}
-
-function jobLabel(build: Build | undefined): string {
-  if (!build?.job_id) {
-    return "—";
-  }
-  const name = build.job_name?.trim() ?? "";
-  return name || `Job ${build.job_id.slice(0, 8)}…`;
 }
 
 function sourceRefValue(build: Build | undefined): string | null {
@@ -209,23 +184,6 @@ function tagValues(item: BuildArtifact, kind: "version" | "channel"): string[] {
     .filter(Boolean);
 }
 
-function MetadataItem({
-  label,
-  value,
-  mono = false,
-}: {
-  label: string;
-  value: ReactNode;
-  mono?: boolean;
-}) {
-  return (
-    <div>
-      <strong>{label}</strong>
-      <span className={mono ? "artifact-mono" : undefined}>{value}</span>
-    </div>
-  );
-}
-
 function stepLabel(stepId: string, steps: BuildStep[] | undefined): string {
   if (steps) {
     const step = steps.find((s) => s.id === stepId);
@@ -255,6 +213,8 @@ function ArtifactTable({
   items: BuildArtifact[];
   onAssignVersion?: (artifactID: string, version: string) => Promise<void>;
 }) {
+  const [openAssignID, setOpenAssignID] = useState<string | null>(null);
+
   return (
     <div className="artifact-build-list">
       {sortArtifacts(items).map((item) => {
@@ -265,33 +225,82 @@ function ArtifactTable({
         const sourceCommit = sourceCommitValue(build);
         const sourceCommitHref = buildCommitURL(build, sourceCommit);
         const typeLabel = artifactTypeLabel(item);
+        const compactPath = artifactSecondaryPath(item) ?? item.path;
+        const hasLabels = versions.length > 0 || channels.length > 0;
+        const showAssignEditor =
+          openAssignID === item.id && Boolean(onAssignVersion);
+        const provenanceLabel =
+          sourceRef ?? (sourceCommit ? shortSHA(sourceCommit) : null);
+        const provenanceHref = sourceRef ? sourceRefHref : sourceCommitHref;
+        const needsScopeBadge = !item.step_id;
 
         return (
-          <article key={item.id} className="artifact-build-card">
+          <article
+            key={item.id}
+            className="artifact-build-card artifact-build-card-compact"
+          >
             <div className="artifact-build-card-header">
-              <div className="artifact-catalog-primary">
+              <div className="artifact-build-summary">
                 <div className="artifact-card-kicker">
                   {typeLabel ? (
                     <span className="artifact-type-pill">{typeLabel}</span>
                   ) : null}
-                  <span className="artifact-secondary-pill">
-                    {stepScopeLabel(item, steps)}
-                  </span>
-                  <span className="artifact-secondary-pill">
-                    {item.storage_provider}
-                  </span>
+                  {needsScopeBadge ? (
+                    <span className="artifact-secondary-pill">
+                      {stepScopeLabel(item, steps)}
+                    </span>
+                  ) : null}
+                  {versions.map((version) => (
+                    <span
+                      key={`${item.id}-version-${version}`}
+                      className="version-tag-pill"
+                    >
+                      {version}
+                    </span>
+                  ))}
+                  {channels.map((channel) => (
+                    <span
+                      key={`${item.id}-channel-${channel}`}
+                      className="version-tag-pill artifact-channel-pill"
+                    >
+                      {channel}
+                    </span>
+                  ))}
                 </div>
-                <Link
-                  className="artifact-build-link"
-                  to={`/artifacts/${item.id}`}
-                >
-                  {artifactTitle(item)}
-                </Link>
-                {artifactSecondaryPath(item) ? (
-                  <div className="subtle-text artifact-mono">
-                    {artifactSecondaryPath(item)}
+                <div className="artifact-build-copy">
+                  <Link
+                    className="artifact-build-link"
+                    to={`/artifacts/${item.id}`}
+                  >
+                    {artifactTitle(item)}
+                  </Link>
+                  <div className="artifact-build-meta subtle-text">
+                    <span className="artifact-mono">{compactPath}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{formatFileSize(item.size_bytes)}</span>
+                    {item.checksum_sha256 ? (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span
+                          className="artifact-mono artifact-checksum-value"
+                          title={item.checksum_sha256}
+                        >
+                          {formatChecksumDisplay(item.checksum_sha256)}
+                        </span>
+                      </>
+                    ) : null}
+                    {provenanceLabel ? (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        {provenanceHref ? (
+                          <a href={provenanceHref}>{provenanceLabel}</a>
+                        ) : (
+                          <span>{provenanceLabel}</span>
+                        )}
+                      </>
+                    ) : null}
                   </div>
-                ) : null}
+                </div>
               </div>
               <div className="artifact-actions artifact-build-actions">
                 <Link to={`/artifacts/${item.id}`}>Open artifact</Link>
@@ -301,146 +310,41 @@ function ArtifactTable({
                 <a href={artifactDownloadURL(item.download_url_path)}>
                   Download
                 </a>
+                {onAssignVersion ? (
+                  <button
+                    type="button"
+                    className="inline-action-button artifact-assign-toggle"
+                    onClick={() =>
+                      setOpenAssignID((current) =>
+                        current === item.id ? null : item.id,
+                      )
+                    }
+                  >
+                    {showAssignEditor ? "Hide label" : "Assign label"}
+                  </button>
+                ) : null}
               </div>
             </div>
-
-            <div className="artifact-detail-grid artifact-build-card-grid">
-              <MetadataItem label="Artifact path" value={item.path} mono />
-              <MetadataItem
-                label="Size"
-                value={formatFileSize(item.size_bytes)}
-              />
-              <MetadataItem
-                label="Digest"
-                mono
-                value={
-                  item.checksum_sha256 ? (
-                    <span
-                      className="artifact-checksum-value"
-                      title={item.checksum_sha256}
-                    >
-                      {formatChecksumDisplay(item.checksum_sha256)}
-                    </span>
-                  ) : (
-                    "—"
-                  )
-                }
-              />
-              <MetadataItem
-                label="Created"
-                value={formatTime(item.created_at)}
-              />
-              <MetadataItem
-                label="Versions"
-                value={
-                  versions.length > 0 ? (
-                    <span className="version-tag-list artifact-inline-tag-list">
-                      {versions.map((version) => (
-                        <span
-                          key={`${item.id}-version-${version}`}
-                          className="version-tag-pill"
-                        >
-                          {version}
-                        </span>
-                      ))}
-                    </span>
-                  ) : (
-                    "—"
-                  )
-                }
-              />
-              <MetadataItem
-                label="Channels"
-                value={
-                  channels.length > 0 ? (
-                    <span className="version-tag-list artifact-inline-tag-list">
-                      {channels.map((channel) => (
-                        <span
-                          key={`${item.id}-channel-${channel}`}
-                          className="version-tag-pill artifact-channel-pill"
-                        >
-                          {channel}
-                        </span>
-                      ))}
-                    </span>
-                  ) : (
-                    "—"
-                  )
-                }
-              />
-              <MetadataItem
-                label="Project"
-                value={
-                  build ? (
-                    <Link to={`/projects/${build.project_id}`}>
-                      {projectLabel(build)}
-                    </Link>
-                  ) : (
-                    "—"
-                  )
-                }
-              />
-              <MetadataItem
-                label="Build"
-                value={
-                  <Link to={`/builds/${item.build_id}`}>
-                    {buildLabel(build, item)}
-                  </Link>
-                }
-              />
-              <MetadataItem
-                label="Job"
-                value={
-                  build?.job_id ? (
-                    <Link to={`/jobs/${build.job_id}`}>{jobLabel(build)}</Link>
-                  ) : (
-                    "—"
-                  )
-                }
-              />
-              <MetadataItem
-                label="Source ref"
-                value={
-                  sourceRef ? (
-                    sourceRefHref ? (
-                      <a href={sourceRefHref}>{sourceRef}</a>
-                    ) : (
-                      sourceRef
-                    )
-                  ) : (
-                    "—"
-                  )
-                }
-              />
-              <MetadataItem
-                label="Commit"
-                mono
-                value={
-                  sourceCommit ? (
-                    sourceCommitHref ? (
-                      <a href={sourceCommitHref}>{shortSHA(sourceCommit)}</a>
-                    ) : (
-                      shortSHA(sourceCommit)
-                    )
-                  ) : (
-                    "—"
-                  )
-                }
-              />
-            </div>
-
-            <div className="artifact-build-card-footer">
-              <VersionTagEditor
-                tags={item.version_tags ?? []}
-                emptyText="No version or channel labels yet."
-                inputLabel={`artifact-version-${item.id}`}
-                onAssign={
-                  onAssignVersion
-                    ? (version) => onAssignVersion(item.id, version)
-                    : undefined
-                }
-              />
-            </div>
+            {showAssignEditor ? (
+              <div className="artifact-build-card-footer artifact-build-card-editor">
+                {!hasLabels ? (
+                  <p className="subtle-text artifact-build-empty-copy">
+                    No labels yet.
+                  </p>
+                ) : null}
+                <VersionTagEditor
+                  tags={item.version_tags ?? []}
+                  emptyText="No labels yet."
+                  inputLabel={`artifact-version-${item.id}`}
+                  submitLabel="Save label"
+                  onAssign={
+                    onAssignVersion
+                      ? (version) => onAssignVersion(item.id, version)
+                      : undefined
+                  }
+                />
+              </div>
+            ) : null}
           </article>
         );
       })}
@@ -456,12 +360,17 @@ export function BuildArtifactsSection({
   error,
   onAssignVersion,
 }: Props) {
-  if (isLoading) return <p>Loading artifacts…</p>;
-  if (error)
+  if (isLoading) {
+    return <p className="subtle-text">Loading artifacts…</p>;
+  }
+
+  if (error) {
     return (
       <p className="error-text">Failed to load artifacts: {String(error)}</p>
     );
-  if (!artifacts || artifacts.length === 0) {
+  }
+
+  if (artifacts.length === 0) {
     return (
       <p className="subtle-text">
         No artifacts were collected for this build. Check packaging or upload

@@ -112,6 +112,24 @@ function buildRelatedArtifact(
   };
 }
 
+function toBuildArtifact(detail: ArtifactDetail): BuildArtifact {
+  return {
+    id: detail.id,
+    build_id: detail.build_id,
+    step_id: detail.step_id ?? null,
+    name: detail.name,
+    path: detail.path,
+    artifact_type: detail.artifact_type,
+    size_bytes: detail.size_bytes,
+    content_type: detail.content_type,
+    checksum_sha256: detail.checksum_sha256,
+    storage_provider: detail.storage_provider,
+    download_url_path: detail.download_url_path,
+    version_tags: detail.version_tags,
+    created_at: detail.created_at,
+  };
+}
+
 function renderPage(initialEntries = ["/artifacts/artifact-1"]) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -144,7 +162,7 @@ describe("ArtifactDetailPage", () => {
     mockedGetArtifact.mockResolvedValue(buildArtifactDetail());
     mockedGetBuild.mockResolvedValue(buildBuild());
     mockedGetBuildArtifacts.mockResolvedValue([
-      buildArtifactDetail(),
+      toBuildArtifact(buildArtifactDetail()),
       buildRelatedArtifact(),
     ]);
   });
