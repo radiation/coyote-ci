@@ -170,18 +170,37 @@ function logGroupSummaryText(steps: BuildStep[]): string {
     counts[step.status] += 1;
   }
 
-  const statusSummary = [
-    counts.running > 0 ? `${counts.running} running` : null,
-    counts.failed > 0 ? `${counts.failed} failed` : null,
-    counts.pending > 0 ? `${counts.pending} pending` : null,
-    counts.success > 0 ? `${counts.success} succeeded` : null,
-    counts.canceled > 0 ? `${counts.canceled} canceled` : null,
-  ].filter((value): value is string => Boolean(value));
-
   const stepSummary = `${steps.length} step${steps.length === 1 ? "" : "s"}`;
-  return statusSummary.length > 0
-    ? `${stepSummary} · ${statusSummary.join(" · ")}`
-    : stepSummary;
+
+  if (counts.failed > 0) {
+    return `${stepSummary} · ${counts.failed} failed`;
+  }
+
+  if (counts.running > 0) {
+    return `${stepSummary} · ${counts.running} running`;
+  }
+
+  if (counts.pending === steps.length) {
+    return `${stepSummary} · pending`;
+  }
+
+  if (counts.pending > 0) {
+    return `${stepSummary} · ${counts.pending} pending`;
+  }
+
+  if (counts.canceled === steps.length) {
+    return `${stepSummary} · canceled`;
+  }
+
+  if (counts.canceled > 0) {
+    return `${stepSummary} · ${counts.canceled} canceled`;
+  }
+
+  if (counts.success > 0) {
+    return `${stepSummary} · ${counts.success} succeeded`;
+  }
+
+  return stepSummary;
 }
 
 function currentStepSummaryLabel(
@@ -613,6 +632,7 @@ export function LogsPanel({
                     href={`#step-${step.step_index}`}
                     onClick={() => onOpenStep(step.step_index)}
                     aria-label={`Open logs for ${step.name}`}
+                    title={`Open logs for ${step.name}`}
                   >
                     <div className="build-log-link-header">
                       <strong>{step.name}</strong>

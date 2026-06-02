@@ -1269,15 +1269,23 @@ fieldset legend {
   gap: 12px;
 }
 
-.step-card-header h4 {
-  margin: 2px 0 0;
+.step-card-header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
 }
 
-.step-card-kicker {
-  margin-top: 0;
-  font-size: 0.76rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+.step-card-header h4 {
+  margin: 0;
+}
+
+.step-card-header-actions .status-badge,
+.step-card-header-actions .logs-toggle {
+  min-height: 0;
+  padding: 3px 8px;
+  font-size: 0.75rem;
+  line-height: 1.2;
 }
 
 .step-card-command-row {
@@ -1833,18 +1841,26 @@ fieldset legend {
 
 .build-log-group-list {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   margin-top: 4px;
 }
 
 .build-log-group {
   display: grid;
   gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 88%, transparent);
+  border-radius: 16px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-surface-raised) 45%, white) 0%,
+    color-mix(in srgb, var(--color-surface) 92%, white) 100%
+  );
 }
 
 .build-log-group-heading {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 10px 16px;
 }
@@ -1858,20 +1874,30 @@ fieldset legend {
 }
 
 .build-log-link-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .build-log-link-list a {
   display: grid;
   gap: 6px;
+  flex: 0 1 18rem;
+  min-width: min(100%, 14rem);
+  max-width: 22rem;
   min-height: 0;
   padding: 8px 10px;
   border-radius: 14px;
   border: 1px solid var(--color-border);
   background: var(--color-surface);
   font-size: 0.85rem;
+  box-shadow: none;
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
 }
 
 .build-log-link-header {
@@ -1883,6 +1909,23 @@ fieldset legend {
 
 .build-log-link strong {
   font-size: 0.9rem;
+  line-height: 1.25;
+}
+
+.build-log-link .status-success {
+  color: color-mix(in srgb, var(--color-success-text) 58%, var(--color-text));
+  background: color-mix(
+    in srgb,
+    var(--color-success-bg) 26%,
+    var(--color-surface)
+  );
+  border-color: color-mix(
+    in srgb,
+    var(--color-success-border) 34%,
+    var(--color-border)
+  );
+  padding: 2px 7px;
+  font-size: 0.7rem;
 }
 
 .build-log-link.is-running {
@@ -1926,8 +1969,35 @@ fieldset legend {
 
 .build-log-link-list a:hover {
   text-decoration: none;
-  background: var(--color-surface-raised);
+  background: color-mix(in srgb, var(--color-surface-raised) 84%, white);
   border-color: var(--color-border-strong);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--color-border) 40%, transparent);
+  transform: translateY(-1px);
+}
+
+.build-log-link-list a:focus-visible {
+  outline: 2px solid var(--color-info-border);
+  outline-offset: 2px;
+  border-color: var(--color-info-border);
+}
+
+.build-log-link.is-running:hover {
+  border-color: var(--color-warning-border);
+}
+
+.build-log-link.is-pending:hover {
+  border-color: color-mix(
+    in srgb,
+    var(--color-border-strong) 72%,
+    var(--color-text-muted)
+  );
+}
+
+@media (max-width: 560px) {
+  .build-log-link-list a {
+    flex-basis: 100%;
+    max-width: none;
+  }
 }
 
 @media (max-width: 720px) {

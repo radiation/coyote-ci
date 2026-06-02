@@ -474,10 +474,10 @@ describe("BuildDetailPage", () => {
     expect(within(verifyGroup).getByText("Verify")).toBeTruthy();
     expect(within(ungroupedGroup).getByText("Ungrouped")).toBeTruthy();
     expect(
-      within(bootstrapGroup).getByText("2 steps · 1 running · 1 succeeded"),
+      within(bootstrapGroup).getByText("2 steps · 1 running"),
     ).toBeTruthy();
-    expect(within(verifyGroup).getByText("1 step · 1 pending")).toBeTruthy();
-    expect(within(ungroupedGroup).getByText("1 step · 1 pending")).toBeTruthy();
+    expect(within(verifyGroup).getByText("1 step · pending")).toBeTruthy();
+    expect(within(ungroupedGroup).getByText("1 step · pending")).toBeTruthy();
     expect(
       within(bootstrapGroup).getByRole("link", {
         name: "Open logs for Backend Format Check",

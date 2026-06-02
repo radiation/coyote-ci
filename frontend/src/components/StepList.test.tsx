@@ -43,7 +43,7 @@ describe("StepList", () => {
       />,
     );
 
-    expect(screen.getByText("Step 3")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "deploy" })).toBeTruthy();
     expect(screen.getByText("Duration 1m 5s")).toBeTruthy();
     expect(screen.getByText("command exited with status 1")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open logs" })).toBeTruthy();

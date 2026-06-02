@@ -224,12 +224,24 @@ export function StepList({
                     <div className="step-card-body">
                       <div className="step-card-header">
                         <div>
-                          <div className="step-card-kicker subtle-text">
-                            Step {displayStepNumber(step.step_index)}
-                          </div>
                           <h4>{step.name}</h4>
                         </div>
-                        <StatusBadge status={step.status} />
+                        <div className="step-card-header-actions">
+                          <StatusBadge status={step.status} />
+                          <button
+                            type="button"
+                            className="logs-toggle"
+                            onClick={() =>
+                              onOpenStepChange(
+                                openStepIndex === step.step_index
+                                  ? null
+                                  : step.step_index,
+                              )
+                            }
+                          >
+                            {isOpen ? "Hide logs" : "Open logs"}
+                          </button>
+                        </div>
                       </div>
 
                       <p className="subtle-text step-card-command-row">
@@ -251,22 +263,6 @@ export function StepList({
                           {step.error_message}
                         </p>
                       ) : null}
-
-                      <div className="detail-actions-row">
-                        <button
-                          type="button"
-                          className="logs-toggle"
-                          onClick={() =>
-                            onOpenStepChange(
-                              openStepIndex === step.step_index
-                                ? null
-                                : step.step_index,
-                            )
-                          }
-                        >
-                          {isOpen ? "Hide logs" : "Open logs"}
-                        </button>
-                      </div>
 
                       {isOpen ? (
                         <div className="step-log-panel">
