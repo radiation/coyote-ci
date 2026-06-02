@@ -148,7 +148,7 @@ function groupLogSteps(steps: BuildStep[]): LogStepGroup[] {
     }
 
     groups.set(label, {
-      key: label.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+      key: label,
       label,
       steps: [step],
     });

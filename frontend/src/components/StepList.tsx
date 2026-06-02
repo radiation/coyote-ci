@@ -231,6 +231,8 @@ export function StepList({
                           <button
                             type="button"
                             className="logs-toggle"
+                            aria-expanded={isOpen}
+                            aria-controls={`step-log-${step.step_index}`}
                             onClick={() =>
                               onOpenStepChange(
                                 openStepIndex === step.step_index

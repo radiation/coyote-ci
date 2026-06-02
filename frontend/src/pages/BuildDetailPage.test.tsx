@@ -500,6 +500,54 @@ describe("BuildDetailPage", () => {
     ).toHaveAttribute("href", "#step-3");
   });
 
+  it("keeps distinct log groups when labels differ only by case or punctuation", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({ status: "running", finished_at: null, error_message: null }),
+    );
+    mockedGetBuildSteps.mockResolvedValueOnce([
+      makeStep({
+        id: "step-foo-1",
+        step_index: 0,
+        name: "Backend Test",
+        group_name: "Foo",
+        status: "success",
+      }),
+      makeStep({
+        id: "step-foo-2",
+        step_index: 1,
+        name: "Frontend Test",
+        group_name: "FOO",
+        status: "running",
+        started_at: "2026-03-30T00:01:20Z",
+        finished_at: null,
+        exit_code: null,
+      }),
+      makeStep({
+        id: "step-foo-3",
+        step_index: 2,
+        name: "Image Build",
+        group_name: "foo!",
+        status: "pending",
+        worker_id: null,
+        started_at: null,
+        finished_at: null,
+        exit_code: null,
+      }),
+    ]);
+    mockedGetBuildArtifacts.mockResolvedValueOnce([]);
+
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Logs" });
+
+    expect(screen.getByRole("region", { name: "Log group Foo" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Log group FOO" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Log group foo!" })).toBeTruthy();
+    expect(screen.getAllByRole("region", { name: /Log group / })).toHaveLength(
+      3,
+    );
+  });
+
   it("renders artifact lineage links from build provenance and repository routes", async () => {
     mockedGetBuildArtifacts.mockResolvedValueOnce([
       makeArtifact({
