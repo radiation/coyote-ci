@@ -13,6 +13,19 @@ Prioritize:
 
 Do not over-engineer for speculative future needs. Build the simplest version that works today while keeping clean seams for future expansion.
 
+## Context and token discipline
+
+This repository may be used with AI coding agents that have usage-based token costs.
+
+Prefer targeted context over broad repository scans:
+- inspect existing instructions and recent diffs first
+- use symbol/file search before opening large files
+- avoid reading generated, vendored, build-output, coverage, `dist`, and dependency directories unless necessary
+- when asked to plan, identify the smallest relevant file set before proposing edits
+- when available, use generated repo-index, graph, or AI-context artifacts as navigation aids, but do not treat them as more authoritative than source code and tests
+
+Do not make broad exploratory changes just because related files exist.
+
 ## Architectural direction
 
 Assume the near-term architecture is:
@@ -84,8 +97,8 @@ Repositories are responsible for:
 - mapping database rows into domain-friendly structures
 - handling transactions when persistence behavior requires them
 
-Repositories should not contain HTTP logic.
-Repositories should not contain orchestration-heavy business rules.
+Repositories should not contain HTTP logic or high-level orchestration.
+Repositories may enforce persistence-level invariants and apply precomputed lifecycle outcomes atomically when correctness requires a transaction.
 
 ### Service layer
 Services are responsible for:
@@ -165,6 +178,16 @@ Separate concerns where helpful:
 
 Do not collapse HTTP, persistence, and domain concerns into one giant struct unless the simplicity benefit is clear and the boundary remains understandable.
 
+## Frontend guidance
+
+For frontend changes:
+- prefer small, focused components over large page files
+- keep API access in shared client modules rather than inline fetch calls
+- keep page containers responsible for data loading/mutations and delegate rendering to sections/components
+- preserve existing routing and query/mutation patterns unless explicitly changing them
+- add focused tests for user-visible behavior, empty states, links, and error handling
+- avoid broad visual redesigns when the request is for polish or behavior
+
 ## Implementation priorities
 
 When proposing or generating code, optimize for this order:
@@ -180,10 +203,11 @@ Do not skip ahead to advanced distributed features unless explicitly requested.
 
 ## What "start small" means in this repo
 
-Prefer implementing these first:
+The core workflow already exists or is being built incrementally around:
+- projects
+- jobs
 - builds
 - build steps
-- job states
 - worker assignment
 - logs
 - artifacts
@@ -191,17 +215,10 @@ Prefer implementing these first:
 - queueing
 - API endpoints for core workflows
 
-Do not proactively implement these unless asked:
-- Kubernetes-native controllers/operators
-- multi-region coordination
-- predictive capacity forecasting
-- AI-generated PR or diff summaries
-- CVE scanning pipelines
-- DORA analytics
-- org-wide RBAC hierarchies
-- advanced monorepo dependency graphs
-
-These are valid future features, but they should be layered on top of a stable core.
+When extending these areas:
+- prefer small, behavior-preserving changes
+- keep lifecycle behavior explicit and tested
+- avoid introducing broad new platform layers unless requested
 
 ## Persistence guidance
 
@@ -339,6 +356,15 @@ Implementation posture:
 - keep seams clean for future multi-control-plane scaling
 - keep artifacts and API serving concerns separable so artifact serving can scale independently later
 
+## PR and review guidance
+
+When responding to review feedback:
+- make the smallest change that addresses the feedback
+- preserve behavior unless the requested change is explicitly behavioral
+- do not bundle unrelated cleanup into correctness fixes
+- update tests when behavior changes or a bug is fixed
+- explain when a suggested change is intentionally deferred
+
 ## Monorepo and dependency-awareness guidance
 
 Future support for monorepos, selective rebuilds, and parallel module execution is desirable.
@@ -350,22 +376,35 @@ For now:
 
 ## Product guidance
 
-This project may eventually include:
-- artifact storage
-- notifications
-- AI notes on diffs
-- queue prioritization
-- resource usage reporting
-- dashboards
-- authorization at multiple scopes
-- DORA metrics
+Coyote CI is a CI control plane and artifact repository. The near-term product direction is to make builds, jobs, queues, logs, artifacts, provenance, and source links easy to inspect and reason about.
 
-These are future layers, not baseline assumptions.
+Current and near-term product areas include:
+
+- build and job execution workflows
+- artifact storage, metadata, versioning, channels, and lineage
+- build logs, step results, and provenance/source linking
+- queue operational visibility
+- auth, RBAC, project membership, and API token foundations
+- lightweight dashboards and metrics for build and queue health
+- behavior-preserving UI polish that improves clarity without changing core workflows
+
+Future layers may include:
+
+- notifications
+- AI/MCP-powered build, diff, and artifact summaries
+- resource usage recommendations
+- advanced compliance scopes
+- DORA metrics
+- monorepo dependency graphs and selective rebuild planning
+- predictive capacity or performance forecasting
 
 When generating code, always ask:
+
 - is this needed for the current milestone?
-- is there a simpler version?
+- is there a simpler version that preserves the current architecture?
 - can this be added later behind a clear interface?
+- does this change improve the build/artifact/operator experience without widening scope unnecessarily?
+
 
 ## Output style for Copilot
 
