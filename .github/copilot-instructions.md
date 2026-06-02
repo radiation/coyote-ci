@@ -26,6 +26,15 @@ Prefer targeted context over broad repository scans:
 
 Do not make broad exploratory changes just because related files exist.
 
+## AI context files
+
+Before scanning large parts of the repository, check the curated context files when they are relevant:
+
+- `docs/ai-context/product-context.md` explains the product vision, differentiators, and future layers.
+- `docs/ai-context/current-priorities.md` explains the current roadmap, development posture, and near-term focus.
+
+Use these files as navigation and intent aids. Do not treat them as more authoritative than source code, migrations, or tests.
+
 ## Architectural direction
 
 Assume the near-term architecture is:
