@@ -108,6 +108,101 @@ function displayStepNumber(stepIndex: number): number {
   return stepIndex + 1;
 }
 
+function stepLogLinkClassName(step: BuildStep): string {
+  if (step.status === "failed") {
+    return "build-log-link is-failed";
+  }
+
+  if (step.status === "running") {
+    return "build-log-link is-running";
+  }
+
+  if (step.status === "pending") {
+    return "build-log-link is-pending";
+  }
+
+  return "build-log-link";
+}
+
+type LogStepGroup = {
+  key: string;
+  label: string;
+  steps: BuildStep[];
+};
+
+function normalizeLogGroupLabel(groupName: string | null | undefined): string {
+  const trimmed = groupName?.trim();
+  return trimmed ? trimmed : "Ungrouped";
+}
+
+function groupLogSteps(steps: BuildStep[]): LogStepGroup[] {
+  const groups = new Map<string, LogStepGroup>();
+
+  for (const step of steps) {
+    const label = normalizeLogGroupLabel(step.group_name);
+    const existing = groups.get(label);
+
+    if (existing) {
+      existing.steps.push(step);
+      continue;
+    }
+
+    groups.set(label, {
+      key: label,
+      label,
+      steps: [step],
+    });
+  }
+
+  return Array.from(groups.values());
+}
+
+function logGroupSummaryText(steps: BuildStep[]): string {
+  const counts = {
+    success: 0,
+    failed: 0,
+    running: 0,
+    pending: 0,
+    canceled: 0,
+  };
+
+  for (const step of steps) {
+    counts[step.status] += 1;
+  }
+
+  const stepSummary = `${steps.length} step${steps.length === 1 ? "" : "s"}`;
+
+  if (counts.failed > 0) {
+    return `${stepSummary} · ${counts.failed} failed`;
+  }
+
+  if (counts.running > 0) {
+    return `${stepSummary} · ${counts.running} running`;
+  }
+
+  if (counts.pending === steps.length) {
+    return `${stepSummary} · pending`;
+  }
+
+  if (counts.pending > 0) {
+    return `${stepSummary} · ${counts.pending} pending`;
+  }
+
+  if (counts.canceled === steps.length) {
+    return `${stepSummary} · canceled`;
+  }
+
+  if (counts.canceled > 0) {
+    return `${stepSummary} · ${counts.canceled} canceled`;
+  }
+
+  if (counts.success > 0) {
+    return `${stepSummary} · ${counts.success} succeeded`;
+  }
+
+  return stepSummary;
+}
+
 function currentStepSummaryLabel(
   currentStepIndex: number,
   totalSteps: number,
@@ -121,10 +216,6 @@ function currentStepSummaryLabel(
     totalSteps - 1,
   );
   return `Step ${displayStepNumber(clampedStepIndex)} of ${totalSteps}`;
-}
-
-function statusText(status: BuildStep["status"]): string {
-  return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
 export function BuildSummaryPanel({
@@ -364,9 +455,6 @@ export function ExecutionSummaryPanel({
       <div className="dashboard-panel-header">
         <div>
           <h3>Execution summary</h3>
-          <p className="subtle-text">
-            What ran, what failed, and where execution stopped.
-          </p>
           {!stepsLoading && !stepsError && (steps ?? []).length > 0 ? (
             <p className="build-steps-summary subtle-text">
               {stepSummaryText(stepCounts)}
@@ -465,10 +553,6 @@ export function StepTimelinePanel({
       <div className="dashboard-panel-header">
         <div>
           <h3>Execution timeline</h3>
-          <p className="subtle-text">
-            Expand a step to inspect live or captured logs without flooding the
-            page.
-          </p>
         </div>
       </div>
       {stepsLoading ? <p>Loading steps…</p> : null}
@@ -479,7 +563,6 @@ export function StepTimelinePanel({
         <StepList
           buildID={build.id}
           steps={steps}
-          activeStepIndex={build.current_step_index}
           openStepIndex={openStepIndex}
           onOpenStepChange={onOpenStepChange}
         />
@@ -500,17 +583,18 @@ export function LogsPanel({
   onOpenStep: (stepIndex: number) => void;
 }) {
   const stepCount = (steps ?? []).length;
+  const stepGroups = groupLogSteps(steps ?? []);
 
   return (
     <section className="detail-panel">
       <div className="dashboard-panel-header">
         <div>
           <h3>Logs</h3>
-          <p className="subtle-text">
-            {stepCount > 0
-              ? `${stepCount} step${stepCount === 1 ? "" : "s"} available. Jump to a step below and open its logs inline.`
-              : "Logs appear here once the build reports step execution."}
-          </p>
+          {stepCount > 0 ? (
+            <p className="subtle-text">
+              {stepCount} step{stepCount === 1 ? "" : "s"}
+            </p>
+          ) : null}
         </div>
       </div>
       {stepsLoading ? <p>Loading log entry points…</p> : null}
@@ -527,21 +611,37 @@ export function LogsPanel({
         </p>
       ) : null}
       {!stepsLoading && !stepsError && (steps ?? []).length > 0 ? (
-        <div className="build-log-link-list">
-          {(steps ?? []).map((step) => (
-            <a
-              key={step.id}
-              className={`build-log-link${step.status === "failed" ? " is-failed" : ""}`}
-              href={`#step-${step.step_index}`}
-              onClick={() => onOpenStep(step.step_index)}
+        <div className="build-log-group-list">
+          {stepGroups.map((group) => (
+            <section
+              key={group.key}
+              className="build-log-group"
+              aria-label={`Log group ${group.label}`}
             >
-              <strong>
-                Step {displayStepNumber(step.step_index)} · {step.name}
-              </strong>
-              <span className="subtle-text">
-                {statusText(step.status)} · Open inline logs
-              </span>
-            </a>
+              <div className="build-log-group-heading">
+                <strong>{group.label}</strong>
+                <span className="build-log-group-meta subtle-text">
+                  {logGroupSummaryText(group.steps)}
+                </span>
+              </div>
+              <div className="build-log-link-list">
+                {group.steps.map((step) => (
+                  <a
+                    key={step.id}
+                    className={stepLogLinkClassName(step)}
+                    href={`#step-${step.step_index}`}
+                    onClick={() => onOpenStep(step.step_index)}
+                    aria-label={`Open logs for ${step.name}`}
+                    title={`Open logs for ${step.name}`}
+                  >
+                    <div className="build-log-link-header">
+                      <strong>{step.name}</strong>
+                      <StatusBadge status={step.status} />
+                    </div>
+                  </a>
+                ))}
+              </div>
+            </section>
           ))}
         </div>
       ) : null}

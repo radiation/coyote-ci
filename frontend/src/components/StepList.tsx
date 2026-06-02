@@ -10,6 +10,22 @@ function displayStepNumber(stepIndex: number): number {
   return stepIndex + 1;
 }
 
+function stepCardClassName(step: BuildStep): string {
+  if (step.status === "failed") {
+    return "step-card is-failed";
+  }
+
+  if (step.status === "running") {
+    return "step-card is-running";
+  }
+
+  if (step.status === "pending") {
+    return "step-card is-pending";
+  }
+
+  return "step-card";
+}
+
 function commandPreview(command: string): string {
   if (command.length <= COMMAND_PREVIEW_LIMIT) {
     return command;
@@ -54,13 +70,11 @@ function bucketSteps(steps: BuildStep[]): StepBucket[] {
 export function StepList({
   buildID,
   steps,
-  activeStepIndex,
   openStepIndex,
   onOpenStepChange,
 }: {
   buildID: string;
   steps: BuildStep[];
-  activeStepIndex?: number;
   openStepIndex: number | null;
   onOpenStepChange: (stepIndex: number | null) => void;
 }) {
@@ -195,7 +209,6 @@ export function StepList({
                 const chunks = logChunks[step.step_index] ?? [];
                 const loading = logLoading[step.step_index] ?? false;
                 const error = logError[step.step_index];
-                const isCurrent = activeStepIndex === step.step_index;
                 const duration = formatDuration(
                   step.started_at,
                   step.finished_at,
@@ -205,19 +218,32 @@ export function StepList({
                   <article
                     key={`step-card-${step.step_index}`}
                     id={`step-${step.step_index}`}
-                    className={`step-card${step.status === "failed" ? " is-failed" : ""}${isCurrent ? " is-current" : ""}`}
+                    className={stepCardClassName(step)}
                   >
                     <div className="step-card-rail" aria-hidden="true" />
                     <div className="step-card-body">
                       <div className="step-card-header">
                         <div>
-                          <div className="step-card-kicker subtle-text">
-                            Step {displayStepNumber(step.step_index)}
-                            {isCurrent ? " · Current step" : ""}
-                          </div>
                           <h4>{step.name}</h4>
                         </div>
-                        <StatusBadge status={step.status} />
+                        <div className="step-card-header-actions">
+                          <StatusBadge status={step.status} />
+                          <button
+                            type="button"
+                            className="logs-toggle"
+                            aria-expanded={isOpen}
+                            aria-controls={`step-log-${step.step_index}`}
+                            onClick={() =>
+                              onOpenStepChange(
+                                openStepIndex === step.step_index
+                                  ? null
+                                  : step.step_index,
+                              )
+                            }
+                          >
+                            {isOpen ? "Hide logs" : "Open logs"}
+                          </button>
+                        </div>
                       </div>
 
                       <p className="subtle-text step-card-command-row">
@@ -239,22 +265,6 @@ export function StepList({
                           {step.error_message}
                         </p>
                       ) : null}
-
-                      <div className="detail-actions-row">
-                        <button
-                          type="button"
-                          className="logs-toggle"
-                          onClick={() =>
-                            onOpenStepChange(
-                              openStepIndex === step.step_index
-                                ? null
-                                : step.step_index,
-                            )
-                          }
-                        >
-                          {isOpen ? "Hide logs" : "Open logs"}
-                        </button>
-                      </div>
 
                       {isOpen ? (
                         <div className="step-log-panel">
