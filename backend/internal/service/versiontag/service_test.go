@@ -184,6 +184,28 @@ func TestService_CreateVersionTags_ArtifactChannelsRequireArtifactLabelRepositor
 	}
 }
 
+func TestService_SetArtifactLabelRepository_EnablesArtifactChannels(t *testing.T) {
+	jobID := "job-1"
+	buildID := "build-1"
+	artifactRepo := repositorymemory.NewArtifactLabelRepository()
+	artifactRepo.SeedBuilds(domain.Build{ID: buildID, JobID: &jobID})
+	artifactRepo.SeedArtifacts(domain.BuildArtifact{ID: "artifact-1", BuildID: buildID, LogicalPath: "packages/pkg-a.tgz"})
+
+	svc := NewService(nil)
+	svc.SetArtifactLabelRepository(artifactRepo)
+	tags, err := svc.CreateVersionTags(context.Background(), jobID, CreateVersionTagsInput{
+		Kind:        string(domain.VersionTagKindChannel),
+		Version:     "latest",
+		ArtifactIDs: []string{"artifact-1"},
+	})
+	if err != nil {
+		t.Fatalf("expected artifact channel create to succeed, got %v", err)
+	}
+	if len(tags) != 1 || tags[0].Kind != domain.VersionTagKindChannel {
+		t.Fatalf("expected one artifact channel tag, got %#v", tags)
+	}
+}
+
 func TestService_ListArtifactAndManagedImageTags(t *testing.T) {
 	legacyRepo := repositorymemory.NewVersionTagRepository()
 	artifactRepo := repositorymemory.NewArtifactLabelRepository()

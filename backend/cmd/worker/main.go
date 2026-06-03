@@ -19,6 +19,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	dockerrunner "github.com/radiation/coyote-ci/backend/internal/runner/docker"
@@ -88,7 +89,7 @@ func main() {
 	}
 	stepRunner := resolveStepRunner(cfg)
 	logSink := logs.NewPostgresSink(db)
-	versionTagService := versiontagsvc.NewService(versionTagRepo)
+	versionTagService := newWorkerVersionTagService(versionTagRepo, artifactLabelRepo)
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, stepRunner, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:    executionJobRepo,
 		ExecutionOutputRepo: executionJobOutputRepo,
@@ -178,6 +179,10 @@ func runWorkerIteration(ctx context.Context, worker workerIterationService) erro
 	log.Printf("worker iteration completed for claimed work: build_id=%s step=%s", step.BuildID, step.StepName)
 
 	return nil
+}
+
+func newWorkerVersionTagService(versionTagRepo repository.VersionTagRepository, artifactLabelRepo repository.ArtifactLabelRepository) *versiontagsvc.Service {
+	return versiontagsvc.NewService(versionTagRepo).WithArtifactLabels(artifactLabelRepo)
 }
 
 func startWorkerStatusServer(ctx context.Context, addr string, worker workerStatusProvider) {

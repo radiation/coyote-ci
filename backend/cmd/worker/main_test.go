@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
+	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 )
 
@@ -133,5 +135,27 @@ func TestNewWorkerStatusHandler_RecoveryStatus(t *testing.T) {
 	}
 	if resp.TimestampUTC.IsZero() {
 		t.Fatal("expected timestamp_utc to be set")
+	}
+}
+
+func TestNewWorkerVersionTagService_WiresArtifactLabels(t *testing.T) {
+	jobID := "job-1"
+	buildID := "build-1"
+	versionRepo := repositorymemory.NewVersionTagRepository()
+	artifactRepo := repositorymemory.NewArtifactLabelRepository()
+	artifactRepo.SeedBuilds(domain.Build{ID: buildID, JobID: &jobID})
+	artifactRepo.SeedArtifacts(domain.BuildArtifact{ID: "artifact-1", BuildID: buildID, LogicalPath: "dist/app.tgz"})
+
+	svc := newWorkerVersionTagService(versionRepo, artifactRepo)
+	tags, err := svc.CreateVersionTags(context.Background(), jobID, versiontagsvc.CreateVersionTagsInput{
+		Kind:        string(domain.VersionTagKindChannel),
+		Version:     "latest",
+		ArtifactIDs: []string{"artifact-1"},
+	})
+	if err != nil {
+		t.Fatalf("expected artifact channel create to succeed, got %v", err)
+	}
+	if len(tags) != 1 || tags[0].Kind != domain.VersionTagKindChannel {
+		t.Fatalf("expected one artifact channel tag, got %#v", tags)
 	}
 }
