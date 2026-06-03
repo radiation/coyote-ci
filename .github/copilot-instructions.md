@@ -30,10 +30,21 @@ Do not make broad exploratory changes just because related files exist.
 
 Before scanning large parts of the repository, check the curated context files when they are relevant:
 
-- `docs/ai-context/product-context.md` explains the product vision, differentiators, and future layers.
+- `docs/ai-context/product-context.md` explains the product vision, differentiators, current product areas, and future layers.
 - `docs/ai-context/current-priorities.md` explains the current roadmap, development posture, and near-term focus.
+- `docs/ai-context/backend-map.md` maps the backend packages and common change areas so you can identify the smallest relevant file set first.
+- `docs/ai-context/frontend-map.md` maps the frontend routes, pages, shared components, client modules, and test surfaces.
+- `docs/ai-context/domain-model.md` summarizes the main domain relationships across builds, artifacts, queueing/job priority, provenance, and auth.
+- `docs/ai-context/prompt-recipes.md` contains low-token prompt templates for planning, review, debugging, and scoped architecture questions.
 
 Use these files as navigation and intent aids. Do not treat them as more authoritative than source code, migrations, or tests.
+
+### Context maintenance
+
+- Update `docs/ai-context/current-priorities.md` when roadmap or current focus changes.
+- Update `docs/ai-context/backend-map.md` or `docs/ai-context/frontend-map.md` after large structural refactors.
+- Update `docs/ai-context/domain-model.md` when core domain concepts or relationships change.
+- Do not update AI context files for small localized bug fixes unless the docs would otherwise become misleading.
 
 ## Architectural direction
 
