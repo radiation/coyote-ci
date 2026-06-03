@@ -37,6 +37,51 @@ func (f *fakeBuildVersionTagger) CreateVersionTags(_ context.Context, jobID stri
 	return []domain.VersionTag{}, nil
 }
 
+func TestGeneratedArtifactVersionConflictHelper(t *testing.T) {
+	if isGeneratedArtifactVersionConflict(nil) {
+		t.Fatal("expected nil error to not be a conflict")
+	}
+	if !isGeneratedArtifactVersionConflict(repository.ErrVersionTagConflict) {
+		t.Fatal("expected repository conflict sentinel to be recognized")
+	}
+	wrapped := errors.New("generated version tagging failed for artifact path=\"dist/app\" name=\"\" declaration=\"dist/**\" resolved_version=\"0.1.7\" channel=\"latest\": version tag already exists for target")
+	if !isGeneratedArtifactVersionConflict(wrapped) {
+		t.Fatal("expected wrapped generated version conflict text to be recognized")
+	}
+	nonConflict := errors.New("generated channel tagging failed for artifact path=\"dist/app\": version tag already exists for target")
+	if isGeneratedArtifactVersionConflict(nonConflict) {
+		t.Fatal("expected non-version conflict text to be ignored")
+	}
+}
+
+func TestMatchingArtifactDeclaration_BuildOnlyAndNoMatchBranches(t *testing.T) {
+	buildDeclarations := []domain.ArtifactDeclaration{{
+		Path:    "dist/*.tgz",
+		Version: &domain.ArtifactVersionDeclaration{Template: "1.2.{build_number}", Channel: "latest"},
+	}}
+	stepDeclarations := map[int][]domain.ArtifactDeclaration{
+		0: {{Path: "dist/app.tgz", Name: "pkg/app", Type: domain.ArtifactTypeNPMPackage}},
+	}
+	stepID := "step-1"
+	item := domain.BuildArtifact{ID: "artifact-1", StepID: &stepID, LogicalPath: "dist/app.tgz"}
+	declaration, ok := matchingArtifactDeclaration(item, map[string]int{"step-1": 0}, buildDeclarations, stepDeclarations)
+	if !ok {
+		t.Fatal("expected matching declaration")
+	}
+	if declaration.Name != "pkg/app" || declaration.Type != domain.ArtifactTypeNPMPackage || declaration.Version == nil || declaration.Version.Template != "1.2.{build_number}" {
+		t.Fatalf("expected merged step/build declaration, got %#v", declaration)
+	}
+
+	buildOnly, ok := matchingArtifactDeclaration(domain.BuildArtifact{LogicalPath: "dist/other.tgz"}, nil, buildDeclarations, nil)
+	if !ok || buildOnly.Version == nil || buildOnly.Version.Channel != "latest" {
+		t.Fatalf("expected build-only declaration, got %#v ok=%v", buildOnly, ok)
+	}
+
+	if _, ok := matchingArtifactDeclaration(domain.BuildArtifact{LogicalPath: "reports/out.xml"}, nil, buildDeclarations, nil); ok {
+		t.Fatal("expected no declaration match")
+	}
+}
+
 type fakeBuildRepository struct {
 	build         domain.Build
 	steps         []domain.BuildStep

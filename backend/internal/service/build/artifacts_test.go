@@ -308,3 +308,70 @@ func TestSkipPathsForScope(t *testing.T) {
 		}
 	})
 }
+
+func TestArtifactDeclarationHelpers_MergeIndexesAndLabels(t *testing.T) {
+	stepDeclaration := domain.ArtifactDeclaration{
+		Path: "dist/app.tgz",
+		Version: &domain.ArtifactVersionDeclaration{
+			Channel: "latest",
+		},
+	}
+	buildDeclaration := domain.ArtifactDeclaration{
+		Path: "dist/app.tgz",
+		Name: "pkg/app",
+		Type: domain.ArtifactTypeNPMPackage,
+		Version: &domain.ArtifactVersionDeclaration{
+			Template: "1.2.{build_number}",
+		},
+	}
+
+	merged := mergeArtifactDeclarations(stepDeclaration, buildDeclaration)
+	if merged.Name != "pkg/app" || merged.Type != domain.ArtifactTypeNPMPackage {
+		t.Fatalf("expected merged identity from build declaration, got %#v", merged)
+	}
+	if merged.Version == nil || merged.Version.Template != "1.2.{build_number}" || merged.Version.Channel != "latest" {
+		t.Fatalf("expected merged version declaration, got %#v", merged.Version)
+	}
+
+	typeIndex := declarationTypeIndex([]domain.ArtifactDeclaration{{Path: " dist/app.tgz ", Type: domain.ArtifactTypeGeneric}, {Path: "", Type: domain.ArtifactTypeDockerImage}})
+	if typeIndex["dist/app.tgz"] != domain.ArtifactTypeGeneric {
+		t.Fatalf("expected trimmed type index, got %#v", typeIndex)
+	}
+
+	nameIndex := declarationNameIndex([]domain.ArtifactDeclaration{{Path: " dist/app.tgz ", Name: " pkg/app "}, {Path: "dist/blank", Name: " "}})
+	if nameIndex["dist/app.tgz"] != "pkg/app" {
+		t.Fatalf("expected trimmed name index, got %#v", nameIndex)
+	}
+
+	declarations := declarationsForPatterns([]string{" dist/** ", "", "reports/*.xml"}, map[string]domain.ArtifactType{"dist/**": domain.ArtifactTypeDockerImage})
+	if len(declarations) != 2 || declarations[0].Type != domain.ArtifactTypeDockerImage || declarations[1].Path != "reports/*.xml" {
+		t.Fatalf("expected declarations for trimmed patterns, got %#v", declarations)
+	}
+
+	if got := artifactCollectionScopeLabel(nil); got != "build" {
+		t.Fatalf("expected build scope label, got %q", got)
+	}
+	stepID := "step-1"
+	if got := artifactCollectionScopeLabel(&stepID); got != "step \"step-1\"" {
+		t.Fatalf("expected step scope label, got %q", got)
+	}
+}
+
+func TestArtifactDeclarationsFromBuild_NilAndEmptyPipeline(t *testing.T) {
+	declarations, err := artifactDeclarationsFromBuild(domain.Build{})
+	if err != nil {
+		t.Fatalf("expected nil pipeline to succeed, got %v", err)
+	}
+	if declarations != nil {
+		t.Fatalf("expected nil declarations for nil pipeline, got %#v", declarations)
+	}
+
+	empty := "   "
+	declarations, err = artifactDeclarationsFromBuild(domain.Build{PipelineConfigYAML: &empty})
+	if err != nil {
+		t.Fatalf("expected empty pipeline to succeed, got %v", err)
+	}
+	if declarations != nil {
+		t.Fatalf("expected nil declarations for empty pipeline, got %#v", declarations)
+	}
+}

@@ -68,3 +68,53 @@ func TestValidateArtifactVersionConfig(t *testing.T) {
 		t.Fatalf("expected unsupported placeholder error, got %v", err)
 	}
 }
+
+func TestValidateArtifactVersionTemplate_MalformedPlaceholders(t *testing.T) {
+	if err := ValidateArtifactVersionTemplate("1.0.{{build_number}"); err == nil || !strings.Contains(err.Error(), "malformed placeholders") {
+		t.Fatalf("expected malformed placeholder error, got %v", err)
+	}
+	if err := ValidateArtifactVersionTemplate("1.0.{build_number}}"); err == nil || !strings.Contains(err.Error(), "malformed placeholders") {
+		t.Fatalf("expected malformed placeholder error, got %v", err)
+	}
+}
+
+func TestResolveArtifactVersionTemplate_FallbackMetadataSources(t *testing.T) {
+	commitSHA := "1234567"
+	ref := " refs/tags/v1.2.3 "
+	build := domain.Build{
+		CommitSHA: &commitSHA,
+		Ref:       &ref,
+	}
+
+	resolvedShort, err := ResolveArtifactVersionTemplate("{git_short_sha}", build)
+	if err != nil {
+		t.Fatalf("unexpected git short sha error: %v", err)
+	}
+	if resolvedShort != "1234567" {
+		t.Fatalf("expected short sha fallback 1234567, got %q", resolvedShort)
+	}
+
+	resolvedRef, err := ResolveArtifactVersionTemplate("release-{git_ref}", build)
+	if err != nil {
+		t.Fatalf("unexpected git ref error: %v", err)
+	}
+	if resolvedRef != "release-refs/tags/v1.2.3" {
+		t.Fatalf("expected trimmed git ref fallback, got %q", resolvedRef)
+	}
+}
+
+func TestResolveArtifactVersionTemplate_UsesTriggerMetadataFallback(t *testing.T) {
+	commitSHA := "abcdef1234567890"
+	ref := "refs/heads/main"
+	build := domain.Build{
+		Trigger: domain.BuildTrigger{CommitSHA: &commitSHA, Ref: &ref},
+	}
+
+	resolved, err := ResolveArtifactVersionTemplate("{git_sha}-{git_ref}", build)
+	if err != nil {
+		t.Fatalf("unexpected trigger metadata error: %v", err)
+	}
+	if resolved != "abcdef1234567890-refs/heads/main" {
+		t.Fatalf("expected trigger metadata fallback, got %q", resolved)
+	}
+}
