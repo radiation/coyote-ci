@@ -369,6 +369,7 @@ func toArtifactBrowseVersionResponse(version domain.ArtifactBrowseVersion, proje
 		StorageProvider: provider,
 		DownloadURLPath: "/builds/" + version.Build.ID + "/artifacts/" + version.Artifact.ID + "/download",
 		VersionTags:     toVersionTagResponses(version.Artifact.VersionTags),
+		Lineage:         toArtifactLineageResponse(version.Artifact, version.Build, projectName, jobName),
 		CreatedAt:       version.Artifact.CreatedAt.Format(time.RFC3339),
 	}
 }
@@ -446,8 +447,109 @@ func toArtifactDetailResponse(record domain.ArtifactRecord, projects map[string]
 		StorageProvider: provider,
 		DownloadURLPath: "/builds/" + record.Build.ID + "/artifacts/" + record.Artifact.ID + "/download",
 		VersionTags:     toVersionTagResponses(record.Artifact.VersionTags),
+		Lineage:         toArtifactLineageResponse(record.Artifact, record.Build, projectName, jobName),
 		CreatedAt:       record.Artifact.CreatedAt.Format(time.RFC3339),
 	}
+}
+
+func toArtifactLineageResponse(artifact domain.BuildArtifact, build domain.Build, projectName *string, jobName *string) *api.ArtifactLineage {
+	versions, channels := artifactLineageLabels(artifact.VersionTags)
+	gitRef := artifactLineageGitRef(build)
+	gitSHA := artifactLineageGitSHA(build)
+	if projectName == nil && build.JobID == nil && len(versions) == 0 && len(channels) == 0 && gitRef == nil && gitSHA == nil {
+		return &api.ArtifactLineage{
+			ProjectID:    build.ProjectID,
+			BuildID:      build.ID,
+			BuildNumber:  build.BuildNumber,
+			ArtifactID:   artifact.ID,
+			ArtifactName: artifact.Name,
+			ArtifactPath: artifact.LogicalPath,
+			CreatedAt:    artifact.CreatedAt.Format(time.RFC3339),
+		}
+	}
+	return &api.ArtifactLineage{
+		ProjectID:    build.ProjectID,
+		ProjectName:  projectName,
+		JobID:        build.JobID,
+		JobName:      jobName,
+		BuildID:      build.ID,
+		BuildNumber:  build.BuildNumber,
+		ArtifactID:   artifact.ID,
+		ArtifactName: artifact.Name,
+		ArtifactPath: artifact.LogicalPath,
+		Versions:     versions,
+		Channels:     channels,
+		GitRef:       gitRef,
+		GitSHA:       gitSHA,
+		CreatedAt:    artifact.CreatedAt.Format(time.RFC3339),
+	}
+}
+
+func artifactLineageLabels(tags []domain.VersionTag) ([]string, []string) {
+	versions := make([]string, 0)
+	channels := make([]string, 0)
+	seenVersions := make(map[string]struct{})
+	seenChannels := make(map[string]struct{})
+	for _, tag := range tags {
+		value := strings.TrimSpace(tag.Version)
+		if value == "" {
+			continue
+		}
+		switch tag.Kind {
+		case domain.VersionTagKindChannel:
+			if _, ok := seenChannels[value]; ok {
+				continue
+			}
+			seenChannels[value] = struct{}{}
+			channels = append(channels, value)
+		default:
+			if _, ok := seenVersions[value]; ok {
+				continue
+			}
+			seenVersions[value] = struct{}{}
+			versions = append(versions, value)
+		}
+	}
+	return versions, channels
+}
+
+func artifactLineageGitRef(build domain.Build) *string {
+	for _, value := range []*string{build.SourceRef, build.Ref} {
+		if trimmed := trimmedStringPointer(value); trimmed != nil {
+			return trimmed
+		}
+	}
+	if build.Source != nil {
+		if trimmed := trimmedStringPointer(build.Source.Ref); trimmed != nil {
+			return trimmed
+		}
+	}
+	return trimmedStringPointer(build.Trigger.Ref)
+}
+
+func artifactLineageGitSHA(build domain.Build) *string {
+	for _, value := range []*string{build.SourceSHA, build.CommitSHA} {
+		if trimmed := trimmedStringPointer(value); trimmed != nil {
+			return trimmed
+		}
+	}
+	if build.Source != nil {
+		if trimmed := trimmedStringPointer(build.Source.CommitSHA); trimmed != nil {
+			return trimmed
+		}
+	}
+	return trimmedStringPointer(build.Trigger.CommitSHA)
+}
+
+func trimmedStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func (h *ArtifactHandler) resolveProjectFilter(w http.ResponseWriter, r *http.Request) (string, bool) {

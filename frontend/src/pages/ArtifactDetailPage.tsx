@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   artifactDownloadURL,
@@ -123,6 +124,97 @@ function relatedArtifacts(
   );
 }
 
+function artifactLineageArtifactLabel(artifact: ArtifactDetail): string {
+  const lineageName = artifact.lineage?.artifact_name?.trim() ?? "";
+  if (lineageName) {
+    return lineageName;
+  }
+  return artifactTitle(artifact);
+}
+
+function artifactLineageVersionLabel(artifact: ArtifactDetail): string | null {
+  const lineageVersion = artifact.lineage?.versions?.find((value) =>
+    value.trim(),
+  );
+  if (lineageVersion) {
+    return lineageVersion;
+  }
+  const versionTag = (artifact.version_tags ?? []).find(
+    (tag) => tagKind(tag) === "version" && tag.version.trim(),
+  );
+  return versionTag?.version ?? null;
+}
+
+function artifactLineageChannelLabel(artifact: ArtifactDetail): string | null {
+  const lineageChannel = artifact.lineage?.channels?.find((value) =>
+    value.trim(),
+  );
+  if (lineageChannel) {
+    return lineageChannel;
+  }
+  const channelTag = (artifact.version_tags ?? []).find(
+    (tag) => tagKind(tag) === "channel" && tag.version.trim(),
+  );
+  return channelTag?.version ?? null;
+}
+
+function artifactLineageSegments(
+  artifact: ArtifactDetail,
+  buildHref: string,
+  primaryCommit: string | null,
+  primaryCommitHref: string | null,
+  sourceRef: string | null,
+  sourceRefHref: string | null,
+): Array<{ key: string; content: ReactNode }> {
+  const segments: Array<{ key: string; content: ReactNode }> = [];
+  if (primaryCommit) {
+    segments.push({
+      key: "commit",
+      content: primaryCommitHref ? (
+        <a href={primaryCommitHref}>Commit {shortSHA(primaryCommit)}</a>
+      ) : (
+        <span>Commit {shortSHA(primaryCommit)}</span>
+      ),
+    });
+  } else if (sourceRef) {
+    segments.push({
+      key: "ref",
+      content: sourceRefHref ? (
+        <a href={sourceRefHref}>Ref {sourceRef}</a>
+      ) : (
+        <span>Ref {sourceRef}</span>
+      ),
+    });
+  }
+  segments.push({
+    key: "build",
+    content: <Link to={buildHref}>{buildLabel(artifact)}</Link>,
+  });
+  segments.push({
+    key: "artifact",
+    content: (
+      <Link to={`/artifacts/${artifact.id}`}>
+        {artifactLineageArtifactLabel(artifact)}
+      </Link>
+    ),
+  });
+  const versionLabelValue = artifactLineageVersionLabel(artifact);
+  if (versionLabelValue) {
+    segments.push({
+      key: "version",
+      content: <span>Version {versionLabelValue}</span>,
+    });
+  }
+  const channelLabelValue = artifactLineageChannelLabel(artifact);
+  if (channelLabelValue) {
+    segments.push({
+      key: "channel",
+      content: <span>Channel {channelLabelValue}</span>,
+    });
+  }
+  return segments;
+}
+
 export function ArtifactDetailPage() {
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
@@ -209,6 +301,8 @@ export function ArtifactDetailPage() {
   const repositoryURL = safeExternalURL(repositoryText);
   const siblingArtifacts = relatedArtifacts(buildArtifacts, data.id);
   const tagJobID = data.job_id ?? build?.job_id ?? null;
+  const lineageVersion = artifactLineageVersionLabel(data);
+  const lineageChannel = artifactLineageChannelLabel(data);
 
   async function assignArtifactTag(
     value: string,
@@ -285,6 +379,35 @@ export function ArtifactDetailPage() {
           <strong>Step:</strong> {stepLabel(data)}
         </span>
       </div>
+
+      <section className="detail-panel">
+        <h3>Lineage</h3>
+        <div className="artifact-lineage-trail artifact-lineage-trail-detail">
+          {artifactLineageSegments(
+            data,
+            `/builds/${data.build_id}`,
+            primaryCommit,
+            primaryCommitHref,
+            sourceRef,
+            sourceRefHref,
+          ).map((segment, index) => (
+            <span key={segment.key}>
+              {index > 0 ? (
+                <span className="artifact-lineage-separator" aria-hidden="true">
+                  →
+                </span>
+              ) : null}
+              {segment.content}
+            </span>
+          ))}
+        </div>
+        {!primaryCommit && !sourceRef && !lineageVersion && !lineageChannel ? (
+          <p className="subtle-text artifact-detail-section-note">
+            Version and source lineage are only partially available for this
+            artifact.
+          </p>
+        ) : null}
+      </section>
 
       <section className="detail-panel">
         <h3>Identity</h3>

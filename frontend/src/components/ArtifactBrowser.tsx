@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { artifactDownloadURL } from "../api";
 import type {
@@ -7,6 +7,7 @@ import type {
   VersionTag,
 } from "../types";
 import { artifactTypeLabel, formatFileSize } from "../utils/format";
+import { shortSHA } from "../utils/provenance";
 import { formatTime } from "../utils/time";
 import { StatusBadge } from "./StatusBadge";
 import { VersionTagEditor } from "./VersionTagEditor";
@@ -138,6 +139,96 @@ function totalChannelCount(artifact: ArtifactBrowseItem): number {
     (count, version) => count + channelTags(version).length,
     0,
   );
+}
+
+function artifactLineageArtifactLabel(version: ArtifactBrowseVersion): string {
+  const lineageName = version.lineage?.artifact_name?.trim() ?? "";
+  if (lineageName) {
+    return lineageName;
+  }
+  const name = version.name?.trim() ?? "";
+  if (name) {
+    return name;
+  }
+  return version.lineage?.artifact_path ?? version.path;
+}
+
+function artifactLineageCommitLabel(
+  version: ArtifactBrowseVersion,
+): string | null {
+  const gitSHA = version.lineage?.git_sha?.trim() ?? "";
+  if (gitSHA) {
+    return shortSHA(gitSHA);
+  }
+  const gitRef = version.lineage?.git_ref?.trim() ?? "";
+  return gitRef || null;
+}
+
+function artifactLineageVersionLabel(
+  version: ArtifactBrowseVersion,
+): string | null {
+  const lineageVersion = version.lineage?.versions?.find((value) =>
+    value.trim(),
+  );
+  if (lineageVersion) {
+    return lineageVersion;
+  }
+  return versionTags(version)[0]?.version?.trim() || null;
+}
+
+function artifactLineageChannelLabel(
+  version: ArtifactBrowseVersion,
+): string | null {
+  const lineageChannel = version.lineage?.channels?.find((value) =>
+    value.trim(),
+  );
+  if (lineageChannel) {
+    return lineageChannel;
+  }
+  return channelTags(version)[0]?.version?.trim() || null;
+}
+
+function artifactLineageSegments(version: ArtifactBrowseVersion): Array<{
+  key: string;
+  content: ReactNode;
+}> {
+  const segments: Array<{ key: string; content: ReactNode }> = [];
+  const commitLabel = artifactLineageCommitLabel(version);
+  if (commitLabel) {
+    segments.push({
+      key: "commit",
+      content: <span>Commit {commitLabel}</span>,
+    });
+  }
+  segments.push({
+    key: "build",
+    content: (
+      <Link to={`/builds/${version.build_id}`}>{versionLabel(version)}</Link>
+    ),
+  });
+  segments.push({
+    key: "artifact",
+    content: (
+      <Link to={`/artifacts/${version.artifact_id}`}>
+        {artifactLineageArtifactLabel(version)}
+      </Link>
+    ),
+  });
+  const versionLabelValue = artifactLineageVersionLabel(version);
+  if (versionLabelValue) {
+    segments.push({
+      key: "version",
+      content: <span>Version {versionLabelValue}</span>,
+    });
+  }
+  const channelLabelValue = artifactLineageChannelLabel(version);
+  if (channelLabelValue) {
+    segments.push({
+      key: "channel",
+      content: <span>Channel {channelLabelValue}</span>,
+    });
+  }
+  return segments;
 }
 
 export function ArtifactBrowser({
@@ -347,6 +438,11 @@ export function ArtifactBrowser({
                                   {versionLabel(version)}
                                 </Link>
                               </span>
+                              {artifactLineageCommitLabel(version) && (
+                                <span>
+                                  Commit {artifactLineageCommitLabel(version)}
+                                </span>
+                              )}
                               <span>{versionProjectLabel(version)}</span>
                               <span>{versionJobLabel(version)}</span>
                               <span>{formatTime(version.created_at)}</span>
@@ -462,6 +558,24 @@ export function ArtifactBrowser({
                               )}
                             </div>
                           </div>
+                        </div>
+
+                        <div className="artifact-lineage-trail subtle-text">
+                          {artifactLineageSegments(version).map(
+                            (segment, index) => (
+                              <span key={segment.key}>
+                                {index > 0 ? (
+                                  <span
+                                    className="artifact-lineage-separator"
+                                    aria-hidden="true"
+                                  >
+                                    →
+                                  </span>
+                                ) : null}
+                                {segment.content}
+                              </span>
+                            ),
+                          )}
                         </div>
 
                         <div className="artifact-version-meta-grid">

@@ -319,6 +319,15 @@ func matchPathPattern(pattern string, relPath string) bool {
 	return matchSegments(patternSegs, pathSegs)
 }
 
+func MatchPathPattern(pattern string, relPath string) bool {
+	trimmedPattern := strings.TrimSpace(pattern)
+	trimmedPath := strings.TrimSpace(relPath)
+	if trimmedPattern == "" || trimmedPath == "" {
+		return false
+	}
+	return matchPathPattern(trimmedPattern, trimmedPath)
+}
+
 func matchSegments(patternSegs []string, pathSegs []string) bool {
 	if len(patternSegs) == 0 {
 		return len(pathSegs) == 0

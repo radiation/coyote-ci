@@ -62,9 +62,15 @@ type ArtifactDef struct {
 }
 
 type artifactPathObject struct {
-	Name string `yaml:"name,omitempty"`
-	Path string `yaml:"path"`
-	Type string `yaml:"type,omitempty"`
+	Name    string               `yaml:"name,omitempty"`
+	Path    string               `yaml:"path"`
+	Type    string               `yaml:"type,omitempty"`
+	Version *artifactVersionSpec `yaml:"version,omitempty"`
+}
+
+type artifactVersionSpec struct {
+	Template string `yaml:"template,omitempty"`
+	Channel  string `yaml:"channel,omitempty"`
 }
 
 // UnmarshalYAML supports ergonomic artifact declarations while normalizing
@@ -146,6 +152,12 @@ func parseArtifactDeclaration(node *yaml.Node) (domain.ArtifactDeclaration, erro
 		declaration := domain.ArtifactDeclaration{Name: obj.Name, Path: obj.Path}
 		if artifactType, ok := domain.ParseArtifactType(obj.Type); ok {
 			declaration.Type = artifactType
+		}
+		if obj.Version != nil {
+			declaration.Version = &domain.ArtifactVersionDeclaration{
+				Template: obj.Version.Template,
+				Channel:  obj.Version.Channel,
+			}
 		}
 		return declaration, nil
 	default:

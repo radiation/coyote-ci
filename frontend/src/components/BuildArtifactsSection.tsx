@@ -49,8 +49,15 @@ function buildArtifactBrowserPath(
   item: BuildArtifact,
   build: Build | undefined,
 ): string {
+  return buildArtifactScopedBrowserPath(item.path, build);
+}
+
+function buildArtifactScopedBrowserPath(
+  queryValue: string,
+  build: Build | undefined,
+): string {
   const params = new URLSearchParams();
-  params.set("q", item.path);
+  params.set("q", queryValue);
   if (build?.job_id) {
     params.set("job_id", build.job_id);
   } else if (build?.project_id) {
@@ -134,20 +141,22 @@ function ArtifactTable({
                     </span>
                   ) : null}
                   {versions.map((version) => (
-                    <span
+                    <Link
                       key={`${item.id}-version-${version}`}
                       className="version-tag-pill"
+                      to={buildArtifactScopedBrowserPath(version, build)}
                     >
                       {version}
-                    </span>
+                    </Link>
                   ))}
                   {channels.map((channel) => (
-                    <span
+                    <Link
                       key={`${item.id}-channel-${channel}`}
                       className="version-tag-pill artifact-channel-pill"
+                      to={buildArtifactScopedBrowserPath(channel, build)}
                     >
                       {channel}
-                    </span>
+                    </Link>
                   ))}
                 </div>
                 <div className="artifact-build-copy">

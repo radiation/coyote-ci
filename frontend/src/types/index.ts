@@ -15,6 +15,7 @@ export {
   type ArtifactCatalogItem,
   type ArtifactCatalogResponse,
   type ArtifactDetail,
+  type ArtifactLineage,
   type ArtifactBrowseItem,
   type ArtifactBrowseResponse,
   type ArtifactBrowseVersion,

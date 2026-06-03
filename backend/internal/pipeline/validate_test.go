@@ -3,6 +3,8 @@ package pipeline
 import (
 	"strings"
 	"testing"
+
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
 
 func TestValidate_MissingVersion(t *testing.T) {
@@ -395,6 +397,90 @@ func TestValidate_Artifacts_Valid(t *testing.T) {
 	if err := Validate(pf); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestValidate_Artifacts_GeneratedVersionConfig(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps:   []StepDef{{Name: "Build", Run: "make"}},
+		Artifacts: ArtifactDef{
+			Declarations: []domain.ArtifactDeclaration{{
+				Path: "dist/app.tgz",
+				Version: &domain.ArtifactVersionDeclaration{
+					Template: "3.1.{build_number}",
+					Channel:  "latest",
+				},
+			}},
+		},
+	}
+
+	if err := Validate(pf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_Artifacts_GeneratedVersionTemplateRejectsWildcardPath(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps:   []StepDef{{Name: "Build", Run: "make"}},
+		Artifacts: ArtifactDef{
+			Declarations: []domain.ArtifactDeclaration{{
+				Path: "dist/*.tgz",
+				Version: &domain.ArtifactVersionDeclaration{
+					Template: "3.1.{build_number}",
+				},
+			}},
+		},
+	}
+
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected artifact version wildcard validation error")
+	}
+	assertContains(t, err.Error(), "exact path declaration")
+}
+
+func TestValidate_Artifacts_ChannelRequiresTemplate(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps:   []StepDef{{Name: "Build", Run: "make"}},
+		Artifacts: ArtifactDef{
+			Declarations: []domain.ArtifactDeclaration{{
+				Path:    "dist/app.tgz",
+				Version: &domain.ArtifactVersionDeclaration{Channel: "latest"},
+			}},
+		},
+	}
+
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected artifact version validation error")
+	}
+	assertContains(t, err.Error(), "requires a template")
+}
+
+func TestValidate_StepArtifacts_GeneratedVersionTemplateRejectsWildcardPath(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps: []StepDef{{
+			Name: "Build",
+			Run:  "make",
+			Artifacts: ArtifactDef{
+				Declarations: []domain.ArtifactDeclaration{{
+					Path: "dist/*.tgz",
+					Version: &domain.ArtifactVersionDeclaration{
+						Template: "3.1.{build_number}",
+					},
+				}},
+			},
+		}},
+	}
+
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected step artifact version wildcard validation error")
+	}
+	assertContains(t, err.Error(), "exact path declaration")
 }
 
 func TestValidate_CachePresetRequired(t *testing.T) {

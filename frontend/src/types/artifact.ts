@@ -6,6 +6,23 @@ export type ArtifactType =
   | "generic"
   | "unknown";
 
+export interface ArtifactLineage {
+  project_id: string;
+  project_name?: string | null;
+  job_id?: string | null;
+  job_name?: string | null;
+  build_id: string;
+  build_number: number;
+  artifact_id: string;
+  artifact_name?: string;
+  artifact_path: string;
+  versions?: string[];
+  channels?: string[];
+  git_ref?: string | null;
+  git_sha?: string | null;
+  created_at: string;
+}
+
 export interface ArtifactBrowseVersion {
   artifact_id: string;
   name?: string;
@@ -27,6 +44,7 @@ export interface ArtifactBrowseVersion {
   storage_provider: string;
   download_url_path: string;
   version_tags?: VersionTag[];
+  lineage?: ArtifactLineage | null;
   created_at: string;
 }
 
@@ -78,6 +96,7 @@ export interface ArtifactCatalogResponse {
 
 export interface ArtifactDetail extends ArtifactCatalogItem {
   version_tags?: VersionTag[];
+  lineage?: ArtifactLineage | null;
 }
 
 export interface DataEnvelope<T> {

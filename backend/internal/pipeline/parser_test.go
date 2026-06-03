@@ -526,6 +526,9 @@ func TestParseAndResolve_TypedArtifactDeclarations(t *testing.T) {
 		"        type: docker_image",
 		"      - path: reports/junit.xml",
 		"        type: generic",
+		"        version:",
+		"          template: 3.1.{build_number}",
+		"          channel: latest",
 		"artifacts:",
 		"  - path: releases/summary.txt",
 		"    type: generic",
@@ -544,6 +547,15 @@ func TestParseAndResolve_TypedArtifactDeclarations(t *testing.T) {
 	if pf.Steps[0].Artifacts.Declarations[0].Name != "coyote-ci/backend" {
 		t.Fatalf("expected named declaration, got %q", pf.Steps[0].Artifacts.Declarations[0].Name)
 	}
+	if pf.Steps[0].Artifacts.Declarations[1].Version == nil {
+		t.Fatal("expected step artifact version declaration")
+	}
+	if pf.Steps[0].Artifacts.Declarations[1].Version.Template != "3.1.{build_number}" {
+		t.Fatalf("expected generated version template, got %#v", pf.Steps[0].Artifacts.Declarations[1].Version)
+	}
+	if pf.Steps[0].Artifacts.Declarations[1].Version.Channel != "latest" {
+		t.Fatalf("expected generated version channel latest, got %#v", pf.Steps[0].Artifacts.Declarations[1].Version)
+	}
 
 	rp := Resolve(pf)
 	if len(rp.Steps[0].ArtifactDecls) != 2 {
@@ -554,6 +566,9 @@ func TestParseAndResolve_TypedArtifactDeclarations(t *testing.T) {
 	}
 	if rp.Steps[0].ArtifactDecls[0].Name != "coyote-ci/backend" {
 		t.Fatalf("expected resolved artifact name, got %q", rp.Steps[0].ArtifactDecls[0].Name)
+	}
+	if rp.Steps[0].ArtifactDecls[1].Version == nil || rp.Steps[0].ArtifactDecls[1].Version.Template != "3.1.{build_number}" {
+		t.Fatalf("expected resolved artifact version template, got %#v", rp.Steps[0].ArtifactDecls[1].Version)
 	}
 	if len(rp.Artifacts.Declarations) != 1 || rp.Artifacts.Declarations[0].Type != domain.ArtifactTypeGeneric {
 		t.Fatalf("expected one generic pipeline-level declaration, got %#v", rp.Artifacts.Declarations)
