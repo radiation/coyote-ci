@@ -43,6 +43,22 @@ function makeArtifact(
         checksum_sha256: "sha-1",
         storage_provider: "filesystem",
         download_url_path: "/builds/build-1/artifacts/artifact-1/download",
+        lineage: {
+          project_id: "project-1",
+          project_name: "Platform",
+          job_id: "job-1",
+          job_name: "backend-ci",
+          build_id: "build-1",
+          build_number: 41,
+          artifact_id: "artifact-1",
+          artifact_name: "coyote-ci/package-a",
+          artifact_path: "packages/pkg-a.tgz",
+          versions: ["2026.04.25"],
+          channels: ["latest"],
+          git_ref: "refs/heads/main",
+          git_sha: "95f09eb123456789",
+          created_at: "2026-04-25T09:00:00Z",
+        },
         version_tags: [
           {
             id: "tag-version-1",
@@ -255,5 +271,22 @@ describe("ArtifactBrowser", () => {
 
     expect(screen.getByText("Points to Build build-2…")).toBeTruthy();
     expect(screen.getAllByText("1 channel").length).toBeGreaterThan(0);
+  });
+
+  it("renders compact lineage details for expanded versions", () => {
+    renderBrowser({
+      artifacts: [makeArtifact()],
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /coyote-ci\/package-a/i }),
+    );
+
+    expect(screen.getAllByText("Commit 95f09eb").length).toBeGreaterThan(0);
+    expect(screen.getByText("Version 2026.04.25")).toBeTruthy();
+    expect(screen.getByText("Channel latest")).toBeTruthy();
+    expect(
+      screen.getAllByRole("link", { name: "Build #41" }).length,
+    ).toBeGreaterThan(0);
   });
 });

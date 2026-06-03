@@ -846,19 +846,25 @@ func TestArtifactHandlerFiltersArtifactsByProjectAccess(t *testing.T) {
 func TestArtifactHandlerResponseHelpersUseFallbacks(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	jobID := "job-1"
+	sourceRef := "refs/heads/main"
+	sourceSHA := "abcdef1234567890"
 	browseVersion := domain.ArtifactBrowseVersion{
 		Artifact: domain.BuildArtifact{
 			ID:          "artifact-1",
 			BuildID:     "build-1",
 			LogicalPath: "packages/pkg-a.tgz",
+			VersionTags: []domain.VersionTag{{ID: "tag-version", Kind: domain.VersionTagKindVersion, Version: "1.2.3"}, {ID: "tag-channel", Kind: domain.VersionTagKindChannel, Version: "latest"}},
 			CreatedAt:   now,
 		},
 		Build: domain.Build{
-			ID:        "build-1",
-			ProjectID: "project-1",
-			JobID:     &jobID,
-			Status:    domain.BuildStatusSuccess,
-			CreatedAt: now,
+			ID:          "build-1",
+			ProjectID:   "project-1",
+			JobID:       &jobID,
+			Status:      domain.BuildStatusSuccess,
+			SourceRef:   &sourceRef,
+			SourceSHA:   &sourceSHA,
+			BuildNumber: 42,
+			CreatedAt:   now,
 		},
 	}
 	browseResponse := toArtifactBrowseVersionResponse(browseVersion, map[string]domain.Project{}, map[string]domain.Job{})
@@ -871,10 +877,28 @@ func TestArtifactHandlerResponseHelpersUseFallbacks(t *testing.T) {
 	if browseResponse.ProjectName != nil || browseResponse.ProjectSlug != nil || browseResponse.JobName != nil {
 		t.Fatalf("expected missing lookup metadata to remain nil, got %#v %#v %#v", browseResponse.ProjectName, browseResponse.ProjectSlug, browseResponse.JobName)
 	}
+	if browseResponse.Lineage == nil {
+		t.Fatal("expected browse lineage response")
+	}
+	if browseResponse.Lineage.BuildNumber != 42 || browseResponse.Lineage.ArtifactPath != "packages/pkg-a.tgz" {
+		t.Fatalf("unexpected browse lineage %#v", browseResponse.Lineage)
+	}
+	if len(browseResponse.Lineage.Versions) != 1 || browseResponse.Lineage.Versions[0] != "1.2.3" {
+		t.Fatalf("expected browse lineage version labels, got %#v", browseResponse.Lineage)
+	}
+	if len(browseResponse.Lineage.Channels) != 1 || browseResponse.Lineage.Channels[0] != "latest" {
+		t.Fatalf("expected browse lineage channel labels, got %#v", browseResponse.Lineage)
+	}
+	if browseResponse.Lineage.GitRef == nil || *browseResponse.Lineage.GitRef != sourceRef {
+		t.Fatalf("expected browse lineage git ref %q, got %#v", sourceRef, browseResponse.Lineage)
+	}
+	if browseResponse.Lineage.GitSHA == nil || *browseResponse.Lineage.GitSHA != sourceSHA {
+		t.Fatalf("expected browse lineage git sha %q, got %#v", sourceSHA, browseResponse.Lineage)
+	}
 
 	record := domain.ArtifactRecord{
-		Artifact: domain.BuildArtifact{ID: "artifact-1", BuildID: "build-1", LogicalPath: "packages/pkg-a.tgz", CreatedAt: now},
-		Build:    domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, Status: domain.BuildStatusSuccess, CreatedAt: now},
+		Artifact: domain.BuildArtifact{ID: "artifact-1", BuildID: "build-1", LogicalPath: "packages/pkg-a.tgz", VersionTags: browseVersion.Artifact.VersionTags, CreatedAt: now},
+		Build:    domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, Status: domain.BuildStatusSuccess, SourceRef: &sourceRef, SourceSHA: &sourceSHA, BuildNumber: 42, CreatedAt: now},
 	}
 	catalogResponse := toArtifactCatalogItemResponse(record, map[string]domain.Project{}, map[string]domain.Job{})
 	detailResponse := toArtifactDetailResponse(record, map[string]domain.Project{}, map[string]domain.Job{})
@@ -883,6 +907,9 @@ func TestArtifactHandlerResponseHelpersUseFallbacks(t *testing.T) {
 	}
 	if detailResponse.StorageProvider != string(domain.StorageProviderFilesystem) {
 		t.Fatalf("expected detail default filesystem provider, got %q", detailResponse.StorageProvider)
+	}
+	if detailResponse.Lineage == nil || detailResponse.Lineage.BuildNumber != 42 {
+		t.Fatalf("expected detail lineage response, got %#v", detailResponse.Lineage)
 	}
 
 	projectName, projectSlug := projectContext(map[string]domain.Project{}, "missing")

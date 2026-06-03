@@ -33,9 +33,15 @@ type BuildArtifact struct {
 // repository/browse identity is modeled separately as Artifact.
 type ArtifactInstance = BuildArtifact
 
+type ArtifactVersionDeclaration struct {
+	Template string
+	Channel  string
+}
+
 // ArtifactDeclaration describes one artifact path declaration from pipeline config.
 type ArtifactDeclaration struct {
-	Name string
-	Path string
-	Type ArtifactType
+	Name    string
+	Path    string
+	Type    ArtifactType
+	Version *ArtifactVersionDeclaration
 }

@@ -12,7 +12,6 @@ import (
 type PipelineFile struct {
 	Version   int               `yaml:"version"`
 	Pipeline  PipelineMeta      `yaml:"pipeline"`
-	Release   ReleaseMeta       `yaml:"release,omitempty"`
 	Env       map[string]string `yaml:"env"`
 	Steps     []StepDef         `yaml:"steps"`
 	Artifacts ArtifactDef       `yaml:"artifacts"`
@@ -23,12 +22,6 @@ type PipelineMeta struct {
 	Name  string    `yaml:"name"`
 	Image string    `yaml:"image"`
 	Cache *CacheDef `yaml:"cache,omitempty"`
-}
-
-type ReleaseMeta struct {
-	Strategy string `yaml:"strategy,omitempty"`
-	Version  string `yaml:"version,omitempty"`
-	Template string `yaml:"template,omitempty"`
 }
 
 // StepDef is the YAML-facing definition for a single step.
@@ -62,9 +55,15 @@ type ArtifactDef struct {
 }
 
 type artifactPathObject struct {
-	Name string `yaml:"name,omitempty"`
-	Path string `yaml:"path"`
-	Type string `yaml:"type,omitempty"`
+	Name    string               `yaml:"name,omitempty"`
+	Path    string               `yaml:"path"`
+	Type    string               `yaml:"type,omitempty"`
+	Version *artifactVersionSpec `yaml:"version,omitempty"`
+}
+
+type artifactVersionSpec struct {
+	Template string `yaml:"template,omitempty"`
+	Channel  string `yaml:"channel,omitempty"`
 }
 
 // UnmarshalYAML supports ergonomic artifact declarations while normalizing
@@ -146,6 +145,12 @@ func parseArtifactDeclaration(node *yaml.Node) (domain.ArtifactDeclaration, erro
 		declaration := domain.ArtifactDeclaration{Name: obj.Name, Path: obj.Path}
 		if artifactType, ok := domain.ParseArtifactType(obj.Type); ok {
 			declaration.Type = artifactType
+		}
+		if obj.Version != nil {
+			declaration.Version = &domain.ArtifactVersionDeclaration{
+				Template: obj.Version.Template,
+				Channel:  obj.Version.Channel,
+			}
 		}
 		return declaration, nil
 	default:

@@ -12,11 +12,17 @@ Near-term priorities include:
 
 - build detail UX polish
 - artifact browser and artifact lineage
+- generated artifact version/channel labels on artifact declarations
 - source and provenance linking
 - queue operational visibility
 - auth, RBAC, project membership, and API token foundations
 - behavior-preserving refactors that improve maintainability
 - frontend polish that improves clarity without broad redesigns
+
+Recent completed slice:
+
+- artifact lineage plus generated artifact version/channel labels V1 is complete
+- generated artifact versions and channels are configured on artifact declarations, not a top-level `release` block
 
 ## Current development style
 

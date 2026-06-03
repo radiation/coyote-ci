@@ -3,6 +3,8 @@ package pipeline
 import (
 	"strings"
 	"testing"
+
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
 
 func TestValidate_MissingVersion(t *testing.T) {
@@ -27,65 +29,6 @@ func TestValidate_UnsupportedVersion(t *testing.T) {
 		t.Fatal("expected error for version 99")
 	}
 	assertContains(t, err.Error(), "unsupported version")
-}
-
-func TestValidate_RejectsBlankReleaseVersion(t *testing.T) {
-	pf := &PipelineFile{
-		Version: 1,
-		Release: ReleaseMeta{Version: "   "},
-		Steps:   []StepDef{{Name: "x", Run: "echo"}},
-	}
-	err := Validate(pf)
-	if err == nil {
-		t.Fatal("expected error for blank release.version")
-	}
-	assertContains(t, err.Error(), "release.version")
-}
-
-func TestValidate_AcceptsManualReleaseVersion(t *testing.T) {
-	pf := &PipelineFile{
-		Version: 1,
-		Release: ReleaseMeta{Version: "1.2"},
-		Steps:   []StepDef{{Name: "x", Run: "echo"}},
-	}
-	if err := Validate(pf); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidate_AcceptsSemverPatchReleaseVersion(t *testing.T) {
-	pf := &PipelineFile{
-		Version: 1,
-		Release: ReleaseMeta{Strategy: "semver-patch", Version: "1.2"},
-		Steps:   []StepDef{{Name: "x", Run: "echo"}},
-	}
-	if err := Validate(pf); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidate_RejectsMalformedReleaseVersion(t *testing.T) {
-	pf := &PipelineFile{
-		Version: 1,
-		Release: ReleaseMeta{Strategy: "semver-patch", Version: "1"},
-		Steps:   []StepDef{{Name: "x", Run: "echo"}},
-	}
-	err := Validate(pf)
-	if err == nil {
-		t.Fatal("expected error for malformed release.version")
-	}
-	assertContains(t, err.Error(), "major.minor")
-}
-
-func TestValidate_AcceptsTemplateReleaseVersion(t *testing.T) {
-	pf := &PipelineFile{
-		Version: 1,
-		Release: ReleaseMeta{Strategy: "template", Template: "1.2.{build_number}"},
-		Steps:   []StepDef{{Name: "x", Run: "echo"}},
-	}
-	if err := Validate(pf); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 }
 
 func TestValidate_EmptySteps(t *testing.T) {
@@ -390,6 +333,86 @@ func TestValidate_Artifacts_Valid(t *testing.T) {
 		Artifacts: ArtifactDef{
 			Paths: []string{"dist/**", "reports/*.xml"},
 		},
+	}
+
+	if err := Validate(pf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_Artifacts_GeneratedVersionConfig(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps:   []StepDef{{Name: "Build", Run: "make"}},
+		Artifacts: ArtifactDef{
+			Declarations: []domain.ArtifactDeclaration{{
+				Path: "dist/app.tgz",
+				Version: &domain.ArtifactVersionDeclaration{
+					Template: "3.1.{build_number}",
+					Channel:  "latest",
+				},
+			}},
+		},
+	}
+
+	if err := Validate(pf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_Artifacts_GeneratedVersionTemplateAllowsWildcardPath(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps:   []StepDef{{Name: "Build", Run: "make"}},
+		Artifacts: ArtifactDef{
+			Declarations: []domain.ArtifactDeclaration{{
+				Path: "dist/*.tgz",
+				Version: &domain.ArtifactVersionDeclaration{
+					Template: "3.1.{build_number}",
+				},
+			}},
+		},
+	}
+
+	if err := Validate(pf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_Artifacts_ChannelRequiresTemplate(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps:   []StepDef{{Name: "Build", Run: "make"}},
+		Artifacts: ArtifactDef{
+			Declarations: []domain.ArtifactDeclaration{{
+				Path:    "dist/app.tgz",
+				Version: &domain.ArtifactVersionDeclaration{Channel: "latest"},
+			}},
+		},
+	}
+
+	err := Validate(pf)
+	if err == nil {
+		t.Fatal("expected artifact version validation error")
+	}
+	assertContains(t, err.Error(), "requires a template")
+}
+
+func TestValidate_StepArtifacts_GeneratedVersionTemplateAllowsWildcardPath(t *testing.T) {
+	pf := &PipelineFile{
+		Version: 1,
+		Steps: []StepDef{{
+			Name: "Build",
+			Run:  "make",
+			Artifacts: ArtifactDef{
+				Declarations: []domain.ArtifactDeclaration{{
+					Path: "dist/*.tgz",
+					Version: &domain.ArtifactVersionDeclaration{
+						Template: "3.1.{build_number}",
+					},
+				}},
+			},
+		}},
 	}
 
 	if err := Validate(pf); err != nil {

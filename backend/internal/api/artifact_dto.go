@@ -55,6 +55,7 @@ type ArtifactBrowseVersionResponse struct {
 	StorageProvider string               `json:"storage_provider"`
 	DownloadURLPath string               `json:"download_url_path"`
 	VersionTags     []VersionTagResponse `json:"version_tags,omitempty"`
+	Lineage         *ArtifactLineage     `json:"lineage,omitempty"`
 	CreatedAt       string               `json:"created_at"`
 }
 
@@ -104,5 +105,23 @@ type ArtifactDetailResponse struct {
 	StorageProvider string               `json:"storage_provider"`
 	DownloadURLPath string               `json:"download_url_path"`
 	VersionTags     []VersionTagResponse `json:"version_tags,omitempty"`
+	Lineage         *ArtifactLineage     `json:"lineage,omitempty"`
 	CreatedAt       string               `json:"created_at"`
+}
+
+type ArtifactLineage struct {
+	ProjectID    string   `json:"project_id"`
+	ProjectName  *string  `json:"project_name,omitempty"`
+	JobID        *string  `json:"job_id,omitempty"`
+	JobName      *string  `json:"job_name,omitempty"`
+	BuildID      string   `json:"build_id"`
+	BuildNumber  int64    `json:"build_number"`
+	ArtifactID   string   `json:"artifact_id"`
+	ArtifactName string   `json:"artifact_name,omitempty"`
+	ArtifactPath string   `json:"artifact_path"`
+	Versions     []string `json:"versions,omitempty"`
+	Channels     []string `json:"channels,omitempty"`
+	GitRef       *string  `json:"git_ref,omitempty"`
+	GitSHA       *string  `json:"git_sha,omitempty"`
+	CreatedAt    string   `json:"created_at"`
 }

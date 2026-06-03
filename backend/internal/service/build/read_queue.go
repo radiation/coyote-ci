@@ -7,12 +7,13 @@ import (
 	"io"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
+	artifactmatch "github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
-	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	"github.com/radiation/coyote-ci/backend/internal/versioning"
@@ -303,8 +304,23 @@ func (s *BuildService) CompleteBuild(ctx context.Context, id string) (domain.Bui
 	}
 	if tagErr := s.autoTagBuildOutputs(ctx, build); tagErr != nil {
 		log.Printf("WARNING: automatic version tagging failed for build_id=%s: %v", build.ID, tagErr)
+		if isGeneratedArtifactVersionConflict(tagErr) {
+			return build, fmt.Errorf("automatic generated artifact version tagging failed for build %s: %w", build.ID, tagErr)
+		}
 	}
 	return build, nil
+}
+
+func isGeneratedArtifactVersionConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, repository.ErrVersionTagConflict) {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "generated version tagging failed") &&
+		strings.Contains(message, repository.ErrVersionTagConflict.Error())
 }
 
 func (s *BuildService) FailBuild(ctx context.Context, id string) (domain.Build, error) {
@@ -315,67 +331,131 @@ func (s *BuildService) autoTagBuildOutputs(ctx context.Context, build domain.Bui
 	if s.versionTagger == nil || build.JobID == nil || strings.TrimSpace(*build.JobID) == "" {
 		return nil
 	}
+	jobID := strings.TrimSpace(*build.JobID)
 
-	releaseConfig, ok, err := buildReleaseConfig(build)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return nil
-	}
-	version, err := s.versionTagger.ResolveReleaseVersion(ctx, build, releaseConfig)
-	if err != nil {
-		return err
-	}
-
-	artifactIDs := []string{}
+	artifacts := []domain.BuildArtifact{}
 	if s.artifactRepo != nil {
-		artifacts, artifactErr := s.artifactRepo.ListByBuildID(ctx, build.ID)
+		var artifactErr error
+		artifacts, artifactErr = s.artifactRepo.ListByBuildID(ctx, build.ID)
 		if artifactErr != nil {
 			return artifactErr
 		}
-		artifactIDs = make([]string, 0, len(artifacts))
-		for _, artifact := range artifacts {
-			artifactIDs = append(artifactIDs, artifact.ID)
-		}
 	}
-
-	managedImageVersionIDs := []string{}
-	if build.ManagedImageVersionID != nil && strings.TrimSpace(*build.ManagedImageVersionID) != "" {
-		managedImageVersionIDs = []string{strings.TrimSpace(*build.ManagedImageVersionID)}
-	}
-	if len(artifactIDs) == 0 && len(managedImageVersionIDs) == 0 {
-		return nil
-	}
-
-	_, err = s.versionTagger.CreateVersionTags(ctx, strings.TrimSpace(*build.JobID), versiontagsvc.CreateVersionTagsInput{
-		Version:                version,
-		ArtifactIDs:            artifactIDs,
-		ManagedImageVersionIDs: managedImageVersionIDs,
-	})
-	if errors.Is(err, repository.ErrVersionTagConflict) {
-		return nil
-	}
-	return err
+	return s.autoTagDeclaredArtifactOutputs(ctx, build, jobID, artifacts)
 }
 
-func buildReleaseConfig(build domain.Build) (versioning.Config, bool, error) {
-	if build.PipelineConfigYAML == nil || strings.TrimSpace(*build.PipelineConfigYAML) == "" {
-		return versioning.Config{}, false, nil
-	}
+type artifactVersionTagPlan struct {
+	ArtifactID   string
+	ArtifactName string
+	LogicalPath  string
+	Pattern      string
+	Template     string
+	Channel      string
+}
 
-	parsed, err := pipeline.Parse([]byte(strings.TrimSpace(*build.PipelineConfigYAML)))
+func (s *BuildService) autoTagDeclaredArtifactOutputs(ctx context.Context, build domain.Build, jobID string, artifacts []domain.BuildArtifact) error {
+	plans, err := s.plannedArtifactVersionTags(ctx, build, artifacts)
 	if err != nil {
-		return versioning.Config{}, false, err
+		return err
+	}
+	for _, plan := range plans {
+		version, resolveErr := versioning.ResolveArtifactVersionTemplate(plan.Template, build)
+		if resolveErr != nil {
+			return fmt.Errorf("generated version tagging failed for artifact path=%q name=%q declaration=%q template=%q: %w", plan.LogicalPath, plan.ArtifactName, plan.Pattern, plan.Template, resolveErr)
+		}
+		if _, createErr := s.versionTagger.CreateVersionTags(ctx, jobID, versiontagsvc.CreateVersionTagsInput{
+			Kind:        string(domain.VersionTagKindVersion),
+			Version:     version,
+			ArtifactIDs: []string{plan.ArtifactID},
+		}); createErr != nil {
+			return fmt.Errorf("generated version tagging failed for artifact path=%q name=%q declaration=%q resolved_version=%q channel=%q: %w", plan.LogicalPath, plan.ArtifactName, plan.Pattern, version, plan.Channel, createErr)
+		}
+		if strings.TrimSpace(plan.Channel) == "" {
+			continue
+		}
+		if _, createErr := s.versionTagger.CreateVersionTags(ctx, jobID, versiontagsvc.CreateVersionTagsInput{
+			Kind:        string(domain.VersionTagKindChannel),
+			Version:     strings.TrimSpace(plan.Channel),
+			ArtifactIDs: []string{plan.ArtifactID},
+		}); createErr != nil {
+			return fmt.Errorf("generated channel tagging failed for artifact path=%q name=%q declaration=%q resolved_version=%q channel=%q: %w", plan.LogicalPath, plan.ArtifactName, plan.Pattern, version, plan.Channel, createErr)
+		}
+	}
+	return nil
+}
+
+func (s *BuildService) plannedArtifactVersionTags(ctx context.Context, build domain.Build, artifacts []domain.BuildArtifact) ([]artifactVersionTagPlan, error) {
+	if len(artifacts) == 0 || build.PipelineConfigYAML == nil || strings.TrimSpace(*build.PipelineConfigYAML) == "" {
+		return nil, nil
+	}
+	buildDeclarations, err := artifactDeclarationsFromBuild(build)
+	if err != nil {
+		return nil, err
+	}
+	stepDeclarations, err := stepArtifactDeclarationsFromBuild(build)
+	if err != nil {
+		return nil, err
+	}
+	steps, err := s.buildRepo.GetStepsByBuildID(ctx, build.ID)
+	if err != nil {
+		return nil, err
+	}
+	stepIndexByID := make(map[string]int, len(steps))
+	for _, step := range steps {
+		stepIndexByID[step.ID] = step.StepIndex
 	}
 
-	config := versioning.Config{
-		Strategy: strings.TrimSpace(parsed.Release.Strategy),
-		Version:  strings.TrimSpace(parsed.Release.Version),
-		Template: strings.TrimSpace(parsed.Release.Template),
+	plans := make([]artifactVersionTagPlan, 0)
+	for _, item := range artifacts {
+		declaration, ok := matchingArtifactDeclaration(item, stepIndexByID, buildDeclarations, stepDeclarations)
+		if !ok || declaration.Version == nil || strings.TrimSpace(declaration.Version.Template) == "" {
+			continue
+		}
+		pattern := strings.TrimSpace(declaration.Path)
+		if buildDeclaration, found := firstMatchingArtifactDeclaration(item.LogicalPath, buildDeclarations); found && buildDeclaration.Version != nil && strings.TrimSpace(buildDeclaration.Version.Template) != "" {
+			pattern = strings.TrimSpace(buildDeclaration.Path)
+		}
+		plans = append(plans, artifactVersionTagPlan{
+			ArtifactID:   item.ID,
+			ArtifactName: strings.TrimSpace(item.Name),
+			LogicalPath:  item.LogicalPath,
+			Pattern:      pattern,
+			Template:     strings.TrimSpace(declaration.Version.Template),
+			Channel:      strings.TrimSpace(declaration.Version.Channel),
+		})
 	}
-	if config.Empty() {
-		return versioning.Config{}, false, nil
+	sort.SliceStable(plans, func(i, j int) bool {
+		if plans[i].LogicalPath != plans[j].LogicalPath {
+			return plans[i].LogicalPath < plans[j].LogicalPath
+		}
+		return plans[i].ArtifactID < plans[j].ArtifactID
+	})
+	return plans, nil
+}
+
+func matchingArtifactDeclaration(item domain.BuildArtifact, stepIndexByID map[string]int, buildDeclarations []domain.ArtifactDeclaration, stepDeclarations map[int][]domain.ArtifactDeclaration) (domain.ArtifactDeclaration, bool) {
+	buildDeclaration, buildFound := firstMatchingArtifactDeclaration(item.LogicalPath, buildDeclarations)
+	if item.StepID != nil {
+		if stepIndex, ok := stepIndexByID[*item.StepID]; ok {
+			if declaration, found := firstMatchingArtifactDeclaration(item.LogicalPath, stepDeclarations[stepIndex]); found {
+				if buildFound {
+					return mergeArtifactDeclarations(declaration, buildDeclaration), true
+				}
+				return declaration, true
+			}
+		}
 	}
-	return config, true, nil
+	if buildFound {
+		return buildDeclaration, true
+	}
+	return domain.ArtifactDeclaration{}, false
+}
+
+func firstMatchingArtifactDeclaration(logicalPath string, declarations []domain.ArtifactDeclaration) (domain.ArtifactDeclaration, bool) {
+	for _, declaration := range declarations {
+		if artifactmatch.MatchPathPattern(declaration.Path, logicalPath) {
+			return declaration, true
+		}
+	}
+	return domain.ArtifactDeclaration{}, false
 }

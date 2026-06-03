@@ -486,6 +486,22 @@ describe("API client - types", () => {
           checksum_sha256: null,
           storage_provider: "filesystem",
           download_url_path: "/builds/build-1/artifacts/artifact-1/download",
+          lineage: {
+            project_id: "project-1",
+            project_name: "Platform",
+            job_id: "job-1",
+            job_name: "backend-ci",
+            build_id: "build-1",
+            build_number: 41,
+            artifact_id: "artifact-1",
+            artifact_name: "pkg-a",
+            artifact_path: "dist/app.tar",
+            versions: ["1.2.3"],
+            channels: ["stable"],
+            git_ref: "refs/heads/main",
+            git_sha: "95f09eb123456789",
+            created_at: "2026-03-24T00:00:01Z",
+          },
           version_tags: [
             {
               id: "tag-1",
@@ -515,6 +531,22 @@ describe("API client - types", () => {
         created_at: "2026-03-24T00:00:02Z",
       },
     ]);
+    expect(artifact.lineage).toEqual({
+      project_id: "project-1",
+      project_name: "Platform",
+      job_id: "job-1",
+      job_name: "backend-ci",
+      build_id: "build-1",
+      build_number: 41,
+      artifact_id: "artifact-1",
+      artifact_name: "pkg-a",
+      artifact_path: "dist/app.tar",
+      versions: ["1.2.3"],
+      channels: ["stable"],
+      git_ref: "refs/heads/main",
+      git_sha: "95f09eb123456789",
+      created_at: "2026-03-24T00:00:01Z",
+    });
     expect(fetchMock).toHaveBeenCalledWith("/api/artifacts/artifact-1", {
       credentials: "include",
     });

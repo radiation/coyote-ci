@@ -58,6 +58,10 @@ func (s *Service) WithArtifactLabels(repo repository.ArtifactLabelRepository) *S
 	return s
 }
 
+func (s *Service) SetArtifactLabelRepository(repo repository.ArtifactLabelRepository) {
+	s.artifactRepo = repo
+}
+
 func (s *Service) CreateVersionTags(ctx context.Context, jobID string, input CreateVersionTagsInput) ([]domain.VersionTag, error) {
 	if s.repo == nil && s.artifactRepo == nil {
 		return nil, ErrVersionTagRepositoryNotConfigured

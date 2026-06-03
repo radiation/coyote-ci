@@ -186,6 +186,14 @@ describe("BuildArtifactsSection", () => {
     expect(screen.getAllByText("1.2.3").length).toBeGreaterThan(0);
     expect(screen.getAllByText("latest").length).toBeGreaterThan(0);
     expect(screen.getAllByText("1.0 KB").length).toBeGreaterThan(0);
+    expect(screen.getByRole("link", { name: "1.2.3" })).toHaveAttribute(
+      "href",
+      "/artifacts/logical?q=1.2.3&job_id=job-1",
+    );
+    expect(screen.getByRole("link", { name: "latest" })).toHaveAttribute(
+      "href",
+      "/artifacts/logical?q=latest&job_id=job-1",
+    );
 
     expect(screen.getByRole("link", { name: "dist/app" })).toHaveAttribute(
       "href",

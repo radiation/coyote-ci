@@ -31,16 +31,6 @@ func Validate(pf *PipelineFile) error {
 		}
 	}
 
-	if pf.Release.Strategy != "" || pf.Release.Version != "" || pf.Release.Template != "" {
-		if err := versioning.ValidateConfig(versioning.Config{
-			Strategy: pf.Release.Strategy,
-			Version:  pf.Release.Version,
-			Template: pf.Release.Template,
-		}); err != nil {
-			errs = append(errs, ValidationError{Field: "release", Message: err.Error()})
-		}
-	}
-
 	errCache := validateCacheDef("pipeline.cache", pf.Pipeline.Cache)
 	errs = append(errs, errCache...)
 
@@ -65,6 +55,11 @@ func Validate(pf *PipelineFile) error {
 		if declaration.Type != "" {
 			if _, ok := domain.ParseArtifactType(string(declaration.Type)); !ok {
 				errs = append(errs, ValidationError{Field: field + ".type", Message: fmt.Sprintf("unsupported artifact type %q", declaration.Type)})
+			}
+		}
+		if declaration.Version != nil {
+			if err := versioning.ValidateArtifactVersionConfig(declaration.Version.Template, declaration.Version.Channel); err != nil {
+				errs = append(errs, ValidationError{Field: field + ".version", Message: err.Error()})
 			}
 		}
 		if strings.TrimSpace(declaration.Name) != "" && pathPatternHasWildcard(trimmed) {
@@ -202,6 +197,11 @@ func validateStepDef(step StepDef, prefix string, seen map[string]bool) Validati
 		if declaration.Type != "" {
 			if _, ok := domain.ParseArtifactType(string(declaration.Type)); !ok {
 				errs = append(errs, ValidationError{Field: field + ".type", Message: fmt.Sprintf("unsupported artifact type %q", declaration.Type)})
+			}
+		}
+		if declaration.Version != nil {
+			if err := versioning.ValidateArtifactVersionConfig(declaration.Version.Template, declaration.Version.Channel); err != nil {
+				errs = append(errs, ValidationError{Field: field + ".version", Message: err.Error()})
 			}
 		}
 	}

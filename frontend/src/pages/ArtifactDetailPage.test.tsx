@@ -51,6 +51,22 @@ function buildArtifactDetail(
       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     storage_provider: "filesystem",
     download_url_path: "/builds/build-1/artifacts/artifact-1/download",
+    lineage: {
+      project_id: "project-1",
+      project_name: "Platform",
+      job_id: "job-1",
+      job_name: "backend-ci",
+      build_id: "build-1",
+      build_number: 41,
+      artifact_id: "artifact-1",
+      artifact_name: "coyote-ci/package-a",
+      artifact_path: "packages/pkg-a.tgz",
+      versions: ["1.2.3"],
+      channels: ["stable"],
+      git_ref: "refs/heads/main",
+      git_sha: "95f09eb123456789",
+      created_at: "2026-04-25T09:00:00Z",
+    },
     version_tags: [
       {
         id: "tag-version",
@@ -274,6 +290,28 @@ describe("ArtifactDetailPage", () => {
     ).toHaveAttribute("href", "/builds/build-1");
   });
 
+  it("renders compact lineage from commit through version and channel", async () => {
+    renderPage();
+
+    const lineage = (
+      await screen.findByRole("heading", { name: "Lineage" })
+    ).closest("section") as HTMLElement;
+
+    await waitFor(() => {
+      expect(
+        within(lineage).getByRole("link", { name: "Commit 95f09eb" }),
+      ).toHaveAttribute(
+        "href",
+        "https://github.com/example/platform/commit/95f09eb123456789",
+      );
+    });
+    expect(
+      within(lineage).getByRole("link", { name: "Build #41" }),
+    ).toHaveAttribute("href", "/builds/build-1");
+    expect(within(lineage).getByText("Version 1.2.3")).toBeTruthy();
+    expect(within(lineage).getByText("Channel stable")).toBeTruthy();
+  });
+
   it("renders provenance fields and source links when build metadata exists", async () => {
     renderPage();
 
@@ -336,6 +374,14 @@ describe("ArtifactDetailPage", () => {
         step_name: undefined,
         content_type: null,
         checksum_sha256: null,
+        lineage: {
+          project_id: "project-1",
+          build_id: "build-1",
+          build_number: 0,
+          artifact_id: "artifact-1",
+          artifact_path: "packages/pkg-a.tgz",
+          created_at: "2026-04-25T09:00:00Z",
+        },
         version_tags: [],
       }),
     );
@@ -369,6 +415,11 @@ describe("ArtifactDetailPage", () => {
     );
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
     expect(screen.queryByRole("link", { name: "backend-ci" })).toBeNull();
+    expect(
+      await screen.findByText(
+        "Version and source lineage are only partially available for this artifact.",
+      ),
+    ).toBeTruthy();
     expect(
       await screen.findByText(
         "No other artifacts from this build were recorded.",

@@ -2904,6 +2904,9 @@ const docTemplate = `{
                 "job_name": {
                     "type": "string"
                 },
+                "lineage": {
+                    "$ref": "#/definitions/api.ArtifactLineage"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -3073,6 +3076,9 @@ const docTemplate = `{
                 "job_name": {
                     "type": "string"
                 },
+                "lineage": {
+                    "$ref": "#/definitions/api.ArtifactLineage"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -3107,6 +3113,59 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/api.VersionTagResponse"
+                    }
+                }
+            }
+        },
+        "api.ArtifactLineage": {
+            "type": "object",
+            "properties": {
+                "artifact_id": {
+                    "type": "string"
+                },
+                "artifact_name": {
+                    "type": "string"
+                },
+                "artifact_path": {
+                    "type": "string"
+                },
+                "build_id": {
+                    "type": "string"
+                },
+                "build_number": {
+                    "type": "integer"
+                },
+                "channels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "git_ref": {
+                    "type": "string"
+                },
+                "git_sha": {
+                    "type": "string"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "job_name": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "versions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
                     }
                 }
             }

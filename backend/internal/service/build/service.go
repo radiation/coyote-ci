@@ -14,7 +14,6 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/service/execution"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	"github.com/radiation/coyote-ci/backend/internal/source"
-	"github.com/radiation/coyote-ci/backend/internal/versioning"
 )
 
 var ErrBuildNotFound = errors.New("build not found")
@@ -78,7 +77,6 @@ type BuildService struct {
 }
 
 type BuildVersionTagger interface {
-	ResolveReleaseVersion(ctx context.Context, build domain.Build, config versioning.Config) (string, error)
 	CreateVersionTags(ctx context.Context, jobID string, input versiontagsvc.CreateVersionTagsInput) ([]domain.VersionTag, error)
 }
 
@@ -91,6 +89,7 @@ type BuildServiceConfig struct {
 	ManagedImageRefresher ManagedImageRefresher
 	SourceResolver        source.WorkspaceSourceResolver
 	ArtifactRepo          repository.ArtifactRepository
+	ArtifactLabelRepo     repository.ArtifactLabelRepository
 	ArtifactResolver      *artifact.StoreResolver
 	ArtifactWorkspace     string
 	ExecutionWorkspace    string
@@ -113,6 +112,14 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 	svc.defaultExecutionImage = strings.TrimSpace(cfg.DefaultImage)
 	svc.executionWorkspaceRoot = buildNormalizeWorkspaceRoot(cfg.ExecutionWorkspace)
 	svc.versionTagger = cfg.VersionTagger
+	if cfg.ArtifactLabelRepo != nil {
+		type artifactLabelRepoAware interface {
+			SetArtifactLabelRepository(repository.ArtifactLabelRepository)
+		}
+		if aware, ok := svc.versionTagger.(artifactLabelRepoAware); ok {
+			aware.SetArtifactLabelRepository(cfg.ArtifactLabelRepo)
+		}
+	}
 	svc.SetArtifactPersistence(cfg.ArtifactRepo, cfg.ArtifactResolver, cfg.ArtifactWorkspace)
 	svc.SetStepCacheStore(cfg.CacheStore, cfg.CacheEntryRepo)
 	return svc

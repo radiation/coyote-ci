@@ -263,6 +263,18 @@ func TestCollectorPatternHelpers(t *testing.T) {
 	}
 }
 
+func TestMatchPathPattern_ExportedHelperTrimsAndRejectsBlankInputs(t *testing.T) {
+	if !MatchPathPattern(" dist/** ", " dist/app.bin ") {
+		t.Fatal("expected trimmed exported pattern helper to match")
+	}
+	if MatchPathPattern("", "dist/app.bin") {
+		t.Fatal("expected blank pattern to not match")
+	}
+	if MatchPathPattern("dist/**", "") {
+		t.Fatal("expected blank path to not match")
+	}
+}
+
 type failingArtifactStore struct {
 	saveErr error
 }
