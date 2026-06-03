@@ -142,10 +142,10 @@ Successful builds can automatically assign generated version and channel labels 
 ```yaml
 version: 1
 artifacts:
-	- path: dist/**
-		version:
-			template: 1.2.{build_number}
-			channel: latest
+   - path: dist/**
+     version:
+       template: 1.2.{build_number}
+       channel: latest
 ```
 
 Keep `version: 1` as the pipeline schema version. Generated artifact versions are configured per artifact declaration, not with a top-level `release` block.

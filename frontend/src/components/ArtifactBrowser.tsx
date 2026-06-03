@@ -157,11 +157,10 @@ function artifactLineageCommitLabel(
   version: ArtifactBrowseVersion,
 ): string | null {
   const gitSHA = version.lineage?.git_sha?.trim() ?? "";
-  if (gitSHA) {
-    return shortSHA(gitSHA);
+  if (!gitSHA) {
+    return null;
   }
-  const gitRef = version.lineage?.git_ref?.trim() ?? "";
-  return gitRef || null;
+  return shortSHA(gitSHA);
 }
 
 function artifactLineageVersionLabel(
@@ -199,6 +198,14 @@ function artifactLineageSegments(version: ArtifactBrowseVersion): Array<{
       key: "commit",
       content: <span>Commit {commitLabel}</span>,
     });
+  } else {
+    const gitRef = version.lineage?.git_ref?.trim() ?? "";
+    if (gitRef) {
+      segments.push({
+        key: "ref",
+        content: <span>Ref {gitRef}</span>,
+      });
+    }
   }
   segments.push({
     key: "build",

@@ -305,7 +305,7 @@ func (s *BuildService) CompleteBuild(ctx context.Context, id string) (domain.Bui
 	if tagErr := s.autoTagBuildOutputs(ctx, build); tagErr != nil {
 		log.Printf("WARNING: automatic version tagging failed for build_id=%s: %v", build.ID, tagErr)
 		if isGeneratedArtifactVersionConflict(tagErr) {
-			return domain.Build{}, fmt.Errorf("automatic generated artifact version tagging failed for build %s: %w", build.ID, tagErr)
+			return build, fmt.Errorf("automatic generated artifact version tagging failed for build %s: %w", build.ID, tagErr)
 		}
 	}
 	return build, nil
