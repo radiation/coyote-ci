@@ -14,7 +14,6 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/service/execution"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	"github.com/radiation/coyote-ci/backend/internal/source"
-	"github.com/radiation/coyote-ci/backend/internal/versioning"
 )
 
 var ErrBuildNotFound = errors.New("build not found")
@@ -78,7 +77,6 @@ type BuildService struct {
 }
 
 type BuildVersionTagger interface {
-	ResolveReleaseVersion(ctx context.Context, build domain.Build, config versioning.Config) (string, error)
 	CreateVersionTags(ctx context.Context, jobID string, input versiontagsvc.CreateVersionTagsInput) ([]domain.VersionTag, error)
 }
 

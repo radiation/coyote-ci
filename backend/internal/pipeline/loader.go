@@ -99,13 +99,8 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 	}
 
 	return &ResolvedPipeline{
-		Name:  pf.Pipeline.Name,
-		Image: strings.TrimSpace(pf.Pipeline.Image),
-		Release: ResolvedRelease{
-			Strategy: strings.TrimSpace(pf.Release.Strategy),
-			Version:  strings.TrimSpace(pf.Release.Version),
-			Template: strings.TrimSpace(pf.Release.Template),
-		},
+		Name:      pf.Pipeline.Name,
+		Image:     strings.TrimSpace(pf.Pipeline.Image),
 		Env:       mergedPipelineEnv,
 		Steps:     steps,
 		Plan:      ExecutionPlan{Nodes: nodes},

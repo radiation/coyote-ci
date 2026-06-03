@@ -135,24 +135,25 @@ To update Go:
 4. Update the `ARG GO_VERSION` default in `backend/Dockerfile`
 5. Run `make check-go-version` to verify consistency
 
-## Release version tags
+## Generated artifact version labels
 
-Successful builds can automatically assign version tags to produced artifacts and the managed image version used by the build when `.coyote/pipeline.yml` declares a release version:
+Successful builds can automatically assign generated version and channel labels to produced artifacts when `.coyote/pipeline.yml` declares them on artifact definitions:
 
 ```yaml
 version: 1
-release:
-  strategy: template
-  template: 1.2.{build_number}
+artifacts:
+	- path: dist/**
+		version:
+			template: 1.2.{build_number}
+			channel: latest
 ```
 
-Keep `version: 1` as the pipeline schema version. Release tagging is strategy-based:
+Keep `version: 1` as the pipeline schema version. Generated artifact versions are configured per artifact declaration, not with a top-level `release` block.
 
-- `manual` is the default. Set `release.version` to any exact string you want applied to outputs.
-- `semver-patch` uses `release.version: major.minor` and allocates the next patch number automatically.
-- `template` renders a version string from build metadata such as `{build_number}`, `{attempt_number}`, `{commit_sha}`, and `{short_commit_sha}`.
+- `version.template` renders a version string from build metadata such as `{build_number}`, `{git_sha}`, `{git_short_sha}`, and `{git_ref}`.
+- `version.channel` optionally assigns a moving channel label such as `latest` alongside the generated version label.
 
-For this repository, `.coyote/pipeline.yml` uses `template: 0.0.{build_number}`, so successful builds produce tags like `0.0.1`, `0.0.2`, and so on without rewriting the pipeline file.
+For this repository, artifact declarations can use templates like `0.0.{build_number}`, so successful builds produce labels such as `0.0.1`, `0.0.2`, and so on without rewriting the pipeline file.
 
 ## Quick start
 

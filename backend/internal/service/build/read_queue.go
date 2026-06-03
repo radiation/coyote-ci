@@ -14,7 +14,6 @@ import (
 	artifactmatch "github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
-	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	"github.com/radiation/coyote-ci/backend/internal/versioning"
@@ -305,11 +304,23 @@ func (s *BuildService) CompleteBuild(ctx context.Context, id string) (domain.Bui
 	}
 	if tagErr := s.autoTagBuildOutputs(ctx, build); tagErr != nil {
 		log.Printf("WARNING: automatic version tagging failed for build_id=%s: %v", build.ID, tagErr)
-		if errors.Is(tagErr, repository.ErrVersionTagConflict) {
+		if isGeneratedArtifactVersionConflict(tagErr) {
 			return domain.Build{}, fmt.Errorf("automatic generated artifact version tagging failed for build %s: %w", build.ID, tagErr)
 		}
 	}
 	return build, nil
+}
+
+func isGeneratedArtifactVersionConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, repository.ErrVersionTagConflict) {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "generated version tagging failed") &&
+		strings.Contains(message, repository.ErrVersionTagConflict.Error())
 }
 
 func (s *BuildService) FailBuild(ctx context.Context, id string) (domain.Build, error) {
@@ -330,48 +341,7 @@ func (s *BuildService) autoTagBuildOutputs(ctx context.Context, build domain.Bui
 			return artifactErr
 		}
 	}
-
-	managedImageVersionIDs := []string{}
-	if build.ManagedImageVersionID != nil && strings.TrimSpace(*build.ManagedImageVersionID) != "" {
-		managedImageVersionIDs = []string{strings.TrimSpace(*build.ManagedImageVersionID)}
-	}
-
-	if err := s.autoTagReleaseOutputs(ctx, build, jobID, artifacts, managedImageVersionIDs); err != nil {
-		return err
-	}
 	return s.autoTagDeclaredArtifactOutputs(ctx, build, jobID, artifacts)
-}
-
-func (s *BuildService) autoTagReleaseOutputs(ctx context.Context, build domain.Build, jobID string, artifacts []domain.BuildArtifact, managedImageVersionIDs []string) error {
-	releaseConfig, ok, err := buildReleaseConfig(build)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return nil
-	}
-	version, err := s.versionTagger.ResolveReleaseVersion(ctx, build, releaseConfig)
-	if err != nil {
-		return err
-	}
-
-	artifactIDs := make([]string, 0, len(artifacts))
-	for _, artifact := range artifacts {
-		artifactIDs = append(artifactIDs, artifact.ID)
-	}
-	if len(artifactIDs) == 0 && len(managedImageVersionIDs) == 0 {
-		return nil
-	}
-
-	_, err = s.versionTagger.CreateVersionTags(ctx, jobID, versiontagsvc.CreateVersionTagsInput{
-		Version:                version,
-		ArtifactIDs:            artifactIDs,
-		ManagedImageVersionIDs: managedImageVersionIDs,
-	})
-	if errors.Is(err, repository.ErrVersionTagConflict) {
-		return nil
-	}
-	return err
 }
 
 type artifactVersionTagPlan struct {
@@ -488,25 +458,4 @@ func firstMatchingArtifactDeclaration(logicalPath string, declarations []domain.
 		}
 	}
 	return domain.ArtifactDeclaration{}, false
-}
-
-func buildReleaseConfig(build domain.Build) (versioning.Config, bool, error) {
-	if build.PipelineConfigYAML == nil || strings.TrimSpace(*build.PipelineConfigYAML) == "" {
-		return versioning.Config{}, false, nil
-	}
-
-	parsed, err := pipeline.Parse([]byte(strings.TrimSpace(*build.PipelineConfigYAML)))
-	if err != nil {
-		return versioning.Config{}, false, err
-	}
-
-	config := versioning.Config{
-		Strategy: strings.TrimSpace(parsed.Release.Strategy),
-		Version:  strings.TrimSpace(parsed.Release.Version),
-		Template: strings.TrimSpace(parsed.Release.Template),
-	}
-	if config.Empty() {
-		return versioning.Config{}, false, nil
-	}
-	return config, true, nil
 }

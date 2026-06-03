@@ -31,16 +31,6 @@ func Validate(pf *PipelineFile) error {
 		}
 	}
 
-	if pf.Release.Strategy != "" || pf.Release.Version != "" || pf.Release.Template != "" {
-		if err := versioning.ValidateConfig(versioning.Config{
-			Strategy: pf.Release.Strategy,
-			Version:  pf.Release.Version,
-			Template: pf.Release.Template,
-		}); err != nil {
-			errs = append(errs, ValidationError{Field: "release", Message: err.Error()})
-		}
-	}
-
 	errCache := validateCacheDef("pipeline.cache", pf.Pipeline.Cache)
 	errs = append(errs, errCache...)
 

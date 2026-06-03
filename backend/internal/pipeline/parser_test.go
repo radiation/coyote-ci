@@ -36,29 +36,29 @@ artifacts:
 }
 
 func TestParse_FullConfig(t *testing.T) {
-	yaml := `
-version: 1
-pipeline:
-  name: backend-ci
-  image: golang:1.24
-release:
-  strategy: template
-  template: "1.2.{build_number}"
-env:
-  KEY: value
-steps:
-  - name: Lint
-    run: golangci-lint run
-    timeout_seconds: 300
-    working_dir: backend
-    env:
-      FOO: bar
-  - name: Test
-    run: go test ./...
-artifacts:
-  - dist/**
-  - reports/*.xml
-`
+	yaml := strings.Join([]string{
+		"version: 1",
+		"pipeline:",
+		"  name: backend-ci",
+		"  image: golang:1.24",
+		"env:",
+		"  KEY: value",
+		"steps:",
+		"  - name: Lint",
+		"    run: golangci-lint run",
+		"    timeout_seconds: 300",
+		"    working_dir: backend",
+		"    env:",
+		"      FOO: bar",
+		"  - name: Test",
+		"    run: go test ./...",
+		"artifacts:",
+		"  - path: dist/**",
+		"    version:",
+		"      template: 1.2.{build_number}",
+		"      channel: latest",
+		"  - reports/*.xml",
+	}, "\n")
 	pf, err := Parse([]byte(yaml))
 	if err != nil {
 		t.Fatalf("unexpected parse error: %v", err)
@@ -69,11 +69,14 @@ artifacts:
 	if pf.Pipeline.Image != "golang:1.24" {
 		t.Errorf("expected pipeline image golang:1.24, got %q", pf.Pipeline.Image)
 	}
-	if pf.Release.Strategy != "template" {
-		t.Errorf("expected release strategy template, got %q", pf.Release.Strategy)
+	if pf.Artifacts.Declarations[0].Version == nil {
+		t.Fatalf("expected first artifact declaration version config")
 	}
-	if pf.Release.Template != "1.2.{build_number}" {
-		t.Errorf("expected release template 1.2.{build_number}, got %q", pf.Release.Template)
+	if pf.Artifacts.Declarations[0].Version.Template != "1.2.{build_number}" {
+		t.Errorf("expected artifact version template 1.2.{build_number}, got %q", pf.Artifacts.Declarations[0].Version.Template)
+	}
+	if pf.Artifacts.Declarations[0].Version.Channel != "latest" {
+		t.Errorf("expected artifact version channel latest, got %q", pf.Artifacts.Declarations[0].Version.Channel)
 	}
 	if pf.Env["KEY"] != "value" {
 		t.Errorf("expected top-level env KEY=value")
@@ -134,6 +137,24 @@ steps:
 	}
 	if _, ok := err.(*ParseError); !ok {
 		t.Errorf("expected *ParseError, got %T", err)
+	}
+}
+
+func TestParse_RejectsLegacyTopLevelReleaseField(t *testing.T) {
+	yaml := `
+version: 1
+release:
+  template: 1.2.{build_number}
+steps:
+  - name: Lint
+    run: golangci-lint run
+`
+	_, err := Parse([]byte(yaml))
+	if err == nil {
+		t.Fatal("expected parse error for legacy top-level release field")
+	}
+	if _, ok := err.(*ParseError); !ok {
+		t.Fatalf("expected *ParseError, got %T", err)
 	}
 }
 
