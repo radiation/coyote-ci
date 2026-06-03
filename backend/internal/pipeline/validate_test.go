@@ -419,7 +419,7 @@ func TestValidate_Artifacts_GeneratedVersionConfig(t *testing.T) {
 	}
 }
 
-func TestValidate_Artifacts_GeneratedVersionTemplateRejectsWildcardPath(t *testing.T) {
+func TestValidate_Artifacts_GeneratedVersionTemplateAllowsWildcardPath(t *testing.T) {
 	pf := &PipelineFile{
 		Version: 1,
 		Steps:   []StepDef{{Name: "Build", Run: "make"}},
@@ -433,11 +433,9 @@ func TestValidate_Artifacts_GeneratedVersionTemplateRejectsWildcardPath(t *testi
 		},
 	}
 
-	err := Validate(pf)
-	if err == nil {
-		t.Fatal("expected artifact version wildcard validation error")
+	if err := Validate(pf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	assertContains(t, err.Error(), "exact path declaration")
 }
 
 func TestValidate_Artifacts_ChannelRequiresTemplate(t *testing.T) {
@@ -459,7 +457,7 @@ func TestValidate_Artifacts_ChannelRequiresTemplate(t *testing.T) {
 	assertContains(t, err.Error(), "requires a template")
 }
 
-func TestValidate_StepArtifacts_GeneratedVersionTemplateRejectsWildcardPath(t *testing.T) {
+func TestValidate_StepArtifacts_GeneratedVersionTemplateAllowsWildcardPath(t *testing.T) {
 	pf := &PipelineFile{
 		Version: 1,
 		Steps: []StepDef{{
@@ -476,11 +474,9 @@ func TestValidate_StepArtifacts_GeneratedVersionTemplateRejectsWildcardPath(t *t
 		}},
 	}
 
-	err := Validate(pf)
-	if err == nil {
-		t.Fatal("expected step artifact version wildcard validation error")
+	if err := Validate(pf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	assertContains(t, err.Error(), "exact path declaration")
 }
 
 func TestValidate_CachePresetRequired(t *testing.T) {

@@ -84,3 +84,11 @@ steps:
             - path: artifacts/images/frontend-image.tar
               name: coyote-ci/frontend
               type: docker_image
+  - group:
+      name: Artifact Debug
+      steps:
+        - name: List Image Artifacts
+          run: |
+            pwd
+            find artifacts -maxdepth 3 -type f -ls || true
+            ls -lah artifacts/images || true

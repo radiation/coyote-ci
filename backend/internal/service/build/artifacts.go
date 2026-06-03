@@ -38,6 +38,7 @@ func (s *BuildService) runPostCompletionSideEffects(ctx context.Context, request
 		if artifactErr != nil {
 			_ = s.writeSystemExecutionLogLine(ctx, request, appender, "Artifact collection failed")
 			_ = s.writeSystemExecutionLogLine(ctx, request, appender, formatFailureReasonLine("artifact collection failed"))
+			_ = s.writeSystemExecutionLogLine(ctx, request, appender, formatFailureReasonLine(artifactErr.Error()))
 			return artifactErr
 		}
 	}
@@ -51,6 +52,7 @@ func (s *BuildService) runPostCompletionSideEffects(ctx context.Context, request
 		if tagErr != nil {
 			_ = s.writeSystemExecutionLogLine(ctx, request, appender, "Automatic version tagging failed")
 			_ = s.writeSystemExecutionLogLine(ctx, request, appender, formatFailureReasonLine("automatic version tagging failed"))
+			_ = s.writeSystemExecutionLogLine(ctx, request, appender, formatFailureReasonLine(tagErr.Error()))
 		}
 	}
 
@@ -144,6 +146,10 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 
 	workspacePath := filepath.Join(s.artifactWorkspaceRoot, strings.TrimSpace(buildID))
 	provider := s.storageProviderName()
+	buildDeclarations, err := artifactDeclarationsFromBuild(build)
+	if err != nil {
+		return nil, fmt.Errorf("resolving build artifact declarations: %w", err)
+	}
 	stepDeclarations, err := stepArtifactDeclarationsFromBuild(build)
 	if err != nil {
 		return nil, fmt.Errorf("resolving step artifact declarations: %w", err)
@@ -164,7 +170,8 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 		if len(declarations) == 0 {
 			declarations = declarationsForPatterns(step.ArtifactPaths, nil)
 		}
-		collected, err = s.collectAndPersistArtifacts(ctx, buildID, &step.ID, provider, workspacePath, declarations, identityKeys)
+		declarations = mergeStepArtifactDeclarations(declarations, buildDeclarations)
+		collected, err = s.collectAndPersistArtifacts(ctx, buildID, &step.ID, provider, workspacePath, declarations, skipPathsForScope(identityKeys, &step.ID), identityKeys)
 		if err != nil {
 			return nil, err
 		}
@@ -174,13 +181,10 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 	}
 
 	// Pipeline-level artifact collection: backward compatibility.
-	declarations, err := artifactDeclarationsFromBuild(build)
-	if err != nil {
-		return nil, fmt.Errorf("resolving build artifact declarations: %w", err)
-	}
+	declarations := buildDeclarations
 	if len(declarations) > 0 {
 		log.Printf("artifact pipeline collection start: build_id=%s patterns=%q", buildID, declarationPaths(declarations))
-		collected, err := s.collectAndPersistArtifacts(ctx, buildID, nil, provider, workspacePath, declarations, identityKeys)
+		collected, err := s.collectAndPersistArtifacts(ctx, buildID, nil, provider, workspacePath, declarations, allLogicalPaths, identityKeys)
 		if err != nil {
 			return nil, err
 		}
@@ -193,13 +197,12 @@ func (s *BuildService) collectArtifactsIfTerminal(ctx context.Context, buildID s
 }
 
 // collectAndPersistArtifacts collects artifacts from the workspace and persists metadata.
-func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID string, stepID *string, provider domain.StorageProvider, workspacePath string, declarations []domain.ArtifactDeclaration, identityKeys map[string]struct{}) ([]string, error) {
+func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID string, stepID *string, provider domain.StorageProvider, workspacePath string, declarations []domain.ArtifactDeclaration, skipPaths map[string]struct{}, identityKeys map[string]struct{}) ([]string, error) {
 	stepIDStr := ""
 	if stepID != nil {
 		stepIDStr = *stepID
 	}
 
-	skipPaths := skipPathsForScope(identityKeys, stepID)
 	artifactTypes := declarationTypeIndex(declarations)
 	artifactNames := declarationNameIndex(declarations)
 
@@ -212,7 +215,7 @@ func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID s
 	})
 	if err != nil {
 		log.Printf("artifact collection error: build_id=%s step_id=%s err=%v", buildID, stepIDStr, err)
-		return nil, err
+		return nil, fmt.Errorf("collecting artifacts for %s with declarations %q: %w", artifactCollectionScopeLabel(stepID), declarationPaths(declarations), err)
 	}
 	for _, warning := range collectResult.Warnings {
 		log.Printf("artifact collection warning: build_id=%s %s", buildID, warning)
@@ -241,7 +244,7 @@ func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID s
 		})
 		if err != nil {
 			log.Printf("artifact metadata persistence error: build_id=%s logical_path=%s err=%v", buildID, item.LogicalPath, err)
-			return nil, fmt.Errorf("persisting artifact metadata: %w", err)
+			return nil, fmt.Errorf("persisting artifact metadata for %q from %s declarations %q: %w", item.LogicalPath, artifactCollectionScopeLabel(stepID), declarationPaths(declarations), err)
 		}
 		identityKeys[artifactInstanceScopeKey(stepID, item.LogicalPath)] = struct{}{}
 		collected = append(collected, item.LogicalPath)
@@ -351,6 +354,60 @@ func declarationsForPatterns(patterns []string, typeHints map[string]domain.Arti
 		})
 	}
 	return declarations
+}
+
+func mergeStepArtifactDeclarations(stepDeclarations []domain.ArtifactDeclaration, buildDeclarations []domain.ArtifactDeclaration) []domain.ArtifactDeclaration {
+	out := make([]domain.ArtifactDeclaration, 0, len(stepDeclarations))
+	for _, declaration := range stepDeclarations {
+		merged := declaration
+		if buildDeclaration, ok := firstMatchingArtifactDeclaration(declaration.Path, buildDeclarations); ok {
+			merged = mergeArtifactDeclarations(declaration, buildDeclaration)
+		}
+		out = append(out, merged)
+	}
+	return out
+}
+
+func mergeArtifactDeclarations(preferred domain.ArtifactDeclaration, supplemental domain.ArtifactDeclaration) domain.ArtifactDeclaration {
+	merged := preferred
+	if strings.TrimSpace(merged.Name) == "" {
+		merged.Name = supplemental.Name
+	}
+	if merged.Type == "" {
+		merged.Type = supplemental.Type
+	}
+	merged.Version = mergeArtifactVersionDeclarations(preferred.Version, supplemental.Version)
+	return merged
+}
+
+func mergeArtifactVersionDeclarations(preferred *domain.ArtifactVersionDeclaration, supplemental *domain.ArtifactVersionDeclaration) *domain.ArtifactVersionDeclaration {
+	if preferred == nil && supplemental == nil {
+		return nil
+	}
+	if preferred == nil {
+		copyValue := *supplemental
+		return &copyValue
+	}
+	merged := *preferred
+	if supplemental != nil {
+		if strings.TrimSpace(merged.Template) == "" {
+			merged.Template = supplemental.Template
+		}
+		if strings.TrimSpace(merged.Channel) == "" {
+			merged.Channel = supplemental.Channel
+		}
+	}
+	if strings.TrimSpace(merged.Template) == "" && strings.TrimSpace(merged.Channel) == "" {
+		return nil
+	}
+	return &merged
+}
+
+func artifactCollectionScopeLabel(stepID *string) string {
+	if stepID != nil && strings.TrimSpace(*stepID) != "" {
+		return fmt.Sprintf("step %q", strings.TrimSpace(*stepID))
+	}
+	return "build"
 }
 
 func stepArtifactDeclarationsFromBuild(build domain.Build) (map[int][]domain.ArtifactDeclaration, error) {

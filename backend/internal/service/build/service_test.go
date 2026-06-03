@@ -1406,6 +1406,218 @@ func TestBuildService_CompleteBuild_GeneratedArtifactVersionConflictReturnsError
 	}
 }
 
+func TestBuildService_CompleteBuild_GeneratedWildcardArtifactVersionAndChannelPerPackage(t *testing.T) {
+	jobID := "job-1"
+	pipelineYAML := strings.Join([]string{
+		"version: 1",
+		"steps:",
+		"  - name: build",
+		"    run: make build",
+		"artifacts:",
+		"  - path: artifacts/images/*.tar",
+		"    version:",
+		"      template: 0.1.{build_number}",
+		"      channel: latest",
+	}, "\n")
+	repo := &fakeBuildRepository{build: domain.Build{
+		ID:                 "build-3",
+		BuildNumber:        42,
+		ProjectID:          "project-1",
+		JobID:              &jobID,
+		Status:             domain.BuildStatusRunning,
+		PipelineConfigYAML: &pipelineYAML,
+	}}
+	labelRepo := memoryrepo.NewArtifactLabelRepository()
+	labelRepo.SeedBuilds(repo.build)
+	artifactRepo := &fakeArtifactRepository{artifacts: map[string][]domain.BuildArtifact{
+		"build-3": {
+			{ID: "artifact-backend", BuildID: "build-3", LogicalPath: "artifacts/images/backend-image.tar", CreatedAt: time.Now().UTC()},
+			{ID: "artifact-frontend", BuildID: "build-3", LogicalPath: "artifacts/images/frontend-image.tar", CreatedAt: time.Now().UTC().Add(time.Second)},
+		},
+	}}
+	labelRepo.SeedArtifacts(artifactRepo.artifacts["build-3"]...)
+
+	svc := NewBuildService(repo, nil, nil)
+	svc.artifactRepo = artifactRepo
+	svc.versionTagger = versiontagsvc.NewService(nil).WithArtifactLabels(labelRepo)
+
+	if _, err := svc.CompleteBuild(context.Background(), "build-3"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	for _, artifactID := range []string{"artifact-backend", "artifact-frontend"} {
+		tags, err := labelRepo.ListByArtifactID(context.Background(), artifactID)
+		if err != nil {
+			t.Fatalf("expected artifact tags for %s, got %v", artifactID, err)
+		}
+		if len(tags) != 2 {
+			t.Fatalf("expected generated version and channel tags for %s, got %#v", artifactID, tags)
+		}
+		kinds := map[domain.VersionTagKind]string{}
+		for _, tag := range tags {
+			kinds[tag.Kind] = tag.Version
+		}
+		if kinds[domain.VersionTagKindVersion] != "0.1.42" {
+			t.Fatalf("expected generated version 0.1.42 for %s, got %#v", artifactID, kinds)
+		}
+		if kinds[domain.VersionTagKindChannel] != "latest" {
+			t.Fatalf("expected generated channel latest for %s, got %#v", artifactID, kinds)
+		}
+	}
+}
+
+func TestBuildService_CompleteBuild_GeneratedWildcardArtifactVersionAndChannelApplyToStepNamedArtifacts(t *testing.T) {
+	jobID := "job-1"
+	stepBackend := "step-backend"
+	stepFrontend := "step-frontend"
+	pipelineYAML := strings.Join([]string{
+		"version: 1",
+		"artifacts:",
+		"  - path: artifacts/images/*.tar",
+		"    version:",
+		"      template: 0.1.{build_number}",
+		"      channel: latest",
+		"steps:",
+		"  - group:",
+		"      name: Images",
+		"      steps:",
+		"        - name: Backend Image",
+		"          run: echo backend",
+		"          artifacts:",
+		"            - path: artifacts/images/backend-image.tar",
+		"              name: coyote-ci/backend",
+		"              type: docker_image",
+		"        - name: Frontend Image",
+		"          run: echo frontend",
+		"          artifacts:",
+		"            - path: artifacts/images/frontend-image.tar",
+		"              name: coyote-ci/frontend",
+		"              type: docker_image",
+	}, "\n")
+	repo := &fakeBuildRepository{build: domain.Build{
+		ID:                 "build-4",
+		BuildNumber:        42,
+		ProjectID:          "project-1",
+		JobID:              &jobID,
+		Status:             domain.BuildStatusRunning,
+		PipelineConfigYAML: &pipelineYAML,
+	}, steps: []domain.BuildStep{{ID: stepBackend, StepIndex: 0, Name: "Backend Image"}, {ID: stepFrontend, StepIndex: 1, Name: "Frontend Image"}}}
+	labelRepo := memoryrepo.NewArtifactLabelRepository()
+	labelRepo.SeedBuilds(repo.build)
+	artifactRepo := &fakeArtifactRepository{artifacts: map[string][]domain.BuildArtifact{
+		"build-4": {
+			{ID: "artifact-backend", BuildID: "build-4", StepID: &stepBackend, Name: "coyote-ci/backend", LogicalPath: "artifacts/images/backend-image.tar", ArtifactType: domain.ArtifactTypeDockerImage, CreatedAt: time.Now().UTC()},
+			{ID: "artifact-frontend", BuildID: "build-4", StepID: &stepFrontend, Name: "coyote-ci/frontend", LogicalPath: "artifacts/images/frontend-image.tar", ArtifactType: domain.ArtifactTypeDockerImage, CreatedAt: time.Now().UTC().Add(time.Second)},
+		},
+	}}
+	labelRepo.SeedArtifacts(artifactRepo.artifacts["build-4"]...)
+
+	svc := NewBuildService(repo, nil, nil)
+	svc.artifactRepo = artifactRepo
+	svc.versionTagger = versiontagsvc.NewService(nil).WithArtifactLabels(labelRepo)
+
+	if _, err := svc.CompleteBuild(context.Background(), "build-4"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	for _, artifactID := range []string{"artifact-backend", "artifact-frontend"} {
+		tags, err := labelRepo.ListByArtifactID(context.Background(), artifactID)
+		if err != nil {
+			t.Fatalf("expected artifact tags for %s, got %v", artifactID, err)
+		}
+		if len(tags) != 2 {
+			t.Fatalf("expected generated version and channel tags for %s, got %#v", artifactID, tags)
+		}
+		kinds := map[domain.VersionTagKind]string{}
+		for _, tag := range tags {
+			kinds[tag.Kind] = tag.Version
+		}
+		if kinds[domain.VersionTagKindVersion] != "0.1.42" {
+			t.Fatalf("expected generated version 0.1.42 for %s, got %#v", artifactID, kinds)
+		}
+		if kinds[domain.VersionTagKindChannel] != "latest" {
+			t.Fatalf("expected generated channel latest for %s, got %#v", artifactID, kinds)
+		}
+	}
+}
+
+func TestNewBuildServiceFromConfig_WiresArtifactLabelRepositoryForGeneratedChannelTagging(t *testing.T) {
+	jobID := "job-1"
+	stepBackend := "step-backend"
+	stepFrontend := "step-frontend"
+	pipelineYAML := strings.Join([]string{
+		"version: 1",
+		"artifacts:",
+		"  - path: artifacts/images/*.tar",
+		"    version:",
+		"      template: 0.1.{build_number}",
+		"      channel: latest",
+		"steps:",
+		"  - group:",
+		"      name: Images",
+		"      steps:",
+		"        - name: Backend Image",
+		"          run: echo backend",
+		"          artifacts:",
+		"            - path: artifacts/images/backend-image.tar",
+		"              name: coyote-ci/backend",
+		"              type: docker_image",
+		"        - name: Frontend Image",
+		"          run: echo frontend",
+		"          artifacts:",
+		"            - path: artifacts/images/frontend-image.tar",
+		"              name: coyote-ci/frontend",
+		"              type: docker_image",
+	}, "\n")
+	repo := &fakeBuildRepository{build: domain.Build{
+		ID:                 "build-config-wiring",
+		BuildNumber:        42,
+		ProjectID:          "project-1",
+		JobID:              &jobID,
+		Status:             domain.BuildStatusRunning,
+		PipelineConfigYAML: &pipelineYAML,
+	}, steps: []domain.BuildStep{{ID: stepBackend, StepIndex: 0, Name: "Backend Image"}, {ID: stepFrontend, StepIndex: 1, Name: "Frontend Image"}}}
+	labelRepo := memoryrepo.NewArtifactLabelRepository()
+	labelRepo.SeedBuilds(repo.build)
+	artifactRepo := &fakeArtifactRepository{artifacts: map[string][]domain.BuildArtifact{
+		"build-config-wiring": {
+			{ID: "artifact-backend", BuildID: "build-config-wiring", StepID: &stepBackend, Name: "coyote-ci/backend", LogicalPath: "artifacts/images/backend-image.tar", ArtifactType: domain.ArtifactTypeDockerImage, CreatedAt: time.Now().UTC()},
+			{ID: "artifact-frontend", BuildID: "build-config-wiring", StepID: &stepFrontend, Name: "coyote-ci/frontend", LogicalPath: "artifacts/images/frontend-image.tar", ArtifactType: domain.ArtifactTypeDockerImage, CreatedAt: time.Now().UTC().Add(time.Second)},
+		},
+	}}
+	labelRepo.SeedArtifacts(artifactRepo.artifacts["build-config-wiring"]...)
+
+	tagger := versiontagsvc.NewService(nil)
+	svc := NewBuildServiceFromConfig(repo, nil, nil, BuildServiceConfig{
+		VersionTagger:     tagger,
+		ArtifactRepo:      artifactRepo,
+		ArtifactLabelRepo: labelRepo,
+	})
+
+	if _, err := svc.CompleteBuild(context.Background(), "build-config-wiring"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	for _, artifactID := range []string{"artifact-backend", "artifact-frontend"} {
+		tags, err := labelRepo.ListByArtifactID(context.Background(), artifactID)
+		if err != nil {
+			t.Fatalf("expected artifact tags for %s, got %v", artifactID, err)
+		}
+		if len(tags) != 2 {
+			t.Fatalf("expected generated version and channel tags for %s, got %#v", artifactID, tags)
+		}
+		kinds := map[domain.VersionTagKind]string{}
+		for _, tag := range tags {
+			kinds[tag.Kind] = tag.Version
+		}
+		if kinds[domain.VersionTagKindVersion] != "0.1.42" {
+			t.Fatalf("expected generated version 0.1.42 for %s, got %#v", artifactID, kinds)
+		}
+		if kinds[domain.VersionTagKindChannel] != "latest" {
+			t.Fatalf("expected generated channel latest for %s, got %#v", artifactID, kinds)
+		}
+	}
+}
+
 func TestBuildService_TransitionBuildStatus_NotFound(t *testing.T) {
 	repo := &fakeBuildRepository{getErr: repository.ErrBuildNotFound}
 	svc := NewBuildService(repo, nil, nil)

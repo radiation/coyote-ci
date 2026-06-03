@@ -62,6 +62,7 @@ func main() {
 	cacheEntryRepo := repositorypostgres.NewCacheEntryRepository(db)
 	workerRepo := repositorypostgres.NewWorkerRepository(db)
 	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
+	artifactLabelRepo := repositorypostgres.NewArtifactLabelRepository(db)
 	artifactResolver, err := artifact.ResolveStores(artifact.StoreConfig{
 		Provider:    cfg.ArtifactStorageProvider,
 		StorageRoot: cfg.ArtifactStorageRoot,
@@ -97,6 +98,7 @@ func main() {
 		CacheEntryRepo:      cacheEntryRepo,
 		VersionTagger:       versionTagService,
 		ArtifactRepo:        artifactRepo,
+		ArtifactLabelRepo:   artifactLabelRepo,
 		ArtifactResolver:    artifactResolver,
 		ArtifactWorkspace:   cfg.ExecutionWorkspaceRoot,
 	})

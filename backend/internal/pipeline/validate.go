@@ -71,9 +71,6 @@ func Validate(pf *PipelineFile) error {
 			if err := versioning.ValidateArtifactVersionConfig(declaration.Version.Template, declaration.Version.Channel); err != nil {
 				errs = append(errs, ValidationError{Field: field + ".version", Message: err.Error()})
 			}
-			if strings.TrimSpace(declaration.Version.Template) != "" && pathPatternHasWildcard(trimmed) {
-				errs = append(errs, ValidationError{Field: field + ".version", Message: "artifact version template requires an exact path declaration"})
-			}
 		}
 		if strings.TrimSpace(declaration.Name) != "" && pathPatternHasWildcard(trimmed) {
 			errs = append(errs, ValidationError{Field: field + ".name", Message: "artifact name requires an exact path declaration"})
@@ -215,9 +212,6 @@ func validateStepDef(step StepDef, prefix string, seen map[string]bool) Validati
 		if declaration.Version != nil {
 			if err := versioning.ValidateArtifactVersionConfig(declaration.Version.Template, declaration.Version.Channel); err != nil {
 				errs = append(errs, ValidationError{Field: field + ".version", Message: err.Error()})
-			}
-			if strings.TrimSpace(declaration.Version.Template) != "" && pathPatternHasWildcard(trimmed) {
-				errs = append(errs, ValidationError{Field: field + ".version", Message: "artifact version template requires an exact path declaration"})
 			}
 		}
 	}

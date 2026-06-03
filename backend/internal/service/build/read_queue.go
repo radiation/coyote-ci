@@ -375,10 +375,12 @@ func (s *BuildService) autoTagReleaseOutputs(ctx context.Context, build domain.B
 }
 
 type artifactVersionTagPlan struct {
-	ArtifactID  string
-	LogicalPath string
-	Template    string
-	Channel     string
+	ArtifactID   string
+	ArtifactName string
+	LogicalPath  string
+	Pattern      string
+	Template     string
+	Channel      string
 }
 
 func (s *BuildService) autoTagDeclaredArtifactOutputs(ctx context.Context, build domain.Build, jobID string, artifacts []domain.BuildArtifact) error {
@@ -389,14 +391,14 @@ func (s *BuildService) autoTagDeclaredArtifactOutputs(ctx context.Context, build
 	for _, plan := range plans {
 		version, resolveErr := versioning.ResolveArtifactVersionTemplate(plan.Template, build)
 		if resolveErr != nil {
-			return fmt.Errorf("artifact %q generated version failed: %w", plan.LogicalPath, resolveErr)
+			return fmt.Errorf("generated version tagging failed for artifact path=%q name=%q declaration=%q template=%q: %w", plan.LogicalPath, plan.ArtifactName, plan.Pattern, plan.Template, resolveErr)
 		}
 		if _, createErr := s.versionTagger.CreateVersionTags(ctx, jobID, versiontagsvc.CreateVersionTagsInput{
 			Kind:        string(domain.VersionTagKindVersion),
 			Version:     version,
 			ArtifactIDs: []string{plan.ArtifactID},
 		}); createErr != nil {
-			return createErr
+			return fmt.Errorf("generated version tagging failed for artifact path=%q name=%q declaration=%q resolved_version=%q channel=%q: %w", plan.LogicalPath, plan.ArtifactName, plan.Pattern, version, plan.Channel, createErr)
 		}
 		if strings.TrimSpace(plan.Channel) == "" {
 			continue
@@ -406,7 +408,7 @@ func (s *BuildService) autoTagDeclaredArtifactOutputs(ctx context.Context, build
 			Version:     strings.TrimSpace(plan.Channel),
 			ArtifactIDs: []string{plan.ArtifactID},
 		}); createErr != nil {
-			return createErr
+			return fmt.Errorf("generated channel tagging failed for artifact path=%q name=%q declaration=%q resolved_version=%q channel=%q: %w", plan.LogicalPath, plan.ArtifactName, plan.Pattern, version, plan.Channel, createErr)
 		}
 	}
 	return nil
@@ -439,11 +441,17 @@ func (s *BuildService) plannedArtifactVersionTags(ctx context.Context, build dom
 		if !ok || declaration.Version == nil || strings.TrimSpace(declaration.Version.Template) == "" {
 			continue
 		}
+		pattern := strings.TrimSpace(declaration.Path)
+		if buildDeclaration, found := firstMatchingArtifactDeclaration(item.LogicalPath, buildDeclarations); found && buildDeclaration.Version != nil && strings.TrimSpace(buildDeclaration.Version.Template) != "" {
+			pattern = strings.TrimSpace(buildDeclaration.Path)
+		}
 		plans = append(plans, artifactVersionTagPlan{
-			ArtifactID:  item.ID,
-			LogicalPath: item.LogicalPath,
-			Template:    strings.TrimSpace(declaration.Version.Template),
-			Channel:     strings.TrimSpace(declaration.Version.Channel),
+			ArtifactID:   item.ID,
+			ArtifactName: strings.TrimSpace(item.Name),
+			LogicalPath:  item.LogicalPath,
+			Pattern:      pattern,
+			Template:     strings.TrimSpace(declaration.Version.Template),
+			Channel:      strings.TrimSpace(declaration.Version.Channel),
 		})
 	}
 	sort.SliceStable(plans, func(i, j int) bool {
@@ -456,14 +464,21 @@ func (s *BuildService) plannedArtifactVersionTags(ctx context.Context, build dom
 }
 
 func matchingArtifactDeclaration(item domain.BuildArtifact, stepIndexByID map[string]int, buildDeclarations []domain.ArtifactDeclaration, stepDeclarations map[int][]domain.ArtifactDeclaration) (domain.ArtifactDeclaration, bool) {
+	buildDeclaration, buildFound := firstMatchingArtifactDeclaration(item.LogicalPath, buildDeclarations)
 	if item.StepID != nil {
 		if stepIndex, ok := stepIndexByID[*item.StepID]; ok {
 			if declaration, found := firstMatchingArtifactDeclaration(item.LogicalPath, stepDeclarations[stepIndex]); found {
+				if buildFound {
+					return mergeArtifactDeclarations(declaration, buildDeclaration), true
+				}
 				return declaration, true
 			}
 		}
 	}
-	return firstMatchingArtifactDeclaration(item.LogicalPath, buildDeclarations)
+	if buildFound {
+		return buildDeclaration, true
+	}
+	return domain.ArtifactDeclaration{}, false
 }
 
 func firstMatchingArtifactDeclaration(logicalPath string, declarations []domain.ArtifactDeclaration) (domain.ArtifactDeclaration, bool) {

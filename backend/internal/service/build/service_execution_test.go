@@ -374,10 +374,175 @@ func TestBuildService_RunStep_SkipsCleanupWhenArtifactCollectionFails(t *testing
 	assertMessagesContain(t, logSink.lines,
 		"Artifact collection failed",
 		"Failure reason: artifact collection failed",
+		"store unavailable",
+		"dist/**",
+		"dist/app",
 	)
 	if runner.cleanupCalls != 0 {
 		t.Fatalf("expected cleanup to be skipped on artifact failure, got %d", runner.cleanupCalls)
 	}
+}
+
+func TestBuildService_CollectArtifactsIfTerminal_MergesStepIdentityWithTopLevelWildcardRule(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	buildID := "build-merge"
+	stepBackend := "step-backend"
+	stepFrontend := "step-frontend"
+
+	workspacePath := filepath.Join(workspaceRoot, buildID)
+	if err := os.MkdirAll(filepath.Join(workspacePath, "artifacts", "images"), 0o755); err != nil {
+		t.Fatalf("failed creating workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePath, "artifacts", "images", "backend-image.tar"), []byte("backend"), 0o644); err != nil {
+		t.Fatalf("failed writing backend artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePath, "artifacts", "images", "frontend-image.tar"), []byte("frontend"), 0o644); err != nil {
+		t.Fatalf("failed writing frontend artifact: %v", err)
+	}
+
+	pipelineYAML := strings.Join([]string{
+		"version: 1",
+		"artifacts:",
+		"  - path: artifacts/images/*.tar",
+		"    version:",
+		"      template: 0.1.{build_number}",
+		"      channel: latest",
+		"steps:",
+		"  - group:",
+		"      name: Images",
+		"      steps:",
+		"        - name: Backend Image",
+		"          run: echo backend",
+		"          artifacts:",
+		"            - path: artifacts/images/backend-image.tar",
+		"              name: coyote-ci/backend",
+		"              type: docker_image",
+		"        - name: Frontend Image",
+		"          run: echo frontend",
+		"          artifacts:",
+		"            - path: artifacts/images/frontend-image.tar",
+		"              name: coyote-ci/frontend",
+		"              type: docker_image",
+	}, "\n")
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: buildID, Status: domain.BuildStatusSuccess, BuildNumber: 42, CurrentStepIndex: 2, PipelineConfigYAML: &pipelineYAML},
+		steps: []domain.BuildStep{
+			{ID: stepBackend, StepIndex: 0, Name: "Backend Image", Status: domain.BuildStepStatusSuccess, ArtifactPaths: []string{"artifacts/images/backend-image.tar"}},
+			{ID: stepFrontend, StepIndex: 1, Name: "Frontend Image", Status: domain.BuildStepStatusSuccess, ArtifactPaths: []string{"artifacts/images/frontend-image.tar"}},
+		},
+	}
+	artifactRepo := &fakeArtifactRepository{}
+	events := make([]string, 0)
+	svc := NewBuildService(repo, nil, &fakeLogSink{})
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(&recordingStore{events: &events}), workspaceRoot)
+
+	paths, err := svc.collectArtifactsIfTerminal(context.Background(), buildID)
+	if err != nil {
+		t.Fatalf("expected collection to succeed, got %v", err)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("expected two collected paths, got %#v", paths)
+	}
+	artifacts := artifactRepo.artifacts[buildID]
+	if len(artifacts) != 2 {
+		t.Fatalf("expected two persisted artifacts without top-level duplicates, got %#v", artifacts)
+	}
+	byPath := map[string]domain.BuildArtifact{}
+	for _, item := range artifacts {
+		byPath[item.LogicalPath] = item
+	}
+	if byPath["artifacts/images/backend-image.tar"].Name != "coyote-ci/backend" || byPath["artifacts/images/backend-image.tar"].ArtifactType != domain.ArtifactTypeDockerImage {
+		t.Fatalf("expected backend artifact identity from step declaration, got %#v", byPath["artifacts/images/backend-image.tar"])
+	}
+	if byPath["artifacts/images/frontend-image.tar"].Name != "coyote-ci/frontend" || byPath["artifacts/images/frontend-image.tar"].ArtifactType != domain.ArtifactTypeDockerImage {
+		t.Fatalf("expected frontend artifact identity from step declaration, got %#v", byPath["artifacts/images/frontend-image.tar"])
+	}
+	for _, item := range artifacts {
+		if item.StepID == nil {
+			t.Fatalf("expected collected artifact %q to remain step-scoped, got %#v", item.LogicalPath, item)
+		}
+	}
+	saveCount := 0
+	for _, event := range events {
+		if strings.HasPrefix(event, "save:") {
+			saveCount++
+		}
+	}
+	if saveCount != 2 {
+		t.Fatalf("expected two storage saves, got %d events=%#v", saveCount, events)
+	}
+}
+
+func TestBuildService_RunStep_AutomaticVersionTaggingFailureLogsUnderlyingCause(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	buildID := "build-tag-failure"
+	jobID := "job-1"
+	claimToken := "claim-active"
+	stepID := "step-backend"
+
+	workspacePath := filepath.Join(workspaceRoot, buildID)
+	if err := os.MkdirAll(filepath.Join(workspacePath, "artifacts", "images"), 0o755); err != nil {
+		t.Fatalf("failed creating workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePath, "artifacts", "images", "backend-image.tar"), []byte("backend"), 0o644); err != nil {
+		t.Fatalf("failed writing artifact file: %v", err)
+	}
+
+	pipelineYAML := strings.Join([]string{
+		"version: 1",
+		"artifacts:",
+		"  - path: artifacts/images/*.tar",
+		"    version:",
+		"      template: 0.1.{build_number}",
+		"      channel: latest",
+		"steps:",
+		"  - name: Backend Image",
+		"    run: echo backend",
+		"    artifacts:",
+		"      - path: artifacts/images/backend-image.tar",
+		"        name: coyote-ci/backend",
+		"        type: docker_image",
+	}, "\n")
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: buildID, Status: domain.BuildStatusRunning, BuildNumber: 42, ProjectID: "project-1", JobID: &jobID, CurrentStepIndex: 0, PipelineConfigYAML: &pipelineYAML, CreatedAt: time.Now().UTC()},
+		steps: []domain.BuildStep{{ID: stepID, StepIndex: 0, Name: "Backend Image", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken, ArtifactPaths: []string{"artifacts/images/backend-image.tar"}}},
+	}
+	r := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, Stdout: "ok\n", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()}}}
+	logStore := logs.NewMemorySink()
+	artifactRepo := &fakeArtifactRepository{}
+	tagger := &fakeBuildVersionTagger{err: errors.New("tag write failed")}
+
+	svc := NewBuildService(repo, r, logStore)
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(artifact.NewFilesystemStore(t.TempDir())), workspaceRoot)
+	svc.versionTagger = tagger
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "Backend Image", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}, WorkingDir: "."})
+	if err != nil {
+		t.Fatalf("run step failed: %v", err)
+	}
+	if report.SideEffectErr == nil {
+		t.Fatal("expected side effect error from tagging failure")
+	}
+
+	buildLogs, err := svc.GetBuildLogs(context.Background(), buildID)
+	if err != nil {
+		t.Fatalf("get build logs failed: %v", err)
+	}
+	messages := make([]string, 0, len(buildLogs))
+	for _, line := range buildLogs {
+		messages = append(messages, line.Message)
+	}
+
+	assertMessagesContain(t, messages,
+		"Automatic version tagging failed",
+		"Failure reason: automatic version tagging failed",
+		"tag write failed",
+		"artifacts/images/backend-image.tar",
+		"coyote-ci/backend",
+		"artifacts/images/*.tar",
+		"0.1.42",
+		"latest",
+	)
 }
 
 func TestBuildService_CollectArtifactsIfTerminal_IsIdempotent(t *testing.T) {
