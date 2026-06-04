@@ -202,3 +202,88 @@ func TestBuildNotificationService_SendSampleBuildFailureRequiresEnabledConfig(t 
 		t.Fatalf("expected no recipient error, got %v", sendErr)
 	}
 }
+
+func TestNewBuildNotificationService_DisabledIgnoresInvalidRecipients(t *testing.T) {
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:    false,
+		Recipients: "not-an-email",
+		Sender:     &recordingEmailSender{},
+	})
+	if err != nil {
+		t.Fatalf("expected disabled notifier to ignore invalid recipients, got %v", err)
+	}
+	if notifier == nil {
+		t.Fatal("expected notifier")
+	}
+	if len(notifier.recipients) != 0 {
+		t.Fatalf("expected disabled notifier to keep no parsed recipients, got %v", notifier.recipients)
+	}
+}
+
+func TestNewBuildNotificationService_EnabledRejectsInvalidRecipients(t *testing.T) {
+	_, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:    true,
+		Recipients: "not-an-email",
+		Sender:     &recordingEmailSender{},
+	})
+	if err == nil {
+		t.Fatal("expected invalid recipient error")
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
+	t.Run("nil service is noop", func(t *testing.T) {
+		var notifier *BuildNotificationService
+		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); err != nil {
+			t.Fatalf("expected nil service to noop, got %v", err)
+		}
+	})
+
+	t.Run("no sender returns error", func(t *testing.T) {
+		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com"})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); err == nil {
+			t.Fatal("expected missing sender error")
+		}
+	})
+
+	t.Run("non failed terminal status is ignored", func(t *testing.T) {
+		sender := &recordingEmailSender{}
+		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusCanceled}); err != nil {
+			t.Fatalf("expected canceled status to be ignored, got %v", err)
+		}
+		if len(sender.messages) != 0 {
+			t.Fatalf("expected no email for canceled status, got %d", len(sender.messages))
+		}
+	})
+}
+
+func TestBuildNotificationService_SendSampleBuildFailureRequiresSender(t *testing.T) {
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com"})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+	if _, sendErr := notifier.SendSampleBuildFailure(context.Background()); sendErr == nil {
+		t.Fatal("expected missing sender error")
+	}
+}
+
+func TestBuildNotificationService_IsActive(t *testing.T) {
+	var nilNotifier *BuildNotificationService
+	if nilNotifier.isActive() {
+		t.Fatal("expected nil notifier to be inactive")
+	}
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+	if !notifier.isActive() {
+		t.Fatal("expected notifier to be active")
+	}
+}

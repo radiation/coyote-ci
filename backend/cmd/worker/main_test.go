@@ -1,25 +1,49 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	nethttp "net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
+	dockerrunner "github.com/radiation/coyote-ci/backend/internal/runner/docker"
+	"github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 )
+
+func captureWorkerLogOutput(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+	}()
+	fn()
+	return buf.String()
+}
 
 type fakeWorkerIterationService struct {
 	claimStep workersvc.WorkerRunnableStep
 	claimOK   bool
 	claimErr  error
+	claimHook func()
 
 	executeReport workersvc.WorkerStepExecutionReport
 	executeErr    error
@@ -36,6 +60,9 @@ func (f *fakeWorkerStatusProvider) RecoveryStats() workersvc.WorkerLeaseRecovery
 }
 
 func (f *fakeWorkerIterationService) ClaimRunnableStep(_ context.Context) (workersvc.WorkerRunnableStep, bool, error) {
+	if f.claimHook != nil {
+		f.claimHook()
+	}
 	return f.claimStep, f.claimOK, f.claimErr
 }
 
@@ -90,6 +117,107 @@ func TestRunWorkerIteration_ExecutionFailure(t *testing.T) {
 	}
 }
 
+func TestRunWorkerIteration_NoRunnableWork(t *testing.T) {
+	worker := &fakeWorkerIterationService{claimOK: false}
+	if err := runWorkerIteration(context.Background(), worker); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if worker.executeCalls != 0 {
+		t.Fatalf("expected execute not to be called, got %d", worker.executeCalls)
+	}
+}
+
+func TestRunWorkerIteration_ClaimFailure(t *testing.T) {
+	worker := &fakeWorkerIterationService{claimErr: errors.New("claim failed")}
+	if err := runWorkerIteration(context.Background(), worker); err == nil || err.Error() != "claim failed" {
+		t.Fatalf("expected claim failed error, got %v", err)
+	}
+}
+
+func TestRunWorkerLoop_StopsOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := runWorkerLoop(ctx, &fakeWorkerIterationService{}, time.Millisecond); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+}
+
+func TestRunWorkerLoop_ProcessesTickerUntilCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	worker := &fakeWorkerIterationService{
+		claimHook: cancel,
+		claimErr:  errors.New("claim failed"),
+	}
+	output := captureWorkerLogOutput(t, func() {
+		if err := runWorkerLoop(ctx, worker, time.Millisecond); !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context canceled, got %v", err)
+		}
+	})
+	if !strings.Contains(output, "worker polling/claiming error: claim failed") {
+		t.Fatalf("expected claim failure log, got %q", output)
+	}
+	if worker.executeCalls != 0 {
+		t.Fatalf("expected execute not to run, got %d", worker.executeCalls)
+	}
+}
+
+func TestResolveStepRunner(t *testing.T) {
+	dockerRunner := resolveStepRunner(config.Config{ExecutionBackend: "docker", ExecutionWorkspaceRoot: "/tmp/coyote-work", ExecutionDefaultImage: "alpine:3.20"})
+	if _, ok := dockerRunner.(*dockerrunner.Runner); !ok {
+		t.Fatalf("expected docker runner, got %T", dockerRunner)
+	}
+
+	inprocessRunner := resolveStepRunner(config.Config{ExecutionBackend: "local", ExecutionWorkspaceRoot: "/tmp/coyote-work"})
+	if _, ok := inprocessRunner.(*inprocess.Runner); !ok {
+		t.Fatalf("expected inprocess runner, got %T", inprocessRunner)
+	}
+
+	fallbackOutput := captureWorkerLogOutput(t, func() {
+		fallbackRunner := resolveStepRunner(config.Config{ExecutionBackend: "weird", ExecutionWorkspaceRoot: "/tmp/coyote-work"})
+		if _, ok := fallbackRunner.(*inprocess.Runner); !ok {
+			t.Fatalf("expected fallback inprocess runner, got %T", fallbackRunner)
+		}
+	})
+	if !strings.Contains(fallbackOutput, "unknown execution backend \"weird\"; falling back to inprocess") {
+		t.Fatalf("expected fallback log, got %q", fallbackOutput)
+	}
+}
+
+func TestDefaultWorkerID(t *testing.T) {
+	id := defaultWorkerID()
+	if id == "" {
+		t.Fatal("expected non-empty worker id")
+	}
+	if !strings.Contains(id, "-") {
+		t.Fatalf("expected worker id to include pid separator, got %q", id)
+	}
+	hostname, err := os.Hostname()
+	if err == nil && hostname != "" && !strings.Contains(id, hostname) {
+		t.Fatalf("expected worker id to contain hostname %q, got %q", hostname, id)
+	}
+}
+
+func TestDefaultWorkerID_FallsBackWhenHostnameFails(t *testing.T) {
+	original := osHostname
+	osHostname = func() (string, error) {
+		return "", errors.New("hostname unavailable")
+	}
+	defer func() {
+		osHostname = original
+	}()
+
+	id := defaultWorkerID()
+	if !strings.HasPrefix(id, "unknown-host-") {
+		t.Fatalf("expected unknown-host fallback, got %q", id)
+	}
+}
+
+func TestStartWorkerStatusServer_EmptyAddrIsNoop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startWorkerStatusServer(ctx, "   ", &fakeWorkerStatusProvider{})
+}
+
 func TestNewWorkerStatusHandler_Healthz(t *testing.T) {
 	h := newWorkerStatusHandler(&fakeWorkerStatusProvider{})
 	req := httptest.NewRequest(nethttp.MethodGet, "/healthz", nil)
@@ -138,6 +266,16 @@ func TestNewWorkerStatusHandler_RecoveryStatus(t *testing.T) {
 	}
 }
 
+func TestNewWorkerStatusHandler_MethodNotAllowed(t *testing.T) {
+	h := newWorkerStatusHandler(&fakeWorkerStatusProvider{})
+	req := httptest.NewRequest(nethttp.MethodPost, "/internal/status/worker", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != nethttp.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", rr.Code)
+	}
+}
+
 func TestNewWorkerVersionTagService_WiresArtifactLabels(t *testing.T) {
 	jobID := "job-1"
 	buildID := "build-1"
@@ -158,4 +296,123 @@ func TestNewWorkerVersionTagService_WiresArtifactLabels(t *testing.T) {
 	if len(tags) != 1 || tags[0].Kind != domain.VersionTagKindChannel {
 		t.Fatalf("expected one artifact channel tag, got %#v", tags)
 	}
+}
+
+func TestLogEmailNotificationConfig(t *testing.T) {
+	t.Run("disabled", func(t *testing.T) {
+		output := captureWorkerLogOutput(t, func() {
+			logEmailNotificationConfig(config.Config{EmailNotificationsEnabled: false})
+		})
+		if !strings.Contains(output, "email notifications disabled") {
+			t.Fatalf("expected disabled log, got %q", output)
+		}
+	})
+
+	t.Run("enabled without recipients", func(t *testing.T) {
+		output := captureWorkerLogOutput(t, func() {
+			logEmailNotificationConfig(config.Config{EmailNotificationsEnabled: true, SMTPHost: "mailpit", SMTPPort: "1025"})
+		})
+		if !strings.Contains(output, "email notifications enabled via smtp mailpit:1025") {
+			t.Fatalf("expected enabled log, got %q", output)
+		}
+		if !strings.Contains(output, "email notifications enabled but no recipients configured") {
+			t.Fatalf("expected no-recipient log, got %q", output)
+		}
+	})
+}
+
+func TestNewWorkerNotificationService(t *testing.T) {
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+
+	t.Run("disabled ignores invalid recipients", func(t *testing.T) {
+		notifier, err := newWorkerNotificationService(config.Config{
+			EmailNotificationsEnabled:   false,
+			EmailNotificationRecipients: "not-an-email",
+		}, jobRepo, projectRepo)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if notifier == nil {
+			t.Fatal("expected notifier")
+		}
+	})
+
+	t.Run("enabled invalid smtp is wrapped as sender config", func(t *testing.T) {
+		_, err := newWorkerNotificationService(config.Config{
+			EmailNotificationsEnabled: true,
+			SMTPHost:                  "mailpit",
+			SMTPPort:                  "1025",
+		}, jobRepo, projectRepo)
+		if !errors.Is(err, errConfigureEmailSender) {
+			t.Fatalf("expected sender configuration error, got %v", err)
+		}
+	})
+
+	t.Run("enabled invalid recipients returns notifier error", func(t *testing.T) {
+		_, err := newWorkerNotificationService(config.Config{
+			EmailNotificationsEnabled:   true,
+			EmailNotificationRecipients: "not-an-email",
+			SMTPHost:                    "mailpit",
+			SMTPPort:                    "1025",
+			SMTPFromAddress:             "coyote-ci@localhost",
+		}, jobRepo, projectRepo)
+		if err == nil || errors.Is(err, errConfigureEmailSender) {
+			t.Fatalf("expected recipient validation error, got %v", err)
+		}
+	})
+}
+
+func TestBuildWorkerNotificationService(t *testing.T) {
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+
+	t.Run("returns notifier on success", func(t *testing.T) {
+		called := false
+		notifier := buildWorkerNotificationService(config.Config{EmailNotificationsEnabled: false}, jobRepo, projectRepo, func(string, ...any) {
+			called = true
+		})
+		if called {
+			t.Fatal("expected fatalf not to be called")
+		}
+		if notifier == nil {
+			t.Fatal("expected notifier")
+		}
+	})
+
+	t.Run("reports sender configuration failures", func(t *testing.T) {
+		var message string
+		notifier := buildWorkerNotificationService(config.Config{
+			EmailNotificationsEnabled: true,
+			SMTPHost:                  "mailpit",
+			SMTPPort:                  "1025",
+		}, jobRepo, projectRepo, func(format string, args ...any) {
+			message = fmt.Sprintf(format, args...)
+		})
+		if notifier != nil {
+			t.Fatal("expected nil notifier")
+		}
+		if !strings.Contains(message, "failed to configure email sender") {
+			t.Fatalf("expected email sender fatal message, got %q", message)
+		}
+	})
+
+	t.Run("reports build notification failures", func(t *testing.T) {
+		var message string
+		notifier := buildWorkerNotificationService(config.Config{
+			EmailNotificationsEnabled:   true,
+			EmailNotificationRecipients: "not-an-email",
+			SMTPHost:                    "mailpit",
+			SMTPPort:                    "1025",
+			SMTPFromAddress:             "coyote-ci@localhost",
+		}, jobRepo, projectRepo, func(format string, args ...any) {
+			message = fmt.Sprintf(format, args...)
+		})
+		if notifier != nil {
+			t.Fatal("expected nil notifier")
+		}
+		if !strings.Contains(message, "failed to configure build notifications") {
+			t.Fatalf("expected build notification fatal message, got %q", message)
+		}
+	})
 }

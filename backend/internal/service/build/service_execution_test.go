@@ -1548,6 +1548,26 @@ func TestBuildService_HandleStepResult_NotifierFailureDoesNotBreakFailedPersiste
 	}
 }
 
+func TestBuildService_HandleStepResult_BuildLookupFailureDoesNotBreakPersistence(t *testing.T) {
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build:  domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
+		steps:  []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+		getErr: errors.New("lookup failed"),
+	}
+	svc := NewBuildService(repo, nil, logs.NewMemorySink())
+	report, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: claimToken}, steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: 7, Stderr: "boom", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion to persist, got %q", report.CompletionOutcome)
+	}
+	if repo.build.Status != domain.BuildStatusFailed {
+		t.Fatalf("expected build failed to remain persisted, got %q", repo.build.Status)
+	}
+}
+
 func TestBuildService_HandleStepResult_DuplicateFailureDoesNotDuplicateLogsOrFinalizeTwice(t *testing.T) {
 	claimToken := "claim-active"
 	repo := &fakeBuildRepository{

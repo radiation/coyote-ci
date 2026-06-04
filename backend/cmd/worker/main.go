@@ -45,25 +45,7 @@ type workerStatusProvider interface {
 func main() {
 	cfg := config.Load()
 	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
-	if cfg.EmailNotificationsEnabled {
-		log.Printf("email notifications enabled via smtp %s:%s", cfg.SMTPHost, cfg.SMTPPort)
-		if strings.TrimSpace(cfg.EmailNotificationRecipients) == "" {
-			log.Printf("email notifications enabled but no recipients configured")
-		}
-	} else {
-		log.Printf("email notifications disabled")
-	}
-	emailSender, emailSenderErr := platformemail.NewSender(platformemail.Config{
-		Enabled:     cfg.EmailNotificationsEnabled,
-		Host:        cfg.SMTPHost,
-		Port:        cfg.SMTPPort,
-		Username:    cfg.SMTPUsername,
-		Password:    cfg.SMTPPassword,
-		FromAddress: cfg.SMTPFromAddress,
-	})
-	if emailSenderErr != nil {
-		log.Fatalf("failed to configure email sender: %v", emailSenderErr)
-	}
+	logEmailNotificationConfig(cfg)
 
 	dbURL, dbPoolCfg := dbopen.FromConfig(cfg)
 	db, err := platformdb.Open(dbURL, dbPoolCfg)
@@ -86,16 +68,7 @@ func main() {
 	projectRepo := repositorypostgres.NewProjectRepository(db)
 	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
 	artifactLabelRepo := repositorypostgres.NewArtifactLabelRepository(db)
-	buildNotificationService, buildNotificationErr := buildsvc.NewBuildNotificationService(buildsvc.BuildNotificationConfig{
-		Enabled:     cfg.EmailNotificationsEnabled,
-		Recipients:  cfg.EmailNotificationRecipients,
-		Sender:      emailSender,
-		JobRepo:     jobRepo,
-		ProjectRepo: projectRepo,
-	})
-	if buildNotificationErr != nil {
-		log.Fatalf("failed to configure build notifications: %v", buildNotificationErr)
-	}
+	buildNotificationService := buildWorkerNotificationService(cfg, jobRepo, projectRepo, log.Fatalf)
 	artifactResolver, err := artifact.ResolveStores(artifact.StoreConfig{
 		Provider:    cfg.ArtifactStorageProvider,
 		StorageRoot: cfg.ArtifactStorageRoot,
@@ -152,6 +125,59 @@ func main() {
 	log.Printf("worker stopped")
 }
 
+var errConfigureEmailSender = errors.New("configure email sender")
+
+func logEmailNotificationConfig(cfg config.Config) {
+	if cfg.EmailNotificationsEnabled {
+		log.Printf("email notifications enabled via smtp %s:%s", cfg.SMTPHost, cfg.SMTPPort)
+		if strings.TrimSpace(cfg.EmailNotificationRecipients) == "" {
+			log.Printf("email notifications enabled but no recipients configured")
+		}
+		return
+	}
+	log.Printf("email notifications disabled")
+}
+
+func newWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepository, projectRepo repository.ProjectRepository) (*buildsvc.BuildNotificationService, error) {
+	emailSender, emailSenderErr := platformemail.NewSender(platformemail.Config{
+		Enabled:     cfg.EmailNotificationsEnabled,
+		Host:        cfg.SMTPHost,
+		Port:        cfg.SMTPPort,
+		Username:    cfg.SMTPUsername,
+		Password:    cfg.SMTPPassword,
+		FromAddress: cfg.SMTPFromAddress,
+	})
+	if emailSenderErr != nil {
+		return nil, fmt.Errorf("%w: %v", errConfigureEmailSender, emailSenderErr)
+	}
+
+	buildNotificationService, buildNotificationErr := buildsvc.NewBuildNotificationService(buildsvc.BuildNotificationConfig{
+		Enabled:     cfg.EmailNotificationsEnabled,
+		Recipients:  cfg.EmailNotificationRecipients,
+		Sender:      emailSender,
+		JobRepo:     jobRepo,
+		ProjectRepo: projectRepo,
+	})
+	if buildNotificationErr != nil {
+		return nil, buildNotificationErr
+	}
+
+	return buildNotificationService, nil
+}
+
+func buildWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepository, projectRepo repository.ProjectRepository, fatalf func(string, ...any)) *buildsvc.BuildNotificationService {
+	buildNotificationService, notificationErr := newWorkerNotificationService(cfg, jobRepo, projectRepo)
+	if notificationErr == nil {
+		return buildNotificationService
+	}
+	if errors.Is(notificationErr, errConfigureEmailSender) {
+		fatalf("failed to configure email sender: %v", notificationErr)
+		return nil
+	}
+	fatalf("failed to configure build notifications: %v", notificationErr)
+	return nil
+}
+
 func resolveStepRunner(cfg config.Config) runner.Runner {
 	switch strings.ToLower(strings.TrimSpace(cfg.ExecutionBackend)) {
 	case "", "docker":
@@ -169,8 +195,10 @@ func resolveStepRunner(cfg config.Config) runner.Runner {
 	}
 }
 
+var osHostname = os.Hostname
+
 func defaultWorkerID() string {
-	hostname, err := os.Hostname()
+	hostname, err := osHostname()
 	if err != nil || hostname == "" {
 		hostname = "unknown-host"
 	}

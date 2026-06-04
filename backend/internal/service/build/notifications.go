@@ -33,9 +33,13 @@ type BuildNotificationConfig struct {
 }
 
 func NewBuildNotificationService(cfg BuildNotificationConfig) (*BuildNotificationService, error) {
-	recipients, err := parseNotificationRecipients(cfg.Recipients)
-	if err != nil {
-		return nil, err
+	recipients := []string(nil)
+	if cfg.Enabled {
+		var err error
+		recipients, err = parseNotificationRecipients(cfg.Recipients)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &BuildNotificationService{
