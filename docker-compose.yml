@@ -51,6 +51,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      mailpit:
+        condition: service_started
     environment:
       APP_PORT: "8080"
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
@@ -69,6 +71,12 @@ services:
       SESSION_COOKIE_SAME_SITE: ${SESSION_COOKIE_SAME_SITE:-lax}
       AUTH_POST_LOGIN_REDIRECT_URL: ${AUTH_POST_LOGIN_REDIRECT_URL:-http://localhost:3000/}
       AUTH_POST_LOGOUT_REDIRECT_URL: ${AUTH_POST_LOGOUT_REDIRECT_URL:-http://localhost:3000/}
+      EMAIL_NOTIFICATIONS_ENABLED: ${EMAIL_NOTIFICATIONS_ENABLED:-true}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM_ADDRESS: ${SMTP_FROM_ADDRESS:-coyote-ci@localhost}
       DB_HOST: db
       DB_PORT: "5432"
       DB_USER: coyote
@@ -112,6 +120,13 @@ services:
       # Do not use this pattern in less-trusted or shared environments.
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/coyote-builds:/tmp/coyote-builds
+
+  mailpit:
+    image: axllent/mailpit
+    container_name: coyote-ci-mailpit
+    ports:
+      - "1025:1025"
+      - "8025:8025"
 
   frontend:
     image: node:22

@@ -18,6 +18,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
+	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	artifactsvc "github.com/radiation/coyote-ci/backend/internal/service/artifact"
@@ -38,8 +39,24 @@ import (
 
 func main() {
 	cfg := config.Load()
+	_, emailSenderErr := platformemail.NewSender(platformemail.Config{
+		Enabled:     cfg.EmailNotificationsEnabled,
+		Host:        cfg.SMTPHost,
+		Port:        cfg.SMTPPort,
+		Username:    cfg.SMTPUsername,
+		Password:    cfg.SMTPPassword,
+		FromAddress: cfg.SMTPFromAddress,
+	})
+	if emailSenderErr != nil {
+		log.Fatalf("failed to configure email sender: %v", emailSenderErr)
+	}
 	docs.SwaggerInfo.BasePath = "/api"
 	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
+	if cfg.EmailNotificationsEnabled {
+		log.Printf("email notifications enabled via smtp %s:%s", cfg.SMTPHost, cfg.SMTPPort)
+	} else {
+		log.Printf("email notifications disabled")
+	}
 
 	dbURL, dbPoolCfg := dbopen.FromConfig(cfg)
 	db, err := platformdb.Open(dbURL, dbPoolCfg)

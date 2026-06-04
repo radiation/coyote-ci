@@ -64,6 +64,14 @@ OIDC/session configuration:
 - `SESSION_COOKIE_SECURE` (defaults to secure except localhost HTTP redirect URLs; set explicitly for local dev if needed)
 - `SESSION_COOKIE_SAME_SITE` (default: `lax`; supported values: `lax`, `strict`, `none`; `none` requires `SESSION_COOKIE_SECURE=true`)
 
+Email notification plumbing configuration:
+
+- `EMAIL_NOTIFICATIONS_ENABLED` (default: `true` for local Mailpit-backed development)
+- `SMTP_HOST` (default: `mailpit` inside Docker Compose)
+- `SMTP_PORT` (default: `1025`)
+- `SMTP_USERNAME` and `SMTP_PASSWORD` (optional; leave empty for local Mailpit)
+- `SMTP_FROM_ADDRESS` (default: `coyote-ci@localhost`)
+
 Security notes:
 
 - Coyote CI does not implement password login.
@@ -171,6 +179,7 @@ The default `.env` sets `COMPOSE_PROFILES=dev`, which starts:
 | backend-dev    | Go backend with hot reload (Air)     | http://localhost:8080 |
 | worker         | Build step executor                  | —                     |
 | frontend-dev   | Vite dev server with HMR             | http://localhost:3000 |
+| mailpit        | Local SMTP sink + email viewer       | http://localhost:8025 |
 
 For production-like images instead:
 
@@ -179,6 +188,8 @@ COMPOSE_PROFILES=prod docker compose up --build
 ```
 
 This swaps `backend-dev`/`frontend-dev` for pre-built `backend`/`frontend` containers.
+
+For local email development, backend services use SMTP host `mailpit` on port `1025`, and Mailpit's web UI is available at `http://localhost:8025`.
 
 ## Queue Fixture Scenarios (Repo Pipeline Path)
 

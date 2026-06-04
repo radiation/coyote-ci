@@ -58,6 +58,12 @@ type Config struct {
 	SessionCookieSameSite      string
 	AuthPostLoginRedirectURL   string
 	AuthPostLogoutRedirectURL  string
+	EmailNotificationsEnabled  bool
+	SMTPHost                   string
+	SMTPPort                   string
+	SMTPUsername               string
+	SMTPPassword               string
+	SMTPFromAddress            string
 }
 
 func Load() Config {
@@ -110,6 +116,12 @@ func Load() Config {
 		SessionCookieSameSite:      getEnv("SESSION_COOKIE_SAME_SITE", "lax"),
 		AuthPostLoginRedirectURL:   getEnv("AUTH_POST_LOGIN_REDIRECT_URL", ""),
 		AuthPostLogoutRedirectURL:  getEnv("AUTH_POST_LOGOUT_REDIRECT_URL", ""),
+		EmailNotificationsEnabled:  getEnvBool("EMAIL_NOTIFICATIONS_ENABLED", true),
+		SMTPHost:                   getEnv("SMTP_HOST", "mailpit"),
+		SMTPPort:                   getEnv("SMTP_PORT", "1025"),
+		SMTPUsername:               getEnv("SMTP_USERNAME", ""),
+		SMTPPassword:               getEnv("SMTP_PASSWORD", ""),
+		SMTPFromAddress:            getEnv("SMTP_FROM_ADDRESS", "coyote-ci@localhost"),
 	}
 }
 

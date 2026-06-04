@@ -24,6 +24,7 @@ Recent completed slice:
 - artifact lineage plus automatic generated artifact version/channel labels V1 is complete
 - generated artifact versions and channels are configured per artifact declaration, not a top-level `release` block
 - notifications are the next likely product feature area after the current artifact/provenance slice
+- local Mailpit-backed email notification plumbing is the first notifications slice; SMTP config lives in `backend/internal/platform/config`, transport plumbing lives in `backend/internal/platform/email`, and local inspection is via `http://localhost:8025`
 
 ## Current development style
 

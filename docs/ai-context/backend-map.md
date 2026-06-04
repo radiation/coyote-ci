@@ -18,6 +18,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - `backend/internal/repository`: persistence logic, Postgres adapters, in-memory adapters, and transaction-safe state updates.
 - `backend/db/migrations`: additive schema history. Add new numbered migrations here; do not edit applied migrations.
 - `backend/internal/artifact`: artifact key resolution and blob-store adapters.
+- `backend/internal/platform/email`: SMTP sender plumbing for local Mailpit development and future email notification delivery.
 - `backend/internal/source`: source fetch/materialization, PR/source metadata, and repo writeback helpers.
 - `backend/internal/versioning`: release/version-tag behavior and lineage helpers.
 - `backend/internal/auth`: session/auth-mode logic and authorization helpers.
