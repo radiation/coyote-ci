@@ -59,15 +59,15 @@ func (s *BuildNotificationService) NotifyTerminalBuild(ctx context.Context, buil
 		log.Printf("build notification skipped: build_id=%s status=%s reason=disabled", build.ID, build.Status)
 		return nil
 	}
+	if !shouldNotifyBuildStatus(build.Status) {
+		return nil
+	}
 	if s.sender == nil {
 		log.Printf("build notification skipped: build_id=%s status=%s reason=no_sender", build.ID, build.Status)
 		return errors.New("email sender is not configured")
 	}
 	if len(s.recipients) == 0 {
 		log.Printf("build notification skipped: build_id=%s status=%s reason=no_recipients", build.ID, build.Status)
-		return nil
-	}
-	if build.Status != domain.BuildStatusFailed {
 		return nil
 	}
 
@@ -135,6 +135,7 @@ func (s *BuildNotificationService) send(ctx context.Context, subject string, bod
 }
 
 func (s *BuildNotificationService) formatBuildStatusEmail(ctx context.Context, build domain.Build) (string, string) {
+	statusSummary := buildStatusNotificationSummary(build.Status)
 	projectLabel := build.ProjectID
 	if s.projectRepo != nil && strings.TrimSpace(build.ProjectID) != "" {
 		project, err := s.projectRepo.GetByID(ctx, build.ProjectID)
@@ -157,13 +158,15 @@ func (s *BuildNotificationService) formatBuildStatusEmail(ctx context.Context, b
 		}
 	}
 
-	subjectParts := []string{"Coyote CI", "build", build.ID, string(build.Status)}
+	subjectParts := []string{"Coyote CI", "build", statusSummary, build.ID}
 	if jobLabel != "" {
-		subjectParts = []string{"Coyote CI", jobLabel, "build", build.ID, string(build.Status)}
+		subjectParts = []string{"Coyote CI", jobLabel, "build", statusSummary, build.ID}
 	}
 	subject := strings.Join(subjectParts, " ")
 
 	bodyLines := []string{
+		fmt.Sprintf("A Coyote CI build %s.", statusSummary),
+		"",
 		fmt.Sprintf("Build ID: %s", build.ID),
 		fmt.Sprintf("Status: %s", build.Status),
 		fmt.Sprintf("Project: %s", projectLabel),
@@ -179,6 +182,21 @@ func (s *BuildNotificationService) formatBuildStatusEmail(ctx context.Context, b
 	}
 
 	return subject, strings.Join(bodyLines, "\n")
+}
+
+func shouldNotifyBuildStatus(status domain.BuildStatus) bool {
+	return status == domain.BuildStatusFailed || status == domain.BuildStatusSuccess
+}
+
+func buildStatusNotificationSummary(status domain.BuildStatus) string {
+	switch status {
+	case domain.BuildStatusSuccess:
+		return "succeeded"
+	case domain.BuildStatusFailed:
+		return "failed"
+	default:
+		return string(status)
+	}
 }
 
 func parseNotificationRecipients(value string) ([]string, error) {

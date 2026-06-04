@@ -88,7 +88,7 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 		}
 	}
 
-	if stepStatus == domain.BuildStepStatusFailed {
+	if s.buildNotifier != nil {
 		build, buildErr := s.buildRepo.GetByID(ctx, request.BuildID)
 		if buildErr != nil {
 			log.Printf("WARNING: build notification skipped: build_id=%s reason=build_lookup_failed err=%v", request.BuildID, buildErr)
