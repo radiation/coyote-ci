@@ -9,7 +9,9 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
+	steprunner "github.com/radiation/coyote-ci/backend/internal/runner"
 )
 
 type recordingEmailSender struct {
@@ -74,8 +76,74 @@ func TestBuildService_FailBuild_SendsNotificationWhenConfigured(t *testing.T) {
 		t.Fatalf("expected subject to include job/build/status context, got %q", message.Subject)
 	}
 	for _, want := range []string{
+		"A Coyote CI build failed.",
 		"Build ID: build-1",
 		"Status: failed",
+		"Project: Payments API (project-1)",
+		"Build number: 42",
+		"Job: backend-ci (job-1)",
+	} {
+		if !strings.Contains(message.Body, want) {
+			t.Fatalf("expected body to contain %q, got %q", want, message.Body)
+		}
+	}
+}
+
+func TestBuildService_CompleteBuild_SendsNotificationWhenConfigured(t *testing.T) {
+	now := time.Now().UTC()
+	jobID := "job-1"
+	buildRepo := &fakeBuildRepository{
+		build: domain.Build{
+			ID:          "build-1",
+			ProjectID:   "project-1",
+			JobID:       &jobID,
+			BuildNumber: 42,
+			Status:      domain.BuildStatusRunning,
+			CreatedAt:   now,
+		},
+	}
+	jobRepo := memoryrepo.NewJobRepository()
+	projectRepo := memoryrepo.NewProjectRepository(jobRepo)
+	if _, err := projectRepo.Create(context.Background(), domain.Project{ID: "project-1", Name: "Payments API", Slug: "payments-api", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	if _, err := jobRepo.Create(context.Background(), domain.Job{ID: jobID, ProjectID: "project-1", Name: "backend-ci", RepositoryURL: "https://github.com/example/payments.git", DefaultRef: "main", PipelineYAML: "version: 1", Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+	sender := &recordingEmailSender{}
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:     true,
+		Recipients:  "dev@example.com",
+		Sender:      sender,
+		JobRepo:     jobRepo,
+		ProjectRepo: projectRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	svc := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{BuildNotifier: notifier})
+	build, err := svc.CompleteBuild(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("complete build returned error: %v", err)
+	}
+	if build.Status != domain.BuildStatusSuccess {
+		t.Fatalf("expected successful build, got %q", build.Status)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected one notification email, got %d", len(sender.messages))
+	}
+	message := sender.messages[0]
+	if message.To != "<dev@example.com>" {
+		t.Fatalf("expected normalized recipient <dev@example.com>, got %q", message.To)
+	}
+	if !strings.Contains(message.Subject, "backend-ci (job-1)") || !strings.Contains(message.Subject, "build-1") || !strings.Contains(message.Subject, "succeeded") {
+		t.Fatalf("expected subject to include job/build/success context, got %q", message.Subject)
+	}
+	for _, want := range []string{
+		"A Coyote CI build succeeded.",
+		"Build ID: build-1",
+		"Status: success",
 		"Project: Payments API (project-1)",
 		"Build number: 42",
 		"Job: backend-ci (job-1)",
@@ -104,6 +172,44 @@ func TestBuildService_FailBuild_DoesNotSendNotificationWhenDisabled(t *testing.T
 	}
 	if len(sender.messages) != 0 {
 		t.Fatalf("expected no notification emails when disabled, got %d", len(sender.messages))
+	}
+}
+
+func TestBuildService_NotificationsDisabled_DoesNotSendForSuccessOrFailure(t *testing.T) {
+	tests := []struct {
+		name   string
+		action func(*BuildService, context.Context, string) (domain.Build, error)
+		want   domain.BuildStatus
+	}{
+		{name: "success", action: (*BuildService).CompleteBuild, want: domain.BuildStatusSuccess},
+		{name: "failure", action: (*BuildService).FailBuild, want: domain.BuildStatusFailed},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}}
+			sender := &recordingEmailSender{}
+			notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+				Enabled:    false,
+				Recipients: "dev@example.com",
+				Sender:     sender,
+			})
+			if err != nil {
+				t.Fatalf("create notifier failed: %v", err)
+			}
+
+			svc := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{BuildNotifier: notifier})
+			build, err := tc.action(svc, context.Background(), "build-1")
+			if err != nil {
+				t.Fatalf("terminal transition returned error: %v", err)
+			}
+			if build.Status != tc.want {
+				t.Fatalf("expected build status %q, got %q", tc.want, build.Status)
+			}
+			if len(sender.messages) != 0 {
+				t.Fatalf("expected no notification emails when disabled, got %d", len(sender.messages))
+			}
+		})
 	}
 }
 
@@ -153,6 +259,98 @@ func TestBuildService_FailBuild_SenderFailureDoesNotBreakPersistence(t *testing.
 	}
 	if len(sender.messages) != 1 {
 		t.Fatalf("expected attempted notification email, got %d", len(sender.messages))
+	}
+}
+
+func TestBuildService_CompleteBuild_SenderFailureDoesNotBreakPersistence(t *testing.T) {
+	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}}
+	sender := &recordingEmailSender{err: errors.New("smtp unavailable")}
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:    true,
+		Recipients: "dev@example.com",
+		Sender:     sender,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	svc := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{BuildNotifier: notifier})
+	build, err := svc.CompleteBuild(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("complete build returned error: %v", err)
+	}
+	if build.Status != domain.BuildStatusSuccess {
+		t.Fatalf("expected successful build to remain persisted, got %q", build.Status)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected attempted notification email, got %d", len(sender.messages))
+	}
+}
+
+func TestBuildService_CancelBuild_DoesNotSendNotificationWhenConfigured(t *testing.T) {
+	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}}
+	sender := &recordingEmailSender{}
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:    true,
+		Recipients: "dev@example.com",
+		Sender:     sender,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	svc := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{BuildNotifier: notifier})
+	build, err := svc.CancelBuild(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("cancel build returned error: %v", err)
+	}
+	if build.Status != domain.BuildStatusCanceled {
+		t.Fatalf("expected canceled build, got %q", build.Status)
+	}
+	if len(sender.messages) != 0 {
+		t.Fatalf("expected no notification emails for canceled builds, got %d", len(sender.messages))
+	}
+}
+
+func TestBuildService_HandleStepResult_FailedStepThenFailBuild_DoesNotDoubleSendEmail(t *testing.T) {
+	claimToken := "claim-active"
+	buildRepo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0, CreatedAt: time.Now().UTC()},
+		steps: []domain.BuildStep{
+			{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken},
+			{StepIndex: 1, Name: "step-2", Status: domain.BuildStepStatusPending},
+		},
+	}
+	sender := &recordingEmailSender{}
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:    true,
+		Recipients: "dev@example.com",
+		Sender:     sender,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	svc := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{BuildNotifier: notifier})
+	report, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: claimToken}, steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: 7, Stderr: "boom", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("handle step result returned error: %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion to persist, got %q", report.CompletionOutcome)
+	}
+	if buildRepo.build.Status != domain.BuildStatusFailed {
+		t.Fatalf("expected build failed after step completion, got %q", buildRepo.build.Status)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected one notification email after failed step completion, got %d", len(sender.messages))
+	}
+
+	if _, err := svc.FailBuild(context.Background(), "build-1"); !errors.Is(err, ErrInvalidBuildStatusTransition) {
+		t.Fatalf("expected invalid transition when failing an already failed build, got %v", err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected no second notification email after invalid FailBuild, got %d", len(sender.messages))
 	}
 }
 
@@ -260,6 +458,23 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 		}
 		if len(sender.messages) != 0 {
 			t.Fatalf("expected no email for canceled status, got %d", len(sender.messages))
+		}
+	})
+
+	t.Run("successful terminal status sends email", func(t *testing.T) {
+		sender := &recordingEmailSender{}
+		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess}); err != nil {
+			t.Fatalf("expected success status to send, got %v", err)
+		}
+		if len(sender.messages) != 1 {
+			t.Fatalf("expected one email for success status, got %d", len(sender.messages))
+		}
+		if !strings.Contains(sender.messages[0].Subject, "succeeded") {
+			t.Fatalf("expected success subject, got %q", sender.messages[0].Subject)
 		}
 	})
 }

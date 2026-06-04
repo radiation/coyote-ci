@@ -1673,7 +1673,8 @@ func TestBuildService_HandleStepResult_ClaimedCompletionFinalizesBuild(t *testin
 		build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
 		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
 	}
-	svc := NewBuildService(repo, nil, logs.NewMemorySink())
+	notifier := &recordingBuildNotifier{}
+	svc := NewBuildServiceFromConfig(repo, nil, logs.NewMemorySink(), BuildServiceConfig{BuildNotifier: notifier})
 
 	report, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: "claim-active"}, steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
 	if err != nil {
@@ -1687,6 +1688,12 @@ func TestBuildService_HandleStepResult_ClaimedCompletionFinalizesBuild(t *testin
 	}
 	if repo.build.Status != domain.BuildStatusSuccess {
 		t.Fatalf("expected build success, got %q", repo.build.Status)
+	}
+	if len(notifier.builds) != 1 {
+		t.Fatalf("expected one build notification, got %d", len(notifier.builds))
+	}
+	if notifier.builds[0].ID != "build-1" || notifier.builds[0].Status != domain.BuildStatusSuccess {
+		t.Fatalf("expected successful build notification for build-1, got %#v", notifier.builds[0])
 	}
 }
 

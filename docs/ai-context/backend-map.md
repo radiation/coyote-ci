@@ -20,7 +20,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - `backend/internal/artifact`: artifact key resolution and blob-store adapters.
 - `backend/internal/platform/config`: env loading for `EMAIL_NOTIFICATIONS_ENABLED`, `EMAIL_NOTIFICATION_RECIPIENTS`, and SMTP settings.
 - `backend/internal/platform/email`: SMTP sender plumbing for local Mailpit development and future email notification delivery.
-- `backend/internal/service/build/notifications.go`: failed-build email formatting/delivery and the dev-only sample send path.
+- `backend/internal/service/build/notifications.go`: terminal build email formatting/delivery for failed and successful builds, plus the dev-only sample send path.
 - `backend/internal/source`: source fetch/materialization, PR/source metadata, and repo writeback helpers.
 - `backend/internal/versioning`: release/version-tag behavior and lineage helpers.
 - `backend/internal/auth`: session/auth-mode logic and authorization helpers.

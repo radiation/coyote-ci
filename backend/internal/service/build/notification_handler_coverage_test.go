@@ -22,21 +22,30 @@ func TestBuildNotificationService_NotifyTerminalBuild_NoSenderReturnsError(t *te
 	}
 }
 
-func TestBuildNotificationService_NotifyTerminalBuild_IgnoresNonFailedTerminalStates(t *testing.T) {
+func TestBuildNotificationService_NotifyTerminalBuild_SendsOnlyForConfiguredStatuses(t *testing.T) {
 	sender := &recordingEmailSender{}
 	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
 
-	states := []domain.BuildStatus{domain.BuildStatusSuccess, domain.BuildStatusCanceled}
+	states := []struct {
+		status    domain.BuildStatus
+		wantCount int
+	}{
+		{status: domain.BuildStatusSuccess, wantCount: 1},
+		{status: domain.BuildStatusCanceled, wantCount: 1},
+	}
 	for _, state := range states {
-		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: state}); notifyErr != nil {
-			t.Fatalf("expected nil error for state %q, got %v", state, notifyErr)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: state.status}); notifyErr != nil {
+			t.Fatalf("expected nil error for state %q, got %v", state.status, notifyErr)
+		}
+		if len(sender.messages) != state.wantCount {
+			t.Fatalf("expected %d emails after status %q, got %d", state.wantCount, state.status, len(sender.messages))
 		}
 	}
-	if len(sender.messages) != 0 {
-		t.Fatalf("expected no emails for non-failed terminal states, got %d", len(sender.messages))
+	if !strings.Contains(sender.messages[0].Subject, "succeeded") {
+		t.Fatalf("expected success email subject, got %q", sender.messages[0].Subject)
 	}
 }
 
@@ -88,7 +97,7 @@ func TestBuildNotificationService_FormatBuildStatusEmail_FallsBackWithoutLookups
 	if !strings.Contains(subject, "job-1") || !strings.Contains(subject, "failed") {
 		t.Fatalf("unexpected subject %q", subject)
 	}
-	for _, want := range []string{"Project: project-1", "Job: job-1", "Build number: 7", "Error: boom"} {
+	for _, want := range []string{"A Coyote CI build failed.", "Project: project-1", "Job: job-1", "Build number: 7", "Error: boom"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected body to contain %q, got %q", want, body)
 		}

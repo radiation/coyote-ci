@@ -192,7 +192,7 @@ This swaps `backend-dev`/`frontend-dev` for pre-built `backend`/`frontend` conta
 
 For local email development, backend services use SMTP host `mailpit` on port `1025`, and Mailpit's web UI is available at `http://localhost:8025`.
 
-Required local env vars for failed-build emails: `EMAIL_NOTIFICATIONS_ENABLED=true`, `EMAIL_NOTIFICATION_RECIPIENTS`, `SMTP_HOST`, `SMTP_PORT`, and `SMTP_FROM_ADDRESS`.
+Required local env vars for build status emails: `EMAIL_NOTIFICATIONS_ENABLED=true`, `EMAIL_NOTIFICATION_RECIPIENTS`, `SMTP_HOST`, `SMTP_PORT`, and `SMTP_FROM_ADDRESS`.
 
 Manual Mailpit verification flow:
 
@@ -202,9 +202,9 @@ curl -X POST http://localhost:8080/api/dev/notifications/sample-build
 curl -sS http://localhost:8025/api/v1/messages | jq '{count, latest_subject: .messages[0].Subject, latest_to: .messages[0].To[0].Address}'
 ```
 
-In the default local configuration, that sends a sample build-failure email to `EMAIL_NOTIFICATION_RECIPIENTS` through the real SMTP sender. The dev-only sample endpoint is only registered when `AUTH_MODE=disabled`.
+In the default local configuration, that sends a sample build-failure email to `EMAIL_NOTIFICATION_RECIPIENTS` through the real SMTP sender. Real terminal build notifications use the same enabled flag and recipient list for both failed and successful builds. The dev-only sample endpoint is only registered when `AUTH_MODE=disabled`.
 
-Real failed-build verification flow:
+Real build-status verification flow:
 
 ```bash
 curl -sS -X POST http://localhost:8080/api/builds/repo \
