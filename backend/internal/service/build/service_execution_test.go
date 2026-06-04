@@ -1494,6 +1494,60 @@ func TestBuildService_HandleStepResult_FailureMarksBuildFailed(t *testing.T) {
 	}
 }
 
+func TestBuildService_HandleStepResult_FailureInvokesBuildNotifier(t *testing.T) {
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
+		steps: []domain.BuildStep{
+			{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken},
+			{StepIndex: 1, Name: "step-2", Status: domain.BuildStepStatusPending},
+		},
+	}
+	notifier := &recordingBuildNotifier{}
+	svc := NewBuildServiceFromConfig(repo, nil, logs.NewMemorySink(), BuildServiceConfig{BuildNotifier: notifier})
+
+	report, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: claimToken}, steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: 7, Stderr: "boom", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion to persist, got %q", report.CompletionOutcome)
+	}
+	if len(notifier.builds) != 1 {
+		t.Fatalf("expected one build notification, got %d", len(notifier.builds))
+	}
+	if notifier.builds[0].ID != "build-1" || notifier.builds[0].Status != domain.BuildStatusFailed {
+		t.Fatalf("expected failed build notification for build-1, got %#v", notifier.builds[0])
+	}
+}
+
+func TestBuildService_HandleStepResult_NotifierFailureDoesNotBreakFailedPersistence(t *testing.T) {
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
+		steps: []domain.BuildStep{
+			{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken},
+			{StepIndex: 1, Name: "step-2", Status: domain.BuildStepStatusPending},
+		},
+	}
+	notifier := &recordingBuildNotifier{err: errors.New("smtp unavailable")}
+	svc := NewBuildServiceFromConfig(repo, nil, logs.NewMemorySink(), BuildServiceConfig{BuildNotifier: notifier})
+
+	report, err := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "step-1", ClaimToken: claimToken}, steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: 7, Stderr: "boom", StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completion to persist, got %q", report.CompletionOutcome)
+	}
+	if repo.build.Status != domain.BuildStatusFailed {
+		t.Fatalf("expected build failed to remain persisted, got %q", repo.build.Status)
+	}
+	if len(notifier.builds) != 1 {
+		t.Fatalf("expected notifier attempt to be recorded once, got %d", len(notifier.builds))
+	}
+}
+
 func TestBuildService_HandleStepResult_DuplicateFailureDoesNotDuplicateLogsOrFinalizeTwice(t *testing.T) {
 	claimToken := "claim-active"
 	repo := &fakeBuildRepository{

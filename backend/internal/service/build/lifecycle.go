@@ -20,7 +20,25 @@ func (s *BuildService) transitionBuildStatus(ctx context.Context, id string, toS
 		return domain.Build{}, ErrInvalidBuildStatusTransition
 	}
 
-	return s.buildRepo.UpdateStatus(ctx, id, toStatus, errorMessage)
+	return s.persistBuildStatus(ctx, id, toStatus, errorMessage)
+}
+
+func (s *BuildService) persistBuildStatus(ctx context.Context, id string, toStatus domain.BuildStatus, errorMessage *string) (domain.Build, error) {
+	build, err := s.buildRepo.UpdateStatus(ctx, id, toStatus, errorMessage)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	s.notifyTerminalBuild(ctx, build)
+	return build, nil
+}
+
+func (s *BuildService) notifyTerminalBuild(ctx context.Context, build domain.Build) {
+	if s.buildNotifier == nil || !domain.IsTerminalBuildStatus(build.Status) {
+		return
+	}
+	if notifyErr := s.buildNotifier.NotifyTerminalBuild(ctx, build); notifyErr != nil {
+		log.Printf("WARNING: build notification failed: build_id=%s status=%s err=%v", build.ID, build.Status, notifyErr)
+	}
 }
 
 func (s *BuildService) CancelBuild(ctx context.Context, id string) (domain.Build, error) {
@@ -76,7 +94,7 @@ func (s *BuildService) CancelBuild(ctx context.Context, id string) (domain.Build
 		updatedSteps++
 	}
 
-	canceled, err := s.buildRepo.UpdateStatus(ctx, id, domain.BuildStatusCanceled, &reason)
+	canceled, err := s.persistBuildStatus(ctx, id, domain.BuildStatusCanceled, &reason)
 	if err != nil {
 		return domain.Build{}, mapRepoErr(err)
 	}

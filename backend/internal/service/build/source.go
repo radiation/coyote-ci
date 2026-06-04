@@ -215,7 +215,7 @@ func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (do
 
 	if prepErr := s.prepareBuildWorkspace(ctx, buildID); prepErr != nil {
 		message := prepErr.Error()
-		failed, updateErr := s.buildRepo.UpdateStatus(ctx, buildID, domain.BuildStatusFailed, &message)
+		failed, updateErr := s.persistBuildStatus(ctx, buildID, domain.BuildStatusFailed, &message)
 		if updateErr != nil {
 			return domain.Build{}, mapRepoErr(updateErr)
 		}
@@ -229,7 +229,7 @@ func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (do
 		if _, sourceErr := s.resolveBuildSourceInWorkspace(ctx, buildID, sourceSpec); sourceErr != nil {
 			reason := classifyBuildSourceFailureReason(sourceErr, sourceSpec)
 			_ = s.cleanupPreparedWorkspace(ctx, buildID)
-			failed, updateErr := s.buildRepo.UpdateStatus(ctx, buildID, domain.BuildStatusFailed, &reason)
+			failed, updateErr := s.persistBuildStatus(ctx, buildID, domain.BuildStatusFailed, &reason)
 			if updateErr != nil {
 				return domain.Build{}, mapRepoErr(updateErr)
 			}

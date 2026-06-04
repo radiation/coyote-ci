@@ -6,6 +6,7 @@ import (
 	"expvar"
 	"log"
 	nethttp "net/http"
+	"strings"
 	"time"
 
 	docs "github.com/radiation/coyote-ci/backend/docs"
@@ -39,7 +40,7 @@ import (
 
 func main() {
 	cfg := config.Load()
-	_, emailSenderErr := platformemail.NewSender(platformemail.Config{
+	emailSender, emailSenderErr := platformemail.NewSender(platformemail.Config{
 		Enabled:     cfg.EmailNotificationsEnabled,
 		Host:        cfg.SMTPHost,
 		Port:        cfg.SMTPPort,
@@ -54,6 +55,9 @@ func main() {
 	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
 	if cfg.EmailNotificationsEnabled {
 		log.Printf("email notifications enabled via smtp %s:%s", cfg.SMTPHost, cfg.SMTPPort)
+		if strings.TrimSpace(cfg.EmailNotificationRecipients) == "" {
+			log.Printf("email notifications enabled but no recipients configured")
+		}
 	} else {
 		log.Printf("email notifications disabled")
 	}
@@ -85,6 +89,16 @@ func main() {
 	webhookDeliveryRepo := repositorypostgres.NewWebhookDeliveryRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	workerRepo := repositorypostgres.NewWorkerRepository(db)
+	buildNotificationService, buildNotificationErr := buildsvc.NewBuildNotificationService(buildsvc.BuildNotificationConfig{
+		Enabled:     cfg.EmailNotificationsEnabled,
+		Recipients:  cfg.EmailNotificationRecipients,
+		Sender:      emailSender,
+		JobRepo:     jobRepo,
+		ProjectRepo: projectRepo,
+	})
+	if buildNotificationErr != nil {
+		log.Fatalf("failed to configure build notifications: %v", buildNotificationErr)
+	}
 	managedImageRefresher := managedimagesvc.NewService(
 		source.NewGitFetcher(),
 		jobManagedImageConfigRepo,
@@ -111,6 +125,7 @@ func main() {
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, nil, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:      executionJobRepo,
 		ExecutionOutputRepo:   executionJobOutputRepo,
+		BuildNotifier:         buildNotificationService,
 		RepoFetcher:           source.NewGitFetcher(),
 		ManagedImageRefresher: managedImageRefresher,
 		VersionTagger:         versionTagService,
@@ -154,6 +169,10 @@ func main() {
 	versionTagHandler := handler.NewVersionTagHandler(versionTagService)
 	credentialHandler := handler.NewSourceCredentialHandler(sourceCredentialService)
 	credentialHandler.SetAuthorization(authMode)
+	var notificationHandler *handler.NotificationHandler
+	if authMode == auth.ModeDisabled {
+		notificationHandler = handler.NewNotificationHandler(buildNotificationService)
+	}
 	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, cfg.GitHubWebhookSecret)
 	readyHandler := handler.NewReadinessHandler(handler.ReadinessCheckFunc(func(ctx context.Context) error {
 		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -231,6 +250,7 @@ func main() {
 		cfg.PushEventSecret,
 		apphttp.WithAuthHandler(authHandler),
 		apphttp.WithAuthMiddleware(authMiddleware),
+		apphttp.WithNotificationHandler(notificationHandler),
 		apphttp.WithUserHandler(userHandler),
 		apphttp.WithAPITokenHandler(apiTokenHandler),
 		apphttp.WithProjectMembershipHandler(projectMembershipHandler),

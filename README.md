@@ -67,6 +67,7 @@ OIDC/session configuration:
 Email notification plumbing configuration:
 
 - `EMAIL_NOTIFICATIONS_ENABLED` (default: `true` for local Mailpit-backed development)
+- `EMAIL_NOTIFICATION_RECIPIENTS` (default: `dev@localhost` for local development)
 - `SMTP_HOST` (default: `mailpit` inside Docker Compose)
 - `SMTP_PORT` (default: `1025`)
 - `SMTP_USERNAME` and `SMTP_PASSWORD` (optional; leave empty for local Mailpit)
@@ -190,6 +191,34 @@ COMPOSE_PROFILES=prod docker compose up --build
 This swaps `backend-dev`/`frontend-dev` for pre-built `backend`/`frontend` containers.
 
 For local email development, backend services use SMTP host `mailpit` on port `1025`, and Mailpit's web UI is available at `http://localhost:8025`.
+
+Required local env vars for failed-build emails: `EMAIL_NOTIFICATIONS_ENABLED=true`, `EMAIL_NOTIFICATION_RECIPIENTS`, `SMTP_HOST`, `SMTP_PORT`, and `SMTP_FROM_ADDRESS`.
+
+Manual Mailpit verification flow:
+
+```bash
+AUTH_MODE=disabled docker compose up -d --build db migrate mailpit server worker
+curl -X POST http://localhost:8080/api/dev/notifications/sample-build
+curl -sS http://localhost:8025/api/v1/messages | jq '{count, latest_subject: .messages[0].Subject, latest_to: .messages[0].To[0].Address}'
+```
+
+In the default local configuration, that sends a sample build-failure email to `EMAIL_NOTIFICATION_RECIPIENTS` through the real SMTP sender. The dev-only sample endpoint is only registered when `AUTH_MODE=disabled`.
+
+Real failed-build verification flow:
+
+```bash
+curl -sS -X POST http://localhost:8080/api/builds/repo \
+	-H 'Content-Type: application/json' \
+	-d '{
+		"project_id": "6be941f1-f6ec-4da5-bf09-e2df74532ffe",
+		"repo_url": "https://github.com/radiation/coyote-ci-fixtures.git",
+		"ref": "main",
+		"pipeline_path": "scenarios/failure-exit-1/coyote.yml"
+	}'
+curl -sS http://localhost:8025/api/v1/messages | jq '{count, latest_subject: .messages[0].Subject, latest_to: .messages[0].To[0].Address}'
+```
+
+That fixture exercises the same worker-driven step failure path used by normal build execution. If you change worker code, rebuild the worker image before re-running the real failed-build check so the live container is actually running the patched binary.
 
 ## Queue Fixture Scenarios (Repo Pipeline Path)
 

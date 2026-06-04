@@ -19,6 +19,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
+	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
@@ -44,6 +45,25 @@ type workerStatusProvider interface {
 func main() {
 	cfg := config.Load()
 	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
+	if cfg.EmailNotificationsEnabled {
+		log.Printf("email notifications enabled via smtp %s:%s", cfg.SMTPHost, cfg.SMTPPort)
+		if strings.TrimSpace(cfg.EmailNotificationRecipients) == "" {
+			log.Printf("email notifications enabled but no recipients configured")
+		}
+	} else {
+		log.Printf("email notifications disabled")
+	}
+	emailSender, emailSenderErr := platformemail.NewSender(platformemail.Config{
+		Enabled:     cfg.EmailNotificationsEnabled,
+		Host:        cfg.SMTPHost,
+		Port:        cfg.SMTPPort,
+		Username:    cfg.SMTPUsername,
+		Password:    cfg.SMTPPassword,
+		FromAddress: cfg.SMTPFromAddress,
+	})
+	if emailSenderErr != nil {
+		log.Fatalf("failed to configure email sender: %v", emailSenderErr)
+	}
 
 	dbURL, dbPoolCfg := dbopen.FromConfig(cfg)
 	db, err := platformdb.Open(dbURL, dbPoolCfg)
@@ -62,8 +82,20 @@ func main() {
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	cacheEntryRepo := repositorypostgres.NewCacheEntryRepository(db)
 	workerRepo := repositorypostgres.NewWorkerRepository(db)
+	jobRepo := repositorypostgres.NewJobRepository(db)
+	projectRepo := repositorypostgres.NewProjectRepository(db)
 	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
 	artifactLabelRepo := repositorypostgres.NewArtifactLabelRepository(db)
+	buildNotificationService, buildNotificationErr := buildsvc.NewBuildNotificationService(buildsvc.BuildNotificationConfig{
+		Enabled:     cfg.EmailNotificationsEnabled,
+		Recipients:  cfg.EmailNotificationRecipients,
+		Sender:      emailSender,
+		JobRepo:     jobRepo,
+		ProjectRepo: projectRepo,
+	})
+	if buildNotificationErr != nil {
+		log.Fatalf("failed to configure build notifications: %v", buildNotificationErr)
+	}
 	artifactResolver, err := artifact.ResolveStores(artifact.StoreConfig{
 		Provider:    cfg.ArtifactStorageProvider,
 		StorageRoot: cfg.ArtifactStorageRoot,
@@ -93,6 +125,7 @@ func main() {
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, stepRunner, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:    executionJobRepo,
 		ExecutionOutputRepo: executionJobOutputRepo,
+		BuildNotifier:       buildNotificationService,
 		DefaultImage:        cfg.ExecutionDefaultImage,
 		ExecutionWorkspace:  cfg.ExecutionWorkspaceRoot,
 		CacheStore:          cacheStore,

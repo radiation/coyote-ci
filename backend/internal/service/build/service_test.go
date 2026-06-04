@@ -27,6 +27,16 @@ type fakeBuildVersionTagger struct {
 	err   error
 }
 
+type recordingBuildNotifier struct {
+	builds []domain.Build
+	err    error
+}
+
+func (n *recordingBuildNotifier) NotifyTerminalBuild(_ context.Context, build domain.Build) error {
+	n.builds = append(n.builds, build)
+	return n.err
+}
+
 func (f *fakeBuildVersionTagger) CreateVersionTags(_ context.Context, jobID string, input versiontagsvc.CreateVersionTagsInput) ([]domain.VersionTag, error) {
 	f.calls++
 	f.jobID = jobID
