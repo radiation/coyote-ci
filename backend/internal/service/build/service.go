@@ -72,12 +72,17 @@ type BuildService struct {
 	artifactStorageProvider domain.StorageProvider
 	stepCacheManager        *StepCacheManager
 	versionTagger           BuildVersionTagger
+	buildNotifier           BuildLifecycleNotifier
 
 	defaultExecutionImage string
 }
 
 type BuildVersionTagger interface {
 	CreateVersionTags(ctx context.Context, jobID string, input versiontagsvc.CreateVersionTagsInput) ([]domain.VersionTag, error)
+}
+
+type BuildLifecycleNotifier interface {
+	NotifyTerminalBuild(ctx context.Context, build domain.Build) error
 }
 
 // BuildServiceConfig groups all optional dependencies for BuildService. Zero
@@ -97,6 +102,7 @@ type BuildServiceConfig struct {
 	CacheStore            cachepkg.Store
 	CacheEntryRepo        repository.CacheEntryRepository
 	VersionTagger         BuildVersionTagger
+	BuildNotifier         BuildLifecycleNotifier
 }
 
 // NewBuildServiceFromConfig creates a fully-wired BuildService in one call.
@@ -112,6 +118,7 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 	svc.defaultExecutionImage = strings.TrimSpace(cfg.DefaultImage)
 	svc.executionWorkspaceRoot = buildNormalizeWorkspaceRoot(cfg.ExecutionWorkspace)
 	svc.versionTagger = cfg.VersionTagger
+	svc.buildNotifier = cfg.BuildNotifier
 	if cfg.ArtifactLabelRepo != nil {
 		type artifactLabelRepoAware interface {
 			SetArtifactLabelRepository(repository.ArtifactLabelRepository)

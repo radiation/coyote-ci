@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"log"
 	"strings"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -84,6 +85,15 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 		}
 		if jobErr != nil {
 			report.SideEffectErr = jobErr
+		}
+	}
+
+	if stepStatus == domain.BuildStepStatusFailed {
+		build, buildErr := s.buildRepo.GetByID(ctx, request.BuildID)
+		if buildErr != nil {
+			log.Printf("WARNING: build notification skipped: build_id=%s reason=build_lookup_failed err=%v", request.BuildID, buildErr)
+		} else {
+			s.notifyTerminalBuild(ctx, build)
 		}
 	}
 

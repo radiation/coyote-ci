@@ -27,6 +27,16 @@ type fakeBuildVersionTagger struct {
 	err   error
 }
 
+type recordingBuildNotifier struct {
+	builds []domain.Build
+	err    error
+}
+
+func (n *recordingBuildNotifier) NotifyTerminalBuild(_ context.Context, build domain.Build) error {
+	n.builds = append(n.builds, build)
+	return n.err
+}
+
 func (f *fakeBuildVersionTagger) CreateVersionTags(_ context.Context, jobID string, input versiontagsvc.CreateVersionTagsInput) ([]domain.VersionTag, error) {
 	f.calls++
 	f.jobID = jobID
@@ -1718,6 +1728,31 @@ func TestBuildService_CancelBuild_AtomicRepoWithoutExecutionJobsUsesFallback(t *
 	}
 	if jobRepo.cancelCalls != 1 {
 		t.Fatalf("expected execution job fallback to run once, got %d calls", jobRepo.cancelCalls)
+	}
+}
+
+func TestBuildService_CancelBuild_AtomicRepoInvokesNotifier(t *testing.T) {
+	now := time.Now().UTC()
+	buildRepo := &fakeAtomicCancelBuildRepository{
+		fakeBuildRepository:   &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}},
+		updatedSteps:          1,
+		includesExecutionJobs: true,
+	}
+	notifier := &recordingBuildNotifier{}
+	svc := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{BuildNotifier: notifier})
+
+	canceled, err := svc.CancelBuild(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("cancel build failed: %v", err)
+	}
+	if canceled.Status != domain.BuildStatusCanceled {
+		t.Fatalf("expected canceled build status, got %q", canceled.Status)
+	}
+	if len(notifier.builds) != 1 {
+		t.Fatalf("expected one notifier call, got %d", len(notifier.builds))
+	}
+	if notifier.builds[0].ID != "build-1" || notifier.builds[0].Status != domain.BuildStatusCanceled {
+		t.Fatalf("expected canceled build notification for build-1, got %#v", notifier.builds[0])
 	}
 }
 

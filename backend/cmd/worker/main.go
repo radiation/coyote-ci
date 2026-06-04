@@ -19,6 +19,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
+	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
@@ -44,6 +45,7 @@ type workerStatusProvider interface {
 func main() {
 	cfg := config.Load()
 	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
+	logEmailNotificationConfig(cfg)
 
 	dbURL, dbPoolCfg := dbopen.FromConfig(cfg)
 	db, err := platformdb.Open(dbURL, dbPoolCfg)
@@ -62,8 +64,11 @@ func main() {
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	cacheEntryRepo := repositorypostgres.NewCacheEntryRepository(db)
 	workerRepo := repositorypostgres.NewWorkerRepository(db)
+	jobRepo := repositorypostgres.NewJobRepository(db)
+	projectRepo := repositorypostgres.NewProjectRepository(db)
 	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
 	artifactLabelRepo := repositorypostgres.NewArtifactLabelRepository(db)
+	buildNotificationService := buildWorkerNotificationService(cfg, jobRepo, projectRepo, log.Fatalf)
 	artifactResolver, err := artifact.ResolveStores(artifact.StoreConfig{
 		Provider:    cfg.ArtifactStorageProvider,
 		StorageRoot: cfg.ArtifactStorageRoot,
@@ -93,6 +98,7 @@ func main() {
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, stepRunner, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:    executionJobRepo,
 		ExecutionOutputRepo: executionJobOutputRepo,
+		BuildNotifier:       buildNotificationService,
 		DefaultImage:        cfg.ExecutionDefaultImage,
 		ExecutionWorkspace:  cfg.ExecutionWorkspaceRoot,
 		CacheStore:          cacheStore,
@@ -119,6 +125,59 @@ func main() {
 	log.Printf("worker stopped")
 }
 
+var errConfigureEmailSender = errors.New("configure email sender")
+
+func logEmailNotificationConfig(cfg config.Config) {
+	if cfg.EmailNotificationsEnabled {
+		log.Printf("email notifications enabled via smtp %s:%s", cfg.SMTPHost, cfg.SMTPPort)
+		if strings.TrimSpace(cfg.EmailNotificationRecipients) == "" {
+			log.Printf("email notifications enabled but no recipients configured")
+		}
+		return
+	}
+	log.Printf("email notifications disabled")
+}
+
+func newWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepository, projectRepo repository.ProjectRepository) (*buildsvc.BuildNotificationService, error) {
+	emailSender, emailSenderErr := platformemail.NewSender(platformemail.Config{
+		Enabled:     cfg.EmailNotificationsEnabled,
+		Host:        cfg.SMTPHost,
+		Port:        cfg.SMTPPort,
+		Username:    cfg.SMTPUsername,
+		Password:    cfg.SMTPPassword,
+		FromAddress: cfg.SMTPFromAddress,
+	})
+	if emailSenderErr != nil {
+		return nil, fmt.Errorf("%w: %v", errConfigureEmailSender, emailSenderErr)
+	}
+
+	buildNotificationService, buildNotificationErr := buildsvc.NewBuildNotificationService(buildsvc.BuildNotificationConfig{
+		Enabled:     cfg.EmailNotificationsEnabled,
+		Recipients:  cfg.EmailNotificationRecipients,
+		Sender:      emailSender,
+		JobRepo:     jobRepo,
+		ProjectRepo: projectRepo,
+	})
+	if buildNotificationErr != nil {
+		return nil, buildNotificationErr
+	}
+
+	return buildNotificationService, nil
+}
+
+func buildWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepository, projectRepo repository.ProjectRepository, fatalf func(string, ...any)) *buildsvc.BuildNotificationService {
+	buildNotificationService, notificationErr := newWorkerNotificationService(cfg, jobRepo, projectRepo)
+	if notificationErr == nil {
+		return buildNotificationService
+	}
+	if errors.Is(notificationErr, errConfigureEmailSender) {
+		fatalf("failed to configure email sender: %v", notificationErr)
+		return nil
+	}
+	fatalf("failed to configure build notifications: %v", notificationErr)
+	return nil
+}
+
 func resolveStepRunner(cfg config.Config) runner.Runner {
 	switch strings.ToLower(strings.TrimSpace(cfg.ExecutionBackend)) {
 	case "", "docker":
@@ -136,8 +195,10 @@ func resolveStepRunner(cfg config.Config) runner.Runner {
 	}
 }
 
+var osHostname = os.Hostname
+
 func defaultWorkerID() string {
-	hostname, err := os.Hostname()
+	hostname, err := osHostname()
 	if err != nil || hostname == "" {
 		hostname = "unknown-host"
 	}

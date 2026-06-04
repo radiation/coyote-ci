@@ -33,6 +33,20 @@ type routeArtifactRepo struct {
 	lookedUpIDs  []string
 }
 
+type fakeSampleBuildEmailSender struct {
+	recipients []string
+	err        error
+	calls      int
+}
+
+func (s *fakeSampleBuildEmailSender) SendSampleBuildFailure(_ context.Context) ([]string, error) {
+	s.calls++
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]string(nil), s.recipients...), nil
+}
+
 func (r *routeArtifactRepo) Browse(_ context.Context, _ repository.BrowseArtifactsParams) ([]domain.ArtifactRecord, error) {
 	return nil, nil
 }
@@ -337,6 +351,34 @@ func TestNewRouter_DisabledModePreservesNormalAPIRoutes(t *testing.T) {
 
 	if res.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+}
+
+func TestNewRouter_DevNotificationRouteOnlyExistsInDisabledMode(t *testing.T) {
+	disabledSender := &fakeSampleBuildEmailSender{recipients: []string{"dev@example.com"}}
+	disabledRouter := newIdentityTestRouter(
+		auth.ModeDisabled,
+		"push-secret",
+		"github-secret",
+		WithNotificationHandler(handler.NewNotificationHandler(disabledSender)),
+	)
+
+	disabledReq := httptest.NewRequest(http.MethodPost, "/api/dev/notifications/sample-build", nil)
+	disabledRes := httptest.NewRecorder()
+	disabledRouter.ServeHTTP(disabledRes, disabledReq)
+	if disabledRes.Code != http.StatusOK {
+		t.Fatalf("expected disabled-mode sample email status %d, got %d body=%s", http.StatusOK, disabledRes.Code, disabledRes.Body.String())
+	}
+	if disabledSender.calls != 1 {
+		t.Fatalf("expected sample sender to be called once, got %d", disabledSender.calls)
+	}
+
+	headerRouter := newIdentityTestRouter(auth.ModeHeader, "push-secret", "github-secret")
+	headerReq := httptest.NewRequest(http.MethodPost, "/api/dev/notifications/sample-build", nil)
+	headerRes := httptest.NewRecorder()
+	headerRouter.ServeHTTP(headerRes, headerReq)
+	if headerRes.Code != http.StatusNotFound {
+		t.Fatalf("expected non-disabled mode sample route status %d, got %d body=%s", http.StatusNotFound, headerRes.Code, headerRes.Body.String())
 	}
 }
 
