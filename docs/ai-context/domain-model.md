@@ -19,10 +19,13 @@ This file is a navigational summary of the main domain relationships. Use it to 
 
 ## Artifacts, versions, and releases
 
-- Artifacts are produced outputs linked back to the build that created them.
-- Artifact metadata is stored separately from blob bytes so artifacts can support browsing, lineage, and later storage backends.
-- Version tags connect artifacts or managed image outputs to release-like concepts such as versions and channels.
-- Releases/lineage behavior ties together artifact outputs, version tags, and the source/build context that produced them.
+- Artifact instances are the concrete outputs produced by one build.
+- Logical artifacts or packages are the stable browse/release identity for those outputs, usually grouped by job plus logical artifact path.
+- Artifact versions are immutable version assignments for one logical artifact and point at one concrete artifact instance.
+- Channels or labels are mutable aliases such as `latest`, `stable`, or `prod`; artifact-backed version/channel data is surfaced through the compatibility `VersionTag` read model.
+- Artifact provenance or lineage ties artifact/package views back to the producing build, project/job context, and source metadata.
+- Source links on artifact lineage expose the producing git ref and commit SHA when that build source metadata exists.
+- Automatic version generation comes from artifact declaration config and applies generated version and optional channel labels after artifact collection.
 
 ## Provenance and source relationships
 
@@ -40,5 +43,5 @@ This file is a navigational summary of the main domain relationships. Use it to 
 ## Practical edit routing
 
 - If the change is about lifecycle or state transitions, inspect build, build step, queue, and worker types together with their service and repository helpers.
-- If the change is about browsing outputs, inspect artifacts, version tags, provenance/source types, and the pages that expose them.
+- If the change is about browsing outputs, inspect artifacts, artifact packages/versions/channels, provenance/source types, and the pages that expose them.
 - If the change is about access control, inspect user, membership, and token types together with auth helpers and the relevant handler/service slice.

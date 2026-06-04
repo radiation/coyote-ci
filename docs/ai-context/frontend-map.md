@@ -26,6 +26,9 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - `frontend/src/api/buildClient.ts`: build-focused API helpers.
 - `frontend/src/queries`: shared query helpers for reused data-fetching logic.
 - `frontend/src/types`: frontend API/domain types grouped by area such as builds, artifacts, jobs, projects, workers, and identity.
+- `frontend/src/types/artifact.ts`: artifact browse/detail/lineage contracts, including logical artifact versions and channel labels.
+- `frontend/src/types/build.ts`: shared `VersionTag` compatibility type still used by build and artifact responses.
+- For frontend work that needs backend API details, check the generated OpenAPI docs in `backend/docs/swagger.yaml` or `backend/docs/swagger.json` and the existing frontend API client/types before scanning backend HTTP handlers.
 
 ## Common change areas
 
@@ -33,7 +36,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Shared UI polish: start in the page, then the smallest component under `frontend/src/components` that owns the rendered section.
 - API contract updates: start in `frontend/src/api/client.ts` and the matching file in `frontend/src/types` before editing pages.
 - Build detail changes: start in `BuildDetailPage.tsx`, then `BuildDetailPage.sections.tsx`, `BuildDetailPage.helpers.ts`, and nearby components like `StepList.tsx` or `BuildArtifactsSection.tsx`.
-- Artifact/release/lineage changes: start in artifact pages, `ArtifactBrowser.tsx`, `BuildArtifactsSection.tsx`, and artifact/version types.
+- Artifact/release/lineage changes: start in artifact pages, `ArtifactBrowser.tsx`, `BuildArtifactsSection.tsx`, `frontend/src/api/client.ts`, `frontend/src/types/artifact.ts`, and `frontend/src/types/build.ts`.
 - Queue operations changes: start in `QueuePage.tsx`, `WorkersPage.tsx`, and worker/build/job types.
 - Auth, tokens, membership, or role-based UI: start in `auth.tsx`, `auth-context.ts`, `types/identity.ts`, then the relevant settings or project page.
 
@@ -41,5 +44,6 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 
 - Most frontend tests are colocated as `*.test.tsx` or `*.test.ts` next to pages, components, API modules, and theme/auth helpers.
 - `frontend/src/api/client.test.ts` is the main contract-level test surface for API client behavior.
+- For artifact lineage or version/channel contract work, check `frontend/src/api/client.test.ts` and the nearest artifact page/component test before scanning broader UI code.
 - For page changes, start with the matching page test before scanning unrelated components.
 - For shared UI changes, start with the nearest component test and only widen if the page composes behavior that the component test does not cover.

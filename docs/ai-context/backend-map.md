@@ -31,13 +31,14 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Repositories/persistence: start in `backend/internal/repository`, then inspect `repository/postgres` or `repository/memory` only if the behavior differs by storage backend.
 - Migrations: inspect `backend/db/migrations` and only the repositories touched by the schema change.
 - Queue/workers/build execution: start with `backend/internal/service/build`, `backend/internal/service/worker`, `backend/internal/service/execution`, then `backend/cmd/worker` if process wiring matters.
-- Artifacts/provenance/source linking: start with `backend/internal/domain/artifact.go`, `backend/internal/artifact`, `backend/internal/versioning`, and `backend/internal/source`.
+- Artifacts/provenance/source linking: start with `backend/internal/domain/artifact.go`, `backend/internal/service/build/artifacts.go`, `backend/internal/repository/artifact_repository.go`, `backend/internal/repository/artifact_label_repository.go`, `backend/internal/api/artifact_dto.go`, `backend/internal/http/handler/artifact_handler.go`, `backend/internal/versioning/artifact_template.go`, and `backend/internal/source`.
 - Auth/RBAC/API tokens: start with `backend/internal/auth`, `backend/internal/service/api_token_service.go`, `backend/internal/service/project_membership_service.go`, and matching handlers/repositories.
 
 ## Focused docs worth checking first
 
 - `backend/docs/state-machine.md`: lifecycle/state-machine intent before changing build or step transitions.
 - `backend/docs/artifact-model.md`: artifact metadata and lineage concepts before changing artifact behavior.
+- `backend/docs/swagger.yaml`: generated API contract for artifact browse/detail/version endpoints before scanning handlers for frontend/API work.
 - `backend/docs/api-tokens.md`: API token behavior and expectations.
 
 ## Tests
