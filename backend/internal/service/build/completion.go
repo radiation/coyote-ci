@@ -88,11 +88,13 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 		}
 	}
 
-	build, buildErr := s.buildRepo.GetByID(ctx, request.BuildID)
-	if buildErr != nil {
-		log.Printf("WARNING: build notification skipped: build_id=%s reason=build_lookup_failed err=%v", request.BuildID, buildErr)
-	} else if domain.IsTerminalBuildStatus(build.Status) {
-		s.notifyTerminalBuild(ctx, build)
+	if s.buildNotifier != nil {
+		build, buildErr := s.buildRepo.GetByID(ctx, request.BuildID)
+		if buildErr != nil {
+			log.Printf("WARNING: build notification skipped: build_id=%s reason=build_lookup_failed err=%v", request.BuildID, buildErr)
+		} else {
+			s.notifyTerminalBuild(ctx, build)
+		}
 	}
 
 	if skipLegacyLogWrite {

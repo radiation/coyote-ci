@@ -59,15 +59,15 @@ func (s *BuildNotificationService) NotifyTerminalBuild(ctx context.Context, buil
 		log.Printf("build notification skipped: build_id=%s status=%s reason=disabled", build.ID, build.Status)
 		return nil
 	}
+	if !shouldNotifyBuildStatus(build.Status) {
+		return nil
+	}
 	if s.sender == nil {
 		log.Printf("build notification skipped: build_id=%s status=%s reason=no_sender", build.ID, build.Status)
 		return errors.New("email sender is not configured")
 	}
 	if len(s.recipients) == 0 {
 		log.Printf("build notification skipped: build_id=%s status=%s reason=no_recipients", build.ID, build.Status)
-		return nil
-	}
-	if !shouldNotifyBuildStatus(build.Status) {
 		return nil
 	}
 

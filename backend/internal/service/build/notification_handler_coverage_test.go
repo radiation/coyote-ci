@@ -22,6 +22,18 @@ func TestBuildNotificationService_NotifyTerminalBuild_NoSenderReturnsError(t *te
 	}
 }
 
+func TestBuildNotificationService_NotifyTerminalBuild_CanceledIgnoresMissingSenderAndRecipients(t *testing.T) {
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	err = notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusCanceled})
+	if err != nil {
+		t.Fatalf("expected canceled status to noop before sender/recipient validation, got %v", err)
+	}
+}
+
 func TestBuildNotificationService_NotifyTerminalBuild_SendsOnlyForConfiguredStatuses(t *testing.T) {
 	sender := &recordingEmailSender{}
 	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender})
