@@ -11,18 +11,19 @@ Current work is focused on making Coyote CI easier to inspect, operate, and reas
 Near-term priorities include:
 
 - build detail UX polish
-- artifact browser and artifact lineage
-- generated artifact version/channel labels on artifact declarations
-- source and provenance linking
+- artifact browser and release browsing polish
+- source and provenance linking polish
 - queue operational visibility
 - auth, RBAC, project membership, and API token foundations
+- notifications
 - behavior-preserving refactors that improve maintainability
 - frontend polish that improves clarity without broad redesigns
 
 Recent completed slice:
 
-- artifact lineage plus generated artifact version/channel labels V1 is complete
-- generated artifact versions and channels are configured on artifact declarations, not a top-level `release` block
+- artifact lineage plus automatic generated artifact version/channel labels V1 is complete
+- generated artifact versions and channels are configured per artifact declaration, not a top-level `release` block
+- notifications are the next likely product feature area after the current artifact/provenance slice
 
 ## Current development style
 
