@@ -20,7 +20,8 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - `backend/internal/artifact`: artifact key resolution and blob-store adapters.
 - `backend/internal/platform/config`: env loading for `EMAIL_NOTIFICATIONS_ENABLED`, `EMAIL_NOTIFICATION_RECIPIENTS`, and SMTP settings.
 - `backend/internal/platform/email`: SMTP sender plumbing for local Mailpit development and future email notification delivery.
-- `backend/internal/service/build/notifications.go`: terminal build email formatting/delivery for failed and successful builds, plus the dev-only sample send path.
+- `backend/internal/service/build/notifications.go`: terminal build email formatting/delivery for failed and successful builds, durable per-recipient delivery tracking/dedupe, and the dev-only sample send path.
+- `backend/internal/repository/notification_delivery_repository.go`, `backend/internal/repository/memory/notification_delivery_repository.go`, `backend/internal/repository/postgres/notification_delivery_repository.go`: notification delivery persistence for build email attempts and future delivery-state inspection.
 - `backend/internal/source`: source fetch/materialization, PR/source metadata, and repo writeback helpers.
 - `backend/internal/versioning`: release/version-tag behavior and lineage helpers.
 - `backend/internal/auth`: session/auth-mode logic and authorization helpers.
@@ -34,7 +35,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Repositories/persistence: start in `backend/internal/repository`, then inspect `repository/postgres` or `repository/memory` only if the behavior differs by storage backend.
 - Migrations: inspect `backend/db/migrations` and only the repositories touched by the schema change.
 - Queue/workers/build execution: start with `backend/internal/service/build`, `backend/internal/service/worker`, `backend/internal/service/execution`, then `backend/cmd/worker` if process wiring matters.
-- Build email notifications: start with `backend/internal/platform/config/config.go`, `backend/internal/platform/email/sender.go`, `backend/internal/service/build/notifications.go`, `backend/internal/service/build/lifecycle.go`, `backend/internal/service/build/completion.go`, `backend/internal/service/build/source.go`, `backend/cmd/server/main.go`, `backend/cmd/worker/main.go`, `backend/internal/http/handler/notification_handler.go`, and `backend/internal/http/router.go` for the dev-only sample route.
+- Build email notifications: start with `backend/internal/platform/config/config.go`, `backend/internal/platform/email/sender.go`, `backend/internal/service/build/notifications.go`, `backend/internal/service/build/lifecycle.go`, `backend/internal/service/build/completion.go`, `backend/internal/service/build/source.go`, `backend/internal/repository/notification_delivery_repository.go`, `backend/db/migrations`, `backend/cmd/server/main.go`, `backend/cmd/worker/main.go`, `backend/internal/http/handler/notification_handler.go`, and `backend/internal/http/router.go` for the dev-only sample route.
 - Artifacts/provenance/source linking: start with `backend/internal/domain/artifact.go`, `backend/internal/service/build/artifacts.go`, `backend/internal/repository/artifact_repository.go`, `backend/internal/repository/artifact_label_repository.go`, `backend/internal/api/artifact_dto.go`, `backend/internal/http/handler/artifact_handler.go`, `backend/internal/versioning/artifact_template.go`, and `backend/internal/source`.
 - Auth/RBAC/API tokens: start with `backend/internal/auth`, `backend/internal/service/api_token_service.go`, `backend/internal/service/project_membership_service.go`, and matching handlers/repositories.
 

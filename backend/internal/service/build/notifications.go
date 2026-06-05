@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/mail"
 	"strings"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
@@ -17,19 +18,21 @@ var ErrEmailNotificationsDisabled = errors.New("email notifications are disabled
 var ErrEmailNotificationRecipientsNotConfigured = errors.New("email notification recipients are not configured")
 
 type BuildNotificationService struct {
-	enabled     bool
-	recipients  []string
-	sender      platformemail.Sender
-	jobRepo     repository.JobRepository
-	projectRepo repository.ProjectRepository
+	enabled      bool
+	recipients   []string
+	sender       platformemail.Sender
+	jobRepo      repository.JobRepository
+	projectRepo  repository.ProjectRepository
+	deliveryRepo repository.NotificationDeliveryRepository
 }
 
 type BuildNotificationConfig struct {
-	Enabled     bool
-	Recipients  string
-	Sender      platformemail.Sender
-	JobRepo     repository.JobRepository
-	ProjectRepo repository.ProjectRepository
+	Enabled      bool
+	Recipients   string
+	Sender       platformemail.Sender
+	JobRepo      repository.JobRepository
+	ProjectRepo  repository.ProjectRepository
+	DeliveryRepo repository.NotificationDeliveryRepository
 }
 
 func NewBuildNotificationService(cfg BuildNotificationConfig) (*BuildNotificationService, error) {
@@ -43,11 +46,12 @@ func NewBuildNotificationService(cfg BuildNotificationConfig) (*BuildNotificatio
 	}
 
 	return &BuildNotificationService{
-		enabled:     cfg.Enabled,
-		recipients:  recipients,
-		sender:      cfg.Sender,
-		jobRepo:     cfg.JobRepo,
-		projectRepo: cfg.ProjectRepo,
+		enabled:      cfg.Enabled,
+		recipients:   recipients,
+		sender:       cfg.Sender,
+		jobRepo:      cfg.JobRepo,
+		projectRepo:  cfg.ProjectRepo,
+		deliveryRepo: cfg.DeliveryRepo,
 	}, nil
 }
 
@@ -71,9 +75,14 @@ func (s *BuildNotificationService) NotifyTerminalBuild(ctx context.Context, buil
 		return nil
 	}
 
+	eventType, ok := buildStatusNotificationEventType(build.Status)
+	if !ok {
+		return nil
+	}
+
 	subject, body := s.formatBuildStatusEmail(ctx, build)
 	log.Printf("build notification sending: build_id=%s status=%s recipients=%d", build.ID, build.Status, len(s.recipients))
-	if err := s.send(ctx, subject, body); err != nil {
+	if err := s.sendTerminalNotification(ctx, build.ID, eventType, subject, body); err != nil {
 		log.Printf("build notification send failed: build_id=%s status=%s err=%v", build.ID, build.Status, err)
 		return err
 	}
@@ -132,6 +141,92 @@ func (s *BuildNotificationService) send(ctx context.Context, subject string, bod
 		}
 	}
 	return nil
+}
+
+func (s *BuildNotificationService) sendTerminalNotification(ctx context.Context, buildID string, eventType domain.NotificationEventType, subject string, body string) error {
+	if s.deliveryRepo == nil {
+		return s.send(ctx, subject, body)
+	}
+
+	for _, recipient := range s.recipients {
+		delivery, shouldSend, err := s.prepareDelivery(ctx, buildID, eventType, recipient)
+		if err != nil {
+			return err
+		}
+		if !shouldSend {
+			continue
+		}
+
+		sendErr := s.sender.SendText(ctx, platformemail.Message{
+			To:      recipient,
+			Subject: subject,
+			Body:    body,
+		})
+		attemptedAt := time.Now().UTC()
+		if sendErr != nil {
+			if updateErr := s.markDeliveryFailed(ctx, delivery, sendErr, attemptedAt); updateErr != nil {
+				return errors.Join(sendErr, updateErr)
+			}
+			return sendErr
+		}
+		if _, updateErr := s.deliveryRepo.Update(ctx, domain.NotificationDelivery{
+			ID:        delivery.ID,
+			BuildID:   delivery.BuildID,
+			EventType: delivery.EventType,
+			Recipient: delivery.Recipient,
+			Status:    domain.NotificationDeliveryStatusSent,
+			Attempts:  delivery.Attempts + 1,
+			CreatedAt: delivery.CreatedAt,
+			UpdatedAt: attemptedAt,
+			SentAt:    &attemptedAt,
+		}); updateErr != nil {
+			return updateErr
+		}
+	}
+
+	return nil
+}
+
+func (s *BuildNotificationService) prepareDelivery(ctx context.Context, buildID string, eventType domain.NotificationEventType, recipient string) (domain.NotificationDelivery, bool, error) {
+	delivery, err := s.deliveryRepo.Create(ctx, domain.NotificationDelivery{
+		BuildID:   buildID,
+		EventType: eventType,
+		Recipient: recipient,
+		Status:    domain.NotificationDeliveryStatusPending,
+	})
+	if err == nil {
+		return delivery, true, nil
+	}
+	if !errors.Is(err, repository.ErrNotificationDeliveryDuplicate) {
+		return domain.NotificationDelivery{}, false, err
+	}
+
+	existing, getErr := s.deliveryRepo.GetByBuildEventRecipient(ctx, buildID, eventType, recipient)
+	if getErr != nil {
+		return domain.NotificationDelivery{}, false, getErr
+	}
+	if existing.Status == domain.NotificationDeliveryStatusSent {
+		log.Printf("build notification skipped: build_id=%s event_type=%s recipient=%s reason=already_sent", buildID, eventType, recipient)
+	} else {
+		log.Printf("build notification skipped: build_id=%s event_type=%s recipient=%s reason=already_recorded status=%s", buildID, eventType, recipient, existing.Status)
+	}
+	return existing, false, nil
+}
+
+func (s *BuildNotificationService) markDeliveryFailed(ctx context.Context, delivery domain.NotificationDelivery, sendErr error, attemptedAt time.Time) error {
+	message := strings.TrimSpace(sendErr.Error())
+	_, err := s.deliveryRepo.Update(ctx, domain.NotificationDelivery{
+		ID:        delivery.ID,
+		BuildID:   delivery.BuildID,
+		EventType: delivery.EventType,
+		Recipient: delivery.Recipient,
+		Status:    domain.NotificationDeliveryStatusFailed,
+		Attempts:  delivery.Attempts + 1,
+		LastError: &message,
+		CreatedAt: delivery.CreatedAt,
+		UpdatedAt: attemptedAt,
+	})
+	return err
 }
 
 func (s *BuildNotificationService) formatBuildStatusEmail(ctx context.Context, build domain.Build) (string, string) {
@@ -196,6 +291,17 @@ func buildStatusNotificationSummary(status domain.BuildStatus) string {
 		return "failed"
 	default:
 		return string(status)
+	}
+}
+
+func buildStatusNotificationEventType(status domain.BuildStatus) (domain.NotificationEventType, bool) {
+	switch status {
+	case domain.BuildStatusSuccess:
+		return domain.NotificationEventTypeBuildSucceeded, true
+	case domain.BuildStatusFailed:
+		return domain.NotificationEventTypeBuildFailed, true
+	default:
+		return "", false
 	}
 }
 
