@@ -180,7 +180,11 @@ func (s *BuildNotificationService) sendTerminalNotification(ctx context.Context,
 			UpdatedAt: attemptedAt,
 			SentAt:    &attemptedAt,
 		}); updateErr != nil {
-			return updateErr
+			persistErr := fmt.Errorf("persist sent delivery state failed: %w", updateErr)
+			if markErr := s.markDeliveryFailed(ctx, delivery, persistErr, attemptedAt); markErr != nil {
+				return errors.Join(persistErr, markErr)
+			}
+			return persistErr
 		}
 	}
 

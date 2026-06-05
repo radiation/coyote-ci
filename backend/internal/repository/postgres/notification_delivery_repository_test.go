@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ func TestNotificationDeliveryRepository_CreateGetAndUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
+	t.Cleanup(func() { _ = db.Close() })
 
 	repo := NewNotificationDeliveryRepository(db)
 	now := time.Now().UTC()
@@ -86,6 +88,78 @@ func TestNotificationDeliveryRepository_CreateGetAndUpdate(t *testing.T) {
 	}
 	if updated.LastError == nil || *updated.LastError != lastError {
 		t.Fatalf("expected last_error %q, got %v", lastError, updated.LastError)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestNotificationDeliveryRepository_ErrorCasesAndSentAtScan(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewNotificationDeliveryRepository(db)
+	now := time.Now().UTC()
+	row := []string{"id", "build_id", "event_type", "recipient", "status", "attempts", "last_error", "created_at", "updated_at", "sent_at"}
+
+	mock.ExpectQuery("INSERT INTO notification_deliveries").WillReturnError(errors.New("insert failed"))
+	_, err = repo.Create(context.Background(), domain.NotificationDelivery{
+		BuildID:   "build-1",
+		EventType: domain.NotificationEventTypeBuildFailed,
+		Recipient: "<dev@example.com>",
+	})
+	if err == nil || err.Error() != "insert failed" {
+		t.Fatalf("expected raw create error, got %v", err)
+	}
+
+	mock.ExpectQuery("SELECT id, build_id, event_type, recipient, status, attempts, last_error, created_at, updated_at, sent_at").WillReturnError(sql.ErrNoRows)
+	_, err = repo.GetByBuildEventRecipient(context.Background(), "build-1", domain.NotificationEventTypeBuildFailed, "<dev@example.com>")
+	if !errors.Is(err, repository.ErrNotificationDeliveryNotFound) {
+		t.Fatalf("expected not found get error, got %v", err)
+	}
+
+	mock.ExpectQuery("SELECT id, build_id, event_type, recipient, status, attempts, last_error, created_at, updated_at, sent_at").WillReturnError(errors.New("select failed"))
+	_, err = repo.GetByBuildEventRecipient(context.Background(), "build-1", domain.NotificationEventTypeBuildFailed, "<dev@example.com>")
+	if err == nil || err.Error() != "select failed" {
+		t.Fatalf("expected raw get error, got %v", err)
+	}
+
+	mock.ExpectQuery("SELECT id, build_id, event_type, recipient, status, attempts, last_error, created_at, updated_at, sent_at").WillReturnRows(sqlmock.NewRows(row).AddRow(
+		"delivery-1", "build-1", "build_succeeded", "<dev@example.com>", "sent", 1, nil, now, now, now,
+	))
+	fetched, err := repo.GetByBuildEventRecipient(context.Background(), "build-1", domain.NotificationEventTypeBuildSucceeded, "<dev@example.com>")
+	if err != nil {
+		t.Fatalf("get with sent_at failed: %v", err)
+	}
+	if fetched.SentAt == nil || fetched.SentAt.IsZero() {
+		t.Fatalf("expected sent_at to be scanned, got %v", fetched.SentAt)
+	}
+
+	mock.ExpectQuery("UPDATE notification_deliveries").WillReturnError(sql.ErrNoRows)
+	_, err = repo.Update(context.Background(), domain.NotificationDelivery{ID: "missing"})
+	if !errors.Is(err, repository.ErrNotificationDeliveryNotFound) {
+		t.Fatalf("expected not found update error, got %v", err)
+	}
+
+	mock.ExpectQuery("UPDATE notification_deliveries").WillReturnError(errors.New("update failed"))
+	_, err = repo.Update(context.Background(), domain.NotificationDelivery{ID: "delivery-1"})
+	if err == nil || err.Error() != "update failed" {
+		t.Fatalf("expected raw update error, got %v", err)
+	}
+
+	if nullableTimestamp(nil) != nil {
+		t.Fatal("expected nil timestamp to stay nil")
+	}
+	zero := time.Time{}
+	if nullableTimestamp(&zero) != nil {
+		t.Fatal("expected zero timestamp pointer to become nil")
+	}
+	if nullableTimestamp(&now) == nil {
+		t.Fatal("expected non-zero timestamp pointer to stay non-nil")
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

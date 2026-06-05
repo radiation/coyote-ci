@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,33 @@ type recordingEmailSender struct {
 func (s *recordingEmailSender) SendText(_ context.Context, message platformemail.Message) error {
 	s.messages = append(s.messages, message)
 	return s.err
+}
+
+type scriptedNotificationDeliveryRepo struct {
+	createFunc func(context.Context, domain.NotificationDelivery) (domain.NotificationDelivery, error)
+	getFunc    func(context.Context, string, domain.NotificationEventType, string) (domain.NotificationDelivery, error)
+	updateFunc func(context.Context, domain.NotificationDelivery) (domain.NotificationDelivery, error)
+}
+
+func (r *scriptedNotificationDeliveryRepo) Create(ctx context.Context, delivery domain.NotificationDelivery) (domain.NotificationDelivery, error) {
+	if r.createFunc != nil {
+		return r.createFunc(ctx, delivery)
+	}
+	return domain.NotificationDelivery{}, nil
+}
+
+func (r *scriptedNotificationDeliveryRepo) GetByBuildEventRecipient(ctx context.Context, buildID string, eventType domain.NotificationEventType, recipient string) (domain.NotificationDelivery, error) {
+	if r.getFunc != nil {
+		return r.getFunc(ctx, buildID, eventType, recipient)
+	}
+	return domain.NotificationDelivery{}, nil
+}
+
+func (r *scriptedNotificationDeliveryRepo) Update(ctx context.Context, delivery domain.NotificationDelivery) (domain.NotificationDelivery, error) {
+	if r.updateFunc != nil {
+		return r.updateFunc(ctx, delivery)
+	}
+	return delivery, nil
 }
 
 func mustGetNotificationDelivery(t *testing.T, repo repository.NotificationDeliveryRepository, buildID string, eventType domain.NotificationEventType, recipient string) domain.NotificationDelivery {
@@ -627,6 +655,105 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 		}
 	})
 
+	t.Run("delivery create error is returned", func(t *testing.T) {
+		repo := &scriptedNotificationDeliveryRepo{
+			createFunc: func(context.Context, domain.NotificationDelivery) (domain.NotificationDelivery, error) {
+				return domain.NotificationDelivery{}, errors.New("create failed")
+			},
+		}
+		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, DeliveryRepo: repo})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); err == nil || err.Error() != "create failed" {
+			t.Fatalf("expected create failure, got %v", err)
+		}
+	})
+
+	t.Run("duplicate record lookup error is returned", func(t *testing.T) {
+		repo := &scriptedNotificationDeliveryRepo{
+			createFunc: func(context.Context, domain.NotificationDelivery) (domain.NotificationDelivery, error) {
+				return domain.NotificationDelivery{}, repository.ErrNotificationDeliveryDuplicate
+			},
+			getFunc: func(context.Context, string, domain.NotificationEventType, string) (domain.NotificationDelivery, error) {
+				return domain.NotificationDelivery{}, errors.New("lookup failed")
+			},
+		}
+		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, DeliveryRepo: repo})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); err == nil || err.Error() != "lookup failed" {
+			t.Fatalf("expected lookup failure, got %v", err)
+		}
+	})
+
+	t.Run("sent state persistence failure marks delivery failed", func(t *testing.T) {
+		updateCalls := 0
+		repo := &scriptedNotificationDeliveryRepo{
+			createFunc: func(_ context.Context, delivery domain.NotificationDelivery) (domain.NotificationDelivery, error) {
+				delivery.ID = "delivery-1"
+				delivery.CreatedAt = time.Now().UTC()
+				return delivery, nil
+			},
+			updateFunc: func(_ context.Context, delivery domain.NotificationDelivery) (domain.NotificationDelivery, error) {
+				updateCalls++
+				if updateCalls == 1 {
+					if delivery.Status != domain.NotificationDeliveryStatusSent {
+						t.Fatalf("expected first update to persist sent status, got %q", delivery.Status)
+					}
+					return domain.NotificationDelivery{}, errors.New("write sent failed")
+				}
+				if delivery.Status != domain.NotificationDeliveryStatusFailed {
+					t.Fatalf("expected fallback update to mark failed, got %q", delivery.Status)
+				}
+				if delivery.LastError == nil || !strings.Contains(*delivery.LastError, "persist sent delivery state failed") {
+					t.Fatalf("expected fallback last error to describe sent-state persistence failure, got %v", delivery.LastError)
+				}
+				return delivery, nil
+			},
+		}
+		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, DeliveryRepo: repo})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+		err = notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusSuccess})
+		if err == nil || !strings.Contains(err.Error(), "persist sent delivery state failed") {
+			t.Fatalf("expected sent-state persistence failure, got %v", err)
+		}
+		if updateCalls != 2 {
+			t.Fatalf("expected two update attempts, got %d", updateCalls)
+		}
+	})
+
+	t.Run("failed fallback persistence returns joined error", func(t *testing.T) {
+		repo := &scriptedNotificationDeliveryRepo{
+			createFunc: func(_ context.Context, delivery domain.NotificationDelivery) (domain.NotificationDelivery, error) {
+				delivery.ID = "delivery-1"
+				delivery.CreatedAt = time.Now().UTC()
+				return delivery, nil
+			},
+			updateFunc: func(_ context.Context, delivery domain.NotificationDelivery) (domain.NotificationDelivery, error) {
+				if delivery.Status == domain.NotificationDeliveryStatusSent {
+					return domain.NotificationDelivery{}, errors.New("write sent failed")
+				}
+				return domain.NotificationDelivery{}, errors.New("write failed failed")
+			},
+		}
+		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, DeliveryRepo: repo})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+		err = notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusSuccess})
+		if err == nil {
+			t.Fatal("expected joined persistence error")
+		}
+		message := err.Error()
+		if !strings.Contains(message, "persist sent delivery state failed") || !strings.Contains(message, "write failed failed") {
+			t.Fatalf("expected joined error message, got %q", message)
+		}
+	})
+
 	t.Run("multiple recipients create separate delivery records", func(t *testing.T) {
 		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 		sender := &recordingEmailSender{}
@@ -671,5 +798,37 @@ func TestBuildNotificationService_IsActive(t *testing.T) {
 	}
 	if !notifier.isActive() {
 		t.Fatal("expected notifier to be active")
+	}
+}
+
+func TestBuildNotificationHelpers(t *testing.T) {
+	if got, ok := buildStatusNotificationEventType(domain.BuildStatusSuccess); !ok || got != domain.NotificationEventTypeBuildSucceeded {
+		t.Fatalf("expected success event type, got %q ok=%v", got, ok)
+	}
+	if got, ok := buildStatusNotificationEventType(domain.BuildStatusFailed); !ok || got != domain.NotificationEventTypeBuildFailed {
+		t.Fatalf("expected failed event type, got %q ok=%v", got, ok)
+	}
+	if got, ok := buildStatusNotificationEventType(domain.BuildStatusCanceled); ok || got != "" {
+		t.Fatalf("expected no event type for canceled build, got %q ok=%v", got, ok)
+	}
+
+	if got := buildStatusNotificationSummary(domain.BuildStatusCanceled); got != string(domain.BuildStatusCanceled) {
+		t.Fatalf("expected fallback summary to echo status, got %q", got)
+	}
+
+	recipients, err := parseNotificationRecipients("")
+	if err != nil {
+		t.Fatalf("expected empty recipients to parse cleanly, got %v", err)
+	}
+	if len(recipients) != 0 {
+		t.Fatalf("expected no recipients, got %v", recipients)
+	}
+
+	recipients, err = parseNotificationRecipients("dev@example.com, qa@example.com")
+	if err != nil {
+		t.Fatalf("expected recipients to parse, got %v", err)
+	}
+	if want := []string{"<dev@example.com>", "<qa@example.com>"}; fmt.Sprint(recipients) != fmt.Sprint(want) {
+		t.Fatalf("unexpected parsed recipients: got %v want %v", recipients, want)
 	}
 }
