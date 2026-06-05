@@ -592,6 +592,41 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 		}
 	})
 
+	t.Run("existing failed delivery record is skipped without retry", func(t *testing.T) {
+		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+		message := "smtp unavailable"
+		if _, err := deliveryRepo.Create(context.Background(), domain.NotificationDelivery{
+			BuildID:   "build-1",
+			EventType: domain.NotificationEventTypeBuildFailed,
+			Recipient: "<dev@example.com>",
+			Status:    domain.NotificationDeliveryStatusFailed,
+			Attempts:  1,
+			LastError: &message,
+		}); err != nil {
+			t.Fatalf("seed failed delivery record failed: %v", err)
+		}
+
+		sender := &recordingEmailSender{}
+		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); err != nil {
+			t.Fatalf("notify with existing failed record should skip cleanly, got %v", err)
+		}
+		if len(sender.messages) != 0 {
+			t.Fatalf("expected no resend when failed delivery record already exists, got %d", len(sender.messages))
+		}
+
+		delivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildFailed, "<dev@example.com>")
+		if delivery.Status != domain.NotificationDeliveryStatusFailed {
+			t.Fatalf("expected failed delivery status to remain unchanged, got %q", delivery.Status)
+		}
+		if delivery.Attempts != 1 {
+			t.Fatalf("expected attempts to remain 1 for skipped failed record, got %d", delivery.Attempts)
+		}
+	})
+
 	t.Run("multiple recipients create separate delivery records", func(t *testing.T) {
 		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 		sender := &recordingEmailSender{}

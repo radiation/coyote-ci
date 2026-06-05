@@ -2,7 +2,7 @@
 
 CREATE TABLE IF NOT EXISTS notification_deliveries (
     id TEXT PRIMARY KEY,
-    build_id TEXT NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+    build_id UUID NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
     event_type TEXT NOT NULL,
     recipient TEXT NOT NULL,
     status TEXT NOT NULL,

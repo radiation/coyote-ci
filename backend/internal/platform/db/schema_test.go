@@ -16,6 +16,7 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"../../../db/migrations/00010_add_build_artifact_types.sql",
 		"../../../db/migrations/00011_add_build_artifact_names.sql",
 		"../../../db/migrations/00017_add_artifact_packages.sql",
+		"../../../db/migrations/00020_add_notification_deliveries.sql",
 	}
 
 	var builder strings.Builder
@@ -69,6 +70,9 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"package_id",
 		"CREATE TABLE IF NOT EXISTS artifact_versions",
 		"CREATE TABLE IF NOT EXISTS artifact_channels",
+		"CREATE TABLE IF NOT EXISTS notification_deliveries",
+		"notification_deliveries_build_event_recipient_key",
+		"idx_notification_deliveries_build_id",
 	}
 	for _, token := range required {
 		if !strings.Contains(sql, token) {
