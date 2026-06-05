@@ -324,12 +324,13 @@ func TestLogEmailNotificationConfig(t *testing.T) {
 func TestNewWorkerNotificationService(t *testing.T) {
 	jobRepo := repositorymemory.NewJobRepository()
 	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	deliveryRepo := repositorymemory.NewNotificationDeliveryRepository()
 
 	t.Run("disabled ignores invalid recipients", func(t *testing.T) {
 		notifier, err := newWorkerNotificationService(config.Config{
 			EmailNotificationsEnabled:   false,
 			EmailNotificationRecipients: "not-an-email",
-		}, jobRepo, projectRepo)
+		}, jobRepo, projectRepo, deliveryRepo)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -343,7 +344,7 @@ func TestNewWorkerNotificationService(t *testing.T) {
 			EmailNotificationsEnabled: true,
 			SMTPHost:                  "mailpit",
 			SMTPPort:                  "1025",
-		}, jobRepo, projectRepo)
+		}, jobRepo, projectRepo, deliveryRepo)
 		if !errors.Is(err, errConfigureEmailSender) {
 			t.Fatalf("expected sender configuration error, got %v", err)
 		}
@@ -356,7 +357,7 @@ func TestNewWorkerNotificationService(t *testing.T) {
 			SMTPHost:                    "mailpit",
 			SMTPPort:                    "1025",
 			SMTPFromAddress:             "coyote-ci@localhost",
-		}, jobRepo, projectRepo)
+		}, jobRepo, projectRepo, deliveryRepo)
 		if err == nil || errors.Is(err, errConfigureEmailSender) {
 			t.Fatalf("expected recipient validation error, got %v", err)
 		}
@@ -366,10 +367,11 @@ func TestNewWorkerNotificationService(t *testing.T) {
 func TestBuildWorkerNotificationService(t *testing.T) {
 	jobRepo := repositorymemory.NewJobRepository()
 	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	deliveryRepo := repositorymemory.NewNotificationDeliveryRepository()
 
 	t.Run("returns notifier on success", func(t *testing.T) {
 		called := false
-		notifier := buildWorkerNotificationService(config.Config{EmailNotificationsEnabled: false}, jobRepo, projectRepo, func(string, ...any) {
+		notifier := buildWorkerNotificationService(config.Config{EmailNotificationsEnabled: false}, jobRepo, projectRepo, deliveryRepo, func(string, ...any) {
 			called = true
 		})
 		if called {
@@ -386,7 +388,7 @@ func TestBuildWorkerNotificationService(t *testing.T) {
 			EmailNotificationsEnabled: true,
 			SMTPHost:                  "mailpit",
 			SMTPPort:                  "1025",
-		}, jobRepo, projectRepo, func(format string, args ...any) {
+		}, jobRepo, projectRepo, deliveryRepo, func(format string, args ...any) {
 			message = fmt.Sprintf(format, args...)
 		})
 		if notifier != nil {
@@ -405,7 +407,7 @@ func TestBuildWorkerNotificationService(t *testing.T) {
 			SMTPHost:                    "mailpit",
 			SMTPPort:                    "1025",
 			SMTPFromAddress:             "coyote-ci@localhost",
-		}, jobRepo, projectRepo, func(format string, args ...any) {
+		}, jobRepo, projectRepo, deliveryRepo, func(format string, args ...any) {
 			message = fmt.Sprintf(format, args...)
 		})
 		if notifier != nil {
