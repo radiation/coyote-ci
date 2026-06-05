@@ -63,6 +63,39 @@ func mustGetNotificationDelivery(t *testing.T, repo repository.NotificationDeliv
 	return delivery
 }
 
+func mustCreateNotificationTarget(t *testing.T, repo *memoryrepo.NotificationSubscriptionRepository, recipient string, enabled bool) domain.NotificationTarget {
+	t.Helper()
+
+	target, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{
+		Type:      domain.NotificationTargetTypeEmail,
+		Name:      recipient,
+		Recipient: recipient,
+		Enabled:   enabled,
+	})
+	if err != nil {
+		t.Fatalf("create notification target failed: %v", err)
+	}
+
+	return target
+}
+
+func mustCreateNotificationSubscription(t *testing.T, repo *memoryrepo.NotificationSubscriptionRepository, targetID string, projectID *string, jobID *string, eventType domain.NotificationEventType, enabled bool) domain.NotificationSubscription {
+	t.Helper()
+
+	subscription, err := repo.CreateSubscription(context.Background(), domain.NotificationSubscription{
+		TargetID:  targetID,
+		ProjectID: projectID,
+		JobID:     jobID,
+		EventType: eventType,
+		Enabled:   enabled,
+	})
+	if err != nil {
+		t.Fatalf("create notification subscription failed: %v", err)
+	}
+
+	return subscription
+}
+
 func TestBuildService_FailBuild_SendsNotificationWhenConfigured(t *testing.T) {
 	now := time.Now().UTC()
 	jobID := "job-1"
@@ -481,8 +514,8 @@ func TestNewBuildNotificationService_DisabledIgnoresInvalidRecipients(t *testing
 	if notifier == nil {
 		t.Fatal("expected notifier")
 	}
-	if len(notifier.recipients) != 0 {
-		t.Fatalf("expected disabled notifier to keep no parsed recipients, got %v", notifier.recipients)
+	if len(notifier.defaultRecipients) != 0 {
+		t.Fatalf("expected disabled notifier to keep no parsed recipients, got %v", notifier.defaultRecipients)
 	}
 }
 
@@ -784,6 +817,223 @@ func TestBuildNotificationService_SendSampleBuildFailureRequiresSender(t *testin
 	}
 	if _, sendErr := notifier.SendSampleBuildFailure(context.Background()); sendErr == nil {
 		t.Fatal("expected missing sender error")
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_UsesProjectSubscriptionRecipients(t *testing.T) {
+	sender := &recordingEmailSender{}
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	target := mustCreateNotificationTarget(t, subscriptionRepo, "dev@example.com", true)
+	projectID := "project-1"
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		Recipients:       "fallback@example.com",
+		Sender:           sender,
+		SubscriptionRepo: subscriptionRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	err = notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: projectID, Status: domain.BuildStatusFailed})
+	if err != nil {
+		t.Fatalf("notify terminal build failed: %v", err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected one subscription email, got %d", len(sender.messages))
+	}
+	if sender.messages[0].To != "<dev@example.com>" {
+		t.Fatalf("expected project subscription recipient, got %q", sender.messages[0].To)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_UsesJobSubscriptionRecipients(t *testing.T) {
+	sender := &recordingEmailSender{}
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	target := mustCreateNotificationTarget(t, subscriptionRepo, "job@example.com", true)
+	jobID := "job-1"
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, nil, &jobID, domain.NotificationEventTypeBuildSucceeded, true)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		Sender:           sender,
+		SubscriptionRepo: subscriptionRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	err = notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, Status: domain.BuildStatusSuccess})
+	if err != nil {
+		t.Fatalf("notify terminal build failed: %v", err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected one job subscription email, got %d", len(sender.messages))
+	}
+	if sender.messages[0].To != "<job@example.com>" {
+		t.Fatalf("expected job subscription recipient, got %q", sender.messages[0].To)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_NonMatchingSubscriptionEventDoesNotSend(t *testing.T) {
+	sender := &recordingEmailSender{}
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	target := mustCreateNotificationTarget(t, subscriptionRepo, "dev@example.com", true)
+	projectID := "project-1"
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildSucceeded, true)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		Sender:           sender,
+		SubscriptionRepo: subscriptionRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	err = notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: projectID, Status: domain.BuildStatusFailed})
+	if err != nil {
+		t.Fatalf("notify terminal build failed: %v", err)
+	}
+	if len(sender.messages) != 0 {
+		t.Fatalf("expected no email for non-matching event, got %d", len(sender.messages))
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_DisabledTargetDoesNotSend(t *testing.T) {
+	sender := &recordingEmailSender{}
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	target := mustCreateNotificationTarget(t, subscriptionRepo, "dev@example.com", false)
+	projectID := "project-1"
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		Sender:           sender,
+		SubscriptionRepo: subscriptionRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	err = notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: projectID, Status: domain.BuildStatusFailed})
+	if err != nil {
+		t.Fatalf("notify terminal build failed: %v", err)
+	}
+	if len(sender.messages) != 0 {
+		t.Fatalf("expected disabled target to suppress send, got %d", len(sender.messages))
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_DisabledSubscriptionDoesNotSend(t *testing.T) {
+	sender := &recordingEmailSender{}
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	target := mustCreateNotificationTarget(t, subscriptionRepo, "dev@example.com", true)
+	projectID := "project-1"
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, false)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		Sender:           sender,
+		SubscriptionRepo: subscriptionRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	err = notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: projectID, Status: domain.BuildStatusFailed})
+	if err != nil {
+		t.Fatalf("notify terminal build failed: %v", err)
+	}
+	if len(sender.messages) != 0 {
+		t.Fatalf("expected disabled subscription to suppress send, got %d", len(sender.messages))
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_DedupesProjectAndJobSubscriptionsForSameRecipient(t *testing.T) {
+	sender := &recordingEmailSender{}
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	target := mustCreateNotificationTarget(t, subscriptionRepo, "dev@example.com", true)
+	projectID := "project-1"
+	jobID := "job-1"
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, nil, &jobID, domain.NotificationEventTypeBuildFailed, true)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		Sender:           sender,
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	build := domain.Build{ID: "build-1", ProjectID: projectID, JobID: &jobID, Status: domain.BuildStatusFailed}
+	err = notifier.NotifyTerminalBuild(context.Background(), build)
+	if err != nil {
+		t.Fatalf("notify terminal build failed: %v", err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected one deduped email, got %d", len(sender.messages))
+	}
+	delivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildFailed, "<dev@example.com>")
+	if delivery.Attempts != 1 {
+		t.Fatalf("expected one delivery attempt, got %d", delivery.Attempts)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_FallsBackToEnvRecipientsWithoutSubscriptions(t *testing.T) {
+	sender := &recordingEmailSender{}
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		Recipients:       "fallback@example.com",
+		Sender:           sender,
+		SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository(),
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	err = notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusFailed})
+	if err != nil {
+		t.Fatalf("notify terminal build failed: %v", err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected fallback email, got %d", len(sender.messages))
+	}
+	if sender.messages[0].To != "<fallback@example.com>" {
+		t.Fatalf("expected fallback recipient, got %q", sender.messages[0].To)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_DurableDedupeStillWorksForSubscriptionRecipients(t *testing.T) {
+	sender := &recordingEmailSender{}
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	target := mustCreateNotificationTarget(t, subscriptionRepo, "dev@example.com", true)
+	projectID := "project-1"
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		Sender:           sender,
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	build := domain.Build{ID: "build-1", ProjectID: projectID, Status: domain.BuildStatusFailed}
+	if err := notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
+		t.Fatalf("first notify failed: %v", err)
+	}
+	if err := notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
+		t.Fatalf("second notify failed: %v", err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected one deduped subscription email, got %d", len(sender.messages))
+	}
+	delivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildFailed, "<dev@example.com>")
+	if delivery.Attempts != 1 {
+		t.Fatalf("expected attempts to remain 1, got %d", delivery.Attempts)
 	}
 }
 

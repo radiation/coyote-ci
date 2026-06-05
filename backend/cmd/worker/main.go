@@ -69,7 +69,8 @@ func main() {
 	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
 	artifactLabelRepo := repositorypostgres.NewArtifactLabelRepository(db)
 	notificationDeliveryRepo := repositorypostgres.NewNotificationDeliveryRepository(db)
-	buildNotificationService := buildWorkerNotificationService(cfg, jobRepo, projectRepo, notificationDeliveryRepo, log.Fatalf)
+	notificationSubscriptionRepo := repositorypostgres.NewNotificationSubscriptionRepository(db)
+	buildNotificationService := buildWorkerNotificationService(cfg, jobRepo, projectRepo, notificationDeliveryRepo, notificationSubscriptionRepo, log.Fatalf)
 	artifactResolver, err := artifact.ResolveStores(artifact.StoreConfig{
 		Provider:    cfg.ArtifactStorageProvider,
 		StorageRoot: cfg.ArtifactStorageRoot,
@@ -139,7 +140,7 @@ func logEmailNotificationConfig(cfg config.Config) {
 	log.Printf("email notifications disabled")
 }
 
-func newWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepository, projectRepo repository.ProjectRepository, deliveryRepo repository.NotificationDeliveryRepository) (*buildsvc.BuildNotificationService, error) {
+func newWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepository, projectRepo repository.ProjectRepository, deliveryRepo repository.NotificationDeliveryRepository, subscriptionRepo repository.NotificationSubscriptionRepository) (*buildsvc.BuildNotificationService, error) {
 	emailSender, emailSenderErr := platformemail.NewSender(platformemail.Config{
 		Enabled:     cfg.EmailNotificationsEnabled,
 		Host:        cfg.SMTPHost,
@@ -153,12 +154,13 @@ func newWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepos
 	}
 
 	buildNotificationService, buildNotificationErr := buildsvc.NewBuildNotificationService(buildsvc.BuildNotificationConfig{
-		Enabled:      cfg.EmailNotificationsEnabled,
-		Recipients:   cfg.EmailNotificationRecipients,
-		Sender:       emailSender,
-		JobRepo:      jobRepo,
-		ProjectRepo:  projectRepo,
-		DeliveryRepo: deliveryRepo,
+		Enabled:          cfg.EmailNotificationsEnabled,
+		Recipients:       cfg.EmailNotificationRecipients,
+		Sender:           emailSender,
+		JobRepo:          jobRepo,
+		ProjectRepo:      projectRepo,
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
 	})
 	if buildNotificationErr != nil {
 		return nil, buildNotificationErr
@@ -167,8 +169,8 @@ func newWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepos
 	return buildNotificationService, nil
 }
 
-func buildWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepository, projectRepo repository.ProjectRepository, deliveryRepo repository.NotificationDeliveryRepository, fatalf func(string, ...any)) *buildsvc.BuildNotificationService {
-	buildNotificationService, notificationErr := newWorkerNotificationService(cfg, jobRepo, projectRepo, deliveryRepo)
+func buildWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepository, projectRepo repository.ProjectRepository, deliveryRepo repository.NotificationDeliveryRepository, subscriptionRepo repository.NotificationSubscriptionRepository, fatalf func(string, ...any)) *buildsvc.BuildNotificationService {
+	buildNotificationService, notificationErr := newWorkerNotificationService(cfg, jobRepo, projectRepo, deliveryRepo, subscriptionRepo)
 	if notificationErr == nil {
 		return buildNotificationService
 	}

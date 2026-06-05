@@ -23,9 +23,9 @@ Recent completed slice:
 
 - artifact lineage plus automatic generated artifact version/channel labels V1 is complete
 - generated artifact versions and channels are configured per artifact declaration, not a top-level `release` block
-- notifications are the next likely product feature area after the current artifact/provenance slice
+- notifications are an active product feature area after the artifact/provenance slice
 - local Mailpit-backed email notification plumbing is the first notifications slice; SMTP config lives in `backend/internal/platform/config`, transport plumbing lives in `backend/internal/platform/email`, and local inspection is via `http://localhost:8025`
-- the current notification slice is terminal build email for failed and successful builds with durable per-recipient delivery records and dedupe: config lives in `backend/internal/platform/config`, SMTP transport lives in `backend/internal/platform/email`, delivery persistence lives in `backend/internal/repository/notification_delivery_repository.go` plus `backend/db/migrations`, worker/server wiring lives in `backend/cmd/server` and `backend/cmd/worker`, terminal build hooks live in `backend/internal/service/build/lifecycle.go` and `backend/internal/service/build/completion.go`, and local/manual verification uses `POST /api/dev/notifications/sample-build` plus Mailpit at `http://localhost:8025`
+- the current notification slice is terminal build email for failed and successful builds with durable notification targets and project/job subscriptions, env-recipient fallback when no subscriptions match, and durable per-recipient delivery records/dedupe: config lives in `backend/internal/platform/config`, SMTP transport lives in `backend/internal/platform/email`, target/subscription lookup lives in `backend/internal/repository/notification_subscription_repository.go` plus `backend/db/migrations`, delivery persistence lives in `backend/internal/repository/notification_delivery_repository.go`, worker/server wiring lives in `backend/cmd/server` and `backend/cmd/worker`, terminal build hooks live in `backend/internal/service/build/lifecycle.go` and `backend/internal/service/build/completion.go`, and local/manual verification uses `POST /api/dev/notifications/sample-build` plus Mailpit at `http://localhost:8025`
 
 ## Current development style
 
