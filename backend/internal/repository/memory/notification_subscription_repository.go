@@ -59,7 +59,7 @@ func (r *NotificationSubscriptionRepository) CreateTarget(_ context.Context, tar
 		target.UpdatedAt = target.CreatedAt
 	}
 	if _, exists := r.findTargetByTypeAndRecipientLocked(target.Type, target.Recipient); exists {
-		return domain.NotificationTarget{}, repository.ErrNotificationDeliveryDuplicate
+		return domain.NotificationTarget{}, repository.ErrNotificationTargetDuplicate
 	}
 
 	r.targets[target.ID] = target
@@ -103,12 +103,12 @@ func (r *NotificationSubscriptionRepository) CreateSubscription(_ context.Contex
 	key := notificationSubscriptionKey(subscription.TargetID, subscription.EventType, subscription.ProjectID, subscription.JobID)
 	if subscription.ProjectID != nil {
 		if _, exists := r.projectIndex[key]; exists {
-			return domain.NotificationSubscription{}, repository.ErrNotificationDeliveryDuplicate
+			return domain.NotificationSubscription{}, repository.ErrNotificationSubscriptionDuplicate
 		}
 		r.projectIndex[key] = subscription.ID
 	} else {
 		if _, exists := r.jobIndex[key]; exists {
-			return domain.NotificationSubscription{}, repository.ErrNotificationDeliveryDuplicate
+			return domain.NotificationSubscription{}, repository.ErrNotificationSubscriptionDuplicate
 		}
 		r.jobIndex[key] = subscription.ID
 	}

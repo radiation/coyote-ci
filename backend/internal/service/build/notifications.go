@@ -89,9 +89,10 @@ func (s *BuildNotificationService) NotifyTerminalBuild(ctx context.Context, buil
 
 	subject, body := s.formatBuildStatusEmail(ctx, build)
 	log.Printf("build notification sending: build_id=%s status=%s recipients=%d", build.ID, build.Status, len(recipients))
-	if err := s.sendTerminalNotification(ctx, build.ID, eventType, recipients, subject, body); err != nil {
-		log.Printf("build notification send failed: build_id=%s status=%s err=%v", build.ID, build.Status, err)
-		return err
+	sendErr := s.sendTerminalNotification(ctx, build.ID, eventType, recipients, subject, body)
+	if sendErr != nil {
+		log.Printf("build notification send failed: build_id=%s status=%s err=%v", build.ID, build.Status, sendErr)
+		return sendErr
 	}
 	log.Printf("build notification sent: build_id=%s status=%s recipients=%d", build.ID, build.Status, len(recipients))
 	return nil
