@@ -1,0 +1,94 @@
+package memory
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
+)
+
+func TestNotificationDeliveryRepository_CreateGetUpdateAndErrors(t *testing.T) {
+	repo := NewNotificationDeliveryRepository()
+
+	created, err := repo.Create(context.Background(), domain.NotificationDelivery{
+		BuildID:   " build-1 ",
+		EventType: domain.NotificationEventTypeBuildFailed,
+		Recipient: " <dev@example.com> ",
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if strings.TrimSpace(created.ID) == "" {
+		t.Fatal("expected generated id")
+	}
+	if created.BuildID != "build-1" {
+		t.Fatalf("expected trimmed build id, got %q", created.BuildID)
+	}
+	if created.Recipient != "<dev@example.com>" {
+		t.Fatalf("expected trimmed recipient, got %q", created.Recipient)
+	}
+	if created.Status != domain.NotificationDeliveryStatusPending {
+		t.Fatalf("expected default pending status, got %q", created.Status)
+	}
+	if created.CreatedAt.IsZero() || created.UpdatedAt.IsZero() {
+		t.Fatal("expected timestamps to be set")
+	}
+
+	fetched, err := repo.GetByBuildEventRecipient(context.Background(), " build-1 ", domain.NotificationEventTypeBuildFailed, " <dev@example.com> ")
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	if fetched.ID != created.ID {
+		t.Fatalf("expected same delivery id, got %q", fetched.ID)
+	}
+
+	updatedAt := time.Now().UTC()
+	sentAt := updatedAt.Add(time.Second)
+	updated, err := repo.Update(context.Background(), domain.NotificationDelivery{
+		ID:        created.ID,
+		BuildID:   " build-1 ",
+		EventType: domain.NotificationEventTypeBuildFailed,
+		Recipient: " <dev@example.com> ",
+		Status:    domain.NotificationDeliveryStatusSent,
+		Attempts:  1,
+		UpdatedAt: updatedAt,
+		SentAt:    &sentAt,
+	})
+	if err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	if updated.CreatedAt != created.CreatedAt {
+		t.Fatalf("expected create timestamp to be preserved, got %v want %v", updated.CreatedAt, created.CreatedAt)
+	}
+	if updated.Status != domain.NotificationDeliveryStatusSent {
+		t.Fatalf("expected sent status, got %q", updated.Status)
+	}
+
+	_, err = repo.Create(context.Background(), domain.NotificationDelivery{
+		BuildID:   "build-1",
+		EventType: domain.NotificationEventTypeBuildFailed,
+		Recipient: "<dev@example.com>",
+	})
+	if !errors.Is(err, repository.ErrNotificationDeliveryDuplicate) {
+		t.Fatalf("expected duplicate create error, got %v", err)
+	}
+
+	_, err = repo.Create(context.Background(), domain.NotificationDelivery{})
+	if !errors.Is(err, repository.ErrNotificationDeliveryDuplicate) {
+		t.Fatalf("expected empty-key duplicate error, got %v", err)
+	}
+
+	_, err = repo.GetByBuildEventRecipient(context.Background(), "missing", domain.NotificationEventTypeBuildFailed, "<dev@example.com>")
+	if !errors.Is(err, repository.ErrNotificationDeliveryNotFound) {
+		t.Fatalf("expected not found on get, got %v", err)
+	}
+
+	_, err = repo.Update(context.Background(), domain.NotificationDelivery{ID: "missing"})
+	if !errors.Is(err, repository.ErrNotificationDeliveryNotFound) {
+		t.Fatalf("expected not found on update, got %v", err)
+	}
+}

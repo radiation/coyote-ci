@@ -81,7 +81,7 @@ func TestBuildNotificationService_IsActive_ZeroAndConfiguredCases(t *testing.T) 
 	if inactive.isActive() {
 		t.Fatal("expected zero-value notifier to be inactive")
 	}
-	active := &BuildNotificationService{enabled: true, recipients: []string{"<dev@example.com>"}, sender: &recordingEmailSender{}}
+	active := &BuildNotificationService{enabled: true, defaultRecipients: []string{"<dev@example.com>"}, sender: &recordingEmailSender{}}
 	if !active.isActive() {
 		t.Fatal("expected configured notifier to be active")
 	}
@@ -118,8 +118,8 @@ func TestBuildNotificationService_FormatBuildStatusEmail_FallsBackWithoutLookups
 
 func TestBuildNotificationService_Send_StopsOnFirstError(t *testing.T) {
 	sender := &recordingEmailSender{err: errors.New("smtp unavailable")}
-	notifier := &BuildNotificationService{recipients: []string{"<dev@example.com>", "<qa@example.com>"}, sender: sender}
-	err := notifier.send(context.Background(), "subject", "body")
+	notifier := &BuildNotificationService{defaultRecipients: []string{"<dev@example.com>", "<qa@example.com>"}, sender: sender}
+	err := notifier.send(context.Background(), notifier.defaultRecipients, "subject", "body")
 	if err == nil {
 		t.Fatal("expected send error")
 	}
