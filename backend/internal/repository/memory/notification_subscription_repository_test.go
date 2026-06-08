@@ -417,3 +417,121 @@ func TestNotificationSubscriptionRepository_HelperFunctions(t *testing.T) {
 		t.Fatalf("expected trimmed value, got %v", trimmed)
 	}
 }
+
+func TestNotificationSubscriptionRepository_ListAndUpdateAdminViews(t *testing.T) {
+	repo := NewNotificationSubscriptionRepository()
+	ctx := context.Background()
+	createdAt := time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC)
+	targetOne, err := repo.CreateTarget(ctx, domain.NotificationTarget{
+		ID:        "target-1",
+		Type:      domain.NotificationTargetTypeEmail,
+		Name:      "Ops",
+		Recipient: "ops@example.com",
+		Enabled:   true,
+		CreatedAt: createdAt,
+		UpdatedAt: createdAt,
+	})
+	if err != nil {
+		t.Fatalf("create target one: %v", err)
+	}
+	targetTwo, err := repo.CreateTarget(ctx, domain.NotificationTarget{
+		ID:        "target-2",
+		Type:      domain.NotificationTargetTypeEmail,
+		Name:      "QA",
+		Recipient: "qa@example.com",
+		Enabled:   true,
+		CreatedAt: createdAt.Add(time.Minute),
+		UpdatedAt: createdAt.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create target two: %v", err)
+	}
+
+	targets, err := repo.ListTargets(ctx)
+	if err != nil {
+		t.Fatalf("list targets: %v", err)
+	}
+	if len(targets) != 2 || targets[0].ID != targetOne.ID || targets[1].ID != targetTwo.ID {
+		t.Fatalf("expected ordered targets, got %+v", targets)
+	}
+
+	targetOne.Name = "Ops Pager"
+	targetOne.Enabled = false
+	targetOne.UpdatedAt = createdAt.Add(2 * time.Minute)
+	updatedTarget, err := repo.UpdateTarget(ctx, targetOne)
+	if err != nil {
+		t.Fatalf("update target: %v", err)
+	}
+	if updatedTarget.Name != "Ops Pager" || updatedTarget.Enabled {
+		t.Fatalf("expected updated target fields, got %+v", updatedTarget)
+	}
+
+	projectID := "project-1"
+	jobID := "job-1"
+	projectSub, err := repo.CreateSubscription(ctx, domain.NotificationSubscription{
+		ID:        "subscription-project",
+		TargetID:  targetOne.ID,
+		ProjectID: &projectID,
+		EventType: domain.NotificationEventTypeBuildFailed,
+		Enabled:   true,
+		CreatedAt: createdAt,
+		UpdatedAt: createdAt,
+	})
+	if err != nil {
+		t.Fatalf("create project subscription: %v", err)
+	}
+	jobSub, err := repo.CreateSubscription(ctx, domain.NotificationSubscription{
+		ID:        "subscription-job",
+		TargetID:  targetTwo.ID,
+		JobID:     &jobID,
+		EventType: domain.NotificationEventTypeBuildSucceeded,
+		Enabled:   true,
+		CreatedAt: createdAt.Add(time.Minute),
+		UpdatedAt: createdAt.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create job subscription: %v", err)
+	}
+
+	projectSubs, err := repo.ListSubscriptions(ctx, repository.NotificationSubscriptionListFilter{ProjectID: &projectID})
+	if err != nil {
+		t.Fatalf("list project subscriptions: %v", err)
+	}
+	if len(projectSubs) != 1 || projectSubs[0].ID != projectSub.ID {
+		t.Fatalf("expected one project subscription, got %+v", projectSubs)
+	}
+
+	jobSubs, err := repo.ListSubscriptions(ctx, repository.NotificationSubscriptionListFilter{JobID: &jobID})
+	if err != nil {
+		t.Fatalf("list job subscriptions: %v", err)
+	}
+	if len(jobSubs) != 1 || jobSubs[0].ID != jobSub.ID {
+		t.Fatalf("expected one job subscription, got %+v", jobSubs)
+	}
+
+	updatedProjectSub, err := repo.UpdateSubscription(ctx, domain.NotificationSubscription{
+		ID:        projectSub.ID,
+		TargetID:  projectSub.TargetID,
+		ProjectID: projectSub.ProjectID,
+		EventType: projectSub.EventType,
+		Enabled:   false,
+		CreatedAt: projectSub.CreatedAt,
+		UpdatedAt: createdAt.Add(3 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("update subscription: %v", err)
+	}
+	if updatedProjectSub.Enabled {
+		t.Fatalf("expected disabled subscription, got %+v", updatedProjectSub)
+	}
+
+	if err := repo.DeleteSubscription(ctx, jobSub.ID); err != nil {
+		t.Fatalf("delete subscription: %v", err)
+	}
+	if _, err := repo.GetSubscriptionByID(ctx, jobSub.ID); !errors.Is(err, repository.ErrNotificationSubscriptionNotFound) {
+		t.Fatalf("expected deleted subscription to be missing, got %v", err)
+	}
+	if _, err := repo.GetTargetByID(ctx, "missing-target"); !errors.Is(err, repository.ErrNotificationTargetNotFound) {
+		t.Fatalf("expected missing target error, got %v", err)
+	}
+}

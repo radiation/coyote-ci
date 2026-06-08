@@ -145,6 +145,7 @@ func main() {
 	projectMembershipService := service.NewProjectMembershipService(projectRepo, projectMembershipRepo)
 	jobService := service.NewJobService(jobRepo, buildService).WithProjectRepository(projectRepo).WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo)
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
+	notificationService := service.NewNotificationService(notificationSubscriptionRepo)
 	webhookService := webhooksvc.NewDeliveryIngressService(webhookDeliveryRepo, jobService)
 	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()
 	webhookService.SetMetrics(webhookMetrics)
@@ -173,9 +174,13 @@ func main() {
 	versionTagHandler := handler.NewVersionTagHandler(versionTagService)
 	credentialHandler := handler.NewSourceCredentialHandler(sourceCredentialService)
 	credentialHandler.SetAuthorization(authMode)
-	var notificationHandler *handler.NotificationHandler
+	notificationHandler := handler.NewNotificationHandler(nil)
+	notificationHandler.SetAdminService(notificationService)
+	notificationHandler.SetAuthorization(authMode)
 	if authMode == auth.ModeDisabled {
 		notificationHandler = handler.NewNotificationHandler(buildNotificationService)
+		notificationHandler.SetAdminService(notificationService)
+		notificationHandler.SetAuthorization(authMode)
 	}
 	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, cfg.GitHubWebhookSecret)
 	readyHandler := handler.NewReadinessHandler(handler.ReadinessCheckFunc(func(ctx context.Context) error {

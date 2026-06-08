@@ -100,7 +100,9 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 			r.Get("/auth/config", cfg.userHandler.GetAuthConfig)
 		}
 		if cfg.notificationHandler != nil {
-			r.Post("/dev/notifications/sample-build", cfg.notificationHandler.SendSampleBuildFailure)
+			if cfg.notificationHandler.HasSampleSender() {
+				r.Post("/dev/notifications/sample-build", cfg.notificationHandler.SendSampleBuildFailure)
+			}
 		}
 
 		r.Route("/events", func(r chi.Router) {
@@ -137,6 +139,20 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 					r.Get("/{id}", cfg.userHandler.GetUser)
 					r.Patch("/{id}", cfg.userHandler.UpdateUser)
 					r.Delete("/{id}", cfg.userHandler.DeleteUser)
+				})
+			}
+
+			if cfg.notificationHandler != nil {
+				r.Route("/notification-targets", func(r chi.Router) {
+					r.Get("/", cfg.notificationHandler.ListTargets)
+					r.Post("/", cfg.notificationHandler.CreateEmailTarget)
+					r.Patch("/{targetID}", cfg.notificationHandler.UpdateTarget)
+				})
+				r.Route("/notification-subscriptions", func(r chi.Router) {
+					r.Get("/", cfg.notificationHandler.ListSubscriptions)
+					r.Post("/", cfg.notificationHandler.CreateSubscription)
+					r.Patch("/{subscriptionID}", cfg.notificationHandler.UpdateSubscription)
+					r.Delete("/{subscriptionID}", cfg.notificationHandler.DeleteSubscription)
 				})
 			}
 

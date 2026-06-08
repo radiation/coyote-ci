@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/mail"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +67,75 @@ func (r *NotificationSubscriptionRepository) CreateTarget(_ context.Context, tar
 	return target, nil
 }
 
+func (r *NotificationSubscriptionRepository) ListTargets(_ context.Context) ([]domain.NotificationTarget, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	targets := make([]domain.NotificationTarget, 0, len(r.targets))
+	for _, target := range r.targets {
+		targets = append(targets, target)
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].CreatedAt.Equal(targets[j].CreatedAt) {
+			return targets[i].ID < targets[j].ID
+		}
+		return targets[i].CreatedAt.Before(targets[j].CreatedAt)
+	})
+
+	return targets, nil
+}
+
+func (r *NotificationSubscriptionRepository) GetTargetByID(_ context.Context, id string) (domain.NotificationTarget, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	target, ok := r.targets[strings.TrimSpace(id)]
+	if !ok {
+		return domain.NotificationTarget{}, repository.ErrNotificationTargetNotFound
+	}
+	return target, nil
+}
+
+func (r *NotificationSubscriptionRepository) UpdateTarget(_ context.Context, target domain.NotificationTarget) (domain.NotificationTarget, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	targetID := strings.TrimSpace(target.ID)
+	current, ok := r.targets[targetID]
+	if !ok {
+		return domain.NotificationTarget{}, repository.ErrNotificationTargetNotFound
+	}
+
+	normalizedRecipient, err := normalizeNotificationTargetRecipient(target.Recipient)
+	if err != nil {
+		return domain.NotificationTarget{}, err
+	}
+	target.Type = domain.NotificationTargetType(strings.TrimSpace(string(target.Type)))
+	if target.Type == "" {
+		target.Type = domain.NotificationTargetTypeEmail
+	}
+	if target.Type != domain.NotificationTargetTypeEmail {
+		return domain.NotificationTarget{}, fmt.Errorf("unsupported notification target type %q", target.Type)
+	}
+	if existing, exists := r.findTargetByTypeAndRecipientLocked(target.Type, normalizedRecipient); exists && existing.ID != targetID {
+		return domain.NotificationTarget{}, repository.ErrNotificationTargetDuplicate
+	}
+
+	current.Type = target.Type
+	current.Name = strings.TrimSpace(target.Name)
+	current.Recipient = normalizedRecipient
+	current.Enabled = target.Enabled
+	if !target.CreatedAt.IsZero() {
+		current.CreatedAt = target.CreatedAt
+	}
+	if !target.UpdatedAt.IsZero() {
+		current.UpdatedAt = target.UpdatedAt
+	}
+
+	r.targets[targetID] = current
+	return current, nil
+}
+
 func (r *NotificationSubscriptionRepository) CreateSubscription(_ context.Context, subscription domain.NotificationSubscription) (domain.NotificationSubscription, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -117,6 +187,122 @@ func (r *NotificationSubscriptionRepository) CreateSubscription(_ context.Contex
 	return subscription, nil
 }
 
+func (r *NotificationSubscriptionRepository) ListSubscriptions(_ context.Context, filter repository.NotificationSubscriptionListFilter) ([]domain.NotificationSubscription, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	projectID := trimOptionalString(filter.ProjectID)
+	jobID := trimOptionalString(filter.JobID)
+	subscriptions := make([]domain.NotificationSubscription, 0, len(r.subscriptions))
+	for _, subscription := range r.subscriptions {
+		if !matchesNotificationSubscriptionFilter(subscription, projectID, jobID) {
+			continue
+		}
+		subscriptions = append(subscriptions, subscription)
+	}
+	sort.Slice(subscriptions, func(i, j int) bool {
+		if subscriptions[i].CreatedAt.Equal(subscriptions[j].CreatedAt) {
+			return subscriptions[i].ID < subscriptions[j].ID
+		}
+		return subscriptions[i].CreatedAt.Before(subscriptions[j].CreatedAt)
+	})
+
+	return subscriptions, nil
+}
+
+func (r *NotificationSubscriptionRepository) GetSubscriptionByID(_ context.Context, id string) (domain.NotificationSubscription, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	subscription, ok := r.subscriptions[strings.TrimSpace(id)]
+	if !ok {
+		return domain.NotificationSubscription{}, repository.ErrNotificationSubscriptionNotFound
+	}
+	return subscription, nil
+}
+
+func (r *NotificationSubscriptionRepository) UpdateSubscription(_ context.Context, subscription domain.NotificationSubscription) (domain.NotificationSubscription, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	subscriptionID := strings.TrimSpace(subscription.ID)
+	current, ok := r.subscriptions[subscriptionID]
+	if !ok {
+		return domain.NotificationSubscription{}, repository.ErrNotificationSubscriptionNotFound
+	}
+	if strings.TrimSpace(subscription.TargetID) == "" {
+		return domain.NotificationSubscription{}, fmt.Errorf("notification subscription target_id is required")
+	}
+	if _, ok := r.targets[strings.TrimSpace(subscription.TargetID)]; !ok {
+		return domain.NotificationSubscription{}, fmt.Errorf("notification subscription target %q not found", subscription.TargetID)
+	}
+	projectID := trimOptionalString(subscription.ProjectID)
+	jobID := trimOptionalString(subscription.JobID)
+	if (projectID == nil) == (jobID == nil) {
+		return domain.NotificationSubscription{}, fmt.Errorf("notification subscription must specify exactly one scope")
+	}
+	if strings.TrimSpace(string(subscription.EventType)) == "" {
+		return domain.NotificationSubscription{}, fmt.Errorf("notification subscription event_type is required")
+	}
+	if subscription.EventType != domain.NotificationEventTypeBuildSucceeded && subscription.EventType != domain.NotificationEventTypeBuildFailed {
+		return domain.NotificationSubscription{}, fmt.Errorf("unsupported notification event type %q", subscription.EventType)
+	}
+
+	oldKey := notificationSubscriptionKey(current.TargetID, current.EventType, current.ProjectID, current.JobID)
+	newKey := notificationSubscriptionKey(strings.TrimSpace(subscription.TargetID), subscription.EventType, projectID, jobID)
+	if current.ProjectID != nil {
+		delete(r.projectIndex, oldKey)
+	} else {
+		delete(r.jobIndex, oldKey)
+	}
+	if projectID != nil {
+		if existingID, exists := r.projectIndex[newKey]; exists && existingID != subscriptionID {
+			r.restoreNotificationSubscriptionIndexLocked(current)
+			return domain.NotificationSubscription{}, repository.ErrNotificationSubscriptionDuplicate
+		}
+		r.projectIndex[newKey] = subscriptionID
+	} else {
+		if existingID, exists := r.jobIndex[newKey]; exists && existingID != subscriptionID {
+			r.restoreNotificationSubscriptionIndexLocked(current)
+			return domain.NotificationSubscription{}, repository.ErrNotificationSubscriptionDuplicate
+		}
+		r.jobIndex[newKey] = subscriptionID
+	}
+
+	current.TargetID = strings.TrimSpace(subscription.TargetID)
+	current.ProjectID = projectID
+	current.JobID = jobID
+	current.EventType = subscription.EventType
+	current.Enabled = subscription.Enabled
+	if !subscription.CreatedAt.IsZero() {
+		current.CreatedAt = subscription.CreatedAt
+	}
+	if !subscription.UpdatedAt.IsZero() {
+		current.UpdatedAt = subscription.UpdatedAt
+	}
+
+	r.subscriptions[subscriptionID] = current
+	return current, nil
+}
+
+func (r *NotificationSubscriptionRepository) DeleteSubscription(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	subscriptionID := strings.TrimSpace(id)
+	subscription, ok := r.subscriptions[subscriptionID]
+	if !ok {
+		return repository.ErrNotificationSubscriptionNotFound
+	}
+	delete(r.subscriptions, subscriptionID)
+	if subscription.ProjectID != nil {
+		delete(r.projectIndex, notificationSubscriptionKey(subscription.TargetID, subscription.EventType, subscription.ProjectID, subscription.JobID))
+	} else {
+		delete(r.jobIndex, notificationSubscriptionKey(subscription.TargetID, subscription.EventType, subscription.ProjectID, subscription.JobID))
+	}
+	return nil
+}
+
 func (r *NotificationSubscriptionRepository) ListEnabledMatchesForBuildEvent(_ context.Context, build domain.Build, eventType domain.NotificationEventType) ([]domain.NotificationSubscriptionMatch, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -159,6 +345,28 @@ func (r *NotificationSubscriptionRepository) findTargetByTypeAndRecipientLocked(
 		}
 	}
 	return domain.NotificationTarget{}, false
+}
+
+func (r *NotificationSubscriptionRepository) restoreNotificationSubscriptionIndexLocked(subscription domain.NotificationSubscription) {
+	key := notificationSubscriptionKey(subscription.TargetID, subscription.EventType, subscription.ProjectID, subscription.JobID)
+	if subscription.ProjectID != nil {
+		r.projectIndex[key] = subscription.ID
+		return
+	}
+	r.jobIndex[key] = subscription.ID
+}
+
+func matchesNotificationSubscriptionFilter(subscription domain.NotificationSubscription, projectID *string, jobID *string) bool {
+	if projectID == nil && jobID == nil {
+		return true
+	}
+	if projectID != nil && subscription.ProjectID != nil && *subscription.ProjectID == *projectID {
+		return true
+	}
+	if jobID != nil && subscription.JobID != nil && *subscription.JobID == *jobID {
+		return true
+	}
+	return false
 }
 
 func notificationSubscriptionKey(targetID string, eventType domain.NotificationEventType, projectID *string, jobID *string) string {
