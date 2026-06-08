@@ -204,6 +204,20 @@ curl -sS http://localhost:8025/api/v1/messages | jq '{count, latest_subject: .me
 
 In the default local configuration, that sends a sample build-failure email to `EMAIL_NOTIFICATION_RECIPIENTS` through the real SMTP sender. Real terminal build notifications use the same enabled flag and recipient list for both failed and successful builds. The dev-only sample endpoint is only registered when `AUTH_MODE=disabled`.
 
+Manual target/subscription API flow:
+
+```bash
+TARGET_ID=$(curl -sS -X POST http://localhost:8080/api/notification-targets \
+	-H 'Content-Type: application/json' \
+	-d '{"name":"Build Alerts","address":"dev@example.com"}' | jq -r '.data.id')
+curl -sS -X POST http://localhost:8080/api/notification-subscriptions \
+	-H 'Content-Type: application/json' \
+	-d '{"target_id":"'"$TARGET_ID"'","project_id":"6be941f1-f6ec-4da5-bf09-e2df74532ffe","event_type":"build_failed"}'
+curl -sS 'http://localhost:8080/api/notification-subscriptions?project_id=6be941f1-f6ec-4da5-bf09-e2df74532ffe' | jq '.data.subscriptions'
+```
+
+In `AUTH_MODE=disabled`, those routes are available without extra auth setup and let you manage durable email targets and build-failure/build-success subscriptions before queueing a real build.
+
 Real build-status verification flow:
 
 ```bash
