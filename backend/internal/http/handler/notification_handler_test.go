@@ -11,6 +11,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
@@ -26,6 +27,50 @@ func (f *fakeSampleNotificationSender) SendSampleBuildFailure(_ context.Context)
 		return nil, f.err
 	}
 	return append([]string(nil), f.recipients...), nil
+}
+
+type fakeNotificationAdminService struct {
+	listTargetsResult        []domain.NotificationTarget
+	listTargetsErr           error
+	createTargetResult       domain.NotificationTarget
+	createTargetErr          error
+	updateTargetResult       domain.NotificationTarget
+	updateTargetErr          error
+	listSubscriptionsResult  []domain.NotificationSubscription
+	listSubscriptionsErr     error
+	createSubscriptionResult domain.NotificationSubscription
+	createSubscriptionErr    error
+	updateSubscriptionResult domain.NotificationSubscription
+	updateSubscriptionErr    error
+	deleteSubscriptionErr    error
+}
+
+func (f *fakeNotificationAdminService) ListTargets(_ context.Context) ([]domain.NotificationTarget, error) {
+	return f.listTargetsResult, f.listTargetsErr
+}
+
+func (f *fakeNotificationAdminService) CreateEmailTarget(_ context.Context, _ service.CreateNotificationTargetInput) (domain.NotificationTarget, error) {
+	return f.createTargetResult, f.createTargetErr
+}
+
+func (f *fakeNotificationAdminService) UpdateTarget(_ context.Context, _ string, _ service.UpdateNotificationTargetInput) (domain.NotificationTarget, error) {
+	return f.updateTargetResult, f.updateTargetErr
+}
+
+func (f *fakeNotificationAdminService) ListSubscriptions(_ context.Context, _ service.ListNotificationSubscriptionsInput) ([]domain.NotificationSubscription, error) {
+	return f.listSubscriptionsResult, f.listSubscriptionsErr
+}
+
+func (f *fakeNotificationAdminService) CreateSubscription(_ context.Context, _ service.CreateNotificationSubscriptionInput) (domain.NotificationSubscription, error) {
+	return f.createSubscriptionResult, f.createSubscriptionErr
+}
+
+func (f *fakeNotificationAdminService) UpdateSubscription(_ context.Context, _ string, _ service.UpdateNotificationSubscriptionInput) (domain.NotificationSubscription, error) {
+	return f.updateSubscriptionResult, f.updateSubscriptionErr
+}
+
+func (f *fakeNotificationAdminService) DeleteSubscription(_ context.Context, _ string) error {
+	return f.deleteSubscriptionErr
 }
 
 func TestNotificationHandler_SendSampleBuildFailure_NotFoundWhenUnavailable(t *testing.T) {
@@ -257,5 +302,124 @@ func TestNotificationHandler_AdminEndpoints(t *testing.T) {
 	h.DeleteSubscription(deleteSubRes, deleteSubReq)
 	if deleteSubRes.Code != http.StatusNoContent {
 		t.Fatalf("expected delete subscription status %d, got %d body=%s", http.StatusNoContent, deleteSubRes.Code, deleteSubRes.Body.String())
+	}
+}
+
+func TestNotificationHandler_AdminAuthorizationAndErrors(t *testing.T) {
+	admin := domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin}
+	nonAdmin := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+
+	missingHandler := NewNotificationHandler(nil)
+	missingReq := httptest.NewRequest(http.MethodGet, "/api/notification-targets", nil)
+	missingRes := httptest.NewRecorder()
+	missingHandler.ListTargets(missingRes, missingReq)
+	if missingRes.Code != http.StatusNotFound {
+		t.Fatalf("expected missing admin service status %d, got %d body=%s", http.StatusNotFound, missingRes.Code, missingRes.Body.String())
+	}
+
+	authHandler := NewNotificationHandler(nil)
+	authHandler.SetAdminService(&fakeNotificationAdminService{})
+	authHandler.SetAuthorization(auth.ModeHeader)
+
+	unauthReq := httptest.NewRequest(http.MethodGet, "/api/notification-targets", nil)
+	unauthRes := httptest.NewRecorder()
+	authHandler.ListTargets(unauthRes, unauthReq)
+	if unauthRes.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized status %d, got %d body=%s", http.StatusUnauthorized, unauthRes.Code, unauthRes.Body.String())
+	}
+
+	forbiddenReq := httptest.NewRequest(http.MethodGet, "/api/notification-targets", nil)
+	forbiddenReq = forbiddenReq.WithContext(auth.WithUser(forbiddenReq.Context(), nonAdmin))
+	forbiddenRes := httptest.NewRecorder()
+	authHandler.ListTargets(forbiddenRes, forbiddenReq)
+	if forbiddenRes.Code != http.StatusForbidden {
+		t.Fatalf("expected forbidden status %d, got %d body=%s", http.StatusForbidden, forbiddenRes.Code, forbiddenRes.Body.String())
+	}
+
+	invalidJSONReq := httptest.NewRequest(http.MethodPost, "/api/notification-targets", bytes.NewBufferString("{"))
+	invalidJSONReq = invalidJSONReq.WithContext(auth.WithUser(invalidJSONReq.Context(), admin))
+	invalidJSONRes := httptest.NewRecorder()
+	authHandler.CreateEmailTarget(invalidJSONRes, invalidJSONReq)
+	if invalidJSONRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid JSON status %d, got %d body=%s", http.StatusBadRequest, invalidJSONRes.Code, invalidJSONRes.Body.String())
+	}
+
+	errorCases := []struct {
+		name       string
+		call       func(*NotificationHandler, *httptest.ResponseRecorder, *http.Request)
+		err        error
+		statusCode int
+	}{
+		{name: "list targets internal", err: errors.New("boom"), statusCode: http.StatusInternalServerError, call: func(h *NotificationHandler, res *httptest.ResponseRecorder, req *http.Request) {
+			h.ListTargets(res, req)
+		}},
+		{name: "create target duplicate", err: repository.ErrNotificationTargetDuplicate, statusCode: http.StatusConflict, call: func(h *NotificationHandler, res *httptest.ResponseRecorder, req *http.Request) {
+			h.CreateEmailTarget(res, req)
+		}},
+		{name: "update target not found", err: repository.ErrNotificationTargetNotFound, statusCode: http.StatusNotFound, call: func(h *NotificationHandler, res *httptest.ResponseRecorder, req *http.Request) {
+			h.UpdateTarget(res, req)
+		}},
+		{name: "list subscriptions internal", err: errors.New("boom"), statusCode: http.StatusInternalServerError, call: func(h *NotificationHandler, res *httptest.ResponseRecorder, req *http.Request) {
+			h.ListSubscriptions(res, req)
+		}},
+		{name: "create subscription invalid", err: service.ErrNotificationSubscriptionEventTypeInvalid, statusCode: http.StatusBadRequest, call: func(h *NotificationHandler, res *httptest.ResponseRecorder, req *http.Request) {
+			h.CreateSubscription(res, req)
+		}},
+		{name: "update subscription not found", err: repository.ErrNotificationSubscriptionNotFound, statusCode: http.StatusNotFound, call: func(h *NotificationHandler, res *httptest.ResponseRecorder, req *http.Request) {
+			h.UpdateSubscription(res, req)
+		}},
+		{name: "delete subscription internal", err: errors.New("boom"), statusCode: http.StatusInternalServerError, call: func(h *NotificationHandler, res *httptest.ResponseRecorder, req *http.Request) {
+			h.DeleteSubscription(res, req)
+		}},
+	}
+
+	for _, testCase := range errorCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			adminService := &fakeNotificationAdminService{}
+			switch testCase.name {
+			case "list targets internal":
+				adminService.listTargetsErr = testCase.err
+			case "create target duplicate":
+				adminService.createTargetErr = testCase.err
+			case "update target not found":
+				adminService.updateTargetErr = testCase.err
+			case "list subscriptions internal":
+				adminService.listSubscriptionsErr = testCase.err
+			case "create subscription invalid":
+				adminService.createSubscriptionErr = testCase.err
+			case "update subscription not found":
+				adminService.updateSubscriptionErr = testCase.err
+			case "delete subscription internal":
+				adminService.deleteSubscriptionErr = testCase.err
+			}
+
+			h := NewNotificationHandler(nil)
+			h.SetAdminService(adminService)
+			h.SetAuthorization(auth.ModeHeader)
+
+			var req *http.Request
+			switch testCase.name {
+			case "list targets internal":
+				req = httptest.NewRequest(http.MethodGet, "/api/notification-targets", nil)
+			case "create target duplicate":
+				req = httptest.NewRequest(http.MethodPost, "/api/notification-targets", bytes.NewBufferString(`{"name":"Alerts","address":"dev@example.com"}`))
+			case "update target not found":
+				req = addURLParam(httptest.NewRequest(http.MethodPatch, "/api/notification-targets/missing", bytes.NewBufferString(`{"enabled":true}`)), "targetID", "missing")
+			case "list subscriptions internal":
+				req = httptest.NewRequest(http.MethodGet, "/api/notification-subscriptions", nil)
+			case "create subscription invalid":
+				req = httptest.NewRequest(http.MethodPost, "/api/notification-subscriptions", bytes.NewBufferString(`{"target_id":"target-1","project_id":"project-1","event_type":"invalid"}`))
+			case "update subscription not found":
+				req = addURLParam(httptest.NewRequest(http.MethodPatch, "/api/notification-subscriptions/missing", bytes.NewBufferString(`{"enabled":true}`)), "subscriptionID", "missing")
+			case "delete subscription internal":
+				req = addURLParam(httptest.NewRequest(http.MethodDelete, "/api/notification-subscriptions/missing", nil), "subscriptionID", "missing")
+			}
+			req = req.WithContext(auth.WithUser(req.Context(), admin))
+			res := httptest.NewRecorder()
+			testCase.call(h, res, req)
+			if res.Code != testCase.statusCode {
+				t.Fatalf("expected status %d, got %d body=%s", testCase.statusCode, res.Code, res.Body.String())
+			}
+		})
 	}
 }

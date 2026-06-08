@@ -525,13 +525,89 @@ func TestNotificationSubscriptionRepository_ListAndUpdateAdminViews(t *testing.T
 		t.Fatalf("expected disabled subscription, got %+v", updatedProjectSub)
 	}
 
-	if err := repo.DeleteSubscription(ctx, jobSub.ID); err != nil {
-		t.Fatalf("delete subscription: %v", err)
+	deleteErr := repo.DeleteSubscription(ctx, jobSub.ID)
+	if deleteErr != nil {
+		t.Fatalf("delete subscription: %v", deleteErr)
 	}
-	if _, err := repo.GetSubscriptionByID(ctx, jobSub.ID); !errors.Is(err, repository.ErrNotificationSubscriptionNotFound) {
-		t.Fatalf("expected deleted subscription to be missing, got %v", err)
+	_, deletedSubscriptionErr := repo.GetSubscriptionByID(ctx, jobSub.ID)
+	if !errors.Is(deletedSubscriptionErr, repository.ErrNotificationSubscriptionNotFound) {
+		t.Fatalf("expected deleted subscription to be missing, got %v", deletedSubscriptionErr)
 	}
-	if _, err := repo.GetTargetByID(ctx, "missing-target"); !errors.Is(err, repository.ErrNotificationTargetNotFound) {
-		t.Fatalf("expected missing target error, got %v", err)
+	_, missingTargetErr := repo.GetTargetByID(ctx, "missing-target")
+	if !errors.Is(missingTargetErr, repository.ErrNotificationTargetNotFound) {
+		t.Fatalf("expected missing target error, got %v", missingTargetErr)
+	}
+	_, missingSubscriptionErr := repo.GetSubscriptionByID(ctx, "missing-subscription")
+	if !errors.Is(missingSubscriptionErr, repository.ErrNotificationSubscriptionNotFound) {
+		t.Fatalf("expected missing subscription error, got %v", missingSubscriptionErr)
+	}
+
+	_, updateTargetMissingErr := repo.UpdateTarget(ctx, domain.NotificationTarget{ID: "missing-target", Recipient: "missing@example.com"})
+	if !errors.Is(updateTargetMissingErr, repository.ErrNotificationTargetNotFound) {
+		t.Fatalf("expected update target missing error, got %v", updateTargetMissingErr)
+	}
+
+	duplicateTarget := targetOne
+	duplicateTarget.Recipient = targetTwo.Recipient
+	duplicateTarget.UpdatedAt = createdAt.Add(4 * time.Minute)
+	_, updateTargetDuplicateErr := repo.UpdateTarget(ctx, duplicateTarget)
+	if !errors.Is(updateTargetDuplicateErr, repository.ErrNotificationTargetDuplicate) {
+		t.Fatalf("expected update target duplicate error, got %v", updateTargetDuplicateErr)
+	}
+
+	allSubs, err := repo.ListSubscriptions(ctx, repository.NotificationSubscriptionListFilter{})
+	if err != nil {
+		t.Fatalf("list all subscriptions: %v", err)
+	}
+	if len(allSubs) != 1 {
+		t.Fatalf("expected one remaining subscription after delete, got %+v", allSubs)
+	}
+
+	duplicateProjectID := "project-dup"
+	duplicateSubA, err := repo.CreateSubscription(ctx, domain.NotificationSubscription{
+		ID:        "subscription-dup-a",
+		TargetID:  targetOne.ID,
+		ProjectID: &duplicateProjectID,
+		EventType: domain.NotificationEventTypeBuildFailed,
+		Enabled:   true,
+		CreatedAt: createdAt.Add(4 * time.Minute),
+		UpdatedAt: createdAt.Add(4 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create duplicate test base subscription: %v", err)
+	}
+	duplicateSubB, err := repo.CreateSubscription(ctx, domain.NotificationSubscription{
+		ID:        "subscription-dup-b",
+		TargetID:  targetTwo.ID,
+		ProjectID: &duplicateProjectID,
+		EventType: domain.NotificationEventTypeBuildFailed,
+		Enabled:   true,
+		CreatedAt: createdAt.Add(5 * time.Minute),
+		UpdatedAt: createdAt.Add(5 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create duplicate test competing subscription: %v", err)
+	}
+
+	_, updateSubscriptionMissingErr := repo.UpdateSubscription(ctx, domain.NotificationSubscription{ID: "missing-subscription", TargetID: targetOne.ID, ProjectID: &duplicateProjectID, EventType: domain.NotificationEventTypeBuildFailed})
+	if !errors.Is(updateSubscriptionMissingErr, repository.ErrNotificationSubscriptionNotFound) {
+		t.Fatalf("expected update subscription missing error, got %v", updateSubscriptionMissingErr)
+	}
+
+	_, updateSubscriptionDuplicateErr := repo.UpdateSubscription(ctx, domain.NotificationSubscription{
+		ID:        duplicateSubB.ID,
+		TargetID:  duplicateSubA.TargetID,
+		ProjectID: duplicateSubA.ProjectID,
+		EventType: duplicateSubA.EventType,
+		Enabled:   true,
+		CreatedAt: duplicateSubB.CreatedAt,
+		UpdatedAt: createdAt.Add(6 * time.Minute),
+	})
+	if !errors.Is(updateSubscriptionDuplicateErr, repository.ErrNotificationSubscriptionDuplicate) {
+		t.Fatalf("expected update subscription duplicate error, got %v", updateSubscriptionDuplicateErr)
+	}
+
+	if err := repo.DeleteSubscription(ctx, "missing-subscription"); !errors.Is(err, repository.ErrNotificationSubscriptionNotFound) {
+		t.Fatalf("expected delete missing subscription error, got %v", err)
 	}
 }
