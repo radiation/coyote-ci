@@ -229,7 +229,12 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 	if errors.Is(err, service.ErrNotificationTargetNameRequired) ||
 		errors.Is(err, service.ErrNotificationTargetAddressRequired) ||
 		errors.Is(err, service.ErrNotificationTargetAddressInvalid) ||
+		errors.Is(err, service.ErrNotificationTargetIDInvalid) ||
+		errors.Is(err, service.ErrNotificationSubscriptionIDInvalid) ||
 		errors.Is(err, service.ErrNotificationSubscriptionTargetIDRequired) ||
+		errors.Is(err, service.ErrNotificationSubscriptionTargetIDInvalid) ||
+		errors.Is(err, service.ErrNotificationSubscriptionProjectIDInvalid) ||
+		errors.Is(err, service.ErrNotificationSubscriptionJobIDInvalid) ||
 		errors.Is(err, service.ErrNotificationSubscriptionScopeRequired) ||
 		errors.Is(err, service.ErrNotificationSubscriptionEventTypeInvalid) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())

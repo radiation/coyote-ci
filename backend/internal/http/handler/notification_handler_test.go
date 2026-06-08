@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -149,6 +151,11 @@ func TestNotificationHandler_SendSampleBuildFailure_Success(t *testing.T) {
 }
 
 func TestNotificationHandler_AdminEndpoints(t *testing.T) {
+	projectID := uuid.NewString()
+	jobID := uuid.NewString()
+	otherJobID := uuid.NewString()
+	otherProjectID := uuid.NewString()
+
 	repo := memoryrepo.NewNotificationSubscriptionRepository()
 	notificationService := service.NewNotificationService(repo)
 	h := NewNotificationHandler(nil)
@@ -211,7 +218,7 @@ func TestNotificationHandler_AdminEndpoints(t *testing.T) {
 		t.Fatalf("expected re-enable target status %d, got %d body=%s", http.StatusOK, enableTargetRes.Code, enableTargetRes.Body.String())
 	}
 
-	projectReq := httptest.NewRequest(http.MethodPost, "/api/notification-subscriptions", bytes.NewBufferString(`{"target_id":"`+targetID+`","project_id":"project-1","event_type":"build_failed"}`))
+	projectReq := httptest.NewRequest(http.MethodPost, "/api/notification-subscriptions", bytes.NewBufferString(`{"target_id":"`+targetID+`","project_id":"`+projectID+`","event_type":"build_failed"}`))
 	projectReq = projectReq.WithContext(auth.WithUser(projectReq.Context(), admin))
 	projectRes := httptest.NewRecorder()
 	h.CreateSubscription(projectRes, projectReq)
@@ -221,7 +228,7 @@ func TestNotificationHandler_AdminEndpoints(t *testing.T) {
 	projectData := decodeDataMap(t, projectRes)
 	projectSubID, _ := projectData["id"].(string)
 
-	jobReq := httptest.NewRequest(http.MethodPost, "/api/notification-subscriptions", bytes.NewBufferString(`{"target_id":"`+targetID+`","job_id":"job-1","event_type":"build_succeeded"}`))
+	jobReq := httptest.NewRequest(http.MethodPost, "/api/notification-subscriptions", bytes.NewBufferString(`{"target_id":"`+targetID+`","job_id":"`+jobID+`","event_type":"build_succeeded"}`))
 	jobReq = jobReq.WithContext(auth.WithUser(jobReq.Context(), admin))
 	jobRes := httptest.NewRecorder()
 	h.CreateSubscription(jobRes, jobReq)
@@ -234,7 +241,7 @@ func TestNotificationHandler_AdminEndpoints(t *testing.T) {
 		t.Fatalf("expected job subscription id, got %v", jobData)
 	}
 
-	bothReq := httptest.NewRequest(http.MethodPost, "/api/notification-subscriptions", bytes.NewBufferString(`{"target_id":"`+targetID+`","project_id":"project-1","job_id":"job-1","event_type":"build_failed"}`))
+	bothReq := httptest.NewRequest(http.MethodPost, "/api/notification-subscriptions", bytes.NewBufferString(`{"target_id":"`+targetID+`","project_id":"`+otherProjectID+`","job_id":"`+otherJobID+`","event_type":"build_failed"}`))
 	bothReq = bothReq.WithContext(auth.WithUser(bothReq.Context(), admin))
 	bothRes := httptest.NewRecorder()
 	h.CreateSubscription(bothRes, bothReq)
@@ -250,7 +257,7 @@ func TestNotificationHandler_AdminEndpoints(t *testing.T) {
 		t.Fatalf("expected neither-scope status %d, got %d body=%s", http.StatusBadRequest, neitherRes.Code, neitherRes.Body.String())
 	}
 
-	duplicateReq := httptest.NewRequest(http.MethodPost, "/api/notification-subscriptions", bytes.NewBufferString(`{"target_id":"`+targetID+`","project_id":"project-1","event_type":"build_failed"}`))
+	duplicateReq := httptest.NewRequest(http.MethodPost, "/api/notification-subscriptions", bytes.NewBufferString(`{"target_id":"`+targetID+`","project_id":"`+projectID+`","event_type":"build_failed"}`))
 	duplicateReq = duplicateReq.WithContext(auth.WithUser(duplicateReq.Context(), admin))
 	duplicateRes := httptest.NewRecorder()
 	h.CreateSubscription(duplicateRes, duplicateReq)
@@ -258,7 +265,7 @@ func TestNotificationHandler_AdminEndpoints(t *testing.T) {
 		t.Fatalf("expected duplicate subscription status %d, got %d body=%s", http.StatusConflict, duplicateRes.Code, duplicateRes.Body.String())
 	}
 
-	projectListReq := httptest.NewRequest(http.MethodGet, "/api/notification-subscriptions?project_id=project-1", nil)
+	projectListReq := httptest.NewRequest(http.MethodGet, "/api/notification-subscriptions?project_id="+projectID, nil)
 	projectListReq = projectListReq.WithContext(auth.WithUser(projectListReq.Context(), admin))
 	projectListRes := httptest.NewRecorder()
 	h.ListSubscriptions(projectListRes, projectListReq)
@@ -271,7 +278,7 @@ func TestNotificationHandler_AdminEndpoints(t *testing.T) {
 		t.Fatalf("expected one project subscription, got %v", projectListData["subscriptions"])
 	}
 
-	jobListReq := httptest.NewRequest(http.MethodGet, "/api/notification-subscriptions?job_id=job-1", nil)
+	jobListReq := httptest.NewRequest(http.MethodGet, "/api/notification-subscriptions?job_id="+jobID, nil)
 	jobListReq = jobListReq.WithContext(auth.WithUser(jobListReq.Context(), admin))
 	jobListRes := httptest.NewRecorder()
 	h.ListSubscriptions(jobListRes, jobListReq)
@@ -302,6 +309,22 @@ func TestNotificationHandler_AdminEndpoints(t *testing.T) {
 	h.DeleteSubscription(deleteSubRes, deleteSubReq)
 	if deleteSubRes.Code != http.StatusNoContent {
 		t.Fatalf("expected delete subscription status %d, got %d body=%s", http.StatusNoContent, deleteSubRes.Code, deleteSubRes.Body.String())
+	}
+
+	invalidProjectReq := httptest.NewRequest(http.MethodPost, "/api/notification-subscriptions", bytes.NewBufferString(`{"target_id":"`+targetID+`","project_id":"not-a-uuid","event_type":"build_failed"}`))
+	invalidProjectReq = invalidProjectReq.WithContext(auth.WithUser(invalidProjectReq.Context(), admin))
+	invalidProjectRes := httptest.NewRecorder()
+	h.CreateSubscription(invalidProjectRes, invalidProjectReq)
+	if invalidProjectRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid project id status %d, got %d body=%s", http.StatusBadRequest, invalidProjectRes.Code, invalidProjectRes.Body.String())
+	}
+
+	invalidListReq := httptest.NewRequest(http.MethodGet, "/api/notification-subscriptions?project_id=not-a-uuid", nil)
+	invalidListReq = invalidListReq.WithContext(auth.WithUser(invalidListReq.Context(), admin))
+	invalidListRes := httptest.NewRecorder()
+	h.ListSubscriptions(invalidListRes, invalidListReq)
+	if invalidListRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid list filter status %d, got %d body=%s", http.StatusBadRequest, invalidListRes.Code, invalidListRes.Body.String())
 	}
 }
 
@@ -365,8 +388,17 @@ func TestNotificationHandler_AdminAuthorizationAndErrors(t *testing.T) {
 		{name: "create subscription invalid", err: service.ErrNotificationSubscriptionEventTypeInvalid, statusCode: http.StatusBadRequest, call: func(h *NotificationHandler, res *httptest.ResponseRecorder, req *http.Request) {
 			h.CreateSubscription(res, req)
 		}},
+		{name: "update target invalid id", err: service.ErrNotificationTargetIDInvalid, statusCode: http.StatusBadRequest, call: func(h *NotificationHandler, res *httptest.ResponseRecorder, req *http.Request) {
+			h.UpdateTarget(res, req)
+		}},
+		{name: "list subscriptions invalid filter", err: service.ErrNotificationSubscriptionProjectIDInvalid, statusCode: http.StatusBadRequest, call: func(h *NotificationHandler, res *httptest.ResponseRecorder, req *http.Request) {
+			h.ListSubscriptions(res, req)
+		}},
 		{name: "update subscription not found", err: repository.ErrNotificationSubscriptionNotFound, statusCode: http.StatusNotFound, call: func(h *NotificationHandler, res *httptest.ResponseRecorder, req *http.Request) {
 			h.UpdateSubscription(res, req)
+		}},
+		{name: "delete subscription invalid id", err: service.ErrNotificationSubscriptionIDInvalid, statusCode: http.StatusBadRequest, call: func(h *NotificationHandler, res *httptest.ResponseRecorder, req *http.Request) {
+			h.DeleteSubscription(res, req)
 		}},
 		{name: "delete subscription internal", err: errors.New("boom"), statusCode: http.StatusInternalServerError, call: func(h *NotificationHandler, res *httptest.ResponseRecorder, req *http.Request) {
 			h.DeleteSubscription(res, req)
@@ -387,8 +419,14 @@ func TestNotificationHandler_AdminAuthorizationAndErrors(t *testing.T) {
 				adminService.listSubscriptionsErr = testCase.err
 			case "create subscription invalid":
 				adminService.createSubscriptionErr = testCase.err
+			case "update target invalid id":
+				adminService.updateTargetErr = testCase.err
+			case "list subscriptions invalid filter":
+				adminService.listSubscriptionsErr = testCase.err
 			case "update subscription not found":
 				adminService.updateSubscriptionErr = testCase.err
+			case "delete subscription invalid id":
+				adminService.deleteSubscriptionErr = testCase.err
 			case "delete subscription internal":
 				adminService.deleteSubscriptionErr = testCase.err
 			}
@@ -409,8 +447,14 @@ func TestNotificationHandler_AdminAuthorizationAndErrors(t *testing.T) {
 				req = httptest.NewRequest(http.MethodGet, "/api/notification-subscriptions", nil)
 			case "create subscription invalid":
 				req = httptest.NewRequest(http.MethodPost, "/api/notification-subscriptions", bytes.NewBufferString(`{"target_id":"target-1","project_id":"project-1","event_type":"invalid"}`))
+			case "update target invalid id":
+				req = addURLParam(httptest.NewRequest(http.MethodPatch, "/api/notification-targets/not-a-uuid", bytes.NewBufferString(`{"enabled":true}`)), "targetID", "not-a-uuid")
+			case "list subscriptions invalid filter":
+				req = httptest.NewRequest(http.MethodGet, "/api/notification-subscriptions?project_id=not-a-uuid", nil)
 			case "update subscription not found":
 				req = addURLParam(httptest.NewRequest(http.MethodPatch, "/api/notification-subscriptions/missing", bytes.NewBufferString(`{"enabled":true}`)), "subscriptionID", "missing")
+			case "delete subscription invalid id":
+				req = addURLParam(httptest.NewRequest(http.MethodDelete, "/api/notification-subscriptions/not-a-uuid", nil), "subscriptionID", "not-a-uuid")
 			case "delete subscription internal":
 				req = addURLParam(httptest.NewRequest(http.MethodDelete, "/api/notification-subscriptions/missing", nil), "subscriptionID", "missing")
 			}

@@ -16,7 +16,12 @@ import (
 var ErrNotificationTargetNameRequired = errors.New("notification target name is required")
 var ErrNotificationTargetAddressRequired = errors.New("notification target address is required")
 var ErrNotificationTargetAddressInvalid = errors.New("notification target address must be a valid email address")
+var ErrNotificationTargetIDInvalid = errors.New("notification target id must be a valid UUID")
 var ErrNotificationSubscriptionTargetIDRequired = errors.New("notification subscription target_id is required")
+var ErrNotificationSubscriptionIDInvalid = errors.New("notification subscription id must be a valid UUID")
+var ErrNotificationSubscriptionTargetIDInvalid = errors.New("notification subscription target_id must be a valid UUID")
+var ErrNotificationSubscriptionProjectIDInvalid = errors.New("notification subscription project_id must be a valid UUID")
+var ErrNotificationSubscriptionJobIDInvalid = errors.New("notification subscription job_id must be a valid UUID")
 var ErrNotificationSubscriptionScopeRequired = errors.New("exactly one of project_id or job_id is required")
 var ErrNotificationSubscriptionEventTypeInvalid = errors.New("notification subscription event_type must be one of build_succeeded, build_failed")
 
@@ -89,11 +94,11 @@ func (s *NotificationService) CreateEmailTarget(ctx context.Context, input Creat
 }
 
 func (s *NotificationService) UpdateTarget(ctx context.Context, id string, input UpdateNotificationTargetInput) (domain.NotificationTarget, error) {
-	trimmedID := strings.TrimSpace(id)
-	if trimmedID == "" {
-		return domain.NotificationTarget{}, repository.ErrNotificationTargetNotFound
+	targetID, err := normalizeRequiredNotificationUUID(id, repository.ErrNotificationTargetNotFound, ErrNotificationTargetIDInvalid)
+	if err != nil {
+		return domain.NotificationTarget{}, err
 	}
-	current, err := s.repo.GetTargetByID(ctx, trimmedID)
+	current, err := s.repo.GetTargetByID(ctx, targetID)
 	if err != nil {
 		return domain.NotificationTarget{}, err
 	}
@@ -119,22 +124,36 @@ func (s *NotificationService) UpdateTarget(ctx context.Context, id string, input
 }
 
 func (s *NotificationService) ListSubscriptions(ctx context.Context, input ListNotificationSubscriptionsInput) ([]domain.NotificationSubscription, error) {
+	projectID, err := normalizeOptionalNotificationUUID(input.ProjectID, ErrNotificationSubscriptionProjectIDInvalid)
+	if err != nil {
+		return nil, err
+	}
+	jobID, err := normalizeOptionalNotificationUUID(input.JobID, ErrNotificationSubscriptionJobIDInvalid)
+	if err != nil {
+		return nil, err
+	}
 	return s.repo.ListSubscriptions(ctx, repository.NotificationSubscriptionListFilter{
-		ProjectID: trimOptionalStringValue(input.ProjectID),
-		JobID:     trimOptionalStringValue(input.JobID),
+		ProjectID: projectID,
+		JobID:     jobID,
 	})
 }
 
 func (s *NotificationService) CreateSubscription(ctx context.Context, input CreateNotificationSubscriptionInput) (domain.NotificationSubscription, error) {
-	targetID := strings.TrimSpace(input.TargetID)
-	if targetID == "" {
-		return domain.NotificationSubscription{}, ErrNotificationSubscriptionTargetIDRequired
-	}
-	if _, err := s.repo.GetTargetByID(ctx, targetID); err != nil {
+	targetID, err := normalizeRequiredNotificationUUID(input.TargetID, ErrNotificationSubscriptionTargetIDRequired, ErrNotificationSubscriptionTargetIDInvalid)
+	if err != nil {
 		return domain.NotificationSubscription{}, err
 	}
-	projectID := trimOptionalStringValue(input.ProjectID)
-	jobID := trimOptionalStringValue(input.JobID)
+	if _, getTargetErr := s.repo.GetTargetByID(ctx, targetID); getTargetErr != nil {
+		return domain.NotificationSubscription{}, getTargetErr
+	}
+	projectID, err := normalizeOptionalNotificationUUID(input.ProjectID, ErrNotificationSubscriptionProjectIDInvalid)
+	if err != nil {
+		return domain.NotificationSubscription{}, err
+	}
+	jobID, err := normalizeOptionalNotificationUUID(input.JobID, ErrNotificationSubscriptionJobIDInvalid)
+	if err != nil {
+		return domain.NotificationSubscription{}, err
+	}
 	if (projectID == nil) == (jobID == nil) {
 		return domain.NotificationSubscription{}, ErrNotificationSubscriptionScopeRequired
 	}
@@ -161,11 +180,11 @@ func (s *NotificationService) CreateSubscription(ctx context.Context, input Crea
 }
 
 func (s *NotificationService) UpdateSubscription(ctx context.Context, id string, input UpdateNotificationSubscriptionInput) (domain.NotificationSubscription, error) {
-	trimmedID := strings.TrimSpace(id)
-	if trimmedID == "" {
-		return domain.NotificationSubscription{}, repository.ErrNotificationSubscriptionNotFound
+	subscriptionID, err := normalizeRequiredNotificationUUID(id, repository.ErrNotificationSubscriptionNotFound, ErrNotificationSubscriptionIDInvalid)
+	if err != nil {
+		return domain.NotificationSubscription{}, err
 	}
-	current, err := s.repo.GetSubscriptionByID(ctx, trimmedID)
+	current, err := s.repo.GetSubscriptionByID(ctx, subscriptionID)
 	if err != nil {
 		return domain.NotificationSubscription{}, err
 	}
@@ -177,11 +196,11 @@ func (s *NotificationService) UpdateSubscription(ctx context.Context, id string,
 }
 
 func (s *NotificationService) DeleteSubscription(ctx context.Context, id string) error {
-	trimmedID := strings.TrimSpace(id)
-	if trimmedID == "" {
-		return repository.ErrNotificationSubscriptionNotFound
+	subscriptionID, err := normalizeRequiredNotificationUUID(id, repository.ErrNotificationSubscriptionNotFound, ErrNotificationSubscriptionIDInvalid)
+	if err != nil {
+		return err
 	}
-	return s.repo.DeleteSubscription(ctx, trimmedID)
+	return s.repo.DeleteSubscription(ctx, subscriptionID)
 }
 
 func normalizeNotificationEmailAddress(value string) (string, error) {
@@ -215,4 +234,29 @@ func trimOptionalStringValue(value *string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func normalizeRequiredNotificationUUID(value string, emptyErr error, invalidErr error) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", emptyErr
+	}
+	parsed, parseErr := uuid.Parse(trimmed)
+	if parseErr != nil {
+		return "", invalidErr
+	}
+	return parsed.String(), nil
+}
+
+func normalizeOptionalNotificationUUID(value *string, invalidErr error) (*string, error) {
+	trimmed := trimOptionalStringValue(value)
+	if trimmed == nil {
+		return nil, nil
+	}
+	parsed, parseErr := uuid.Parse(*trimmed)
+	if parseErr != nil {
+		return nil, invalidErr
+	}
+	normalized := parsed.String()
+	return &normalized, nil
 }

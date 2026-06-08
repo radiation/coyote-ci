@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
@@ -75,7 +77,7 @@ func TestNotificationService_CreateSubscriptionValidationAndFiltering(t *testing
 		t.Fatalf("create target: %v", err)
 	}
 
-	projectID := "project-1"
+	projectID := uuid.NewString()
 	projectSub, err := service.CreateSubscription(ctx, CreateNotificationSubscriptionInput{
 		TargetID:  target.ID,
 		ProjectID: &projectID,
@@ -88,7 +90,7 @@ func TestNotificationService_CreateSubscriptionValidationAndFiltering(t *testing
 		t.Fatalf("expected project scope, got %+v", projectSub)
 	}
 
-	jobID := "job-1"
+	jobID := uuid.NewString()
 	jobSub, err := service.CreateSubscription(ctx, CreateNotificationSubscriptionInput{
 		TargetID:  target.ID,
 		JobID:     &jobID,
@@ -164,11 +166,20 @@ func TestNotificationService_TargetAndSubscriptionErrorBranches(t *testing.T) {
 	if _, err := service.UpdateTarget(ctx, " ", UpdateNotificationTargetInput{}); !errors.Is(err, repository.ErrNotificationTargetNotFound) {
 		t.Fatalf("expected blank target id to be not found, got %v", err)
 	}
+	if _, err := service.UpdateTarget(ctx, "not-a-uuid", UpdateNotificationTargetInput{}); !errors.Is(err, ErrNotificationTargetIDInvalid) {
+		t.Fatalf("expected invalid target id error, got %v", err)
+	}
 	if _, err := service.UpdateSubscription(ctx, " ", UpdateNotificationSubscriptionInput{}); !errors.Is(err, repository.ErrNotificationSubscriptionNotFound) {
 		t.Fatalf("expected blank subscription id to be not found, got %v", err)
 	}
+	if _, err := service.UpdateSubscription(ctx, "not-a-uuid", UpdateNotificationSubscriptionInput{}); !errors.Is(err, ErrNotificationSubscriptionIDInvalid) {
+		t.Fatalf("expected invalid subscription id error, got %v", err)
+	}
 	if err := service.DeleteSubscription(ctx, " "); !errors.Is(err, repository.ErrNotificationSubscriptionNotFound) {
 		t.Fatalf("expected blank delete subscription id to be not found, got %v", err)
+	}
+	if err := service.DeleteSubscription(ctx, "not-a-uuid"); !errors.Is(err, ErrNotificationSubscriptionIDInvalid) {
+		t.Fatalf("expected invalid delete subscription id error, got %v", err)
 	}
 
 	target, createErr := service.CreateEmailTarget(ctx, CreateNotificationTargetInput{Name: "Alerts", Address: "dev@example.com"})
@@ -202,18 +213,36 @@ func TestNotificationService_TargetAndSubscriptionErrorBranches(t *testing.T) {
 		t.Fatalf("unexpected updated target %+v", updatedTarget)
 	}
 
-	missingTargetID := "missing"
+	missingTargetID := uuid.NewString()
 	if _, err := service.CreateSubscription(ctx, CreateNotificationSubscriptionInput{TargetID: missingTargetID, EventType: string(domain.NotificationEventTypeBuildFailed), ProjectID: &missingTargetID}); !errors.Is(err, repository.ErrNotificationTargetNotFound) {
 		t.Fatalf("expected missing target error, got %v", err)
 	}
 	if _, err := service.CreateSubscription(ctx, CreateNotificationSubscriptionInput{EventType: string(domain.NotificationEventTypeBuildFailed), ProjectID: &missingTargetID}); !errors.Is(err, ErrNotificationSubscriptionTargetIDRequired) {
 		t.Fatalf("expected missing target id error, got %v", err)
 	}
+	invalidTargetID := "not-a-uuid"
+	if _, err := service.CreateSubscription(ctx, CreateNotificationSubscriptionInput{TargetID: invalidTargetID, EventType: string(domain.NotificationEventTypeBuildFailed), ProjectID: &missingTargetID}); !errors.Is(err, ErrNotificationSubscriptionTargetIDInvalid) {
+		t.Fatalf("expected invalid target id error, got %v", err)
+	}
+	invalidProjectID := "not-a-uuid"
+	if _, err := service.CreateSubscription(ctx, CreateNotificationSubscriptionInput{TargetID: target.ID, EventType: string(domain.NotificationEventTypeBuildFailed), ProjectID: &invalidProjectID}); !errors.Is(err, ErrNotificationSubscriptionProjectIDInvalid) {
+		t.Fatalf("expected invalid project id error, got %v", err)
+	}
+	invalidJobID := "not-a-uuid"
+	if _, err := service.CreateSubscription(ctx, CreateNotificationSubscriptionInput{TargetID: target.ID, EventType: string(domain.NotificationEventTypeBuildFailed), JobID: &invalidJobID}); !errors.Is(err, ErrNotificationSubscriptionJobIDInvalid) {
+		t.Fatalf("expected invalid job id error, got %v", err)
+	}
 	if _, err := service.CreateSubscription(ctx, CreateNotificationSubscriptionInput{TargetID: target.ID, EventType: "build_canceled", ProjectID: &missingTargetID}); !errors.Is(err, ErrNotificationSubscriptionEventTypeInvalid) {
 		t.Fatalf("expected invalid event type error, got %v", err)
 	}
+	if _, err := service.ListSubscriptions(ctx, ListNotificationSubscriptionsInput{ProjectID: &invalidProjectID}); !errors.Is(err, ErrNotificationSubscriptionProjectIDInvalid) {
+		t.Fatalf("expected invalid list project id error, got %v", err)
+	}
+	if _, err := service.ListSubscriptions(ctx, ListNotificationSubscriptionsInput{JobID: &invalidJobID}); !errors.Is(err, ErrNotificationSubscriptionJobIDInvalid) {
+		t.Fatalf("expected invalid list job id error, got %v", err)
+	}
 
-	jobID := "job-1"
+	jobID := uuid.NewString()
 	createdSub, createSubErr := service.CreateSubscription(ctx, CreateNotificationSubscriptionInput{TargetID: target.ID, JobID: &jobID, EventType: string(domain.NotificationEventTypeBuildFailed)})
 	if createSubErr != nil {
 		t.Fatalf("create subscription for delete failed: %v", createSubErr)
@@ -248,5 +277,18 @@ func TestNotificationService_TargetAndSubscriptionErrorBranches(t *testing.T) {
 	trimmed := trimOptionalStringValue(&trimmedValue)
 	if trimmed == nil || *trimmed != "value" {
 		t.Fatalf("expected trimmed optional string, got %v", trimmed)
+	}
+	if normalizedID, err := normalizeRequiredNotificationUUID(" 550e8400-e29b-41d4-a716-446655440000 ", repository.ErrNotificationTargetNotFound, ErrNotificationTargetIDInvalid); err != nil || normalizedID != "550e8400-e29b-41d4-a716-446655440000" {
+		t.Fatalf("expected normalized uuid, got %q err=%v", normalizedID, err)
+	}
+	if _, err := normalizeRequiredNotificationUUID("bad", repository.ErrNotificationTargetNotFound, ErrNotificationTargetIDInvalid); !errors.Is(err, ErrNotificationTargetIDInvalid) {
+		t.Fatalf("expected invalid required uuid error, got %v", err)
+	}
+	validOptionalID := "550e8400-e29b-41d4-a716-446655440000"
+	if normalizedOptionalID, err := normalizeOptionalNotificationUUID(&validOptionalID, ErrNotificationSubscriptionProjectIDInvalid); err != nil || normalizedOptionalID == nil || *normalizedOptionalID != validOptionalID {
+		t.Fatalf("expected normalized optional uuid, got %v err=%v", normalizedOptionalID, err)
+	}
+	if _, err := normalizeOptionalNotificationUUID(&invalidProjectID, ErrNotificationSubscriptionProjectIDInvalid); !errors.Is(err, ErrNotificationSubscriptionProjectIDInvalid) {
+		t.Fatalf("expected invalid optional uuid error, got %v", err)
 	}
 }

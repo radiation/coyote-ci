@@ -340,6 +340,64 @@ func TestNotificationSubscriptionRepository_SubscriptionCRUDAndErrors(t *testing
 	}
 }
 
+func TestNotificationSubscriptionRepository_ListAndGetErrorBranches(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewNotificationSubscriptionRepository(db)
+	now := time.Now().UTC()
+	targetColumns := []string{"id", "type", "name", "recipient", "enabled", "created_at", "updated_at"}
+	subscriptionColumns := []string{"id", "target_id", "project_id", "job_id", "event_type", "enabled", "created_at", "updated_at"}
+	projectID := "project-1"
+
+	mock.ExpectQuery(`SELECT id, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets`).WillReturnError(errors.New("list targets failed"))
+	_, listTargetsErr := repo.ListTargets(context.Background())
+	if listTargetsErr == nil || listTargetsErr.Error() != "list targets failed" {
+		t.Fatalf("expected list targets error, got %v", listTargetsErr)
+	}
+
+	mock.ExpectQuery(`SELECT id, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets`).WillReturnRows(
+		sqlmock.NewRows(targetColumns).AddRow("target-1", nil, "Dev", "<dev@example.com>", true, now, now),
+	)
+	_, targetScanErr := repo.ListTargets(context.Background())
+	if targetScanErr == nil {
+		t.Fatal("expected target scan error")
+	}
+
+	mock.ExpectQuery(`SELECT id, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE id = \$1`).WithArgs("broken").WillReturnError(errors.New("get target failed"))
+	_, getTargetErr := repo.GetTargetByID(context.Background(), "broken")
+	if getTargetErr == nil || getTargetErr.Error() != "get target failed" {
+		t.Fatalf("expected raw get target error, got %v", getTargetErr)
+	}
+
+	mock.ExpectQuery(`SELECT id, target_id, project_id::text, job_id::text, event_type, enabled, created_at, updated_at\s+FROM notification_subscriptions`).WillReturnError(errors.New("list subscriptions failed"))
+	_, listSubscriptionsErr := repo.ListSubscriptions(context.Background(), repository.NotificationSubscriptionListFilter{})
+	if listSubscriptionsErr == nil || listSubscriptionsErr.Error() != "list subscriptions failed" {
+		t.Fatalf("expected list subscriptions error, got %v", listSubscriptionsErr)
+	}
+
+	mock.ExpectQuery(`SELECT id, target_id, project_id::text, job_id::text, event_type, enabled, created_at, updated_at\s+FROM notification_subscriptions`).WillReturnRows(
+		sqlmock.NewRows(subscriptionColumns).AddRow("subscription-1", nil, projectID, nil, "build_failed", true, now, now),
+	)
+	_, subscriptionScanErr := repo.ListSubscriptions(context.Background(), repository.NotificationSubscriptionListFilter{})
+	if subscriptionScanErr == nil {
+		t.Fatal("expected subscription scan error")
+	}
+
+	mock.ExpectQuery(`SELECT id, target_id, project_id::text, job_id::text, event_type, enabled, created_at, updated_at\s+FROM notification_subscriptions\s+WHERE id = \$1`).WithArgs("broken").WillReturnError(errors.New("get subscription failed"))
+	_, getSubscriptionErr := repo.GetSubscriptionByID(context.Background(), "broken")
+	if getSubscriptionErr == nil || getSubscriptionErr.Error() != "get subscription failed" {
+		t.Fatalf("expected raw get subscription error, got %v", getSubscriptionErr)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 func TestNotificationSubscriptionRepository_ScanHelpersAndListMatchesErrors(t *testing.T) {
 	now := time.Now().UTC()
 	scannedTarget, targetScanErr := scanNotificationTarget(notificationTestScanner{values: []any{
