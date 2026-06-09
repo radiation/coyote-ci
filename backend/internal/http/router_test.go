@@ -26,6 +26,8 @@ import (
 	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
 )
 
+const routerBuildCreateProjectID = "11111111-1111-1111-1111-111111111111"
+
 type routeArtifactRepo struct {
 	records      []domain.ArtifactRecord
 	record       domain.ArtifactRecord
@@ -562,7 +564,7 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
-	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"11111111-1111-1111-1111-111111111111"}`))
 	createRes := httptest.NewRecorder()
 	r.ServeHTTP(createRes, createReq)
 	if createRes.Code != http.StatusCreated {
@@ -626,7 +628,7 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 		t.Fatalf("expected cancel status %d after completion, got %d", http.StatusConflict, cancelRes.Code)
 	}
 
-	cancelableCreateReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
+	cancelableCreateReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"11111111-1111-1111-1111-111111111111"}`))
 	cancelableCreateRes := httptest.NewRecorder()
 	r.ServeHTTP(cancelableCreateRes, cancelableCreateReq)
 	if cancelableCreateRes.Code != http.StatusCreated {
@@ -668,7 +670,7 @@ func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
 	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
-	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"11111111-1111-1111-1111-111111111111"}`))
 	createRes := httptest.NewRecorder()
 	r.ServeHTTP(createRes, createReq)
 	if createRes.Code != http.StatusCreated {
@@ -1137,7 +1139,7 @@ func TestNewRouter_QueueBuild_UnknownTemplate_FallsBackToDefaultStep(t *testing.
 	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
-	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"project-1"}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"11111111-1111-1111-1111-111111111111"}`))
 	createRes := httptest.NewRecorder()
 	r.ServeHTTP(createRes, createReq)
 	if createRes.Code != http.StatusCreated {

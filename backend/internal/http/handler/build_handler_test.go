@@ -26,6 +26,8 @@ import (
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
+const createBuildTestProjectID = "11111111-1111-1111-1111-111111111111"
+
 type trackingProjectRepo struct {
 	repositorymemory.ProjectRepository
 	listCalls     int
@@ -58,6 +60,38 @@ type fakeRepo struct {
 	createErr    error
 	getErr       error
 	updateErr    error
+}
+
+type failingProjectRepo struct {
+	getBySlugErr error
+}
+
+func (r *failingProjectRepo) Create(_ context.Context, project domain.Project) (domain.Project, error) {
+	return project, nil
+}
+
+func (r *failingProjectRepo) GetByID(_ context.Context, id string) (domain.Project, error) {
+	return domain.Project{ID: id}, nil
+}
+
+func (r *failingProjectRepo) GetByIDs(_ context.Context, _ []string) ([]domain.Project, error) {
+	return nil, nil
+}
+
+func (r *failingProjectRepo) GetBySlug(_ context.Context, _ string) (domain.Project, error) {
+	return domain.Project{}, r.getBySlugErr
+}
+
+func (r *failingProjectRepo) List(_ context.Context) ([]domain.Project, error) {
+	return nil, nil
+}
+
+func (r *failingProjectRepo) Update(_ context.Context, project domain.Project) (domain.Project, error) {
+	return project, nil
+}
+
+func (r *failingProjectRepo) Delete(_ context.Context, _ string) error {
+	return nil
 }
 
 type fakeArtifactRepo struct {
@@ -736,10 +770,10 @@ func TestBuildHandler_CreateBuild(t *testing.T) {
 	}{
 		{name: "invalid json", body: "{", repo: &fakeRepo{}, statusCode: http.StatusBadRequest, errMsg: "invalid request body"},
 		{name: "missing project id", body: `{"project_id":""}`, repo: &fakeRepo{}, statusCode: http.StatusBadRequest, errMsg: buildsvc.ErrProjectIDRequired.Error()},
-		{name: "repository error", body: `{"project_id":"project-1"}`, repo: &fakeRepo{createErr: errors.New("create failed")}, statusCode: http.StatusInternalServerError, errMsg: "internal server error"},
-		{name: "success", body: `{"project_id":"project-1"}`, repo: &fakeRepo{}, statusCode: http.StatusCreated},
-		{name: "success with steps auto queues", body: `{"project_id":"project-1","steps":[{"name":"checkout"}]}`, repo: &fakeRepo{}, statusCode: http.StatusCreated},
-		{name: "success with source", body: `{"project_id":"project-1","source":{"repository_url":"https://github.com/org/repo.git","ref":"main"}}`, repo: &fakeRepo{}, statusCode: http.StatusCreated},
+		{name: "repository error", body: `{"project_id":"11111111-1111-1111-1111-111111111111"}`, repo: &fakeRepo{createErr: errors.New("create failed")}, statusCode: http.StatusInternalServerError, errMsg: "internal server error"},
+		{name: "success", body: `{"project_id":"11111111-1111-1111-1111-111111111111"}`, repo: &fakeRepo{}, statusCode: http.StatusCreated},
+		{name: "success with steps auto queues", body: `{"project_id":"11111111-1111-1111-1111-111111111111","steps":[{"name":"checkout"}]}`, repo: &fakeRepo{}, statusCode: http.StatusCreated},
+		{name: "success with source", body: `{"project_id":"11111111-1111-1111-1111-111111111111","source":{"repository_url":"https://github.com/org/repo.git","ref":"main"}}`, repo: &fakeRepo{}, statusCode: http.StatusCreated},
 	}
 
 	for _, tc := range tests {
@@ -765,8 +799,8 @@ func TestBuildHandler_CreateBuild(t *testing.T) {
 			if data["id"] == "" {
 				t.Fatal("expected id in response")
 			}
-			if data["project_id"] != "project-1" {
-				t.Fatalf("expected project_id project-1, got %v", data["project_id"])
+			if data["project_id"] != createBuildTestProjectID {
+				t.Fatalf("expected project_id %s, got %v", createBuildTestProjectID, data["project_id"])
 			}
 			expectedStatus := string(domain.BuildStatusPending)
 			if tc.name == "success with steps auto queues" {
@@ -832,6 +866,62 @@ func TestBuildHandler_CreateBuild_ResolvesSlugLikeProjectID(t *testing.T) {
 	if repo.build.ProjectID != project.ID {
 		t.Fatalf("expected persisted project_id %q, got %q", project.ID, repo.build.ProjectID)
 	}
+}
+
+func TestBuildHandler_ResolveRequestedProjectID_HelperBranches(t *testing.T) {
+	h := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{}, nil, nil))
+	req := httptest.NewRequest(http.MethodPost, "/builds", nil)
+
+	resolved, ok := h.resolveRequestedProjectID(httptest.NewRecorder(), req, "   ")
+	if !ok || resolved != "" {
+		t.Fatalf("expected blank project id to pass through, got %q ok=%v", resolved, ok)
+	}
+
+	resolved, ok = h.resolveRequestedProjectID(httptest.NewRecorder(), req, "11111111-1111-1111-1111-111111111111")
+	if !ok || resolved != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("expected UUID project id to pass through, got %q ok=%v", resolved, ok)
+	}
+
+	w := httptest.NewRecorder()
+	resolved, ok = h.resolveRequestedProjectID(w, req, " fixtures ")
+	if ok || resolved != "" {
+		t.Fatalf("expected slug-like project id without service to fail, got %q ok=%v", resolved, ok)
+	}
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, w.Code)
+	}
+}
+
+func TestBuildHandler_ResolveRequestedProjectID_ProjectLookupFailures(t *testing.T) {
+	t.Run("project not found", func(t *testing.T) {
+		h := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{}, nil, nil))
+		h.SetProjectService(service.NewProjectService(&failingProjectRepo{getBySlugErr: repository.ErrProjectNotFound}))
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/builds", nil)
+
+		resolved, ok := h.resolveRequestedProjectID(w, req, "fixtures")
+		if ok || resolved != "" {
+			t.Fatalf("expected lookup to fail, got %q ok=%v", resolved, ok)
+		}
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected status %d, got %d", http.StatusNotFound, w.Code)
+		}
+	})
+
+	t.Run("generic lookup error", func(t *testing.T) {
+		h := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{}, nil, nil))
+		h.SetProjectService(service.NewProjectService(&failingProjectRepo{getBySlugErr: errors.New("boom")}))
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/builds", nil)
+
+		resolved, ok := h.resolveRequestedProjectID(w, req, "fixtures")
+		if ok || resolved != "" {
+			t.Fatalf("expected lookup to fail, got %q ok=%v", resolved, ok)
+		}
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, w.Code)
+		}
+	})
 }
 
 func TestBuildHandler_ListBuilds(t *testing.T) {

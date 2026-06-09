@@ -12,7 +12,6 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
-	"github.com/radiation/coyote-ci/backend/internal/repository"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
@@ -214,15 +213,12 @@ func (h *BuildHandler) resolveRequestedProjectID(w http.ResponseWriter, r *http.
 		return trimmedProjectID, true
 	}
 	if h.projects == nil {
-		return trimmedProjectID, true
+		h.writeProjectLookupError(w, errors.New("project service not configured"))
+		return "", false
 	}
 	project, err := h.projects.GetProjectBySlug(r.Context(), trimmedProjectID)
 	if err != nil {
-		if errors.Is(err, repository.ErrProjectNotFound) {
-			writeErrorJSON(w, http.StatusNotFound, "not_found", err.Error())
-			return "", false
-		}
-		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		h.writeProjectLookupError(w, err)
 		return "", false
 	}
 	return project.ID, true
