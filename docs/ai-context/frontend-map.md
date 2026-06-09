@@ -18,6 +18,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Queue operations UI: `QueuePage.tsx` and `WorkersPage.tsx`.
 - Project/job/build navigation: `ProjectsListPage.tsx`, `ProjectDetailPage.tsx`, `JobsListPage.tsx`, `JobDetailPage.tsx`, `JobCreatePage.tsx`, `BuildsListPage.tsx`.
 - Auth/token/user/credentials UI: `APITokensPage.tsx`, `UsersPage.tsx`, `CredentialsPage.tsx`, and auth state in `auth.tsx` and `auth-context.ts`.
+- Notification target/subscription admin UI: `NotificationsPage.tsx`, plus notification contracts in `api/client.ts` and `types/notification.ts`.
 
 ## Shared components and state
 
@@ -39,6 +40,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Artifact/release/lineage changes: start in artifact pages, `ArtifactBrowser.tsx`, `BuildArtifactsSection.tsx`, `frontend/src/api/client.ts`, `frontend/src/types/artifact.ts`, and `frontend/src/types/build.ts`.
 - Queue operations changes: start in `QueuePage.tsx`, `WorkersPage.tsx`, and worker/build/job types.
 - Auth, tokens, membership, or role-based UI: start in `auth.tsx`, `auth-context.ts`, `types/identity.ts`, then the relevant settings or project page.
+- Notification settings/admin changes: start in `pages/NotificationsPage.tsx`, then `api/client.ts`, `types/notification.ts`, and the colocated page test.
 
 ## Tests and patterns
 

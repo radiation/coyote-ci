@@ -44,6 +44,16 @@ import type {
   User,
   UserListResponse,
 } from "../types/identity";
+import type {
+  CreateNotificationSubscriptionRequest,
+  CreateNotificationTargetRequest,
+  NotificationSubscription,
+  NotificationSubscriptionListResponse,
+  NotificationTarget,
+  NotificationTargetListResponse,
+  UpdateNotificationSubscriptionRequest,
+  UpdateNotificationTargetRequest,
+} from "../types/notification";
 import {
   APIError,
   AUTH_BASE,
@@ -236,6 +246,97 @@ export async function deleteProjectMember(
 ): Promise<void> {
   await deleteNoContent(
     `/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+  );
+}
+
+export async function listNotificationTargets(): Promise<NotificationTarget[]> {
+  const envelope = await fetchJSON<
+    DataEnvelope<NotificationTargetListResponse>
+  >("/notification-targets");
+  return envelope.data.targets;
+}
+
+export async function createNotificationTarget(
+  input: CreateNotificationTargetRequest,
+): Promise<NotificationTarget> {
+  const envelope = await postJSON<
+    DataEnvelope<NotificationTarget>,
+    CreateNotificationTargetRequest
+  >("/notification-targets", input);
+  return envelope.data;
+}
+
+export async function updateNotificationTarget(
+  id: string,
+  input: UpdateNotificationTargetRequest,
+): Promise<NotificationTarget> {
+  const envelope = await fetchJSON<DataEnvelope<NotificationTarget>>(
+    `/notification-targets/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  return envelope.data;
+}
+
+export async function listNotificationSubscriptions(input?: {
+  project_id?: string;
+  job_id?: string;
+}): Promise<NotificationSubscription[]> {
+  const params = new URLSearchParams();
+  const projectID = input?.project_id?.trim() ?? "";
+  const jobID = input?.job_id?.trim() ?? "";
+
+  if (projectID) {
+    params.set("project_id", projectID);
+  }
+  if (jobID) {
+    params.set("job_id", jobID);
+  }
+
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const envelope = await fetchJSON<
+    DataEnvelope<NotificationSubscriptionListResponse>
+  >(`/notification-subscriptions${suffix}`);
+  return envelope.data.subscriptions;
+}
+
+export async function createNotificationSubscription(
+  input: CreateNotificationSubscriptionRequest,
+): Promise<NotificationSubscription> {
+  const envelope = await postJSON<
+    DataEnvelope<NotificationSubscription>,
+    CreateNotificationSubscriptionRequest
+  >("/notification-subscriptions", input);
+  return envelope.data;
+}
+
+export async function updateNotificationSubscription(
+  id: string,
+  input: UpdateNotificationSubscriptionRequest,
+): Promise<NotificationSubscription> {
+  const envelope = await fetchJSON<DataEnvelope<NotificationSubscription>>(
+    `/notification-subscriptions/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  return envelope.data;
+}
+
+export async function deleteNotificationSubscription(
+  id: string,
+): Promise<void> {
+  await deleteNoContent(
+    `/notification-subscriptions/${encodeURIComponent(id)}`,
   );
 }
 

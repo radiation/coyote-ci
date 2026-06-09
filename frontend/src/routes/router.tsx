@@ -20,6 +20,7 @@ import { UsersPage } from "../pages/UsersPage";
 import { ProjectsListPage } from "../pages/ProjectsListPage";
 import { ProjectDetailPage } from "../pages/ProjectDetailPage";
 import { DashboardPage } from "../pages/DashboardPage";
+import { NotificationsPage } from "../pages/NotificationsPage";
 
 export const appRoutes: RouteObject[] = [
   {
@@ -42,6 +43,7 @@ export const appRoutes: RouteObject[] = [
       { path: "/settings/tokens", element: <APITokensPage /> },
       { path: "/settings/users", element: <UsersPage /> },
       { path: "/settings/credentials", element: <CredentialsPage /> },
+      { path: "/settings/notifications", element: <NotificationsPage /> },
     ],
   },
 ];

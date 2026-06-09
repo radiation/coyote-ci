@@ -28,3 +28,16 @@ export {
   type CreateJobRequest,
   type UpdateJobRequest,
 } from "./job";
+
+export {
+  type NotificationEventType,
+  type NotificationSubscription,
+  type NotificationSubscriptionListResponse,
+  type NotificationTarget,
+  type NotificationTargetListResponse,
+  type NotificationTargetType,
+  type CreateNotificationSubscriptionRequest,
+  type CreateNotificationTargetRequest,
+  type UpdateNotificationSubscriptionRequest,
+  type UpdateNotificationTargetRequest,
+} from "./notification";

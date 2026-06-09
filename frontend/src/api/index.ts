@@ -48,4 +48,11 @@ export {
   upsertProjectMember,
   updateProjectMember,
   deleteProjectMember,
+  listNotificationTargets,
+  createNotificationTarget,
+  updateNotificationTarget,
+  listNotificationSubscriptions,
+  createNotificationSubscription,
+  updateNotificationSubscription,
+  deleteNotificationSubscription,
 } from "./client";

@@ -41,6 +41,13 @@ import {
   upsertProjectMember,
   updateProjectMember,
   deleteProjectMember,
+  listNotificationTargets,
+  createNotificationTarget,
+  updateNotificationTarget,
+  listNotificationSubscriptions,
+  createNotificationSubscription,
+  updateNotificationSubscription,
+  deleteNotificationSubscription,
   isAPIErrorStatus,
 } from "../api/client";
 
@@ -80,6 +87,13 @@ describe("API client - types", () => {
     expect(typeof upsertProjectMember).toBe("function");
     expect(typeof updateProjectMember).toBe("function");
     expect(typeof deleteProjectMember).toBe("function");
+    expect(typeof listNotificationTargets).toBe("function");
+    expect(typeof createNotificationTarget).toBe("function");
+    expect(typeof updateNotificationTarget).toBe("function");
+    expect(typeof listNotificationSubscriptions).toBe("function");
+    expect(typeof createNotificationSubscription).toBe("function");
+    expect(typeof updateNotificationSubscription).toBe("function");
+    expect(typeof deleteNotificationSubscription).toBe("function");
   });
 
   it("cancels a build via /builds/{id}/cancel", async () => {
@@ -1027,6 +1041,188 @@ describe("API client - types", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       8,
       "/api/projects/project-1/members/user-1",
+      { credentials: "include", method: "DELETE" },
+    );
+  });
+
+  it("uses notification target and subscription endpoints", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            targets: [
+              {
+                id: "target-1",
+                type: "email",
+                name: "Dev Mailbox",
+                address: "dev@localhost",
+                enabled: true,
+                created_at: "2026-06-01T00:00:00Z",
+                updated_at: "2026-06-01T00:00:00Z",
+              },
+            ],
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            id: "target-2",
+            type: "email",
+            name: "Ops",
+            address: "ops@localhost",
+            enabled: true,
+            created_at: "2026-06-02T00:00:00Z",
+            updated_at: "2026-06-02T00:00:00Z",
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            id: "target-1",
+            type: "email",
+            name: "Dev Mailbox",
+            address: "dev@localhost",
+            enabled: false,
+            created_at: "2026-06-01T00:00:00Z",
+            updated_at: "2026-06-02T00:00:00Z",
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            subscriptions: [
+              {
+                id: "subscription-1",
+                target_id: "target-1",
+                project_id: "project-1",
+                job_id: null,
+                event_type: "build_failed",
+                enabled: true,
+                created_at: "2026-06-01T00:00:00Z",
+                updated_at: "2026-06-01T00:00:00Z",
+              },
+            ],
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            id: "subscription-2",
+            target_id: "target-1",
+            project_id: null,
+            job_id: "job-1",
+            event_type: "build_succeeded",
+            enabled: true,
+            created_at: "2026-06-02T00:00:00Z",
+            updated_at: "2026-06-02T00:00:00Z",
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            id: "subscription-1",
+            target_id: "target-1",
+            project_id: "project-1",
+            job_id: null,
+            event_type: "build_failed",
+            enabled: false,
+            created_at: "2026-06-01T00:00:00Z",
+            updated_at: "2026-06-02T00:00:00Z",
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const targets = await listNotificationTargets();
+    await createNotificationTarget({
+      name: "Ops",
+      address: "ops@localhost",
+      enabled: true,
+    });
+    await updateNotificationTarget("target-1", { enabled: false });
+    const subscriptions = await listNotificationSubscriptions({
+      project_id: " project-1 ",
+      job_id: " ",
+    });
+    await createNotificationSubscription({
+      target_id: "target-1",
+      job_id: "job-1",
+      event_type: "build_succeeded",
+      enabled: true,
+    });
+    await updateNotificationSubscription("subscription-1", { enabled: false });
+    await deleteNotificationSubscription("subscription-1");
+
+    expect(targets).toHaveLength(1);
+    expect(subscriptions).toHaveLength(1);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/notification-targets", {
+      credentials: "include",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/notification-targets", {
+      credentials: "include",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Ops",
+        address: "ops@localhost",
+        enabled: true,
+      }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/notification-targets/target-1",
+      {
+        credentials: "include",
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false }),
+      },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/notification-subscriptions?project_id=project-1",
+      { credentials: "include" },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "/api/notification-subscriptions",
+      {
+        credentials: "include",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target_id: "target-1",
+          job_id: "job-1",
+          event_type: "build_succeeded",
+          enabled: true,
+        }),
+      },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      6,
+      "/api/notification-subscriptions/subscription-1",
+      {
+        credentials: "include",
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false }),
+      },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      7,
+      "/api/notification-subscriptions/subscription-1",
       { credentials: "include", method: "DELETE" },
     );
   });
