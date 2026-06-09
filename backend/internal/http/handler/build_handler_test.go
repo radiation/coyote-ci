@@ -798,6 +798,42 @@ func TestBuildHandler_CreateBuild(t *testing.T) {
 	}
 }
 
+func TestBuildHandler_CreateBuild_ResolvesSlugLikeProjectID(t *testing.T) {
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	now := time.Now().UTC()
+	project, err := projectRepo.Create(context.Background(), domain.Project{
+		ID:        "11111111-1111-1111-1111-111111111111",
+		Name:      "Fixtures",
+		Slug:      "fixtures",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	repo := &fakeRepo{}
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, nil))
+	h.SetProjectService(projectService)
+	req := httptest.NewRequest(http.MethodPost, "/builds", bytes.NewBufferString(`{"project_id":"fixtures"}`))
+	rr := httptest.NewRecorder()
+
+	h.CreateBuild(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rr.Code, rr.Body.String())
+	}
+	data := decodeDataMap(t, rr)
+	if data["project_id"] != project.ID {
+		t.Fatalf("expected project_id %q, got %v", project.ID, data["project_id"])
+	}
+	if repo.build.ProjectID != project.ID {
+		t.Fatalf("expected persisted project_id %q, got %q", project.ID, repo.build.ProjectID)
+	}
+}
+
 func TestBuildHandler_ListBuilds(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	queuedAt := now.Add(10 * time.Second)

@@ -23,6 +23,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
+	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 )
@@ -211,6 +212,59 @@ func TestCreateRepoBuild(t *testing.T) {
 		}
 		if data["pipeline_path"] != "scenarios/success-basic/coyote.yml" {
 			t.Errorf("expected pipeline_path in response, got %v", data["pipeline_path"])
+		}
+	})
+
+	t.Run("resolves slug-like project_id for repo build", func(t *testing.T) {
+		jobRepo := repositorymemory.NewJobRepository()
+		projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+		projectService := service.NewProjectService(projectRepo)
+		now := time.Now().UTC()
+		project, err := projectRepo.Create(context.Background(), domain.Project{
+			ID:        "11111111-1111-1111-1111-111111111111",
+			Name:      "Fixtures",
+			Slug:      "fixtures",
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("create project: %v", err)
+		}
+
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/scenarios/success-basic", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tmpDir+"/scenarios/success-basic/coyote.yml", []byte("version: 1\nsteps:\n  - name: test\n    run: echo ok\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
+		h := NewBuildHandler(svc)
+		h.SetProjectService(projectService)
+
+		body := `{"project_id":"fixtures","repo_url":"https://github.com/org/repo.git","ref":"main","pipeline_path":"scenarios/success-basic/coyote.yml"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		data := resp["data"]
+		if data["project_id"] != project.ID {
+			t.Fatalf("expected project_id %q, got %v", project.ID, data["project_id"])
+		}
+		if repo.build.ProjectID != project.ID {
+			t.Fatalf("expected persisted project_id %q, got %q", project.ID, repo.build.ProjectID)
 		}
 	})
 
