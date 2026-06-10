@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -254,6 +255,9 @@ func uniqueProjectIDs(ids []string) []string {
 	for _, id := range ids {
 		trimmedID := strings.TrimSpace(id)
 		if trimmedID == "" {
+			continue
+		}
+		if _, parseErr := uuid.Parse(trimmedID); parseErr != nil {
 			continue
 		}
 		if _, ok := seen[trimmedID]; ok {

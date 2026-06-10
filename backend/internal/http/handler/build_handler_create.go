@@ -5,6 +5,9 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/auth"
@@ -29,12 +32,16 @@ func (h *BuildHandler) CreateBuild(w http.ResponseWriter, r *http.Request) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
-	if !authorizeProject(w, r, h.authMode, h.projectRoles, req.ProjectID, auth.CanTriggerBuild, "project owner or maintainer is required") {
+	projectID, ok := h.resolveRequestedProjectID(w, r, req.ProjectID)
+	if !ok {
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanTriggerBuild, "project owner or maintainer is required") {
 		return
 	}
 
 	build, err := h.buildService.CreateBuild(r.Context(), buildsvc.CreateBuildInput{
-		ProjectID: req.ProjectID,
+		ProjectID: projectID,
 		Steps:     toCreateBuildStepInputs(req.Steps),
 		Source:    toCreateBuildSourceInput(req.Source),
 	})
@@ -102,12 +109,16 @@ func (h *BuildHandler) CreatePipelineBuild(w http.ResponseWriter, r *http.Reques
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
-	if !authorizeProject(w, r, h.authMode, h.projectRoles, req.ProjectID, auth.CanTriggerBuild, "project owner or maintainer is required") {
+	projectID, ok := h.resolveRequestedProjectID(w, r, req.ProjectID)
+	if !ok {
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanTriggerBuild, "project owner or maintainer is required") {
 		return
 	}
 
 	build, err := h.buildService.CreateBuildFromPipeline(r.Context(), buildsvc.CreatePipelineBuildInput{
-		ProjectID:    req.ProjectID,
+		ProjectID:    projectID,
 		PipelineYAML: req.PipelineYAML,
 		Source:       toCreateBuildSourceInput(req.Source),
 	})
@@ -149,12 +160,16 @@ func (h *BuildHandler) CreateRepoBuild(w http.ResponseWriter, r *http.Request) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
-	if !authorizeProject(w, r, h.authMode, h.projectRoles, req.ProjectID, auth.CanTriggerBuild, "project owner or maintainer is required") {
+	projectID, ok := h.resolveRequestedProjectID(w, r, req.ProjectID)
+	if !ok {
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanTriggerBuild, "project owner or maintainer is required") {
 		return
 	}
 
 	build, err := h.buildService.CreateBuildFromRepo(r.Context(), buildsvc.CreateRepoBuildInput{
-		ProjectID:    req.ProjectID,
+		ProjectID:    projectID,
 		RepoURL:      req.RepoURL,
 		Ref:          req.Ref,
 		CommitSHA:    req.CommitSHA,
@@ -187,4 +202,24 @@ func (h *BuildHandler) CreateRepoBuild(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeDataJSON(w, http.StatusCreated, toBuildResponse(build))
+}
+
+func (h *BuildHandler) resolveRequestedProjectID(w http.ResponseWriter, r *http.Request, requestedProjectID string) (string, bool) {
+	trimmedProjectID := strings.TrimSpace(requestedProjectID)
+	if trimmedProjectID == "" {
+		return "", true
+	}
+	if _, err := uuid.Parse(trimmedProjectID); err == nil {
+		return trimmedProjectID, true
+	}
+	if h.projects == nil {
+		h.writeProjectLookupError(w, errors.New("project service not configured"))
+		return "", false
+	}
+	project, err := h.projects.GetProjectBySlug(r.Context(), trimmedProjectID)
+	if err != nil {
+		h.writeProjectLookupError(w, err)
+		return "", false
+	}
+	return project.ID, true
 }

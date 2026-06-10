@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,19 +24,36 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
+	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 )
 
+const testProjectID = "11111111-1111-1111-1111-111111111111"
+
 // Build creation endpoints beyond the base /builds handler coverage.
 func TestCreatePipelineBuild(t *testing.T) {
+	t.Run("invalid json returns 400", func(t *testing.T) {
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		h := NewBuildHandler(svc)
+
+		req := httptest.NewRequest(http.MethodPost, "/builds/pipeline", bytes.NewBufferString("{"))
+		w := httptest.NewRecorder()
+		h.CreatePipelineBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
 	t.Run("valid pipeline creates queued build", func(t *testing.T) {
 		repo := &fakeRepo{}
 		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
 		h := NewBuildHandler(svc)
 
 		body := `{
-			"project_id": "proj-1",
+			"project_id": "11111111-1111-1111-1111-111111111111",
 			"pipeline_yaml": "version: 1\nsteps:\n  - name: Lint\n    run: golangci-lint run\n  - name: Test\n    run: go test ./...\n"
 		}`
 
@@ -69,6 +87,52 @@ func TestCreatePipelineBuild(t *testing.T) {
 		}
 	})
 
+	t.Run("resolves slug-like project_id", func(t *testing.T) {
+		jobRepo := repositorymemory.NewJobRepository()
+		projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+		projectService := service.NewProjectService(projectRepo)
+		now := time.Now().UTC()
+		project, err := projectRepo.Create(context.Background(), domain.Project{
+			ID:        "11111111-1111-1111-1111-111111111111",
+			Name:      "Fixtures",
+			Slug:      "fixtures",
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("create project: %v", err)
+		}
+
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		h := NewBuildHandler(svc)
+		h.SetProjectService(projectService)
+
+		body := `{
+			"project_id": "fixtures",
+			"pipeline_yaml": "version: 1\nsteps:\n  - name: Lint\n    run: golangci-lint run\n"
+		}`
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/builds/pipeline", bytes.NewBufferString(body))
+		h.CreatePipelineBuild(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		data := resp["data"]
+		if data["project_id"] != project.ID {
+			t.Fatalf("expected project_id %q, got %v", project.ID, data["project_id"])
+		}
+		if repo.build.ProjectID != project.ID {
+			t.Fatalf("expected persisted project_id %q, got %q", project.ID, repo.build.ProjectID)
+		}
+	})
+
 	t.Run("missing project_id returns 400", func(t *testing.T) {
 		repo := &fakeRepo{}
 		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
@@ -84,18 +148,92 @@ func TestCreatePipelineBuild(t *testing.T) {
 		}
 	})
 
+	t.Run("unknown slug-like project_id returns 404", func(t *testing.T) {
+		jobRepo := repositorymemory.NewJobRepository()
+		projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+		projectService := service.NewProjectService(projectRepo)
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		h := NewBuildHandler(svc)
+		h.SetProjectService(projectService)
+
+		body := `{"project_id":"fixtures","pipeline_yaml":"version: 1\nsteps:\n  - name: Lint\n    run: golangci-lint run\n"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/pipeline", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreatePipelineBuild(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
 	t.Run("invalid YAML returns 400", func(t *testing.T) {
 		repo := &fakeRepo{}
 		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
 		h := NewBuildHandler(svc)
 
-		body := `{"project_id": "proj-1", "pipeline_yaml": "version: 2\nsteps:\n  - name: X\n    run: echo\n"}`
+		body := `{"project_id": "11111111-1111-1111-1111-111111111111", "pipeline_yaml": "version: 2\nsteps:\n  - name: X\n    run: echo\n"}`
 		req := httptest.NewRequest(http.MethodPost, "/builds/pipeline", bytes.NewBufferString(body))
 		w := httptest.NewRecorder()
 		h.CreatePipelineBuild(w, req)
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("validation errors return pipeline_validation", func(t *testing.T) {
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id": "11111111-1111-1111-1111-111111111111", "pipeline_yaml": "version: 2\nsteps:\n  - name: X\n    run: echo\n"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/pipeline", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreatePipelineBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+		bodyMap := decodeBody(t, w)
+		errorMap, ok := bodyMap["error"].(map[string]any)
+		if !ok || errorMap["code"] != "pipeline_validation" {
+			t.Fatalf("expected pipeline_validation code, got %v", bodyMap)
+		}
+	})
+
+	t.Run("parse errors return pipeline_parse", func(t *testing.T) {
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id": "11111111-1111-1111-1111-111111111111", "pipeline_yaml": "version: [1\n"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/pipeline", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreatePipelineBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+		bodyMap := decodeBody(t, w)
+		errorMap, ok := bodyMap["error"].(map[string]any)
+		if !ok || errorMap["code"] != "pipeline_parse" {
+			t.Fatalf("expected pipeline_parse code, got %v", bodyMap)
+		}
+	})
+
+	t.Run("unexpected create error returns 500", func(t *testing.T) {
+		repo := &fakeRepo{createErr: errors.New("boom")}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id":"11111111-1111-1111-1111-111111111111","pipeline_yaml":"version: 1\nsteps:\n  - name: Lint\n    run: golangci-lint run\n"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/pipeline", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreatePipelineBuild(w, req)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
 		}
 	})
 }
@@ -115,6 +253,20 @@ func (f *handlerFakeRepoFetcher) Fetch(_ context.Context, _ string, _ string) (s
 }
 
 func TestCreateRepoBuild(t *testing.T) {
+	t.Run("invalid json returns 400", func(t *testing.T) {
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		h := NewBuildHandler(svc)
+
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString("{"))
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
 	t.Run("valid repo build", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		if err := os.MkdirAll(tmpDir+"/.coyote", 0o755); err != nil {
@@ -129,7 +281,7 @@ func TestCreateRepoBuild(t *testing.T) {
 		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
 		h := NewBuildHandler(svc)
 
-		body := `{"project_id":"proj-1","repo_url":"https://github.com/org/repo.git","ref":"main"}`
+		body := `{"project_id":"11111111-1111-1111-1111-111111111111","repo_url":"https://github.com/org/repo.git","ref":"main"}`
 		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -191,7 +343,7 @@ func TestCreateRepoBuild(t *testing.T) {
 		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
 		h := NewBuildHandler(svc)
 
-		body := `{"project_id":"proj-1","repo_url":"https://github.com/org/repo.git","ref":"main","pipeline_path":"scenarios/success-basic/coyote.yml"}`
+		body := `{"project_id":"11111111-1111-1111-1111-111111111111","repo_url":"https://github.com/org/repo.git","ref":"main","pipeline_path":"scenarios/success-basic/coyote.yml"}`
 		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -214,6 +366,59 @@ func TestCreateRepoBuild(t *testing.T) {
 		}
 	})
 
+	t.Run("resolves slug-like project_id for repo build", func(t *testing.T) {
+		jobRepo := repositorymemory.NewJobRepository()
+		projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+		projectService := service.NewProjectService(projectRepo)
+		now := time.Now().UTC()
+		project, err := projectRepo.Create(context.Background(), domain.Project{
+			ID:        "11111111-1111-1111-1111-111111111111",
+			Name:      "Fixtures",
+			Slug:      "fixtures",
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("create project: %v", err)
+		}
+
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/scenarios/success-basic", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tmpDir+"/scenarios/success-basic/coyote.yml", []byte("version: 1\nsteps:\n  - name: test\n    run: echo ok\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
+		h := NewBuildHandler(svc)
+		h.SetProjectService(projectService)
+
+		body := `{"project_id":"fixtures","repo_url":"https://github.com/org/repo.git","ref":"main","pipeline_path":"scenarios/success-basic/coyote.yml"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		data := resp["data"]
+		if data["project_id"] != project.ID {
+			t.Fatalf("expected project_id %q, got %v", project.ID, data["project_id"])
+		}
+		if repo.build.ProjectID != project.ID {
+			t.Fatalf("expected persisted project_id %q, got %q", project.ID, repo.build.ProjectID)
+		}
+	})
+
 	t.Run("missing project_id returns 400", func(t *testing.T) {
 		repo := &fakeRepo{}
 		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
@@ -230,13 +435,154 @@ func TestCreateRepoBuild(t *testing.T) {
 		}
 	})
 
+	t.Run("unknown slug-like project_id returns 404", func(t *testing.T) {
+		jobRepo := repositorymemory.NewJobRepository()
+		projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+		projectService := service.NewProjectService(projectRepo)
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: "/tmp", commitSHA: "abc"})
+		h := NewBuildHandler(svc)
+		h.SetProjectService(projectService)
+
+		body := `{"project_id":"fixtures","repo_url":"https://github.com/org/repo.git","ref":"main"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("repo fetcher not configured returns 500", func(t *testing.T) {
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id":"11111111-1111-1111-1111-111111111111","repo_url":"https://github.com/org/repo.git","ref":"main"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("invalid repo pipeline returns 400", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/.coyote", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tmpDir+"/.coyote/pipeline.yml", []byte("version: 2\nsteps:\n  - name: test\n    run: echo ok\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id":"11111111-1111-1111-1111-111111111111","repo_url":"https://github.com/org/repo.git","ref":"main"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("repo validation errors return pipeline_validation", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/.coyote", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tmpDir+"/.coyote/pipeline.yml", []byte("version: 2\nsteps:\n  - name: test\n    run: echo ok\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id":"11111111-1111-1111-1111-111111111111","repo_url":"https://github.com/org/repo.git","ref":"main"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+		bodyMap := decodeBody(t, w)
+		errorMap, ok := bodyMap["error"].(map[string]any)
+		if !ok || errorMap["code"] != "pipeline_validation" {
+			t.Fatalf("expected pipeline_validation code, got %v", bodyMap)
+		}
+	})
+
+	t.Run("repo parse errors return pipeline_parse", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/.coyote", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tmpDir+"/.coyote/pipeline.yml", []byte("version: [1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id":"11111111-1111-1111-1111-111111111111","repo_url":"https://github.com/org/repo.git","ref":"main"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+		bodyMap := decodeBody(t, w)
+		errorMap, ok := bodyMap["error"].(map[string]any)
+		if !ok || errorMap["code"] != "pipeline_parse" {
+			t.Fatalf("expected pipeline_parse code, got %v", bodyMap)
+		}
+	})
+
+	t.Run("unexpected create error returns 500", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/.coyote", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tmpDir+"/.coyote/pipeline.yml", []byte("version: 1\nsteps:\n  - name: test\n    run: echo ok\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeRepo{createErr: errors.New("boom")}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id":"11111111-1111-1111-1111-111111111111","repo_url":"https://github.com/org/repo.git","ref":"main"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
 	t.Run("missing ref returns 400", func(t *testing.T) {
 		repo := &fakeRepo{}
 		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
 		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: "/tmp", commitSHA: "abc"})
 		h := NewBuildHandler(svc)
 
-		body := `{"project_id":"proj-1","repo_url":"https://github.com/org/repo.git"}`
+		body := `{"project_id":"11111111-1111-1111-1111-111111111111","repo_url":"https://github.com/org/repo.git"}`
 		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
 		w := httptest.NewRecorder()
 		h.CreateRepoBuild(w, req)
@@ -260,7 +606,7 @@ func TestCreateRepoBuild(t *testing.T) {
 		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
 		h := NewBuildHandler(svc)
 
-		body := `{"project_id":"proj-1","repo_url":"https://github.com/org/repo.git","commit_sha":"abc123"}`
+		body := `{"project_id":"11111111-1111-1111-1111-111111111111","repo_url":"https://github.com/org/repo.git","commit_sha":"abc123"}`
 		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
 		w := httptest.NewRecorder()
 		h.CreateRepoBuild(w, req)
@@ -277,7 +623,7 @@ func TestCreateRepoBuild(t *testing.T) {
 		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc"})
 		h := NewBuildHandler(svc)
 
-		body := `{"project_id":"proj-1","repo_url":"https://github.com/org/repo.git","ref":"main"}`
+		body := `{"project_id":"11111111-1111-1111-1111-111111111111","repo_url":"https://github.com/org/repo.git","ref":"main"}`
 		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
 		w := httptest.NewRecorder()
 		h.CreateRepoBuild(w, req)
@@ -301,7 +647,7 @@ func TestCreateRepoBuild(t *testing.T) {
 		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc"})
 		h := NewBuildHandler(svc)
 
-		body := `{"project_id":"proj-1","repo_url":"https://github.com/org/repo.git","ref":"main","pipeline_path":"../../foo"}`
+		body := `{"project_id":"11111111-1111-1111-1111-111111111111","repo_url":"https://github.com/org/repo.git","ref":"main","pipeline_path":"../../foo"}`
 		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
 		w := httptest.NewRecorder()
 		h.CreateRepoBuild(w, req)
