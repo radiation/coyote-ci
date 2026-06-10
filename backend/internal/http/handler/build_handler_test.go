@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -922,6 +923,32 @@ func TestBuildHandler_ResolveRequestedProjectID_ProjectLookupFailures(t *testing
 			t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, w.Code)
 		}
 	})
+}
+
+func TestToCreateBuildSourceInput(t *testing.T) {
+	if result := toCreateBuildSourceInput(nil); result != nil {
+		t.Fatalf("expected nil source input, got %#v", result)
+	}
+
+	ref := "main"
+	commitSHA := "abc123"
+	result := toCreateBuildSourceInput(&api.BuildSourceInput{
+		RepositoryURL: "https://github.com/org/repo.git",
+		Ref:           &ref,
+		CommitSHA:     &commitSHA,
+	})
+	if result == nil {
+		t.Fatal("expected source input")
+	}
+	if result.RepositoryURL != "https://github.com/org/repo.git" {
+		t.Fatalf("expected repository URL to round trip, got %q", result.RepositoryURL)
+	}
+	if result.Ref != ref {
+		t.Fatalf("expected ref %q, got %q", ref, result.Ref)
+	}
+	if result.CommitSHA != commitSHA {
+		t.Fatalf("expected commit SHA %q, got %q", commitSHA, result.CommitSHA)
+	}
 }
 
 func TestBuildHandler_ListBuilds(t *testing.T) {

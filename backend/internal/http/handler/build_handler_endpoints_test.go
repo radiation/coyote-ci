@@ -182,6 +182,46 @@ func TestCreatePipelineBuild(t *testing.T) {
 		}
 	})
 
+	t.Run("validation errors return pipeline_validation", func(t *testing.T) {
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id": "11111111-1111-1111-1111-111111111111", "pipeline_yaml": "version: 2\nsteps:\n  - name: X\n    run: echo\n"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/pipeline", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreatePipelineBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+		bodyMap := decodeBody(t, w)
+		errorMap, ok := bodyMap["error"].(map[string]any)
+		if !ok || errorMap["code"] != "pipeline_validation" {
+			t.Fatalf("expected pipeline_validation code, got %v", bodyMap)
+		}
+	})
+
+	t.Run("parse errors return pipeline_parse", func(t *testing.T) {
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id": "11111111-1111-1111-1111-111111111111", "pipeline_yaml": "version: [1\n"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/pipeline", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreatePipelineBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+		bodyMap := decodeBody(t, w)
+		errorMap, ok := bodyMap["error"].(map[string]any)
+		if !ok || errorMap["code"] != "pipeline_parse" {
+			t.Fatalf("expected pipeline_parse code, got %v", bodyMap)
+		}
+	})
+
 	t.Run("unexpected create error returns 500", func(t *testing.T) {
 		repo := &fakeRepo{createErr: errors.New("boom")}
 		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
@@ -451,6 +491,64 @@ func TestCreateRepoBuild(t *testing.T) {
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("repo validation errors return pipeline_validation", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/.coyote", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tmpDir+"/.coyote/pipeline.yml", []byte("version: 2\nsteps:\n  - name: test\n    run: echo ok\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id":"11111111-1111-1111-1111-111111111111","repo_url":"https://github.com/org/repo.git","ref":"main"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+		bodyMap := decodeBody(t, w)
+		errorMap, ok := bodyMap["error"].(map[string]any)
+		if !ok || errorMap["code"] != "pipeline_validation" {
+			t.Fatalf("expected pipeline_validation code, got %v", bodyMap)
+		}
+	})
+
+	t.Run("repo parse errors return pipeline_parse", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.MkdirAll(tmpDir+"/.coyote", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tmpDir+"/.coyote/pipeline.yml", []byte("version: [1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		repo := &fakeRepo{}
+		svc := buildsvc.NewBuildService(repo, nil, logs.NewNoopSink())
+		svc.SetRepoFetcher(&handlerFakeRepoFetcher{localPath: tmpDir, commitSHA: "abc123"})
+		h := NewBuildHandler(svc)
+
+		body := `{"project_id":"11111111-1111-1111-1111-111111111111","repo_url":"https://github.com/org/repo.git","ref":"main"}`
+		req := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.CreateRepoBuild(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+		bodyMap := decodeBody(t, w)
+		errorMap, ok := bodyMap["error"].(map[string]any)
+		if !ok || errorMap["code"] != "pipeline_parse" {
+			t.Fatalf("expected pipeline_parse code, got %v", bodyMap)
 		}
 	})
 
