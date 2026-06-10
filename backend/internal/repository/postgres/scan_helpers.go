@@ -13,10 +13,10 @@ type rowScanner interface {
 }
 
 // buildColumns is the canonical column list for build SELECT/RETURNING clauses (full detail).
-const buildColumns = `id, build_number, project_id, job_id, priority, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
+const buildColumns = `id, build_number, project_id, job_id, priority, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, source_author_name, source_author_email, source_committer_name, source_committer_email, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
 
 // buildListColumns is a minimal column list used for list queries (omits large pipeline YAML).
-const buildListColumns = `id, build_number, project_id, job_id, priority, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
+const buildListColumns = `id, build_number, project_id, job_id, priority, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, source_author_name, source_author_email, source_committer_name, source_committer_email, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
 
 var queueEntryColumns = qualifyColumns("b", buildListColumns) + `, p.name, p.slug, j.name, running_job.claimed_by, running_job.claim_expires_at`
 
@@ -63,6 +63,10 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 		&nf.repoURL,
 		&nf.ref,
 		&nf.commitSHA,
+		&nf.sourceAuthorName,
+		&nf.sourceAuthorEmail,
+		&nf.sourceCommitterName,
+		&nf.sourceCommitterEmail,
 		&nf.triggerKind,
 		&nf.scmProvider,
 		&nf.eventType,
@@ -118,6 +122,10 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 		&nf.repoURL,
 		&nf.ref,
 		&nf.commitSHA,
+		&nf.sourceAuthorName,
+		&nf.sourceAuthorEmail,
+		&nf.sourceCommitterName,
+		&nf.sourceCommitterEmail,
 		&nf.triggerKind,
 		&nf.scmProvider,
 		&nf.eventType,
@@ -165,6 +173,10 @@ type buildNullFields struct {
 	repoURL                sql.NullString
 	ref                    sql.NullString
 	commitSHA              sql.NullString
+	sourceAuthorName       sql.NullString
+	sourceAuthorEmail      sql.NullString
+	sourceCommitterName    sql.NullString
+	sourceCommitterEmail   sql.NullString
 	triggerKind            sql.NullString
 	scmProvider            sql.NullString
 	eventType              sql.NullString
@@ -247,6 +259,22 @@ func (nf *buildNullFields) applyTo(build *domain.Build) {
 	if nf.commitSHA.Valid {
 		v := nf.commitSHA.String
 		build.CommitSHA = &v
+	}
+	if nf.sourceAuthorName.Valid {
+		v := nf.sourceAuthorName.String
+		build.SourceAuthorName = &v
+	}
+	if nf.sourceAuthorEmail.Valid {
+		v := nf.sourceAuthorEmail.String
+		build.SourceAuthorEmail = &v
+	}
+	if nf.sourceCommitterName.Valid {
+		v := nf.sourceCommitterName.String
+		build.SourceCommitterName = &v
+	}
+	if nf.sourceCommitterEmail.Valid {
+		v := nf.sourceCommitterEmail.String
+		build.SourceCommitterEmail = &v
 	}
 	if nf.triggerKind.Valid {
 		build.Trigger.Kind = domain.BuildTriggerKind(nf.triggerKind.String)
@@ -360,6 +388,10 @@ func scanQueueEntry(scanner rowScanner) (domain.QueueEntry, error) {
 		&nf.repoURL,
 		&nf.ref,
 		&nf.commitSHA,
+		&nf.sourceAuthorName,
+		&nf.sourceAuthorEmail,
+		&nf.sourceCommitterName,
+		&nf.sourceCommitterEmail,
 		&nf.triggerKind,
 		&nf.scmProvider,
 		&nf.eventType,

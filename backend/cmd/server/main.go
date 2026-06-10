@@ -92,13 +92,14 @@ func main() {
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	workerRepo := repositorypostgres.NewWorkerRepository(db)
 	buildNotificationService, buildNotificationErr := buildsvc.NewBuildNotificationService(buildsvc.BuildNotificationConfig{
-		Enabled:          cfg.EmailNotificationsEnabled,
-		Recipients:       cfg.EmailNotificationRecipients,
-		Sender:           emailSender,
-		JobRepo:          jobRepo,
-		ProjectRepo:      projectRepo,
-		DeliveryRepo:     notificationDeliveryRepo,
-		SubscriptionRepo: notificationSubscriptionRepo,
+		Enabled:                     cfg.EmailNotificationsEnabled,
+		NotifyCommitAuthorOnFailure: cfg.EmailNotifyCommitAuthorOnFailure,
+		Recipients:                  cfg.EmailNotificationRecipients,
+		Sender:                      emailSender,
+		JobRepo:                     jobRepo,
+		ProjectRepo:                 projectRepo,
+		DeliveryRepo:                notificationDeliveryRepo,
+		SubscriptionRepo:            notificationSubscriptionRepo,
 	})
 	if buildNotificationErr != nil {
 		log.Fatalf("failed to configure build notifications: %v", buildNotificationErr)

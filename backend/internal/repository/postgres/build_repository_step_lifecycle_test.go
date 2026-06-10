@@ -8,7 +8,9 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -504,9 +506,24 @@ func TestBuildRepository_CreateQueuedBuild(t *testing.T) {
 	rerunOfBuildID := "build-0"
 
 	mock.ExpectBegin()
+	buildRowColumns := strings.Split(strings.ReplaceAll(buildColumns, " ", ""), ",")
+	buildRow := make([]driver.Value, len(buildRowColumns))
+	buildRow[buildColumnPosition(buildRowColumns, "id")] = "build-1"
+	buildRow[buildColumnPosition(buildRowColumns, "build_number")] = 2
+	buildRow[buildColumnPosition(buildRowColumns, "project_id")] = "project-1"
+	buildRow[buildColumnPosition(buildRowColumns, "job_id")] = jobID
+	buildRow[buildColumnPosition(buildRowColumns, "priority")] = 5
+	buildRow[buildColumnPosition(buildRowColumns, "status")] = "queued"
+	buildRow[buildColumnPosition(buildRowColumns, "created_at")] = now
+	buildRow[buildColumnPosition(buildRowColumns, "queued_at")] = now
+	buildRow[buildColumnPosition(buildRowColumns, "current_step_index")] = 0
+	buildRow[buildColumnPosition(buildRowColumns, "attempt_number")] = 1
+	buildRow[buildColumnPosition(buildRowColumns, "rerun_of_build_id")] = rerunOfBuildID
+	buildRow[buildColumnPosition(buildRowColumns, "trigger_kind")] = "manual"
+	buildRow[buildColumnPosition(buildRowColumns, "image_source_kind")] = "external"
 	mock.ExpectQuery("INSERT INTO builds").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "build_number", "project_id", "job_id", "priority", "status", "created_at", "queued_at", "started_at", "finished_at", "current_step_index", "attempt_number", "rerun_of_build_id", "rerun_from_step_index", "error_message", "pipeline_config_yaml", "pipeline_name", "pipeline_source", "pipeline_path", "repo_url", "ref", "commit_sha", "trigger_kind", "scm_provider", "event_type", "trigger_repository_owner", "trigger_repository_name", "trigger_repository_url", "trigger_raw_ref", "trigger_ref", "trigger_ref_type", "trigger_ref_name", "trigger_deleted", "trigger_commit_sha", "trigger_delivery_id", "trigger_actor", "requested_image_ref", "resolved_image_ref", "image_source_kind", "managed_image_id", "managed_image_version_id"}).
-			AddRow("build-1", 2, "project-1", jobID, 5, "queued", now, now, nil, nil, 0, 1, rerunOfBuildID, nil, nil, nil, nil, nil, nil, nil, nil, nil, "manual", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "external", nil, nil),
+		sqlmock.NewRows(buildRowColumns).
+			AddRow(buildRow...),
 	)
 	mock.ExpectExec("INSERT INTO build_steps").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO build_steps").WillReturnResult(sqlmock.NewResult(1, 1))

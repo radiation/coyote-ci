@@ -336,17 +336,25 @@ func (r *fakeRepo) QueueBuild(ctx context.Context, id string, steps []domain.Bui
 }
 
 func (r *fakeRepo) UpdateSourceCommitSHA(_ context.Context, id string, commitSHA string) (domain.Build, error) {
+	return r.UpdateSourceProvenance(context.Background(), id, repository.SourceProvenanceUpdate{CommitSHA: commitSHA})
+}
+
+func (r *fakeRepo) UpdateSourceProvenance(_ context.Context, id string, update repository.SourceProvenanceUpdate) (domain.Build, error) {
 	b, err := r.GetByID(context.Background(), id)
 	if err != nil {
 		return domain.Build{}, err
 	}
 
-	trimmed := strings.TrimSpace(commitSHA)
+	trimmed := strings.TrimSpace(update.CommitSHA)
 	if trimmed == "" {
 		b.CommitSHA = nil
 	} else {
 		b.CommitSHA = &trimmed
 	}
+	b.SourceAuthorName = readOptionalStringPtr(update.AuthorName)
+	b.SourceAuthorEmail = readOptionalStringPtr(update.AuthorEmail)
+	b.SourceCommitterName = readOptionalStringPtr(update.CommitterName)
+	b.SourceCommitterEmail = readOptionalStringPtr(update.CommitterEmail)
 	b.Source = domain.NewSourceSpec(readOptionalString(b.RepoURL), readOptionalString(b.Ref), readOptionalString(b.CommitSHA))
 
 	if r.builds == nil {
@@ -393,6 +401,14 @@ func readOptionalString(value *string) string {
 		return ""
 	}
 	return strings.TrimSpace(*value)
+}
+
+func readOptionalStringPtr(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func (r *fakeRepo) ClaimStepIfPending(_ context.Context, buildID string, stepIndex int, _ *string, startedAt time.Time) (domain.BuildStep, bool, error) {
@@ -1329,7 +1345,7 @@ func TestBuildHandler_GetBuild(t *testing.T) {
 	}{
 		{name: "missing build id", buildID: "", repo: &fakeRepo{}, statusCode: http.StatusBadRequest, errMsg: "build id is required"},
 		{name: "build not found", buildID: "missing", repo: &fakeRepo{getErr: repository.ErrBuildNotFound}, statusCode: http.StatusNotFound, errMsg: "build not found"},
-		{name: "success", buildID: "build-1", repo: &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusQueued, CreatedAt: now, CurrentStepIndex: 2}}, statusCode: http.StatusOK},
+		{name: "success", buildID: "build-1", repo: &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusQueued, CreatedAt: now, CurrentStepIndex: 2, SourceAuthorName: stringPtr("Ada Lovelace"), SourceAuthorEmail: stringPtr("ada@example.com"), SourceCommitterName: stringPtr("Grace Hopper"), SourceCommitterEmail: stringPtr("grace@example.com")}}, statusCode: http.StatusOK},
 	}
 
 	for _, tc := range tests {
@@ -1360,6 +1376,12 @@ func TestBuildHandler_GetBuild(t *testing.T) {
 				if _, ok := data[field]; !ok {
 					t.Fatalf("expected build detail field %q, got %v", field, data)
 				}
+			}
+			if data["source_author_email"] != "ada@example.com" {
+				t.Fatalf("expected source_author_email ada@example.com, got %v", data["source_author_email"])
+			}
+			if data["source_committer_email"] != "grace@example.com" {
+				t.Fatalf("expected source_committer_email grace@example.com, got %v", data["source_committer_email"])
 			}
 		})
 	}

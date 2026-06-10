@@ -55,6 +55,10 @@ function makeBuild(overrides: Partial<Build> = {}): Build {
     error_message: "Build failed during deploy.",
     pipeline_source: "repo",
     pipeline_path: "scenarios/success-basic/coyote.yml",
+    source_author_name: null,
+    source_author_email: null,
+    source_committer_name: null,
+    source_committer_email: null,
     trigger_kind: "webhook",
     scm_provider: "github",
     event_type: "push",
@@ -730,6 +734,79 @@ describe("BuildDetailPage", () => {
         name: "scenarios/multi-step-failure/coyote.yml",
       }),
     ).toBeNull();
+  });
+
+  it("renders author and committer provenance rows when present", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({
+        source_author_name: "Ada Lovelace",
+        source_author_email: "ada@example.com",
+        source_committer_name: "Grace Hopper",
+        source_committer_email: "grace@example.com",
+      }),
+    );
+
+    renderPage();
+
+    const provenanceSection = (
+      await screen.findByRole("heading", {
+        name: "Provenance",
+      })
+    ).closest("section") as HTMLElement;
+
+    expect(within(provenanceSection).getByText("Author")).toBeTruthy();
+    expect(
+      within(provenanceSection).getByText("Ada Lovelace <ada@example.com>"),
+    ).toBeTruthy();
+    expect(within(provenanceSection).getByText("Committer")).toBeTruthy();
+    expect(
+      within(provenanceSection).getByText("Grace Hopper <grace@example.com>"),
+    ).toBeTruthy();
+  });
+
+  it("hides author and committer provenance rows when metadata is absent", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({
+        source_author_name: null,
+        source_author_email: null,
+        source_committer_name: null,
+        source_committer_email: null,
+      }),
+    );
+
+    renderPage();
+
+    const provenanceSection = (
+      await screen.findByRole("heading", {
+        name: "Provenance",
+      })
+    ).closest("section") as HTMLElement;
+
+    expect(within(provenanceSection).queryByText("Author")).toBeNull();
+    expect(within(provenanceSection).queryByText("Committer")).toBeNull();
+  });
+
+  it("renders partial author or committer metadata without placeholders", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({
+        source_author_name: null,
+        source_author_email: "ada@example.com",
+        source_committer_name: "Grace Hopper",
+        source_committer_email: null,
+      }),
+    );
+
+    renderPage();
+
+    const provenanceSection = (
+      await screen.findByRole("heading", {
+        name: "Provenance",
+      })
+    ).closest("section") as HTMLElement;
+
+    expect(within(provenanceSection).getByText("ada@example.com")).toBeTruthy();
+    expect(within(provenanceSection).getByText("Grace Hopper")).toBeTruthy();
+    expect(within(provenanceSection).queryByText("Unknown")).toBeNull();
   });
 
   it("opens the matching step logs when a log card is clicked", async () => {

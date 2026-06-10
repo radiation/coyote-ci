@@ -26,45 +26,46 @@ type Config struct {
 	StepLeaseSeconds  int
 	WorkerStatusAddr  string
 
-	ExecutionBackend            string
-	ExecutionDefaultImage       string
-	ExecutionWorkspaceRoot      string
-	WorkerCacheStorageProvider  string
-	WorkerCacheStorageRoot      string
-	WorkerCacheMaxSizeMB        int
-	WorkerCacheStorageStrict    bool
-	WorkerCacheGCSBucket        string
-	WorkerCacheGCSPrefix        string
-	WorkerCacheGCSProject       string
-	MountDockerSocket           bool
-	ArtifactStorageRoot         string
-	ArtifactStorageProvider     string
-	ArtifactStorageStrict       bool
-	ArtifactGCSBucket           string
-	ArtifactGCSPrefix           string
-	ArtifactGCSProject          string
-	PushEventSecret             string
-	GitHubWebhookSecret         string
-	AuthMode                    string
-	BootstrapAdminEmails        string
-	OIDCIssuerURL               string
-	OIDCClientID                string
-	OIDCClientSecret            string
-	OIDCRedirectURL             string
-	OIDCScopes                  string
-	SessionSecret               string
-	SessionCookieName           string
-	SessionCookieSecure         bool
-	SessionCookieSameSite       string
-	AuthPostLoginRedirectURL    string
-	AuthPostLogoutRedirectURL   string
-	EmailNotificationsEnabled   bool
-	EmailNotificationRecipients string
-	SMTPHost                    string
-	SMTPPort                    string
-	SMTPUsername                string
-	SMTPPassword                string
-	SMTPFromAddress             string
+	ExecutionBackend                 string
+	ExecutionDefaultImage            string
+	ExecutionWorkspaceRoot           string
+	WorkerCacheStorageProvider       string
+	WorkerCacheStorageRoot           string
+	WorkerCacheMaxSizeMB             int
+	WorkerCacheStorageStrict         bool
+	WorkerCacheGCSBucket             string
+	WorkerCacheGCSPrefix             string
+	WorkerCacheGCSProject            string
+	MountDockerSocket                bool
+	ArtifactStorageRoot              string
+	ArtifactStorageProvider          string
+	ArtifactStorageStrict            bool
+	ArtifactGCSBucket                string
+	ArtifactGCSPrefix                string
+	ArtifactGCSProject               string
+	PushEventSecret                  string
+	GitHubWebhookSecret              string
+	AuthMode                         string
+	BootstrapAdminEmails             string
+	OIDCIssuerURL                    string
+	OIDCClientID                     string
+	OIDCClientSecret                 string
+	OIDCRedirectURL                  string
+	OIDCScopes                       string
+	SessionSecret                    string
+	SessionCookieName                string
+	SessionCookieSecure              bool
+	SessionCookieSameSite            string
+	AuthPostLoginRedirectURL         string
+	AuthPostLogoutRedirectURL        string
+	EmailNotificationsEnabled        bool
+	EmailNotifyCommitAuthorOnFailure bool
+	EmailNotificationRecipients      string
+	SMTPHost                         string
+	SMTPPort                         string
+	SMTPUsername                     string
+	SMTPPassword                     string
+	SMTPFromAddress                  string
 }
 
 func Load() Config {
@@ -85,45 +86,46 @@ func Load() Config {
 		StepLeaseSeconds:  getEnvInt("WORKER_STEP_LEASE_SECONDS", 45),
 		WorkerStatusAddr:  getEnv("WORKER_STATUS_ADDR", ""),
 
-		ExecutionBackend:            getEnv("WORKER_EXECUTION_BACKEND", "docker"),
-		ExecutionDefaultImage:       getEnv("WORKER_EXECUTION_DEFAULT_IMAGE", "alpine:3.20"),
-		ExecutionWorkspaceRoot:      getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
-		WorkerCacheStorageProvider:  getEnv("WORKER_CACHE_STORAGE_PROVIDER", ""),
-		WorkerCacheStorageRoot:      getEnv("WORKER_CACHE_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-cache")),
-		WorkerCacheMaxSizeMB:        getEnvInt("CACHE_MAX_SIZE_MB", 10240),
-		WorkerCacheStorageStrict:    getEnvBool("WORKER_CACHE_STORAGE_STRICT", false),
-		WorkerCacheGCSBucket:        getEnv("WORKER_CACHE_GCS_BUCKET", ""),
-		WorkerCacheGCSPrefix:        getEnv("WORKER_CACHE_GCS_PREFIX", ""),
-		WorkerCacheGCSProject:       getEnv("WORKER_CACHE_GCS_PROJECT", ""),
-		MountDockerSocket:           getEnvBool("WORKER_MOUNT_DOCKER_SOCKET", false),
-		ArtifactStorageRoot:         getEnv("ARTIFACT_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-artifacts")),
-		ArtifactStorageProvider:     getEnv("ARTIFACT_STORAGE_PROVIDER", "filesystem"),
-		ArtifactStorageStrict:       getEnvBool("ARTIFACT_STORAGE_STRICT", false),
-		ArtifactGCSBucket:           getEnv("ARTIFACT_GCS_BUCKET", ""),
-		ArtifactGCSPrefix:           getEnv("ARTIFACT_GCS_PREFIX", ""),
-		ArtifactGCSProject:          getEnv("ARTIFACT_GCS_PROJECT", ""),
-		PushEventSecret:             getEnv("PUSH_EVENT_SECRET", ""),
-		GitHubWebhookSecret:         getEnv("GITHUB_WEBHOOK_SECRET", getEnv("PUSH_EVENT_SECRET", "")),
-		AuthMode:                    getEnv("AUTH_MODE", "disabled"),
-		BootstrapAdminEmails:        getEnv("BOOTSTRAP_ADMIN_EMAILS", ""),
-		OIDCIssuerURL:               getEnv("OIDC_ISSUER_URL", ""),
-		OIDCClientID:                getEnv("OIDC_CLIENT_ID", ""),
-		OIDCClientSecret:            getEnv("OIDC_CLIENT_SECRET", ""),
-		OIDCRedirectURL:             oidcRedirectURL,
-		OIDCScopes:                  getEnv("OIDC_SCOPES", "openid email profile"),
-		SessionSecret:               getEnv("SESSION_SECRET", ""),
-		SessionCookieName:           getEnv("SESSION_COOKIE_NAME", "coyote_session"),
-		SessionCookieSecure:         getEnvBool("SESSION_COOKIE_SECURE", defaultSessionCookieSecure(oidcRedirectURL)),
-		SessionCookieSameSite:       getEnv("SESSION_COOKIE_SAME_SITE", "lax"),
-		AuthPostLoginRedirectURL:    getEnv("AUTH_POST_LOGIN_REDIRECT_URL", ""),
-		AuthPostLogoutRedirectURL:   getEnv("AUTH_POST_LOGOUT_REDIRECT_URL", ""),
-		EmailNotificationsEnabled:   getEnvBool("EMAIL_NOTIFICATIONS_ENABLED", true),
-		EmailNotificationRecipients: getEnv("EMAIL_NOTIFICATION_RECIPIENTS", "dev@localhost"),
-		SMTPHost:                    getEnv("SMTP_HOST", "mailpit"),
-		SMTPPort:                    getEnv("SMTP_PORT", "1025"),
-		SMTPUsername:                getEnv("SMTP_USERNAME", ""),
-		SMTPPassword:                getEnv("SMTP_PASSWORD", ""),
-		SMTPFromAddress:             getEnv("SMTP_FROM_ADDRESS", "coyote-ci@localhost"),
+		ExecutionBackend:                 getEnv("WORKER_EXECUTION_BACKEND", "docker"),
+		ExecutionDefaultImage:            getEnv("WORKER_EXECUTION_DEFAULT_IMAGE", "alpine:3.20"),
+		ExecutionWorkspaceRoot:           getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
+		WorkerCacheStorageProvider:       getEnv("WORKER_CACHE_STORAGE_PROVIDER", ""),
+		WorkerCacheStorageRoot:           getEnv("WORKER_CACHE_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-cache")),
+		WorkerCacheMaxSizeMB:             getEnvInt("CACHE_MAX_SIZE_MB", 10240),
+		WorkerCacheStorageStrict:         getEnvBool("WORKER_CACHE_STORAGE_STRICT", false),
+		WorkerCacheGCSBucket:             getEnv("WORKER_CACHE_GCS_BUCKET", ""),
+		WorkerCacheGCSPrefix:             getEnv("WORKER_CACHE_GCS_PREFIX", ""),
+		WorkerCacheGCSProject:            getEnv("WORKER_CACHE_GCS_PROJECT", ""),
+		MountDockerSocket:                getEnvBool("WORKER_MOUNT_DOCKER_SOCKET", false),
+		ArtifactStorageRoot:              getEnv("ARTIFACT_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-artifacts")),
+		ArtifactStorageProvider:          getEnv("ARTIFACT_STORAGE_PROVIDER", "filesystem"),
+		ArtifactStorageStrict:            getEnvBool("ARTIFACT_STORAGE_STRICT", false),
+		ArtifactGCSBucket:                getEnv("ARTIFACT_GCS_BUCKET", ""),
+		ArtifactGCSPrefix:                getEnv("ARTIFACT_GCS_PREFIX", ""),
+		ArtifactGCSProject:               getEnv("ARTIFACT_GCS_PROJECT", ""),
+		PushEventSecret:                  getEnv("PUSH_EVENT_SECRET", ""),
+		GitHubWebhookSecret:              getEnv("GITHUB_WEBHOOK_SECRET", getEnv("PUSH_EVENT_SECRET", "")),
+		AuthMode:                         getEnv("AUTH_MODE", "disabled"),
+		BootstrapAdminEmails:             getEnv("BOOTSTRAP_ADMIN_EMAILS", ""),
+		OIDCIssuerURL:                    getEnv("OIDC_ISSUER_URL", ""),
+		OIDCClientID:                     getEnv("OIDC_CLIENT_ID", ""),
+		OIDCClientSecret:                 getEnv("OIDC_CLIENT_SECRET", ""),
+		OIDCRedirectURL:                  oidcRedirectURL,
+		OIDCScopes:                       getEnv("OIDC_SCOPES", "openid email profile"),
+		SessionSecret:                    getEnv("SESSION_SECRET", ""),
+		SessionCookieName:                getEnv("SESSION_COOKIE_NAME", "coyote_session"),
+		SessionCookieSecure:              getEnvBool("SESSION_COOKIE_SECURE", defaultSessionCookieSecure(oidcRedirectURL)),
+		SessionCookieSameSite:            getEnv("SESSION_COOKIE_SAME_SITE", "lax"),
+		AuthPostLoginRedirectURL:         getEnv("AUTH_POST_LOGIN_REDIRECT_URL", ""),
+		AuthPostLogoutRedirectURL:        getEnv("AUTH_POST_LOGOUT_REDIRECT_URL", ""),
+		EmailNotificationsEnabled:        getEnvBool("EMAIL_NOTIFICATIONS_ENABLED", true),
+		EmailNotifyCommitAuthorOnFailure: getEnvBool("EMAIL_NOTIFY_COMMIT_AUTHOR_ON_FAILURE", false),
+		EmailNotificationRecipients:      getEnv("EMAIL_NOTIFICATION_RECIPIENTS", "dev@localhost"),
+		SMTPHost:                         getEnv("SMTP_HOST", "mailpit"),
+		SMTPPort:                         getEnv("SMTP_PORT", "1025"),
+		SMTPUsername:                     getEnv("SMTP_USERNAME", ""),
+		SMTPPassword:                     getEnv("SMTP_PASSWORD", ""),
+		SMTPFromAddress:                  getEnv("SMTP_FROM_ADDRESS", "coyote-ci@localhost"),
 	}
 }
 

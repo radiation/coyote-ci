@@ -10,11 +10,14 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service/execution"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 )
 
 const buildPreparationLogStepName = "build-prep"
+
+var readWorkspaceCommitMetadata = source.ReadWorkspaceCommitMetadata
 
 func (s *BuildService) emitBuildPreparationLog(ctx context.Context, buildID string, line string) {
 	if s.logSink == nil {
@@ -149,7 +152,18 @@ func (s *BuildService) resolveBuildSourceInWorkspace(ctx context.Context, buildI
 		return "", source.ErrResolveCommitFailed
 	}
 
-	build, err := s.buildRepo.UpdateSourceCommitSHA(ctx, strings.TrimSpace(buildID), trimmedResolvedCommit)
+	provenanceUpdate := repository.SourceProvenanceUpdate{CommitSHA: trimmedResolvedCommit}
+	metadata, metadataErr := readWorkspaceCommitMetadata(ctx, workspacePath)
+	if metadataErr != nil {
+		log.Printf("build source metadata unavailable: build_id=%s err=%v", strings.TrimSpace(buildID), metadataErr)
+	} else {
+		provenanceUpdate.AuthorName = metadata.AuthorName
+		provenanceUpdate.AuthorEmail = metadata.AuthorEmail
+		provenanceUpdate.CommitterName = metadata.CommitterName
+		provenanceUpdate.CommitterEmail = metadata.CommitterEmail
+	}
+
+	build, err := s.buildRepo.UpdateSourceProvenance(ctx, strings.TrimSpace(buildID), provenanceUpdate)
 	if err != nil {
 		return "", fmt.Errorf("persisting resolved commit SHA: %w", err)
 	}

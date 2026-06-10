@@ -3392,7 +3392,19 @@ const docTemplate = `{
                 "source": {
                     "$ref": "#/definitions/api.BuildSourceResponse"
                 },
+                "source_author_email": {
+                    "type": "string"
+                },
+                "source_author_name": {
+                    "type": "string"
+                },
                 "source_commit_sha": {
+                    "type": "string"
+                },
+                "source_committer_email": {
+                    "type": "string"
+                },
+                "source_committer_name": {
                     "type": "string"
                 },
                 "source_ref": {

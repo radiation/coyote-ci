@@ -298,6 +298,10 @@ func (r *fakeBuildRepository) QueueBuild(_ context.Context, id string, steps []d
 }
 
 func (r *fakeBuildRepository) UpdateSourceCommitSHA(_ context.Context, id string, commitSHA string) (domain.Build, error) {
+	return r.UpdateSourceProvenance(context.Background(), id, repository.SourceProvenanceUpdate{CommitSHA: commitSHA})
+}
+
+func (r *fakeBuildRepository) UpdateSourceProvenance(_ context.Context, id string, update repository.SourceProvenanceUpdate) (domain.Build, error) {
 	if r.updateErr != nil {
 		return domain.Build{}, r.updateErr
 	}
@@ -306,15 +310,27 @@ func (r *fakeBuildRepository) UpdateSourceCommitSHA(_ context.Context, id string
 		return domain.Build{}, repository.ErrBuildNotFound
 	}
 
-	trimmed := strings.TrimSpace(commitSHA)
+	trimmed := strings.TrimSpace(update.CommitSHA)
 	r.updatedCommit = trimmed
 	if trimmed == "" {
 		r.build.CommitSHA = nil
 	} else {
 		r.build.CommitSHA = &trimmed
 	}
+	r.build.SourceAuthorName = readOptionalStringPtrForTest(update.AuthorName)
+	r.build.SourceAuthorEmail = readOptionalStringPtrForTest(update.AuthorEmail)
+	r.build.SourceCommitterName = readOptionalStringPtrForTest(update.CommitterName)
+	r.build.SourceCommitterEmail = readOptionalStringPtrForTest(update.CommitterEmail)
 	r.build.Source = domain.NewSourceSpec(buildReadOptionalString(r.build.RepoURL), buildReadOptionalString(r.build.Ref), buildReadOptionalString(r.build.CommitSHA))
 	return r.build, nil
+}
+
+func readOptionalStringPtrForTest(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func (r *fakeBuildRepository) UpdateImageExecution(_ context.Context, id string, requestedRef *string, resolvedRef *string, sourceKind domain.ImageSourceKind, managedImageID *string, managedImageVersionID *string) (domain.Build, error) {

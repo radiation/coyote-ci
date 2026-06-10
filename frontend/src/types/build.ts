@@ -63,6 +63,10 @@ export interface Build {
   pipeline_path?: string | null;
   source_ref?: string | null;
   source_sha?: string | null;
+  source_author_name?: string | null;
+  source_author_email?: string | null;
+  source_committer_name?: string | null;
+  source_committer_email?: string | null;
   trigger_type?: string | null;
   triggered_by?: string | null;
   trigger_kind?: string | null;

@@ -471,14 +471,31 @@ func (r *BuildRepository) UpdateStatus(ctx context.Context, id string, status do
 }
 
 func (r *BuildRepository) UpdateSourceCommitSHA(ctx context.Context, id string, commitSHA string) (domain.Build, error) {
+	return r.UpdateSourceProvenance(ctx, id, repository.SourceProvenanceUpdate{CommitSHA: commitSHA})
+}
+
+func (r *BuildRepository) UpdateSourceProvenance(ctx context.Context, id string, update repository.SourceProvenanceUpdate) (domain.Build, error) {
 	query := `
 		UPDATE builds
-		SET commit_sha = $2
+		SET commit_sha = $2,
+			source_author_name = NULLIF($3, ''),
+			source_author_email = NULLIF($4, ''),
+			source_committer_name = NULLIF($5, ''),
+			source_committer_email = NULLIF($6, '')
 		WHERE id = $1
 		RETURNING ` + buildColumns + `
 	`
 
-	build, err := scanBuild(r.db.QueryRowContext(ctx, query, id, strings.TrimSpace(commitSHA)))
+	build, err := scanBuild(r.db.QueryRowContext(
+		ctx,
+		query,
+		id,
+		strings.TrimSpace(update.CommitSHA),
+		strings.TrimSpace(update.AuthorName),
+		strings.TrimSpace(update.AuthorEmail),
+		strings.TrimSpace(update.CommitterName),
+		strings.TrimSpace(update.CommitterEmail),
+	))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.Build{}, repository.ErrBuildNotFound

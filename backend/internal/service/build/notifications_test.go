@@ -808,6 +808,52 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("failed builds can include commit author when enabled", func(t *testing.T) {
+		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+		sender := &recordingEmailSender{}
+		authorEmail := "author@example.com"
+		notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+			Enabled:                     true,
+			NotifyCommitAuthorOnFailure: true,
+			Recipients:                  "dev@example.com",
+			Sender:                      sender,
+			DeliveryRepo:                deliveryRepo,
+		})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+
+		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify terminal build failed: %v", err)
+		}
+		if len(sender.messages) != 2 {
+			t.Fatalf("expected default plus author recipient, got %d", len(sender.messages))
+		}
+	})
+
+	t.Run("commit author recipient is deduped against configured recipients", func(t *testing.T) {
+		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+		sender := &recordingEmailSender{}
+		authorEmail := "dev@example.com"
+		notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+			Enabled:                     true,
+			NotifyCommitAuthorOnFailure: true,
+			Recipients:                  "dev@example.com",
+			Sender:                      sender,
+			DeliveryRepo:                deliveryRepo,
+		})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+
+		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify terminal build failed: %v", err)
+		}
+		if len(sender.messages) != 1 {
+			t.Fatalf("expected duplicate author recipient to be deduped, got %d", len(sender.messages))
+		}
+	})
 }
 
 func TestBuildNotificationService_SendSampleBuildFailureRequiresSender(t *testing.T) {
