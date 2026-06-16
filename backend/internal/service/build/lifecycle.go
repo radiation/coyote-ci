@@ -36,7 +36,16 @@ func (s *BuildService) notifyTerminalBuild(ctx context.Context, build domain.Bui
 	if s.buildNotifier == nil || !domain.IsTerminalBuildStatus(build.Status) {
 		return
 	}
-	if notifyErr := s.buildNotifier.NotifyTerminalBuild(ctx, build); notifyErr != nil {
+	authoritativeBuild := build
+	if shouldNotifyBuildStatus(build.Status) {
+		persistedBuild, err := s.buildRepo.GetByID(ctx, build.ID)
+		if err != nil {
+			log.Printf("WARNING: build notification using in-memory build after lookup failure: build_id=%s status=%s err=%v", build.ID, build.Status, err)
+		} else {
+			authoritativeBuild = persistedBuild
+		}
+	}
+	if notifyErr := s.buildNotifier.NotifyTerminalBuild(ctx, authoritativeBuild); notifyErr != nil {
 		log.Printf("WARNING: build notification failed: build_id=%s status=%s err=%v", build.ID, build.Status, notifyErr)
 	}
 }
