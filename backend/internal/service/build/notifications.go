@@ -18,23 +18,25 @@ var ErrEmailNotificationsDisabled = errors.New("email notifications are disabled
 var ErrEmailNotificationRecipientsNotConfigured = errors.New("email notification recipients are not configured")
 
 type BuildNotificationService struct {
-	enabled           bool
-	defaultRecipients []string
-	sender            platformemail.Sender
-	jobRepo           repository.JobRepository
-	projectRepo       repository.ProjectRepository
-	deliveryRepo      repository.NotificationDeliveryRepository
-	subscriptionRepo  repository.NotificationSubscriptionRepository
+	enabled                     bool
+	notifyCommitAuthorOnFailure bool
+	defaultRecipients           []string
+	sender                      platformemail.Sender
+	jobRepo                     repository.JobRepository
+	projectRepo                 repository.ProjectRepository
+	deliveryRepo                repository.NotificationDeliveryRepository
+	subscriptionRepo            repository.NotificationSubscriptionRepository
 }
 
 type BuildNotificationConfig struct {
-	Enabled          bool
-	Recipients       string
-	Sender           platformemail.Sender
-	JobRepo          repository.JobRepository
-	ProjectRepo      repository.ProjectRepository
-	DeliveryRepo     repository.NotificationDeliveryRepository
-	SubscriptionRepo repository.NotificationSubscriptionRepository
+	Enabled                     bool
+	NotifyCommitAuthorOnFailure bool
+	Recipients                  string
+	Sender                      platformemail.Sender
+	JobRepo                     repository.JobRepository
+	ProjectRepo                 repository.ProjectRepository
+	DeliveryRepo                repository.NotificationDeliveryRepository
+	SubscriptionRepo            repository.NotificationSubscriptionRepository
 }
 
 func NewBuildNotificationService(cfg BuildNotificationConfig) (*BuildNotificationService, error) {
@@ -48,13 +50,14 @@ func NewBuildNotificationService(cfg BuildNotificationConfig) (*BuildNotificatio
 	}
 
 	return &BuildNotificationService{
-		enabled:           cfg.Enabled,
-		defaultRecipients: recipients,
-		sender:            cfg.Sender,
-		jobRepo:           cfg.JobRepo,
-		projectRepo:       cfg.ProjectRepo,
-		deliveryRepo:      cfg.DeliveryRepo,
-		subscriptionRepo:  cfg.SubscriptionRepo,
+		enabled:                     cfg.Enabled,
+		notifyCommitAuthorOnFailure: cfg.NotifyCommitAuthorOnFailure,
+		defaultRecipients:           recipients,
+		sender:                      cfg.Sender,
+		jobRepo:                     cfg.JobRepo,
+		projectRepo:                 cfg.ProjectRepo,
+		deliveryRepo:                cfg.DeliveryRepo,
+		subscriptionRepo:            cfg.SubscriptionRepo,
 	}, nil
 }
 
@@ -200,33 +203,35 @@ func (s *BuildNotificationService) sendTerminalNotification(ctx context.Context,
 }
 
 func (s *BuildNotificationService) resolveTerminalRecipients(ctx context.Context, build domain.Build, eventType domain.NotificationEventType) ([]string, error) {
+	var recipients []string
 	if s.subscriptionRepo == nil {
-		return append([]string(nil), s.defaultRecipients...), nil
-	}
-
-	matches, err := s.subscriptionRepo.ListEnabledMatchesForBuildEvent(ctx, build, eventType)
-	if err != nil {
-		return nil, err
-	}
-	if len(matches) == 0 {
-		return append([]string(nil), s.defaultRecipients...), nil
-	}
-
-	recipients := make([]string, 0, len(matches))
-	seen := make(map[string]struct{}, len(matches))
-	for _, match := range matches {
-		recipient := strings.TrimSpace(match.Target.Recipient)
-		if recipient == "" {
-			continue
+		recipients = append(recipients, s.defaultRecipients...)
+	} else {
+		matches, err := s.subscriptionRepo.ListEnabledMatchesForBuildEvent(ctx, build, eventType)
+		if err != nil {
+			return nil, err
 		}
-		if _, exists := seen[recipient]; exists {
-			continue
+		if len(matches) == 0 {
+			recipients = append(recipients, s.defaultRecipients...)
+		} else {
+			recipients = make([]string, 0, len(matches))
+			for _, match := range matches {
+				recipient := strings.TrimSpace(match.Target.Recipient)
+				if recipient == "" {
+					continue
+				}
+				recipients = append(recipients, recipient)
+			}
 		}
-		seen[recipient] = struct{}{}
-		recipients = append(recipients, recipient)
 	}
 
-	return recipients, nil
+	if s.notifyCommitAuthorOnFailure && eventType == domain.NotificationEventTypeBuildFailed {
+		if recipient, ok := parseNotificationRecipient(build.SourceAuthorEmail); ok {
+			recipients = append(recipients, recipient)
+		}
+	}
+
+	return dedupeRecipients(recipients), nil
 }
 
 func (s *BuildNotificationService) prepareDelivery(ctx context.Context, buildID string, eventType domain.NotificationEventType, recipient string) (domain.NotificationDelivery, bool, error) {
@@ -366,4 +371,39 @@ func parseNotificationRecipients(value string) ([]string, error) {
 		recipients = append(recipients, parsed.String())
 	}
 	return recipients, nil
+}
+
+func parseNotificationRecipient(value *string) (string, bool) {
+	if value == nil {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return "", false
+	}
+	parsed, err := mail.ParseAddress(trimmed)
+	if err != nil {
+		return "", false
+	}
+	return parsed.String(), true
+}
+
+func dedupeRecipients(recipients []string) []string {
+	if len(recipients) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(recipients))
+	seen := make(map[string]struct{}, len(recipients))
+	for _, recipient := range recipients {
+		trimmed := strings.TrimSpace(recipient)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
 }

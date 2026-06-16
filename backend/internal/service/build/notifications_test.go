@@ -13,6 +13,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	steprunner "github.com/radiation/coyote-ci/backend/internal/runner"
+	"github.com/radiation/coyote-ci/backend/internal/source"
 )
 
 type recordingEmailSender struct {
@@ -413,6 +414,234 @@ func TestBuildService_CancelBuild_DoesNotSendNotificationWhenConfigured(t *testi
 	}
 }
 
+func TestBuildService_FailBuild_UsesPersistedProvenanceForCommitAuthorNotifications(t *testing.T) {
+	buildRepo := memoryrepo.NewBuildRepository()
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	sender := &recordingEmailSender{}
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:                     true,
+		NotifyCommitAuthorOnFailure: true,
+		Recipients:                  "dev@example.com",
+		Sender:                      sender,
+		DeliveryRepo:                deliveryRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	queuedBuild, err := buildRepo.CreateQueuedBuild(context.Background(), domain.Build{
+		ID:        "build-1",
+		ProjectID: "project-1",
+		Status:    domain.BuildStatusQueued,
+		RepoURL:   readOptionalStringPtrForTest("https://github.com/example/repo.git"),
+		Ref:       readOptionalStringPtrForTest("main"),
+	}, nil)
+	if err != nil {
+		t.Fatalf("create queued build failed: %v", err)
+	}
+	if queuedBuild.SourceAuthorEmail != nil {
+		t.Fatalf("expected original build value to lack author email, got %v", queuedBuild.SourceAuthorEmail)
+	}
+
+	originalReadMetadata := readWorkspaceCommitMetadata
+	t.Cleanup(func() {
+		readWorkspaceCommitMetadata = originalReadMetadata
+	})
+	readWorkspaceCommitMetadata = func(context.Context, string) (source.CommitMetadata, error) {
+		return source.CommitMetadata{
+			AuthorName:  "Author Example",
+			AuthorEmail: "author@example.com",
+		}, nil
+	}
+
+	resolver := &fakeWorkspaceSourceResolver{resolvedCommit: "deadbeef"}
+	svc := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{BuildNotifier: notifier})
+	svc.SetSourceResolver(resolver)
+	svc.SetExecutionWorkspaceRoot(t.TempDir())
+
+	preparedBuild, err := svc.PrepareBuildExecution(context.Background(), queuedBuild.ID)
+	if err != nil {
+		t.Fatalf("prepare build execution returned error: %v", err)
+	}
+	if preparedBuild.Status != domain.BuildStatusRunning {
+		t.Fatalf("expected prepared build to be running, got %q", preparedBuild.Status)
+	}
+	if preparedBuild.SourceAuthorEmail == nil || *preparedBuild.SourceAuthorEmail != "author@example.com" {
+		t.Fatalf("expected prepare build execution to persist author email, got %v", preparedBuild.SourceAuthorEmail)
+	}
+
+	failedBuild, err := svc.FailBuild(context.Background(), queuedBuild.ID)
+	if err != nil {
+		t.Fatalf("fail build returned error: %v", err)
+	}
+	if failedBuild.Status != domain.BuildStatusFailed {
+		t.Fatalf("expected failed build, got %q", failedBuild.Status)
+	}
+	if failedBuild.SourceAuthorEmail == nil || *failedBuild.SourceAuthorEmail != "author@example.com" {
+		t.Fatalf("expected failed build returned from repo to include author email, got %v", failedBuild.SourceAuthorEmail)
+	}
+	if len(sender.messages) != 2 {
+		t.Fatalf("expected default plus author notification, got %d", len(sender.messages))
+	}
+
+	seen := map[string]bool{}
+	for _, message := range sender.messages {
+		seen[message.To] = true
+	}
+	for _, recipient := range []string{"<dev@example.com>", "<author@example.com>"} {
+		if !seen[recipient] {
+			t.Fatalf("expected notification for %s, got %v", recipient, seen)
+		}
+		if delivery := mustGetNotificationDelivery(t, deliveryRepo, queuedBuild.ID, domain.NotificationEventTypeBuildFailed, recipient); delivery.Status != domain.NotificationDeliveryStatusSent {
+			t.Fatalf("expected sent delivery for %s, got %q", recipient, delivery.Status)
+		}
+	}
+	if queuedBuild.SourceAuthorEmail != nil {
+		t.Fatalf("expected stale original build value to remain unchanged, got %v", queuedBuild.SourceAuthorEmail)
+	}
+	storedBuild, err := buildRepo.GetByID(context.Background(), queuedBuild.ID)
+	if err != nil {
+		t.Fatalf("reload persisted build failed: %v", err)
+	}
+	if storedBuild.SourceAuthorEmail == nil || *storedBuild.SourceAuthorEmail != "author@example.com" {
+		t.Fatalf("expected persisted build author email, got %v", storedBuild.SourceAuthorEmail)
+	}
+	if queuedBuild.SourceAuthorEmail != nil {
+		t.Fatalf("expected stale original build value to remain unchanged, got %v", queuedBuild.SourceAuthorEmail)
+	}
+	if failedBuild.SourceAuthorEmail == nil || *failedBuild.SourceAuthorEmail != "author@example.com" {
+		t.Fatalf("expected terminal build used for notification to include persisted author email, got %v", failedBuild.SourceAuthorEmail)
+	}
+}
+
+func TestBuildService_FailBuild_DoesNotIncludeCommitAuthorWhenDisabled(t *testing.T) {
+	buildRepo := memoryrepo.NewBuildRepository()
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	sender := &recordingEmailSender{}
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:      true,
+		Recipients:   "dev@example.com",
+		Sender:       sender,
+		DeliveryRepo: deliveryRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	queuedBuild, err := buildRepo.CreateQueuedBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusQueued}, nil)
+	if err != nil {
+		t.Fatalf("create queued build failed: %v", err)
+	}
+	if _, err := buildRepo.UpdateSourceProvenance(context.Background(), queuedBuild.ID, repository.SourceProvenanceUpdate{CommitSHA: "deadbeef", AuthorEmail: "author@example.com"}); err != nil {
+		t.Fatalf("persist source provenance failed: %v", err)
+	}
+	if _, err := buildRepo.UpdateStatus(context.Background(), queuedBuild.ID, domain.BuildStatusRunning, nil); err != nil {
+		t.Fatalf("transition to running failed: %v", err)
+	}
+
+	svc := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{BuildNotifier: notifier})
+	if _, err := svc.FailBuild(context.Background(), queuedBuild.ID); err != nil {
+		t.Fatalf("fail build returned error: %v", err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected only configured recipient when author notify disabled, got %d", len(sender.messages))
+	}
+	if sender.messages[0].To != "<dev@example.com>" {
+		t.Fatalf("expected configured recipient only, got %q", sender.messages[0].To)
+	}
+	if _, err := deliveryRepo.GetByBuildEventRecipient(context.Background(), queuedBuild.ID, domain.NotificationEventTypeBuildFailed, "<author@example.com>"); !errors.Is(err, repository.ErrNotificationDeliveryNotFound) {
+		t.Fatalf("expected no author delivery record when disabled, got %v", err)
+	}
+	if delivery := mustGetNotificationDelivery(t, deliveryRepo, queuedBuild.ID, domain.NotificationEventTypeBuildFailed, "<dev@example.com>"); delivery.Status != domain.NotificationDeliveryStatusSent {
+		t.Fatalf("expected configured recipient delivery, got %q", delivery.Status)
+	}
+}
+
+func TestBuildService_CompleteBuild_DoesNotIncludeCommitAuthorOnSuccess(t *testing.T) {
+	buildRepo := memoryrepo.NewBuildRepository()
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	sender := &recordingEmailSender{}
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:                     true,
+		NotifyCommitAuthorOnFailure: true,
+		Recipients:                  "dev@example.com",
+		Sender:                      sender,
+		DeliveryRepo:                deliveryRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	queuedBuild, err := buildRepo.CreateQueuedBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusQueued}, nil)
+	if err != nil {
+		t.Fatalf("create queued build failed: %v", err)
+	}
+	if _, err := buildRepo.UpdateSourceProvenance(context.Background(), queuedBuild.ID, repository.SourceProvenanceUpdate{CommitSHA: "deadbeef", AuthorEmail: "author@example.com"}); err != nil {
+		t.Fatalf("persist source provenance failed: %v", err)
+	}
+	if _, err := buildRepo.UpdateStatus(context.Background(), queuedBuild.ID, domain.BuildStatusRunning, nil); err != nil {
+		t.Fatalf("transition to running failed: %v", err)
+	}
+
+	svc := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{BuildNotifier: notifier})
+	if _, err := svc.CompleteBuild(context.Background(), queuedBuild.ID); err != nil {
+		t.Fatalf("complete build returned error: %v", err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected only configured success recipient, got %d", len(sender.messages))
+	}
+	if sender.messages[0].To != "<dev@example.com>" {
+		t.Fatalf("expected configured success recipient, got %q", sender.messages[0].To)
+	}
+	if _, err := deliveryRepo.GetByBuildEventRecipient(context.Background(), queuedBuild.ID, domain.NotificationEventTypeBuildSucceeded, "<author@example.com>"); !errors.Is(err, repository.ErrNotificationDeliveryNotFound) {
+		t.Fatalf("expected no author success delivery record, got %v", err)
+	}
+}
+
+func TestBuildService_FailBuild_DedupesCommitAuthorAgainstConfiguredRecipients(t *testing.T) {
+	buildRepo := memoryrepo.NewBuildRepository()
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	sender := &recordingEmailSender{}
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:                     true,
+		NotifyCommitAuthorOnFailure: true,
+		Recipients:                  "dev@example.com",
+		Sender:                      sender,
+		DeliveryRepo:                deliveryRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	queuedBuild, err := buildRepo.CreateQueuedBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusQueued}, nil)
+	if err != nil {
+		t.Fatalf("create queued build failed: %v", err)
+	}
+	if _, err := buildRepo.UpdateSourceProvenance(context.Background(), queuedBuild.ID, repository.SourceProvenanceUpdate{CommitSHA: "deadbeef", AuthorEmail: "dev@example.com"}); err != nil {
+		t.Fatalf("persist source provenance failed: %v", err)
+	}
+	if _, err := buildRepo.UpdateStatus(context.Background(), queuedBuild.ID, domain.BuildStatusRunning, nil); err != nil {
+		t.Fatalf("transition to running failed: %v", err)
+	}
+
+	svc := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{BuildNotifier: notifier})
+	if _, err := svc.FailBuild(context.Background(), queuedBuild.ID); err != nil {
+		t.Fatalf("fail build returned error: %v", err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected deduped configured/author recipient, got %d", len(sender.messages))
+	}
+	if sender.messages[0].To != "<dev@example.com>" {
+		t.Fatalf("expected deduped recipient, got %q", sender.messages[0].To)
+	}
+	if delivery := mustGetNotificationDelivery(t, deliveryRepo, queuedBuild.ID, domain.NotificationEventTypeBuildFailed, "<dev@example.com>"); delivery.Attempts != 1 {
+		t.Fatalf("expected one deduped delivery attempt, got %d", delivery.Attempts)
+	}
+	if _, err := deliveryRepo.GetByBuildEventRecipient(context.Background(), queuedBuild.ID, domain.NotificationEventTypeBuildFailed, "<author@example.com>"); !errors.Is(err, repository.ErrNotificationDeliveryNotFound) {
+		t.Fatalf("expected no second author delivery after dedupe, got %v", err)
+	}
+}
+
 func TestBuildService_HandleStepResult_FailedStepThenFailBuild_DoesNotDoubleSendEmail(t *testing.T) {
 	claimToken := "claim-active"
 	buildRepo := &fakeBuildRepository{
@@ -806,6 +1035,52 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 			if delivery.Status != domain.NotificationDeliveryStatusSent {
 				t.Fatalf("expected sent delivery for %s, got %q", recipient, delivery.Status)
 			}
+		}
+	})
+
+	t.Run("failed builds can include commit author when enabled", func(t *testing.T) {
+		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+		sender := &recordingEmailSender{}
+		authorEmail := "author@example.com"
+		notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+			Enabled:                     true,
+			NotifyCommitAuthorOnFailure: true,
+			Recipients:                  "dev@example.com",
+			Sender:                      sender,
+			DeliveryRepo:                deliveryRepo,
+		})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+
+		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify terminal build failed: %v", err)
+		}
+		if len(sender.messages) != 2 {
+			t.Fatalf("expected default plus author recipient, got %d", len(sender.messages))
+		}
+	})
+
+	t.Run("commit author recipient is deduped against configured recipients", func(t *testing.T) {
+		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+		sender := &recordingEmailSender{}
+		authorEmail := "dev@example.com"
+		notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+			Enabled:                     true,
+			NotifyCommitAuthorOnFailure: true,
+			Recipients:                  "dev@example.com",
+			Sender:                      sender,
+			DeliveryRepo:                deliveryRepo,
+		})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+
+		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify terminal build failed: %v", err)
+		}
+		if len(sender.messages) != 1 {
+			t.Fatalf("expected duplicate author recipient to be deduped, got %d", len(sender.messages))
 		}
 	})
 }

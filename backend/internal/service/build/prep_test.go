@@ -11,6 +11,7 @@ package build
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -152,6 +153,85 @@ func TestPrepareBuildExecution_SourceClonedExactlyOnce(t *testing.T) {
 	}
 	if resolver.cloneCalls != 1 {
 		t.Fatalf("expected still 1 clone call after idempotent re-prep, got %d", resolver.cloneCalls)
+	}
+}
+
+func TestPrepareBuildExecution_PersistsCommitMetadataWhenAvailable(t *testing.T) {
+	repoURL := "https://github.com/example/repo.git"
+	ref := "main"
+
+	repo := &fakeBuildRepository{
+		build: domain.Build{
+			ID:     "build-metadata",
+			Status: domain.BuildStatusQueued,
+			Source: domain.NewSourceSpec(repoURL, ref, ""),
+		},
+	}
+
+	originalReadMetadata := readWorkspaceCommitMetadata
+	t.Cleanup(func() {
+		readWorkspaceCommitMetadata = originalReadMetadata
+	})
+	readWorkspaceCommitMetadata = func(context.Context, string) (source.CommitMetadata, error) {
+		return source.CommitMetadata{
+			AuthorName:     "Ada Lovelace",
+			AuthorEmail:    "ada@example.com",
+			CommitterName:  "Grace Hopper",
+			CommitterEmail: "grace@example.com",
+		}, nil
+	}
+
+	resolver := &fakeWorkspaceSourceResolver{resolvedCommit: "deadbeef"}
+	svc := NewBuildService(repo, nil, nil)
+	svc.SetSourceResolver(resolver)
+	svc.SetExecutionWorkspaceRoot(t.TempDir())
+
+	build, prepErr := svc.PrepareBuildExecution(context.Background(), "build-metadata")
+	if prepErr != nil {
+		t.Fatalf("prep error: %v", prepErr)
+	}
+	if build.SourceAuthorEmail == nil || *build.SourceAuthorEmail != "ada@example.com" {
+		t.Fatalf("expected source author email to persist, got %v", build.SourceAuthorEmail)
+	}
+	if build.SourceCommitterEmail == nil || *build.SourceCommitterEmail != "grace@example.com" {
+		t.Fatalf("expected source committer email to persist, got %v", build.SourceCommitterEmail)
+	}
+}
+
+func TestPrepareBuildExecution_IgnoresCommitMetadataFailures(t *testing.T) {
+	repoURL := "https://github.com/example/repo.git"
+	ref := "main"
+
+	repo := &fakeBuildRepository{
+		build: domain.Build{
+			ID:     "build-metadata-missing",
+			Status: domain.BuildStatusQueued,
+			Source: domain.NewSourceSpec(repoURL, ref, ""),
+		},
+	}
+
+	originalReadMetadata := readWorkspaceCommitMetadata
+	t.Cleanup(func() {
+		readWorkspaceCommitMetadata = originalReadMetadata
+	})
+	readWorkspaceCommitMetadata = func(context.Context, string) (source.CommitMetadata, error) {
+		return source.CommitMetadata{}, errors.New("git show failed")
+	}
+
+	resolver := &fakeWorkspaceSourceResolver{resolvedCommit: "cafebabe"}
+	svc := NewBuildService(repo, nil, nil)
+	svc.SetSourceResolver(resolver)
+	svc.SetExecutionWorkspaceRoot(t.TempDir())
+
+	build, prepErr := svc.PrepareBuildExecution(context.Background(), "build-metadata-missing")
+	if prepErr != nil {
+		t.Fatalf("prep error: %v", prepErr)
+	}
+	if build.Status != domain.BuildStatusRunning {
+		t.Fatalf("expected running build after metadata failure, got %q", build.Status)
+	}
+	if build.SourceAuthorEmail != nil || build.SourceCommitterEmail != nil {
+		t.Fatalf("expected missing metadata to remain nil, got author=%v committer=%v", build.SourceAuthorEmail, build.SourceCommitterEmail)
 	}
 }
 

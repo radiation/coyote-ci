@@ -80,6 +80,10 @@ func NormalizeBuildMetadata(in Build) Build {
 	in.Trigger = trigger
 	in.SourceRef = trimOptional(in.SourceRef)
 	in.SourceSHA = trimOptional(in.SourceSHA)
+	in.SourceAuthorName = trimOptional(in.SourceAuthorName)
+	in.SourceAuthorEmail = trimOptional(in.SourceAuthorEmail)
+	in.SourceCommitterName = trimOptional(in.SourceCommitterName)
+	in.SourceCommitterEmail = trimOptional(in.SourceCommitterEmail)
 	in.TriggeredBy = trimOptional(in.TriggeredBy)
 
 	if in.SourceRef == nil {

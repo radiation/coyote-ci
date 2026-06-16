@@ -187,6 +187,47 @@ func TestBuildRepository_DerivesBuildMetadataFromSourceAndTrigger(t *testing.T) 
 	}
 }
 
+func TestBuildRepository_UpdateSourceProvenance_RoundTrip(t *testing.T) {
+	repo := NewBuildRepository()
+	now := time.Now().UTC()
+	build, err := repo.Create(context.Background(), domain.Build{
+		ID:        "build-1",
+		ProjectID: "project-1",
+		Status:    domain.BuildStatusPending,
+		CreatedAt: now,
+		RepoURL:   stringPtr("https://github.com/acme/repo.git"),
+		Ref:       stringPtr("main"),
+	})
+	if err != nil {
+		t.Fatalf("create build failed: %v", err)
+	}
+
+	updated, err := repo.UpdateSourceProvenance(context.Background(), build.ID, repository.SourceProvenanceUpdate{
+		CommitSHA:      "deadbeef",
+		AuthorName:     "Ada Lovelace",
+		AuthorEmail:    "ada@example.com",
+		CommitterName:  "Grace Hopper",
+		CommitterEmail: "grace@example.com",
+	})
+	if err != nil {
+		t.Fatalf("update source provenance failed: %v", err)
+	}
+	if updated.SourceAuthorEmail == nil || *updated.SourceAuthorEmail != "ada@example.com" {
+		t.Fatalf("expected persisted source author email, got %v", updated.SourceAuthorEmail)
+	}
+
+	reloaded, err := repo.GetByID(context.Background(), build.ID)
+	if err != nil {
+		t.Fatalf("reload build failed: %v", err)
+	}
+	if reloaded.SourceCommitterEmail == nil || *reloaded.SourceCommitterEmail != "grace@example.com" {
+		t.Fatalf("expected persisted source committer email, got %v", reloaded.SourceCommitterEmail)
+	}
+	if reloaded.SourceSHA == nil || *reloaded.SourceSHA != "deadbeef" {
+		t.Fatalf("expected source_sha to reflect commit SHA, got %v", reloaded.SourceSHA)
+	}
+}
+
 func stringPtr(value string) *string {
 	return &value
 }

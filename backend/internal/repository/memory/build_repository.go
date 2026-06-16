@@ -342,6 +342,14 @@ func runningOrderTime(build domain.Build) time.Time {
 	return build.CreatedAt
 }
 
+func readOptionalStringPtr(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
 func (r *BuildRepository) ListByJobID(_ context.Context, jobID string) ([]domain.Build, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -441,6 +449,10 @@ func (r *BuildRepository) UpdateStatus(_ context.Context, id string, status doma
 }
 
 func (r *BuildRepository) UpdateSourceCommitSHA(_ context.Context, id string, commitSHA string) (domain.Build, error) {
+	return r.UpdateSourceProvenance(context.Background(), id, repository.SourceProvenanceUpdate{CommitSHA: commitSHA})
+}
+
+func (r *BuildRepository) UpdateSourceProvenance(_ context.Context, id string, update repository.SourceProvenanceUpdate) (domain.Build, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -449,12 +461,18 @@ func (r *BuildRepository) UpdateSourceCommitSHA(_ context.Context, id string, co
 		return domain.Build{}, repository.ErrBuildNotFound
 	}
 
-	trimmed := strings.TrimSpace(commitSHA)
+	trimmed := strings.TrimSpace(update.CommitSHA)
 	if trimmed == "" {
 		build.CommitSHA = nil
+		build.SourceSHA = nil
 	} else {
 		build.CommitSHA = &trimmed
+		build.SourceSHA = &trimmed
 	}
+	build.SourceAuthorName = readOptionalStringPtr(update.AuthorName)
+	build.SourceAuthorEmail = readOptionalStringPtr(update.AuthorEmail)
+	build.SourceCommitterName = readOptionalStringPtr(update.CommitterName)
+	build.SourceCommitterEmail = readOptionalStringPtr(update.CommitterEmail)
 	build.Source = domain.NewSourceSpec(readOptionalString(build.RepoURL), readOptionalString(build.Ref), readOptionalString(build.CommitSHA))
 
 	r.builds[id] = build

@@ -154,13 +154,14 @@ func newWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepos
 	}
 
 	buildNotificationService, buildNotificationErr := buildsvc.NewBuildNotificationService(buildsvc.BuildNotificationConfig{
-		Enabled:          cfg.EmailNotificationsEnabled,
-		Recipients:       cfg.EmailNotificationRecipients,
-		Sender:           emailSender,
-		JobRepo:          jobRepo,
-		ProjectRepo:      projectRepo,
-		DeliveryRepo:     deliveryRepo,
-		SubscriptionRepo: subscriptionRepo,
+		Enabled:                     cfg.EmailNotificationsEnabled,
+		NotifyCommitAuthorOnFailure: cfg.EmailNotifyCommitAuthorOnFailure,
+		Recipients:                  cfg.EmailNotificationRecipients,
+		Sender:                      emailSender,
+		JobRepo:                     jobRepo,
+		ProjectRepo:                 projectRepo,
+		DeliveryRepo:                deliveryRepo,
+		SubscriptionRepo:            subscriptionRepo,
 	})
 	if buildNotificationErr != nil {
 		return nil, buildNotificationErr

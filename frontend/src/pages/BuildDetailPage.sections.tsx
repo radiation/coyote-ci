@@ -70,6 +70,19 @@ function textValue(value: string | null | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
+function formatIdentityValue(
+  name: string | null | undefined,
+  email: string | null | undefined,
+): string | null {
+  const normalizedName = textValue(name);
+  const normalizedEmail = textValue(email);
+
+  if (normalizedName && normalizedEmail) {
+    return `${normalizedName} <${normalizedEmail}>`;
+  }
+  return normalizedName ?? normalizedEmail;
+}
+
 function repositoryDisplayLabel(build: Build): string {
   return `${build.repository_owner ?? ""}${build.repository_owner && build.repository_name ? "/" : ""}${build.repository_name ?? build.repository_url ?? ""}`;
 }
@@ -716,6 +729,14 @@ export function ProvenancePanel({
   const sourceCommitHref = buildGitHubCommitURL(build, sourceCommit);
   const triggerCommit = textValue(build.trigger_commit_sha);
   const triggerCommitHref = buildGitHubCommitURL(build, triggerCommit);
+  const authorValue = formatIdentityValue(
+    build.source_author_name,
+    build.source_author_email,
+  );
+  const committerValue = formatIdentityValue(
+    build.source_committer_name,
+    build.source_committer_email,
+  );
   const sourceItems = [
     build.repository_url
       ? metadataItem(
@@ -783,6 +804,8 @@ export function ProvenancePanel({
             ),
           )
         : null,
+    authorValue ? metadataItem("Author", authorValue) : null,
+    committerValue ? metadataItem("Committer", committerValue) : null,
   ].filter((item): item is { label: string; value: ReactNode } =>
     Boolean(item),
   );
