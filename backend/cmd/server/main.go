@@ -96,10 +96,12 @@ func main() {
 		NotifyCommitAuthorOnFailure: cfg.EmailNotifyCommitAuthorOnFailure,
 		Recipients:                  cfg.EmailNotificationRecipients,
 		Sender:                      emailSender,
+		SlackSender:                 buildsvc.NewSlackWebhookSender(nil),
 		JobRepo:                     jobRepo,
 		ProjectRepo:                 projectRepo,
 		DeliveryRepo:                notificationDeliveryRepo,
 		SubscriptionRepo:            notificationSubscriptionRepo,
+		PublicBaseURL:               cfg.PublicURL,
 	})
 	if buildNotificationErr != nil {
 		log.Fatalf("failed to configure build notifications: %v", buildNotificationErr)

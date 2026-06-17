@@ -158,10 +158,12 @@ func newWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepos
 		NotifyCommitAuthorOnFailure: cfg.EmailNotifyCommitAuthorOnFailure,
 		Recipients:                  cfg.EmailNotificationRecipients,
 		Sender:                      emailSender,
+		SlackSender:                 buildsvc.NewSlackWebhookSender(nil),
 		JobRepo:                     jobRepo,
 		ProjectRepo:                 projectRepo,
 		DeliveryRepo:                deliveryRepo,
 		SubscriptionRepo:            subscriptionRepo,
+		PublicBaseURL:               cfg.PublicURL,
 	})
 	if buildNotificationErr != nil {
 		return nil, buildNotificationErr

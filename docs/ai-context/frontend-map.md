@@ -18,7 +18,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Queue operations UI: `QueuePage.tsx` and `WorkersPage.tsx`.
 - Project/job/build navigation: `ProjectsListPage.tsx`, `ProjectDetailPage.tsx`, `JobsListPage.tsx`, `JobDetailPage.tsx`, `JobCreatePage.tsx`, `BuildsListPage.tsx`.
 - Auth/token/user/credentials UI: `APITokensPage.tsx`, `UsersPage.tsx`, `CredentialsPage.tsx`, and auth state in `auth.tsx` and `auth-context.ts`.
-- Notification target/subscription admin UI: `NotificationsPage.tsx`, plus notification contracts in `api/client.ts` and `types/notification.ts`.
+- Notification target/subscription admin UI: `NotificationsPage.tsx`, plus notification contracts in `api/client.ts` and `types/notification.ts`; this page now handles both email and Slack webhook targets and keeps webhook secrets masked during edits.
 
 ## Shared components and state
 

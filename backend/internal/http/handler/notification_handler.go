@@ -30,8 +30,10 @@ type NotificationHandler struct {
 
 type notificationAdminService interface {
 	ListTargets(ctx context.Context) ([]domain.NotificationTarget, error)
+	CreateTarget(ctx context.Context, input service.CreateNotificationTargetInput) (domain.NotificationTarget, error)
 	CreateEmailTarget(ctx context.Context, input service.CreateNotificationTargetInput) (domain.NotificationTarget, error)
 	UpdateTarget(ctx context.Context, id string, input service.UpdateNotificationTargetInput) (domain.NotificationTarget, error)
+	DeleteTarget(ctx context.Context, id string) error
 	ListSubscriptions(ctx context.Context, input service.ListNotificationSubscriptionsInput) ([]domain.NotificationSubscription, error)
 	CreateSubscription(ctx context.Context, input service.CreateNotificationSubscriptionInput) (domain.NotificationSubscription, error)
 	UpdateSubscription(ctx context.Context, id string, input service.UpdateNotificationSubscriptionInput) (domain.NotificationSubscription, error)
@@ -93,7 +95,7 @@ func (h *NotificationHandler) ListTargets(w http.ResponseWriter, r *http.Request
 	writeDataJSON(w, http.StatusOK, api.NotificationTargetListResponse{Targets: responses})
 }
 
-func (h *NotificationHandler) CreateEmailTarget(w http.ResponseWriter, r *http.Request) {
+func (h *NotificationHandler) CreateTarget(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeAdmin(w, r) {
 		return
 	}
@@ -102,16 +104,22 @@ func (h *NotificationHandler) CreateEmailTarget(w http.ResponseWriter, r *http.R
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
-	target, err := h.admin.CreateEmailTarget(r.Context(), service.CreateNotificationTargetInput{
-		Name:    req.Name,
-		Address: req.Address,
-		Enabled: req.Enabled,
+	target, err := h.admin.CreateTarget(r.Context(), service.CreateNotificationTargetInput{
+		Type:       req.Type,
+		Name:       req.Name,
+		Address:    req.Address,
+		WebhookURL: req.WebhookURL,
+		Enabled:    req.Enabled,
 	})
 	if err != nil {
 		h.writeNotificationError(w, err)
 		return
 	}
 	writeDataJSON(w, http.StatusCreated, toNotificationTargetResponse(target))
+}
+
+func (h *NotificationHandler) CreateEmailTarget(w http.ResponseWriter, r *http.Request) {
+	h.CreateTarget(w, r)
 }
 
 func (h *NotificationHandler) UpdateTarget(w http.ResponseWriter, r *http.Request) {
@@ -124,15 +132,27 @@ func (h *NotificationHandler) UpdateTarget(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	target, err := h.admin.UpdateTarget(r.Context(), strings.TrimSpace(chi.URLParam(r, "targetID")), service.UpdateNotificationTargetInput{
-		Name:    req.Name,
-		Address: req.Address,
-		Enabled: req.Enabled,
+		Name:       req.Name,
+		Address:    req.Address,
+		WebhookURL: req.WebhookURL,
+		Enabled:    req.Enabled,
 	})
 	if err != nil {
 		h.writeNotificationError(w, err)
 		return
 	}
 	writeDataJSON(w, http.StatusOK, toNotificationTargetResponse(target))
+}
+
+func (h *NotificationHandler) DeleteTarget(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeAdmin(w, r) {
+		return
+	}
+	if err := h.admin.DeleteTarget(r.Context(), strings.TrimSpace(chi.URLParam(r, "targetID"))); err != nil {
+		h.writeNotificationError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *NotificationHandler) ListSubscriptions(w http.ResponseWriter, r *http.Request) {
@@ -227,8 +247,11 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 		return
 	}
 	if errors.Is(err, service.ErrNotificationTargetNameRequired) ||
+		errors.Is(err, service.ErrNotificationTargetTypeInvalid) ||
 		errors.Is(err, service.ErrNotificationTargetAddressRequired) ||
 		errors.Is(err, service.ErrNotificationTargetAddressInvalid) ||
+		errors.Is(err, service.ErrNotificationTargetWebhookURLRequired) ||
+		errors.Is(err, service.ErrNotificationTargetWebhookURLInvalid) ||
 		errors.Is(err, service.ErrNotificationTargetIDInvalid) ||
 		errors.Is(err, service.ErrNotificationSubscriptionIDInvalid) ||
 		errors.Is(err, service.ErrNotificationSubscriptionTargetIDRequired) ||
@@ -244,15 +267,20 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 }
 
 func toNotificationTargetResponse(target domain.NotificationTarget) api.NotificationTargetResponse {
-	return api.NotificationTargetResponse{
+	response := api.NotificationTargetResponse{
 		ID:        target.ID,
 		Type:      string(target.Type),
 		Name:      target.Name,
-		Address:   target.Recipient,
 		Enabled:   target.Enabled,
 		CreatedAt: target.CreatedAt.Format(time.RFC3339),
 		UpdatedAt: target.UpdatedAt.Format(time.RFC3339),
 	}
+	if target.Type == domain.NotificationTargetTypeEmail {
+		response.Address = target.Recipient
+	} else {
+		response.WebhookConfigured = strings.TrimSpace(target.Recipient) != ""
+	}
+	return response
 }
 
 func toNotificationSubscriptionResponse(subscription domain.NotificationSubscription) api.NotificationSubscriptionResponse {

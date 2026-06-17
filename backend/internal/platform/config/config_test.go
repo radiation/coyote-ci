@@ -374,6 +374,15 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestNormalizePublicURL(t *testing.T) {
+	if got := normalizePublicURL(" https://ci.example.com/ "); got != "https://ci.example.com" {
+		t.Fatalf("expected trimmed public url, got %q", got)
+	}
+	if got := normalizePublicURL(""); got != "" {
+		t.Fatalf("expected empty public url, got %q", got)
+	}
+}
+
 func TestConfig_DatabaseURL(t *testing.T) {
 	tests := []struct {
 		name     string

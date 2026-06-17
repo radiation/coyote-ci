@@ -127,6 +127,23 @@ func (r *NotificationSubscriptionRepository) UpdateTarget(ctx context.Context, t
 	return updated, nil
 }
 
+func (r *NotificationSubscriptionRepository) DeleteTarget(ctx context.Context, id string) error {
+	const query = `DELETE FROM notification_targets WHERE id = $1`
+
+	res, err := r.db.ExecContext(ctx, query, strings.TrimSpace(id))
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return repository.ErrNotificationTargetNotFound
+	}
+	return nil
+}
+
 func (r *NotificationSubscriptionRepository) CreateSubscription(ctx context.Context, subscription domain.NotificationSubscription) (domain.NotificationSubscription, error) {
 	const query = `
 		INSERT INTO notification_subscriptions (id, target_id, project_id, job_id, event_type, enabled, created_at, updated_at)

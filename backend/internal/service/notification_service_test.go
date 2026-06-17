@@ -266,6 +266,21 @@ func TestNotificationService_TargetAndSubscriptionErrorBranches(t *testing.T) {
 	if _, err := normalizeNotificationEventType("invalid"); !errors.Is(err, ErrNotificationSubscriptionEventTypeInvalid) {
 		t.Fatalf("expected invalid event type error, got %v", err)
 	}
+	if got, err := normalizeNotificationWebhookURL(" https://hooks.slack.example/services/abc "); err != nil || got != "https://hooks.slack.example/services/abc" {
+		t.Fatalf("expected normalized webhook url, got %q err=%v", got, err)
+	}
+	if _, err := normalizeNotificationWebhookURL("http://hooks.slack.example/services/abc"); !errors.Is(err, ErrNotificationTargetWebhookURLInvalid) {
+		t.Fatalf("expected invalid webhook scheme error, got %v", err)
+	}
+	if _, err := normalizeNotificationWebhookURL("   "); !errors.Is(err, ErrNotificationTargetWebhookURLRequired) {
+		t.Fatalf("expected required webhook url error, got %v", err)
+	}
+	if got, err := normalizeNotificationTargetType("slack_webhook"); err != nil || got != domain.NotificationTargetTypeSlackWebhook {
+		t.Fatalf("expected slack_webhook type, got %q err=%v", got, err)
+	}
+	if _, err := normalizeNotificationTargetType("sms"); !errors.Is(err, ErrNotificationTargetTypeInvalid) {
+		t.Fatalf("expected invalid type error, got %v", err)
+	}
 	if trimOptionalStringValue(nil) != nil {
 		t.Fatal("expected nil optional string to stay nil")
 	}
@@ -290,5 +305,63 @@ func TestNotificationService_TargetAndSubscriptionErrorBranches(t *testing.T) {
 	}
 	if _, err := normalizeOptionalNotificationUUID(&invalidProjectID, ErrNotificationSubscriptionProjectIDInvalid); !errors.Is(err, ErrNotificationSubscriptionProjectIDInvalid) {
 		t.Fatalf("expected invalid optional uuid error, got %v", err)
+	}
+}
+
+func TestNotificationService_CreateSlackTargetAndDeleteTarget(t *testing.T) {
+	ctx := context.Background()
+	repo := memoryrepo.NewNotificationSubscriptionRepository()
+	service := NewNotificationService(repo)
+	now := time.Date(2026, 6, 7, 14, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+
+	target, err := service.CreateTarget(ctx, CreateNotificationTargetInput{
+		Type:       "slack_webhook",
+		Name:       "Build Alerts",
+		WebhookURL: "https://hooks.slack.example/services/T/B/X",
+	})
+	if err != nil {
+		t.Fatalf("create slack target: %v", err)
+	}
+	if target.Type != domain.NotificationTargetTypeSlackWebhook {
+		t.Fatalf("expected slack target type, got %q", target.Type)
+	}
+	if target.Recipient != "https://hooks.slack.example/services/T/B/X" {
+		t.Fatalf("unexpected webhook storage %q", target.Recipient)
+	}
+
+	updatedURL := "https://hooks.slack.example/services/T/B/Y"
+	updated, err := service.UpdateTarget(ctx, target.ID, UpdateNotificationTargetInput{WebhookURL: &updatedURL})
+	if err != nil {
+		t.Fatalf("update slack target: %v", err)
+	}
+	if updated.Recipient != updatedURL {
+		t.Fatalf("expected updated webhook url, got %q", updated.Recipient)
+	}
+
+	projectID := uuid.NewString()
+	_, err = service.CreateSubscription(ctx, CreateNotificationSubscriptionInput{
+		TargetID:  target.ID,
+		ProjectID: &projectID,
+		EventType: string(domain.NotificationEventTypeBuildFailed),
+	})
+	if err != nil {
+		t.Fatalf("create slack subscription: %v", err)
+	}
+
+	deleteErr := service.DeleteTarget(ctx, target.ID)
+	if deleteErr != nil {
+		t.Fatalf("delete slack target: %v", deleteErr)
+	}
+	_, listSubscriptionsErr := service.ListSubscriptions(ctx, ListNotificationSubscriptionsInput{})
+	if listSubscriptionsErr != nil {
+		t.Fatalf("list subscriptions after delete: %v", listSubscriptionsErr)
+	}
+	targets, err := service.ListTargets(ctx)
+	if err != nil {
+		t.Fatalf("list targets after delete: %v", err)
+	}
+	if len(targets) != 0 {
+		t.Fatalf("expected no targets after delete, got %+v", targets)
 	}
 }

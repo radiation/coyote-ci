@@ -18,6 +18,7 @@ import type {
   NotificationEventType,
   NotificationSubscription,
   NotificationTarget,
+  NotificationTargetType,
 } from "../types/notification";
 import { formatTime } from "../utils/time";
 
@@ -27,11 +28,13 @@ const EVENT_OPTIONS: NotificationEventType[] = [
 ];
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+$/;
+const SLACK_WEBHOOK_PATTERN = /^https:\/\/.+/i;
 
 type NotificationScopeType = "" | "project" | "job";
 
 export function NotificationsPage() {
   const queryClient = useQueryClient();
+  const [targetType, setTargetType] = useState<NotificationTargetType>("email");
   const [targetName, setTargetName] = useState("");
   const [targetAddress, setTargetAddress] = useState("");
   const [targetEnabled, setTargetEnabled] = useState(true);
@@ -106,6 +109,7 @@ export function NotificationsPage() {
       await queryClient.invalidateQueries({
         queryKey: ["notification-targets"],
       });
+      setTargetType("email");
       setTargetName("");
       setTargetAddress("");
       setTargetEnabled(true);
@@ -234,18 +238,39 @@ export function NotificationsPage() {
       setTargetErrorMessage("Target name is required.");
       return;
     }
-    if (!trimmedAddress) {
-      setTargetErrorMessage("Email address is required.");
+
+    if (targetType === "email") {
+      if (!trimmedAddress) {
+        setTargetErrorMessage("Email address is required.");
+        return;
+      }
+      if (!EMAIL_PATTERN.test(trimmedAddress)) {
+        setTargetErrorMessage("Email address must be valid.");
+        return;
+      }
+
+      createTargetMutation.mutate({
+        type: targetType,
+        name: trimmedName,
+        address: trimmedAddress,
+        enabled: targetEnabled,
+      });
       return;
     }
-    if (!EMAIL_PATTERN.test(trimmedAddress)) {
-      setTargetErrorMessage("Email address must be valid.");
+
+    if (!trimmedAddress) {
+      setTargetErrorMessage("Webhook URL is required.");
+      return;
+    }
+    if (!SLACK_WEBHOOK_PATTERN.test(trimmedAddress)) {
+      setTargetErrorMessage("Webhook URL must be an HTTPS URL.");
       return;
     }
 
     createTargetMutation.mutate({
+      type: targetType,
       name: trimmedName,
-      address: trimmedAddress,
+      webhook_url: trimmedAddress,
       enabled: targetEnabled,
     });
   };
@@ -300,33 +325,62 @@ export function NotificationsPage() {
         <div>
           <h2>Notifications</h2>
           <p className="subtle-text">
-            Manage email targets and build result subscriptions for local and
-            admin verification flows.
+            Manage email and Slack webhook targets plus build result
+            subscriptions for admin verification flows.
           </p>
         </div>
       </div>
 
       <div className="settings-grid">
         <section className="settings-panel">
-          <h3>Create Email Target</h3>
+          <h3>Create Target</h3>
           <form className="job-form" onSubmit={onCreateTarget} noValidate>
+            <label htmlFor="notification-target-type">Target Type</label>
+            <select
+              id="notification-target-type"
+              value={targetType}
+              onChange={(event) => {
+                setTargetType(event.target.value as NotificationTargetType);
+                setTargetAddress("");
+                setTargetErrorMessage(null);
+              }}
+              disabled={createTargetMutation.isPending}
+            >
+              <option value="email">Email</option>
+              <option value="slack_webhook">Slack webhook</option>
+            </select>
+
             <label htmlFor="notification-target-name">Name</label>
             <input
               id="notification-target-name"
               value={targetName}
-              onChange={(event) => setTargetName(event.target.value)}
+              onChange={(event) => {
+                setTargetName(event.target.value);
+                setTargetErrorMessage(null);
+              }}
               disabled={createTargetMutation.isPending}
-              placeholder="Dev Mailbox"
+              placeholder={
+                targetType === "email" ? "Dev Mailbox" : "Build Alerts"
+              }
             />
 
-            <label htmlFor="notification-target-address">Email Address</label>
+            <label htmlFor="notification-target-address">
+              {targetType === "email" ? "Email Address" : "Webhook URL"}
+            </label>
             <input
               id="notification-target-address"
-              type="email"
+              type={targetType === "email" ? "email" : "url"}
               value={targetAddress}
-              onChange={(event) => setTargetAddress(event.target.value)}
+              onChange={(event) => {
+                setTargetAddress(event.target.value);
+                setTargetErrorMessage(null);
+              }}
               disabled={createTargetMutation.isPending}
-              placeholder="dev@localhost"
+              placeholder={
+                targetType === "email"
+                  ? "dev@localhost"
+                  : "https://hooks.slack.com/services/..."
+              }
             />
 
             <label
@@ -347,7 +401,9 @@ export function NotificationsPage() {
               <button type="submit" disabled={createTargetMutation.isPending}>
                 {createTargetMutation.isPending
                   ? "Creating…"
-                  : "Create Email Target"}
+                  : targetType === "email"
+                    ? "Create Email Target"
+                    : "Create Slack Webhook"}
               </button>
             </div>
           </form>
@@ -369,7 +425,7 @@ export function NotificationsPage() {
               <option value="">Select a target</option>
               {targets.map((target) => (
                 <option key={target.id} value={target.id}>
-                  {target.name} ({target.address})
+                  {formatTargetOptionLabel(target)}
                 </option>
               ))}
             </select>
@@ -490,7 +546,7 @@ export function NotificationsPage() {
           </form>
           {targets.length === 0 && !targetsLoading && (
             <p className="subtle-text">
-              Create an email target first before adding subscriptions.
+              Create a target first before adding subscriptions.
             </p>
           )}
           {subscriptionErrorMessage && (
@@ -532,7 +588,7 @@ export function NotificationsPage() {
             <thead>
               <tr>
                 <th>Name</th>
-                <th>Address</th>
+                <th>Destination</th>
                 <th>Type</th>
                 <th>Status</th>
                 <th>Updated</th>
@@ -620,11 +676,16 @@ function NotificationTargetRow({
 }: {
   target: NotificationTarget;
   disabled: boolean;
-  onSave: (input: { name: string; address: string }) => void;
+  onSave: (input: {
+    name: string;
+    address?: string;
+    webhook_url?: string;
+  }) => void;
   onToggle: () => void;
 }) {
   const [name, setName] = useState(target.name);
-  const [address, setAddress] = useState(target.address);
+  const [address, setAddress] = useState(target.address ?? "");
+  const [webhookURL, setWebhookURL] = useState("");
 
   return (
     <tr>
@@ -637,14 +698,32 @@ function NotificationTargetRow({
         />
       </td>
       <td>
-        <input
-          aria-label={`Address for ${target.name}`}
-          value={address}
-          onChange={(event) => setAddress(event.target.value)}
-          disabled={disabled}
-        />
+        {target.type === "email" ? (
+          <input
+            aria-label={`Address for ${target.name}`}
+            value={address}
+            onChange={(event) => setAddress(event.target.value)}
+            disabled={disabled}
+          />
+        ) : (
+          <div>
+            <div>
+              {target.webhook_configured
+                ? "Webhook configured"
+                : "Webhook missing"}
+            </div>
+            <input
+              aria-label={`Webhook URL for ${target.name}`}
+              type="url"
+              value={webhookURL}
+              onChange={(event) => setWebhookURL(event.target.value)}
+              disabled={disabled}
+              placeholder="Paste replacement webhook URL"
+            />
+          </div>
+        )}
       </td>
-      <td>{target.type}</td>
+      <td>{formatTargetTypeLabel(target.type)}</td>
       <td>{target.enabled ? "Enabled" : "Disabled"}</td>
       <td>{formatTime(target.updated_at)}</td>
       <td>
@@ -652,9 +731,18 @@ function NotificationTargetRow({
           <button
             type="button"
             className="table-action-button"
-            onClick={() =>
-              onSave({ name: name.trim(), address: address.trim() })
-            }
+            onClick={() => {
+              const input =
+                target.type === "email"
+                  ? { name: name.trim(), address: address.trim() }
+                  : {
+                      name: name.trim(),
+                      ...(webhookURL.trim()
+                        ? { webhook_url: webhookURL.trim() }
+                        : {}),
+                    };
+              onSave(input);
+            }}
             disabled={disabled}
           >
             Save {target.name}
@@ -700,7 +788,7 @@ function NotificationSubscriptionRow({
   return (
     <tr>
       <td>
-        {target ? `${target.name} (${target.address})` : subscription.target_id}
+        {target ? formatTargetOptionLabel(target) : subscription.target_id}
       </td>
       <td>{subscription.event_type}</td>
       <td>{scopeLabel}</td>
@@ -728,6 +816,17 @@ function NotificationSubscriptionRow({
       </td>
     </tr>
   );
+}
+
+function formatTargetTypeLabel(type: NotificationTargetType): string {
+  return type === "slack_webhook" ? "Slack webhook" : "Email";
+}
+
+function formatTargetOptionLabel(target: NotificationTarget): string {
+  if (target.type === "slack_webhook") {
+    return `${target.name} (${formatTargetTypeLabel(target.type)}${target.webhook_configured ? ", Webhook configured" : ""})`;
+  }
+  return `${target.name} (${formatTargetTypeLabel(target.type)}: ${target.address ?? ""})`;
 }
 
 function formatSubscriptionScope(

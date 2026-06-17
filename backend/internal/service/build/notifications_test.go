@@ -26,6 +26,18 @@ func (s *recordingEmailSender) SendText(_ context.Context, message platformemail
 	return s.err
 }
 
+type recordingSlackSender struct {
+	webhookURLs []string
+	messages    []SlackWebhookMessage
+	err         error
+}
+
+func (s *recordingSlackSender) Send(_ context.Context, webhookURL string, message SlackWebhookMessage) error {
+	s.webhookURLs = append(s.webhookURLs, webhookURL)
+	s.messages = append(s.messages, message)
+	return s.err
+}
+
 type scriptedNotificationDeliveryRepo struct {
 	createFunc func(context.Context, domain.NotificationDelivery) (domain.NotificationDelivery, error)
 	getFunc    func(context.Context, string, domain.NotificationEventType, string) (domain.NotificationDelivery, error)
@@ -75,6 +87,22 @@ func mustCreateNotificationTarget(t *testing.T, repo *memoryrepo.NotificationSub
 	})
 	if err != nil {
 		t.Fatalf("create notification target failed: %v", err)
+	}
+
+	return target
+}
+
+func mustCreateSlackNotificationTarget(t *testing.T, repo *memoryrepo.NotificationSubscriptionRepository, webhookURL string, enabled bool) domain.NotificationTarget {
+	t.Helper()
+
+	target, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{
+		Type:      domain.NotificationTargetTypeSlackWebhook,
+		Name:      "slack",
+		Recipient: webhookURL,
+		Enabled:   enabled,
+	})
+	if err != nil {
+		t.Fatalf("create slack notification target failed: %v", err)
 	}
 
 	return target
@@ -1355,5 +1383,170 @@ func TestBuildNotificationHelpers(t *testing.T) {
 	}
 	if want := []string{"<dev@example.com>", "<qa@example.com>"}; fmt.Sprint(recipients) != fmt.Sprint(want) {
 		t.Fatalf("unexpected parsed recipients: got %v want %v", recipients, want)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_SendsSlackWebhookSubscription(t *testing.T) {
+	slackSender := &recordingSlackSender{}
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	target := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
+	projectID := "project-1"
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		SlackSender:      slackSender,
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
+		PublicBaseURL:    "https://ci.example.com/",
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+	ref := "refs/heads/main"
+	sha := "deadbeefcafebabe"
+	authorName := "Octo Cat"
+	authorEmail := "octo@example.com"
+	startedAt := time.Now().Add(-3 * time.Minute).UTC()
+	finishedAt := time.Now().UTC()
+	build := domain.Build{
+		ID:                "build-1",
+		ProjectID:         projectID,
+		Status:            domain.BuildStatusFailed,
+		BuildNumber:       42,
+		SourceRef:         &ref,
+		SourceSHA:         &sha,
+		SourceAuthorName:  &authorName,
+		SourceAuthorEmail: &authorEmail,
+		StartedAt:         &startedAt,
+		FinishedAt:        &finishedAt,
+	}
+
+	if err := notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
+		t.Fatalf("notify terminal build failed: %v", err)
+	}
+	if len(slackSender.messages) != 1 {
+		t.Fatalf("expected one slack message, got %d", len(slackSender.messages))
+	}
+	if len(slackSender.webhookURLs) != 1 || slackSender.webhookURLs[0] != "https://hooks.slack.example/services/T/B/X" {
+		t.Fatalf("unexpected slack webhook urls %v", slackSender.webhookURLs)
+	}
+	message := slackSender.messages[0].Text
+	for _, want := range []string{":x:", "Project: project-1", "Build: #42 (build-1)", "Git: refs/heads/main @ deadbee", "Commit author: Octo Cat <octo@example.com>", "Build detail: https://ci.example.com/builds/build-1"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected slack text to contain %q, got %q", want, message)
+		}
+	}
+	delivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildFailed, "slack_webhook:"+target.ID)
+	if delivery.Status != domain.NotificationDeliveryStatusSent {
+		t.Fatalf("expected sent slack delivery status, got %q", delivery.Status)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureDoesNotBlockEmail(t *testing.T) {
+	emailSender := &recordingEmailSender{}
+	slackSender := &recordingSlackSender{err: errors.New("webhook unavailable")}
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	projectID := "project-1"
+	emailTarget := mustCreateNotificationTarget(t, subscriptionRepo, "dev@example.com", true)
+	slackTarget := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
+	mustCreateNotificationSubscription(t, subscriptionRepo, emailTarget.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
+	mustCreateNotificationSubscription(t, subscriptionRepo, slackTarget.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		Sender:           emailSender,
+		SlackSender:      slackSender,
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	err = notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: projectID, Status: domain.BuildStatusFailed})
+	if err == nil || !strings.Contains(err.Error(), "webhook unavailable") {
+		t.Fatalf("expected slack failure error, got %v", err)
+	}
+	if len(emailSender.messages) != 1 {
+		t.Fatalf("expected email delivery to proceed, got %d emails", len(emailSender.messages))
+	}
+	emailDelivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildFailed, "<dev@example.com>")
+	if emailDelivery.Status != domain.NotificationDeliveryStatusSent {
+		t.Fatalf("expected email delivery sent, got %q", emailDelivery.Status)
+	}
+	slackDelivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildFailed, "slack_webhook:"+slackTarget.ID)
+	if slackDelivery.Status != domain.NotificationDeliveryStatusFailed {
+		t.Fatalf("expected slack delivery failed, got %q", slackDelivery.Status)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureSanitizedErrorDoesNotLeakWebhookToken(t *testing.T) {
+	emailSender := &recordingEmailSender{}
+	secretToken := "SECRET_TOKEN_123"
+	slackSender := NewSlackWebhookSender(&recordingSlackHTTPDoer{err: errors.New("Post \"https://hooks.slack.example/services/T/B/" + secretToken + "\": dial tcp: lookup hooks.slack.example: i/o timeout")})
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	projectID := "project-1"
+	emailTarget := mustCreateNotificationTarget(t, subscriptionRepo, "dev@example.com", true)
+	slackTarget := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/"+secretToken, true)
+	mustCreateNotificationSubscription(t, subscriptionRepo, emailTarget.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
+	mustCreateNotificationSubscription(t, subscriptionRepo, slackTarget.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		Sender:           emailSender,
+		SlackSender:      slackSender,
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	err = notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: projectID, Status: domain.BuildStatusFailed})
+	if err == nil || !strings.Contains(err.Error(), "slack webhook request failed") {
+		t.Fatalf("expected sanitized slack failure error, got %v", err)
+	}
+	if strings.Contains(err.Error(), secretToken) {
+		t.Fatalf("expected returned error to hide webhook token, got %q", err.Error())
+	}
+	if len(emailSender.messages) != 1 {
+		t.Fatalf("expected email delivery to proceed, got %d emails", len(emailSender.messages))
+	}
+	slackDelivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildFailed, "slack_webhook:"+slackTarget.ID)
+	if slackDelivery.LastError == nil || *slackDelivery.LastError == "" {
+		t.Fatalf("expected slack delivery last_error to be recorded, got %v", slackDelivery.LastError)
+	}
+	if strings.Contains(*slackDelivery.LastError, secretToken) {
+		t.Fatalf("expected persisted last_error to hide webhook token, got %q", *slackDelivery.LastError)
+	}
+	if *slackDelivery.LastError != "slack webhook request failed" {
+		t.Fatalf("expected sanitized persisted last_error, got %q", *slackDelivery.LastError)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_SlackMessageOmitsMissingOptionalFields(t *testing.T) {
+	slackSender := &recordingSlackSender{}
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	target := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
+	projectID := "project-1"
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildSucceeded, true)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		SlackSender:      slackSender,
+		SubscriptionRepo: subscriptionRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: projectID, Status: domain.BuildStatusSuccess}); err != nil {
+		t.Fatalf("notify terminal build failed: %v", err)
+	}
+	message := slackSender.messages[0].Text
+	for _, unwanted := range []string{"Git:", "Commit author:", "Build detail:"} {
+		if strings.Contains(message, unwanted) {
+			t.Fatalf("did not expect slack text to contain %q, got %q", unwanted, message)
+		}
 	}
 }
