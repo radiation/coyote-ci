@@ -557,6 +557,7 @@ func streamOutput(stdoutPipe, stderrPipe io.ReadCloser, onOutput runner.StepOutp
 	var wg sync.WaitGroup
 	var streamErr error
 	var streamMu sync.Mutex
+	var callbackMu sync.Mutex
 
 	consume := func(pipe io.ReadCloser, stream runner.StepOutputStream, target *strings.Builder) {
 		defer wg.Done()
@@ -568,7 +569,10 @@ func streamOutput(stdoutPipe, stderrPipe io.ReadCloser, onOutput runner.StepOutp
 			target.WriteString(line)
 			target.WriteString("\n")
 			if onOutput != nil {
-				if cbErr := onOutput(runner.StepOutputChunk{Stream: stream, ChunkText: line, EmittedAt: time.Now().UTC()}); cbErr != nil {
+				callbackMu.Lock()
+				cbErr := onOutput(runner.StepOutputChunk{Stream: stream, ChunkText: line, EmittedAt: time.Now().UTC()})
+				callbackMu.Unlock()
+				if cbErr != nil {
 					streamMu.Lock()
 					if streamErr == nil {
 						streamErr = cbErr
