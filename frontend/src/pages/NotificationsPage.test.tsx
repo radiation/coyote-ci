@@ -517,4 +517,29 @@ describe("NotificationsPage", () => {
       "Build Alerts (Slack webhook, Webhook configured)",
     );
   });
+
+  it("shows email target label without address when address is missing", async () => {
+    mockedListNotificationTargets.mockResolvedValue([
+      {
+        id: "target-1",
+        type: "email",
+        name: "Dev Mailbox",
+        webhook_configured: false,
+        enabled: true,
+        created_at: "2026-06-01T00:00:00Z",
+        updated_at: "2026-06-01T00:00:00Z",
+      },
+    ]);
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Target") as HTMLSelectElement).options,
+      ).toHaveLength(2);
+    });
+
+    const select = screen.getByLabelText("Target") as HTMLSelectElement;
+    const labels = Array.from(select.options).map((option) => option.text);
+    expect(labels).toContain("Dev Mailbox (Email)");
+  });
 });

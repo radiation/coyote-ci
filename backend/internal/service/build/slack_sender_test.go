@@ -57,6 +57,13 @@ func TestSlackWebhookSender_Send(t *testing.T) {
 	}
 }
 
+func TestNewSlackWebhookSender_UsesDefaultClientWhenNil(t *testing.T) {
+	sender := NewSlackWebhookSender(nil)
+	if sender == nil {
+		t.Fatal("expected sender instance")
+	}
+}
+
 func TestSlackWebhookSender_SendErrorCases(t *testing.T) {
 	doer := &recordingSlackHTTPDoer{response: &http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(strings.NewReader("bad"))}}
 	sender := NewSlackWebhookSender(doer)
@@ -68,6 +75,12 @@ func TestSlackWebhookSender_SendErrorCases(t *testing.T) {
 	sender = NewSlackWebhookSender(doer)
 	if err := sender.Send(context.Background(), "https://hooks.slack.example/services/T/B/X", SlackWebhookMessage{Text: "hello"}); err == nil || err.Error() != "slack webhook request timed out" {
 		t.Fatalf("expected sanitized timeout error, got %v", err)
+	}
+
+	doer = &recordingSlackHTTPDoer{err: context.DeadlineExceeded}
+	sender = NewSlackWebhookSender(doer)
+	if err := sender.Send(context.Background(), "https://hooks.slack.example/services/T/B/X", SlackWebhookMessage{Text: "hello"}); err == nil || err.Error() != "slack webhook request timed out" {
+		t.Fatalf("expected context deadline timeout error, got %v", err)
 	}
 
 	secretToken := "SECRET_TOKEN_123"

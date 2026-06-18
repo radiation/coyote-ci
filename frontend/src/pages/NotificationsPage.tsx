@@ -826,7 +826,10 @@ function formatTargetOptionLabel(target: NotificationTarget): string {
   if (target.type === "slack_webhook") {
     return `${target.name} (${formatTargetTypeLabel(target.type)}${target.webhook_configured ? ", Webhook configured" : ""})`;
   }
-  return `${target.name} (${formatTargetTypeLabel(target.type)}: ${target.address ?? ""})`;
+  const destination = target.address?.trim();
+  return destination
+    ? `${target.name} (${formatTargetTypeLabel(target.type)}: ${destination})`
+    : `${target.name} (${formatTargetTypeLabel(target.type)})`;
 }
 
 function formatSubscriptionScope(

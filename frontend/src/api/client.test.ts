@@ -1147,6 +1147,7 @@ describe("API client - types", () => {
 
     const targets = await listNotificationTargets();
     await createNotificationTarget({
+      type: "email",
       name: "Ops",
       address: "ops@localhost",
       enabled: true,
@@ -1175,6 +1176,7 @@ describe("API client - types", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        type: "email",
         name: "Ops",
         address: "ops@localhost",
         enabled: true,

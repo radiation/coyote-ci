@@ -17,13 +17,23 @@ export interface NotificationTargetListResponse {
   targets: NotificationTarget[];
 }
 
-export interface CreateNotificationTargetRequest {
-  type?: NotificationTargetType;
+export interface CreateEmailNotificationTargetRequest {
+  type: "email";
   name: string;
-  address?: string;
-  webhook_url?: string;
+  address: string;
   enabled?: boolean;
 }
+
+export interface CreateSlackNotificationTargetRequest {
+  type: "slack_webhook";
+  name: string;
+  webhook_url: string;
+  enabled?: boolean;
+}
+
+export type CreateNotificationTargetRequest =
+  | CreateEmailNotificationTargetRequest
+  | CreateSlackNotificationTargetRequest;
 
 export interface UpdateNotificationTargetRequest {
   name?: string;
