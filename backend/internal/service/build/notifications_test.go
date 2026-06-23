@@ -275,6 +275,63 @@ func TestBuildService_CompleteBuild_SendsNotificationWhenConfigured(t *testing.T
 	}
 }
 
+func TestBuildService_FailBuild_EmailIncludesCoyoteEntityLinksWhenPublicURLSet(t *testing.T) {
+	now := time.Now().UTC()
+	jobID := "job-1"
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	buildRepo := &fakeBuildRepository{
+		build: domain.Build{
+			ID:          "build-1",
+			ProjectID:   "project-1",
+			JobID:       &jobID,
+			BuildNumber: 42,
+			Status:      domain.BuildStatusRunning,
+			CreatedAt:   now,
+		},
+	}
+	jobRepo := memoryrepo.NewJobRepository()
+	projectRepo := memoryrepo.NewProjectRepository(jobRepo)
+	if _, err := projectRepo.Create(context.Background(), domain.Project{ID: "project-1", Name: "Payments API", Slug: "payments-api", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	if _, err := jobRepo.Create(context.Background(), domain.Job{ID: jobID, ProjectID: "project-1", Name: "backend-ci", RepositoryURL: "https://github.com/example/payments.git", DefaultRef: "main", PipelineYAML: "version: 1", Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+	sender := &recordingEmailSender{}
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:       true,
+		Recipients:    "dev@example.com",
+		Sender:        sender,
+		JobRepo:       jobRepo,
+		ProjectRepo:   projectRepo,
+		DeliveryRepo:  deliveryRepo,
+		PublicBaseURL: "https://ci.example.com/",
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	svc := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{BuildNotifier: notifier})
+	if _, err := svc.FailBuild(context.Background(), "build-1"); err != nil {
+		t.Fatalf("fail build returned error: %v", err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected one notification email, got %d", len(sender.messages))
+	}
+	body := sender.messages[0].Body
+	for _, want := range []string{
+		"Project: Payments API (project-1)",
+		"Project detail: https://ci.example.com/projects/project-1",
+		"Job: backend-ci (job-1)",
+		"Job detail: https://ci.example.com/jobs/job-1",
+		"Build detail: https://ci.example.com/builds/build-1",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected body to contain %q, got %q", want, body)
+		}
+	}
+}
+
 func TestBuildService_FailBuild_DoesNotSendNotificationWhenDisabled(t *testing.T) {
 	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}}
 	sender := &recordingEmailSender{}

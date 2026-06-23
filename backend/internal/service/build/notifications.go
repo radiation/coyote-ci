@@ -458,11 +458,17 @@ func (s *BuildNotificationService) formatBuildStatusEmail(build domain.Build, de
 		fmt.Sprintf("Status: %s", build.Status),
 		fmt.Sprintf("Project: %s", details.projectLabel),
 	}
+	if details.projectURL != "" {
+		bodyLines = append(bodyLines, fmt.Sprintf("Project detail: %s", details.projectURL))
+	}
 	if build.BuildNumber > 0 {
 		bodyLines = append(bodyLines, fmt.Sprintf("Build number: %d", build.BuildNumber))
 	}
 	if details.jobLabel != "" {
 		bodyLines = append(bodyLines, fmt.Sprintf("Job: %s", details.jobLabel))
+		if details.jobURL != "" {
+			bodyLines = append(bodyLines, fmt.Sprintf("Job detail: %s", details.jobURL))
+		}
 	}
 	if details.durationLabel != "" {
 		bodyLines = append(bodyLines, fmt.Sprintf("Duration: %s", details.durationLabel))
