@@ -46,6 +46,11 @@ func main() {
 	cfg := config.Load()
 	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
 	logEmailNotificationConfig(cfg)
+	if strings.TrimSpace(cfg.PublicURL) == "" {
+		log.Printf("public url is not configured; slack project/job/build links are disabled")
+	} else {
+		log.Printf("public url configured for notification links: %s", cfg.PublicURL)
+	}
 
 	dbURL, dbPoolCfg := dbopen.FromConfig(cfg)
 	db, err := platformdb.Open(dbURL, dbPoolCfg)

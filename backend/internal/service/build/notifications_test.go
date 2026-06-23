@@ -1390,12 +1390,24 @@ func TestBuildNotificationService_NotifyTerminalBuild_SendsSlackWebhookSubscript
 	slackSender := &recordingSlackSender{}
 	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	jobRepo := memoryrepo.NewJobRepository()
+	projectRepo := memoryrepo.NewProjectRepository(jobRepo)
 	target := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
 	projectID := "project-1"
+	jobID := "job-1"
+	now := time.Now().UTC()
+	if _, err := projectRepo.Create(context.Background(), domain.Project{ID: projectID, Name: "Payments API", Slug: "payments-api", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	if _, err := jobRepo.Create(context.Background(), domain.Job{ID: jobID, ProjectID: projectID, Name: "backend-ci", RepositoryURL: "https://github.com/example/payments.git", DefaultRef: "main", PipelineYAML: "version: 1", Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
 	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
 	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
 		Enabled:          true,
 		SlackSender:      slackSender,
+		JobRepo:          jobRepo,
+		ProjectRepo:      projectRepo,
 		DeliveryRepo:     deliveryRepo,
 		SubscriptionRepo: subscriptionRepo,
 		PublicBaseURL:    "https://ci.example.com/",
@@ -1404,7 +1416,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SendsSlackWebhookSubscript
 		t.Fatalf("create notifier failed: %v", err)
 	}
 	ref := "refs/heads/main"
-	sha := "deadbeefcafebabe"
+	sha := "deadbeefcafebabedeadbeefcafebabedeadbeef"
 	authorName := "Octo Cat"
 	authorEmail := "octo@example.com"
 	startedAt := time.Now().Add(-3 * time.Minute).UTC()
@@ -1412,6 +1424,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SendsSlackWebhookSubscript
 	build := domain.Build{
 		ID:                "build-1",
 		ProjectID:         projectID,
+		JobID:             &jobID,
 		Status:            domain.BuildStatusFailed,
 		BuildNumber:       42,
 		SourceRef:         &ref,
@@ -1432,7 +1445,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SendsSlackWebhookSubscript
 		t.Fatalf("unexpected slack webhook urls %v", slackSender.webhookURLs)
 	}
 	message := slackSender.messages[0].Text
-	for _, want := range []string{":x:", "Project: project-1", "Build: #42 (build-1)", "Git: refs/heads/main @ deadbee", "Commit author: Octo Cat <octo@example.com>", "Build detail: https://ci.example.com/builds/build-1"} {
+	for _, want := range []string{":x:", "Project: <https://ci.example.com/projects/project-1|Payments API>", "Job: <https://ci.example.com/jobs/job-1|backend-ci>", "Build: <https://ci.example.com/builds/build-1|#42>", "Git: <https://github.com/example/payments/commit/deadbeefcafebabedeadbeefcafebabedeadbeef|main @ deadbee>", "Commit author: Octo Cat (octo@example.com)", "Build detail: https://ci.example.com/builds/build-1"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("expected slack text to contain %q, got %q", want, message)
 		}
@@ -1548,5 +1561,253 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackMessageOmitsMissingOp
 		if strings.Contains(message, unwanted) {
 			t.Fatalf("did not expect slack text to contain %q, got %q", unwanted, message)
 		}
+	}
+}
+
+func TestBuildNotificationHelpers_FrontendEntityURLs(t *testing.T) {
+	tests := []struct {
+		name      string
+		baseURL   string
+		projectID string
+		jobID     string
+		buildID   string
+		wantProj  string
+		wantJob   string
+		wantBuild string
+	}{
+		{
+			name:      "base url without trailing slash",
+			baseURL:   "https://ci.example.com",
+			projectID: "project-1",
+			jobID:     "job-1",
+			buildID:   "build-1",
+			wantProj:  "https://ci.example.com/projects/project-1",
+			wantJob:   "https://ci.example.com/jobs/job-1",
+			wantBuild: "https://ci.example.com/builds/build-1",
+		},
+		{
+			name:      "base url with trailing slash",
+			baseURL:   "https://ci.example.com/",
+			projectID: "project-1",
+			jobID:     "job-1",
+			buildID:   "build-1",
+			wantProj:  "https://ci.example.com/projects/project-1",
+			wantJob:   "https://ci.example.com/jobs/job-1",
+			wantBuild: "https://ci.example.com/builds/build-1",
+		},
+		{
+			name:      "empty base url falls back",
+			baseURL:   "",
+			projectID: "project-1",
+			jobID:     "job-1",
+			buildID:   "build-1",
+			wantProj:  "",
+			wantJob:   "",
+			wantBuild: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := buildProjectDetailURL(tc.baseURL, tc.projectID); got != tc.wantProj {
+				t.Fatalf("project url mismatch: got %q want %q", got, tc.wantProj)
+			}
+			if got := buildJobDetailURL(tc.baseURL, tc.jobID); got != tc.wantJob {
+				t.Fatalf("job url mismatch: got %q want %q", got, tc.wantJob)
+			}
+			if got := buildBuildDetailURL(tc.baseURL, tc.buildID); got != tc.wantBuild {
+				t.Fatalf("build url mismatch: got %q want %q", got, tc.wantBuild)
+			}
+		})
+	}
+}
+
+func TestBuildNotificationHelpers_GitHubCommitURLs(t *testing.T) {
+	fullSHA := "1fccc2972f530f59642f8f88f2f818ca1d2f0f99"
+	tests := []struct {
+		name   string
+		remote string
+		sha    string
+		want   string
+		ok     bool
+	}{
+		{
+			name:   "github https with .git",
+			remote: "https://github.com/owner/repo.git",
+			sha:    fullSHA,
+			want:   "https://github.com/owner/repo/commit/" + fullSHA,
+			ok:     true,
+		},
+		{
+			name:   "github https without .git",
+			remote: "https://github.com/owner/repo",
+			sha:    fullSHA,
+			want:   "https://github.com/owner/repo/commit/" + fullSHA,
+			ok:     true,
+		},
+		{
+			name:   "github scp ssh",
+			remote: "git@github.com:owner/repo.git",
+			sha:    fullSHA,
+			want:   "https://github.com/owner/repo/commit/" + fullSHA,
+			ok:     true,
+		},
+		{
+			name:   "github ssh url",
+			remote: "ssh://git@github.com/owner/repo.git",
+			sha:    fullSHA,
+			want:   "https://github.com/owner/repo/commit/" + fullSHA,
+			ok:     true,
+		},
+		{
+			name:   "unknown host fallback",
+			remote: "https://gitlab.com/owner/repo.git",
+			sha:    fullSHA,
+			want:   "",
+			ok:     false,
+		},
+		{
+			name:   "missing repository remote",
+			remote: "",
+			sha:    fullSHA,
+			want:   "",
+			ok:     false,
+		},
+		{
+			name:   "missing commit sha",
+			remote: "https://github.com/owner/repo.git",
+			sha:    "",
+			want:   "",
+			ok:     false,
+		},
+		{
+			name:   "non-full commit sha fallback",
+			remote: "https://github.com/owner/repo.git",
+			sha:    "1fccc29",
+			want:   "",
+			ok:     false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := buildRepositoryCommitURL(tc.remote, tc.sha)
+			if ok != tc.ok {
+				t.Fatalf("expected ok=%v, got %v (url=%q)", tc.ok, ok, got)
+			}
+			if got != tc.want {
+				t.Fatalf("commit url mismatch: got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFormatBuildStatusSlackText_LinkPolish(t *testing.T) {
+	fullSHA := "1fccc2972f530f59642f8f88f2f818ca1d2f0f99"
+	shortSHA := shortNotificationSHA(fullSHA)
+
+	t.Run("links and escaped labels with configured urls", func(t *testing.T) {
+		details := buildNotificationDetails{
+			statusSummary: "failed",
+			projectName:   "Core & <Proj>",
+			projectLabel:  "Core & <Proj> (project-1)",
+			projectURL:    "https://ci.example.com/projects/project-1",
+			jobName:       "Build > Job",
+			jobLabel:      "Build > Job (job-1)",
+			jobURL:        "https://ci.example.com/jobs/job-1",
+			buildNumber:   42,
+			buildLabel:    "#42 (build-1)",
+			buildURL:      "https://ci.example.com/builds/build-1",
+			refLabel:      "refs/heads/main",
+			shaLabel:      shortSHA,
+			commitURL:     "https://github.com/owner/repo/commit/" + fullSHA,
+			authorName:    "Bryan & <Choate>",
+			authorEmail:   "bryan.choate@gmail.com",
+		}
+
+		message := formatBuildStatusSlackText(details)
+		for _, want := range []string{
+			":x: Build failed",
+			"Project: <https://ci.example.com/projects/project-1|Core &amp; &lt;Proj&gt;>",
+			"Job: <https://ci.example.com/jobs/job-1|Build &gt; Job>",
+			"Build: <https://ci.example.com/builds/build-1|#42>",
+			"Git: <https://github.com/owner/repo/commit/" + fullSHA + "|main @ " + shortSHA + ">",
+			"Commit author: Bryan &amp; &lt;Choate&gt; (bryan.choate@gmail.com)",
+			"Build detail: https://ci.example.com/builds/build-1",
+		} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("expected slack text to contain %q, got %q", want, message)
+			}
+		}
+		if strings.Contains(message, "<bryan.choate@gmail.com>") {
+			t.Fatalf("expected author to use parentheses, got %q", message)
+		}
+	})
+
+	t.Run("plain text fallback without urls", func(t *testing.T) {
+		details := buildNotificationDetails{
+			statusSummary: "succeeded",
+			projectLabel:  "project-1",
+			jobLabel:      "job-1",
+			buildLabel:    "#42 (build-1)",
+			refLabel:      "refs/heads/main",
+			shaLabel:      shortSHA,
+			authorName:    "Bryan Choate",
+			authorEmail:   "bryan.choate@gmail.com",
+		}
+
+		message := formatBuildStatusSlackText(details)
+		for _, want := range []string{
+			":white_check_mark: Build succeeded",
+			"Project: project-1",
+			"Job: job-1",
+			"Build: #42 (build-1)",
+			"Git: refs/heads/main @ " + shortSHA,
+			"Commit author: Bryan Choate (bryan.choate@gmail.com)",
+		} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("expected slack text to contain %q, got %q", want, message)
+			}
+		}
+		if strings.Contains(message, "<http") {
+			t.Fatalf("did not expect mrkdwn links without urls, got %q", message)
+		}
+	})
+}
+
+func TestFormatBuildStatusSlackText_NonFullSHAFallbackStillLinksCoyoteEntities(t *testing.T) {
+	details := buildNotificationDetails{
+		statusSummary: "failed",
+		projectName:   "Payments API",
+		projectLabel:  "Payments API (project-1)",
+		projectURL:    "https://ci.example.com/projects/project-1",
+		jobName:       "backend-ci",
+		jobLabel:      "backend-ci (job-1)",
+		jobURL:        "https://ci.example.com/jobs/job-1",
+		buildNumber:   42,
+		buildLabel:    "#42 (build-1)",
+		buildURL:      "https://ci.example.com/builds/build-1",
+		refLabel:      "refs/heads/main",
+		shaLabel:      "deadbee",
+		// Non-full SHA intentionally means no commit URL should be linked.
+		commitURL:   "",
+		authorName:  "Octo Cat",
+		authorEmail: "octo@example.com",
+	}
+
+	message := formatBuildStatusSlackText(details)
+	for _, want := range []string{
+		"Project: <https://ci.example.com/projects/project-1|Payments API>",
+		"Job: <https://ci.example.com/jobs/job-1|backend-ci>",
+		"Build: <https://ci.example.com/builds/build-1|#42>",
+		"Git: refs/heads/main @ deadbee",
+		"Commit author: Octo Cat (octo@example.com)",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected slack text to contain %q, got %q", want, message)
+		}
+	}
+	if strings.Contains(message, "github.com") {
+		t.Fatalf("did not expect commit link for non-full sha, got %q", message)
 	}
 }
