@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/mail"
+	"net/url"
 	"strings"
 	"time"
 
@@ -14,8 +15,11 @@ import (
 )
 
 var ErrNotificationTargetNameRequired = errors.New("notification target name is required")
+var ErrNotificationTargetTypeInvalid = errors.New("notification target type must be one of email, slack_webhook")
 var ErrNotificationTargetAddressRequired = errors.New("notification target address is required")
 var ErrNotificationTargetAddressInvalid = errors.New("notification target address must be a valid email address")
+var ErrNotificationTargetWebhookURLRequired = errors.New("notification target webhook_url is required")
+var ErrNotificationTargetWebhookURLInvalid = errors.New("notification target webhook_url must be a valid https URL")
 var ErrNotificationTargetIDInvalid = errors.New("notification target id must be a valid UUID")
 var ErrNotificationSubscriptionTargetIDRequired = errors.New("notification subscription target_id is required")
 var ErrNotificationSubscriptionIDInvalid = errors.New("notification subscription id must be a valid UUID")
@@ -35,15 +39,18 @@ func NewNotificationService(repo repository.NotificationSubscriptionRepository) 
 }
 
 type CreateNotificationTargetInput struct {
-	Name    string
-	Address string
-	Enabled *bool
+	Type       string
+	Name       string
+	Address    string
+	WebhookURL string
+	Enabled    *bool
 }
 
 type UpdateNotificationTargetInput struct {
-	Name    *string
-	Address *string
-	Enabled *bool
+	Name       *string
+	Address    *string
+	WebhookURL *string
+	Enabled    *bool
 }
 
 type ListNotificationSubscriptionsInput struct {
@@ -67,12 +74,16 @@ func (s *NotificationService) ListTargets(ctx context.Context) ([]domain.Notific
 	return s.repo.ListTargets(ctx)
 }
 
-func (s *NotificationService) CreateEmailTarget(ctx context.Context, input CreateNotificationTargetInput) (domain.NotificationTarget, error) {
+func (s *NotificationService) CreateTarget(ctx context.Context, input CreateNotificationTargetInput) (domain.NotificationTarget, error) {
 	name := strings.TrimSpace(input.Name)
 	if name == "" {
 		return domain.NotificationTarget{}, ErrNotificationTargetNameRequired
 	}
-	address, err := normalizeNotificationEmailAddress(input.Address)
+	targetType, err := normalizeNotificationTargetType(input.Type)
+	if err != nil {
+		return domain.NotificationTarget{}, err
+	}
+	recipient, err := normalizeNotificationTargetRecipient(targetType, input.Address, input.WebhookURL)
 	if err != nil {
 		return domain.NotificationTarget{}, err
 	}
@@ -84,13 +95,18 @@ func (s *NotificationService) CreateEmailTarget(ctx context.Context, input Creat
 
 	return s.repo.CreateTarget(ctx, domain.NotificationTarget{
 		ID:        uuid.NewString(),
-		Type:      domain.NotificationTargetTypeEmail,
+		Type:      targetType,
 		Name:      name,
-		Recipient: address,
+		Recipient: recipient,
 		Enabled:   enabled,
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
+}
+
+func (s *NotificationService) CreateEmailTarget(ctx context.Context, input CreateNotificationTargetInput) (domain.NotificationTarget, error) {
+	input.Type = string(domain.NotificationTargetTypeEmail)
+	return s.CreateTarget(ctx, input)
 }
 
 func (s *NotificationService) UpdateTarget(ctx context.Context, id string, input UpdateNotificationTargetInput) (domain.NotificationTarget, error) {
@@ -109,18 +125,34 @@ func (s *NotificationService) UpdateTarget(ctx context.Context, id string, input
 		}
 		current.Name = name
 	}
-	if input.Address != nil {
-		address, addressErr := normalizeNotificationEmailAddress(*input.Address)
-		if addressErr != nil {
-			return domain.NotificationTarget{}, addressErr
+	if input.Address != nil || input.WebhookURL != nil {
+		address := ""
+		if input.Address != nil {
+			address = *input.Address
 		}
-		current.Recipient = address
+		webhookURL := ""
+		if input.WebhookURL != nil {
+			webhookURL = *input.WebhookURL
+		}
+		recipient, recipientErr := normalizeNotificationTargetRecipient(current.Type, address, webhookURL)
+		if recipientErr != nil {
+			return domain.NotificationTarget{}, recipientErr
+		}
+		current.Recipient = recipient
 	}
 	if input.Enabled != nil {
 		current.Enabled = *input.Enabled
 	}
 	current.UpdatedAt = s.now().UTC()
 	return s.repo.UpdateTarget(ctx, current)
+}
+
+func (s *NotificationService) DeleteTarget(ctx context.Context, id string) error {
+	targetID, err := normalizeRequiredNotificationUUID(id, repository.ErrNotificationTargetNotFound, ErrNotificationTargetIDInvalid)
+	if err != nil {
+		return err
+	}
+	return s.repo.DeleteTarget(ctx, targetID)
 }
 
 func (s *NotificationService) ListSubscriptions(ctx context.Context, input ListNotificationSubscriptionsInput) ([]domain.NotificationSubscription, error) {
@@ -213,6 +245,42 @@ func normalizeNotificationEmailAddress(value string) (string, error) {
 		return "", ErrNotificationTargetAddressInvalid
 	}
 	return address.String(), nil
+}
+
+func normalizeNotificationTargetType(value string) (domain.NotificationTargetType, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return domain.NotificationTargetTypeEmail, nil
+	}
+	switch domain.NotificationTargetType(trimmed) {
+	case domain.NotificationTargetTypeEmail, domain.NotificationTargetTypeSlackWebhook:
+		return domain.NotificationTargetType(trimmed), nil
+	default:
+		return "", ErrNotificationTargetTypeInvalid
+	}
+}
+
+func normalizeNotificationTargetRecipient(targetType domain.NotificationTargetType, address string, webhookURL string) (string, error) {
+	switch targetType {
+	case domain.NotificationTargetTypeEmail:
+		return normalizeNotificationEmailAddress(address)
+	case domain.NotificationTargetTypeSlackWebhook:
+		return normalizeNotificationWebhookURL(webhookURL)
+	default:
+		return "", ErrNotificationTargetTypeInvalid
+	}
+}
+
+func normalizeNotificationWebhookURL(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", ErrNotificationTargetWebhookURLRequired
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed == nil || !parsed.IsAbs() || strings.ToLower(parsed.Scheme) != "https" || strings.TrimSpace(parsed.Host) == "" {
+		return "", ErrNotificationTargetWebhookURLInvalid
+	}
+	return parsed.String(), nil
 }
 
 func normalizeNotificationEventType(value string) (domain.NotificationEventType, error) {

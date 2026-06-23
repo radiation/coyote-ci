@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/mail"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -36,10 +37,6 @@ func (r *NotificationSubscriptionRepository) CreateTarget(_ context.Context, tar
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	normalizedRecipient, err := normalizeNotificationTargetRecipient(target.Recipient)
-	if err != nil {
-		return domain.NotificationTarget{}, err
-	}
 	if strings.TrimSpace(target.ID) == "" {
 		target.ID = uuid.NewString()
 	}
@@ -48,8 +45,12 @@ func (r *NotificationSubscriptionRepository) CreateTarget(_ context.Context, tar
 	if target.Type == "" {
 		target.Type = domain.NotificationTargetTypeEmail
 	}
-	if target.Type != domain.NotificationTargetTypeEmail {
+	if target.Type != domain.NotificationTargetTypeEmail && target.Type != domain.NotificationTargetTypeSlackWebhook {
 		return domain.NotificationTarget{}, fmt.Errorf("unsupported notification target type %q", target.Type)
+	}
+	normalizedRecipient, err := normalizeNotificationTargetRecipient(target.Type, target.Recipient)
+	if err != nil {
+		return domain.NotificationTarget{}, err
 	}
 	target.Name = strings.TrimSpace(target.Name)
 	target.Recipient = normalizedRecipient
@@ -106,16 +107,16 @@ func (r *NotificationSubscriptionRepository) UpdateTarget(_ context.Context, tar
 		return domain.NotificationTarget{}, repository.ErrNotificationTargetNotFound
 	}
 
-	normalizedRecipient, err := normalizeNotificationTargetRecipient(target.Recipient)
-	if err != nil {
-		return domain.NotificationTarget{}, err
-	}
 	target.Type = domain.NotificationTargetType(strings.TrimSpace(string(target.Type)))
 	if target.Type == "" {
 		target.Type = domain.NotificationTargetTypeEmail
 	}
-	if target.Type != domain.NotificationTargetTypeEmail {
+	if target.Type != domain.NotificationTargetTypeEmail && target.Type != domain.NotificationTargetTypeSlackWebhook {
 		return domain.NotificationTarget{}, fmt.Errorf("unsupported notification target type %q", target.Type)
+	}
+	normalizedRecipient, err := normalizeNotificationTargetRecipient(target.Type, target.Recipient)
+	if err != nil {
+		return domain.NotificationTarget{}, err
 	}
 	if existing, exists := r.findTargetByTypeAndRecipientLocked(target.Type, normalizedRecipient); exists && existing.ID != targetID {
 		return domain.NotificationTarget{}, repository.ErrNotificationTargetDuplicate
@@ -134,6 +135,29 @@ func (r *NotificationSubscriptionRepository) UpdateTarget(_ context.Context, tar
 
 	r.targets[targetID] = current
 	return current, nil
+}
+
+func (r *NotificationSubscriptionRepository) DeleteTarget(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	targetID := strings.TrimSpace(id)
+	if _, ok := r.targets[targetID]; !ok {
+		return repository.ErrNotificationTargetNotFound
+	}
+	delete(r.targets, targetID)
+	for subscriptionID, subscription := range r.subscriptions {
+		if subscription.TargetID != targetID {
+			continue
+		}
+		delete(r.subscriptions, subscriptionID)
+		if subscription.ProjectID != nil {
+			delete(r.projectIndex, notificationSubscriptionKey(subscription.TargetID, subscription.EventType, subscription.ProjectID, subscription.JobID))
+		} else {
+			delete(r.jobIndex, notificationSubscriptionKey(subscription.TargetID, subscription.EventType, subscription.ProjectID, subscription.JobID))
+		}
+	}
+	return nil
 }
 
 func (r *NotificationSubscriptionRepository) CreateSubscription(_ context.Context, subscription domain.NotificationSubscription) (domain.NotificationSubscription, error) {
@@ -380,12 +404,24 @@ func notificationSubscriptionKey(targetID string, eventType domain.NotificationE
 	return strings.TrimSpace(targetID) + "|" + strings.TrimSpace(string(eventType)) + "|" + scope
 }
 
-func normalizeNotificationTargetRecipient(value string) (string, error) {
-	parsed, err := mail.ParseAddress(strings.TrimSpace(value))
-	if err != nil {
-		return "", fmt.Errorf("invalid notification target recipient %q: %w", strings.TrimSpace(value), err)
+func normalizeNotificationTargetRecipient(targetType domain.NotificationTargetType, value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	switch targetType {
+	case domain.NotificationTargetTypeEmail:
+		parsed, err := mail.ParseAddress(trimmed)
+		if err != nil {
+			return "", fmt.Errorf("invalid notification target recipient %q: %w", trimmed, err)
+		}
+		return parsed.String(), nil
+	case domain.NotificationTargetTypeSlackWebhook:
+		parsed, err := url.Parse(trimmed)
+		if err != nil || parsed == nil || !parsed.IsAbs() || strings.ToLower(parsed.Scheme) != "https" || strings.TrimSpace(parsed.Host) == "" {
+			return "", fmt.Errorf("notification target webhook_url must be a valid https URL")
+		}
+		return parsed.String(), nil
+	default:
+		return "", fmt.Errorf("unsupported notification target type %q", targetType)
 	}
-	return parsed.String(), nil
 }
 
 func trimOptionalString(value *string) *string {

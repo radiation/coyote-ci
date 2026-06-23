@@ -46,6 +46,11 @@ func main() {
 	cfg := config.Load()
 	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
 	logEmailNotificationConfig(cfg)
+	if strings.TrimSpace(cfg.PublicURL) == "" {
+		log.Printf("public url is not configured; slack project/job/build links are disabled")
+	} else {
+		log.Printf("public url configured for notification links: %s", cfg.PublicURL)
+	}
 
 	dbURL, dbPoolCfg := dbopen.FromConfig(cfg)
 	db, err := platformdb.Open(dbURL, dbPoolCfg)
@@ -158,10 +163,12 @@ func newWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepos
 		NotifyCommitAuthorOnFailure: cfg.EmailNotifyCommitAuthorOnFailure,
 		Recipients:                  cfg.EmailNotificationRecipients,
 		Sender:                      emailSender,
+		SlackSender:                 buildsvc.NewSlackWebhookSender(nil),
 		JobRepo:                     jobRepo,
 		ProjectRepo:                 projectRepo,
 		DeliveryRepo:                deliveryRepo,
 		SubscriptionRepo:            subscriptionRepo,
+		PublicBaseURL:               cfg.PublicURL,
 	})
 	if buildNotificationErr != nil {
 		return nil, buildNotificationErr

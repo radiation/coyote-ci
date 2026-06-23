@@ -131,6 +131,15 @@ Optional connection pool settings:
 - `DB_CONN_MAX_LIFETIME` (Go duration, e.g. `30m`)
 - `DB_CONN_MAX_IDLE_TIME` (Go duration, e.g. `5m`)
 
+Notification configuration:
+
+- `EMAIL_NOTIFICATIONS_ENABLED`
+- `EMAIL_NOTIFY_COMMIT_AUTHOR_ON_FAILURE`
+- `EMAIL_NOTIFICATION_RECIPIENTS` (fallback email recipients when no durable subscription matches)
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_ADDRESS`
+- `COYOTE_PUBLIC_URL` (optional externally reachable UI base URL used in Slack/email build detail links)
+- `APP_BASE_URL` (legacy-compatible fallback for `COYOTE_PUBLIC_URL`)
+
 Artifact storage configuration:
 
 - `ARTIFACT_STORAGE_PROVIDER` (`filesystem` or `gcs`)

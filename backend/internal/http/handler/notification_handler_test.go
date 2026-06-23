@@ -51,6 +51,10 @@ func (f *fakeNotificationAdminService) ListTargets(_ context.Context) ([]domain.
 	return f.listTargetsResult, f.listTargetsErr
 }
 
+func (f *fakeNotificationAdminService) CreateTarget(_ context.Context, _ service.CreateNotificationTargetInput) (domain.NotificationTarget, error) {
+	return f.createTargetResult, f.createTargetErr
+}
+
 func (f *fakeNotificationAdminService) CreateEmailTarget(_ context.Context, _ service.CreateNotificationTargetInput) (domain.NotificationTarget, error) {
 	return f.createTargetResult, f.createTargetErr
 }
@@ -69,6 +73,10 @@ func (f *fakeNotificationAdminService) CreateSubscription(_ context.Context, _ s
 
 func (f *fakeNotificationAdminService) UpdateSubscription(_ context.Context, _ string, _ service.UpdateNotificationSubscriptionInput) (domain.NotificationSubscription, error) {
 	return f.updateSubscriptionResult, f.updateSubscriptionErr
+}
+
+func (f *fakeNotificationAdminService) DeleteTarget(_ context.Context, _ string) error {
+	return nil
 }
 
 func (f *fakeNotificationAdminService) DeleteSubscription(_ context.Context, _ string) error {
@@ -325,6 +333,58 @@ func TestNotificationHandler_AdminEndpoints(t *testing.T) {
 	h.ListSubscriptions(invalidListRes, invalidListReq)
 	if invalidListRes.Code != http.StatusBadRequest {
 		t.Fatalf("expected invalid list filter status %d, got %d body=%s", http.StatusBadRequest, invalidListRes.Code, invalidListRes.Body.String())
+	}
+}
+
+func TestNotificationHandler_TargetResponsesMaskSlackWebhookSecrets(t *testing.T) {
+	h := NewNotificationHandler(nil)
+	h.SetAuthorization(auth.ModeHeader)
+	h.SetAdminService(&fakeNotificationAdminService{
+		listTargetsResult: []domain.NotificationTarget{
+			{ID: "target-email", Type: domain.NotificationTargetTypeEmail, Name: "Email", Recipient: "<dev@example.com>", Enabled: true},
+			{ID: "target-slack", Type: domain.NotificationTargetTypeSlackWebhook, Name: "Slack", Recipient: "https://hooks.slack.example/services/T/B/X", Enabled: true},
+		},
+	})
+	admin := domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/notification-targets", nil)
+	req = req.WithContext(auth.WithUser(req.Context(), admin))
+	res := httptest.NewRecorder()
+	h.ListTargets(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+
+	data := decodeDataMap(t, res)
+	targets, ok := data["targets"].([]any)
+	if !ok || len(targets) != 2 {
+		t.Fatalf("expected two targets, got %v", data["targets"])
+	}
+	slackTarget, ok := targets[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected slack target map, got %T", targets[1])
+	}
+	if _, exists := slackTarget["address"]; exists {
+		t.Fatalf("expected slack target secret to be omitted, got %v", slackTarget)
+	}
+	configured, ok := slackTarget["webhook_configured"].(bool)
+	if !ok || !configured {
+		t.Fatalf("expected webhook_configured=true, got %v", slackTarget["webhook_configured"])
+	}
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/notification-targets", bytes.NewBufferString(`{"type":"slack_webhook","name":"Slack","webhook_url":"https://hooks.slack.example/services/T/B/X"}`))
+	createReq = createReq.WithContext(auth.WithUser(createReq.Context(), admin))
+	createRes := httptest.NewRecorder()
+	h.SetAdminService(&fakeNotificationAdminService{
+		createTargetResult: domain.NotificationTarget{ID: "target-slack", Type: domain.NotificationTargetTypeSlackWebhook, Name: "Slack", Recipient: "https://hooks.slack.example/services/T/B/X", Enabled: true},
+	})
+	h.CreateTarget(createRes, createReq)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("expected create target status %d, got %d body=%s", http.StatusCreated, createRes.Code, createRes.Body.String())
+	}
+	created := decodeDataMap(t, createRes)
+	if _, exists := created["address"]; exists {
+		t.Fatalf("expected created slack target to omit address, got %v", created)
 	}
 }
 

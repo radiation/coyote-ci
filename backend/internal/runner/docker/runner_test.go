@@ -53,6 +53,26 @@ type executorResponse struct {
 	err    error
 }
 
+type errorReadCloser struct {
+	reads [][]byte
+	err   error
+	index int
+}
+
+func (r *errorReadCloser) Read(p []byte) (int, error) {
+	if r.index >= len(r.reads) {
+		return 0, r.err
+	}
+	n := copy(p, r.reads[r.index])
+	r.index++
+	if r.index >= len(r.reads) {
+		return n, r.err
+	}
+	return n, nil
+}
+
+func (r *errorReadCloser) Close() error { return nil }
+
 func (f *fakeExecutor) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, cmdCall{name: name, args: append([]string(nil), args...)})
 	if len(f.responses) > 0 {
@@ -593,6 +613,23 @@ func TestStreamOutput_CollectsEmitsAndReturnsCallbackError(t *testing.T) {
 	)
 	if !errors.Is(err, callbackErr) {
 		t.Fatalf("expected callback error, got %v", err)
+	}
+}
+
+func TestStreamOutput_ReturnsScannerError(t *testing.T) {
+	scanErr := errors.New("read failed")
+	stdoutPipe := &errorReadCloser{reads: [][]byte{[]byte("out\n")}, err: scanErr}
+	stderrPipe := io.NopCloser(strings.NewReader(""))
+
+	stdout, stderr, err := streamOutput(stdoutPipe, stderrPipe, nil)
+	if !errors.Is(err, scanErr) {
+		t.Fatalf("expected scanner error, got %v", err)
+	}
+	if stdout != "out\n" {
+		t.Fatalf("unexpected stdout: %q", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("unexpected stderr: %q", stderr)
 	}
 }
 

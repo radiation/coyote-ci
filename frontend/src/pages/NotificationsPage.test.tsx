@@ -73,6 +73,16 @@ describe("NotificationsPage", () => {
         type: "email",
         name: "Dev Mailbox",
         address: "dev@localhost",
+        webhook_configured: false,
+        enabled: true,
+        created_at: "2026-06-01T00:00:00Z",
+        updated_at: "2026-06-01T00:00:00Z",
+      },
+      {
+        id: "target-2",
+        type: "slack_webhook",
+        name: "Build Alerts",
+        webhook_configured: true,
         enabled: true,
         created_at: "2026-06-01T00:00:00Z",
         updated_at: "2026-06-01T00:00:00Z",
@@ -115,10 +125,11 @@ describe("NotificationsPage", () => {
       },
     ]);
     mockedCreateNotificationTarget.mockResolvedValue({
-      id: "target-2",
+      id: "target-3",
       type: "email",
       name: "Ops",
       address: "ops@localhost",
+      webhook_configured: false,
       enabled: true,
       created_at: "2026-06-02T00:00:00Z",
       updated_at: "2026-06-02T00:00:00Z",
@@ -128,6 +139,7 @@ describe("NotificationsPage", () => {
       type: "email",
       name: "Dev Mailbox",
       address: "dev@localhost",
+      webhook_configured: false,
       enabled: false,
       created_at: "2026-06-01T00:00:00Z",
       updated_at: "2026-06-02T00:00:00Z",
@@ -161,6 +173,7 @@ describe("NotificationsPage", () => {
     await waitFor(() => {
       expect(screen.getByText("Notifications")).toBeTruthy();
       expect(screen.getByDisplayValue("Dev Mailbox")).toBeTruthy();
+      expect(screen.getByText("Webhook configured")).toBeTruthy();
       expect(screen.getAllByText("build_failed").length).toBeGreaterThan(0);
       expect(screen.getByText("project: Backend")).toBeTruthy();
     });
@@ -185,6 +198,7 @@ describe("NotificationsPage", () => {
 
     await waitFor(() => {
       expect(mockedCreateNotificationTarget).toHaveBeenCalledWith({
+        type: "email",
         name: "Ops Mailbox",
         address: "ops@localhost",
         enabled: true,
@@ -218,7 +232,7 @@ describe("NotificationsPage", () => {
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Target") as HTMLSelectElement).options,
-      ).toHaveLength(2);
+      ).toHaveLength(3);
     });
 
     fireEvent.change(screen.getByLabelText("Target"), {
@@ -253,7 +267,7 @@ describe("NotificationsPage", () => {
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Target") as HTMLSelectElement).options,
-      ).toHaveLength(2);
+      ).toHaveLength(3);
     });
 
     fireEvent.change(screen.getByLabelText("Target"), {
@@ -354,5 +368,178 @@ describe("NotificationsPage", () => {
     await waitFor(() => {
       expect(screen.getByText("Scope is required.")).toBeTruthy();
     });
+  });
+
+  it("creates a slack webhook target", async () => {
+    mockedCreateNotificationTarget.mockResolvedValue({
+      id: "target-3",
+      type: "slack_webhook",
+      name: "Build Alerts",
+      webhook_configured: true,
+      enabled: true,
+      created_at: "2026-06-02T00:00:00Z",
+      updated_at: "2026-06-02T00:00:00Z",
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target Type")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Target Type"), {
+      target: { value: "slack_webhook" },
+    });
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Build Alerts" },
+    });
+    fireEvent.change(screen.getByLabelText("Webhook URL"), {
+      target: { value: "https://hooks.slack.com/services/T/B/X" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create Slack Webhook" }),
+    );
+
+    await waitFor(() => {
+      expect(mockedCreateNotificationTarget).toHaveBeenCalledWith({
+        type: "slack_webhook",
+        name: "Build Alerts",
+        webhook_url: "https://hooks.slack.com/services/T/B/X",
+        enabled: true,
+      });
+    });
+  });
+
+  it("edits a slack target without re-entering its url", async () => {
+    mockedUpdateNotificationTarget.mockResolvedValue({
+      id: "target-2",
+      type: "slack_webhook",
+      name: "Release Alerts",
+      webhook_configured: true,
+      enabled: true,
+      created_at: "2026-06-01T00:00:00Z",
+      updated_at: "2026-06-02T00:00:00Z",
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Build Alerts")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Name for Build Alerts"), {
+      target: { value: "Release Alerts" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Build Alerts" }));
+
+    await waitFor(() => {
+      expect(mockedUpdateNotificationTarget).toHaveBeenCalledWith("target-2", {
+        name: "Release Alerts",
+      });
+    });
+  });
+
+  it("replaces a slack webhook url without displaying the stored secret", async () => {
+    mockedUpdateNotificationTarget.mockResolvedValue({
+      id: "target-2",
+      type: "slack_webhook",
+      name: "Build Alerts",
+      webhook_configured: true,
+      enabled: true,
+      created_at: "2026-06-01T00:00:00Z",
+      updated_at: "2026-06-02T00:00:00Z",
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Webhook configured")).toBeTruthy();
+    });
+
+    expect(
+      screen.queryByDisplayValue("https://hooks.slack.com/services/T/B/X"),
+    ).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Webhook URL for Build Alerts"), {
+      target: { value: "https://hooks.slack.com/services/T/B/Y" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Build Alerts" }));
+
+    await waitFor(() => {
+      expect(mockedUpdateNotificationTarget).toHaveBeenCalledWith("target-2", {
+        name: "Build Alerts",
+        webhook_url: "https://hooks.slack.com/services/T/B/Y",
+      });
+    });
+  });
+
+  it("validates slack webhook urls", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target Type")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Target Type"), {
+      target: { value: "slack_webhook" },
+    });
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Broken Slack" },
+    });
+    fireEvent.change(screen.getByLabelText("Webhook URL"), {
+      target: { value: "http://hooks.slack.com/services/T/B/X" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create Slack Webhook" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Webhook URL must be an HTTPS URL."),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows target types in subscription selection", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Target") as HTMLSelectElement).options,
+      ).toHaveLength(3);
+    });
+
+    const select = screen.getByLabelText("Target") as HTMLSelectElement;
+    const labels = Array.from(select.options).map((option) => option.text);
+
+    expect(labels).toContain("Dev Mailbox (Email: dev@localhost)");
+    expect(labels).toContain(
+      "Build Alerts (Slack webhook, Webhook configured)",
+    );
+  });
+
+  it("shows email target label without address when address is missing", async () => {
+    mockedListNotificationTargets.mockResolvedValue([
+      {
+        id: "target-1",
+        type: "email",
+        name: "Dev Mailbox",
+        webhook_configured: false,
+        enabled: true,
+        created_at: "2026-06-01T00:00:00Z",
+        updated_at: "2026-06-01T00:00:00Z",
+      },
+    ]);
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Target") as HTMLSelectElement).options,
+      ).toHaveLength(2);
+    });
+
+    const select = screen.getByLabelText("Target") as HTMLSelectElement;
+    const labels = Array.from(select.options).map((option) => option.text);
+    expect(labels).toContain("Dev Mailbox (Email)");
   });
 });

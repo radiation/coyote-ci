@@ -98,14 +98,15 @@ func TestBuildNotificationService_FormatBuildStatusEmail_FallsBackWithoutLookups
 	errMessage := "boom"
 	jobID := "job-1"
 	notifier := &BuildNotificationService{}
-	subject, body := notifier.formatBuildStatusEmail(context.Background(), domain.Build{
+	build := domain.Build{
 		ID:           "build-1",
 		ProjectID:    "project-1",
 		JobID:        &jobID,
 		BuildNumber:  7,
 		Status:       domain.BuildStatusFailed,
 		ErrorMessage: &errMessage,
-	})
+	}
+	subject, body := notifier.formatBuildStatusEmail(build, notifier.buildNotificationDetails(context.Background(), build))
 	if !strings.Contains(subject, "job-1") || !strings.Contains(subject, "failed") {
 		t.Fatalf("unexpected subject %q", subject)
 	}

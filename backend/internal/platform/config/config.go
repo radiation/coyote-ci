@@ -66,6 +66,7 @@ type Config struct {
 	SMTPUsername                     string
 	SMTPPassword                     string
 	SMTPFromAddress                  string
+	PublicURL                        string
 }
 
 func Load() Config {
@@ -126,6 +127,7 @@ func Load() Config {
 		SMTPUsername:                     getEnv("SMTP_USERNAME", ""),
 		SMTPPassword:                     getEnv("SMTP_PASSWORD", ""),
 		SMTPFromAddress:                  getEnv("SMTP_FROM_ADDRESS", "coyote-ci@localhost"),
+		PublicURL:                        normalizePublicURL(getEnv("COYOTE_PUBLIC_URL", getEnv("APP_BASE_URL", ""))),
 	}
 }
 
@@ -205,4 +207,12 @@ func defaultSessionCookieSecure(redirectURL string) bool {
 		return false
 	}
 	return true
+}
+
+func normalizePublicURL(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	return strings.TrimRight(trimmed, "/")
 }

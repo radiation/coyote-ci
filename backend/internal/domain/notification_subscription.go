@@ -5,7 +5,8 @@ import "time"
 type NotificationTargetType string
 
 const (
-	NotificationTargetTypeEmail NotificationTargetType = "email"
+	NotificationTargetTypeEmail        NotificationTargetType = "email"
+	NotificationTargetTypeSlackWebhook NotificationTargetType = "slack_webhook"
 )
 
 type NotificationTarget struct {

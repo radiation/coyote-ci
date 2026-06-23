@@ -171,6 +171,30 @@ func TestNotificationSubscriptionRepository_TargetCRUDAndErrors(t *testing.T) {
 		t.Fatalf("expected raw update error, got %v", rawUpdateErr)
 	}
 
+	mock.ExpectQuery("INSERT INTO notification_targets").WillReturnRows(sqlmock.NewRows(targetColumns).AddRow(
+		"target-slack", "slack_webhook", "Build Alerts", "https://hooks.slack.example/services/T/B/X", true, now, now,
+	))
+	createdSlackTarget, createSlackErr := repo.CreateTarget(context.Background(), domain.NotificationTarget{
+		ID:        "target-slack",
+		Type:      domain.NotificationTargetTypeSlackWebhook,
+		Name:      "Build Alerts",
+		Recipient: "https://hooks.slack.example/services/T/B/X",
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if createSlackErr != nil {
+		t.Fatalf("create slack target failed: %v", createSlackErr)
+	}
+	if createdSlackTarget.Type != domain.NotificationTargetTypeSlackWebhook {
+		t.Fatalf("expected slack target type, got %+v", createdSlackTarget)
+	}
+
+	mock.ExpectExec(`DELETE FROM notification_targets WHERE id = \$1`).WithArgs("target-slack").WillReturnResult(sqlmock.NewResult(0, 1))
+	if err := repo.DeleteTarget(context.Background(), "target-slack"); err != nil {
+		t.Fatalf("delete target failed: %v", err)
+	}
+
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}

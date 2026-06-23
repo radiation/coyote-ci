@@ -1,25 +1,29 @@
 package api
 
 type CreateNotificationTargetRequest struct {
-	Name    string `json:"name"`
-	Address string `json:"address"`
-	Enabled *bool  `json:"enabled,omitempty"`
+	Type       string `json:"type,omitempty"`
+	Name       string `json:"name"`
+	Address    string `json:"address,omitempty"`
+	WebhookURL string `json:"webhook_url,omitempty"`
+	Enabled    *bool  `json:"enabled,omitempty"`
 }
 
 type UpdateNotificationTargetRequest struct {
-	Name    *string `json:"name,omitempty"`
-	Address *string `json:"address,omitempty"`
-	Enabled *bool   `json:"enabled,omitempty"`
+	Name       *string `json:"name,omitempty"`
+	Address    *string `json:"address,omitempty"`
+	WebhookURL *string `json:"webhook_url,omitempty"`
+	Enabled    *bool   `json:"enabled,omitempty"`
 }
 
 type NotificationTargetResponse struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	Name      string `json:"name"`
-	Address   string `json:"address"`
-	Enabled   bool   `json:"enabled"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID                string `json:"id"`
+	Type              string `json:"type"`
+	Name              string `json:"name"`
+	Address           string `json:"address,omitempty"`
+	WebhookConfigured bool   `json:"webhook_configured"`
+	Enabled           bool   `json:"enabled"`
+	CreatedAt         string `json:"created_at"`
+	UpdatedAt         string `json:"updated_at"`
 }
 
 type NotificationTargetListResponse struct {

@@ -1,4 +1,4 @@
-export type NotificationTargetType = "email";
+export type NotificationTargetType = "email" | "slack_webhook";
 
 export type NotificationEventType = "build_succeeded" | "build_failed";
 
@@ -6,7 +6,8 @@ export interface NotificationTarget {
   id: string;
   type: NotificationTargetType;
   name: string;
-  address: string;
+  address?: string;
+  webhook_configured: boolean;
   enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -16,15 +17,28 @@ export interface NotificationTargetListResponse {
   targets: NotificationTarget[];
 }
 
-export interface CreateNotificationTargetRequest {
+export interface CreateEmailNotificationTargetRequest {
+  type: "email";
   name: string;
   address: string;
   enabled?: boolean;
 }
 
+export interface CreateSlackNotificationTargetRequest {
+  type: "slack_webhook";
+  name: string;
+  webhook_url: string;
+  enabled?: boolean;
+}
+
+export type CreateNotificationTargetRequest =
+  | CreateEmailNotificationTargetRequest
+  | CreateSlackNotificationTargetRequest;
+
 export interface UpdateNotificationTargetRequest {
   name?: string;
   address?: string;
+  webhook_url?: string;
   enabled?: boolean;
 }
 

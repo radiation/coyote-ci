@@ -61,6 +61,11 @@ func main() {
 	} else {
 		log.Printf("email notifications disabled")
 	}
+	if strings.TrimSpace(cfg.PublicURL) == "" {
+		log.Printf("public url is not configured; slack project/job/build links are disabled")
+	} else {
+		log.Printf("public url configured for notification links: %s", cfg.PublicURL)
+	}
 
 	dbURL, dbPoolCfg := dbopen.FromConfig(cfg)
 	db, err := platformdb.Open(dbURL, dbPoolCfg)
@@ -96,10 +101,12 @@ func main() {
 		NotifyCommitAuthorOnFailure: cfg.EmailNotifyCommitAuthorOnFailure,
 		Recipients:                  cfg.EmailNotificationRecipients,
 		Sender:                      emailSender,
+		SlackSender:                 buildsvc.NewSlackWebhookSender(nil),
 		JobRepo:                     jobRepo,
 		ProjectRepo:                 projectRepo,
 		DeliveryRepo:                notificationDeliveryRepo,
 		SubscriptionRepo:            notificationSubscriptionRepo,
+		PublicBaseURL:               cfg.PublicURL,
 	})
 	if buildNotificationErr != nil {
 		log.Fatalf("failed to configure build notifications: %v", buildNotificationErr)

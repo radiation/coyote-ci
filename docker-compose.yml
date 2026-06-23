@@ -79,6 +79,7 @@ services:
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM_ADDRESS: ${SMTP_FROM_ADDRESS:-coyote-ci@localhost}
+      COYOTE_PUBLIC_URL: ${COYOTE_PUBLIC_URL:-http://localhost:3000}
       DB_HOST: db
       DB_PORT: "5432"
       DB_USER: coyote
@@ -122,6 +123,7 @@ services:
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM_ADDRESS: ${SMTP_FROM_ADDRESS:-coyote-ci@localhost}
+      COYOTE_PUBLIC_URL: ${COYOTE_PUBLIC_URL:-http://localhost:3000}
       ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
       WORKER_EXECUTION_WORKSPACE_ROOT: /tmp/coyote-builds
       WORKER_MOUNT_DOCKER_SOCKET: "true"

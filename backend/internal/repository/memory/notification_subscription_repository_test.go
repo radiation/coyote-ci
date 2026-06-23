@@ -391,7 +391,7 @@ func TestNotificationSubscriptionRepository_HelperFunctions(t *testing.T) {
 		t.Fatalf("unexpected job key: %q", got)
 	}
 
-	normalized, err := normalizeNotificationTargetRecipient(" dev@example.com ")
+	normalized, err := normalizeNotificationTargetRecipient(domain.NotificationTargetTypeEmail, " dev@example.com ")
 	if err != nil {
 		t.Fatalf("normalize recipient failed: %v", err)
 	}
@@ -399,7 +399,7 @@ func TestNotificationSubscriptionRepository_HelperFunctions(t *testing.T) {
 		t.Fatalf("unexpected normalized recipient %q", normalized)
 	}
 
-	_, err = normalizeNotificationTargetRecipient("bad-email")
+	_, err = normalizeNotificationTargetRecipient(domain.NotificationTargetTypeEmail, "bad-email")
 	if err == nil {
 		t.Fatal("expected invalid email error")
 	}
