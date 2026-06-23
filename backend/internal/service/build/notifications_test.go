@@ -1868,3 +1868,263 @@ func TestFormatBuildStatusSlackText_NonFullSHAFallbackStillLinksCoyoteEntities(t
 		t.Fatalf("did not expect commit link for non-full sha, got %q", message)
 	}
 }
+
+func TestBuildNotificationHelpers_GitRefLabel(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  string
+		want string
+	}{
+		{
+			name: "refs/heads/ prefix",
+			ref:  "refs/heads/main",
+			want: "main",
+		},
+		{
+			name: "refs/tags/ prefix",
+			ref:  "refs/tags/v1.2.3",
+			want: "v1.2.3",
+		},
+		{
+			name: "plain branch name",
+			ref:  "develop",
+			want: "develop",
+		},
+		{
+			name: "empty ref",
+			ref:  "",
+			want: "",
+		},
+		{
+			name: "whitespace-only ref",
+			ref:  "   ",
+			want: "",
+		},
+		{
+			name: "refs/heads/ with special chars",
+			ref:  "refs/heads/feature/PROJ-123",
+			want: "feature/PROJ-123",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := slackGitRefLabel(tc.ref); got != tc.want {
+				t.Fatalf("git ref label mismatch: got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildNotificationHelpers_RepositoryRemoteParsing(t *testing.T) {
+	tests := []struct {
+		name      string
+		remote    string
+		wantHost  string
+		wantOwner string
+		wantRepo  string
+		wantOk    bool
+	}{
+		{
+			name:      "https url with trailing .git",
+			remote:    "https://github.com/acme/myrepo.git",
+			wantHost:  "github.com",
+			wantOwner: "acme",
+			wantRepo:  "myrepo",
+			wantOk:    true,
+		},
+		{
+			name:      "scp-style git url",
+			remote:    "git@github.com:acme/myrepo.git",
+			wantHost:  "github.com",
+			wantOwner: "acme",
+			wantRepo:  "myrepo",
+			wantOk:    true,
+		},
+		{
+			name:      "ssh:// url with .git",
+			remote:    "ssh://git@github.com/acme/myrepo.git",
+			wantHost:  "github.com",
+			wantOwner: "acme",
+			wantRepo:  "myrepo",
+			wantOk:    true,
+		},
+		{
+			name:      "missing owner",
+			remote:    "https://github.com//myrepo.git",
+			wantHost:  "",
+			wantOwner: "",
+			wantRepo:  "",
+			wantOk:    false,
+		},
+		{
+			name:      "malformed git@ url without colon",
+			remote:    "git@github.com/acme/myrepo",
+			wantHost:  "",
+			wantOwner: "",
+			wantRepo:  "",
+			wantOk:    false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			host, owner, repo, ok := parseRepositoryRemote(tc.remote)
+			if ok != tc.wantOk {
+				t.Fatalf("expected ok=%v, got %v", tc.wantOk, ok)
+			}
+			if host != tc.wantHost {
+				t.Fatalf("host mismatch: got %q want %q", host, tc.wantHost)
+			}
+			if owner != tc.wantOwner {
+				t.Fatalf("owner mismatch: got %q want %q", owner, tc.wantOwner)
+			}
+			if repo != tc.wantRepo {
+				t.Fatalf("repo mismatch: got %q want %q", repo, tc.wantRepo)
+			}
+		})
+	}
+}
+
+func TestBuildNotificationHelpers_DedupeRecipients(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []string
+		want  []string
+	}{
+		{
+			name:  "dedupes and trims",
+			input: []string{"alice@example.com", " alice@example.com ", "bob@example.com"},
+			want:  []string{"alice@example.com", "bob@example.com"},
+		},
+		{
+			name:  "skips empty strings",
+			input: []string{"alice@example.com", "", "   ", "bob@example.com"},
+			want:  []string{"alice@example.com", "bob@example.com"},
+		},
+		{
+			name:  "empty input",
+			input: []string{},
+			want:  nil,
+		},
+		{
+			name:  "all duplicates",
+			input: []string{"alice@example.com", "alice@example.com", "alice@example.com"},
+			want:  []string{"alice@example.com"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := dedupeRecipients(tc.input)
+			if len(got) != len(tc.want) {
+				t.Fatalf("dedupeRecipients mismatch: got length %d, want %d (got %v, want %v)", len(got), len(tc.want), got, tc.want)
+			}
+			for i, item := range got {
+				if item != tc.want[i] {
+					t.Fatalf("dedupeRecipients mismatch at index %d: got %q, want %q", i, item, tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestBuildNotificationHelpers_SlackStatusIndicator(t *testing.T) {
+	tests := []struct {
+		status string
+		want   string
+	}{
+		{status: "succeeded", want: ":white_check_mark:"},
+		{status: "failed", want: ":x:"},
+		{status: "cancelled", want: ":information_source:"},
+		{status: "", want: ":information_source:"},
+	}
+
+	for _, tc := range tests {
+		if got := slackStatusIndicator(tc.status); got != tc.want {
+			t.Fatalf("slackStatusIndicator(%q): got %q, want %q", tc.status, got, tc.want)
+		}
+	}
+}
+
+func TestBuildNotificationHelpers_ShortNotificationSHA(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "abc1234def5678", want: "abc1234"},
+		{input: "abc", want: "abc"},
+		{input: "   deadbeef   ", want: "deadbee"},
+		{input: "", want: ""},
+	}
+
+	for _, tc := range tests {
+		if got := shortNotificationSHA(tc.input); got != tc.want {
+			t.Fatalf("shortNotificationSHA(%q): got %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestBuildNotificationHelpers_ParseNotificationRecipient(t *testing.T) {
+	valid := "alice@example.com"
+	withName := "Alice <alice@example.com>"
+	withSpace := "  bob@example.com  "
+	invalid := "not-an-email"
+	empty := ""
+
+	tests := []struct {
+		name      string
+		value     *string
+		wantOk    bool
+		wantCheck func(got string) bool
+	}{
+		{
+			name:      "valid email",
+			value:     &valid,
+			wantOk:    true,
+			wantCheck: func(got string) bool { return strings.Contains(got, "alice@example.com") },
+		},
+		{
+			name:      "email with name",
+			value:     &withName,
+			wantOk:    true,
+			wantCheck: func(got string) bool { return strings.Contains(got, "alice@example.com") },
+		},
+		{
+			name:      "nil value",
+			value:     nil,
+			wantOk:    false,
+			wantCheck: func(got string) bool { return got == "" },
+		},
+		{
+			name:      "empty string",
+			value:     &empty,
+			wantOk:    false,
+			wantCheck: func(got string) bool { return got == "" },
+		},
+		{
+			name:      "whitespace only",
+			value:     &withSpace,
+			wantOk:    true,
+			wantCheck: func(got string) bool { return strings.Contains(got, "bob@example.com") },
+		},
+		{
+			name:      "invalid email",
+			value:     &invalid,
+			wantOk:    false,
+			wantCheck: func(got string) bool { return got == "" },
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseNotificationRecipient(tc.value)
+			if ok != tc.wantOk {
+				t.Fatalf("parseNotificationRecipient ok mismatch: got %v, want %v", ok, tc.wantOk)
+			}
+			if !tc.wantCheck(got) {
+				t.Fatalf("parseNotificationRecipient result failed check: got %q", got)
+			}
+		})
+	}
+}
