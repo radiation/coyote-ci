@@ -308,6 +308,159 @@ describe("NotificationsPage", () => {
     expect(succeeded.checked).toBe(false);
   });
 
+  it("validates required fields for creating an email target", async () => {
+    renderPage();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create Email Target" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Target name is required.")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Eng Alerts" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create Email Target" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Email address is required.")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Email Address"), {
+      target: { value: "invalid-email" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create Email Target" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Email address must be valid.")).toBeTruthy();
+    });
+  });
+
+  it("creates an email target and resets the create-target form", async () => {
+    renderPage();
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Eng Alerts" },
+    });
+    fireEvent.change(screen.getByLabelText("Email Address"), {
+      target: { value: "eng-alerts@example.com" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create Email Target" }),
+    );
+
+    await waitFor(() => {
+      expect(mockedCreateNotificationTarget).toHaveBeenCalledWith({
+        type: "email",
+        name: "Eng Alerts",
+        address: "eng-alerts@example.com",
+        enabled: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
+        "",
+      );
+      expect(
+        (screen.getByLabelText("Email Address") as HTMLInputElement).value,
+      ).toBe("");
+    });
+  });
+
+  it("validates and creates a slack webhook target", async () => {
+    renderPage();
+
+    fireEvent.change(screen.getByLabelText("Target Type"), {
+      target: { value: "slack_webhook" },
+    });
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "#coyote-ci" },
+    });
+    fireEvent.change(screen.getByLabelText("Webhook URL"), {
+      target: { value: "http://hooks.slack.com/services/a/b/c" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create Slack Webhook" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Webhook URL must be an HTTPS URL."),
+      ).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Webhook URL"), {
+      target: { value: "https://hooks.slack.com/services/a/b/c" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create Slack Webhook" }),
+    );
+
+    await waitFor(() => {
+      expect(mockedCreateNotificationTarget).toHaveBeenCalledWith({
+        type: "slack_webhook",
+        name: "#coyote-ci",
+        webhook_url: "https://hooks.slack.com/services/a/b/c",
+        enabled: true,
+      });
+    });
+  });
+
+  it("surfaces create-target API errors", async () => {
+    mockedCreateNotificationTarget.mockRejectedValueOnce(
+      new Error("create target failed"),
+    );
+
+    renderPage();
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Eng Alerts" },
+    });
+    fireEvent.change(screen.getByLabelText("Email Address"), {
+      target: { value: "eng-alerts@example.com" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create Email Target" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Failed to create notification target/),
+      ).toBeTruthy();
+    });
+  });
+
+  it("surfaces update-target API errors", async () => {
+    mockedUpdateNotificationTarget.mockRejectedValueOnce(
+      new Error("update target failed"),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Disable Engineering alerts" }),
+      ).toBeTruthy();
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Disable Engineering alerts" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Failed to update notification target/),
+      ).toBeTruthy();
+    });
+  });
+
   it("creates one subscription row for one selected event", async () => {
     renderPage();
 
@@ -465,6 +618,129 @@ describe("NotificationsPage", () => {
     expect(
       within(rulesSection).getAllByText("Build succeeded").length,
     ).toBeGreaterThan(0);
+  });
+
+  it("shows project-scope fallback when project lookup is missing", async () => {
+    mockedListNotificationSubscriptions.mockResolvedValue([
+      {
+        id: "subscription-missing-project",
+        target_id: "target-1",
+        project_id: "project-missing",
+        job_id: null,
+        event_type: "build_failed",
+        enabled: true,
+        created_at: "2026-06-01T00:00:00Z",
+        updated_at: "2026-06-01T00:00:00Z",
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        within(getRulesSection()).getByText("All jobs in selected project"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows job-scope fallback when job lookup is missing", async () => {
+    mockedListNotificationSubscriptions.mockResolvedValue([
+      {
+        id: "subscription-missing-job",
+        target_id: "target-2",
+        project_id: null,
+        job_id: "job-missing",
+        event_type: "build_failed",
+        enabled: false,
+        created_at: "2026-06-01T00:00:00Z",
+        updated_at: "2026-06-01T00:00:00Z",
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        within(getRulesSection()).getByText("One specific job"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows job name when job exists but its project lookup is missing", async () => {
+    mockedListNotificationSubscriptions.mockResolvedValue([
+      {
+        id: "subscription-job-only",
+        target_id: "target-2",
+        project_id: null,
+        job_id: "job-ghost",
+        event_type: "build_failed",
+        enabled: false,
+        created_at: "2026-06-01T00:00:00Z",
+        updated_at: "2026-06-01T00:00:00Z",
+      },
+    ]);
+    mockedListProjects.mockResolvedValue([
+      {
+        id: "project-1",
+        name: "Coyote CI",
+        slug: "coyote-ci",
+        created_at: "2026-06-01T00:00:00Z",
+        updated_at: "2026-06-01T00:00:00Z",
+      },
+    ]);
+    mockedListJobs.mockResolvedValue([
+      {
+        id: "job-ghost",
+        project_id: "project-ghost",
+        name: "nightly-release",
+        priority: 5,
+        repository_url: "https://example.com/repo.git",
+        default_ref: "main",
+        push_enabled: true,
+        pipeline_yaml: "steps: []",
+        enabled: true,
+        created_at: "2026-06-01T00:00:00Z",
+        updated_at: "2026-06-01T00:00:00Z",
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        within(getRulesSection()).getByText("nightly-release"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("keeps project unset when editing a job rule whose job is missing", async () => {
+    mockedListNotificationSubscriptions.mockResolvedValue([
+      {
+        id: "subscription-edit-missing-job",
+        target_id: "target-2",
+        project_id: null,
+        job_id: "job-missing",
+        event_type: "build_failed",
+        enabled: true,
+        created_at: "2026-06-01T00:00:00Z",
+        updated_at: "2026-06-01T00:00:00Z",
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        within(getRulesSection()).getByText("Slack · #coyote-ci"),
+      ).toBeTruthy();
+    });
+
+    clickEditForRule("Slack · #coyote-ci");
+
+    const projectSelect = within(getEditRulePanel()).getByLabelText(
+      "Project",
+    ) as HTMLSelectElement;
+    expect(projectSelect.value).toBe("");
   });
 
   it("does not duplicate event badges when duplicate rows exist", async () => {
