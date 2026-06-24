@@ -505,6 +505,84 @@ describe("NotificationsPage", () => {
     });
   });
 
+  it("shows validation error when scope is missing", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      const form = getCreateRuleForm();
+      const select = within(form).getByLabelText(
+        "1. Target",
+      ) as HTMLSelectElement;
+      expect(Array.from(select.options).length).toBeGreaterThan(1);
+    });
+
+    fireEvent.change(within(getCreateRuleForm()).getByLabelText("1. Target"), {
+      target: { value: "target-1" },
+    });
+    fireEvent.click(
+      within(getCreateRuleForm()).getByRole("button", { name: "Create Rule" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Scope is required.")).toBeTruthy();
+    });
+  });
+
+  it("shows validation error when project is missing", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      const form = getCreateRuleForm();
+      const select = within(form).getByLabelText(
+        "1. Target",
+      ) as HTMLSelectElement;
+      expect(Array.from(select.options).length).toBeGreaterThan(1);
+    });
+
+    fireEvent.change(within(getCreateRuleForm()).getByLabelText("1. Target"), {
+      target: { value: "target-1" },
+    });
+    fireEvent.change(within(getCreateRuleForm()).getByLabelText("3. Scope"), {
+      target: { value: "project" },
+    });
+    fireEvent.click(
+      within(getCreateRuleForm()).getByRole("button", { name: "Create Rule" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Project is required.")).toBeTruthy();
+    });
+  });
+
+  it("shows validation error when job is missing for job scope", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      const form = getCreateRuleForm();
+      const select = within(form).getByLabelText(
+        "1. Target",
+      ) as HTMLSelectElement;
+      expect(Array.from(select.options).length).toBeGreaterThan(1);
+    });
+
+    fireEvent.change(within(getCreateRuleForm()).getByLabelText("1. Target"), {
+      target: { value: "target-1" },
+    });
+    fireEvent.change(within(getCreateRuleForm()).getByLabelText("3. Scope"), {
+      target: { value: "job" },
+    });
+    fireEvent.change(within(getCreateRuleForm()).getByLabelText("4. Project"), {
+      target: { value: "project-1" },
+    });
+    fireEvent.click(
+      within(getCreateRuleForm()).getByRole("button", { name: "Create Rule" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Job is required for job scope.")).toBeTruthy();
+    });
+  });
+
   it("creates two rows when both events selected", async () => {
     renderPage();
 
@@ -838,6 +916,70 @@ describe("NotificationsPage", () => {
         "subscription-2",
       );
     });
+  });
+
+  it("editing a job-scoped rule updates enabled state in place", async () => {
+    mockedListNotificationSubscriptions.mockResolvedValue([
+      {
+        id: "subscription-job-edit",
+        target_id: "target-2",
+        project_id: null,
+        job_id: "job-2",
+        event_type: "build_failed",
+        enabled: false,
+        created_at: "2026-06-01T00:00:00Z",
+        updated_at: "2026-06-01T00:00:00Z",
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        within(getRulesSection()).getByText("Website / frontend-ci"),
+      ).toBeTruthy();
+    });
+
+    clickEditForRule("Slack · #coyote-ci");
+    fireEvent.click(within(getEditRulePanel()).getByLabelText("Enabled"));
+    fireEvent.click(screen.getByRole("button", { name: "Save Rule" }));
+
+    await waitFor(() => {
+      expect(mockedUpdateNotificationSubscription).toHaveBeenCalledWith(
+        "subscription-job-edit",
+        { enabled: true },
+      );
+    });
+  });
+
+  it("editing a malformed job-scoped rule with no job id keeps project unset", async () => {
+    mockedListNotificationSubscriptions.mockResolvedValue([
+      {
+        id: "subscription-missing-job-id",
+        target_id: "target-2",
+        project_id: null,
+        job_id: null,
+        event_type: "build_failed",
+        enabled: true,
+        created_at: "2026-06-01T00:00:00Z",
+        updated_at: "2026-06-01T00:00:00Z",
+      },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        within(getRulesSection()).getByText("One specific job"),
+      ).toBeTruthy();
+    });
+
+    clickEditForRule("Slack · #coyote-ci");
+
+    const projectSelect = within(getEditRulePanel()).getByLabelText(
+      "Project",
+    ) as HTMLSelectElement;
+    expect(projectSelect.value).toBe("");
   });
 
   it("editing changes scope using create-first then delete", async () => {
