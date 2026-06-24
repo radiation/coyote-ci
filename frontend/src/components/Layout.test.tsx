@@ -77,6 +77,7 @@ describe("Layout", () => {
     });
     mockedGetMe.mockResolvedValue({
       auth_mode: "disabled",
+      email_verified: null,
       user: {
         id: "disabled-mode-user",
         email: "dev@local.coyote-ci",
@@ -97,6 +98,7 @@ describe("Layout", () => {
       expect(screen.getByRole("link", { name: "Artifacts" })).toHaveClass(
         "is-active",
       );
+      expect(screen.getByRole("link", { name: "Profile" })).toBeTruthy();
       expect(screen.queryByRole("link", { name: "Tokens" })).toBeNull();
       expect(screen.getByRole("link", { name: "Users" })).toBeTruthy();
     });
@@ -115,6 +117,7 @@ describe("Layout", () => {
   it("hides the Users nav link for non-admin header-mode identities", async () => {
     mockedGetMe.mockResolvedValue({
       auth_mode: "header",
+      email_verified: null,
       user: {
         id: "user-1",
         email: "user@example.com",
@@ -200,6 +203,7 @@ describe("Layout", () => {
   it("shows the logout control for authenticated oidc users", async () => {
     mockedGetMe.mockResolvedValue({
       auth_mode: "oidc",
+      email_verified: null,
       user: {
         id: "user-1",
         email: "user@example.com",

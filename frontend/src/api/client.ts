@@ -47,6 +47,7 @@ import type {
 import type {
   CreateNotificationSubscriptionRequest,
   CreateNotificationTargetRequest,
+  MyEmailNotificationTargetResponse,
   NotificationSubscription,
   NotificationSubscriptionListResponse,
   NotificationTarget,
@@ -254,6 +255,20 @@ export async function listNotificationTargets(): Promise<NotificationTarget[]> {
     DataEnvelope<NotificationTargetListResponse>
   >("/notification-targets");
   return envelope.data.targets;
+}
+
+export async function getMyEmailNotificationTarget(): Promise<NotificationTarget | null> {
+  const envelope = await fetchJSON<
+    DataEnvelope<MyEmailNotificationTargetResponse>
+  >("/me/notification-targets/email");
+  return envelope.data.target;
+}
+
+export async function ensureMyEmailNotificationTarget(): Promise<NotificationTarget> {
+  const envelope = await postNoBodyJSON<DataEnvelope<NotificationTarget>>(
+    "/me/notification-targets/email",
+  );
+  return envelope.data;
 }
 
 export async function createNotificationTarget(

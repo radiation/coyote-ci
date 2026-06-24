@@ -42,6 +42,8 @@ import {
   updateProjectMember,
   deleteProjectMember,
   listNotificationTargets,
+  getMyEmailNotificationTarget,
+  ensureMyEmailNotificationTarget,
   createNotificationTarget,
   updateNotificationTarget,
   listNotificationSubscriptions,
@@ -88,6 +90,8 @@ describe("API client - types", () => {
     expect(typeof updateProjectMember).toBe("function");
     expect(typeof deleteProjectMember).toBe("function");
     expect(typeof listNotificationTargets).toBe("function");
+    expect(typeof getMyEmailNotificationTarget).toBe("function");
+    expect(typeof ensureMyEmailNotificationTarget).toBe("function");
     expect(typeof createNotificationTarget).toBe("function");
     expect(typeof updateNotificationTarget).toBe("function");
     expect(typeof listNotificationSubscriptions).toBe("function");
@@ -892,6 +896,7 @@ describe("API client - types", () => {
       json: async () => ({
         data: {
           auth_mode: "disabled",
+          email_verified: null,
           user: {
             id: "disabled-mode-user",
             email: "dev@local.coyote-ci",
@@ -1254,6 +1259,51 @@ describe("API client - types", () => {
     expect(
       formatAPIErrorMessage("raw failure", "fallback forbidden message"),
     ).toBe("raw failure");
+  });
+
+  it("gets and ensures my email notification target", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            target: null,
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            id: "target-1",
+            owner_user_id: "user-1",
+            type: "email",
+            name: "User Example",
+            address: "<user@example.com>",
+            webhook_configured: false,
+            enabled: true,
+            created_at: "2026-06-24T00:00:00Z",
+            updated_at: "2026-06-24T00:00:00Z",
+          },
+        }),
+      } as Response);
+
+    const current = await getMyEmailNotificationTarget();
+    const created = await ensureMyEmailNotificationTarget();
+
+    expect(current).toBeNull();
+    expect(created.id).toBe("target-1");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/me/notification-targets/email",
+      { credentials: "include" },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/me/notification-targets/email",
+      { credentials: "include", method: "POST" },
+    );
   });
 
   it("throws APIError for JSON and plain-text error responses", async () => {

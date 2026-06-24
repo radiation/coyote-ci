@@ -36,6 +36,9 @@ func TestUserHandler_GetMeUsesCurrentUser(t *testing.T) {
 	if payload.Data.AuthMethod != string(auth.MethodOIDC) {
 		t.Fatalf("expected auth method oidc, got %q", payload.Data.AuthMethod)
 	}
+	if payload.Data.EmailVerified != nil {
+		t.Fatalf("expected unknown email verification state, got %v", payload.Data.EmailVerified)
+	}
 }
 
 func TestUserHandler_GetMeFallsBackToDisabledModeUser(t *testing.T) {
@@ -53,6 +56,9 @@ func TestUserHandler_GetMeFallsBackToDisabledModeUser(t *testing.T) {
 	}
 	if payload.Data.AuthMode != string(auth.ModeDisabled) {
 		t.Fatalf("expected disabled auth mode, got %q", payload.Data.AuthMode)
+	}
+	if payload.Data.EmailVerified != nil {
+		t.Fatalf("expected unknown email verification state, got %v", payload.Data.EmailVerified)
 	}
 }
 

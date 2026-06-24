@@ -143,6 +143,8 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 			}
 
 			if cfg.notificationHandler != nil {
+				r.Get("/me/notification-targets/email", cfg.notificationHandler.GetMyEmailTarget)
+				r.Post("/me/notification-targets/email", cfg.notificationHandler.EnsureMyEmailTarget)
 				r.Route("/notification-targets", func(r chi.Router) {
 					r.Get("/", cfg.notificationHandler.ListTargets)
 					r.Post("/", cfg.notificationHandler.CreateTarget)

@@ -977,6 +977,26 @@ fieldset {
   margin-bottom: 6px;
 }
 
+.profile-details-list {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 1fr;
+  gap: 10px 16px;
+  margin: 10px 0 0;
+}
+
+.profile-details-list div {
+  display: contents;
+}
+
+.profile-details-list dt {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+}
+
+.profile-details-list dd {
+  margin: 0;
+}
+
 .checkbox-label,
 .radio-label {
   display: flex;
@@ -2024,6 +2044,15 @@ fieldset legend {
 @media (max-width: 900px) {
   .build-summary-hero {
     flex-direction: column;
+  }
+
+  .profile-details-list {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .profile-details-list dd {
+    margin-bottom: 8px;
   }
 
   .build-summary-side {

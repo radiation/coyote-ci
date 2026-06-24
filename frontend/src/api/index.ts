@@ -49,6 +49,8 @@ export {
   updateProjectMember,
   deleteProjectMember,
   listNotificationTargets,
+  getMyEmailNotificationTarget,
+  ensureMyEmailNotificationTarget,
   createNotificationTarget,
   updateNotificationTarget,
   listNotificationSubscriptions,

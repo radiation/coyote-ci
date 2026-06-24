@@ -8,6 +8,7 @@ import { appRoutes } from "./router";
 import {
   getAuthConfig,
   getMe,
+  getMyEmailNotificationTarget,
   listBuilds,
   listProjects,
   listQueue,
@@ -20,6 +21,7 @@ vi.mock("../api", async () => {
     ...actual,
     getAuthConfig: vi.fn(),
     getMe: vi.fn(),
+    getMyEmailNotificationTarget: vi.fn(),
     listProjects: vi.fn(),
     listQueue: vi.fn(),
     listBuilds: vi.fn(),
@@ -67,6 +69,9 @@ function renderRouter(initialEntries: string[]) {
 describe("router dashboard home", () => {
   const mockedGetAuthConfig = vi.mocked(getAuthConfig);
   const mockedGetMe = vi.mocked(getMe);
+  const mockedGetMyEmailNotificationTarget = vi.mocked(
+    getMyEmailNotificationTarget,
+  );
   const mockedListProjects = vi.mocked(listProjects);
   const mockedListQueue = vi.mocked(listQueue);
   const mockedListBuilds = vi.mocked(listBuilds);
@@ -83,12 +88,14 @@ describe("router dashboard home", () => {
     });
     mockedGetMe.mockResolvedValue({
       auth_mode: "disabled",
+      email_verified: null,
       user: {
         id: "disabled-mode-user",
         email: "dev@local.coyote-ci",
         global_role: "admin",
       },
     });
+    mockedGetMyEmailNotificationTarget.mockResolvedValue(null);
     mockedListProjects.mockResolvedValue([]);
     mockedListQueue.mockResolvedValue([]);
     mockedListBuilds.mockResolvedValue([]);
@@ -118,6 +125,17 @@ describe("router dashboard home", () => {
         }),
       ).toBeTruthy();
       expect(screen.getByRole("heading", { name: "Projects" })).toBeTruthy();
+    });
+  });
+
+  it("renders the profile settings route", async () => {
+    renderRouter(["/settings/profile"]);
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "Profile" })).toHaveClass(
+        "is-active",
+      );
+      expect(screen.getByRole("heading", { name: "Profile" })).toBeTruthy();
     });
   });
 });

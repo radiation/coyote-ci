@@ -4129,6 +4129,10 @@ const docTemplate = `{
                 "auth_mode": {
                     "type": "string"
                 },
+                "email_verified": {
+                    "type": "boolean",
+                    "x-nullable": true
+                },
                 "user": {
                     "$ref": "#/definitions/api.UserResponse"
                 }

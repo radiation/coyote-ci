@@ -4,6 +4,7 @@ export type NotificationEventType = "build_succeeded" | "build_failed";
 
 export interface NotificationTarget {
   id: string;
+  owner_user_id?: string;
   type: NotificationTargetType;
   name: string;
   address?: string;
@@ -15,6 +16,10 @@ export interface NotificationTarget {
 
 export interface NotificationTargetListResponse {
   targets: NotificationTarget[];
+}
+
+export interface MyEmailNotificationTargetResponse {
+  target: NotificationTarget | null;
 }
 
 export interface CreateEmailNotificationTargetRequest {

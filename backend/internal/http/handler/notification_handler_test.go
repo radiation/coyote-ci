@@ -32,23 +32,35 @@ func (f *fakeSampleNotificationSender) SendSampleBuildFailure(_ context.Context)
 }
 
 type fakeNotificationAdminService struct {
-	listTargetsResult        []domain.NotificationTarget
-	listTargetsErr           error
-	createTargetResult       domain.NotificationTarget
-	createTargetErr          error
-	updateTargetResult       domain.NotificationTarget
-	updateTargetErr          error
-	listSubscriptionsResult  []domain.NotificationSubscription
-	listSubscriptionsErr     error
-	createSubscriptionResult domain.NotificationSubscription
-	createSubscriptionErr    error
-	updateSubscriptionResult domain.NotificationSubscription
-	updateSubscriptionErr    error
-	deleteSubscriptionErr    error
+	listTargetsResult            []domain.NotificationTarget
+	listTargetsErr               error
+	getOwnedEmailTargetResult    domain.NotificationTarget
+	getOwnedEmailTargetErr       error
+	ensureOwnedEmailTargetResult domain.NotificationTarget
+	ensureOwnedEmailTargetErr    error
+	createTargetResult           domain.NotificationTarget
+	createTargetErr              error
+	updateTargetResult           domain.NotificationTarget
+	updateTargetErr              error
+	listSubscriptionsResult      []domain.NotificationSubscription
+	listSubscriptionsErr         error
+	createSubscriptionResult     domain.NotificationSubscription
+	createSubscriptionErr        error
+	updateSubscriptionResult     domain.NotificationSubscription
+	updateSubscriptionErr        error
+	deleteSubscriptionErr        error
 }
 
 func (f *fakeNotificationAdminService) ListTargets(_ context.Context) ([]domain.NotificationTarget, error) {
 	return f.listTargetsResult, f.listTargetsErr
+}
+
+func (f *fakeNotificationAdminService) GetOwnedEmailTarget(_ context.Context, _ domain.User) (domain.NotificationTarget, error) {
+	return f.getOwnedEmailTargetResult, f.getOwnedEmailTargetErr
+}
+
+func (f *fakeNotificationAdminService) EnsureOwnedEmailTarget(_ context.Context, _ domain.User) (domain.NotificationTarget, error) {
+	return f.ensureOwnedEmailTargetResult, f.ensureOwnedEmailTargetErr
 }
 
 func (f *fakeNotificationAdminService) CreateTarget(_ context.Context, _ service.CreateNotificationTargetInput) (domain.NotificationTarget, error) {
@@ -155,6 +167,67 @@ func TestNotificationHandler_SendSampleBuildFailure_Success(t *testing.T) {
 	}
 	if len(payload.Data.Recipients) != 2 {
 		t.Fatalf("expected two recipients, got %v", payload.Data.Recipients)
+	}
+}
+
+func TestNotificationHandler_MyEmailTargetEndpoints(t *testing.T) {
+	h := NewNotificationHandler(nil)
+	h.SetAuthorization(auth.ModeHeader)
+	h.SetAdminService(&fakeNotificationAdminService{
+		getOwnedEmailTargetErr: repository.ErrNotificationTargetNotFound,
+		ensureOwnedEmailTargetResult: domain.NotificationTarget{
+			ID:          "target-1",
+			OwnerUserID: stringPtr("user-1"),
+			Type:        domain.NotificationTargetTypeEmail,
+			Name:        "User One",
+			Recipient:   "<user@example.com>",
+			Enabled:     true,
+		},
+	})
+	user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/me/notification-targets/email", nil)
+	getReq = getReq.WithContext(auth.WithUser(getReq.Context(), user))
+	getRes := httptest.NewRecorder()
+	h.GetMyEmailTarget(getRes, getReq)
+	if getRes.Code != http.StatusOK {
+		t.Fatalf("expected get my target status %d, got %d body=%s", http.StatusOK, getRes.Code, getRes.Body.String())
+	}
+	getData := decodeDataMap(t, getRes)
+	if targetValue, exists := getData["target"]; !exists || targetValue != nil {
+		t.Fatalf("expected null target payload, got %v", getData["target"])
+	}
+
+	ensureReq := httptest.NewRequest(http.MethodPost, "/api/me/notification-targets/email", nil)
+	ensureReq = ensureReq.WithContext(auth.WithUser(ensureReq.Context(), user))
+	ensureRes := httptest.NewRecorder()
+	h.EnsureMyEmailTarget(ensureRes, ensureReq)
+	if ensureRes.Code != http.StatusOK {
+		t.Fatalf("expected ensure my target status %d, got %d body=%s", http.StatusOK, ensureRes.Code, ensureRes.Body.String())
+	}
+	ensureData := decodeDataMap(t, ensureRes)
+	if ensureData["id"] != "target-1" {
+		t.Fatalf("expected ensured target id target-1, got %v", ensureData["id"])
+	}
+}
+
+func TestNotificationHandler_MyEmailTargetEndpointsRequireAuthentication(t *testing.T) {
+	h := NewNotificationHandler(nil)
+	h.SetAuthorization(auth.ModeHeader)
+	h.SetAdminService(&fakeNotificationAdminService{})
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/me/notification-targets/email", nil)
+	getRes := httptest.NewRecorder()
+	h.GetMyEmailTarget(getRes, getReq)
+	if getRes.Code != http.StatusUnauthorized {
+		t.Fatalf("expected get my target unauthorized status %d, got %d body=%s", http.StatusUnauthorized, getRes.Code, getRes.Body.String())
+	}
+
+	ensureReq := httptest.NewRequest(http.MethodPost, "/api/me/notification-targets/email", nil)
+	ensureRes := httptest.NewRecorder()
+	h.EnsureMyEmailTarget(ensureRes, ensureReq)
+	if ensureRes.Code != http.StatusUnauthorized {
+		t.Fatalf("expected ensure my target unauthorized status %d, got %d body=%s", http.StatusUnauthorized, ensureRes.Code, ensureRes.Body.String())
 	}
 }
 

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -363,5 +364,166 @@ func TestNotificationService_CreateSlackTargetAndDeleteTarget(t *testing.T) {
 	}
 	if len(targets) != 0 {
 		t.Fatalf("expected no targets after delete, got %+v", targets)
+	}
+}
+
+func TestNotificationService_EnsureOwnedEmailTarget_IdempotentAndReusable(t *testing.T) {
+	ctx := context.Background()
+	repo := memoryrepo.NewNotificationSubscriptionRepository()
+	svc := NewNotificationService(repo)
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	owner := domain.User{ID: uuid.NewString(), Email: "Owner@Example.com", DisplayName: strPtr("Owner User")}
+	target, err := svc.EnsureOwnedEmailTarget(ctx, owner)
+	if err != nil {
+		t.Fatalf("ensure target failed: %v", err)
+	}
+	if target.OwnerUserID == nil || *target.OwnerUserID != owner.ID {
+		t.Fatalf("expected target owner %q, got %+v", owner.ID, target.OwnerUserID)
+	}
+	if target.Name != "Owner User" {
+		t.Fatalf("expected display name-backed target name, got %q", target.Name)
+	}
+	if target.Recipient != "<owner@example.com>" {
+		t.Fatalf("expected normalized recipient, got %q", target.Recipient)
+	}
+
+	second, err := svc.EnsureOwnedEmailTarget(ctx, owner)
+	if err != nil {
+		t.Fatalf("second ensure target failed: %v", err)
+	}
+	if second.ID != target.ID {
+		t.Fatalf("expected idempotent ensure target id %q, got %q", target.ID, second.ID)
+	}
+
+	otherOwner := domain.User{ID: uuid.NewString(), Email: "Owner@example.com", DisplayName: strPtr("Different")}
+	_, err = svc.EnsureOwnedEmailTarget(ctx, otherOwner)
+	if !errors.Is(err, repository.ErrNotificationTargetOwnershipConflict) {
+		t.Fatalf("expected ownership conflict, got %v", err)
+	}
+}
+
+func TestNotificationService_EnsureOwnedEmailTarget_ClaimsUnownedTargetOnlyWhenSafe(t *testing.T) {
+	ctx := context.Background()
+	repo := memoryrepo.NewNotificationSubscriptionRepository()
+	svc := NewNotificationService(repo)
+	now := time.Date(2026, 6, 24, 13, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	unowned, err := svc.CreateEmailTarget(ctx, CreateNotificationTargetInput{
+		Name:    "Shared inbox",
+		Address: "shared@example.com",
+	})
+	if err != nil {
+		t.Fatalf("create unowned target failed: %v", err)
+	}
+
+	user := domain.User{ID: uuid.NewString(), Email: "shared@example.com"}
+	claimed, err := svc.EnsureOwnedEmailTarget(ctx, user)
+	if err != nil {
+		t.Fatalf("claim unowned target failed: %v", err)
+	}
+	if claimed.ID != unowned.ID {
+		t.Fatalf("expected existing unowned target to be claimed, got %q", claimed.ID)
+	}
+	if claimed.OwnerUserID == nil || *claimed.OwnerUserID != user.ID {
+		t.Fatalf("expected claimed owner %q, got %+v", user.ID, claimed.OwnerUserID)
+	}
+
+	unownedWithSub, err := svc.CreateEmailTarget(ctx, CreateNotificationTargetInput{
+		Name:    "Admin shared",
+		Address: "admin-shared@example.com",
+	})
+	if err != nil {
+		t.Fatalf("create second unowned target failed: %v", err)
+	}
+	projectID := uuid.NewString()
+	_, err = svc.CreateSubscription(ctx, CreateNotificationSubscriptionInput{
+		TargetID:  unownedWithSub.ID,
+		ProjectID: &projectID,
+		EventType: string(domain.NotificationEventTypeBuildFailed),
+	})
+	if err != nil {
+		t.Fatalf("create shared subscription failed: %v", err)
+	}
+
+	_, err = svc.EnsureOwnedEmailTarget(ctx, domain.User{ID: uuid.NewString(), Email: "admin-shared@example.com"})
+	if !errors.Is(err, repository.ErrNotificationTargetOwnershipConflict) {
+		t.Fatalf("expected shared target conflict, got %v", err)
+	}
+}
+
+func TestNotificationService_EnsureOwnedEmailTarget_ConcurrentRequestsReturnSingleTarget(t *testing.T) {
+	ctx := context.Background()
+	repo := memoryrepo.NewNotificationSubscriptionRepository()
+	svc := NewNotificationService(repo)
+	now := time.Date(2026, 6, 24, 14, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	user := domain.User{ID: uuid.NewString(), Email: "race@example.com", DisplayName: strPtr("Race User")}
+	const workers = 8
+	ids := make(chan string, workers)
+	errCh := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			target, err := svc.EnsureOwnedEmailTarget(ctx, user)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			ids <- target.ID
+		}()
+	}
+	wg.Wait()
+	close(ids)
+	close(errCh)
+
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("unexpected concurrent ensure error: %v", err)
+		}
+	}
+
+	first := ""
+	for id := range ids {
+		if first == "" {
+			first = id
+			continue
+		}
+		if id != first {
+			t.Fatalf("expected all requests to return same target id %q, got %q", first, id)
+		}
+	}
+
+	targets, err := svc.ListTargets(ctx)
+	if err != nil {
+		t.Fatalf("list targets failed: %v", err)
+	}
+	count := 0
+	for _, target := range targets {
+		if target.Type == domain.NotificationTargetTypeEmail && target.OwnerUserID != nil && *target.OwnerUserID == user.ID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one owned personal target, got %d", count)
+	}
+}
+
+func TestNotificationService_EnsureOwnedEmailTarget_Validation(t *testing.T) {
+	svc := NewNotificationService(memoryrepo.NewNotificationSubscriptionRepository())
+
+	_, err := svc.EnsureOwnedEmailTarget(context.Background(), domain.User{ID: "", Email: "user@example.com"})
+	if !errors.Is(err, ErrNotificationPersonalUserIDRequired) {
+		t.Fatalf("expected missing user id error, got %v", err)
+	}
+
+	_, err = svc.EnsureOwnedEmailTarget(context.Background(), domain.User{ID: uuid.NewString(), Email: "   "})
+	if !errors.Is(err, ErrNotificationPersonalEmailRequired) {
+		t.Fatalf("expected missing email error, got %v", err)
 	}
 }
