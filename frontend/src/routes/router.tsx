@@ -21,6 +21,7 @@ import { ProjectsListPage } from "../pages/ProjectsListPage";
 import { ProjectDetailPage } from "../pages/ProjectDetailPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { NotificationsPage } from "../pages/NotificationsPage";
+import { ProfilePage } from "../pages/ProfilePage";
 
 export const appRoutes: RouteObject[] = [
   {
@@ -41,6 +42,7 @@ export const appRoutes: RouteObject[] = [
       { path: "/jobs/new", element: <JobCreatePage /> },
       { path: "/jobs/:id", element: <JobDetailPage /> },
       { path: "/settings/tokens", element: <APITokensPage /> },
+      { path: "/settings/profile", element: <ProfilePage /> },
       { path: "/settings/users", element: <UsersPage /> },
       { path: "/settings/credentials", element: <CredentialsPage /> },
       { path: "/settings/notifications", element: <NotificationsPage /> },

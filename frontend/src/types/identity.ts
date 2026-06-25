@@ -16,6 +16,8 @@ export interface UserListResponse {
 
 export interface MeResponse {
   auth_mode: "disabled" | "header" | "oidc";
+  auth_method?: "header" | "oidc" | "api_token";
+  email_verified: boolean | null;
   user: User;
 }
 

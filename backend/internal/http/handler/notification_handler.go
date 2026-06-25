@@ -30,6 +30,8 @@ type NotificationHandler struct {
 
 type notificationAdminService interface {
 	ListTargets(ctx context.Context) ([]domain.NotificationTarget, error)
+	GetOwnedEmailTarget(ctx context.Context, user domain.User) (domain.NotificationTarget, error)
+	EnsureOwnedEmailTarget(ctx context.Context, user domain.User) (domain.NotificationTarget, error)
 	CreateTarget(ctx context.Context, input service.CreateNotificationTargetInput) (domain.NotificationTarget, error)
 	CreateEmailTarget(ctx context.Context, input service.CreateNotificationTargetInput) (domain.NotificationTarget, error)
 	UpdateTarget(ctx context.Context, id string, input service.UpdateNotificationTargetInput) (domain.NotificationTarget, error)
@@ -93,6 +95,53 @@ func (h *NotificationHandler) ListTargets(w http.ResponseWriter, r *http.Request
 		responses = append(responses, toNotificationTargetResponse(target))
 	}
 	writeDataJSON(w, http.StatusOK, api.NotificationTargetListResponse{Targets: responses})
+}
+
+func (h *NotificationHandler) GetMyEmailTarget(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.admin == nil {
+		writeErrorJSON(w, http.StatusNotFound, "not_found", "notification endpoint is not available")
+		return
+	}
+
+	user, ok := h.currentRequestUser(r)
+	if !ok {
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	target, err := h.admin.GetOwnedEmailTarget(r.Context(), user)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotificationTargetNotFound) {
+			writeDataJSON(w, http.StatusOK, api.MyEmailNotificationTargetResponse{Target: nil})
+			return
+		}
+		h.writeNotificationError(w, err)
+		return
+	}
+
+	response := toNotificationTargetResponse(target)
+	writeDataJSON(w, http.StatusOK, api.MyEmailNotificationTargetResponse{Target: &response})
+}
+
+func (h *NotificationHandler) EnsureMyEmailTarget(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.admin == nil {
+		writeErrorJSON(w, http.StatusNotFound, "not_found", "notification endpoint is not available")
+		return
+	}
+
+	user, ok := h.currentRequestUser(r)
+	if !ok {
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	target, err := h.admin.EnsureOwnedEmailTarget(r.Context(), user)
+	if err != nil {
+		h.writeNotificationError(w, err)
+		return
+	}
+
+	writeDataJSON(w, http.StatusOK, toNotificationTargetResponse(target))
 }
 
 func (h *NotificationHandler) CreateTarget(w http.ResponseWriter, r *http.Request) {
@@ -242,7 +291,7 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 		writeErrorJSON(w, http.StatusNotFound, "not_found", err.Error())
 		return
 	}
-	if errors.Is(err, repository.ErrNotificationTargetDuplicate) || errors.Is(err, repository.ErrNotificationSubscriptionDuplicate) {
+	if errors.Is(err, repository.ErrNotificationTargetDuplicate) || errors.Is(err, repository.ErrNotificationSubscriptionDuplicate) || errors.Is(err, repository.ErrNotificationTargetOwnershipConflict) {
 		writeErrorJSON(w, http.StatusConflict, "conflict", err.Error())
 		return
 	}
@@ -259,7 +308,9 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 		errors.Is(err, service.ErrNotificationSubscriptionProjectIDInvalid) ||
 		errors.Is(err, service.ErrNotificationSubscriptionJobIDInvalid) ||
 		errors.Is(err, service.ErrNotificationSubscriptionScopeRequired) ||
-		errors.Is(err, service.ErrNotificationSubscriptionEventTypeInvalid) {
+		errors.Is(err, service.ErrNotificationSubscriptionEventTypeInvalid) ||
+		errors.Is(err, service.ErrNotificationPersonalEmailRequired) ||
+		errors.Is(err, service.ErrNotificationPersonalUserIDRequired) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -268,12 +319,13 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 
 func toNotificationTargetResponse(target domain.NotificationTarget) api.NotificationTargetResponse {
 	response := api.NotificationTargetResponse{
-		ID:        target.ID,
-		Type:      string(target.Type),
-		Name:      target.Name,
-		Enabled:   target.Enabled,
-		CreatedAt: target.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: target.UpdatedAt.Format(time.RFC3339),
+		ID:          target.ID,
+		OwnerUserID: target.OwnerUserID,
+		Type:        string(target.Type),
+		Name:        target.Name,
+		Enabled:     target.Enabled,
+		CreatedAt:   target.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   target.UpdatedAt.Format(time.RFC3339),
 	}
 	if target.Type == domain.NotificationTargetTypeEmail {
 		response.Address = target.Recipient
@@ -281,6 +333,16 @@ func toNotificationTargetResponse(target domain.NotificationTarget) api.Notifica
 		response.WebhookConfigured = strings.TrimSpace(target.Recipient) != ""
 	}
 	return response
+}
+
+func (h *NotificationHandler) currentRequestUser(r *http.Request) (domain.User, bool) {
+	if user, ok := auth.CurrentUser(r.Context()); ok {
+		return user, true
+	}
+	if normalizedAuthMode(h.authMode) == auth.ModeDisabled {
+		return auth.DisabledModeUser(), true
+	}
+	return domain.User{}, false
 }
 
 func toNotificationSubscriptionResponse(subscription domain.NotificationSubscription) api.NotificationSubscriptionResponse {

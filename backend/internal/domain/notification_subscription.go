@@ -10,13 +10,14 @@ const (
 )
 
 type NotificationTarget struct {
-	ID        string
-	Type      NotificationTargetType
-	Name      string
-	Recipient string
-	Enabled   bool
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID          string
+	OwnerUserID *string
+	Type        NotificationTargetType
+	Name        string
+	Recipient   string
+	Enabled     bool
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type NotificationSubscription struct {

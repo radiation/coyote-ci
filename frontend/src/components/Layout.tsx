@@ -31,6 +31,7 @@ export function Layout() {
   const showTokensLink = authMode !== "disabled";
   const displayName = currentUser?.display_name || currentUser?.email;
   const settingsNavigation: AppShellNavigationItem[] = [
+    { to: "/settings/profile", label: "Profile" },
     { to: "/settings/credentials", label: "Credentials" },
     {
       to: "/settings/notifications",

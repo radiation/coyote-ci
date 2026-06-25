@@ -16,14 +16,15 @@ type UpdateNotificationTargetRequest struct {
 }
 
 type NotificationTargetResponse struct {
-	ID                string `json:"id"`
-	Type              string `json:"type"`
-	Name              string `json:"name"`
-	Address           string `json:"address,omitempty"`
-	WebhookConfigured bool   `json:"webhook_configured"`
-	Enabled           bool   `json:"enabled"`
-	CreatedAt         string `json:"created_at"`
-	UpdatedAt         string `json:"updated_at"`
+	ID                string  `json:"id"`
+	OwnerUserID       *string `json:"owner_user_id,omitempty"`
+	Type              string  `json:"type"`
+	Name              string  `json:"name"`
+	Address           string  `json:"address,omitempty"`
+	WebhookConfigured bool    `json:"webhook_configured"`
+	Enabled           bool    `json:"enabled"`
+	CreatedAt         string  `json:"created_at"`
+	UpdatedAt         string  `json:"updated_at"`
 }
 
 type NotificationTargetListResponse struct {
@@ -36,6 +37,14 @@ type NotificationTargetEnvelope struct {
 
 type NotificationTargetListEnvelope struct {
 	Data NotificationTargetListResponse `json:"data"`
+}
+
+type MyEmailNotificationTargetResponse struct {
+	Target *NotificationTargetResponse `json:"target"`
+}
+
+type MyEmailNotificationTargetEnvelope struct {
+	Data MyEmailNotificationTargetResponse `json:"data"`
 }
 
 type CreateNotificationSubscriptionRequest struct {

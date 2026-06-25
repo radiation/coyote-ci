@@ -53,6 +53,7 @@ func (r *NotificationSubscriptionRepository) CreateTarget(_ context.Context, tar
 		return domain.NotificationTarget{}, err
 	}
 	target.Name = strings.TrimSpace(target.Name)
+	target.OwnerUserID = trimOptionalString(target.OwnerUserID)
 	target.Recipient = normalizedRecipient
 	if target.CreatedAt.IsZero() {
 		target.CreatedAt = now
@@ -97,6 +98,99 @@ func (r *NotificationSubscriptionRepository) GetTargetByID(_ context.Context, id
 	return target, nil
 }
 
+func (r *NotificationSubscriptionRepository) GetOwnedEmailTargetByUserID(_ context.Context, userID string) (domain.NotificationTarget, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	trimmedUserID := strings.TrimSpace(userID)
+	for _, target := range r.targets {
+		if target.Type != domain.NotificationTargetTypeEmail {
+			continue
+		}
+		if target.OwnerUserID == nil {
+			continue
+		}
+		if strings.TrimSpace(*target.OwnerUserID) == trimmedUserID {
+			return target, nil
+		}
+	}
+
+	return domain.NotificationTarget{}, repository.ErrNotificationTargetNotFound
+}
+
+func (r *NotificationSubscriptionRepository) EnsureOwnedEmailTarget(_ context.Context, input repository.EnsureOwnedNotificationEmailTargetInput) (domain.NotificationTarget, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	trimmedOwnerID := strings.TrimSpace(input.OwnerUserID)
+	trimmedRecipient := strings.TrimSpace(input.Recipient)
+
+	for _, target := range r.targets {
+		if target.Type != domain.NotificationTargetTypeEmail || target.OwnerUserID == nil {
+			continue
+		}
+		if strings.TrimSpace(*target.OwnerUserID) == trimmedOwnerID {
+			return target, nil
+		}
+	}
+
+	for id, target := range r.targets {
+		if target.Type != domain.NotificationTargetTypeEmail {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(target.Recipient), trimmedRecipient) {
+			continue
+		}
+
+		if target.OwnerUserID != nil && strings.TrimSpace(*target.OwnerUserID) != trimmedOwnerID {
+			return domain.NotificationTarget{}, repository.ErrNotificationTargetOwnershipConflict
+		}
+
+		if target.OwnerUserID == nil {
+			for _, subscription := range r.subscriptions {
+				if subscription.TargetID == target.ID {
+					return domain.NotificationTarget{}, repository.ErrNotificationTargetOwnershipConflict
+				}
+			}
+			target.OwnerUserID = &trimmedOwnerID
+			target.UpdatedAt = input.UpdatedAt
+			r.targets[id] = target
+		}
+
+		return target, nil
+	}
+
+	createdAt := input.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	updatedAt := input.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = createdAt
+	}
+	id := strings.TrimSpace(input.ID)
+	if id == "" {
+		id = uuid.NewString()
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = trimmedRecipient
+	}
+
+	created := domain.NotificationTarget{
+		ID:          id,
+		OwnerUserID: &trimmedOwnerID,
+		Type:        domain.NotificationTargetTypeEmail,
+		Name:        name,
+		Recipient:   trimmedRecipient,
+		Enabled:     true,
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
+	}
+	r.targets[created.ID] = created
+	return created, nil
+}
+
 func (r *NotificationSubscriptionRepository) UpdateTarget(_ context.Context, target domain.NotificationTarget) (domain.NotificationTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -123,6 +217,7 @@ func (r *NotificationSubscriptionRepository) UpdateTarget(_ context.Context, tar
 	}
 
 	current.Type = target.Type
+	current.OwnerUserID = trimOptionalString(target.OwnerUserID)
 	current.Name = strings.TrimSpace(target.Name)
 	current.Recipient = normalizedRecipient
 	current.Enabled = target.Enabled
@@ -364,7 +459,16 @@ func (r *NotificationSubscriptionRepository) ListEnabledMatchesForBuildEvent(_ c
 
 func (r *NotificationSubscriptionRepository) findTargetByTypeAndRecipientLocked(targetType domain.NotificationTargetType, recipient string) (domain.NotificationTarget, bool) {
 	for _, target := range r.targets {
-		if target.Type == targetType && target.Recipient == recipient {
+		if target.Type != targetType {
+			continue
+		}
+		if targetType == domain.NotificationTargetTypeEmail {
+			if strings.EqualFold(target.Recipient, recipient) {
+				return target, true
+			}
+			continue
+		}
+		if target.Recipient == recipient {
 			return target, true
 		}
 	}

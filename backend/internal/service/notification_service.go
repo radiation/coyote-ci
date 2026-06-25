@@ -28,6 +28,8 @@ var ErrNotificationSubscriptionProjectIDInvalid = errors.New("notification subsc
 var ErrNotificationSubscriptionJobIDInvalid = errors.New("notification subscription job_id must be a valid UUID")
 var ErrNotificationSubscriptionScopeRequired = errors.New("exactly one of project_id or job_id is required")
 var ErrNotificationSubscriptionEventTypeInvalid = errors.New("notification subscription event_type must be one of build_succeeded, build_failed")
+var ErrNotificationPersonalEmailRequired = errors.New("authenticated user email is required")
+var ErrNotificationPersonalUserIDRequired = errors.New("authenticated user id is required")
 
 type NotificationService struct {
 	repo repository.NotificationSubscriptionRepository
@@ -72,6 +74,51 @@ type UpdateNotificationSubscriptionInput struct {
 
 func (s *NotificationService) ListTargets(ctx context.Context) ([]domain.NotificationTarget, error) {
 	return s.repo.ListTargets(ctx)
+}
+
+func (s *NotificationService) GetOwnedEmailTarget(ctx context.Context, user domain.User) (domain.NotificationTarget, error) {
+	ownerUserID := strings.TrimSpace(user.ID)
+	if ownerUserID == "" {
+		return domain.NotificationTarget{}, ErrNotificationPersonalUserIDRequired
+	}
+	return s.repo.GetOwnedEmailTargetByUserID(ctx, ownerUserID)
+}
+
+func (s *NotificationService) EnsureOwnedEmailTarget(ctx context.Context, user domain.User) (domain.NotificationTarget, error) {
+	ownerUserID := strings.TrimSpace(user.ID)
+	if ownerUserID == "" {
+		return domain.NotificationTarget{}, ErrNotificationPersonalUserIDRequired
+	}
+
+	normalizedIdentityEmail := NormalizeEmail(user.Email)
+	if normalizedIdentityEmail == "" {
+		return domain.NotificationTarget{}, ErrNotificationPersonalEmailRequired
+	}
+
+	recipient, err := normalizeNotificationEmailAddress(normalizedIdentityEmail)
+	if err != nil {
+		if errors.Is(err, ErrNotificationTargetAddressRequired) || errors.Is(err, ErrNotificationTargetAddressInvalid) {
+			return domain.NotificationTarget{}, ErrNotificationPersonalEmailRequired
+		}
+		return domain.NotificationTarget{}, err
+	}
+
+	targetName := normalizedIdentityEmail
+	if user.DisplayName != nil {
+		if trimmedDisplayName := strings.TrimSpace(*user.DisplayName); trimmedDisplayName != "" {
+			targetName = trimmedDisplayName
+		}
+	}
+
+	now := s.now().UTC()
+	return s.repo.EnsureOwnedEmailTarget(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+		ID:          uuid.NewString(),
+		OwnerUserID: ownerUserID,
+		Name:        targetName,
+		Recipient:   recipient,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
 }
 
 func (s *NotificationService) CreateTarget(ctx context.Context, input CreateNotificationTargetInput) (domain.NotificationTarget, error) {
@@ -244,7 +291,7 @@ func normalizeNotificationEmailAddress(value string) (string, error) {
 	if err != nil {
 		return "", ErrNotificationTargetAddressInvalid
 	}
-	return address.String(), nil
+	return (&mail.Address{Address: NormalizeEmail(address.Address)}).String(), nil
 }
 
 func normalizeNotificationTargetType(value string) (domain.NotificationTargetType, error) {

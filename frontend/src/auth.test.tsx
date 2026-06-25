@@ -76,6 +76,7 @@ describe("AuthProvider", () => {
     });
     mockedGetMe.mockResolvedValue({
       auth_mode: "oidc",
+      email_verified: null,
       user: {
         id: "user-1",
         email: "admin@example.com",
@@ -162,6 +163,7 @@ describe("AuthProvider", () => {
     mockedGetMe
       .mockResolvedValueOnce({
         auth_mode: "oidc",
+        email_verified: null,
         user: {
           id: "user-1",
           email: "admin@example.com",

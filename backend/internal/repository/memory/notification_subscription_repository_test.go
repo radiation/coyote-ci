@@ -418,6 +418,139 @@ func TestNotificationSubscriptionRepository_HelperFunctions(t *testing.T) {
 	}
 }
 
+func TestNotificationSubscriptionRepository_OwnedEmailTargets(t *testing.T) {
+	repo := NewNotificationSubscriptionRepository()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	claimable, err := repo.CreateTarget(ctx, domain.NotificationTarget{
+		Type:      domain.NotificationTargetTypeEmail,
+		Recipient: "shared@example.com",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create claimable target failed: %v", err)
+	}
+
+	claimed, err := repo.EnsureOwnedEmailTarget(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+		ID:          "claimed-target",
+		OwnerUserID: " user-1 ",
+		Name:        "User One",
+		Recipient:   claimable.Recipient,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("claim target failed: %v", err)
+	}
+	if claimed.ID != claimable.ID {
+		t.Fatalf("expected claimed target id %q, got %q", claimable.ID, claimed.ID)
+	}
+	if claimed.OwnerUserID == nil || *claimed.OwnerUserID != "user-1" {
+		t.Fatalf("expected claimed owner user-1, got %+v", claimed.OwnerUserID)
+	}
+
+	fetched, err := repo.GetOwnedEmailTargetByUserID(ctx, " user-1 ")
+	if err != nil {
+		t.Fatalf("get owned target failed: %v", err)
+	}
+	if fetched.ID != claimable.ID {
+		t.Fatalf("expected fetched owned target id %q, got %q", claimable.ID, fetched.ID)
+	}
+
+	again, err := repo.EnsureOwnedEmailTarget(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+		ID:          "ignored-id",
+		OwnerUserID: "user-1",
+		Name:        "Ignored",
+		Recipient:   "<different@example.com>",
+		CreatedAt:   now.Add(time.Minute),
+		UpdatedAt:   now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("re-ensure owned target failed: %v", err)
+	}
+	if again.ID != claimable.ID {
+		t.Fatalf("expected idempotent owned target id %q, got %q", claimable.ID, again.ID)
+	}
+
+	otherOwner := "other-user"
+	conflictingOwned, err := repo.CreateTarget(ctx, domain.NotificationTarget{
+		Type:        domain.NotificationTargetTypeEmail,
+		OwnerUserID: &otherOwner,
+		Recipient:   "owned@example.com",
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("create conflicting owned target failed: %v", err)
+	}
+
+	_, err = repo.EnsureOwnedEmailTarget(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+		OwnerUserID: "user-2",
+		Name:        "User Two",
+		Recipient:   conflictingOwned.Recipient,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	if !errors.Is(err, repository.ErrNotificationTargetOwnershipConflict) {
+		t.Fatalf("expected owned target conflict, got %v", err)
+	}
+
+	sharedWithSubscription, err := repo.CreateTarget(ctx, domain.NotificationTarget{
+		Type:      domain.NotificationTargetTypeEmail,
+		Recipient: "subscribed@example.com",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create shared target failed: %v", err)
+	}
+	projectID := "project-1"
+	_, err = repo.CreateSubscription(ctx, domain.NotificationSubscription{
+		TargetID:  sharedWithSubscription.ID,
+		ProjectID: &projectID,
+		EventType: domain.NotificationEventTypeBuildFailed,
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create shared target subscription failed: %v", err)
+	}
+
+	_, err = repo.EnsureOwnedEmailTarget(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+		OwnerUserID: "user-3",
+		Name:        "User Three",
+		Recipient:   sharedWithSubscription.Recipient,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	if !errors.Is(err, repository.ErrNotificationTargetOwnershipConflict) {
+		t.Fatalf("expected subscribed shared target conflict, got %v", err)
+	}
+
+	created, err := repo.EnsureOwnedEmailTarget(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+		ID:          "fresh-target",
+		OwnerUserID: "user-4",
+		Recipient:   "<fresh@example.com>",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("create fresh owned target failed: %v", err)
+	}
+	if created.ID != "fresh-target" {
+		t.Fatalf("expected created target id fresh-target, got %q", created.ID)
+	}
+	if created.Name != "<fresh@example.com>" {
+		t.Fatalf("expected fallback name to use recipient, got %q", created.Name)
+	}
+	if created.OwnerUserID == nil || *created.OwnerUserID != "user-4" {
+		t.Fatalf("expected created owner user-4, got %+v", created.OwnerUserID)
+	}
+
+	_, err = repo.GetOwnedEmailTargetByUserID(ctx, "missing-user")
+	if !errors.Is(err, repository.ErrNotificationTargetNotFound) {
+		t.Fatalf("expected owned target not found, got %v", err)
+	}
+}
+
 func TestNotificationSubscriptionRepository_ListAndUpdateAdminViews(t *testing.T) {
 	repo := NewNotificationSubscriptionRepository()
 	ctx := context.Background()

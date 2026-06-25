@@ -26,9 +26,10 @@ type UserListResponse struct {
 }
 
 type MeResponse struct {
-	AuthMode   string       `json:"auth_mode"`
-	AuthMethod string       `json:"auth_method,omitempty"`
-	User       UserResponse `json:"user"`
+	AuthMode      string       `json:"auth_mode"`
+	AuthMethod    string       `json:"auth_method,omitempty"`
+	EmailVerified *bool        `json:"email_verified" extensions:"x-nullable"`
+	User          UserResponse `json:"user"`
 }
 
 type CreateAPITokenRequest struct {
