@@ -202,4 +202,168 @@ describe("ProfilePage", () => {
       ).toBeTruthy();
     });
   });
+
+  it("renders verified email state and display-name fallback", async () => {
+    mockedGetMe.mockResolvedValue({
+      auth_mode: "oidc",
+      auth_method: "oidc",
+      email_verified: true,
+      user: {
+        id: "user-1",
+        email: "user@example.com",
+        display_name: null,
+        global_role: "user",
+      },
+    });
+
+    renderPage({
+      currentUser: {
+        id: "user-1",
+        email: "user@example.com",
+        display_name: "   ",
+        global_role: "user",
+      },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Not provided by authentication provider"),
+      ).toBeTruthy();
+      expect(
+        screen.getByText("Verified by authentication provider"),
+      ).toBeTruthy();
+    });
+
+    expect(
+      screen.queryByText(/verification state is not currently provided/i),
+    ).toBeNull();
+  });
+
+  it("renders api token provider label", async () => {
+    mockedGetMe.mockResolvedValue({
+      auth_mode: "oidc",
+      auth_method: "api_token",
+      email_verified: null,
+      user: {
+        id: "user-1",
+        email: "user@example.com",
+        display_name: "User Example",
+        global_role: "user",
+      },
+    });
+
+    renderPage({ authMode: null });
+
+    await waitFor(() => {
+      expect(screen.getByText("API token")).toBeTruthy();
+    });
+  });
+
+  it("renders trusted header provider label from auth mode fallback", async () => {
+    mockedGetMe.mockResolvedValue({
+      auth_mode: "header",
+      email_verified: null,
+      user: {
+        id: "user-1",
+        email: "user@example.com",
+        display_name: "User Example",
+        global_role: "user",
+      },
+    });
+
+    renderPage({ authMode: "header" });
+
+    await waitFor(() => {
+      expect(screen.getByText("Trusted header")).toBeTruthy();
+    });
+  });
+
+  it("renders trusted header provider label from auth method directly", async () => {
+    mockedGetMe.mockResolvedValue({
+      auth_mode: "oidc",
+      auth_method: "header",
+      email_verified: null,
+      user: {
+        id: "user-1",
+        email: "user@example.com",
+        display_name: "User Example",
+        global_role: "user",
+      },
+    });
+
+    renderPage({ authMode: null });
+
+    await waitFor(() => {
+      expect(screen.getByText("Trusted header")).toBeTruthy();
+    });
+  });
+
+  it("renders disabled auth mode provider label from auth mode fallback", async () => {
+    mockedGetMe.mockResolvedValue({
+      auth_mode: "disabled",
+      email_verified: null,
+      user: {
+        id: "user-1",
+        email: "user@example.com",
+        display_name: "User Example",
+        global_role: "user",
+      },
+    });
+
+    renderPage({ authMode: "disabled" });
+
+    await waitFor(() => {
+      expect(screen.getByText("Disabled auth mode")).toBeTruthy();
+    });
+  });
+
+  it("renders unknown provider label when neither auth method nor auth mode is available", async () => {
+    mockedGetMe.mockResolvedValue({
+      auth_mode: "oidc",
+      email_verified: null,
+      user: {
+        id: "user-1",
+        email: "user@example.com",
+        display_name: "User Example",
+        global_role: "user",
+      },
+    });
+
+    renderPage({ authMode: null });
+
+    await waitFor(() => {
+      expect(screen.getByText("Unknown")).toBeTruthy();
+    });
+  });
+
+  it("renders notification target loading state", () => {
+    mockedGetMyEmailNotificationTarget.mockImplementation(
+      () => new Promise(() => undefined) as Promise<null>,
+    );
+
+    renderPage();
+
+    expect(
+      screen.getByText("Loading personal notification target..."),
+    ).toBeTruthy();
+  });
+
+  it("renders notification target load failure state", async () => {
+    mockedGetMyEmailNotificationTarget.mockRejectedValue(
+      new Error("target lookup failed"),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Failed to load personal notification target/i),
+      ).toBeTruthy();
+    });
+  });
+
+  it("renders nothing when there is no current user", () => {
+    const { container } = renderPage({ currentUser: null });
+    expect(container).toBeEmptyDOMElement();
+  });
 });
