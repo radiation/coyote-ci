@@ -527,3 +527,33 @@ func TestNotificationService_EnsureOwnedEmailTarget_Validation(t *testing.T) {
 		t.Fatalf("expected missing email error, got %v", err)
 	}
 }
+
+func TestNotificationService_GetOwnedEmailTarget(t *testing.T) {
+	ctx := context.Background()
+	repo := memoryrepo.NewNotificationSubscriptionRepository()
+	svc := NewNotificationService(repo)
+
+	_, err := svc.GetOwnedEmailTarget(ctx, domain.User{})
+	if !errors.Is(err, ErrNotificationPersonalUserIDRequired) {
+		t.Fatalf("expected missing user id error, got %v", err)
+	}
+
+	owner := domain.User{ID: uuid.NewString(), Email: "owner@example.com"}
+	ensured, err := svc.EnsureOwnedEmailTarget(ctx, owner)
+	if err != nil {
+		t.Fatalf("ensure owned target failed: %v", err)
+	}
+
+	fetched, err := svc.GetOwnedEmailTarget(ctx, domain.User{ID: " " + owner.ID + " "})
+	if err != nil {
+		t.Fatalf("get owned target failed: %v", err)
+	}
+	if fetched.ID != ensured.ID {
+		t.Fatalf("expected fetched target id %q, got %q", ensured.ID, fetched.ID)
+	}
+
+	_, err = svc.GetOwnedEmailTarget(ctx, domain.User{ID: uuid.NewString()})
+	if !errors.Is(err, repository.ErrNotificationTargetNotFound) {
+		t.Fatalf("expected owned target not found, got %v", err)
+	}
+}

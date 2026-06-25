@@ -231,6 +231,66 @@ func TestNotificationHandler_MyEmailTargetEndpointsRequireAuthentication(t *test
 	}
 }
 
+func TestNotificationHandler_MyEmailTargetEndpointErrors(t *testing.T) {
+	t.Run("endpoint unavailable", func(t *testing.T) {
+		h := NewNotificationHandler(nil)
+
+		getReq := httptest.NewRequest(http.MethodGet, "/api/me/notification-targets/email", nil)
+		getRes := httptest.NewRecorder()
+		h.GetMyEmailTarget(getRes, getReq)
+		if getRes.Code != http.StatusNotFound {
+			t.Fatalf("expected unavailable get status %d, got %d body=%s", http.StatusNotFound, getRes.Code, getRes.Body.String())
+		}
+
+		ensureReq := httptest.NewRequest(http.MethodPost, "/api/me/notification-targets/email", nil)
+		ensureRes := httptest.NewRecorder()
+		h.EnsureMyEmailTarget(ensureRes, ensureReq)
+		if ensureRes.Code != http.StatusNotFound {
+			t.Fatalf("expected unavailable ensure status %d, got %d body=%s", http.StatusNotFound, ensureRes.Code, ensureRes.Body.String())
+		}
+	})
+
+	tests := []struct {
+		name       string
+		method     string
+		serviceErr error
+		wantStatus int
+	}{
+		{name: "get internal error", method: http.MethodGet, serviceErr: errors.New("boom"), wantStatus: http.StatusInternalServerError},
+		{name: "ensure ownership conflict", method: http.MethodPost, serviceErr: repository.ErrNotificationTargetOwnershipConflict, wantStatus: http.StatusConflict},
+		{name: "ensure invalid request", method: http.MethodPost, serviceErr: service.ErrNotificationPersonalEmailRequired, wantStatus: http.StatusBadRequest},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewNotificationHandler(nil)
+			h.SetAuthorization(auth.ModeHeader)
+			fakeSvc := &fakeNotificationAdminService{}
+			if tc.method == http.MethodGet {
+				fakeSvc.getOwnedEmailTargetErr = tc.serviceErr
+			} else {
+				fakeSvc.ensureOwnedEmailTargetErr = tc.serviceErr
+			}
+			h.SetAdminService(fakeSvc)
+			user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+
+			req := httptest.NewRequest(tc.method, "/api/me/notification-targets/email", nil)
+			req = req.WithContext(auth.WithUser(req.Context(), user))
+			res := httptest.NewRecorder()
+
+			if tc.method == http.MethodGet {
+				h.GetMyEmailTarget(res, req)
+			} else {
+				h.EnsureMyEmailTarget(res, req)
+			}
+
+			if res.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d body=%s", tc.wantStatus, res.Code, res.Body.String())
+			}
+		})
+	}
+}
+
 func TestNotificationHandler_AdminEndpoints(t *testing.T) {
 	projectID := uuid.NewString()
 	jobID := uuid.NewString()
