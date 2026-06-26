@@ -1743,6 +1743,106 @@ const docTemplate = `{
                 }
             }
         },
+        "/me/notification-preferences/commit-author-failures": {
+            "get": {
+                "description": "Returns the authenticated user's opt-in state for commit-author failure notifications and whether delivery is currently active.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Get my commit failure notification preference",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.CommitAuthorFailureNotificationPreferenceEnvelope"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Sets the authenticated user's explicit opt-in state for commit-author failure notifications.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Update my commit failure notification preference",
+                "parameters": [
+                    {
+                        "description": "Commit failure notification preference",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.PutCommitAuthorFailureNotificationPreferenceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.CommitAuthorFailureNotificationPreferenceEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me/tokens": {
             "get": {
                 "description": "Lists API token metadata for the authenticated user.",
@@ -3539,6 +3639,34 @@ const docTemplate = `{
                 }
             }
         },
+        "api.CommitAuthorFailureNotificationPreferenceEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.CommitAuthorFailureNotificationPreferenceResponse"
+                }
+            }
+        },
+        "api.CommitAuthorFailureNotificationPreferenceResponse": {
+            "type": "object",
+            "properties": {
+                "delivery_active": {
+                    "type": "boolean"
+                },
+                "eligible": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "target": {
+                    "$ref": "#/definitions/api.NotificationTargetResponse"
+                },
+                "unavailable_reason": {
+                    "type": "string"
+                }
+            }
+        },
         "api.CreateAPITokenRequest": {
             "type": "object",
             "properties": {
@@ -4138,6 +4266,38 @@ const docTemplate = `{
                 }
             }
         },
+        "api.NotificationTargetResponse": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "owner_user_id": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "webhook_configured": {
+                    "type": "boolean"
+                }
+            }
+        },
         "api.ProjectEnvelope": {
             "type": "object",
             "properties": {
@@ -4306,6 +4466,14 @@ const docTemplate = `{
                 },
                 "repository_url": {
                     "type": "string"
+                }
+            }
+        },
+        "api.PutCommitAuthorFailureNotificationPreferenceRequest": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
                 }
             }
         },

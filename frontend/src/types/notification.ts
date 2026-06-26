@@ -22,6 +22,14 @@ export interface MyEmailNotificationTargetResponse {
   target: NotificationTarget | null;
 }
 
+export interface CommitAuthorFailureNotificationPreference {
+  enabled: boolean;
+  eligible: boolean;
+  delivery_active: boolean;
+  target: NotificationTarget | null;
+  unavailable_reason?: string | null;
+}
+
 export interface CreateEmailNotificationTargetRequest {
   type: "email";
   name: string;
@@ -72,4 +80,8 @@ export interface CreateNotificationSubscriptionRequest {
 
 export interface UpdateNotificationSubscriptionRequest {
   enabled?: boolean;
+}
+
+export interface UpdateCommitAuthorFailureNotificationPreferenceRequest {
+  enabled: boolean;
 }

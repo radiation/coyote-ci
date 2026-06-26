@@ -94,6 +94,7 @@ func main() {
 	webhookDeliveryRepo := repositorypostgres.NewWebhookDeliveryRepository(db)
 	notificationDeliveryRepo := repositorypostgres.NewNotificationDeliveryRepository(db)
 	notificationSubscriptionRepo := repositorypostgres.NewNotificationSubscriptionRepository(db)
+	notificationPreferenceRepo := repositorypostgres.NewUserNotificationPreferenceRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	workerRepo := repositorypostgres.NewWorkerRepository(db)
 	buildNotificationService, buildNotificationErr := buildsvc.NewBuildNotificationService(buildsvc.BuildNotificationConfig{
@@ -106,6 +107,8 @@ func main() {
 		ProjectRepo:                 projectRepo,
 		DeliveryRepo:                notificationDeliveryRepo,
 		SubscriptionRepo:            notificationSubscriptionRepo,
+		UserRepo:                    userRepo,
+		PreferenceRepo:              notificationPreferenceRepo,
 		PublicBaseURL:               cfg.PublicURL,
 	})
 	if buildNotificationErr != nil {
@@ -153,7 +156,7 @@ func main() {
 	projectMembershipService := service.NewProjectMembershipService(projectRepo, projectMembershipRepo)
 	jobService := service.NewJobService(jobRepo, buildService).WithProjectRepository(projectRepo).WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo)
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
-	notificationService := service.NewNotificationService(notificationSubscriptionRepo)
+	notificationService := service.NewNotificationService(notificationSubscriptionRepo).WithPreferenceRepository(notificationPreferenceRepo)
 	webhookService := webhooksvc.NewDeliveryIngressService(webhookDeliveryRepo, jobService)
 	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()
 	webhookService.SetMetrics(webhookMetrics)

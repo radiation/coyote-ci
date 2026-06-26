@@ -47,6 +47,22 @@ type MyEmailNotificationTargetEnvelope struct {
 	Data MyEmailNotificationTargetResponse `json:"data"`
 }
 
+type CommitAuthorFailureNotificationPreferenceResponse struct {
+	Enabled           bool                        `json:"enabled"`
+	Eligible          bool                        `json:"eligible"`
+	DeliveryActive    bool                        `json:"delivery_active"`
+	Target            *NotificationTargetResponse `json:"target"`
+	UnavailableReason *string                     `json:"unavailable_reason,omitempty"`
+}
+
+type CommitAuthorFailureNotificationPreferenceEnvelope struct {
+	Data CommitAuthorFailureNotificationPreferenceResponse `json:"data"`
+}
+
+type PutCommitAuthorFailureNotificationPreferenceRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
 type CreateNotificationSubscriptionRequest struct {
 	TargetID  string  `json:"target_id"`
 	ProjectID *string `json:"project_id,omitempty"`

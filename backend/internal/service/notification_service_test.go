@@ -557,3 +557,146 @@ func TestNotificationService_GetOwnedEmailTarget(t *testing.T) {
 		t.Fatalf("expected owned target not found, got %v", err)
 	}
 }
+
+func TestNotificationService_CommitAuthorFailureNotificationPreference(t *testing.T) {
+	ctx := context.Background()
+	targetRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+	svc := NewNotificationService(targetRepo).WithPreferenceRepository(preferenceRepo)
+	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	user := domain.User{ID: uuid.NewString(), Email: "user@example.com", DisplayName: strPtr("User Example")}
+
+	state, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, user)
+	if err != nil {
+		t.Fatalf("get default preference failed: %v", err)
+	}
+	if state.Enabled || state.Eligible || state.DeliveryActive {
+		t.Fatalf("expected disabled ineligible default, got %+v", state)
+	}
+	if state.UnavailableReason == nil || *state.UnavailableReason != NotificationPreferenceUnavailableReasonPersonalTargetRequired {
+		t.Fatalf("expected missing-target reason, got %+v", state.UnavailableReason)
+	}
+
+	if _, enableErr := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, notificationBoolPtr(true)); !errors.Is(enableErr, ErrNotificationPreferencePersonalTargetRequired) {
+		t.Fatalf("expected enable without target to fail, got %v", enableErr)
+	}
+
+	target, err := svc.EnsureOwnedEmailTarget(ctx, user)
+	if err != nil {
+		t.Fatalf("ensure owned target failed: %v", err)
+	}
+
+	enabledState, err := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, notificationBoolPtr(true))
+	if err != nil {
+		t.Fatalf("enable preference failed: %v", err)
+	}
+	if !enabledState.Enabled || !enabledState.Eligible || !enabledState.DeliveryActive {
+		t.Fatalf("unexpected enabled state %+v", enabledState)
+	}
+	if enabledState.Target == nil || enabledState.Target.ID != target.ID {
+		t.Fatalf("expected preference target %q, got %+v", target.ID, enabledState.Target)
+	}
+
+	repeatedEnable, err := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, notificationBoolPtr(true))
+	if err != nil {
+		t.Fatalf("repeat enable failed: %v", err)
+	}
+	if !repeatedEnable.Enabled {
+		t.Fatal("expected repeat enable to remain enabled")
+	}
+
+	manualTarget, err := svc.CreateEmailTarget(ctx, CreateNotificationTargetInput{Name: "Project Alerts", Address: "alerts@example.com"})
+	if err != nil {
+		t.Fatalf("create manual target failed: %v", err)
+	}
+	projectID := uuid.NewString()
+	_, err = svc.CreateSubscription(ctx, CreateNotificationSubscriptionInput{TargetID: manualTarget.ID, ProjectID: &projectID, EventType: string(domain.NotificationEventTypeBuildFailed)})
+	if err != nil {
+		t.Fatalf("create manual subscription failed: %v", err)
+	}
+
+	disabledState, err := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, notificationBoolPtr(false))
+	if err != nil {
+		t.Fatalf("disable preference failed: %v", err)
+	}
+	if disabledState.Enabled || !disabledState.Eligible || disabledState.DeliveryActive {
+		t.Fatalf("unexpected disabled state %+v", disabledState)
+	}
+	subscriptions, err := svc.ListSubscriptions(ctx, ListNotificationSubscriptionsInput{ProjectID: &projectID})
+	if err != nil {
+		t.Fatalf("list subscriptions failed: %v", err)
+	}
+	if len(subscriptions) != 1 {
+		t.Fatalf("expected manual subscription to remain, got %+v", subscriptions)
+	}
+
+	falseValue := false
+	_, err = svc.UpdateTarget(ctx, target.ID, UpdateNotificationTargetInput{Enabled: &falseValue})
+	if err != nil {
+		t.Fatalf("disable personal target failed: %v", err)
+	}
+	pausedState, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, user)
+	if err != nil {
+		t.Fatalf("get paused state failed: %v", err)
+	}
+	if pausedState.UnavailableReason == nil || *pausedState.UnavailableReason != NotificationPreferenceUnavailableReasonPersonalTargetDisabled {
+		t.Fatalf("expected disabled-target reason, got %+v", pausedState.UnavailableReason)
+	}
+	if pausedState.Eligible != true || pausedState.DeliveryActive {
+		t.Fatalf("expected paused delivery state, got %+v", pausedState)
+	}
+
+	disabledWithPausedTarget, err := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, notificationBoolPtr(false))
+	if err != nil {
+		t.Fatalf("disable preference with disabled target failed: %v", err)
+	}
+	if disabledWithPausedTarget.Enabled || disabledWithPausedTarget.DeliveryActive {
+		t.Fatalf("expected disabled preference with paused target, got %+v", disabledWithPausedTarget)
+	}
+
+	enabledAgain, err := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, notificationBoolPtr(true))
+	if !errors.Is(err, ErrNotificationPreferencePersonalTargetRequired) {
+		t.Fatalf("expected re-enable with disabled target to fail, got state=%+v err=%v", enabledAgain, err)
+	}
+
+	if deleteErr := svc.DeleteTarget(ctx, target.ID); deleteErr != nil {
+		t.Fatalf("delete personal target failed: %v", deleteErr)
+	}
+	missingTargetEnabledState, err := preferenceRepo.Upsert(ctx, domain.UserNotificationPreference{
+		UserID:                     user.ID,
+		CommitAuthorFailureEnabled: true,
+		CreatedAt:                  now,
+		UpdatedAt:                  now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("restore enabled preference without target failed: %v", err)
+	}
+	if !missingTargetEnabledState.CommitAuthorFailureEnabled {
+		t.Fatalf("expected stored enabled preference, got %+v", missingTargetEnabledState)
+	}
+
+	missingTargetState, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, user)
+	if err != nil {
+		t.Fatalf("get missing-target enabled state failed: %v", err)
+	}
+	if !missingTargetState.Enabled || missingTargetState.Eligible || missingTargetState.DeliveryActive {
+		t.Fatalf("expected enabled preference but inactive missing-target state, got %+v", missingTargetState)
+	}
+	if missingTargetState.UnavailableReason == nil || *missingTargetState.UnavailableReason != NotificationPreferenceUnavailableReasonPersonalTargetRequired {
+		t.Fatalf("expected missing-target reason after target removal, got %+v", missingTargetState.UnavailableReason)
+	}
+
+	disabledWithoutTarget, err := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, notificationBoolPtr(false))
+	if err != nil {
+		t.Fatalf("disable preference without target failed: %v", err)
+	}
+	if disabledWithoutTarget.Enabled || disabledWithoutTarget.DeliveryActive {
+		t.Fatalf("expected disable without target to succeed, got %+v", disabledWithoutTarget)
+	}
+}
+
+func notificationBoolPtr(value bool) *bool {
+	return &value
+}

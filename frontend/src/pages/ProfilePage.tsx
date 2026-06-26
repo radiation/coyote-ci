@@ -4,8 +4,10 @@ import { Link } from "react-router-dom";
 import {
   ensureMyEmailNotificationTarget,
   formatAPIErrorMessage,
+  getCommitAuthorFailureNotificationPreference,
   getMe,
   getMyEmailNotificationTarget,
+  setCommitAuthorFailureNotificationPreference,
 } from "../api";
 import { useAuth } from "../auth-context";
 
@@ -55,6 +57,15 @@ export function ProfilePage() {
     queryFn: getMyEmailNotificationTarget,
   });
 
+  const {
+    data: commitPreference,
+    isLoading: commitPreferenceLoading,
+    error: commitPreferenceError,
+  } = useQuery({
+    queryKey: ["me", "notification-preferences", "commit-author-failures"],
+    queryFn: getCommitAuthorFailureNotificationPreference,
+  });
+
   const ensureTargetMutation = useMutation({
     mutationFn: ensureMyEmailNotificationTarget,
     onMutate: () => {
@@ -64,6 +75,9 @@ export function ProfilePage() {
       await queryClient.invalidateQueries({
         queryKey: ["me", "notification-target", "email"],
       });
+      await queryClient.invalidateQueries({
+        queryKey: ["me", "notification-preferences", "commit-author-failures"],
+      });
     },
     onError: (mutationError) => {
       setActionErrorMessage(
@@ -71,6 +85,27 @@ export function ProfilePage() {
           mutationError,
           "You do not have permission to create a personal notification target.",
           "Failed to create personal email target",
+        ),
+      );
+    },
+  });
+
+  const updateCommitPreferenceMutation = useMutation({
+    mutationFn: setCommitAuthorFailureNotificationPreference,
+    onMutate: () => {
+      setActionErrorMessage(null);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["me", "notification-preferences", "commit-author-failures"],
+      });
+    },
+    onError: (mutationError) => {
+      setActionErrorMessage(
+        formatAPIErrorMessage(
+          mutationError,
+          "You do not have permission to update commit notifications.",
+          "Failed to update commit notifications",
         ),
       );
     },
@@ -85,6 +120,13 @@ export function ProfilePage() {
     "Not provided by authentication provider";
   const effectiveProvider = providerLabel(me?.auth_method, authMode);
   const emailVerified = me?.email_verified;
+  const commitPreferenceCanEnable =
+    !!commitPreference?.target && commitPreference.target.enabled;
+  const commitPreferenceControlDisabled =
+    updateCommitPreferenceMutation.isPending ||
+    !commitPreference ||
+    commitPreferenceLoading ||
+    (!commitPreference.enabled && !commitPreferenceCanEnable);
 
   return (
     <>
@@ -191,6 +233,64 @@ export function ProfilePage() {
                 ? "Creating..."
                 : "Create my email target"}
             </button>
+          </>
+        )}
+      </section>
+
+      <section className="settings-panel" style={{ marginTop: 16 }}>
+        <h3>Commit Notifications</h3>
+        <p className="subtle-text">
+          Receive an email when a commit attributed to your Coyote account
+          causes a build or job to fail.
+        </p>
+        {commitPreferenceError && (
+          <p className="error-text">
+            {formatAPIErrorMessage(
+              commitPreferenceError,
+              "Unable to load your commit notification preference.",
+              "Failed to load commit notifications",
+            )}
+          </p>
+        )}
+        {commitPreferenceLoading && (
+          <p>Loading commit notification preference...</p>
+        )}
+        {!commitPreferenceLoading && commitPreference && (
+          <>
+            <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={commitPreference.enabled}
+                disabled={commitPreferenceControlDisabled}
+                onChange={(event) =>
+                  updateCommitPreferenceMutation.mutate({
+                    enabled: event.currentTarget.checked,
+                  })
+                }
+              />
+              <span>Notify me when my commits fail</span>
+            </label>
+            {commitPreference.target?.address && (
+              <p className="subtle-text" style={{ marginTop: 10 }}>
+                Notifications will be sent to {commitPreference.target.address}.
+              </p>
+            )}
+            {commitPreference.unavailable_reason ===
+              "personal_target_required" && (
+              <>
+                <p className="subtle-text" style={{ marginTop: 10 }}>
+                  Create your personal email target before enabling commit
+                  failure notifications.
+                </p>
+              </>
+            )}
+            {commitPreference.target && !commitPreference.target.enabled && (
+              <p className="subtle-text" style={{ marginTop: 10 }}>
+                Delivery is paused because your personal email target is
+                disabled. Re-enable it in{" "}
+                <Link to="/settings/notifications">Notification settings</Link>.
+              </p>
+            )}
           </>
         )}
       </section>
