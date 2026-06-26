@@ -697,6 +697,87 @@ func TestNotificationService_CommitAuthorFailureNotificationPreference(t *testin
 	}
 }
 
+type scriptedUserNotificationPreferenceRepository struct {
+	getByUserID func(context.Context, string) (domain.UserNotificationPreference, error)
+	upsert      func(context.Context, domain.UserNotificationPreference) (domain.UserNotificationPreference, error)
+}
+
+func (r *scriptedUserNotificationPreferenceRepository) GetByUserID(ctx context.Context, userID string) (domain.UserNotificationPreference, error) {
+	if r.getByUserID != nil {
+		return r.getByUserID(ctx, userID)
+	}
+	return domain.UserNotificationPreference{}, repository.ErrUserNotificationPreferenceNotFound
+}
+
+func (r *scriptedUserNotificationPreferenceRepository) Upsert(ctx context.Context, preference domain.UserNotificationPreference) (domain.UserNotificationPreference, error) {
+	if r.upsert != nil {
+		return r.upsert(ctx, preference)
+	}
+	return preference, nil
+}
+
+func TestNotificationService_CommitAuthorFailureNotificationPreference_ValidationAndRepoErrors(t *testing.T) {
+	ctx := context.Background()
+	repo := memoryrepo.NewNotificationSubscriptionRepository()
+	user := domain.User{ID: uuid.NewString(), Email: "user@example.com"}
+
+	t.Run("get requires user id", func(t *testing.T) {
+		svc := NewNotificationService(repo).WithPreferenceRepository(memoryrepo.NewUserNotificationPreferenceRepository())
+		_, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, domain.User{})
+		if !errors.Is(err, ErrNotificationPersonalUserIDRequired) {
+			t.Fatalf("expected missing user id error, got %v", err)
+		}
+	})
+
+	t.Run("set requires user id", func(t *testing.T) {
+		svc := NewNotificationService(repo).WithPreferenceRepository(memoryrepo.NewUserNotificationPreferenceRepository())
+		_, err := svc.SetCommitAuthorFailureNotificationPreference(ctx, domain.User{}, notificationBoolPtr(false))
+		if !errors.Is(err, ErrNotificationPersonalUserIDRequired) {
+			t.Fatalf("expected missing user id error, got %v", err)
+		}
+	})
+
+	t.Run("set requires enabled flag", func(t *testing.T) {
+		svc := NewNotificationService(repo).WithPreferenceRepository(memoryrepo.NewUserNotificationPreferenceRepository())
+		_, err := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, nil)
+		if !errors.Is(err, ErrNotificationPreferenceEnabledRequired) {
+			t.Fatalf("expected missing enabled flag error, got %v", err)
+		}
+	})
+
+	t.Run("set requires configured preference repository", func(t *testing.T) {
+		svc := NewNotificationService(repo)
+		_, err := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, notificationBoolPtr(false))
+		if err == nil || err.Error() != "notification preference repository is not configured" {
+			t.Fatalf("expected missing preference repo error, got %v", err)
+		}
+	})
+
+	t.Run("get returns preference lookup errors", func(t *testing.T) {
+		svc := NewNotificationService(repo).WithPreferenceRepository(&scriptedUserNotificationPreferenceRepository{
+			getByUserID: func(context.Context, string) (domain.UserNotificationPreference, error) {
+				return domain.UserNotificationPreference{}, errors.New("lookup failed")
+			},
+		})
+		_, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, user)
+		if err == nil || err.Error() != "lookup failed" {
+			t.Fatalf("expected raw preference lookup error, got %v", err)
+		}
+	})
+
+	t.Run("set returns existing preference lookup errors", func(t *testing.T) {
+		svc := NewNotificationService(repo).WithPreferenceRepository(&scriptedUserNotificationPreferenceRepository{
+			getByUserID: func(context.Context, string) (domain.UserNotificationPreference, error) {
+				return domain.UserNotificationPreference{}, errors.New("lookup failed")
+			},
+		})
+		_, err := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, notificationBoolPtr(false))
+		if err == nil || err.Error() != "lookup failed" {
+			t.Fatalf("expected raw preference lookup error, got %v", err)
+		}
+	})
+}
+
 func notificationBoolPtr(value bool) *bool {
 	return &value
 }

@@ -44,6 +44,11 @@ type scriptedNotificationDeliveryRepo struct {
 	updateFunc func(context.Context, domain.NotificationDelivery) (domain.NotificationDelivery, error)
 }
 
+type scriptedNotificationPreferenceRepo struct {
+	getFunc    func(context.Context, string) (domain.UserNotificationPreference, error)
+	upsertFunc func(context.Context, domain.UserNotificationPreference) (domain.UserNotificationPreference, error)
+}
+
 func (r *scriptedNotificationDeliveryRepo) Create(ctx context.Context, delivery domain.NotificationDelivery) (domain.NotificationDelivery, error) {
 	if r.createFunc != nil {
 		return r.createFunc(ctx, delivery)
@@ -63,6 +68,20 @@ func (r *scriptedNotificationDeliveryRepo) Update(ctx context.Context, delivery 
 		return r.updateFunc(ctx, delivery)
 	}
 	return delivery, nil
+}
+
+func (r *scriptedNotificationPreferenceRepo) GetByUserID(ctx context.Context, userID string) (domain.UserNotificationPreference, error) {
+	if r.getFunc != nil {
+		return r.getFunc(ctx, userID)
+	}
+	return domain.UserNotificationPreference{}, repository.ErrUserNotificationPreferenceNotFound
+}
+
+func (r *scriptedNotificationPreferenceRepo) Upsert(ctx context.Context, preference domain.UserNotificationPreference) (domain.UserNotificationPreference, error) {
+	if r.upsertFunc != nil {
+		return r.upsertFunc(ctx, preference)
+	}
+	return preference, nil
 }
 
 func mustGetNotificationDelivery(t *testing.T, repo repository.NotificationDeliveryRepository, buildID string, eventType domain.NotificationEventType, recipient string) domain.NotificationDelivery {
@@ -1388,6 +1407,112 @@ func TestBuildNotificationService_SendSampleBuildFailureRequiresSender(t *testin
 	}
 	if _, sendErr := notifier.SendSampleBuildFailure(context.Background()); sendErr == nil {
 		t.Fatal("expected missing sender error")
+	}
+}
+
+func TestBuildNotificationService_ResolveCommitAuthorDestination_Branches(t *testing.T) {
+	t.Run("returns false when repos are not configured", func(t *testing.T) {
+		notifier := &BuildNotificationService{}
+		destination, ok, err := notifier.resolveCommitAuthorDestination(context.Background(), domain.Build{ID: "build-1"})
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if ok || destination != (notificationDestination{}) {
+			t.Fatalf("expected no destination, got ok=%v destination=%+v", ok, destination)
+		}
+	})
+
+	t.Run("returns false when author email is missing", func(t *testing.T) {
+		notifier := &BuildNotificationService{
+			userRepo:         memoryrepo.NewUserRepository(),
+			preferenceRepo:   memoryrepo.NewUserNotificationPreferenceRepository(),
+			subscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository(),
+		}
+		_, ok, err := notifier.resolveCommitAuthorDestination(context.Background(), domain.Build{ID: "build-1"})
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if ok {
+			t.Fatal("expected no destination for missing author email")
+		}
+	})
+
+	t.Run("returns false when preference is missing", func(t *testing.T) {
+		userRepo := memoryrepo.NewUserRepository()
+		subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+		authorEmail := "author@example.com"
+		user := mustCreateNotificationUser(t, userRepo, authorEmail)
+		mustEnsureOwnedNotificationTarget(t, subscriptionRepo, user.ID, authorEmail, true)
+		notifier := &BuildNotificationService{
+			userRepo:         userRepo,
+			preferenceRepo:   memoryrepo.NewUserNotificationPreferenceRepository(),
+			subscriptionRepo: subscriptionRepo,
+		}
+		_, ok, err := notifier.resolveCommitAuthorDestination(context.Background(), domain.Build{ID: "build-1", SourceAuthorEmail: &authorEmail})
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if ok {
+			t.Fatal("expected no destination when preference is missing")
+		}
+	})
+
+	t.Run("returns false when personal target is missing", func(t *testing.T) {
+		userRepo := memoryrepo.NewUserRepository()
+		preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+		authorEmail := "author@example.com"
+		user := mustCreateNotificationUser(t, userRepo, authorEmail)
+		mustUpsertNotificationPreference(t, preferenceRepo, user.ID, true)
+		notifier := &BuildNotificationService{
+			userRepo:         userRepo,
+			preferenceRepo:   preferenceRepo,
+			subscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository(),
+		}
+		_, ok, err := notifier.resolveCommitAuthorDestination(context.Background(), domain.Build{ID: "build-1", SourceAuthorEmail: &authorEmail})
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if ok {
+			t.Fatal("expected no destination when target is missing")
+		}
+	})
+
+	t.Run("returns lookup errors from preference repository", func(t *testing.T) {
+		userRepo := memoryrepo.NewUserRepository()
+		authorEmail := "author@example.com"
+		_ = mustCreateNotificationUser(t, userRepo, authorEmail)
+		notifier := &BuildNotificationService{
+			userRepo: userRepo,
+			preferenceRepo: &scriptedNotificationPreferenceRepo{
+				getFunc: func(context.Context, string) (domain.UserNotificationPreference, error) {
+					return domain.UserNotificationPreference{}, errors.New("lookup failed")
+				},
+			},
+			subscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository(),
+		}
+		_, _, err := notifier.resolveCommitAuthorDestination(context.Background(), domain.Build{ID: "build-1", SourceAuthorEmail: &authorEmail})
+		if err == nil || err.Error() != "lookup failed" {
+			t.Fatalf("expected raw preference lookup error, got %v", err)
+		}
+	})
+}
+
+func TestBuildNotificationService_SendDestination_RequiresConfiguredSenders(t *testing.T) {
+	notifier := &BuildNotificationService{}
+	err := notifier.sendDestination(context.Background(), notificationDestination{
+		targetType:     domain.NotificationTargetTypeEmail,
+		emailRecipient: "<dev@example.com>",
+	}, "subject", "body", "")
+	if err == nil || err.Error() != "email sender is not configured" {
+		t.Fatalf("expected email sender configuration error, got %v", err)
+	}
+
+	err = notifier.sendDestination(context.Background(), notificationDestination{
+		targetType: domain.NotificationTargetTypeSlackWebhook,
+		webhookURL: "https://hooks.slack.example/services/T/B/X",
+	}, "subject", "body", "slack")
+	if err == nil || err.Error() != "slack sender is not configured" {
+		t.Fatalf("expected slack sender configuration error, got %v", err)
 	}
 }
 
