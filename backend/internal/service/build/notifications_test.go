@@ -44,11 +44,6 @@ type scriptedNotificationDeliveryRepo struct {
 	updateFunc func(context.Context, domain.NotificationDelivery) (domain.NotificationDelivery, error)
 }
 
-type scriptedNotificationPreferenceRepo struct {
-	getFunc    func(context.Context, string) (domain.UserNotificationPreference, error)
-	upsertFunc func(context.Context, domain.UserNotificationPreference) (domain.UserNotificationPreference, error)
-}
-
 func (r *scriptedNotificationDeliveryRepo) Create(ctx context.Context, delivery domain.NotificationDelivery) (domain.NotificationDelivery, error) {
 	if r.createFunc != nil {
 		return r.createFunc(ctx, delivery)
@@ -68,20 +63,6 @@ func (r *scriptedNotificationDeliveryRepo) Update(ctx context.Context, delivery 
 		return r.updateFunc(ctx, delivery)
 	}
 	return delivery, nil
-}
-
-func (r *scriptedNotificationPreferenceRepo) GetByUserID(ctx context.Context, userID string) (domain.UserNotificationPreference, error) {
-	if r.getFunc != nil {
-		return r.getFunc(ctx, userID)
-	}
-	return domain.UserNotificationPreference{}, repository.ErrUserNotificationPreferenceNotFound
-}
-
-func (r *scriptedNotificationPreferenceRepo) Upsert(ctx context.Context, preference domain.UserNotificationPreference) (domain.UserNotificationPreference, error) {
-	if r.upsertFunc != nil {
-		return r.upsertFunc(ctx, preference)
-	}
-	return preference, nil
 }
 
 func mustGetNotificationDelivery(t *testing.T, repo repository.NotificationDeliveryRepository, buildID string, eventType domain.NotificationEventType, recipient string) domain.NotificationDelivery {
@@ -578,14 +559,13 @@ func TestBuildService_FailBuild_UsesPersistedProvenanceForCommitAuthorNotificati
 	mustEnsureOwnedNotificationTarget(t, subscriptionRepo, user.ID, "author@example.com", true)
 	mustUpsertNotificationPreference(t, preferenceRepo, user.ID, true)
 	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
-		Enabled:                     true,
-		NotifyCommitAuthorOnFailure: true,
-		Recipients:                  "dev@example.com",
-		Sender:                      sender,
-		DeliveryRepo:                deliveryRepo,
-		SubscriptionRepo:            subscriptionRepo,
-		UserRepo:                    userRepo,
-		PreferenceRepo:              preferenceRepo,
+		Enabled:          true,
+		Recipients:       "dev@example.com",
+		Sender:           sender,
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
+		UserRepo:         userRepo,
+		PreferenceRepo:   preferenceRepo,
 	})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
@@ -676,7 +656,7 @@ func TestBuildService_FailBuild_UsesPersistedProvenanceForCommitAuthorNotificati
 	}
 }
 
-func TestBuildService_FailBuild_IgnoresLegacyCommitAuthorFlagWhenUserOptedIn(t *testing.T) {
+func TestBuildService_FailBuild_SendsCommitAuthorNotificationWhenUserOptedIn(t *testing.T) {
 	buildRepo := memoryrepo.NewBuildRepository()
 	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 	userRepo := memoryrepo.NewUserRepository()
@@ -688,14 +668,13 @@ func TestBuildService_FailBuild_IgnoresLegacyCommitAuthorFlagWhenUserOptedIn(t *
 	mustEnsureOwnedNotificationTarget(t, subscriptionRepo, user.ID, authorEmail, true)
 	mustUpsertNotificationPreference(t, preferenceRepo, user.ID, true)
 	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
-		Enabled:                     true,
-		NotifyCommitAuthorOnFailure: false,
-		Recipients:                  "dev@example.com",
-		Sender:                      sender,
-		DeliveryRepo:                deliveryRepo,
-		SubscriptionRepo:            subscriptionRepo,
-		UserRepo:                    userRepo,
-		PreferenceRepo:              preferenceRepo,
+		Enabled:          true,
+		Recipients:       "dev@example.com",
+		Sender:           sender,
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
+		UserRepo:         userRepo,
+		PreferenceRepo:   preferenceRepo,
 	})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
@@ -741,11 +720,10 @@ func TestBuildService_CompleteBuild_DoesNotIncludeCommitAuthorOnSuccess(t *testi
 	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 	sender := &recordingEmailSender{}
 	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
-		Enabled:                     true,
-		NotifyCommitAuthorOnFailure: true,
-		Recipients:                  "dev@example.com",
-		Sender:                      sender,
-		DeliveryRepo:                deliveryRepo,
+		Enabled:      true,
+		Recipients:   "dev@example.com",
+		Sender:       sender,
+		DeliveryRepo: deliveryRepo,
 	})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
@@ -782,11 +760,10 @@ func TestBuildService_FailBuild_DedupesCommitAuthorAgainstConfiguredRecipients(t
 	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 	sender := &recordingEmailSender{}
 	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
-		Enabled:                     true,
-		NotifyCommitAuthorOnFailure: true,
-		Recipients:                  "dev@example.com",
-		Sender:                      sender,
-		DeliveryRepo:                deliveryRepo,
+		Enabled:      true,
+		Recipients:   "dev@example.com",
+		Sender:       sender,
+		DeliveryRepo: deliveryRepo,
 	})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
@@ -1228,14 +1205,13 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 		mustEnsureOwnedNotificationTarget(t, subscriptionRepo, user.ID, authorEmail, true)
 		mustUpsertNotificationPreference(t, preferenceRepo, user.ID, true)
 		notifier, err := NewBuildNotificationService(BuildNotificationConfig{
-			Enabled:                     true,
-			NotifyCommitAuthorOnFailure: true,
-			Recipients:                  "dev@example.com",
-			Sender:                      sender,
-			DeliveryRepo:                deliveryRepo,
-			SubscriptionRepo:            subscriptionRepo,
-			UserRepo:                    userRepo,
-			PreferenceRepo:              preferenceRepo,
+			Enabled:          true,
+			Recipients:       "dev@example.com",
+			Sender:           sender,
+			DeliveryRepo:     deliveryRepo,
+			SubscriptionRepo: subscriptionRepo,
+			UserRepo:         userRepo,
+			PreferenceRepo:   preferenceRepo,
 		})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
@@ -1260,14 +1236,13 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 		mustEnsureOwnedNotificationTarget(t, subscriptionRepo, user.ID, authorEmail, true)
 		mustUpsertNotificationPreference(t, preferenceRepo, user.ID, true)
 		notifier, err := NewBuildNotificationService(BuildNotificationConfig{
-			Enabled:                     true,
-			NotifyCommitAuthorOnFailure: true,
-			Recipients:                  "dev@example.com",
-			Sender:                      sender,
-			DeliveryRepo:                deliveryRepo,
-			SubscriptionRepo:            subscriptionRepo,
-			UserRepo:                    userRepo,
-			PreferenceRepo:              preferenceRepo,
+			Enabled:          true,
+			Recipients:       "dev@example.com",
+			Sender:           sender,
+			DeliveryRepo:     deliveryRepo,
+			SubscriptionRepo: subscriptionRepo,
+			UserRepo:         userRepo,
+			PreferenceRepo:   preferenceRepo,
 		})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
@@ -1283,7 +1258,7 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 }
 
 func TestBuildNotificationService_CommitAuthorPreferenceDelivery(t *testing.T) {
-	newNotifier := func(t *testing.T, authorEmail string, targetEnabled bool, preferenceEnabled bool, legacyFlag bool) (*BuildNotificationService, *recordingEmailSender, *memoryrepo.NotificationSubscriptionRepository) {
+	newNotifier := func(t *testing.T, authorEmail string, targetEnabled bool, preferenceEnabled bool) (*BuildNotificationService, *recordingEmailSender, *memoryrepo.NotificationSubscriptionRepository) {
 		t.Helper()
 
 		sender := &recordingEmailSender{}
@@ -1296,13 +1271,12 @@ func TestBuildNotificationService_CommitAuthorPreferenceDelivery(t *testing.T) {
 		mustUpsertNotificationPreference(t, preferenceRepo, user.ID, preferenceEnabled)
 
 		notifier, err := NewBuildNotificationService(BuildNotificationConfig{
-			Enabled:                     true,
-			NotifyCommitAuthorOnFailure: legacyFlag,
-			Sender:                      sender,
-			DeliveryRepo:                deliveryRepo,
-			SubscriptionRepo:            subscriptionRepo,
-			UserRepo:                    userRepo,
-			PreferenceRepo:              preferenceRepo,
+			Enabled:          true,
+			Sender:           sender,
+			DeliveryRepo:     deliveryRepo,
+			SubscriptionRepo: subscriptionRepo,
+			UserRepo:         userRepo,
+			PreferenceRepo:   preferenceRepo,
 		})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
@@ -1313,7 +1287,7 @@ func TestBuildNotificationService_CommitAuthorPreferenceDelivery(t *testing.T) {
 
 	t.Run("non-opted-in author does not receive personal author notification", func(t *testing.T) {
 		authorEmail := "author@example.com"
-		notifier, sender, _ := newNotifier(t, authorEmail, true, false, true)
+		notifier, sender, _ := newNotifier(t, authorEmail, true, false)
 		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
 			t.Fatalf("notify terminal build failed: %v", err)
 		}
@@ -1323,7 +1297,7 @@ func TestBuildNotificationService_CommitAuthorPreferenceDelivery(t *testing.T) {
 	})
 
 	t.Run("unknown commit author is skipped safely", func(t *testing.T) {
-		notifier, sender, _ := newNotifier(t, "author@example.com", true, true, true)
+		notifier, sender, _ := newNotifier(t, "author@example.com", true, true)
 		unknown := "unknown@example.com"
 		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &unknown}); err != nil {
 			t.Fatalf("notify terminal build failed: %v", err)
@@ -1335,7 +1309,7 @@ func TestBuildNotificationService_CommitAuthorPreferenceDelivery(t *testing.T) {
 
 	t.Run("disabled personal target prevents delivery", func(t *testing.T) {
 		authorEmail := "author@example.com"
-		notifier, sender, _ := newNotifier(t, authorEmail, false, true, true)
+		notifier, sender, _ := newNotifier(t, authorEmail, false, true)
 		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
 			t.Fatalf("notify terminal build failed: %v", err)
 		}
@@ -1345,7 +1319,7 @@ func TestBuildNotificationService_CommitAuthorPreferenceDelivery(t *testing.T) {
 	})
 
 	t.Run("case-normalized email matching works", func(t *testing.T) {
-		notifier, sender, _ := newNotifier(t, "author@example.com", true, true, true)
+		notifier, sender, _ := newNotifier(t, "author@example.com", true, true)
 		mixedCase := "AUTHOR@EXAMPLE.COM"
 		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &mixedCase}); err != nil {
 			t.Fatalf("notify terminal build failed: %v", err)
@@ -1355,20 +1329,9 @@ func TestBuildNotificationService_CommitAuthorPreferenceDelivery(t *testing.T) {
 		}
 	})
 
-	t.Run("legacy global flag no longer blocks opted-in personal delivery", func(t *testing.T) {
-		authorEmail := "author@example.com"
-		notifier, sender, _ := newNotifier(t, authorEmail, true, true, false)
-		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
-			t.Fatalf("notify terminal build failed: %v", err)
-		}
-		if len(sender.messages) != 1 || sender.messages[0].To != "<author@example.com>" {
-			t.Fatalf("expected opted-in author delivery despite legacy flag, got %+v", sender.messages)
-		}
-	})
-
 	t.Run("manual project subscription plus personal author preference produces one delivery to same target", func(t *testing.T) {
 		authorEmail := "author@example.com"
-		notifier, sender, subscriptionRepo := newNotifier(t, authorEmail, true, true, true)
+		notifier, sender, subscriptionRepo := newNotifier(t, authorEmail, true, true)
 		targets, err := subscriptionRepo.ListTargets(context.Background())
 		if err != nil {
 			t.Fatalf("list targets failed: %v", err)
@@ -1386,7 +1349,7 @@ func TestBuildNotificationService_CommitAuthorPreferenceDelivery(t *testing.T) {
 
 	t.Run("distinct targets still each receive delivery", func(t *testing.T) {
 		authorEmail := "author@example.com"
-		notifier, sender, subscriptionRepo := newNotifier(t, authorEmail, true, true, true)
+		notifier, sender, subscriptionRepo := newNotifier(t, authorEmail, true, true)
 		jobID := "job-1"
 		manualTarget := mustCreateNotificationTarget(t, subscriptionRepo, "ops@example.com", true)
 		mustCreateNotificationSubscription(t, subscriptionRepo, manualTarget.ID, nil, &jobID, domain.NotificationEventTypeBuildFailed, true)
@@ -1407,112 +1370,6 @@ func TestBuildNotificationService_SendSampleBuildFailureRequiresSender(t *testin
 	}
 	if _, sendErr := notifier.SendSampleBuildFailure(context.Background()); sendErr == nil {
 		t.Fatal("expected missing sender error")
-	}
-}
-
-func TestBuildNotificationService_ResolveCommitAuthorDestination_Branches(t *testing.T) {
-	t.Run("returns false when repos are not configured", func(t *testing.T) {
-		notifier := &BuildNotificationService{}
-		destination, ok, err := notifier.resolveCommitAuthorDestination(context.Background(), domain.Build{ID: "build-1"})
-		if err != nil {
-			t.Fatalf("expected nil error, got %v", err)
-		}
-		if ok || destination != (notificationDestination{}) {
-			t.Fatalf("expected no destination, got ok=%v destination=%+v", ok, destination)
-		}
-	})
-
-	t.Run("returns false when author email is missing", func(t *testing.T) {
-		notifier := &BuildNotificationService{
-			userRepo:         memoryrepo.NewUserRepository(),
-			preferenceRepo:   memoryrepo.NewUserNotificationPreferenceRepository(),
-			subscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository(),
-		}
-		_, ok, err := notifier.resolveCommitAuthorDestination(context.Background(), domain.Build{ID: "build-1"})
-		if err != nil {
-			t.Fatalf("expected nil error, got %v", err)
-		}
-		if ok {
-			t.Fatal("expected no destination for missing author email")
-		}
-	})
-
-	t.Run("returns false when preference is missing", func(t *testing.T) {
-		userRepo := memoryrepo.NewUserRepository()
-		subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
-		authorEmail := "author@example.com"
-		user := mustCreateNotificationUser(t, userRepo, authorEmail)
-		mustEnsureOwnedNotificationTarget(t, subscriptionRepo, user.ID, authorEmail, true)
-		notifier := &BuildNotificationService{
-			userRepo:         userRepo,
-			preferenceRepo:   memoryrepo.NewUserNotificationPreferenceRepository(),
-			subscriptionRepo: subscriptionRepo,
-		}
-		_, ok, err := notifier.resolveCommitAuthorDestination(context.Background(), domain.Build{ID: "build-1", SourceAuthorEmail: &authorEmail})
-		if err != nil {
-			t.Fatalf("expected nil error, got %v", err)
-		}
-		if ok {
-			t.Fatal("expected no destination when preference is missing")
-		}
-	})
-
-	t.Run("returns false when personal target is missing", func(t *testing.T) {
-		userRepo := memoryrepo.NewUserRepository()
-		preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
-		authorEmail := "author@example.com"
-		user := mustCreateNotificationUser(t, userRepo, authorEmail)
-		mustUpsertNotificationPreference(t, preferenceRepo, user.ID, true)
-		notifier := &BuildNotificationService{
-			userRepo:         userRepo,
-			preferenceRepo:   preferenceRepo,
-			subscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository(),
-		}
-		_, ok, err := notifier.resolveCommitAuthorDestination(context.Background(), domain.Build{ID: "build-1", SourceAuthorEmail: &authorEmail})
-		if err != nil {
-			t.Fatalf("expected nil error, got %v", err)
-		}
-		if ok {
-			t.Fatal("expected no destination when target is missing")
-		}
-	})
-
-	t.Run("returns lookup errors from preference repository", func(t *testing.T) {
-		userRepo := memoryrepo.NewUserRepository()
-		authorEmail := "author@example.com"
-		_ = mustCreateNotificationUser(t, userRepo, authorEmail)
-		notifier := &BuildNotificationService{
-			userRepo: userRepo,
-			preferenceRepo: &scriptedNotificationPreferenceRepo{
-				getFunc: func(context.Context, string) (domain.UserNotificationPreference, error) {
-					return domain.UserNotificationPreference{}, errors.New("lookup failed")
-				},
-			},
-			subscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository(),
-		}
-		_, _, err := notifier.resolveCommitAuthorDestination(context.Background(), domain.Build{ID: "build-1", SourceAuthorEmail: &authorEmail})
-		if err == nil || err.Error() != "lookup failed" {
-			t.Fatalf("expected raw preference lookup error, got %v", err)
-		}
-	})
-}
-
-func TestBuildNotificationService_SendDestination_RequiresConfiguredSenders(t *testing.T) {
-	notifier := &BuildNotificationService{}
-	err := notifier.sendDestination(context.Background(), notificationDestination{
-		targetType:     domain.NotificationTargetTypeEmail,
-		emailRecipient: "<dev@example.com>",
-	}, "subject", "body", "")
-	if err == nil || err.Error() != "email sender is not configured" {
-		t.Fatalf("expected email sender configuration error, got %v", err)
-	}
-
-	err = notifier.sendDestination(context.Background(), notificationDestination{
-		targetType: domain.NotificationTargetTypeSlackWebhook,
-		webhookURL: "https://hooks.slack.example/services/T/B/X",
-	}, "subject", "body", "slack")
-	if err == nil || err.Error() != "slack sender is not configured" {
-		t.Fatalf("expected slack sender configuration error, got %v", err)
 	}
 }
 

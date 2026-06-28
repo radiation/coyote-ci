@@ -284,13 +284,18 @@ export function ProfilePage() {
                 </p>
               </>
             )}
-            {commitPreference.target && !commitPreference.target.enabled && (
-              <p className="subtle-text" style={{ marginTop: 10 }}>
-                Delivery is paused because your personal email target is
-                disabled. Re-enable it in{" "}
-                <Link to="/settings/notifications">Notification settings</Link>.
-              </p>
-            )}
+            {commitPreference.enabled &&
+              commitPreference.target &&
+              !commitPreference.target.enabled && (
+                <p className="subtle-text" style={{ marginTop: 10 }}>
+                  Delivery is paused because your personal email target is
+                  disabled. Re-enable it in{" "}
+                  <Link to="/settings/notifications">
+                    Notification settings
+                  </Link>
+                  .
+                </p>
+              )}
           </>
         )}
       </section>

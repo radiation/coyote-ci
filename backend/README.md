@@ -134,7 +134,6 @@ Optional connection pool settings:
 Notification configuration:
 
 - `EMAIL_NOTIFICATIONS_ENABLED`
-- `EMAIL_NOTIFY_COMMIT_AUTHOR_ON_FAILURE`
 - `EMAIL_NOTIFICATION_RECIPIENTS` (fallback email recipients when no durable subscription matches)
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_ADDRESS`
 - `COYOTE_PUBLIC_URL` (optional externally reachable UI base URL used in Slack/email build detail links)

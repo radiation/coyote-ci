@@ -31,7 +31,7 @@ var ErrNotificationSubscriptionEventTypeInvalid = errors.New("notification subsc
 var ErrNotificationPersonalEmailRequired = errors.New("authenticated user email is required")
 var ErrNotificationPersonalUserIDRequired = errors.New("authenticated user id is required")
 var ErrNotificationPreferenceEnabledRequired = errors.New("notification preference enabled is required")
-var ErrNotificationPreferencePersonalTargetRequired = errors.New("an owned personal email target is required to enable commit-author failure notifications")
+var ErrNotificationPreferencePersonalTargetRequired = errors.New("an enabled owned personal email target is required to enable commit-author failure notifications")
 
 const (
 	NotificationPreferenceUnavailableReasonPersonalTargetRequired = "personal_target_required"

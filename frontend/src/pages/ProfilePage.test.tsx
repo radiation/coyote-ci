@@ -399,6 +399,11 @@ describe("ProfilePage", () => {
     expect(
       mockedSetCommitAuthorFailureNotificationPreference,
     ).not.toHaveBeenCalled();
+    expect(
+      screen.queryByText(
+        /Delivery is paused because your personal email target is disabled/i,
+      ),
+    ).toBeNull();
   });
 
   it("allows disabling an enabled commit preference even when the personal target is missing", async () => {
