@@ -20,29 +20,31 @@ var ErrEmailNotificationsDisabled = errors.New("email notifications are disabled
 var ErrEmailNotificationRecipientsNotConfigured = errors.New("email notification recipients are not configured")
 
 type BuildNotificationService struct {
-	enabled                     bool
-	notifyCommitAuthorOnFailure bool
-	defaultRecipients           []string
-	sender                      platformemail.Sender
-	slackSender                 SlackWebhookSender
-	jobRepo                     repository.JobRepository
-	projectRepo                 repository.ProjectRepository
-	deliveryRepo                repository.NotificationDeliveryRepository
-	subscriptionRepo            repository.NotificationSubscriptionRepository
-	publicBaseURL               string
+	enabled           bool
+	defaultRecipients []string
+	sender            platformemail.Sender
+	slackSender       SlackWebhookSender
+	jobRepo           repository.JobRepository
+	projectRepo       repository.ProjectRepository
+	deliveryRepo      repository.NotificationDeliveryRepository
+	subscriptionRepo  repository.NotificationSubscriptionRepository
+	userRepo          repository.UserRepository
+	preferenceRepo    repository.UserNotificationPreferenceRepository
+	publicBaseURL     string
 }
 
 type BuildNotificationConfig struct {
-	Enabled                     bool
-	NotifyCommitAuthorOnFailure bool
-	Recipients                  string
-	Sender                      platformemail.Sender
-	SlackSender                 SlackWebhookSender
-	JobRepo                     repository.JobRepository
-	ProjectRepo                 repository.ProjectRepository
-	DeliveryRepo                repository.NotificationDeliveryRepository
-	SubscriptionRepo            repository.NotificationSubscriptionRepository
-	PublicBaseURL               string
+	Enabled          bool
+	Recipients       string
+	Sender           platformemail.Sender
+	SlackSender      SlackWebhookSender
+	JobRepo          repository.JobRepository
+	ProjectRepo      repository.ProjectRepository
+	DeliveryRepo     repository.NotificationDeliveryRepository
+	SubscriptionRepo repository.NotificationSubscriptionRepository
+	UserRepo         repository.UserRepository
+	PreferenceRepo   repository.UserNotificationPreferenceRepository
+	PublicBaseURL    string
 }
 
 type notificationDestination struct {
@@ -89,16 +91,17 @@ func NewBuildNotificationService(cfg BuildNotificationConfig) (*BuildNotificatio
 	}
 
 	return &BuildNotificationService{
-		enabled:                     cfg.Enabled,
-		notifyCommitAuthorOnFailure: cfg.NotifyCommitAuthorOnFailure,
-		defaultRecipients:           recipients,
-		sender:                      cfg.Sender,
-		slackSender:                 cfg.SlackSender,
-		jobRepo:                     cfg.JobRepo,
-		projectRepo:                 cfg.ProjectRepo,
-		deliveryRepo:                cfg.DeliveryRepo,
-		subscriptionRepo:            cfg.SubscriptionRepo,
-		publicBaseURL:               strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/"),
+		enabled:           cfg.Enabled,
+		defaultRecipients: recipients,
+		sender:            cfg.Sender,
+		slackSender:       cfg.SlackSender,
+		jobRepo:           cfg.JobRepo,
+		projectRepo:       cfg.ProjectRepo,
+		deliveryRepo:      cfg.DeliveryRepo,
+		subscriptionRepo:  cfg.SubscriptionRepo,
+		userRepo:          cfg.UserRepo,
+		preferenceRepo:    cfg.PreferenceRepo,
+		publicBaseURL:     strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/"),
 	}, nil
 }
 
@@ -295,17 +298,71 @@ func (s *BuildNotificationService) resolveTerminalDestinations(ctx context.Conte
 		}
 	}
 
-	if s.notifyCommitAuthorOnFailure && eventType == domain.NotificationEventTypeBuildFailed {
-		if recipient, ok := parseNotificationRecipient(build.SourceAuthorEmail); ok {
-			destinations = append(destinations, notificationDestination{
-				targetType:        domain.NotificationTargetTypeEmail,
-				deliveryRecipient: recipient,
-				emailRecipient:    recipient,
-			})
+	if eventType == domain.NotificationEventTypeBuildFailed {
+		destination, ok, err := s.resolveCommitAuthorDestination(ctx, build)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			destinations = append(destinations, destination)
 		}
 	}
 
 	return dedupeDestinations(destinations), nil
+}
+
+func (s *BuildNotificationService) resolveCommitAuthorDestination(ctx context.Context, build domain.Build) (notificationDestination, bool, error) {
+	if s.userRepo == nil || s.preferenceRepo == nil || s.subscriptionRepo == nil {
+		return notificationDestination{}, false, nil
+	}
+
+	authorEmail := normalizeCommitAuthorEmail(build.SourceAuthorEmail)
+	if authorEmail == "" {
+		return notificationDestination{}, false, nil
+	}
+
+	user, err := s.userRepo.GetByEmail(ctx, authorEmail)
+	if err != nil {
+		if errors.Is(err, repository.ErrUserNotFound) {
+			log.Printf("build notification skipped commit author recipient: build_id=%s reason=author_unmatched email=%s", build.ID, authorEmail)
+			return notificationDestination{}, false, nil
+		}
+		return notificationDestination{}, false, err
+	}
+
+	preference, err := s.preferenceRepo.GetByUserID(ctx, user.ID)
+	if err != nil {
+		if errors.Is(err, repository.ErrUserNotificationPreferenceNotFound) {
+			return notificationDestination{}, false, nil
+		}
+		return notificationDestination{}, false, err
+	}
+	if !preference.CommitAuthorFailureEnabled {
+		return notificationDestination{}, false, nil
+	}
+
+	target, err := s.subscriptionRepo.GetOwnedEmailTargetByUserID(ctx, user.ID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotificationTargetNotFound) {
+			log.Printf("build notification skipped commit author recipient: build_id=%s reason=personal_target_missing user_id=%s", build.ID, user.ID)
+			return notificationDestination{}, false, nil
+		}
+		return notificationDestination{}, false, err
+	}
+	if !target.Enabled {
+		return notificationDestination{}, false, nil
+	}
+
+	recipient := strings.TrimSpace(target.Recipient)
+	if recipient == "" {
+		return notificationDestination{}, false, nil
+	}
+
+	return notificationDestination{
+		targetType:        domain.NotificationTargetTypeEmail,
+		deliveryRecipient: recipient,
+		emailRecipient:    recipient,
+	}, true, nil
 }
 
 func (s *BuildNotificationService) sendDestination(ctx context.Context, destination notificationDestination, subject string, body string, slackText string) error {
@@ -549,6 +606,21 @@ func parseNotificationRecipient(value *string) (string, bool) {
 		return "", false
 	}
 	return parsed.String(), true
+}
+
+func normalizeCommitAuthorEmail(value *string) string {
+	if value == nil {
+		return ""
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := mail.ParseAddress(trimmed)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(parsed.Address))
 }
 
 func dedupeRecipients(recipients []string) []string {

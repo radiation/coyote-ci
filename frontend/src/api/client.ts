@@ -45,6 +45,7 @@ import type {
   UserListResponse,
 } from "../types/identity";
 import type {
+  CommitAuthorFailureNotificationPreference,
   CreateNotificationSubscriptionRequest,
   CreateNotificationTargetRequest,
   MyEmailNotificationTargetResponse,
@@ -52,6 +53,7 @@ import type {
   NotificationSubscriptionListResponse,
   NotificationTarget,
   NotificationTargetListResponse,
+  UpdateCommitAuthorFailureNotificationPreferenceRequest,
   UpdateNotificationSubscriptionRequest,
   UpdateNotificationTargetRequest,
 } from "../types/notification";
@@ -268,6 +270,28 @@ export async function ensureMyEmailNotificationTarget(): Promise<NotificationTar
   const envelope = await postNoBodyJSON<DataEnvelope<NotificationTarget>>(
     "/me/notification-targets/email",
   );
+  return envelope.data;
+}
+
+export async function getCommitAuthorFailureNotificationPreference(): Promise<CommitAuthorFailureNotificationPreference> {
+  const envelope = await fetchJSON<
+    DataEnvelope<CommitAuthorFailureNotificationPreference>
+  >("/me/notification-preferences/commit-author-failures");
+  return envelope.data;
+}
+
+export async function setCommitAuthorFailureNotificationPreference(
+  input: UpdateCommitAuthorFailureNotificationPreferenceRequest,
+): Promise<CommitAuthorFailureNotificationPreference> {
+  const envelope = await fetchJSON<
+    DataEnvelope<CommitAuthorFailureNotificationPreference>
+  >("/me/notification-preferences/commit-author-failures", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
   return envelope.data;
 }
 

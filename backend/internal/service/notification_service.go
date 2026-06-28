@@ -30,14 +30,35 @@ var ErrNotificationSubscriptionScopeRequired = errors.New("exactly one of projec
 var ErrNotificationSubscriptionEventTypeInvalid = errors.New("notification subscription event_type must be one of build_succeeded, build_failed")
 var ErrNotificationPersonalEmailRequired = errors.New("authenticated user email is required")
 var ErrNotificationPersonalUserIDRequired = errors.New("authenticated user id is required")
+var ErrNotificationPreferenceEnabledRequired = errors.New("notification preference enabled is required")
+var ErrNotificationPreferencePersonalTargetRequired = errors.New("an enabled owned personal email target is required to enable commit-author failure notifications")
+
+const (
+	NotificationPreferenceUnavailableReasonPersonalTargetRequired = "personal_target_required"
+	NotificationPreferenceUnavailableReasonPersonalTargetDisabled = "personal_target_disabled"
+)
 
 type NotificationService struct {
-	repo repository.NotificationSubscriptionRepository
-	now  func() time.Time
+	repo            repository.NotificationSubscriptionRepository
+	preferencesRepo repository.UserNotificationPreferenceRepository
+	now             func() time.Time
 }
 
 func NewNotificationService(repo repository.NotificationSubscriptionRepository) *NotificationService {
 	return &NotificationService{repo: repo, now: time.Now}
+}
+
+type CommitAuthorFailureNotificationPreferenceState struct {
+	Enabled           bool
+	Eligible          bool
+	DeliveryActive    bool
+	Target            *domain.NotificationTarget
+	UnavailableReason *string
+}
+
+func (s *NotificationService) WithPreferenceRepository(preferencesRepo repository.UserNotificationPreferenceRepository) *NotificationService {
+	s.preferencesRepo = preferencesRepo
+	return s
 }
 
 type CreateNotificationTargetInput struct {
@@ -119,6 +140,89 @@ func (s *NotificationService) EnsureOwnedEmailTarget(ctx context.Context, user d
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	})
+}
+
+func (s *NotificationService) GetCommitAuthorFailureNotificationPreference(ctx context.Context, user domain.User) (CommitAuthorFailureNotificationPreferenceState, error) {
+	ownerUserID := strings.TrimSpace(user.ID)
+	if ownerUserID == "" {
+		return CommitAuthorFailureNotificationPreferenceState{}, ErrNotificationPersonalUserIDRequired
+	}
+
+	preferenceEnabled, err := s.getCommitAuthorFailurePreferenceEnabled(ctx, ownerUserID)
+	if err != nil {
+		return CommitAuthorFailureNotificationPreferenceState{}, err
+	}
+
+	target, err := s.repo.GetOwnedEmailTargetByUserID(ctx, ownerUserID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotificationTargetNotFound) {
+			reason := NotificationPreferenceUnavailableReasonPersonalTargetRequired
+			return CommitAuthorFailureNotificationPreferenceState{
+				Enabled:           preferenceEnabled,
+				Eligible:          false,
+				DeliveryActive:    false,
+				UnavailableReason: &reason,
+			}, nil
+		}
+		return CommitAuthorFailureNotificationPreferenceState{}, err
+	}
+
+	state := CommitAuthorFailureNotificationPreferenceState{
+		Enabled:        preferenceEnabled,
+		Eligible:       true,
+		DeliveryActive: preferenceEnabled && target.Enabled,
+		Target:         &target,
+	}
+	if !target.Enabled {
+		reason := NotificationPreferenceUnavailableReasonPersonalTargetDisabled
+		state.UnavailableReason = &reason
+	}
+	return state, nil
+}
+
+func (s *NotificationService) SetCommitAuthorFailureNotificationPreference(ctx context.Context, user domain.User, enabled *bool) (CommitAuthorFailureNotificationPreferenceState, error) {
+	ownerUserID := strings.TrimSpace(user.ID)
+	if ownerUserID == "" {
+		return CommitAuthorFailureNotificationPreferenceState{}, ErrNotificationPersonalUserIDRequired
+	}
+	if enabled == nil {
+		return CommitAuthorFailureNotificationPreferenceState{}, ErrNotificationPreferenceEnabledRequired
+	}
+	if *enabled {
+		target, err := s.repo.GetOwnedEmailTargetByUserID(ctx, ownerUserID)
+		if err != nil {
+			if errors.Is(err, repository.ErrNotificationTargetNotFound) {
+				return CommitAuthorFailureNotificationPreferenceState{}, ErrNotificationPreferencePersonalTargetRequired
+			}
+			return CommitAuthorFailureNotificationPreferenceState{}, err
+		}
+		if !target.Enabled {
+			return CommitAuthorFailureNotificationPreferenceState{}, ErrNotificationPreferencePersonalTargetRequired
+		}
+	}
+	if s.preferencesRepo == nil {
+		return CommitAuthorFailureNotificationPreferenceState{}, errors.New("notification preference repository is not configured")
+	}
+
+	now := s.now().UTC()
+	createdAt := now
+	if existing, err := s.preferencesRepo.GetByUserID(ctx, ownerUserID); err == nil {
+		createdAt = existing.CreatedAt
+	} else if !errors.Is(err, repository.ErrUserNotificationPreferenceNotFound) {
+		return CommitAuthorFailureNotificationPreferenceState{}, err
+	}
+
+	_, err := s.preferencesRepo.Upsert(ctx, domain.UserNotificationPreference{
+		UserID:                     ownerUserID,
+		CommitAuthorFailureEnabled: *enabled,
+		CreatedAt:                  createdAt,
+		UpdatedAt:                  now,
+	})
+	if err != nil {
+		return CommitAuthorFailureNotificationPreferenceState{}, err
+	}
+
+	return s.GetCommitAuthorFailureNotificationPreference(ctx, user)
 }
 
 func (s *NotificationService) CreateTarget(ctx context.Context, input CreateNotificationTargetInput) (domain.NotificationTarget, error) {
@@ -316,6 +420,20 @@ func normalizeNotificationTargetRecipient(targetType domain.NotificationTargetTy
 	default:
 		return "", ErrNotificationTargetTypeInvalid
 	}
+}
+
+func (s *NotificationService) getCommitAuthorFailurePreferenceEnabled(ctx context.Context, userID string) (bool, error) {
+	if s.preferencesRepo == nil {
+		return false, nil
+	}
+	preference, err := s.preferencesRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, repository.ErrUserNotificationPreferenceNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return preference.CommitAuthorFailureEnabled, nil
 }
 
 func normalizeNotificationWebhookURL(value string) (string, error) {

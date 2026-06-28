@@ -511,6 +511,24 @@ definitions:
           $ref: '#/definitions/api.BuildStepResponse'
         type: array
     type: object
+  api.CommitAuthorFailureNotificationPreferenceEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.CommitAuthorFailureNotificationPreferenceResponse'
+    type: object
+  api.CommitAuthorFailureNotificationPreferenceResponse:
+    properties:
+      delivery_active:
+        type: boolean
+      eligible:
+        type: boolean
+      enabled:
+        type: boolean
+      target:
+        $ref: '#/definitions/api.NotificationTargetResponse'
+      unavailable_reason:
+        type: string
+    type: object
   api.CreateAPITokenRequest:
     properties:
       expires_at:
@@ -903,6 +921,27 @@ definitions:
       user:
         $ref: '#/definitions/api.UserResponse'
     type: object
+  api.NotificationTargetResponse:
+    properties:
+      address:
+        type: string
+      created_at:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: string
+      name:
+        type: string
+      owner_user_id:
+        type: string
+      type:
+        type: string
+      updated_at:
+        type: string
+      webhook_configured:
+        type: boolean
+    type: object
   api.ProjectEnvelope:
     properties:
       data:
@@ -1012,6 +1051,11 @@ definitions:
         type: string
       repository_url:
         type: string
+    type: object
+  api.PutCommitAuthorFailureNotificationPreferenceRequest:
+    properties:
+      enabled:
+        type: boolean
     type: object
   api.QueueBuildRequest:
     properties:
@@ -2436,6 +2480,74 @@ paths:
           schema:
             $ref: '#/definitions/api.ErrorResponse'
       summary: Get current user
+      tags:
+      - users
+  /me/notification-preferences/commit-author-failures:
+    get:
+      description: Returns the authenticated user's opt-in state for commit-author
+        failure notifications and whether delivery is currently active.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.CommitAuthorFailureNotificationPreferenceEnvelope'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get my commit failure notification preference
+      tags:
+      - users
+    put:
+      consumes:
+      - application/json
+      description: Sets the authenticated user's explicit opt-in state for commit-author
+        failure notifications.
+      parameters:
+      - description: Commit failure notification preference
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.PutCommitAuthorFailureNotificationPreferenceRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.CommitAuthorFailureNotificationPreferenceEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Update my commit failure notification preference
       tags:
       - users
   /me/tokens:

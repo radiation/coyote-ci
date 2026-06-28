@@ -4,8 +4,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import {
   ensureMyEmailNotificationTarget,
+  getCommitAuthorFailureNotificationPreference,
   getMe,
   getMyEmailNotificationTarget,
+  setCommitAuthorFailureNotificationPreference,
 } from "../api";
 import { AuthContext, type AuthContextValue } from "../auth-context";
 import { ProfilePage } from "./ProfilePage";
@@ -17,6 +19,8 @@ vi.mock("../api", async () => {
     getMe: vi.fn(),
     getMyEmailNotificationTarget: vi.fn(),
     ensureMyEmailNotificationTarget: vi.fn(),
+    getCommitAuthorFailureNotificationPreference: vi.fn(),
+    setCommitAuthorFailureNotificationPreference: vi.fn(),
   };
 });
 
@@ -65,6 +69,12 @@ describe("ProfilePage", () => {
   const mockedEnsureMyEmailNotificationTarget = vi.mocked(
     ensureMyEmailNotificationTarget,
   );
+  const mockedGetCommitAuthorFailureNotificationPreference = vi.mocked(
+    getCommitAuthorFailureNotificationPreference,
+  );
+  const mockedSetCommitAuthorFailureNotificationPreference = vi.mocked(
+    setCommitAuthorFailureNotificationPreference,
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -82,6 +92,13 @@ describe("ProfilePage", () => {
     });
 
     mockedGetMyEmailNotificationTarget.mockResolvedValue(null);
+    mockedGetCommitAuthorFailureNotificationPreference.mockResolvedValue({
+      enabled: false,
+      eligible: false,
+      delivery_active: false,
+      target: null,
+      unavailable_reason: "personal_target_required",
+    });
 
     mockedEnsureMyEmailNotificationTarget.mockResolvedValue({
       id: "target-1",
@@ -93,6 +110,24 @@ describe("ProfilePage", () => {
       enabled: true,
       created_at: "2026-06-24T00:00:00Z",
       updated_at: "2026-06-24T00:00:00Z",
+    });
+
+    mockedSetCommitAuthorFailureNotificationPreference.mockResolvedValue({
+      enabled: true,
+      eligible: true,
+      delivery_active: true,
+      unavailable_reason: null,
+      target: {
+        id: "target-1",
+        owner_user_id: "user-1",
+        type: "email",
+        name: "User Example",
+        address: "<user@example.com>",
+        webhook_configured: false,
+        enabled: true,
+        created_at: "2026-06-24T00:00:00Z",
+        updated_at: "2026-06-24T00:00:00Z",
+      },
     });
   });
 
@@ -158,6 +193,31 @@ describe("ProfilePage", () => {
         created_at: "2026-06-24T00:00:00Z",
         updated_at: "2026-06-24T00:00:00Z",
       });
+    mockedGetCommitAuthorFailureNotificationPreference
+      .mockResolvedValueOnce({
+        enabled: false,
+        eligible: false,
+        delivery_active: false,
+        target: null,
+        unavailable_reason: "personal_target_required",
+      })
+      .mockResolvedValueOnce({
+        enabled: false,
+        eligible: true,
+        delivery_active: false,
+        unavailable_reason: null,
+        target: {
+          id: "target-1",
+          owner_user_id: "user-1",
+          type: "email",
+          name: "User Example",
+          address: "<user@example.com>",
+          webhook_configured: false,
+          enabled: true,
+          created_at: "2026-06-24T00:00:00Z",
+          updated_at: "2026-06-24T00:00:00Z",
+        },
+      });
 
     renderPage();
 
@@ -176,7 +236,253 @@ describe("ProfilePage", () => {
       expect(
         screen.getByText("This is your personal email notification target."),
       ).toBeTruthy();
+      expect(
+        screen.getByRole("checkbox", {
+          name: /Notify me when my commits fail/i,
+        }),
+      ).toBeTruthy();
     });
+  });
+
+  it("toggles commit-author failure notifications when the personal target is enabled", async () => {
+    mockedGetMyEmailNotificationTarget.mockResolvedValue({
+      id: "target-1",
+      owner_user_id: "user-1",
+      type: "email",
+      name: "User Example",
+      address: "<user@example.com>",
+      webhook_configured: false,
+      enabled: true,
+      created_at: "2026-06-24T00:00:00Z",
+      updated_at: "2026-06-24T00:00:00Z",
+    });
+    mockedGetCommitAuthorFailureNotificationPreference.mockResolvedValue({
+      enabled: true,
+      eligible: true,
+      delivery_active: true,
+      unavailable_reason: null,
+      target: {
+        id: "target-1",
+        owner_user_id: "user-1",
+        type: "email",
+        name: "User Example",
+        address: "<user@example.com>",
+        webhook_configured: false,
+        enabled: true,
+        created_at: "2026-06-24T00:00:00Z",
+        updated_at: "2026-06-24T00:00:00Z",
+      },
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("checkbox", {
+          name: /Notify me when my commits fail/i,
+        }),
+      ).toBeChecked();
+    });
+
+    const checkbox = screen.getByRole("checkbox", {
+      name: /Notify me when my commits fail/i,
+    });
+
+    fireEvent.click(checkbox);
+
+    await waitFor(() => {
+      expect(
+        mockedSetCommitAuthorFailureNotificationPreference,
+      ).toHaveBeenCalled();
+    });
+    expect(
+      mockedSetCommitAuthorFailureNotificationPreference.mock.calls[0]?.[0],
+    ).toEqual({
+      enabled: false,
+    });
+  });
+
+  it("explains that a disabled personal target pauses commit notifications", async () => {
+    mockedGetMyEmailNotificationTarget.mockResolvedValue({
+      id: "target-1",
+      owner_user_id: "user-1",
+      type: "email",
+      name: "User Example",
+      address: "<user@example.com>",
+      webhook_configured: false,
+      enabled: false,
+      created_at: "2026-06-24T00:00:00Z",
+      updated_at: "2026-06-24T00:00:00Z",
+    });
+    mockedGetCommitAuthorFailureNotificationPreference.mockResolvedValue({
+      enabled: true,
+      eligible: true,
+      delivery_active: false,
+      unavailable_reason: "personal_target_disabled",
+      target: {
+        id: "target-1",
+        owner_user_id: "user-1",
+        type: "email",
+        name: "User Example",
+        address: "<user@example.com>",
+        webhook_configured: false,
+        enabled: false,
+        created_at: "2026-06-24T00:00:00Z",
+        updated_at: "2026-06-24T00:00:00Z",
+      },
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /Delivery is paused because your personal email target is disabled/i,
+        ),
+      ).toBeTruthy();
+    });
+
+    const checkbox = screen.getByRole("checkbox", {
+      name: /Notify me when my commits fail/i,
+    });
+    expect(checkbox).toBeChecked();
+    expect(checkbox).not.toBeDisabled();
+
+    fireEvent.click(checkbox);
+
+    await waitFor(() => {
+      expect(
+        mockedSetCommitAuthorFailureNotificationPreference.mock.calls[0]?.[0],
+      ).toEqual({
+        enabled: false,
+      });
+    });
+  });
+
+  it("does not allow enabling commit notifications when the personal target is disabled", async () => {
+    mockedGetMyEmailNotificationTarget.mockResolvedValue({
+      id: "target-1",
+      owner_user_id: "user-1",
+      type: "email",
+      name: "User Example",
+      address: "<user@example.com>",
+      webhook_configured: false,
+      enabled: false,
+      created_at: "2026-06-24T00:00:00Z",
+      updated_at: "2026-06-24T00:00:00Z",
+    });
+    mockedGetCommitAuthorFailureNotificationPreference.mockResolvedValue({
+      enabled: false,
+      eligible: true,
+      delivery_active: false,
+      unavailable_reason: "personal_target_disabled",
+      target: {
+        id: "target-1",
+        owner_user_id: "user-1",
+        type: "email",
+        name: "User Example",
+        address: "<user@example.com>",
+        webhook_configured: false,
+        enabled: false,
+        created_at: "2026-06-24T00:00:00Z",
+        updated_at: "2026-06-24T00:00:00Z",
+      },
+    });
+
+    renderPage();
+
+    const checkbox = await screen.findByRole("checkbox", {
+      name: /Notify me when my commits fail/i,
+    });
+    expect(checkbox).not.toBeChecked();
+    expect(checkbox).toBeDisabled();
+    expect(
+      mockedSetCommitAuthorFailureNotificationPreference,
+    ).not.toHaveBeenCalled();
+    expect(
+      screen.queryByText(
+        /Delivery is paused because your personal email target is disabled/i,
+      ),
+    ).toBeNull();
+  });
+
+  it("allows disabling an enabled commit preference even when the personal target is missing", async () => {
+    mockedGetCommitAuthorFailureNotificationPreference.mockResolvedValue({
+      enabled: true,
+      eligible: false,
+      delivery_active: false,
+      unavailable_reason: "personal_target_required",
+      target: null,
+    });
+
+    renderPage();
+
+    const checkbox = await screen.findByRole("checkbox", {
+      name: /Notify me when my commits fail/i,
+    });
+    expect(checkbox).toBeChecked();
+    expect(checkbox).not.toBeDisabled();
+
+    fireEvent.click(checkbox);
+
+    await waitFor(() => {
+      expect(
+        mockedSetCommitAuthorFailureNotificationPreference.mock.calls[0]?.[0],
+      ).toEqual({
+        enabled: false,
+      });
+    });
+  });
+
+  it("surfaces commit preference update failures clearly", async () => {
+    mockedGetMyEmailNotificationTarget.mockResolvedValue({
+      id: "target-1",
+      owner_user_id: "user-1",
+      type: "email",
+      name: "User Example",
+      address: "<user@example.com>",
+      webhook_configured: false,
+      enabled: true,
+      created_at: "2026-06-24T00:00:00Z",
+      updated_at: "2026-06-24T00:00:00Z",
+    });
+    mockedGetCommitAuthorFailureNotificationPreference.mockResolvedValue({
+      enabled: true,
+      eligible: true,
+      delivery_active: true,
+      unavailable_reason: null,
+      target: {
+        id: "target-1",
+        owner_user_id: "user-1",
+        type: "email",
+        name: "User Example",
+        address: "<user@example.com>",
+        webhook_configured: false,
+        enabled: true,
+        created_at: "2026-06-24T00:00:00Z",
+        updated_at: "2026-06-24T00:00:00Z",
+      },
+    });
+    mockedSetCommitAuthorFailureNotificationPreference.mockRejectedValue(
+      new Error("conflict"),
+    );
+
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("checkbox", {
+        name: /Notify me when my commits fail/i,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Failed to update commit notifications/i),
+      ).toBeTruthy();
+    });
+    expect(
+      screen.getByRole("checkbox", { name: /Notify me when my commits fail/i }),
+    ).toBeChecked();
   });
 
   it("surfaces mutation failures clearly", async () => {

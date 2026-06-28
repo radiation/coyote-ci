@@ -32,6 +32,8 @@ type notificationAdminService interface {
 	ListTargets(ctx context.Context) ([]domain.NotificationTarget, error)
 	GetOwnedEmailTarget(ctx context.Context, user domain.User) (domain.NotificationTarget, error)
 	EnsureOwnedEmailTarget(ctx context.Context, user domain.User) (domain.NotificationTarget, error)
+	GetCommitAuthorFailureNotificationPreference(ctx context.Context, user domain.User) (service.CommitAuthorFailureNotificationPreferenceState, error)
+	SetCommitAuthorFailureNotificationPreference(ctx context.Context, user domain.User, enabled *bool) (service.CommitAuthorFailureNotificationPreferenceState, error)
 	CreateTarget(ctx context.Context, input service.CreateNotificationTargetInput) (domain.NotificationTarget, error)
 	CreateEmailTarget(ctx context.Context, input service.CreateNotificationTargetInput) (domain.NotificationTarget, error)
 	UpdateTarget(ctx context.Context, id string, input service.UpdateNotificationTargetInput) (domain.NotificationTarget, error)
@@ -142,6 +144,78 @@ func (h *NotificationHandler) EnsureMyEmailTarget(w http.ResponseWriter, r *http
 	}
 
 	writeDataJSON(w, http.StatusOK, toNotificationTargetResponse(target))
+}
+
+// GetMyCommitAuthorFailureNotificationPreference godoc
+// @Summary Get my commit failure notification preference
+// @Description Returns the authenticated user's opt-in state for commit-author failure notifications and whether delivery is currently active.
+// @Tags users
+// @Produce json
+// @Success 200 {object} api.CommitAuthorFailureNotificationPreferenceEnvelope
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /me/notification-preferences/commit-author-failures [get]
+func (h *NotificationHandler) GetMyCommitAuthorFailureNotificationPreference(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.admin == nil {
+		writeErrorJSON(w, http.StatusNotFound, "not_found", "notification endpoint is not available")
+		return
+	}
+
+	user, ok := h.currentRequestUser(r)
+	if !ok {
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	state, err := h.admin.GetCommitAuthorFailureNotificationPreference(r.Context(), user)
+	if err != nil {
+		h.writeNotificationError(w, err)
+		return
+	}
+
+	writeDataJSON(w, http.StatusOK, toCommitAuthorFailureNotificationPreferenceResponse(state))
+}
+
+// SetMyCommitAuthorFailureNotificationPreference godoc
+// @Summary Update my commit failure notification preference
+// @Description Sets the authenticated user's explicit opt-in state for commit-author failure notifications.
+// @Tags users
+// @Accept json
+// @Produce json
+// @Param request body api.PutCommitAuthorFailureNotificationPreferenceRequest true "Commit failure notification preference"
+// @Success 200 {object} api.CommitAuthorFailureNotificationPreferenceEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /me/notification-preferences/commit-author-failures [put]
+func (h *NotificationHandler) SetMyCommitAuthorFailureNotificationPreference(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.admin == nil {
+		writeErrorJSON(w, http.StatusNotFound, "not_found", "notification endpoint is not available")
+		return
+	}
+
+	user, ok := h.currentRequestUser(r)
+	if !ok {
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	var req api.PutCommitAuthorFailureNotificationPreferenceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+
+	state, err := h.admin.SetCommitAuthorFailureNotificationPreference(r.Context(), user, req.Enabled)
+	if err != nil {
+		h.writeNotificationError(w, err)
+		return
+	}
+
+	writeDataJSON(w, http.StatusOK, toCommitAuthorFailureNotificationPreferenceResponse(state))
 }
 
 func (h *NotificationHandler) CreateTarget(w http.ResponseWriter, r *http.Request) {
@@ -295,6 +369,10 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 		writeErrorJSON(w, http.StatusConflict, "conflict", err.Error())
 		return
 	}
+	if errors.Is(err, service.ErrNotificationPreferencePersonalTargetRequired) {
+		writeErrorJSON(w, http.StatusConflict, "conflict", err.Error())
+		return
+	}
 	if errors.Is(err, service.ErrNotificationTargetNameRequired) ||
 		errors.Is(err, service.ErrNotificationTargetTypeInvalid) ||
 		errors.Is(err, service.ErrNotificationTargetAddressRequired) ||
@@ -310,11 +388,26 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 		errors.Is(err, service.ErrNotificationSubscriptionScopeRequired) ||
 		errors.Is(err, service.ErrNotificationSubscriptionEventTypeInvalid) ||
 		errors.Is(err, service.ErrNotificationPersonalEmailRequired) ||
-		errors.Is(err, service.ErrNotificationPersonalUserIDRequired) {
+		errors.Is(err, service.ErrNotificationPersonalUserIDRequired) ||
+		errors.Is(err, service.ErrNotificationPreferenceEnabledRequired) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 	writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+}
+
+func toCommitAuthorFailureNotificationPreferenceResponse(state service.CommitAuthorFailureNotificationPreferenceState) api.CommitAuthorFailureNotificationPreferenceResponse {
+	response := api.CommitAuthorFailureNotificationPreferenceResponse{
+		Enabled:           state.Enabled,
+		Eligible:          state.Eligible,
+		DeliveryActive:    state.DeliveryActive,
+		UnavailableReason: state.UnavailableReason,
+	}
+	if state.Target != nil {
+		targetResponse := toNotificationTargetResponse(*state.Target)
+		response.Target = &targetResponse
+	}
+	return response
 }
 
 func toNotificationTargetResponse(target domain.NotificationTarget) api.NotificationTargetResponse {
