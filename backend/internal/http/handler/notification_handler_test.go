@@ -32,27 +32,31 @@ func (f *fakeSampleNotificationSender) SendSampleBuildFailure(_ context.Context)
 }
 
 type fakeNotificationAdminService struct {
-	listTargetsResult            []domain.NotificationTarget
-	listTargetsErr               error
-	getOwnedEmailTargetResult    domain.NotificationTarget
-	getOwnedEmailTargetErr       error
-	ensureOwnedEmailTargetResult domain.NotificationTarget
-	ensureOwnedEmailTargetErr    error
-	getPreferenceResult          service.CommitAuthorFailureNotificationPreferenceState
-	getPreferenceErr             error
-	setPreferenceResult          service.CommitAuthorFailureNotificationPreferenceState
-	setPreferenceErr             error
-	createTargetResult           domain.NotificationTarget
-	createTargetErr              error
-	updateTargetResult           domain.NotificationTarget
-	updateTargetErr              error
-	listSubscriptionsResult      []domain.NotificationSubscription
-	listSubscriptionsErr         error
-	createSubscriptionResult     domain.NotificationSubscription
-	createSubscriptionErr        error
-	updateSubscriptionResult     domain.NotificationSubscription
-	updateSubscriptionErr        error
-	deleteSubscriptionErr        error
+	listTargetsResult             []domain.NotificationTarget
+	listTargetsErr                error
+	getOwnedEmailTargetResult     domain.NotificationTarget
+	getOwnedEmailTargetErr        error
+	ensureOwnedEmailTargetResult  domain.NotificationTarget
+	ensureOwnedEmailTargetErr     error
+	getNotificationDefaultsResult service.NotificationDefaultsState
+	getNotificationDefaultsErr    error
+	setNotificationDefaultsResult service.NotificationDefaultsState
+	setNotificationDefaultsErr    error
+	getPreferenceResult           service.CommitAuthorFailureNotificationPreferenceState
+	getPreferenceErr              error
+	setPreferenceResult           service.CommitAuthorFailureNotificationPreferenceState
+	setPreferenceErr              error
+	createTargetResult            domain.NotificationTarget
+	createTargetErr               error
+	updateTargetResult            domain.NotificationTarget
+	updateTargetErr               error
+	listSubscriptionsResult       []domain.NotificationSubscription
+	listSubscriptionsErr          error
+	createSubscriptionResult      domain.NotificationSubscription
+	createSubscriptionErr         error
+	updateSubscriptionResult      domain.NotificationSubscription
+	updateSubscriptionErr         error
+	deleteSubscriptionErr         error
 }
 
 func (f *fakeNotificationAdminService) ListTargets(_ context.Context) ([]domain.NotificationTarget, error) {
@@ -65,6 +69,14 @@ func (f *fakeNotificationAdminService) GetOwnedEmailTarget(_ context.Context, _ 
 
 func (f *fakeNotificationAdminService) EnsureOwnedEmailTarget(_ context.Context, _ domain.User) (domain.NotificationTarget, error) {
 	return f.ensureOwnedEmailTargetResult, f.ensureOwnedEmailTargetErr
+}
+
+func (f *fakeNotificationAdminService) GetNotificationDefaults(_ context.Context) (service.NotificationDefaultsState, error) {
+	return f.getNotificationDefaultsResult, f.getNotificationDefaultsErr
+}
+
+func (f *fakeNotificationAdminService) SetNotificationDefaults(_ context.Context, _ *bool) (service.NotificationDefaultsState, error) {
+	return f.setNotificationDefaultsResult, f.setNotificationDefaultsErr
 }
 
 func (f *fakeNotificationAdminService) GetCommitAuthorFailureNotificationPreference(_ context.Context, _ domain.User) (service.CommitAuthorFailureNotificationPreferenceState, error) {
@@ -628,6 +640,48 @@ func TestNotificationHandler_AdminEndpoints(t *testing.T) {
 	h.ListSubscriptions(invalidListRes, invalidListReq)
 	if invalidListRes.Code != http.StatusBadRequest {
 		t.Fatalf("expected invalid list filter status %d, got %d body=%s", http.StatusBadRequest, invalidListRes.Code, invalidListRes.Body.String())
+	}
+}
+
+func TestNotificationHandler_NotificationDefaultsEndpoints(t *testing.T) {
+	h := NewNotificationHandler(nil)
+	h.SetAuthorization(auth.ModeHeader)
+	h.SetAdminService(&fakeNotificationAdminService{
+		getNotificationDefaultsResult: service.NotificationDefaultsState{DefaultCommitAuthorFailureEmailEnabled: true},
+		setNotificationDefaultsResult: service.NotificationDefaultsState{DefaultCommitAuthorFailureEmailEnabled: false},
+	})
+	admin := domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/settings/notifications/defaults", nil)
+	getReq = getReq.WithContext(auth.WithUser(getReq.Context(), admin))
+	getRes := httptest.NewRecorder()
+	h.GetNotificationDefaults(getRes, getReq)
+	if getRes.Code != http.StatusOK {
+		t.Fatalf("expected get defaults status %d, got %d body=%s", http.StatusOK, getRes.Code, getRes.Body.String())
+	}
+	getData := decodeDataMap(t, getRes)
+	if enabled, ok := getData["default_commit_author_failure_email_enabled"].(bool); !ok || !enabled {
+		t.Fatalf("expected enabled defaults payload, got %v", getData)
+	}
+
+	putReq := httptest.NewRequest(http.MethodPut, "/api/settings/notifications/defaults", bytes.NewBufferString(`{"default_commit_author_failure_email_enabled":false}`))
+	putReq = putReq.WithContext(auth.WithUser(putReq.Context(), admin))
+	putRes := httptest.NewRecorder()
+	h.SetNotificationDefaults(putRes, putReq)
+	if putRes.Code != http.StatusOK {
+		t.Fatalf("expected put defaults status %d, got %d body=%s", http.StatusOK, putRes.Code, putRes.Body.String())
+	}
+	putData := decodeDataMap(t, putRes)
+	if enabled, ok := putData["default_commit_author_failure_email_enabled"].(bool); !ok || enabled {
+		t.Fatalf("expected disabled defaults payload, got %v", putData)
+	}
+
+	invalidReq := httptest.NewRequest(http.MethodPut, "/api/settings/notifications/defaults", bytes.NewBufferString(`{}`))
+	invalidReq = invalidReq.WithContext(auth.WithUser(invalidReq.Context(), admin))
+	invalidRes := httptest.NewRecorder()
+	h.SetNotificationDefaults(invalidRes, invalidReq)
+	if invalidRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid defaults status %d, got %d body=%s", http.StatusBadRequest, invalidRes.Code, invalidRes.Body.String())
 	}
 }
 

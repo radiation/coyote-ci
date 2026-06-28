@@ -2563,6 +2563,112 @@ const docTemplate = `{
                 }
             }
         },
+        "/settings/notifications/defaults": {
+            "get": {
+                "description": "Returns the effective instance default used when a newly eligible user first gets a personal email target for commit-author failure notifications.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Get notification defaults",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.NotificationDefaultsEnvelope"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Updates the instance default used only when a newly eligible user first gets a personal email target for commit-author failure notifications.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Update notification defaults",
+                "parameters": [
+                    {
+                        "description": "Notification defaults",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.PutNotificationDefaultsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.NotificationDefaultsEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/users": {
             "get": {
                 "description": "Lists Coyote users.",
@@ -4266,6 +4372,22 @@ const docTemplate = `{
                 }
             }
         },
+        "api.NotificationDefaultsEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.NotificationDefaultsResponse"
+                }
+            }
+        },
+        "api.NotificationDefaultsResponse": {
+            "type": "object",
+            "properties": {
+                "default_commit_author_failure_email_enabled": {
+                    "type": "boolean"
+                }
+            }
+        },
         "api.NotificationTargetResponse": {
             "type": "object",
             "properties": {
@@ -4473,6 +4595,14 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "enabled": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "api.PutNotificationDefaultsRequest": {
+            "type": "object",
+            "properties": {
+                "default_commit_author_failure_email_enabled": {
                     "type": "boolean"
                 }
             }

@@ -5,11 +5,13 @@ import {
   createNotificationTarget,
   deleteNotificationSubscription,
   formatAPIErrorMessage,
+  getNotificationDefaults,
   isAPIErrorStatus,
   listJobs,
   listNotificationSubscriptions,
   listNotificationTargets,
   listProjects,
+  setNotificationDefaults,
   updateNotificationSubscription,
   updateNotificationTarget,
 } from "../api";
@@ -122,6 +124,15 @@ export function NotificationsPage() {
   );
   const [subscriptionActionPending, setSubscriptionActionPending] =
     useState(false);
+
+  const {
+    data: notificationDefaults,
+    isLoading: notificationDefaultsLoading,
+    error: notificationDefaultsError,
+  } = useQuery({
+    queryKey: ["notification-defaults"],
+    queryFn: getNotificationDefaults,
+  });
 
   const {
     data: targets = [],
@@ -245,6 +256,29 @@ export function NotificationsPage() {
           mutationError,
           "You do not have permission to manage notification settings.",
           "Failed to update notification target",
+        ),
+      );
+    },
+  });
+
+  const updateNotificationDefaultsMutation = useMutation({
+    mutationFn: setNotificationDefaults,
+    onMutate: () => {
+      setActionErrorMessage(null);
+      setActionNoticeMessage(null);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["notification-defaults"],
+      });
+      setActionNoticeMessage("Saved notification defaults.");
+    },
+    onError: (mutationError) => {
+      setActionErrorMessage(
+        formatAPIErrorMessage(
+          mutationError,
+          "You do not have permission to manage notification settings.",
+          "Failed to update notification defaults",
         ),
       );
     },
@@ -523,6 +557,56 @@ export function NotificationsPage() {
           </p>
         </div>
       </div>
+
+      <section className="settings-panel" style={{ marginTop: 16 }}>
+        <h3>Notification defaults</h3>
+        <p className="subtle-text">
+          Choose whether newly eligible users start with personal email
+          notifications enabled for commit-author build failures.
+        </p>
+        <p className="subtle-text">
+          This applies only when a user first creates or claims their owned
+          personal email target. It does not modify existing users, and users
+          can change the setting later from their profile. This currently
+          applies only to personal email notifications for commit-author
+          failures.
+        </p>
+        {notificationDefaultsLoading && <p>Loading notification defaults...</p>}
+        {notificationDefaultsError && (
+          <p className="error-text">
+            {formatAPIErrorMessage(
+              notificationDefaultsError,
+              "You do not have permission to manage notification settings.",
+              "Failed to load notification defaults",
+            )}
+          </p>
+        )}
+        {notificationDefaults && (
+          <label
+            className="checkbox-label"
+            htmlFor="notification-default-enabled"
+          >
+            <input
+              id="notification-default-enabled"
+              type="checkbox"
+              checked={
+                notificationDefaults.default_commit_author_failure_email_enabled
+              }
+              disabled={
+                notificationDefaultsLoading ||
+                updateNotificationDefaultsMutation.isPending
+              }
+              onChange={(event) =>
+                updateNotificationDefaultsMutation.mutate({
+                  default_commit_author_failure_email_enabled:
+                    event.target.checked,
+                })
+              }
+            />
+            Notify new users when their commits fail
+          </label>
+        )}
+      </section>
 
       <div className="settings-grid">
         <section className="settings-panel">

@@ -30,6 +30,10 @@ export interface CommitAuthorFailureNotificationPreference {
   unavailable_reason?: string | null;
 }
 
+export interface NotificationDefaults {
+  default_commit_author_failure_email_enabled: boolean;
+}
+
 export interface CreateEmailNotificationTargetRequest {
   type: "email";
   name: string;
@@ -84,4 +88,8 @@ export interface UpdateNotificationSubscriptionRequest {
 
 export interface UpdateCommitAuthorFailureNotificationPreferenceRequest {
   enabled: boolean;
+}
+
+export interface UpdateNotificationDefaultsRequest {
+  default_commit_author_failure_email_enabled: boolean;
 }

@@ -457,7 +457,9 @@ func TestNotificationService_EnsureOwnedEmailTarget_ClaimsUnownedTargetOnlyWhenS
 func TestNotificationService_EnsureOwnedEmailTarget_ConcurrentRequestsReturnSingleTarget(t *testing.T) {
 	ctx := context.Background()
 	repo := memoryrepo.NewNotificationSubscriptionRepository()
-	svc := NewNotificationService(repo)
+	preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+	settingsRepo := memoryrepo.NewNotificationInstanceSettingsRepository()
+	svc := NewNotificationService(repo).WithPreferenceRepository(preferenceRepo).WithInstanceSettingsRepository(settingsRepo)
 	now := time.Date(2026, 6, 24, 14, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return now }
 
@@ -511,6 +513,14 @@ func TestNotificationService_EnsureOwnedEmailTarget_ConcurrentRequestsReturnSing
 	}
 	if count != 1 {
 		t.Fatalf("expected exactly one owned personal target, got %d", count)
+	}
+
+	preference, err := preferenceRepo.GetByUserID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("expected initialized preference, got %v", err)
+	}
+	if !preference.CommitAuthorFailureEnabled || preference.Source != domain.UserNotificationPreferenceSourceInstanceDefault {
+		t.Fatalf("unexpected initialized preference %+v", preference)
 	}
 }
 
@@ -694,6 +704,114 @@ func TestNotificationService_CommitAuthorFailureNotificationPreference(t *testin
 	}
 	if disabledWithoutTarget.Enabled || disabledWithoutTarget.DeliveryActive {
 		t.Fatalf("expected disable without target to succeed, got %+v", disabledWithoutTarget)
+	}
+}
+
+func TestNotificationService_NotificationDefaultsAndInitialization(t *testing.T) {
+	ctx := context.Background()
+	targetRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+	settingsRepo := memoryrepo.NewNotificationInstanceSettingsRepository()
+	svc := NewNotificationService(targetRepo).WithPreferenceRepository(preferenceRepo).WithInstanceSettingsRepository(settingsRepo)
+	now := time.Date(2026, 6, 26, 9, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	defaults, err := svc.GetNotificationDefaults(ctx)
+	if err != nil {
+		t.Fatalf("get defaults failed: %v", err)
+	}
+	if !defaults.DefaultCommitAuthorFailureEmailEnabled {
+		t.Fatalf("expected unset defaults to resolve enabled, got %+v", defaults)
+	}
+
+	updatedDefaults, err := svc.SetNotificationDefaults(ctx, notificationBoolPtr(false))
+	if err != nil {
+		t.Fatalf("set defaults failed: %v", err)
+	}
+	if updatedDefaults.DefaultCommitAuthorFailureEmailEnabled {
+		t.Fatalf("expected defaults to be disabled, got %+v", updatedDefaults)
+	}
+
+	user := domain.User{ID: uuid.NewString(), Email: "new-user@example.com"}
+	if _, ensureErr := svc.EnsureOwnedEmailTarget(ctx, user); ensureErr != nil {
+		t.Fatalf("ensure owned target failed: %v", ensureErr)
+	}
+
+	preference, err := preferenceRepo.GetByUserID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("expected initialized preference, got %v", err)
+	}
+	if preference.CommitAuthorFailureEnabled {
+		t.Fatalf("expected disabled preference from instance default, got %+v", preference)
+	}
+	if preference.Source != domain.UserNotificationPreferenceSourceInstanceDefault {
+		t.Fatalf("expected instance-default source, got %+v", preference)
+	}
+
+	if _, enableErr := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, notificationBoolPtr(true)); enableErr != nil {
+		t.Fatalf("explicit enable failed: %v", enableErr)
+	}
+	if _, defaultsErr := svc.SetNotificationDefaults(ctx, notificationBoolPtr(true)); defaultsErr != nil {
+		t.Fatalf("re-enable defaults failed: %v", defaultsErr)
+	}
+	if _, repeatEnsureErr := svc.EnsureOwnedEmailTarget(ctx, user); repeatEnsureErr != nil {
+		t.Fatalf("repeat ensure failed: %v", repeatEnsureErr)
+	}
+
+	explicitPreference, err := preferenceRepo.GetByUserID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("get explicit preference failed: %v", err)
+	}
+	if !explicitPreference.CommitAuthorFailureEnabled || explicitPreference.Source != domain.UserNotificationPreferenceSourceUser {
+		t.Fatalf("expected explicit user preference to be preserved, got %+v", explicitPreference)
+	}
+}
+
+func TestNotificationService_ExistingOwnedTargetIsNotRetroactivelyInitialized(t *testing.T) {
+	ctx := context.Background()
+	targetRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+	settingsRepo := memoryrepo.NewNotificationInstanceSettingsRepository()
+	svc := NewNotificationService(targetRepo).WithPreferenceRepository(preferenceRepo).WithInstanceSettingsRepository(settingsRepo)
+	now := time.Date(2026, 6, 26, 10, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	userID := uuid.NewString()
+	_, err := targetRepo.EnsureOwnedEmailTarget(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+		ID:          uuid.NewString(),
+		OwnerUserID: userID,
+		Name:        "Existing User",
+		Recipient:   "<existing@example.com>",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("seed owned target failed: %v", err)
+	}
+
+	state, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, domain.User{ID: userID, Email: "existing@example.com"})
+	if err != nil {
+		t.Fatalf("get preference state failed: %v", err)
+	}
+	if state.Enabled || !state.Eligible {
+		t.Fatalf("expected existing target without preference to stay disabled but eligible, got %+v", state)
+	}
+
+	if _, defaultsErr := svc.SetNotificationDefaults(ctx, notificationBoolPtr(false)); defaultsErr != nil {
+		t.Fatalf("set defaults failed: %v", defaultsErr)
+	}
+
+	ensured, err := svc.EnsureOwnedEmailTarget(ctx, domain.User{ID: userID, Email: "existing@example.com"})
+	if err != nil {
+		t.Fatalf("ensure existing target failed: %v", err)
+	}
+	if ensured.ID == "" {
+		t.Fatal("expected ensure to return the existing owned target")
+	}
+
+	_, err = preferenceRepo.GetByUserID(ctx, userID)
+	if !errors.Is(err, repository.ErrUserNotificationPreferenceNotFound) {
+		t.Fatalf("expected no retroactive preference row, got %v", err)
 	}
 }
 

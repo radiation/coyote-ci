@@ -22,6 +22,8 @@ type NotificationSubscriptionRepository struct {
 	subscriptions map[string]domain.NotificationSubscription
 	projectIndex  map[string]string
 	jobIndex      map[string]string
+	preferences   *UserNotificationPreferenceRepository
+	settings      *NotificationInstanceSettingsRepository
 }
 
 func NewNotificationSubscriptionRepository() *NotificationSubscriptionRepository {
@@ -31,6 +33,22 @@ func NewNotificationSubscriptionRepository() *NotificationSubscriptionRepository
 		projectIndex:  make(map[string]string),
 		jobIndex:      make(map[string]string),
 	}
+}
+
+func (r *NotificationSubscriptionRepository) SetNotificationPreferenceRepository(preferences repository.UserNotificationPreferenceRepository) {
+	configured, ok := preferences.(*UserNotificationPreferenceRepository)
+	if !ok {
+		return
+	}
+	r.preferences = configured
+}
+
+func (r *NotificationSubscriptionRepository) SetNotificationInstanceSettingsRepository(settings repository.NotificationInstanceSettingsRepository) {
+	configured, ok := settings.(*NotificationInstanceSettingsRepository)
+	if !ok {
+		return
+	}
+	r.settings = configured
 }
 
 func (r *NotificationSubscriptionRepository) CreateTarget(_ context.Context, target domain.NotificationTarget) (domain.NotificationTarget, error) {
@@ -189,6 +207,115 @@ func (r *NotificationSubscriptionRepository) EnsureOwnedEmailTarget(_ context.Co
 	}
 	r.targets[created.ID] = created
 	return created, nil
+}
+
+func (r *NotificationSubscriptionRepository) EnsureOwnedEmailTargetInitialized(_ context.Context, input repository.EnsureOwnedNotificationEmailTargetInput) (domain.NotificationTarget, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	target, newlyEligible, err := r.ensureOwnedEmailTargetLocked(input)
+	if err != nil {
+		return domain.NotificationTarget{}, err
+	}
+	if !newlyEligible || r.preferences == nil {
+		return target, nil
+	}
+
+	defaultEnabled := true
+	if r.settings != nil {
+		r.settings.mu.RLock()
+		if r.settings.settings != nil {
+			defaultEnabled = r.settings.settings.DefaultCommitAuthorFailureEmailEnabled
+		}
+		r.settings.mu.RUnlock()
+	}
+
+	r.preferences.mu.Lock()
+	defer r.preferences.mu.Unlock()
+
+	trimmedUserID := strings.TrimSpace(input.OwnerUserID)
+	if _, exists := r.preferences.preferences[trimmedUserID]; !exists {
+		r.preferences.preferences[trimmedUserID] = domain.UserNotificationPreference{
+			UserID:                     trimmedUserID,
+			CommitAuthorFailureEnabled: defaultEnabled,
+			Source:                     domain.UserNotificationPreferenceSourceInstanceDefault,
+			CreatedAt:                  input.CreatedAt,
+			UpdatedAt:                  input.UpdatedAt,
+		}
+	}
+
+	return target, nil
+}
+
+func (r *NotificationSubscriptionRepository) ensureOwnedEmailTargetLocked(input repository.EnsureOwnedNotificationEmailTargetInput) (domain.NotificationTarget, bool, error) {
+	trimmedOwnerID := strings.TrimSpace(input.OwnerUserID)
+	trimmedRecipient := strings.TrimSpace(input.Recipient)
+
+	for _, target := range r.targets {
+		if target.Type != domain.NotificationTargetTypeEmail || target.OwnerUserID == nil {
+			continue
+		}
+		if strings.TrimSpace(*target.OwnerUserID) == trimmedOwnerID {
+			return target, false, nil
+		}
+	}
+
+	for id, target := range r.targets {
+		if target.Type != domain.NotificationTargetTypeEmail {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(target.Recipient), trimmedRecipient) {
+			continue
+		}
+
+		if target.OwnerUserID != nil && strings.TrimSpace(*target.OwnerUserID) != trimmedOwnerID {
+			return domain.NotificationTarget{}, false, repository.ErrNotificationTargetOwnershipConflict
+		}
+
+		if target.OwnerUserID == nil {
+			for _, subscription := range r.subscriptions {
+				if subscription.TargetID == target.ID {
+					return domain.NotificationTarget{}, false, repository.ErrNotificationTargetOwnershipConflict
+				}
+			}
+			target.OwnerUserID = &trimmedOwnerID
+			target.UpdatedAt = input.UpdatedAt
+			r.targets[id] = target
+			return target, true, nil
+		}
+
+		return target, false, nil
+	}
+
+	createdAt := input.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	updatedAt := input.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = createdAt
+	}
+	id := strings.TrimSpace(input.ID)
+	if id == "" {
+		id = uuid.NewString()
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = trimmedRecipient
+	}
+
+	created := domain.NotificationTarget{
+		ID:          id,
+		OwnerUserID: &trimmedOwnerID,
+		Type:        domain.NotificationTargetTypeEmail,
+		Name:        name,
+		Recipient:   trimmedRecipient,
+		Enabled:     true,
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
+	}
+	r.targets[created.ID] = created
+	return created, true, nil
 }
 
 func (r *NotificationSubscriptionRepository) UpdateTarget(_ context.Context, target domain.NotificationTarget) (domain.NotificationTarget, error) {
