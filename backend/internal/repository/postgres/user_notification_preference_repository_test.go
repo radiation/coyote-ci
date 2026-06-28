@@ -115,6 +115,32 @@ func TestUserNotificationPreferenceRepository_GetByUserIDAndUpsert(t *testing.T)
 	}
 
 	mock.ExpectQuery("INSERT INTO user_notification_preferences").
+		WillReturnError(errors.New("initialize failed"))
+
+	_, _, rawInitializeErr := repo.InitializeIfAbsent(context.Background(), domain.UserNotificationPreference{UserID: "user-4"})
+	if rawInitializeErr == nil || rawInitializeErr.Error() != "initialize failed" {
+		t.Fatalf("expected raw initialize error, got %v", rawInitializeErr)
+	}
+
+	mock.ExpectQuery("INSERT INTO user_notification_preferences").
+		WithArgs("user-5", true, domain.UserNotificationPreferenceSourceInstanceDefault, now, now.Add(5*time.Minute)).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT user_id::text, commit_author_failure_enabled, source, created_at, updated_at").
+		WithArgs("user-5").
+		WillReturnError(errors.New("get existing failed"))
+
+	_, _, getExistingErr := repo.InitializeIfAbsent(context.Background(), domain.UserNotificationPreference{
+		UserID:                     "user-5",
+		CommitAuthorFailureEnabled: true,
+		Source:                     domain.UserNotificationPreferenceSourceInstanceDefault,
+		CreatedAt:                  now,
+		UpdatedAt:                  now.Add(5 * time.Minute),
+	})
+	if getExistingErr == nil || getExistingErr.Error() != "get existing failed" {
+		t.Fatalf("expected existing get error, got %v", getExistingErr)
+	}
+
+	mock.ExpectQuery("INSERT INTO user_notification_preferences").
 		WillReturnError(errors.New("upsert failed"))
 
 	_, rawUpsertErr := repo.Upsert(context.Background(), domain.UserNotificationPreference{UserID: "user-2"})

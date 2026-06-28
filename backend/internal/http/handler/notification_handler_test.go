@@ -131,6 +131,47 @@ func TestNotificationHandler_SendSampleBuildFailure_NotFoundWhenUnavailable(t *t
 	}
 }
 
+func TestNotificationHandler_HasSampleSender(t *testing.T) {
+	var nilHandler *NotificationHandler
+	if nilHandler.HasSampleSender() {
+		t.Fatal("expected nil handler to report no sample sender")
+	}
+
+	h := NewNotificationHandler(nil)
+	if h.HasSampleSender() {
+		t.Fatal("expected handler without sender to report false")
+	}
+
+	h = NewNotificationHandler(&fakeSampleNotificationSender{})
+	if !h.HasSampleSender() {
+		t.Fatal("expected handler with sender to report true")
+	}
+}
+
+func TestNotificationHandler_CurrentRequestUserAndTrimQueryString(t *testing.T) {
+	h := NewNotificationHandler(nil)
+	h.SetAuthorization(auth.ModeDisabled)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/notifications?project_id=%20project-1%20", nil)
+	user, ok := h.currentRequestUser(req)
+	if !ok {
+		t.Fatal("expected disabled auth mode to provide a request user")
+	}
+	if user.ID == "" {
+		t.Fatalf("expected disabled mode user, got %+v", user)
+	}
+
+	trimmed := trimQueryString(req, "project_id")
+	if trimmed == nil || *trimmed != "project-1" {
+		t.Fatalf("expected trimmed project_id, got %+v", trimmed)
+	}
+
+	missing := trimQueryString(req, "job_id")
+	if missing != nil {
+		t.Fatalf("expected nil missing query string, got %+v", missing)
+	}
+}
+
 func TestNotificationHandler_SendSampleBuildFailure_ConflictForDisabledOrMissingRecipients(t *testing.T) {
 	tests := []struct {
 		name string
@@ -683,6 +724,104 @@ func TestNotificationHandler_NotificationDefaultsEndpoints(t *testing.T) {
 	if invalidRes.Code != http.StatusBadRequest {
 		t.Fatalf("expected invalid defaults status %d, got %d body=%s", http.StatusBadRequest, invalidRes.Code, invalidRes.Body.String())
 	}
+}
+
+func TestNotificationHandler_NotificationDefaultsEndpointErrors(t *testing.T) {
+	t.Run("admin endpoints unavailable", func(t *testing.T) {
+		h := NewNotificationHandler(nil)
+
+		getReq := httptest.NewRequest(http.MethodGet, "/api/settings/notifications/defaults", nil)
+		getRes := httptest.NewRecorder()
+		h.GetNotificationDefaults(getRes, getReq)
+		if getRes.Code != http.StatusNotFound {
+			t.Fatalf("expected unavailable get defaults status %d, got %d body=%s", http.StatusNotFound, getRes.Code, getRes.Body.String())
+		}
+
+		putReq := httptest.NewRequest(http.MethodPut, "/api/settings/notifications/defaults", nil)
+		putRes := httptest.NewRecorder()
+		h.SetNotificationDefaults(putRes, putReq)
+		if putRes.Code != http.StatusNotFound {
+			t.Fatalf("expected unavailable put defaults status %d, got %d body=%s", http.StatusNotFound, putRes.Code, putRes.Body.String())
+		}
+	})
+
+	t.Run("non admin forbidden", func(t *testing.T) {
+		h := NewNotificationHandler(nil)
+		h.SetAuthorization(auth.ModeHeader)
+		h.SetAdminService(&fakeNotificationAdminService{})
+		user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+
+		getReq := httptest.NewRequest(http.MethodGet, "/api/settings/notifications/defaults", nil)
+		getReq = getReq.WithContext(auth.WithUser(getReq.Context(), user))
+		getRes := httptest.NewRecorder()
+		h.GetNotificationDefaults(getRes, getReq)
+		if getRes.Code != http.StatusForbidden {
+			t.Fatalf("expected forbidden get defaults status %d, got %d body=%s", http.StatusForbidden, getRes.Code, getRes.Body.String())
+		}
+	})
+
+	t.Run("current defaults read failure blocks update", func(t *testing.T) {
+		h := NewNotificationHandler(nil)
+		h.SetAuthorization(auth.ModeHeader)
+		h.SetAdminService(&fakeNotificationAdminService{getNotificationDefaultsErr: errors.New("boom")})
+		admin := domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin}
+
+		req := httptest.NewRequest(http.MethodPut, "/api/settings/notifications/defaults", bytes.NewBufferString(`{"default_commit_author_failure_email_enabled":true}`))
+		req = req.WithContext(auth.WithUser(req.Context(), admin))
+		res := httptest.NewRecorder()
+		h.SetNotificationDefaults(res, req)
+		if res.Code != http.StatusInternalServerError {
+			t.Fatalf("expected current defaults failure status %d, got %d body=%s", http.StatusInternalServerError, res.Code, res.Body.String())
+		}
+	})
+
+	t.Run("get defaults service error", func(t *testing.T) {
+		h := NewNotificationHandler(nil)
+		h.SetAuthorization(auth.ModeHeader)
+		h.SetAdminService(&fakeNotificationAdminService{getNotificationDefaultsErr: errors.New("boom")})
+		admin := domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin}
+
+		req := httptest.NewRequest(http.MethodGet, "/api/settings/notifications/defaults", nil)
+		req = req.WithContext(auth.WithUser(req.Context(), admin))
+		res := httptest.NewRecorder()
+		h.GetNotificationDefaults(res, req)
+		if res.Code != http.StatusInternalServerError {
+			t.Fatalf("expected get defaults error status %d, got %d body=%s", http.StatusInternalServerError, res.Code, res.Body.String())
+		}
+	})
+
+	t.Run("invalid json body", func(t *testing.T) {
+		h := NewNotificationHandler(nil)
+		h.SetAuthorization(auth.ModeHeader)
+		h.SetAdminService(&fakeNotificationAdminService{getNotificationDefaultsResult: service.NotificationDefaultsState{DefaultCommitAuthorFailureEmailEnabled: true}})
+		admin := domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin}
+
+		req := httptest.NewRequest(http.MethodPut, "/api/settings/notifications/defaults", bytes.NewBufferString(`{"default_commit_author_failure_email_enabled":`))
+		req = req.WithContext(auth.WithUser(req.Context(), admin))
+		res := httptest.NewRecorder()
+		h.SetNotificationDefaults(res, req)
+		if res.Code != http.StatusBadRequest {
+			t.Fatalf("expected invalid json status %d, got %d body=%s", http.StatusBadRequest, res.Code, res.Body.String())
+		}
+	})
+
+	t.Run("set defaults service error", func(t *testing.T) {
+		h := NewNotificationHandler(nil)
+		h.SetAuthorization(auth.ModeHeader)
+		h.SetAdminService(&fakeNotificationAdminService{
+			getNotificationDefaultsResult: service.NotificationDefaultsState{DefaultCommitAuthorFailureEmailEnabled: true},
+			setNotificationDefaultsErr:    service.ErrNotificationDefaultEnabledRequired,
+		})
+		admin := domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin}
+
+		req := httptest.NewRequest(http.MethodPut, "/api/settings/notifications/defaults", bytes.NewBufferString(`{"default_commit_author_failure_email_enabled":true}`))
+		req = req.WithContext(auth.WithUser(req.Context(), admin))
+		res := httptest.NewRecorder()
+		h.SetNotificationDefaults(res, req)
+		if res.Code != http.StatusBadRequest {
+			t.Fatalf("expected service set defaults error status %d, got %d body=%s", http.StatusBadRequest, res.Code, res.Body.String())
+		}
+	})
 }
 
 func TestNotificationHandler_TargetResponsesMaskSlackWebhookSecrets(t *testing.T) {

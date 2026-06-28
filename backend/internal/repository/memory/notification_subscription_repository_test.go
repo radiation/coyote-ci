@@ -11,6 +11,30 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
+type nonMemoryPreferenceRepo struct{}
+
+func (r *nonMemoryPreferenceRepo) GetByUserID(context.Context, string) (domain.UserNotificationPreference, error) {
+	return domain.UserNotificationPreference{}, repository.ErrUserNotificationPreferenceNotFound
+}
+
+func (r *nonMemoryPreferenceRepo) InitializeIfAbsent(context.Context, domain.UserNotificationPreference) (domain.UserNotificationPreference, bool, error) {
+	return domain.UserNotificationPreference{}, false, nil
+}
+
+func (r *nonMemoryPreferenceRepo) Upsert(context.Context, domain.UserNotificationPreference) (domain.UserNotificationPreference, error) {
+	return domain.UserNotificationPreference{}, nil
+}
+
+type nonMemorySettingsRepo struct{}
+
+func (r *nonMemorySettingsRepo) Get(context.Context) (domain.NotificationInstanceSettings, error) {
+	return domain.NotificationInstanceSettings{}, repository.ErrNotificationInstanceSettingsNotFound
+}
+
+func (r *nonMemorySettingsRepo) Upsert(context.Context, domain.NotificationInstanceSettings) (domain.NotificationInstanceSettings, error) {
+	return domain.NotificationInstanceSettings{}, nil
+}
+
 func TestNotificationSubscriptionRepository_CreateAndListMatches(t *testing.T) {
 	repo := NewNotificationSubscriptionRepository()
 	target, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{
@@ -855,5 +879,28 @@ func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized(t 
 	_, err = preferences.GetByUserID(ctx, legacyOwner)
 	if !errors.Is(err, repository.ErrUserNotificationPreferenceNotFound) {
 		t.Fatalf("expected legacy preference to remain absent, got %v", err)
+	}
+}
+
+func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized_NoConfiguredMemoryRepositories(t *testing.T) {
+	ctx := context.Background()
+	repo := NewNotificationSubscriptionRepository()
+	repo.SetNotificationPreferenceRepository(&nonMemoryPreferenceRepo{})
+	repo.SetNotificationInstanceSettingsRepository(&nonMemorySettingsRepo{})
+	now := time.Date(2026, 6, 28, 20, 15, 0, 0, time.UTC)
+
+	ensured, err := repo.EnsureOwnedEmailTargetInitialized(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+		ID:          "target-nil-config",
+		OwnerUserID: "user-no-pref",
+		Name:        "No Pref",
+		Recipient:   "<no-pref@example.com>",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("ensure target without memory config failed: %v", err)
+	}
+	if ensured.ID != "target-nil-config" {
+		t.Fatalf("expected ensured target id target-nil-config, got %q", ensured.ID)
 	}
 }

@@ -47,10 +47,6 @@ type NotificationService struct {
 	now             func() time.Time
 }
 
-type notificationOwnedEmailTargetInitializer interface {
-	EnsureOwnedEmailTargetInitialized(ctx context.Context, input repository.EnsureOwnedNotificationEmailTargetInput) (domain.NotificationTarget, error)
-}
-
 type notificationPreferenceRepositoryAware interface {
 	SetNotificationPreferenceRepository(preferences repository.UserNotificationPreferenceRepository)
 }
@@ -170,27 +166,7 @@ func (s *NotificationService) EnsureOwnedEmailTarget(ctx context.Context, user d
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	if initializer, ok := s.repo.(notificationOwnedEmailTargetInitializer); ok {
-		return initializer.EnsureOwnedEmailTargetInitialized(ctx, input)
-	}
-
-	hadOwnedTarget := false
-	if _, getErr := s.repo.GetOwnedEmailTargetByUserID(ctx, ownerUserID); getErr == nil {
-		hadOwnedTarget = true
-	} else if !errors.Is(getErr, repository.ErrNotificationTargetNotFound) {
-		return domain.NotificationTarget{}, getErr
-	}
-
-	target, err := s.repo.EnsureOwnedEmailTarget(ctx, input)
-	if err != nil {
-		return domain.NotificationTarget{}, err
-	}
-	if !hadOwnedTarget {
-		if initErr := s.initializeCommitAuthorFailurePreference(ctx, ownerUserID); initErr != nil {
-			return domain.NotificationTarget{}, initErr
-		}
-	}
-	return target, nil
+	return s.repo.EnsureOwnedEmailTargetInitialized(ctx, input)
 }
 
 func (s *NotificationService) GetNotificationDefaults(ctx context.Context) (NotificationDefaultsState, error) {
@@ -519,25 +495,6 @@ func (s *NotificationService) getCommitAuthorFailurePreferenceEnabled(ctx contex
 		return false, err
 	}
 	return preference.CommitAuthorFailureEnabled, nil
-}
-
-func (s *NotificationService) initializeCommitAuthorFailurePreference(ctx context.Context, ownerUserID string) error {
-	if s.preferencesRepo == nil {
-		return nil
-	}
-	enabled, err := s.getDefaultCommitAuthorFailureEmailEnabled(ctx)
-	if err != nil {
-		return err
-	}
-	now := s.now().UTC()
-	_, _, err = s.preferencesRepo.InitializeIfAbsent(ctx, domain.UserNotificationPreference{
-		UserID:                     ownerUserID,
-		CommitAuthorFailureEnabled: enabled,
-		Source:                     domain.UserNotificationPreferenceSourceInstanceDefault,
-		CreatedAt:                  now,
-		UpdatedAt:                  now,
-	})
-	return err
 }
 
 func (s *NotificationService) getDefaultCommitAuthorFailureEmailEnabled(ctx context.Context) (bool, error) {

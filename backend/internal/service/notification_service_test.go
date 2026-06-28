@@ -14,6 +14,18 @@ import (
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 )
 
+type errNotificationInstanceSettingsRepo struct {
+	err error
+}
+
+func (r *errNotificationInstanceSettingsRepo) Get(context.Context) (domain.NotificationInstanceSettings, error) {
+	return domain.NotificationInstanceSettings{}, r.err
+}
+
+func (r *errNotificationInstanceSettingsRepo) Upsert(context.Context, domain.NotificationInstanceSettings) (domain.NotificationInstanceSettings, error) {
+	return domain.NotificationInstanceSettings{}, r.err
+}
+
 func TestNotificationService_TargetCreateValidateAndUpdate(t *testing.T) {
 	ctx := context.Background()
 	repo := memoryrepo.NewNotificationSubscriptionRepository()
@@ -812,6 +824,91 @@ func TestNotificationService_ExistingOwnedTargetIsNotRetroactivelyInitialized(t 
 	_, err = preferenceRepo.GetByUserID(ctx, userID)
 	if !errors.Is(err, repository.ErrUserNotificationPreferenceNotFound) {
 		t.Fatalf("expected no retroactive preference row, got %v", err)
+	}
+}
+
+func TestNotificationService_DefaultConfigurationBranches(t *testing.T) {
+	ctx := context.Background()
+	svc := NewNotificationService(memoryrepo.NewNotificationSubscriptionRepository())
+	now := time.Date(2026, 6, 28, 20, 5, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	defaults, err := svc.GetNotificationDefaults(ctx)
+	if err != nil {
+		t.Fatalf("get defaults without settings repo failed: %v", err)
+	}
+	if !defaults.DefaultCommitAuthorFailureEmailEnabled {
+		t.Fatalf("expected nil settings repo to default enabled, got %+v", defaults)
+	}
+
+	_, err = svc.SetNotificationDefaults(ctx, nil)
+	if !errors.Is(err, ErrNotificationDefaultEnabledRequired) {
+		t.Fatalf("expected missing enabled error, got %v", err)
+	}
+
+	_, err = svc.SetNotificationDefaults(ctx, notificationBoolPtr(true))
+	if err == nil || err.Error() != "notification instance settings repository is not configured" {
+		t.Fatalf("expected missing settings repo error, got %v", err)
+	}
+
+	_, err = svc.SetCommitAuthorFailureNotificationPreference(ctx, domain.User{ID: uuid.NewString(), Email: "user@example.com"}, notificationBoolPtr(false))
+	if err == nil || err.Error() != "notification preference repository is not configured" {
+		t.Fatalf("expected missing preferences repo error, got %v", err)
+	}
+
+	errSvc := NewNotificationService(memoryrepo.NewNotificationSubscriptionRepository()).WithInstanceSettingsRepository(&errNotificationInstanceSettingsRepo{err: errors.New("settings failed")})
+	_, err = errSvc.GetNotificationDefaults(ctx)
+	if err == nil || err.Error() != "get notification instance settings: settings failed" {
+		t.Fatalf("expected wrapped settings get error, got %v", err)
+	}
+}
+
+func TestNotificationService_InternalPreferenceHelpers(t *testing.T) {
+	ctx := context.Background()
+	svc := NewNotificationService(memoryrepo.NewNotificationSubscriptionRepository())
+
+	enabled, err := svc.getCommitAuthorFailurePreferenceEnabled(ctx, "user-1")
+	if err != nil {
+		t.Fatalf("get preference enabled without repo failed: %v", err)
+	}
+	if enabled {
+		t.Fatalf("expected missing preference repo to resolve disabled, got %t", enabled)
+	}
+
+	defaultEnabled, defaultErr := svc.getDefaultCommitAuthorFailureEmailEnabled(ctx)
+	if defaultErr != nil {
+		t.Fatalf("get default without settings repo failed: %v", defaultErr)
+	}
+	if !defaultEnabled {
+		t.Fatal("expected missing settings repo to default enabled")
+	}
+}
+
+func TestNotificationService_NotificationHelperNormalizers(t *testing.T) {
+	targetType, err := normalizeNotificationTargetType("slack_webhook")
+	if err != nil {
+		t.Fatalf("normalize slack target type failed: %v", err)
+	}
+	if targetType != domain.NotificationTargetTypeSlackWebhook {
+		t.Fatalf("expected slack target type, got %q", targetType)
+	}
+
+	_, err = normalizeNotificationTargetType("pagerduty")
+	if !errors.Is(err, ErrNotificationTargetTypeInvalid) {
+		t.Fatalf("expected invalid target type error, got %v", err)
+	}
+
+	webhookURL, webhookErr := normalizeNotificationWebhookURL("https://hooks.slack.example/services/T/B/X")
+	if webhookErr != nil {
+		t.Fatalf("normalize webhook url failed: %v", webhookErr)
+	}
+	if webhookURL != "https://hooks.slack.example/services/T/B/X" {
+		t.Fatalf("unexpected normalized webhook url %q", webhookURL)
+	}
+
+	_, webhookErr = normalizeNotificationWebhookURL("http://hooks.slack.example/services/T/B/X")
+	if !errors.Is(webhookErr, ErrNotificationTargetWebhookURLInvalid) {
+		t.Fatalf("expected invalid webhook url error, got %v", webhookErr)
 	}
 }
 
