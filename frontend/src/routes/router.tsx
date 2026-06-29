@@ -1,4 +1,4 @@
-import { lazy } from "react";
+import { lazy, type ComponentType } from "react";
 import {
   createBrowserRouter,
   Navigate,
@@ -12,7 +12,7 @@ function lazyPage<
 >(loader: () => Promise<TModule>, exportName: TExport) {
   return lazy(async () => {
     const module = await loader();
-    return { default: module[exportName] as React.ComponentType };
+    return { default: module[exportName] as ComponentType };
   });
 }
 

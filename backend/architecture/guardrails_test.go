@@ -61,7 +61,7 @@ func TestConcreteRepositoryImportsStayInCompositionRoots(t *testing.T) {
 		}
 
 		for importPath := range pkg.Imports {
-			if _, isConcreteAdapter := concreteAdapters[importPath]; !isConcreteAdapter {
+			if !isConcreteAdapterImport(importPath, concreteAdapters) {
 				continue
 			}
 			if _, allowed := allowedImporters[pkg.PkgPath]; allowed {
@@ -141,6 +141,16 @@ func backendDependencyRules() []*configuration.DependenciesRule {
 	))
 
 	return rules
+}
+
+func isConcreteAdapterImport(importPath string, concreteAdapters map[string]struct{}) bool {
+	for adapterPath := range concreteAdapters {
+		if importPath == adapterPath || strings.HasPrefix(importPath, adapterPath+"/") {
+			return true
+		}
+	}
+
+	return false
 }
 
 func exactAndDescendantRules(packagePath string, disallowed ...string) []*configuration.DependenciesRule {
