@@ -10,21 +10,26 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ArtifactDetailPage } from "./ArtifactDetailPage";
 import {
+  APIError,
   createJobVersionTags,
   getArtifact,
   getBuild,
   getBuildArtifacts,
 } from "../api";
-import { APIError } from "../api/request";
 import type { ArtifactDetail, Build, BuildArtifact } from "../types";
 
-vi.mock("../api", () => ({
-  createJobVersionTags: vi.fn(),
-  getArtifact: vi.fn(),
-  getBuild: vi.fn(),
-  getBuildArtifacts: vi.fn(),
-  artifactDownloadURL: (path: string) => `/api${path}`,
-}));
+vi.mock("../api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api")>();
+
+  return {
+    ...actual,
+    createJobVersionTags: vi.fn(),
+    getArtifact: vi.fn(),
+    getBuild: vi.fn(),
+    getBuildArtifacts: vi.fn(),
+    artifactDownloadURL: (path: string) => `/api${path}`,
+  };
+});
 
 function buildArtifactDetail(
   overrides: Partial<ArtifactDetail> = {},

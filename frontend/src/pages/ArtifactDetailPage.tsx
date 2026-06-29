@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
+  APIError,
   artifactDownloadURL,
   createJobVersionTags,
   getArtifact,
@@ -10,7 +11,6 @@ import {
 } from "../api";
 import { VersionTagEditor } from "../components/VersionTagEditor";
 import { StatusBadge } from "../components/StatusBadge";
-import { APIError } from "../api/request";
 import type { ArtifactDetail, BuildArtifact, VersionTag } from "../types";
 import {
   artifactTypeLabel,

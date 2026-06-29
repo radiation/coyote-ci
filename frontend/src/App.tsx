@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "react-router-dom";
-import { checkReadiness } from "./api/client";
+import { checkReadiness } from "./api";
 import { AuthProvider } from "./auth";
 import { router } from "./routes/router";
 

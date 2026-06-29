@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { AppShell, type AppShellNavigationItem } from "./AppShell";
 import { useAuth } from "../auth-context";
@@ -121,11 +122,22 @@ export function Layout() {
             primaryNavigation={showNavigation ? primaryNavigation : []}
             settingsNavigation={showNavigation ? settingsNavigation : []}
           >
-            <Outlet />
+            <Suspense fallback={<RouteLoadingPanel />}>
+              <Outlet />
+            </Suspense>
           </AppShell>
         )}
       </main>
     </div>
+  );
+}
+
+function RouteLoadingPanel() {
+  return (
+    <section className="panel auth-state-panel">
+      <h2>Loading page</h2>
+      <p className="subtle-text">Opening the requested Coyote CI view.</p>
+    </section>
   );
 }
 

@@ -5,6 +5,11 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -38,6 +43,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: backend
@@ -54,22 +60,20 @@ jobs:
         run: go install github.com/swaggo/swag/cmd/swag@v1.16.4
 
       - name: Verify swagger docs are up to date
-        run: |
-          make swagger
-          git diff --exit-code backend/docs
+        run: make swagger-check
         working-directory: .
 
       - name: Verify formatting
-        run: |
-          fmt_out="$(gofmt -l .)"
-          if [ -n "$fmt_out" ]; then
-            echo "These files need formatting:"
-            echo "$fmt_out"
-            exit 1
-          fi
+        run: make backend-format-check
+        working-directory: .
+
+      - name: Run architecture guardrails
+        run: make backend-architecture
+        working-directory: .
 
       - name: Run vet
-        run: go vet ./...
+        run: make backend-vet
+        working-directory: .
 
       - name: Run tests with coverage
         working-directory: backend
