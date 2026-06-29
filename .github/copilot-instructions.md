@@ -342,6 +342,8 @@ When possible, test:
 - services independently from HTTP
 - repositories with integration tests
 - handlers as thin translation layers
+- when touching backend package boundaries or frontend dependency direction, run `cd backend && go test ./architecture` and `cd frontend && npm run lint`
+- keep architecture guardrail updates descriptive of existing structure; do not add aspirational rules that would require broad cleanup
 
 For lifecycle/state-machine code specifically:
 - prefer table-driven tests for pure decision helpers first
