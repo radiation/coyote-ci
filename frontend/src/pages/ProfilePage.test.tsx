@@ -641,6 +641,63 @@ describe("ProfilePage", () => {
     });
   });
 
+  it("explains that a disabled personal target pauses success notifications", async () => {
+    mockedGetMyEmailNotificationTarget.mockResolvedValue({
+      id: "target-1",
+      owner_user_id: "user-1",
+      type: "email",
+      name: "User Example",
+      address: "<user@example.com>",
+      webhook_configured: false,
+      enabled: false,
+      created_at: "2026-06-24T00:00:00Z",
+      updated_at: "2026-06-24T00:00:00Z",
+    });
+    mockedGetCommitAuthorSuccessNotificationPreference.mockResolvedValue({
+      enabled: true,
+      eligible: true,
+      delivery_active: false,
+      unavailable_reason: "personal_target_disabled",
+      target: {
+        id: "target-1",
+        owner_user_id: "user-1",
+        type: "email",
+        name: "User Example",
+        address: "<user@example.com>",
+        webhook_configured: false,
+        enabled: false,
+        created_at: "2026-06-24T00:00:00Z",
+        updated_at: "2026-06-24T00:00:00Z",
+      },
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /Success delivery is paused because your personal email target is disabled/i,
+        ),
+      ).toBeTruthy();
+    });
+
+    const checkbox = screen.getByRole("checkbox", {
+      name: /Notify me when my commits succeed/i,
+    });
+    expect(checkbox).toBeChecked();
+    expect(checkbox).not.toBeDisabled();
+
+    fireEvent.click(checkbox);
+
+    await waitFor(() => {
+      expect(
+        mockedSetCommitAuthorSuccessNotificationPreference.mock.calls[0]?.[0],
+      ).toEqual({
+        enabled: false,
+      });
+    });
+  });
+
   it("does not allow enabling commit notifications when the personal target is disabled", async () => {
     mockedGetMyEmailNotificationTarget.mockResolvedValue({
       id: "target-1",
