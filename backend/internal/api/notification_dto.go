@@ -47,6 +47,10 @@ type MyEmailNotificationTargetEnvelope struct {
 	Data MyEmailNotificationTargetResponse `json:"data"`
 }
 
+type PutMyEmailNotificationTargetRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
 type CommitAuthorFailureNotificationPreferenceResponse struct {
 	Enabled           bool                        `json:"enabled"`
 	Eligible          bool                        `json:"eligible"`

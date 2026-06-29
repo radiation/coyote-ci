@@ -33,6 +33,7 @@ type notificationAdminService interface {
 	ListTargets(ctx context.Context) ([]domain.NotificationTarget, error)
 	GetOwnedEmailTarget(ctx context.Context, user domain.User) (domain.NotificationTarget, error)
 	EnsureOwnedEmailTarget(ctx context.Context, user domain.User) (domain.NotificationTarget, error)
+	SetOwnedEmailTargetEnabled(ctx context.Context, user domain.User, enabled *bool) (domain.NotificationTarget, error)
 	GetNotificationDefaults(ctx context.Context) (service.NotificationDefaultsState, error)
 	SetNotificationDefaults(ctx context.Context, failureEnabled *bool, successEnabled *bool) (service.NotificationDefaultsState, error)
 	GetCommitAuthorFailureNotificationPreference(ctx context.Context, user domain.User) (service.CommitAuthorNotificationPreferenceState, error)
@@ -143,6 +144,46 @@ func (h *NotificationHandler) EnsureMyEmailTarget(w http.ResponseWriter, r *http
 	}
 
 	target, err := h.admin.EnsureOwnedEmailTarget(r.Context(), user)
+	if err != nil {
+		h.writeNotificationError(w, err)
+		return
+	}
+
+	writeDataJSON(w, http.StatusOK, toNotificationTargetResponse(target))
+}
+
+// SetMyEmailTarget godoc
+// @Summary Update my email notification target
+// @Description Enables or disables the authenticated user's owned personal email notification target without changing its address or preferences.
+// @Tags users
+// @Accept json
+// @Produce json
+// @Param request body api.PutMyEmailNotificationTargetRequest true "Owned personal email target state"
+// @Success 200 {object} api.NotificationTargetEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /me/notification-targets/email [put]
+func (h *NotificationHandler) SetMyEmailTarget(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.admin == nil {
+		writeErrorJSON(w, http.StatusNotFound, "not_found", "notification endpoint is not available")
+		return
+	}
+
+	user, ok := h.currentRequestUser(r)
+	if !ok {
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	var req api.PutMyEmailNotificationTargetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+
+	target, err := h.admin.SetOwnedEmailTargetEnabled(r.Context(), user, req.Enabled)
 	if err != nil {
 		h.writeNotificationError(w, err)
 		return
@@ -536,6 +577,7 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 		errors.Is(err, service.ErrNotificationTargetWebhookURLRequired) ||
 		errors.Is(err, service.ErrNotificationTargetWebhookURLInvalid) ||
 		errors.Is(err, service.ErrNotificationTargetIDInvalid) ||
+		errors.Is(err, service.ErrNotificationTargetEnabledRequired) ||
 		errors.Is(err, service.ErrNotificationSubscriptionIDInvalid) ||
 		errors.Is(err, service.ErrNotificationSubscriptionTargetIDRequired) ||
 		errors.Is(err, service.ErrNotificationSubscriptionTargetIDInvalid) ||

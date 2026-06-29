@@ -39,6 +39,8 @@ type fakeNotificationAdminService struct {
 	getOwnedEmailTargetErr        error
 	ensureOwnedEmailTargetResult  domain.NotificationTarget
 	ensureOwnedEmailTargetErr     error
+	setOwnedEmailTargetResult     domain.NotificationTarget
+	setOwnedEmailTargetErr        error
 	getNotificationDefaultsResult service.NotificationDefaultsState
 	getNotificationDefaultsErr    error
 	setNotificationDefaultsResult service.NotificationDefaultsState
@@ -74,6 +76,10 @@ func (f *fakeNotificationAdminService) GetOwnedEmailTarget(_ context.Context, _ 
 
 func (f *fakeNotificationAdminService) EnsureOwnedEmailTarget(_ context.Context, _ domain.User) (domain.NotificationTarget, error) {
 	return f.ensureOwnedEmailTargetResult, f.ensureOwnedEmailTargetErr
+}
+
+func (f *fakeNotificationAdminService) SetOwnedEmailTargetEnabled(_ context.Context, _ domain.User, _ *bool) (domain.NotificationTarget, error) {
+	return f.setOwnedEmailTargetResult, f.setOwnedEmailTargetErr
 }
 
 func (f *fakeNotificationAdminService) GetNotificationDefaults(_ context.Context) (service.NotificationDefaultsState, error) {
@@ -330,6 +336,13 @@ func TestNotificationHandler_MyEmailTargetEndpointsRequireAuthentication(t *test
 	if ensureRes.Code != http.StatusUnauthorized {
 		t.Fatalf("expected ensure my target unauthorized status %d, got %d body=%s", http.StatusUnauthorized, ensureRes.Code, ensureRes.Body.String())
 	}
+
+	setReq := httptest.NewRequest(http.MethodPut, "/api/me/notification-targets/email", bytes.NewBufferString(`{"enabled":false}`))
+	setRes := httptest.NewRecorder()
+	h.SetMyEmailTarget(setRes, setReq)
+	if setRes.Code != http.StatusUnauthorized {
+		t.Fatalf("expected set my target unauthorized status %d, got %d body=%s", http.StatusUnauthorized, setRes.Code, setRes.Body.String())
+	}
 }
 
 func TestNotificationHandler_MyEmailTargetEndpointErrors(t *testing.T) {
@@ -349,6 +362,13 @@ func TestNotificationHandler_MyEmailTargetEndpointErrors(t *testing.T) {
 		if ensureRes.Code != http.StatusNotFound {
 			t.Fatalf("expected unavailable ensure status %d, got %d body=%s", http.StatusNotFound, ensureRes.Code, ensureRes.Body.String())
 		}
+
+		setReq := httptest.NewRequest(http.MethodPut, "/api/me/notification-targets/email", bytes.NewBufferString(`{"enabled":false}`))
+		setRes := httptest.NewRecorder()
+		h.SetMyEmailTarget(setRes, setReq)
+		if setRes.Code != http.StatusNotFound {
+			t.Fatalf("expected unavailable set status %d, got %d body=%s", http.StatusNotFound, setRes.Code, setRes.Body.String())
+		}
 	})
 
 	tests := []struct {
@@ -360,6 +380,8 @@ func TestNotificationHandler_MyEmailTargetEndpointErrors(t *testing.T) {
 		{name: "get internal error", method: http.MethodGet, serviceErr: errors.New("boom"), wantStatus: http.StatusInternalServerError},
 		{name: "ensure ownership conflict", method: http.MethodPost, serviceErr: repository.ErrNotificationTargetOwnershipConflict, wantStatus: http.StatusConflict},
 		{name: "ensure invalid request", method: http.MethodPost, serviceErr: service.ErrNotificationPersonalEmailRequired, wantStatus: http.StatusBadRequest},
+		{name: "set missing target", method: http.MethodPut, serviceErr: repository.ErrNotificationTargetNotFound, wantStatus: http.StatusNotFound},
+		{name: "set invalid request", method: http.MethodPut, serviceErr: service.ErrNotificationTargetEnabledRequired, wantStatus: http.StatusBadRequest},
 	}
 
 	for _, tc := range tests {
@@ -367,28 +389,70 @@ func TestNotificationHandler_MyEmailTargetEndpointErrors(t *testing.T) {
 			h := NewNotificationHandler(nil)
 			h.SetAuthorization(auth.ModeHeader)
 			fakeSvc := &fakeNotificationAdminService{}
-			if tc.method == http.MethodGet {
+			switch tc.method {
+			case http.MethodGet:
 				fakeSvc.getOwnedEmailTargetErr = tc.serviceErr
-			} else {
+			case http.MethodPost:
 				fakeSvc.ensureOwnedEmailTargetErr = tc.serviceErr
+			default:
+				fakeSvc.setOwnedEmailTargetErr = tc.serviceErr
 			}
 			h.SetAdminService(fakeSvc)
 			user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
 
-			req := httptest.NewRequest(tc.method, "/api/me/notification-targets/email", nil)
+			var req *http.Request
+			switch tc.method {
+			case http.MethodPut:
+				req = httptest.NewRequest(tc.method, "/api/me/notification-targets/email", bytes.NewBufferString(`{"enabled":true}`))
+			default:
+				req = httptest.NewRequest(tc.method, "/api/me/notification-targets/email", nil)
+			}
 			req = req.WithContext(auth.WithUser(req.Context(), user))
 			res := httptest.NewRecorder()
 
-			if tc.method == http.MethodGet {
+			switch tc.method {
+			case http.MethodGet:
 				h.GetMyEmailTarget(res, req)
-			} else {
+			case http.MethodPost:
 				h.EnsureMyEmailTarget(res, req)
+			default:
+				h.SetMyEmailTarget(res, req)
 			}
 
 			if res.Code != tc.wantStatus {
 				t.Fatalf("expected status %d, got %d body=%s", tc.wantStatus, res.Code, res.Body.String())
 			}
 		})
+	}
+}
+
+func TestNotificationHandler_SetMyEmailTarget(t *testing.T) {
+	h := NewNotificationHandler(nil)
+	h.SetAuthorization(auth.ModeHeader)
+	h.SetAdminService(&fakeNotificationAdminService{
+		setOwnedEmailTargetResult: domain.NotificationTarget{
+			ID:          "target-1",
+			OwnerUserID: stringPtr("user-1"),
+			Type:        domain.NotificationTargetTypeEmail,
+			Name:        "User One",
+			Recipient:   "<user@example.com>",
+			Enabled:     false,
+		},
+	})
+	user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/me/notification-targets/email", bytes.NewBufferString(`{"enabled":false}`))
+	req = req.WithContext(auth.WithUser(req.Context(), user))
+	res := httptest.NewRecorder()
+
+	h.SetMyEmailTarget(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected set my target status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+	data := decodeDataMap(t, res)
+	if data["enabled"] != false {
+		t.Fatalf("expected disabled target payload, got %v", data["enabled"])
 	}
 }
 

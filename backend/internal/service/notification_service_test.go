@@ -745,6 +745,212 @@ func TestNotificationService_CommitAuthorSuccessNotificationPreference_TargetReq
 	}
 }
 
+func TestNotificationService_SetOwnedEmailTargetEnabled(t *testing.T) {
+	ctx := context.Background()
+	targetRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+	svc := NewNotificationService(targetRepo).WithPreferenceRepository(preferenceRepo)
+	now := time.Date(2026, 6, 29, 9, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	user := domain.User{ID: uuid.NewString(), Email: "user@example.com", DisplayName: strPtr("User Example")}
+	target, err := svc.EnsureOwnedEmailTarget(ctx, user)
+	if err != nil {
+		t.Fatalf("ensure owned target failed: %v", err)
+	}
+
+	if _, err = svc.SetOwnedEmailTargetEnabled(ctx, user, nil); !errors.Is(err, ErrNotificationTargetEnabledRequired) {
+		t.Fatalf("expected enabled-required error, got %v", err)
+	}
+
+	falseValue := false
+	disabledTarget, err := svc.SetOwnedEmailTargetEnabled(ctx, user, &falseValue)
+	if err != nil {
+		t.Fatalf("disable owned target failed: %v", err)
+	}
+	if disabledTarget.Enabled {
+		t.Fatalf("expected disabled target, got %+v", disabledTarget)
+	}
+
+	pausedState, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, user)
+	if err != nil {
+		t.Fatalf("get failure preference after disable failed: %v", err)
+	}
+	if pausedState.DeliveryActive {
+		t.Fatalf("expected delivery paused after disabling target, got %+v", pausedState)
+	}
+
+	trueValue := true
+	reEnabledTarget, err := svc.SetOwnedEmailTargetEnabled(ctx, user, &trueValue)
+	if err != nil {
+		t.Fatalf("re-enable owned target failed: %v", err)
+	}
+	if !reEnabledTarget.Enabled {
+		t.Fatalf("expected re-enabled target, got %+v", reEnabledTarget)
+	}
+
+	repeatedTarget, err := svc.SetOwnedEmailTargetEnabled(ctx, user, &trueValue)
+	if err != nil {
+		t.Fatalf("repeat enable failed: %v", err)
+	}
+	if !repeatedTarget.Enabled {
+		t.Fatalf("expected idempotent enabled target, got %+v", repeatedTarget)
+	}
+
+	otherUser := domain.User{ID: uuid.NewString(), Email: "other@example.com"}
+	if _, err = svc.SetOwnedEmailTargetEnabled(ctx, otherUser, &falseValue); !errors.Is(err, repository.ErrNotificationTargetNotFound) {
+		t.Fatalf("expected missing target for other user, got %v", err)
+	}
+
+	storedTarget, err := targetRepo.GetTargetByID(ctx, target.ID)
+	if err != nil {
+		t.Fatalf("get stored target failed: %v", err)
+	}
+	if !storedTarget.Enabled {
+		t.Fatalf("expected stored target to remain enabled after repeat enable, got %+v", storedTarget)
+	}
+}
+
+func TestNotificationService_SetOwnedEmailTargetEnabled_PreservesBothEnabledPreferences(t *testing.T) {
+	ctx := context.Background()
+	targetRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+	svc := NewNotificationService(targetRepo).WithPreferenceRepository(preferenceRepo)
+	now := time.Date(2026, 6, 29, 9, 30, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	user := domain.User{ID: uuid.NewString(), Email: "user@example.com", DisplayName: strPtr("User Example")}
+	if _, err := svc.EnsureOwnedEmailTarget(ctx, user); err != nil {
+		t.Fatalf("ensure owned target failed: %v", err)
+	}
+	if _, err := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, notificationBoolPtr(true)); err != nil {
+		t.Fatalf("enable failure preference failed: %v", err)
+	}
+	if _, err := svc.SetCommitAuthorSuccessNotificationPreference(ctx, user, notificationBoolPtr(true)); err != nil {
+		t.Fatalf("enable success preference failed: %v", err)
+	}
+
+	falseValue := false
+	if _, err := svc.SetOwnedEmailTargetEnabled(ctx, user, &falseValue); err != nil {
+		t.Fatalf("disable owned target failed: %v", err)
+	}
+
+	failurePaused, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, user)
+	if err != nil {
+		t.Fatalf("get failure preference after disable failed: %v", err)
+	}
+	if !failurePaused.Enabled || failurePaused.DeliveryActive {
+		t.Fatalf("expected enabled but paused failure preference, got %+v", failurePaused)
+	}
+
+	successPaused, err := svc.GetCommitAuthorSuccessNotificationPreference(ctx, user)
+	if err != nil {
+		t.Fatalf("get success preference after disable failed: %v", err)
+	}
+	if !successPaused.Enabled || successPaused.DeliveryActive {
+		t.Fatalf("expected enabled but paused success preference, got %+v", successPaused)
+	}
+
+	trueValue := true
+	if _, reEnableErr := svc.SetOwnedEmailTargetEnabled(ctx, user, &trueValue); reEnableErr != nil {
+		t.Fatalf("re-enable owned target failed: %v", reEnableErr)
+	}
+
+	failureActive, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, user)
+	if err != nil {
+		t.Fatalf("get failure preference after re-enable failed: %v", err)
+	}
+	if !failureActive.Enabled || !failureActive.DeliveryActive {
+		t.Fatalf("expected active enabled failure preference, got %+v", failureActive)
+	}
+
+	successActive, err := svc.GetCommitAuthorSuccessNotificationPreference(ctx, user)
+	if err != nil {
+		t.Fatalf("get success preference after re-enable failed: %v", err)
+	}
+	if !successActive.Enabled || !successActive.DeliveryActive {
+		t.Fatalf("expected active enabled success preference, got %+v", successActive)
+	}
+
+	storedPreference, err := preferenceRepo.GetByUserID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("get stored preference failed: %v", err)
+	}
+	if !storedPreference.CommitAuthorFailureEnabled || !storedPreference.CommitAuthorSuccessEnabled {
+		t.Fatalf("expected stored preferences to remain enabled, got %+v", storedPreference)
+	}
+}
+
+func TestNotificationService_SetOwnedEmailTargetEnabled_PreservesMixedPreferences(t *testing.T) {
+	ctx := context.Background()
+	targetRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+	svc := NewNotificationService(targetRepo).WithPreferenceRepository(preferenceRepo)
+	now := time.Date(2026, 6, 29, 9, 45, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	user := domain.User{ID: uuid.NewString(), Email: "user@example.com", DisplayName: strPtr("User Example")}
+	if _, err := svc.EnsureOwnedEmailTarget(ctx, user); err != nil {
+		t.Fatalf("ensure owned target failed: %v", err)
+	}
+	if _, err := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, notificationBoolPtr(true)); err != nil {
+		t.Fatalf("enable failure preference failed: %v", err)
+	}
+	if _, err := svc.SetCommitAuthorSuccessNotificationPreference(ctx, user, notificationBoolPtr(false)); err != nil {
+		t.Fatalf("disable success preference failed: %v", err)
+	}
+
+	falseValue := false
+	if _, err := svc.SetOwnedEmailTargetEnabled(ctx, user, &falseValue); err != nil {
+		t.Fatalf("disable owned target failed: %v", err)
+	}
+
+	failurePaused, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, user)
+	if err != nil {
+		t.Fatalf("get failure preference after disable failed: %v", err)
+	}
+	if !failurePaused.Enabled || failurePaused.DeliveryActive {
+		t.Fatalf("expected enabled but paused failure preference, got %+v", failurePaused)
+	}
+
+	successPaused, err := svc.GetCommitAuthorSuccessNotificationPreference(ctx, user)
+	if err != nil {
+		t.Fatalf("get success preference after disable failed: %v", err)
+	}
+	if successPaused.Enabled || successPaused.DeliveryActive {
+		t.Fatalf("expected disabled inactive success preference, got %+v", successPaused)
+	}
+
+	trueValue := true
+	if _, reEnableErr := svc.SetOwnedEmailTargetEnabled(ctx, user, &trueValue); reEnableErr != nil {
+		t.Fatalf("re-enable owned target failed: %v", reEnableErr)
+	}
+
+	failureActive, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, user)
+	if err != nil {
+		t.Fatalf("get failure preference after re-enable failed: %v", err)
+	}
+	if !failureActive.Enabled || !failureActive.DeliveryActive {
+		t.Fatalf("expected enabled active failure preference, got %+v", failureActive)
+	}
+
+	successActive, err := svc.GetCommitAuthorSuccessNotificationPreference(ctx, user)
+	if err != nil {
+		t.Fatalf("get success preference after re-enable failed: %v", err)
+	}
+	if successActive.Enabled || successActive.DeliveryActive {
+		t.Fatalf("expected disabled inactive success preference, got %+v", successActive)
+	}
+
+	storedPreference, err := preferenceRepo.GetByUserID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("get stored preference failed: %v", err)
+	}
+	if !storedPreference.CommitAuthorFailureEnabled || storedPreference.CommitAuthorSuccessEnabled {
+		t.Fatalf("expected mixed stored preferences to remain unchanged, got %+v", storedPreference)
+	}
+}
+
 func TestNotificationService_CommitAuthorSuccessNotificationPreference(t *testing.T) {
 	ctx := context.Background()
 	targetRepo := memoryrepo.NewNotificationSubscriptionRepository()

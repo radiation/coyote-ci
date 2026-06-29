@@ -99,7 +99,11 @@ describe("Layout", () => {
         "is-active",
       );
       expect(screen.getByRole("link", { name: "Profile" })).toBeTruthy();
+      expect(
+        screen.getByRole("link", { name: "My notifications" }),
+      ).toBeTruthy();
       expect(screen.queryByRole("link", { name: "Tokens" })).toBeNull();
+      expect(screen.getByRole("link", { name: "Notifications" })).toBeTruthy();
       expect(screen.getByRole("link", { name: "Users" })).toBeTruthy();
     });
 
@@ -127,6 +131,10 @@ describe("Layout", () => {
     renderLayout();
 
     await waitFor(() => {
+      expect(
+        screen.getByRole("link", { name: "My notifications" }),
+      ).toBeTruthy();
+      expect(screen.queryByRole("link", { name: "Notifications" })).toBeNull();
       expect(screen.queryByRole("link", { name: "Users" })).toBeNull();
       expect(screen.getByRole("link", { name: "Tokens" })).toBeTruthy();
     });

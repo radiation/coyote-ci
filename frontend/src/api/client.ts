@@ -57,6 +57,7 @@ import type {
   NotificationTargetListResponse,
   UpdateCommitAuthorFailureNotificationPreferenceRequest,
   UpdateCommitAuthorSuccessNotificationPreferenceRequest,
+  UpdateMyEmailNotificationTargetRequest,
   UpdateNotificationDefaultsRequest,
   UpdateNotificationSubscriptionRequest,
   UpdateNotificationTargetRequest,
@@ -273,6 +274,22 @@ export async function getMyEmailNotificationTarget(): Promise<NotificationTarget
 export async function ensureMyEmailNotificationTarget(): Promise<NotificationTarget> {
   const envelope = await postNoBodyJSON<DataEnvelope<NotificationTarget>>(
     "/me/notification-targets/email",
+  );
+  return envelope.data;
+}
+
+export async function setMyEmailNotificationTargetEnabled(
+  input: UpdateMyEmailNotificationTargetRequest,
+): Promise<NotificationTarget> {
+  const envelope = await fetchJSON<DataEnvelope<NotificationTarget>>(
+    "/me/notification-targets/email",
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
   );
   return envelope.data;
 }

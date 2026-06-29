@@ -136,6 +136,30 @@ func (r *NotificationSubscriptionRepository) GetOwnedEmailTargetByUserID(_ conte
 	return domain.NotificationTarget{}, repository.ErrNotificationTargetNotFound
 }
 
+func (r *NotificationSubscriptionRepository) SetOwnedEmailTargetEnabled(_ context.Context, ownerUserID string, enabled bool, updatedAt time.Time) (domain.NotificationTarget, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	trimmedUserID := strings.TrimSpace(ownerUserID)
+	for id, target := range r.targets {
+		if target.Type != domain.NotificationTargetTypeEmail || target.OwnerUserID == nil {
+			continue
+		}
+		if strings.TrimSpace(*target.OwnerUserID) != trimmedUserID {
+			continue
+		}
+
+		target.Enabled = enabled
+		if !updatedAt.IsZero() {
+			target.UpdatedAt = updatedAt
+		}
+		r.targets[id] = target
+		return target, nil
+	}
+
+	return domain.NotificationTarget{}, repository.ErrNotificationTargetNotFound
+}
+
 func (r *NotificationSubscriptionRepository) EnsureOwnedEmailTarget(_ context.Context, input repository.EnsureOwnedNotificationEmailTargetInput) (domain.NotificationTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

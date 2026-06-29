@@ -575,6 +575,136 @@ func TestNotificationSubscriptionRepository_OwnedEmailTargets(t *testing.T) {
 	}
 }
 
+func TestNotificationSubscriptionRepository_SetOwnedEmailTargetEnabled(t *testing.T) {
+	repo := NewNotificationSubscriptionRepository()
+	ctx := context.Background()
+	createdAt := time.Date(2026, 6, 29, 11, 0, 0, 0, time.UTC)
+	updatedAt := createdAt.Add(15 * time.Minute)
+	ownerUserID := "user-1"
+
+	owned, err := repo.CreateTarget(ctx, domain.NotificationTarget{
+		ID:          "owned-target",
+		OwnerUserID: &ownerUserID,
+		Type:        domain.NotificationTargetTypeEmail,
+		Name:        "User Example",
+		Recipient:   "user@example.com",
+		Enabled:     true,
+		CreatedAt:   createdAt,
+		UpdatedAt:   createdAt,
+	})
+	if err != nil {
+		t.Fatalf("create owned target failed: %v", err)
+	}
+
+	shared, err := repo.CreateTarget(ctx, domain.NotificationTarget{
+		ID:        "shared-target",
+		Type:      domain.NotificationTargetTypeEmail,
+		Name:      "Shared Inbox",
+		Recipient: "shared@example.com",
+		Enabled:   true,
+		CreatedAt: createdAt,
+		UpdatedAt: createdAt,
+	})
+	if err != nil {
+		t.Fatalf("create shared target failed: %v", err)
+	}
+
+	otherOwner := "user-2"
+	otherOwned, err := repo.CreateTarget(ctx, domain.NotificationTarget{
+		ID:          "other-owned-target",
+		OwnerUserID: &otherOwner,
+		Type:        domain.NotificationTargetTypeEmail,
+		Name:        "Other User",
+		Recipient:   "other@example.com",
+		Enabled:     true,
+		CreatedAt:   createdAt,
+		UpdatedAt:   createdAt,
+	})
+	if err != nil {
+		t.Fatalf("create other owned target failed: %v", err)
+	}
+
+	disabled, err := repo.SetOwnedEmailTargetEnabled(ctx, " user-1 ", false, updatedAt)
+	if err != nil {
+		t.Fatalf("disable owned target failed: %v", err)
+	}
+	if disabled.Enabled {
+		t.Fatalf("expected disabled target, got %+v", disabled)
+	}
+	if disabled.Name != owned.Name || disabled.Recipient != owned.Recipient || disabled.Type != owned.Type {
+		t.Fatalf("expected identifying fields to remain unchanged, got %+v", disabled)
+	}
+	if disabled.OwnerUserID == nil || *disabled.OwnerUserID != ownerUserID {
+		t.Fatalf("expected owner to remain unchanged, got %+v", disabled.OwnerUserID)
+	}
+	if !disabled.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("expected updated_at to change to %v, got %v", updatedAt, disabled.UpdatedAt)
+	}
+
+	reEnabled, err := repo.SetOwnedEmailTargetEnabled(ctx, ownerUserID, true, updatedAt.Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("re-enable owned target failed: %v", err)
+	}
+	if !reEnabled.Enabled {
+		t.Fatalf("expected enabled target, got %+v", reEnabled)
+	}
+
+	repeated, err := repo.SetOwnedEmailTargetEnabled(ctx, ownerUserID, true, updatedAt.Add(10*time.Minute))
+	if err != nil {
+		t.Fatalf("repeat enable failed: %v", err)
+	}
+	if !repeated.Enabled {
+		t.Fatalf("expected idempotent enabled target, got %+v", repeated)
+	}
+
+	if _, missingErr := repo.SetOwnedEmailTargetEnabled(ctx, "missing-user", false, updatedAt); !errors.Is(missingErr, repository.ErrNotificationTargetNotFound) {
+		t.Fatalf("expected missing owned target error, got %v", missingErr)
+	}
+	if _, otherUpdateErr := repo.SetOwnedEmailTargetEnabled(ctx, otherOwner, false, updatedAt); otherUpdateErr != nil {
+		t.Fatalf("expected other user to update only their own target, got %v", otherUpdateErr)
+	}
+
+	sharedFetched, err := repo.GetTargetByID(ctx, shared.ID)
+	if err != nil {
+		t.Fatalf("get shared target failed: %v", err)
+	}
+	if !sharedFetched.Enabled {
+		t.Fatalf("expected unowned shared target to remain unchanged, got %+v", sharedFetched)
+	}
+
+	otherFetched, err := repo.GetTargetByID(ctx, otherOwned.ID)
+	if err != nil {
+		t.Fatalf("get other owned target failed: %v", err)
+	}
+	if otherFetched.Enabled {
+		t.Fatalf("expected other user target to reflect only its own update, got %+v", otherFetched)
+	}
+
+	ownedFetched, err := repo.GetTargetByID(ctx, owned.ID)
+	if err != nil {
+		t.Fatalf("get owned target failed: %v", err)
+	}
+	if ownedFetched.Name != owned.Name || ownedFetched.Recipient != owned.Recipient || ownedFetched.OwnerUserID == nil || *ownedFetched.OwnerUserID != ownerUserID || ownedFetched.Type != owned.Type {
+		t.Fatalf("expected owned target identifying fields to remain unchanged, got %+v", ownedFetched)
+	}
+
+	unownedOnlyRepo := NewNotificationSubscriptionRepository()
+	if _, err := unownedOnlyRepo.CreateTarget(ctx, domain.NotificationTarget{
+		ID:        "unowned-only",
+		Type:      domain.NotificationTargetTypeEmail,
+		Name:      "Unowned",
+		Recipient: "unowned@example.com",
+		Enabled:   true,
+		CreatedAt: createdAt,
+		UpdatedAt: createdAt,
+	}); err != nil {
+		t.Fatalf("create unowned-only target failed: %v", err)
+	}
+	if _, err := unownedOnlyRepo.SetOwnedEmailTargetEnabled(ctx, ownerUserID, false, updatedAt); !errors.Is(err, repository.ErrNotificationTargetNotFound) {
+		t.Fatalf("expected unowned target update to behave as not found, got %v", err)
+	}
+}
+
 func TestNotificationSubscriptionRepository_ListAndUpdateAdminViews(t *testing.T) {
 	repo := NewNotificationSubscriptionRepository()
 	ctx := context.Background()

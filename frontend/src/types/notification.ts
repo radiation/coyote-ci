@@ -22,6 +22,10 @@ export interface MyEmailNotificationTargetResponse {
   target: NotificationTarget | null;
 }
 
+export interface UpdateMyEmailNotificationTargetRequest {
+  enabled: boolean;
+}
+
 export interface CommitAuthorNotificationPreference {
   enabled: boolean;
   eligible: boolean;

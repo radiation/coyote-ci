@@ -22,6 +22,7 @@ var ErrNotificationTargetAddressInvalid = errors.New("notification target addres
 var ErrNotificationTargetWebhookURLRequired = errors.New("notification target webhook_url is required")
 var ErrNotificationTargetWebhookURLInvalid = errors.New("notification target webhook_url must be a valid https URL")
 var ErrNotificationTargetIDInvalid = errors.New("notification target id must be a valid UUID")
+var ErrNotificationTargetEnabledRequired = errors.New("notification target enabled is required")
 var ErrNotificationSubscriptionTargetIDRequired = errors.New("notification subscription target_id is required")
 var ErrNotificationSubscriptionIDInvalid = errors.New("notification subscription id must be a valid UUID")
 var ErrNotificationSubscriptionTargetIDInvalid = errors.New("notification subscription target_id must be a valid UUID")
@@ -172,6 +173,18 @@ func (s *NotificationService) EnsureOwnedEmailTarget(ctx context.Context, user d
 		UpdatedAt:   now,
 	}
 	return s.repo.EnsureOwnedEmailTargetInitialized(ctx, input)
+}
+
+func (s *NotificationService) SetOwnedEmailTargetEnabled(ctx context.Context, user domain.User, enabled *bool) (domain.NotificationTarget, error) {
+	ownerUserID := strings.TrimSpace(user.ID)
+	if ownerUserID == "" {
+		return domain.NotificationTarget{}, ErrNotificationPersonalUserIDRequired
+	}
+	if enabled == nil {
+		return domain.NotificationTarget{}, ErrNotificationTargetEnabledRequired
+	}
+
+	return s.repo.SetOwnedEmailTargetEnabled(ctx, ownerUserID, *enabled, s.now().UTC())
 }
 
 func (s *NotificationService) GetNotificationDefaults(ctx context.Context) (NotificationDefaultsState, error) {

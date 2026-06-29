@@ -33,6 +33,7 @@ type NotificationSubscriptionRepository interface {
 	ListTargets(ctx context.Context) ([]domain.NotificationTarget, error)
 	GetTargetByID(ctx context.Context, id string) (domain.NotificationTarget, error)
 	GetOwnedEmailTargetByUserID(ctx context.Context, userID string) (domain.NotificationTarget, error)
+	SetOwnedEmailTargetEnabled(ctx context.Context, ownerUserID string, enabled bool, updatedAt time.Time) (domain.NotificationTarget, error)
 	EnsureOwnedEmailTarget(ctx context.Context, input EnsureOwnedNotificationEmailTargetInput) (domain.NotificationTarget, error)
 	EnsureOwnedEmailTargetInitialized(ctx context.Context, input EnsureOwnedNotificationEmailTargetInput) (domain.NotificationTarget, error)
 	UpdateTarget(ctx context.Context, target domain.NotificationTarget) (domain.NotificationTarget, error)

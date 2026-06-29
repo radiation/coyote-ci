@@ -44,6 +44,7 @@ import {
   listNotificationTargets,
   getMyEmailNotificationTarget,
   ensureMyEmailNotificationTarget,
+  setMyEmailNotificationTargetEnabled,
   getCommitAuthorFailureNotificationPreference,
   getCommitAuthorSuccessNotificationPreference,
   getNotificationDefaults,
@@ -98,6 +99,7 @@ describe("API client - types", () => {
     expect(typeof listNotificationTargets).toBe("function");
     expect(typeof getMyEmailNotificationTarget).toBe("function");
     expect(typeof ensureMyEmailNotificationTarget).toBe("function");
+    expect(typeof setMyEmailNotificationTargetEnabled).toBe("function");
     expect(typeof getCommitAuthorFailureNotificationPreference).toBe(
       "function",
     );
@@ -1323,6 +1325,42 @@ describe("API client - types", () => {
       2,
       "/api/me/notification-targets/email",
       { credentials: "include", method: "POST" },
+    );
+  });
+
+  it("updates my email notification target enabled state", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          id: "target-1",
+          owner_user_id: "user-1",
+          type: "email",
+          name: "User Example",
+          address: "<user@example.com>",
+          webhook_configured: false,
+          enabled: false,
+          created_at: "2026-06-24T00:00:00Z",
+          updated_at: "2026-06-24T01:00:00Z",
+        },
+      }),
+    } as Response);
+
+    const updated = await setMyEmailNotificationTargetEnabled({
+      enabled: false,
+    });
+
+    expect(updated.enabled).toBe(false);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/me/notification-targets/email",
+      {
+        credentials: "include",
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ enabled: false }),
+      },
     );
   });
 

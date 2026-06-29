@@ -121,6 +121,31 @@ func (r *NotificationSubscriptionRepository) GetOwnedEmailTargetByUserID(ctx con
 	return target, nil
 }
 
+func (r *NotificationSubscriptionRepository) SetOwnedEmailTargetEnabled(ctx context.Context, ownerUserID string, enabled bool, updatedAt time.Time) (domain.NotificationTarget, error) {
+	const query = `
+		UPDATE notification_targets
+		SET enabled = $2,
+			updated_at = $3
+		WHERE owner_user_id = $1
+		  AND type = $4
+		RETURNING ` + notificationTargetSelectColumns + `
+	`
+
+	target, err := scanNotificationTarget(r.db.QueryRowContext(ctx, query,
+		strings.TrimSpace(ownerUserID),
+		enabled,
+		updatedAt,
+		string(domain.NotificationTargetTypeEmail),
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.NotificationTarget{}, repository.ErrNotificationTargetNotFound
+		}
+		return domain.NotificationTarget{}, err
+	}
+	return target, nil
+}
+
 func (r *NotificationSubscriptionRepository) EnsureOwnedEmailTarget(ctx context.Context, input repository.EnsureOwnedNotificationEmailTargetInput) (domain.NotificationTarget, error) {
 	ownerUserID := strings.TrimSpace(input.OwnerUserID)
 	for attempts := 0; attempts < 3; attempts++ {
