@@ -35,6 +35,12 @@ func (s notificationTestScanner) Scan(dest ...any) error {
 				return fmt.Errorf("value %d is not string", index)
 			}
 			*typedDest = value
+		case *domain.UserNotificationPreferenceSource:
+			value, ok := s.values[index].(string)
+			if !ok {
+				return fmt.Errorf("value %d is not preference source", index)
+			}
+			*typedDest = domain.UserNotificationPreferenceSource(value)
 		case *bool:
 			value, ok := s.values[index].(bool)
 			if !ok {
@@ -632,6 +638,271 @@ func TestNotificationSubscriptionRepository_EnsureOwnedEmailTarget_RetriesAndErr
 		_, exhaustedErr := repo.EnsureOwnedEmailTarget(context.Background(), input)
 		if !errors.Is(exhaustedErr, repository.ErrNotificationTargetDuplicate) {
 			t.Fatalf("expected exhausted retry duplicate error, got %v", exhaustedErr)
+		}
+	})
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewNotificationSubscriptionRepository(db)
+	now := time.Date(2026, 6, 28, 19, 5, 0, 0, time.UTC)
+	targetColumns := []string{"id", "owner_user_id", "type", "name", "recipient", "enabled", "created_at", "updated_at"}
+	input := repository.EnsureOwnedNotificationEmailTargetInput{
+		ID:          "target-new",
+		OwnerUserID: " user-1 ",
+		Name:        "User One",
+		Recipient:   "<user@example.com>",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	t.Run("returns existing owned target without initialization", func(t *testing.T) {
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE owner_user_id = \$1`).WithArgs("user-1", string(domain.NotificationTargetTypeEmail)).WillReturnRows(
+			sqlmock.NewRows(targetColumns).AddRow("target-owned", "user-1", "email", "User One", "<user@example.com>", true, now, now),
+		)
+		mock.ExpectCommit()
+
+		target, ensureErr := repo.EnsureOwnedEmailTargetInitialized(context.Background(), input)
+		if ensureErr != nil {
+			t.Fatalf("ensure existing owned target failed: %v", ensureErr)
+		}
+		if target.ID != "target-owned" {
+			t.Fatalf("expected existing target id target-owned, got %q", target.ID)
+		}
+	})
+
+	t.Run("creates target and initializes preference from current default", func(t *testing.T) {
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE owner_user_id = \$1`).WithArgs("user-1", string(domain.NotificationTargetTypeEmail)).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE type = \$1`).WithArgs(string(domain.NotificationTargetTypeEmail), strings.TrimSpace(input.Recipient)).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`INSERT INTO notification_targets`).WithArgs(input.ID, "user-1", string(domain.NotificationTargetTypeEmail), input.Name, strings.TrimSpace(input.Recipient), true, input.CreatedAt, input.UpdatedAt).WillReturnRows(
+			sqlmock.NewRows(targetColumns).AddRow("target-new", "user-1", "email", "User One", "<user@example.com>", true, now, now),
+		)
+		mock.ExpectQuery(`SELECT default_commit_author_failure_email_enabled\s+FROM notification_instance_settings`).WillReturnRows(sqlmock.NewRows([]string{"default_commit_author_failure_email_enabled"}).AddRow(false))
+		mock.ExpectExec(`INSERT INTO user_notification_preferences`).WithArgs("user-1", false, domain.UserNotificationPreferenceSourceInstanceDefault, input.CreatedAt, input.UpdatedAt).WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectCommit()
+
+		target, ensureErr := repo.EnsureOwnedEmailTargetInitialized(context.Background(), input)
+		if ensureErr != nil {
+			t.Fatalf("ensure initialized target failed: %v", ensureErr)
+		}
+		if target.ID != "target-new" {
+			t.Fatalf("expected created target id target-new, got %q", target.ID)
+		}
+	})
+
+	t.Run("claims unowned target and defaults to enabled when settings are absent", func(t *testing.T) {
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE owner_user_id = \$1`).WithArgs("user-1", string(domain.NotificationTargetTypeEmail)).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE type = \$1`).WithArgs(string(domain.NotificationTargetTypeEmail), strings.TrimSpace(input.Recipient)).WillReturnRows(
+			sqlmock.NewRows(targetColumns).AddRow("target-shared", nil, "email", "Shared Inbox", "<user@example.com>", true, now, now),
+		)
+		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM notification_subscriptions WHERE target_id = \$1`).WithArgs("target-shared").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+		mock.ExpectQuery(`UPDATE notification_targets\s+SET owner_user_id = \$2,\s+updated_at = \$3`).WithArgs("target-shared", "user-1", now).WillReturnRows(
+			sqlmock.NewRows(targetColumns).AddRow("target-shared", "user-1", "email", "Shared Inbox", "<user@example.com>", true, now, now),
+		)
+		mock.ExpectQuery(`SELECT default_commit_author_failure_email_enabled\s+FROM notification_instance_settings`).WillReturnError(sql.ErrNoRows)
+		mock.ExpectExec(`INSERT INTO user_notification_preferences`).WithArgs("user-1", true, domain.UserNotificationPreferenceSourceInstanceDefault, input.CreatedAt, input.UpdatedAt).WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectCommit()
+
+		claimed, claimErr := repo.EnsureOwnedEmailTargetInitialized(context.Background(), input)
+		if claimErr != nil {
+			t.Fatalf("claim initialized target failed: %v", claimErr)
+		}
+		if claimed.ID != "target-shared" {
+			t.Fatalf("expected claimed target id target-shared, got %q", claimed.ID)
+		}
+	})
+
+	t.Run("rolls back when settings lookup fails after create", func(t *testing.T) {
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE owner_user_id = \$1`).WithArgs("user-1", string(domain.NotificationTargetTypeEmail)).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE type = \$1`).WithArgs(string(domain.NotificationTargetTypeEmail), strings.TrimSpace(input.Recipient)).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`INSERT INTO notification_targets`).WithArgs(input.ID, "user-1", string(domain.NotificationTargetTypeEmail), input.Name, strings.TrimSpace(input.Recipient), true, input.CreatedAt, input.UpdatedAt).WillReturnRows(
+			sqlmock.NewRows(targetColumns).AddRow("target-new", "user-1", "email", "User One", "<user@example.com>", true, now, now),
+		)
+		mock.ExpectQuery(`SELECT default_commit_author_failure_email_enabled\s+FROM notification_instance_settings`).WillReturnError(errors.New("settings failed"))
+		mock.ExpectRollback()
+
+		_, ensureErr := repo.EnsureOwnedEmailTargetInitialized(context.Background(), input)
+		if ensureErr == nil || ensureErr.Error() != "settings failed" {
+			t.Fatalf("expected settings lookup error, got %v", ensureErr)
+		}
+	})
+
+	t.Run("rolls back when preference initialization fails after claim", func(t *testing.T) {
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE owner_user_id = \$1`).WithArgs("user-1", string(domain.NotificationTargetTypeEmail)).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE type = \$1`).WithArgs(string(domain.NotificationTargetTypeEmail), strings.TrimSpace(input.Recipient)).WillReturnRows(
+			sqlmock.NewRows(targetColumns).AddRow("target-claim", nil, "email", "Shared Inbox", "<user@example.com>", true, now, now),
+		)
+		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM notification_subscriptions WHERE target_id = \$1`).WithArgs("target-claim").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+		mock.ExpectQuery(`UPDATE notification_targets\s+SET owner_user_id = \$2,\s+updated_at = \$3`).WithArgs("target-claim", "user-1", now).WillReturnRows(
+			sqlmock.NewRows(targetColumns).AddRow("target-claim", "user-1", "email", "Shared Inbox", "<user@example.com>", true, now, now),
+		)
+		mock.ExpectQuery(`SELECT default_commit_author_failure_email_enabled\s+FROM notification_instance_settings`).WillReturnRows(sqlmock.NewRows([]string{"default_commit_author_failure_email_enabled"}).AddRow(true))
+		mock.ExpectExec(`INSERT INTO user_notification_preferences`).WithArgs("user-1", true, domain.UserNotificationPreferenceSourceInstanceDefault, input.CreatedAt, input.UpdatedAt).WillReturnError(errors.New("initialize failed"))
+		mock.ExpectRollback()
+
+		_, ensureErr := repo.EnsureOwnedEmailTargetInitialized(context.Background(), input)
+		if ensureErr == nil || ensureErr.Error() != "initialize failed" {
+			t.Fatalf("expected initialize error, got %v", ensureErr)
+		}
+	})
+
+	t.Run("returns commit error after successful initialization", func(t *testing.T) {
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE owner_user_id = \$1`).WithArgs("user-1", string(domain.NotificationTargetTypeEmail)).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE type = \$1`).WithArgs(string(domain.NotificationTargetTypeEmail), strings.TrimSpace(input.Recipient)).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`INSERT INTO notification_targets`).WithArgs(input.ID, "user-1", string(domain.NotificationTargetTypeEmail), input.Name, strings.TrimSpace(input.Recipient), true, input.CreatedAt, input.UpdatedAt).WillReturnRows(
+			sqlmock.NewRows(targetColumns).AddRow("target-commit", "user-1", "email", "User One", "<user@example.com>", true, now, now),
+		)
+		mock.ExpectQuery(`SELECT default_commit_author_failure_email_enabled\s+FROM notification_instance_settings`).WillReturnRows(sqlmock.NewRows([]string{"default_commit_author_failure_email_enabled"}).AddRow(true))
+		mock.ExpectExec(`INSERT INTO user_notification_preferences`).WithArgs("user-1", true, domain.UserNotificationPreferenceSourceInstanceDefault, input.CreatedAt, input.UpdatedAt).WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
+
+		_, ensureErr := repo.EnsureOwnedEmailTargetInitialized(context.Background(), input)
+		if ensureErr == nil || ensureErr.Error() != "commit failed" {
+			t.Fatalf("expected commit error, got %v", ensureErr)
+		}
+	})
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized_RetryAfterRollback(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewNotificationSubscriptionRepository(db)
+	now := time.Date(2026, 6, 28, 19, 10, 0, 0, time.UTC)
+	targetColumns := []string{"id", "owner_user_id", "type", "name", "recipient", "enabled", "created_at", "updated_at"}
+	input := repository.EnsureOwnedNotificationEmailTargetInput{
+		ID:          "target-retry",
+		OwnerUserID: "user-retry",
+		Name:        "Retry User",
+		Recipient:   "<retry@example.com>",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE owner_user_id = \$1`).WithArgs("user-retry", string(domain.NotificationTargetTypeEmail)).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE type = \$1`).WithArgs(string(domain.NotificationTargetTypeEmail), strings.TrimSpace(input.Recipient)).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`INSERT INTO notification_targets`).WithArgs(input.ID, "user-retry", string(domain.NotificationTargetTypeEmail), input.Name, strings.TrimSpace(input.Recipient), true, input.CreatedAt, input.UpdatedAt).WillReturnRows(
+		sqlmock.NewRows(targetColumns).AddRow("target-retry", "user-retry", "email", "Retry User", "<retry@example.com>", true, now, now),
+	)
+	mock.ExpectQuery(`SELECT default_commit_author_failure_email_enabled\s+FROM notification_instance_settings`).WillReturnRows(sqlmock.NewRows([]string{"default_commit_author_failure_email_enabled"}).AddRow(false))
+	mock.ExpectExec(`INSERT INTO user_notification_preferences`).WithArgs("user-retry", false, domain.UserNotificationPreferenceSourceInstanceDefault, input.CreatedAt, input.UpdatedAt).WillReturnError(errors.New("initialize failed"))
+	mock.ExpectRollback()
+
+	_, firstErr := repo.EnsureOwnedEmailTargetInitialized(context.Background(), input)
+	if firstErr == nil || firstErr.Error() != "initialize failed" {
+		t.Fatalf("expected initialize failure on first attempt, got %v", firstErr)
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE owner_user_id = \$1`).WithArgs("user-retry", string(domain.NotificationTargetTypeEmail)).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE type = \$1`).WithArgs(string(domain.NotificationTargetTypeEmail), strings.TrimSpace(input.Recipient)).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`INSERT INTO notification_targets`).WithArgs(input.ID, "user-retry", string(domain.NotificationTargetTypeEmail), input.Name, strings.TrimSpace(input.Recipient), true, input.CreatedAt, input.UpdatedAt).WillReturnRows(
+		sqlmock.NewRows(targetColumns).AddRow("target-retry", "user-retry", "email", "Retry User", "<retry@example.com>", true, now, now),
+	)
+	mock.ExpectQuery(`SELECT default_commit_author_failure_email_enabled\s+FROM notification_instance_settings`).WillReturnRows(sqlmock.NewRows([]string{"default_commit_author_failure_email_enabled"}).AddRow(true))
+	mock.ExpectExec(`INSERT INTO user_notification_preferences`).WithArgs("user-retry", true, domain.UserNotificationPreferenceSourceInstanceDefault, input.CreatedAt, input.UpdatedAt).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	ensured, secondErr := repo.EnsureOwnedEmailTargetInitialized(context.Background(), input)
+	if secondErr != nil {
+		t.Fatalf("expected retry to succeed, got %v", secondErr)
+	}
+	if ensured.ID != "target-retry" {
+		t.Fatalf("expected retry target id target-retry, got %q", ensured.ID)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized_Retries(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewNotificationSubscriptionRepository(db)
+	now := time.Date(2026, 6, 28, 19, 15, 0, 0, time.UTC)
+	targetColumns := []string{"id", "owner_user_id", "type", "name", "recipient", "enabled", "created_at", "updated_at"}
+	input := repository.EnsureOwnedNotificationEmailTargetInput{
+		ID:          "target-retry-init",
+		OwnerUserID: "user-retry-init",
+		Name:        "Retry Init",
+		Recipient:   "<retry-init@example.com>",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	t.Run("retries on duplicate race and then succeeds", func(t *testing.T) {
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE owner_user_id = \$1`).WithArgs("user-retry-init", string(domain.NotificationTargetTypeEmail)).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE type = \$1`).WithArgs(string(domain.NotificationTargetTypeEmail), strings.TrimSpace(input.Recipient)).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`INSERT INTO notification_targets`).WithArgs(input.ID, "user-retry-init", string(domain.NotificationTargetTypeEmail), input.Name, strings.TrimSpace(input.Recipient), true, input.CreatedAt, input.UpdatedAt).WillReturnError(errors.New("duplicate key value violates unique constraint notification_targets_owner_user_email_key"))
+		mock.ExpectRollback()
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE owner_user_id = \$1`).WithArgs("user-retry-init", string(domain.NotificationTargetTypeEmail)).WillReturnRows(
+			sqlmock.NewRows(targetColumns).AddRow("target-retry-init", "user-retry-init", "email", "Retry Init", "<retry-init@example.com>", true, now, now),
+		)
+		mock.ExpectCommit()
+
+		ensured, retryErr := repo.EnsureOwnedEmailTargetInitialized(context.Background(), input)
+		if retryErr != nil {
+			t.Fatalf("expected retry to succeed, got %v", retryErr)
+		}
+		if ensured.ID != "target-retry-init" {
+			t.Fatalf("expected retried target id target-retry-init, got %q", ensured.ID)
+		}
+	})
+
+	t.Run("retries on commit unique violation and replays initialization", func(t *testing.T) {
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE owner_user_id = \$1`).WithArgs("user-retry-init", string(domain.NotificationTargetTypeEmail)).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE type = \$1`).WithArgs(string(domain.NotificationTargetTypeEmail), strings.TrimSpace(input.Recipient)).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`INSERT INTO notification_targets`).WithArgs(input.ID, "user-retry-init", string(domain.NotificationTargetTypeEmail), input.Name, strings.TrimSpace(input.Recipient), true, input.CreatedAt, input.UpdatedAt).WillReturnRows(
+			sqlmock.NewRows(targetColumns).AddRow("target-retry-init", "user-retry-init", "email", "Retry Init", "<retry-init@example.com>", true, now, now),
+		)
+		mock.ExpectQuery(`SELECT default_commit_author_failure_email_enabled\s+FROM notification_instance_settings`).WillReturnRows(sqlmock.NewRows([]string{"default_commit_author_failure_email_enabled"}).AddRow(true))
+		mock.ExpectExec(`INSERT INTO user_notification_preferences`).WithArgs("user-retry-init", true, domain.UserNotificationPreferenceSourceInstanceDefault, input.CreatedAt, input.UpdatedAt).WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectCommit().WillReturnError(errors.New("duplicate key value violates unique constraint notification_targets_owner_user_email_key"))
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets\s+WHERE owner_user_id = \$1`).WithArgs("user-retry-init", string(domain.NotificationTargetTypeEmail)).WillReturnRows(
+			sqlmock.NewRows(targetColumns).AddRow("target-retry-init", "user-retry-init", "email", "Retry Init", "<retry-init@example.com>", true, now, now),
+		)
+		mock.ExpectCommit()
+
+		ensured, commitRetryErr := repo.EnsureOwnedEmailTargetInitialized(context.Background(), input)
+		if commitRetryErr != nil {
+			t.Fatalf("expected commit retry to succeed, got %v", commitRetryErr)
+		}
+		if ensured.ID != "target-retry-init" {
+			t.Fatalf("expected commit retry target id target-retry-init, got %q", ensured.ID)
 		}
 	})
 

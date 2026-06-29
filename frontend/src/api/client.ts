@@ -49,11 +49,13 @@ import type {
   CreateNotificationSubscriptionRequest,
   CreateNotificationTargetRequest,
   MyEmailNotificationTargetResponse,
+  NotificationDefaults,
   NotificationSubscription,
   NotificationSubscriptionListResponse,
   NotificationTarget,
   NotificationTargetListResponse,
   UpdateCommitAuthorFailureNotificationPreferenceRequest,
+  UpdateNotificationDefaultsRequest,
   UpdateNotificationSubscriptionRequest,
   UpdateNotificationTargetRequest,
 } from "../types/notification";
@@ -280,6 +282,13 @@ export async function getCommitAuthorFailureNotificationPreference(): Promise<Co
   return envelope.data;
 }
 
+export async function getNotificationDefaults(): Promise<NotificationDefaults> {
+  const envelope = await fetchJSON<DataEnvelope<NotificationDefaults>>(
+    "/settings/notifications/defaults",
+  );
+  return envelope.data;
+}
+
 export async function setCommitAuthorFailureNotificationPreference(
   input: UpdateCommitAuthorFailureNotificationPreferenceRequest,
 ): Promise<CommitAuthorFailureNotificationPreference> {
@@ -292,6 +301,22 @@ export async function setCommitAuthorFailureNotificationPreference(
     },
     body: JSON.stringify(input),
   });
+  return envelope.data;
+}
+
+export async function setNotificationDefaults(
+  input: UpdateNotificationDefaultsRequest,
+): Promise<NotificationDefaults> {
+  const envelope = await fetchJSON<DataEnvelope<NotificationDefaults>>(
+    "/settings/notifications/defaults",
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
   return envelope.data;
 }
 

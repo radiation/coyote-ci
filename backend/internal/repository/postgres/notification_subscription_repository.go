@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -128,7 +129,7 @@ func (r *NotificationSubscriptionRepository) EnsureOwnedEmailTarget(ctx context.
 			return domain.NotificationTarget{}, beginErr
 		}
 
-		ensured, ensureErr := r.ensureOwnedEmailTargetTx(ctx, tx, input, ownerUserID)
+		ensured, _, ensureErr := r.ensureOwnedEmailTargetTx(ctx, tx, input, ownerUserID)
 		if ensureErr != nil {
 			_ = tx.Rollback()
 			if errors.Is(ensureErr, repository.ErrNotificationTargetDuplicate) {
@@ -149,7 +150,44 @@ func (r *NotificationSubscriptionRepository) EnsureOwnedEmailTarget(ctx context.
 	return domain.NotificationTarget{}, repository.ErrNotificationTargetDuplicate
 }
 
-func (r *NotificationSubscriptionRepository) ensureOwnedEmailTargetTx(ctx context.Context, tx *sql.Tx, input repository.EnsureOwnedNotificationEmailTargetInput, ownerUserID string) (domain.NotificationTarget, error) {
+func (r *NotificationSubscriptionRepository) EnsureOwnedEmailTargetInitialized(ctx context.Context, input repository.EnsureOwnedNotificationEmailTargetInput) (domain.NotificationTarget, error) {
+	ownerUserID := strings.TrimSpace(input.OwnerUserID)
+	for attempts := 0; attempts < 3; attempts++ {
+		tx, beginErr := r.db.BeginTx(ctx, nil)
+		if beginErr != nil {
+			return domain.NotificationTarget{}, beginErr
+		}
+
+		ensured, newlyEligible, ensureErr := r.ensureOwnedEmailTargetTx(ctx, tx, input, ownerUserID)
+		if ensureErr != nil {
+			_ = tx.Rollback()
+			if errors.Is(ensureErr, repository.ErrNotificationTargetDuplicate) {
+				continue
+			}
+			return domain.NotificationTarget{}, ensureErr
+		}
+
+		if newlyEligible {
+			initErr := r.initializeCommitAuthorFailurePreferenceTx(ctx, tx, ownerUserID, input.CreatedAt, input.UpdatedAt)
+			if initErr != nil {
+				_ = tx.Rollback()
+				return domain.NotificationTarget{}, initErr
+			}
+		}
+
+		if commitErr := tx.Commit(); commitErr != nil {
+			if isUniqueViolation(commitErr) {
+				continue
+			}
+			return domain.NotificationTarget{}, commitErr
+		}
+		return ensured, nil
+	}
+
+	return domain.NotificationTarget{}, repository.ErrNotificationTargetDuplicate
+}
+
+func (r *NotificationSubscriptionRepository) ensureOwnedEmailTargetTx(ctx context.Context, tx *sql.Tx, input repository.EnsureOwnedNotificationEmailTargetInput, ownerUserID string) (domain.NotificationTarget, bool, error) {
 	const findOwnedQuery = `
 		SELECT ` + notificationTargetSelectColumns + `
 		FROM notification_targets
@@ -162,10 +200,10 @@ func (r *NotificationSubscriptionRepository) ensureOwnedEmailTargetTx(ctx contex
 
 	target, err := scanNotificationTarget(tx.QueryRowContext(ctx, findOwnedQuery, ownerUserID, string(domain.NotificationTargetTypeEmail)))
 	if err == nil {
-		return target, nil
+		return target, false, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return domain.NotificationTarget{}, err
+		return domain.NotificationTarget{}, false, err
 	}
 
 	const findByRecipientQuery = `
@@ -184,17 +222,17 @@ func (r *NotificationSubscriptionRepository) ensureOwnedEmailTargetTx(ctx contex
 	))
 	if err == nil {
 		if target.OwnerUserID != nil && strings.TrimSpace(*target.OwnerUserID) != ownerUserID {
-			return domain.NotificationTarget{}, repository.ErrNotificationTargetOwnershipConflict
+			return domain.NotificationTarget{}, false, repository.ErrNotificationTargetOwnershipConflict
 		}
 		if target.OwnerUserID == nil {
 			const subscriptionCountQuery = `SELECT COUNT(*) FROM notification_subscriptions WHERE target_id = $1`
 			var subscriptionCount int
 			countErr := tx.QueryRowContext(ctx, subscriptionCountQuery, target.ID).Scan(&subscriptionCount)
 			if countErr != nil {
-				return domain.NotificationTarget{}, countErr
+				return domain.NotificationTarget{}, false, countErr
 			}
 			if subscriptionCount > 0 {
-				return domain.NotificationTarget{}, repository.ErrNotificationTargetOwnershipConflict
+				return domain.NotificationTarget{}, false, repository.ErrNotificationTargetOwnershipConflict
 			}
 
 			const claimQuery = `
@@ -212,19 +250,19 @@ func (r *NotificationSubscriptionRepository) ensureOwnedEmailTargetTx(ctx contex
 			))
 			if claimErr != nil {
 				if errors.Is(claimErr, sql.ErrNoRows) {
-					return domain.NotificationTarget{}, repository.ErrNotificationTargetDuplicate
+					return domain.NotificationTarget{}, false, repository.ErrNotificationTargetDuplicate
 				}
 				if isUniqueViolation(claimErr) {
-					return domain.NotificationTarget{}, repository.ErrNotificationTargetDuplicate
+					return domain.NotificationTarget{}, false, repository.ErrNotificationTargetDuplicate
 				}
-				return domain.NotificationTarget{}, claimErr
+				return domain.NotificationTarget{}, false, claimErr
 			}
-			return claimed, nil
+			return claimed, true, nil
 		}
-		return target, nil
+		return target, false, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return domain.NotificationTarget{}, err
+		return domain.NotificationTarget{}, false, err
 	}
 
 	const insertQuery = `
@@ -245,11 +283,51 @@ func (r *NotificationSubscriptionRepository) ensureOwnedEmailTargetTx(ctx contex
 	))
 	if createErr != nil {
 		if isUniqueViolation(createErr) {
-			return domain.NotificationTarget{}, repository.ErrNotificationTargetDuplicate
+			return domain.NotificationTarget{}, false, repository.ErrNotificationTargetDuplicate
 		}
-		return domain.NotificationTarget{}, createErr
+		return domain.NotificationTarget{}, false, createErr
 	}
-	return created, nil
+	return created, true, nil
+}
+
+func (r *NotificationSubscriptionRepository) initializeCommitAuthorFailurePreferenceTx(ctx context.Context, tx *sql.Tx, ownerUserID string, createdAt time.Time, updatedAt time.Time) error {
+	enabled, err := getDefaultCommitAuthorFailureEmailEnabledTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+
+	const query = `
+		INSERT INTO user_notification_preferences (user_id, commit_author_failure_enabled, source, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (user_id) DO NOTHING
+	`
+
+	_, execErr := tx.ExecContext(ctx, query,
+		ownerUserID,
+		enabled,
+		domain.UserNotificationPreferenceSourceInstanceDefault,
+		createdAt,
+		updatedAt,
+	)
+	return execErr
+}
+
+func getDefaultCommitAuthorFailureEmailEnabledTx(ctx context.Context, tx *sql.Tx) (bool, error) {
+	const query = `
+		SELECT default_commit_author_failure_email_enabled
+		FROM notification_instance_settings
+		WHERE singleton = TRUE
+	`
+
+	var enabled bool
+	err := tx.QueryRowContext(ctx, query).Scan(&enabled)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return true, nil
+		}
+		return false, err
+	}
+	return enabled, nil
 }
 
 func (r *NotificationSubscriptionRepository) UpdateTarget(ctx context.Context, target domain.NotificationTarget) (domain.NotificationTarget, error) {

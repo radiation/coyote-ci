@@ -921,6 +921,16 @@ definitions:
       user:
         $ref: '#/definitions/api.UserResponse'
     type: object
+  api.NotificationDefaultsEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.NotificationDefaultsResponse'
+    type: object
+  api.NotificationDefaultsResponse:
+    properties:
+      default_commit_author_failure_email_enabled:
+        type: boolean
+    type: object
   api.NotificationTargetResponse:
     properties:
       address:
@@ -1055,6 +1065,11 @@ definitions:
   api.PutCommitAuthorFailureNotificationPreferenceRequest:
     properties:
       enabled:
+        type: boolean
+    type: object
+  api.PutNotificationDefaultsRequest:
+    properties:
+      default_commit_author_failure_email_enabled:
         type: boolean
     type: object
   api.QueueBuildRequest:
@@ -3028,6 +3043,78 @@ paths:
       summary: Readiness check
       tags:
       - health
+  /settings/notifications/defaults:
+    get:
+      description: Returns the effective instance default used when a newly eligible
+        user first gets a personal email target for commit-author failure notifications.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.NotificationDefaultsEnvelope'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get notification defaults
+      tags:
+      - notifications
+    put:
+      consumes:
+      - application/json
+      description: Updates the instance default used only when a newly eligible user
+        first gets a personal email target for commit-author failure notifications.
+      parameters:
+      - description: Notification defaults
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.PutNotificationDefaultsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.NotificationDefaultsEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Update notification defaults
+      tags:
+      - notifications
   /users:
     get:
       description: Lists Coyote users.

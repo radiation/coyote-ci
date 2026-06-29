@@ -11,6 +11,30 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
+type nonMemoryPreferenceRepo struct{}
+
+func (r *nonMemoryPreferenceRepo) GetByUserID(context.Context, string) (domain.UserNotificationPreference, error) {
+	return domain.UserNotificationPreference{}, repository.ErrUserNotificationPreferenceNotFound
+}
+
+func (r *nonMemoryPreferenceRepo) InitializeIfAbsent(context.Context, domain.UserNotificationPreference) (domain.UserNotificationPreference, bool, error) {
+	return domain.UserNotificationPreference{}, false, nil
+}
+
+func (r *nonMemoryPreferenceRepo) Upsert(context.Context, domain.UserNotificationPreference) (domain.UserNotificationPreference, error) {
+	return domain.UserNotificationPreference{}, nil
+}
+
+type nonMemorySettingsRepo struct{}
+
+func (r *nonMemorySettingsRepo) Get(context.Context) (domain.NotificationInstanceSettings, error) {
+	return domain.NotificationInstanceSettings{}, repository.ErrNotificationInstanceSettingsNotFound
+}
+
+func (r *nonMemorySettingsRepo) Upsert(context.Context, domain.NotificationInstanceSettings) (domain.NotificationInstanceSettings, error) {
+	return domain.NotificationInstanceSettings{}, nil
+}
+
 func TestNotificationSubscriptionRepository_CreateAndListMatches(t *testing.T) {
 	repo := NewNotificationSubscriptionRepository()
 	target, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{
@@ -742,5 +766,141 @@ func TestNotificationSubscriptionRepository_ListAndUpdateAdminViews(t *testing.T
 
 	if err := repo.DeleteSubscription(ctx, "missing-subscription"); !errors.Is(err, repository.ErrNotificationSubscriptionNotFound) {
 		t.Fatalf("expected delete missing subscription error, got %v", err)
+	}
+}
+
+func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized(t *testing.T) {
+	ctx := context.Background()
+	repo := NewNotificationSubscriptionRepository()
+	preferences := NewUserNotificationPreferenceRepository()
+	settings := NewNotificationInstanceSettingsRepository()
+	repo.SetNotificationPreferenceRepository(preferences)
+	repo.SetNotificationInstanceSettingsRepository(settings)
+
+	now := time.Date(2026, 6, 28, 19, 0, 0, 0, time.UTC)
+	_, err := settings.Upsert(ctx, domain.NotificationInstanceSettings{
+		DefaultCommitAuthorFailureEmailEnabled: false,
+		CreatedAt:                              now,
+		UpdatedAt:                              now,
+	})
+	if err != nil {
+		t.Fatalf("seed settings failed: %v", err)
+	}
+
+	created, err := repo.EnsureOwnedEmailTargetInitialized(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+		ID:          "target-init",
+		OwnerUserID: "user-init",
+		Name:        "User Init",
+		Recipient:   "<user-init@example.com>",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("ensure initialized target failed: %v", err)
+	}
+	if created.ID != "target-init" {
+		t.Fatalf("expected created target id target-init, got %q", created.ID)
+	}
+
+	preference, err := preferences.GetByUserID(ctx, "user-init")
+	if err != nil {
+		t.Fatalf("expected initialized preference, got %v", err)
+	}
+	if preference.CommitAuthorFailureEnabled {
+		t.Fatalf("expected disabled initialized preference, got %+v", preference)
+	}
+	if preference.Source != domain.UserNotificationPreferenceSourceInstanceDefault {
+		t.Fatalf("expected instance-default preference source, got %+v", preference)
+	}
+
+	_, err = preferences.Upsert(ctx, domain.UserNotificationPreference{
+		UserID:                     "user-init",
+		CommitAuthorFailureEnabled: true,
+		Source:                     domain.UserNotificationPreferenceSourceUser,
+		CreatedAt:                  now,
+		UpdatedAt:                  now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("seed explicit preference failed: %v", err)
+	}
+
+	again, err := repo.EnsureOwnedEmailTargetInitialized(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+		ID:          "ignored",
+		OwnerUserID: "user-init",
+		Name:        "Ignored",
+		Recipient:   "<different@example.com>",
+		CreatedAt:   now.Add(time.Minute),
+		UpdatedAt:   now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("repeat ensure initialized failed: %v", err)
+	}
+	if again.ID != created.ID {
+		t.Fatalf("expected repeat ensure to return %q, got %q", created.ID, again.ID)
+	}
+
+	explicitPreference, err := preferences.GetByUserID(ctx, "user-init")
+	if err != nil {
+		t.Fatalf("get explicit preference failed: %v", err)
+	}
+	if !explicitPreference.CommitAuthorFailureEnabled || explicitPreference.Source != domain.UserNotificationPreferenceSourceUser {
+		t.Fatalf("expected explicit preference to be preserved, got %+v", explicitPreference)
+	}
+
+	legacyOwner := "legacy-user"
+	_, err = repo.CreateTarget(ctx, domain.NotificationTarget{
+		ID:          "legacy-target",
+		OwnerUserID: &legacyOwner,
+		Type:        domain.NotificationTargetTypeEmail,
+		Name:        "Legacy User",
+		Recipient:   "legacy@example.com",
+		Enabled:     true,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("seed legacy target failed: %v", err)
+	}
+
+	legacy, err := repo.EnsureOwnedEmailTargetInitialized(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+		ID:          "legacy-ignore",
+		OwnerUserID: legacyOwner,
+		Name:        "Legacy User",
+		Recipient:   "legacy@example.com",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("ensure legacy target failed: %v", err)
+	}
+	if legacy.ID != "legacy-target" {
+		t.Fatalf("expected legacy target id legacy-target, got %q", legacy.ID)
+	}
+	_, err = preferences.GetByUserID(ctx, legacyOwner)
+	if !errors.Is(err, repository.ErrUserNotificationPreferenceNotFound) {
+		t.Fatalf("expected legacy preference to remain absent, got %v", err)
+	}
+}
+
+func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized_NoConfiguredMemoryRepositories(t *testing.T) {
+	ctx := context.Background()
+	repo := NewNotificationSubscriptionRepository()
+	repo.SetNotificationPreferenceRepository(&nonMemoryPreferenceRepo{})
+	repo.SetNotificationInstanceSettingsRepository(&nonMemorySettingsRepo{})
+	now := time.Date(2026, 6, 28, 20, 15, 0, 0, time.UTC)
+
+	ensured, err := repo.EnsureOwnedEmailTargetInitialized(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+		ID:          "target-nil-config",
+		OwnerUserID: "user-no-pref",
+		Name:        "No Pref",
+		Recipient:   "<no-pref@example.com>",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("ensure target without memory config failed: %v", err)
+	}
+	if ensured.ID != "target-nil-config" {
+		t.Fatalf("expected ensured target id target-nil-config, got %q", ensured.ID)
 	}
 }

@@ -13,10 +13,12 @@ import {
   createNotificationSubscription,
   createNotificationTarget,
   deleteNotificationSubscription,
+  getNotificationDefaults,
   listJobs,
   listNotificationSubscriptions,
   listNotificationTargets,
   listProjects,
+  setNotificationDefaults,
   updateNotificationSubscription,
   updateNotificationTarget,
 } from "../api";
@@ -28,10 +30,12 @@ vi.mock("../api", async () => {
     createNotificationSubscription: vi.fn(),
     createNotificationTarget: vi.fn(),
     deleteNotificationSubscription: vi.fn(),
+    getNotificationDefaults: vi.fn(),
     listJobs: vi.fn(),
     listNotificationSubscriptions: vi.fn(),
     listNotificationTargets: vi.fn(),
     listProjects: vi.fn(),
+    setNotificationDefaults: vi.fn(),
     updateNotificationSubscription: vi.fn(),
     updateNotificationTarget: vi.fn(),
   };
@@ -116,12 +120,14 @@ describe("NotificationsPage", () => {
   const mockedDeleteNotificationSubscription = vi.mocked(
     deleteNotificationSubscription,
   );
+  const mockedGetNotificationDefaults = vi.mocked(getNotificationDefaults);
   const mockedListJobs = vi.mocked(listJobs);
   const mockedListNotificationSubscriptions = vi.mocked(
     listNotificationSubscriptions,
   );
   const mockedListNotificationTargets = vi.mocked(listNotificationTargets);
   const mockedListProjects = vi.mocked(listProjects);
+  const mockedSetNotificationDefaults = vi.mocked(setNotificationDefaults);
   const mockedUpdateNotificationSubscription = vi.mocked(
     updateNotificationSubscription,
   );
@@ -129,6 +135,10 @@ describe("NotificationsPage", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+
+    mockedGetNotificationDefaults.mockResolvedValue({
+      default_commit_author_failure_email_enabled: true,
+    });
 
     mockedListNotificationTargets.mockResolvedValue([
       {
@@ -276,6 +286,92 @@ describe("NotificationsPage", () => {
     });
 
     mockedDeleteNotificationSubscription.mockResolvedValue();
+    mockedSetNotificationDefaults.mockResolvedValue({
+      default_commit_author_failure_email_enabled: false,
+    });
+  });
+
+  it("renders notification defaults with clear non-retroactive copy", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("checkbox", {
+          name: /Notify new users when their commits fail/i,
+        }),
+      ).toBeChecked();
+    });
+
+    expect(screen.getByText(/does not modify existing users/i)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /personal email notifications for commit-author failures/i,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/apply to existing users/i)).toBeNull();
+    expect(screen.queryByText(/success/i)).toBeNull();
+  });
+
+  it("updates notification defaults and prevents duplicate submits while pending", async () => {
+    const pendingMutation = (() => {
+      let release!: () => void;
+      const promise = new Promise<{
+        default_commit_author_failure_email_enabled: boolean;
+      }>((resolve) => {
+        release = () => {
+          resolve({ default_commit_author_failure_email_enabled: false });
+        };
+      });
+      return { promise, release };
+    })();
+    mockedSetNotificationDefaults.mockImplementation(
+      () => pendingMutation.promise,
+    );
+
+    renderPage();
+
+    const checkbox = await screen.findByRole("checkbox", {
+      name: /Notify new users when their commits fail/i,
+    });
+    fireEvent.click(checkbox);
+
+    await waitFor(() => {
+      expect(mockedSetNotificationDefaults).toHaveBeenCalledTimes(1);
+      expect(checkbox).toBeDisabled();
+    });
+
+    fireEvent.click(checkbox);
+    expect(mockedSetNotificationDefaults).toHaveBeenCalledTimes(1);
+
+    pendingMutation.release();
+    await waitFor(() => {
+      expect(mockedSetNotificationDefaults).toHaveBeenCalledWith(
+        {
+          default_commit_author_failure_email_enabled: false,
+        },
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("preserves the prior visible default when the mutation fails", async () => {
+    mockedSetNotificationDefaults.mockRejectedValue(new APIError(500, "boom"));
+
+    renderPage();
+
+    const checkbox = await screen.findByRole("checkbox", {
+      name: /Notify new users when their commits fail/i,
+    });
+    expect(checkbox).toBeChecked();
+
+    fireEvent.click(checkbox);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Failed to update notification defaults/i),
+      ).toBeTruthy();
+    });
+    expect(checkbox).toBeChecked();
   });
 
   it("shows target options with channel labels", async () => {

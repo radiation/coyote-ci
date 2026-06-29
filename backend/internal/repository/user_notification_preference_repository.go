@@ -11,5 +11,6 @@ var ErrUserNotificationPreferenceNotFound = errors.New("user notification prefer
 
 type UserNotificationPreferenceRepository interface {
 	GetByUserID(ctx context.Context, userID string) (domain.UserNotificationPreference, error)
+	InitializeIfAbsent(ctx context.Context, preference domain.UserNotificationPreference) (domain.UserNotificationPreference, bool, error)
 	Upsert(ctx context.Context, preference domain.UserNotificationPreference) (domain.UserNotificationPreference, error)
 }

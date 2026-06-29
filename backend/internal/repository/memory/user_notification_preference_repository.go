@@ -29,6 +29,18 @@ func (r *UserNotificationPreferenceRepository) GetByUserID(_ context.Context, us
 	return preference, nil
 }
 
+func (r *UserNotificationPreferenceRepository) InitializeIfAbsent(_ context.Context, preference domain.UserNotificationPreference) (domain.UserNotificationPreference, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	preference.UserID = strings.TrimSpace(preference.UserID)
+	if existing, ok := r.preferences[preference.UserID]; ok {
+		return existing, false, nil
+	}
+	r.preferences[preference.UserID] = preference
+	return preference, true, nil
+}
+
 func (r *UserNotificationPreferenceRepository) Upsert(_ context.Context, preference domain.UserNotificationPreference) (domain.UserNotificationPreference, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

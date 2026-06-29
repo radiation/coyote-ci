@@ -59,6 +59,18 @@ type CommitAuthorFailureNotificationPreferenceEnvelope struct {
 	Data CommitAuthorFailureNotificationPreferenceResponse `json:"data"`
 }
 
+type NotificationDefaultsResponse struct {
+	DefaultCommitAuthorFailureEmailEnabled bool `json:"default_commit_author_failure_email_enabled"`
+}
+
+type NotificationDefaultsEnvelope struct {
+	Data NotificationDefaultsResponse `json:"data"`
+}
+
+type PutNotificationDefaultsRequest struct {
+	DefaultCommitAuthorFailureEmailEnabled *bool `json:"default_commit_author_failure_email_enabled"`
+}
+
 type PutCommitAuthorFailureNotificationPreferenceRequest struct {
 	Enabled *bool `json:"enabled"`
 }

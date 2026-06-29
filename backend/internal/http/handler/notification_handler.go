@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -32,6 +33,8 @@ type notificationAdminService interface {
 	ListTargets(ctx context.Context) ([]domain.NotificationTarget, error)
 	GetOwnedEmailTarget(ctx context.Context, user domain.User) (domain.NotificationTarget, error)
 	EnsureOwnedEmailTarget(ctx context.Context, user domain.User) (domain.NotificationTarget, error)
+	GetNotificationDefaults(ctx context.Context) (service.NotificationDefaultsState, error)
+	SetNotificationDefaults(ctx context.Context, enabled *bool) (service.NotificationDefaultsState, error)
 	GetCommitAuthorFailureNotificationPreference(ctx context.Context, user domain.User) (service.CommitAuthorFailureNotificationPreferenceState, error)
 	SetCommitAuthorFailureNotificationPreference(ctx context.Context, user domain.User, enabled *bool) (service.CommitAuthorFailureNotificationPreferenceState, error)
 	CreateTarget(ctx context.Context, input service.CreateNotificationTargetInput) (domain.NotificationTarget, error)
@@ -144,6 +147,83 @@ func (h *NotificationHandler) EnsureMyEmailTarget(w http.ResponseWriter, r *http
 	}
 
 	writeDataJSON(w, http.StatusOK, toNotificationTargetResponse(target))
+}
+
+// GetNotificationDefaults godoc
+// @Summary Get notification defaults
+// @Description Returns the effective instance default used when a newly eligible user first gets a personal email target for commit-author failure notifications.
+// @Tags notifications
+// @Produce json
+// @Success 200 {object} api.NotificationDefaultsEnvelope
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 403 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /settings/notifications/defaults [get]
+func (h *NotificationHandler) GetNotificationDefaults(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeAdmin(w, r) {
+		return
+	}
+
+	state, err := h.admin.GetNotificationDefaults(r.Context())
+	if err != nil {
+		h.writeNotificationError(w, err)
+		return
+	}
+
+	writeDataJSON(w, http.StatusOK, toNotificationDefaultsResponse(state))
+}
+
+// SetNotificationDefaults godoc
+// @Summary Update notification defaults
+// @Description Updates the instance default used only when a newly eligible user first gets a personal email target for commit-author failure notifications.
+// @Tags notifications
+// @Accept json
+// @Produce json
+// @Param request body api.PutNotificationDefaultsRequest true "Notification defaults"
+// @Success 200 {object} api.NotificationDefaultsEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 403 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /settings/notifications/defaults [put]
+func (h *NotificationHandler) SetNotificationDefaults(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeAdmin(w, r) {
+		return
+	}
+
+	actor, _ := h.currentRequestUser(r)
+	current, currentErr := h.admin.GetNotificationDefaults(r.Context())
+	if currentErr != nil {
+		h.writeNotificationError(w, currentErr)
+		return
+	}
+
+	var req api.PutNotificationDefaultsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+	if req.DefaultCommitAuthorFailureEmailEnabled == nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", service.ErrNotificationDefaultEnabledRequired.Error())
+		return
+	}
+
+	state, err := h.admin.SetNotificationDefaults(r.Context(), req.DefaultCommitAuthorFailureEmailEnabled)
+	if err != nil {
+		h.writeNotificationError(w, err)
+		return
+	}
+
+	log.Printf(
+		"notification defaults updated: actor_user_id=%s old_default_commit_author_failure_email_enabled=%t new_default_commit_author_failure_email_enabled=%t",
+		strings.TrimSpace(actor.ID),
+		current.DefaultCommitAuthorFailureEmailEnabled,
+		state.DefaultCommitAuthorFailureEmailEnabled,
+	)
+
+	writeDataJSON(w, http.StatusOK, toNotificationDefaultsResponse(state))
 }
 
 // GetMyCommitAuthorFailureNotificationPreference godoc
@@ -389,11 +469,18 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 		errors.Is(err, service.ErrNotificationSubscriptionEventTypeInvalid) ||
 		errors.Is(err, service.ErrNotificationPersonalEmailRequired) ||
 		errors.Is(err, service.ErrNotificationPersonalUserIDRequired) ||
-		errors.Is(err, service.ErrNotificationPreferenceEnabledRequired) {
+		errors.Is(err, service.ErrNotificationPreferenceEnabledRequired) ||
+		errors.Is(err, service.ErrNotificationDefaultEnabledRequired) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 	writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+}
+
+func toNotificationDefaultsResponse(state service.NotificationDefaultsState) api.NotificationDefaultsResponse {
+	return api.NotificationDefaultsResponse{
+		DefaultCommitAuthorFailureEmailEnabled: state.DefaultCommitAuthorFailureEmailEnabled,
+	}
 }
 
 func toCommitAuthorFailureNotificationPreferenceResponse(state service.CommitAuthorFailureNotificationPreferenceState) api.CommitAuthorFailureNotificationPreferenceResponse {

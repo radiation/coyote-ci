@@ -45,7 +45,9 @@ import {
   getMyEmailNotificationTarget,
   ensureMyEmailNotificationTarget,
   getCommitAuthorFailureNotificationPreference,
+  getNotificationDefaults,
   setCommitAuthorFailureNotificationPreference,
+  setNotificationDefaults,
   createNotificationTarget,
   updateNotificationTarget,
   listNotificationSubscriptions,
@@ -97,9 +99,11 @@ describe("API client - types", () => {
     expect(typeof getCommitAuthorFailureNotificationPreference).toBe(
       "function",
     );
+    expect(typeof getNotificationDefaults).toBe("function");
     expect(typeof setCommitAuthorFailureNotificationPreference).toBe(
       "function",
     );
+    expect(typeof setNotificationDefaults).toBe("function");
     expect(typeof createNotificationTarget).toBe("function");
     expect(typeof updateNotificationTarget).toBe("function");
     expect(typeof listNotificationSubscriptions).toBe("function");
@@ -1375,6 +1379,54 @@ describe("API client - types", () => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ enabled: true }),
+      },
+    );
+  });
+
+  it("gets and updates notification defaults", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            default_commit_author_failure_email_enabled: true,
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            default_commit_author_failure_email_enabled: false,
+          },
+        }),
+      } as Response);
+
+    const current = await getNotificationDefaults();
+    const updated = await setNotificationDefaults({
+      default_commit_author_failure_email_enabled: false,
+    });
+
+    expect(current.default_commit_author_failure_email_enabled).toBe(true);
+    expect(updated.default_commit_author_failure_email_enabled).toBe(false);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/settings/notifications/defaults",
+      { credentials: "include" },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/settings/notifications/defaults",
+      {
+        credentials: "include",
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          default_commit_author_failure_email_enabled: false,
+        }),
       },
     );
   });
