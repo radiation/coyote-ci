@@ -97,6 +97,12 @@ vi.mock("../pages/NotificationsPage", () => ({
   },
 }));
 
+vi.mock("../pages/MyNotificationsPage", () => ({
+  MyNotificationsPage() {
+    return <h2>My Notifications Mock</h2>;
+  },
+}));
+
 import { appRoutes } from "./router";
 
 function renderRoute(path: string) {
@@ -120,6 +126,7 @@ describe("router lazy route loaders", () => {
     ["/jobs/new", "Job Create Mock"],
     ["/jobs/job-1", "Job Detail Mock"],
     ["/settings/tokens", "API Tokens Mock"],
+    ["/settings/my-notifications", "My Notifications Mock"],
     ["/settings/users", "Users Mock"],
     ["/settings/credentials", "Credentials Mock"],
     ["/settings/notifications", "Notifications Mock"],

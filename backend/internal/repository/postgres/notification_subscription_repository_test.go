@@ -405,6 +405,55 @@ func TestNotificationSubscriptionRepository_GetOwnedEmailTargetByUserID(t *testi
 	}
 }
 
+func TestNotificationSubscriptionRepository_SetOwnedEmailTargetEnabled(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewNotificationSubscriptionRepository(db)
+	now := time.Now().UTC()
+	targetColumns := []string{"id", "owner_user_id", "type", "name", "recipient", "enabled", "created_at", "updated_at"}
+
+	mock.ExpectQuery(`UPDATE notification_targets\s+SET enabled = \$2,\s+updated_at = \$3\s+WHERE owner_user_id = \$1\s+AND type = \$4\s+RETURNING id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at`).WithArgs("user-1", false, now, string(domain.NotificationTargetTypeEmail)).WillReturnRows(
+		sqlmock.NewRows(targetColumns).AddRow("target-1", "user-1", "email", "User One", "<user@example.com>", false, now.Add(-time.Hour), now),
+	)
+
+	updated, updateErr := repo.SetOwnedEmailTargetEnabled(context.Background(), " user-1 ", false, now)
+	if updateErr != nil {
+		t.Fatalf("disable owned email target failed: %v", updateErr)
+	}
+	if updated.Name != "User One" || updated.Recipient != "<user@example.com>" || updated.Type != domain.NotificationTargetTypeEmail {
+		t.Fatalf("expected unchanged identifying fields, got %+v", updated)
+	}
+	if updated.OwnerUserID == nil || *updated.OwnerUserID != "user-1" || updated.Enabled {
+		t.Fatalf("unexpected updated owned target %+v", updated)
+	}
+
+	mock.ExpectQuery(`UPDATE notification_targets\s+SET enabled = \$2,\s+updated_at = \$3\s+WHERE owner_user_id = \$1\s+AND type = \$4\s+RETURNING id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at`).WithArgs("user-1", true, now.Add(time.Minute), string(domain.NotificationTargetTypeEmail)).WillReturnRows(
+		sqlmock.NewRows(targetColumns).AddRow("target-1", "user-1", "email", "User One", "<user@example.com>", true, now.Add(-time.Hour), now.Add(time.Minute)),
+	)
+
+	reEnabled, reEnableErr := repo.SetOwnedEmailTargetEnabled(context.Background(), "user-1", true, now.Add(time.Minute))
+	if reEnableErr != nil {
+		t.Fatalf("re-enable owned email target failed: %v", reEnableErr)
+	}
+	if !reEnabled.Enabled {
+		t.Fatalf("expected re-enabled target, got %+v", reEnabled)
+	}
+
+	mock.ExpectQuery(`UPDATE notification_targets\s+SET enabled = \$2,\s+updated_at = \$3\s+WHERE owner_user_id = \$1\s+AND type = \$4\s+RETURNING id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at`).WithArgs("other-user", false, now, string(domain.NotificationTargetTypeEmail)).WillReturnError(sql.ErrNoRows)
+	_, missingErr := repo.SetOwnedEmailTargetEnabled(context.Background(), "other-user", false, now)
+	if !errors.Is(missingErr, repository.ErrNotificationTargetNotFound) {
+		t.Fatalf("expected missing owned email target, got %v", missingErr)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 func TestNotificationSubscriptionRepository_EnsureOwnedEmailTarget(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

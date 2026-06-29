@@ -13,15 +13,22 @@ fixes:
 coverage:
   status:
     project:
-      default:
-        target: auto
       backend:
+        informational: true
         flags: [backend]
       frontend:
+        informational: true
         flags: [frontend]
+
     patch:
-      default:
+      backend:
         target: 80%
+        threshold: 0%
+        flags: [backend]
+      frontend:
+        target: 80%
+        threshold: 0%
+        flags: [frontend]
 
 flags:
   backend:

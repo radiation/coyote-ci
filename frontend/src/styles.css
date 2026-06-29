@@ -997,6 +997,78 @@ fieldset {
   margin: 0;
 }
 
+.my-notifications-target-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.my-notifications-detail-label,
+.my-notifications-detail-value,
+.my-notifications-email {
+  margin: 0;
+}
+
+.my-notifications-email,
+.my-notifications-detail-value {
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.my-notifications-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.my-notifications-status.is-enabled {
+  border-color: var(--color-success-border);
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+}
+
+.my-notifications-status.is-paused {
+  border-color: var(--color-error-border);
+  background: var(--color-error-bg);
+  color: var(--color-error-text);
+}
+
+.my-notifications-preference-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.my-notifications-preference {
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border);
+}
+
+.my-notifications-preference:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.my-notifications-preference-description {
+  margin: 6px 0 0 28px;
+}
+
+.my-notifications-preference-meta {
+  margin: 8px 0 0 28px;
+}
+
+.my-notifications-admin-handoff {
+  margin-top: 12px;
+  padding: 0 2px;
+}
+
 .checkbox-label,
 .radio-label {
   display: flex;

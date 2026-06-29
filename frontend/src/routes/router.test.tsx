@@ -6,6 +6,8 @@ import { ThemeProvider } from "../theme";
 import { AuthProvider } from "../auth";
 import { appRoutes } from "./router";
 import {
+  getCommitAuthorFailureNotificationPreference,
+  getCommitAuthorSuccessNotificationPreference,
   getAuthConfig,
   getMe,
   getMyEmailNotificationTarget,
@@ -19,6 +21,8 @@ vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
   return {
     ...actual,
+    getCommitAuthorFailureNotificationPreference: vi.fn(),
+    getCommitAuthorSuccessNotificationPreference: vi.fn(),
     getAuthConfig: vi.fn(),
     getMe: vi.fn(),
     getMyEmailNotificationTarget: vi.fn(),
@@ -68,6 +72,12 @@ function renderRouter(initialEntries: string[]) {
 
 describe("router dashboard home", () => {
   const mockedGetAuthConfig = vi.mocked(getAuthConfig);
+  const mockedGetCommitAuthorFailureNotificationPreference = vi.mocked(
+    getCommitAuthorFailureNotificationPreference,
+  );
+  const mockedGetCommitAuthorSuccessNotificationPreference = vi.mocked(
+    getCommitAuthorSuccessNotificationPreference,
+  );
   const mockedGetMe = vi.mocked(getMe);
   const mockedGetMyEmailNotificationTarget = vi.mocked(
     getMyEmailNotificationTarget,
@@ -96,6 +106,20 @@ describe("router dashboard home", () => {
       },
     });
     mockedGetMyEmailNotificationTarget.mockResolvedValue(null);
+    mockedGetCommitAuthorFailureNotificationPreference.mockResolvedValue({
+      enabled: false,
+      eligible: false,
+      delivery_active: false,
+      target: null,
+      unavailable_reason: "personal_target_required",
+    });
+    mockedGetCommitAuthorSuccessNotificationPreference.mockResolvedValue({
+      enabled: false,
+      eligible: false,
+      delivery_active: false,
+      target: null,
+      unavailable_reason: "personal_target_required",
+    });
     mockedListProjects.mockResolvedValue([]);
     mockedListQueue.mockResolvedValue([]);
     mockedListBuilds.mockResolvedValue([]);
@@ -135,6 +159,17 @@ describe("router dashboard home", () => {
       await screen.findByRole("heading", { name: "Profile" }),
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Profile" })).toHaveClass(
+      "is-active",
+    );
+  });
+
+  it("renders the my notifications settings route", async () => {
+    renderRouter(["/settings/my-notifications"]);
+
+    expect(
+      await screen.findByRole("heading", { name: "My notifications" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "My notifications" })).toHaveClass(
       "is-active",
     );
   });

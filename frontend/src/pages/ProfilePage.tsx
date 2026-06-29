@@ -1,15 +1,9 @@
-import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
-  ensureMyEmailNotificationTarget,
   formatAPIErrorMessage,
-  getCommitAuthorFailureNotificationPreference,
-  getCommitAuthorSuccessNotificationPreference,
   getMe,
   getMyEmailNotificationTarget,
-  setCommitAuthorFailureNotificationPreference,
-  setCommitAuthorSuccessNotificationPreference,
 } from "../api";
 import { useAuth } from "../auth-context";
 
@@ -39,11 +33,7 @@ function providerLabel(
 }
 
 export function ProfilePage() {
-  const queryClient = useQueryClient();
   const { currentUser, authMode } = useAuth();
-  const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(
-    null,
-  );
 
   const { data: me } = useQuery({
     queryKey: ["me", "auth-provider"],
@@ -59,93 +49,6 @@ export function ProfilePage() {
     queryFn: getMyEmailNotificationTarget,
   });
 
-  const {
-    data: failurePreference,
-    isLoading: failurePreferenceLoading,
-    error: failurePreferenceError,
-  } = useQuery({
-    queryKey: ["me", "notification-preferences", "commit-author-failures"],
-    queryFn: getCommitAuthorFailureNotificationPreference,
-  });
-
-  const {
-    data: successPreference,
-    isLoading: successPreferenceLoading,
-    error: successPreferenceError,
-  } = useQuery({
-    queryKey: ["me", "notification-preferences", "commit-author-successes"],
-    queryFn: getCommitAuthorSuccessNotificationPreference,
-  });
-
-  const ensureTargetMutation = useMutation({
-    mutationFn: ensureMyEmailNotificationTarget,
-    onMutate: () => {
-      setActionErrorMessage(null);
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ["me", "notification-target", "email"],
-      });
-      await queryClient.invalidateQueries({
-        queryKey: ["me", "notification-preferences", "commit-author-failures"],
-      });
-      await queryClient.invalidateQueries({
-        queryKey: ["me", "notification-preferences", "commit-author-successes"],
-      });
-    },
-    onError: (mutationError) => {
-      setActionErrorMessage(
-        formatAPIErrorMessage(
-          mutationError,
-          "You do not have permission to create a personal notification target.",
-          "Failed to create personal email target",
-        ),
-      );
-    },
-  });
-
-  const updateCommitPreferenceMutation = useMutation({
-    mutationFn: setCommitAuthorFailureNotificationPreference,
-    onMutate: () => {
-      setActionErrorMessage(null);
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ["me", "notification-preferences", "commit-author-failures"],
-      });
-    },
-    onError: (mutationError) => {
-      setActionErrorMessage(
-        formatAPIErrorMessage(
-          mutationError,
-          "You do not have permission to update commit notifications.",
-          "Failed to update commit notifications",
-        ),
-      );
-    },
-  });
-
-  const updateCommitSuccessPreferenceMutation = useMutation({
-    mutationFn: setCommitAuthorSuccessNotificationPreference,
-    onMutate: () => {
-      setActionErrorMessage(null);
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ["me", "notification-preferences", "commit-author-successes"],
-      });
-    },
-    onError: (mutationError) => {
-      setActionErrorMessage(
-        formatAPIErrorMessage(
-          mutationError,
-          "You do not have permission to update commit notifications.",
-          "Failed to update commit notifications",
-        ),
-      );
-    },
-  });
-
   if (!currentUser) {
     return null;
   }
@@ -155,20 +58,6 @@ export function ProfilePage() {
     "Not provided by authentication provider";
   const effectiveProvider = providerLabel(me?.auth_method, authMode);
   const emailVerified = me?.email_verified;
-  const failurePreferenceCanEnable =
-    !!failurePreference?.target && failurePreference.target.enabled;
-  const failurePreferenceControlDisabled =
-    updateCommitPreferenceMutation.isPending ||
-    !failurePreference ||
-    failurePreferenceLoading ||
-    (!failurePreference.enabled && !failurePreferenceCanEnable);
-  const successPreferenceCanEnable =
-    !!successPreference?.target && successPreference.target.enabled;
-  const successPreferenceControlDisabled =
-    updateCommitSuccessPreferenceMutation.isPending ||
-    !successPreference ||
-    successPreferenceLoading ||
-    (!successPreference.enabled && !successPreferenceCanEnable);
 
   return (
     <>
@@ -221,10 +110,11 @@ export function ProfilePage() {
       </section>
 
       <section className="settings-panel" style={{ marginTop: 16 }}>
-        <h3>My Notification Target</h3>
-        {actionErrorMessage && (
-          <p className="error-text">{actionErrorMessage}</p>
-        )}
+        <h3>My notifications</h3>
+        <p className="subtle-text">
+          Manage your personal notification target and commit notifications from
+          your dedicated notification settings page.
+        </p>
         {myTargetError && (
           <p className="error-text">
             {formatAPIErrorMessage(
@@ -234,163 +124,32 @@ export function ProfilePage() {
             )}
           </p>
         )}
-        {myTargetLoading && <p>Loading personal notification target...</p>}
-        {!myTargetLoading && myTarget && (
+        {myTargetLoading && <p>Loading notification summary...</p>}
+        {!myTargetLoading && (
           <>
-            <p className="subtle-text">
-              This is your personal email notification target.
-            </p>
             <dl className="profile-details-list" style={{ marginTop: 10 }}>
               <div>
-                <dt>Name</dt>
-                <dd>{myTarget.name}</dd>
+                <dt>Personal target</dt>
+                <dd>{myTarget ? "Configured" : "Not configured"}</dd>
               </div>
               <div>
-                <dt>Email</dt>
-                <dd>{myTarget.address ?? "-"}</dd>
-              </div>
-              <div>
-                <dt>Enabled</dt>
-                <dd>{myTarget.enabled ? "Yes" : "No"}</dd>
+                <dt>Delivery</dt>
+                <dd>
+                  {!myTarget
+                    ? "Create a target to enable personal delivery"
+                    : myTarget.enabled
+                      ? "Active"
+                      : "Paused"}
+                </dd>
               </div>
             </dl>
             <p className="subtle-text" style={{ marginTop: 10 }}>
-              Manage additional targets and subscriptions in{" "}
-              <Link to="/settings/notifications">Notification settings</Link>.
+              <Link to="/settings/my-notifications">
+                Manage my notifications
+              </Link>
             </p>
           </>
         )}
-        {!myTargetLoading && !myTarget && (
-          <>
-            <p className="subtle-text">
-              Creating your personal target will use this authenticated email:
-            </p>
-            <p>{currentUser.email}</p>
-            <button
-              type="button"
-              onClick={() => ensureTargetMutation.mutate()}
-              disabled={ensureTargetMutation.isPending}
-            >
-              {ensureTargetMutation.isPending
-                ? "Creating..."
-                : "Create my email target"}
-            </button>
-          </>
-        )}
-      </section>
-
-      <section className="settings-panel" style={{ marginTop: 16 }}>
-        <h3>Commit Notifications</h3>
-        <p className="subtle-text">
-          Receive an email when a commit attributed to your Coyote account
-          causes a build or job to fail or succeed. Success notifications may be
-          more frequent.
-        </p>
-        {(failurePreferenceError || successPreferenceError) && (
-          <p className="error-text">
-            {formatAPIErrorMessage(
-              failurePreferenceError ?? successPreferenceError,
-              "Unable to load your commit notification preference.",
-              "Failed to load commit notifications",
-            )}
-          </p>
-        )}
-        {(failurePreferenceLoading || successPreferenceLoading) && (
-          <p>Loading commit notification preference...</p>
-        )}
-        {!failurePreferenceLoading &&
-          !successPreferenceLoading &&
-          failurePreference &&
-          successPreference && (
-            <>
-              <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <input
-                  type="checkbox"
-                  checked={failurePreference.enabled}
-                  disabled={failurePreferenceControlDisabled}
-                  onChange={(event) =>
-                    updateCommitPreferenceMutation.mutate({
-                      enabled: event.currentTarget.checked,
-                    })
-                  }
-                />
-                <span>Notify me when my commits fail</span>
-              </label>
-              {failurePreference.target?.address && (
-                <p className="subtle-text" style={{ marginTop: 10 }}>
-                  Failure notifications will be sent to{" "}
-                  {failurePreference.target.address}.
-                </p>
-              )}
-              {failurePreference.unavailable_reason ===
-                "personal_target_required" && (
-                <>
-                  <p className="subtle-text" style={{ marginTop: 10 }}>
-                    Create your personal email target before enabling commit
-                    failure notifications.
-                  </p>
-                </>
-              )}
-              {failurePreference.enabled &&
-                failurePreference.target &&
-                !failurePreference.target.enabled && (
-                  <p className="subtle-text" style={{ marginTop: 10 }}>
-                    Delivery is paused because your personal email target is
-                    disabled. Re-enable it in{" "}
-                    <Link to="/settings/notifications">
-                      Notification settings
-                    </Link>
-                    .
-                  </p>
-                )}
-
-              <label
-                style={{
-                  display: "flex",
-                  gap: 10,
-                  alignItems: "center",
-                  marginTop: 16,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={successPreference.enabled}
-                  disabled={successPreferenceControlDisabled}
-                  onChange={(event) =>
-                    updateCommitSuccessPreferenceMutation.mutate({
-                      enabled: event.currentTarget.checked,
-                    })
-                  }
-                />
-                <span>Notify me when my commits succeed</span>
-              </label>
-              {successPreference.target?.address && (
-                <p className="subtle-text" style={{ marginTop: 10 }}>
-                  Success notifications will be sent to{" "}
-                  {successPreference.target.address}.
-                </p>
-              )}
-              {successPreference.unavailable_reason ===
-                "personal_target_required" && (
-                <p className="subtle-text" style={{ marginTop: 10 }}>
-                  Create your personal email target before enabling commit
-                  success notifications.
-                </p>
-              )}
-              {successPreference.enabled &&
-                successPreference.target &&
-                !successPreference.target.enabled && (
-                  <p className="subtle-text" style={{ marginTop: 10 }}>
-                    Success delivery is paused because your personal email
-                    target is disabled. Re-enable it in{" "}
-                    <Link to="/settings/notifications">
-                      Notification settings
-                    </Link>
-                    .
-                  </p>
-                )}
-            </>
-          )}
       </section>
     </>
   );

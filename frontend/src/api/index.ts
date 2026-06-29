@@ -52,6 +52,7 @@ export {
   listNotificationTargets,
   getMyEmailNotificationTarget,
   ensureMyEmailNotificationTarget,
+  setMyEmailNotificationTargetEnabled,
   getCommitAuthorFailureNotificationPreference,
   getCommitAuthorSuccessNotificationPreference,
   getNotificationDefaults,

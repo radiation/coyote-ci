@@ -33,6 +33,7 @@ export function Layout() {
   const displayName = currentUser?.display_name || currentUser?.email;
   const settingsNavigation: AppShellNavigationItem[] = [
     { to: "/settings/profile", label: "Profile" },
+    { to: "/settings/my-notifications", label: "My notifications" },
     { to: "/settings/credentials", label: "Credentials" },
     {
       to: "/settings/notifications",

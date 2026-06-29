@@ -73,6 +73,10 @@ const ProfilePage = lazyPage(
   () => import("../pages/ProfilePage"),
   "ProfilePage",
 );
+const MyNotificationsPage = lazyPage(
+  () => import("../pages/MyNotificationsPage"),
+  "MyNotificationsPage",
+);
 const UsersPage = lazyPage(() => import("../pages/UsersPage"), "UsersPage");
 const CredentialsPage = lazyPage(
   () => import("../pages/CredentialsPage"),
@@ -103,6 +107,7 @@ export const appRoutes: RouteObject[] = [
       { path: "/jobs/:id", element: <JobDetailPage /> },
       { path: "/settings/tokens", element: <APITokensPage /> },
       { path: "/settings/profile", element: <ProfilePage /> },
+      { path: "/settings/my-notifications", element: <MyNotificationsPage /> },
       { path: "/settings/users", element: <UsersPage /> },
       { path: "/settings/credentials", element: <CredentialsPage /> },
       { path: "/settings/notifications", element: <NotificationsPage /> },

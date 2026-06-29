@@ -951,6 +951,11 @@ definitions:
       default_commit_author_success_email_enabled:
         type: boolean
     type: object
+  api.NotificationTargetEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.NotificationTargetResponse'
+    type: object
   api.NotificationTargetResponse:
     properties:
       address:
@@ -1088,6 +1093,11 @@ definitions:
         type: boolean
     type: object
   api.PutCommitAuthorSuccessNotificationPreferenceRequest:
+    properties:
+      enabled:
+        type: boolean
+    type: object
+  api.PutMyEmailNotificationTargetRequest:
     properties:
       enabled:
         type: boolean
@@ -2658,6 +2668,45 @@ paths:
           schema:
             $ref: '#/definitions/api.ErrorResponse'
       summary: Update my commit success notification preference
+      tags:
+      - users
+  /me/notification-targets/email:
+    put:
+      consumes:
+      - application/json
+      description: Enables or disables the authenticated user's owned personal email
+        notification target without changing its address or preferences.
+      parameters:
+      - description: Owned personal email target state
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.PutMyEmailNotificationTargetRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.NotificationTargetEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Update my email notification target
       tags:
       - users
   /me/tokens:

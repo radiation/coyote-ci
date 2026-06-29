@@ -1943,6 +1943,64 @@ const docTemplate = `{
                 }
             }
         },
+        "/me/notification-targets/email": {
+            "put": {
+                "description": "Enables or disables the authenticated user's owned personal email notification target without changing its address or preferences.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Update my email notification target",
+                "parameters": [
+                    {
+                        "description": "Owned personal email target state",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.PutMyEmailNotificationTargetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.NotificationTargetEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me/tokens": {
             "get": {
                 "description": "Lists API token metadata for the authenticated user.",
@@ -4519,6 +4577,14 @@ const docTemplate = `{
                 }
             }
         },
+        "api.NotificationTargetEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.NotificationTargetResponse"
+                }
+            }
+        },
         "api.NotificationTargetResponse": {
             "type": "object",
             "properties": {
@@ -4731,6 +4797,14 @@ const docTemplate = `{
             }
         },
         "api.PutCommitAuthorSuccessNotificationPreferenceRequest": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "api.PutMyEmailNotificationTargetRequest": {
             "type": "object",
             "properties": {
                 "enabled": {
