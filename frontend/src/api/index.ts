@@ -2,6 +2,7 @@ export {
   APIError,
   formatAPIErrorMessage,
   isAPIErrorStatus,
+  checkReadiness,
   getArtifact,
   listArtifacts,
   listArtifactCatalog,

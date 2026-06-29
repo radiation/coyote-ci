@@ -1,4 +1,4 @@
-.PHONY: swagger check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status
+.PHONY: swagger swagger-check backend-format-check backend-vet backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status
 
 GOOSE := go run github.com/pressly/goose/v3/cmd/goose@v3.24.1
 MIGRATIONS_DIR := backend/db/migrations
@@ -10,6 +10,44 @@ swagger:
 	else \
 		go run github.com/swaggo/swag/cmd/swag@v1.16.4 init --parseInternal -g ./cmd/server/main.go -o ./docs; \
 	fi
+
+swagger-check: swagger
+	git diff --exit-code backend/docs
+
+backend-format-check:
+	@cd backend && fmt_out="$$(gofmt -l .)" && \
+	if [ -n "$$fmt_out" ]; then \
+		echo "These files need formatting:"; \
+		echo "$$fmt_out"; \
+		exit 1; \
+	fi
+
+backend-vet:
+	cd backend && go vet ./...
+
+backend-architecture:
+	cd backend && go test ./architecture
+
+backend-unit-test:
+	@cd backend && packages="$$(go list ./... | grep -v '/architecture$$' || true)" && \
+	if [ -z "$$packages" ]; then \
+		echo "No non-architecture Go packages found"; \
+		exit 1; \
+	fi && \
+	go test $$packages
+
+backend-test: backend-architecture backend-unit-test
+
+frontend-lint:
+	cd frontend && npm run lint
+
+frontend-test:
+	cd frontend && npm run test:run
+
+frontend-build:
+	cd frontend && npm run build
+
+pre-push-check: backend-test frontend-lint frontend-test frontend-build swagger-check
 
 check-go-version:
 	@echo "Checking Go version consistency (source of truth: backend/go.mod)..."

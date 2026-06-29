@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { ThemeProvider } from "../theme";
@@ -104,38 +104,38 @@ describe("router dashboard home", () => {
   it("redirects the home route to the dashboard", async () => {
     renderRouter(["/"]);
 
-    await waitFor(() => {
-      expect(screen.getByRole("link", { name: "Dashboard" })).toHaveClass(
-        "is-active",
-      );
-      expect(screen.getByRole("heading", { name: "Dashboard" })).toBeTruthy();
-    });
+    expect(
+      await screen.findByRole("heading", { name: "Dashboard" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Dashboard" })).toHaveClass(
+      "is-active",
+    );
   });
 
   it("renders the projects route inside the shared shell", async () => {
     renderRouter(["/projects"]);
 
-    await waitFor(() => {
-      expect(screen.getByRole("link", { name: "Projects" })).toHaveClass(
-        "is-active",
-      );
-      expect(
-        screen.getByRole("complementary", {
-          name: "Application navigation",
-        }),
-      ).toBeTruthy();
-      expect(screen.getByRole("heading", { name: "Projects" })).toBeTruthy();
-    });
+    expect(
+      await screen.findByRole("heading", { name: "Projects" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveClass(
+      "is-active",
+    );
+    expect(
+      screen.getByRole("complementary", {
+        name: "Application navigation",
+      }),
+    ).toBeTruthy();
   });
 
   it("renders the profile settings route", async () => {
     renderRouter(["/settings/profile"]);
 
-    await waitFor(() => {
-      expect(screen.getByRole("link", { name: "Profile" })).toHaveClass(
-        "is-active",
-      );
-      expect(screen.getByRole("heading", { name: "Profile" })).toBeTruthy();
-    });
+    expect(
+      await screen.findByRole("heading", { name: "Profile" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Profile" })).toHaveClass(
+      "is-active",
+    );
   });
 });

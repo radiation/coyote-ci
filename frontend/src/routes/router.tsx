@@ -1,27 +1,87 @@
+import { lazy } from "react";
 import {
   createBrowserRouter,
   Navigate,
   type RouteObject,
 } from "react-router-dom";
 import { Layout } from "../components/Layout";
-import { BuildsListPage } from "../pages/BuildsListPage";
-import { BuildDetailPage } from "../pages/BuildDetailPage";
-import { QueuePage } from "../pages/QueuePage";
-import { WorkersPage } from "../pages/WorkersPage";
-import { ArtifactDetailPage } from "../pages/ArtifactDetailPage";
-import { ArtifactLogicalBrowserPage } from "../pages/ArtifactLogicalBrowserPage";
-import { ArtifactsPage } from "../pages/ArtifactsPage";
-import { JobsListPage } from "../pages/JobsListPage";
-import { JobCreatePage } from "../pages/JobCreatePage";
-import { JobDetailPage } from "../pages/JobDetailPage";
-import { CredentialsPage } from "../pages/CredentialsPage";
-import { APITokensPage } from "../pages/APITokensPage";
-import { UsersPage } from "../pages/UsersPage";
-import { ProjectsListPage } from "../pages/ProjectsListPage";
-import { ProjectDetailPage } from "../pages/ProjectDetailPage";
-import { DashboardPage } from "../pages/DashboardPage";
-import { NotificationsPage } from "../pages/NotificationsPage";
-import { ProfilePage } from "../pages/ProfilePage";
+
+function lazyPage<
+  TModule extends Record<string, unknown>,
+  TExport extends keyof TModule,
+>(loader: () => Promise<TModule>, exportName: TExport) {
+  return lazy(async () => {
+    const module = await loader();
+    return { default: module[exportName] as React.ComponentType };
+  });
+}
+
+const DashboardPage = lazyPage(
+  () => import("../pages/DashboardPage"),
+  "DashboardPage",
+);
+const BuildsListPage = lazyPage(
+  () => import("../pages/BuildsListPage"),
+  "BuildsListPage",
+);
+const BuildDetailPage = lazyPage(
+  () => import("../pages/BuildDetailPage"),
+  "BuildDetailPage",
+);
+const QueuePage = lazyPage(() => import("../pages/QueuePage"), "QueuePage");
+const WorkersPage = lazyPage(
+  () => import("../pages/WorkersPage"),
+  "WorkersPage",
+);
+const ArtifactsPage = lazyPage(
+  () => import("../pages/ArtifactsPage"),
+  "ArtifactsPage",
+);
+const ArtifactLogicalBrowserPage = lazyPage(
+  () => import("../pages/ArtifactLogicalBrowserPage"),
+  "ArtifactLogicalBrowserPage",
+);
+const ArtifactDetailPage = lazyPage(
+  () => import("../pages/ArtifactDetailPage"),
+  "ArtifactDetailPage",
+);
+const ProjectsListPage = lazyPage(
+  () => import("../pages/ProjectsListPage"),
+  "ProjectsListPage",
+);
+const ProjectDetailPage = lazyPage(
+  () => import("../pages/ProjectDetailPage"),
+  "ProjectDetailPage",
+);
+const JobsListPage = lazyPage(
+  () => import("../pages/JobsListPage"),
+  "JobsListPage",
+);
+const JobCreatePage = lazyPage(
+  () => import("../pages/JobCreatePage"),
+  "JobCreatePage",
+);
+const JobDetailPage = lazyPage(
+  () => import("../pages/JobDetailPage"),
+  "JobDetailPage",
+);
+const APITokensPage = lazyPage(
+  () => import("../pages/APITokensPage"),
+  "APITokensPage",
+);
+const ProfilePage = lazyPage(
+  () => import("../pages/ProfilePage"),
+  "ProfilePage",
+);
+const UsersPage = lazyPage(() => import("../pages/UsersPage"), "UsersPage");
+const CredentialsPage = lazyPage(
+  () => import("../pages/CredentialsPage"),
+  "CredentialsPage",
+);
+const NotificationsPage = lazyPage(
+  () => import("../pages/NotificationsPage"),
+  "NotificationsPage",
+);
 
 export const appRoutes: RouteObject[] = [
   {

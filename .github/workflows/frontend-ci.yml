@@ -2,25 +2,44 @@ name: Frontend CI
 
 on:
   pull_request:
-    paths:
-      - 'frontend/**'
-      - 'codecov.yml'
-      - '.github/workflows/frontend-ci.yml'
   push:
     branches:
       - main
-    paths:
-      - 'frontend/**'
-      - 'codecov.yml'
-      - '.github/workflows/frontend-ci.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: frontend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+              - 'Makefile'
+              - 'codecov.yml'
+              - '.github/workflows/frontend-ci.yml'
+
   frontend:
     name: Frontend CI
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: frontend
@@ -38,10 +57,12 @@ jobs:
         run: npm ci
 
       - name: Run linter
-        run: npm run lint
+        run: make frontend-lint
+        working-directory: .
 
       - name: Build
-        run: npm run build
+        run: make frontend-build
+        working-directory: .
 
       - name: Run tests with coverage
         run: npm run test:coverage
@@ -63,3 +84,22 @@ jobs:
           disable_search: true
           fail_ci_if_error: true
           verbose: true
+
+  frontend-summary:
+    name: Frontend Summary
+    needs:
+      - changes
+      - frontend
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure required frontend job passed or was not needed
+        run: |
+          echo "frontend changed: ${{ needs.changes.outputs.frontend }}"
+
+          if [ "${{ needs.changes.outputs.frontend }}" = "true" ] && [ "${{ needs.frontend.result }}" != "success" ]; then
+            echo "Frontend CI failed"
+            exit 1
+          fi
+
+          echo "All required frontend checks passed"

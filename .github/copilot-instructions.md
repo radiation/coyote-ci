@@ -342,7 +342,8 @@ When possible, test:
 - services independently from HTTP
 - repositories with integration tests
 - handlers as thin translation layers
-- when touching backend package boundaries or frontend dependency direction, run `cd backend && go test ./architecture` and `cd frontend && npm run lint`
+- when touching backend package boundaries or frontend dependency direction, run `make backend-architecture` and `make frontend-lint`
+- when changing shared local or CI quality gates, run `make pre-push-check`
 - keep architecture guardrail updates descriptive of existing structure; do not add aspirational rules that would require broad cleanup
 
 For lifecycle/state-machine code specifically:

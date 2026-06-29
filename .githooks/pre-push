@@ -9,28 +9,38 @@ set -eu
 failed=0
 
 # ── Backend ──────────────────────────────────────────────────────────────────
-if command -v go >/dev/null 2>&1; then
+if command -v go >/dev/null 2>&1 && command -v make >/dev/null 2>&1; then
 	echo "== Backend tests =="
-	if ! (cd backend && go test ./...) ; then
+	if ! make backend-test ; then
 		failed=1
 	fi
 else
-	echo "== Backend tests (skipped: go not found) =="
+	echo "== Backend tests (skipped: go or make not found) =="
 fi
 
 # ── Frontend ─────────────────────────────────────────────────────────────────
-if [ -f frontend/package.json ] && command -v npx >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+if [ -f frontend/package.json ] && command -v make >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+	echo "== Frontend lint =="
+	if ! make frontend-lint ; then
+		failed=1
+	fi
+
 	echo "== Frontend tests =="
-	if ! (cd frontend && npx --no-install vitest run 2>/dev/null) ; then
+	if ! make frontend-test ; then
 		failed=1
 	fi
 
 	echo "== Frontend build =="
-	if ! (cd frontend && npm run build) ; then
+	if ! make frontend-build ; then
+		failed=1
+	fi
+
+	echo "== Swagger validation =="
+	if ! make swagger-check ; then
 		failed=1
 	fi
 else
-	echo "== Frontend checks (skipped: npm/npx not found or no package.json) =="
+	echo "== Frontend checks (skipped: make/npm not found or no package.json) =="
 fi
 
 # ── Result ───────────────────────────────────────────────────────────────────
