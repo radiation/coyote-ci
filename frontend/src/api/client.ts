@@ -46,6 +46,7 @@ import type {
 } from "../types/identity";
 import type {
   CommitAuthorFailureNotificationPreference,
+  CommitAuthorSuccessNotificationPreference,
   CreateNotificationSubscriptionRequest,
   CreateNotificationTargetRequest,
   MyEmailNotificationTargetResponse,
@@ -55,6 +56,7 @@ import type {
   NotificationTarget,
   NotificationTargetListResponse,
   UpdateCommitAuthorFailureNotificationPreferenceRequest,
+  UpdateCommitAuthorSuccessNotificationPreferenceRequest,
   UpdateNotificationDefaultsRequest,
   UpdateNotificationSubscriptionRequest,
   UpdateNotificationTargetRequest,
@@ -282,6 +284,13 @@ export async function getCommitAuthorFailureNotificationPreference(): Promise<Co
   return envelope.data;
 }
 
+export async function getCommitAuthorSuccessNotificationPreference(): Promise<CommitAuthorSuccessNotificationPreference> {
+  const envelope = await fetchJSON<
+    DataEnvelope<CommitAuthorSuccessNotificationPreference>
+  >("/me/notification-preferences/commit-author-successes");
+  return envelope.data;
+}
+
 export async function getNotificationDefaults(): Promise<NotificationDefaults> {
   const envelope = await fetchJSON<DataEnvelope<NotificationDefaults>>(
     "/settings/notifications/defaults",
@@ -295,6 +304,21 @@ export async function setCommitAuthorFailureNotificationPreference(
   const envelope = await fetchJSON<
     DataEnvelope<CommitAuthorFailureNotificationPreference>
   >("/me/notification-preferences/commit-author-failures", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+  return envelope.data;
+}
+
+export async function setCommitAuthorSuccessNotificationPreference(
+  input: UpdateCommitAuthorSuccessNotificationPreferenceRequest,
+): Promise<CommitAuthorSuccessNotificationPreference> {
+  const envelope = await fetchJSON<
+    DataEnvelope<CommitAuthorSuccessNotificationPreference>
+  >("/me/notification-preferences/commit-author-successes", {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",

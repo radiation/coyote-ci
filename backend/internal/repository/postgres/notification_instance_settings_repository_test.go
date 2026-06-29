@@ -22,10 +22,10 @@ func TestNotificationInstanceSettingsRepository_GetAndUpsert(t *testing.T) {
 
 	repo := NewNotificationInstanceSettingsRepository(db)
 	now := time.Date(2026, 6, 28, 18, 5, 0, 0, time.UTC)
-	columns := []string{"default_commit_author_failure_email_enabled", "created_at", "updated_at"}
+	columns := []string{"default_commit_author_failure_email_enabled", "default_commit_author_success_email_enabled", "created_at", "updated_at"}
 
-	mock.ExpectQuery("SELECT default_commit_author_failure_email_enabled, created_at, updated_at").
-		WillReturnRows(sqlmock.NewRows(columns).AddRow(true, now, now))
+	mock.ExpectQuery("SELECT default_commit_author_failure_email_enabled, default_commit_author_success_email_enabled, created_at, updated_at").
+		WillReturnRows(sqlmock.NewRows(columns).AddRow(true, false, now, now))
 
 	fetched, getErr := repo.Get(context.Background())
 	if getErr != nil {
@@ -34,8 +34,11 @@ func TestNotificationInstanceSettingsRepository_GetAndUpsert(t *testing.T) {
 	if !fetched.DefaultCommitAuthorFailureEmailEnabled {
 		t.Fatalf("expected enabled settings, got %+v", fetched)
 	}
+	if fetched.DefaultCommitAuthorSuccessEmailEnabled {
+		t.Fatalf("expected success defaults disabled, got %+v", fetched)
+	}
 
-	mock.ExpectQuery("SELECT default_commit_author_failure_email_enabled, created_at, updated_at").
+	mock.ExpectQuery("SELECT default_commit_author_failure_email_enabled, default_commit_author_success_email_enabled, created_at, updated_at").
 		WillReturnError(sql.ErrNoRows)
 
 	_, missingErr := repo.Get(context.Background())
@@ -43,7 +46,7 @@ func TestNotificationInstanceSettingsRepository_GetAndUpsert(t *testing.T) {
 		t.Fatalf("expected not found, got %v", missingErr)
 	}
 
-	mock.ExpectQuery("SELECT default_commit_author_failure_email_enabled, created_at, updated_at").
+	mock.ExpectQuery("SELECT default_commit_author_failure_email_enabled, default_commit_author_success_email_enabled, created_at, updated_at").
 		WillReturnError(errors.New("select failed"))
 
 	_, rawGetErr := repo.Get(context.Background())
@@ -53,11 +56,12 @@ func TestNotificationInstanceSettingsRepository_GetAndUpsert(t *testing.T) {
 
 	updatedAt := now.Add(time.Minute)
 	mock.ExpectQuery("INSERT INTO notification_instance_settings").
-		WithArgs(false, now, updatedAt).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow(false, now, updatedAt))
+		WithArgs(false, true, now, updatedAt).
+		WillReturnRows(sqlmock.NewRows(columns).AddRow(false, true, now, updatedAt))
 
 	updated, upsertErr := repo.Upsert(context.Background(), domain.NotificationInstanceSettings{
 		DefaultCommitAuthorFailureEmailEnabled: false,
+		DefaultCommitAuthorSuccessEmailEnabled: true,
 		CreatedAt:                              now,
 		UpdatedAt:                              updatedAt,
 	})
@@ -84,13 +88,16 @@ func TestNotificationInstanceSettingsRepository_GetAndUpsert(t *testing.T) {
 func TestScanNotificationInstanceSettings(t *testing.T) {
 	now := time.Date(2026, 6, 28, 18, 10, 0, 0, time.UTC)
 	settings, err := scanNotificationInstanceSettings(notificationTestScanner{
-		values: []any{true, now, now.Add(time.Minute)},
+		values: []any{true, false, now, now.Add(time.Minute)},
 	})
 	if err != nil {
 		t.Fatalf("scan settings failed: %v", err)
 	}
 	if !settings.DefaultCommitAuthorFailureEmailEnabled {
 		t.Fatalf("expected enabled settings, got %+v", settings)
+	}
+	if settings.DefaultCommitAuthorSuccessEmailEnabled {
+		t.Fatalf("expected success defaults disabled, got %+v", settings)
 	}
 
 	_, err = scanNotificationInstanceSettings(notificationTestScanner{err: errors.New("scan failed")})

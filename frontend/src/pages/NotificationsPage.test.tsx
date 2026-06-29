@@ -138,6 +138,7 @@ describe("NotificationsPage", () => {
 
     mockedGetNotificationDefaults.mockResolvedValue({
       default_commit_author_failure_email_enabled: true,
+      default_commit_author_success_email_enabled: false,
     });
 
     mockedListNotificationTargets.mockResolvedValue([
@@ -288,6 +289,7 @@ describe("NotificationsPage", () => {
     mockedDeleteNotificationSubscription.mockResolvedValue();
     mockedSetNotificationDefaults.mockResolvedValue({
       default_commit_author_failure_email_enabled: false,
+      default_commit_author_success_email_enabled: true,
     });
   });
 
@@ -305,11 +307,15 @@ describe("NotificationsPage", () => {
     expect(screen.getByText(/does not modify existing users/i)).toBeTruthy();
     expect(
       screen.getByText(
-        /personal email notifications for commit-author failures/i,
+        /currently applies only to personal email notifications/i,
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/apply to existing users/i)).toBeNull();
-    expect(screen.queryByText(/success/i)).toBeNull();
+    expect(
+      screen.getByRole("checkbox", {
+        name: /Notify new users when their commits succeed/i,
+      }),
+    ).not.toBeChecked();
   });
 
   it("updates notification defaults and prevents duplicate submits while pending", async () => {
@@ -317,9 +323,13 @@ describe("NotificationsPage", () => {
       let release!: () => void;
       const promise = new Promise<{
         default_commit_author_failure_email_enabled: boolean;
+        default_commit_author_success_email_enabled: boolean;
       }>((resolve) => {
         release = () => {
-          resolve({ default_commit_author_failure_email_enabled: false });
+          resolve({
+            default_commit_author_failure_email_enabled: false,
+            default_commit_author_success_email_enabled: false,
+          });
         };
       });
       return { promise, release };
@@ -348,6 +358,33 @@ describe("NotificationsPage", () => {
       expect(mockedSetNotificationDefaults).toHaveBeenCalledWith(
         {
           default_commit_author_failure_email_enabled: false,
+          default_commit_author_success_email_enabled: false,
+        },
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("updates the success default independently", async () => {
+    mockedSetNotificationDefaults.mockResolvedValue({
+      default_commit_author_failure_email_enabled: true,
+      default_commit_author_success_email_enabled: true,
+    });
+
+    renderPage();
+
+    const successCheckbox = await screen.findByRole("checkbox", {
+      name: /Notify new users when their commits succeed/i,
+    });
+    expect(successCheckbox).not.toBeChecked();
+
+    fireEvent.click(successCheckbox);
+
+    await waitFor(() => {
+      expect(mockedSetNotificationDefaults).toHaveBeenCalledWith(
+        {
+          default_commit_author_failure_email_enabled: true,
+          default_commit_author_success_email_enabled: true,
         },
         expect.any(Object),
       );

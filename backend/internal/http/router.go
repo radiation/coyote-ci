@@ -147,6 +147,8 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 				r.Post("/me/notification-targets/email", cfg.notificationHandler.EnsureMyEmailTarget)
 				r.Get("/me/notification-preferences/commit-author-failures", cfg.notificationHandler.GetMyCommitAuthorFailureNotificationPreference)
 				r.Put("/me/notification-preferences/commit-author-failures", cfg.notificationHandler.SetMyCommitAuthorFailureNotificationPreference)
+				r.Get("/me/notification-preferences/commit-author-successes", cfg.notificationHandler.GetMyCommitAuthorSuccessNotificationPreference)
+				r.Put("/me/notification-preferences/commit-author-successes", cfg.notificationHandler.SetMyCommitAuthorSuccessNotificationPreference)
 				r.Get("/settings/notifications/defaults", cfg.notificationHandler.GetNotificationDefaults)
 				r.Put("/settings/notifications/defaults", cfg.notificationHandler.SetNotificationDefaults)
 				r.Route("/notification-targets", func(r chi.Router) {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -46,6 +47,10 @@ type fakeNotificationAdminService struct {
 	getPreferenceErr              error
 	setPreferenceResult           service.CommitAuthorFailureNotificationPreferenceState
 	setPreferenceErr              error
+	getSuccessPreferenceResult    service.CommitAuthorSuccessNotificationPreferenceState
+	getSuccessPreferenceErr       error
+	setSuccessPreferenceResult    service.CommitAuthorSuccessNotificationPreferenceState
+	setSuccessPreferenceErr       error
 	createTargetResult            domain.NotificationTarget
 	createTargetErr               error
 	updateTargetResult            domain.NotificationTarget
@@ -75,7 +80,7 @@ func (f *fakeNotificationAdminService) GetNotificationDefaults(_ context.Context
 	return f.getNotificationDefaultsResult, f.getNotificationDefaultsErr
 }
 
-func (f *fakeNotificationAdminService) SetNotificationDefaults(_ context.Context, _ *bool) (service.NotificationDefaultsState, error) {
+func (f *fakeNotificationAdminService) SetNotificationDefaults(_ context.Context, _ *bool, _ *bool) (service.NotificationDefaultsState, error) {
 	return f.setNotificationDefaultsResult, f.setNotificationDefaultsErr
 }
 
@@ -85,6 +90,14 @@ func (f *fakeNotificationAdminService) GetCommitAuthorFailureNotificationPrefere
 
 func (f *fakeNotificationAdminService) SetCommitAuthorFailureNotificationPreference(_ context.Context, _ domain.User, _ *bool) (service.CommitAuthorFailureNotificationPreferenceState, error) {
 	return f.setPreferenceResult, f.setPreferenceErr
+}
+
+func (f *fakeNotificationAdminService) GetCommitAuthorSuccessNotificationPreference(_ context.Context, _ domain.User) (service.CommitAuthorSuccessNotificationPreferenceState, error) {
+	return f.getSuccessPreferenceResult, f.getSuccessPreferenceErr
+}
+
+func (f *fakeNotificationAdminService) SetCommitAuthorSuccessNotificationPreference(_ context.Context, _ domain.User, _ *bool) (service.CommitAuthorSuccessNotificationPreferenceState, error) {
+	return f.setSuccessPreferenceResult, f.setSuccessPreferenceErr
 }
 
 func (f *fakeNotificationAdminService) CreateTarget(_ context.Context, _ service.CreateNotificationTargetInput) (domain.NotificationTarget, error) {
@@ -194,6 +207,29 @@ func TestNotificationHandler_SendSampleBuildFailure_ConflictForDisabledOrMissing
 			}
 		})
 	}
+
+	t.Run("success put target required returns neutral conflict message", func(t *testing.T) {
+		h := NewNotificationHandler(nil)
+		h.SetAuthorization(auth.ModeHeader)
+		h.SetAdminService(&fakeNotificationAdminService{setSuccessPreferenceErr: service.ErrNotificationPreferencePersonalTargetRequired})
+		user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+
+		req := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-successes", bytes.NewBufferString(`{"enabled":true}`))
+		req = req.WithContext(auth.WithUser(req.Context(), user))
+		res := httptest.NewRecorder()
+
+		h.SetMyCommitAuthorSuccessNotificationPreference(res, req)
+
+		if res.Code != http.StatusConflict {
+			t.Fatalf("expected status %d, got %d body=%s", http.StatusConflict, res.Code, res.Body.String())
+		}
+		if !strings.Contains(res.Body.String(), "commit-author notifications") {
+			t.Fatalf("expected neutral conflict message, got body=%s", res.Body.String())
+		}
+		if strings.Contains(res.Body.String(), "failure notifications") {
+			t.Fatalf("expected success conflict body to avoid failure-specific wording, got body=%s", res.Body.String())
+		}
+	})
 }
 
 func TestNotificationHandler_SendSampleBuildFailure_InternalError(t *testing.T) {
@@ -688,8 +724,8 @@ func TestNotificationHandler_NotificationDefaultsEndpoints(t *testing.T) {
 	h := NewNotificationHandler(nil)
 	h.SetAuthorization(auth.ModeHeader)
 	h.SetAdminService(&fakeNotificationAdminService{
-		getNotificationDefaultsResult: service.NotificationDefaultsState{DefaultCommitAuthorFailureEmailEnabled: true},
-		setNotificationDefaultsResult: service.NotificationDefaultsState{DefaultCommitAuthorFailureEmailEnabled: false},
+		getNotificationDefaultsResult: service.NotificationDefaultsState{DefaultCommitAuthorFailureEmailEnabled: true, DefaultCommitAuthorSuccessEmailEnabled: false},
+		setNotificationDefaultsResult: service.NotificationDefaultsState{DefaultCommitAuthorFailureEmailEnabled: false, DefaultCommitAuthorSuccessEmailEnabled: true},
 	})
 	admin := domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin}
 
@@ -704,8 +740,11 @@ func TestNotificationHandler_NotificationDefaultsEndpoints(t *testing.T) {
 	if enabled, ok := getData["default_commit_author_failure_email_enabled"].(bool); !ok || !enabled {
 		t.Fatalf("expected enabled defaults payload, got %v", getData)
 	}
+	if enabled, ok := getData["default_commit_author_success_email_enabled"].(bool); !ok || enabled {
+		t.Fatalf("expected success defaults to start disabled, got %v", getData)
+	}
 
-	putReq := httptest.NewRequest(http.MethodPut, "/api/settings/notifications/defaults", bytes.NewBufferString(`{"default_commit_author_failure_email_enabled":false}`))
+	putReq := httptest.NewRequest(http.MethodPut, "/api/settings/notifications/defaults", bytes.NewBufferString(`{"default_commit_author_failure_email_enabled":false,"default_commit_author_success_email_enabled":true}`))
 	putReq = putReq.WithContext(auth.WithUser(putReq.Context(), admin))
 	putRes := httptest.NewRecorder()
 	h.SetNotificationDefaults(putRes, putReq)
@@ -715,6 +754,9 @@ func TestNotificationHandler_NotificationDefaultsEndpoints(t *testing.T) {
 	putData := decodeDataMap(t, putRes)
 	if enabled, ok := putData["default_commit_author_failure_email_enabled"].(bool); !ok || enabled {
 		t.Fatalf("expected disabled defaults payload, got %v", putData)
+	}
+	if enabled, ok := putData["default_commit_author_success_email_enabled"].(bool); !ok || !enabled {
+		t.Fatalf("expected success defaults payload to be enabled, got %v", putData)
 	}
 
 	invalidReq := httptest.NewRequest(http.MethodPut, "/api/settings/notifications/defaults", bytes.NewBufferString(`{}`))
@@ -766,7 +808,7 @@ func TestNotificationHandler_NotificationDefaultsEndpointErrors(t *testing.T) {
 		h.SetAdminService(&fakeNotificationAdminService{getNotificationDefaultsErr: errors.New("boom")})
 		admin := domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin}
 
-		req := httptest.NewRequest(http.MethodPut, "/api/settings/notifications/defaults", bytes.NewBufferString(`{"default_commit_author_failure_email_enabled":true}`))
+		req := httptest.NewRequest(http.MethodPut, "/api/settings/notifications/defaults", bytes.NewBufferString(`{"default_commit_author_failure_email_enabled":true,"default_commit_author_success_email_enabled":false}`))
 		req = req.WithContext(auth.WithUser(req.Context(), admin))
 		res := httptest.NewRecorder()
 		h.SetNotificationDefaults(res, req)
@@ -793,7 +835,7 @@ func TestNotificationHandler_NotificationDefaultsEndpointErrors(t *testing.T) {
 	t.Run("invalid json body", func(t *testing.T) {
 		h := NewNotificationHandler(nil)
 		h.SetAuthorization(auth.ModeHeader)
-		h.SetAdminService(&fakeNotificationAdminService{getNotificationDefaultsResult: service.NotificationDefaultsState{DefaultCommitAuthorFailureEmailEnabled: true}})
+		h.SetAdminService(&fakeNotificationAdminService{getNotificationDefaultsResult: service.NotificationDefaultsState{DefaultCommitAuthorFailureEmailEnabled: true, DefaultCommitAuthorSuccessEmailEnabled: false}})
 		admin := domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin}
 
 		req := httptest.NewRequest(http.MethodPut, "/api/settings/notifications/defaults", bytes.NewBufferString(`{"default_commit_author_failure_email_enabled":`))
@@ -809,12 +851,12 @@ func TestNotificationHandler_NotificationDefaultsEndpointErrors(t *testing.T) {
 		h := NewNotificationHandler(nil)
 		h.SetAuthorization(auth.ModeHeader)
 		h.SetAdminService(&fakeNotificationAdminService{
-			getNotificationDefaultsResult: service.NotificationDefaultsState{DefaultCommitAuthorFailureEmailEnabled: true},
+			getNotificationDefaultsResult: service.NotificationDefaultsState{DefaultCommitAuthorFailureEmailEnabled: true, DefaultCommitAuthorSuccessEmailEnabled: false},
 			setNotificationDefaultsErr:    service.ErrNotificationDefaultEnabledRequired,
 		})
 		admin := domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin}
 
-		req := httptest.NewRequest(http.MethodPut, "/api/settings/notifications/defaults", bytes.NewBufferString(`{"default_commit_author_failure_email_enabled":true}`))
+		req := httptest.NewRequest(http.MethodPut, "/api/settings/notifications/defaults", bytes.NewBufferString(`{"default_commit_author_failure_email_enabled":true,"default_commit_author_success_email_enabled":false}`))
 		req = req.WithContext(auth.WithUser(req.Context(), admin))
 		res := httptest.NewRecorder()
 		h.SetNotificationDefaults(res, req)

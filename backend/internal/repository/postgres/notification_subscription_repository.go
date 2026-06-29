@@ -168,7 +168,7 @@ func (r *NotificationSubscriptionRepository) EnsureOwnedEmailTargetInitialized(c
 		}
 
 		if newlyEligible {
-			initErr := r.initializeCommitAuthorFailurePreferenceTx(ctx, tx, ownerUserID, input.CreatedAt, input.UpdatedAt)
+			initErr := r.initializeCommitAuthorPreferencesTx(ctx, tx, ownerUserID, input.CreatedAt, input.UpdatedAt)
 			if initErr != nil {
 				_ = tx.Rollback()
 				return domain.NotificationTarget{}, initErr
@@ -290,21 +290,44 @@ func (r *NotificationSubscriptionRepository) ensureOwnedEmailTargetTx(ctx contex
 	return created, true, nil
 }
 
-func (r *NotificationSubscriptionRepository) initializeCommitAuthorFailurePreferenceTx(ctx context.Context, tx *sql.Tx, ownerUserID string, createdAt time.Time, updatedAt time.Time) error {
-	enabled, err := getDefaultCommitAuthorFailureEmailEnabledTx(ctx, tx)
+func (r *NotificationSubscriptionRepository) initializeCommitAuthorPreferencesTx(ctx context.Context, tx *sql.Tx, ownerUserID string, createdAt time.Time, updatedAt time.Time) error {
+	failureEnabled, successEnabled, err := getNotificationDefaultsTx(ctx, tx)
 	if err != nil {
 		return err
 	}
 
 	const query = `
-		INSERT INTO user_notification_preferences (user_id, commit_author_failure_enabled, source, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (user_id) DO NOTHING
+		INSERT INTO user_notification_preferences (
+			user_id,
+			commit_author_failure_enabled,
+			source,
+			commit_author_success_enabled,
+			commit_author_success_source,
+			created_at,
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (user_id)
+		DO UPDATE SET
+			commit_author_success_enabled = CASE
+				WHEN user_notification_preferences.commit_author_success_source IS NULL THEN EXCLUDED.commit_author_success_enabled
+				ELSE user_notification_preferences.commit_author_success_enabled
+			END,
+			commit_author_success_source = CASE
+				WHEN user_notification_preferences.commit_author_success_source IS NULL THEN EXCLUDED.commit_author_success_source
+				ELSE user_notification_preferences.commit_author_success_source
+			END,
+			updated_at = CASE
+				WHEN user_notification_preferences.commit_author_success_source IS NULL THEN EXCLUDED.updated_at
+				ELSE user_notification_preferences.updated_at
+			END
 	`
 
 	_, execErr := tx.ExecContext(ctx, query,
 		ownerUserID,
-		enabled,
+		failureEnabled,
+		domain.UserNotificationPreferenceSourceInstanceDefault,
+		successEnabled,
 		domain.UserNotificationPreferenceSourceInstanceDefault,
 		createdAt,
 		updatedAt,
@@ -312,22 +335,23 @@ func (r *NotificationSubscriptionRepository) initializeCommitAuthorFailurePrefer
 	return execErr
 }
 
-func getDefaultCommitAuthorFailureEmailEnabledTx(ctx context.Context, tx *sql.Tx) (bool, error) {
+func getNotificationDefaultsTx(ctx context.Context, tx *sql.Tx) (bool, bool, error) {
 	const query = `
-		SELECT default_commit_author_failure_email_enabled
+		SELECT default_commit_author_failure_email_enabled, default_commit_author_success_email_enabled
 		FROM notification_instance_settings
 		WHERE singleton = TRUE
 	`
 
-	var enabled bool
-	err := tx.QueryRowContext(ctx, query).Scan(&enabled)
+	var failureEnabled bool
+	var successEnabled bool
+	err := tx.QueryRowContext(ctx, query).Scan(&failureEnabled, &successEnabled)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return true, nil
+			return true, false, nil
 		}
-		return false, err
+		return false, false, err
 	}
-	return enabled, nil
+	return failureEnabled, successEnabled, nil
 }
 
 func (r *NotificationSubscriptionRepository) UpdateTarget(ctx context.Context, target domain.NotificationTarget) (domain.NotificationTarget, error) {

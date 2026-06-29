@@ -1839,6 +1839,106 @@
                 }
             }
         },
+        "/me/notification-preferences/commit-author-successes": {
+            "get": {
+                "description": "Returns the authenticated user's opt-in state for commit-author success notifications and whether delivery is currently active.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Get my commit success notification preference",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.CommitAuthorSuccessNotificationPreferenceEnvelope"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Sets the authenticated user's explicit opt-in state for commit-author success notifications.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Update my commit success notification preference",
+                "parameters": [
+                    {
+                        "description": "Commit success notification preference",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.PutCommitAuthorSuccessNotificationPreferenceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.CommitAuthorSuccessNotificationPreferenceEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me/tokens": {
             "get": {
                 "description": "Lists API token metadata for the authenticated user.",
@@ -2561,7 +2661,7 @@
         },
         "/settings/notifications/defaults": {
             "get": {
-                "description": "Returns the effective instance default used when a newly eligible user first gets a personal email target for commit-author failure notifications.",
+                "description": "Returns the effective instance defaults used when a newly eligible user first gets a personal email target for commit-author failure and success notifications.",
                 "produces": [
                     "application/json"
                 ],
@@ -2603,7 +2703,7 @@
                 }
             },
             "put": {
-                "description": "Updates the instance default used only when a newly eligible user first gets a personal email target for commit-author failure notifications.",
+                "description": "Updates the instance defaults used only when a newly eligible user first gets a personal email target for commit-author failure and success notifications.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3769,6 +3869,34 @@
                 }
             }
         },
+        "api.CommitAuthorSuccessNotificationPreferenceEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.CommitAuthorSuccessNotificationPreferenceResponse"
+                }
+            }
+        },
+        "api.CommitAuthorSuccessNotificationPreferenceResponse": {
+            "type": "object",
+            "properties": {
+                "delivery_active": {
+                    "type": "boolean"
+                },
+                "eligible": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "target": {
+                    "$ref": "#/definitions/api.NotificationTargetResponse"
+                },
+                "unavailable_reason": {
+                    "type": "string"
+                }
+            }
+        },
         "api.CreateAPITokenRequest": {
             "type": "object",
             "properties": {
@@ -4381,6 +4509,9 @@
             "properties": {
                 "default_commit_author_failure_email_enabled": {
                     "type": "boolean"
+                },
+                "default_commit_author_success_email_enabled": {
+                    "type": "boolean"
                 }
             }
         },
@@ -4595,10 +4726,21 @@
                 }
             }
         },
+        "api.PutCommitAuthorSuccessNotificationPreferenceRequest": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                }
+            }
+        },
         "api.PutNotificationDefaultsRequest": {
             "type": "object",
             "properties": {
                 "default_commit_author_failure_email_enabled": {
+                    "type": "boolean"
+                },
+                "default_commit_author_success_email_enabled": {
                     "type": "boolean"
                 }
             }

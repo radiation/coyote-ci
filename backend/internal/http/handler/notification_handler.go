@@ -34,9 +34,11 @@ type notificationAdminService interface {
 	GetOwnedEmailTarget(ctx context.Context, user domain.User) (domain.NotificationTarget, error)
 	EnsureOwnedEmailTarget(ctx context.Context, user domain.User) (domain.NotificationTarget, error)
 	GetNotificationDefaults(ctx context.Context) (service.NotificationDefaultsState, error)
-	SetNotificationDefaults(ctx context.Context, enabled *bool) (service.NotificationDefaultsState, error)
-	GetCommitAuthorFailureNotificationPreference(ctx context.Context, user domain.User) (service.CommitAuthorFailureNotificationPreferenceState, error)
-	SetCommitAuthorFailureNotificationPreference(ctx context.Context, user domain.User, enabled *bool) (service.CommitAuthorFailureNotificationPreferenceState, error)
+	SetNotificationDefaults(ctx context.Context, failureEnabled *bool, successEnabled *bool) (service.NotificationDefaultsState, error)
+	GetCommitAuthorFailureNotificationPreference(ctx context.Context, user domain.User) (service.CommitAuthorNotificationPreferenceState, error)
+	SetCommitAuthorFailureNotificationPreference(ctx context.Context, user domain.User, enabled *bool) (service.CommitAuthorNotificationPreferenceState, error)
+	GetCommitAuthorSuccessNotificationPreference(ctx context.Context, user domain.User) (service.CommitAuthorNotificationPreferenceState, error)
+	SetCommitAuthorSuccessNotificationPreference(ctx context.Context, user domain.User, enabled *bool) (service.CommitAuthorNotificationPreferenceState, error)
 	CreateTarget(ctx context.Context, input service.CreateNotificationTargetInput) (domain.NotificationTarget, error)
 	CreateEmailTarget(ctx context.Context, input service.CreateNotificationTargetInput) (domain.NotificationTarget, error)
 	UpdateTarget(ctx context.Context, id string, input service.UpdateNotificationTargetInput) (domain.NotificationTarget, error)
@@ -151,7 +153,7 @@ func (h *NotificationHandler) EnsureMyEmailTarget(w http.ResponseWriter, r *http
 
 // GetNotificationDefaults godoc
 // @Summary Get notification defaults
-// @Description Returns the effective instance default used when a newly eligible user first gets a personal email target for commit-author failure notifications.
+// @Description Returns the effective instance defaults used when a newly eligible user first gets a personal email target for commit-author failure and success notifications.
 // @Tags notifications
 // @Produce json
 // @Success 200 {object} api.NotificationDefaultsEnvelope
@@ -176,7 +178,7 @@ func (h *NotificationHandler) GetNotificationDefaults(w http.ResponseWriter, r *
 
 // SetNotificationDefaults godoc
 // @Summary Update notification defaults
-// @Description Updates the instance default used only when a newly eligible user first gets a personal email target for commit-author failure notifications.
+// @Description Updates the instance defaults used only when a newly eligible user first gets a personal email target for commit-author failure and success notifications.
 // @Tags notifications
 // @Accept json
 // @Produce json
@@ -205,22 +207,24 @@ func (h *NotificationHandler) SetNotificationDefaults(w http.ResponseWriter, r *
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
-	if req.DefaultCommitAuthorFailureEmailEnabled == nil {
-		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", service.ErrNotificationDefaultEnabledRequired.Error())
+	if req.DefaultCommitAuthorFailureEmailEnabled == nil && req.DefaultCommitAuthorSuccessEmailEnabled == nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", service.ErrNotificationDefaultsUpdateRequired.Error())
 		return
 	}
 
-	state, err := h.admin.SetNotificationDefaults(r.Context(), req.DefaultCommitAuthorFailureEmailEnabled)
+	state, err := h.admin.SetNotificationDefaults(r.Context(), req.DefaultCommitAuthorFailureEmailEnabled, req.DefaultCommitAuthorSuccessEmailEnabled)
 	if err != nil {
 		h.writeNotificationError(w, err)
 		return
 	}
 
 	log.Printf(
-		"notification defaults updated: actor_user_id=%s old_default_commit_author_failure_email_enabled=%t new_default_commit_author_failure_email_enabled=%t",
+		"notification defaults updated: actor_user_id=%s old_default_commit_author_failure_email_enabled=%t new_default_commit_author_failure_email_enabled=%t old_default_commit_author_success_email_enabled=%t new_default_commit_author_success_email_enabled=%t",
 		strings.TrimSpace(actor.ID),
 		current.DefaultCommitAuthorFailureEmailEnabled,
 		state.DefaultCommitAuthorFailureEmailEnabled,
+		current.DefaultCommitAuthorSuccessEmailEnabled,
+		state.DefaultCommitAuthorSuccessEmailEnabled,
 	)
 
 	writeDataJSON(w, http.StatusOK, toNotificationDefaultsResponse(state))
@@ -255,6 +259,37 @@ func (h *NotificationHandler) GetMyCommitAuthorFailureNotificationPreference(w h
 	}
 
 	writeDataJSON(w, http.StatusOK, toCommitAuthorFailureNotificationPreferenceResponse(state))
+}
+
+// GetMyCommitAuthorSuccessNotificationPreference godoc
+// @Summary Get my commit success notification preference
+// @Description Returns the authenticated user's opt-in state for commit-author success notifications and whether delivery is currently active.
+// @Tags users
+// @Produce json
+// @Success 200 {object} api.CommitAuthorSuccessNotificationPreferenceEnvelope
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /me/notification-preferences/commit-author-successes [get]
+func (h *NotificationHandler) GetMyCommitAuthorSuccessNotificationPreference(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.admin == nil {
+		writeErrorJSON(w, http.StatusNotFound, "not_found", "notification endpoint is not available")
+		return
+	}
+
+	user, ok := h.currentRequestUser(r)
+	if !ok {
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	state, err := h.admin.GetCommitAuthorSuccessNotificationPreference(r.Context(), user)
+	if err != nil {
+		h.writeNotificationError(w, err)
+		return
+	}
+
+	writeDataJSON(w, http.StatusOK, toCommitAuthorSuccessNotificationPreferenceResponse(state))
 }
 
 // SetMyCommitAuthorFailureNotificationPreference godoc
@@ -296,6 +331,47 @@ func (h *NotificationHandler) SetMyCommitAuthorFailureNotificationPreference(w h
 	}
 
 	writeDataJSON(w, http.StatusOK, toCommitAuthorFailureNotificationPreferenceResponse(state))
+}
+
+// SetMyCommitAuthorSuccessNotificationPreference godoc
+// @Summary Update my commit success notification preference
+// @Description Sets the authenticated user's explicit opt-in state for commit-author success notifications.
+// @Tags users
+// @Accept json
+// @Produce json
+// @Param request body api.PutCommitAuthorSuccessNotificationPreferenceRequest true "Commit success notification preference"
+// @Success 200 {object} api.CommitAuthorSuccessNotificationPreferenceEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /me/notification-preferences/commit-author-successes [put]
+func (h *NotificationHandler) SetMyCommitAuthorSuccessNotificationPreference(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.admin == nil {
+		writeErrorJSON(w, http.StatusNotFound, "not_found", "notification endpoint is not available")
+		return
+	}
+
+	user, ok := h.currentRequestUser(r)
+	if !ok {
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	var req api.PutCommitAuthorSuccessNotificationPreferenceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+
+	state, err := h.admin.SetCommitAuthorSuccessNotificationPreference(r.Context(), user, req.Enabled)
+	if err != nil {
+		h.writeNotificationError(w, err)
+		return
+	}
+
+	writeDataJSON(w, http.StatusOK, toCommitAuthorSuccessNotificationPreferenceResponse(state))
 }
 
 func (h *NotificationHandler) CreateTarget(w http.ResponseWriter, r *http.Request) {
@@ -470,7 +546,7 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 		errors.Is(err, service.ErrNotificationPersonalEmailRequired) ||
 		errors.Is(err, service.ErrNotificationPersonalUserIDRequired) ||
 		errors.Is(err, service.ErrNotificationPreferenceEnabledRequired) ||
-		errors.Is(err, service.ErrNotificationDefaultEnabledRequired) {
+		errors.Is(err, service.ErrNotificationDefaultsUpdateRequired) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -480,11 +556,26 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 func toNotificationDefaultsResponse(state service.NotificationDefaultsState) api.NotificationDefaultsResponse {
 	return api.NotificationDefaultsResponse{
 		DefaultCommitAuthorFailureEmailEnabled: state.DefaultCommitAuthorFailureEmailEnabled,
+		DefaultCommitAuthorSuccessEmailEnabled: state.DefaultCommitAuthorSuccessEmailEnabled,
 	}
 }
 
-func toCommitAuthorFailureNotificationPreferenceResponse(state service.CommitAuthorFailureNotificationPreferenceState) api.CommitAuthorFailureNotificationPreferenceResponse {
+func toCommitAuthorFailureNotificationPreferenceResponse(state service.CommitAuthorNotificationPreferenceState) api.CommitAuthorFailureNotificationPreferenceResponse {
 	response := api.CommitAuthorFailureNotificationPreferenceResponse{
+		Enabled:           state.Enabled,
+		Eligible:          state.Eligible,
+		DeliveryActive:    state.DeliveryActive,
+		UnavailableReason: state.UnavailableReason,
+	}
+	if state.Target != nil {
+		targetResponse := toNotificationTargetResponse(*state.Target)
+		response.Target = &targetResponse
+	}
+	return response
+}
+
+func toCommitAuthorSuccessNotificationPreferenceResponse(state service.CommitAuthorNotificationPreferenceState) api.CommitAuthorSuccessNotificationPreferenceResponse {
+	response := api.CommitAuthorSuccessNotificationPreferenceResponse{
 		Enabled:           state.Enabled,
 		Eligible:          state.Eligible,
 		DeliveryActive:    state.DeliveryActive,

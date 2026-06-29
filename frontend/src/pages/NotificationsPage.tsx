@@ -560,16 +560,12 @@ export function NotificationsPage() {
 
       <section className="settings-panel" style={{ marginTop: 16 }}>
         <h3>Notification defaults</h3>
-        <p className="subtle-text">
-          Choose whether newly eligible users start with personal email
-          notifications enabled for commit-author build failures.
-        </p>
+        <p className="subtle-text">Commit-author email defaults</p>
         <p className="subtle-text">
           This applies only when a user first creates or claims their owned
           personal email target. It does not modify existing users, and users
           can change the setting later from their profile. This currently
-          applies only to personal email notifications for commit-author
-          failures.
+          applies only to personal email notifications.
         </p>
         {notificationDefaultsLoading && <p>Loading notification defaults...</p>}
         {notificationDefaultsError && (
@@ -582,29 +578,67 @@ export function NotificationsPage() {
           </p>
         )}
         {notificationDefaults && (
-          <label
-            className="checkbox-label"
-            htmlFor="notification-default-enabled"
-          >
-            <input
-              id="notification-default-enabled"
-              type="checkbox"
-              checked={
-                notificationDefaults.default_commit_author_failure_email_enabled
-              }
-              disabled={
-                notificationDefaultsLoading ||
-                updateNotificationDefaultsMutation.isPending
-              }
-              onChange={(event) =>
-                updateNotificationDefaultsMutation.mutate({
-                  default_commit_author_failure_email_enabled:
-                    event.target.checked,
-                })
-              }
-            />
-            Notify new users when their commits fail
-          </label>
+          <>
+            <label
+              className="checkbox-label"
+              htmlFor="notification-default-failure-enabled"
+            >
+              <input
+                id="notification-default-failure-enabled"
+                type="checkbox"
+                checked={
+                  notificationDefaults.default_commit_author_failure_email_enabled
+                }
+                disabled={
+                  notificationDefaultsLoading ||
+                  updateNotificationDefaultsMutation.isPending
+                }
+                onChange={(event) =>
+                  updateNotificationDefaultsMutation.mutate({
+                    default_commit_author_failure_email_enabled:
+                      event.target.checked,
+                    default_commit_author_success_email_enabled:
+                      notificationDefaults.default_commit_author_success_email_enabled,
+                  })
+                }
+              />
+              Notify new users when their commits fail
+            </label>
+            <p className="subtle-text" style={{ marginTop: 8 }}>
+              Automatically enable failure emails when a user creates their
+              personal email target.
+            </p>
+            <label
+              className="checkbox-label"
+              htmlFor="notification-default-success-enabled"
+              style={{ marginTop: 14 }}
+            >
+              <input
+                id="notification-default-success-enabled"
+                type="checkbox"
+                checked={
+                  notificationDefaults.default_commit_author_success_email_enabled
+                }
+                disabled={
+                  notificationDefaultsLoading ||
+                  updateNotificationDefaultsMutation.isPending
+                }
+                onChange={(event) =>
+                  updateNotificationDefaultsMutation.mutate({
+                    default_commit_author_failure_email_enabled:
+                      notificationDefaults.default_commit_author_failure_email_enabled,
+                    default_commit_author_success_email_enabled:
+                      event.target.checked,
+                  })
+                }
+              />
+              Notify new users when their commits succeed
+            </label>
+            <p className="subtle-text" style={{ marginTop: 8 }}>
+              Automatically enable success emails when a user creates their
+              personal email target. Success notifications may be more frequent.
+            </p>
+          </>
         )}
       </section>
 

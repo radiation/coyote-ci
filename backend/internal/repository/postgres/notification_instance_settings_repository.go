@@ -17,7 +17,7 @@ func NewNotificationInstanceSettingsRepository(db *sql.DB) *NotificationInstance
 	return &NotificationInstanceSettingsRepository{db: db}
 }
 
-const notificationInstanceSettingsColumns = `default_commit_author_failure_email_enabled, created_at, updated_at`
+const notificationInstanceSettingsColumns = `default_commit_author_failure_email_enabled, default_commit_author_success_email_enabled, created_at, updated_at`
 
 func (r *NotificationInstanceSettingsRepository) Get(ctx context.Context) (domain.NotificationInstanceSettings, error) {
 	const query = `
@@ -41,19 +41,22 @@ func (r *NotificationInstanceSettingsRepository) Upsert(ctx context.Context, set
 		INSERT INTO notification_instance_settings (
 			singleton,
 			default_commit_author_failure_email_enabled,
+			default_commit_author_success_email_enabled,
 			created_at,
 			updated_at
 		)
-		VALUES (TRUE, $1, $2, $3)
+		VALUES (TRUE, $1, $2, $3, $4)
 		ON CONFLICT (singleton)
 		DO UPDATE SET
 			default_commit_author_failure_email_enabled = EXCLUDED.default_commit_author_failure_email_enabled,
+			default_commit_author_success_email_enabled = EXCLUDED.default_commit_author_success_email_enabled,
 			updated_at = EXCLUDED.updated_at
 		RETURNING ` + notificationInstanceSettingsColumns + `
 	`
 
 	return scanNotificationInstanceSettings(r.db.QueryRowContext(ctx, query,
 		settings.DefaultCommitAuthorFailureEmailEnabled,
+		settings.DefaultCommitAuthorSuccessEmailEnabled,
 		settings.CreatedAt,
 		settings.UpdatedAt,
 	))
@@ -63,6 +66,7 @@ func scanNotificationInstanceSettings(scanner rowScanner) (domain.NotificationIn
 	var settings domain.NotificationInstanceSettings
 	err := scanner.Scan(
 		&settings.DefaultCommitAuthorFailureEmailEnabled,
+		&settings.DefaultCommitAuthorSuccessEmailEnabled,
 		&settings.CreatedAt,
 		&settings.UpdatedAt,
 	)
