@@ -339,14 +339,16 @@ export function MyNotificationsPage() {
                   Receive an email when a commit attributed to your account
                   results in a failed build.
                 </p>
-                <p className="subtle-text my-notifications-preference-meta">
-                  Sends to{" "}
-                  {formatNotificationEmail(
-                    failurePreference.target?.address,
-                    currentUser.email,
-                  )}
-                  .
-                </p>
+                {failurePreference.target && (
+                  <p className="subtle-text my-notifications-preference-meta">
+                    Sends to{" "}
+                    {formatNotificationEmail(
+                      failurePreference.target.address,
+                      currentUser.email,
+                    )}
+                    .
+                  </p>
+                )}
                 {failurePreference.unavailable_reason ===
                   "personal_target_required" && (
                   <p className="subtle-text my-notifications-preference-meta">
@@ -392,14 +394,16 @@ export function MyNotificationsPage() {
                   Receive an email when a commit attributed to your account
                   results in a successful build.
                 </p>
-                <p className="subtle-text my-notifications-preference-meta">
-                  Sends to{" "}
-                  {formatNotificationEmail(
-                    successPreference.target?.address,
-                    currentUser.email,
-                  )}
-                  .
-                </p>
+                {successPreference.target && (
+                  <p className="subtle-text my-notifications-preference-meta">
+                    Sends to{" "}
+                    {formatNotificationEmail(
+                      successPreference.target.address,
+                      currentUser.email,
+                    )}
+                    .
+                  </p>
+                )}
                 {successPreference.unavailable_reason ===
                   "personal_target_required" && (
                   <p className="subtle-text my-notifications-preference-meta">

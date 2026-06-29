@@ -183,6 +183,12 @@ describe("MyNotificationsPage", () => {
           name: /Open Notification administration/i,
         }),
       ).toBeNull();
+      expect(screen.queryByText(/Sends to /i)).toBeNull();
+      expect(
+        screen.getAllByText(
+          /Create your personal email target to turn this on/i,
+        ).length,
+      ).toBe(2);
     });
   });
 
