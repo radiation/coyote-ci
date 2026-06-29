@@ -603,6 +603,8 @@ func TestNotificationService_CommitAuthorFailureNotificationPreference(t *testin
 
 	if _, enableErr := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, notificationBoolPtr(true)); !errors.Is(enableErr, ErrNotificationPreferencePersonalTargetRequired) {
 		t.Fatalf("expected enable without target to fail, got %v", enableErr)
+	} else if enableErr.Error() != "an enabled owned personal email target is required to enable commit-author notifications" {
+		t.Fatalf("expected neutral target-required message, got %q", enableErr.Error())
 	}
 
 	target, err := svc.EnsureOwnedEmailTarget(ctx, user)
@@ -719,6 +721,107 @@ func TestNotificationService_CommitAuthorFailureNotificationPreference(t *testin
 	}
 }
 
+func TestNotificationService_CommitAuthorSuccessNotificationPreference_TargetRequiredMessageIsEventNeutral(t *testing.T) {
+	ctx := context.Background()
+	targetRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+	svc := NewNotificationService(targetRepo).WithPreferenceRepository(preferenceRepo)
+	user := domain.User{ID: uuid.NewString(), Email: "user@example.com"}
+
+	_, err := svc.SetCommitAuthorSuccessNotificationPreference(ctx, user, notificationBoolPtr(true))
+	if !errors.Is(err, ErrNotificationPreferencePersonalTargetRequired) {
+		t.Fatalf("expected target required error, got %v", err)
+	}
+	if err.Error() != "an enabled owned personal email target is required to enable commit-author notifications" {
+		t.Fatalf("expected neutral target-required message, got %q", err.Error())
+	}
+
+	state, err := svc.SetCommitAuthorSuccessNotificationPreference(ctx, user, notificationBoolPtr(false))
+	if err != nil {
+		t.Fatalf("expected disabling without target to succeed, got %v", err)
+	}
+	if state.Enabled || state.DeliveryActive {
+		t.Fatalf("expected disabled success preference state, got %+v", state)
+	}
+}
+
+func TestNotificationService_CommitAuthorSuccessNotificationPreference(t *testing.T) {
+	ctx := context.Background()
+	targetRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+	svc := NewNotificationService(targetRepo).WithPreferenceRepository(preferenceRepo)
+	now := time.Date(2026, 6, 29, 9, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	user := domain.User{ID: uuid.NewString(), Email: "user@example.com", DisplayName: strPtr("User Example")}
+
+	state, err := svc.GetCommitAuthorSuccessNotificationPreference(ctx, user)
+	if err != nil {
+		t.Fatalf("get default success preference failed: %v", err)
+	}
+	if state.Enabled || state.Eligible || state.DeliveryActive {
+		t.Fatalf("expected disabled ineligible success default, got %+v", state)
+	}
+	if state.UnavailableReason == nil || *state.UnavailableReason != NotificationPreferenceUnavailableReasonPersonalTargetRequired {
+		t.Fatalf("expected missing-target success reason, got %+v", state.UnavailableReason)
+	}
+
+	target, err := svc.EnsureOwnedEmailTarget(ctx, user)
+	if err != nil {
+		t.Fatalf("ensure owned target failed: %v", err)
+	}
+
+	enabledState, err := svc.SetCommitAuthorSuccessNotificationPreference(ctx, user, notificationBoolPtr(true))
+	if err != nil {
+		t.Fatalf("enable success preference failed: %v", err)
+	}
+	if !enabledState.Enabled || !enabledState.Eligible || !enabledState.DeliveryActive {
+		t.Fatalf("unexpected enabled success state %+v", enabledState)
+	}
+	if enabledState.Target == nil || enabledState.Target.ID != target.ID {
+		t.Fatalf("expected success preference target %q, got %+v", target.ID, enabledState.Target)
+	}
+
+	falseValue := false
+	_, err = svc.UpdateTarget(ctx, target.ID, UpdateNotificationTargetInput{Enabled: &falseValue})
+	if err != nil {
+		t.Fatalf("disable personal target failed: %v", err)
+	}
+	pausedState, err := svc.GetCommitAuthorSuccessNotificationPreference(ctx, user)
+	if err != nil {
+		t.Fatalf("get paused success state failed: %v", err)
+	}
+	if pausedState.UnavailableReason == nil || *pausedState.UnavailableReason != NotificationPreferenceUnavailableReasonPersonalTargetDisabled {
+		t.Fatalf("expected disabled-target success reason, got %+v", pausedState.UnavailableReason)
+	}
+	if !pausedState.Enabled || !pausedState.Eligible || pausedState.DeliveryActive {
+		t.Fatalf("expected paused active-success preference state, got %+v", pausedState)
+	}
+
+	disabledState, err := svc.SetCommitAuthorSuccessNotificationPreference(ctx, user, notificationBoolPtr(false))
+	if err != nil {
+		t.Fatalf("disable success preference with disabled target failed: %v", err)
+	}
+	if disabledState.Enabled || disabledState.DeliveryActive {
+		t.Fatalf("expected disabled success preference with paused target, got %+v", disabledState)
+	}
+
+	_, err = svc.SetCommitAuthorSuccessNotificationPreference(ctx, user, nil)
+	if !errors.Is(err, ErrNotificationPreferenceEnabledRequired) {
+		t.Fatalf("expected enabled-required error, got %v", err)
+	}
+
+	_, err = svc.SetCommitAuthorSuccessNotificationPreference(ctx, domain.User{ID: "   ", Email: user.Email}, notificationBoolPtr(false))
+	if !errors.Is(err, ErrNotificationPersonalUserIDRequired) {
+		t.Fatalf("expected missing user id error, got %v", err)
+	}
+
+	_, err = svc.SetCommitAuthorSuccessNotificationPreference(ctx, user, notificationBoolPtr(true))
+	if !errors.Is(err, ErrNotificationPreferencePersonalTargetRequired) {
+		t.Fatalf("expected re-enable with disabled target to fail, got %v", err)
+	}
+}
+
 func TestNotificationService_NotificationDefaultsAndInitialization(t *testing.T) {
 	ctx := context.Background()
 	targetRepo := memoryrepo.NewNotificationSubscriptionRepository()
@@ -736,12 +839,15 @@ func TestNotificationService_NotificationDefaultsAndInitialization(t *testing.T)
 		t.Fatalf("expected unset defaults to resolve enabled, got %+v", defaults)
 	}
 
-	updatedDefaults, err := svc.SetNotificationDefaults(ctx, notificationBoolPtr(false))
+	updatedDefaults, err := svc.SetNotificationDefaults(ctx, notificationBoolPtr(false), notificationBoolPtr(false))
 	if err != nil {
 		t.Fatalf("set defaults failed: %v", err)
 	}
 	if updatedDefaults.DefaultCommitAuthorFailureEmailEnabled {
 		t.Fatalf("expected defaults to be disabled, got %+v", updatedDefaults)
+	}
+	if updatedDefaults.DefaultCommitAuthorSuccessEmailEnabled {
+		t.Fatalf("expected success defaults to be disabled, got %+v", updatedDefaults)
 	}
 
 	user := domain.User{ID: uuid.NewString(), Email: "new-user@example.com"}
@@ -759,11 +865,17 @@ func TestNotificationService_NotificationDefaultsAndInitialization(t *testing.T)
 	if preference.Source != domain.UserNotificationPreferenceSourceInstanceDefault {
 		t.Fatalf("expected instance-default source, got %+v", preference)
 	}
+	if preference.CommitAuthorSuccessEnabled {
+		t.Fatalf("expected success preference from instance default to stay disabled, got %+v", preference)
+	}
+	if preference.CommitAuthorSuccessSource == nil || *preference.CommitAuthorSuccessSource != domain.UserNotificationPreferenceSourceInstanceDefault {
+		t.Fatalf("expected success instance-default source, got %+v", preference)
+	}
 
 	if _, enableErr := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, notificationBoolPtr(true)); enableErr != nil {
 		t.Fatalf("explicit enable failed: %v", enableErr)
 	}
-	if _, defaultsErr := svc.SetNotificationDefaults(ctx, notificationBoolPtr(true)); defaultsErr != nil {
+	if _, defaultsErr := svc.SetNotificationDefaults(ctx, notificationBoolPtr(true), notificationBoolPtr(true)); defaultsErr != nil {
 		t.Fatalf("re-enable defaults failed: %v", defaultsErr)
 	}
 	if _, repeatEnsureErr := svc.EnsureOwnedEmailTarget(ctx, user); repeatEnsureErr != nil {
@@ -776,6 +888,9 @@ func TestNotificationService_NotificationDefaultsAndInitialization(t *testing.T)
 	}
 	if !explicitPreference.CommitAuthorFailureEnabled || explicitPreference.Source != domain.UserNotificationPreferenceSourceUser {
 		t.Fatalf("expected explicit user preference to be preserved, got %+v", explicitPreference)
+	}
+	if explicitPreference.CommitAuthorSuccessEnabled {
+		t.Fatalf("expected success preference to remain unchanged, got %+v", explicitPreference)
 	}
 }
 
@@ -809,7 +924,7 @@ func TestNotificationService_ExistingOwnedTargetIsNotRetroactivelyInitialized(t 
 		t.Fatalf("expected existing target without preference to stay disabled but eligible, got %+v", state)
 	}
 
-	if _, defaultsErr := svc.SetNotificationDefaults(ctx, notificationBoolPtr(false)); defaultsErr != nil {
+	if _, defaultsErr := svc.SetNotificationDefaults(ctx, notificationBoolPtr(false), notificationBoolPtr(false)); defaultsErr != nil {
 		t.Fatalf("set defaults failed: %v", defaultsErr)
 	}
 
@@ -841,12 +956,12 @@ func TestNotificationService_DefaultConfigurationBranches(t *testing.T) {
 		t.Fatalf("expected nil settings repo to default enabled, got %+v", defaults)
 	}
 
-	_, err = svc.SetNotificationDefaults(ctx, nil)
+	_, err = svc.SetNotificationDefaults(ctx, nil, nil)
 	if !errors.Is(err, ErrNotificationDefaultEnabledRequired) {
 		t.Fatalf("expected missing enabled error, got %v", err)
 	}
 
-	_, err = svc.SetNotificationDefaults(ctx, notificationBoolPtr(true))
+	_, err = svc.SetNotificationDefaults(ctx, notificationBoolPtr(true), notificationBoolPtr(false))
 	if err == nil || err.Error() != "notification instance settings repository is not configured" {
 		t.Fatalf("expected missing settings repo error, got %v", err)
 	}
@@ -854,6 +969,11 @@ func TestNotificationService_DefaultConfigurationBranches(t *testing.T) {
 	_, err = svc.SetCommitAuthorFailureNotificationPreference(ctx, domain.User{ID: uuid.NewString(), Email: "user@example.com"}, notificationBoolPtr(false))
 	if err == nil || err.Error() != "notification preference repository is not configured" {
 		t.Fatalf("expected missing preferences repo error, got %v", err)
+	}
+
+	_, err = svc.SetCommitAuthorSuccessNotificationPreference(ctx, domain.User{ID: uuid.NewString(), Email: "user@example.com"}, notificationBoolPtr(false))
+	if err == nil || err.Error() != "notification preference repository is not configured" {
+		t.Fatalf("expected missing success preferences repo error, got %v", err)
 	}
 
 	errSvc := NewNotificationService(memoryrepo.NewNotificationSubscriptionRepository()).WithInstanceSettingsRepository(&errNotificationInstanceSettingsRepo{err: errors.New("settings failed")})

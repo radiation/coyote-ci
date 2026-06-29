@@ -45,8 +45,10 @@ import {
   getMyEmailNotificationTarget,
   ensureMyEmailNotificationTarget,
   getCommitAuthorFailureNotificationPreference,
+  getCommitAuthorSuccessNotificationPreference,
   getNotificationDefaults,
   setCommitAuthorFailureNotificationPreference,
+  setCommitAuthorSuccessNotificationPreference,
   setNotificationDefaults,
   createNotificationTarget,
   updateNotificationTarget,
@@ -99,8 +101,14 @@ describe("API client - types", () => {
     expect(typeof getCommitAuthorFailureNotificationPreference).toBe(
       "function",
     );
+    expect(typeof getCommitAuthorSuccessNotificationPreference).toBe(
+      "function",
+    );
     expect(typeof getNotificationDefaults).toBe("function");
     expect(typeof setCommitAuthorFailureNotificationPreference).toBe(
+      "function",
+    );
+    expect(typeof setCommitAuthorSuccessNotificationPreference).toBe(
       "function",
     );
     expect(typeof setNotificationDefaults).toBe("function");
@@ -1383,6 +1391,81 @@ describe("API client - types", () => {
     );
   });
 
+  it("gets and updates my commit-author success notification preference", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            enabled: false,
+            eligible: true,
+            delivery_active: false,
+            target: {
+              id: "target-1",
+              owner_user_id: "user-1",
+              type: "email",
+              name: "User Example",
+              address: "<user@example.com>",
+              webhook_configured: false,
+              enabled: true,
+              created_at: "2026-06-24T00:00:00Z",
+              updated_at: "2026-06-24T00:00:00Z",
+            },
+            unavailable_reason: null,
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            enabled: true,
+            eligible: true,
+            delivery_active: true,
+            unavailable_reason: null,
+            target: {
+              id: "target-1",
+              owner_user_id: "user-1",
+              type: "email",
+              name: "User Example",
+              address: "<user@example.com>",
+              webhook_configured: false,
+              enabled: true,
+              created_at: "2026-06-24T00:00:00Z",
+              updated_at: "2026-06-24T00:00:00Z",
+            },
+          },
+        }),
+      } as Response);
+
+    const current = await getCommitAuthorSuccessNotificationPreference();
+    const updated = await setCommitAuthorSuccessNotificationPreference({
+      enabled: true,
+    });
+
+    expect(current.enabled).toBe(false);
+    expect(updated.enabled).toBe(true);
+    expect(updated.target?.id).toBe("target-1");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/me/notification-preferences/commit-author-successes",
+      { credentials: "include" },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/me/notification-preferences/commit-author-successes",
+      {
+        credentials: "include",
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ enabled: true }),
+      },
+    );
+  });
+
   it("gets and updates notification defaults", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -1391,6 +1474,7 @@ describe("API client - types", () => {
         json: async () => ({
           data: {
             default_commit_author_failure_email_enabled: true,
+            default_commit_author_success_email_enabled: false,
           },
         }),
       } as Response)
@@ -1399,6 +1483,7 @@ describe("API client - types", () => {
         json: async () => ({
           data: {
             default_commit_author_failure_email_enabled: false,
+            default_commit_author_success_email_enabled: true,
           },
         }),
       } as Response);
@@ -1406,10 +1491,13 @@ describe("API client - types", () => {
     const current = await getNotificationDefaults();
     const updated = await setNotificationDefaults({
       default_commit_author_failure_email_enabled: false,
+      default_commit_author_success_email_enabled: true,
     });
 
     expect(current.default_commit_author_failure_email_enabled).toBe(true);
+    expect(current.default_commit_author_success_email_enabled).toBe(false);
     expect(updated.default_commit_author_failure_email_enabled).toBe(false);
+    expect(updated.default_commit_author_success_email_enabled).toBe(true);
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/api/settings/notifications/defaults",
@@ -1426,6 +1514,7 @@ describe("API client - types", () => {
         },
         body: JSON.stringify({
           default_commit_author_failure_email_enabled: false,
+          default_commit_author_success_email_enabled: true,
         }),
       },
     );

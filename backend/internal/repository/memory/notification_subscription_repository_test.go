@@ -812,6 +812,12 @@ func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized(t 
 	if preference.Source != domain.UserNotificationPreferenceSourceInstanceDefault {
 		t.Fatalf("expected instance-default preference source, got %+v", preference)
 	}
+	if preference.CommitAuthorSuccessEnabled {
+		t.Fatalf("expected success preference default to stay disabled, got %+v", preference)
+	}
+	if preference.CommitAuthorSuccessSource == nil || *preference.CommitAuthorSuccessSource != domain.UserNotificationPreferenceSourceInstanceDefault {
+		t.Fatalf("expected success source to be initialized from instance default, got %+v", preference)
+	}
 
 	_, err = preferences.Upsert(ctx, domain.UserNotificationPreference{
 		UserID:                     "user-init",
@@ -845,6 +851,56 @@ func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized(t 
 	}
 	if !explicitPreference.CommitAuthorFailureEnabled || explicitPreference.Source != domain.UserNotificationPreferenceSourceUser {
 		t.Fatalf("expected explicit preference to be preserved, got %+v", explicitPreference)
+	}
+
+	legacyPreference, err := preferences.Upsert(ctx, domain.UserNotificationPreference{
+		UserID:                     "legacy-claimed-user",
+		CommitAuthorFailureEnabled: true,
+		Source:                     domain.UserNotificationPreferenceSourceUser,
+		CreatedAt:                  now,
+		UpdatedAt:                  now,
+	})
+	if err != nil {
+		t.Fatalf("seed legacy preference without success source failed: %v", err)
+	}
+	if legacyPreference.CommitAuthorSuccessSource != nil {
+		t.Fatalf("expected seeded legacy preference to lack success source, got %+v", legacyPreference)
+	}
+	claimableLegacy, err := repo.CreateTarget(ctx, domain.NotificationTarget{
+		ID:        "legacy-claimable-target",
+		Type:      domain.NotificationTargetTypeEmail,
+		Name:      "Legacy Claimable",
+		Recipient: "legacy-claimed@example.com",
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create legacy claimable target failed: %v", err)
+	}
+	claimedLegacy, err := repo.EnsureOwnedEmailTargetInitialized(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+		ID:          "ignored-legacy-claim-id",
+		OwnerUserID: "legacy-claimed-user",
+		Name:        "Legacy Claimed User",
+		Recipient:   claimableLegacy.Recipient,
+		CreatedAt:   now,
+		UpdatedAt:   now.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("claim legacy target with backfill failed: %v", err)
+	}
+	if claimedLegacy.ID != claimableLegacy.ID {
+		t.Fatalf("expected claimed legacy target id %q, got %q", claimableLegacy.ID, claimedLegacy.ID)
+	}
+	backfilledPreference, err := preferences.GetByUserID(ctx, "legacy-claimed-user")
+	if err != nil {
+		t.Fatalf("get backfilled legacy preference failed: %v", err)
+	}
+	if backfilledPreference.CommitAuthorSuccessEnabled {
+		t.Fatalf("expected backfilled success preference to remain disabled, got %+v", backfilledPreference)
+	}
+	if backfilledPreference.CommitAuthorSuccessSource == nil || *backfilledPreference.CommitAuthorSuccessSource != domain.UserNotificationPreferenceSourceInstanceDefault {
+		t.Fatalf("expected legacy preference success source backfill, got %+v", backfilledPreference)
 	}
 
 	legacyOwner := "legacy-user"

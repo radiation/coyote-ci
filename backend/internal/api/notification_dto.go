@@ -59,8 +59,21 @@ type CommitAuthorFailureNotificationPreferenceEnvelope struct {
 	Data CommitAuthorFailureNotificationPreferenceResponse `json:"data"`
 }
 
+type CommitAuthorSuccessNotificationPreferenceResponse struct {
+	Enabled           bool                        `json:"enabled"`
+	Eligible          bool                        `json:"eligible"`
+	DeliveryActive    bool                        `json:"delivery_active"`
+	Target            *NotificationTargetResponse `json:"target"`
+	UnavailableReason *string                     `json:"unavailable_reason,omitempty"`
+}
+
+type CommitAuthorSuccessNotificationPreferenceEnvelope struct {
+	Data CommitAuthorSuccessNotificationPreferenceResponse `json:"data"`
+}
+
 type NotificationDefaultsResponse struct {
 	DefaultCommitAuthorFailureEmailEnabled bool `json:"default_commit_author_failure_email_enabled"`
+	DefaultCommitAuthorSuccessEmailEnabled bool `json:"default_commit_author_success_email_enabled"`
 }
 
 type NotificationDefaultsEnvelope struct {
@@ -69,9 +82,14 @@ type NotificationDefaultsEnvelope struct {
 
 type PutNotificationDefaultsRequest struct {
 	DefaultCommitAuthorFailureEmailEnabled *bool `json:"default_commit_author_failure_email_enabled"`
+	DefaultCommitAuthorSuccessEmailEnabled *bool `json:"default_commit_author_success_email_enabled"`
 }
 
 type PutCommitAuthorFailureNotificationPreferenceRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+type PutCommitAuthorSuccessNotificationPreferenceRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 

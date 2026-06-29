@@ -128,9 +128,16 @@ func mustEnsureOwnedNotificationTarget(t *testing.T, repo *memoryrepo.Notificati
 func mustUpsertNotificationPreference(t *testing.T, repo *memoryrepo.UserNotificationPreferenceRepository, userID string, enabled bool) domain.UserNotificationPreference {
 	t.Helper()
 
+	return mustUpsertNotificationPreferenceFlags(t, repo, userID, enabled, false)
+}
+
+func mustUpsertNotificationPreferenceFlags(t *testing.T, repo *memoryrepo.UserNotificationPreferenceRepository, userID string, failureEnabled bool, successEnabled bool) domain.UserNotificationPreference {
+	t.Helper()
+
 	preference, err := repo.Upsert(context.Background(), domain.UserNotificationPreference{
 		UserID:                     userID,
-		CommitAuthorFailureEnabled: enabled,
+		CommitAuthorFailureEnabled: failureEnabled,
+		CommitAuthorSuccessEnabled: successEnabled,
 		CreatedAt:                  time.Now().UTC(),
 		UpdatedAt:                  time.Now().UTC(),
 	})
@@ -139,6 +146,267 @@ func mustUpsertNotificationPreference(t *testing.T, repo *memoryrepo.UserNotific
 	}
 
 	return preference
+}
+
+func TestBuildNotificationService_CommitAuthorSuccessPreferenceDelivery(t *testing.T) {
+	type successFixture struct {
+		notifier         *BuildNotificationService
+		sender           *recordingEmailSender
+		deliveryRepo     *memoryrepo.NotificationDeliveryRepository
+		subscriptionRepo *memoryrepo.NotificationSubscriptionRepository
+		userRepo         *memoryrepo.UserRepository
+		preferenceRepo   *memoryrepo.UserNotificationPreferenceRepository
+		authorUser       domain.User
+	}
+
+	newFixture := func(t *testing.T, authorEmail string, createOwnedTarget bool, targetEnabled bool, failureEnabled bool, successEnabled bool) successFixture {
+		t.Helper()
+
+		sender := &recordingEmailSender{}
+		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+		userRepo := memoryrepo.NewUserRepository()
+		preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+		subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+		authorUser := mustCreateNotificationUser(t, userRepo, authorEmail)
+		if createOwnedTarget {
+			mustEnsureOwnedNotificationTarget(t, subscriptionRepo, authorUser.ID, authorEmail, targetEnabled)
+		}
+		mustUpsertNotificationPreferenceFlags(t, preferenceRepo, authorUser.ID, failureEnabled, successEnabled)
+
+		notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+			Enabled:          true,
+			Sender:           sender,
+			DeliveryRepo:     deliveryRepo,
+			SubscriptionRepo: subscriptionRepo,
+			UserRepo:         userRepo,
+			PreferenceRepo:   preferenceRepo,
+		})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+
+		return successFixture{
+			notifier:         notifier,
+			sender:           sender,
+			deliveryRepo:     deliveryRepo,
+			subscriptionRepo: subscriptionRepo,
+			userRepo:         userRepo,
+			preferenceRepo:   preferenceRepo,
+			authorUser:       authorUser,
+		}
+	}
+
+	t.Run("successful build sends to owned enabled personal target when success preference is enabled", func(t *testing.T) {
+		authorEmail := "author@example.com"
+		fixture := newFixture(t, authorEmail, true, true, false, true)
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-success-1", Status: domain.BuildStatusSuccess, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify terminal build failed: %v", err)
+		}
+		if len(fixture.sender.messages) != 1 || fixture.sender.messages[0].To != "<author@example.com>" {
+			t.Fatalf("expected one personal success delivery to author target, got %+v", fixture.sender.messages)
+		}
+		delivery := mustGetNotificationDelivery(t, fixture.deliveryRepo, "build-success-1", domain.NotificationEventTypeBuildSucceeded, "<author@example.com>")
+		if delivery.Status != domain.NotificationDeliveryStatusSent {
+			t.Fatalf("expected sent success delivery, got %q", delivery.Status)
+		}
+	})
+
+	t.Run("success-disabled author receives no personal success delivery", func(t *testing.T) {
+		authorEmail := "author@example.com"
+		fixture := newFixture(t, authorEmail, true, true, false, false)
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-success-2", Status: domain.BuildStatusSuccess, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify terminal build failed: %v", err)
+		}
+		if len(fixture.sender.messages) != 0 {
+			t.Fatalf("expected no personal success delivery, got %+v", fixture.sender.messages)
+		}
+	})
+
+	t.Run("failure preference alone does not cause success delivery and remains independently authoritative", func(t *testing.T) {
+		authorEmail := "author@example.com"
+		fixture := newFixture(t, authorEmail, true, true, true, false)
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-success-3", Status: domain.BuildStatusSuccess, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify success build failed: %v", err)
+		}
+		if len(fixture.sender.messages) != 0 {
+			t.Fatalf("expected no success delivery when only failure preference is enabled, got %+v", fixture.sender.messages)
+		}
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-failure-3", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify failure build failed: %v", err)
+		}
+		if len(fixture.sender.messages) != 1 || fixture.sender.messages[0].To != "<author@example.com>" {
+			t.Fatalf("expected failure delivery to remain enabled independently, got %+v", fixture.sender.messages)
+		}
+	})
+
+	t.Run("success preference alone does not change existing failure delivery behavior", func(t *testing.T) {
+		authorEmail := "author@example.com"
+		fixture := newFixture(t, authorEmail, true, true, false, true)
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-failure-4", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify failure build failed: %v", err)
+		}
+		if len(fixture.sender.messages) != 0 {
+			t.Fatalf("expected failure delivery to remain disabled, got %+v", fixture.sender.messages)
+		}
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-success-4", Status: domain.BuildStatusSuccess, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify success build failed: %v", err)
+		}
+		if len(fixture.sender.messages) != 1 || fixture.sender.messages[0].To != "<author@example.com>" {
+			t.Fatalf("expected success delivery to remain enabled independently, got %+v", fixture.sender.messages)
+		}
+	})
+
+	t.Run("disabled owned personal target prevents success delivery", func(t *testing.T) {
+		authorEmail := "author@example.com"
+		fixture := newFixture(t, authorEmail, true, false, false, true)
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-success-5", Status: domain.BuildStatusSuccess, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify terminal build failed: %v", err)
+		}
+		if len(fixture.sender.messages) != 0 {
+			t.Fatalf("expected disabled target to prevent success delivery, got %+v", fixture.sender.messages)
+		}
+	})
+
+	t.Run("missing owned personal target prevents success delivery", func(t *testing.T) {
+		authorEmail := "author@example.com"
+		fixture := newFixture(t, authorEmail, false, false, false, true)
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-success-6", Status: domain.BuildStatusSuccess, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify terminal build failed: %v", err)
+		}
+		if len(fixture.sender.messages) != 0 {
+			t.Fatalf("expected missing target to prevent success delivery, got %+v", fixture.sender.messages)
+		}
+	})
+
+	t.Run("target owned by another user is not used", func(t *testing.T) {
+		authorEmail := "author@example.com"
+		fixture := newFixture(t, authorEmail, false, false, false, true)
+		otherOwner := mustCreateNotificationUser(t, fixture.userRepo, "owner@example.com")
+		mustEnsureOwnedNotificationTarget(t, fixture.subscriptionRepo, otherOwner.ID, authorEmail, true)
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-success-7", Status: domain.BuildStatusSuccess, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify terminal build failed: %v", err)
+		}
+		if len(fixture.sender.messages) != 0 {
+			t.Fatalf("expected foreign owned target to be ignored, got %+v", fixture.sender.messages)
+		}
+	})
+
+	t.Run("unknown commit author is skipped safely", func(t *testing.T) {
+		fixture := newFixture(t, "author@example.com", true, true, false, true)
+		unknown := "unknown@example.com"
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-success-8", Status: domain.BuildStatusSuccess, SourceAuthorEmail: &unknown}); err != nil {
+			t.Fatalf("notify terminal build failed: %v", err)
+		}
+		if len(fixture.sender.messages) != 0 {
+			t.Fatalf("expected unknown author to be skipped, got %+v", fixture.sender.messages)
+		}
+	})
+
+	t.Run("case-normalized author email matching works for success delivery", func(t *testing.T) {
+		fixture := newFixture(t, "author@example.com", true, true, false, true)
+		mixedCase := "AUTHOR@EXAMPLE.COM"
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-success-9", Status: domain.BuildStatusSuccess, SourceAuthorEmail: &mixedCase}); err != nil {
+			t.Fatalf("notify terminal build failed: %v", err)
+		}
+		if len(fixture.sender.messages) != 1 || fixture.sender.messages[0].To != "<author@example.com>" {
+			t.Fatalf("expected normalized success delivery, got %+v", fixture.sender.messages)
+		}
+	})
+
+	t.Run("manual success subscription plus personal success preference dedupes same target", func(t *testing.T) {
+		authorEmail := "author@example.com"
+		fixture := newFixture(t, authorEmail, true, true, false, true)
+		targets, err := fixture.subscriptionRepo.ListTargets(context.Background())
+		if err != nil {
+			t.Fatalf("list targets failed: %v", err)
+		}
+		projectID := "project-1"
+		mustCreateNotificationSubscription(t, fixture.subscriptionRepo, targets[0].ID, &projectID, nil, domain.NotificationEventTypeBuildSucceeded, true)
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-success-10", ProjectID: projectID, Status: domain.BuildStatusSuccess, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify terminal build failed: %v", err)
+		}
+		if len(fixture.sender.messages) != 1 || fixture.sender.messages[0].To != "<author@example.com>" {
+			t.Fatalf("expected same-target success dedupe, got %+v", fixture.sender.messages)
+		}
+		delivery := mustGetNotificationDelivery(t, fixture.deliveryRepo, "build-success-10", domain.NotificationEventTypeBuildSucceeded, "<author@example.com>")
+		if delivery.Attempts != 1 {
+			t.Fatalf("expected one success delivery attempt after same-target dedupe, got %d", delivery.Attempts)
+		}
+	})
+
+	t.Run("distinct targets still each receive one success delivery", func(t *testing.T) {
+		authorEmail := "author@example.com"
+		fixture := newFixture(t, authorEmail, true, true, false, true)
+		jobID := "job-1"
+		manualTarget := mustCreateNotificationTarget(t, fixture.subscriptionRepo, "ops@example.com", true)
+		mustCreateNotificationSubscription(t, fixture.subscriptionRepo, manualTarget.ID, nil, &jobID, domain.NotificationEventTypeBuildSucceeded, true)
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-success-11", JobID: &jobID, Status: domain.BuildStatusSuccess, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify terminal build failed: %v", err)
+		}
+		if len(fixture.sender.messages) != 2 {
+			t.Fatalf("expected distinct success targets to receive delivery, got %+v", fixture.sender.messages)
+		}
+	})
+
+	t.Run("success and failure events remain distinct for dedupe", func(t *testing.T) {
+		authorEmail := "author@example.com"
+		fixture := newFixture(t, authorEmail, true, true, true, true)
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-shared-12", Status: domain.BuildStatusSuccess, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify success build failed: %v", err)
+		}
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-shared-12", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify failure build failed: %v", err)
+		}
+		if len(fixture.sender.messages) != 2 {
+			t.Fatalf("expected distinct success and failure deliveries, got %+v", fixture.sender.messages)
+		}
+		mustGetNotificationDelivery(t, fixture.deliveryRepo, "build-shared-12", domain.NotificationEventTypeBuildSucceeded, "<author@example.com>")
+		mustGetNotificationDelivery(t, fixture.deliveryRepo, "build-shared-12", domain.NotificationEventTypeBuildFailed, "<author@example.com>")
+	})
+
+	t.Run("existing failed success delivery record is skipped without retry", func(t *testing.T) {
+		authorEmail := "author@example.com"
+		fixture := newFixture(t, authorEmail, true, true, false, true)
+		message := "smtp unavailable"
+		if _, err := fixture.deliveryRepo.Create(context.Background(), domain.NotificationDelivery{
+			BuildID:   "build-success-13",
+			EventType: domain.NotificationEventTypeBuildSucceeded,
+			Recipient: "<author@example.com>",
+			Status:    domain.NotificationDeliveryStatusFailed,
+			Attempts:  1,
+			LastError: &message,
+		}); err != nil {
+			t.Fatalf("seed failed success delivery record failed: %v", err)
+		}
+
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-success-13", Status: domain.BuildStatusSuccess, SourceAuthorEmail: &authorEmail}); err != nil {
+			t.Fatalf("notify with existing failed success record should skip cleanly, got %v", err)
+		}
+		if len(fixture.sender.messages) != 0 {
+			t.Fatalf("expected no resend when failed success delivery record already exists, got %+v", fixture.sender.messages)
+		}
+		delivery := mustGetNotificationDelivery(t, fixture.deliveryRepo, "build-success-13", domain.NotificationEventTypeBuildSucceeded, "<author@example.com>")
+		if delivery.Status != domain.NotificationDeliveryStatusFailed {
+			t.Fatalf("expected failed success delivery status to remain unchanged, got %q", delivery.Status)
+		}
+		if delivery.Attempts != 1 {
+			t.Fatalf("expected success delivery attempts to remain 1, got %d", delivery.Attempts)
+		}
+	})
 }
 
 func mustCreateSlackNotificationTarget(t *testing.T, repo *memoryrepo.NotificationSubscriptionRepository, webhookURL string, enabled bool) domain.NotificationTarget {

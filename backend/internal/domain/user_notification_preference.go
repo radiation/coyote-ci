@@ -12,7 +12,9 @@ const (
 type UserNotificationPreference struct {
 	UserID                     string
 	CommitAuthorFailureEnabled bool
+	CommitAuthorSuccessEnabled bool
 	Source                     UserNotificationPreferenceSource
+	CommitAuthorSuccessSource  *UserNotificationPreferenceSource
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
 }

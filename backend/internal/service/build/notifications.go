@@ -298,8 +298,8 @@ func (s *BuildNotificationService) resolveTerminalDestinations(ctx context.Conte
 		}
 	}
 
-	if eventType == domain.NotificationEventTypeBuildFailed {
-		destination, ok, err := s.resolveCommitAuthorDestination(ctx, build)
+	if eventType == domain.NotificationEventTypeBuildFailed || eventType == domain.NotificationEventTypeBuildSucceeded {
+		destination, ok, err := s.resolveCommitAuthorDestination(ctx, build, eventType)
 		if err != nil {
 			return nil, err
 		}
@@ -311,7 +311,7 @@ func (s *BuildNotificationService) resolveTerminalDestinations(ctx context.Conte
 	return dedupeDestinations(destinations), nil
 }
 
-func (s *BuildNotificationService) resolveCommitAuthorDestination(ctx context.Context, build domain.Build) (notificationDestination, bool, error) {
+func (s *BuildNotificationService) resolveCommitAuthorDestination(ctx context.Context, build domain.Build, eventType domain.NotificationEventType) (notificationDestination, bool, error) {
 	if s.userRepo == nil || s.preferenceRepo == nil || s.subscriptionRepo == nil {
 		return notificationDestination{}, false, nil
 	}
@@ -337,7 +337,14 @@ func (s *BuildNotificationService) resolveCommitAuthorDestination(ctx context.Co
 		}
 		return notificationDestination{}, false, err
 	}
-	if !preference.CommitAuthorFailureEnabled {
+	preferenceEnabled := false
+	switch eventType {
+	case domain.NotificationEventTypeBuildFailed:
+		preferenceEnabled = preference.CommitAuthorFailureEnabled
+	case domain.NotificationEventTypeBuildSucceeded:
+		preferenceEnabled = preference.CommitAuthorSuccessEnabled
+	}
+	if !preferenceEnabled {
 		return notificationDestination{}, false, nil
 	}
 

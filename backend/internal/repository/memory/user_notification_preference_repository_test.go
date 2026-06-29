@@ -14,6 +14,7 @@ func TestUserNotificationPreferenceRepository_GetByUserIDAndUpsert(t *testing.T)
 	repo := NewUserNotificationPreferenceRepository()
 	ctx := context.Background()
 	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	source := domain.UserNotificationPreferenceSourceUser
 
 	_, err := repo.GetByUserID(ctx, "missing")
 	if !errors.Is(err, repository.ErrUserNotificationPreferenceNotFound) {
@@ -23,6 +24,8 @@ func TestUserNotificationPreferenceRepository_GetByUserIDAndUpsert(t *testing.T)
 	stored, err := repo.Upsert(ctx, domain.UserNotificationPreference{
 		UserID:                     "  user-1  ",
 		CommitAuthorFailureEnabled: true,
+		CommitAuthorSuccessEnabled: true,
+		CommitAuthorSuccessSource:  &source,
 		CreatedAt:                  now,
 		UpdatedAt:                  now,
 	})
@@ -32,6 +35,10 @@ func TestUserNotificationPreferenceRepository_GetByUserIDAndUpsert(t *testing.T)
 	if stored.UserID != "user-1" {
 		t.Fatalf("expected trimmed user id, got %q", stored.UserID)
 	}
+	source = domain.UserNotificationPreferenceSourceInstanceDefault
+	if stored.CommitAuthorSuccessSource == nil || *stored.CommitAuthorSuccessSource != domain.UserNotificationPreferenceSourceUser {
+		t.Fatalf("expected success source clone to preserve original value, got %+v", stored.CommitAuthorSuccessSource)
+	}
 
 	fetched, err := repo.GetByUserID(ctx, " user-1 ")
 	if err != nil {
@@ -39,6 +46,9 @@ func TestUserNotificationPreferenceRepository_GetByUserIDAndUpsert(t *testing.T)
 	}
 	if !fetched.CommitAuthorFailureEnabled {
 		t.Fatalf("expected enabled preference, got %+v", fetched)
+	}
+	if !fetched.CommitAuthorSuccessEnabled || fetched.CommitAuthorSuccessSource == nil || *fetched.CommitAuthorSuccessSource != domain.UserNotificationPreferenceSourceUser {
+		t.Fatalf("expected success preference fields to persist, got %+v", fetched)
 	}
 
 	updated, err := repo.Upsert(ctx, domain.UserNotificationPreference{
@@ -67,11 +77,13 @@ func TestUserNotificationPreferenceRepository_InitializeIfAbsent(t *testing.T) {
 	repo := NewUserNotificationPreferenceRepository()
 	ctx := context.Background()
 	now := time.Date(2026, 6, 28, 20, 10, 0, 0, time.UTC)
+	source := domain.UserNotificationPreferenceSourceInstanceDefault
 
 	initialized, created, err := repo.InitializeIfAbsent(ctx, domain.UserNotificationPreference{
 		UserID:                     "  user-init  ",
 		CommitAuthorFailureEnabled: true,
 		Source:                     domain.UserNotificationPreferenceSourceInstanceDefault,
+		CommitAuthorSuccessSource:  &source,
 		CreatedAt:                  now,
 		UpdatedAt:                  now,
 	})
@@ -80,6 +92,10 @@ func TestUserNotificationPreferenceRepository_InitializeIfAbsent(t *testing.T) {
 	}
 	if !created || initialized.UserID != "user-init" {
 		t.Fatalf("unexpected initialized preference %+v created=%t", initialized, created)
+	}
+	source = domain.UserNotificationPreferenceSourceUser
+	if initialized.CommitAuthorSuccessSource == nil || *initialized.CommitAuthorSuccessSource != domain.UserNotificationPreferenceSourceInstanceDefault {
+		t.Fatalf("expected initialized success source clone, got %+v", initialized.CommitAuthorSuccessSource)
 	}
 
 	existing, existingCreated, err := repo.InitializeIfAbsent(ctx, domain.UserNotificationPreference{

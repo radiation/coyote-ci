@@ -221,11 +221,13 @@ func (r *NotificationSubscriptionRepository) EnsureOwnedEmailTargetInitialized(_
 		return target, nil
 	}
 
-	defaultEnabled := true
+	defaultFailureEnabled := true
+	defaultSuccessEnabled := false
 	if r.settings != nil {
 		r.settings.mu.RLock()
 		if r.settings.settings != nil {
-			defaultEnabled = r.settings.settings.DefaultCommitAuthorFailureEmailEnabled
+			defaultFailureEnabled = r.settings.settings.DefaultCommitAuthorFailureEmailEnabled
+			defaultSuccessEnabled = r.settings.settings.DefaultCommitAuthorSuccessEmailEnabled
 		}
 		r.settings.mu.RUnlock()
 	}
@@ -234,14 +236,23 @@ func (r *NotificationSubscriptionRepository) EnsureOwnedEmailTargetInitialized(_
 	defer r.preferences.mu.Unlock()
 
 	trimmedUserID := strings.TrimSpace(input.OwnerUserID)
-	if _, exists := r.preferences.preferences[trimmedUserID]; !exists {
+	if existing, exists := r.preferences.preferences[trimmedUserID]; !exists {
+		successSource := domain.UserNotificationPreferenceSourceInstanceDefault
 		r.preferences.preferences[trimmedUserID] = domain.UserNotificationPreference{
 			UserID:                     trimmedUserID,
-			CommitAuthorFailureEnabled: defaultEnabled,
+			CommitAuthorFailureEnabled: defaultFailureEnabled,
+			CommitAuthorSuccessEnabled: defaultSuccessEnabled,
 			Source:                     domain.UserNotificationPreferenceSourceInstanceDefault,
+			CommitAuthorSuccessSource:  &successSource,
 			CreatedAt:                  input.CreatedAt,
 			UpdatedAt:                  input.UpdatedAt,
 		}
+	} else if existing.CommitAuthorSuccessSource == nil {
+		successSource := domain.UserNotificationPreferenceSourceInstanceDefault
+		existing.CommitAuthorSuccessEnabled = defaultSuccessEnabled
+		existing.CommitAuthorSuccessSource = &successSource
+		existing.UpdatedAt = input.UpdatedAt
+		r.preferences.preferences[trimmedUserID] = existing
 	}
 
 	return target, nil

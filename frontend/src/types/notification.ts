@@ -22,7 +22,7 @@ export interface MyEmailNotificationTargetResponse {
   target: NotificationTarget | null;
 }
 
-export interface CommitAuthorFailureNotificationPreference {
+export interface CommitAuthorNotificationPreference {
   enabled: boolean;
   eligible: boolean;
   delivery_active: boolean;
@@ -30,8 +30,15 @@ export interface CommitAuthorFailureNotificationPreference {
   unavailable_reason?: string | null;
 }
 
+export type CommitAuthorFailureNotificationPreference =
+  CommitAuthorNotificationPreference;
+
+export type CommitAuthorSuccessNotificationPreference =
+  CommitAuthorNotificationPreference;
+
 export interface NotificationDefaults {
   default_commit_author_failure_email_enabled: boolean;
+  default_commit_author_success_email_enabled: boolean;
 }
 
 export interface CreateEmailNotificationTargetRequest {
@@ -90,6 +97,11 @@ export interface UpdateCommitAuthorFailureNotificationPreferenceRequest {
   enabled: boolean;
 }
 
+export interface UpdateCommitAuthorSuccessNotificationPreferenceRequest {
+  enabled: boolean;
+}
+
 export interface UpdateNotificationDefaultsRequest {
   default_commit_author_failure_email_enabled: boolean;
+  default_commit_author_success_email_enabled: boolean;
 }
