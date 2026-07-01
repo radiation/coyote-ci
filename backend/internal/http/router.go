@@ -152,6 +152,11 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 				r.Put("/me/notification-preferences/commit-author-successes", cfg.notificationHandler.SetMyCommitAuthorSuccessNotificationPreference)
 				r.Get("/settings/notifications/defaults", cfg.notificationHandler.GetNotificationDefaults)
 				r.Put("/settings/notifications/defaults", cfg.notificationHandler.SetNotificationDefaults)
+				r.Get("/settings/integrations/slack", cfg.notificationHandler.GetSlackWorkspaceIntegration)
+				r.Put("/settings/integrations/slack", cfg.notificationHandler.PutSlackWorkspaceIntegration)
+				r.Patch("/settings/integrations/slack", cfg.notificationHandler.PatchSlackWorkspaceIntegration)
+				r.Delete("/settings/integrations/slack", cfg.notificationHandler.DeleteSlackWorkspaceIntegration)
+				r.Post("/settings/integrations/slack/test", cfg.notificationHandler.TestSlackWorkspaceIntegration)
 				r.Route("/notification-targets", func(r chi.Router) {
 					r.Get("/", cfg.notificationHandler.ListTargets)
 					r.Post("/", cfg.notificationHandler.CreateTarget)

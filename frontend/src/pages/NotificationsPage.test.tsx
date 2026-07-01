@@ -9,16 +9,22 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { APIError } from "../api";
 import { NotificationsPage } from "./NotificationsPage";
+import { AuthContext, type AuthContextValue } from "../auth-context";
 import {
   createNotificationSubscription,
   createNotificationTarget,
+  deleteSlackWorkspaceIntegration,
   deleteNotificationSubscription,
   getNotificationDefaults,
+  getSlackWorkspaceIntegration,
   listJobs,
   listNotificationSubscriptions,
   listNotificationTargets,
   listProjects,
+  patchSlackWorkspaceIntegration,
+  putSlackWorkspaceIntegration,
   setNotificationDefaults,
+  testSlackWorkspaceIntegration,
   updateNotificationSubscription,
   updateNotificationTarget,
 } from "../api";
@@ -29,19 +35,24 @@ vi.mock("../api", async () => {
     ...actual,
     createNotificationSubscription: vi.fn(),
     createNotificationTarget: vi.fn(),
+    deleteSlackWorkspaceIntegration: vi.fn(),
     deleteNotificationSubscription: vi.fn(),
     getNotificationDefaults: vi.fn(),
+    getSlackWorkspaceIntegration: vi.fn(),
     listJobs: vi.fn(),
     listNotificationSubscriptions: vi.fn(),
     listNotificationTargets: vi.fn(),
     listProjects: vi.fn(),
+    patchSlackWorkspaceIntegration: vi.fn(),
+    putSlackWorkspaceIntegration: vi.fn(),
     setNotificationDefaults: vi.fn(),
+    testSlackWorkspaceIntegration: vi.fn(),
     updateNotificationSubscription: vi.fn(),
     updateNotificationTarget: vi.fn(),
   };
 });
 
-function renderPage() {
+function renderPage(options?: { isGlobalAdmin?: boolean }) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -49,10 +60,28 @@ function renderPage() {
     },
   });
 
+  const authValue: AuthContextValue = {
+    currentUser: {
+      id: "user-1",
+      email: "admin@example.com",
+      global_role: options?.isGlobalAdmin === false ? "user" : "admin",
+    },
+    authMode: "oidc",
+    authStatus: "authenticated",
+    error: null,
+    isGlobalAdmin: options?.isGlobalAdmin !== false,
+    loginAvailable: true,
+    login: vi.fn(),
+    logout: vi.fn(async () => {}),
+    refreshCurrentUser: vi.fn(async () => {}),
+  };
+
   return render(
-    <QueryClientProvider client={queryClient}>
-      <NotificationsPage />
-    </QueryClientProvider>,
+    <AuthContext.Provider value={authValue}>
+      <QueryClientProvider client={queryClient}>
+        <NotificationsPage />
+      </QueryClientProvider>
+    </AuthContext.Provider>,
   );
 }
 
@@ -117,17 +146,32 @@ describe("NotificationsPage", () => {
     createNotificationSubscription,
   );
   const mockedCreateNotificationTarget = vi.mocked(createNotificationTarget);
+  const mockedDeleteSlackWorkspaceIntegration = vi.mocked(
+    deleteSlackWorkspaceIntegration,
+  );
   const mockedDeleteNotificationSubscription = vi.mocked(
     deleteNotificationSubscription,
   );
   const mockedGetNotificationDefaults = vi.mocked(getNotificationDefaults);
+  const mockedGetSlackWorkspaceIntegration = vi.mocked(
+    getSlackWorkspaceIntegration,
+  );
   const mockedListJobs = vi.mocked(listJobs);
   const mockedListNotificationSubscriptions = vi.mocked(
     listNotificationSubscriptions,
   );
   const mockedListNotificationTargets = vi.mocked(listNotificationTargets);
   const mockedListProjects = vi.mocked(listProjects);
+  const mockedPatchSlackWorkspaceIntegration = vi.mocked(
+    patchSlackWorkspaceIntegration,
+  );
+  const mockedPutSlackWorkspaceIntegration = vi.mocked(
+    putSlackWorkspaceIntegration,
+  );
   const mockedSetNotificationDefaults = vi.mocked(setNotificationDefaults);
+  const mockedTestSlackWorkspaceIntegration = vi.mocked(
+    testSlackWorkspaceIntegration,
+  );
   const mockedUpdateNotificationSubscription = vi.mocked(
     updateNotificationSubscription,
   );
@@ -140,6 +184,41 @@ describe("NotificationsPage", () => {
       default_commit_author_failure_email_enabled: true,
       default_commit_author_success_email_enabled: false,
     });
+    mockedGetSlackWorkspaceIntegration.mockResolvedValue({ configured: false });
+    mockedPutSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    });
+    mockedPatchSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    });
+    mockedTestSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    });
+    mockedDeleteSlackWorkspaceIntegration.mockResolvedValue();
 
     mockedListNotificationTargets.mockResolvedValue([
       {
@@ -1547,6 +1626,320 @@ describe("NotificationsPage", () => {
         ),
       ).toBeTruthy();
     });
+  });
+
+  it("manages Slack workspace integration and clears token after connect", async () => {
+    renderPage();
+
+    const tokenInput = (await screen.findByLabelText(
+      "Slack bot token",
+    )) as HTMLInputElement;
+    const helpLink = screen.getByRole("link", { name: "Open Slack app setup" });
+    expect(helpLink).toHaveAttribute("href", "https://api.slack.com/apps");
+    expect(helpLink).toHaveAttribute("target", "_blank");
+    expect(
+      screen.queryByLabelText(
+        "Allow this token to switch Coyote to a different Slack workspace.",
+      ),
+    ).toBeNull();
+    fireEvent.change(tokenInput, { target: { value: "xoxb-secret" } });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Connect Slack workspace" }),
+    );
+
+    await waitFor(() => {
+      expect(mockedPutSlackWorkspaceIntegration).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bot_token: "xoxb-secret",
+          replace_existing: false,
+        }),
+        expect.anything(),
+      );
+    });
+
+    await waitFor(() => {
+      expect(tokenInput.value).toBe("");
+      expect(screen.queryByDisplayValue("xoxb-secret")).toBeNull();
+    });
+  });
+
+  it("renders a connected Slack workspace with null App ID and no unavailable metadata", async () => {
+    mockedGetSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        workspace_url: "https://coyote.slack.com/services",
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        last_tested_at: "2026-07-01T14:46:00Z",
+        last_test_succeeded: true,
+        updated_at: "2026-07-01T00:00:00Z",
+        app_id: null,
+      },
+    });
+
+    renderPage();
+
+    await screen.findByText("Coyote");
+    expect(screen.getByText("Connected")).toBeTruthy();
+    const workspaceLink = screen.getByRole("link", {
+      name: "coyote.slack.com",
+    });
+    expect(workspaceLink).toHaveAttribute(
+      "href",
+      "https://coyote.slack.com/services",
+    );
+    expect(screen.getByText("Passed")).toBeTruthy();
+    expect(screen.queryByText("App ID")).toBeNull();
+    expect(screen.queryByText("Unavailable")).toBeNull();
+    expect(screen.queryByLabelText("New Slack bot token")).toBeNull();
+  });
+
+  it("shows App ID only inside integration details when present", async () => {
+    mockedGetSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        workspace_url: "https://coyote.slack.com",
+        bot_user_id: "B123",
+        app_id: "A123",
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    });
+
+    renderPage();
+
+    const detailsSummary = await screen.findByText("Integration details");
+    const details = detailsSummary.closest("details");
+    if (!details) {
+      throw new Error("Expected integration details disclosure");
+    }
+    expect(within(details).getByText("App ID")).toBeTruthy();
+    expect(within(details).getByText("A123")).toBeTruthy();
+  });
+
+  it("reveals and cancels token replacement from the connected Slack workspace view", async () => {
+    mockedGetSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        workspace_url: "https://coyote.slack.com",
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    });
+
+    renderPage();
+
+    await screen.findByText("Coyote");
+    expect(screen.queryByLabelText("New Slack bot token")).toBeNull();
+    expect(
+      screen.queryByLabelText(
+        "Allow this token to switch Coyote to a different Slack workspace.",
+      ),
+    ).toBeNull();
+
+    const replaceButton = screen.getByRole("button", {
+      name: "Replace bot token",
+    });
+    expect(replaceButton).toHaveClass("secondary-button");
+
+    fireEvent.click(replaceButton);
+    const tokenInput = (await screen.findByLabelText(
+      "New Slack bot token",
+    )) as HTMLInputElement;
+    const switchCheckbox = screen.getByLabelText(
+      "Allow this token to switch Coyote to a different Slack workspace.",
+    ) as HTMLInputElement;
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    expect(cancelButton).toHaveClass("secondary-button");
+
+    fireEvent.change(tokenInput, { target: { value: "xoxb-rotate" } });
+    fireEvent.click(switchCheckbox);
+    expect(switchCheckbox.checked).toBe(true);
+
+    fireEvent.click(cancelButton);
+    expect(screen.queryByLabelText("New Slack bot token")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Replace bot token" }));
+    const tokenInputAfterCancel = (await screen.findByLabelText(
+      "New Slack bot token",
+    )) as HTMLInputElement;
+    const switchCheckboxAfterCancel = screen.getByLabelText(
+      "Allow this token to switch Coyote to a different Slack workspace.",
+    ) as HTMLInputElement;
+    expect(tokenInputAfterCancel.value).toBe("");
+    expect(switchCheckboxAfterCancel.checked).toBe(false);
+  });
+
+  it("updates a connected Slack workspace token without requiring switch confirmation", async () => {
+    mockedGetSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        workspace_url: "https://coyote.slack.com",
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    });
+
+    renderPage();
+
+    await screen.findByText("Coyote");
+    fireEvent.click(screen.getByRole("button", { name: "Replace bot token" }));
+    const tokenInput = (await screen.findByLabelText(
+      "New Slack bot token",
+    )) as HTMLInputElement;
+
+    fireEvent.change(tokenInput, { target: { value: "xoxb-rotate" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save new token" }));
+
+    await waitFor(() => {
+      expect(mockedPutSlackWorkspaceIntegration).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bot_token: "xoxb-rotate",
+          replace_existing: false,
+        }),
+        expect.anything(),
+      );
+    });
+  });
+
+  it("shows action button hierarchy for a connected Slack workspace", async () => {
+    mockedGetSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        workspace_url: "https://coyote.slack.com",
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    });
+
+    renderPage();
+
+    await screen.findByText("Coyote");
+    expect(screen.getByRole("button", { name: "Test connection" })).toHaveClass(
+      "secondary-button",
+    );
+    expect(
+      screen.getByRole("button", { name: "Disable integration" }),
+    ).toHaveClass("secondary-button", "danger-button");
+    expect(screen.getByRole("button", { name: "Disconnect" })).toHaveClass(
+      "secondary-button",
+      "danger-button",
+    );
+  });
+
+  it("sends replace_existing true only for an explicit confirmed workspace switch", async () => {
+    mockedGetSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        workspace_url: "https://coyote.slack.com",
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    });
+
+    renderPage();
+
+    await screen.findByText("Coyote");
+    fireEvent.click(screen.getByRole("button", { name: "Replace bot token" }));
+    const tokenInput = (await screen.findByLabelText(
+      "New Slack bot token",
+    )) as HTMLInputElement;
+    fireEvent.change(tokenInput, { target: { value: "xoxb-switch" } });
+    fireEvent.click(
+      screen.getByLabelText(
+        "Allow this token to switch Coyote to a different Slack workspace.",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save new token" }));
+
+    await waitFor(() => {
+      expect(mockedPutSlackWorkspaceIntegration).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bot_token: "xoxb-switch",
+          replace_existing: true,
+        }),
+        expect.anything(),
+      );
+    });
+  });
+
+  it("surfaces Slack workspace replacement conflicts and keeps current metadata visible", async () => {
+    mockedGetSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        workspace_url: "https://coyote.slack.com",
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    });
+    mockedPutSlackWorkspaceIntegration.mockRejectedValueOnce(
+      new APIError(
+        409,
+        "slack workspace integration replacement requires explicit confirmation",
+      ),
+    );
+
+    renderPage();
+
+    await screen.findByText("Coyote");
+    fireEvent.click(screen.getByRole("button", { name: "Replace bot token" }));
+    const tokenInput = (await screen.findByLabelText(
+      "New Slack bot token",
+    )) as HTMLInputElement;
+    fireEvent.change(tokenInput, { target: { value: "xoxb-other-workspace" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save new token" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /Failed to connect Slack workspace: API 409: slack workspace integration replacement requires explicit confirmation/i,
+        ),
+      ).toBeTruthy();
+    });
+    expect(screen.getByText("Coyote")).toBeTruthy();
+    expect(screen.getByText("T123")).toBeTruthy();
+  });
+
+  it("hides Slack workspace controls for non-admin users", async () => {
+    renderPage({ isGlobalAdmin: false });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "Global admin access is required to manage Slack workspace integration.",
+        ),
+      ).toBeTruthy();
+    });
+    expect(screen.queryByLabelText("Slack bot token")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Replace bot token" }),
+    ).toBeNull();
   });
 
   it("keeps existing target management intact", async () => {

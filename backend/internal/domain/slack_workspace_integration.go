@@ -1,0 +1,20 @@
+package domain
+
+import "time"
+
+type SlackWorkspaceIntegration struct {
+	ID                string
+	WorkspaceID       string
+	WorkspaceName     *string
+	WorkspaceURL      *string
+	BotUserID         *string
+	AuthedUserID      *string
+	AppID             *string
+	BotTokenSecret    string
+	Enabled           bool
+	ConnectedAt       time.Time
+	LastTestedAt      *time.Time
+	LastTestSucceeded *bool
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}

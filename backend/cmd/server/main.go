@@ -20,6 +20,7 @@ import (
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
 	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
+	platformslack "github.com/radiation/coyote-ci/backend/internal/platform/slack"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	artifactsvc "github.com/radiation/coyote-ci/backend/internal/service/artifact"
@@ -96,6 +97,7 @@ func main() {
 	notificationSubscriptionRepo := repositorypostgres.NewNotificationSubscriptionRepository(db)
 	notificationPreferenceRepo := repositorypostgres.NewUserNotificationPreferenceRepository(db)
 	notificationInstanceSettingsRepo := repositorypostgres.NewNotificationInstanceSettingsRepository(db)
+	slackWorkspaceIntegrationRepo := repositorypostgres.NewSlackWorkspaceIntegrationRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	workerRepo := repositorypostgres.NewWorkerRepository(db)
 	buildNotificationService, buildNotificationErr := buildsvc.NewBuildNotificationService(buildsvc.BuildNotificationConfig{
@@ -157,6 +159,7 @@ func main() {
 	jobService := service.NewJobService(jobRepo, buildService).WithProjectRepository(projectRepo).WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo)
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
 	notificationService := service.NewNotificationService(notificationSubscriptionRepo).WithPreferenceRepository(notificationPreferenceRepo).WithInstanceSettingsRepository(notificationInstanceSettingsRepo)
+	slackWorkspaceIntegrationService := service.NewSlackWorkspaceIntegrationService(slackWorkspaceIntegrationRepo, platformslack.NewClient(nil))
 	webhookService := webhooksvc.NewDeliveryIngressService(webhookDeliveryRepo, jobService)
 	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()
 	webhookService.SetMetrics(webhookMetrics)
@@ -187,10 +190,12 @@ func main() {
 	credentialHandler.SetAuthorization(authMode)
 	notificationHandler := handler.NewNotificationHandler(nil)
 	notificationHandler.SetAdminService(notificationService)
+	notificationHandler.SetSlackWorkspaceIntegrationService(slackWorkspaceIntegrationService)
 	notificationHandler.SetAuthorization(authMode)
 	if authMode == auth.ModeDisabled {
 		notificationHandler = handler.NewNotificationHandler(buildNotificationService)
 		notificationHandler.SetAdminService(notificationService)
+		notificationHandler.SetSlackWorkspaceIntegrationService(slackWorkspaceIntegrationService)
 		notificationHandler.SetAuthorization(authMode)
 	}
 	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, cfg.GitHubWebhookSecret)
