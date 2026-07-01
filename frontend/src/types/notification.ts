@@ -45,6 +45,35 @@ export interface NotificationDefaults {
   default_commit_author_success_email_enabled: boolean;
 }
 
+export interface SlackWorkspaceIntegration {
+  id: string;
+  workspace_id: string;
+  workspace_name?: string | null;
+  workspace_url?: string | null;
+  bot_id?: string | null;
+  authed_user_id?: string | null;
+  app_id?: string | null;
+  enabled: boolean;
+  connected_at: string;
+  last_tested_at?: string | null;
+  last_test_succeeded?: boolean | null;
+  updated_at: string;
+}
+
+export interface SlackWorkspaceIntegrationStatus {
+  configured: boolean;
+  integration?: SlackWorkspaceIntegration | null;
+}
+
+export interface PutSlackWorkspaceIntegrationRequest {
+  bot_token: string;
+  replace_existing?: boolean;
+}
+
+export interface PatchSlackWorkspaceIntegrationRequest {
+  enabled: boolean;
+}
+
 export interface CreateEmailNotificationTargetRequest {
   type: "email";
   name: string;

@@ -48,9 +48,14 @@ import {
   getCommitAuthorFailureNotificationPreference,
   getCommitAuthorSuccessNotificationPreference,
   getNotificationDefaults,
+  getSlackWorkspaceIntegration,
   setCommitAuthorFailureNotificationPreference,
   setCommitAuthorSuccessNotificationPreference,
   setNotificationDefaults,
+  putSlackWorkspaceIntegration,
+  patchSlackWorkspaceIntegration,
+  testSlackWorkspaceIntegration,
+  deleteSlackWorkspaceIntegration,
   createNotificationTarget,
   updateNotificationTarget,
   listNotificationSubscriptions,
@@ -107,6 +112,7 @@ describe("API client - types", () => {
       "function",
     );
     expect(typeof getNotificationDefaults).toBe("function");
+    expect(typeof getSlackWorkspaceIntegration).toBe("function");
     expect(typeof setCommitAuthorFailureNotificationPreference).toBe(
       "function",
     );
@@ -114,6 +120,10 @@ describe("API client - types", () => {
       "function",
     );
     expect(typeof setNotificationDefaults).toBe("function");
+    expect(typeof putSlackWorkspaceIntegration).toBe("function");
+    expect(typeof patchSlackWorkspaceIntegration).toBe("function");
+    expect(typeof testSlackWorkspaceIntegration).toBe("function");
+    expect(typeof deleteSlackWorkspaceIntegration).toBe("function");
     expect(typeof createNotificationTarget).toBe("function");
     expect(typeof updateNotificationTarget).toBe("function");
     expect(typeof listNotificationSubscriptions).toBe("function");
@@ -1555,6 +1565,116 @@ describe("API client - types", () => {
           default_commit_author_success_email_enabled: true,
         }),
       },
+    );
+  });
+
+  it("manages slack workspace integration", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: { configured: false } }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            configured: true,
+            integration: {
+              id: "int-1",
+              workspace_id: "T123",
+              workspace_name: "Coyote",
+              enabled: true,
+              connected_at: "2026-07-01T13:00:00Z",
+              updated_at: "2026-07-01T13:00:00Z",
+            },
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            configured: true,
+            integration: {
+              id: "int-1",
+              workspace_id: "T123",
+              enabled: false,
+              connected_at: "2026-07-01T13:00:00Z",
+              updated_at: "2026-07-01T13:01:00Z",
+            },
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            configured: true,
+            integration: {
+              id: "int-1",
+              workspace_id: "T123",
+              enabled: false,
+              connected_at: "2026-07-01T13:00:00Z",
+              last_tested_at: "2026-07-01T13:02:00Z",
+              last_test_succeeded: true,
+              updated_at: "2026-07-01T13:02:00Z",
+            },
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    await getSlackWorkspaceIntegration();
+    await putSlackWorkspaceIntegration({
+      bot_token: "xoxb-secret",
+      replace_existing: true,
+    });
+    await patchSlackWorkspaceIntegration({ enabled: false });
+    await testSlackWorkspaceIntegration();
+    await deleteSlackWorkspaceIntegration();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/settings/integrations/slack",
+      { credentials: "include" },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/settings/integrations/slack",
+      {
+        credentials: "include",
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          bot_token: "xoxb-secret",
+          replace_existing: true,
+        }),
+      },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/settings/integrations/slack",
+      {
+        credentials: "include",
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ enabled: false }),
+      },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/settings/integrations/slack/test",
+      { credentials: "include", method: "POST" },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "/api/settings/integrations/slack",
+      { credentials: "include", method: "DELETE" },
     );
   });
 

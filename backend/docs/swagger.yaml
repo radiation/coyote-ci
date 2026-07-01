@@ -977,6 +977,11 @@ definitions:
       webhook_configured:
         type: boolean
     type: object
+  api.PatchSlackWorkspaceIntegrationRequest:
+    properties:
+      enabled:
+        type: boolean
+    type: object
   api.ProjectEnvelope:
     properties:
       data:
@@ -1109,6 +1114,13 @@ definitions:
       default_commit_author_success_email_enabled:
         type: boolean
     type: object
+  api.PutSlackWorkspaceIntegrationRequest:
+    properties:
+      bot_token:
+        type: string
+      replace_existing:
+        type: boolean
+    type: object
   api.QueueBuildRequest:
     properties:
       steps:
@@ -1187,6 +1199,45 @@ definitions:
         $ref: '#/definitions/api.BuildResponse'
       job:
         $ref: '#/definitions/api.ExecutionJobResponse'
+    type: object
+  api.SlackWorkspaceIntegrationResponse:
+    properties:
+      app_id:
+        type: string
+      authed_user_id:
+        type: string
+      bot_id:
+        type: string
+      connected_at:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: string
+      last_test_succeeded:
+        type: boolean
+      last_tested_at:
+        type: string
+      updated_at:
+        type: string
+      workspace_id:
+        type: string
+      workspace_name:
+        type: string
+      workspace_url:
+        type: string
+    type: object
+  api.SlackWorkspaceIntegrationStatusEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.SlackWorkspaceIntegrationStatusResponse'
+    type: object
+  api.SlackWorkspaceIntegrationStatusResponse:
+    properties:
+      configured:
+        type: boolean
+      integration:
+        $ref: '#/definitions/api.SlackWorkspaceIntegrationResponse'
     type: object
   api.StepLogChunkResponse:
     properties:
@@ -3187,6 +3238,192 @@ paths:
       summary: Readiness check
       tags:
       - health
+  /settings/integrations/slack:
+    delete:
+      description: Disconnects the instance-level Slack workspace integration and
+        removes stored credentials.
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Disconnect Slack workspace integration
+      tags:
+      - notifications
+    get:
+      description: Returns safe Slack workspace integration metadata for the instance.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SlackWorkspaceIntegrationStatusEnvelope'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get Slack workspace integration
+      tags:
+      - notifications
+    patch:
+      consumes:
+      - application/json
+      description: Enables or disables the connected Slack workspace integration without
+        deleting credentials.
+      parameters:
+      - description: Slack workspace integration patch
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.PatchSlackWorkspaceIntegrationRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SlackWorkspaceIntegrationStatusEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Enable or disable Slack workspace integration
+      tags:
+      - notifications
+    put:
+      consumes:
+      - application/json
+      description: Validates a Slack bot token via auth.test and stores safe workspace
+        metadata plus credentials for the instance.
+      parameters:
+      - description: Slack workspace integration request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.PutSlackWorkspaceIntegrationRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SlackWorkspaceIntegrationStatusEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Connect or replace Slack workspace integration
+      tags:
+      - notifications
+  /settings/integrations/slack/test:
+    post:
+      description: Runs Slack auth.test using stored credentials and updates last
+        test status.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SlackWorkspaceIntegrationStatusEnvelope'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Test Slack workspace integration
+      tags:
+      - notifications
   /settings/notifications/defaults:
     get:
       description: Returns the effective instance defaults used when a newly eligible

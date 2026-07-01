@@ -84,6 +84,39 @@ type NotificationDefaultsEnvelope struct {
 	Data NotificationDefaultsResponse `json:"data"`
 }
 
+type SlackWorkspaceIntegrationResponse struct {
+	ID                string  `json:"id"`
+	WorkspaceID       string  `json:"workspace_id"`
+	WorkspaceName     *string `json:"workspace_name,omitempty"`
+	WorkspaceURL      *string `json:"workspace_url,omitempty"`
+	BotID             *string `json:"bot_id,omitempty"`
+	AuthedUserID      *string `json:"authed_user_id,omitempty"`
+	AppID             *string `json:"app_id,omitempty"`
+	Enabled           bool    `json:"enabled"`
+	ConnectedAt       string  `json:"connected_at"`
+	LastTestedAt      *string `json:"last_tested_at,omitempty"`
+	LastTestSucceeded *bool   `json:"last_test_succeeded,omitempty"`
+	UpdatedAt         string  `json:"updated_at"`
+}
+
+type SlackWorkspaceIntegrationStatusResponse struct {
+	Configured  bool                               `json:"configured"`
+	Integration *SlackWorkspaceIntegrationResponse `json:"integration,omitempty"`
+}
+
+type SlackWorkspaceIntegrationStatusEnvelope struct {
+	Data SlackWorkspaceIntegrationStatusResponse `json:"data"`
+}
+
+type PutSlackWorkspaceIntegrationRequest struct {
+	BotToken        string `json:"bot_token"`
+	ReplaceExisting *bool  `json:"replace_existing,omitempty"`
+}
+
+type PatchSlackWorkspaceIntegrationRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
 type PutNotificationDefaultsRequest struct {
 	DefaultCommitAuthorFailureEmailEnabled *bool `json:"default_commit_author_failure_email_enabled"`
 	DefaultCommitAuthorSuccessEmailEnabled *bool `json:"default_commit_author_success_email_enabled"`

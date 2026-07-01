@@ -45,6 +45,8 @@ import type {
   UserListResponse,
 } from "../types/identity";
 import type {
+  PatchSlackWorkspaceIntegrationRequest,
+  PutSlackWorkspaceIntegrationRequest,
   CommitAuthorFailureNotificationPreference,
   CommitAuthorSuccessNotificationPreference,
   CreateNotificationSubscriptionRequest,
@@ -55,6 +57,7 @@ import type {
   NotificationSubscriptionListResponse,
   NotificationTarget,
   NotificationTargetListResponse,
+  SlackWorkspaceIntegrationStatus,
   UpdateCommitAuthorFailureNotificationPreferenceRequest,
   UpdateCommitAuthorSuccessNotificationPreferenceRequest,
   UpdateMyEmailNotificationTargetRequest,
@@ -359,6 +362,54 @@ export async function setNotificationDefaults(
     },
   );
   return envelope.data;
+}
+
+export async function getSlackWorkspaceIntegration(): Promise<SlackWorkspaceIntegrationStatus> {
+  const envelope = await fetchJSON<
+    DataEnvelope<SlackWorkspaceIntegrationStatus>
+  >("/settings/integrations/slack");
+  return envelope.data;
+}
+
+export async function putSlackWorkspaceIntegration(
+  input: PutSlackWorkspaceIntegrationRequest,
+): Promise<SlackWorkspaceIntegrationStatus> {
+  const envelope = await fetchJSON<
+    DataEnvelope<SlackWorkspaceIntegrationStatus>
+  >("/settings/integrations/slack", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+  return envelope.data;
+}
+
+export async function patchSlackWorkspaceIntegration(
+  input: PatchSlackWorkspaceIntegrationRequest,
+): Promise<SlackWorkspaceIntegrationStatus> {
+  const envelope = await fetchJSON<
+    DataEnvelope<SlackWorkspaceIntegrationStatus>
+  >("/settings/integrations/slack", {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+  return envelope.data;
+}
+
+export async function testSlackWorkspaceIntegration(): Promise<SlackWorkspaceIntegrationStatus> {
+  const envelope = await postNoBodyJSON<
+    DataEnvelope<SlackWorkspaceIntegrationStatus>
+  >("/settings/integrations/slack/test");
+  return envelope.data;
+}
+
+export async function deleteSlackWorkspaceIntegration(): Promise<void> {
+  await deleteNoContent("/settings/integrations/slack");
 }
 
 export async function createNotificationTarget(

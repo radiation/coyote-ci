@@ -26,6 +26,7 @@ type sampleBuildEmailSender interface {
 type NotificationHandler struct {
 	notifications sampleBuildEmailSender
 	admin         notificationAdminService
+	slackAdmin    slackWorkspaceIntegrationAdminService
 	authMode      auth.Mode
 }
 
@@ -60,6 +61,10 @@ func (h *NotificationHandler) SetAuthorization(mode auth.Mode) {
 
 func (h *NotificationHandler) SetAdminService(admin notificationAdminService) {
 	h.admin = admin
+}
+
+func (h *NotificationHandler) SetSlackWorkspaceIntegrationService(admin slackWorkspaceIntegrationAdminService) {
+	h.slackAdmin = admin
 }
 
 func (h *NotificationHandler) HasSampleSender() bool {
