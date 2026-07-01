@@ -88,3 +88,39 @@ func TestClient_TestAuthentication_ContextCancellation(t *testing.T) {
 		t.Fatalf("expected deadline exceeded, got %v", err)
 	}
 }
+
+func TestClient_TestAuthentication_RejectsBlankToken(t *testing.T) {
+	client := NewClient(nil)
+
+	_, err := client.TestAuthentication(context.Background(), "   ")
+	if !errors.Is(err, ErrInvalidAuth) {
+		t.Fatalf("expected invalid auth for blank token, got %v", err)
+	}
+}
+
+func TestClient_TestAuthentication_AuthFailureFallbacks(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		expectErr error
+	}{
+		{name: "not authed", body: `{"ok":false,"error":"not_authed"}`, expectErr: ErrInvalidAuth},
+		{name: "payload rate limited", body: `{"ok":false,"error":"ratelimited"}`, expectErr: ErrRateLimited},
+		{name: "unknown auth failure", body: `{"ok":false,"error":"something_else"}`, expectErr: ErrAuthTestFailed},
+		{name: "non ok status", body: `{"ok":false}`, expectErr: ErrAuthTestFailed},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := NewClient(&recordingDoer{response: &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader(tc.body))}})
+			if tc.name != "non ok status" {
+				client = NewClient(&recordingDoer{response: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tc.body))}})
+			}
+
+			_, err := client.TestAuthentication(context.Background(), "xoxb-secret")
+			if !errors.Is(err, tc.expectErr) {
+				t.Fatalf("expected %v, got %v", tc.expectErr, err)
+			}
+		})
+	}
+}

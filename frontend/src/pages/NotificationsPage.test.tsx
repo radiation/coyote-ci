@@ -1727,6 +1727,134 @@ describe("NotificationsPage", () => {
     expect(within(details).getByText("A123")).toBeTruthy();
   });
 
+  it("shows Slack workspace loading and error states for admins", async () => {
+    mockedGetSlackWorkspaceIntegration.mockImplementation(
+      () => new Promise(() => {}),
+    );
+
+    renderPage();
+    expect(
+      await screen.findByText("Loading Slack workspace integration..."),
+    ).toBeTruthy();
+  });
+
+  it("shows Slack workspace load errors", async () => {
+    mockedGetSlackWorkspaceIntegration.mockRejectedValueOnce(
+      new Error("load failed"),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /Failed to load Slack workspace integration: load failed/i,
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  it("validates a missing Slack bot token before connect", async () => {
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Connect Slack workspace" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Slack bot token is required.")).toBeTruthy();
+    });
+    expect(mockedPutSlackWorkspaceIntegration).not.toHaveBeenCalled();
+  });
+
+  it("shows disabled Slack workspace state and re-enables it", async () => {
+    mockedGetSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        enabled: false,
+        connected_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    });
+    mockedPatchSlackWorkspaceIntegration.mockResolvedValueOnce({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:01:00Z",
+      },
+    });
+
+    renderPage();
+
+    await screen.findByRole("button", { name: "Enable integration" });
+    expect(
+      screen.getByText(/This workspace connection is paused/i),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Enable integration" }));
+
+    await waitFor(() => {
+      expect(mockedPatchSlackWorkspaceIntegration).toHaveBeenCalledWith(
+        { enabled: true },
+        expect.anything(),
+      );
+    });
+  });
+
+  it("shows failed Slack connection status and allows retesting", async () => {
+    mockedGetSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        last_tested_at: "2026-07-01T14:46:00Z",
+        last_test_succeeded: false,
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    });
+
+    renderPage();
+
+    await screen.findByText("Failed");
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+
+    await waitFor(() => {
+      expect(mockedTestSlackWorkspaceIntegration).toHaveBeenCalledWith(
+        undefined,
+        expect.anything(),
+      );
+    });
+  });
+
+  it("omits the workspace link when the Slack workspace URL is missing", async () => {
+    mockedGetSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        workspace_url: null,
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    });
+
+    renderPage();
+
+    await screen.findByText("Coyote");
+    expect(screen.queryByRole("link", { name: "coyote.slack.com" })).toBeNull();
+  });
+
   it("reveals and cancels token replacement from the connected Slack workspace view", async () => {
     mockedGetSlackWorkspaceIntegration.mockResolvedValue({
       configured: true,
@@ -1927,6 +2055,57 @@ describe("NotificationsPage", () => {
     });
     expect(screen.getByText("Coyote")).toBeTruthy();
     expect(screen.getByText("T123")).toBeTruthy();
+  });
+
+  it("does not disconnect the Slack workspace when the confirmation is canceled", async () => {
+    mockedGetSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    renderPage();
+
+    await screen.findByText("Coyote");
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(mockedDeleteSlackWorkspaceIntegration).not.toHaveBeenCalled();
+  });
+
+  it("disconnects the Slack workspace when the confirmation is accepted", async () => {
+    mockedGetSlackWorkspaceIntegration.mockResolvedValue({
+      configured: true,
+      integration: {
+        id: "integration-1",
+        workspace_id: "T123",
+        workspace_name: "Coyote",
+        enabled: true,
+        connected_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderPage();
+
+    await screen.findByText("Coyote");
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mockedDeleteSlackWorkspaceIntegration).toHaveBeenCalledWith(
+        undefined,
+        expect.anything(),
+      );
+    });
   });
 
   it("hides Slack workspace controls for non-admin users", async () => {

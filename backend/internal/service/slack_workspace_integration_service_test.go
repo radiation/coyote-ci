@@ -300,6 +300,102 @@ func TestSlackWorkspaceIntegrationService_TestConnectionSuccessReturnsPersistenc
 	}
 }
 
+func TestSlackWorkspaceIntegrationService_SetEnabledAndDisconnect(t *testing.T) {
+	now := time.Date(2026, 7, 1, 13, 0, 0, 0, time.UTC)
+	repo := &fakeSlackWorkspaceIntegrationRepository{
+		has: true,
+		integration: domain.SlackWorkspaceIntegration{
+			ID:             "int-1",
+			WorkspaceID:    "T123",
+			BotTokenSecret: "xoxb-secret",
+			Enabled:        true,
+			ConnectedAt:    now,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+	}
+	svc := NewSlackWorkspaceIntegrationService(repo, fakeSlackAuthClient{})
+	svc.now = func() time.Time { return now.Add(time.Minute) }
+
+	updated, err := svc.SetEnabled(context.Background(), boolPtrSvc(false))
+	if err != nil {
+		t.Fatalf("set enabled: %v", err)
+	}
+	if updated.Enabled {
+		t.Fatalf("expected integration to be disabled")
+	}
+
+	if err := svc.Disconnect(context.Background()); err != nil {
+		t.Fatalf("disconnect integration: %v", err)
+	}
+	if repo.has {
+		t.Fatalf("expected integration to be removed after disconnect")
+	}
+}
+
+func TestSlackWorkspaceIntegrationService_SetEnabledRequiresValue(t *testing.T) {
+	svc := NewSlackWorkspaceIntegrationService(&fakeSlackWorkspaceIntegrationRepository{}, fakeSlackAuthClient{})
+
+	_, err := svc.SetEnabled(context.Background(), nil)
+	if !errors.Is(err, ErrSlackWorkspaceEnabledRequired) {
+		t.Fatalf("expected enabled required error, got %v", err)
+	}
+}
+
+func TestSlackWorkspaceIntegrationService_TestConnectionWorkspaceMismatchMarksFailure(t *testing.T) {
+	now := time.Date(2026, 7, 1, 13, 10, 0, 0, time.UTC)
+	repo := &fakeSlackWorkspaceIntegrationRepository{
+		has: true,
+		integration: domain.SlackWorkspaceIntegration{
+			ID:             "int-1",
+			WorkspaceID:    "T123",
+			BotTokenSecret: "xoxb-secret",
+			Enabled:        true,
+			ConnectedAt:    now,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+	}
+	svc := NewSlackWorkspaceIntegrationService(repo, fakeSlackAuthClient{result: platformslack.AuthTestResult{WorkspaceID: "T999"}})
+	svc.now = func() time.Time { return now.Add(time.Minute) }
+
+	_, err := svc.TestConnection(context.Background())
+	if !errors.Is(err, ErrSlackWorkspaceInvalidAuth) {
+		t.Fatalf("expected invalid auth for workspace mismatch, got %v", err)
+	}
+	if repo.integration.LastTestSucceeded == nil || *repo.integration.LastTestSucceeded {
+		t.Fatalf("expected failed test result to be persisted on mismatch")
+	}
+}
+
+func TestMapSlackClientError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{name: "invalid auth", err: platformslack.ErrInvalidAuth, want: ErrSlackWorkspaceInvalidAuth},
+		{name: "token revoked", err: platformslack.ErrTokenRevoked, want: ErrSlackWorkspaceTokenRevoked},
+		{name: "inactive", err: platformslack.ErrAccountInactive, want: ErrSlackWorkspaceAccountInactive},
+		{name: "rate limited", err: platformslack.ErrRateLimited, want: ErrSlackWorkspaceRateLimited},
+		{name: "malformed", err: platformslack.ErrMalformedResponse, want: ErrSlackWorkspaceMalformedResponse},
+		{name: "upstream", err: platformslack.ErrUpstreamFailure, want: ErrSlackWorkspaceUpstream},
+		{name: "auth failed fallback", err: platformslack.ErrAuthTestFailed, want: ErrSlackWorkspaceInvalidAuth},
+		{name: "context canceled passthrough", err: context.Canceled, want: context.Canceled},
+		{name: "context deadline passthrough", err: context.DeadlineExceeded, want: context.DeadlineExceeded},
+		{name: "unknown fallback", err: errors.New("boom"), want: ErrSlackWorkspaceUpstream},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mapSlackClientError(tc.err)
+			if !errors.Is(got, tc.want) {
+				t.Fatalf("expected %v, got %v", tc.want, got)
+			}
+		})
+	}
+}
+
 func strPtrSvc(value string) *string {
 	v := value
 	return &v

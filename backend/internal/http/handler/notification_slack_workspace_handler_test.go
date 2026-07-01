@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,9 +18,17 @@ import (
 type fakeSlackWorkspaceAdminService struct {
 	integration domain.SlackWorkspaceIntegration
 	has         bool
+	getErr      error
+	connectErr  error
+	setErr      error
+	testErr     error
+	deleteErr   error
 }
 
 func (f *fakeSlackWorkspaceAdminService) Get(_ context.Context) (domain.SlackWorkspaceIntegration, error) {
+	if f.getErr != nil {
+		return domain.SlackWorkspaceIntegration{}, f.getErr
+	}
 	if !f.has {
 		return domain.SlackWorkspaceIntegration{}, repository.ErrSlackWorkspaceIntegrationNotFound
 	}
@@ -27,6 +36,9 @@ func (f *fakeSlackWorkspaceAdminService) Get(_ context.Context) (domain.SlackWor
 }
 
 func (f *fakeSlackWorkspaceAdminService) Connect(_ context.Context, input service.ConnectSlackWorkspaceIntegrationInput) (domain.SlackWorkspaceIntegration, error) {
+	if f.connectErr != nil {
+		return domain.SlackWorkspaceIntegration{}, f.connectErr
+	}
 	if input.BotToken == "" {
 		return domain.SlackWorkspaceIntegration{}, service.ErrSlackWorkspaceBotTokenRequired
 	}
@@ -47,6 +59,9 @@ func (f *fakeSlackWorkspaceAdminService) Connect(_ context.Context, input servic
 }
 
 func (f *fakeSlackWorkspaceAdminService) SetEnabled(_ context.Context, enabled *bool) (domain.SlackWorkspaceIntegration, error) {
+	if f.setErr != nil {
+		return domain.SlackWorkspaceIntegration{}, f.setErr
+	}
 	if !f.has {
 		return domain.SlackWorkspaceIntegration{}, repository.ErrSlackWorkspaceIntegrationNotFound
 	}
@@ -58,6 +73,9 @@ func (f *fakeSlackWorkspaceAdminService) SetEnabled(_ context.Context, enabled *
 }
 
 func (f *fakeSlackWorkspaceAdminService) TestConnection(_ context.Context) (domain.SlackWorkspaceIntegration, error) {
+	if f.testErr != nil {
+		return domain.SlackWorkspaceIntegration{}, f.testErr
+	}
 	if !f.has {
 		return domain.SlackWorkspaceIntegration{}, repository.ErrSlackWorkspaceIntegrationNotFound
 	}
@@ -70,6 +88,9 @@ func (f *fakeSlackWorkspaceAdminService) TestConnection(_ context.Context) (doma
 }
 
 func (f *fakeSlackWorkspaceAdminService) Disconnect(_ context.Context) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	if !f.has {
 		return repository.ErrSlackWorkspaceIntegrationNotFound
 	}
@@ -136,6 +157,106 @@ func TestNotificationHandler_SlackWorkspaceIntegration_ConnectAndNoTokenInRespon
 	}
 	if _, has := integration["bot_user_id"]; has {
 		t.Fatalf("did not expect legacy bot_user_id field in response")
+	}
+}
+
+func TestNotificationHandler_SlackWorkspaceIntegration_ServiceUnavailableAndInvalidBodies(t *testing.T) {
+	h := NewNotificationHandler(nil)
+	h.SetAuthorization(auth.ModeOIDC)
+	admin := domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/settings/integrations/slack", nil)
+	getReq = getReq.WithContext(auth.WithUser(getReq.Context(), admin))
+	getRes := httptest.NewRecorder()
+	h.GetSlackWorkspaceIntegration(getRes, getReq)
+	if getRes.Code != http.StatusNotFound {
+		t.Fatalf("expected not found when service unavailable, got %d", getRes.Code)
+	}
+
+	h.SetSlackWorkspaceIntegrationService(&fakeSlackWorkspaceAdminService{})
+	putReq := httptest.NewRequest(http.MethodPut, "/settings/integrations/slack", bytes.NewBufferString("{"))
+	putReq = putReq.WithContext(auth.WithUser(putReq.Context(), admin))
+	putRes := httptest.NewRecorder()
+	h.PutSlackWorkspaceIntegration(putRes, putReq)
+	if putRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad request for invalid put body, got %d", putRes.Code)
+	}
+
+	patchReq := httptest.NewRequest(http.MethodPatch, "/settings/integrations/slack", bytes.NewBufferString("{"))
+	patchReq = patchReq.WithContext(auth.WithUser(patchReq.Context(), admin))
+	patchRes := httptest.NewRecorder()
+	h.PatchSlackWorkspaceIntegration(patchRes, patchReq)
+	if patchRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad request for invalid patch body, got %d", patchRes.Code)
+	}
+}
+
+func TestNotificationHandler_SlackWorkspaceIntegration_PatchTestAndDelete(t *testing.T) {
+	h := NewNotificationHandler(nil)
+	h.SetAuthorization(auth.ModeOIDC)
+	h.SetSlackWorkspaceIntegrationService(&fakeSlackWorkspaceAdminService{
+		has: true,
+		integration: domain.SlackWorkspaceIntegration{
+			ID:          "int-1",
+			WorkspaceID: "T123",
+			Enabled:     true,
+			ConnectedAt: time.Date(2026, 7, 1, 13, 0, 0, 0, time.UTC),
+			CreatedAt:   time.Date(2026, 7, 1, 13, 0, 0, 0, time.UTC),
+			UpdatedAt:   time.Date(2026, 7, 1, 13, 0, 0, 0, time.UTC),
+		},
+	})
+
+	admin := domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin}
+	patchReq := httptest.NewRequest(http.MethodPatch, "/settings/integrations/slack", bytes.NewBufferString(`{"enabled":false}`))
+	patchReq = patchReq.WithContext(auth.WithUser(patchReq.Context(), admin))
+	patchRes := httptest.NewRecorder()
+	h.PatchSlackWorkspaceIntegration(patchRes, patchReq)
+	if patchRes.Code != http.StatusOK {
+		t.Fatalf("expected patch status 200, got %d", patchRes.Code)
+	}
+
+	testReq := httptest.NewRequest(http.MethodPost, "/settings/integrations/slack/test", nil)
+	testReq = testReq.WithContext(auth.WithUser(testReq.Context(), admin))
+	testRes := httptest.NewRecorder()
+	h.TestSlackWorkspaceIntegration(testRes, testReq)
+	if testRes.Code != http.StatusOK {
+		t.Fatalf("expected test status 200, got %d", testRes.Code)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/settings/integrations/slack", nil)
+	deleteReq = deleteReq.WithContext(auth.WithUser(deleteReq.Context(), admin))
+	deleteRes := httptest.NewRecorder()
+	h.DeleteSlackWorkspaceIntegration(deleteRes, deleteReq)
+	if deleteRes.Code != http.StatusNoContent {
+		t.Fatalf("expected delete status 204, got %d", deleteRes.Code)
+	}
+}
+
+func TestNotificationHandler_SlackWorkspaceIntegration_ErrorMappings(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		code int
+	}{
+		{name: "not found", err: repository.ErrSlackWorkspaceIntegrationNotFound, code: http.StatusNotFound},
+		{name: "conflict", err: service.ErrSlackWorkspaceReplaceRequired, code: http.StatusConflict},
+		{name: "invalid", err: service.ErrSlackWorkspaceTokenRevoked, code: http.StatusBadRequest},
+		{name: "rate limited", err: service.ErrSlackWorkspaceRateLimited, code: http.StatusTooManyRequests},
+		{name: "upstream", err: service.ErrSlackWorkspaceUpstream, code: http.StatusBadGateway},
+		{name: "deadline", err: context.DeadlineExceeded, code: http.StatusBadGateway},
+		{name: "canceled", err: context.Canceled, code: http.StatusBadGateway},
+		{name: "internal", err: errors.New("boom"), code: http.StatusInternalServerError},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewNotificationHandler(nil)
+			res := httptest.NewRecorder()
+			h.writeSlackWorkspaceIntegrationError(res, tc.err)
+			if res.Code != tc.code {
+				t.Fatalf("expected status %d, got %d", tc.code, res.Code)
+			}
+		})
 	}
 }
 
