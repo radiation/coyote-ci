@@ -535,6 +535,144 @@ func TestNotificationHandler_MySlackIdentityResolveInvalidAuthReturnsBadRequest(
 	}
 }
 
+func TestNotificationHandler_MySlackIdentityEndpointValidationAndErrorMappings(t *testing.T) {
+	t.Run("resolve invalid body and invalid method", func(t *testing.T) {
+		h := NewNotificationHandler(nil)
+		h.SetAuthorization(auth.ModeOIDC)
+		h.SetPersonalSlackIdentityService(&fakePersonalSlackIdentityService{})
+		user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+
+		invalidBodyReq := httptest.NewRequest(http.MethodPost, "/api/me/slack-identity/resolve", bytes.NewBufferString(`{"method":`))
+		invalidBodyReq = invalidBodyReq.WithContext(auth.WithUser(invalidBodyReq.Context(), user))
+		invalidBodyRes := httptest.NewRecorder()
+		h.ResolveMySlackIdentity(invalidBodyRes, invalidBodyReq)
+		if invalidBodyRes.Code != http.StatusBadRequest {
+			t.Fatalf("expected invalid body status %d, got %d body=%s", http.StatusBadRequest, invalidBodyRes.Code, invalidBodyRes.Body.String())
+		}
+
+		invalidMethodReq := httptest.NewRequest(http.MethodPost, "/api/me/slack-identity/resolve", bytes.NewBufferString(`{"method":"email"}`))
+		invalidMethodReq = invalidMethodReq.WithContext(auth.WithUser(invalidMethodReq.Context(), user))
+		invalidMethodRes := httptest.NewRecorder()
+		h.ResolveMySlackIdentity(invalidMethodRes, invalidMethodReq)
+		if invalidMethodRes.Code != http.StatusBadRequest {
+			t.Fatalf("expected invalid method status %d, got %d body=%s", http.StatusBadRequest, invalidMethodRes.Code, invalidMethodRes.Body.String())
+		}
+	})
+
+	t.Run("resolve, create, patch, delete error mappings", func(t *testing.T) {
+		testCases := []struct {
+			name       string
+			serviceErr error
+			statusCode int
+			invoke     func(h *NotificationHandler, req *http.Request, res *httptest.ResponseRecorder)
+			request    *http.Request
+		}{
+			{
+				name:       "resolve rate limited",
+				serviceErr: service.ErrSlackWorkspaceRateLimited,
+				statusCode: http.StatusTooManyRequests,
+				request:    httptest.NewRequest(http.MethodPost, "/api/me/slack-identity/resolve", bytes.NewBufferString(`{"method":"authenticated_email"}`)),
+				invoke: func(h *NotificationHandler, req *http.Request, res *httptest.ResponseRecorder) {
+					h.ResolveMySlackIdentity(res, req)
+				},
+			},
+			{
+				name:       "resolve upstream",
+				serviceErr: service.ErrSlackWorkspaceUpstream,
+				statusCode: http.StatusBadGateway,
+				request:    httptest.NewRequest(http.MethodPost, "/api/me/slack-identity/resolve", bytes.NewBufferString(`{"method":"authenticated_email"}`)),
+				invoke: func(h *NotificationHandler, req *http.Request, res *httptest.ResponseRecorder) {
+					h.ResolveMySlackIdentity(res, req)
+				},
+			},
+			{
+				name:       "create member unavailable",
+				serviceErr: service.ErrUserSlackIdentityMemberUnavailable,
+				statusCode: http.StatusNotFound,
+				request:    httptest.NewRequest(http.MethodPost, "/api/me/slack-identity", bytes.NewBufferString(`{"resolution_method":"authenticated_email","workspace_integration_id":"workspace-1","slack_workspace_id":"T123","slack_user_id":"U123"}`)),
+				invoke: func(h *NotificationHandler, req *http.Request, res *httptest.ResponseRecorder) {
+					h.CreateMySlackIdentity(res, req)
+				},
+			},
+			{
+				name:       "patch enabled required",
+				serviceErr: service.ErrUserSlackIdentityEnabledRequired,
+				statusCode: http.StatusBadRequest,
+				request:    httptest.NewRequest(http.MethodPatch, "/api/me/slack-identity", bytes.NewBufferString(`{"enabled":true}`)),
+				invoke: func(h *NotificationHandler, req *http.Request, res *httptest.ResponseRecorder) {
+					h.PatchMySlackIdentity(res, req)
+				},
+			},
+			{
+				name:       "delete unexpected internal",
+				serviceErr: errors.New("boom"),
+				statusCode: http.StatusInternalServerError,
+				request:    httptest.NewRequest(http.MethodDelete, "/api/me/slack-identity", nil),
+				invoke: func(h *NotificationHandler, req *http.Request, res *httptest.ResponseRecorder) {
+					h.DeleteMySlackIdentity(res, req)
+				},
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				serviceDouble := &fakePersonalSlackIdentityService{}
+				switch tc.request.Method {
+				case http.MethodPost:
+					if strings.HasSuffix(tc.request.URL.Path, "/resolve") {
+						serviceDouble.resolveErr = tc.serviceErr
+					} else {
+						serviceDouble.linkErr = tc.serviceErr
+					}
+				case http.MethodPatch:
+					serviceDouble.setErr = tc.serviceErr
+				case http.MethodDelete:
+					serviceDouble.unlinkErr = tc.serviceErr
+				}
+
+				h := NewNotificationHandler(nil)
+				h.SetAuthorization(auth.ModeOIDC)
+				h.SetPersonalSlackIdentityService(serviceDouble)
+				user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+				req := tc.request.WithContext(auth.WithUser(tc.request.Context(), user))
+				res := httptest.NewRecorder()
+
+				tc.invoke(h, req, res)
+				if res.Code != tc.statusCode {
+					t.Fatalf("expected status %d, got %d body=%s", tc.statusCode, res.Code, res.Body.String())
+				}
+			})
+		}
+	})
+
+	t.Run("create and patch state reload failures map through helper", func(t *testing.T) {
+		h := NewNotificationHandler(nil)
+		h.SetAuthorization(auth.ModeOIDC)
+		h.SetPersonalSlackIdentityService(&fakePersonalSlackIdentityService{
+			linkResult: domain.UserSlackIdentity{ID: "identity-1", UserID: "user-1", SlackWorkspaceIntegrationID: "workspace-1", SlackUserID: "U123", Enabled: true, LinkedAt: time.Now().UTC()},
+			setResult:  domain.UserSlackIdentity{ID: "identity-1", UserID: "user-1", SlackWorkspaceIntegrationID: "workspace-1", SlackUserID: "U123", Enabled: false, LinkedAt: time.Now().UTC()},
+			getErr:     repository.ErrUserSlackIdentityNotFound,
+		})
+
+		user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+		createReq := httptest.NewRequest(http.MethodPost, "/api/me/slack-identity", bytes.NewBufferString(`{"resolution_method":"authenticated_email","workspace_integration_id":"workspace-1","slack_workspace_id":"T123","slack_user_id":"U123"}`))
+		createReq = createReq.WithContext(auth.WithUser(createReq.Context(), user))
+		createRes := httptest.NewRecorder()
+		h.CreateMySlackIdentity(createRes, createReq)
+		if createRes.Code != http.StatusNotFound {
+			t.Fatalf("expected state reload not found on create, got %d body=%s", createRes.Code, createRes.Body.String())
+		}
+
+		patchReq := httptest.NewRequest(http.MethodPatch, "/api/me/slack-identity", bytes.NewBufferString(`{"enabled":false}`))
+		patchReq = patchReq.WithContext(auth.WithUser(patchReq.Context(), user))
+		patchRes := httptest.NewRecorder()
+		h.PatchMySlackIdentity(patchRes, patchReq)
+		if patchRes.Code != http.StatusNotFound {
+			t.Fatalf("expected state reload not found on patch, got %d body=%s", patchRes.Code, patchRes.Body.String())
+		}
+	})
+}
+
 func TestNotificationHandler_MyEmailTargetEndpointsRequireAuthentication(t *testing.T) {
 	h := NewNotificationHandler(nil)
 	h.SetAuthorization(auth.ModeHeader)

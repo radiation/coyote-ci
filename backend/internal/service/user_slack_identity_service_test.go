@@ -109,6 +109,29 @@ func TestUserSlackIdentityService_MissingScopeIsActionable(t *testing.T) {
 	}
 }
 
+func TestUserSlackIdentityService_GetStatesAndValidation(t *testing.T) {
+	workspaceRepo := repositorymemory.NewSlackWorkspaceIntegrationRepository()
+	identityRepo := repositorymemory.NewUserSlackIdentityRepository()
+	workspaceRepo.SetUserSlackIdentityRepository(identityRepo)
+	svc := NewUserSlackIdentityService(identityRepo, workspaceRepo, fakeSlackDirectoryClient{})
+
+	_, err := svc.Get(context.Background(), domain.User{})
+	if !errors.Is(err, ErrUserSlackIdentityUserIDRequired) {
+		t.Fatalf("expected missing user id error, got %v", err)
+	}
+
+	state, err := svc.Get(context.Background(), domain.User{ID: "user-1"})
+	if err != nil {
+		t.Fatalf("get not configured state: %v", err)
+	}
+	if state.WorkspaceStatus != SlackIdentityWorkspaceStatusNotConfigured {
+		t.Fatalf("expected not configured status, got %q", state.WorkspaceStatus)
+	}
+	if state.Workspace != nil || state.Identity != nil {
+		t.Fatalf("expected empty state when workspace and identity are absent, got %+v", state)
+	}
+}
+
 func TestUserSlackIdentityService_PreviousFailedHealthTestStillAllowsLookup(t *testing.T) {
 	workspaceRepo := repositorymemory.NewSlackWorkspaceIntegrationRepository()
 	identityRepo := repositorymemory.NewUserSlackIdentityRepository()
@@ -215,6 +238,172 @@ func TestUserSlackIdentityService_LiveLookupInvalidCredentialsStillFails(t *test
 	_, _, err = svc.ResolveByAuthenticatedEmail(context.Background(), domain.User{ID: "user-1", Email: "user@example.com"})
 	if !errors.Is(err, ErrSlackWorkspaceInvalidAuth) {
 		t.Fatalf("expected live lookup invalid auth error, got %v", err)
+	}
+}
+
+func TestUserSlackIdentityService_ResolveLookupErrorMappings(t *testing.T) {
+	workspaceRepo := repositorymemory.NewSlackWorkspaceIntegrationRepository()
+	identityRepo := repositorymemory.NewUserSlackIdentityRepository()
+	workspaceRepo.SetUserSlackIdentityRepository(identityRepo)
+	now := time.Date(2026, 7, 1, 14, 9, 30, 0, time.UTC)
+	_, err := workspaceRepo.ConnectOrReplace(context.Background(), domain.SlackWorkspaceIntegration{
+		ID:             "workspace-1",
+		WorkspaceID:    "T123",
+		BotTokenSecret: "xoxb-secret",
+		Enabled:        true,
+		ConnectedAt:    now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}, false)
+	if err != nil {
+		t.Fatalf("seed workspace integration: %v", err)
+	}
+
+	testCases := []struct {
+		name        string
+		err         error
+		wantErr     error
+		wantMatched bool
+	}{
+		{name: "no match", err: platformslack.ErrUsersNotFound, wantMatched: false},
+		{name: "deleted user", err: platformslack.ErrDeletedUser, wantErr: ErrUserSlackIdentityMemberUnavailable},
+		{name: "bot user", err: platformslack.ErrBotUser, wantErr: ErrUserSlackIdentityMemberUnavailable},
+		{name: "app user", err: platformslack.ErrAppUser, wantErr: ErrUserSlackIdentityMemberUnavailable},
+		{name: "token revoked", err: platformslack.ErrTokenRevoked, wantErr: ErrSlackWorkspaceTokenRevoked},
+		{name: "account inactive", err: platformslack.ErrAccountInactive, wantErr: ErrSlackWorkspaceAccountInactive},
+		{name: "rate limited", err: platformslack.ErrRateLimited, wantErr: ErrSlackWorkspaceRateLimited},
+		{name: "malformed", err: platformslack.ErrMalformedResponse, wantErr: ErrSlackWorkspaceMalformedResponse},
+		{name: "upstream", err: platformslack.ErrUpstreamFailure, wantErr: ErrSlackWorkspaceUpstream},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewUserSlackIdentityService(identityRepo, workspaceRepo, fakeSlackDirectoryClient{err: tc.err})
+			candidate, matched, resolveErr := svc.ResolveByAuthenticatedEmail(context.Background(), domain.User{ID: "user-1", Email: "user@example.com"})
+			if tc.wantErr == nil {
+				if resolveErr != nil {
+					t.Fatalf("expected no error, got %v", resolveErr)
+				}
+				if matched != tc.wantMatched || candidate != nil {
+					t.Fatalf("expected matched=%t and nil candidate, got matched=%t candidate=%v", tc.wantMatched, matched, candidate)
+				}
+				return
+			}
+			if !errors.Is(resolveErr, tc.wantErr) {
+				t.Fatalf("expected error %v, got %v", tc.wantErr, resolveErr)
+			}
+		})
+	}
+}
+
+func TestUserSlackIdentityService_LinkValidationAndCandidateMismatch(t *testing.T) {
+	workspaceRepo := repositorymemory.NewSlackWorkspaceIntegrationRepository()
+	identityRepo := repositorymemory.NewUserSlackIdentityRepository()
+	workspaceRepo.SetUserSlackIdentityRepository(identityRepo)
+	now := time.Date(2026, 7, 1, 14, 11, 0, 0, time.UTC)
+	_, err := workspaceRepo.ConnectOrReplace(context.Background(), domain.SlackWorkspaceIntegration{
+		ID:             "workspace-1",
+		WorkspaceID:    "T123",
+		BotTokenSecret: "xoxb-secret",
+		Enabled:        true,
+		ConnectedAt:    now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}, false)
+	if err != nil {
+		t.Fatalf("seed workspace integration: %v", err)
+	}
+
+	svc := NewUserSlackIdentityService(identityRepo, workspaceRepo, fakeSlackDirectoryClient{user: platformslack.User{ID: "U123"}})
+	user := domain.User{ID: "user-1", Email: "user@example.com"}
+
+	validationCases := []struct {
+		name  string
+		user  domain.User
+		input LinkUserSlackIdentityInput
+		want  error
+	}{
+		{name: "missing user id", user: domain.User{Email: "user@example.com"}, input: LinkUserSlackIdentityInput{ResolutionMethod: SlackIdentityResolutionMethodAuthenticatedEmail, WorkspaceIntegrationID: "workspace-1", SlackWorkspaceID: "T123", SlackUserID: "U123"}, want: ErrUserSlackIdentityUserIDRequired},
+		{name: "invalid method", user: user, input: LinkUserSlackIdentityInput{ResolutionMethod: "email", WorkspaceIntegrationID: "workspace-1", SlackWorkspaceID: "T123", SlackUserID: "U123"}, want: ErrUserSlackIdentityResolutionMethodInvalid},
+		{name: "missing workspace integration id", user: user, input: LinkUserSlackIdentityInput{ResolutionMethod: SlackIdentityResolutionMethodAuthenticatedEmail, SlackWorkspaceID: "T123", SlackUserID: "U123"}, want: ErrUserSlackIdentityWorkspaceIntegrationIDRequired},
+		{name: "missing slack workspace id", user: user, input: LinkUserSlackIdentityInput{ResolutionMethod: SlackIdentityResolutionMethodAuthenticatedEmail, WorkspaceIntegrationID: "workspace-1", SlackUserID: "U123"}, want: ErrUserSlackIdentitySlackWorkspaceIDRequired},
+		{name: "missing slack user id", user: user, input: LinkUserSlackIdentityInput{ResolutionMethod: SlackIdentityResolutionMethodAuthenticatedEmail, WorkspaceIntegrationID: "workspace-1", SlackWorkspaceID: "T123"}, want: ErrUserSlackIdentitySlackUserIDRequired},
+	}
+
+	for _, tc := range validationCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, linkErr := svc.Link(context.Background(), tc.user, tc.input)
+			if !errors.Is(linkErr, tc.want) {
+				t.Fatalf("expected %v, got %v", tc.want, linkErr)
+			}
+		})
+	}
+
+	_, err = svc.Link(context.Background(), user, LinkUserSlackIdentityInput{
+		ResolutionMethod:       SlackIdentityResolutionMethodAuthenticatedEmail,
+		WorkspaceIntegrationID: "workspace-1",
+		SlackWorkspaceID:       "T123",
+		SlackUserID:            "U999",
+	})
+	if !errors.Is(err, ErrUserSlackIdentityCandidateChanged) {
+		t.Fatalf("expected candidate changed for mismatched slack user, got %v", err)
+	}
+
+	_, _, err = NewUserSlackIdentityService(identityRepo, workspaceRepo, fakeSlackDirectoryClient{}).ResolveByAuthenticatedEmail(context.Background(), domain.User{ID: "user-1"})
+	if !errors.Is(err, ErrUserSlackIdentityEmailRequired) {
+		t.Fatalf("expected missing email error, got %v", err)
+	}
+}
+
+func TestUserSlackIdentityService_SetEnabledValidationAndGetIdentity(t *testing.T) {
+	workspaceRepo := repositorymemory.NewSlackWorkspaceIntegrationRepository()
+	identityRepo := repositorymemory.NewUserSlackIdentityRepository()
+	workspaceRepo.SetUserSlackIdentityRepository(identityRepo)
+	now := time.Date(2026, 7, 1, 14, 21, 0, 0, time.UTC)
+	_, err := workspaceRepo.ConnectOrReplace(context.Background(), domain.SlackWorkspaceIntegration{
+		ID:             "workspace-1",
+		WorkspaceID:    "T123",
+		WorkspaceName:  testStringPtr("Coyote"),
+		BotTokenSecret: "xoxb-secret",
+		Enabled:        true,
+		ConnectedAt:    now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}, false)
+	if err != nil {
+		t.Fatalf("seed workspace integration: %v", err)
+	}
+
+	identity, err := identityRepo.Upsert(context.Background(), domain.UserSlackIdentity{
+		ID:                          "identity-1",
+		UserID:                      "user-1",
+		SlackWorkspaceIntegrationID: "workspace-1",
+		SlackUserID:                 "U123",
+		Enabled:                     true,
+		LinkedAt:                    now,
+		CreatedAt:                   now,
+		UpdatedAt:                   now,
+	})
+	if err != nil {
+		t.Fatalf("seed identity: %v", err)
+	}
+
+	svc := NewUserSlackIdentityService(identityRepo, workspaceRepo, fakeSlackDirectoryClient{})
+	state, err := svc.Get(context.Background(), domain.User{ID: "user-1", Email: "user@example.com"})
+	if err != nil {
+		t.Fatalf("get state with identity: %v", err)
+	}
+	if state.Identity == nil || state.Identity.ID != identity.ID {
+		t.Fatalf("expected linked identity in state, got %+v", state.Identity)
+	}
+
+	_, err = svc.SetEnabled(context.Background(), domain.User{}, testBoolPtr(true))
+	if !errors.Is(err, ErrUserSlackIdentityUserIDRequired) {
+		t.Fatalf("expected missing user id error, got %v", err)
+	}
+	_, err = svc.SetEnabled(context.Background(), domain.User{ID: "user-1"}, nil)
+	if !errors.Is(err, ErrUserSlackIdentityEnabledRequired) {
+		t.Fatalf("expected enabled required error, got %v", err)
 	}
 }
 
