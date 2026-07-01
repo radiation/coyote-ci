@@ -68,7 +68,7 @@ func (s *SlackWorkspaceIntegrationService) Connect(ctx context.Context, input Co
 		WorkspaceID:       authResult.WorkspaceID,
 		WorkspaceName:     authResult.WorkspaceName,
 		WorkspaceURL:      authResult.WorkspaceURL,
-		BotUserID:         authResult.BotUserID,
+		BotID:             authResult.BotID,
 		AuthedUserID:      authResult.AuthedUserID,
 		AppID:             authResult.AppID,
 		BotTokenSecret:    token,

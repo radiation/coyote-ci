@@ -104,7 +104,7 @@ func (r *fakeSlackWorkspaceIntegrationRepository) Delete(_ context.Context) erro
 func TestSlackWorkspaceIntegrationService_ConnectAndReplace(t *testing.T) {
 	now := time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC)
 	repo := &fakeSlackWorkspaceIntegrationRepository{}
-	svc := NewSlackWorkspaceIntegrationService(repo, fakeSlackAuthClient{result: platformslack.AuthTestResult{WorkspaceID: "T123", WorkspaceName: strPtrSvc("Coyote")}})
+	svc := NewSlackWorkspaceIntegrationService(repo, fakeSlackAuthClient{result: platformslack.AuthTestResult{WorkspaceID: "T123", WorkspaceName: strPtrSvc("Coyote"), BotID: strPtrSvc("B123")}})
 	svc.now = func() time.Time { return now }
 
 	created, err := svc.Connect(context.Background(), ConnectSlackWorkspaceIntegrationInput{BotToken: "xoxb-1"})
@@ -113,6 +113,9 @@ func TestSlackWorkspaceIntegrationService_ConnectAndReplace(t *testing.T) {
 	}
 	if created.WorkspaceID != "T123" {
 		t.Fatalf("unexpected workspace id %q", created.WorkspaceID)
+	}
+	if created.BotID == nil || *created.BotID != "B123" {
+		t.Fatalf("expected bot id B123, got %v", created.BotID)
 	}
 
 	svc.client = fakeSlackAuthClient{result: platformslack.AuthTestResult{WorkspaceID: "T999"}}

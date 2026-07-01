@@ -1705,7 +1705,7 @@ describe("NotificationsPage", () => {
         workspace_id: "T123",
         workspace_name: "Coyote",
         workspace_url: "https://coyote.slack.com",
-        bot_user_id: "B123",
+        bot_id: "B123",
         app_id: "A123",
         enabled: true,
         connected_at: "2026-07-01T00:00:00Z",
@@ -1720,6 +1720,9 @@ describe("NotificationsPage", () => {
     if (!details) {
       throw new Error("Expected integration details disclosure");
     }
+    expect(within(details).getByText("Bot ID")).toBeTruthy();
+    expect(within(details).getByText("B123")).toBeTruthy();
+    expect(within(details).queryByText("Bot user ID")).toBeNull();
     expect(within(details).getByText("App ID")).toBeTruthy();
     expect(within(details).getByText("A123")).toBeTruthy();
   });

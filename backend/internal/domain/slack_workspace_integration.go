@@ -7,7 +7,7 @@ type SlackWorkspaceIntegration struct {
 	WorkspaceID       string
 	WorkspaceName     *string
 	WorkspaceURL      *string
-	BotUserID         *string
+	BotID             *string
 	AuthedUserID      *string
 	AppID             *string
 	BotTokenSecret    string

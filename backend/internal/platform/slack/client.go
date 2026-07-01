@@ -28,7 +28,7 @@ type AuthTestResult struct {
 	WorkspaceID   string
 	WorkspaceName *string
 	WorkspaceURL  *string
-	BotUserID     *string
+	BotID         *string
 	AuthedUserID  *string
 	AppID         *string
 }
@@ -116,7 +116,7 @@ func (c *Client) TestAuthentication(ctx context.Context, token string) (AuthTest
 		WorkspaceID:   workspaceID,
 		WorkspaceName: optionalString(payload.Team),
 		WorkspaceURL:  optionalString(payload.URL),
-		BotUserID:     optionalString(payload.BotID),
+		BotID:         optionalString(payload.BotID),
 		AuthedUserID:  optionalString(payload.UserID),
 		AppID:         optionalString(payload.AppID),
 	}

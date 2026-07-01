@@ -35,6 +35,7 @@ func (f *fakeSlackWorkspaceAdminService) Connect(_ context.Context, input servic
 		ID:             "int-1",
 		WorkspaceID:    "T123",
 		WorkspaceName:  strPtrHandler("Coyote"),
+		BotID:          strPtrHandler("B123"),
 		BotTokenSecret: input.BotToken,
 		Enabled:        true,
 		ConnectedAt:    now,
@@ -129,6 +130,12 @@ func TestNotificationHandler_SlackWorkspaceIntegration_ConnectAndNoTokenInRespon
 	}
 	if _, has := integration["bot_token"]; has {
 		t.Fatalf("did not expect bot token field in response")
+	}
+	if got := integration["bot_id"]; got != "B123" {
+		t.Fatalf("expected bot_id B123, got %v", got)
+	}
+	if _, has := integration["bot_user_id"]; has {
+		t.Fatalf("did not expect legacy bot_user_id field in response")
 	}
 }
 

@@ -22,7 +22,7 @@ func TestSlackWorkspaceIntegrationRepository_GetAndMutations(t *testing.T) {
 
 	repo := NewSlackWorkspaceIntegrationRepository(db)
 	now := time.Date(2026, 7, 1, 12, 5, 0, 0, time.UTC)
-	columns := []string{"id", "workspace_id", "workspace_name", "workspace_url", "bot_user_id", "authed_user_id", "app_id", "bot_token_secret", "enabled", "connected_at", "last_tested_at", "last_test_succeeded", "created_at", "updated_at"}
+	columns := []string{"id", "workspace_id", "workspace_name", "workspace_url", "bot_id", "authed_user_id", "app_id", "bot_token_secret", "enabled", "connected_at", "last_tested_at", "last_test_succeeded", "created_at", "updated_at"}
 
 	mock.ExpectQuery("SELECT id::text, workspace_id").
 		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-secret", true, now, now, true, now, now))
@@ -86,14 +86,14 @@ func TestSlackWorkspaceIntegrationRepository_ConnectOrReplace(t *testing.T) {
 
 	repo := NewSlackWorkspaceIntegrationRepository(db)
 	now := time.Date(2026, 7, 1, 12, 10, 0, 0, time.UTC)
-	columns := []string{"id", "workspace_id", "workspace_name", "workspace_url", "bot_user_id", "authed_user_id", "app_id", "bot_token_secret", "enabled", "connected_at", "last_tested_at", "last_test_succeeded", "created_at", "updated_at"}
+	columns := []string{"id", "workspace_id", "workspace_name", "workspace_url", "bot_id", "authed_user_id", "app_id", "bot_token_secret", "enabled", "connected_at", "last_tested_at", "last_test_succeeded", "created_at", "updated_at"}
 
 	integration := domain.SlackWorkspaceIntegration{
 		ID:             "int-1",
 		WorkspaceID:    "T123",
 		WorkspaceName:  strPtr("Coyote"),
 		WorkspaceURL:   strPtr("https://example.slack.com/"),
-		BotUserID:      strPtr("B1"),
+		BotID:          strPtr("B1"),
 		AuthedUserID:   strPtr("U1"),
 		AppID:          strPtr("A1"),
 		BotTokenSecret: "xoxb-secret",

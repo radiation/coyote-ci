@@ -766,8 +766,8 @@ export function NotificationsPage() {
           label: "Workspace ID",
           value: slackIntegration.workspace_id,
         },
-        slackIntegration.bot_user_id
-          ? { label: "Bot user ID", value: slackIntegration.bot_user_id }
+        slackIntegration.bot_id
+          ? { label: "Bot ID", value: slackIntegration.bot_id }
           : null,
         slackIntegration.authed_user_id
           ? { label: "Authed user ID", value: slackIntegration.authed_user_id }

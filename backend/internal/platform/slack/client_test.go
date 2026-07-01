@@ -37,6 +37,12 @@ func TestClient_TestAuthentication_Success(t *testing.T) {
 	if result.WorkspaceID != "T123" {
 		t.Fatalf("expected workspace id T123, got %q", result.WorkspaceID)
 	}
+	if result.BotID == nil || *result.BotID != "B123" {
+		t.Fatalf("expected bot id B123, got %v", result.BotID)
+	}
+	if result.AuthedUserID == nil || *result.AuthedUserID != "U123" {
+		t.Fatalf("expected authed user id U123, got %v", result.AuthedUserID)
+	}
 	if doer.req == nil {
 		t.Fatal("expected request")
 	}

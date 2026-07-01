@@ -89,7 +89,7 @@ type SlackWorkspaceIntegrationResponse struct {
 	WorkspaceID       string  `json:"workspace_id"`
 	WorkspaceName     *string `json:"workspace_name,omitempty"`
 	WorkspaceURL      *string `json:"workspace_url,omitempty"`
-	BotUserID         *string `json:"bot_user_id,omitempty"`
+	BotID             *string `json:"bot_id,omitempty"`
 	AuthedUserID      *string `json:"authed_user_id,omitempty"`
 	AppID             *string `json:"app_id,omitempty"`
 	Enabled           bool    `json:"enabled"`

@@ -50,7 +50,7 @@ export interface SlackWorkspaceIntegration {
   workspace_id: string;
   workspace_name?: string | null;
   workspace_url?: string | null;
-  bot_user_id?: string | null;
+  bot_id?: string | null;
   authed_user_id?: string | null;
   app_id?: string | null;
   enabled: boolean;

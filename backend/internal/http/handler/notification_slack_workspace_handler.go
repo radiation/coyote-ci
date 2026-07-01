@@ -235,7 +235,7 @@ func toSlackWorkspaceIntegrationResponse(integration domain.SlackWorkspaceIntegr
 		WorkspaceID:   integration.WorkspaceID,
 		WorkspaceName: integration.WorkspaceName,
 		WorkspaceURL:  integration.WorkspaceURL,
-		BotUserID:     integration.BotUserID,
+		BotID:         integration.BotID,
 		AuthedUserID:  integration.AuthedUserID,
 		AppID:         integration.AppID,
 		Enabled:       integration.Enabled,

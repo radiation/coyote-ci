@@ -5248,7 +5248,7 @@ const docTemplate = `{
                 "authed_user_id": {
                     "type": "string"
                 },
-                "bot_user_id": {
+                "bot_id": {
                     "type": "string"
                 },
                 "connected_at": {

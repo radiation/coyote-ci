@@ -19,7 +19,7 @@ func NewSlackWorkspaceIntegrationRepository(db *sql.DB) *SlackWorkspaceIntegrati
 	return &SlackWorkspaceIntegrationRepository{db: db}
 }
 
-const slackWorkspaceIntegrationColumns = `id::text, workspace_id, workspace_name, workspace_url, bot_user_id, authed_user_id, app_id, bot_token_secret, enabled, connected_at, last_tested_at, last_test_succeeded, created_at, updated_at`
+const slackWorkspaceIntegrationColumns = `id::text, workspace_id, workspace_name, workspace_url, bot_id, authed_user_id, app_id, bot_token_secret, enabled, connected_at, last_tested_at, last_test_succeeded, created_at, updated_at`
 
 func (r *SlackWorkspaceIntegrationRepository) Get(ctx context.Context) (domain.SlackWorkspaceIntegration, error) {
 	const query = `
@@ -69,7 +69,7 @@ func (r *SlackWorkspaceIntegrationRepository) ConnectOrReplace(ctx context.Conte
 				workspace_id,
 				workspace_name,
 				workspace_url,
-				bot_user_id,
+				bot_id,
 				authed_user_id,
 				app_id,
 				bot_token_secret,
@@ -87,7 +87,7 @@ func (r *SlackWorkspaceIntegrationRepository) ConnectOrReplace(ctx context.Conte
 			candidate.WorkspaceID,
 			nullableOptionalString(candidate.WorkspaceName),
 			nullableOptionalString(candidate.WorkspaceURL),
-			nullableOptionalString(candidate.BotUserID),
+			nullableOptionalString(candidate.BotID),
 			nullableOptionalString(candidate.AuthedUserID),
 			nullableOptionalString(candidate.AppID),
 			candidate.BotTokenSecret,
@@ -120,7 +120,7 @@ func (r *SlackWorkspaceIntegrationRepository) ConnectOrReplace(ctx context.Conte
 		SET workspace_id = $1,
 			workspace_name = $2,
 			workspace_url = $3,
-			bot_user_id = $4,
+			bot_id = $4,
 			authed_user_id = $5,
 			app_id = $6,
 			bot_token_secret = $7,
@@ -135,7 +135,7 @@ func (r *SlackWorkspaceIntegrationRepository) ConnectOrReplace(ctx context.Conte
 		candidate.WorkspaceID,
 		nullableOptionalString(candidate.WorkspaceName),
 		nullableOptionalString(candidate.WorkspaceURL),
-		nullableOptionalString(candidate.BotUserID),
+		nullableOptionalString(candidate.BotID),
 		nullableOptionalString(candidate.AuthedUserID),
 		nullableOptionalString(candidate.AppID),
 		candidate.BotTokenSecret,
@@ -222,7 +222,7 @@ func scanSlackWorkspaceIntegration(scanner slackWorkspaceIntegrationScanner) (do
 	var integration domain.SlackWorkspaceIntegration
 	var workspaceName sql.NullString
 	var workspaceURL sql.NullString
-	var botUserID sql.NullString
+	var botID sql.NullString
 	var authedUserID sql.NullString
 	var appID sql.NullString
 	var lastTestedAt sql.NullTime
@@ -233,7 +233,7 @@ func scanSlackWorkspaceIntegration(scanner slackWorkspaceIntegrationScanner) (do
 		&integration.WorkspaceID,
 		&workspaceName,
 		&workspaceURL,
-		&botUserID,
+		&botID,
 		&authedUserID,
 		&appID,
 		&integration.BotTokenSecret,
@@ -250,7 +250,7 @@ func scanSlackWorkspaceIntegration(scanner slackWorkspaceIntegrationScanner) (do
 
 	integration.WorkspaceName = nullStringPtr(workspaceName)
 	integration.WorkspaceURL = nullStringPtr(workspaceURL)
-	integration.BotUserID = nullStringPtr(botUserID)
+	integration.BotID = nullStringPtr(botID)
 	integration.AuthedUserID = nullStringPtr(authedUserID)
 	integration.AppID = nullStringPtr(appID)
 	if lastTestedAt.Valid {
