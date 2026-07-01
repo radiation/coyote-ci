@@ -225,6 +225,7 @@ func (h *NotificationHandler) writePersonalSlackIdentityError(w http.ResponseWri
 	switch {
 	case errors.Is(err, service.ErrUserSlackIdentityUserIDRequired),
 		errors.Is(err, service.ErrUserSlackIdentityEmailRequired),
+		errors.Is(err, service.ErrUserSlackIdentityMissingScope),
 		errors.Is(err, service.ErrUserSlackIdentityResolutionMethodInvalid),
 		errors.Is(err, service.ErrUserSlackIdentitySlackWorkspaceIDRequired),
 		errors.Is(err, service.ErrUserSlackIdentitySlackUserIDRequired),

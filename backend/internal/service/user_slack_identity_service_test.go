@@ -104,6 +104,9 @@ func TestUserSlackIdentityService_MissingScopeIsActionable(t *testing.T) {
 
 	svc := NewUserSlackIdentityService(identityRepo, workspaceRepo, fakeSlackDirectoryClient{err: &platformslack.MissingScopeError{Needed: "users:read.email", Provided: "chat:write"}})
 	_, _, err = svc.ResolveByAuthenticatedEmail(context.Background(), domain.User{ID: "user-1", Email: "user@example.com"})
+	if !errors.Is(err, ErrUserSlackIdentityMissingScope) {
+		t.Fatalf("expected missing-scope sentinel, got %v", err)
+	}
 	if err == nil || err.Error() != "slack member lookup requires the users:read.email scope. Ask an administrator to add it and reinstall or reauthorize the Slack app" {
 		t.Fatalf("expected actionable missing-scope error, got %v", err)
 	}
@@ -129,6 +132,42 @@ func TestUserSlackIdentityService_GetStatesAndValidation(t *testing.T) {
 	}
 	if state.Workspace != nil || state.Identity != nil {
 		t.Fatalf("expected empty state when workspace and identity are absent, got %+v", state)
+	}
+}
+
+func TestUserSlackIdentityService_GetSuppressesOrphanedIdentityWhenWorkspaceMissing(t *testing.T) {
+	workspaceRepo := repositorymemory.NewSlackWorkspaceIntegrationRepository()
+	identityRepo := repositorymemory.NewUserSlackIdentityRepository()
+	workspaceRepo.SetUserSlackIdentityRepository(identityRepo)
+	svc := NewUserSlackIdentityService(identityRepo, workspaceRepo, fakeSlackDirectoryClient{})
+	now := time.Date(2026, 7, 1, 14, 6, 0, 0, time.UTC)
+
+	_, err := identityRepo.Upsert(context.Background(), domain.UserSlackIdentity{
+		ID:                          "identity-1",
+		UserID:                      "user-1",
+		SlackWorkspaceIntegrationID: "workspace-1",
+		SlackUserID:                 "U123",
+		Enabled:                     true,
+		LinkedAt:                    now,
+		CreatedAt:                   now,
+		UpdatedAt:                   now,
+	})
+	if err != nil {
+		t.Fatalf("seed orphan identity: %v", err)
+	}
+
+	state, err := svc.Get(context.Background(), domain.User{ID: "user-1"})
+	if err != nil {
+		t.Fatalf("get state with orphan identity: %v", err)
+	}
+	if state.WorkspaceStatus != SlackIdentityWorkspaceStatusNotConfigured {
+		t.Fatalf("expected not configured status, got %q", state.WorkspaceStatus)
+	}
+	if state.Workspace != nil {
+		t.Fatalf("expected no workspace, got %+v", state.Workspace)
+	}
+	if state.Identity != nil {
+		t.Fatalf("expected orphan identity to be suppressed, got %+v", state.Identity)
 	}
 }
 

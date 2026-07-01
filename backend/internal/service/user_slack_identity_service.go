@@ -35,6 +35,7 @@ var ErrUserSlackIdentityCandidateChanged = errors.New("the Slack account match c
 var ErrUserSlackIdentityConflict = errors.New("that Slack account is already linked")
 var ErrUserSlackIdentityEnabledRequired = errors.New("enabled is required")
 var ErrUserSlackIdentityMemberUnavailable = errors.New("the matched Slack account is unavailable for personal linking")
+var ErrUserSlackIdentityMissingScope = errors.New("slack member lookup requires additional app scopes")
 
 type slackDirectoryClient interface {
 	LookupUserByEmail(ctx context.Context, token string, email string) (platformslack.User, error)
@@ -101,6 +102,7 @@ func (s *UserSlackIdentityService) Get(ctx context.Context, user domain.User) (U
 		if !errors.Is(err, repository.ErrSlackWorkspaceIntegrationNotFound) {
 			return UserSlackIdentityState{}, err
 		}
+		return state, nil
 	} else {
 		state.Workspace = &SlackWorkspaceReference{
 			ID:                integration.ID,
@@ -278,13 +280,25 @@ func (s *UserSlackIdentityService) lookupAuthenticatedEmailMember(ctx context.Co
 func mapSlackIdentityMissingScope(err error) error {
 	var missingScopeErr *platformslack.MissingScopeError
 	if !errors.As(err, &missingScopeErr) {
-		return fmt.Errorf("slack member lookup requires additional app scopes")
+		return &userSlackIdentityMissingScopeError{message: ErrUserSlackIdentityMissingScope.Error()}
 	}
 	needed := strings.TrimSpace(missingScopeErr.Needed)
 	if needed == "" {
 		needed = "users:read.email"
 	}
-	return fmt.Errorf("slack member lookup requires the %s scope. Ask an administrator to add it and reinstall or reauthorize the Slack app", needed)
+	return &userSlackIdentityMissingScopeError{message: fmt.Sprintf("slack member lookup requires the %s scope. Ask an administrator to add it and reinstall or reauthorize the Slack app", needed)}
+}
+
+type userSlackIdentityMissingScopeError struct {
+	message string
+}
+
+func (e *userSlackIdentityMissingScopeError) Error() string {
+	return e.message
+}
+
+func (e *userSlackIdentityMissingScopeError) Unwrap() error {
+	return ErrUserSlackIdentityMissingScope
 }
 
 func slackIdentityWorkspaceStatus(integration domain.SlackWorkspaceIntegration) string {

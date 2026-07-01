@@ -81,6 +81,19 @@ type fakePersonalSlackIdentityService struct {
 	linkInput     service.LinkUserSlackIdentityInput
 }
 
+type fakeWrappedError struct {
+	message string
+	cause   error
+}
+
+func (e fakeWrappedError) Error() string {
+	return e.message
+}
+
+func (e fakeWrappedError) Unwrap() error {
+	return e.cause
+}
+
 func (f *fakePersonalSlackIdentityService) Get(_ context.Context, _ domain.User) (service.UserSlackIdentityState, error) {
 	return f.getState, f.getErr
 }
@@ -532,6 +545,28 @@ func TestNotificationHandler_MySlackIdentityResolveInvalidAuthReturnsBadRequest(
 	}
 	if !strings.Contains(res.Body.String(), service.ErrSlackWorkspaceInvalidAuth.Error()) {
 		t.Fatalf("expected invalid auth details in body, got %s", res.Body.String())
+	}
+}
+
+func TestNotificationHandler_MySlackIdentityResolveMissingScopeReturnsBadRequest(t *testing.T) {
+	h := NewNotificationHandler(nil)
+	h.SetAuthorization(auth.ModeOIDC)
+	h.SetPersonalSlackIdentityService(&fakePersonalSlackIdentityService{resolveErr: fakeWrappedError{
+		message: "slack member lookup requires the users:read.email scope. Ask an administrator to add it and reinstall or reauthorize the Slack app",
+		cause:   service.ErrUserSlackIdentityMissingScope,
+	}})
+
+	user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+	req := httptest.NewRequest(http.MethodPost, "/api/me/slack-identity/resolve", bytes.NewBufferString(`{"method":"authenticated_email"}`))
+	req = req.WithContext(auth.WithUser(req.Context(), user))
+	res := httptest.NewRecorder()
+
+	h.ResolveMySlackIdentity(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad request status %d, got %d body=%s", http.StatusBadRequest, res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "slack member lookup requires the users:read.email scope") {
+		t.Fatalf("expected missing scope details in body, got %s", res.Body.String())
 	}
 }
 
