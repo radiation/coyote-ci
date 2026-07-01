@@ -31,13 +31,21 @@ export {
 
 export {
   type NotificationEventType,
+  type MySlackIdentityResponse,
   type NotificationSubscription,
   type NotificationSubscriptionListResponse,
   type NotificationTarget,
   type NotificationTargetListResponse,
   type NotificationTargetType,
+  type PatchMySlackIdentityRequest,
+  type ResolveMySlackIdentityRequest,
+  type ResolveMySlackIdentityResponse,
+  type ResolvedSlackIdentityCandidate,
+  type SlackIdentityWorkspace,
   type CreateNotificationSubscriptionRequest,
+  type CreateMySlackIdentityRequest,
   type CreateNotificationTargetRequest,
   type UpdateNotificationSubscriptionRequest,
   type UpdateNotificationTargetRequest,
+  type UserSlackIdentity,
 } from "./notification";

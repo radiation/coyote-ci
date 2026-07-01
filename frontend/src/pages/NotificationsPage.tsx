@@ -144,6 +144,15 @@ function slackTestStatus(integration: SlackWorkspaceIntegration): {
   return { label: "Not tested", className: "status-canceled" };
 }
 
+function slackLinkedIdentitySummary(
+  integration: SlackWorkspaceIntegration,
+): string {
+  if (integration.linked_identity_count === 1) {
+    return "1 linked personal Slack identity";
+  }
+  return `${integration.linked_identity_count} linked personal Slack identities`;
+}
+
 export function NotificationsPage() {
   const { authMode, isGlobalAdmin } = useAuth();
   const canManageAdminSettings = authMode === "disabled" || isGlobalAdmin;
@@ -766,6 +775,10 @@ export function NotificationsPage() {
           label: "Workspace ID",
           value: slackIntegration.workspace_id,
         },
+        {
+          label: "Linked identities",
+          value: slackLinkedIdentitySummary(slackIntegration),
+        },
         slackIntegration.bot_id
           ? { label: "Bot ID", value: slackIntegration.bot_id }
           : null,
@@ -950,6 +963,13 @@ export function NotificationsPage() {
                 ))}
               </dl>
             </details>
+
+            {slackIntegration.linked_identity_count > 0 && (
+              <p className="subtle-text" style={{ marginTop: 10 }}>
+                This workspace has linked user identities. Unlink them before
+                disconnecting or switching workspaces.
+              </p>
+            )}
 
             <div className="job-form-actions" style={{ marginTop: 12 }}>
               <button

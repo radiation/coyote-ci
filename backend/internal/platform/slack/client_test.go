@@ -124,3 +124,66 @@ func TestClient_TestAuthentication_AuthFailureFallbacks(t *testing.T) {
 		})
 	}
 }
+
+func TestClient_LookupUserByEmail_Success(t *testing.T) {
+	doer := &recordingDoer{response: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":true,"user":{"id":"U123","name":"bryan","profile":{"display_name":"Bryan","real_name":"Bryan Choate","email":"bryan@example.com","image_72":"https://images.example/avatar.png"}}}`))}}
+	client := NewClient(doer)
+
+	user, err := client.LookupUserByEmail(context.Background(), "xoxb-secret", " bryan@example.com ")
+	if err != nil {
+		t.Fatalf("lookup user by email: %v", err)
+	}
+	if user.ID != "U123" {
+		t.Fatalf("expected slack user id U123, got %q", user.ID)
+	}
+	if user.Handle == nil || *user.Handle != "bryan" {
+		t.Fatalf("expected handle bryan, got %v", user.Handle)
+	}
+	if doer.req == nil {
+		t.Fatal("expected request")
+	}
+	if got := doer.req.Header.Get("Authorization"); got != "Bearer xoxb-secret" {
+		t.Fatalf("expected bearer header, got %q", got)
+	}
+	if got := doer.req.URL.Query().Get("email"); got != "bryan@example.com" {
+		t.Fatalf("expected email query bryan@example.com, got %q", got)
+	}
+}
+
+func TestClient_LookupUserByEmail_Errors(t *testing.T) {
+	tests := []struct {
+		name      string
+		response  *http.Response
+		err       error
+		expectErr error
+	}{
+		{name: "users not found", response: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":false,"error":"users_not_found"}`))}, expectErr: ErrUsersNotFound},
+		{name: "missing scope", response: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":false,"error":"missing_scope","needed":"users:read.email","provided":"chat:write"}`))}, expectErr: ErrMissingScope},
+		{name: "invalid auth", response: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":false,"error":"invalid_auth"}`))}, expectErr: ErrInvalidAuth},
+		{name: "token revoked", response: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":false,"error":"token_revoked"}`))}, expectErr: ErrTokenRevoked},
+		{name: "deleted user", response: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":true,"user":{"id":"U123","deleted":true}}`))}, expectErr: ErrDeletedUser},
+		{name: "bot user", response: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":true,"user":{"id":"U123","is_bot":true}}`))}, expectErr: ErrBotUser},
+		{name: "app user", response: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":true,"user":{"id":"U123","is_app_user":true}}`))}, expectErr: ErrAppUser},
+		{name: "malformed user", response: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":true,"user":{}}`))}, expectErr: ErrMalformedResponse},
+		{name: "network", err: errors.New("dial error"), expectErr: ErrUpstreamFailure},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := NewClient(&recordingDoer{response: tc.response, err: tc.err})
+			_, err := client.LookupUserByEmail(context.Background(), "xoxb-secret", "user@example.com")
+			if !errors.Is(err, tc.expectErr) {
+				t.Fatalf("expected %v, got %v", tc.expectErr, err)
+			}
+			if strings.Contains(err.Error(), "xoxb-secret") {
+				t.Fatalf("token leaked in error: %q", err.Error())
+			}
+			var missingScopeErr *MissingScopeError
+			if errors.As(err, &missingScopeErr) {
+				if missingScopeErr.Needed != "users:read.email" {
+					t.Fatalf("expected needed scope users:read.email, got %q", missingScopeErr.Needed)
+				}
+			}
+		})
+	}
+}

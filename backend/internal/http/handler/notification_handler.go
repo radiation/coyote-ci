@@ -27,7 +27,16 @@ type NotificationHandler struct {
 	notifications sampleBuildEmailSender
 	admin         notificationAdminService
 	slackAdmin    slackWorkspaceIntegrationAdminService
+	personalSlack personalSlackIdentityService
 	authMode      auth.Mode
+}
+
+type personalSlackIdentityService interface {
+	Get(ctx context.Context, user domain.User) (service.UserSlackIdentityState, error)
+	ResolveByAuthenticatedEmail(ctx context.Context, user domain.User) (*service.ResolvedUserSlackIdentityCandidate, bool, error)
+	Link(ctx context.Context, user domain.User, input service.LinkUserSlackIdentityInput) (domain.UserSlackIdentity, error)
+	SetEnabled(ctx context.Context, user domain.User, enabled *bool) (domain.UserSlackIdentity, error)
+	Unlink(ctx context.Context, user domain.User) error
 }
 
 type notificationAdminService interface {
@@ -65,6 +74,10 @@ func (h *NotificationHandler) SetAdminService(admin notificationAdminService) {
 
 func (h *NotificationHandler) SetSlackWorkspaceIntegrationService(admin slackWorkspaceIntegrationAdminService) {
 	h.slackAdmin = admin
+}
+
+func (h *NotificationHandler) SetPersonalSlackIdentityService(personalSlack personalSlackIdentityService) {
+	h.personalSlack = personalSlack
 }
 
 func (h *NotificationHandler) HasSampleSender() bool {

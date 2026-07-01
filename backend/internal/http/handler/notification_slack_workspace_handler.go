@@ -198,6 +198,10 @@ func (h *NotificationHandler) writeSlackWorkspaceIntegrationError(w http.Respons
 		writeErrorJSON(w, http.StatusConflict, "conflict", err.Error())
 		return
 	}
+	if errors.Is(err, repository.ErrSlackWorkspaceIntegrationLinkedIdentitiesExist) {
+		writeErrorJSON(w, http.StatusConflict, "conflict", "This workspace has linked user identities. Unlink them before disconnecting or switching workspaces.")
+		return
+	}
 	if errors.Is(err, service.ErrSlackWorkspaceBotTokenRequired) || errors.Is(err, service.ErrSlackWorkspaceEnabledRequired) ||
 		errors.Is(err, service.ErrSlackWorkspaceInvalidAuth) || errors.Is(err, service.ErrSlackWorkspaceTokenRevoked) ||
 		errors.Is(err, service.ErrSlackWorkspaceAccountInactive) || errors.Is(err, service.ErrSlackWorkspaceMalformedResponse) {
@@ -231,16 +235,17 @@ func toSlackWorkspaceIntegrationStatusResponse(integration *domain.SlackWorkspac
 
 func toSlackWorkspaceIntegrationResponse(integration domain.SlackWorkspaceIntegration) *api.SlackWorkspaceIntegrationResponse {
 	response := &api.SlackWorkspaceIntegrationResponse{
-		ID:            integration.ID,
-		WorkspaceID:   integration.WorkspaceID,
-		WorkspaceName: integration.WorkspaceName,
-		WorkspaceURL:  integration.WorkspaceURL,
-		BotID:         integration.BotID,
-		AuthedUserID:  integration.AuthedUserID,
-		AppID:         integration.AppID,
-		Enabled:       integration.Enabled,
-		ConnectedAt:   integration.ConnectedAt.Format(time.RFC3339),
-		UpdatedAt:     integration.UpdatedAt.Format(time.RFC3339),
+		ID:                  integration.ID,
+		WorkspaceID:         integration.WorkspaceID,
+		WorkspaceName:       integration.WorkspaceName,
+		WorkspaceURL:        integration.WorkspaceURL,
+		BotID:               integration.BotID,
+		AuthedUserID:        integration.AuthedUserID,
+		AppID:               integration.AppID,
+		LinkedIdentityCount: integration.LinkedIdentityCount,
+		Enabled:             integration.Enabled,
+		ConnectedAt:         integration.ConnectedAt.Format(time.RFC3339),
+		UpdatedAt:           integration.UpdatedAt.Format(time.RFC3339),
 	}
 	if integration.LastTestedAt != nil {
 		value := integration.LastTestedAt.Format(time.RFC3339)

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -64,6 +65,41 @@ type fakeNotificationAdminService struct {
 	updateSubscriptionResult      domain.NotificationSubscription
 	updateSubscriptionErr         error
 	deleteSubscriptionErr         error
+}
+
+type fakePersonalSlackIdentityService struct {
+	getState      service.UserSlackIdentityState
+	getErr        error
+	resolveResult *service.ResolvedUserSlackIdentityCandidate
+	resolveMatch  bool
+	resolveErr    error
+	linkResult    domain.UserSlackIdentity
+	linkErr       error
+	setResult     domain.UserSlackIdentity
+	setErr        error
+	unlinkErr     error
+	linkInput     service.LinkUserSlackIdentityInput
+}
+
+func (f *fakePersonalSlackIdentityService) Get(_ context.Context, _ domain.User) (service.UserSlackIdentityState, error) {
+	return f.getState, f.getErr
+}
+
+func (f *fakePersonalSlackIdentityService) ResolveByAuthenticatedEmail(_ context.Context, _ domain.User) (*service.ResolvedUserSlackIdentityCandidate, bool, error) {
+	return f.resolveResult, f.resolveMatch, f.resolveErr
+}
+
+func (f *fakePersonalSlackIdentityService) Link(_ context.Context, _ domain.User, input service.LinkUserSlackIdentityInput) (domain.UserSlackIdentity, error) {
+	f.linkInput = input
+	return f.linkResult, f.linkErr
+}
+
+func (f *fakePersonalSlackIdentityService) SetEnabled(_ context.Context, _ domain.User, _ *bool) (domain.UserSlackIdentity, error) {
+	return f.setResult, f.setErr
+}
+
+func (f *fakePersonalSlackIdentityService) Unlink(_ context.Context, _ domain.User) error {
+	return f.unlinkErr
 }
 
 func (f *fakeNotificationAdminService) ListTargets(_ context.Context) ([]domain.NotificationTarget, error) {
@@ -315,6 +351,187 @@ func TestNotificationHandler_MyEmailTargetEndpoints(t *testing.T) {
 	ensureData := decodeDataMap(t, ensureRes)
 	if ensureData["id"] != "target-1" {
 		t.Fatalf("expected ensured target id target-1, got %v", ensureData["id"])
+	}
+}
+
+func TestNotificationHandler_MySlackIdentityEndpoints(t *testing.T) {
+	h := NewNotificationHandler(nil)
+	h.SetAuthorization(auth.ModeOIDC)
+	serviceDouble := &fakePersonalSlackIdentityService{
+		getState: service.UserSlackIdentityState{
+			WorkspaceStatus: service.SlackIdentityWorkspaceStatusReady,
+			Workspace: &service.SlackWorkspaceReference{
+				ID:               "workspace-1",
+				SlackWorkspaceID: "T123",
+				Name:             strPtr("Coyote"),
+			},
+			Identity: &domain.UserSlackIdentity{
+				ID:                          "identity-1",
+				UserID:                      "user-1",
+				SlackWorkspaceIntegrationID: "workspace-1",
+				SlackUserID:                 "U123",
+				SlackDisplayName:            strPtr("Bryan"),
+				Enabled:                     true,
+				LinkedAt:                    time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+			},
+		},
+		resolveResult: &service.ResolvedUserSlackIdentityCandidate{
+			ResolutionMethod: service.SlackIdentityResolutionMethodAuthenticatedEmail,
+			Workspace: service.SlackWorkspaceReference{
+				ID:               "workspace-1",
+				SlackWorkspaceID: "T123",
+				Name:             strPtr("Coyote"),
+			},
+			SlackUserID: "U123",
+			DisplayName: strPtr("Bryan"),
+		},
+		resolveMatch: true,
+		linkResult: domain.UserSlackIdentity{
+			ID:                          "identity-1",
+			UserID:                      "user-1",
+			SlackWorkspaceIntegrationID: "workspace-1",
+			SlackUserID:                 "U123",
+			SlackDisplayName:            strPtr("Bryan"),
+			Enabled:                     true,
+			LinkedAt:                    time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		},
+		setResult: domain.UserSlackIdentity{
+			ID:                          "identity-1",
+			UserID:                      "user-1",
+			SlackWorkspaceIntegrationID: "workspace-1",
+			SlackUserID:                 "U123",
+			SlackDisplayName:            strPtr("Bryan"),
+			Enabled:                     false,
+			LinkedAt:                    time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC),
+		},
+	}
+	h.SetPersonalSlackIdentityService(serviceDouble)
+
+	user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/me/slack-identity", nil)
+	getReq = getReq.WithContext(auth.WithUser(getReq.Context(), user))
+	getRes := httptest.NewRecorder()
+	h.GetMySlackIdentity(getRes, getReq)
+	if getRes.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, getRes.Code, getRes.Body.String())
+	}
+	getData := decodeDataMap(t, getRes)
+	if getData["workspace_status"] != service.SlackIdentityWorkspaceStatusReady {
+		t.Fatalf("expected ready workspace status, got %v", getData["workspace_status"])
+	}
+
+	resolveReq := httptest.NewRequest(http.MethodPost, "/api/me/slack-identity/resolve", bytes.NewBufferString(`{"method":"authenticated_email"}`))
+	resolveReq = resolveReq.WithContext(auth.WithUser(resolveReq.Context(), user))
+	resolveRes := httptest.NewRecorder()
+	h.ResolveMySlackIdentity(resolveRes, resolveReq)
+	if resolveRes.Code != http.StatusOK {
+		t.Fatalf("expected resolve status %d, got %d body=%s", http.StatusOK, resolveRes.Code, resolveRes.Body.String())
+	}
+	resolveData := decodeDataMap(t, resolveRes)
+	if resolveData["matched"] != true {
+		t.Fatalf("expected matched=true, got %v", resolveData["matched"])
+	}
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/me/slack-identity", bytes.NewBufferString(`{"resolution_method":"authenticated_email","workspace_integration_id":"workspace-1","slack_workspace_id":"T123","slack_user_id":"U123"}`))
+	createReq = createReq.WithContext(auth.WithUser(createReq.Context(), user))
+	createRes := httptest.NewRecorder()
+	h.CreateMySlackIdentity(createRes, createReq)
+	if createRes.Code != http.StatusOK {
+		t.Fatalf("expected create status %d, got %d body=%s", http.StatusOK, createRes.Code, createRes.Body.String())
+	}
+	if serviceDouble.linkInput.SlackUserID != "U123" {
+		t.Fatalf("expected link input slack_user_id U123, got %+v", serviceDouble.linkInput)
+	}
+	if serviceDouble.linkInput.SlackWorkspaceID != "T123" {
+		t.Fatalf("expected link input slack_workspace_id T123, got %+v", serviceDouble.linkInput)
+	}
+
+	patchReq := httptest.NewRequest(http.MethodPatch, "/api/me/slack-identity", bytes.NewBufferString(`{"enabled":false}`))
+	patchReq = patchReq.WithContext(auth.WithUser(patchReq.Context(), user))
+	patchRes := httptest.NewRecorder()
+	h.PatchMySlackIdentity(patchRes, patchReq)
+	if patchRes.Code != http.StatusOK {
+		t.Fatalf("expected patch status %d, got %d body=%s", http.StatusOK, patchRes.Code, patchRes.Body.String())
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/me/slack-identity", nil)
+	deleteReq = deleteReq.WithContext(auth.WithUser(deleteReq.Context(), user))
+	deleteRes := httptest.NewRecorder()
+	h.DeleteMySlackIdentity(deleteRes, deleteReq)
+	if deleteRes.Code != http.StatusNoContent {
+		t.Fatalf("expected delete status %d, got %d body=%s", http.StatusNoContent, deleteRes.Code, deleteRes.Body.String())
+	}
+}
+
+func TestNotificationHandler_MySlackIdentityRequiresAuthentication(t *testing.T) {
+	h := NewNotificationHandler(nil)
+	h.SetAuthorization(auth.ModeOIDC)
+	h.SetPersonalSlackIdentityService(&fakePersonalSlackIdentityService{})
+
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/api/me/slack-identity", nil),
+		httptest.NewRequest(http.MethodPost, "/api/me/slack-identity/resolve", bytes.NewBufferString(`{"method":"authenticated_email"}`)),
+		httptest.NewRequest(http.MethodPost, "/api/me/slack-identity", bytes.NewBufferString(`{"resolution_method":"authenticated_email","workspace_integration_id":"workspace-1","slack_workspace_id":"T123","slack_user_id":"U123"}`)),
+		httptest.NewRequest(http.MethodPatch, "/api/me/slack-identity", bytes.NewBufferString(`{"enabled":false}`)),
+		httptest.NewRequest(http.MethodDelete, "/api/me/slack-identity", nil),
+	} {
+		res := httptest.NewRecorder()
+		switch req.Method {
+		case http.MethodGet:
+			h.GetMySlackIdentity(res, req)
+		case http.MethodPost:
+			if strings.HasSuffix(req.URL.Path, "/resolve") {
+				h.ResolveMySlackIdentity(res, req)
+			} else {
+				h.CreateMySlackIdentity(res, req)
+			}
+		case http.MethodPatch:
+			h.PatchMySlackIdentity(res, req)
+		case http.MethodDelete:
+			h.DeleteMySlackIdentity(res, req)
+		}
+		if res.Code != http.StatusUnauthorized {
+			t.Fatalf("expected unauthorized for %s %s, got %d body=%s", req.Method, req.URL.Path, res.Code, res.Body.String())
+		}
+	}
+}
+
+func TestNotificationHandler_MySlackIdentityConflictIsPrivacySafe(t *testing.T) {
+	h := NewNotificationHandler(nil)
+	h.SetAuthorization(auth.ModeOIDC)
+	h.SetPersonalSlackIdentityService(&fakePersonalSlackIdentityService{linkErr: service.ErrUserSlackIdentityConflict})
+
+	user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+	req := httptest.NewRequest(http.MethodPost, "/api/me/slack-identity", bytes.NewBufferString(`{"resolution_method":"authenticated_email","workspace_integration_id":"workspace-1","slack_workspace_id":"T123","slack_user_id":"U123"}`))
+	req = req.WithContext(auth.WithUser(req.Context(), user))
+	res := httptest.NewRecorder()
+
+	h.CreateMySlackIdentity(res, req)
+	if res.Code != http.StatusConflict {
+		t.Fatalf("expected conflict status %d, got %d body=%s", http.StatusConflict, res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "user@example.com") || strings.Contains(res.Body.String(), "user-2") {
+		t.Fatalf("expected privacy-safe conflict, got body=%s", res.Body.String())
+	}
+}
+
+func TestNotificationHandler_MySlackIdentityResolveInvalidAuthReturnsBadRequest(t *testing.T) {
+	h := NewNotificationHandler(nil)
+	h.SetAuthorization(auth.ModeOIDC)
+	h.SetPersonalSlackIdentityService(&fakePersonalSlackIdentityService{resolveErr: service.ErrSlackWorkspaceInvalidAuth})
+
+	user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+	req := httptest.NewRequest(http.MethodPost, "/api/me/slack-identity/resolve", bytes.NewBufferString(`{"method":"authenticated_email"}`))
+	req = req.WithContext(auth.WithUser(req.Context(), user))
+	res := httptest.NewRecorder()
+
+	h.ResolveMySlackIdentity(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad request status %d, got %d body=%s", http.StatusBadRequest, res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), service.ErrSlackWorkspaceInvalidAuth.Error()) {
+		t.Fatalf("expected invalid auth details in body, got %s", res.Body.String())
 	}
 }
 

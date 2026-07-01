@@ -143,6 +143,11 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 			}
 
 			if cfg.notificationHandler != nil {
+				r.Get("/me/slack-identity", cfg.notificationHandler.GetMySlackIdentity)
+				r.Post("/me/slack-identity/resolve", cfg.notificationHandler.ResolveMySlackIdentity)
+				r.Post("/me/slack-identity", cfg.notificationHandler.CreateMySlackIdentity)
+				r.Patch("/me/slack-identity", cfg.notificationHandler.PatchMySlackIdentity)
+				r.Delete("/me/slack-identity", cfg.notificationHandler.DeleteMySlackIdentity)
 				r.Get("/me/notification-targets/email", cfg.notificationHandler.GetMyEmailTarget)
 				r.Post("/me/notification-targets/email", cfg.notificationHandler.EnsureMyEmailTarget)
 				r.Put("/me/notification-targets/email", cfg.notificationHandler.SetMyEmailTarget)

@@ -12,23 +12,36 @@ import (
 type SlackWorkspaceIntegrationRepository struct {
 	mu          sync.RWMutex
 	integration *domain.SlackWorkspaceIntegration
+	identities  repository.UserSlackIdentityRepository
 }
 
 func NewSlackWorkspaceIntegrationRepository() *SlackWorkspaceIntegrationRepository {
 	return &SlackWorkspaceIntegrationRepository{}
 }
 
-func (r *SlackWorkspaceIntegrationRepository) Get(_ context.Context) (domain.SlackWorkspaceIntegration, error) {
+func (r *SlackWorkspaceIntegrationRepository) SetUserSlackIdentityRepository(identities repository.UserSlackIdentityRepository) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.identities = identities
+}
+
+func (r *SlackWorkspaceIntegrationRepository) Get(ctx context.Context) (domain.SlackWorkspaceIntegration, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	if r.integration == nil {
 		return domain.SlackWorkspaceIntegration{}, repository.ErrSlackWorkspaceIntegrationNotFound
 	}
-	return *r.integration, nil
+	copy := *r.integration
+	count, err := r.linkedIdentityCountLocked(ctx, copy.ID)
+	if err != nil {
+		return domain.SlackWorkspaceIntegration{}, err
+	}
+	copy.LinkedIdentityCount = count
+	return copy, nil
 }
 
-func (r *SlackWorkspaceIntegrationRepository) ConnectOrReplace(_ context.Context, candidate domain.SlackWorkspaceIntegration, replaceDifferentWorkspace bool) (domain.SlackWorkspaceIntegration, error) {
+func (r *SlackWorkspaceIntegrationRepository) ConnectOrReplace(ctx context.Context, candidate domain.SlackWorkspaceIntegration, replaceDifferentWorkspace bool) (domain.SlackWorkspaceIntegration, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -39,6 +52,13 @@ func (r *SlackWorkspaceIntegrationRepository) ConnectOrReplace(_ context.Context
 	}
 
 	existing := *r.integration
+	linkedCount, err := r.linkedIdentityCountLocked(ctx, existing.ID)
+	if err != nil {
+		return domain.SlackWorkspaceIntegration{}, err
+	}
+	if existing.WorkspaceID != candidate.WorkspaceID && linkedCount > 0 {
+		return domain.SlackWorkspaceIntegration{}, repository.ErrSlackWorkspaceIntegrationLinkedIdentitiesExist
+	}
 	if existing.WorkspaceID != candidate.WorkspaceID && !replaceDifferentWorkspace {
 		return domain.SlackWorkspaceIntegration{}, repository.ErrSlackWorkspaceIntegrationReplaceRequired
 	}
@@ -47,6 +67,7 @@ func (r *SlackWorkspaceIntegrationRepository) ConnectOrReplace(_ context.Context
 	candidate.Enabled = existing.Enabled
 	candidate.CreatedAt = existing.CreatedAt
 	copy := candidate
+	copy.LinkedIdentityCount = linkedCount
 	r.integration = &copy
 	return copy, nil
 }
@@ -78,15 +99,29 @@ func (r *SlackWorkspaceIntegrationRepository) UpdateLastTestResult(_ context.Con
 	return copy, nil
 }
 
-func (r *SlackWorkspaceIntegrationRepository) Delete(_ context.Context) error {
+func (r *SlackWorkspaceIntegrationRepository) Delete(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.integration == nil {
 		return repository.ErrSlackWorkspaceIntegrationNotFound
 	}
+	linkedCount, err := r.linkedIdentityCountLocked(ctx, r.integration.ID)
+	if err != nil {
+		return err
+	}
+	if linkedCount > 0 {
+		return repository.ErrSlackWorkspaceIntegrationLinkedIdentitiesExist
+	}
 	r.integration = nil
 	return nil
+}
+
+func (r *SlackWorkspaceIntegrationRepository) linkedIdentityCountLocked(ctx context.Context, workspaceIntegrationID string) (int, error) {
+	if r.identities == nil {
+		return 0, nil
+	}
+	return r.identities.CountByWorkspaceIntegrationID(ctx, workspaceIntegrationID)
 }
 
 func boolPtr(value bool) *bool {

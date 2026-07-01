@@ -2001,6 +2001,283 @@ const docTemplate = `{
                 }
             }
         },
+        "/me/slack-identity": {
+            "get": {
+                "description": "Returns the authenticated user's linked personal Slack identity and safe workspace readiness metadata.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Get my Slack identity",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.MySlackIdentityEnvelope"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Confirms and persists the authenticated user's personal Slack identity after server-side revalidation.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Link my Slack identity",
+                "parameters": [
+                    {
+                        "description": "Link my Slack identity request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.CreateMySlackIdentityRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.UserSlackIdentityEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Removes the authenticated user's linked personal Slack identity without changing the Slack workspace integration.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Unlink my Slack identity",
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "description": "Pauses or resumes the authenticated user's linked personal Slack identity without changing the linked Slack member.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Enable or disable my Slack identity",
+                "parameters": [
+                    {
+                        "description": "Patch my Slack identity request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.PatchMySlackIdentityRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.UserSlackIdentityEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/slack-identity/resolve": {
+            "post": {
+                "description": "Resolves a personal Slack identity candidate for the authenticated user by exact authenticated-email match without persisting it.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Resolve my Slack identity",
+                "parameters": [
+                    {
+                        "description": "Resolve my Slack identity request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.ResolveMySlackIdentityRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ResolveMySlackIdentityEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me/tokens": {
             "get": {
                 "description": "Lists API token metadata for the authenticated user.",
@@ -4379,6 +4656,23 @@ const docTemplate = `{
                 }
             }
         },
+        "api.CreateMySlackIdentityRequest": {
+            "type": "object",
+            "properties": {
+                "resolution_method": {
+                    "type": "string"
+                },
+                "slack_user_id": {
+                    "type": "string"
+                },
+                "slack_workspace_id": {
+                    "type": "string"
+                },
+                "workspace_integration_id": {
+                    "type": "string"
+                }
+            }
+        },
         "api.CreatePipelineBuildRequest": {
             "type": "object",
             "properties": {
@@ -4833,6 +5127,28 @@ const docTemplate = `{
                 }
             }
         },
+        "api.MySlackIdentityEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.MySlackIdentityResponse"
+                }
+            }
+        },
+        "api.MySlackIdentityResponse": {
+            "type": "object",
+            "properties": {
+                "identity": {
+                    "$ref": "#/definitions/api.UserSlackIdentityResponse"
+                },
+                "workspace": {
+                    "$ref": "#/definitions/api.SlackIdentityWorkspaceResponse"
+                },
+                "workspace_status": {
+                    "type": "string"
+                }
+            }
+        },
         "api.NotificationDefaultsEnvelope": {
             "type": "object",
             "properties": {
@@ -4888,6 +5204,14 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "webhook_configured": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "api.PatchMySlackIdentityRequest": {
+            "type": "object",
+            "properties": {
+                "enabled": {
                     "type": "boolean"
                 }
             }
@@ -5220,6 +5544,59 @@ const docTemplate = `{
                 }
             }
         },
+        "api.ResolveMySlackIdentityEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.ResolveMySlackIdentityResponse"
+                }
+            }
+        },
+        "api.ResolveMySlackIdentityRequest": {
+            "type": "object",
+            "properties": {
+                "method": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.ResolveMySlackIdentityResponse": {
+            "type": "object",
+            "properties": {
+                "candidate": {
+                    "$ref": "#/definitions/api.ResolvedSlackIdentityCandidateResponse"
+                },
+                "matched": {
+                    "type": "boolean"
+                },
+                "method": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.ResolvedSlackIdentityCandidateResponse": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "handle": {
+                    "type": "string"
+                },
+                "profile_image_url": {
+                    "type": "string"
+                },
+                "real_name": {
+                    "type": "string"
+                },
+                "slack_user_id": {
+                    "type": "string"
+                },
+                "workspace": {
+                    "$ref": "#/definitions/api.SlackIdentityWorkspaceResponse"
+                }
+            }
+        },
         "api.RetryJobEnvelope": {
             "type": "object",
             "properties": {
@@ -5236,6 +5613,23 @@ const docTemplate = `{
                 },
                 "job": {
                     "$ref": "#/definitions/api.ExecutionJobResponse"
+                }
+            }
+        },
+        "api.SlackIdentityWorkspaceResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "last_test_succeeded": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slack_workspace_id": {
+                    "type": "string"
                 }
             }
         },
@@ -5265,6 +5659,9 @@ const docTemplate = `{
                 },
                 "last_tested_at": {
                     "type": "string"
+                },
+                "linked_identity_count": {
+                    "type": "integer"
                 },
                 "updated_at": {
                     "type": "string"
@@ -5532,6 +5929,49 @@ const docTemplate = `{
                 },
                 "updated_at": {
                     "type": "string"
+                }
+            }
+        },
+        "api.UserSlackIdentityEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.UserSlackIdentityResponse"
+                }
+            }
+        },
+        "api.UserSlackIdentityResponse": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "handle": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "last_verified_at": {
+                    "type": "string"
+                },
+                "linked_at": {
+                    "type": "string"
+                },
+                "profile_image_url": {
+                    "type": "string"
+                },
+                "real_name": {
+                    "type": "string"
+                },
+                "slack_user_id": {
+                    "type": "string"
+                },
+                "workspace": {
+                    "$ref": "#/definitions/api.SlackIdentityWorkspaceResponse"
                 }
             }
         },

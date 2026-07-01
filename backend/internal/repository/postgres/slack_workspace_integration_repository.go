@@ -19,7 +19,7 @@ func NewSlackWorkspaceIntegrationRepository(db *sql.DB) *SlackWorkspaceIntegrati
 	return &SlackWorkspaceIntegrationRepository{db: db}
 }
 
-const slackWorkspaceIntegrationColumns = `id::text, workspace_id, workspace_name, workspace_url, bot_id, authed_user_id, app_id, bot_token_secret, enabled, connected_at, last_tested_at, last_test_succeeded, created_at, updated_at`
+const slackWorkspaceIntegrationColumns = `id::text, workspace_id, workspace_name, workspace_url, bot_id, authed_user_id, app_id, bot_token_secret, enabled, connected_at, last_tested_at, last_test_succeeded, created_at, updated_at, (SELECT COUNT(*) FROM user_slack_identities WHERE slack_workspace_integration_id = slack_workspace_integrations.id)::int AS linked_identity_count`
 
 func (r *SlackWorkspaceIntegrationRepository) Get(ctx context.Context) (domain.SlackWorkspaceIntegration, error) {
 	const query = `
@@ -114,6 +114,15 @@ func (r *SlackWorkspaceIntegrationRepository) ConnectOrReplace(ctx context.Conte
 	if existing.WorkspaceID != candidate.WorkspaceID && !replaceDifferentWorkspace {
 		return domain.SlackWorkspaceIntegration{}, repository.ErrSlackWorkspaceIntegrationReplaceRequired
 	}
+	if existing.WorkspaceID != candidate.WorkspaceID {
+		linkedCount, countErr := countLinkedSlackIdentitiesTx(ctx, tx, existing.ID)
+		if countErr != nil {
+			return domain.SlackWorkspaceIntegration{}, countErr
+		}
+		if linkedCount > 0 {
+			return domain.SlackWorkspaceIntegration{}, repository.ErrSlackWorkspaceIntegrationLinkedIdentitiesExist
+		}
+	}
 
 	updated, updateErr := scanSlackWorkspaceIntegration(tx.QueryRowContext(ctx, `
 		UPDATE slack_workspace_integrations
@@ -198,9 +207,35 @@ func (r *SlackWorkspaceIntegrationRepository) UpdateLastTestResult(ctx context.C
 }
 
 func (r *SlackWorkspaceIntegrationRepository) Delete(ctx context.Context) error {
-	const query = `DELETE FROM slack_workspace_integrations WHERE singleton = TRUE`
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
 
-	res, err := r.db.ExecContext(ctx, query)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	integration, err := scanSlackWorkspaceIntegration(tx.QueryRowContext(ctx, `
+		SELECT `+slackWorkspaceIntegrationColumns+`
+		FROM slack_workspace_integrations
+		WHERE singleton = TRUE
+		FOR UPDATE
+	`))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return repository.ErrSlackWorkspaceIntegrationNotFound
+		}
+		return err
+	}
+	if integration.LinkedIdentityCount > 0 {
+		return repository.ErrSlackWorkspaceIntegrationLinkedIdentitiesExist
+	}
+
+	res, err := tx.ExecContext(ctx, `DELETE FROM slack_workspace_integrations WHERE singleton = TRUE`)
 	if err != nil {
 		return err
 	}
@@ -211,6 +246,10 @@ func (r *SlackWorkspaceIntegrationRepository) Delete(ctx context.Context) error 
 	if rows == 0 {
 		return repository.ErrSlackWorkspaceIntegrationNotFound
 	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return commitErr
+	}
+	committed = true
 	return nil
 }
 
@@ -227,6 +266,7 @@ func scanSlackWorkspaceIntegration(scanner slackWorkspaceIntegrationScanner) (do
 	var appID sql.NullString
 	var lastTestedAt sql.NullTime
 	var lastTestSucceeded sql.NullBool
+	var linkedIdentityCount int
 
 	err := scanner.Scan(
 		&integration.ID,
@@ -243,6 +283,7 @@ func scanSlackWorkspaceIntegration(scanner slackWorkspaceIntegrationScanner) (do
 		&lastTestSucceeded,
 		&integration.CreatedAt,
 		&integration.UpdatedAt,
+		&linkedIdentityCount,
 	)
 	if err != nil {
 		return domain.SlackWorkspaceIntegration{}, err
@@ -260,9 +301,20 @@ func scanSlackWorkspaceIntegration(scanner slackWorkspaceIntegrationScanner) (do
 	if lastTestSucceeded.Valid {
 		integration.LastTestSucceeded = boolPtrSlack(lastTestSucceeded.Bool)
 	}
+	integration.LinkedIdentityCount = linkedIdentityCount
 
 	integration.WorkspaceID = strings.TrimSpace(integration.WorkspaceID)
 	return integration, nil
+}
+
+func countLinkedSlackIdentitiesTx(ctx context.Context, tx *sql.Tx, workspaceIntegrationID string) (int, error) {
+	const query = `SELECT COUNT(*) FROM user_slack_identities WHERE slack_workspace_integration_id = $1`
+
+	var count int
+	if err := tx.QueryRowContext(ctx, query, workspaceIntegrationID).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func nullableTimeOptional(value *time.Time) any {

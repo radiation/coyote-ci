@@ -98,6 +98,7 @@ func main() {
 	notificationPreferenceRepo := repositorypostgres.NewUserNotificationPreferenceRepository(db)
 	notificationInstanceSettingsRepo := repositorypostgres.NewNotificationInstanceSettingsRepository(db)
 	slackWorkspaceIntegrationRepo := repositorypostgres.NewSlackWorkspaceIntegrationRepository(db)
+	userSlackIdentityRepo := repositorypostgres.NewUserSlackIdentityRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	workerRepo := repositorypostgres.NewWorkerRepository(db)
 	buildNotificationService, buildNotificationErr := buildsvc.NewBuildNotificationService(buildsvc.BuildNotificationConfig{
@@ -160,6 +161,7 @@ func main() {
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
 	notificationService := service.NewNotificationService(notificationSubscriptionRepo).WithPreferenceRepository(notificationPreferenceRepo).WithInstanceSettingsRepository(notificationInstanceSettingsRepo)
 	slackWorkspaceIntegrationService := service.NewSlackWorkspaceIntegrationService(slackWorkspaceIntegrationRepo, platformslack.NewClient(nil))
+	personalSlackIdentityService := service.NewUserSlackIdentityService(userSlackIdentityRepo, slackWorkspaceIntegrationRepo, platformslack.NewClient(nil))
 	webhookService := webhooksvc.NewDeliveryIngressService(webhookDeliveryRepo, jobService)
 	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()
 	webhookService.SetMetrics(webhookMetrics)
@@ -191,11 +193,13 @@ func main() {
 	notificationHandler := handler.NewNotificationHandler(nil)
 	notificationHandler.SetAdminService(notificationService)
 	notificationHandler.SetSlackWorkspaceIntegrationService(slackWorkspaceIntegrationService)
+	notificationHandler.SetPersonalSlackIdentityService(personalSlackIdentityService)
 	notificationHandler.SetAuthorization(authMode)
 	if authMode == auth.ModeDisabled {
 		notificationHandler = handler.NewNotificationHandler(buildNotificationService)
 		notificationHandler.SetAdminService(notificationService)
 		notificationHandler.SetSlackWorkspaceIntegrationService(slackWorkspaceIntegrationService)
+		notificationHandler.SetPersonalSlackIdentityService(personalSlackIdentityService)
 		notificationHandler.SetAuthorization(authMode)
 	}
 	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, cfg.GitHubWebhookSecret)

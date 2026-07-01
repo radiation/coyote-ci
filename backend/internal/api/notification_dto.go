@@ -85,18 +85,19 @@ type NotificationDefaultsEnvelope struct {
 }
 
 type SlackWorkspaceIntegrationResponse struct {
-	ID                string  `json:"id"`
-	WorkspaceID       string  `json:"workspace_id"`
-	WorkspaceName     *string `json:"workspace_name,omitempty"`
-	WorkspaceURL      *string `json:"workspace_url,omitempty"`
-	BotID             *string `json:"bot_id,omitempty"`
-	AuthedUserID      *string `json:"authed_user_id,omitempty"`
-	AppID             *string `json:"app_id,omitempty"`
-	Enabled           bool    `json:"enabled"`
-	ConnectedAt       string  `json:"connected_at"`
-	LastTestedAt      *string `json:"last_tested_at,omitempty"`
-	LastTestSucceeded *bool   `json:"last_test_succeeded,omitempty"`
-	UpdatedAt         string  `json:"updated_at"`
+	ID                  string  `json:"id"`
+	WorkspaceID         string  `json:"workspace_id"`
+	WorkspaceName       *string `json:"workspace_name,omitempty"`
+	WorkspaceURL        *string `json:"workspace_url,omitempty"`
+	BotID               *string `json:"bot_id,omitempty"`
+	AuthedUserID        *string `json:"authed_user_id,omitempty"`
+	AppID               *string `json:"app_id,omitempty"`
+	LinkedIdentityCount int     `json:"linked_identity_count"`
+	Enabled             bool    `json:"enabled"`
+	ConnectedAt         string  `json:"connected_at"`
+	LastTestedAt        *string `json:"last_tested_at,omitempty"`
+	LastTestSucceeded   *bool   `json:"last_test_succeeded,omitempty"`
+	UpdatedAt           string  `json:"updated_at"`
 }
 
 type SlackWorkspaceIntegrationStatusResponse struct {
@@ -114,6 +115,74 @@ type PutSlackWorkspaceIntegrationRequest struct {
 }
 
 type PatchSlackWorkspaceIntegrationRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+type SlackIdentityWorkspaceResponse struct {
+	ID                string  `json:"id"`
+	SlackWorkspaceID  string  `json:"slack_workspace_id"`
+	Name              *string `json:"name,omitempty"`
+	LastTestSucceeded *bool   `json:"last_test_succeeded,omitempty"`
+}
+
+type UserSlackIdentityResponse struct {
+	ID              string                         `json:"id"`
+	Workspace       SlackIdentityWorkspaceResponse `json:"workspace"`
+	SlackUserID     string                         `json:"slack_user_id"`
+	DisplayName     *string                        `json:"display_name,omitempty"`
+	RealName        *string                        `json:"real_name,omitempty"`
+	Handle          *string                        `json:"handle,omitempty"`
+	ProfileImageURL *string                        `json:"profile_image_url,omitempty"`
+	Enabled         bool                           `json:"enabled"`
+	LinkedAt        string                         `json:"linked_at"`
+	LastVerifiedAt  *string                        `json:"last_verified_at,omitempty"`
+}
+
+type UserSlackIdentityEnvelope struct {
+	Data UserSlackIdentityResponse `json:"data"`
+}
+
+type MySlackIdentityResponse struct {
+	WorkspaceStatus string                          `json:"workspace_status"`
+	Workspace       *SlackIdentityWorkspaceResponse `json:"workspace,omitempty"`
+	Identity        *UserSlackIdentityResponse      `json:"identity,omitempty"`
+}
+
+type MySlackIdentityEnvelope struct {
+	Data MySlackIdentityResponse `json:"data"`
+}
+
+type ResolveMySlackIdentityRequest struct {
+	Method string `json:"method"`
+}
+
+type ResolvedSlackIdentityCandidateResponse struct {
+	Workspace       SlackIdentityWorkspaceResponse `json:"workspace"`
+	SlackUserID     string                         `json:"slack_user_id"`
+	DisplayName     *string                        `json:"display_name,omitempty"`
+	RealName        *string                        `json:"real_name,omitempty"`
+	Handle          *string                        `json:"handle,omitempty"`
+	ProfileImageURL *string                        `json:"profile_image_url,omitempty"`
+}
+
+type ResolveMySlackIdentityResponse struct {
+	Method    string                                  `json:"method"`
+	Matched   bool                                    `json:"matched"`
+	Candidate *ResolvedSlackIdentityCandidateResponse `json:"candidate,omitempty"`
+}
+
+type ResolveMySlackIdentityEnvelope struct {
+	Data ResolveMySlackIdentityResponse `json:"data"`
+}
+
+type CreateMySlackIdentityRequest struct {
+	ResolutionMethod       string `json:"resolution_method"`
+	WorkspaceIntegrationID string `json:"workspace_integration_id"`
+	SlackWorkspaceID       string `json:"slack_workspace_id"`
+	SlackUserID            string `json:"slack_user_id"`
+}
+
+type PatchMySlackIdentityRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 

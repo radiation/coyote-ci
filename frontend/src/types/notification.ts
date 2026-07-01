@@ -53,6 +53,7 @@ export interface SlackWorkspaceIntegration {
   bot_id?: string | null;
   authed_user_id?: string | null;
   app_id?: string | null;
+  linked_identity_count: number;
   enabled: boolean;
   connected_at: string;
   last_tested_at?: string | null;
@@ -71,6 +72,62 @@ export interface PutSlackWorkspaceIntegrationRequest {
 }
 
 export interface PatchSlackWorkspaceIntegrationRequest {
+  enabled: boolean;
+}
+
+export interface SlackIdentityWorkspace {
+  id: string;
+  slack_workspace_id: string;
+  name?: string | null;
+  last_test_succeeded?: boolean | null;
+}
+
+export interface UserSlackIdentity {
+  id: string;
+  workspace: SlackIdentityWorkspace;
+  slack_user_id: string;
+  display_name?: string | null;
+  real_name?: string | null;
+  handle?: string | null;
+  profile_image_url?: string | null;
+  enabled: boolean;
+  linked_at: string;
+  last_verified_at?: string | null;
+}
+
+export interface MySlackIdentityResponse {
+  workspace_status: string;
+  workspace?: SlackIdentityWorkspace | null;
+  identity?: UserSlackIdentity | null;
+}
+
+export interface ResolvedSlackIdentityCandidate {
+  workspace: SlackIdentityWorkspace;
+  slack_user_id: string;
+  display_name?: string | null;
+  real_name?: string | null;
+  handle?: string | null;
+  profile_image_url?: string | null;
+}
+
+export interface ResolveMySlackIdentityRequest {
+  method: "authenticated_email";
+}
+
+export interface ResolveMySlackIdentityResponse {
+  method: string;
+  matched: boolean;
+  candidate?: ResolvedSlackIdentityCandidate | null;
+}
+
+export interface CreateMySlackIdentityRequest {
+  resolution_method: "authenticated_email";
+  workspace_integration_id: string;
+  slack_workspace_id: string;
+  slack_user_id: string;
+}
+
+export interface PatchMySlackIdentityRequest {
   enabled: boolean;
 }
 

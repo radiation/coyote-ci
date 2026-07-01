@@ -40,6 +40,15 @@ This file is a navigational summary of the main domain relationships. Use it to 
 - API tokens are user-scoped credentials used to call the API without an interactive session.
 - Authorization checks sit at handler/service boundaries but are grounded in user role and project membership state.
 
+## Notification and Slack concepts
+
+- `slack_webhook` notification targets are shared delivery destinations used by build notifications today.
+- Slack workspace integration is instance-level infrastructure that stores the connected Slack workspace and bot credentials.
+- User Slack identity is a self-scoped mapping between one Coyote user and one stable Slack member ID in the connected workspace.
+- A personal Slack identity is not a notification target and does not deliver messages by itself.
+- Future personal Slack DM delivery can build on the stored Slack member ID without changing the shared target model.
+- Future shared Slack channel destinations, if added, should remain separate from personal user identities.
+
 ## Practical edit routing
 
 - If the change is about lifecycle or state transitions, inspect build, build step, queue, and worker types together with their service and repository helpers.
