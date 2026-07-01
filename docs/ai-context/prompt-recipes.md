@@ -28,6 +28,10 @@ Treat source code, migrations, tests, and recent diffs as authoritative.
 
 "Improve frontend polish for [page or interaction] without broad redesign. Start with `.github/copilot-instructions.md`, `docs/ai-context/current-priorities.md`, and `docs/ai-context/frontend-map.md`. Identify the smallest page and component files plus their colocated tests. Preserve existing routes and API contracts unless explicitly changing them."
 
+## Changing Slack integration or personal Slack identity
+
+"Update Slack integration or personal Slack identity behavior. Start with `.github/copilot-instructions.md`, `docs/ai-context/current-priorities.md`, `docs/ai-context/backend-map.md`, `docs/ai-context/frontend-map.md`, and `docs/ai-context/domain-model.md`. Stay local to `backend/internal/platform/slack`, `backend/internal/service/user_slack_identity_service.go`, the Slack workspace repositories, `backend/internal/http/handler/notification_personal_slack_identity_handler.go`, `frontend/src/pages/MyNotificationsPage.tsx`, `frontend/src/pages/NotificationsPage.tsx`, `frontend/src/api/client.ts`, and `frontend/src/types/notification.ts`. Never expose bot tokens, persist stable Slack member IDs rather than handles, keep personal identities separate from shared notification targets, verify workspace lifecycle dependency checks, and rerun architecture plus Swagger checks."
+
 ## Updating artifact behavior
 
 "Update artifact behavior for [browse, lineage, version tags, release view, storage, or provenance]. Start with `docs/ai-context/backend-map.md`, `docs/ai-context/frontend-map.md`, `docs/ai-context/domain-model.md`, and `backend/docs/artifact-model.md`. Identify the smallest cross-backend/frontend file set and call out whether the change touches metadata, storage, lineage, or UI presentation."

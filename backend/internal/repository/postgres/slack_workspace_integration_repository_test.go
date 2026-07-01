@@ -22,10 +22,10 @@ func TestSlackWorkspaceIntegrationRepository_GetAndMutations(t *testing.T) {
 
 	repo := NewSlackWorkspaceIntegrationRepository(db)
 	now := time.Date(2026, 7, 1, 12, 5, 0, 0, time.UTC)
-	columns := []string{"id", "workspace_id", "workspace_name", "workspace_url", "bot_id", "authed_user_id", "app_id", "bot_token_secret", "enabled", "connected_at", "last_tested_at", "last_test_succeeded", "created_at", "updated_at"}
+	columns := []string{"id", "workspace_id", "workspace_name", "workspace_url", "bot_id", "authed_user_id", "app_id", "bot_token_secret", "enabled", "connected_at", "last_tested_at", "last_test_succeeded", "created_at", "updated_at", "linked_identity_count"}
 
 	mock.ExpectQuery("SELECT id::text, workspace_id").
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-secret", true, now, now, true, now, now))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-secret", true, now, now, true, now, now, 0))
 
 	integration, getErr := repo.Get(context.Background())
 	if getErr != nil {
@@ -44,7 +44,7 @@ func TestSlackWorkspaceIntegrationRepository_GetAndMutations(t *testing.T) {
 	updatedAt := now.Add(time.Minute)
 	mock.ExpectQuery("UPDATE slack_workspace_integrations").
 		WithArgs(false, updatedAt).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-secret", false, now, now, true, now, updatedAt))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-secret", false, now, now, true, now, updatedAt, 0))
 
 	updated, setErr := repo.SetEnabled(context.Background(), false, updatedAt)
 	if setErr != nil {
@@ -57,7 +57,7 @@ func TestSlackWorkspaceIntegrationRepository_GetAndMutations(t *testing.T) {
 	testedAt := now.Add(2 * time.Minute)
 	mock.ExpectQuery("UPDATE slack_workspace_integrations").
 		WithArgs(testedAt, true).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-secret", false, now, testedAt, true, now, testedAt))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-secret", false, now, testedAt, true, now, testedAt, 0))
 
 	tested, testErr := repo.UpdateLastTestResult(context.Background(), testedAt, true)
 	if testErr != nil {
@@ -67,7 +67,11 @@ func TestSlackWorkspaceIntegrationRepository_GetAndMutations(t *testing.T) {
 		t.Fatalf("expected successful test state")
 	}
 
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT id::text, workspace_id").
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-secret", false, now, testedAt, true, now, testedAt, 0))
 	mock.ExpectExec("DELETE FROM slack_workspace_integrations").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 	if deleteErr := repo.Delete(context.Background()); deleteErr != nil {
 		t.Fatalf("delete integration: %v", deleteErr)
 	}
@@ -86,7 +90,7 @@ func TestSlackWorkspaceIntegrationRepository_ConnectOrReplace(t *testing.T) {
 
 	repo := NewSlackWorkspaceIntegrationRepository(db)
 	now := time.Date(2026, 7, 1, 12, 10, 0, 0, time.UTC)
-	columns := []string{"id", "workspace_id", "workspace_name", "workspace_url", "bot_id", "authed_user_id", "app_id", "bot_token_secret", "enabled", "connected_at", "last_tested_at", "last_test_succeeded", "created_at", "updated_at"}
+	columns := []string{"id", "workspace_id", "workspace_name", "workspace_url", "bot_id", "authed_user_id", "app_id", "bot_token_secret", "enabled", "connected_at", "last_tested_at", "last_test_succeeded", "created_at", "updated_at", "linked_identity_count"}
 
 	integration := domain.SlackWorkspaceIntegration{
 		ID:             "int-1",
@@ -108,7 +112,7 @@ func TestSlackWorkspaceIntegrationRepository_ConnectOrReplace(t *testing.T) {
 	mock.ExpectQuery("SELECT id::text, workspace_id").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("INSERT INTO slack_workspace_integrations").
 		WithArgs("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-secret", true, now, now, nil, now, now).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-secret", true, now, now, nil, now, now))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-secret", true, now, now, nil, now, now, 0))
 	mock.ExpectCommit()
 
 	stored, connectErr := repo.ConnectOrReplace(context.Background(), integration, false)
@@ -121,10 +125,10 @@ func TestSlackWorkspaceIntegrationRepository_ConnectOrReplace(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT id::text, workspace_id").
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-old", false, now, now, true, now, now))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-old", false, now, now, true, now, now, 0))
 	mock.ExpectQuery("UPDATE slack_workspace_integrations").
 		WithArgs("T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-secret", false, now, now, nil, now).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-secret", false, now, now, nil, now, now))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-secret", false, now, now, nil, now, now, 0))
 	mock.ExpectCommit()
 
 	rotated, rotateErr := repo.ConnectOrReplace(context.Background(), integration, false)
@@ -137,7 +141,7 @@ func TestSlackWorkspaceIntegrationRepository_ConnectOrReplace(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT id::text, workspace_id").
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-old", true, now, now, true, now, now))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-old", true, now, now, true, now, now, 0))
 	mock.ExpectRollback()
 
 	_, replaceErr := repo.ConnectOrReplace(context.Background(), domain.SlackWorkspaceIntegration{
@@ -155,10 +159,13 @@ func TestSlackWorkspaceIntegrationRepository_ConnectOrReplace(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT id::text, workspace_id").
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-old", true, now, now, true, now, now))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T123", "Coyote", "https://example.slack.com/", "B1", "U1", "A1", "xoxb-old", true, now, now, true, now, now, 0))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM user_slack_identities WHERE slack_workspace_integration_id = \$1`).
+		WithArgs("int-1").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectQuery("UPDATE slack_workspace_integrations").
 		WithArgs("T999", nil, nil, nil, nil, nil, "xoxb-new", true, now, nil, nil, now).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T999", nil, nil, nil, nil, nil, "xoxb-new", true, now, nil, nil, now, now))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("int-1", "T999", nil, nil, nil, nil, nil, "xoxb-new", true, now, nil, nil, now, now, 0))
 	mock.ExpectCommit()
 
 	replaced, allowReplaceErr := repo.ConnectOrReplace(context.Background(), domain.SlackWorkspaceIntegration{

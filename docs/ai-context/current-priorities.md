@@ -27,6 +27,13 @@ Recent completed slice:
 - local Mailpit-backed email notification plumbing is the first notifications slice; SMTP config lives in `backend/internal/platform/config`, transport plumbing lives in `backend/internal/platform/email`, and local inspection is via `http://localhost:8025`
 - the current notification slice is terminal build email for failed and successful builds with durable notification targets and project/job subscriptions, env-recipient fallback when no subscriptions match, durable per-recipient delivery records/dedupe, and small admin-style backend endpoints for managing email targets and project/job subscriptions without direct SQL: config lives in `backend/internal/platform/config`, SMTP transport lives in `backend/internal/platform/email`, admin CRUD orchestration lives in `backend/internal/service/notification_service.go`, target/subscription persistence lives in `backend/internal/repository/notification_subscription_repository.go` plus `backend/db/migrations`, delivery persistence lives in `backend/internal/repository/notification_delivery_repository.go`, worker/server wiring lives in `backend/cmd/server` and `backend/cmd/worker`, terminal build hooks live in `backend/internal/service/build/lifecycle.go` and `backend/internal/service/build/completion.go`, admin API wiring lives in `backend/internal/http/handler/notification_handler.go` and `backend/internal/http/router.go`, and local/manual verification uses the notification target/subscription API plus `POST /api/dev/notifications/sample-build` and Mailpit at `http://localhost:8025`
 - the current frontend notification slice is a small admin/settings UI at `frontend/src/pages/NotificationsPage.tsx` mounted under `/settings/notifications`; it manages email targets plus project/job subscriptions using the existing notification API and local Mailpit verification flow
+- the current Slack identity slice adds instance-level Slack workspace connection metadata for admins plus self-scoped personal Slack identity linking at `frontend/src/pages/MyNotificationsPage.tsx`; linking persists stable Slack member IDs only and does not send Slack messages yet
+
+## Next likely notification slice
+
+- Personal Slack DM Delivery V1 is the next likely follow-on after identity linking.
+- Per-event email/Slack/both channel selection is a likely follow-up once DM delivery exists.
+- Shared project/job Slack channel routing remains deferred until owner-or-maintainer authorization for shared destinations is designed.
 
 ## Current development style
 

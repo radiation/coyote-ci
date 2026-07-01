@@ -3,10 +3,15 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import {
+  createMySlackIdentity,
+  deleteMySlackIdentity,
   ensureMyEmailNotificationTarget,
   getCommitAuthorFailureNotificationPreference,
   getCommitAuthorSuccessNotificationPreference,
   getMyEmailNotificationTarget,
+  getMySlackIdentity,
+  patchMySlackIdentity,
+  resolveMySlackIdentity,
   setCommitAuthorFailureNotificationPreference,
   setCommitAuthorSuccessNotificationPreference,
   setMyEmailNotificationTargetEnabled,
@@ -19,7 +24,12 @@ vi.mock("../api", async () => {
   return {
     ...actual,
     getMyEmailNotificationTarget: vi.fn(),
+    getMySlackIdentity: vi.fn(),
     ensureMyEmailNotificationTarget: vi.fn(),
+    resolveMySlackIdentity: vi.fn(),
+    createMySlackIdentity: vi.fn(),
+    patchMySlackIdentity: vi.fn(),
+    deleteMySlackIdentity: vi.fn(),
     getCommitAuthorFailureNotificationPreference: vi.fn(),
     getCommitAuthorSuccessNotificationPreference: vi.fn(),
     setMyEmailNotificationTargetEnabled: vi.fn(),
@@ -69,9 +79,14 @@ describe("MyNotificationsPage", () => {
   const mockedGetMyEmailNotificationTarget = vi.mocked(
     getMyEmailNotificationTarget,
   );
+  const mockedGetMySlackIdentity = vi.mocked(getMySlackIdentity);
   const mockedEnsureMyEmailNotificationTarget = vi.mocked(
     ensureMyEmailNotificationTarget,
   );
+  const mockedResolveMySlackIdentity = vi.mocked(resolveMySlackIdentity);
+  const mockedCreateMySlackIdentity = vi.mocked(createMySlackIdentity);
+  const mockedPatchMySlackIdentity = vi.mocked(patchMySlackIdentity);
+  const mockedDeleteMySlackIdentity = vi.mocked(deleteMySlackIdentity);
   const mockedGetCommitAuthorFailureNotificationPreference = vi.mocked(
     getCommitAuthorFailureNotificationPreference,
   );
@@ -92,6 +107,11 @@ describe("MyNotificationsPage", () => {
     vi.resetAllMocks();
 
     mockedGetMyEmailNotificationTarget.mockResolvedValue(null);
+    mockedGetMySlackIdentity.mockResolvedValue({
+      workspace_status: "not_configured",
+      workspace: null,
+      identity: null,
+    });
     mockedGetCommitAuthorFailureNotificationPreference.mockResolvedValue({
       enabled: false,
       eligible: false,
@@ -162,6 +182,451 @@ describe("MyNotificationsPage", () => {
         updated_at: "2026-06-24T00:00:00Z",
       },
     });
+    mockedResolveMySlackIdentity.mockResolvedValue({
+      method: "authenticated_email",
+      matched: true,
+      candidate: {
+        workspace: {
+          id: "workspace-1",
+          slack_workspace_id: "T123",
+          name: "Coyote",
+        },
+        slack_user_id: "U123",
+        display_name: "Bryan",
+        real_name: "Bryan Choate",
+        handle: "bryan",
+        profile_image_url: "https://images.example/avatar.png",
+      },
+    });
+    mockedCreateMySlackIdentity.mockResolvedValue({
+      id: "identity-1",
+      workspace: {
+        id: "workspace-1",
+        slack_workspace_id: "T123",
+        name: "Coyote",
+      },
+      slack_user_id: "U123",
+      display_name: "Bryan",
+      real_name: "Bryan Choate",
+      handle: "bryan",
+      profile_image_url: "https://images.example/avatar.png",
+      enabled: true,
+      linked_at: "2026-07-01T15:00:00Z",
+      last_verified_at: "2026-07-01T15:00:00Z",
+    });
+    mockedPatchMySlackIdentity.mockResolvedValue({
+      id: "identity-1",
+      workspace: {
+        id: "workspace-1",
+        slack_workspace_id: "T123",
+        name: "Coyote",
+      },
+      slack_user_id: "U123",
+      display_name: "Bryan",
+      real_name: "Bryan Choate",
+      handle: "bryan",
+      profile_image_url: "https://images.example/avatar.png",
+      enabled: false,
+      linked_at: "2026-07-01T15:00:00Z",
+      last_verified_at: "2026-07-01T15:00:00Z",
+    });
+    mockedDeleteMySlackIdentity.mockResolvedValue(undefined);
+  });
+
+  it("renders no-workspace Slack state", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /Slack is not connected for this Coyote instance\. Ask an administrator to connect a workspace\./i,
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: "Find my Slack account" }),
+      ).toBeNull();
+    });
+  });
+
+  it("renders disabled-workspace Slack state", async () => {
+    mockedGetMySlackIdentity.mockResolvedValue({
+      workspace_status: "disabled",
+      workspace: {
+        id: "workspace-1",
+        slack_workspace_id: "T123",
+        name: "Coyote",
+      },
+      identity: null,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/personal Slack linking is currently disabled/i),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows a warning for a failed health test but keeps live lookup available", async () => {
+    mockedGetMySlackIdentity.mockResolvedValue({
+      workspace_status: "ready",
+      workspace: {
+        id: "workspace-1",
+        slack_workspace_id: "T123",
+        name: "Coyote",
+        last_test_succeeded: false,
+      },
+      identity: null,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/The last admin Slack connection test failed/i),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Find my Slack account" }),
+      ).toBeTruthy();
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Find my Slack account" }),
+    );
+
+    await waitFor(() => {
+      expect(mockedResolveMySlackIdentity).toHaveBeenCalledWith(
+        { method: "authenticated_email" },
+        expect.anything(),
+      );
+    });
+  });
+
+  it("offers Slack email matching when workspace is ready", async () => {
+    mockedGetMySlackIdentity.mockResolvedValue({
+      workspace_status: "ready",
+      workspace: {
+        id: "workspace-1",
+        slack_workspace_id: "T123",
+        name: "Coyote",
+      },
+      identity: null,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Find my Slack account" }),
+      ).toBeTruthy();
+      expect(screen.getAllByText("user@example.com")).toHaveLength(2);
+    });
+  });
+
+  it("requires confirmation before linking Slack identity", async () => {
+    mockedGetMySlackIdentity
+      .mockResolvedValueOnce({
+        workspace_status: "ready",
+        workspace: {
+          id: "workspace-1",
+          slack_workspace_id: "T123",
+          name: "Coyote",
+        },
+        identity: null,
+      })
+      .mockResolvedValueOnce({
+        workspace_status: "ready",
+        workspace: {
+          id: "workspace-1",
+          slack_workspace_id: "T123",
+          name: "Coyote",
+        },
+        identity: {
+          id: "identity-1",
+          workspace: {
+            id: "workspace-1",
+            slack_workspace_id: "T123",
+            name: "Coyote",
+          },
+          slack_user_id: "U123",
+          display_name: "Bryan",
+          real_name: "Bryan Choate",
+          handle: "bryan",
+          profile_image_url: "https://images.example/avatar.png",
+          enabled: true,
+          linked_at: "2026-07-01T15:00:00Z",
+          last_verified_at: "2026-07-01T15:00:00Z",
+        },
+      });
+
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Find my Slack account" }),
+    );
+
+    await waitFor(() => {
+      expect(mockedResolveMySlackIdentity).toHaveBeenCalledWith(
+        { method: "authenticated_email" },
+        expect.anything(),
+      );
+      expect(screen.getByText(/Is this your Slack account\?/i)).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Link this Slack account" }),
+      ).toBeTruthy();
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Link this Slack account" }),
+    );
+
+    await waitFor(() => {
+      expect(mockedCreateMySlackIdentity).toHaveBeenCalledWith(
+        {
+          resolution_method: "authenticated_email",
+          workspace_integration_id: "workspace-1",
+          slack_workspace_id: "T123",
+          slack_user_id: "U123",
+        },
+        expect.anything(),
+      );
+      expect(
+        screen.getByText(/This link only stores your Slack member identity/i),
+      ).toBeTruthy();
+    });
+    expect(mockedEnsureMyEmailNotificationTarget).not.toHaveBeenCalled();
+    expect(
+      mockedSetCommitAuthorFailureNotificationPreference,
+    ).not.toHaveBeenCalled();
+    expect(
+      mockedSetCommitAuthorSuccessNotificationPreference,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("lets the user cancel Slack candidate confirmation", async () => {
+    mockedGetMySlackIdentity.mockResolvedValue({
+      workspace_status: "ready",
+      workspace: {
+        id: "workspace-1",
+        slack_workspace_id: "T123",
+        name: "Coyote",
+      },
+      identity: null,
+    });
+
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Find my Slack account" }),
+    );
+
+    await screen.findByText(/Is this your Slack account\?/i);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Is this your Slack account\?/i)).toBeNull();
+      expect(mockedCreateMySlackIdentity).not.toHaveBeenCalled();
+    });
+  });
+
+  it("renders the no-match Slack state after resolution", async () => {
+    mockedGetMySlackIdentity.mockResolvedValue({
+      workspace_status: "ready",
+      workspace: {
+        id: "workspace-1",
+        slack_workspace_id: "T123",
+        name: "Coyote",
+      },
+      identity: null,
+    });
+    mockedResolveMySlackIdentity.mockResolvedValue({
+      method: "authenticated_email",
+      matched: false,
+      candidate: null,
+    });
+
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Find my Slack account" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No active Slack member matched your Coyote email/i),
+      ).toBeTruthy();
+    });
+  });
+
+  it("displays and toggles a linked Slack identity", async () => {
+    mockedGetMySlackIdentity
+      .mockResolvedValueOnce({
+        workspace_status: "ready",
+        workspace: {
+          id: "workspace-1",
+          slack_workspace_id: "T123",
+          name: "Coyote",
+        },
+        identity: {
+          id: "identity-1",
+          workspace: {
+            id: "workspace-1",
+            slack_workspace_id: "T123",
+            name: "Coyote",
+          },
+          slack_user_id: "U123",
+          display_name: "Bryan",
+          real_name: "Bryan Choate",
+          handle: "bryan",
+          profile_image_url: "https://images.example/avatar.png",
+          enabled: true,
+          linked_at: "2026-07-01T15:00:00Z",
+          last_verified_at: "2026-07-01T15:00:00Z",
+        },
+      })
+      .mockResolvedValueOnce({
+        workspace_status: "ready",
+        workspace: {
+          id: "workspace-1",
+          slack_workspace_id: "T123",
+          name: "Coyote",
+        },
+        identity: {
+          id: "identity-1",
+          workspace: {
+            id: "workspace-1",
+            slack_workspace_id: "T123",
+            name: "Coyote",
+          },
+          slack_user_id: "U123",
+          display_name: "Bryan",
+          real_name: "Bryan Choate",
+          handle: "bryan",
+          profile_image_url: "https://images.example/avatar.png",
+          enabled: false,
+          linked_at: "2026-07-01T15:00:00Z",
+          last_verified_at: "2026-07-01T15:00:00Z",
+        },
+      });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/This link only stores your Slack member identity/i),
+      ).toBeTruthy();
+      expect(screen.getByText(/Bryan \(@bryan\)/i)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Pause Slack link" }));
+
+    await waitFor(() => {
+      expect(mockedPatchMySlackIdentity).toHaveBeenCalledWith(
+        { enabled: false },
+        expect.anything(),
+      );
+      expect(
+        screen.getByRole("button", { name: "Enable Slack link" }),
+      ).toBeTruthy();
+    });
+    expect(mockedEnsureMyEmailNotificationTarget).not.toHaveBeenCalled();
+    expect(
+      mockedSetCommitAuthorFailureNotificationPreference,
+    ).not.toHaveBeenCalled();
+    expect(
+      mockedSetCommitAuthorSuccessNotificationPreference,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("unlinks Slack identity after confirmation", async () => {
+    mockedGetMySlackIdentity
+      .mockResolvedValueOnce({
+        workspace_status: "ready",
+        workspace: {
+          id: "workspace-1",
+          slack_workspace_id: "T123",
+          name: "Coyote",
+        },
+        identity: {
+          id: "identity-1",
+          workspace: {
+            id: "workspace-1",
+            slack_workspace_id: "T123",
+            name: "Coyote",
+          },
+          slack_user_id: "U123",
+          display_name: "Bryan",
+          real_name: "Bryan Choate",
+          handle: "bryan",
+          profile_image_url: "https://images.example/avatar.png",
+          enabled: true,
+          linked_at: "2026-07-01T15:00:00Z",
+          last_verified_at: "2026-07-01T15:00:00Z",
+        },
+      })
+      .mockResolvedValueOnce({
+        workspace_status: "ready",
+        workspace: {
+          id: "workspace-1",
+          slack_workspace_id: "T123",
+          name: "Coyote",
+        },
+        identity: null,
+      });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Unlink Slack account" }),
+    );
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mockedDeleteMySlackIdentity).toHaveBeenCalledTimes(1);
+      expect(
+        screen.getByRole("button", { name: "Find my Slack account" }),
+      ).toBeTruthy();
+    });
+    expect(mockedEnsureMyEmailNotificationTarget).not.toHaveBeenCalled();
+    expect(
+      mockedSetCommitAuthorFailureNotificationPreference,
+    ).not.toHaveBeenCalled();
+    expect(
+      mockedSetCommitAuthorSuccessNotificationPreference,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("surfaces Slack identity conflicts without revealing another user", async () => {
+    mockedGetMySlackIdentity.mockResolvedValue({
+      workspace_status: "ready",
+      workspace: {
+        id: "workspace-1",
+        slack_workspace_id: "T123",
+        name: "Coyote",
+      },
+      identity: null,
+    });
+    mockedCreateMySlackIdentity.mockRejectedValue(
+      new Error("that Slack account is already linked"),
+    );
+
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Find my Slack account" }),
+    );
+    await screen.findByText(/Is this your Slack account\?/i);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Link this Slack account" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to link Slack account/i)).toBeTruthy();
+    });
+    expect(screen.queryByText(/user-2/i)).toBeNull();
+    expect(screen.queryByText(/other@example.com/i)).toBeNull();
   });
 
   it("renders the no-target state and offers target creation", async () => {

@@ -11,6 +11,7 @@ import (
 var ErrSlackWorkspaceIntegrationNotFound = errors.New("slack workspace integration not found")
 var ErrSlackWorkspaceIntegrationConflict = errors.New("slack workspace integration conflict")
 var ErrSlackWorkspaceIntegrationReplaceRequired = errors.New("slack workspace integration replacement requires explicit confirmation")
+var ErrSlackWorkspaceIntegrationLinkedIdentitiesExist = errors.New("slack workspace integration has linked user identities")
 
 type SlackWorkspaceIntegrationRepository interface {
 	Get(ctx context.Context) (domain.SlackWorkspaceIntegration, error)

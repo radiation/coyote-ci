@@ -642,6 +642,17 @@ definitions:
       trigger_mode:
         type: string
     type: object
+  api.CreateMySlackIdentityRequest:
+    properties:
+      resolution_method:
+        type: string
+      slack_user_id:
+        type: string
+      slack_workspace_id:
+        type: string
+      workspace_integration_id:
+        type: string
+    type: object
   api.CreatePipelineBuildRequest:
     properties:
       pipeline_yaml:
@@ -939,6 +950,20 @@ definitions:
       user:
         $ref: '#/definitions/api.UserResponse'
     type: object
+  api.MySlackIdentityEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.MySlackIdentityResponse'
+    type: object
+  api.MySlackIdentityResponse:
+    properties:
+      identity:
+        $ref: '#/definitions/api.UserSlackIdentityResponse'
+      workspace:
+        $ref: '#/definitions/api.SlackIdentityWorkspaceResponse'
+      workspace_status:
+        type: string
+    type: object
   api.NotificationDefaultsEnvelope:
     properties:
       data:
@@ -975,6 +1000,11 @@ definitions:
       updated_at:
         type: string
       webhook_configured:
+        type: boolean
+    type: object
+  api.PatchMySlackIdentityRequest:
+    properties:
+      enabled:
         type: boolean
     type: object
   api.PatchSlackWorkspaceIntegrationRequest:
@@ -1188,6 +1218,40 @@ definitions:
           $ref: '#/definitions/api.QueueEntryResponse'
         type: array
     type: object
+  api.ResolveMySlackIdentityEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.ResolveMySlackIdentityResponse'
+    type: object
+  api.ResolveMySlackIdentityRequest:
+    properties:
+      method:
+        type: string
+    type: object
+  api.ResolveMySlackIdentityResponse:
+    properties:
+      candidate:
+        $ref: '#/definitions/api.ResolvedSlackIdentityCandidateResponse'
+      matched:
+        type: boolean
+      method:
+        type: string
+    type: object
+  api.ResolvedSlackIdentityCandidateResponse:
+    properties:
+      display_name:
+        type: string
+      handle:
+        type: string
+      profile_image_url:
+        type: string
+      real_name:
+        type: string
+      slack_user_id:
+        type: string
+      workspace:
+        $ref: '#/definitions/api.SlackIdentityWorkspaceResponse'
+    type: object
   api.RetryJobEnvelope:
     properties:
       data:
@@ -1199,6 +1263,17 @@ definitions:
         $ref: '#/definitions/api.BuildResponse'
       job:
         $ref: '#/definitions/api.ExecutionJobResponse'
+    type: object
+  api.SlackIdentityWorkspaceResponse:
+    properties:
+      id:
+        type: string
+      last_test_succeeded:
+        type: boolean
+      name:
+        type: string
+      slack_workspace_id:
+        type: string
     type: object
   api.SlackWorkspaceIntegrationResponse:
     properties:
@@ -1218,6 +1293,8 @@ definitions:
         type: boolean
       last_tested_at:
         type: string
+      linked_identity_count:
+        type: integer
       updated_at:
         type: string
       workspace_id:
@@ -1391,6 +1468,34 @@ definitions:
         type: string
       updated_at:
         type: string
+    type: object
+  api.UserSlackIdentityEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.UserSlackIdentityResponse'
+    type: object
+  api.UserSlackIdentityResponse:
+    properties:
+      display_name:
+        type: string
+      enabled:
+        type: boolean
+      handle:
+        type: string
+      id:
+        type: string
+      last_verified_at:
+        type: string
+      linked_at:
+        type: string
+      profile_image_url:
+        type: string
+      real_name:
+        type: string
+      slack_user_id:
+        type: string
+      workspace:
+        $ref: '#/definitions/api.SlackIdentityWorkspaceResponse'
     type: object
   api.VersionTagCreateRequest:
     properties:
@@ -2758,6 +2863,194 @@ paths:
           schema:
             $ref: '#/definitions/api.ErrorResponse'
       summary: Update my email notification target
+      tags:
+      - users
+  /me/slack-identity:
+    delete:
+      description: Removes the authenticated user's linked personal Slack identity
+        without changing the Slack workspace integration.
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Unlink my Slack identity
+      tags:
+      - users
+    get:
+      description: Returns the authenticated user's linked personal Slack identity
+        and safe workspace readiness metadata.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.MySlackIdentityEnvelope'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get my Slack identity
+      tags:
+      - users
+    patch:
+      consumes:
+      - application/json
+      description: Pauses or resumes the authenticated user's linked personal Slack
+        identity without changing the linked Slack member.
+      parameters:
+      - description: Patch my Slack identity request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.PatchMySlackIdentityRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.UserSlackIdentityEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Enable or disable my Slack identity
+      tags:
+      - users
+    post:
+      consumes:
+      - application/json
+      description: Confirms and persists the authenticated user's personal Slack identity
+        after server-side revalidation.
+      parameters:
+      - description: Link my Slack identity request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.CreateMySlackIdentityRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.UserSlackIdentityEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Link my Slack identity
+      tags:
+      - users
+  /me/slack-identity/resolve:
+    post:
+      consumes:
+      - application/json
+      description: Resolves a personal Slack identity candidate for the authenticated
+        user by exact authenticated-email match without persisting it.
+      parameters:
+      - description: Resolve my Slack identity request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.ResolveMySlackIdentityRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ResolveMySlackIdentityEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Resolve my Slack identity
       tags:
       - users
   /me/tokens:

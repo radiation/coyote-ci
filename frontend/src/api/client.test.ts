@@ -48,10 +48,15 @@ import {
   getCommitAuthorFailureNotificationPreference,
   getCommitAuthorSuccessNotificationPreference,
   getNotificationDefaults,
+  getMySlackIdentity,
   getSlackWorkspaceIntegration,
   setCommitAuthorFailureNotificationPreference,
   setCommitAuthorSuccessNotificationPreference,
   setNotificationDefaults,
+  resolveMySlackIdentity,
+  createMySlackIdentity,
+  patchMySlackIdentity,
+  deleteMySlackIdentity,
   putSlackWorkspaceIntegration,
   patchSlackWorkspaceIntegration,
   testSlackWorkspaceIntegration,
@@ -112,7 +117,12 @@ describe("API client - types", () => {
       "function",
     );
     expect(typeof getNotificationDefaults).toBe("function");
+    expect(typeof getMySlackIdentity).toBe("function");
     expect(typeof getSlackWorkspaceIntegration).toBe("function");
+    expect(typeof resolveMySlackIdentity).toBe("function");
+    expect(typeof createMySlackIdentity).toBe("function");
+    expect(typeof patchMySlackIdentity).toBe("function");
+    expect(typeof deleteMySlackIdentity).toBe("function");
     expect(typeof setCommitAuthorFailureNotificationPreference).toBe(
       "function",
     );
@@ -1676,6 +1686,136 @@ describe("API client - types", () => {
       "/api/settings/integrations/slack",
       { credentials: "include", method: "DELETE" },
     );
+  });
+
+  it("manages my personal slack identity", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            workspace_status: "ready",
+            workspace: {
+              id: "workspace-1",
+              slack_workspace_id: "T123",
+              name: "Coyote",
+            },
+            identity: null,
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            method: "authenticated_email",
+            matched: true,
+            candidate: {
+              workspace: {
+                id: "workspace-1",
+                slack_workspace_id: "T123",
+                name: "Coyote",
+              },
+              slack_user_id: "U123",
+              display_name: "Bryan",
+            },
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            id: "identity-1",
+            workspace: {
+              id: "workspace-1",
+              slack_workspace_id: "T123",
+              name: "Coyote",
+            },
+            slack_user_id: "U123",
+            display_name: "Bryan",
+            enabled: true,
+            linked_at: "2026-07-01T15:00:00Z",
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            id: "identity-1",
+            workspace: {
+              id: "workspace-1",
+              slack_workspace_id: "T123",
+              name: "Coyote",
+            },
+            slack_user_id: "U123",
+            display_name: "Bryan",
+            enabled: false,
+            linked_at: "2026-07-01T15:00:00Z",
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const current = await getMySlackIdentity();
+    const resolved = await resolveMySlackIdentity({
+      method: "authenticated_email",
+    });
+    const linked = await createMySlackIdentity({
+      resolution_method: "authenticated_email",
+      workspace_integration_id: "workspace-1",
+      slack_workspace_id: "T123",
+      slack_user_id: "U123",
+    });
+    const toggled = await patchMySlackIdentity({ enabled: false });
+    await deleteMySlackIdentity();
+
+    expect(current.workspace_status).toBe("ready");
+    expect(resolved.matched).toBe(true);
+    expect(linked.slack_user_id).toBe("U123");
+    expect(toggled.enabled).toBe(false);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/me/slack-identity", {
+      credentials: "include",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/me/slack-identity/resolve",
+      {
+        credentials: "include",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ method: "authenticated_email" }),
+      },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/me/slack-identity", {
+      credentials: "include",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        resolution_method: "authenticated_email",
+        workspace_integration_id: "workspace-1",
+        slack_workspace_id: "T123",
+        slack_user_id: "U123",
+      }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/me/slack-identity", {
+      credentials: "include",
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(5, "/api/me/slack-identity", {
+      credentials: "include",
+      method: "DELETE",
+    });
   });
 
   it("throws APIError for JSON and plain-text error responses", async () => {

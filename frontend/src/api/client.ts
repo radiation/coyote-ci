@@ -45,18 +45,23 @@ import type {
   UserListResponse,
 } from "../types/identity";
 import type {
+  CreateMySlackIdentityRequest,
   PatchSlackWorkspaceIntegrationRequest,
+  PatchMySlackIdentityRequest,
   PutSlackWorkspaceIntegrationRequest,
   CommitAuthorFailureNotificationPreference,
   CommitAuthorSuccessNotificationPreference,
   CreateNotificationSubscriptionRequest,
   CreateNotificationTargetRequest,
+  MySlackIdentityResponse,
   MyEmailNotificationTargetResponse,
   NotificationDefaults,
   NotificationSubscription,
   NotificationSubscriptionListResponse,
   NotificationTarget,
   NotificationTargetListResponse,
+  ResolveMySlackIdentityRequest,
+  ResolveMySlackIdentityResponse,
   SlackWorkspaceIntegrationStatus,
   UpdateCommitAuthorFailureNotificationPreferenceRequest,
   UpdateCommitAuthorSuccessNotificationPreferenceRequest,
@@ -64,6 +69,7 @@ import type {
   UpdateNotificationDefaultsRequest,
   UpdateNotificationSubscriptionRequest,
   UpdateNotificationTargetRequest,
+  UserSlackIdentity,
 } from "../types/notification";
 import {
   APIError,
@@ -369,6 +375,65 @@ export async function getSlackWorkspaceIntegration(): Promise<SlackWorkspaceInte
     DataEnvelope<SlackWorkspaceIntegrationStatus>
   >("/settings/integrations/slack");
   return envelope.data;
+}
+
+export async function getMySlackIdentity(): Promise<MySlackIdentityResponse> {
+  const envelope =
+    await fetchJSON<DataEnvelope<MySlackIdentityResponse>>(
+      "/me/slack-identity",
+    );
+  return envelope.data;
+}
+
+export async function resolveMySlackIdentity(
+  input: ResolveMySlackIdentityRequest,
+): Promise<ResolveMySlackIdentityResponse> {
+  const envelope = await fetchJSON<
+    DataEnvelope<ResolveMySlackIdentityResponse>
+  >("/me/slack-identity/resolve", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+  return envelope.data;
+}
+
+export async function createMySlackIdentity(
+  input: CreateMySlackIdentityRequest,
+): Promise<UserSlackIdentity> {
+  const envelope = await fetchJSON<DataEnvelope<UserSlackIdentity>>(
+    "/me/slack-identity",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  return envelope.data;
+}
+
+export async function patchMySlackIdentity(
+  input: PatchMySlackIdentityRequest,
+): Promise<UserSlackIdentity> {
+  const envelope = await fetchJSON<DataEnvelope<UserSlackIdentity>>(
+    "/me/slack-identity",
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  return envelope.data;
+}
+
+export async function deleteMySlackIdentity(): Promise<void> {
+  await deleteNoContent("/me/slack-identity");
 }
 
 export async function putSlackWorkspaceIntegration(

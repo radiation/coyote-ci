@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
 const authTestEndpoint = "https://slack.com/api/auth.test"
+const usersLookupByEmailEndpoint = "https://slack.com/api/users.lookupByEmail?email=%s"
 
 var ErrInvalidAuth = errors.New("slack invalid auth")
 var ErrTokenRevoked = errors.New("slack token revoked")
@@ -19,6 +21,12 @@ var ErrRateLimited = errors.New("slack rate limited")
 var ErrUpstreamFailure = errors.New("slack upstream failure")
 var ErrMalformedResponse = errors.New("slack malformed response")
 var ErrAuthTestFailed = errors.New("slack auth test failed")
+var ErrUsersLookupByEmailFailed = errors.New("slack users.lookupByEmail failed")
+var ErrUsersNotFound = errors.New("slack user not found")
+var ErrMissingScope = errors.New("slack missing scope")
+var ErrDeletedUser = errors.New("slack user is deleted")
+var ErrBotUser = errors.New("slack user is a bot")
+var ErrAppUser = errors.New("slack user is an app user")
 
 type HTTPDoer interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -31,6 +39,32 @@ type AuthTestResult struct {
 	BotID         *string
 	AuthedUserID  *string
 	AppID         *string
+}
+
+type User struct {
+	ID              string
+	DisplayName     *string
+	RealName        *string
+	Handle          *string
+	Email           *string
+	ProfileImageURL *string
+}
+
+type MissingScopeError struct {
+	Needed   string
+	Provided string
+}
+
+func (e *MissingScopeError) Error() string {
+	needed := strings.TrimSpace(e.Needed)
+	if needed == "" {
+		return ErrMissingScope.Error()
+	}
+	return fmt.Sprintf("%s: %s", ErrMissingScope.Error(), needed)
+}
+
+func (e *MissingScopeError) Unwrap() error {
+	return ErrMissingScope
 }
 
 type Client struct {
@@ -121,6 +155,110 @@ func (c *Client) TestAuthentication(ctx context.Context, token string) (AuthTest
 		AppID:         optionalString(payload.AppID),
 	}
 	return result, nil
+}
+
+func (c *Client) LookupUserByEmail(ctx context.Context, token string, email string) (User, error) {
+	trimmedToken := strings.TrimSpace(token)
+	if trimmedToken == "" {
+		return User{}, ErrInvalidAuth
+	}
+	trimmedEmail := strings.TrimSpace(email)
+	if trimmedEmail == "" {
+		return User{}, ErrUsersLookupByEmailFailed
+	}
+
+	endpoint := fmt.Sprintf(usersLookupByEmailEndpoint, url.QueryEscape(trimmedEmail))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return User{}, ErrUsersLookupByEmailFailed
+	}
+	req.Header.Set("Authorization", "Bearer "+trimmedToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return User{}, err
+		}
+		return User{}, ErrUpstreamFailure
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return User{}, ErrRateLimited
+	}
+	if resp.StatusCode >= http.StatusInternalServerError {
+		return User{}, ErrUpstreamFailure
+	}
+	if resp.StatusCode != http.StatusOK {
+		return User{}, ErrUsersLookupByEmailFailed
+	}
+
+	var payload struct {
+		OK       bool   `json:"ok"`
+		Error    string `json:"error"`
+		Needed   string `json:"needed"`
+		Provided string `json:"provided"`
+		User     struct {
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			Deleted   bool   `json:"deleted"`
+			IsBot     bool   `json:"is_bot"`
+			IsAppUser bool   `json:"is_app_user"`
+			Profile   struct {
+				DisplayName string `json:"display_name"`
+				RealName    string `json:"real_name"`
+				Email       string `json:"email"`
+				Image72     string `json:"image_72"`
+			} `json:"profile"`
+		} `json:"user"`
+	}
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&payload); decodeErr != nil {
+		return User{}, ErrMalformedResponse
+	}
+	if !payload.OK {
+		switch strings.TrimSpace(payload.Error) {
+		case "users_not_found":
+			return User{}, ErrUsersNotFound
+		case "missing_scope":
+			return User{}, &MissingScopeError{Needed: payload.Needed, Provided: payload.Provided}
+		case "invalid_auth", "not_authed":
+			return User{}, ErrInvalidAuth
+		case "token_revoked":
+			return User{}, ErrTokenRevoked
+		case "account_inactive", "team_disabled", "org_login_required":
+			return User{}, ErrAccountInactive
+		case "ratelimited":
+			return User{}, ErrRateLimited
+		default:
+			return User{}, fmt.Errorf("%w: %s", ErrUsersLookupByEmailFailed, strings.TrimSpace(payload.Error))
+		}
+	}
+
+	userID := strings.TrimSpace(payload.User.ID)
+	if userID == "" {
+		return User{}, ErrMalformedResponse
+	}
+	if payload.User.Deleted {
+		return User{}, ErrDeletedUser
+	}
+	if payload.User.IsBot {
+		return User{}, ErrBotUser
+	}
+	if payload.User.IsAppUser {
+		return User{}, ErrAppUser
+	}
+
+	return User{
+		ID:              userID,
+		DisplayName:     optionalString(payload.User.Profile.DisplayName),
+		RealName:        optionalString(payload.User.Profile.RealName),
+		Handle:          optionalString(payload.User.Name),
+		Email:           optionalString(payload.User.Profile.Email),
+		ProfileImageURL: optionalString(payload.User.Profile.Image72),
+	}, nil
 }
 
 func optionalString(value string) *string {
