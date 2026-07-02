@@ -737,12 +737,12 @@ describe("MyNotificationsPage", () => {
       expect(screen.queryByText("<user@example.com>")).toBeNull();
       expect(
         screen.getByRole("checkbox", {
-          name: /Notify me when my commits fail/i,
+          name: /Email me when my commits fail/i,
         }),
       ).toBeTruthy();
       expect(
         screen.getByRole("checkbox", {
-          name: /Notify me when my commits succeed/i,
+          name: /Email me when my commits succeed/i,
         }),
       ).toBeTruthy();
     });
@@ -1070,10 +1070,10 @@ describe("MyNotificationsPage", () => {
     renderPage();
 
     const failureCheckbox = await screen.findByRole("checkbox", {
-      name: /Notify me when my commits fail/i,
+      name: /Email me when my commits fail/i,
     });
     const successCheckbox = await screen.findByRole("checkbox", {
-      name: /Notify me when my commits succeed/i,
+      name: /Email me when my commits succeed/i,
     });
     expect(failureCheckbox).toBeChecked();
     expect(successCheckbox).toBeChecked();
@@ -1256,10 +1256,10 @@ describe("MyNotificationsPage", () => {
     renderPage();
 
     const failureCheckbox = await screen.findByRole("checkbox", {
-      name: /Notify me when my commits fail/i,
+      name: /Email me when my commits fail/i,
     });
     const successCheckbox = await screen.findByRole("checkbox", {
-      name: /Notify me when my commits succeed/i,
+      name: /Email me when my commits succeed/i,
     });
     expect(failureCheckbox).toBeChecked();
     expect(successCheckbox).not.toBeChecked();
@@ -1334,7 +1334,7 @@ describe("MyNotificationsPage", () => {
     });
 
     const checkbox = screen.getByRole("checkbox", {
-      name: /Notify me when my commits fail/i,
+      name: /Email me when my commits fail/i,
     });
     expect(checkbox).toBeChecked();
     expect(checkbox).not.toBeDisabled();
@@ -1381,7 +1381,7 @@ describe("MyNotificationsPage", () => {
     renderPage();
 
     const checkbox = await screen.findByRole("checkbox", {
-      name: /Notify me when my commits fail/i,
+      name: /Email me when my commits fail/i,
     });
     expect(checkbox).not.toBeChecked();
     expect(checkbox).toBeDisabled();
@@ -1429,7 +1429,7 @@ describe("MyNotificationsPage", () => {
 
     fireEvent.click(
       await screen.findByRole("checkbox", {
-        name: /Notify me when my commits succeed/i,
+        name: /Email me when my commits succeed/i,
       }),
     );
 
@@ -1525,7 +1525,7 @@ describe("MyNotificationsPage", () => {
     expect(slackCheckbox).not.toBeDisabled();
     expect(
       screen.getByText(
-        /Re-enable your linked Slack account to resume failure Slack delivery/i,
+        /Re-enable your linked Slack account to use failure Slack delivery/i,
       ),
     ).toBeTruthy();
     expect(
@@ -1656,7 +1656,7 @@ describe("MyNotificationsPage", () => {
     renderPage();
 
     const failureEmailCheckbox = await screen.findByRole("checkbox", {
-      name: /Notify me when my commits fail/i,
+      name: /Email me when my commits fail/i,
     });
     const failureSlackCheckbox = screen.getByRole("checkbox", {
       name: /Send me a Slack DM when my commits fail/i,
@@ -1722,7 +1722,7 @@ describe("MyNotificationsPage", () => {
     renderPage();
 
     const failureEmailCheckbox = await screen.findByRole("checkbox", {
-      name: /Notify me when my commits fail/i,
+      name: /Email me when my commits fail/i,
     });
     const failureSlackCheckbox = screen.getByRole("checkbox", {
       name: /Send me a Slack DM when my commits fail/i,

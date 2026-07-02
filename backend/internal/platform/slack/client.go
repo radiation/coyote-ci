@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -298,7 +299,7 @@ func (c *Client) PostDirectMessage(ctx context.Context, token string, slackUserI
 		return PostMessageResult{}, ErrPostMessageFailed
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatPostMessageEndpoint, strings.NewReader(string(payload)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatPostMessageEndpoint, bytes.NewReader(payload))
 	if err != nil {
 		return PostMessageResult{}, ErrPostMessageFailed
 	}

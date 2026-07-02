@@ -58,7 +58,7 @@ function renderPreferenceUnavailableReason(
     case "slack_identity_required":
       return `Link your personal Slack account to turn on ${deliveryLabel}.`;
     case "slack_identity_disabled":
-      return `Re-enable your linked Slack account to resume ${deliveryLabel}.`;
+      return `Re-enable your linked Slack account to use ${deliveryLabel}.`;
     case "slack_workspace_not_configured":
       return `An administrator must connect Slack before ${deliveryLabel} can be enabled.`;
     case "slack_workspace_disabled":
@@ -833,7 +833,6 @@ export function MyNotificationsPage() {
                   <input
                     id="my-notifications-commit-failures-email"
                     type="checkbox"
-                    aria-label="Notify me when my commits fail"
                     checked={failurePreference.email.enabled}
                     disabled={
                       !failurePreference ||
@@ -948,7 +947,6 @@ export function MyNotificationsPage() {
                   <input
                     id="my-notifications-commit-successes-email"
                     type="checkbox"
-                    aria-label="Notify me when my commits succeed"
                     checked={successPreference.email.enabled}
                     disabled={
                       !successPreference ||

@@ -32,7 +32,6 @@ var ErrNotificationSubscriptionScopeRequired = errors.New("exactly one of projec
 var ErrNotificationSubscriptionEventTypeInvalid = errors.New("notification subscription event_type must be one of build_succeeded, build_failed")
 var ErrNotificationPersonalEmailRequired = errors.New("authenticated user email is required")
 var ErrNotificationPersonalUserIDRequired = errors.New("authenticated user id is required")
-var ErrNotificationPreferenceEnabledRequired = errors.New("notification preference enabled is required")
 var ErrNotificationPreferenceChannelEnabledRequired = errors.New("email_enabled and slack_enabled are required")
 var ErrNotificationDefaultsUpdateRequired = errors.New("at least one notification default value is required")
 var ErrNotificationDefaultEnabledRequired = ErrNotificationDefaultsUpdateRequired

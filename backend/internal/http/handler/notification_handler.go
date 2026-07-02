@@ -615,7 +615,6 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 		errors.Is(err, service.ErrNotificationSubscriptionEventTypeInvalid) ||
 		errors.Is(err, service.ErrNotificationPersonalEmailRequired) ||
 		errors.Is(err, service.ErrNotificationPersonalUserIDRequired) ||
-		errors.Is(err, service.ErrNotificationPreferenceEnabledRequired) ||
 		errors.Is(err, service.ErrNotificationPreferenceChannelEnabledRequired) ||
 		errors.Is(err, service.ErrNotificationDefaultsUpdateRequired) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
