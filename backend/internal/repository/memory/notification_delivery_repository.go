@@ -308,7 +308,7 @@ func normalizeNotificationClaimInput(input repository.NotificationDeliveryClaimI
 	}
 	now := input.Now.UTC()
 	if now.IsZero() {
-		return domain.NotificationDelivery{}, time.Time{}, "", 0, context.Canceled
+		return domain.NotificationDelivery{}, time.Time{}, "", 0, errors.New("notification delivery claim time is required")
 	}
 	claimOwner := strings.TrimSpace(input.ClaimOwner)
 	if claimOwner == "" {
@@ -329,7 +329,6 @@ func claimNotificationDelivery(existing domain.NotificationDelivery, now time.Ti
 		return existing, repository.NotificationDeliveryClaimOutcomeFromExisting(existing, now)
 	}
 	if existing.Attempts >= existing.MaxAttempts {
-		existing.Status = domain.NotificationDeliveryStatusFailedExhausted
 		return existing, repository.NotificationDeliveryClaimOutcomeAttemptsExhausted
 	}
 	switch existing.Status {

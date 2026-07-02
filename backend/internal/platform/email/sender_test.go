@@ -389,10 +389,96 @@ func TestSMTPSendMail_CanceledContextReturnsSafely(t *testing.T) {
 	}
 }
 
+func TestSMTPOperationContext_TimeoutDisabled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel, deadline := smtpOperationContext(context.Background(), 0, time.Now)
+	defer cancel()
+	if ctx != context.Background() {
+		t.Fatal("expected timeout-disabled operation context to reuse the parent context")
+	}
+	if !deadline.IsZero() {
+		t.Fatalf("expected zero deadline, got %s", deadline)
+	}
+
+	parentDeadline := time.Date(2026, time.July, 2, 12, 0, 0, 0, time.UTC)
+	parentCtx, parentCancel := context.WithDeadline(context.Background(), parentDeadline)
+	defer parentCancel()
+	ctx, cancel, deadline = smtpOperationContext(parentCtx, 0, time.Now)
+	defer cancel()
+	if ctx != parentCtx {
+		t.Fatal("expected timeout-disabled operation context to preserve parent deadline context")
+	}
+	if !deadline.Equal(parentDeadline) {
+		t.Fatalf("expected parent deadline %s, got %s", parentDeadline, deadline)
+	}
+}
+
+func TestSMTPSendMail_InternalErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		addr      string
+		conn      *recordingConn
+		client    *fakeSMTPClient
+		newClient smtpClientFactory
+		wantErr   string
+	}{
+		{name: "invalid address", addr: "bad-address", wantErr: "missing port in address"},
+		{name: "set deadline error", addr: "smtp.example.com:25", conn: &recordingConn{setDeadlineErr: errors.New("deadline failed")}, client: &fakeSMTPClient{writer: nopWriteCloser{Writer: io.Discard}}, wantErr: "deadline failed"},
+		{name: "client creation error", addr: "smtp.example.com:25", conn: &recordingConn{}, newClient: func(conn net.Conn, host string) (smtpClient, error) { return nil, errors.New("client failed") }, wantErr: "client failed"},
+		{name: "auth unsupported", addr: "smtp.example.com:25", conn: &recordingConn{}, client: &fakeSMTPClient{writer: nopWriteCloser{Writer: io.Discard}}, wantErr: "does not support AUTH"},
+		{name: "mail error", addr: "smtp.example.com:25", conn: &recordingConn{}, client: &fakeSMTPClient{mailErr: errors.New("mail failed"), writer: nopWriteCloser{Writer: io.Discard}}, wantErr: "mail failed"},
+		{name: "rcpt error", addr: "smtp.example.com:25", conn: &recordingConn{}, client: &fakeSMTPClient{rcptErr: errors.New("rcpt failed"), writer: nopWriteCloser{Writer: io.Discard}}, wantErr: "rcpt failed"},
+		{name: "data error", addr: "smtp.example.com:25", conn: &recordingConn{}, client: &fakeSMTPClient{dataErr: errors.New("data failed"), writer: nopWriteCloser{Writer: io.Discard}}, wantErr: "data failed"},
+		{name: "write error", addr: "smtp.example.com:25", conn: &recordingConn{}, client: &fakeSMTPClient{writer: nopWriteCloser{writeErr: errors.New("write failed")}}, wantErr: "write failed"},
+		{name: "close error", addr: "smtp.example.com:25", conn: &recordingConn{}, client: &fakeSMTPClient{writer: nopWriteCloser{closeErr: errors.New("close failed")}}, wantErr: "close failed"},
+		{name: "quit error", addr: "smtp.example.com:25", conn: &recordingConn{}, client: &fakeSMTPClient{quitErr: errors.New("quit failed"), writer: nopWriteCloser{Writer: io.Discard}}, wantErr: "quit failed"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			newClient := tc.newClient
+			if newClient == nil {
+				newClient = func(conn net.Conn, host string) (smtpClient, error) {
+					_ = conn
+					_ = host
+					return tc.client, nil
+				}
+			}
+			sendMail := smtpSendMail(10*time.Second,
+				func(ctx context.Context, network, addr string) (net.Conn, error) {
+					_ = ctx
+					_ = network
+					_ = addr
+					if tc.conn == nil {
+						return nil, nil
+					}
+					return tc.conn, nil
+				},
+				newClient,
+				time.Now,
+			)
+
+			auth := smtp.Auth(nil)
+			if tc.name == "auth unsupported" {
+				auth = smtp.PlainAuth("", "user", "pass", "smtp.example.com")
+			}
+
+			err := sendMail(context.Background(), tc.addr, auth, "from@example.com", []string{"to@example.com"}, []byte("hello"))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 type recordingConn struct {
 	deadline         time.Time
 	setDeadlineCalls int
 	closed           bool
+	setDeadlineErr   error
 }
 
 func (c *recordingConn) Read(b []byte) (int, error) {
@@ -420,7 +506,7 @@ func (c *recordingConn) RemoteAddr() net.Addr {
 func (c *recordingConn) SetDeadline(deadline time.Time) error {
 	c.deadline = deadline
 	c.setDeadlineCalls++
-	return nil
+	return c.setDeadlineErr
 }
 
 func (c *recordingConn) SetReadDeadline(deadline time.Time) error {
@@ -437,34 +523,50 @@ type fakeSMTPClient struct {
 	writer     nopWriteCloser
 	wrote      []byte
 	quitCalled bool
+	startTLS   bool
+	authExt    bool
+	startErr   error
+	authErr    error
+	mailErr    error
+	rcptErr    error
+	dataErr    error
+	quitErr    error
 }
 
 func (c *fakeSMTPClient) Extension(ext string) (bool, string) {
-	_ = ext
+	if ext == "STARTTLS" {
+		return c.startTLS, ""
+	}
+	if ext == "AUTH" {
+		return c.authExt, ""
+	}
 	return false, ""
 }
 
 func (c *fakeSMTPClient) StartTLS(config *tls.Config) error {
 	_ = config
-	return nil
+	return c.startErr
 }
 
 func (c *fakeSMTPClient) Auth(auth smtp.Auth) error {
 	_ = auth
-	return nil
+	return c.authErr
 }
 
 func (c *fakeSMTPClient) Mail(from string) error {
 	_ = from
-	return nil
+	return c.mailErr
 }
 
 func (c *fakeSMTPClient) Rcpt(to string) error {
 	_ = to
-	return nil
+	return c.rcptErr
 }
 
 func (c *fakeSMTPClient) Data() (io.WriteCloser, error) {
+	if c.dataErr != nil {
+		return nil, c.dataErr
+	}
 	c.writer.write = func(p []byte) {
 		c.wrote = append(c.wrote, p...)
 	}
@@ -473,7 +575,7 @@ func (c *fakeSMTPClient) Data() (io.WriteCloser, error) {
 
 func (c *fakeSMTPClient) Quit() error {
 	c.quitCalled = true
-	return nil
+	return c.quitErr
 }
 
 func (c *fakeSMTPClient) Close() error {
@@ -482,7 +584,9 @@ func (c *fakeSMTPClient) Close() error {
 
 type nopWriteCloser struct {
 	io.Writer
-	write func([]byte)
+	write    func([]byte)
+	writeErr error
+	closeErr error
 }
 
 func (w nopWriteCloser) Write(p []byte) (int, error) {
@@ -490,11 +594,17 @@ func (w nopWriteCloser) Write(p []byte) (int, error) {
 		w.write(p)
 	}
 	if w.Writer == nil {
+		if w.writeErr != nil {
+			return 0, w.writeErr
+		}
 		return len(p), nil
+	}
+	if w.writeErr != nil {
+		return 0, w.writeErr
 	}
 	return w.Writer.Write(p)
 }
 
-func (nopWriteCloser) Close() error {
-	return nil
+func (w nopWriteCloser) Close() error {
+	return w.closeErr
 }

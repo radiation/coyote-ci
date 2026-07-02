@@ -85,6 +85,9 @@ func NotificationDeliveryClaimOutcomeFromExisting(delivery domain.NotificationDe
 	case domain.NotificationDeliveryStatusFailedExhausted:
 		return NotificationDeliveryClaimOutcomeAttemptsExhausted
 	case domain.NotificationDeliveryStatusSending:
+		if delivery.Attempts >= delivery.MaxAttempts {
+			return NotificationDeliveryClaimOutcomeAttemptsExhausted
+		}
 		if delivery.ClaimExpiresAt != nil && !now.UTC().Before(delivery.ClaimExpiresAt.UTC()) {
 			return NotificationDeliveryClaimOutcomeStaleClaimReclaimed
 		}
