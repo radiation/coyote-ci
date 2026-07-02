@@ -18,13 +18,14 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Queue operations UI: `QueuePage.tsx` and `WorkersPage.tsx`.
 - Project/job/build navigation: `ProjectsListPage.tsx`, `ProjectDetailPage.tsx`, `JobsListPage.tsx`, `JobDetailPage.tsx`, `JobCreatePage.tsx`, `BuildsListPage.tsx`.
 - Auth/token/user/credentials UI: `APITokensPage.tsx`, `UsersPage.tsx`, `CredentialsPage.tsx`, and auth state in `auth.tsx` and `auth-context.ts`.
-- Notification target/subscription admin UI: `NotificationsPage.tsx`, plus notification contracts in `api/client.ts` and `types/notification.ts`; this page now handles both email and Slack webhook targets and keeps webhook secrets masked during edits.
-- Personal notification self-service UI: `MyNotificationsPage.tsx`, plus `api/client.ts` and `types/notification.ts` for personal email targets, per-event email/Slack commit-author preferences, and personal Slack identity linking.
+- Notification target/subscription admin UI: `NotificationsPage.tsx`, `NotificationsPage.helpers.ts`, `api/notificationClient.ts`, and `types/notification.ts`; this page handles both email and Slack webhook targets and keeps webhook secrets masked during edits.
+- Personal notification self-service UI: `MyNotificationsPage.tsx`, `MyNotificationsPage.helpers.ts`, `api/notificationClient.ts`, and `types/notification.ts` for personal email targets, per-event email/Slack commit-author preferences, and personal Slack identity linking.
 
 ## Shared components and state
 
 - `frontend/src/components`: reusable visual sections and widgets. Inspect only the components rendered by the page you are changing.
-- `frontend/src/api/client.ts`: shared API client functions. Start here for request/response contract changes.
+- `frontend/src/api/client.ts`: shared API client export surface and common helpers.
+- `frontend/src/api/notificationClient.ts`: notification-specific API functions for targets, subscriptions, defaults, Slack workspace integration, and personal Slack identity flows.
 - `frontend/src/api/buildClient.ts`: build-focused API helpers.
 - `frontend/src/queries`: shared query helpers for reused data-fetching logic.
 - `frontend/src/types`: frontend API/domain types grouped by area such as builds, artifacts, jobs, projects, workers, and identity.
@@ -41,14 +42,15 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Artifact/release/lineage changes: start in artifact pages, `ArtifactBrowser.tsx`, `BuildArtifactsSection.tsx`, `frontend/src/api/client.ts`, `frontend/src/types/artifact.ts`, and `frontend/src/types/build.ts`.
 - Queue operations changes: start in `QueuePage.tsx`, `WorkersPage.tsx`, and worker/build/job types.
 - Auth, tokens, membership, or role-based UI: start in `auth.tsx`, `auth-context.ts`, `types/identity.ts`, then the relevant settings or project page.
-- Notification settings/admin changes: start in `pages/NotificationsPage.tsx`, then `api/client.ts`, `types/notification.ts`, and the colocated page test.
-- Personal Slack identity or personal-notification changes: start in `pages/MyNotificationsPage.tsx`, then `api/client.ts`, `types/notification.ts`, and `pages/MyNotificationsPage.test.tsx`. This page now owns personal Slack linking plus the four independent failure/success x email/Slack preference controls.
+- Notification settings/admin changes: start in `pages/NotificationsPage.tsx`, then `pages/NotificationsPage.helpers.ts`, `api/notificationClient.ts`, `types/notification.ts`, and the colocated page test.
+- Personal Slack identity or personal-notification changes: start in `pages/MyNotificationsPage.tsx`, then `pages/MyNotificationsPage.helpers.ts`, `api/notificationClient.ts`, `types/notification.ts`, and `pages/MyNotificationsPage.test.tsx`. This page owns personal Slack linking plus the four independent failure/success x email/Slack preference controls.
 
 ## Tests and patterns
 
 - Most frontend tests are colocated as `*.test.tsx` or `*.test.ts` next to pages, components, API modules, and theme/auth helpers.
-- `frontend/src/api/client.test.ts` is the main contract-level test surface for API client behavior.
+- `frontend/src/api/client.test.ts` remains the main contract-level test surface for API client behavior, including notification client re-exports.
 - Personal Slack identity UI coverage lives primarily in `frontend/src/pages/MyNotificationsPage.test.tsx`; admin Slack workspace coverage lives in `frontend/src/pages/NotificationsPage.test.tsx`.
+- Extracted notification page helper coverage lives in `frontend/src/pages/NotificationsPage.helpers.test.ts` and `frontend/src/pages/MyNotificationsPage.helpers.test.ts`.
 - For artifact lineage or version/channel contract work, check `frontend/src/api/client.test.ts` and the nearest artifact page/component test before scanning broader UI code.
 - For page changes, start with the matching page test before scanning unrelated components.
 - For shared UI changes, start with the nearest component test and only widen if the page composes behavior that the component test does not cover.
