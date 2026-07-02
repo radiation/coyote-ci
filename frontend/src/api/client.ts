@@ -44,7 +44,6 @@ import type {
   User,
   UserListResponse,
 } from "../types/identity";
-import type {} from "../types/notification";
 import {
   APIError,
   AUTH_BASE,

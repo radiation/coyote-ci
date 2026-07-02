@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/mail"
 	"strings"
-	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	platformslack "github.com/radiation/coyote-ci/backend/internal/platform/slack"
@@ -212,7 +211,7 @@ func (s *BuildNotificationService) resolveConfiguredEmailDestination(ctx context
 			emailRecipient:  parsedRecipient,
 		}, nil
 	}
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	target, err := s.subscriptionRepo.EnsureConfigEmailTarget(ctx, repository.EnsureConfigNotificationEmailTargetInput{
 		Name:      recipient,
 		Recipient: recipient,
