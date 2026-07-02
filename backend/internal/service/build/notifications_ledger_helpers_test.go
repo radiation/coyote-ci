@@ -130,6 +130,29 @@ func TestBuildNotificationService_MarkDeliveryFailedRoutesPersistence(t *testing
 			t.Fatalf("expected lost-claim outcome, got %q", outcome)
 		}
 	})
+
+	t.Run("non-ledger send handles provider errors without persistence", func(t *testing.T) {
+		sender := &recordingEmailSender{err: errors.New("smtp unavailable")}
+		service := &BuildNotificationService{
+			enabled: true,
+			sender:  sender,
+		}
+		destinations := []notificationDestination{{
+			transport:       domain.NotificationTransportEmail,
+			destinationKind: domain.NotificationDestinationKindSharedTarget,
+			destinationKey:  "email-target:target-1",
+			recipient:       "<dev@example.com>",
+			emailRecipient:  "dev@example.com",
+		}}
+
+		err := service.sendTerminalNotification(context.Background(), "build-1", domain.NotificationEventTypeBuildFailed, destinations, "subject", "body", "slack", "personal slack")
+		if err == nil || !strings.Contains(err.Error(), "smtp unavailable") {
+			t.Fatalf("expected provider error, got %v", err)
+		}
+		if len(sender.messages) != 1 {
+			t.Fatalf("expected one direct send attempt, got %d", len(sender.messages))
+		}
+	})
 }
 
 func TestBuildNotificationService_MarkDeliverySentAndCancellationBranches(t *testing.T) {

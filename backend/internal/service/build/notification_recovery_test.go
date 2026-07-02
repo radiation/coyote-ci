@@ -189,6 +189,210 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 			t.Fatalf("unexpected slack dm destination: %+v", destination)
 		}
 	})
+
+	t.Run("rehydration dependency and metadata failures are classified correctly", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			notifier *BuildNotificationService
+			delivery domain.NotificationDelivery
+			reason   string
+			retry    bool
+		}{
+			{
+				name:     "missing build repository is permanent",
+				notifier: &BuildNotificationService{},
+				delivery: domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:1"},
+				reason:   "delivery_metadata_invalid",
+			},
+			{
+				name:     "missing build is permanent",
+				notifier: &BuildNotificationService{buildRepo: &fakeBuildRepository{getErr: repository.ErrBuildNotFound}},
+				delivery: domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:1"},
+				reason:   "build_unavailable",
+			},
+			{
+				name:     "build lookup error is retryable",
+				notifier: &BuildNotificationService{buildRepo: &fakeBuildRepository{getErr: errors.New("db unavailable")}},
+				delivery: domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:1"},
+				reason:   "rehydration_failed",
+				retry:    true,
+			},
+			{
+				name:     "build status mismatch is permanent",
+				notifier: &BuildNotificationService{buildRepo: &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusSuccess}}},
+				delivery: domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:1"},
+				reason:   "build_event_mismatch",
+			},
+			{
+				name:     "invalid transport metadata is permanent",
+				notifier: &BuildNotificationService{buildRepo: &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}}},
+				delivery: domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportSlackWebhook, DestinationKind: domain.NotificationDestinationKindPersonalEmail, DestinationKey: "bad"},
+				reason:   "delivery_metadata_invalid",
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				_, _, _, err := tc.notifier.rehydrateDelivery(context.Background(), tc.delivery)
+				var executionErr *notificationExecutionFailure
+				if !errors.As(err, &executionErr) {
+					t.Fatalf("expected execution failure, got %v", err)
+				}
+				if executionErr.reason != tc.reason || executionErr.retryable != tc.retry {
+					t.Fatalf("unexpected execution failure: %+v", executionErr)
+				}
+			})
+		}
+	})
+
+	t.Run("destination-specific validation branches", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			delivery domain.NotificationDelivery
+			mutate   func(*destinationBranchFixture)
+			reason   string
+		}{
+			{name: "shared target key mismatch", mutate: func(f *destinationBranchFixture) {
+				f.delivery = domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: f.sharedKind, DestinationKey: f.sharedKey + "-wrong", NotificationTargetID: &f.sharedTarget.ID}
+			}, reason: "shared_target_mismatch"},
+			{name: "personal target disabled", mutate: func(f *destinationBranchFixture) {
+				f.personalTarget.Enabled = false
+				_, _ = f.subscriptionRepo.UpdateTarget(context.Background(), f.personalTarget)
+				f.delivery = domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: f.personalKind, DestinationKey: f.personalKey, NotificationTargetID: &f.personalTarget.ID, RecipientUserID: &f.user.ID}
+			}, reason: "personal_email_target_disabled"},
+			{name: "personal target user mismatch", mutate: func(f *destinationBranchFixture) {
+				f.delivery = domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: f.personalKind, DestinationKey: f.personalKey, NotificationTargetID: &f.personalTarget.ID, RecipientUserID: strPtr("other-user")}
+			}, reason: "personal_email_target_mismatch"},
+			{name: "slack webhook missing reference", mutate: func(f *destinationBranchFixture) {
+				f.delivery = domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportSlackWebhook, DestinationKind: f.webhookKind, DestinationKey: f.webhookKey}
+			}, reason: "delivery_metadata_invalid"},
+			{name: "slack dm credentials missing", mutate: func(f *destinationBranchFixture) {
+				f.workspace.BotTokenSecret = ""
+				_, _ = f.workspaceRepo.ConnectOrReplace(context.Background(), f.workspace, true)
+				f.delivery = domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportSlackDM, DestinationKind: f.dmKind, DestinationKey: f.dmKey, RecipientUserID: &f.user.ID, SlackWorkspaceIntegrationID: &f.workspace.ID}
+			}, reason: "slack_workspace_credentials_missing"},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				fixture := newDestinationBranchFixture(t)
+				tc.mutate(fixture)
+				localNotifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, SlackSender: &recordingSlackSender{}, SlackClient: &recordingSlackDMClient{}, BuildRepo: buildRepo, DeliveryRepo: memoryrepo.NewNotificationDeliveryRepository(), SubscriptionRepo: fixture.subscriptionRepo, IdentityRepo: fixture.identityRepo, WorkspaceRepo: fixture.workspaceRepo, ClaimOwner: "recovery-test"})
+				if err != nil {
+					t.Fatalf("create notifier failed: %v", err)
+				}
+				_, _, _, rehydrateErr := localNotifier.rehydrateDelivery(context.Background(), fixture.delivery)
+				var executionErr *notificationExecutionFailure
+				if !errors.As(rehydrateErr, &executionErr) {
+					t.Fatalf("expected execution failure, got %v", rehydrateErr)
+				}
+				if executionErr.reason != tc.reason {
+					t.Fatalf("expected reason %q, got %+v", tc.reason, executionErr)
+				}
+			})
+		}
+	})
+
+	t.Run("claim metrics map skip outcomes", func(t *testing.T) {
+		metrics := observability.NewInMemoryNotificationDeliveryMetrics()
+		notifier := &BuildNotificationService{deliveryMetrics: metrics}
+		delivery := domain.NotificationDelivery{EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget}
+		cases := map[repository.NotificationDeliveryClaimOutcome]string{
+			repository.NotificationDeliveryClaimOutcomeCreatedClaimed:      observability.NotificationDeliveryOutcomeClaimAcquired,
+			repository.NotificationDeliveryClaimOutcomeRetryClaimed:        observability.NotificationDeliveryOutcomeRetryClaimed,
+			repository.NotificationDeliveryClaimOutcomeStaleClaimReclaimed: observability.NotificationDeliveryOutcomeStaleClaimReclaimed,
+			repository.NotificationDeliveryClaimOutcomeClaimedByOther:      observability.NotificationDeliveryOutcomeSkippedContention,
+			repository.NotificationDeliveryClaimOutcomeRetryNotDue:         observability.NotificationDeliveryOutcomeSkippedNotDue,
+			repository.NotificationDeliveryClaimOutcomeAlreadySent:         observability.NotificationDeliveryOutcomeSkippedTerminal,
+			repository.NotificationDeliveryClaimOutcomePermanentlyFailed:   observability.NotificationDeliveryOutcomeSkippedTerminal,
+			repository.NotificationDeliveryClaimOutcomeAttemptsExhausted:   observability.NotificationDeliveryOutcomeSkippedTerminal,
+			repository.NotificationDeliveryClaimOutcome("weird"):           observability.NotificationDeliveryOutcomeSkippedIneligible,
+		}
+		for outcome, metric := range cases {
+			notifier.recordClaimMetric(delivery, notificationRecoveryReasonDueRetry, outcome)
+			if got := metrics.OutcomeCount(string(delivery.EventType), string(delivery.Transport), string(delivery.DestinationKind), notificationRecoveryReasonDueRetry, metric); got == 0 {
+				t.Fatalf("expected metric %q for outcome %q", metric, outcome)
+			}
+		}
+	})
+}
+
+type destinationBranchFixture struct {
+	subscriptionRepo *memoryrepo.NotificationSubscriptionRepository
+	identityRepo     *memoryrepo.UserSlackIdentityRepository
+	workspaceRepo    *memoryrepo.SlackWorkspaceIntegrationRepository
+	user             domain.User
+	sharedTarget     domain.NotificationTarget
+	personalTarget   domain.NotificationTarget
+	webhookTarget    domain.NotificationTarget
+	workspace        domain.SlackWorkspaceIntegration
+	identity         domain.UserSlackIdentity
+	sharedKind       domain.NotificationDestinationKind
+	sharedKey        string
+	personalKind     domain.NotificationDestinationKind
+	personalKey      string
+	webhookKind      domain.NotificationDestinationKind
+	webhookKey       string
+	dmKind           domain.NotificationDestinationKind
+	dmKey            string
+	delivery         domain.NotificationDelivery
+}
+
+func newDestinationBranchFixture(t *testing.T) *destinationBranchFixture {
+	t.Helper()
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	identityRepo := memoryrepo.NewUserSlackIdentityRepository()
+	workspaceRepo := memoryrepo.NewSlackWorkspaceIntegrationRepository()
+	workspaceRepo.SetUserSlackIdentityRepository(identityRepo)
+	userRepo := memoryrepo.NewUserRepository()
+	user := mustCreateNotificationUser(t, userRepo, "author2@example.com")
+	personalTarget := mustEnsureOwnedNotificationTarget(t, subscriptionRepo, user.ID, "author2@example.com", true)
+	sharedTarget := mustCreateNotificationTarget(t, subscriptionRepo, "shared2@example.com", true)
+	webhookTarget := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/branch", true)
+	now := time.Now().UTC()
+	workspace, workspaceErr := workspaceRepo.ConnectOrReplace(context.Background(), domain.SlackWorkspaceIntegration{ID: "workspace-2", WorkspaceID: "T234", BotTokenSecret: "xoxb-token", Enabled: true, ConnectedAt: now, CreatedAt: now, UpdatedAt: now}, true)
+	if workspaceErr != nil {
+		t.Fatalf("connect workspace failed: %v", workspaceErr)
+	}
+	identity, identityErr := identityRepo.Upsert(context.Background(), domain.UserSlackIdentity{UserID: user.ID, SlackWorkspaceIntegrationID: workspace.ID, SlackUserID: "U234", Enabled: true, LinkedAt: now, CreatedAt: now, UpdatedAt: now})
+	if identityErr != nil {
+		t.Fatalf("upsert slack identity failed: %v", identityErr)
+	}
+	sharedKind, sharedKey, sharedErr := domain.NotificationSharedEmailTargetKey(sharedTarget.ID)
+	if sharedErr != nil {
+		t.Fatalf("shared email key failed: %v", sharedErr)
+	}
+	personalKind, personalKey, personalErr := domain.NotificationPersonalEmailTargetKey(personalTarget.ID)
+	if personalErr != nil {
+		t.Fatalf("personal email key failed: %v", personalErr)
+	}
+	webhookKind, webhookKey, webhookErr := domain.NotificationSharedSlackWebhookTargetKey(webhookTarget.ID)
+	if webhookErr != nil {
+		t.Fatalf("slack webhook key failed: %v", webhookErr)
+	}
+	dmKind, dmKey, dmErr := domain.NotificationSlackDMDestinationKey(workspace.ID, identity.SlackUserID)
+	if dmErr != nil {
+		t.Fatalf("slack dm key failed: %v", dmErr)
+	}
+	return &destinationBranchFixture{
+		subscriptionRepo: subscriptionRepo,
+		identityRepo:     identityRepo,
+		workspaceRepo:    workspaceRepo,
+		user:             user,
+		sharedTarget:     sharedTarget,
+		personalTarget:   personalTarget,
+		webhookTarget:    webhookTarget,
+		workspace:        workspace,
+		identity:         identity,
+		sharedKind:       sharedKind,
+		sharedKey:        sharedKey,
+		personalKind:     personalKind,
+		personalKey:      personalKey,
+		webhookKind:      webhookKind,
+		webhookKey:       webhookKey,
+		dmKind:           dmKind,
+		dmKey:            dmKey,
+	}
 }
 
 func TestNotificationRecoveryDrain_RunIteration(t *testing.T) {

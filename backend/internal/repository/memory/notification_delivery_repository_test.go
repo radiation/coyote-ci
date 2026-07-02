@@ -368,6 +368,12 @@ func TestClaimNotificationDeliveryBranches(t *testing.T) {
 func TestNotificationDeliveryRepository_ListRecoverable(t *testing.T) {
 	repo := NewNotificationDeliveryRepository()
 	now := time.Date(2026, 7, 2, 16, 0, 0, 0, time.UTC)
+	if _, err := repo.ListRecoverable(context.Background(), repository.NotificationDeliveryRecoverableScanInput{}); err == nil {
+		t.Fatal("expected missing scan time error")
+	}
+	if _, err := repo.ListRecoverable(context.Background(), repository.NotificationDeliveryRecoverableScanInput{Now: now, Limit: 0}); err == nil {
+		t.Fatal("expected missing limit error")
+	}
 	buildID := "build-recoverable"
 	retryable := domain.NotificationDeliveryFailureCategoryRetryable
 	claimOwner := "worker-a"

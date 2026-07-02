@@ -249,14 +249,19 @@ func (s *BuildNotificationService) sendTerminalNotification(ctx context.Context,
 	}
 
 	for _, destination := range destinations {
-		var delivery domain.NotificationDelivery
-		shouldSend := true
-		var err error
-		if s.deliveryRepo != nil {
-			delivery, shouldSend, err = s.prepareDelivery(ctx, buildID, eventType, destination)
-			if err != nil {
-				return err
+		if s.deliveryRepo == nil {
+			if sendErr := s.sendDestination(ctx, destination, content.subject, content.body, content.slackText, content.personalSlackText); sendErr != nil {
+				sendErrs = append(sendErrs, sendErr)
 			}
+			continue
+		}
+
+		var delivery domain.NotificationDelivery
+		var shouldSend bool
+		var err error
+		delivery, shouldSend, err = s.prepareDelivery(ctx, buildID, eventType, destination)
+		if err != nil {
+			return err
 		}
 		if !shouldSend {
 			continue
