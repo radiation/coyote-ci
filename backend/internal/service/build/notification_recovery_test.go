@@ -622,6 +622,84 @@ func TestNotificationRecoveryDrain_RunIteration(t *testing.T) {
 	})
 }
 
+func TestNewNotificationRecoveryDrain_Validation(t *testing.T) {
+	baseNotifier := &BuildNotificationService{
+		buildRepo:     &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}},
+		deliveryRepo:  memoryrepo.NewNotificationDeliveryRepository(),
+		claimOwner:    "recovery-a",
+		retryPolicy:   defaultNotificationRetryPolicy(),
+		claimDuration: minimumNotificationClaimDuration(),
+	}
+
+	tests := []struct {
+		name string
+		cfg  NotificationRecoveryDrainConfig
+	}{
+		{name: "missing notifier", cfg: NotificationRecoveryDrainConfig{Interval: time.Second, BatchSize: 1}},
+		{name: "missing delivery repo", cfg: NotificationRecoveryDrainConfig{Notifier: &BuildNotificationService{buildRepo: baseNotifier.buildRepo}, Interval: time.Second, BatchSize: 1}},
+		{name: "missing build repo", cfg: NotificationRecoveryDrainConfig{Notifier: &BuildNotificationService{deliveryRepo: baseNotifier.deliveryRepo}, Interval: time.Second, BatchSize: 1}},
+		{name: "non-positive interval", cfg: NotificationRecoveryDrainConfig{Notifier: baseNotifier, Interval: 0, BatchSize: 1}},
+		{name: "non-positive batch size", cfg: NotificationRecoveryDrainConfig{Notifier: baseNotifier, Interval: time.Second, BatchSize: 0}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			drain, err := NewNotificationRecoveryDrain(tc.cfg)
+			if err == nil {
+				t.Fatalf("expected validation error, got drain=%+v", drain)
+			}
+		})
+	}
+}
+
+func TestNotificationRecoveryDrain_ApplyAttemptResult(t *testing.T) {
+	drain := &NotificationRecoveryDrain{}
+	tests := []struct {
+		name    string
+		attempt notificationRecoveryAttemptResult
+		check   func(t *testing.T, result NotificationRecoveryIterationResult)
+	}{
+		{
+			name:    "not due increments skipped not due",
+			attempt: notificationRecoveryAttemptResult{claimOutcome: repository.NotificationDeliveryClaimOutcomeRetryNotDue},
+			check: func(t *testing.T, result NotificationRecoveryIterationResult) {
+				t.Helper()
+				if result.Skipped != 1 || result.SkippedNotDue != 1 {
+					t.Fatalf("unexpected retry-not-due counters: %+v", result)
+				}
+			},
+		},
+		{
+			name:    "terminal outcomes increment skipped terminal",
+			attempt: notificationRecoveryAttemptResult{claimOutcome: repository.NotificationDeliveryClaimOutcomeAlreadySent},
+			check: func(t *testing.T, result NotificationRecoveryIterationResult) {
+				t.Helper()
+				if result.Skipped != 1 || result.SkippedTerminal != 1 {
+					t.Fatalf("unexpected terminal skip counters: %+v", result)
+				}
+			},
+		},
+		{
+			name:    "default ineligible still counts skipped and execution outcome",
+			attempt: notificationRecoveryAttemptResult{claimOutcome: repository.NotificationDeliveryClaimOutcome("other"), executionOutcome: notificationExecutionOutcomeLostClaim, rehydrationFailed: true},
+			check: func(t *testing.T, result NotificationRecoveryIterationResult) {
+				t.Helper()
+				if result.Skipped != 1 || result.SkippedNotDue != 0 || result.SkippedTerminal != 0 || result.LostClaim != 1 || result.RehydrationFailed != 1 {
+					t.Fatalf("unexpected default counters: %+v", result)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var result NotificationRecoveryIterationResult
+			drain.applyAttemptResult(&result, tc.attempt)
+			tc.check(t, result)
+		})
+	}
+}
+
 func TestNotificationRecoveryDrain_Run(t *testing.T) {
 	t.Run("starts and stops with context", func(t *testing.T) {
 		calls := make(chan struct{}, 1)
