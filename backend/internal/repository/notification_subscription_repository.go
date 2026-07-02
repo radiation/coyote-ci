@@ -23,10 +23,9 @@ type EnsureOwnedNotificationEmailTargetInput struct {
 	UpdatedAt   time.Time
 }
 
-type EnsureSharedNotificationTargetInput struct {
+type EnsureConfigNotificationEmailTargetInput struct {
 	ID        string
 	Name      string
-	Type      domain.NotificationTargetType
 	Recipient string
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -42,7 +41,7 @@ type NotificationSubscriptionRepository interface {
 	ListTargets(ctx context.Context) ([]domain.NotificationTarget, error)
 	GetTargetByID(ctx context.Context, id string) (domain.NotificationTarget, error)
 	GetOwnedEmailTargetByUserID(ctx context.Context, userID string) (domain.NotificationTarget, error)
-	EnsureSharedTarget(ctx context.Context, input EnsureSharedNotificationTargetInput) (domain.NotificationTarget, error)
+	EnsureConfigEmailTarget(ctx context.Context, input EnsureConfigNotificationEmailTargetInput) (domain.NotificationTarget, error)
 	SetOwnedEmailTargetEnabled(ctx context.Context, ownerUserID string, enabled bool, updatedAt time.Time) (domain.NotificationTarget, error)
 	EnsureOwnedEmailTarget(ctx context.Context, input EnsureOwnedNotificationEmailTargetInput) (domain.NotificationTarget, error)
 	EnsureOwnedEmailTargetInitialized(ctx context.Context, input EnsureOwnedNotificationEmailTargetInput) (domain.NotificationTarget, error)

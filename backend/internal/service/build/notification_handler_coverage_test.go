@@ -8,10 +8,11 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
+	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 )
 
 func TestBuildNotificationService_NotifyTerminalBuild_NoSenderReturnsError(t *testing.T) {
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com"})
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -36,7 +37,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_CanceledIgnoresMissingSend
 
 func TestBuildNotificationService_NotifyTerminalBuild_SendsOnlyForConfiguredStatuses(t *testing.T) {
 	sender := &recordingEmailSender{}
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender})
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -81,7 +82,7 @@ func TestBuildNotificationService_IsActive_ZeroAndConfiguredCases(t *testing.T) 
 	if inactive.isActive() {
 		t.Fatal("expected zero-value notifier to be inactive")
 	}
-	active := &BuildNotificationService{enabled: true, defaultRecipients: []string{"<dev@example.com>"}, sender: &recordingEmailSender{}}
+	active := &BuildNotificationService{enabled: true, defaultRecipients: []string{"<dev@example.com>"}, sender: &recordingEmailSender{}, subscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()}
 	if !active.isActive() {
 		t.Fatal("expected configured notifier to be active")
 	}

@@ -2,7 +2,6 @@ package build
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log"
@@ -772,20 +771,10 @@ func dedupeDestinations(destinations []notificationDestination) []notificationDe
 
 func (s *BuildNotificationService) resolveConfiguredEmailDestination(ctx context.Context, recipient string) (notificationDestination, error) {
 	if s.subscriptionRepo == nil {
-		if s.deliveryRepo != nil {
-			return notificationDestination{}, errors.New("notification subscription repository is required for shared email delivery identity")
-		}
-		return notificationDestination{
-			transport:       domain.NotificationTransportEmail,
-			destinationKind: domain.NotificationDestinationKindSharedTarget,
-			destinationKey:  transientConfiguredEmailDestinationKey(recipient),
-			recipient:       recipient,
-			emailRecipient:  recipient,
-		}, nil
+		return notificationDestination{}, errors.New("notification subscription repository is required for configured shared email delivery identity")
 	}
 	now := time.Now().UTC()
-	target, err := s.subscriptionRepo.EnsureSharedTarget(ctx, repository.EnsureSharedNotificationTargetInput{
-		Type:      domain.NotificationTargetTypeEmail,
+	target, err := s.subscriptionRepo.EnsureConfigEmailTarget(ctx, repository.EnsureConfigNotificationEmailTargetInput{
 		Name:      recipient,
 		Recipient: recipient,
 		CreatedAt: now,
@@ -870,11 +859,6 @@ func slackDMDestination(userID string, workspaceIntegrationID string, slackUserI
 		slackUserID:                 trimmedSlackUserID,
 		slackBotToken:               strings.TrimSpace(slackBotToken),
 	}, nil
-}
-
-func transientConfiguredEmailDestinationKey(recipient string) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(recipient))))
-	return fmt.Sprintf("transient-config-email:%x", sum[:8])
 }
 
 func formatBuildStatusSlackText(details buildNotificationDetails) string {

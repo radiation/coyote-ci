@@ -21,12 +21,36 @@ func NewNotificationSubscriptionRepository(db *sql.DB) *NotificationSubscription
 
 const notificationSubscriptionColumns = `id, target_id, project_id::text, job_id::text, event_type, enabled, created_at, updated_at`
 
-const notificationTargetSelectColumns = `id, owner_user_id::text, type, name, recipient, enabled, created_at, updated_at`
+const notificationTargetSelectColumns = `id, owner_user_id::text, type, origin, name, recipient, enabled, created_at, updated_at`
+
+const notificationConfigEmailTargetLookupAttempts = 8
+
+const notificationConfigEmailTargetInsertQuery = `
+	INSERT INTO notification_targets (id, owner_user_id, type, origin, name, recipient, enabled, created_at, updated_at)
+	VALUES ($1, NULL, $2, $3, $4, $5, TRUE, $6, $7)
+	ON CONFLICT DO NOTHING
+	RETURNING ` + notificationTargetSelectColumns + `
+`
+
+const notificationConfigEmailTargetSelectQuery = `
+	SELECT ` + notificationTargetSelectColumns + `
+	FROM notification_targets
+	WHERE type = $1
+	  AND origin = $2
+	  AND owner_user_id IS NULL
+	  AND lower(recipient) = lower($3)
+	ORDER BY created_at ASC, id ASC
+	LIMIT 1
+`
 
 func (r *NotificationSubscriptionRepository) CreateTarget(ctx context.Context, target domain.NotificationTarget) (domain.NotificationTarget, error) {
+	origin := target.Origin
+	if strings.TrimSpace(string(origin)) == "" {
+		origin = domain.NotificationTargetOriginManual
+	}
 	const query = `
-		INSERT INTO notification_targets (id, owner_user_id, type, name, recipient, enabled, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO notification_targets (id, owner_user_id, type, origin, name, recipient, enabled, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING ` + notificationTargetSelectColumns + `
 	`
 
@@ -34,6 +58,7 @@ func (r *NotificationSubscriptionRepository) CreateTarget(ctx context.Context, t
 		target.ID,
 		nullableOptionalString(target.OwnerUserID),
 		string(target.Type),
+		string(origin),
 		target.Name,
 		target.Recipient,
 		target.Enabled,
@@ -121,63 +146,7 @@ func (r *NotificationSubscriptionRepository) GetOwnedEmailTargetByUserID(ctx con
 	return target, nil
 }
 
-func (r *NotificationSubscriptionRepository) EnsureSharedTarget(ctx context.Context, input repository.EnsureSharedNotificationTargetInput) (domain.NotificationTarget, error) {
-	targetType := domain.NotificationTargetType(strings.TrimSpace(string(input.Type)))
-	if targetType == "" {
-		targetType = domain.NotificationTargetTypeEmail
-	}
-	for attempts := 0; attempts < 3; attempts++ {
-		tx, beginErr := r.db.BeginTx(ctx, nil)
-		if beginErr != nil {
-			return domain.NotificationTarget{}, beginErr
-		}
-
-		target, ensureErr := r.ensureSharedTargetTx(ctx, tx, input, targetType)
-		if ensureErr != nil {
-			_ = tx.Rollback()
-			if errors.Is(ensureErr, repository.ErrNotificationTargetDuplicate) {
-				continue
-			}
-			return domain.NotificationTarget{}, ensureErr
-		}
-
-		if commitErr := tx.Commit(); commitErr != nil {
-			if isUniqueViolation(commitErr) {
-				continue
-			}
-			return domain.NotificationTarget{}, commitErr
-		}
-		return target, nil
-	}
-
-	return domain.NotificationTarget{}, repository.ErrNotificationTargetDuplicate
-}
-
-func (r *NotificationSubscriptionRepository) ensureSharedTargetTx(ctx context.Context, tx *sql.Tx, input repository.EnsureSharedNotificationTargetInput, targetType domain.NotificationTargetType) (domain.NotificationTarget, error) {
-	const findQuery = `
-		SELECT ` + notificationTargetSelectColumns + `
-		FROM notification_targets
-		WHERE type = $1
-		  AND lower(recipient) = lower($2)
-		ORDER BY created_at ASC, id ASC
-		LIMIT 1
-		FOR UPDATE
-	`
-
-	target, err := scanNotificationTarget(tx.QueryRowContext(ctx, findQuery, string(targetType), strings.TrimSpace(input.Recipient)))
-	if err == nil {
-		return target, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return domain.NotificationTarget{}, err
-	}
-
-	const insertQuery = `
-		INSERT INTO notification_targets (id, owner_user_id, type, name, recipient, enabled, created_at, updated_at)
-		VALUES ($1, NULL, $2, $3, $4, TRUE, $5, $6)
-		RETURNING ` + notificationTargetSelectColumns + `
-	`
-
+func (r *NotificationSubscriptionRepository) EnsureConfigEmailTarget(ctx context.Context, input repository.EnsureConfigNotificationEmailTargetInput) (domain.NotificationTarget, error) {
 	createdAt := input.CreatedAt
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
@@ -186,21 +155,45 @@ func (r *NotificationSubscriptionRepository) ensureSharedTargetTx(ctx context.Co
 	if updatedAt.IsZero() {
 		updatedAt = createdAt
 	}
-	created, createErr := scanNotificationTarget(tx.QueryRowContext(ctx, insertQuery,
+	created, createErr := scanNotificationTarget(r.db.QueryRowContext(ctx, notificationConfigEmailTargetInsertQuery,
 		strings.TrimSpace(input.ID),
-		string(targetType),
+		string(domain.NotificationTargetTypeEmail),
+		string(domain.NotificationTargetOriginConfigDefault),
 		strings.TrimSpace(input.Name),
 		strings.TrimSpace(input.Recipient),
 		createdAt,
 		updatedAt,
 	))
-	if createErr != nil {
-		if isUniqueViolation(createErr) {
-			return domain.NotificationTarget{}, repository.ErrNotificationTargetDuplicate
-		}
+	if createErr == nil {
+		return created, nil
+	}
+	if !errors.Is(createErr, sql.ErrNoRows) {
 		return domain.NotificationTarget{}, createErr
 	}
-	return created, nil
+
+	for attempt := 0; attempt < notificationConfigEmailTargetLookupAttempts; attempt++ {
+		target, err := scanNotificationTarget(r.db.QueryRowContext(
+			ctx,
+			notificationConfigEmailTargetSelectQuery,
+			string(domain.NotificationTargetTypeEmail),
+			string(domain.NotificationTargetOriginConfigDefault),
+			strings.TrimSpace(input.Recipient),
+		))
+		if err == nil {
+			return target, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return domain.NotificationTarget{}, err
+		}
+		if attempt == notificationConfigEmailTargetLookupAttempts-1 {
+			break
+		}
+		if waitErr := waitForNotificationDeliveryAcquireRetry(ctx, notificationDeliveryAcquireLookupDelay); waitErr != nil {
+			return domain.NotificationTarget{}, waitErr
+		}
+	}
+
+	return domain.NotificationTarget{}, repository.ErrNotificationTargetNotFound
 }
 
 func (r *NotificationSubscriptionRepository) SetOwnedEmailTargetEnabled(ctx context.Context, ownerUserID string, enabled bool, updatedAt time.Time) (domain.NotificationTarget, error) {
@@ -313,68 +306,9 @@ func (r *NotificationSubscriptionRepository) ensureOwnedEmailTargetTx(ctx contex
 		return domain.NotificationTarget{}, false, err
 	}
 
-	const findByRecipientQuery = `
-		SELECT ` + notificationTargetSelectColumns + `
-		FROM notification_targets
-		WHERE type = $1
-		  AND lower(recipient) = lower($2)
-		ORDER BY created_at ASC, id ASC
-		LIMIT 1
-		FOR UPDATE
-	`
-
-	target, err = scanNotificationTarget(tx.QueryRowContext(ctx, findByRecipientQuery,
-		string(domain.NotificationTargetTypeEmail),
-		strings.TrimSpace(input.Recipient),
-	))
-	if err == nil {
-		if target.OwnerUserID != nil && strings.TrimSpace(*target.OwnerUserID) != ownerUserID {
-			return domain.NotificationTarget{}, false, repository.ErrNotificationTargetOwnershipConflict
-		}
-		if target.OwnerUserID == nil {
-			const subscriptionCountQuery = `SELECT COUNT(*) FROM notification_subscriptions WHERE target_id = $1`
-			var subscriptionCount int
-			countErr := tx.QueryRowContext(ctx, subscriptionCountQuery, target.ID).Scan(&subscriptionCount)
-			if countErr != nil {
-				return domain.NotificationTarget{}, false, countErr
-			}
-			if subscriptionCount > 0 {
-				return domain.NotificationTarget{}, false, repository.ErrNotificationTargetOwnershipConflict
-			}
-
-			const claimQuery = `
-				UPDATE notification_targets
-				SET owner_user_id = $2,
-					updated_at = $3
-				WHERE id = $1
-				  AND owner_user_id IS NULL
-				RETURNING ` + notificationTargetSelectColumns + `
-			`
-			claimed, claimErr := scanNotificationTarget(tx.QueryRowContext(ctx, claimQuery,
-				target.ID,
-				ownerUserID,
-				input.UpdatedAt,
-			))
-			if claimErr != nil {
-				if errors.Is(claimErr, sql.ErrNoRows) {
-					return domain.NotificationTarget{}, false, repository.ErrNotificationTargetDuplicate
-				}
-				if isUniqueViolation(claimErr) {
-					return domain.NotificationTarget{}, false, repository.ErrNotificationTargetDuplicate
-				}
-				return domain.NotificationTarget{}, false, claimErr
-			}
-			return claimed, true, nil
-		}
-		return target, false, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return domain.NotificationTarget{}, false, err
-	}
-
 	const insertQuery = `
-		INSERT INTO notification_targets (id, owner_user_id, type, name, recipient, enabled, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO notification_targets (id, owner_user_id, type, origin, name, recipient, enabled, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING ` + notificationTargetSelectColumns + `
 	`
 
@@ -382,6 +316,7 @@ func (r *NotificationSubscriptionRepository) ensureOwnedEmailTargetTx(ctx contex
 		input.ID,
 		ownerUserID,
 		string(domain.NotificationTargetTypeEmail),
+		string(domain.NotificationTargetOriginManual),
 		strings.TrimSpace(input.Name),
 		strings.TrimSpace(input.Recipient),
 		true,
@@ -470,18 +405,25 @@ func (r *NotificationSubscriptionRepository) UpdateTarget(ctx context.Context, t
 		UPDATE notification_targets
 		SET owner_user_id = $2,
 			type = $3,
-			name = $4,
-			recipient = $5,
-			enabled = $6,
-			updated_at = $7
+			origin = $4,
+			name = $5,
+			recipient = $6,
+			enabled = $7,
+			updated_at = $8
 		WHERE id = $1
 		RETURNING ` + notificationTargetSelectColumns + `
 	`
+
+	origin := target.Origin
+	if strings.TrimSpace(string(origin)) == "" {
+		origin = domain.NotificationTargetOriginManual
+	}
 
 	updated, err := scanNotificationTarget(r.db.QueryRowContext(ctx, query,
 		strings.TrimSpace(target.ID),
 		nullableOptionalString(target.OwnerUserID),
 		string(target.Type),
+		string(origin),
 		target.Name,
 		target.Recipient,
 		target.Enabled,
@@ -658,6 +600,7 @@ const notificationSubscriptionMatchColumns = `
 	s.updated_at,
 	t.id,
 	t.type,
+	t.origin,
 	t.name,
 	t.recipient,
 	t.enabled,
@@ -714,11 +657,13 @@ func scanNotificationTarget(scanner rowScanner) (domain.NotificationTarget, erro
 	var target domain.NotificationTarget
 	var ownerUserID sql.NullString
 	var targetType string
+	var origin string
 
 	err := scanner.Scan(
 		&target.ID,
 		&ownerUserID,
 		&targetType,
+		&origin,
 		&target.Name,
 		&target.Recipient,
 		&target.Enabled,
@@ -733,6 +678,7 @@ func scanNotificationTarget(scanner rowScanner) (domain.NotificationTarget, erro
 		target.OwnerUserID = &value
 	}
 	target.Type = domain.NotificationTargetType(targetType)
+	target.Origin = domain.NotificationTargetOrigin(origin)
 	return target, nil
 }
 
@@ -785,6 +731,7 @@ func scanNotificationSubscriptionMatch(scanner rowScanner) (domain.NotificationS
 		&match.Subscription.UpdatedAt,
 		&match.Target.ID,
 		&targetType,
+		&match.Target.Origin,
 		&match.Target.Name,
 		&match.Target.Recipient,
 		&match.Target.Enabled,

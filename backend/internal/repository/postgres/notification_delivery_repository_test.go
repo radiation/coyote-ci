@@ -22,10 +22,10 @@ func TestNotificationDeliveryRepository_CreateGetAndUpdate(t *testing.T) {
 
 	repo := NewNotificationDeliveryRepository(db)
 	now := time.Now().UTC()
-	row := []string{"created", "id", "build_id", "event_type", "transport", "destination_kind", "destination_key", "notification_target_id", "recipient_user_id", "slack_workspace_integration_id", "recipient", "status", "attempts", "last_error", "created_at", "updated_at", "sent_at"}
+	row := []string{"id", "build_id", "event_type", "transport", "destination_kind", "destination_key", "notification_target_id", "recipient_user_id", "slack_workspace_integration_id", "recipient", "status", "attempts", "last_error", "created_at", "updated_at", "sent_at"}
 
 	mock.ExpectQuery("INSERT INTO notification_deliveries").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		true, "delivery-1", "build-1", "build_failed", "email", "shared_target", "email-target:target-1", "target-1", nil, nil, "<dev@example.com>", "pending", 0, nil, now, now, nil,
+		"delivery-1", "build-1", "build_failed", "email", "shared_target", "email-target:target-1", "target-1", nil, nil, "<dev@example.com>", "pending", 0, nil, now, now, nil,
 	))
 
 	created, err := repo.Create(context.Background(), domain.NotificationDelivery{
@@ -46,8 +46,9 @@ func TestNotificationDeliveryRepository_CreateGetAndUpdate(t *testing.T) {
 		t.Fatalf("expected pending status, got %q", created.Status)
 	}
 
-	mock.ExpectQuery("INSERT INTO notification_deliveries").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		false, "delivery-1", "build-1", "build_failed", "email", "shared_target", "email-target:target-1", "target-1", nil, nil, "<dev@example.com>", "pending", 0, nil, now, now, nil,
+	mock.ExpectQuery("INSERT INTO notification_deliveries").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT id, build_id, event_type, transport, destination_kind, destination_key, notification_target_id::text, recipient_user_id::text, slack_workspace_integration_id::text, recipient, status, attempts, last_error, created_at, updated_at, sent_at").WillReturnRows(sqlmock.NewRows(row).AddRow(
+		"delivery-1", "build-1", "build_failed", "email", "shared_target", "email-target:target-1", "target-1", nil, nil, "<dev@example.com>", "pending", 0, nil, now, now, nil,
 	))
 	_, err = repo.Create(context.Background(), domain.NotificationDelivery{
 		BuildID:              "build-1",
@@ -132,6 +133,20 @@ func TestNotificationDeliveryRepository_ErrorCasesAndSentAtScan(t *testing.T) {
 	})
 	if err == nil || err.Error() != "insert failed" {
 		t.Fatalf("expected raw create error, got %v", err)
+	}
+
+	mock.ExpectQuery("INSERT INTO notification_deliveries").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT id, build_id, event_type, transport, destination_kind, destination_key, notification_target_id::text, recipient_user_id::text, slack_workspace_integration_id::text, recipient, status, attempts, last_error, created_at, updated_at, sent_at").WillReturnError(errors.New("select after conflict failed"))
+	_, err = repo.Acquire(context.Background(), domain.NotificationDelivery{
+		BuildID:         "build-1",
+		EventType:       domain.NotificationEventTypeBuildFailed,
+		Transport:       domain.NotificationTransportEmail,
+		DestinationKind: domain.NotificationDestinationKindSharedTarget,
+		DestinationKey:  "email-target:target-1",
+		Recipient:       "<dev@example.com>",
+	})
+	if err == nil || err.Error() != "select after conflict failed" {
+		t.Fatalf("expected post-conflict select error, got %v", err)
 	}
 
 	mock.ExpectQuery("SELECT id, build_id, event_type, transport, destination_kind, destination_key, notification_target_id::text, recipient_user_id::text, slack_workspace_integration_id::text, recipient, status, attempts, last_error, created_at, updated_at, sent_at").WillReturnError(sql.ErrNoRows)

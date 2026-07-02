@@ -75,9 +75,12 @@ func TestNotificationSubscriptionRepository_CreateAndListMatches(t *testing.T) {
 		t.Fatalf("unexpected recipient %q", matches[0].Target.Recipient)
 	}
 
-	_, err = repo.CreateTarget(context.Background(), domain.NotificationTarget{Type: domain.NotificationTargetTypeEmail, Recipient: "dev@example.com", Enabled: true})
-	if !errors.Is(err, repository.ErrNotificationTargetDuplicate) {
-		t.Fatalf("expected duplicate target error, got %v", err)
+	duplicateShared, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{Type: domain.NotificationTargetTypeEmail, Recipient: "dev@example.com", Enabled: true})
+	if err != nil {
+		t.Fatalf("expected duplicate-address shared target to be allowed, got %v", err)
+	}
+	if duplicateShared.ID == target.ID {
+		t.Fatalf("expected duplicate-address shared target to have a distinct id, got %q", duplicateShared.ID)
 	}
 
 	_, err = repo.CreateSubscription(context.Background(), domain.NotificationSubscription{TargetID: target.ID, ProjectID: &projectID, EventType: domain.NotificationEventTypeBuildFailed, Enabled: true})
@@ -467,19 +470,22 @@ func TestNotificationSubscriptionRepository_OwnedEmailTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim target failed: %v", err)
 	}
-	if claimed.ID != claimable.ID {
-		t.Fatalf("expected claimed target id %q, got %q", claimable.ID, claimed.ID)
+	if claimed.ID != "claimed-target" {
+		t.Fatalf("expected a distinct owned target id, got %q", claimed.ID)
 	}
 	if claimed.OwnerUserID == nil || *claimed.OwnerUserID != "user-1" {
 		t.Fatalf("expected claimed owner user-1, got %+v", claimed.OwnerUserID)
+	}
+	if claimed.ID == claimable.ID {
+		t.Fatalf("expected personal target to remain distinct from shared target, got %q", claimed.ID)
 	}
 
 	fetched, err := repo.GetOwnedEmailTargetByUserID(ctx, " user-1 ")
 	if err != nil {
 		t.Fatalf("get owned target failed: %v", err)
 	}
-	if fetched.ID != claimable.ID {
-		t.Fatalf("expected fetched owned target id %q, got %q", claimable.ID, fetched.ID)
+	if fetched.ID != claimed.ID {
+		t.Fatalf("expected fetched owned target id %q, got %q", claimed.ID, fetched.ID)
 	}
 
 	again, err := repo.EnsureOwnedEmailTarget(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
@@ -493,8 +499,8 @@ func TestNotificationSubscriptionRepository_OwnedEmailTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-ensure owned target failed: %v", err)
 	}
-	if again.ID != claimable.ID {
-		t.Fatalf("expected idempotent owned target id %q, got %q", claimable.ID, again.ID)
+	if again.ID != claimed.ID {
+		t.Fatalf("expected idempotent owned target id %q, got %q", claimed.ID, again.ID)
 	}
 
 	otherOwner := "other-user"
@@ -508,15 +514,21 @@ func TestNotificationSubscriptionRepository_OwnedEmailTargets(t *testing.T) {
 		t.Fatalf("create conflicting owned target failed: %v", err)
 	}
 
-	_, err = repo.EnsureOwnedEmailTarget(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+	secondOwned, err := repo.EnsureOwnedEmailTarget(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
 		OwnerUserID: "user-2",
 		Name:        "User Two",
 		Recipient:   conflictingOwned.Recipient,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	})
-	if !errors.Is(err, repository.ErrNotificationTargetOwnershipConflict) {
-		t.Fatalf("expected owned target conflict, got %v", err)
+	if err != nil {
+		t.Fatalf("expected distinct owned target to be created, got %v", err)
+	}
+	if secondOwned.OwnerUserID == nil || *secondOwned.OwnerUserID != "user-2" {
+		t.Fatalf("expected distinct owned target for user-2, got %+v", secondOwned.OwnerUserID)
+	}
+	if secondOwned.ID == conflictingOwned.ID {
+		t.Fatalf("expected owned targets with the same address to remain distinct, got %q", secondOwned.ID)
 	}
 
 	sharedWithSubscription, err := repo.CreateTarget(ctx, domain.NotificationTarget{
@@ -538,15 +550,18 @@ func TestNotificationSubscriptionRepository_OwnedEmailTargets(t *testing.T) {
 		t.Fatalf("create shared target subscription failed: %v", err)
 	}
 
-	_, err = repo.EnsureOwnedEmailTarget(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
+	ownedFromSubscribedAddress, err := repo.EnsureOwnedEmailTarget(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
 		OwnerUserID: "user-3",
 		Name:        "User Three",
 		Recipient:   sharedWithSubscription.Recipient,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	})
-	if !errors.Is(err, repository.ErrNotificationTargetOwnershipConflict) {
-		t.Fatalf("expected subscribed shared target conflict, got %v", err)
+	if err != nil {
+		t.Fatalf("expected subscribed shared target address to remain claim-independent, got %v", err)
+	}
+	if ownedFromSubscribedAddress.ID == sharedWithSubscription.ID {
+		t.Fatalf("expected shared subscribed target and owned target to remain distinct, got %q", ownedFromSubscribedAddress.ID)
 	}
 
 	created, err := repo.EnsureOwnedEmailTarget(ctx, repository.EnsureOwnedNotificationEmailTargetInput{
@@ -837,9 +852,12 @@ func TestNotificationSubscriptionRepository_ListAndUpdateAdminViews(t *testing.T
 	duplicateTarget := targetOne
 	duplicateTarget.Recipient = targetTwo.Recipient
 	duplicateTarget.UpdatedAt = createdAt.Add(4 * time.Minute)
-	_, updateTargetDuplicateErr := repo.UpdateTarget(ctx, duplicateTarget)
-	if !errors.Is(updateTargetDuplicateErr, repository.ErrNotificationTargetDuplicate) {
-		t.Fatalf("expected update target duplicate error, got %v", updateTargetDuplicateErr)
+	updatedDuplicateRecipient, updateTargetDuplicateErr := repo.UpdateTarget(ctx, duplicateTarget)
+	if updateTargetDuplicateErr != nil {
+		t.Fatalf("expected manual shared target duplicate address to be allowed, got %v", updateTargetDuplicateErr)
+	}
+	if updatedDuplicateRecipient.Recipient != targetTwo.Recipient {
+		t.Fatalf("expected duplicate shared recipient to be preserved, got %+v", updatedDuplicateRecipient)
 	}
 
 	allSubs, err := repo.ListSubscriptions(ctx, repository.NotificationSubscriptionListFilter{})
@@ -1019,8 +1037,11 @@ func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized(t 
 	if err != nil {
 		t.Fatalf("claim legacy target with backfill failed: %v", err)
 	}
-	if claimedLegacy.ID != claimableLegacy.ID {
-		t.Fatalf("expected claimed legacy target id %q, got %q", claimableLegacy.ID, claimedLegacy.ID)
+	if claimedLegacy.ID != "ignored-legacy-claim-id" {
+		t.Fatalf("expected distinct owned legacy target id, got %q", claimedLegacy.ID)
+	}
+	if claimedLegacy.ID == claimableLegacy.ID {
+		t.Fatalf("expected legacy shared target and owned target to remain distinct, got %q", claimedLegacy.ID)
 	}
 	backfilledPreference, err := preferences.GetByUserID(ctx, "legacy-claimed-user")
 	if err != nil {

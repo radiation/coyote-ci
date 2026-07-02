@@ -18,6 +18,12 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"../../../db/migrations/00017_add_artifact_packages.sql",
 		"../../../db/migrations/00020_add_notification_deliveries.sql",
 		"../../../db/migrations/00021_add_notification_targets_and_subscriptions.sql",
+		"../../../db/migrations/00023_expand_notification_targets_for_slack_webhooks.sql",
+		"../../../db/migrations/00024_add_notification_target_owner_user.sql",
+		"../../../db/migrations/00028_add_slack_workspace_integrations.sql",
+		"../../../db/migrations/00029_rename_slack_workspace_bot_user_id_to_bot_id.sql",
+		"../../../db/migrations/00030_add_user_slack_identities.sql",
+		"../../../db/migrations/00032_refactor_notification_delivery_identity.sql",
 	}
 
 	var builder strings.Builder
@@ -72,10 +78,13 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS artifact_versions",
 		"CREATE TABLE IF NOT EXISTS artifact_channels",
 		"CREATE TABLE IF NOT EXISTS notification_deliveries",
-		"notification_deliveries_build_event_recipient_key",
+		"notification_deliveries_build_event_transport_destination_key_key",
 		"idx_notification_deliveries_build_id",
 		"CREATE TABLE IF NOT EXISTS notification_targets",
-		"notification_targets_type_recipient_key",
+		"origin TEXT",
+		"notification_targets_config_default_email_recipient_key",
+		"CREATE TABLE IF NOT EXISTS slack_workspace_integrations",
+		"CREATE TABLE IF NOT EXISTS user_slack_identities",
 		"CREATE TABLE IF NOT EXISTS notification_subscriptions",
 		"notification_subscriptions_target_event_project_key",
 		"notification_subscriptions_target_event_job_key",
