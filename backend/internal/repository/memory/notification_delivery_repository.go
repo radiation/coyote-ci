@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -128,6 +129,53 @@ func (r *NotificationDeliveryRepository) AcquireForDelivery(ctx context.Context,
 		Delivery: delivery,
 		Outcome:  repository.NotificationDeliveryClaimOutcomeCreatedClaimed,
 	}, nil
+}
+
+func (r *NotificationDeliveryRepository) ListRecoverable(ctx context.Context, input repository.NotificationDeliveryRecoverableScanInput) ([]domain.NotificationDelivery, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	now := input.Now.UTC()
+	if now.IsZero() {
+		return nil, errors.New("notification delivery recoverable scan time is required")
+	}
+	if input.Limit <= 0 {
+		return nil, errors.New("notification delivery recoverable scan limit must be positive")
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	type candidate struct {
+		delivery domain.NotificationDelivery
+		dueAt    time.Time
+	}
+	candidates := make([]candidate, 0, len(r.deliveries))
+	for _, delivery := range r.deliveries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		dueAt, ok := notificationDeliveryRecoverableDueAt(delivery, now)
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, candidate{delivery: delivery, dueAt: dueAt})
+	}
+
+	sort.Slice(candidates, func(i int, j int) bool {
+		if !candidates[i].dueAt.Equal(candidates[j].dueAt) {
+			return candidates[i].dueAt.Before(candidates[j].dueAt)
+		}
+		return candidates[i].delivery.ID < candidates[j].delivery.ID
+	})
+	if len(candidates) > input.Limit {
+		candidates = candidates[:input.Limit]
+	}
+	result := make([]domain.NotificationDelivery, 0, len(candidates))
+	for _, candidate := range candidates {
+		result = append(result, candidate.delivery)
+	}
+	return result, nil
 }
 
 func (r *NotificationDeliveryRepository) GetByBuildEventRecipient(ctx context.Context, buildID string, eventType domain.NotificationEventType, recipient string) (domain.NotificationDelivery, error) {
@@ -392,4 +440,22 @@ func trimMemoryNotificationOptionalString(value *string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func notificationDeliveryRecoverableDueAt(delivery domain.NotificationDelivery, now time.Time) (time.Time, bool) {
+	delivery = delivery.Normalize()
+	switch delivery.Status {
+	case domain.NotificationDeliveryStatusRetryWaiting:
+		if delivery.NextAttemptAt == nil || delivery.NextAttemptAt.After(now) {
+			return time.Time{}, false
+		}
+		return delivery.NextAttemptAt.UTC(), true
+	case domain.NotificationDeliveryStatusSending:
+		if delivery.ClaimExpiresAt == nil || delivery.ClaimExpiresAt.After(now) {
+			return time.Time{}, false
+		}
+		return delivery.ClaimExpiresAt.UTC(), true
+	default:
+		return time.Time{}, false
+	}
 }

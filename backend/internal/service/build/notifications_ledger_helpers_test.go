@@ -40,12 +40,12 @@ func TestBuildNotificationService_MarkDeliveryFailedRoutesPersistence(t *testing
 			},
 		}
 
-		persisted, err := service.markDeliveryFailed(context.Background(), base, errors.New("smtp unavailable"), now)
+		outcome, err := service.markDeliveryFailed(context.Background(), base, errors.New("smtp unavailable"), now, notificationRecoveryReasonInline)
 		if err != nil {
 			t.Fatalf("expected retryable failure to persist, got %v", err)
 		}
-		if !persisted {
-			t.Fatal("expected retryable failure to be persisted")
+		if outcome != notificationExecutionOutcomeRetryScheduled {
+			t.Fatalf("expected retryable failure to schedule retry, got %q", outcome)
 		}
 		if got.FailureCategory != domain.NotificationDeliveryFailureCategoryRetryable || got.FailureReason != "email_send_failed" {
 			t.Fatalf("unexpected retryable failure input: %+v", got)
@@ -74,12 +74,12 @@ func TestBuildNotificationService_MarkDeliveryFailedRoutesPersistence(t *testing
 			},
 		}
 
-		persisted, err := service.markDeliveryFailed(context.Background(), delivery, errors.New("smtp unavailable"), now)
+		outcome, err := service.markDeliveryFailed(context.Background(), delivery, errors.New("smtp unavailable"), now, notificationRecoveryReasonInline)
 		if err != nil {
 			t.Fatalf("expected exhausted failure to persist, got %v", err)
 		}
-		if !persisted || !called {
-			t.Fatalf("expected exhausted retry path to be used, persisted=%t called=%t", persisted, called)
+		if outcome != notificationExecutionOutcomeAttemptsExhausted || !called {
+			t.Fatalf("expected exhausted retry path to be used, outcome=%q called=%t", outcome, called)
 		}
 	})
 
@@ -97,12 +97,12 @@ func TestBuildNotificationService_MarkDeliveryFailedRoutesPersistence(t *testing
 			},
 		}
 
-		persisted, err := service.markDeliveryFailed(context.Background(), base, platformemail.ErrInvalidMessage, now)
+		outcome, err := service.markDeliveryFailed(context.Background(), base, platformemail.ErrInvalidMessage, now, notificationRecoveryReasonInline)
 		if err != nil {
 			t.Fatalf("expected permanent failure to persist, got %v", err)
 		}
-		if !persisted {
-			t.Fatal("expected permanent failure to be persisted")
+		if outcome != notificationExecutionOutcomePermanentlyFailed {
+			t.Fatalf("expected permanent failure outcome, got %q", outcome)
 		}
 		if got.FailureCategory != domain.NotificationDeliveryFailureCategoryPermanent || got.FailureReason != "invalid_email_message" {
 			t.Fatalf("unexpected permanent failure input: %+v", got)
@@ -122,12 +122,35 @@ func TestBuildNotificationService_MarkDeliveryFailedRoutesPersistence(t *testing
 			},
 		}
 
-		persisted, err := service.markDeliveryFailed(context.Background(), base, platformemail.ErrInvalidMessage, now)
+		outcome, err := service.markDeliveryFailed(context.Background(), base, platformemail.ErrInvalidMessage, now, notificationRecoveryReasonInline)
 		if err != nil {
 			t.Fatalf("expected lost-claim failure path without error, got %v", err)
 		}
-		if persisted {
-			t.Fatal("expected lost-claim failure path not to persist")
+		if outcome != notificationExecutionOutcomeLostClaim {
+			t.Fatalf("expected lost-claim outcome, got %q", outcome)
+		}
+	})
+
+	t.Run("non-ledger send handles provider errors without persistence", func(t *testing.T) {
+		sender := &recordingEmailSender{err: errors.New("smtp unavailable")}
+		service := &BuildNotificationService{
+			enabled: true,
+			sender:  sender,
+		}
+		destinations := []notificationDestination{{
+			transport:       domain.NotificationTransportEmail,
+			destinationKind: domain.NotificationDestinationKindSharedTarget,
+			destinationKey:  "email-target:target-1",
+			recipient:       "<dev@example.com>",
+			emailRecipient:  "dev@example.com",
+		}}
+
+		err := service.sendTerminalNotification(context.Background(), "build-1", domain.NotificationEventTypeBuildFailed, destinations, "subject", "body", "slack", "personal slack")
+		if err == nil || !strings.Contains(err.Error(), "smtp unavailable") {
+			t.Fatalf("expected provider error, got %v", err)
+		}
+		if len(sender.messages) != 1 {
+			t.Fatalf("expected one direct send attempt, got %d", len(sender.messages))
 		}
 	})
 }
@@ -156,9 +179,9 @@ func TestBuildNotificationService_MarkDeliverySentAndCancellationBranches(t *tes
 		service := &BuildNotificationService{claimOwner: "worker-a", deliveryRepo: &scriptedNotificationDeliveryRepo{}}
 		missing := delivery
 		missing.ClaimedAt = nil
-		persisted, err := service.markDeliverySent(context.Background(), missing, now)
-		if persisted || err == nil || !strings.Contains(err.Error(), "claim timestamp is required") {
-			t.Fatalf("expected missing claim timestamp error, got persisted=%t err=%v", persisted, err)
+		outcome, err := service.markDeliverySent(context.Background(), missing, now, notificationRecoveryReasonInline)
+		if outcome != notificationExecutionOutcomeNone || err == nil || !strings.Contains(err.Error(), "claim timestamp is required") {
+			t.Fatalf("expected missing claim timestamp error, got outcome=%q err=%v", outcome, err)
 		}
 	})
 
@@ -173,12 +196,12 @@ func TestBuildNotificationService_MarkDeliverySentAndCancellationBranches(t *tes
 				},
 			},
 		}
-		persisted, err := service.markDeliverySent(context.Background(), delivery, now)
+		outcome, err := service.markDeliverySent(context.Background(), delivery, now, notificationRecoveryReasonInline)
 		if err != nil {
 			t.Fatalf("expected lost-claim mark sent path without error, got %v", err)
 		}
-		if persisted {
-			t.Fatal("expected lost-claim mark sent path not to persist")
+		if outcome != notificationExecutionOutcomeLostClaim {
+			t.Fatalf("expected lost-claim outcome, got %q", outcome)
 		}
 	})
 

@@ -60,6 +60,7 @@ func (c *recordingSlackDMClient) PostDirectMessage(_ context.Context, token stri
 
 type scriptedNotificationDeliveryRepo struct {
 	acquireFunc                func(context.Context, repository.NotificationDeliveryClaimInput) (repository.NotificationDeliveryClaimResult, error)
+	listRecoverableFunc        func(context.Context, repository.NotificationDeliveryRecoverableScanInput) ([]domain.NotificationDelivery, error)
 	markSentFunc               func(context.Context, repository.NotificationDeliveryMarkSentInput) (repository.NotificationDeliveryUpdateResult, error)
 	recordRetryableFailureFunc func(context.Context, repository.NotificationDeliveryRecordFailureInput) (repository.NotificationDeliveryUpdateResult, error)
 	recordPermanentFailureFunc func(context.Context, repository.NotificationDeliveryRecordFailureInput) (repository.NotificationDeliveryUpdateResult, error)
@@ -103,6 +104,13 @@ func (r *scriptedNotificationDeliveryRepo) AcquireForDelivery(ctx context.Contex
 		return repository.NotificationDeliveryClaimResult{Delivery: created, Outcome: repository.NotificationDeliveryClaimOutcomeCreatedClaimed}, nil
 	}
 	return repository.NotificationDeliveryClaimResult{}, nil
+}
+
+func (r *scriptedNotificationDeliveryRepo) ListRecoverable(ctx context.Context, input repository.NotificationDeliveryRecoverableScanInput) ([]domain.NotificationDelivery, error) {
+	if r.listRecoverableFunc != nil {
+		return r.listRecoverableFunc(ctx, input)
+	}
+	return nil, nil
 }
 
 func (r *scriptedNotificationDeliveryRepo) MarkSent(ctx context.Context, input repository.NotificationDeliveryMarkSentInput) (repository.NotificationDeliveryUpdateResult, error) {

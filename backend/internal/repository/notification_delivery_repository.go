@@ -37,6 +37,11 @@ type NotificationDeliveryClaimResult struct {
 	Outcome  NotificationDeliveryClaimOutcome
 }
 
+type NotificationDeliveryRecoverableScanInput struct {
+	Now   time.Time
+	Limit int
+}
+
 type NotificationDeliveryUpdateOutcome string
 
 const (
@@ -69,6 +74,7 @@ type NotificationDeliveryRecordFailureInput struct {
 
 type NotificationDeliveryRepository interface {
 	AcquireForDelivery(ctx context.Context, input NotificationDeliveryClaimInput) (NotificationDeliveryClaimResult, error)
+	ListRecoverable(ctx context.Context, input NotificationDeliveryRecoverableScanInput) ([]domain.NotificationDelivery, error)
 	MarkSent(ctx context.Context, input NotificationDeliveryMarkSentInput) (NotificationDeliveryUpdateResult, error)
 	RecordRetryableFailure(ctx context.Context, input NotificationDeliveryRecordFailureInput) (NotificationDeliveryUpdateResult, error)
 	RecordPermanentFailure(ctx context.Context, input NotificationDeliveryRecordFailureInput) (NotificationDeliveryUpdateResult, error)

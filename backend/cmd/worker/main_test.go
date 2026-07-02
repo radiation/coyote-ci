@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/observability"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
@@ -322,6 +323,7 @@ func TestLogEmailNotificationConfig(t *testing.T) {
 }
 
 func TestNewWorkerNotificationService(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
 	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
 	userRepo := repositorymemory.NewUserRepository()
@@ -330,12 +332,13 @@ func TestNewWorkerNotificationService(t *testing.T) {
 	workspaceRepo := repositorymemory.NewSlackWorkspaceIntegrationRepository()
 	deliveryRepo := repositorymemory.NewNotificationDeliveryRepository()
 	subscriptionRepo := repositorymemory.NewNotificationSubscriptionRepository()
+	metrics := observability.NewNoopNotificationDeliveryMetrics()
 
 	t.Run("disabled ignores invalid recipients", func(t *testing.T) {
 		notifier, err := newWorkerNotificationService(config.Config{
 			EmailNotificationsEnabled:   false,
 			EmailNotificationRecipients: "not-an-email",
-		}, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo)
+		}, buildRepo, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo, metrics)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -349,7 +352,7 @@ func TestNewWorkerNotificationService(t *testing.T) {
 			EmailNotificationsEnabled: true,
 			SMTPHost:                  "mailpit",
 			SMTPPort:                  "1025",
-		}, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo)
+		}, buildRepo, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo, metrics)
 		if !errors.Is(err, errConfigureEmailSender) {
 			t.Fatalf("expected sender configuration error, got %v", err)
 		}
@@ -362,7 +365,7 @@ func TestNewWorkerNotificationService(t *testing.T) {
 			SMTPHost:                    "mailpit",
 			SMTPPort:                    "1025",
 			SMTPFromAddress:             "coyote-ci@localhost",
-		}, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo)
+		}, buildRepo, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo, metrics)
 		if err == nil || errors.Is(err, errConfigureEmailSender) {
 			t.Fatalf("expected recipient validation error, got %v", err)
 		}
@@ -370,6 +373,7 @@ func TestNewWorkerNotificationService(t *testing.T) {
 }
 
 func TestBuildWorkerNotificationService(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
 	jobRepo := repositorymemory.NewJobRepository()
 	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
 	userRepo := repositorymemory.NewUserRepository()
@@ -378,10 +382,11 @@ func TestBuildWorkerNotificationService(t *testing.T) {
 	workspaceRepo := repositorymemory.NewSlackWorkspaceIntegrationRepository()
 	deliveryRepo := repositorymemory.NewNotificationDeliveryRepository()
 	subscriptionRepo := repositorymemory.NewNotificationSubscriptionRepository()
+	metrics := observability.NewNoopNotificationDeliveryMetrics()
 
 	t.Run("returns notifier on success", func(t *testing.T) {
 		called := false
-		notifier := buildWorkerNotificationService(config.Config{EmailNotificationsEnabled: false}, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo, func(string, ...any) {
+		notifier := buildWorkerNotificationService(config.Config{EmailNotificationsEnabled: false}, buildRepo, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo, metrics, func(string, ...any) {
 			called = true
 		})
 		if called {
@@ -398,7 +403,7 @@ func TestBuildWorkerNotificationService(t *testing.T) {
 			EmailNotificationsEnabled: true,
 			SMTPHost:                  "mailpit",
 			SMTPPort:                  "1025",
-		}, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo, func(format string, args ...any) {
+		}, buildRepo, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo, metrics, func(format string, args ...any) {
 			message = fmt.Sprintf(format, args...)
 		})
 		if notifier != nil {
@@ -417,7 +422,7 @@ func TestBuildWorkerNotificationService(t *testing.T) {
 			SMTPHost:                    "mailpit",
 			SMTPPort:                    "1025",
 			SMTPFromAddress:             "coyote-ci@localhost",
-		}, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo, func(format string, args ...any) {
+		}, buildRepo, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo, metrics, func(format string, args ...any) {
 			message = fmt.Sprintf(format, args...)
 		})
 		if notifier != nil {

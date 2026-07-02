@@ -8,7 +8,10 @@ import (
 	"log"
 	nethttp "net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	docs "github.com/radiation/coyote-ci/backend/docs"
@@ -105,12 +108,14 @@ func main() {
 	userSlackIdentityRepo := repositorypostgres.NewUserSlackIdentityRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	workerRepo := repositorypostgres.NewWorkerRepository(db)
+	notificationMetrics := observability.NewExpvarNotificationDeliveryMetrics()
 	buildNotificationService, buildNotificationErr := buildsvc.NewBuildNotificationService(buildsvc.BuildNotificationConfig{
 		Enabled:          cfg.EmailNotificationsEnabled,
 		Recipients:       cfg.EmailNotificationRecipients,
 		Sender:           emailSender,
 		SlackSender:      buildsvc.NewSlackWebhookSender(nil),
 		SlackClient:      platformslack.NewClient(nil),
+		BuildRepo:        buildRepo,
 		JobRepo:          jobRepo,
 		ProjectRepo:      projectRepo,
 		DeliveryRepo:     notificationDeliveryRepo,
@@ -121,9 +126,18 @@ func main() {
 		WorkspaceRepo:    slackWorkspaceIntegrationRepo,
 		PublicBaseURL:    cfg.PublicURL,
 		ClaimOwner:       defaultServerNotificationClaimOwner(),
+		DeliveryMetrics:  notificationMetrics,
 	})
 	if buildNotificationErr != nil {
 		log.Fatalf("failed to configure build notifications: %v", buildNotificationErr)
+	}
+	notificationRecoveryDrain, notificationRecoveryErr := buildsvc.NewNotificationRecoveryDrain(buildsvc.NotificationRecoveryDrainConfig{
+		Notifier:  buildNotificationService,
+		Interval:  cfg.NotificationRecoveryInterval,
+		BatchSize: cfg.NotificationRecoveryBatchSize,
+	})
+	if notificationRecoveryErr != nil {
+		log.Fatalf("failed to configure notification recovery drain: %v", notificationRecoveryErr)
 	}
 	managedImageRefresher := managedimagesvc.NewService(
 		source.NewGitFetcher(),
@@ -306,10 +320,30 @@ func main() {
 
 	addr := ":" + cfg.AppPort
 	log.Printf("starting server on %s", addr)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	server := &nethttp.Server{Addr: addr, Handler: mux}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := notificationRecoveryDrain.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("notification recovery drain stopped with error: %v", err)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("server shutdown error: %v", err)
+		}
+	}()
 
-	if err := nethttp.ListenAndServe(addr, mux); err != nil {
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, nethttp.ErrServerClosed) {
 		log.Fatalf("server failed: %v", err)
 	}
+	wg.Wait()
 }
 
 func defaultServerNotificationClaimOwner() string {

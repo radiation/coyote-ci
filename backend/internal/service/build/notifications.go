@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/observability"
 	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
 	platformslack "github.com/radiation/coyote-ci/backend/internal/platform/slack"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -26,6 +27,7 @@ type BuildNotificationService struct {
 	sender            platformemail.Sender
 	slackSender       SlackWebhookSender
 	slackClient       slackDirectMessageClient
+	buildRepo         repository.BuildRepository
 	jobRepo           repository.JobRepository
 	projectRepo       repository.ProjectRepository
 	deliveryRepo      repository.NotificationDeliveryRepository
@@ -37,6 +39,7 @@ type BuildNotificationService struct {
 	publicBaseURL     string
 	claimOwner        string
 	claimDuration     time.Duration
+	deliveryMetrics   observability.NotificationDeliveryMetrics
 	now               func() time.Time
 	retryPolicy       notificationRetryPolicy
 }
@@ -47,6 +50,7 @@ type BuildNotificationConfig struct {
 	Sender           platformemail.Sender
 	SlackSender      SlackWebhookSender
 	SlackClient      slackDirectMessageClient
+	BuildRepo        repository.BuildRepository
 	JobRepo          repository.JobRepository
 	ProjectRepo      repository.ProjectRepository
 	DeliveryRepo     repository.NotificationDeliveryRepository
@@ -58,6 +62,7 @@ type BuildNotificationConfig struct {
 	PublicBaseURL    string
 	ClaimOwner       string
 	ClaimDuration    time.Duration
+	DeliveryMetrics  observability.NotificationDeliveryMetrics
 }
 
 type notificationDestination struct {
@@ -124,6 +129,7 @@ func NewBuildNotificationService(cfg BuildNotificationConfig) (*BuildNotificatio
 		sender:            cfg.Sender,
 		slackSender:       cfg.SlackSender,
 		slackClient:       cfg.SlackClient,
+		buildRepo:         cfg.BuildRepo,
 		jobRepo:           cfg.JobRepo,
 		projectRepo:       cfg.ProjectRepo,
 		deliveryRepo:      cfg.DeliveryRepo,
@@ -135,6 +141,7 @@ func NewBuildNotificationService(cfg BuildNotificationConfig) (*BuildNotificatio
 		publicBaseURL:     strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/"),
 		claimOwner:        notificationClaimOwner(cfg.ClaimOwner),
 		claimDuration:     claimDuration,
+		deliveryMetrics:   deliveryMetricsOrNoop(cfg.DeliveryMetrics),
 		now:               func() time.Time { return time.Now().UTC() },
 		retryPolicy:       defaultNotificationRetryPolicy(),
 	}, nil
@@ -234,64 +241,34 @@ func (s *BuildNotificationService) send(ctx context.Context, recipients []string
 
 func (s *BuildNotificationService) sendTerminalNotification(ctx context.Context, buildID string, eventType domain.NotificationEventType, destinations []notificationDestination, subject string, body string, slackText string, personalSlackText string) error {
 	var sendErrs []error
+	content := notificationContent{
+		subject:           subject,
+		body:              body,
+		slackText:         slackText,
+		personalSlackText: personalSlackText,
+	}
 
 	for _, destination := range destinations {
-		var delivery domain.NotificationDelivery
-		shouldSend := true
-		var err error
-		if s.deliveryRepo != nil {
-			delivery, shouldSend, err = s.prepareDelivery(ctx, buildID, eventType, destination)
-			if err != nil {
-				return err
+		if s.deliveryRepo == nil {
+			if sendErr := s.sendDestination(ctx, destination, content.subject, content.body, content.slackText, content.personalSlackText); sendErr != nil {
+				sendErrs = append(sendErrs, sendErr)
 			}
+			continue
+		}
+
+		var delivery domain.NotificationDelivery
+		var shouldSend bool
+		var err error
+		delivery, shouldSend, err = s.prepareDelivery(ctx, buildID, eventType, destination)
+		if err != nil {
+			return err
 		}
 		if !shouldSend {
 			continue
 		}
-
-		sendErr := s.sendDestination(ctx, destination, subject, body, slackText, personalSlackText)
-		attemptedAt := time.Now().UTC()
-		if sendErr != nil {
-			if s.deliveryRepo != nil {
-				if errors.Is(sendErr, context.Canceled) || errors.Is(sendErr, context.DeadlineExceeded) {
-					// Cancellation is ambiguous: the provider may have accepted the message,
-					// so the claim stays active until it expires and stale-claim recovery can decide later.
-					log.Printf("build notification claim left active for stale recovery: delivery_id=%s build_id=%s event_type=%s transport=%s destination_kind=%s claim_owner=%s attempt=%d reason=context_canceled", delivery.ID, buildID, eventType, destination.transport, destination.destinationKind, s.claimOwner, delivery.Attempts)
-					sendErrs = append(sendErrs, sendErr)
-					continue
-				}
-				persisted, updateErr := s.markDeliveryFailed(ctx, delivery, sendErr, attemptedAt)
-				if updateErr != nil {
-					sendErrs = append(sendErrs, errors.Join(sendErr, updateErr))
-					continue
-				}
-				if !persisted {
-					continue
-				}
-			}
-			sendErrs = append(sendErrs, sendErr)
+		if _, executeErr := s.executeClaimedDelivery(ctx, delivery, destination, content, notificationRecoveryReasonInline); executeErr != nil {
+			sendErrs = append(sendErrs, executeErr)
 			continue
-		}
-		if s.deliveryRepo != nil {
-			updateErr := func() error {
-				persisted, markErr := s.markDeliverySent(ctx, delivery, attemptedAt)
-				if markErr != nil {
-					return markErr
-				}
-				if !persisted {
-					return nil
-				}
-				return nil
-			}()
-			if updateErr != nil {
-				persistErr := fmt.Errorf("persist sent delivery state failed: %w", updateErr)
-				if _, markErr := s.markDeliveryFailed(ctx, delivery, persistErr, attemptedAt); markErr != nil {
-					sendErrs = append(sendErrs, errors.Join(persistErr, markErr))
-					continue
-				}
-				sendErrs = append(sendErrs, persistErr)
-				continue
-			}
 		}
 	}
 
@@ -361,7 +338,7 @@ func (s *BuildNotificationService) resolveCommitAuthorDestinations(ctx context.C
 	user, err := s.userRepo.GetByEmail(ctx, authorEmail)
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
-			log.Printf("build notification skipped commit author recipient: build_id=%s reason=author_unmatched email=%s", build.ID, authorEmail)
+			log.Printf("build notification skipped commit author recipient: build_id=%s reason=author_unmatched", build.ID)
 			return nil, nil
 		}
 		return nil, err
@@ -502,17 +479,35 @@ func (s *BuildNotificationService) sendDestination(ctx context.Context, destinat
 }
 
 func (s *BuildNotificationService) prepareDelivery(ctx context.Context, buildID string, eventType domain.NotificationEventType, destination notificationDestination) (domain.NotificationDelivery, bool, error) {
+	result, shouldSend, err := s.acquireDelivery(ctx, domain.NotificationDelivery{
+		BuildID:                     buildID,
+		EventType:                   eventType,
+		Transport:                   destination.transport,
+		DestinationKind:             destination.destinationKind,
+		DestinationKey:              destination.destinationKey,
+		NotificationTargetID:        destination.notificationTargetID,
+		RecipientUserID:             destination.recipientUserID,
+		SlackWorkspaceIntegrationID: destination.slackWorkspaceIntegrationID,
+		Recipient:                   destination.recipient,
+	}, notificationRecoveryReasonInline)
+	if err != nil {
+		return domain.NotificationDelivery{}, false, err
+	}
+	return result.Delivery, shouldSend, nil
+}
+
+func (s *BuildNotificationService) acquireDelivery(ctx context.Context, delivery domain.NotificationDelivery, recoveryReason string) (repository.NotificationDeliveryClaimResult, bool, error) {
 	result, err := s.deliveryRepo.AcquireForDelivery(ctx, repository.NotificationDeliveryClaimInput{
 		Delivery: domain.NotificationDelivery{
-			BuildID:                     buildID,
-			EventType:                   eventType,
-			Transport:                   destination.transport,
-			DestinationKind:             destination.destinationKind,
-			DestinationKey:              destination.destinationKey,
-			NotificationTargetID:        destination.notificationTargetID,
-			RecipientUserID:             destination.recipientUserID,
-			SlackWorkspaceIntegrationID: destination.slackWorkspaceIntegrationID,
-			Recipient:                   destination.recipient,
+			BuildID:                     delivery.BuildID,
+			EventType:                   delivery.EventType,
+			Transport:                   delivery.Transport,
+			DestinationKind:             delivery.DestinationKind,
+			DestinationKey:              delivery.DestinationKey,
+			NotificationTargetID:        delivery.NotificationTargetID,
+			RecipientUserID:             delivery.RecipientUserID,
+			SlackWorkspaceIntegrationID: delivery.SlackWorkspaceIntegrationID,
+			Recipient:                   delivery.Recipient,
 		},
 		ClaimOwner:    s.claimOwner,
 		Now:           s.now().UTC(),
@@ -520,24 +515,29 @@ func (s *BuildNotificationService) prepareDelivery(ctx context.Context, buildID 
 		MaxAttempts:   s.retryPolicy.maxAttempts,
 	})
 	if err != nil {
-		return domain.NotificationDelivery{}, false, err
+		return repository.NotificationDeliveryClaimResult{}, false, err
 	}
+	s.recordClaimMetric(result.Delivery, recoveryReason, result.Outcome)
 	switch result.Outcome {
 	case repository.NotificationDeliveryClaimOutcomeCreatedClaimed, repository.NotificationDeliveryClaimOutcomeRetryClaimed, repository.NotificationDeliveryClaimOutcomeStaleClaimReclaimed:
-		log.Printf("build notification delivery claimed: delivery_id=%s build_id=%s event_type=%s transport=%s destination_kind=%s claim_result=%s attempt=%d claim_owner=%s", result.Delivery.ID, buildID, eventType, destination.transport, destination.destinationKind, result.Outcome, result.Delivery.Attempts, s.claimOwner)
-		return result.Delivery, true, nil
+		logNotificationDeliveryEvent("build notification delivery claimed", result.Delivery, notificationLogFields{
+			recoveryReason: recoveryReason,
+			claimOutcome:   string(result.Outcome),
+			claimOwner:     s.claimOwner,
+		})
+		return result, true, nil
 	case repository.NotificationDeliveryClaimOutcomeAlreadySent:
-		log.Printf("build notification skipped: delivery_id=%s build_id=%s event_type=%s transport=%s destination_kind=%s claim_result=%s", result.Delivery.ID, buildID, eventType, destination.transport, destination.destinationKind, result.Outcome)
+		logNotificationDeliveryEvent("build notification skipped", result.Delivery, notificationLogFields{recoveryReason: recoveryReason, claimOutcome: string(result.Outcome)})
 	default:
-		log.Printf("build notification skipped: delivery_id=%s build_id=%s event_type=%s transport=%s destination_kind=%s claim_result=%s attempt=%d", result.Delivery.ID, buildID, eventType, destination.transport, destination.destinationKind, result.Outcome, result.Delivery.Attempts)
+		logNotificationDeliveryEvent("build notification skipped", result.Delivery, notificationLogFields{recoveryReason: recoveryReason, claimOutcome: string(result.Outcome)})
 	}
-	return result.Delivery, false, nil
+	return result, false, nil
 }
 
-func (s *BuildNotificationService) markDeliverySent(ctx context.Context, delivery domain.NotificationDelivery, sentAt time.Time) (bool, error) {
+func (s *BuildNotificationService) markDeliverySent(ctx context.Context, delivery domain.NotificationDelivery, sentAt time.Time, recoveryReason string) (notificationExecutionOutcome, error) {
 	claimedAt, claimErr := claimedNotificationTimestamp(delivery)
 	if claimErr != nil {
-		return false, claimErr
+		return notificationExecutionOutcomeNone, claimErr
 	}
 	result, err := s.deliveryRepo.MarkSent(ctx, repository.NotificationDeliveryMarkSentInput{
 		DeliveryID: delivery.ID,
@@ -546,21 +546,23 @@ func (s *BuildNotificationService) markDeliverySent(ctx context.Context, deliver
 		SentAt:     sentAt,
 	})
 	if err != nil {
-		return false, err
+		return notificationExecutionOutcomeNone, err
 	}
 	if result.Outcome == repository.NotificationDeliveryUpdateOutcomeLostClaim {
-		log.Printf("build notification lost claim before marking sent: delivery_id=%s build_id=%s event_type=%s transport=%s attempt=%d claim_owner=%s", delivery.ID, delivery.BuildID, delivery.EventType, delivery.Transport, delivery.Attempts, s.claimOwner)
-		return false, nil
+		s.recordDeliveryMetric(delivery, recoveryReason, observability.NotificationDeliveryOutcomeLostClaim)
+		logNotificationDeliveryEvent("build notification lost claim before marking sent", delivery, notificationLogFields{recoveryReason: recoveryReason, claimOwner: s.claimOwner})
+		return notificationExecutionOutcomeLostClaim, nil
 	}
-	return true, nil
+	s.recordDeliveryMetric(delivery, recoveryReason, observability.NotificationDeliveryOutcomeSent)
+	return notificationExecutionOutcomeSent, nil
 }
 
-func (s *BuildNotificationService) markDeliveryFailed(ctx context.Context, delivery domain.NotificationDelivery, sendErr error, attemptedAt time.Time) (bool, error) {
+func (s *BuildNotificationService) markDeliveryFailed(ctx context.Context, delivery domain.NotificationDelivery, sendErr error, attemptedAt time.Time, recoveryReason string) (notificationExecutionOutcome, error) {
 	claimedAt, claimErr := claimedNotificationTimestamp(delivery)
 	if claimErr != nil {
-		return false, claimErr
+		return notificationExecutionOutcomeNone, claimErr
 	}
-	decision := classifyNotificationSendError(delivery.Transport, sendErr)
+	decision := classifyNotificationDeliveryFailure(delivery.Transport, sendErr)
 	message := strings.TrimSpace(sendErr.Error())
 	input := repository.NotificationDeliveryRecordFailureInput{
 		DeliveryID:      delivery.ID,
@@ -580,27 +582,37 @@ func (s *BuildNotificationService) markDeliveryFailed(ctx context.Context, deliv
 		input.NextAttemptAt = &nextAttemptAt
 		result, err = s.deliveryRepo.RecordRetryableFailure(ctx, input)
 		if err == nil {
-			log.Printf("build notification delivery scheduled retry: delivery_id=%s build_id=%s event_type=%s transport=%s attempt=%d retry_at=%s failure_category=%s claim_owner=%s", delivery.ID, delivery.BuildID, delivery.EventType, delivery.Transport, delivery.Attempts, nextAttemptAt.Format(time.RFC3339), decision.category, s.claimOwner)
+			s.recordDeliveryMetric(delivery, recoveryReason, observability.NotificationDeliveryOutcomeRetryScheduled)
+			logNotificationDeliveryEvent("build notification delivery scheduled retry", delivery, notificationLogFields{recoveryReason: recoveryReason, claimOwner: s.claimOwner, failureCategory: string(decision.category), failureReason: decision.reason})
 		}
 	} else if decision.retryable {
 		result, err = s.deliveryRepo.RecordExhaustedFailure(ctx, input)
 		if err == nil {
-			log.Printf("build notification delivery exhausted retries: delivery_id=%s build_id=%s event_type=%s transport=%s attempt=%d failure_category=%s claim_owner=%s", delivery.ID, delivery.BuildID, delivery.EventType, delivery.Transport, delivery.Attempts, decision.category, s.claimOwner)
+			s.recordDeliveryMetric(delivery, recoveryReason, observability.NotificationDeliveryOutcomeAttemptsExhausted)
+			logNotificationDeliveryEvent("build notification delivery exhausted retries", delivery, notificationLogFields{recoveryReason: recoveryReason, claimOwner: s.claimOwner, failureCategory: string(decision.category), failureReason: decision.reason})
 		}
 	} else {
 		result, err = s.deliveryRepo.RecordPermanentFailure(ctx, input)
 		if err == nil {
-			log.Printf("build notification delivery permanently failed: delivery_id=%s build_id=%s event_type=%s transport=%s attempt=%d failure_category=%s claim_owner=%s", delivery.ID, delivery.BuildID, delivery.EventType, delivery.Transport, delivery.Attempts, decision.category, s.claimOwner)
+			s.recordDeliveryMetric(delivery, recoveryReason, observability.NotificationDeliveryOutcomePermanentlyFailed)
+			logNotificationDeliveryEvent("build notification delivery permanently failed", delivery, notificationLogFields{recoveryReason: recoveryReason, claimOwner: s.claimOwner, failureCategory: string(decision.category), failureReason: decision.reason})
 		}
 	}
 	if err != nil {
-		return false, err
+		return notificationExecutionOutcomeNone, err
 	}
 	if result.Outcome == repository.NotificationDeliveryUpdateOutcomeLostClaim {
-		log.Printf("build notification lost claim before recording failure: delivery_id=%s build_id=%s event_type=%s transport=%s attempt=%d claim_owner=%s", delivery.ID, delivery.BuildID, delivery.EventType, delivery.Transport, delivery.Attempts, s.claimOwner)
-		return false, nil
+		s.recordDeliveryMetric(delivery, recoveryReason, observability.NotificationDeliveryOutcomeLostClaim)
+		logNotificationDeliveryEvent("build notification lost claim before recording failure", delivery, notificationLogFields{recoveryReason: recoveryReason, claimOwner: s.claimOwner, failureCategory: string(decision.category), failureReason: decision.reason})
+		return notificationExecutionOutcomeLostClaim, nil
 	}
-	return true, nil
+	if decision.retryable && delivery.Attempts < delivery.MaxAttempts {
+		return notificationExecutionOutcomeRetryScheduled, nil
+	}
+	if decision.retryable {
+		return notificationExecutionOutcomeAttemptsExhausted, nil
+	}
+	return notificationExecutionOutcomePermanentlyFailed, nil
 }
 
 func (s *BuildNotificationService) buildNotificationDetails(ctx context.Context, build domain.Build) buildNotificationDetails {

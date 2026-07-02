@@ -18,7 +18,10 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/observability"
+	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
 func TestNotificationDeliveryRepository_AcquireConcurrentIdenticalCreatesOneRow_Postgres(t *testing.T) {
@@ -358,6 +361,200 @@ func TestNotificationDeliveryRepository_AcquireConcurrentStaleClaimReclaimsOnce_
 	if winningSent.Outcome != repository.NotificationDeliveryUpdateOutcomeUpdated {
 		t.Fatalf("expected updated outcome for winning owner, got %q", winningSent.Outcome)
 	}
+}
+
+func TestNotificationDeliveryRepository_ListRecoverable_Postgres(t *testing.T) {
+	db := openNotificationIntegrationDB(t)
+	defer closeNotificationIntegrationDB(t, db)
+
+	ctx := context.Background()
+	buildID := createNotificationIntegrationBuild(t, db, ctx)
+	repo := NewNotificationDeliveryRepository(db)
+	now := time.Date(2026, 7, 2, 14, 0, 0, 0, time.UTC)
+	retryDueA := uuid.NewString()
+	retryDueB := uuid.NewString()
+	retryFuture := uuid.NewString()
+	staleClaim := uuid.NewString()
+	activeClaim := uuid.NewString()
+	sentID := uuid.NewString()
+	createdAt := now.Add(-5 * time.Minute)
+	retryDueAtA := now.Add(-3 * time.Minute)
+	retryDueAtB := now.Add(-2 * time.Minute)
+	retryFutureAt := now.Add(time.Minute)
+	claimedAt := now.Add(-2 * time.Minute)
+	staleExpiresAt := now.Add(-time.Minute)
+	activeExpiresAt := now.Add(time.Minute)
+
+	_, insertErr := db.ExecContext(ctx, `
+		INSERT INTO notification_deliveries (
+			id, build_id, event_type, transport, destination_kind, destination_key, recipient, status,
+			attempts, max_attempts, last_attempt_at, next_attempt_at, claimed_at, claim_expires_at, claimed_by,
+			failure_category, failure_reason, created_at, updated_at, sent_at
+		) VALUES
+		($1, $7, 'build_failed', 'email', 'shared_target', $2, $3, 'retry_waiting', 1, 3, $8, $4, NULL, NULL, NULL, 'retryable', 'email_send_failed', $9, $9, NULL),
+		($5, $7, 'build_failed', 'email', 'shared_target', $6, $10, 'retry_waiting', 1, 3, $8, $11, NULL, NULL, NULL, 'retryable', 'email_send_failed', $9, $9, NULL),
+		($12, $7, 'build_failed', 'email', 'shared_target', $13, $14, 'retry_waiting', 1, 3, $8, $15, NULL, NULL, NULL, 'retryable', 'email_send_failed', $9, $9, NULL),
+		($16, $7, 'build_failed', 'email', 'shared_target', $17, $18, 'sending', 1, 3, $19, NULL, $19, $20, 'worker-a', NULL, NULL, $9, $9, NULL),
+		($21, $7, 'build_failed', 'email', 'shared_target', $22, $23, 'sending', 1, 3, $19, NULL, $19, $24, 'worker-a', NULL, NULL, $9, $9, NULL),
+		($25, $7, 'build_failed', 'email', 'shared_target', $26, $27, 'sent', 1, 1, $8, NULL, NULL, NULL, NULL, NULL, NULL, $9, $9, $8)
+	`, retryDueA, "email-target:a", "a@example.com", retryDueAtA,
+		retryDueB, "email-target:b", buildID, createdAt,
+		"b@example.com", retryDueAtB,
+		retryFuture, "email-target:c", "c@example.com", retryFutureAt,
+		staleClaim, "email-target:d", "d@example.com", claimedAt, staleExpiresAt,
+		activeClaim, "email-target:e", "e@example.com", activeExpiresAt,
+		sentID, "email-target:f", "f@example.com",
+	)
+	if insertErr != nil {
+		t.Fatalf("insert recoverable rows failed: %v", insertErr)
+	}
+
+	result, err := repo.ListRecoverable(ctx, repository.NotificationDeliveryRecoverableScanInput{Now: now, Limit: 10})
+	if err != nil {
+		t.Fatalf("list recoverable failed: %v", err)
+	}
+	if len(result) != 3 {
+		t.Fatalf("expected 3 recoverable rows, got %d", len(result))
+	}
+	got := []string{result[0].ID, result[1].ID, result[2].ID}
+	want := []string{retryDueA, retryDueB, staleClaim}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("expected ordered ids %v, got %v", want, got)
+	}
+
+	limited, limitErr := repo.ListRecoverable(ctx, repository.NotificationDeliveryRecoverableScanInput{Now: now, Limit: 2})
+	if limitErr != nil {
+		t.Fatalf("list recoverable limit failed: %v", limitErr)
+	}
+	if len(limited) != 2 || limited[0].ID != retryDueA || limited[1].ID != retryDueB {
+		t.Fatalf("unexpected limited recoverable result: %+v", limited)
+	}
+
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := repo.ListRecoverable(canceledCtx, repository.NotificationDeliveryRecoverableScanInput{Now: now, Limit: 1}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled scan error, got %v", err)
+	}
+}
+
+func TestNotificationRecoveryDrain_ConcurrentDrainsSendOnce_Postgres(t *testing.T) {
+	db := openNotificationIntegrationDB(t)
+	defer closeNotificationIntegrationDB(t, db)
+
+	ctx := context.Background()
+	buildID := createNotificationIntegrationBuild(t, db, ctx)
+	_, updateErr := db.ExecContext(ctx, `UPDATE builds SET status = 'failed', updated_at = $2 WHERE id = $1`, buildID, time.Now().UTC())
+	if updateErr != nil {
+		t.Fatalf("update build status failed: %v", updateErr)
+	}
+
+	deliveryRepo := NewNotificationDeliveryRepository(db)
+	buildRepo := NewBuildRepository(db)
+	subscriptionRepo := NewNotificationSubscriptionRepository(db)
+	target, targetErr := subscriptionRepo.CreateTarget(ctx, domain.NotificationTarget{Type: domain.NotificationTargetTypeEmail, Origin: domain.NotificationTargetOriginManual, Name: "alerts", Recipient: "alerts@example.com", Enabled: true})
+	if targetErr != nil {
+		t.Fatalf("create notification target failed: %v", targetErr)
+	}
+	kind, destinationKey, keyErr := domain.NotificationSharedEmailTargetKey(target.ID)
+	if keyErr != nil {
+		t.Fatalf("build shared target key failed: %v", keyErr)
+	}
+	deliveryID := uuid.NewString()
+	now := time.Now().UTC()
+	nextAttemptAt := now.Add(-time.Minute)
+	createdAt := now.Add(-2 * time.Minute)
+	_, insertErr := db.ExecContext(ctx, `
+		INSERT INTO notification_deliveries (
+			id, build_id, event_type, transport, destination_kind, destination_key, notification_target_id, recipient, status,
+			attempts, max_attempts, last_attempt_at, next_attempt_at, failure_category, failure_reason, created_at, updated_at
+		) VALUES ($1, $2, 'build_failed', 'email', $3, $4, $5, $6, 'retry_waiting', 1, 3, $7, $8, 'retryable', 'email_send_failed', $9, $9)
+	`, deliveryID, buildID, string(kind), destinationKey, target.ID, target.Recipient, createdAt, nextAttemptAt, createdAt)
+	if insertErr != nil {
+		t.Fatalf("insert due retry delivery failed: %v", insertErr)
+	}
+
+	sender := &countingEmailSender{}
+	newDrain := func(claimOwner string) *buildsvc.NotificationRecoveryDrain {
+		notifier, err := buildsvc.NewBuildNotificationService(buildsvc.BuildNotificationConfig{
+			Enabled:          true,
+			Recipients:       "dev@example.com",
+			Sender:           sender,
+			BuildRepo:        buildRepo,
+			DeliveryRepo:     deliveryRepo,
+			SubscriptionRepo: subscriptionRepo,
+			ClaimOwner:       claimOwner,
+			DeliveryMetrics:  observability.NewNoopNotificationDeliveryMetrics(),
+		})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+		drain, drainErr := buildsvc.NewNotificationRecoveryDrain(buildsvc.NotificationRecoveryDrainConfig{Notifier: notifier, Interval: time.Millisecond, BatchSize: 5})
+		if drainErr != nil {
+			t.Fatalf("create drain failed: %v", drainErr)
+		}
+		return drain
+	}
+
+	drainA := newDrain("server-a")
+	drainB := newDrain("server-b")
+	start := make(chan struct{})
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, drain := range []*buildsvc.NotificationRecoveryDrain{drainA, drainB} {
+		wg.Add(1)
+		go func(d *buildsvc.NotificationRecoveryDrain) {
+			defer wg.Done()
+			<-start
+			_, err := d.RunIteration(context.Background())
+			errCh <- err
+		}(drain)
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent drain iteration failed: %v", err)
+		}
+	}
+	if sender.Count() != 1 {
+		t.Fatalf("expected one provider send under concurrent drains, got %d", sender.Count())
+	}
+
+	var attempts int
+	var status string
+	var persistedID string
+	stateErr := db.QueryRowContext(ctx, `SELECT id::text, attempts, status FROM notification_deliveries WHERE build_id = $1 AND event_type = 'build_failed' AND transport = 'email' AND destination_key = $2`, buildID, destinationKey).Scan(&persistedID, &attempts, &status)
+	if stateErr != nil {
+		t.Fatalf("load recovered delivery state failed: %v", stateErr)
+	}
+	if persistedID != deliveryID {
+		t.Fatalf("expected canonical delivery id %q, got %q", deliveryID, persistedID)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected one attempt increment to 2, got %d", attempts)
+	}
+	if status != string(domain.NotificationDeliveryStatusSent) {
+		t.Fatalf("expected sent status after concurrent recovery, got %q", status)
+	}
+}
+
+type countingEmailSender struct {
+	mu    sync.Mutex
+	count int
+}
+
+func (s *countingEmailSender) SendText(_ context.Context, _ platformemail.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.count++
+	return nil
+}
+
+func (s *countingEmailSender) Count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.count
 }
 
 func TestNotificationDeliveryRepository_AcquireRejectsTerminalAndBlockedStates_Postgres(t *testing.T) {
@@ -872,6 +1069,87 @@ func TestMigration00033_BackfillsClaimableLedgerState_Postgres(t *testing.T) {
 	assertRow("delivery-sent", string(domain.NotificationDeliveryStatusSent), 1, 1, "", "", true)
 	assertRow("delivery-failed", string(domain.NotificationDeliveryStatusFailedPermanent), 2, 2, string(domain.NotificationDeliveryFailureCategoryPermanent), "legacy_failed_no_retry", false)
 	assertRow("delivery-pending", string(domain.NotificationDeliveryStatusFailedExhausted), 1, 1, string(domain.NotificationDeliveryFailureCategoryRetryable), "legacy_pending_no_automatic_retry", false)
+}
+
+func TestMigration00034_AddsRecoveryScanIndexes_Postgres(t *testing.T) {
+	db := openNotificationIntegrationDB(t)
+	defer closeNotificationIntegrationDB(t, db)
+
+	ctx := context.Background()
+	schema := createNotificationIntegrationSchema(t, db, ctx)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open dedicated connection: %v", err)
+	}
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Fatalf("close dedicated connection: %v", closeErr)
+		}
+	}()
+
+	setSearchPath(t, ctx, conn, schema)
+	applyNotificationMigrationSeries(t, ctx, conn, "00033")
+
+	assertIndexExists := func(indexName string, wantColumns string, wantPredicate string) {
+		t.Helper()
+		var definition string
+		var predicate sql.NullString
+		queryErr := conn.QueryRowContext(ctx, `
+			SELECT pg_get_indexdef(i.indexrelid), pg_get_expr(i.indpred, i.indrelid)
+			FROM pg_index i
+			JOIN pg_class c ON c.oid = i.indexrelid
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE n.nspname = current_schema()
+			  AND c.relname = $1
+		`, indexName).Scan(&definition, &predicate)
+		if queryErr != nil {
+			t.Fatalf("lookup index %s failed: %v", indexName, queryErr)
+		}
+		if !strings.Contains(definition, wantColumns) {
+			t.Fatalf("expected index %s definition %q to contain %q", indexName, definition, wantColumns)
+		}
+		if !predicate.Valid || !strings.Contains(predicate.String, wantPredicate) {
+			t.Fatalf("expected index %s predicate %q to contain %q", indexName, predicate.String, wantPredicate)
+		}
+	}
+	assertIndexMissing := func(indexName string) {
+		t.Helper()
+		var exists bool
+		queryErr := conn.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM pg_class c
+				JOIN pg_namespace n ON n.oid = c.relnamespace
+				WHERE n.nspname = current_schema()
+				  AND c.relname = $1
+			)
+		`, indexName).Scan(&exists)
+		if queryErr != nil {
+			t.Fatalf("lookup index presence %s failed: %v", indexName, queryErr)
+		}
+		if exists {
+			t.Fatalf("expected index %s to be absent", indexName)
+		}
+	}
+
+	assertIndexExists("idx_notification_deliveries_retry_waiting_next_attempt_at", "(next_attempt_at)", "status = 'retry_waiting'::text")
+	assertIndexExists("idx_notification_deliveries_sending_claim_expires_at", "(claim_expires_at)", "status = 'sending'::text")
+
+	applyNotificationMigrationFile(t, ctx, conn, "00034_add_notification_recovery_scan_indexes.sql")
+
+	assertIndexExists("idx_notification_deliveries_retry_waiting_next_attempt_at_id", "(next_attempt_at, id)", "status = 'retry_waiting'::text")
+	assertIndexExists("idx_notification_deliveries_sending_claim_expires_at_id", "(claim_expires_at, id)", "status = 'sending'::text")
+	assertIndexMissing("idx_notification_deliveries_retry_waiting_next_attempt_at")
+	assertIndexMissing("idx_notification_deliveries_sending_claim_expires_at")
+
+	if downErr := applyNotificationMigrationDownExpectError(ctx, conn, "00034_add_notification_recovery_scan_indexes.sql"); downErr != nil {
+		t.Fatalf("expected migration 00034 down to succeed, got %v", downErr)
+	}
+
+	assertIndexExists("idx_notification_deliveries_retry_waiting_next_attempt_at", "(next_attempt_at)", "status = 'retry_waiting'::text")
+	assertIndexExists("idx_notification_deliveries_sending_claim_expires_at", "(claim_expires_at)", "status = 'sending'::text")
+	assertIndexMissing("idx_notification_deliveries_retry_waiting_next_attempt_at_id")
+	assertIndexMissing("idx_notification_deliveries_sending_claim_expires_at_id")
 }
 
 func TestNotificationDeliveryLedgerConstraintsRejectInvalidStates_Postgres(t *testing.T) {

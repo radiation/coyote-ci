@@ -93,6 +93,28 @@ const notificationDeliverySelectByRecipientQuery = `
 	WHERE build_id = $1 AND event_type = $2 AND recipient = $3
 `
 
+const notificationDeliveryListRecoverableQuery = `
+	WITH recoverable AS (
+		SELECT ` + notificationDeliveryColumns + `,
+			next_attempt_at AS recover_at
+		FROM notification_deliveries
+		WHERE status = 'retry_waiting'
+		  AND next_attempt_at IS NOT NULL
+		  AND next_attempt_at <= $1
+		UNION ALL
+		SELECT ` + notificationDeliveryColumns + `,
+			claim_expires_at AS recover_at
+		FROM notification_deliveries
+		WHERE status = 'sending'
+		  AND claim_expires_at IS NOT NULL
+		  AND claim_expires_at <= $1
+	)
+	SELECT ` + notificationDeliveryColumns + `
+	FROM recoverable
+	ORDER BY recover_at ASC, id ASC
+	LIMIT $2
+`
+
 const notificationDeliveryMarkSentQuery = `
 	UPDATE notification_deliveries
 	SET status = 'sent',
@@ -226,6 +248,43 @@ func (r *NotificationDeliveryRepository) AcquireForDelivery(ctx context.Context,
 		return repository.NotificationDeliveryClaimResult{}, commitErr
 	}
 	return repository.NotificationDeliveryClaimResult{Delivery: claimed, Outcome: claimOutcome}, nil
+}
+
+func (r *NotificationDeliveryRepository) ListRecoverable(ctx context.Context, input repository.NotificationDeliveryRecoverableScanInput) (result []domain.NotificationDelivery, err error) {
+	now := input.Now.UTC()
+	if now.IsZero() {
+		return nil, errors.New("notification delivery recoverable scan time is required")
+	}
+	if input.Limit <= 0 {
+		return nil, errors.New("notification delivery recoverable scan limit must be positive")
+	}
+
+	rows, err := r.db.QueryContext(ctx, notificationDeliveryListRecoverableQuery, now, input.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		closeErr := rows.Close()
+		if err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+
+	result = make([]domain.NotificationDelivery, 0, input.Limit)
+	for rows.Next() {
+		delivery, scanErr := scanNotificationDelivery(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		result = append(result, delivery)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, rowsErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (r *NotificationDeliveryRepository) MarkSent(ctx context.Context, input repository.NotificationDeliveryMarkSentInput) (repository.NotificationDeliveryUpdateResult, error) {

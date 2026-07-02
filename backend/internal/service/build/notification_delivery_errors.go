@@ -38,6 +38,18 @@ func classifyNotificationSendError(transport domain.NotificationTransport, err e
 	}
 }
 
+func classifyNotificationDeliveryFailure(transport domain.NotificationTransport, err error) notificationFailureDecision {
+	var executionErr *notificationExecutionFailure
+	if errors.As(err, &executionErr) {
+		return notificationFailureDecision{
+			category:  executionErr.category,
+			reason:    executionErr.reason,
+			retryable: executionErr.retryable,
+		}
+	}
+	return classifyNotificationSendError(transport, err)
+}
+
 func classifyEmailNotificationError(err error) notificationFailureDecision {
 	if errors.Is(err, platformemail.ErrInvalidMessage) {
 		return notificationFailureDecision{category: domain.NotificationDeliveryFailureCategoryPermanent, reason: "invalid_email_message"}
