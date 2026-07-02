@@ -268,6 +268,25 @@ describe("MyNotificationsPage", () => {
     });
   });
 
+  it("renders nothing when there is no authenticated user", () => {
+    const { container } = renderPage({
+      currentUser: null,
+      authStatus: "unauthenticated",
+    });
+
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders the Slack identity load error", async () => {
+    mockedGetMySlackIdentity.mockRejectedValue(new Error("boom"));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to load Slack identity/i)).toBeTruthy();
+    });
+  });
+
   it("shows a warning for a failed health test but keeps live lookup available", async () => {
     mockedGetMySlackIdentity.mockResolvedValue({
       workspace_status: "ready",
@@ -1589,6 +1608,74 @@ describe("MyNotificationsPage", () => {
     expect(mockedCreateMySlackIdentity).not.toHaveBeenCalled();
     expect(mockedPatchMySlackIdentity).not.toHaveBeenCalled();
     expect(mockedDeleteMySlackIdentity).not.toHaveBeenCalled();
+  });
+
+  it("shows and updates the paused success Slack preference", async () => {
+    mockedGetMyEmailNotificationTarget.mockResolvedValue({
+      id: "target-1",
+      owner_user_id: "user-1",
+      type: "email",
+      name: "User Example",
+      address: "<user@example.com>",
+      webhook_configured: false,
+      enabled: true,
+      created_at: "2026-06-24T00:00:00Z",
+      updated_at: "2026-06-24T00:00:00Z",
+    });
+    mockedGetCommitAuthorFailureNotificationPreference.mockResolvedValue({
+      email: {
+        enabled: false,
+        delivery_active: false,
+        unavailable_reason: null,
+        target: null,
+      },
+      slack: {
+        enabled: false,
+        delivery_active: false,
+        unavailable_reason: null,
+        target: null,
+      },
+    });
+    mockedGetCommitAuthorSuccessNotificationPreference.mockResolvedValue({
+      email: {
+        enabled: false,
+        delivery_active: false,
+        unavailable_reason: null,
+        target: null,
+      },
+      slack: {
+        enabled: true,
+        delivery_active: false,
+        unavailable_reason: "slack_identity_disabled",
+        target: null,
+      },
+    });
+
+    renderPage();
+
+    const successSlackCheckbox = await screen.findByRole("checkbox", {
+      name: /Send me a Slack DM when my commits succeed/i,
+    });
+    expect(successSlackCheckbox).toBeChecked();
+    expect(successSlackCheckbox).not.toBeDisabled();
+    expect(
+      screen.getByText(
+        /Re-enable your linked Slack account to use success Slack delivery/i,
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getAllByText(
+        /Slack delivery is paused until your linked Slack identity and workspace are active again/i,
+      ).length,
+    ).toBeGreaterThan(0);
+
+    fireEvent.click(successSlackCheckbox);
+
+    await waitFor(() => {
+      expect(
+        mockedSetCommitAuthorSuccessNotificationPreference.mock.calls[0]?.[0],
+      ).toEqual({ email_enabled: false, slack_enabled: false });
+    });
   });
 
   it("refreshes failure preference state from the authoritative backend response after save", async () => {
