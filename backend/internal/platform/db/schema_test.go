@@ -82,6 +82,7 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"idx_notification_deliveries_build_id",
 		"CREATE TABLE IF NOT EXISTS notification_targets",
 		"origin TEXT",
+		"notification_targets_origin_semantics_check",
 		"notification_targets_config_default_email_recipient_key",
 		"CREATE TABLE IF NOT EXISTS slack_workspace_integrations",
 		"CREATE TABLE IF NOT EXISTS user_slack_identities",

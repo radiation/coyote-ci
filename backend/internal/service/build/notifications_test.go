@@ -129,6 +129,7 @@ func mustCreateNotificationTarget(t *testing.T, repo *memoryrepo.NotificationSub
 
 	target, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Name:      recipient,
 		Recipient: recipient,
 		Enabled:   enabled,
@@ -162,6 +163,7 @@ func mustEnsureOwnedNotificationTarget(t *testing.T, repo *memoryrepo.Notificati
 	target, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{
 		OwnerUserID: &userID,
 		Type:        domain.NotificationTargetTypeEmail,
+		Origin:      domain.NotificationTargetOriginManual,
 		Name:        recipient,
 		Recipient:   recipient,
 		Enabled:     enabled,
@@ -653,6 +655,7 @@ func mustCreateSlackNotificationTarget(t *testing.T, repo *memoryrepo.Notificati
 
 	target, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{
 		Type:      domain.NotificationTargetTypeSlackWebhook,
+		Origin:    domain.NotificationTargetOriginManual,
 		Name:      "slack",
 		Recipient: webhookURL,
 		Enabled:   enabled,

@@ -39,6 +39,7 @@ func TestNotificationSubscriptionRepository_CreateAndListMatches(t *testing.T) {
 	repo := NewNotificationSubscriptionRepository()
 	target, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Name:      "Dev Mailbox",
 		Recipient: "dev@example.com",
 		Enabled:   true,
@@ -75,7 +76,7 @@ func TestNotificationSubscriptionRepository_CreateAndListMatches(t *testing.T) {
 		t.Fatalf("unexpected recipient %q", matches[0].Target.Recipient)
 	}
 
-	duplicateShared, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{Type: domain.NotificationTargetTypeEmail, Recipient: "dev@example.com", Enabled: true})
+	duplicateShared, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{Type: domain.NotificationTargetTypeEmail, Origin: domain.NotificationTargetOriginManual, Recipient: "dev@example.com", Enabled: true})
 	if err != nil {
 		t.Fatalf("expected duplicate-address shared target to be allowed, got %v", err)
 	}
@@ -94,7 +95,7 @@ func TestNotificationSubscriptionRepository_CreateAndListMatches(t *testing.T) {
 		t.Fatal("expected mixed-scope subscription error")
 	}
 
-	disabledTarget, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{Type: domain.NotificationTargetTypeEmail, Recipient: "qa@example.com", Enabled: false})
+	disabledTarget, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{Type: domain.NotificationTargetTypeEmail, Origin: domain.NotificationTargetOriginManual, Recipient: "qa@example.com", Enabled: false})
 	if err != nil {
 		t.Fatalf("create disabled target failed: %v", err)
 	}
@@ -116,6 +117,7 @@ func TestNotificationSubscriptionRepository_CreateTarget_ValidationAndDefaults(t
 	repo := NewNotificationSubscriptionRepository()
 
 	created, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{
+		Origin:    domain.NotificationTargetOriginManual,
 		Name:      " Dev Mailbox ",
 		Recipient: " dev@example.com ",
 		Enabled:   true,
@@ -137,6 +139,7 @@ func TestNotificationSubscriptionRepository_CreateTarget_ValidationAndDefaults(t
 	preserved, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{
 		ID:        "target-2",
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Name:      "QA",
 		Recipient: "qa@example.com",
 		Enabled:   true,
@@ -155,6 +158,7 @@ func TestNotificationSubscriptionRepository_CreateTarget_ValidationAndDefaults(t
 
 	_, err = repo.CreateTarget(context.Background(), domain.NotificationTarget{
 		Type:      domain.NotificationTargetType("sms"),
+		Origin:    domain.NotificationTargetOriginManual,
 		Recipient: "sms@example.com",
 		Enabled:   true,
 	})
@@ -164,11 +168,55 @@ func TestNotificationSubscriptionRepository_CreateTarget_ValidationAndDefaults(t
 
 	_, err = repo.CreateTarget(context.Background(), domain.NotificationTarget{
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Recipient: "not-an-email",
 		Enabled:   true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "invalid notification target recipient") {
 		t.Fatalf("expected invalid recipient error, got %v", err)
+	}
+
+	ownerUserID := "user-1"
+	_, err = repo.CreateTarget(context.Background(), domain.NotificationTarget{
+		Type:        domain.NotificationTargetTypeSlackWebhook,
+		Origin:      domain.NotificationTargetOriginConfigDefault,
+		Recipient:   "https://hooks.slack.example/services/T/B/X",
+		OwnerUserID: &ownerUserID,
+		Enabled:     true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "config-default notification targets must be email targets") {
+		t.Fatalf("expected config-default slack target validation error, got %v", err)
+	}
+
+	_, err = repo.CreateTarget(context.Background(), domain.NotificationTarget{
+		Type:        domain.NotificationTargetTypeEmail,
+		Origin:      domain.NotificationTargetOriginConfigDefault,
+		Recipient:   "owned@example.com",
+		OwnerUserID: &ownerUserID,
+		Enabled:     true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "config-default notification targets must be ownerless") {
+		t.Fatalf("expected owned config-default validation error, got %v", err)
+	}
+
+	_, err = repo.CreateTarget(context.Background(), domain.NotificationTarget{
+		Origin:    "",
+		Type:      domain.NotificationTargetTypeEmail,
+		Recipient: "blank-origin@example.com",
+		Enabled:   true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "notification target origin is required") {
+		t.Fatalf("expected blank origin error, got %v", err)
+	}
+
+	_, err = repo.CreateTarget(context.Background(), domain.NotificationTarget{
+		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOrigin("legacy"),
+		Recipient: "legacy@example.com",
+		Enabled:   true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported notification target origin") {
+		t.Fatalf("expected unsupported origin error, got %v", err)
 	}
 }
 
@@ -176,6 +224,7 @@ func TestNotificationSubscriptionRepository_CreateSubscription_ValidationAndJobS
 	repo := NewNotificationSubscriptionRepository()
 	target, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Recipient: "dev@example.com",
 		Enabled:   true,
 	})
@@ -273,6 +322,7 @@ func TestNotificationSubscriptionRepository_ListEnabledMatchesForBuildEvent_Filt
 	repo := NewNotificationSubscriptionRepository()
 	projectTarget, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Recipient: "project@example.com",
 		Enabled:   true,
 	})
@@ -281,6 +331,7 @@ func TestNotificationSubscriptionRepository_ListEnabledMatchesForBuildEvent_Filt
 	}
 	jobTarget, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Recipient: "job@example.com",
 		Enabled:   true,
 	})
@@ -289,6 +340,7 @@ func TestNotificationSubscriptionRepository_ListEnabledMatchesForBuildEvent_Filt
 	}
 	disabledTarget, err := repo.CreateTarget(context.Background(), domain.NotificationTarget{
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Recipient: "disabled@example.com",
 		Enabled:   false,
 	})
@@ -418,15 +470,16 @@ func TestNotificationSubscriptionRepository_HelperFunctions(t *testing.T) {
 		t.Fatalf("unexpected job key: %q", got)
 	}
 
-	normalized, err := normalizeNotificationTargetRecipient(domain.NotificationTargetTypeEmail, " dev@example.com ")
+	normalizedTarget, err := domain.NormalizeNotificationTarget(domain.NotificationTarget{Type: domain.NotificationTargetTypeEmail, Origin: domain.NotificationTargetOriginManual, Recipient: " dev@example.com ", Enabled: true})
 	if err != nil {
 		t.Fatalf("normalize recipient failed: %v", err)
 	}
+	normalized := normalizedTarget.Recipient
 	if normalized != "<dev@example.com>" {
 		t.Fatalf("unexpected normalized recipient %q", normalized)
 	}
 
-	_, err = normalizeNotificationTargetRecipient(domain.NotificationTargetTypeEmail, "bad-email")
+	_, err = domain.NormalizeNotificationTarget(domain.NotificationTarget{Type: domain.NotificationTargetTypeEmail, Origin: domain.NotificationTargetOriginManual, Recipient: "bad-email", Enabled: true})
 	if err == nil {
 		t.Fatal("expected invalid email error")
 	}
@@ -452,6 +505,7 @@ func TestNotificationSubscriptionRepository_OwnedEmailTargets(t *testing.T) {
 
 	claimable, err := repo.CreateTarget(ctx, domain.NotificationTarget{
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Recipient: "shared@example.com",
 		Enabled:   true,
 	})
@@ -506,6 +560,7 @@ func TestNotificationSubscriptionRepository_OwnedEmailTargets(t *testing.T) {
 	otherOwner := "other-user"
 	conflictingOwned, err := repo.CreateTarget(ctx, domain.NotificationTarget{
 		Type:        domain.NotificationTargetTypeEmail,
+		Origin:      domain.NotificationTargetOriginManual,
 		OwnerUserID: &otherOwner,
 		Recipient:   "owned@example.com",
 		Enabled:     true,
@@ -533,6 +588,7 @@ func TestNotificationSubscriptionRepository_OwnedEmailTargets(t *testing.T) {
 
 	sharedWithSubscription, err := repo.CreateTarget(ctx, domain.NotificationTarget{
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Recipient: "subscribed@example.com",
 		Enabled:   true,
 	})
@@ -601,6 +657,7 @@ func TestNotificationSubscriptionRepository_SetOwnedEmailTargetEnabled(t *testin
 		ID:          "owned-target",
 		OwnerUserID: &ownerUserID,
 		Type:        domain.NotificationTargetTypeEmail,
+		Origin:      domain.NotificationTargetOriginManual,
 		Name:        "User Example",
 		Recipient:   "user@example.com",
 		Enabled:     true,
@@ -614,6 +671,7 @@ func TestNotificationSubscriptionRepository_SetOwnedEmailTargetEnabled(t *testin
 	shared, err := repo.CreateTarget(ctx, domain.NotificationTarget{
 		ID:        "shared-target",
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Name:      "Shared Inbox",
 		Recipient: "shared@example.com",
 		Enabled:   true,
@@ -629,6 +687,7 @@ func TestNotificationSubscriptionRepository_SetOwnedEmailTargetEnabled(t *testin
 		ID:          "other-owned-target",
 		OwnerUserID: &otherOwner,
 		Type:        domain.NotificationTargetTypeEmail,
+		Origin:      domain.NotificationTargetOriginManual,
 		Name:        "Other User",
 		Recipient:   "other@example.com",
 		Enabled:     true,
@@ -707,6 +766,7 @@ func TestNotificationSubscriptionRepository_SetOwnedEmailTargetEnabled(t *testin
 	if _, err := unownedOnlyRepo.CreateTarget(ctx, domain.NotificationTarget{
 		ID:        "unowned-only",
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Name:      "Unowned",
 		Recipient: "unowned@example.com",
 		Enabled:   true,
@@ -727,6 +787,7 @@ func TestNotificationSubscriptionRepository_ListAndUpdateAdminViews(t *testing.T
 	targetOne, err := repo.CreateTarget(ctx, domain.NotificationTarget{
 		ID:        "target-1",
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Name:      "Ops",
 		Recipient: "ops@example.com",
 		Enabled:   true,
@@ -739,6 +800,7 @@ func TestNotificationSubscriptionRepository_ListAndUpdateAdminViews(t *testing.T
 	targetTwo, err := repo.CreateTarget(ctx, domain.NotificationTarget{
 		ID:        "target-2",
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Name:      "QA",
 		Recipient: "qa@example.com",
 		Enabled:   true,
@@ -1017,6 +1079,7 @@ func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized(t 
 	claimableLegacy, err := repo.CreateTarget(ctx, domain.NotificationTarget{
 		ID:        "legacy-claimable-target",
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Name:      "Legacy Claimable",
 		Recipient: "legacy-claimed@example.com",
 		Enabled:   true,
@@ -1059,6 +1122,7 @@ func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized(t 
 		ID:          "legacy-target",
 		OwnerUserID: &legacyOwner,
 		Type:        domain.NotificationTargetTypeEmail,
+		Origin:      domain.NotificationTargetOriginManual,
 		Name:        "Legacy User",
 		Recipient:   "legacy@example.com",
 		Enabled:     true,

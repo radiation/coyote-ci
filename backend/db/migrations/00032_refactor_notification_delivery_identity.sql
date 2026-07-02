@@ -18,6 +18,20 @@ ALTER TABLE notification_targets
         CHECK (origin IN ('manual', 'config_default'));
 
 ALTER TABLE notification_targets
+    DROP CONSTRAINT IF EXISTS notification_targets_origin_semantics_check;
+
+ALTER TABLE notification_targets
+    ADD CONSTRAINT notification_targets_origin_semantics_check
+        CHECK (
+            origin = 'manual'
+            OR (
+                origin = 'config_default'
+                AND type = 'email'
+                AND owner_user_id IS NULL
+            )
+        );
+
+ALTER TABLE notification_targets
     DROP CONSTRAINT IF EXISTS notification_targets_type_recipient_key;
 
 CREATE UNIQUE INDEX IF NOT EXISTS notification_targets_config_default_email_recipient_key
@@ -199,33 +213,9 @@ ALTER TABLE notification_deliveries
 
 -- +goose Down
 
-ALTER TABLE notification_deliveries
-    ADD CONSTRAINT notification_deliveries_build_event_recipient_key UNIQUE (build_id, event_type, recipient);
-
-DROP INDEX IF EXISTS idx_notification_deliveries_transport_status;
-DROP INDEX IF EXISTS idx_notification_deliveries_build_event;
-DROP INDEX IF EXISTS notification_deliveries_build_event_transport_destination_key_key;
-
-ALTER TABLE notification_deliveries
-    DROP CONSTRAINT IF EXISTS notification_deliveries_transport_destination_kind_check,
-    DROP CONSTRAINT IF EXISTS notification_deliveries_destination_kind_check,
-    DROP CONSTRAINT IF EXISTS notification_deliveries_transport_check;
-
-ALTER TABLE notification_deliveries
-    DROP COLUMN IF EXISTS slack_workspace_integration_id,
-    DROP COLUMN IF EXISTS recipient_user_id,
-    DROP COLUMN IF EXISTS notification_target_id,
-    DROP COLUMN IF EXISTS destination_key,
-    DROP COLUMN IF EXISTS destination_kind,
-    DROP COLUMN IF EXISTS transport;
-
-DROP INDEX IF EXISTS notification_targets_config_default_email_recipient_key;
-
-ALTER TABLE notification_targets
-    ADD CONSTRAINT notification_targets_type_recipient_key UNIQUE (type, recipient);
-
-ALTER TABLE notification_targets
-    DROP CONSTRAINT IF EXISTS notification_targets_origin_check;
-
-ALTER TABLE notification_targets
-    DROP COLUMN IF EXISTS origin;
+-- +goose StatementBegin
+DO $$
+BEGIN
+    RAISE EXCEPTION 'migration 00032 is intentionally irreversible: the legacy notification_targets UNIQUE (type, recipient) model cannot represent valid post-migration data, automatic rollback would require destructive or ambiguous target merging, and restoration requires an intentional manual data migration';
+END $$;
+-- +goose StatementEnd

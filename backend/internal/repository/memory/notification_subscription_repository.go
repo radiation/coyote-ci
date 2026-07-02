@@ -3,8 +3,6 @@ package memory
 import (
 	"context"
 	"fmt"
-	"net/mail"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -59,25 +57,11 @@ func (r *NotificationSubscriptionRepository) CreateTarget(_ context.Context, tar
 		target.ID = uuid.NewString()
 	}
 	now := time.Now().UTC()
-	target.Type = domain.NotificationTargetType(strings.TrimSpace(string(target.Type)))
-	if target.Type == "" {
-		target.Type = domain.NotificationTargetTypeEmail
-	}
-	if target.Type != domain.NotificationTargetTypeEmail && target.Type != domain.NotificationTargetTypeSlackWebhook {
-		return domain.NotificationTarget{}, fmt.Errorf("unsupported notification target type %q", target.Type)
-	}
-	normalizedRecipient, err := normalizeNotificationTargetRecipient(target.Type, target.Recipient)
+	normalizedTarget, err := domain.ValidateExplicitNotificationTarget(target)
 	if err != nil {
 		return domain.NotificationTarget{}, err
 	}
-	target.Name = strings.TrimSpace(target.Name)
-	target.OwnerUserID = trimOptionalString(target.OwnerUserID)
-	target.Recipient = normalizedRecipient
-	origin, originErr := normalizeNotificationTargetOrigin(target.Type, target.OwnerUserID, target.Origin)
-	if originErr != nil {
-		return domain.NotificationTarget{}, originErr
-	}
-	target.Origin = origin
+	target = normalizedTarget
 	if target.CreatedAt.IsZero() {
 		target.CreatedAt = now
 	}
@@ -96,9 +80,6 @@ func (r *NotificationSubscriptionRepository) CreateTarget(_ context.Context, tar
 		if existing, exists := r.findConfigEmailTargetByRecipientLocked(target.Recipient); exists && existing.ID != target.ID {
 			return domain.NotificationTarget{}, repository.ErrNotificationTargetDuplicate
 		}
-	}
-	if target.Type == domain.NotificationTargetTypeSlackWebhook && target.OwnerUserID != nil {
-		return domain.NotificationTarget{}, repository.ErrNotificationTargetDuplicate
 	}
 
 	r.targets[target.ID] = target
@@ -150,10 +131,16 @@ func (r *NotificationSubscriptionRepository) EnsureConfigEmailTarget(_ context.C
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	trimmedRecipient, err := normalizeNotificationTargetRecipient(domain.NotificationTargetTypeEmail, input.Recipient)
+	normalizedTarget, err := domain.NormalizeNotificationTarget(domain.NotificationTarget{
+		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginConfigDefault,
+		Recipient: input.Recipient,
+		Enabled:   true,
+	})
 	if err != nil {
 		return domain.NotificationTarget{}, err
 	}
+	trimmedRecipient := normalizedTarget.Recipient
 	if existing, exists := r.findConfigEmailTargetByRecipientLocked(trimmedRecipient); exists {
 		return existing, nil
 	}
@@ -176,15 +163,18 @@ func (r *NotificationSubscriptionRepository) EnsureConfigEmailTarget(_ context.C
 		name = trimmedRecipient
 	}
 
-	created := domain.NotificationTarget{
+	created, normalizeErr := domain.NormalizeNotificationTarget(domain.NotificationTarget{
 		ID:        id,
 		Type:      domain.NotificationTargetTypeEmail,
 		Origin:    domain.NotificationTargetOriginConfigDefault,
 		Name:      name,
-		Recipient: trimmedRecipient,
+		Recipient: input.Recipient,
 		Enabled:   true,
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
+	})
+	if normalizeErr != nil {
+		return domain.NotificationTarget{}, normalizeErr
 	}
 	r.targets[created.ID] = created
 	return created, nil
@@ -242,16 +232,19 @@ func (r *NotificationSubscriptionRepository) EnsureOwnedEmailTarget(_ context.Co
 		name = trimmedRecipient
 	}
 
-	created := domain.NotificationTarget{
+	created, normalizeErr := domain.NormalizeNotificationTarget(domain.NotificationTarget{
 		ID:          id,
 		OwnerUserID: &trimmedOwnerID,
 		Type:        domain.NotificationTargetTypeEmail,
 		Origin:      domain.NotificationTargetOriginManual,
 		Name:        name,
-		Recipient:   trimmedRecipient,
+		Recipient:   input.Recipient,
 		Enabled:     true,
 		CreatedAt:   createdAt,
 		UpdatedAt:   updatedAt,
+	})
+	if normalizeErr != nil {
+		return domain.NotificationTarget{}, normalizeErr
 	}
 	r.targets[created.ID] = created
 	return created, nil
@@ -331,16 +324,19 @@ func (r *NotificationSubscriptionRepository) ensureOwnedEmailTargetLocked(input 
 		name = trimmedRecipient
 	}
 
-	created := domain.NotificationTarget{
+	created, normalizeErr := domain.NormalizeNotificationTarget(domain.NotificationTarget{
 		ID:          id,
 		OwnerUserID: &trimmedOwnerID,
 		Type:        domain.NotificationTargetTypeEmail,
 		Origin:      domain.NotificationTargetOriginManual,
 		Name:        name,
-		Recipient:   trimmedRecipient,
+		Recipient:   input.Recipient,
 		Enabled:     true,
 		CreatedAt:   createdAt,
 		UpdatedAt:   updatedAt,
+	})
+	if normalizeErr != nil {
+		return domain.NotificationTarget{}, false, normalizeErr
 	}
 	r.targets[created.ID] = created
 	return created, true, nil
@@ -356,38 +352,28 @@ func (r *NotificationSubscriptionRepository) UpdateTarget(_ context.Context, tar
 		return domain.NotificationTarget{}, repository.ErrNotificationTargetNotFound
 	}
 
-	target.Type = domain.NotificationTargetType(strings.TrimSpace(string(target.Type)))
-	if target.Type == "" {
-		target.Type = domain.NotificationTargetTypeEmail
-	}
-	if target.Type != domain.NotificationTargetTypeEmail && target.Type != domain.NotificationTargetTypeSlackWebhook {
-		return domain.NotificationTarget{}, fmt.Errorf("unsupported notification target type %q", target.Type)
-	}
-	normalizedRecipient, err := normalizeNotificationTargetRecipient(target.Type, target.Recipient)
+	normalizedTarget, err := domain.ValidateExplicitNotificationTarget(target)
 	if err != nil {
 		return domain.NotificationTarget{}, err
 	}
+	target = normalizedTarget
 	ownerUserID := trimOptionalString(target.OwnerUserID)
-	origin, originErr := normalizeNotificationTargetOrigin(target.Type, ownerUserID, target.Origin)
-	if originErr != nil {
-		return domain.NotificationTarget{}, originErr
-	}
 	if ownerUserID != nil {
 		if existing, exists := r.findOwnedEmailTargetByUserIDLocked(*ownerUserID); exists && existing.ID != targetID {
 			return domain.NotificationTarget{}, repository.ErrNotificationTargetDuplicate
 		}
 	}
-	if target.Type == domain.NotificationTargetTypeEmail && ownerUserID == nil && origin == domain.NotificationTargetOriginConfigDefault {
-		if existing, exists := r.findConfigEmailTargetByRecipientLocked(normalizedRecipient); exists && existing.ID != targetID {
+	if target.Type == domain.NotificationTargetTypeEmail && ownerUserID == nil && target.Origin == domain.NotificationTargetOriginConfigDefault {
+		if existing, exists := r.findConfigEmailTargetByRecipientLocked(target.Recipient); exists && existing.ID != targetID {
 			return domain.NotificationTarget{}, repository.ErrNotificationTargetDuplicate
 		}
 	}
 
 	current.Type = target.Type
 	current.OwnerUserID = ownerUserID
-	current.Origin = origin
+	current.Origin = target.Origin
 	current.Name = strings.TrimSpace(target.Name)
-	current.Recipient = normalizedRecipient
+	current.Recipient = target.Recipient
 	current.Enabled = target.Enabled
 	if !target.CreatedAt.IsZero() {
 		current.CreatedAt = target.CreatedAt
@@ -717,47 +703,6 @@ func notificationSubscriptionKey(targetID string, eventType domain.NotificationE
 		scope = "job:" + *jobID
 	}
 	return strings.TrimSpace(targetID) + "|" + strings.TrimSpace(string(eventType)) + "|" + scope
-}
-
-func normalizeNotificationTargetOrigin(targetType domain.NotificationTargetType, ownerUserID *string, origin domain.NotificationTargetOrigin) (domain.NotificationTargetOrigin, error) {
-	trimmedOrigin := domain.NotificationTargetOrigin(strings.TrimSpace(string(origin)))
-	if trimmedOrigin == "" {
-		trimmedOrigin = domain.NotificationTargetOriginManual
-	}
-	switch trimmedOrigin {
-	case domain.NotificationTargetOriginManual:
-		return trimmedOrigin, nil
-	case domain.NotificationTargetOriginConfigDefault:
-		if targetType != domain.NotificationTargetTypeEmail {
-			return "", fmt.Errorf("config-default notification targets must be email targets")
-		}
-		if ownerUserID != nil {
-			return "", fmt.Errorf("config-default notification targets must be ownerless")
-		}
-		return trimmedOrigin, nil
-	default:
-		return "", fmt.Errorf("unsupported notification target origin %q", trimmedOrigin)
-	}
-}
-
-func normalizeNotificationTargetRecipient(targetType domain.NotificationTargetType, value string) (string, error) {
-	trimmed := strings.TrimSpace(value)
-	switch targetType {
-	case domain.NotificationTargetTypeEmail:
-		parsed, err := mail.ParseAddress(trimmed)
-		if err != nil {
-			return "", fmt.Errorf("invalid notification target recipient %q: %w", trimmed, err)
-		}
-		return parsed.String(), nil
-	case domain.NotificationTargetTypeSlackWebhook:
-		parsed, err := url.Parse(trimmed)
-		if err != nil || parsed == nil || !parsed.IsAbs() || strings.ToLower(parsed.Scheme) != "https" || strings.TrimSpace(parsed.Host) == "" {
-			return "", fmt.Errorf("notification target webhook_url must be a valid https URL")
-		}
-		return parsed.String(), nil
-	default:
-		return "", fmt.Errorf("unsupported notification target type %q", targetType)
-	}
 }
 
 func trimOptionalString(value *string) *string {

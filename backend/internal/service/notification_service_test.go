@@ -437,13 +437,19 @@ func TestNotificationService_EnsureOwnedEmailTarget_IdempotentAndReusable(t *tes
 	}
 
 	otherOwner := domain.User{ID: uuid.NewString(), Email: "Owner@example.com", DisplayName: strPtr("Different")}
-	_, err = svc.EnsureOwnedEmailTarget(ctx, otherOwner)
-	if !errors.Is(err, repository.ErrNotificationTargetOwnershipConflict) {
-		t.Fatalf("expected ownership conflict, got %v", err)
+	otherTarget, err := svc.EnsureOwnedEmailTarget(ctx, otherOwner)
+	if err != nil {
+		t.Fatalf("ensure second user target failed: %v", err)
+	}
+	if otherTarget.ID == target.ID {
+		t.Fatalf("expected distinct personal target for second user, got shared id %q", otherTarget.ID)
+	}
+	if otherTarget.OwnerUserID == nil || *otherTarget.OwnerUserID != otherOwner.ID {
+		t.Fatalf("expected second target owner %q, got %+v", otherOwner.ID, otherTarget.OwnerUserID)
 	}
 }
 
-func TestNotificationService_EnsureOwnedEmailTarget_ClaimsUnownedTargetOnlyWhenSafe(t *testing.T) {
+func TestNotificationService_EnsureOwnedEmailTarget_DoesNotClaimSharedTargets(t *testing.T) {
 	ctx := context.Background()
 	repo := memoryrepo.NewNotificationSubscriptionRepository()
 	svc := NewNotificationService(repo)
@@ -461,10 +467,10 @@ func TestNotificationService_EnsureOwnedEmailTarget_ClaimsUnownedTargetOnlyWhenS
 	user := domain.User{ID: uuid.NewString(), Email: "shared@example.com"}
 	claimed, err := svc.EnsureOwnedEmailTarget(ctx, user)
 	if err != nil {
-		t.Fatalf("claim unowned target failed: %v", err)
+		t.Fatalf("ensure owned target failed: %v", err)
 	}
-	if claimed.ID != unowned.ID {
-		t.Fatalf("expected existing unowned target to be claimed, got %q", claimed.ID)
+	if claimed.ID == unowned.ID {
+		t.Fatalf("expected shared target and owned target to remain distinct, got %q", claimed.ID)
 	}
 	if claimed.OwnerUserID == nil || *claimed.OwnerUserID != user.ID {
 		t.Fatalf("expected claimed owner %q, got %+v", user.ID, claimed.OwnerUserID)
@@ -487,9 +493,12 @@ func TestNotificationService_EnsureOwnedEmailTarget_ClaimsUnownedTargetOnlyWhenS
 		t.Fatalf("create shared subscription failed: %v", err)
 	}
 
-	_, err = svc.EnsureOwnedEmailTarget(ctx, domain.User{ID: uuid.NewString(), Email: "admin-shared@example.com"})
-	if !errors.Is(err, repository.ErrNotificationTargetOwnershipConflict) {
-		t.Fatalf("expected shared target conflict, got %v", err)
+	ownedFromShared, err := svc.EnsureOwnedEmailTarget(ctx, domain.User{ID: uuid.NewString(), Email: "admin-shared@example.com"})
+	if err != nil {
+		t.Fatalf("ensure owned target from subscribed shared target failed: %v", err)
+	}
+	if ownedFromShared.ID == unownedWithSub.ID {
+		t.Fatalf("expected subscribed shared target to remain distinct from owned target, got %q", ownedFromShared.ID)
 	}
 }
 

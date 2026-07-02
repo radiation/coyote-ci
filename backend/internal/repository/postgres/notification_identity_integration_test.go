@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -38,7 +40,11 @@ func TestNotificationDeliveryRepository_AcquireConcurrentIdenticalCreatesOneRow_
 
 	const workers = 8
 	start := make(chan struct{})
-	results := make(chan repository.NotificationDeliveryAcquireOutcome, workers)
+	type acquireResult struct {
+		ID      string
+		Outcome repository.NotificationDeliveryAcquireOutcome
+	}
+	results := make(chan acquireResult, workers)
 	errs := make(chan error, workers)
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
@@ -51,7 +57,7 @@ func TestNotificationDeliveryRepository_AcquireConcurrentIdenticalCreatesOneRow_
 				errs <- err
 				return
 			}
-			results <- result.Outcome
+			results <- acquireResult{ID: strings.TrimSpace(result.Delivery.ID), Outcome: result.Outcome}
 		}()
 	}
 	close(start)
@@ -67,14 +73,19 @@ func TestNotificationDeliveryRepository_AcquireConcurrentIdenticalCreatesOneRow_
 
 	created := 0
 	pending := 0
-	for outcome := range results {
-		switch outcome {
+	returnedIDs := make([]string, 0, workers)
+	for result := range results {
+		if result.ID == "" {
+			t.Fatal("expected every acquire caller to receive a non-blank delivery id")
+		}
+		returnedIDs = append(returnedIDs, result.ID)
+		switch result.Outcome {
 		case repository.NotificationDeliveryAcquireOutcomeCreated:
 			created++
 		case repository.NotificationDeliveryAcquireOutcomePending:
 			pending++
 		default:
-			t.Fatalf("unexpected acquire outcome %q", outcome)
+			t.Fatalf("unexpected acquire outcome %q", result.Outcome)
 		}
 	}
 	if created != 1 {
@@ -83,18 +94,31 @@ func TestNotificationDeliveryRepository_AcquireConcurrentIdenticalCreatesOneRow_
 	if pending != workers-1 {
 		t.Fatalf("expected %d pending duplicate outcomes, got %d", workers-1, pending)
 	}
+	canonicalID := returnedIDs[0]
+	for _, returnedID := range returnedIDs[1:] {
+		if returnedID != canonicalID {
+			t.Fatalf("expected every acquire caller to receive the same delivery id, got %q and %q", canonicalID, returnedID)
+		}
+	}
 
+	var persistedID string
 	var count int
 	countErr := db.QueryRowContext(ctx, `
-		SELECT COUNT(*)
+		SELECT COUNT(*), COALESCE(MIN(id::text), '')
 		FROM notification_deliveries
 		WHERE build_id = $1 AND event_type = $2 AND transport = $3 AND destination_key = $4
-	`, buildID, string(domain.NotificationEventTypeBuildFailed), string(domain.NotificationTransportEmail), destinationKey).Scan(&count)
+	`, buildID, string(domain.NotificationEventTypeBuildFailed), string(domain.NotificationTransportEmail), destinationKey).Scan(&count, &persistedID)
 	if countErr != nil {
 		t.Fatalf("count deliveries failed: %v", countErr)
 	}
 	if count != 1 {
-		t.Fatalf("expected one persisted logical delivery, got %d", count)
+		t.Fatalf("expected exactly one persisted logical delivery row, got %d", count)
+	}
+	if strings.TrimSpace(persistedID) == "" {
+		t.Fatal("expected persisted delivery id to be non-blank")
+	}
+	if persistedID != canonicalID {
+		t.Fatalf("expected returned delivery id %q to match persisted delivery id %q", canonicalID, persistedID)
 	}
 }
 
@@ -145,6 +169,7 @@ func TestNotificationSubscriptionRepository_EnsureConfigEmailTargetConcurrentRet
 	for target := range targets {
 		if canonicalID == "" {
 			canonicalID = target.ID
+			recipient = target.Recipient
 		}
 		if target.ID != canonicalID {
 			t.Fatalf("expected all callers to observe the same canonical target id, got %q and %q", canonicalID, target.ID)
@@ -339,6 +364,113 @@ func TestMigration00032_BackfillsNotificationDeliveryIdentityDeterministically_P
 	assertDeliveryIdentity("delivery-dm", "slack_dm", "slack_identity", "slack-dm:"+workspaceID+":U999", "", userID, workspaceID)
 }
 
+func TestNotificationTargetOriginConstraintRejectsInvalidCombinations_Postgres(t *testing.T) {
+	db := openNotificationIntegrationDB(t)
+	defer closeNotificationIntegrationDB(t, db)
+
+	ctx := context.Background()
+	schema := createNotificationIntegrationSchema(t, db, ctx)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open dedicated connection: %v", err)
+	}
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Fatalf("close dedicated connection: %v", closeErr)
+		}
+	}()
+
+	setSearchPath(t, ctx, conn, schema)
+	applyNotificationMigrationSeries(t, ctx, conn, "00032")
+
+	now := time.Now().UTC()
+	userID := uuid.NewString()
+	mustExecNotificationIntegration(t, ctx, conn, `
+		INSERT INTO users (id, email, display_name, global_role, created_at, updated_at)
+		VALUES ($1, $2, $3, 'user', $4, $4)
+	`, userID, "user+"+userID+"@example.com", "User", now)
+
+	assertConstraint := func(name string, query string, args ...any) {
+		t.Helper()
+		_, execErr := conn.ExecContext(ctx, query, args...)
+		if execErr == nil {
+			t.Fatalf("expected %s insert to fail", name)
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(execErr, &pgErr) {
+			t.Fatalf("expected pg error for %s, got %T: %v", name, execErr, execErr)
+		}
+		if pgErr.ConstraintName != "notification_targets_origin_semantics_check" && pgErr.ConstraintName != "notification_targets_origin_check" {
+			t.Fatalf("expected named origin constraint for %s, got %q", name, pgErr.ConstraintName)
+		}
+	}
+
+	assertConstraint("config-default slack webhook", `
+		INSERT INTO notification_targets (id, type, origin, name, recipient, enabled, created_at, updated_at)
+		VALUES ($1, 'slack_webhook', 'config_default', 'Slack invalid', 'https://hooks.slack.example/services/T/B/X', TRUE, $2, $2)
+	`, uuid.NewString(), now)
+	assertConstraint("owned config-default email", `
+		INSERT INTO notification_targets (id, owner_user_id, type, origin, name, recipient, enabled, created_at, updated_at)
+		VALUES ($1, $2, 'email', 'config_default', 'Owned invalid', '<owned@example.com>', TRUE, $3, $3)
+	`, uuid.NewString(), userID, now)
+	assertConstraint("unsupported origin", `
+		INSERT INTO notification_targets (id, type, origin, name, recipient, enabled, created_at, updated_at)
+		VALUES ($1, 'email', 'legacy', 'Legacy invalid', '<legacy@example.com>', TRUE, $2, $2)
+	`, uuid.NewString(), now)
+
+	mustExecNotificationIntegration(t, ctx, conn, `
+		INSERT INTO notification_targets (id, type, origin, name, recipient, enabled, created_at, updated_at)
+		VALUES ($1, 'email', 'manual', 'Manual shared', '<shared@example.com>', TRUE, $2, $2)
+	`, uuid.NewString(), now)
+	mustExecNotificationIntegration(t, ctx, conn, `
+		INSERT INTO notification_targets (id, type, origin, name, recipient, enabled, created_at, updated_at)
+		VALUES ($1, 'slack_webhook', 'manual', 'Manual Slack', 'https://hooks.slack.example/services/T/B/Y', TRUE, $2, $2)
+	`, uuid.NewString(), now)
+	mustExecNotificationIntegration(t, ctx, conn, `
+		INSERT INTO notification_targets (id, owner_user_id, type, origin, name, recipient, enabled, created_at, updated_at)
+		VALUES ($1, $2, 'email', 'manual', 'Manual personal', '<personal@example.com>', TRUE, $3, $3)
+	`, uuid.NewString(), userID, now)
+	mustExecNotificationIntegration(t, ctx, conn, `
+		INSERT INTO notification_targets (id, type, origin, name, recipient, enabled, created_at, updated_at)
+		VALUES ($1, 'email', 'config_default', 'Config default', '<config@example.com>', TRUE, $2, $2)
+	`, uuid.NewString(), now)
+}
+
+func TestMigration00032_DownFailsIntentionally_Postgres(t *testing.T) {
+	db := openNotificationIntegrationDB(t)
+	defer closeNotificationIntegrationDB(t, db)
+
+	ctx := context.Background()
+	schema := createNotificationIntegrationSchema(t, db, ctx)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open dedicated connection: %v", err)
+	}
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Fatalf("close dedicated connection: %v", closeErr)
+		}
+	}()
+
+	setSearchPath(t, ctx, conn, schema)
+	applyNotificationMigrationSeries(t, ctx, conn, "00032")
+
+	err = applyNotificationMigrationDownExpectError(ctx, conn, "00032_refactor_notification_delivery_identity.sql")
+	if err == nil {
+		t.Fatal("expected migration 00032 down to fail intentionally")
+	}
+	message := err.Error()
+	for _, want := range []string{
+		"intentionally irreversible",
+		"legacy notification_targets UNIQUE (type, recipient) model cannot represent valid post-migration data",
+		"manual data migration",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected rollback error to contain %q, got %v", want, err)
+		}
+	}
+}
+
 func openNotificationIntegrationDB(t *testing.T) *sql.DB {
 	t.Helper()
 	databaseURL := strings.TrimSpace(os.Getenv("COYOTE_TEST_DATABASE_URL"))
@@ -447,14 +579,9 @@ func applyNotificationMigrationSeries(t *testing.T, ctx context.Context, conn *s
 
 func applyNotificationMigrationFile(t *testing.T, ctx context.Context, conn *sql.Conn, fileName string) {
 	t.Helper()
-	path := filepath.Join("../../../db/migrations", fileName)
-	content, err := os.ReadFile(filepath.Clean(path))
+	upSQL, err := loadNotificationMigrationSection(fileName, true)
 	if err != nil {
-		t.Fatalf("read migration %s: %v", fileName, err)
-	}
-	upSQL := string(content)
-	if idx := strings.Index(upSQL, "-- +goose Down"); idx >= 0 {
-		upSQL = upSQL[:idx]
+		t.Fatalf("load up migration %s: %v", fileName, err)
 	}
 	if strings.TrimSpace(upSQL) == "" {
 		return
@@ -463,6 +590,38 @@ func applyNotificationMigrationFile(t *testing.T, ctx context.Context, conn *sql
 	if err != nil {
 		t.Fatalf("apply migration %s: %v", fileName, err)
 	}
+}
+
+func applyNotificationMigrationDownExpectError(ctx context.Context, conn *sql.Conn, fileName string) error {
+	downSQL, err := loadNotificationMigrationSection(fileName, false)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(downSQL) == "" {
+		return nil
+	}
+	_, err = conn.ExecContext(ctx, downSQL)
+	return err
+}
+
+func loadNotificationMigrationSection(fileName string, up bool) (string, error) {
+	path := filepath.Join("../../../db/migrations", fileName)
+	content, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	text := string(content)
+	downIndex := strings.Index(text, "-- +goose Down")
+	if downIndex < 0 {
+		if up {
+			return text, nil
+		}
+		return "", nil
+	}
+	if up {
+		return text[:downIndex], nil
+	}
+	return text[downIndex+len("-- +goose Down"):], nil
 }
 
 func mustExecNotificationIntegration(t *testing.T, ctx context.Context, conn *sql.Conn, query string, args ...any) {

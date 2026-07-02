@@ -87,6 +87,7 @@ func TestNotificationSubscriptionRepository_TargetCRUDAndErrors(t *testing.T) {
 	created, createErr := repo.CreateTarget(context.Background(), domain.NotificationTarget{
 		ID:        "target-1",
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Name:      "Dev Mailbox",
 		Recipient: "<dev@example.com>",
 		Enabled:   true,
@@ -101,13 +102,13 @@ func TestNotificationSubscriptionRepository_TargetCRUDAndErrors(t *testing.T) {
 	}
 
 	mock.ExpectQuery("INSERT INTO notification_targets").WillReturnError(errors.New("duplicate key value violates unique constraint notification_targets_type_recipient_key"))
-	_, duplicateCreateErr := repo.CreateTarget(context.Background(), domain.NotificationTarget{ID: "target-2", Type: domain.NotificationTargetTypeEmail, Recipient: "<dev@example.com>"})
+	_, duplicateCreateErr := repo.CreateTarget(context.Background(), domain.NotificationTarget{ID: "target-2", Type: domain.NotificationTargetTypeEmail, Origin: domain.NotificationTargetOriginManual, Recipient: "<dev@example.com>"})
 	if !errors.Is(duplicateCreateErr, repository.ErrNotificationTargetDuplicate) {
 		t.Fatalf("expected duplicate target error, got %v", duplicateCreateErr)
 	}
 
 	mock.ExpectQuery("INSERT INTO notification_targets").WillReturnError(errors.New("insert failed"))
-	_, rawCreateErr := repo.CreateTarget(context.Background(), domain.NotificationTarget{ID: "target-3", Type: domain.NotificationTargetTypeEmail, Recipient: "<qa@example.com>"})
+	_, rawCreateErr := repo.CreateTarget(context.Background(), domain.NotificationTarget{ID: "target-3", Type: domain.NotificationTargetTypeEmail, Origin: domain.NotificationTargetOriginManual, Recipient: "<qa@example.com>"})
 	if rawCreateErr == nil || rawCreateErr.Error() != "insert failed" {
 		t.Fatalf("expected raw create error, got %v", rawCreateErr)
 	}
@@ -148,6 +149,7 @@ func TestNotificationSubscriptionRepository_TargetCRUDAndErrors(t *testing.T) {
 	updatedTarget, updateErr := repo.UpdateTarget(context.Background(), domain.NotificationTarget{
 		ID:        " target-1 ",
 		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
 		Name:      "Dev Team",
 		Recipient: "<dev@example.com>",
 		Enabled:   false,
@@ -161,19 +163,19 @@ func TestNotificationSubscriptionRepository_TargetCRUDAndErrors(t *testing.T) {
 	}
 
 	mock.ExpectQuery("UPDATE notification_targets").WillReturnError(sql.ErrNoRows)
-	_, missingUpdateErr := repo.UpdateTarget(context.Background(), domain.NotificationTarget{ID: "missing"})
+	_, missingUpdateErr := repo.UpdateTarget(context.Background(), domain.NotificationTarget{ID: "missing", Type: domain.NotificationTargetTypeEmail, Origin: domain.NotificationTargetOriginManual, Recipient: "missing@example.com"})
 	if !errors.Is(missingUpdateErr, repository.ErrNotificationTargetNotFound) {
 		t.Fatalf("expected missing target update error, got %v", missingUpdateErr)
 	}
 
 	mock.ExpectQuery("UPDATE notification_targets").WillReturnError(errors.New("duplicate key value violates unique constraint notification_targets_type_recipient_key"))
-	_, duplicateUpdateErr := repo.UpdateTarget(context.Background(), domain.NotificationTarget{ID: "target-1", Type: domain.NotificationTargetTypeEmail})
+	_, duplicateUpdateErr := repo.UpdateTarget(context.Background(), domain.NotificationTarget{ID: "target-1", Type: domain.NotificationTargetTypeEmail, Origin: domain.NotificationTargetOriginManual, Recipient: "<dev@example.com>"})
 	if !errors.Is(duplicateUpdateErr, repository.ErrNotificationTargetDuplicate) {
 		t.Fatalf("expected duplicate target update error, got %v", duplicateUpdateErr)
 	}
 
 	mock.ExpectQuery("UPDATE notification_targets").WillReturnError(errors.New("update failed"))
-	_, rawUpdateErr := repo.UpdateTarget(context.Background(), domain.NotificationTarget{ID: "target-1", Type: domain.NotificationTargetTypeEmail})
+	_, rawUpdateErr := repo.UpdateTarget(context.Background(), domain.NotificationTarget{ID: "target-1", Type: domain.NotificationTargetTypeEmail, Origin: domain.NotificationTargetOriginManual, Recipient: "<dev@example.com>"})
 	if rawUpdateErr == nil || rawUpdateErr.Error() != "update failed" {
 		t.Fatalf("expected raw update error, got %v", rawUpdateErr)
 	}
@@ -184,6 +186,7 @@ func TestNotificationSubscriptionRepository_TargetCRUDAndErrors(t *testing.T) {
 	createdSlackTarget, createSlackErr := repo.CreateTarget(context.Background(), domain.NotificationTarget{
 		ID:        "target-slack",
 		Type:      domain.NotificationTargetTypeSlackWebhook,
+		Origin:    domain.NotificationTargetOriginManual,
 		Name:      "Build Alerts",
 		Recipient: "https://hooks.slack.example/services/T/B/X",
 		Enabled:   true,
@@ -204,6 +207,83 @@ func TestNotificationSubscriptionRepository_TargetCRUDAndErrors(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestNotificationSubscriptionRepository_TargetValidationBeforeSQL(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewNotificationSubscriptionRepository(db)
+	ownerUserID := "user-1"
+	tests := []struct {
+		name     string
+		target   domain.NotificationTarget
+		wantText string
+	}{
+		{
+			name: "blank origin",
+			target: domain.NotificationTarget{
+				Type:      domain.NotificationTargetTypeEmail,
+				Recipient: "blank-origin@example.com",
+				Enabled:   true,
+			},
+			wantText: "notification target origin is required",
+		},
+		{
+			name: "config-default slack webhook",
+			target: domain.NotificationTarget{
+				Type:      domain.NotificationTargetTypeSlackWebhook,
+				Origin:    domain.NotificationTargetOriginConfigDefault,
+				Recipient: "https://hooks.slack.example/services/T/B/X",
+				Enabled:   true,
+			},
+			wantText: "config-default notification targets must be email targets",
+		},
+		{
+			name: "owned config-default email",
+			target: domain.NotificationTarget{
+				Type:        domain.NotificationTargetTypeEmail,
+				Origin:      domain.NotificationTargetOriginConfigDefault,
+				Recipient:   "owned@example.com",
+				OwnerUserID: &ownerUserID,
+				Enabled:     true,
+			},
+			wantText: "config-default notification targets must be ownerless",
+		},
+		{
+			name: "unsupported origin",
+			target: domain.NotificationTarget{
+				Type:      domain.NotificationTargetTypeEmail,
+				Origin:    domain.NotificationTargetOrigin("legacy"),
+				Recipient: "legacy@example.com",
+				Enabled:   true,
+			},
+			wantText: "unsupported notification target origin",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, createErr := repo.CreateTarget(context.Background(), tc.target)
+			if createErr == nil || !strings.Contains(createErr.Error(), tc.wantText) {
+				t.Fatalf("expected %q, got %v", tc.wantText, createErr)
+			}
+
+			updateTarget := tc.target
+			updateTarget.ID = "target-1"
+			_, updateErr := repo.UpdateTarget(context.Background(), updateTarget)
+			if updateErr == nil || !strings.Contains(updateErr.Error(), tc.wantText) {
+				t.Fatalf("expected update to fail with %q, got %v", tc.wantText, updateErr)
+			}
+		})
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unexpected sql calls for pre-validation failures: %v", err)
 	}
 }
 
