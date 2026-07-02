@@ -411,7 +411,9 @@ describe("MyNotificationsPage", () => {
         expect.anything(),
       );
       expect(
-        screen.getByText(/This link only stores your Slack member identity/i),
+        screen.getByText(
+          /This link identifies your Slack account for personal notifications/i,
+        ),
       ).toBeTruthy();
     });
     expect(mockedEnsureMyEmailNotificationTarget).not.toHaveBeenCalled();
@@ -533,7 +535,9 @@ describe("MyNotificationsPage", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/This link only stores your Slack member identity/i),
+        screen.getByText(
+          /This link identifies your Slack account for personal notifications/i,
+        ),
       ).toBeTruthy();
       expect(screen.getByText(/Bryan \(@bryan\)/i)).toBeTruthy();
     });

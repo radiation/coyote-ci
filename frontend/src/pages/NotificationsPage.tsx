@@ -21,136 +21,42 @@ import {
   updateNotificationTarget,
 } from "../api";
 import { useAuth } from "../auth-context";
-import type { Job } from "../types/job";
-import type { Project } from "../types/project";
 import type {
-  SlackWorkspaceIntegration,
   NotificationEventType,
   NotificationSubscription,
   NotificationTarget,
   NotificationTargetType,
+  SlackWorkspaceIntegration,
 } from "../types/notification";
-import { formatCompactTime, formatTime } from "../utils/time";
+import { formatTime } from "../utils/time";
 
-const EVENT_OPTIONS: NotificationEventType[] = [
-  "build_failed",
-  "build_succeeded",
-];
+import {
+  DEFAULT_EVENT_SELECTION,
+  EVENT_OPTIONS,
+  buildReconcilePlan,
+  describeScope,
+  draftToIdentity,
+  findProjectIDForRule,
+  formatEventLabel,
+  formatRuleEnabledState,
+  formatTargetSelectorLabel,
+  formatTargetTypeLabel,
+  groupSubscriptions,
+  selectedEventsFromDraft,
+  validateRuleDraft,
+  type GroupedSubscriptionRule,
+  type NotificationScopeType,
+  type RuleDraft,
+} from "./NotificationsPage.helpers";
+import { NotificationsSlackWorkspaceSection } from "./NotificationsPage.sections";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+$/;
 const SLACK_WEBHOOK_PATTERN = /^https:\/\/.+/i;
-
-const SLACK_SETUP_URL = "https://api.slack.com/apps";
-
-type NotificationScopeType = "project" | "job";
-
-type EventSelection = Record<NotificationEventType, boolean>;
-
-type RuleEnabledState = "enabled" | "disabled" | "mixed";
-
-interface GroupedSubscriptionRule {
-  key: string;
-  targetID: string;
-  scopeType: NotificationScopeType;
-  projectID?: string;
-  jobID?: string;
-  subscriptions: NotificationSubscription[];
-  eventTypes: NotificationEventType[];
-  enabledState: RuleEnabledState;
-  updatedAt: string;
-}
-
-interface RuleDraft {
-  targetID: string;
-  scopeType: NotificationScopeType | "";
-  projectID: string;
-  jobID: string;
-  events: EventSelection;
-  enabled: boolean;
-}
-
-interface ReconcilePlan {
-  createEvents: NotificationEventType[];
-  updateEnabledRows: NotificationSubscription[];
-  deleteRows: NotificationSubscription[];
-}
 
 interface OperationResult {
   completed: number;
   alreadySatisfied: number;
   failures: string[];
-}
-
-interface RuleIdentity {
-  targetID: string;
-  scopeType: NotificationScopeType;
-  projectID?: string;
-  jobID?: string;
-}
-
-const DEFAULT_EVENT_SELECTION: EventSelection = {
-  build_failed: true,
-  build_succeeded: false,
-};
-
-function slackWorkspaceDisplayName(
-  integration: SlackWorkspaceIntegration,
-): string {
-  return integration.workspace_name?.trim() || integration.workspace_id;
-}
-
-function slackWorkspaceLink(
-  workspaceURL: string | null | undefined,
-): { href: string; label: string } | null {
-  const trimmed = workspaceURL?.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return null;
-    }
-    return {
-      href: trimmed,
-      label: parsed.host,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function slackConnectionStatus(integration: SlackWorkspaceIntegration): {
-  label: string;
-  className: string;
-} {
-  if (integration.enabled) {
-    return { label: "Connected", className: "status-success" };
-  }
-  return { label: "Disabled", className: "status-canceled" };
-}
-
-function slackTestStatus(integration: SlackWorkspaceIntegration): {
-  label: string;
-  className: string;
-} {
-  if (integration.last_test_succeeded === true) {
-    return { label: "Passed", className: "status-success" };
-  }
-  if (integration.last_test_succeeded === false) {
-    return { label: "Failed", className: "status-failed" };
-  }
-  return { label: "Not tested", className: "status-canceled" };
-}
-
-function slackLinkedIdentitySummary(
-  integration: SlackWorkspaceIntegration,
-): string {
-  if (integration.linked_identity_count === 1) {
-    return "1 linked personal Slack identity";
-  }
-  return `${integration.linked_identity_count} linked personal Slack identities`;
 }
 
 export function NotificationsPage() {
@@ -769,44 +675,6 @@ export function NotificationsPage() {
     setSlackActionErrorMessage(null);
   };
 
-  const slackTechnicalDetails = slackIntegration
-    ? [
-        {
-          label: "Workspace ID",
-          value: slackIntegration.workspace_id,
-        },
-        {
-          label: "Linked identities",
-          value: slackLinkedIdentitySummary(slackIntegration),
-        },
-        slackIntegration.bot_id
-          ? { label: "Bot ID", value: slackIntegration.bot_id }
-          : null,
-        slackIntegration.authed_user_id
-          ? { label: "Authed user ID", value: slackIntegration.authed_user_id }
-          : null,
-        slackIntegration.app_id
-          ? { label: "App ID", value: slackIntegration.app_id }
-          : null,
-      ].filter(
-        (
-          detail,
-        ): detail is {
-          label: string;
-          value: string;
-        } => detail !== null,
-      )
-    : [];
-  const slackWorkspaceSummaryLink = slackIntegration
-    ? slackWorkspaceLink(slackIntegration.workspace_url)
-    : null;
-  const slackStateStatus = slackIntegration
-    ? slackConnectionStatus(slackIntegration)
-    : null;
-  const slackLastTestStatus = slackIntegration
-    ? slackTestStatus(slackIntegration)
-    : null;
-
   const onToggleSlackEnabled = (integration: SlackWorkspaceIntegration) => {
     patchSlackMutation.mutate({ enabled: !integration.enabled });
   };
@@ -833,267 +701,46 @@ export function NotificationsPage() {
         </div>
       </div>
 
-      <section className="settings-panel" style={{ marginTop: 16 }}>
-        <h3>Slack workspace</h3>
-        <p className="subtle-text">
-          A global administrator can connect one Slack workspace for this Coyote
-          instance.
-        </p>
-        <p className="subtle-text">
-          This workspace connection will be used for personal Slack accounts and
-          shared notification destinations.
-        </p>
-        <p className="subtle-text">
-          Existing Slack webhook targets remain separate and continue to work
-          independently.
-        </p>
-
-        {!canManageAdminSettings && (
-          <p className="subtle-text">
-            Global admin access is required to manage Slack workspace
-            integration.
-          </p>
-        )}
-
-        {canManageAdminSettings && slackWorkspaceLoading && (
-          <p>Loading Slack workspace integration...</p>
-        )}
-
-        {canManageAdminSettings && slackWorkspaceError && (
-          <p className="error-text">
-            {formatAPIErrorMessage(
-              slackWorkspaceError,
-              "You do not have permission to manage Slack workspace integration.",
-              "Failed to load Slack workspace integration",
-            )}
-          </p>
-        )}
-
-        {canManageAdminSettings &&
-          !slackWorkspaceLoading &&
-          !slackIntegration && (
-            <form className="job-form" onSubmit={onConnectSlackWorkspace}>
-              <label htmlFor="slack-bot-token">Slack bot token</label>
-              <input
-                id="slack-bot-token"
-                type="password"
-                value={slackBotToken}
-                onChange={(event) => {
-                  setSlackBotToken(event.target.value);
-                  setSlackActionErrorMessage(null);
-                }}
-                placeholder="xoxb-..."
-                autoComplete="off"
-                disabled={slackMutationPending}
-              />
-              <p className="subtle-text">
-                Connect a Slack app bot token to enable instance-level Slack
-                workspace features. Existing Slack webhook targets are not
-                changed by this connection.{" "}
-                <a href={SLACK_SETUP_URL} target="_blank" rel="noreferrer">
-                  Open Slack app setup
-                </a>
-                .
-              </p>
-              <div className="job-form-actions">
-                <button type="submit" disabled={slackMutationPending}>
-                  {connectSlackMutation.isPending
-                    ? "Connecting..."
-                    : "Connect Slack workspace"}
-                </button>
-              </div>
-            </form>
-          )}
-
-        {canManageAdminSettings && slackIntegration && (
-          <>
-            <div className="slack-integration-summary">
-              <div className="slack-integration-summary-header">
-                <div>
-                  <div className="slack-integration-summary-title-row">
-                    <h4>{slackWorkspaceDisplayName(slackIntegration)}</h4>
-                    {slackStateStatus && (
-                      <span
-                        className={`status-badge ${slackStateStatus.className}`}
-                      >
-                        {slackStateStatus.label}
-                      </span>
-                    )}
-                  </div>
-                  {slackWorkspaceSummaryLink ? (
-                    <a
-                      className="slack-integration-link"
-                      href={slackWorkspaceSummaryLink.href}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {slackWorkspaceSummaryLink.label}
-                    </a>
-                  ) : null}
-                </div>
-              </div>
-              <p className="slack-integration-test-summary">
-                {slackIntegration.last_tested_at
-                  ? `Last tested ${formatCompactTime(slackIntegration.last_tested_at)}`
-                  : "Connection test not run yet"}{" "}
-                {slackLastTestStatus && (
-                  <span
-                    className={`status-badge ${slackLastTestStatus.className}`}
-                  >
-                    {slackLastTestStatus.label}
-                  </span>
-                )}
-              </p>
-              {!slackIntegration.enabled && (
-                <p className="subtle-text">
-                  This workspace connection is paused. Re-enable it to resume
-                  Slack workspace features without reconnecting.
-                </p>
-              )}
-            </div>
-
-            <details className="slack-integration-details">
-              <summary>Integration details</summary>
-              <dl className="slack-integration-details-grid">
-                {slackTechnicalDetails.map((detail) => (
-                  <div key={detail.label}>
-                    <dt className="subtle-text">{detail.label}</dt>
-                    <dd>{detail.value}</dd>
-                  </div>
-                ))}
-              </dl>
-            </details>
-
-            {slackIntegration.linked_identity_count > 0 && (
-              <p className="subtle-text" style={{ marginTop: 10 }}>
-                This workspace has linked user identities. Unlink them before
-                disconnecting or switching workspaces.
-              </p>
-            )}
-
-            <div className="job-form-actions" style={{ marginTop: 12 }}>
-              <button
-                className={
-                  slackIntegration.enabled
-                    ? "secondary-button danger-button"
-                    : "secondary-button"
-                }
-                type="button"
-                onClick={() => onToggleSlackEnabled(slackIntegration)}
-                disabled={slackMutationPending}
-              >
-                {patchSlackMutation.isPending
-                  ? "Saving..."
-                  : slackIntegration.enabled
-                    ? "Disable integration"
-                    : "Enable integration"}
-              </button>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => testSlackMutation.mutate()}
-                disabled={slackMutationPending}
-              >
-                {testSlackMutation.isPending ? "Testing..." : "Test connection"}
-              </button>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => {
-                  setSlackReplaceTokenMode(true);
-                  setSlackBotToken("");
-                  setSlackReplaceExisting(false);
-                  setSlackActionErrorMessage(null);
-                }}
-                disabled={slackMutationPending}
-              >
-                Replace bot token
-              </button>
-              <button
-                className="secondary-button danger-button"
-                type="button"
-                onClick={onDisconnectSlackWorkspace}
-                disabled={slackMutationPending}
-              >
-                {disconnectSlackMutation.isPending
-                  ? "Disconnecting..."
-                  : "Disconnect"}
-              </button>
-            </div>
-
-            {slackReplaceTokenMode && (
-              <form
-                className="job-form slack-replacement-form"
-                style={{ marginTop: 16 }}
-                onSubmit={onConnectSlackWorkspace}
-              >
-                <label htmlFor="slack-bot-token-replace">
-                  New Slack bot token
-                </label>
-                <input
-                  id="slack-bot-token-replace"
-                  type="password"
-                  value={slackBotToken}
-                  onChange={(event) => {
-                    setSlackBotToken(event.target.value);
-                    setSlackActionErrorMessage(null);
-                  }}
-                  placeholder="Enter a new xoxb- token"
-                  autoComplete="off"
-                  disabled={slackMutationPending}
-                />
-                <p className="subtle-text">
-                  Use the same-workspace token rotation path by default. Only
-                  enable workspace switching when the new token belongs to a
-                  different Slack workspace.
-                </p>
-                <label
-                  className="checkbox-label"
-                  htmlFor="slack-replace-existing-connected"
-                >
-                  <input
-                    id="slack-replace-existing-connected"
-                    type="checkbox"
-                    checked={slackReplaceExisting}
-                    onChange={(event) =>
-                      setSlackReplaceExisting(event.target.checked)
-                    }
-                    disabled={slackMutationPending}
-                  />
-                  Allow this token to switch Coyote to a different Slack
-                  workspace.
-                </label>
-                <div className="job-form-actions">
-                  <button type="submit" disabled={slackMutationPending}>
-                    {connectSlackMutation.isPending
-                      ? "Saving..."
-                      : "Save new token"}
-                  </button>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={onCancelSlackTokenReplacement}
-                    disabled={slackMutationPending}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            )}
-          </>
-        )}
-
-        {slackActionNoticeMessage && (
-          <p className="subtle-text" style={{ marginTop: 10 }}>
-            {slackActionNoticeMessage}
-          </p>
-        )}
-        {slackActionErrorMessage && (
-          <p className="error-text" style={{ marginTop: 10 }}>
-            {slackActionErrorMessage}
-          </p>
-        )}
-      </section>
+      <NotificationsSlackWorkspaceSection
+        canManageAdminSettings={canManageAdminSettings}
+        loading={slackWorkspaceLoading}
+        errorMessage={
+          canManageAdminSettings && slackWorkspaceError
+            ? formatAPIErrorMessage(
+                slackWorkspaceError,
+                "You do not have permission to manage Slack workspace integration.",
+                "Failed to load Slack workspace integration",
+              )
+            : null
+        }
+        integration={slackIntegration}
+        mutationPending={slackMutationPending}
+        connectPending={connectSlackMutation.isPending}
+        patchPending={patchSlackMutation.isPending}
+        testPending={testSlackMutation.isPending}
+        disconnectPending={disconnectSlackMutation.isPending}
+        botToken={slackBotToken}
+        replaceTokenMode={slackReplaceTokenMode}
+        replaceExisting={slackReplaceExisting}
+        actionNoticeMessage={slackActionNoticeMessage}
+        actionErrorMessage={slackActionErrorMessage}
+        onConnect={onConnectSlackWorkspace}
+        onBotTokenChange={(value) => {
+          setSlackBotToken(value);
+          setSlackActionErrorMessage(null);
+        }}
+        onOpenReplaceTokenMode={() => {
+          setSlackReplaceTokenMode(true);
+          setSlackBotToken("");
+          setSlackReplaceExisting(false);
+          setSlackActionErrorMessage(null);
+        }}
+        onReplaceExistingChange={setSlackReplaceExisting}
+        onCancelReplace={onCancelSlackTokenReplacement}
+        onTestConnection={() => testSlackMutation.mutate()}
+        onToggleEnabled={onToggleSlackEnabled}
+        onDisconnect={onDisconnectSlackWorkspace}
+      />
 
       <section className="settings-panel" style={{ marginTop: 16 }}>
         <h3>Notification defaults</h3>
@@ -1994,255 +1641,4 @@ function NotificationTargetRow({
       </td>
     </tr>
   );
-}
-
-function groupSubscriptions(
-  subscriptions: NotificationSubscription[],
-): GroupedSubscriptionRule[] {
-  const grouped = new Map<string, NotificationSubscription[]>();
-  for (const subscription of subscriptions) {
-    const key = ruleKeyFromRow(subscription);
-    const current = grouped.get(key);
-    if (current) {
-      current.push(subscription);
-    } else {
-      grouped.set(key, [subscription]);
-    }
-  }
-
-  const rules: GroupedSubscriptionRule[] = [];
-  grouped.forEach((rows, key) => {
-    if (rows.length === 0) {
-      return;
-    }
-    const first = rows[0];
-    const scopeType: NotificationScopeType = first.project_id
-      ? "project"
-      : "job";
-
-    const eventTypes: NotificationEventType[] = [];
-    const seenEvents = new Set<NotificationEventType>();
-    let enabledCount = 0;
-    let latestUpdatedAt = first.updated_at;
-
-    for (const row of rows) {
-      if (!seenEvents.has(row.event_type)) {
-        seenEvents.add(row.event_type);
-        eventTypes.push(row.event_type);
-      }
-      if (row.enabled) {
-        enabledCount += 1;
-      }
-      if (row.updated_at > latestUpdatedAt) {
-        latestUpdatedAt = row.updated_at;
-      }
-    }
-
-    eventTypes.sort(
-      (left, right) =>
-        EVENT_OPTIONS.indexOf(left) - EVENT_OPTIONS.indexOf(right),
-    );
-
-    const enabledState: RuleEnabledState =
-      enabledCount === rows.length
-        ? "enabled"
-        : enabledCount === 0
-          ? "disabled"
-          : "mixed";
-
-    rules.push({
-      key,
-      targetID: first.target_id,
-      scopeType,
-      projectID: first.project_id ?? undefined,
-      jobID: first.job_id ?? undefined,
-      subscriptions: rows,
-      eventTypes,
-      enabledState,
-      updatedAt: latestUpdatedAt,
-    });
-  });
-
-  rules.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  return rules;
-}
-
-function buildReconcilePlan(
-  rule: GroupedSubscriptionRule,
-  draft: RuleDraft,
-): ReconcilePlan {
-  const desiredEvents = selectedEventsFromDraft(draft);
-  const desiredIdentity = draftToIdentity(draft);
-
-  const byDesiredKey = new Map<string, NotificationSubscription[]>();
-  for (const row of rule.subscriptions) {
-    const key = desiredKeyFromRow(row);
-    const current = byDesiredKey.get(key);
-    if (current) {
-      current.push(row);
-    } else {
-      byDesiredKey.set(key, [row]);
-    }
-  }
-
-  const createEvents: NotificationEventType[] = [];
-  const updateEnabledRows: NotificationSubscription[] = [];
-  const deleteRows: NotificationSubscription[] = [];
-  const keptRowIDs = new Set<string>();
-
-  for (const eventType of desiredEvents) {
-    const key = desiredKeyFromIdentityAndEvent(desiredIdentity, eventType);
-    const matches = byDesiredKey.get(key) ?? [];
-    if (matches.length === 0) {
-      createEvents.push(eventType);
-      continue;
-    }
-
-    const [keeper, ...duplicates] = matches;
-    keptRowIDs.add(keeper.id);
-    if (keeper.enabled !== draft.enabled) {
-      updateEnabledRows.push(keeper);
-    }
-    for (const duplicate of duplicates) {
-      deleteRows.push(duplicate);
-    }
-  }
-
-  for (const row of rule.subscriptions) {
-    if (
-      !keptRowIDs.has(row.id) &&
-      !deleteRows.find((candidate) => candidate.id === row.id)
-    ) {
-      deleteRows.push(row);
-    }
-  }
-
-  return {
-    createEvents,
-    updateEnabledRows,
-    deleteRows,
-  };
-}
-
-function selectedEventsFromDraft(draft: RuleDraft): NotificationEventType[] {
-  return EVENT_OPTIONS.filter((eventType) => draft.events[eventType]);
-}
-
-function validateRuleDraft(draft: RuleDraft): string | null {
-  if (!draft.targetID.trim()) {
-    return "Notification target is required.";
-  }
-  if (!draft.scopeType) {
-    return "Scope is required.";
-  }
-  if (!draft.projectID.trim()) {
-    return "Project is required.";
-  }
-  if (draft.scopeType === "job" && !draft.jobID.trim()) {
-    return "Job is required for job scope.";
-  }
-  return null;
-}
-
-function draftToIdentity(draft: RuleDraft): RuleIdentity {
-  return {
-    targetID: draft.targetID.trim(),
-    scopeType: draft.scopeType as NotificationScopeType,
-    projectID:
-      draft.scopeType === "project" ? draft.projectID.trim() : undefined,
-    jobID: draft.scopeType === "job" ? draft.jobID.trim() : undefined,
-  };
-}
-
-function desiredKeyFromRow(subscription: NotificationSubscription): string {
-  if (subscription.project_id) {
-    return desiredKeyFromIdentityAndEvent(
-      {
-        targetID: subscription.target_id,
-        scopeType: "project",
-        projectID: subscription.project_id,
-      },
-      subscription.event_type,
-    );
-  }
-
-  return desiredKeyFromIdentityAndEvent(
-    {
-      targetID: subscription.target_id,
-      scopeType: "job",
-      jobID: subscription.job_id ?? "",
-    },
-    subscription.event_type,
-  );
-}
-
-function desiredKeyFromIdentityAndEvent(
-  identity: RuleIdentity,
-  eventType: NotificationEventType,
-): string {
-  const scopeID =
-    identity.scopeType === "project" ? identity.projectID : identity.jobID;
-  return `${identity.targetID}|${identity.scopeType}|${scopeID ?? ""}|${eventType}`;
-}
-
-function ruleKeyFromRow(subscription: NotificationSubscription): string {
-  if (subscription.project_id) {
-    return `${subscription.target_id}|project|${subscription.project_id}`;
-  }
-  return `${subscription.target_id}|job|${subscription.job_id ?? ""}`;
-}
-
-function formatTargetTypeLabel(type: NotificationTargetType): string {
-  return type === "slack_webhook" ? "Slack" : "Email";
-}
-
-function formatTargetSelectorLabel(target: NotificationTarget): string {
-  return `${formatTargetTypeLabel(target.type)} · ${target.name}`;
-}
-
-function formatEventLabel(eventType: NotificationEventType): string {
-  return eventType === "build_failed" ? "Build failed" : "Build succeeded";
-}
-
-function formatRuleEnabledState(state: RuleEnabledState): string {
-  if (state === "mixed") {
-    return "Mixed";
-  }
-  return state === "enabled" ? "Enabled" : "Disabled";
-}
-
-function describeScope(
-  rule: GroupedSubscriptionRule,
-  projectLookup: Map<string, Project>,
-  jobLookup: Map<string, Job>,
-): string {
-  if (rule.scopeType === "project") {
-    const project = rule.projectID
-      ? projectLookup.get(rule.projectID)
-      : undefined;
-    return project
-      ? `All jobs in ${project.name}`
-      : "All jobs in selected project";
-  }
-
-  const job = rule.jobID ? jobLookup.get(rule.jobID) : undefined;
-  if (!job) {
-    return "One specific job";
-  }
-  const project = projectLookup.get(job.project_id);
-  return project ? `${project.name} / ${job.name}` : job.name;
-}
-
-function findProjectIDForRule(
-  rule: GroupedSubscriptionRule,
-  jobLookup: Map<string, Job>,
-): string {
-  if (rule.scopeType === "project") {
-    return rule.projectID ?? "";
-  }
-  if (!rule.jobID) {
-    return "";
-  }
-  const job = jobLookup.get(rule.jobID);
-  return job ? job.project_id : "";
 }
