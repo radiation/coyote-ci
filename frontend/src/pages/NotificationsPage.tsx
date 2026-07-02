@@ -28,7 +28,7 @@ import type {
   NotificationTargetType,
   SlackWorkspaceIntegration,
 } from "../types/notification";
-import { formatCompactTime, formatTime } from "../utils/time";
+import { formatTime } from "../utils/time";
 
 import {
   DEFAULT_EVENT_SELECTION,
@@ -43,21 +43,15 @@ import {
   formatTargetTypeLabel,
   groupSubscriptions,
   selectedEventsFromDraft,
-  slackConnectionStatus,
-  slackLinkedIdentitySummary,
-  slackTestStatus,
-  slackWorkspaceDisplayName,
-  slackWorkspaceLink,
   validateRuleDraft,
   type GroupedSubscriptionRule,
   type NotificationScopeType,
   type RuleDraft,
 } from "./NotificationsPage.helpers";
+import { NotificationsSlackWorkspaceSection } from "./NotificationsPage.sections";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+$/;
 const SLACK_WEBHOOK_PATTERN = /^https:\/\/.+/i;
-
-const SLACK_SETUP_URL = "https://api.slack.com/apps";
 
 interface OperationResult {
   completed: number;
@@ -681,44 +675,6 @@ export function NotificationsPage() {
     setSlackActionErrorMessage(null);
   };
 
-  const slackTechnicalDetails = slackIntegration
-    ? [
-        {
-          label: "Workspace ID",
-          value: slackIntegration.workspace_id,
-        },
-        {
-          label: "Linked identities",
-          value: slackLinkedIdentitySummary(slackIntegration),
-        },
-        slackIntegration.bot_id
-          ? { label: "Bot ID", value: slackIntegration.bot_id }
-          : null,
-        slackIntegration.authed_user_id
-          ? { label: "Authed user ID", value: slackIntegration.authed_user_id }
-          : null,
-        slackIntegration.app_id
-          ? { label: "App ID", value: slackIntegration.app_id }
-          : null,
-      ].filter(
-        (
-          detail,
-        ): detail is {
-          label: string;
-          value: string;
-        } => detail !== null,
-      )
-    : [];
-  const slackWorkspaceSummaryLink = slackIntegration
-    ? slackWorkspaceLink(slackIntegration.workspace_url)
-    : null;
-  const slackStateStatus = slackIntegration
-    ? slackConnectionStatus(slackIntegration)
-    : null;
-  const slackLastTestStatus = slackIntegration
-    ? slackTestStatus(slackIntegration)
-    : null;
-
   const onToggleSlackEnabled = (integration: SlackWorkspaceIntegration) => {
     patchSlackMutation.mutate({ enabled: !integration.enabled });
   };
@@ -745,267 +701,46 @@ export function NotificationsPage() {
         </div>
       </div>
 
-      <section className="settings-panel" style={{ marginTop: 16 }}>
-        <h3>Slack workspace</h3>
-        <p className="subtle-text">
-          A global administrator can connect one Slack workspace for this Coyote
-          instance.
-        </p>
-        <p className="subtle-text">
-          This workspace connection will be used for personal Slack accounts and
-          shared notification destinations.
-        </p>
-        <p className="subtle-text">
-          Existing Slack webhook targets remain separate and continue to work
-          independently.
-        </p>
-
-        {!canManageAdminSettings && (
-          <p className="subtle-text">
-            Global admin access is required to manage Slack workspace
-            integration.
-          </p>
-        )}
-
-        {canManageAdminSettings && slackWorkspaceLoading && (
-          <p>Loading Slack workspace integration...</p>
-        )}
-
-        {canManageAdminSettings && slackWorkspaceError && (
-          <p className="error-text">
-            {formatAPIErrorMessage(
-              slackWorkspaceError,
-              "You do not have permission to manage Slack workspace integration.",
-              "Failed to load Slack workspace integration",
-            )}
-          </p>
-        )}
-
-        {canManageAdminSettings &&
-          !slackWorkspaceLoading &&
-          !slackIntegration && (
-            <form className="job-form" onSubmit={onConnectSlackWorkspace}>
-              <label htmlFor="slack-bot-token">Slack bot token</label>
-              <input
-                id="slack-bot-token"
-                type="password"
-                value={slackBotToken}
-                onChange={(event) => {
-                  setSlackBotToken(event.target.value);
-                  setSlackActionErrorMessage(null);
-                }}
-                placeholder="xoxb-..."
-                autoComplete="off"
-                disabled={slackMutationPending}
-              />
-              <p className="subtle-text">
-                Connect a Slack app bot token to enable instance-level Slack
-                workspace features. Existing Slack webhook targets are not
-                changed by this connection.{" "}
-                <a href={SLACK_SETUP_URL} target="_blank" rel="noreferrer">
-                  Open Slack app setup
-                </a>
-                .
-              </p>
-              <div className="job-form-actions">
-                <button type="submit" disabled={slackMutationPending}>
-                  {connectSlackMutation.isPending
-                    ? "Connecting..."
-                    : "Connect Slack workspace"}
-                </button>
-              </div>
-            </form>
-          )}
-
-        {canManageAdminSettings && slackIntegration && (
-          <>
-            <div className="slack-integration-summary">
-              <div className="slack-integration-summary-header">
-                <div>
-                  <div className="slack-integration-summary-title-row">
-                    <h4>{slackWorkspaceDisplayName(slackIntegration)}</h4>
-                    {slackStateStatus && (
-                      <span
-                        className={`status-badge ${slackStateStatus.className}`}
-                      >
-                        {slackStateStatus.label}
-                      </span>
-                    )}
-                  </div>
-                  {slackWorkspaceSummaryLink ? (
-                    <a
-                      className="slack-integration-link"
-                      href={slackWorkspaceSummaryLink.href}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {slackWorkspaceSummaryLink.label}
-                    </a>
-                  ) : null}
-                </div>
-              </div>
-              <p className="slack-integration-test-summary">
-                {slackIntegration.last_tested_at
-                  ? `Last tested ${formatCompactTime(slackIntegration.last_tested_at)}`
-                  : "Connection test not run yet"}{" "}
-                {slackLastTestStatus && (
-                  <span
-                    className={`status-badge ${slackLastTestStatus.className}`}
-                  >
-                    {slackLastTestStatus.label}
-                  </span>
-                )}
-              </p>
-              {!slackIntegration.enabled && (
-                <p className="subtle-text">
-                  This workspace connection is paused. Re-enable it to resume
-                  Slack workspace features without reconnecting.
-                </p>
-              )}
-            </div>
-
-            <details className="slack-integration-details">
-              <summary>Integration details</summary>
-              <dl className="slack-integration-details-grid">
-                {slackTechnicalDetails.map((detail) => (
-                  <div key={detail.label}>
-                    <dt className="subtle-text">{detail.label}</dt>
-                    <dd>{detail.value}</dd>
-                  </div>
-                ))}
-              </dl>
-            </details>
-
-            {slackIntegration.linked_identity_count > 0 && (
-              <p className="subtle-text" style={{ marginTop: 10 }}>
-                This workspace has linked user identities. Unlink them before
-                disconnecting or switching workspaces.
-              </p>
-            )}
-
-            <div className="job-form-actions" style={{ marginTop: 12 }}>
-              <button
-                className={
-                  slackIntegration.enabled
-                    ? "secondary-button danger-button"
-                    : "secondary-button"
-                }
-                type="button"
-                onClick={() => onToggleSlackEnabled(slackIntegration)}
-                disabled={slackMutationPending}
-              >
-                {patchSlackMutation.isPending
-                  ? "Saving..."
-                  : slackIntegration.enabled
-                    ? "Disable integration"
-                    : "Enable integration"}
-              </button>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => testSlackMutation.mutate()}
-                disabled={slackMutationPending}
-              >
-                {testSlackMutation.isPending ? "Testing..." : "Test connection"}
-              </button>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => {
-                  setSlackReplaceTokenMode(true);
-                  setSlackBotToken("");
-                  setSlackReplaceExisting(false);
-                  setSlackActionErrorMessage(null);
-                }}
-                disabled={slackMutationPending}
-              >
-                Replace bot token
-              </button>
-              <button
-                className="secondary-button danger-button"
-                type="button"
-                onClick={onDisconnectSlackWorkspace}
-                disabled={slackMutationPending}
-              >
-                {disconnectSlackMutation.isPending
-                  ? "Disconnecting..."
-                  : "Disconnect"}
-              </button>
-            </div>
-
-            {slackReplaceTokenMode && (
-              <form
-                className="job-form slack-replacement-form"
-                style={{ marginTop: 16 }}
-                onSubmit={onConnectSlackWorkspace}
-              >
-                <label htmlFor="slack-bot-token-replace">
-                  New Slack bot token
-                </label>
-                <input
-                  id="slack-bot-token-replace"
-                  type="password"
-                  value={slackBotToken}
-                  onChange={(event) => {
-                    setSlackBotToken(event.target.value);
-                    setSlackActionErrorMessage(null);
-                  }}
-                  placeholder="Enter a new xoxb- token"
-                  autoComplete="off"
-                  disabled={slackMutationPending}
-                />
-                <p className="subtle-text">
-                  Use the same-workspace token rotation path by default. Only
-                  enable workspace switching when the new token belongs to a
-                  different Slack workspace.
-                </p>
-                <label
-                  className="checkbox-label"
-                  htmlFor="slack-replace-existing-connected"
-                >
-                  <input
-                    id="slack-replace-existing-connected"
-                    type="checkbox"
-                    checked={slackReplaceExisting}
-                    onChange={(event) =>
-                      setSlackReplaceExisting(event.target.checked)
-                    }
-                    disabled={slackMutationPending}
-                  />
-                  Allow this token to switch Coyote to a different Slack
-                  workspace.
-                </label>
-                <div className="job-form-actions">
-                  <button type="submit" disabled={slackMutationPending}>
-                    {connectSlackMutation.isPending
-                      ? "Saving..."
-                      : "Save new token"}
-                  </button>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={onCancelSlackTokenReplacement}
-                    disabled={slackMutationPending}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            )}
-          </>
-        )}
-
-        {slackActionNoticeMessage && (
-          <p className="subtle-text" style={{ marginTop: 10 }}>
-            {slackActionNoticeMessage}
-          </p>
-        )}
-        {slackActionErrorMessage && (
-          <p className="error-text" style={{ marginTop: 10 }}>
-            {slackActionErrorMessage}
-          </p>
-        )}
-      </section>
+      <NotificationsSlackWorkspaceSection
+        canManageAdminSettings={canManageAdminSettings}
+        loading={slackWorkspaceLoading}
+        errorMessage={
+          canManageAdminSettings && slackWorkspaceError
+            ? formatAPIErrorMessage(
+                slackWorkspaceError,
+                "You do not have permission to manage Slack workspace integration.",
+                "Failed to load Slack workspace integration",
+              )
+            : null
+        }
+        integration={slackIntegration}
+        mutationPending={slackMutationPending}
+        connectPending={connectSlackMutation.isPending}
+        patchPending={patchSlackMutation.isPending}
+        testPending={testSlackMutation.isPending}
+        disconnectPending={disconnectSlackMutation.isPending}
+        botToken={slackBotToken}
+        replaceTokenMode={slackReplaceTokenMode}
+        replaceExisting={slackReplaceExisting}
+        actionNoticeMessage={slackActionNoticeMessage}
+        actionErrorMessage={slackActionErrorMessage}
+        onConnect={onConnectSlackWorkspace}
+        onBotTokenChange={(value) => {
+          setSlackBotToken(value);
+          setSlackActionErrorMessage(null);
+        }}
+        onOpenReplaceTokenMode={() => {
+          setSlackReplaceTokenMode(true);
+          setSlackBotToken("");
+          setSlackReplaceExisting(false);
+          setSlackActionErrorMessage(null);
+        }}
+        onReplaceExistingChange={setSlackReplaceExisting}
+        onCancelReplace={onCancelSlackTokenReplacement}
+        onTestConnection={() => testSlackMutation.mutate()}
+        onToggleEnabled={onToggleSlackEnabled}
+        onDisconnect={onDisconnectSlackWorkspace}
+      />
 
       <section className="settings-panel" style={{ marginTop: 16 }}>
         <h3>Notification defaults</h3>

@@ -18,8 +18,8 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Queue operations UI: `QueuePage.tsx` and `WorkersPage.tsx`.
 - Project/job/build navigation: `ProjectsListPage.tsx`, `ProjectDetailPage.tsx`, `JobsListPage.tsx`, `JobDetailPage.tsx`, `JobCreatePage.tsx`, `BuildsListPage.tsx`.
 - Auth/token/user/credentials UI: `APITokensPage.tsx`, `UsersPage.tsx`, `CredentialsPage.tsx`, and auth state in `auth.tsx` and `auth-context.ts`.
-- Notification target/subscription admin UI: `NotificationsPage.tsx`, `NotificationsPage.helpers.ts`, `api/notificationClient.ts`, and `types/notification.ts`; this page handles both email and Slack webhook targets and keeps webhook secrets masked during edits.
-- Personal notification self-service UI: `MyNotificationsPage.tsx`, `MyNotificationsPage.helpers.ts`, `api/notificationClient.ts`, and `types/notification.ts` for personal email targets, per-event email/Slack commit-author preferences, and personal Slack identity linking.
+- Notification target/subscription admin UI: `NotificationsPage.tsx` as the composition owner, plus `NotificationsPage.helpers.ts`, `NotificationsPage.sections.tsx`, `api/notificationClient.ts`, and `types/notification.ts`; this page handles both email and Slack webhook targets and keeps webhook secrets masked during edits.
+- Personal notification self-service UI: `MyNotificationsPage.tsx` as the composition owner, plus `MyNotificationsPage.helpers.ts`, `MyNotificationsPage.sections.tsx`, `api/notificationClient.ts`, and `types/notification.ts` for personal email targets, per-event email/Slack commit-author preferences, and personal Slack identity linking.
 
 ## Shared components and state
 
@@ -42,8 +42,8 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Artifact/release/lineage changes: start in artifact pages, `ArtifactBrowser.tsx`, `BuildArtifactsSection.tsx`, `frontend/src/api/client.ts`, `frontend/src/types/artifact.ts`, and `frontend/src/types/build.ts`.
 - Queue operations changes: start in `QueuePage.tsx`, `WorkersPage.tsx`, and worker/build/job types.
 - Auth, tokens, membership, or role-based UI: start in `auth.tsx`, `auth-context.ts`, `types/identity.ts`, then the relevant settings or project page.
-- Notification settings/admin changes: start in `pages/NotificationsPage.tsx`, then `pages/NotificationsPage.helpers.ts`, `api/notificationClient.ts`, `types/notification.ts`, and the colocated page test.
-- Personal Slack identity or personal-notification changes: start in `pages/MyNotificationsPage.tsx`, then `pages/MyNotificationsPage.helpers.ts`, `api/notificationClient.ts`, `types/notification.ts`, and `pages/MyNotificationsPage.test.tsx`. This page owns personal Slack linking plus the four independent failure/success x email/Slack preference controls.
+- Notification settings/admin changes: start in `pages/NotificationsPage.tsx`, then `pages/NotificationsPage.sections.tsx`, `pages/NotificationsPage.helpers.ts`, `api/notificationClient.ts`, `types/notification.ts`, and the colocated page test.
+- Personal Slack identity or personal-notification changes: start in `pages/MyNotificationsPage.tsx`, then `pages/MyNotificationsPage.sections.tsx`, `pages/MyNotificationsPage.helpers.ts`, `api/notificationClient.ts`, `types/notification.ts`, and `pages/MyNotificationsPage.test.tsx`. This page owns cross-section state and mutation coordination for personal Slack linking plus the four independent failure/success x email/Slack preference controls.
 
 ## Tests and patterns
 

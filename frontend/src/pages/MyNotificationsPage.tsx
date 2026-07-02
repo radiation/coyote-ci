@@ -24,6 +24,7 @@ import {
   preferenceChannelDisabled,
   renderPreferenceUnavailableReason,
 } from "./MyNotificationsPage.helpers";
+import { MyNotificationsSlackSection } from "./MyNotificationsPage.sections";
 
 export function MyNotificationsPage() {
   const queryClient = useQueryClient();
@@ -191,7 +192,7 @@ export function MyNotificationsPage() {
       setSlackNoMatchMessage(
         "No active Slack member matched your Coyote email. Ensure the same email is present in Slack or contact an administrator.",
       );
-      setSlackNoMatchWorkspaceID(slackWorkspace?.id ?? null);
+      setSlackNoMatchWorkspaceID(mySlackIdentity?.workspace?.id ?? null);
     },
     onError: (mutationError) => {
       setSlackCandidate(null);
@@ -282,281 +283,6 @@ export function MyNotificationsPage() {
   const successPreference = successPreferenceData
     ? normalizeCommitAuthorPreference(successPreferenceData)
     : null;
-  const slackWorkspace = mySlackIdentity?.workspace ?? null;
-  const linkedSlackIdentity = mySlackIdentity?.identity ?? null;
-  const slackWorkspaceName =
-    slackWorkspace?.name?.trim() ||
-    slackWorkspace?.slack_workspace_id ||
-    "Slack";
-  const visibleSlackCandidate =
-    mySlackIdentity?.workspace_status === "ready" &&
-    !linkedSlackIdentity &&
-    slackCandidate &&
-    slackCandidate.workspace.id === slackWorkspace?.id
-      ? slackCandidate
-      : null;
-  const visibleSlackNoMatchMessage =
-    mySlackIdentity?.workspace_status === "ready" &&
-    !linkedSlackIdentity &&
-    slackNoMatchWorkspaceID === (slackWorkspace?.id ?? null)
-      ? slackNoMatchMessage
-      : null;
-
-  const renderSlackSection = () => {
-    if (mySlackIdentityLoading) {
-      return <p>Loading Slack identity...</p>;
-    }
-
-    if (mySlackIdentityError) {
-      return (
-        <p className="error-text">
-          {formatAPIErrorMessage(
-            mySlackIdentityError,
-            "Unable to load your Slack identity.",
-            "Failed to load Slack identity",
-          )}
-        </p>
-      );
-    }
-
-    if (mySlackIdentity?.workspace_status === "not_configured") {
-      return (
-        <p className="subtle-text">
-          Slack is not connected for this Coyote instance. Ask an administrator
-          to connect a workspace.
-        </p>
-      );
-    }
-
-    if (mySlackIdentity?.workspace_status === "disabled") {
-      return (
-        <p className="subtle-text">
-          {slackWorkspaceName} is connected, but personal Slack linking is
-          currently disabled. Ask an administrator to re-enable the workspace.
-        </p>
-      );
-    }
-
-    const showWorkspaceHealthWarning =
-      slackWorkspace?.last_test_succeeded === false;
-
-    if (linkedSlackIdentity) {
-      return (
-        <>
-          <div className="my-notifications-target-summary">
-            <div>
-              <p className="subtle-text my-notifications-detail-label">
-                Workspace
-              </p>
-              <p className="my-notifications-detail-value">
-                {slackWorkspaceName}
-              </p>
-            </div>
-            <div>
-              <p className="subtle-text my-notifications-detail-label">
-                Slack account
-              </p>
-              <p className="my-notifications-detail-value">
-                {linkedSlackIdentity.display_name ||
-                  linkedSlackIdentity.real_name ||
-                  linkedSlackIdentity.handle ||
-                  linkedSlackIdentity.slack_user_id}
-                {linkedSlackIdentity.handle
-                  ? ` (@${linkedSlackIdentity.handle.replace(/^@+/, "")})`
-                  : ""}
-              </p>
-            </div>
-            <div>
-              <p className="subtle-text my-notifications-detail-label">
-                Status
-              </p>
-              <p className="my-notifications-detail-value">
-                <span
-                  className={
-                    linkedSlackIdentity.enabled
-                      ? "my-notifications-status is-enabled"
-                      : "my-notifications-status is-paused"
-                  }
-                >
-                  {linkedSlackIdentity.enabled ? "Linked" : "Paused"}
-                </span>
-              </p>
-            </div>
-          </div>
-          {showWorkspaceHealthWarning && (
-            <p className="subtle-text" style={{ marginTop: 10 }}>
-              The last admin Slack connection test failed. Your linked identity
-              is still saved, but an administrator may need to refresh the
-              workspace credentials if future lookups fail.
-            </p>
-          )}
-          <p className="subtle-text" style={{ marginTop: 10 }}>
-            This link only stores your Slack member identity. It does not send
-            Slack notifications yet.
-          </p>
-          <div className="button-row" style={{ marginTop: 10 }}>
-            <button
-              className={
-                linkedSlackIdentity.enabled
-                  ? "secondary-button danger-button"
-                  : "secondary-button"
-              }
-              type="button"
-              onClick={() =>
-                patchSlackIdentityMutation.mutate({
-                  enabled: !linkedSlackIdentity.enabled,
-                })
-              }
-              disabled={patchSlackIdentityMutation.isPending}
-            >
-              {patchSlackIdentityMutation.isPending
-                ? "Saving..."
-                : linkedSlackIdentity.enabled
-                  ? "Pause Slack link"
-                  : "Enable Slack link"}
-            </button>
-            <button
-              className="secondary-button danger-button"
-              type="button"
-              onClick={() => {
-                if (
-                  window.confirm(
-                    "Unlink your Slack account from Coyote? This does not enable or disable any notifications.",
-                  )
-                ) {
-                  deleteSlackIdentityMutation.mutate();
-                }
-              }}
-              disabled={deleteSlackIdentityMutation.isPending}
-            >
-              {deleteSlackIdentityMutation.isPending
-                ? "Unlinking..."
-                : "Unlink Slack account"}
-            </button>
-          </div>
-        </>
-      );
-    }
-
-    return (
-      <>
-        <div className="my-notifications-target-summary">
-          <div>
-            <p className="subtle-text my-notifications-detail-label">
-              Workspace
-            </p>
-            <p className="my-notifications-detail-value">
-              {slackWorkspaceName}
-            </p>
-          </div>
-          <div>
-            <p className="subtle-text my-notifications-detail-label">
-              Matching email
-            </p>
-            <p className="my-notifications-email">{currentUser.email}</p>
-          </div>
-        </div>
-        <p className="subtle-text" style={{ marginTop: 10 }}>
-          Coyote stores Slack’s stable member ID after you confirm the account
-          match.
-        </p>
-        {showWorkspaceHealthWarning && (
-          <p className="subtle-text" style={{ marginTop: 10 }}>
-            The last admin Slack connection test failed. You can still try a
-            live lookup now; the lookup result is the current source of truth.
-          </p>
-        )}
-        {!visibleSlackCandidate && (
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() =>
-              resolveSlackIdentityMutation.mutate({
-                method: "authenticated_email",
-              })
-            }
-            disabled={resolveSlackIdentityMutation.isPending}
-          >
-            {resolveSlackIdentityMutation.isPending
-              ? "Finding..."
-              : "Find my Slack account"}
-          </button>
-        )}
-        {visibleSlackNoMatchMessage && (
-          <p className="subtle-text" style={{ marginTop: 10 }}>
-            {visibleSlackNoMatchMessage}
-          </p>
-        )}
-        {visibleSlackCandidate && (
-          <div style={{ marginTop: 14 }}>
-            <h4 style={{ marginBottom: 8 }}>Is this your Slack account?</h4>
-            <div className="my-notifications-target-summary">
-              <div>
-                <p className="subtle-text my-notifications-detail-label">
-                  Display name
-                </p>
-                <p className="my-notifications-detail-value">
-                  {visibleSlackCandidate.display_name || "Unavailable"}
-                </p>
-              </div>
-              <div>
-                <p className="subtle-text my-notifications-detail-label">
-                  Real name
-                </p>
-                <p className="my-notifications-detail-value">
-                  {visibleSlackCandidate.real_name || "Unavailable"}
-                </p>
-              </div>
-              <div>
-                <p className="subtle-text my-notifications-detail-label">
-                  Handle
-                </p>
-                <p className="my-notifications-detail-value">
-                  {visibleSlackCandidate.handle
-                    ? `@${visibleSlackCandidate.handle.replace(/^@+/, "")}`
-                    : "Unavailable"}
-                </p>
-              </div>
-            </div>
-            <div className="button-row" style={{ marginTop: 10 }}>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() =>
-                  createSlackIdentityMutation.mutate({
-                    resolution_method: "authenticated_email",
-                    workspace_integration_id:
-                      visibleSlackCandidate.workspace.id,
-                    slack_workspace_id:
-                      visibleSlackCandidate.workspace.slack_workspace_id,
-                    slack_user_id: visibleSlackCandidate.slack_user_id,
-                  })
-                }
-                disabled={createSlackIdentityMutation.isPending}
-              >
-                {createSlackIdentityMutation.isPending
-                  ? "Linking..."
-                  : "Link this Slack account"}
-              </button>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => {
-                  setSlackCandidate(null);
-                  setSlackNoMatchMessage(null);
-                  setSlackNoMatchWorkspaceID(null);
-                }}
-                disabled={createSlackIdentityMutation.isPending}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-      </>
-    );
-  };
-
   return (
     <>
       <div className="page-header-row">
@@ -569,17 +295,62 @@ export function MyNotificationsPage() {
         </div>
       </div>
 
-      <section className="settings-panel" style={{ marginTop: 14 }}>
-        <h3>Personal Slack</h3>
-        <p className="subtle-text">
-          Link your account to a stable Slack member identity in the connected
-          workspace. This does not enable Slack delivery by itself.
-        </p>
-        {slackActionErrorMessage && (
-          <p className="error-text">{slackActionErrorMessage}</p>
-        )}
-        {renderSlackSection()}
-      </section>
+      <MyNotificationsSlackSection
+        actionErrorMessage={slackActionErrorMessage}
+        loading={mySlackIdentityLoading}
+        errorMessage={
+          mySlackIdentityError
+            ? formatAPIErrorMessage(
+                mySlackIdentityError,
+                "Unable to load your Slack identity.",
+                "Failed to load Slack identity",
+              )
+            : null
+        }
+        workspaceStatus={mySlackIdentity?.workspace_status}
+        workspace={mySlackIdentity?.workspace ?? null}
+        linkedIdentity={mySlackIdentity?.identity ?? null}
+        currentUserEmail={currentUser.email}
+        candidate={slackCandidate}
+        noMatchMessage={slackNoMatchMessage}
+        noMatchWorkspaceID={slackNoMatchWorkspaceID}
+        resolvePending={resolveSlackIdentityMutation.isPending}
+        createPending={createSlackIdentityMutation.isPending}
+        patchPending={patchSlackIdentityMutation.isPending}
+        deletePending={deleteSlackIdentityMutation.isPending}
+        onResolve={() =>
+          resolveSlackIdentityMutation.mutate({
+            method: "authenticated_email",
+          })
+        }
+        onConfirmCandidate={(candidate) =>
+          createSlackIdentityMutation.mutate({
+            resolution_method: "authenticated_email",
+            workspace_integration_id: candidate.workspace.id,
+            slack_workspace_id: candidate.workspace.slack_workspace_id,
+            slack_user_id: candidate.slack_user_id,
+          })
+        }
+        onCancelCandidate={() => {
+          setSlackCandidate(null);
+          setSlackNoMatchMessage(null);
+          setSlackNoMatchWorkspaceID(null);
+        }}
+        onToggleIdentity={(identity) =>
+          patchSlackIdentityMutation.mutate({
+            enabled: !identity.enabled,
+          })
+        }
+        onUnlinkIdentity={() => {
+          if (
+            window.confirm(
+              "Unlink your Slack account from Coyote? This does not enable or disable any notifications.",
+            )
+          ) {
+            deleteSlackIdentityMutation.mutate();
+          }
+        }}
+      />
 
       <section className="settings-panel" style={{ marginTop: 14 }}>
         <h3>Personal email</h3>
