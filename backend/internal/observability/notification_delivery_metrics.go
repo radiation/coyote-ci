@@ -13,6 +13,8 @@ const (
 	NotificationDeliveryOutcomeRetryClaimed        = "retry_claimed"
 	NotificationDeliveryOutcomeStaleClaimReclaimed = "stale_claim_reclaimed"
 	NotificationDeliveryOutcomeSkippedContention   = "skipped_contention"
+	NotificationDeliveryOutcomeSkippedNotDue       = "skipped_not_due"
+	NotificationDeliveryOutcomeSkippedTerminal     = "skipped_terminal"
 	NotificationDeliveryOutcomeSkippedIneligible   = "skipped_ineligible"
 	NotificationDeliveryOutcomeSent                = "sent"
 	NotificationDeliveryOutcomeRetryScheduled      = "retry_scheduled"

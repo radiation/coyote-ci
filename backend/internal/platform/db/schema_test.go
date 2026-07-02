@@ -25,6 +25,7 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"../../../db/migrations/00030_add_user_slack_identities.sql",
 		"../../../db/migrations/00032_refactor_notification_delivery_identity.sql",
 		"../../../db/migrations/00033_add_claimable_notification_delivery_ledger.sql",
+		"../../../db/migrations/00034_add_notification_recovery_scan_indexes.sql",
 	}
 
 	var builder strings.Builder
@@ -83,6 +84,8 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"max_attempts INTEGER",
 		"claim_expires_at TIMESTAMPTZ",
 		"retry_waiting",
+		"idx_notification_deliveries_retry_waiting_next_attempt_at_id",
+		"idx_notification_deliveries_sending_claim_expires_at_id",
 		"idx_notification_deliveries_build_id",
 		"CREATE TABLE IF NOT EXISTS notification_targets",
 		"origin TEXT",

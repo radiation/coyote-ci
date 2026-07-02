@@ -28,6 +28,9 @@ type NotificationRecoveryIterationResult struct {
 	ClaimAcquired       int
 	RetryClaimed        int
 	StaleClaimReclaimed int
+	SkippedContention   int
+	SkippedNotDue       int
+	SkippedTerminal     int
 	Skipped             int
 	Sent                int
 	RetryScheduled      int
@@ -115,7 +118,7 @@ func (d *NotificationRecoveryDrain) RunIteration(ctx context.Context) (Notificat
 		}
 	}
 	if result.Scanned > 0 || result.Errors > 0 {
-		log.Printf("notification recovery iteration completed: scanned=%d claim_acquired=%d retry_claimed=%d stale_claim_reclaimed=%d skipped=%d sent=%d retry_scheduled=%d permanently_failed=%d attempts_exhausted=%d lost_claim=%d rehydration_failed=%d errors=%d", result.Scanned, result.ClaimAcquired, result.RetryClaimed, result.StaleClaimReclaimed, result.Skipped, result.Sent, result.RetryScheduled, result.PermanentlyFailed, result.AttemptsExhausted, result.LostClaim, result.RehydrationFailed, result.Errors)
+		log.Printf("notification recovery iteration completed: scanned=%d claim_acquired=%d retry_claimed=%d stale_claim_reclaimed=%d skipped_contention=%d skipped_not_due=%d skipped_terminal=%d skipped=%d sent=%d retry_scheduled=%d permanently_failed=%d attempts_exhausted=%d lost_claim=%d rehydration_failed=%d errors=%d", result.Scanned, result.ClaimAcquired, result.RetryClaimed, result.StaleClaimReclaimed, result.SkippedContention, result.SkippedNotDue, result.SkippedTerminal, result.Skipped, result.Sent, result.RetryScheduled, result.PermanentlyFailed, result.AttemptsExhausted, result.LostClaim, result.RehydrationFailed, result.Errors)
 	}
 	return result, errors.Join(iterationErrs...)
 }
@@ -128,6 +131,17 @@ func (d *NotificationRecoveryDrain) applyAttemptResult(result *NotificationRecov
 		result.RetryClaimed++
 	case repository.NotificationDeliveryClaimOutcomeStaleClaimReclaimed:
 		result.StaleClaimReclaimed++
+	case repository.NotificationDeliveryClaimOutcomeClaimedByOther:
+		result.Skipped++
+		result.SkippedContention++
+	case repository.NotificationDeliveryClaimOutcomeRetryNotDue:
+		result.Skipped++
+		result.SkippedNotDue++
+	case repository.NotificationDeliveryClaimOutcomeAlreadySent,
+		repository.NotificationDeliveryClaimOutcomePermanentlyFailed,
+		repository.NotificationDeliveryClaimOutcomeAttemptsExhausted:
+		result.Skipped++
+		result.SkippedTerminal++
 	default:
 		result.Skipped++
 	}

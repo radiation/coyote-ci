@@ -1071,6 +1071,87 @@ func TestMigration00033_BackfillsClaimableLedgerState_Postgres(t *testing.T) {
 	assertRow("delivery-pending", string(domain.NotificationDeliveryStatusFailedExhausted), 1, 1, string(domain.NotificationDeliveryFailureCategoryRetryable), "legacy_pending_no_automatic_retry", false)
 }
 
+func TestMigration00034_AddsRecoveryScanIndexes_Postgres(t *testing.T) {
+	db := openNotificationIntegrationDB(t)
+	defer closeNotificationIntegrationDB(t, db)
+
+	ctx := context.Background()
+	schema := createNotificationIntegrationSchema(t, db, ctx)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open dedicated connection: %v", err)
+	}
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Fatalf("close dedicated connection: %v", closeErr)
+		}
+	}()
+
+	setSearchPath(t, ctx, conn, schema)
+	applyNotificationMigrationSeries(t, ctx, conn, "00033")
+
+	assertIndexExists := func(indexName string, wantColumns string, wantPredicate string) {
+		t.Helper()
+		var definition string
+		var predicate sql.NullString
+		queryErr := conn.QueryRowContext(ctx, `
+			SELECT pg_get_indexdef(i.indexrelid), pg_get_expr(i.indpred, i.indrelid)
+			FROM pg_index i
+			JOIN pg_class c ON c.oid = i.indexrelid
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE n.nspname = current_schema()
+			  AND c.relname = $1
+		`, indexName).Scan(&definition, &predicate)
+		if queryErr != nil {
+			t.Fatalf("lookup index %s failed: %v", indexName, queryErr)
+		}
+		if !strings.Contains(definition, wantColumns) {
+			t.Fatalf("expected index %s definition %q to contain %q", indexName, definition, wantColumns)
+		}
+		if !predicate.Valid || !strings.Contains(predicate.String, wantPredicate) {
+			t.Fatalf("expected index %s predicate %q to contain %q", indexName, predicate.String, wantPredicate)
+		}
+	}
+	assertIndexMissing := func(indexName string) {
+		t.Helper()
+		var exists bool
+		queryErr := conn.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM pg_class c
+				JOIN pg_namespace n ON n.oid = c.relnamespace
+				WHERE n.nspname = current_schema()
+				  AND c.relname = $1
+			)
+		`, indexName).Scan(&exists)
+		if queryErr != nil {
+			t.Fatalf("lookup index presence %s failed: %v", indexName, queryErr)
+		}
+		if exists {
+			t.Fatalf("expected index %s to be absent", indexName)
+		}
+	}
+
+	assertIndexExists("idx_notification_deliveries_retry_waiting_next_attempt_at", "(next_attempt_at)", "status = 'retry_waiting'::text")
+	assertIndexExists("idx_notification_deliveries_sending_claim_expires_at", "(claim_expires_at)", "status = 'sending'::text")
+
+	applyNotificationMigrationFile(t, ctx, conn, "00034_add_notification_recovery_scan_indexes.sql")
+
+	assertIndexExists("idx_notification_deliveries_retry_waiting_next_attempt_at_id", "(next_attempt_at, id)", "status = 'retry_waiting'::text")
+	assertIndexExists("idx_notification_deliveries_sending_claim_expires_at_id", "(claim_expires_at, id)", "status = 'sending'::text")
+	assertIndexMissing("idx_notification_deliveries_retry_waiting_next_attempt_at")
+	assertIndexMissing("idx_notification_deliveries_sending_claim_expires_at")
+
+	if downErr := applyNotificationMigrationDownExpectError(ctx, conn, "00034_add_notification_recovery_scan_indexes.sql"); downErr != nil {
+		t.Fatalf("expected migration 00034 down to succeed, got %v", downErr)
+	}
+
+	assertIndexExists("idx_notification_deliveries_retry_waiting_next_attempt_at", "(next_attempt_at)", "status = 'retry_waiting'::text")
+	assertIndexExists("idx_notification_deliveries_sending_claim_expires_at", "(claim_expires_at)", "status = 'sending'::text")
+	assertIndexMissing("idx_notification_deliveries_retry_waiting_next_attempt_at_id")
+	assertIndexMissing("idx_notification_deliveries_sending_claim_expires_at_id")
+}
+
 func TestNotificationDeliveryLedgerConstraintsRejectInvalidStates_Postgres(t *testing.T) {
 	db := openNotificationIntegrationDB(t)
 	defer closeNotificationIntegrationDB(t, db)

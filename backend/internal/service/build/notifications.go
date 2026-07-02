@@ -474,7 +474,7 @@ func (s *BuildNotificationService) sendDestination(ctx context.Context, destinat
 }
 
 func (s *BuildNotificationService) prepareDelivery(ctx context.Context, buildID string, eventType domain.NotificationEventType, destination notificationDestination) (domain.NotificationDelivery, bool, error) {
-	return s.acquireDelivery(ctx, domain.NotificationDelivery{
+	result, shouldSend, err := s.acquireDelivery(ctx, domain.NotificationDelivery{
 		BuildID:                     buildID,
 		EventType:                   eventType,
 		Transport:                   destination.transport,
@@ -485,9 +485,13 @@ func (s *BuildNotificationService) prepareDelivery(ctx context.Context, buildID 
 		SlackWorkspaceIntegrationID: destination.slackWorkspaceIntegrationID,
 		Recipient:                   destination.recipient,
 	}, notificationRecoveryReasonInline)
+	if err != nil {
+		return domain.NotificationDelivery{}, false, err
+	}
+	return result.Delivery, shouldSend, nil
 }
 
-func (s *BuildNotificationService) acquireDelivery(ctx context.Context, delivery domain.NotificationDelivery, recoveryReason string) (domain.NotificationDelivery, bool, error) {
+func (s *BuildNotificationService) acquireDelivery(ctx context.Context, delivery domain.NotificationDelivery, recoveryReason string) (repository.NotificationDeliveryClaimResult, bool, error) {
 	result, err := s.deliveryRepo.AcquireForDelivery(ctx, repository.NotificationDeliveryClaimInput{
 		Delivery: domain.NotificationDelivery{
 			BuildID:                     delivery.BuildID,
@@ -506,7 +510,7 @@ func (s *BuildNotificationService) acquireDelivery(ctx context.Context, delivery
 		MaxAttempts:   s.retryPolicy.maxAttempts,
 	})
 	if err != nil {
-		return domain.NotificationDelivery{}, false, err
+		return repository.NotificationDeliveryClaimResult{}, false, err
 	}
 	s.recordClaimMetric(result.Delivery, recoveryReason, result.Outcome)
 	switch result.Outcome {
@@ -516,13 +520,13 @@ func (s *BuildNotificationService) acquireDelivery(ctx context.Context, delivery
 			claimOutcome:   string(result.Outcome),
 			claimOwner:     s.claimOwner,
 		})
-		return result.Delivery, true, nil
+		return result, true, nil
 	case repository.NotificationDeliveryClaimOutcomeAlreadySent:
 		logNotificationDeliveryEvent("build notification skipped", result.Delivery, notificationLogFields{recoveryReason: recoveryReason, claimOutcome: string(result.Outcome)})
 	default:
 		logNotificationDeliveryEvent("build notification skipped", result.Delivery, notificationLogFields{recoveryReason: recoveryReason, claimOutcome: string(result.Outcome)})
 	}
-	return result.Delivery, false, nil
+	return result, false, nil
 }
 
 func (s *BuildNotificationService) markDeliverySent(ctx context.Context, delivery domain.NotificationDelivery, sentAt time.Time, recoveryReason string) (notificationExecutionOutcome, error) {

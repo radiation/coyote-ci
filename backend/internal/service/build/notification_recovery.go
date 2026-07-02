@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/mail"
 	"strings"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -107,16 +106,15 @@ func (s *BuildNotificationService) executeClaimedDelivery(ctx context.Context, d
 }
 
 func (s *BuildNotificationService) recoverDelivery(ctx context.Context, candidate domain.NotificationDelivery, recoveryReason string) (notificationRecoveryAttemptResult, error) {
-	claimed, shouldSend, err := s.acquireDelivery(ctx, candidate, recoveryReason)
+	claimResult, shouldSend, err := s.acquireDelivery(ctx, candidate, recoveryReason)
 	if err != nil {
 		return notificationRecoveryAttemptResult{}, err
 	}
-	result := notificationRecoveryAttemptResult{claimOutcome: repository.NotificationDeliveryClaimOutcomeFromExisting(claimed, s.now().UTC())}
+	claimed := claimResult.Delivery
+	result := notificationRecoveryAttemptResult{claimOutcome: claimResult.Outcome}
 	if !shouldSend {
-		result.claimOutcome = repository.NotificationDeliveryClaimOutcomeFromExisting(claimed, s.now().UTC())
 		return result, nil
 	}
-	result.claimOutcome = candidateRecoveryClaimOutcome(candidate.Status)
 
 	build, destination, content, rehydrateErr := s.rehydrateDelivery(ctx, claimed)
 	_ = build
@@ -197,21 +195,7 @@ func (s *BuildNotificationService) rehydrateDestination(ctx context.Context, del
 
 func (s *BuildNotificationService) rehydrateSharedEmailDestination(ctx context.Context, delivery domain.NotificationDelivery) (notificationDestination, error) {
 	if delivery.NotificationTargetID == nil {
-		recipient := strings.TrimSpace(delivery.Recipient)
-		if recipient == "" {
-			return notificationDestination{}, permanentNotificationExecutionFailure("delivery_metadata_invalid", "notification email recipient is missing", nil)
-		}
-		parsed, err := mail.ParseAddress(recipient)
-		if err != nil {
-			return notificationDestination{}, permanentNotificationExecutionFailure("delivery_metadata_invalid", "notification email recipient is invalid", err)
-		}
-		return notificationDestination{
-			transport:       domain.NotificationTransportEmail,
-			destinationKind: domain.NotificationDestinationKindSharedTarget,
-			destinationKey:  delivery.DestinationKey,
-			recipient:       parsed.String(),
-			emailRecipient:  parsed.String(),
-		}, nil
+		return notificationDestination{}, permanentNotificationExecutionFailure("delivery_metadata_invalid", "shared email delivery target reference is missing", nil)
 	}
 	if s.subscriptionRepo == nil {
 		return notificationDestination{}, retryableNotificationExecutionFailure("rehydration_failed", "notification subscription repository is not configured", nil)
@@ -226,10 +210,14 @@ func (s *BuildNotificationService) rehydrateSharedEmailDestination(ctx context.C
 	if !target.Enabled {
 		return notificationDestination{}, permanentNotificationExecutionFailure("shared_target_disabled", "notification target is disabled", nil)
 	}
-	if target.Type != domain.NotificationTargetTypeEmail {
+	normalizedTarget, normalizeErr := domain.ValidateExplicitNotificationTarget(target)
+	if normalizeErr != nil {
+		return notificationDestination{}, permanentNotificationExecutionFailure("delivery_metadata_invalid", "notification target metadata is invalid", normalizeErr)
+	}
+	if normalizedTarget.Type != domain.NotificationTargetTypeEmail || normalizedTarget.OwnerUserID != nil {
 		return notificationDestination{}, permanentNotificationExecutionFailure("delivery_metadata_invalid", "notification target type no longer matches the persisted delivery", nil)
 	}
-	destination, err := notificationTargetDestination(target)
+	destination, err := notificationTargetDestination(normalizedTarget)
 	if err != nil {
 		return notificationDestination{}, permanentNotificationExecutionFailure("delivery_metadata_invalid", "notification target metadata is invalid", err)
 	}
@@ -355,13 +343,6 @@ func candidateRecoveryReason(status domain.NotificationDeliveryStatus) string {
 	return notificationRecoveryReasonDueRetry
 }
 
-func candidateRecoveryClaimOutcome(status domain.NotificationDeliveryStatus) repository.NotificationDeliveryClaimOutcome {
-	if status == domain.NotificationDeliveryStatusSending {
-		return repository.NotificationDeliveryClaimOutcomeStaleClaimReclaimed
-	}
-	return repository.NotificationDeliveryClaimOutcomeRetryClaimed
-}
-
 func permanentNotificationExecutionFailure(reason string, message string, cause error) error {
 	return &notificationExecutionFailure{category: domain.NotificationDeliveryFailureCategoryPermanent, reason: reason, message: message, cause: cause}
 }
@@ -380,6 +361,10 @@ func (s *BuildNotificationService) recordClaimMetric(delivery domain.Notificatio
 		s.recordDeliveryMetric(delivery, recoveryReason, observability.NotificationDeliveryOutcomeStaleClaimReclaimed)
 	case repository.NotificationDeliveryClaimOutcomeClaimedByOther:
 		s.recordDeliveryMetric(delivery, recoveryReason, observability.NotificationDeliveryOutcomeSkippedContention)
+	case repository.NotificationDeliveryClaimOutcomeRetryNotDue:
+		s.recordDeliveryMetric(delivery, recoveryReason, observability.NotificationDeliveryOutcomeSkippedNotDue)
+	case repository.NotificationDeliveryClaimOutcomeAlreadySent, repository.NotificationDeliveryClaimOutcomePermanentlyFailed, repository.NotificationDeliveryClaimOutcomeAttemptsExhausted:
+		s.recordDeliveryMetric(delivery, recoveryReason, observability.NotificationDeliveryOutcomeSkippedTerminal)
 	default:
 		s.recordDeliveryMetric(delivery, recoveryReason, observability.NotificationDeliveryOutcomeSkippedIneligible)
 	}

@@ -57,6 +57,71 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 		}
 	})
 
+	t.Run("shared email missing target reference is permanent rehydration failure", func(t *testing.T) {
+		kind, key, keyErr := domain.NotificationSharedEmailTargetKey("target-missing")
+		if keyErr != nil {
+			t.Fatalf("shared email key failed: %v", keyErr)
+		}
+		delivery := domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: kind, DestinationKey: key, Recipient: "alerts@example.com"}
+		_, _, _, rehydrateErr := notifier.rehydrateDelivery(context.Background(), delivery)
+		var executionErr *notificationExecutionFailure
+		if !errors.As(rehydrateErr, &executionErr) {
+			t.Fatalf("expected execution failure, got %v", rehydrateErr)
+		}
+		if executionErr.retryable || executionErr.reason != "delivery_metadata_invalid" {
+			t.Fatalf("unexpected missing target failure: %+v", executionErr)
+		}
+	})
+
+	t.Run("shared email missing target does not send", func(t *testing.T) {
+		missingTargetID := "00000000-0000-4000-a000-000000000111"
+		kind, key, keyErr := domain.NotificationSharedEmailTargetKey(missingTargetID)
+		if keyErr != nil {
+			t.Fatalf("shared email key failed: %v", keyErr)
+		}
+		claimedAt := time.Now().UTC()
+		claimExpiresAt := claimedAt.Add(time.Minute)
+		delivery := domain.NotificationDelivery{ID: "delivery-missing-target", BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: kind, DestinationKey: key, NotificationTargetID: &missingTargetID, Recipient: "alerts@example.com", Status: domain.NotificationDeliveryStatusSending, Attempts: 1, MaxAttempts: 3, ClaimedAt: &claimedAt, ClaimExpiresAt: &claimExpiresAt, ClaimedBy: strPtr("recovery-test")}
+		result, err := notifier.recoverDelivery(context.Background(), delivery, notificationRecoveryReasonDueRetry)
+		if err != nil {
+			t.Fatalf("recover missing target delivery failed: %v", err)
+		}
+		if result.executionOutcome != notificationExecutionOutcomePermanentlyFailed || !result.rehydrationFailed {
+			t.Fatalf("unexpected missing target recovery result: %+v", result)
+		}
+	})
+
+	t.Run("personal and shared email identities stay distinct when addresses match", func(t *testing.T) {
+		userRepo := memoryrepo.NewUserRepository()
+		user := mustCreateNotificationUser(t, userRepo, "same@example.com")
+		sharedTarget := mustCreateNotificationTarget(t, subscriptionRepo, "same@example.com", true)
+		personalTarget := mustEnsureOwnedNotificationTarget(t, subscriptionRepo, user.ID, "same@example.com", true)
+		sharedKind, sharedKey, sharedErr := domain.NotificationSharedEmailTargetKey(sharedTarget.ID)
+		if sharedErr != nil {
+			t.Fatalf("shared email key failed: %v", sharedErr)
+		}
+		personalKind, personalKey, personalErr := domain.NotificationPersonalEmailTargetKey(personalTarget.ID)
+		if personalErr != nil {
+			t.Fatalf("personal email key failed: %v", personalErr)
+		}
+		sharedDelivery := domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: sharedKind, DestinationKey: sharedKey, NotificationTargetID: &sharedTarget.ID, Recipient: "same@example.com"}
+		personalDelivery := domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: personalKind, DestinationKey: personalKey, NotificationTargetID: &personalTarget.ID, RecipientUserID: &user.ID, Recipient: "same@example.com"}
+		_, sharedDestination, _, sharedRehydrateErr := notifier.rehydrateDelivery(context.Background(), sharedDelivery)
+		if sharedRehydrateErr != nil {
+			t.Fatalf("rehydrate shared same-address delivery failed: %v", sharedRehydrateErr)
+		}
+		_, personalDestination, _, personalRehydrateErr := notifier.rehydrateDelivery(context.Background(), personalDelivery)
+		if personalRehydrateErr != nil {
+			t.Fatalf("rehydrate personal same-address delivery failed: %v", personalRehydrateErr)
+		}
+		if sharedDestination.notificationTargetID == nil || personalDestination.notificationTargetID == nil {
+			t.Fatal("expected both destinations to retain stable target references")
+		}
+		if *sharedDestination.notificationTargetID == *personalDestination.notificationTargetID || sharedDestination.destinationKey == personalDestination.destinationKey {
+			t.Fatalf("expected shared and personal identities to remain distinct: shared=%+v personal=%+v", sharedDestination, personalDestination)
+		}
+	})
+
 	t.Run("personal email uses current target recipient without changing identity", func(t *testing.T) {
 		user := mustCreateNotificationUser(t, memoryrepo.NewUserRepository(), "author@example.com")
 		target := mustEnsureOwnedNotificationTarget(t, subscriptionRepo, user.ID, "author@example.com", true)
@@ -177,8 +242,36 @@ func TestNotificationRecoveryDrain_RunIteration(t *testing.T) {
 		if runErr != nil {
 			t.Fatalf("run iteration failed: %v", runErr)
 		}
-		if result.Skipped != 1 || result.Scanned != 1 {
+		if result.Skipped != 1 || result.SkippedContention != 1 || result.Scanned != 1 {
 			t.Fatalf("unexpected contention result: %+v", result)
+		}
+	})
+
+	t.Run("summary uses repository claim outcome when scan status races", func(t *testing.T) {
+		metrics := observability.NewInMemoryNotificationDeliveryMetrics()
+		notifier := &BuildNotificationService{buildRepo: &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}}, deliveryRepo: &scriptedNotificationDeliveryRepo{listRecoverableFunc: func(context.Context, repository.NotificationDeliveryRecoverableScanInput) ([]domain.NotificationDelivery, error) {
+			return []domain.NotificationDelivery{{ID: "delivery-1", BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:1", Recipient: "dev@example.com", Status: domain.NotificationDeliveryStatusRetryWaiting}}, nil
+		}, acquireFunc: func(context.Context, repository.NotificationDeliveryClaimInput) (repository.NotificationDeliveryClaimResult, error) {
+			claimedAt := time.Date(2026, 7, 2, 18, 0, 0, 0, time.UTC)
+			claimExpiresAt := claimedAt.Add(time.Minute)
+			return repository.NotificationDeliveryClaimResult{Delivery: domain.NotificationDelivery{ID: "delivery-1", BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:1", Recipient: "dev@example.com", Status: domain.NotificationDeliveryStatusSending, Attempts: 2, MaxAttempts: 3, ClaimedAt: &claimedAt, ClaimExpiresAt: &claimExpiresAt, ClaimedBy: strPtr("recovery-a")}, Outcome: repository.NotificationDeliveryClaimOutcomeStaleClaimReclaimed}, nil
+		}}, deliveryMetrics: metrics, claimOwner: "recovery-a", retryPolicy: defaultNotificationRetryPolicy(), claimDuration: minimumNotificationClaimDuration(), now: func() time.Time { return time.Date(2026, 7, 2, 18, 0, 0, 0, time.UTC) }}
+		drain, err := NewNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: notifier, Interval: time.Millisecond, BatchSize: 1})
+		if err != nil {
+			t.Fatalf("create drain failed: %v", err)
+		}
+		result, runErr := drain.RunIteration(context.Background())
+		if runErr != nil {
+			t.Fatalf("expected local permanent handling, got %v", runErr)
+		}
+		if result.RetryClaimed != 0 || result.StaleClaimReclaimed != 1 || result.PermanentlyFailed != 1 || result.RehydrationFailed != 1 {
+			t.Fatalf("expected authoritative stale-claim summary, got %+v", result)
+		}
+		if metrics.OutcomeCount(string(domain.NotificationEventTypeBuildFailed), string(domain.NotificationTransportEmail), string(domain.NotificationDestinationKindSharedTarget), notificationRecoveryReasonDueRetry, observability.NotificationDeliveryOutcomeStaleClaimReclaimed) != 1 {
+			t.Fatal("expected stale-claim metric to use repository outcome")
+		}
+		if metrics.OutcomeCount(string(domain.NotificationEventTypeBuildFailed), string(domain.NotificationTransportEmail), string(domain.NotificationDestinationKindSharedTarget), notificationRecoveryReasonDueRetry, observability.NotificationDeliveryOutcomeRetryClaimed) != 0 {
+			t.Fatal("expected retry-claimed metric to remain zero for raced candidate")
 		}
 	})
 
@@ -234,6 +327,35 @@ func TestNotificationRecoveryDrain_RunIteration(t *testing.T) {
 		}
 		if result.PermanentlyFailed != 1 || result.RehydrationFailed != 1 {
 			t.Fatalf("unexpected permanent failure result: %+v", result)
+		}
+		delivery := mustGetNotificationDelivery(t, fixture.deliveryRepo, fixture.build.ID, domain.NotificationEventTypeBuildFailed, fixture.target.Recipient)
+		if delivery.Status != domain.NotificationDeliveryStatusFailedPermanent {
+			t.Fatalf("expected permanent failure status, got %+v", delivery)
+		}
+	})
+
+	t.Run("missing shared target reference becomes terminal without send", func(t *testing.T) {
+		fixture := newRecoveryDrainFixture(t, nil)
+		kind, key, keyErr := domain.NotificationSharedEmailTargetKey(fixture.target.ID)
+		if keyErr != nil {
+			t.Fatalf("shared email key failed: %v", keyErr)
+		}
+		nextAttemptAt := fixture.now.Add(-time.Minute)
+		lastAttemptAt := nextAttemptAt.Add(-time.Minute)
+		retryable := domain.NotificationDeliveryFailureCategoryRetryable
+		if _, err := fixture.deliveryRepo.Create(context.Background(), domain.NotificationDelivery{ID: key, BuildID: fixture.build.ID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: kind, DestinationKey: key, Recipient: fixture.target.Recipient, MaxAttempts: 3}); err != nil {
+			t.Fatalf("create delivery without target id failed: %v", err)
+		}
+		if _, err := fixture.deliveryRepo.Update(context.Background(), domain.NotificationDelivery{ID: key, BuildID: fixture.build.ID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: kind, DestinationKey: key, Recipient: fixture.target.Recipient, Status: domain.NotificationDeliveryStatusRetryWaiting, Attempts: 1, MaxAttempts: 3, LastAttemptAt: &lastAttemptAt, NextAttemptAt: &nextAttemptAt, FailureCategory: &retryable, UpdatedAt: nextAttemptAt}); err != nil {
+			t.Fatalf("update delivery without target id failed: %v", err)
+		}
+		drain := fixture.newDrain(t)
+		result, err := drain.RunIteration(context.Background())
+		if err != nil {
+			t.Fatalf("run iteration failed: %v", err)
+		}
+		if result.PermanentlyFailed != 1 || result.RehydrationFailed != 1 || len(fixture.sender.messages) != 0 {
+			t.Fatalf("unexpected missing reference recovery result: %+v sends=%d", result, len(fixture.sender.messages))
 		}
 		delivery := mustGetNotificationDelivery(t, fixture.deliveryRepo, fixture.build.ID, domain.NotificationEventTypeBuildFailed, fixture.target.Recipient)
 		if delivery.Status != domain.NotificationDeliveryStatusFailedPermanent {
