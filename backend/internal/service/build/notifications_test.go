@@ -10,6 +10,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
+	platformslack "github.com/radiation/coyote-ci/backend/internal/platform/slack"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	steprunner "github.com/radiation/coyote-ci/backend/internal/runner"
@@ -36,6 +37,25 @@ func (s *recordingSlackSender) Send(_ context.Context, webhookURL string, messag
 	s.webhookURLs = append(s.webhookURLs, webhookURL)
 	s.messages = append(s.messages, message)
 	return s.err
+}
+
+type recordingSlackDMClient struct {
+	tokens   []string
+	userIDs  []string
+	messages []platformslack.Message
+	err      error
+}
+
+func (c *recordingSlackDMClient) PostDirectMessage(_ context.Context, token string, slackUserID string, message platformslack.Message) (platformslack.PostMessageResult, error) {
+	c.tokens = append(c.tokens, token)
+	c.userIDs = append(c.userIDs, slackUserID)
+	c.messages = append(c.messages, message)
+	if c.err != nil {
+		return platformslack.PostMessageResult{}, c.err
+	}
+	channelID := "D123"
+	timestamp := "1710000000.000100"
+	return platformslack.PostMessageResult{ChannelID: &channelID, Timestamp: &timestamp}, nil
 }
 
 type scriptedNotificationDeliveryRepo struct {
@@ -135,11 +155,12 @@ func mustUpsertNotificationPreferenceFlags(t *testing.T, repo *memoryrepo.UserNo
 	t.Helper()
 
 	preference, err := repo.Upsert(context.Background(), domain.UserNotificationPreference{
-		UserID:                     userID,
-		CommitAuthorFailureEnabled: failureEnabled,
-		CommitAuthorSuccessEnabled: successEnabled,
-		CreatedAt:                  time.Now().UTC(),
-		UpdatedAt:                  time.Now().UTC(),
+		UserID:                          userID,
+		CommitAuthorFailureEmailEnabled: failureEnabled,
+		CommitAuthorFailureEmailSource:  domain.UserNotificationPreferenceSourceUser,
+		CommitAuthorSuccessEmailEnabled: successEnabled,
+		CreatedAt:                       time.Now().UTC(),
+		UpdatedAt:                       time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("upsert notification preference failed: %v", err)
@@ -2009,6 +2030,95 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureDoesNotBlockEm
 	slackDelivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildFailed, "slack_webhook:"+slackTarget.ID)
 	if slackDelivery.Status != domain.NotificationDeliveryStatusFailed {
 		t.Fatalf("expected slack delivery failed, got %q", slackDelivery.Status)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_PersonalSlackDMDistinctFromEmailDelivery(t *testing.T) {
+	emailSender := &recordingEmailSender{}
+	slackClient := &recordingSlackDMClient{}
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	userRepo := memoryrepo.NewUserRepository()
+	preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+	identityRepo := memoryrepo.NewUserSlackIdentityRepository()
+	workspaceRepo := memoryrepo.NewSlackWorkspaceIntegrationRepository()
+	workspaceRepo.SetUserSlackIdentityRepository(identityRepo)
+
+	authorEmail := "author@example.com"
+	authorUser := mustCreateNotificationUser(t, userRepo, authorEmail)
+	mustEnsureOwnedNotificationTarget(t, subscriptionRepo, authorUser.ID, authorEmail, true)
+	if _, err := preferenceRepo.Upsert(context.Background(), domain.UserNotificationPreference{
+		UserID:                          authorUser.ID,
+		CommitAuthorFailureEmailEnabled: true,
+		CommitAuthorFailureSlackEnabled: true,
+		CommitAuthorFailureEmailSource:  domain.UserNotificationPreferenceSourceUser,
+		CreatedAt:                       time.Now().UTC(),
+		UpdatedAt:                       time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("upsert notification preference failed: %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := workspaceRepo.ConnectOrReplace(context.Background(), domain.SlackWorkspaceIntegration{
+		ID:             "workspace-integration-1",
+		WorkspaceID:    "T123",
+		BotTokenSecret: "xoxb-secret",
+		Enabled:        true,
+		ConnectedAt:    now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}, true); err != nil {
+		t.Fatalf("connect slack workspace failed: %v", err)
+	}
+	if _, err := identityRepo.Upsert(context.Background(), domain.UserSlackIdentity{
+		ID:                          "identity-1",
+		UserID:                      authorUser.ID,
+		SlackWorkspaceIntegrationID: "workspace-integration-1",
+		SlackUserID:                 "U123",
+		Enabled:                     true,
+		LinkedAt:                    now,
+		CreatedAt:                   now,
+		UpdatedAt:                   now,
+	}); err != nil {
+		t.Fatalf("upsert slack identity failed: %v", err)
+	}
+
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		Sender:           emailSender,
+		SlackClient:      slackClient,
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
+		UserRepo:         userRepo,
+		PreferenceRepo:   preferenceRepo,
+		IdentityRepo:     identityRepo,
+		WorkspaceRepo:    workspaceRepo,
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-dm-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
+		t.Fatalf("notify terminal build failed: %v", err)
+	}
+	if len(emailSender.messages) != 1 || emailSender.messages[0].To != "<author@example.com>" {
+		t.Fatalf("expected one email delivery, got %+v", emailSender.messages)
+	}
+	if len(slackClient.userIDs) != 1 || slackClient.userIDs[0] != "U123" {
+		t.Fatalf("expected one slack dm delivery to U123, got %+v", slackClient.userIDs)
+	}
+	if len(slackClient.tokens) != 1 || slackClient.tokens[0] != "xoxb-secret" {
+		t.Fatalf("expected slack bot token to be used, got %+v", slackClient.tokens)
+	}
+	if !strings.Contains(slackClient.messages[0].Text, "Build failed") {
+		t.Fatalf("expected slack dm message to contain build status, got %q", slackClient.messages[0].Text)
+	}
+	emailDelivery := mustGetNotificationDelivery(t, deliveryRepo, "build-dm-1", domain.NotificationEventTypeBuildFailed, "<author@example.com>")
+	if emailDelivery.Status != domain.NotificationDeliveryStatusSent {
+		t.Fatalf("expected sent email delivery, got %q", emailDelivery.Status)
+	}
+	slackDelivery := mustGetNotificationDelivery(t, deliveryRepo, "build-dm-1", domain.NotificationEventTypeBuildFailed, "slack_dm:workspace-integration-1:U123")
+	if slackDelivery.Status != domain.NotificationDeliveryStatusSent {
+		t.Fatalf("expected sent slack dm delivery, got %q", slackDelivery.Status)
 	}
 }
 

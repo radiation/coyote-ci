@@ -17,7 +17,12 @@ import {
   setMyEmailNotificationTargetEnabled,
 } from "../api";
 import { useAuth } from "../auth-context";
-import type { ResolvedSlackIdentityCandidate } from "../types";
+import type {
+  CommitAuthorNotificationPreference,
+  CommitAuthorNotificationPreferenceChannel,
+  NotificationTarget,
+  ResolvedSlackIdentityCandidate,
+} from "../types";
 
 function formatNotificationEmail(value: string | undefined, fallback: string) {
   const trimmed = value?.trim() ?? "";
@@ -25,6 +30,82 @@ function formatNotificationEmail(value: string | undefined, fallback: string) {
     return trimmed.slice(1, -1);
   }
   return trimmed || fallback;
+}
+
+function preferenceChannelCanEnable(channel: {
+  enabled: boolean;
+  unavailable_reason?: string | null;
+}) {
+  return channel.enabled || !channel.unavailable_reason;
+}
+
+function preferenceChannelDisabled(
+  channel: { enabled: boolean; unavailable_reason?: string | null },
+  pending: boolean,
+) {
+  return pending || !preferenceChannelCanEnable(channel);
+}
+
+function renderPreferenceUnavailableReason(
+  channel: { unavailable_reason?: string | null },
+  deliveryLabel: string,
+) {
+  switch (channel.unavailable_reason) {
+    case "personal_target_required":
+      return "Create your personal email target to turn this on.";
+    case "personal_target_disabled":
+      return null;
+    case "slack_identity_required":
+      return `Link your personal Slack account to turn on ${deliveryLabel}.`;
+    case "slack_identity_disabled":
+      return `Re-enable your linked Slack account to resume ${deliveryLabel}.`;
+    case "slack_workspace_not_configured":
+      return `An administrator must connect Slack before ${deliveryLabel} can be enabled.`;
+    case "slack_workspace_disabled":
+      return `An administrator must re-enable the Slack workspace before ${deliveryLabel} can be enabled.`;
+    case "slack_workspace_mismatch":
+      return `Your linked Slack account belongs to a different workspace. Relink it to this workspace to turn on ${deliveryLabel}.`;
+    default:
+      return null;
+  }
+}
+
+type LegacyCommitAuthorNotificationPreference = {
+  enabled?: boolean;
+  delivery_active?: boolean;
+  target?: NotificationTarget | null;
+  unavailable_reason?: string | null;
+};
+
+function normalizeCommitAuthorPreference(
+  preference:
+    | CommitAuthorNotificationPreference
+    | LegacyCommitAuthorNotificationPreference,
+): {
+  email: CommitAuthorNotificationPreferenceChannel;
+  slack: CommitAuthorNotificationPreferenceChannel;
+} {
+  if (preference?.email && preference?.slack) {
+    return {
+      email: preference.email,
+      slack: preference.slack,
+    };
+  }
+
+  return {
+    email: {
+      enabled: Boolean(preference?.enabled),
+      delivery_active: Boolean(preference?.delivery_active),
+      target: preference?.target ?? null,
+      unavailable_reason: preference?.unavailable_reason ?? null,
+    },
+    slack: {
+      enabled: false,
+      delivery_active: false,
+      target: null,
+      unavailable_reason: null,
+    },
+  };
 }
 
 export function MyNotificationsPage() {
@@ -64,7 +145,7 @@ export function MyNotificationsPage() {
   });
 
   const {
-    data: failurePreference,
+    data: failurePreferenceData,
     isLoading: failurePreferenceLoading,
     error: failurePreferenceError,
   } = useQuery({
@@ -73,7 +154,7 @@ export function MyNotificationsPage() {
   });
 
   const {
-    data: successPreference,
+    data: successPreferenceData,
     isLoading: successPreferenceLoading,
     error: successPreferenceError,
   } = useQuery({
@@ -274,24 +355,16 @@ export function MyNotificationsPage() {
   }
 
   const showAdminLink = authMode === "disabled" || isGlobalAdmin;
-  const failurePreferenceCanEnable =
-    !!failurePreference?.target && failurePreference.target.enabled;
-  const failurePreferenceControlDisabled =
-    updateCommitPreferenceMutation.isPending ||
-    !failurePreference ||
-    failurePreferenceLoading ||
-    (!failurePreference.enabled && !failurePreferenceCanEnable);
-  const successPreferenceCanEnable =
-    !!successPreference?.target && successPreference.target.enabled;
-  const successPreferenceControlDisabled =
-    updateCommitSuccessPreferenceMutation.isPending ||
-    !successPreference ||
-    successPreferenceLoading ||
-    (!successPreference.enabled && !successPreferenceCanEnable);
   const personalEmail = formatNotificationEmail(
     myTarget?.address,
     currentUser.email,
   );
+  const failurePreference = failurePreferenceData
+    ? normalizeCommitAuthorPreference(failurePreferenceData)
+    : null;
+  const successPreference = successPreferenceData
+    ? normalizeCommitAuthorPreference(successPreferenceData)
+    : null;
   const slackWorkspace = mySlackIdentity?.workspace ?? null;
   const linkedSlackIdentity = mySlackIdentity?.identity ?? null;
   const slackWorkspaceName =
@@ -573,8 +646,8 @@ export function MyNotificationsPage() {
         <div>
           <h2>My notifications</h2>
           <p className="subtle-text">
-            Manage the personal email address Coyote uses for your notifications
-            and choose which build results get emailed to you.
+            Manage the personal email and Slack delivery Coyote uses for your
+            commit-author build notifications.
           </p>
         </div>
       </div>
@@ -708,8 +781,8 @@ export function MyNotificationsPage() {
       <section className="settings-panel" style={{ marginTop: 16 }}>
         <h3>Commit notifications</h3>
         <p className="subtle-text">
-          Choose which build results you want emailed to you. Notifications are
-          paused whenever your personal email target is disabled. Success
+          Choose which build results you want delivered to you. Email and Slack
+          are configured independently for failures and successes. Success
           notifications can be more frequent.
         </p>
         {(failurePreferenceError || successPreferenceError) && (
@@ -730,111 +803,231 @@ export function MyNotificationsPage() {
           successPreference && (
             <div className="my-notifications-preference-list">
               <div className="my-notifications-preference">
-                <label
-                  className="checkbox-label"
-                  htmlFor="my-notifications-commit-failures"
-                >
-                  <input
-                    id="my-notifications-commit-failures"
-                    type="checkbox"
-                    checked={failurePreference.enabled}
-                    disabled={failurePreferenceControlDisabled}
-                    onChange={(event) =>
-                      updateCommitPreferenceMutation.mutate({
-                        enabled: event.currentTarget.checked,
-                      })
-                    }
-                  />
-                  <span>Notify me when my commits fail</span>
-                </label>
-                <p className="subtle-text my-notifications-preference-description">
-                  Receive an email when a commit attributed to your account
-                  results in a failed build.
+                <p className="my-notifications-detail-value">
+                  Notify me when my commits fail
                 </p>
-                {failurePreference.target && (
+                <p className="subtle-text my-notifications-preference-description">
+                  Choose whether failed builds attributed to your account are
+                  sent by email, Slack DM, or both.
+                </p>
+                {failurePreference.email.target && (
                   <p className="subtle-text my-notifications-preference-meta">
                     Sends to{" "}
                     {formatNotificationEmail(
-                      failurePreference.target.address,
+                      failurePreference.email.target.address,
                       currentUser.email,
                     )}
                     .
                   </p>
                 )}
-                {failurePreference.unavailable_reason ===
-                  "personal_target_required" && (
+                <label
+                  className="checkbox-label"
+                  htmlFor="my-notifications-commit-failures-email"
+                >
+                  <input
+                    id="my-notifications-commit-failures-email"
+                    type="checkbox"
+                    aria-label="Notify me when my commits fail"
+                    checked={failurePreference.email.enabled}
+                    disabled={
+                      !failurePreference ||
+                      failurePreferenceLoading ||
+                      preferenceChannelDisabled(
+                        failurePreference.email,
+                        updateCommitPreferenceMutation.isPending,
+                      )
+                    }
+                    onChange={(event) =>
+                      updateCommitPreferenceMutation.mutate({
+                        email_enabled: event.currentTarget.checked,
+                        slack_enabled: failurePreference.slack.enabled,
+                      })
+                    }
+                  />
+                  <span>Email me when my commits fail</span>
+                </label>
+                {renderPreferenceUnavailableReason(
+                  failurePreference.email,
+                  "failure emails",
+                ) && (
                   <p className="subtle-text my-notifications-preference-meta">
-                    Create your personal email target to turn this on.
+                    {renderPreferenceUnavailableReason(
+                      failurePreference.email,
+                      "failure emails",
+                    )}
                   </p>
                 )}
-                {failurePreference.enabled &&
-                  failurePreference.target &&
-                  !failurePreference.target.enabled && (
+                {failurePreference.email.enabled &&
+                  failurePreference.email.target &&
+                  !failurePreference.email.target.enabled && (
                     <p className="subtle-text my-notifications-preference-meta">
                       Paused while your personal email target is disabled.
                     </p>
                   )}
-                {!failurePreference.enabled &&
-                  failurePreference.target &&
-                  !failurePreference.target.enabled && (
+                {!failurePreference.email.enabled &&
+                  failurePreference.email.target &&
+                  !failurePreference.email.target.enabled && (
                     <p className="subtle-text my-notifications-preference-meta">
                       Re-enable your personal email target before turning this
                       on.
+                    </p>
+                  )}
+                <label
+                  className="checkbox-label"
+                  htmlFor="my-notifications-commit-failures-slack"
+                >
+                  <input
+                    id="my-notifications-commit-failures-slack"
+                    type="checkbox"
+                    checked={failurePreference.slack.enabled}
+                    disabled={
+                      !failurePreference ||
+                      failurePreferenceLoading ||
+                      preferenceChannelDisabled(
+                        failurePreference.slack,
+                        updateCommitPreferenceMutation.isPending,
+                      )
+                    }
+                    onChange={(event) =>
+                      updateCommitPreferenceMutation.mutate({
+                        email_enabled: failurePreference.email.enabled,
+                        slack_enabled: event.currentTarget.checked,
+                      })
+                    }
+                  />
+                  <span>Send me a Slack DM when my commits fail</span>
+                </label>
+                {renderPreferenceUnavailableReason(
+                  failurePreference.slack,
+                  "failure Slack delivery",
+                ) && (
+                  <p className="subtle-text my-notifications-preference-meta">
+                    {renderPreferenceUnavailableReason(
+                      failurePreference.slack,
+                      "failure Slack delivery",
+                    )}
+                  </p>
+                )}
+                {failurePreference.slack.enabled &&
+                  !failurePreference.slack.delivery_active && (
+                    <p className="subtle-text my-notifications-preference-meta">
+                      Slack delivery is paused until your linked Slack identity
+                      and workspace are active again.
                     </p>
                   )}
               </div>
 
               <div className="my-notifications-preference">
-                <label
-                  className="checkbox-label"
-                  htmlFor="my-notifications-commit-successes"
-                >
-                  <input
-                    id="my-notifications-commit-successes"
-                    type="checkbox"
-                    checked={successPreference.enabled}
-                    disabled={successPreferenceControlDisabled}
-                    onChange={(event) =>
-                      updateCommitSuccessPreferenceMutation.mutate({
-                        enabled: event.currentTarget.checked,
-                      })
-                    }
-                  />
-                  <span>Notify me when my commits succeed</span>
-                </label>
-                <p className="subtle-text my-notifications-preference-description">
-                  Receive an email when a commit attributed to your account
-                  results in a successful build.
+                <p className="my-notifications-detail-value">
+                  Notify me when my commits succeed
                 </p>
-                {successPreference.target && (
+                <p className="subtle-text my-notifications-preference-description">
+                  Choose whether successful builds attributed to your account
+                  are sent by email, Slack DM, or both.
+                </p>
+                {successPreference.email.target && (
                   <p className="subtle-text my-notifications-preference-meta">
                     Sends to{" "}
                     {formatNotificationEmail(
-                      successPreference.target.address,
+                      successPreference.email.target.address,
                       currentUser.email,
                     )}
                     .
                   </p>
                 )}
-                {successPreference.unavailable_reason ===
-                  "personal_target_required" && (
+                <label
+                  className="checkbox-label"
+                  htmlFor="my-notifications-commit-successes-email"
+                >
+                  <input
+                    id="my-notifications-commit-successes-email"
+                    type="checkbox"
+                    aria-label="Notify me when my commits succeed"
+                    checked={successPreference.email.enabled}
+                    disabled={
+                      !successPreference ||
+                      successPreferenceLoading ||
+                      preferenceChannelDisabled(
+                        successPreference.email,
+                        updateCommitSuccessPreferenceMutation.isPending,
+                      )
+                    }
+                    onChange={(event) =>
+                      updateCommitSuccessPreferenceMutation.mutate({
+                        email_enabled: event.currentTarget.checked,
+                        slack_enabled: successPreference.slack.enabled,
+                      })
+                    }
+                  />
+                  <span>Email me when my commits succeed</span>
+                </label>
+                {renderPreferenceUnavailableReason(
+                  successPreference.email,
+                  "success emails",
+                ) && (
                   <p className="subtle-text my-notifications-preference-meta">
-                    Create your personal email target to turn this on.
+                    {renderPreferenceUnavailableReason(
+                      successPreference.email,
+                      "success emails",
+                    )}
                   </p>
                 )}
-                {successPreference.enabled &&
-                  successPreference.target &&
-                  !successPreference.target.enabled && (
+                {successPreference.email.enabled &&
+                  successPreference.email.target &&
+                  !successPreference.email.target.enabled && (
                     <p className="subtle-text my-notifications-preference-meta">
                       Paused while your personal email target is disabled.
                     </p>
                   )}
-                {!successPreference.enabled &&
-                  successPreference.target &&
-                  !successPreference.target.enabled && (
+                {!successPreference.email.enabled &&
+                  successPreference.email.target &&
+                  !successPreference.email.target.enabled && (
                     <p className="subtle-text my-notifications-preference-meta">
                       Re-enable your personal email target before turning this
                       on.
+                    </p>
+                  )}
+                <label
+                  className="checkbox-label"
+                  htmlFor="my-notifications-commit-successes-slack"
+                >
+                  <input
+                    id="my-notifications-commit-successes-slack"
+                    type="checkbox"
+                    checked={successPreference.slack.enabled}
+                    disabled={
+                      !successPreference ||
+                      successPreferenceLoading ||
+                      preferenceChannelDisabled(
+                        successPreference.slack,
+                        updateCommitSuccessPreferenceMutation.isPending,
+                      )
+                    }
+                    onChange={(event) =>
+                      updateCommitSuccessPreferenceMutation.mutate({
+                        email_enabled: successPreference.email.enabled,
+                        slack_enabled: event.currentTarget.checked,
+                      })
+                    }
+                  />
+                  <span>Send me a Slack DM when my commits succeed</span>
+                </label>
+                {renderPreferenceUnavailableReason(
+                  successPreference.slack,
+                  "success Slack delivery",
+                ) && (
+                  <p className="subtle-text my-notifications-preference-meta">
+                    {renderPreferenceUnavailableReason(
+                      successPreference.slack,
+                      "success Slack delivery",
+                    )}
+                  </p>
+                )}
+                {successPreference.slack.enabled &&
+                  !successPreference.slack.delivery_active && (
+                    <p className="subtle-text my-notifications-preference-meta">
+                      Slack delivery is paused until your linked Slack identity
+                      and workspace are active again.
                     </p>
                   )}
               </div>

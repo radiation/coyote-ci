@@ -22,21 +22,21 @@ func TestUserNotificationPreferenceRepository_GetByUserIDAndUpsert(t *testing.T)
 
 	repo := NewUserNotificationPreferenceRepository(db)
 	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
-	columns := []string{"user_id", "commit_author_failure_enabled", "source", "commit_author_success_enabled", "commit_author_success_source", "created_at", "updated_at"}
+	columns := []string{"user_id", "commit_author_failure_email_enabled", "commit_author_failure_slack_enabled", "commit_author_failure_email_source", "commit_author_success_email_enabled", "commit_author_success_slack_enabled", "commit_author_success_email_source", "created_at", "updated_at"}
 
-	mock.ExpectQuery("SELECT user_id::text, commit_author_failure_enabled, source, commit_author_success_enabled, commit_author_success_source, created_at, updated_at").
+	mock.ExpectQuery("SELECT user_id::text, commit_author_failure_email_enabled, commit_author_failure_slack_enabled, commit_author_failure_email_source, commit_author_success_email_enabled, commit_author_success_slack_enabled, commit_author_success_email_source, created_at, updated_at").
 		WithArgs("user-1").
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("user-1", true, string(domain.UserNotificationPreferenceSourceUser), false, nil, now, now))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("user-1", true, false, string(domain.UserNotificationPreferenceSourceUser), false, false, nil, now, now))
 
 	fetched, getErr := repo.GetByUserID(context.Background(), " user-1 ")
 	if getErr != nil {
 		t.Fatalf("get preference failed: %v", getErr)
 	}
-	if fetched.UserID != "user-1" || !fetched.CommitAuthorFailureEnabled || fetched.Source != domain.UserNotificationPreferenceSourceUser {
+	if fetched.UserID != "user-1" || !fetched.CommitAuthorFailureEmailEnabled || fetched.CommitAuthorFailureEmailSource != domain.UserNotificationPreferenceSourceUser {
 		t.Fatalf("unexpected fetched preference %+v", fetched)
 	}
 
-	mock.ExpectQuery("SELECT user_id::text, commit_author_failure_enabled, source, commit_author_success_enabled, commit_author_success_source, created_at, updated_at").
+	mock.ExpectQuery("SELECT user_id::text, commit_author_failure_email_enabled, commit_author_failure_slack_enabled, commit_author_failure_email_source, commit_author_success_email_enabled, commit_author_success_slack_enabled, commit_author_success_email_source, created_at, updated_at").
 		WithArgs("missing").
 		WillReturnError(sql.ErrNoRows)
 
@@ -45,7 +45,7 @@ func TestUserNotificationPreferenceRepository_GetByUserIDAndUpsert(t *testing.T)
 		t.Fatalf("expected missing preference error, got %v", getMissingErr)
 	}
 
-	mock.ExpectQuery("SELECT user_id::text, commit_author_failure_enabled, source, commit_author_success_enabled, commit_author_success_source, created_at, updated_at").
+	mock.ExpectQuery("SELECT user_id::text, commit_author_failure_email_enabled, commit_author_failure_slack_enabled, commit_author_failure_email_source, commit_author_success_email_enabled, commit_author_success_slack_enabled, commit_author_success_email_source, created_at, updated_at").
 		WithArgs("broken").
 		WillReturnError(errors.New("select failed"))
 
@@ -55,68 +55,67 @@ func TestUserNotificationPreferenceRepository_GetByUserIDAndUpsert(t *testing.T)
 	}
 
 	mock.ExpectQuery("INSERT INTO user_notification_preferences").
-		WithArgs("user-1", false, domain.UserNotificationPreferenceSourceUser, true, sql.NullString{String: string(domain.UserNotificationPreferenceSourceUser), Valid: true}, now, now.Add(time.Minute)).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("user-1", false, string(domain.UserNotificationPreferenceSourceUser), true, string(domain.UserNotificationPreferenceSourceUser), now, now.Add(time.Minute)))
+		WithArgs("user-1", false, false, domain.UserNotificationPreferenceSourceUser, true, false, sql.NullString{String: string(domain.UserNotificationPreferenceSourceUser), Valid: true}, now, now.Add(time.Minute)).
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("user-1", false, false, string(domain.UserNotificationPreferenceSourceUser), true, false, string(domain.UserNotificationPreferenceSourceUser), now, now.Add(time.Minute)))
 
 	successSource := domain.UserNotificationPreferenceSourceUser
 	updated, upsertErr := repo.Upsert(context.Background(), domain.UserNotificationPreference{
-		UserID:                     " user-1 ",
-		CommitAuthorFailureEnabled: false,
-		Source:                     domain.UserNotificationPreferenceSourceUser,
-		CommitAuthorSuccessEnabled: true,
-		CommitAuthorSuccessSource:  &successSource,
-		CreatedAt:                  now,
-		UpdatedAt:                  now.Add(time.Minute),
+		UserID:                          " user-1 ",
+		CommitAuthorFailureEmailEnabled: false,
+		CommitAuthorFailureEmailSource:  domain.UserNotificationPreferenceSourceUser,
+		CommitAuthorSuccessEmailEnabled: true,
+		CommitAuthorSuccessEmailSource:  &successSource,
+		CreatedAt:                       now,
+		UpdatedAt:                       now.Add(time.Minute),
 	})
 	if upsertErr != nil {
 		t.Fatalf("upsert preference failed: %v", upsertErr)
 	}
-	if updated.UserID != "user-1" || updated.CommitAuthorFailureEnabled {
+	if updated.UserID != "user-1" || updated.CommitAuthorFailureEmailEnabled {
 		t.Fatalf("unexpected upserted preference %+v", updated)
 	}
-	if updated.Source != domain.UserNotificationPreferenceSourceUser {
+	if updated.CommitAuthorFailureEmailSource != domain.UserNotificationPreferenceSourceUser {
 		t.Fatalf("expected user source, got %+v", updated)
 	}
-	if !updated.CommitAuthorSuccessEnabled || updated.CommitAuthorSuccessSource == nil || *updated.CommitAuthorSuccessSource != domain.UserNotificationPreferenceSourceUser {
+	if !updated.CommitAuthorSuccessEmailEnabled || updated.CommitAuthorSuccessEmailSource == nil || *updated.CommitAuthorSuccessEmailSource != domain.UserNotificationPreferenceSourceUser {
 		t.Fatalf("expected success preference to persist, got %+v", updated)
 	}
 
 	mock.ExpectQuery("INSERT INTO user_notification_preferences").
-		WithArgs("user-2", true, domain.UserNotificationPreferenceSourceInstanceDefault, false, sql.NullString{}, now, now.Add(2*time.Minute)).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("user-2", true, string(domain.UserNotificationPreferenceSourceInstanceDefault), false, nil, now, now.Add(2*time.Minute)))
+		WithArgs("user-2", true, false, domain.UserNotificationPreferenceSourceInstanceDefault, false, false, sql.NullString{}, now, now.Add(2*time.Minute)).
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("user-2", true, false, string(domain.UserNotificationPreferenceSourceInstanceDefault), false, false, nil, now, now.Add(2*time.Minute)))
 
 	initialized, created, initializeErr := repo.InitializeIfAbsent(context.Background(), domain.UserNotificationPreference{
-		UserID:                     "user-2",
-		CommitAuthorFailureEnabled: true,
-		Source:                     domain.UserNotificationPreferenceSourceInstanceDefault,
-		CreatedAt:                  now,
-		UpdatedAt:                  now.Add(2 * time.Minute),
+		UserID:                          "user-2",
+		CommitAuthorFailureEmailEnabled: true,
+		CommitAuthorFailureEmailSource:  domain.UserNotificationPreferenceSourceInstanceDefault,
+		CreatedAt:                       now,
+		UpdatedAt:                       now.Add(2 * time.Minute),
 	})
 	if initializeErr != nil {
 		t.Fatalf("initialize preference failed: %v", initializeErr)
 	}
-	if !created || initialized.Source != domain.UserNotificationPreferenceSourceInstanceDefault {
+	if !created || initialized.CommitAuthorFailureEmailSource != domain.UserNotificationPreferenceSourceInstanceDefault {
 		t.Fatalf("unexpected initialized preference %+v created=%t", initialized, created)
 	}
 
 	mock.ExpectQuery("INSERT INTO user_notification_preferences").
-		WithArgs("user-3", false, domain.UserNotificationPreferenceSourceInstanceDefault, false, sql.NullString{}, now, now.Add(3*time.Minute)).
+		WithArgs("user-3", false, false, domain.UserNotificationPreferenceSourceInstanceDefault, false, false, sql.NullString{}, now, now.Add(3*time.Minute)).
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery("SELECT user_id::text, commit_author_failure_enabled, source, commit_author_success_enabled, commit_author_success_source, created_at, updated_at").
+	mock.ExpectQuery("SELECT user_id::text, commit_author_failure_email_enabled, commit_author_failure_slack_enabled, commit_author_failure_email_source, commit_author_success_email_enabled, commit_author_success_slack_enabled, commit_author_success_email_source, created_at, updated_at").
 		WithArgs("user-3").
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("user-3", false, string(domain.UserNotificationPreferenceSourceUser), true, string(domain.UserNotificationPreferenceSourceUser), now, now.Add(4*time.Minute)))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("user-3", false, false, string(domain.UserNotificationPreferenceSourceUser), true, false, string(domain.UserNotificationPreferenceSourceUser), now, now.Add(4*time.Minute)))
 
 	existing, existingCreated, existingErr := repo.InitializeIfAbsent(context.Background(), domain.UserNotificationPreference{
-		UserID:                     "user-3",
-		CommitAuthorFailureEnabled: false,
-		Source:                     domain.UserNotificationPreferenceSourceInstanceDefault,
-		CreatedAt:                  now,
-		UpdatedAt:                  now.Add(3 * time.Minute),
+		UserID:                         "user-3",
+		CommitAuthorFailureEmailSource: domain.UserNotificationPreferenceSourceInstanceDefault,
+		CreatedAt:                      now,
+		UpdatedAt:                      now.Add(3 * time.Minute),
 	})
 	if existingErr != nil {
 		t.Fatalf("initialize existing preference failed: %v", existingErr)
 	}
-	if existingCreated || existing.Source != domain.UserNotificationPreferenceSourceUser {
+	if existingCreated || existing.CommitAuthorFailureEmailSource != domain.UserNotificationPreferenceSourceUser {
 		t.Fatalf("unexpected existing preference %+v created=%t", existing, existingCreated)
 	}
 
@@ -129,18 +128,18 @@ func TestUserNotificationPreferenceRepository_GetByUserIDAndUpsert(t *testing.T)
 	}
 
 	mock.ExpectQuery("INSERT INTO user_notification_preferences").
-		WithArgs("user-5", true, domain.UserNotificationPreferenceSourceInstanceDefault, false, sql.NullString{}, now, now.Add(5*time.Minute)).
+		WithArgs("user-5", true, false, domain.UserNotificationPreferenceSourceInstanceDefault, false, false, sql.NullString{}, now, now.Add(5*time.Minute)).
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery("SELECT user_id::text, commit_author_failure_enabled, source, commit_author_success_enabled, commit_author_success_source, created_at, updated_at").
+	mock.ExpectQuery("SELECT user_id::text, commit_author_failure_email_enabled, commit_author_failure_slack_enabled, commit_author_failure_email_source, commit_author_success_email_enabled, commit_author_success_slack_enabled, commit_author_success_email_source, created_at, updated_at").
 		WithArgs("user-5").
 		WillReturnError(errors.New("get existing failed"))
 
 	_, _, getExistingErr := repo.InitializeIfAbsent(context.Background(), domain.UserNotificationPreference{
-		UserID:                     "user-5",
-		CommitAuthorFailureEnabled: true,
-		Source:                     domain.UserNotificationPreferenceSourceInstanceDefault,
-		CreatedAt:                  now,
-		UpdatedAt:                  now.Add(5 * time.Minute),
+		UserID:                          "user-5",
+		CommitAuthorFailureEmailEnabled: true,
+		CommitAuthorFailureEmailSource:  domain.UserNotificationPreferenceSourceInstanceDefault,
+		CreatedAt:                       now,
+		UpdatedAt:                       now.Add(5 * time.Minute),
 	})
 	if getExistingErr == nil || getExistingErr.Error() != "get existing failed" {
 		t.Fatalf("expected existing get error, got %v", getExistingErr)
@@ -162,12 +161,12 @@ func TestUserNotificationPreferenceRepository_GetByUserIDAndUpsert(t *testing.T)
 func TestScanUserNotificationPreference(t *testing.T) {
 	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
 	preference, err := scanUserNotificationPreference(notificationTestScanner{
-		values: []any{"user-1", true, string(domain.UserNotificationPreferenceSourceUser), false, nil, now, now.Add(time.Minute)},
+		values: []any{"user-1", true, false, string(domain.UserNotificationPreferenceSourceUser), false, false, nil, now, now.Add(time.Minute)},
 	})
 	if err != nil {
 		t.Fatalf("scan preference failed: %v", err)
 	}
-	if preference.UserID != "user-1" || !preference.CommitAuthorFailureEnabled || preference.Source != domain.UserNotificationPreferenceSourceUser {
+	if preference.UserID != "user-1" || !preference.CommitAuthorFailureEmailEnabled || preference.CommitAuthorFailureEmailSource != domain.UserNotificationPreferenceSourceUser {
 		t.Fatalf("unexpected scanned preference %+v", preference)
 	}
 

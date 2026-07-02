@@ -1344,7 +1344,7 @@ describe("MyNotificationsPage", () => {
     await waitFor(() => {
       expect(
         mockedSetCommitAuthorFailureNotificationPreference.mock.calls[0]?.[0],
-      ).toEqual({ enabled: false });
+      ).toEqual({ email_enabled: false, slack_enabled: false });
     });
   });
 
@@ -1436,7 +1436,7 @@ describe("MyNotificationsPage", () => {
     await waitFor(() => {
       expect(
         mockedSetCommitAuthorSuccessNotificationPreference.mock.calls[0]?.[0],
-      ).toEqual({ enabled: false });
+      ).toEqual({ email_enabled: false, slack_enabled: false });
     });
     expect(
       mockedSetCommitAuthorFailureNotificationPreference,

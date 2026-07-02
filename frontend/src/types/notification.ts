@@ -27,8 +27,17 @@ export interface UpdateMyEmailNotificationTargetRequest {
 }
 
 export interface CommitAuthorNotificationPreference {
+  email?: CommitAuthorNotificationPreferenceChannel;
+  slack?: CommitAuthorNotificationPreferenceChannel;
+  enabled?: boolean;
+  eligible?: boolean;
+  delivery_active?: boolean;
+  target?: NotificationTarget | null;
+  unavailable_reason?: string | null;
+}
+
+export interface CommitAuthorNotificationPreferenceChannel {
   enabled: boolean;
-  eligible: boolean;
   delivery_active: boolean;
   target: NotificationTarget | null;
   unavailable_reason?: string | null;
@@ -184,11 +193,15 @@ export interface UpdateNotificationSubscriptionRequest {
 }
 
 export interface UpdateCommitAuthorFailureNotificationPreferenceRequest {
-  enabled: boolean;
+  enabled?: boolean;
+  email_enabled?: boolean;
+  slack_enabled?: boolean;
 }
 
 export interface UpdateCommitAuthorSuccessNotificationPreferenceRequest {
-  enabled: boolean;
+  enabled?: boolean;
+  email_enabled?: boolean;
+  slack_enabled?: boolean;
 }
 
 export interface UpdateNotificationDefaultsRequest {

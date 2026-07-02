@@ -106,12 +106,15 @@ func main() {
 		Recipients:       cfg.EmailNotificationRecipients,
 		Sender:           emailSender,
 		SlackSender:      buildsvc.NewSlackWebhookSender(nil),
+		SlackClient:      platformslack.NewClient(nil),
 		JobRepo:          jobRepo,
 		ProjectRepo:      projectRepo,
 		DeliveryRepo:     notificationDeliveryRepo,
 		SubscriptionRepo: notificationSubscriptionRepo,
 		UserRepo:         userRepo,
 		PreferenceRepo:   notificationPreferenceRepo,
+		IdentityRepo:     userSlackIdentityRepo,
+		WorkspaceRepo:    slackWorkspaceIntegrationRepo,
 		PublicBaseURL:    cfg.PublicURL,
 	})
 	if buildNotificationErr != nil {
@@ -159,7 +162,11 @@ func main() {
 	projectMembershipService := service.NewProjectMembershipService(projectRepo, projectMembershipRepo)
 	jobService := service.NewJobService(jobRepo, buildService).WithProjectRepository(projectRepo).WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo)
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
-	notificationService := service.NewNotificationService(notificationSubscriptionRepo).WithPreferenceRepository(notificationPreferenceRepo).WithInstanceSettingsRepository(notificationInstanceSettingsRepo)
+	notificationService := service.NewNotificationService(notificationSubscriptionRepo).
+		WithPreferenceRepository(notificationPreferenceRepo).
+		WithInstanceSettingsRepository(notificationInstanceSettingsRepo).
+		WithUserSlackIdentityRepository(userSlackIdentityRepo).
+		WithSlackWorkspaceIntegrationRepository(slackWorkspaceIntegrationRepo)
 	slackWorkspaceIntegrationService := service.NewSlackWorkspaceIntegrationService(slackWorkspaceIntegrationRepo, platformslack.NewClient(nil))
 	personalSlackIdentityService := service.NewUserSlackIdentityService(userSlackIdentityRepo, slackWorkspaceIntegrationRepo, platformslack.NewClient(nil))
 	webhookService := webhooksvc.NewDeliveryIngressService(webhookDeliveryRepo, jobService)

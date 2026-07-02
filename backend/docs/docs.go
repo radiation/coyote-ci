@@ -4466,10 +4466,18 @@ const docTemplate = `{
         "api.CommitAuthorFailureNotificationPreferenceResponse": {
             "type": "object",
             "properties": {
-                "delivery_active": {
-                    "type": "boolean"
+                "email": {
+                    "$ref": "#/definitions/api.CommitAuthorNotificationPreferenceChannelResponse"
                 },
-                "eligible": {
+                "slack": {
+                    "$ref": "#/definitions/api.CommitAuthorNotificationPreferenceChannelResponse"
+                }
+            }
+        },
+        "api.CommitAuthorNotificationPreferenceChannelResponse": {
+            "type": "object",
+            "properties": {
+                "delivery_active": {
                     "type": "boolean"
                 },
                 "enabled": {
@@ -4494,20 +4502,11 @@ const docTemplate = `{
         "api.CommitAuthorSuccessNotificationPreferenceResponse": {
             "type": "object",
             "properties": {
-                "delivery_active": {
-                    "type": "boolean"
+                "email": {
+                    "$ref": "#/definitions/api.CommitAuthorNotificationPreferenceChannelResponse"
                 },
-                "eligible": {
-                    "type": "boolean"
-                },
-                "enabled": {
-                    "type": "boolean"
-                },
-                "target": {
-                    "$ref": "#/definitions/api.NotificationTargetResponse"
-                },
-                "unavailable_reason": {
-                    "type": "string"
+                "slack": {
+                    "$ref": "#/definitions/api.CommitAuthorNotificationPreferenceChannelResponse"
                 }
             }
         },
@@ -5398,7 +5397,10 @@ const docTemplate = `{
         "api.PutCommitAuthorFailureNotificationPreferenceRequest": {
             "type": "object",
             "properties": {
-                "enabled": {
+                "email_enabled": {
+                    "type": "boolean"
+                },
+                "slack_enabled": {
                     "type": "boolean"
                 }
             }
@@ -5406,7 +5408,10 @@ const docTemplate = `{
         "api.PutCommitAuthorSuccessNotificationPreferenceRequest": {
             "type": "object",
             "properties": {
-                "enabled": {
+                "email_enabled": {
+                    "type": "boolean"
+                },
+                "slack_enabled": {
                     "type": "boolean"
                 }
             }

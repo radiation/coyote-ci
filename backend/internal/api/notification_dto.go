@@ -51,12 +51,16 @@ type PutMyEmailNotificationTargetRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
-type CommitAuthorFailureNotificationPreferenceResponse struct {
+type CommitAuthorNotificationPreferenceChannelResponse struct {
 	Enabled           bool                        `json:"enabled"`
-	Eligible          bool                        `json:"eligible"`
 	DeliveryActive    bool                        `json:"delivery_active"`
-	Target            *NotificationTargetResponse `json:"target"`
+	Target            *NotificationTargetResponse `json:"target,omitempty"`
 	UnavailableReason *string                     `json:"unavailable_reason,omitempty"`
+}
+
+type CommitAuthorFailureNotificationPreferenceResponse struct {
+	Email CommitAuthorNotificationPreferenceChannelResponse `json:"email"`
+	Slack CommitAuthorNotificationPreferenceChannelResponse `json:"slack"`
 }
 
 type CommitAuthorFailureNotificationPreferenceEnvelope struct {
@@ -64,11 +68,8 @@ type CommitAuthorFailureNotificationPreferenceEnvelope struct {
 }
 
 type CommitAuthorSuccessNotificationPreferenceResponse struct {
-	Enabled           bool                        `json:"enabled"`
-	Eligible          bool                        `json:"eligible"`
-	DeliveryActive    bool                        `json:"delivery_active"`
-	Target            *NotificationTargetResponse `json:"target"`
-	UnavailableReason *string                     `json:"unavailable_reason,omitempty"`
+	Email CommitAuthorNotificationPreferenceChannelResponse `json:"email"`
+	Slack CommitAuthorNotificationPreferenceChannelResponse `json:"slack"`
 }
 
 type CommitAuthorSuccessNotificationPreferenceEnvelope struct {
@@ -192,11 +193,13 @@ type PutNotificationDefaultsRequest struct {
 }
 
 type PutCommitAuthorFailureNotificationPreferenceRequest struct {
-	Enabled *bool `json:"enabled"`
+	EmailEnabled *bool `json:"email_enabled"`
+	SlackEnabled *bool `json:"slack_enabled"`
 }
 
 type PutCommitAuthorSuccessNotificationPreferenceRequest struct {
-	Enabled *bool `json:"enabled"`
+	EmailEnabled *bool `json:"email_enabled"`
+	SlackEnabled *bool `json:"slack_enabled"`
 }
 
 type CreateNotificationSubscriptionRequest struct {

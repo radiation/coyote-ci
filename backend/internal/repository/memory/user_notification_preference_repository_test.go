@@ -22,12 +22,13 @@ func TestUserNotificationPreferenceRepository_GetByUserIDAndUpsert(t *testing.T)
 	}
 
 	stored, err := repo.Upsert(ctx, domain.UserNotificationPreference{
-		UserID:                     "  user-1  ",
-		CommitAuthorFailureEnabled: true,
-		CommitAuthorSuccessEnabled: true,
-		CommitAuthorSuccessSource:  &source,
-		CreatedAt:                  now,
-		UpdatedAt:                  now,
+		UserID:                          "  user-1  ",
+		CommitAuthorFailureEmailEnabled: true,
+		CommitAuthorFailureEmailSource:  domain.UserNotificationPreferenceSourceUser,
+		CommitAuthorSuccessEmailEnabled: true,
+		CommitAuthorSuccessEmailSource:  &source,
+		CreatedAt:                       now,
+		UpdatedAt:                       now,
 	})
 	if err != nil {
 		t.Fatalf("upsert preference failed: %v", err)
@@ -36,31 +37,31 @@ func TestUserNotificationPreferenceRepository_GetByUserIDAndUpsert(t *testing.T)
 		t.Fatalf("expected trimmed user id, got %q", stored.UserID)
 	}
 	source = domain.UserNotificationPreferenceSourceInstanceDefault
-	if stored.CommitAuthorSuccessSource == nil || *stored.CommitAuthorSuccessSource != domain.UserNotificationPreferenceSourceUser {
-		t.Fatalf("expected success source clone to preserve original value, got %+v", stored.CommitAuthorSuccessSource)
+	if stored.CommitAuthorSuccessEmailSource == nil || *stored.CommitAuthorSuccessEmailSource != domain.UserNotificationPreferenceSourceUser {
+		t.Fatalf("expected success source clone to preserve original value, got %+v", stored.CommitAuthorSuccessEmailSource)
 	}
 
 	fetched, err := repo.GetByUserID(ctx, " user-1 ")
 	if err != nil {
 		t.Fatalf("get preference failed: %v", err)
 	}
-	if !fetched.CommitAuthorFailureEnabled {
+	if !fetched.CommitAuthorFailureEmailEnabled {
 		t.Fatalf("expected enabled preference, got %+v", fetched)
 	}
-	if !fetched.CommitAuthorSuccessEnabled || fetched.CommitAuthorSuccessSource == nil || *fetched.CommitAuthorSuccessSource != domain.UserNotificationPreferenceSourceUser {
+	if !fetched.CommitAuthorSuccessEmailEnabled || fetched.CommitAuthorSuccessEmailSource == nil || *fetched.CommitAuthorSuccessEmailSource != domain.UserNotificationPreferenceSourceUser {
 		t.Fatalf("expected success preference fields to persist, got %+v", fetched)
 	}
 
 	updated, err := repo.Upsert(ctx, domain.UserNotificationPreference{
-		UserID:                     "user-1",
-		CommitAuthorFailureEnabled: false,
-		CreatedAt:                  now,
-		UpdatedAt:                  now.Add(time.Minute),
+		UserID:                         "user-1",
+		CommitAuthorFailureEmailSource: domain.UserNotificationPreferenceSourceUser,
+		CreatedAt:                      now,
+		UpdatedAt:                      now.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("update preference failed: %v", err)
 	}
-	if updated.CommitAuthorFailureEnabled {
+	if updated.CommitAuthorFailureEmailEnabled {
 		t.Fatalf("expected updated disabled preference, got %+v", updated)
 	}
 
@@ -68,7 +69,7 @@ func TestUserNotificationPreferenceRepository_GetByUserIDAndUpsert(t *testing.T)
 	if err != nil {
 		t.Fatalf("get updated preference failed: %v", err)
 	}
-	if fetchedUpdated.CommitAuthorFailureEnabled {
+	if fetchedUpdated.CommitAuthorFailureEmailEnabled {
 		t.Fatalf("expected fetched updated preference to be disabled, got %+v", fetchedUpdated)
 	}
 }
@@ -80,12 +81,12 @@ func TestUserNotificationPreferenceRepository_InitializeIfAbsent(t *testing.T) {
 	source := domain.UserNotificationPreferenceSourceInstanceDefault
 
 	initialized, created, err := repo.InitializeIfAbsent(ctx, domain.UserNotificationPreference{
-		UserID:                     "  user-init  ",
-		CommitAuthorFailureEnabled: true,
-		Source:                     domain.UserNotificationPreferenceSourceInstanceDefault,
-		CommitAuthorSuccessSource:  &source,
-		CreatedAt:                  now,
-		UpdatedAt:                  now,
+		UserID:                          "  user-init  ",
+		CommitAuthorFailureEmailEnabled: true,
+		CommitAuthorFailureEmailSource:  domain.UserNotificationPreferenceSourceInstanceDefault,
+		CommitAuthorSuccessEmailSource:  &source,
+		CreatedAt:                       now,
+		UpdatedAt:                       now,
 	})
 	if err != nil {
 		t.Fatalf("initialize preference failed: %v", err)
@@ -94,21 +95,20 @@ func TestUserNotificationPreferenceRepository_InitializeIfAbsent(t *testing.T) {
 		t.Fatalf("unexpected initialized preference %+v created=%t", initialized, created)
 	}
 	source = domain.UserNotificationPreferenceSourceUser
-	if initialized.CommitAuthorSuccessSource == nil || *initialized.CommitAuthorSuccessSource != domain.UserNotificationPreferenceSourceInstanceDefault {
-		t.Fatalf("expected initialized success source clone, got %+v", initialized.CommitAuthorSuccessSource)
+	if initialized.CommitAuthorSuccessEmailSource == nil || *initialized.CommitAuthorSuccessEmailSource != domain.UserNotificationPreferenceSourceInstanceDefault {
+		t.Fatalf("expected initialized success source clone, got %+v", initialized.CommitAuthorSuccessEmailSource)
 	}
 
 	existing, existingCreated, err := repo.InitializeIfAbsent(ctx, domain.UserNotificationPreference{
-		UserID:                     "user-init",
-		CommitAuthorFailureEnabled: false,
-		Source:                     domain.UserNotificationPreferenceSourceUser,
-		CreatedAt:                  now,
-		UpdatedAt:                  now.Add(time.Minute),
+		UserID:                         "user-init",
+		CommitAuthorFailureEmailSource: domain.UserNotificationPreferenceSourceUser,
+		CreatedAt:                      now,
+		UpdatedAt:                      now.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("initialize existing preference failed: %v", err)
 	}
-	if existingCreated || !existing.CommitAuthorFailureEnabled || existing.Source != domain.UserNotificationPreferenceSourceInstanceDefault {
+	if existingCreated || !existing.CommitAuthorFailureEmailEnabled || existing.CommitAuthorFailureEmailSource != domain.UserNotificationPreferenceSourceInstanceDefault {
 		t.Fatalf("expected existing initialized preference to be preserved, got %+v created=%t", existing, existingCreated)
 	}
 }

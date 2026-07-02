@@ -143,7 +143,7 @@ func (f *fakeNotificationAdminService) GetCommitAuthorFailureNotificationPrefere
 	return f.getPreferenceResult, f.getPreferenceErr
 }
 
-func (f *fakeNotificationAdminService) SetCommitAuthorFailureNotificationPreference(_ context.Context, _ domain.User, _ *bool) (service.CommitAuthorFailureNotificationPreferenceState, error) {
+func (f *fakeNotificationAdminService) SetCommitAuthorFailureNotificationPreference(_ context.Context, _ domain.User, _ service.UpdateCommitAuthorNotificationPreferenceInput) (service.CommitAuthorFailureNotificationPreferenceState, error) {
 	return f.setPreferenceResult, f.setPreferenceErr
 }
 
@@ -151,7 +151,7 @@ func (f *fakeNotificationAdminService) GetCommitAuthorSuccessNotificationPrefere
 	return f.getSuccessPreferenceResult, f.getSuccessPreferenceErr
 }
 
-func (f *fakeNotificationAdminService) SetCommitAuthorSuccessNotificationPreference(_ context.Context, _ domain.User, _ *bool) (service.CommitAuthorSuccessNotificationPreferenceState, error) {
+func (f *fakeNotificationAdminService) SetCommitAuthorSuccessNotificationPreference(_ context.Context, _ domain.User, _ service.UpdateCommitAuthorNotificationPreferenceInput) (service.CommitAuthorSuccessNotificationPreferenceState, error) {
 	return f.setSuccessPreferenceResult, f.setSuccessPreferenceErr
 }
 
@@ -269,7 +269,7 @@ func TestNotificationHandler_SendSampleBuildFailure_ConflictForDisabledOrMissing
 		h.SetAdminService(&fakeNotificationAdminService{setSuccessPreferenceErr: service.ErrNotificationPreferencePersonalTargetRequired})
 		user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
 
-		req := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-successes", bytes.NewBufferString(`{"enabled":true}`))
+		req := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-successes", bytes.NewBufferString(`{"email_enabled":true,"slack_enabled":false}`))
 		req = req.WithContext(auth.WithUser(req.Context(), user))
 		res := httptest.NewRecorder()
 
@@ -852,22 +852,33 @@ func TestNotificationHandler_MyCommitAuthorFailurePreferenceEndpoints(t *testing
 	reason := service.NotificationPreferenceUnavailableReasonPersonalTargetRequired
 	h.SetAdminService(&fakeNotificationAdminService{
 		getPreferenceResult: service.CommitAuthorFailureNotificationPreferenceState{
-			Enabled:           false,
-			Eligible:          false,
-			DeliveryActive:    false,
-			UnavailableReason: &reason,
+			Email: service.CommitAuthorEmailNotificationPreferenceState{
+				Enabled:           false,
+				DeliveryActive:    false,
+				UnavailableReason: &reason,
+			},
+			Slack: service.CommitAuthorSlackNotificationPreferenceState{
+				Enabled:           false,
+				DeliveryActive:    false,
+				UnavailableReason: stringPtr(service.NotificationPreferenceUnavailableReasonSlackIdentityRequired),
+			},
 		},
 		setPreferenceResult: service.CommitAuthorFailureNotificationPreferenceState{
-			Enabled:        true,
-			Eligible:       true,
-			DeliveryActive: true,
-			Target: &domain.NotificationTarget{
-				ID:          "target-1",
-				OwnerUserID: stringPtr("user-1"),
-				Type:        domain.NotificationTargetTypeEmail,
-				Name:        "User One",
-				Recipient:   "<user@example.com>",
-				Enabled:     true,
+			Email: service.CommitAuthorEmailNotificationPreferenceState{
+				Enabled:        true,
+				DeliveryActive: true,
+				Target: &domain.NotificationTarget{
+					ID:          "target-1",
+					OwnerUserID: stringPtr("user-1"),
+					Type:        domain.NotificationTargetTypeEmail,
+					Name:        "User One",
+					Recipient:   "<user@example.com>",
+					Enabled:     true,
+				},
+			},
+			Slack: service.CommitAuthorSlackNotificationPreferenceState{
+				Enabled:        false,
+				DeliveryActive: false,
 			},
 		},
 	})
@@ -881,14 +892,25 @@ func TestNotificationHandler_MyCommitAuthorFailurePreferenceEndpoints(t *testing
 		t.Fatalf("expected get preference status %d, got %d body=%s", http.StatusOK, getRes.Code, getRes.Body.String())
 	}
 	getData := decodeDataMap(t, getRes)
-	if getData["enabled"] != false || getData["eligible"] != false || getData["delivery_active"] != false {
+	emailData, ok := getData["email"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected email preference payload map, got %T", getData["email"])
+	}
+	slackData, ok := getData["slack"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected slack preference payload map, got %T", getData["slack"])
+	}
+	if emailData["enabled"] != false || emailData["delivery_active"] != false {
 		t.Fatalf("unexpected get preference payload: %+v", getData)
 	}
-	if getData["unavailable_reason"] != reason {
-		t.Fatalf("expected unavailable reason %q, got %v", reason, getData["unavailable_reason"])
+	if emailData["unavailable_reason"] != reason {
+		t.Fatalf("expected email unavailable reason %q, got %v", reason, emailData["unavailable_reason"])
+	}
+	if slackData["enabled"] != false || slackData["delivery_active"] != false {
+		t.Fatalf("unexpected slack get preference payload: %+v", slackData)
 	}
 
-	putReq := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-failures", bytes.NewBufferString(`{"enabled":true}`))
+	putReq := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-failures", bytes.NewBufferString(`{"email_enabled":true,"slack_enabled":false}`))
 	putReq = putReq.WithContext(auth.WithUser(putReq.Context(), user))
 	putRes := httptest.NewRecorder()
 	h.SetMyCommitAuthorFailureNotificationPreference(putRes, putReq)
@@ -896,8 +918,19 @@ func TestNotificationHandler_MyCommitAuthorFailurePreferenceEndpoints(t *testing
 		t.Fatalf("expected put preference status %d, got %d body=%s", http.StatusOK, putRes.Code, putRes.Body.String())
 	}
 	putData := decodeDataMap(t, putRes)
-	if putData["enabled"] != true || putData["eligible"] != true || putData["delivery_active"] != true {
+	putEmailData, ok := putData["email"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected email put payload map, got %T", putData["email"])
+	}
+	putSlackData, ok := putData["slack"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected slack put payload map, got %T", putData["slack"])
+	}
+	if putEmailData["enabled"] != true || putEmailData["delivery_active"] != true {
 		t.Fatalf("unexpected put preference payload: %+v", putData)
+	}
+	if putSlackData["enabled"] != false || putSlackData["delivery_active"] != false {
+		t.Fatalf("unexpected put slack preference payload: %+v", putData)
 	}
 }
 
@@ -913,7 +946,7 @@ func TestNotificationHandler_MyCommitAuthorFailurePreferenceEndpointsRequireAuth
 		t.Fatalf("expected get preference unauthorized status %d, got %d body=%s", http.StatusUnauthorized, getRes.Code, getRes.Body.String())
 	}
 
-	putReq := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-failures", bytes.NewBufferString(`{"enabled":true}`))
+	putReq := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-failures", bytes.NewBufferString(`{"email_enabled":true,"slack_enabled":false}`))
 	putRes := httptest.NewRecorder()
 	h.SetMyCommitAuthorFailureNotificationPreference(putRes, putReq)
 	if putRes.Code != http.StatusUnauthorized {
@@ -932,7 +965,7 @@ func TestNotificationHandler_MyCommitAuthorFailurePreferenceEndpointErrors(t *te
 			t.Fatalf("expected unavailable get status %d, got %d body=%s", http.StatusNotFound, getRes.Code, getRes.Body.String())
 		}
 
-		putReq := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-failures", bytes.NewBufferString(`{"enabled":true}`))
+		putReq := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-failures", bytes.NewBufferString(`{"email_enabled":true,"slack_enabled":false}`))
 		putRes := httptest.NewRecorder()
 		h.SetMyCommitAuthorFailureNotificationPreference(putRes, putReq)
 		if putRes.Code != http.StatusNotFound {
@@ -963,7 +996,7 @@ func TestNotificationHandler_MyCommitAuthorFailurePreferenceEndpointErrors(t *te
 	}{
 		{name: "get internal error", method: http.MethodGet, serviceErr: errors.New("boom"), wantStatus: http.StatusInternalServerError},
 		{name: "put target required", method: http.MethodPut, serviceErr: service.ErrNotificationPreferencePersonalTargetRequired, wantStatus: http.StatusConflict},
-		{name: "put invalid request", method: http.MethodPut, serviceErr: service.ErrNotificationPreferenceEnabledRequired, wantStatus: http.StatusBadRequest},
+		{name: "put invalid request", method: http.MethodPut, serviceErr: service.ErrNotificationPreferenceChannelEnabledRequired, wantStatus: http.StatusBadRequest},
 	}
 
 	for _, tc := range tests {
@@ -979,7 +1012,7 @@ func TestNotificationHandler_MyCommitAuthorFailurePreferenceEndpointErrors(t *te
 			h.SetAdminService(fakeSvc)
 			user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
 
-			req := httptest.NewRequest(tc.method, "/api/me/notification-preferences/commit-author-failures", bytes.NewBufferString(`{"enabled":true}`))
+			req := httptest.NewRequest(tc.method, "/api/me/notification-preferences/commit-author-failures", bytes.NewBufferString(`{"email_enabled":true,"slack_enabled":false}`))
 			req = req.WithContext(auth.WithUser(req.Context(), user))
 			res := httptest.NewRecorder()
 
@@ -1002,22 +1035,33 @@ func TestNotificationHandler_MyCommitAuthorSuccessPreferenceEndpoints(t *testing
 	reason := service.NotificationPreferenceUnavailableReasonPersonalTargetRequired
 	h.SetAdminService(&fakeNotificationAdminService{
 		getSuccessPreferenceResult: service.CommitAuthorSuccessNotificationPreferenceState{
-			Enabled:           false,
-			Eligible:          false,
-			DeliveryActive:    false,
-			UnavailableReason: &reason,
+			Email: service.CommitAuthorEmailNotificationPreferenceState{
+				Enabled:           false,
+				DeliveryActive:    false,
+				UnavailableReason: &reason,
+			},
+			Slack: service.CommitAuthorSlackNotificationPreferenceState{
+				Enabled:           false,
+				DeliveryActive:    false,
+				UnavailableReason: stringPtr(service.NotificationPreferenceUnavailableReasonSlackIdentityRequired),
+			},
 		},
 		setSuccessPreferenceResult: service.CommitAuthorSuccessNotificationPreferenceState{
-			Enabled:        true,
-			Eligible:       true,
-			DeliveryActive: true,
-			Target: &domain.NotificationTarget{
-				ID:          "target-1",
-				OwnerUserID: stringPtr("user-1"),
-				Type:        domain.NotificationTargetTypeEmail,
-				Name:        "User One",
-				Recipient:   "<user@example.com>",
-				Enabled:     true,
+			Email: service.CommitAuthorEmailNotificationPreferenceState{
+				Enabled:        true,
+				DeliveryActive: true,
+				Target: &domain.NotificationTarget{
+					ID:          "target-1",
+					OwnerUserID: stringPtr("user-1"),
+					Type:        domain.NotificationTargetTypeEmail,
+					Name:        "User One",
+					Recipient:   "<user@example.com>",
+					Enabled:     true,
+				},
+			},
+			Slack: service.CommitAuthorSlackNotificationPreferenceState{
+				Enabled:        false,
+				DeliveryActive: false,
 			},
 		},
 	})
@@ -1031,14 +1075,25 @@ func TestNotificationHandler_MyCommitAuthorSuccessPreferenceEndpoints(t *testing
 		t.Fatalf("expected get preference status %d, got %d body=%s", http.StatusOK, getRes.Code, getRes.Body.String())
 	}
 	getData := decodeDataMap(t, getRes)
-	if getData["enabled"] != false || getData["eligible"] != false || getData["delivery_active"] != false {
+	emailData, ok := getData["email"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected email preference payload map, got %T", getData["email"])
+	}
+	slackData, ok := getData["slack"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected slack preference payload map, got %T", getData["slack"])
+	}
+	if emailData["enabled"] != false || emailData["delivery_active"] != false {
 		t.Fatalf("unexpected get preference payload: %+v", getData)
 	}
-	if getData["unavailable_reason"] != reason {
-		t.Fatalf("expected unavailable reason %q, got %v", reason, getData["unavailable_reason"])
+	if emailData["unavailable_reason"] != reason {
+		t.Fatalf("expected email unavailable reason %q, got %v", reason, emailData["unavailable_reason"])
+	}
+	if slackData["enabled"] != false || slackData["delivery_active"] != false {
+		t.Fatalf("unexpected slack get preference payload: %+v", slackData)
 	}
 
-	putReq := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-successes", bytes.NewBufferString(`{"enabled":true}`))
+	putReq := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-successes", bytes.NewBufferString(`{"email_enabled":true,"slack_enabled":false}`))
 	putReq = putReq.WithContext(auth.WithUser(putReq.Context(), user))
 	putRes := httptest.NewRecorder()
 	h.SetMyCommitAuthorSuccessNotificationPreference(putRes, putReq)
@@ -1046,8 +1101,19 @@ func TestNotificationHandler_MyCommitAuthorSuccessPreferenceEndpoints(t *testing
 		t.Fatalf("expected put preference status %d, got %d body=%s", http.StatusOK, putRes.Code, putRes.Body.String())
 	}
 	putData := decodeDataMap(t, putRes)
-	if putData["enabled"] != true || putData["eligible"] != true || putData["delivery_active"] != true {
+	putEmailData, ok := putData["email"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected email put payload map, got %T", putData["email"])
+	}
+	putSlackData, ok := putData["slack"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected slack put payload map, got %T", putData["slack"])
+	}
+	if putEmailData["enabled"] != true || putEmailData["delivery_active"] != true {
 		t.Fatalf("unexpected put preference payload: %+v", putData)
+	}
+	if putSlackData["enabled"] != false || putSlackData["delivery_active"] != false {
+		t.Fatalf("unexpected put slack preference payload: %+v", putData)
 	}
 }
 
@@ -1063,7 +1129,7 @@ func TestNotificationHandler_MyCommitAuthorSuccessPreferenceEndpointsRequireAuth
 		t.Fatalf("expected get preference unauthorized status %d, got %d body=%s", http.StatusUnauthorized, getRes.Code, getRes.Body.String())
 	}
 
-	putReq := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-successes", bytes.NewBufferString(`{"enabled":true}`))
+	putReq := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-successes", bytes.NewBufferString(`{"email_enabled":true,"slack_enabled":false}`))
 	putRes := httptest.NewRecorder()
 	h.SetMyCommitAuthorSuccessNotificationPreference(putRes, putReq)
 	if putRes.Code != http.StatusUnauthorized {
@@ -1082,7 +1148,7 @@ func TestNotificationHandler_MyCommitAuthorSuccessPreferenceEndpointErrors(t *te
 			t.Fatalf("expected unavailable get status %d, got %d body=%s", http.StatusNotFound, getRes.Code, getRes.Body.String())
 		}
 
-		putReq := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-successes", bytes.NewBufferString(`{"enabled":true}`))
+		putReq := httptest.NewRequest(http.MethodPut, "/api/me/notification-preferences/commit-author-successes", bytes.NewBufferString(`{"email_enabled":true,"slack_enabled":false}`))
 		putRes := httptest.NewRecorder()
 		h.SetMyCommitAuthorSuccessNotificationPreference(putRes, putReq)
 		if putRes.Code != http.StatusNotFound {
@@ -1113,7 +1179,7 @@ func TestNotificationHandler_MyCommitAuthorSuccessPreferenceEndpointErrors(t *te
 	}{
 		{name: "get internal error", method: http.MethodGet, serviceErr: errors.New("boom"), wantStatus: http.StatusInternalServerError},
 		{name: "put target required", method: http.MethodPut, serviceErr: service.ErrNotificationPreferencePersonalTargetRequired, wantStatus: http.StatusConflict},
-		{name: "put invalid request", method: http.MethodPut, serviceErr: service.ErrNotificationPreferenceEnabledRequired, wantStatus: http.StatusBadRequest},
+		{name: "put invalid request", method: http.MethodPut, serviceErr: service.ErrNotificationPreferenceChannelEnabledRequired, wantStatus: http.StatusBadRequest},
 	}
 
 	for _, tc := range tests {
@@ -1129,7 +1195,7 @@ func TestNotificationHandler_MyCommitAuthorSuccessPreferenceEndpointErrors(t *te
 			h.SetAdminService(fakeSvc)
 			user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
 
-			req := httptest.NewRequest(tc.method, "/api/me/notification-preferences/commit-author-successes", bytes.NewBufferString(`{"enabled":true}`))
+			req := httptest.NewRequest(tc.method, "/api/me/notification-preferences/commit-author-successes", bytes.NewBufferString(`{"email_enabled":true,"slack_enabled":false}`))
 			req = req.WithContext(auth.WithUser(req.Context(), user))
 			res := httptest.NewRecorder()
 

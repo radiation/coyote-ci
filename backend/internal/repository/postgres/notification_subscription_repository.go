@@ -324,26 +324,28 @@ func (r *NotificationSubscriptionRepository) initializeCommitAuthorPreferencesTx
 	const query = `
 		INSERT INTO user_notification_preferences (
 			user_id,
-			commit_author_failure_enabled,
-			source,
-			commit_author_success_enabled,
-			commit_author_success_source,
+			commit_author_failure_email_enabled,
+			commit_author_failure_slack_enabled,
+			commit_author_failure_email_source,
+			commit_author_success_email_enabled,
+			commit_author_success_slack_enabled,
+			commit_author_success_email_source,
 			created_at,
 			updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (user_id)
 		DO UPDATE SET
-			commit_author_success_enabled = CASE
-				WHEN user_notification_preferences.commit_author_success_source IS NULL THEN EXCLUDED.commit_author_success_enabled
-				ELSE user_notification_preferences.commit_author_success_enabled
+			commit_author_success_email_enabled = CASE
+				WHEN user_notification_preferences.commit_author_success_email_source IS NULL THEN EXCLUDED.commit_author_success_email_enabled
+				ELSE user_notification_preferences.commit_author_success_email_enabled
 			END,
-			commit_author_success_source = CASE
-				WHEN user_notification_preferences.commit_author_success_source IS NULL THEN EXCLUDED.commit_author_success_source
-				ELSE user_notification_preferences.commit_author_success_source
+			commit_author_success_email_source = CASE
+				WHEN user_notification_preferences.commit_author_success_email_source IS NULL THEN EXCLUDED.commit_author_success_email_source
+				ELSE user_notification_preferences.commit_author_success_email_source
 			END,
 			updated_at = CASE
-				WHEN user_notification_preferences.commit_author_success_source IS NULL THEN EXCLUDED.updated_at
+				WHEN user_notification_preferences.commit_author_success_email_source IS NULL THEN EXCLUDED.updated_at
 				ELSE user_notification_preferences.updated_at
 			END
 	`
@@ -351,8 +353,10 @@ func (r *NotificationSubscriptionRepository) initializeCommitAuthorPreferencesTx
 	_, execErr := tx.ExecContext(ctx, query,
 		ownerUserID,
 		failureEnabled,
+		false,
 		domain.UserNotificationPreferenceSourceInstanceDefault,
 		successEnabled,
+		false,
 		domain.UserNotificationPreferenceSourceInstanceDefault,
 		createdAt,
 		updatedAt,
