@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"crypto/md5"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -161,7 +163,7 @@ func (r *NotificationSubscriptionRepository) EnsureConfigEmailTarget(ctx context
 		name = input.Recipient
 	}
 	configTarget, normalizeErr := domain.NormalizeNotificationTarget(domain.NotificationTarget{
-		ID:        strings.TrimSpace(input.ID),
+		ID:        notificationConfigEmailTargetID(strings.TrimSpace(input.ID), input.Recipient),
 		Type:      domain.NotificationTargetTypeEmail,
 		Origin:    domain.NotificationTargetOriginConfigDefault,
 		Name:      name,
@@ -212,6 +214,19 @@ func (r *NotificationSubscriptionRepository) EnsureConfigEmailTarget(ctx context
 	}
 
 	return domain.NotificationTarget{}, repository.ErrNotificationTargetNotFound
+}
+
+func notificationConfigEmailTargetID(explicitID string, recipient string) string {
+	trimmedID := strings.TrimSpace(explicitID)
+	if trimmedID != "" {
+		return trimmedID
+	}
+
+	normalizedRecipient := strings.ToLower(strings.TrimSpace(recipient))
+	hash := md5.Sum([]byte("notification-target:config-default-email:" + normalizedRecipient))
+	hexValue := hex.EncodeToString(hash[:])
+
+	return hexValue[0:8] + "-" + hexValue[8:12] + "-4" + hexValue[13:16] + "-a" + hexValue[17:20] + "-" + hexValue[20:32]
 }
 
 func (r *NotificationSubscriptionRepository) SetOwnedEmailTargetEnabled(ctx context.Context, ownerUserID string, enabled bool, updatedAt time.Time) (domain.NotificationTarget, error) {

@@ -1489,6 +1489,45 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 		}
 	})
 
+	t.Run("configured recipients send without subscription repo", func(t *testing.T) {
+		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+		sender := &recordingEmailSender{}
+		notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+			Enabled:      true,
+			Recipients:   "Dev <dev@example.com>",
+			Sender:       sender,
+			DeliveryRepo: deliveryRepo,
+		})
+		if err != nil {
+			t.Fatalf("create notifier failed: %v", err)
+		}
+
+		build := domain.Build{ID: "build-no-subscriptions", Status: domain.BuildStatusSuccess}
+		if err := notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
+			t.Fatalf("expected configured-recipient notifier without subscriptions to send, got %v", err)
+		}
+		if err := notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
+			t.Fatalf("expected duplicate configured-recipient notify to skip cleanly, got %v", err)
+		}
+		if len(sender.messages) != 1 {
+			t.Fatalf("expected one sent email after duplicate notify, got %d", len(sender.messages))
+		}
+		if sender.messages[0].To != "\"Dev\" <dev@example.com>" {
+			t.Fatalf("expected normalized configured recipient, got %q", sender.messages[0].To)
+		}
+
+		delivery := mustGetNotificationDelivery(t, deliveryRepo, "build-no-subscriptions", domain.NotificationEventTypeBuildSucceeded, "\"Dev\" <dev@example.com>")
+		if delivery.DestinationKey != "email-config:dev@example.com" {
+			t.Fatalf("expected stable configured-recipient destination key, got %q", delivery.DestinationKey)
+		}
+		if delivery.Status != domain.NotificationDeliveryStatusSent {
+			t.Fatalf("expected sent delivery status, got %q", delivery.Status)
+		}
+		if delivery.Attempts != 1 {
+			t.Fatalf("expected one delivery attempt, got %d", delivery.Attempts)
+		}
+	})
+
 	t.Run("records sent delivery state", func(t *testing.T) {
 		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 		sender := &recordingEmailSender{}

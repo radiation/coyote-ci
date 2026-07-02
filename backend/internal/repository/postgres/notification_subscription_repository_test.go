@@ -647,6 +647,33 @@ func TestNotificationSubscriptionRepository_EnsureConfigEmailTarget(t *testing.T
 		}
 	})
 
+	t.Run("derives deterministic id when input id is blank", func(t *testing.T) {
+		expectedID := notificationConfigEmailTargetID("", "alerts@example.com")
+		mock.ExpectQuery(`INSERT INTO notification_targets`).WithArgs(
+			expectedID,
+			string(domain.NotificationTargetTypeEmail),
+			string(domain.NotificationTargetOriginConfigDefault),
+			"alerts@example.com",
+			"<alerts@example.com>",
+			now,
+			now,
+		).WillReturnRows(sqlmock.NewRows(targetColumns).AddRow(
+			expectedID, nil, "email", "config_default", "<alerts@example.com>", "<alerts@example.com>", true, now, now,
+		))
+
+		target, ensureErr := repo.EnsureConfigEmailTarget(context.Background(), repository.EnsureConfigNotificationEmailTargetInput{
+			Recipient: "alerts@example.com",
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if ensureErr != nil {
+			t.Fatalf("ensure config target with derived id failed: %v", ensureErr)
+		}
+		if target.ID != expectedID {
+			t.Fatalf("expected derived config target id %q, got %q", expectedID, target.ID)
+		}
+	})
+
 	t.Run("rejects invalid email before sql", func(t *testing.T) {
 		_, ensureErr := repo.EnsureConfigEmailTarget(context.Background(), repository.EnsureConfigNotificationEmailTargetInput{
 			Recipient: "not-an-email",

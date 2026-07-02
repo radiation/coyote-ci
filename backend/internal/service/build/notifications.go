@@ -771,7 +771,22 @@ func dedupeDestinations(destinations []notificationDestination) []notificationDe
 
 func (s *BuildNotificationService) resolveConfiguredEmailDestination(ctx context.Context, recipient string) (notificationDestination, error) {
 	if s.subscriptionRepo == nil {
-		return notificationDestination{}, errors.New("notification subscription repository is required for configured shared email delivery identity")
+		parsedRecipient, ok := parseNotificationRecipient(&recipient)
+		if !ok {
+			trimmedRecipient := strings.TrimSpace(recipient)
+			return notificationDestination{}, fmt.Errorf("invalid email notification recipient %q", trimmedRecipient)
+		}
+		parsedAddress, err := mail.ParseAddress(parsedRecipient)
+		if err != nil {
+			return notificationDestination{}, fmt.Errorf("invalid email notification recipient %q: %w", strings.TrimSpace(recipient), err)
+		}
+		return notificationDestination{
+			transport:       domain.NotificationTransportEmail,
+			destinationKind: domain.NotificationDestinationKindSharedTarget,
+			destinationKey:  "email-config:" + strings.ToLower(strings.TrimSpace(parsedAddress.Address)),
+			recipient:       parsedRecipient,
+			emailRecipient:  parsedRecipient,
+		}, nil
 	}
 	now := time.Now().UTC()
 	target, err := s.subscriptionRepo.EnsureConfigEmailTarget(ctx, repository.EnsureConfigNotificationEmailTargetInput{
