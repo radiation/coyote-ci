@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/mail"
 	"net/smtp"
@@ -37,6 +38,21 @@ type Config struct {
 
 type sendMailFunc func(ctx context.Context, addr string, auth smtp.Auth, from string, to []string, msg []byte) error
 
+type smtpDialContextFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+type smtpClient interface {
+	Extension(ext string) (bool, string)
+	StartTLS(config *tls.Config) error
+	Auth(auth smtp.Auth) error
+	Mail(from string) error
+	Rcpt(to string) error
+	Data() (io.WriteCloser, error)
+	Quit() error
+	Close() error
+}
+
+type smtpClientFactory func(conn net.Conn, host string) (smtpClient, error)
+
 type noopSender struct{}
 
 type smtpSender struct {
@@ -44,6 +60,7 @@ type smtpSender struct {
 	auth         smtp.Auth
 	envelopeFrom string
 	headerFrom   string
+	timeout      time.Duration
 	sendMail     sendMailFunc
 }
 
@@ -56,6 +73,10 @@ func NewSender(cfg Config) (Sender, error) {
 }
 
 func newSMTPSender(cfg Config, sendMail sendMailFunc) (Sender, error) {
+	return newSMTPSenderWithTimeout(cfg, DefaultSMTPTimeout, sendMail)
+}
+
+func newSMTPSenderWithTimeout(cfg Config, timeout time.Duration, sendMail sendMailFunc) (Sender, error) {
 	host := strings.TrimSpace(cfg.Host)
 	if host == "" {
 		return nil, errors.New("smtp host is required")
@@ -92,6 +113,7 @@ func newSMTPSender(cfg Config, sendMail sendMailFunc) (Sender, error) {
 		auth:         auth,
 		envelopeFrom: parsedFrom.Address,
 		headerFrom:   parsedFrom.String(),
+		timeout:      timeout,
 		sendMail:     sendMail,
 	}, nil
 }
@@ -115,7 +137,7 @@ func (s *smtpSender) SendText(ctx context.Context, message Message) error {
 	}
 
 	rawMessage := buildPlainTextMessage(s.headerFrom, parsedTo.String(), subject, body)
-	sendCtx, cancel := context.WithTimeout(ctx, DefaultSMTPTimeout)
+	sendCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 	if sendErr := s.sendMail(sendCtx, s.addr, s.auth, s.envelopeFrom, []string{parsedTo.Address}, rawMessage); sendErr != nil {
 		return fmt.Errorf("send email: %w", sendErr)
@@ -172,25 +194,35 @@ func normalizeBody(body string) string {
 }
 
 func smtpSendMailWithTimeout(timeout time.Duration) sendMailFunc {
+	return smtpSendMail(timeout, (&net.Dialer{}).DialContext, func(conn net.Conn, host string) (smtpClient, error) {
+		return smtp.NewClient(conn, host)
+	}, time.Now)
+}
+
+func smtpSendMail(timeout time.Duration, dial smtpDialContextFunc, newClient smtpClientFactory, now func() time.Time) sendMailFunc {
 	return func(ctx context.Context, addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
 		host, _, splitErr := net.SplitHostPort(addr)
 		if splitErr != nil {
 			return splitErr
 		}
 
-		dialer := &net.Dialer{Timeout: timeout}
-		conn, dialErr := dialer.DialContext(ctx, "tcp", addr)
+		operationCtx, cancel, deadline := smtpOperationContext(ctx, timeout, now)
+		defer cancel()
+
+		conn, dialErr := dial(operationCtx, "tcp", addr)
 		if dialErr != nil {
 			return dialErr
 		}
 		defer func() {
 			_ = conn.Close()
 		}()
-		if setErr := conn.SetDeadline(time.Now().Add(timeout)); setErr != nil {
-			return setErr
+		if !deadline.IsZero() {
+			if setErr := conn.SetDeadline(deadline); setErr != nil {
+				return setErr
+			}
 		}
 
-		client, clientErr := smtp.NewClient(conn, host)
+		client, clientErr := newClient(conn, host)
 		if clientErr != nil {
 			return clientErr
 		}
@@ -232,4 +264,21 @@ func smtpSendMailWithTimeout(timeout time.Duration) sendMailFunc {
 		}
 		return client.Quit()
 	}
+}
+
+func smtpOperationContext(ctx context.Context, timeout time.Duration, now func() time.Time) (context.Context, context.CancelFunc, time.Time) {
+	if timeout <= 0 {
+		if deadline, ok := ctx.Deadline(); ok {
+			return ctx, func() {}, deadline
+		}
+		return ctx, func() {}, time.Time{}
+	}
+
+	deadline := now().Add(timeout)
+	if parentDeadline, ok := ctx.Deadline(); ok && !parentDeadline.After(deadline) {
+		return ctx, func() {}, parentDeadline
+	}
+
+	operationCtx, cancel := context.WithDeadline(ctx, deadline)
+	return operationCtx, cancel, deadline
 }

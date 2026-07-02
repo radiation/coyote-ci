@@ -21,6 +21,9 @@ type notificationRetryPolicy struct {
 }
 
 func minimumNotificationClaimDuration() time.Duration {
+	// This bound tracks Coyote's production-configured provider adapters.
+	// Test doubles and custom HTTPDoer implementations are expected to honor
+	// the same operational timeout contract without expanding this interface.
 	maxProviderTimeout := platformemail.DefaultSMTPTimeout
 	if platformslack.DefaultAPITimeout > maxProviderTimeout {
 		maxProviderTimeout = platformslack.DefaultAPITimeout
