@@ -120,3 +120,87 @@ func TestNotificationDeliveryDestinationKeyBuilders(t *testing.T) {
 		t.Fatal("slack dm key unexpectedly includes secret data")
 	}
 }
+
+func TestNotificationDeliveryNormalizeAndHelpers(t *testing.T) {
+	blank := "   "
+	trimmed := " user-1 "
+	lastError := " smtp failed "
+	delivery := NotificationDelivery{
+		BuildID:                     " build-1 ",
+		EventType:                   NotificationEventType(" build_failed "),
+		Transport:                   NotificationTransport(" email "),
+		DestinationKind:             NotificationDestinationKind(" shared_target "),
+		DestinationKey:              " email-target:target-1 ",
+		NotificationTargetID:        &trimmed,
+		RecipientUserID:             &blank,
+		SlackWorkspaceIntegrationID: &blank,
+		Recipient:                   " <dev@example.com> ",
+		Status:                      NotificationDeliveryStatus(" pending "),
+		LastError:                   &lastError,
+	}
+
+	normalized := delivery.Normalize()
+	if normalized.BuildID != "build-1" || normalized.DestinationKey != "email-target:target-1" {
+		t.Fatalf("expected normalized identity fields, got %+v", normalized)
+	}
+	if normalized.NotificationTargetID == nil || *normalized.NotificationTargetID != "user-1" {
+		t.Fatalf("expected trimmed target id, got %v", normalized.NotificationTargetID)
+	}
+	if normalized.RecipientUserID != nil || normalized.SlackWorkspaceIntegrationID != nil {
+		t.Fatalf("expected blank optional ids to normalize to nil, got recipient=%v slack=%v", normalized.RecipientUserID, normalized.SlackWorkspaceIntegrationID)
+	}
+	if normalized.LastError == nil || *normalized.LastError != "smtp failed" {
+		t.Fatalf("expected trimmed last error, got %v", normalized.LastError)
+	}
+
+	if !NotificationTransportEmail.IsValid() || NotificationTransport("sms").IsValid() {
+		t.Fatal("unexpected transport validity result")
+	}
+	if !NotificationDestinationKindSharedTarget.IsValid() || NotificationDestinationKind("pager").IsValid() {
+		t.Fatal("unexpected destination kind validity result")
+	}
+
+	if !(NotificationDelivery{Transport: NotificationTransportEmail, DestinationKind: NotificationDestinationKindSharedTarget}).IsTransportDestinationKindValid() {
+		t.Fatal("expected email/shared_target to be valid")
+	}
+	if !(NotificationDelivery{Transport: NotificationTransportEmail, DestinationKind: NotificationDestinationKindPersonalEmail}).IsTransportDestinationKindValid() {
+		t.Fatal("expected email/personal_email to be valid")
+	}
+	if !(NotificationDelivery{Transport: NotificationTransportSlackWebhook, DestinationKind: NotificationDestinationKindSharedTarget}).IsTransportDestinationKindValid() {
+		t.Fatal("expected slack_webhook/shared_target to be valid")
+	}
+	if !(NotificationDelivery{Transport: NotificationTransportSlackDM, DestinationKind: NotificationDestinationKindSlackIdentity}).IsTransportDestinationKindValid() {
+		t.Fatal("expected slack_dm/slack_identity to be valid")
+	}
+	if (NotificationDelivery{Transport: NotificationTransportSlackDM, DestinationKind: NotificationDestinationKindSharedTarget}).IsTransportDestinationKindValid() {
+		t.Fatal("expected slack_dm/shared_target to be invalid")
+	}
+
+	if got := trimNotificationOptionalString(nil); got != nil {
+		t.Fatalf("expected nil optional string, got %v", got)
+	}
+	if got := trimNotificationOptionalString(&blank); got != nil {
+		t.Fatalf("expected blank optional string to normalize to nil, got %v", got)
+	}
+	if got := trimNotificationOptionalString(&trimmed); got == nil || *got != "user-1" {
+		t.Fatalf("expected trimmed optional string, got %v", got)
+	}
+}
+
+func TestNotificationDeliveryDestinationKeyBuilderErrors(t *testing.T) {
+	if _, _, err := NotificationSharedEmailTargetKey("   "); err == nil {
+		t.Fatal("expected blank shared email target id to fail")
+	}
+	if _, _, err := NotificationSharedSlackWebhookTargetKey("   "); err == nil {
+		t.Fatal("expected blank shared slack webhook target id to fail")
+	}
+	if _, _, err := NotificationPersonalEmailTargetKey("   "); err == nil {
+		t.Fatal("expected blank personal email target id to fail")
+	}
+	if _, _, err := NotificationSlackDMDestinationKey("", "U123"); err == nil {
+		t.Fatal("expected blank workspace id to fail")
+	}
+	if _, _, err := NotificationSlackDMDestinationKey("workspace-1", "   "); err == nil {
+		t.Fatal("expected blank slack user id to fail")
+	}
+}

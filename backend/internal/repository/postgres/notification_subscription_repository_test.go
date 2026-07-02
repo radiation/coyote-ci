@@ -587,6 +587,96 @@ func TestNotificationSubscriptionRepository_EnsureOwnedEmailTarget(t *testing.T)
 	}
 }
 
+func TestNotificationSubscriptionRepository_EnsureConfigEmailTarget(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewNotificationSubscriptionRepository(db)
+	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	targetColumns := []string{"id", "owner_user_id", "type", "origin", "name", "recipient", "enabled", "created_at", "updated_at"}
+
+	t.Run("creates canonical config target", func(t *testing.T) {
+		mock.ExpectQuery(`INSERT INTO notification_targets`).WithArgs(
+			"config-target",
+			string(domain.NotificationTargetTypeEmail),
+			string(domain.NotificationTargetOriginConfigDefault),
+			"Alerts@Example.com",
+			"<Alerts@Example.com>",
+			now,
+			now,
+		).WillReturnRows(sqlmock.NewRows(targetColumns).AddRow(
+			"config-target", nil, "email", "config_default", "<Alerts@Example.com>", "<Alerts@Example.com>", true, now, now,
+		))
+
+		target, ensureErr := repo.EnsureConfigEmailTarget(context.Background(), repository.EnsureConfigNotificationEmailTargetInput{
+			ID:        "config-target",
+			Name:      "   ",
+			Recipient: " Alerts@Example.com ",
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if ensureErr != nil {
+			t.Fatalf("ensure config target failed: %v", ensureErr)
+		}
+		if target.Origin != domain.NotificationTargetOriginConfigDefault || target.OwnerUserID != nil {
+			t.Fatalf("unexpected ensured config target %+v", target)
+		}
+	})
+
+	t.Run("selects canonical target after insert conflict", func(t *testing.T) {
+		mock.ExpectQuery(`INSERT INTO notification_targets`).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, origin, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets`).WithArgs(
+			string(domain.NotificationTargetTypeEmail),
+			string(domain.NotificationTargetOriginConfigDefault),
+			"<alerts@example.com>",
+		).WillReturnRows(sqlmock.NewRows(targetColumns).AddRow(
+			"existing-config", nil, "email", "config_default", "Build Alerts", "<alerts@example.com>", true, now, now,
+		))
+
+		target, ensureErr := repo.EnsureConfigEmailTarget(context.Background(), repository.EnsureConfigNotificationEmailTargetInput{
+			Recipient: "alerts@example.com",
+		})
+		if ensureErr != nil {
+			t.Fatalf("ensure config target after conflict failed: %v", ensureErr)
+		}
+		if target.ID != "existing-config" {
+			t.Fatalf("expected existing canonical target id, got %q", target.ID)
+		}
+	})
+
+	t.Run("rejects invalid email before sql", func(t *testing.T) {
+		_, ensureErr := repo.EnsureConfigEmailTarget(context.Background(), repository.EnsureConfigNotificationEmailTargetInput{
+			Recipient: "not-an-email",
+		})
+		if ensureErr == nil || !strings.Contains(ensureErr.Error(), "invalid notification target recipient") {
+			t.Fatalf("expected invalid email error, got %v", ensureErr)
+		}
+	})
+
+	t.Run("returns raw select error after conflict", func(t *testing.T) {
+		mock.ExpectQuery(`INSERT INTO notification_targets`).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`SELECT id, owner_user_id::text, type, origin, name, recipient, enabled, created_at, updated_at\s+FROM notification_targets`).WithArgs(
+			string(domain.NotificationTargetTypeEmail),
+			string(domain.NotificationTargetOriginConfigDefault),
+			"<error@example.com>",
+		).WillReturnError(errors.New("select failed"))
+
+		_, ensureErr := repo.EnsureConfigEmailTarget(context.Background(), repository.EnsureConfigNotificationEmailTargetInput{
+			Recipient: "error@example.com",
+		})
+		if ensureErr == nil || ensureErr.Error() != "select failed" {
+			t.Fatalf("expected raw select error, got %v", ensureErr)
+		}
+	})
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 func TestNotificationSubscriptionRepository_EnsureOwnedEmailTarget_RetriesAndErrors(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

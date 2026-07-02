@@ -646,6 +646,68 @@ func TestNotificationSubscriptionRepository_OwnedEmailTargets(t *testing.T) {
 	}
 }
 
+func TestNotificationSubscriptionRepository_EnsureConfigEmailTarget(t *testing.T) {
+	repo := NewNotificationSubscriptionRepository()
+	ctx := context.Background()
+	now := time.Date(2026, 7, 2, 9, 30, 0, 0, time.UTC)
+
+	manual, err := repo.CreateTarget(ctx, domain.NotificationTarget{
+		Type:      domain.NotificationTargetTypeEmail,
+		Origin:    domain.NotificationTargetOriginManual,
+		Recipient: "alerts@example.com",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create manual shared target failed: %v", err)
+	}
+
+	created, err := repo.EnsureConfigEmailTarget(ctx, repository.EnsureConfigNotificationEmailTargetInput{
+		ID:        "config-target",
+		Name:      "   ",
+		Recipient: " Alerts@Example.com ",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("ensure config email target failed: %v", err)
+	}
+	if created.ID != "config-target" {
+		t.Fatalf("expected config target id to be preserved, got %q", created.ID)
+	}
+	if created.ID == manual.ID {
+		t.Fatalf("expected config-default target to remain distinct from manual shared target, got %q", created.ID)
+	}
+	if created.Origin != domain.NotificationTargetOriginConfigDefault {
+		t.Fatalf("expected config-default origin, got %q", created.Origin)
+	}
+	if created.OwnerUserID != nil {
+		t.Fatalf("expected ownerless config target, got %v", created.OwnerUserID)
+	}
+	if created.Name != "<Alerts@Example.com>" {
+		t.Fatalf("expected fallback name to use normalized recipient, got %q", created.Name)
+	}
+	if created.Recipient != "<Alerts@Example.com>" {
+		t.Fatalf("expected normalized recipient, got %q", created.Recipient)
+	}
+
+	again, err := repo.EnsureConfigEmailTarget(ctx, repository.EnsureConfigNotificationEmailTargetInput{
+		ID:        "ignored-id",
+		Name:      "Ignored",
+		Recipient: "alerts@example.com",
+	})
+	if err != nil {
+		t.Fatalf("re-ensure config email target failed: %v", err)
+	}
+	if again.ID != created.ID {
+		t.Fatalf("expected canonical config target id %q, got %q", created.ID, again.ID)
+	}
+
+	_, err = repo.EnsureConfigEmailTarget(ctx, repository.EnsureConfigNotificationEmailTargetInput{Recipient: "not-an-email"})
+	if err == nil || !strings.Contains(err.Error(), "invalid notification target recipient") {
+		t.Fatalf("expected invalid config email recipient error, got %v", err)
+	}
+}
+
 func TestNotificationSubscriptionRepository_SetOwnedEmailTargetEnabled(t *testing.T) {
 	repo := NewNotificationSubscriptionRepository()
 	ctx := context.Background()
