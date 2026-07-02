@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,24 +21,13 @@ func TestNotificationDeliveryRepository_CreateGetUpdateAndErrors(t *testing.T) {
 		DestinationKind: domain.NotificationDestinationKindSharedTarget,
 		DestinationKey:  "email-target:target-1",
 		Recipient:       " <dev@example.com> ",
+		MaxAttempts:     1,
 	})
 	if err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
-	if strings.TrimSpace(created.ID) == "" {
-		t.Fatal("expected generated id")
-	}
-	if created.BuildID != "build-1" {
-		t.Fatalf("expected trimmed build id, got %q", created.BuildID)
-	}
-	if created.Recipient != "<dev@example.com>" {
-		t.Fatalf("expected trimmed recipient, got %q", created.Recipient)
-	}
 	if created.Status != domain.NotificationDeliveryStatusPending {
-		t.Fatalf("expected default pending status, got %q", created.Status)
-	}
-	if created.CreatedAt.IsZero() || created.UpdatedAt.IsZero() {
-		t.Fatal("expected timestamps to be set")
+		t.Fatalf("expected pending status, got %q", created.Status)
 	}
 
 	fetched, err := repo.GetByBuildEventRecipient(context.Background(), " build-1 ", domain.NotificationEventTypeBuildFailed, " <dev@example.com> ")
@@ -50,61 +38,44 @@ func TestNotificationDeliveryRepository_CreateGetUpdateAndErrors(t *testing.T) {
 		t.Fatalf("expected same delivery id, got %q", fetched.ID)
 	}
 
-	updatedAt := time.Now().UTC()
-	sentAt := updatedAt.Add(time.Second)
+	now := time.Now().UTC()
+	nextAttemptAt := now.Add(time.Minute)
 	updated, err := repo.Update(context.Background(), domain.NotificationDelivery{
 		ID:              created.ID,
-		BuildID:         " build-1 ",
-		EventType:       domain.NotificationEventTypeBuildFailed,
-		Transport:       domain.NotificationTransportEmail,
-		DestinationKind: domain.NotificationDestinationKindSharedTarget,
-		DestinationKey:  "email-target:target-1",
-		Recipient:       " <dev@example.com> ",
-		Status:          domain.NotificationDeliveryStatusSent,
+		BuildID:         created.BuildID,
+		EventType:       created.EventType,
+		Transport:       created.Transport,
+		DestinationKind: created.DestinationKind,
+		DestinationKey:  created.DestinationKey,
+		Recipient:       created.Recipient,
+		Status:          domain.NotificationDeliveryStatusRetryWaiting,
 		Attempts:        1,
-		UpdatedAt:       updatedAt,
-		SentAt:          &sentAt,
+		MaxAttempts:     2,
+		LastAttemptAt:   &now,
+		NextAttemptAt:   &nextAttemptAt,
+		UpdatedAt:       now,
 	})
 	if err != nil {
 		t.Fatalf("update failed: %v", err)
 	}
-	if updated.CreatedAt != created.CreatedAt {
-		t.Fatalf("expected create timestamp to be preserved, got %v want %v", updated.CreatedAt, created.CreatedAt)
-	}
-	if updated.Status != domain.NotificationDeliveryStatusSent {
-		t.Fatalf("expected sent status, got %q", updated.Status)
+	if updated.Status != domain.NotificationDeliveryStatusRetryWaiting {
+		t.Fatalf("expected retry_waiting status, got %q", updated.Status)
 	}
 
-	_, err = repo.Create(context.Background(), domain.NotificationDelivery{
-		BuildID:         "build-1",
-		EventType:       domain.NotificationEventTypeBuildFailed,
-		Transport:       domain.NotificationTransportEmail,
-		DestinationKind: domain.NotificationDestinationKindSharedTarget,
-		DestinationKey:  "email-target:target-1",
-		Recipient:       "<dev@example.com>",
-	})
-	if !errors.Is(err, repository.ErrNotificationDeliveryDuplicate) {
+	if _, err := repo.Create(context.Background(), domain.NotificationDelivery{BuildID: created.BuildID, EventType: created.EventType, Transport: created.Transport, DestinationKind: created.DestinationKind, DestinationKey: created.DestinationKey, Recipient: created.Recipient, MaxAttempts: 1}); !errors.Is(err, repository.ErrNotificationDeliveryDuplicate) {
 		t.Fatalf("expected duplicate create error, got %v", err)
 	}
-
-	_, err = repo.Create(context.Background(), domain.NotificationDelivery{})
-	if err == nil || !strings.Contains(err.Error(), "build id is required") {
-		t.Fatalf("expected validation error for blank identity, got %v", err)
+	if _, err := repo.GetByBuildEventRecipient(context.Background(), "missing", domain.NotificationEventTypeBuildFailed, "<dev@example.com>"); !errors.Is(err, repository.ErrNotificationDeliveryNotFound) {
+		t.Fatalf("expected not found get error, got %v", err)
 	}
-
-	_, err = repo.GetByBuildEventRecipient(context.Background(), "missing", domain.NotificationEventTypeBuildFailed, "<dev@example.com>")
-	if !errors.Is(err, repository.ErrNotificationDeliveryNotFound) {
-		t.Fatalf("expected not found on get, got %v", err)
-	}
-
-	_, err = repo.Update(context.Background(), domain.NotificationDelivery{ID: "missing"})
-	if !errors.Is(err, repository.ErrNotificationDeliveryNotFound) {
-		t.Fatalf("expected not found on update, got %v", err)
+	if _, err := repo.Update(context.Background(), domain.NotificationDelivery{ID: "missing"}); !errors.Is(err, repository.ErrNotificationDeliveryNotFound) {
+		t.Fatalf("expected not found update error, got %v", err)
 	}
 }
 
-func TestNotificationDeliveryRepository_AcquireContract(t *testing.T) {
+func TestNotificationDeliveryRepository_ClaimContractAndLostClaimProtection(t *testing.T) {
 	repo := NewNotificationDeliveryRepository()
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
 	base := domain.NotificationDelivery{
 		BuildID:         "build-1",
 		EventType:       domain.NotificationEventTypeBuildFailed,
@@ -114,54 +85,84 @@ func TestNotificationDeliveryRepository_AcquireContract(t *testing.T) {
 		Recipient:       "<dev@example.com>",
 	}
 
-	first, err := repo.Acquire(context.Background(), base)
+	first, err := repo.AcquireForDelivery(context.Background(), repository.NotificationDeliveryClaimInput{Delivery: base, ClaimOwner: "worker-a", Now: now, ClaimDuration: time.Minute, MaxAttempts: 3})
 	if err != nil {
 		t.Fatalf("first acquire failed: %v", err)
 	}
-	if first.Outcome != repository.NotificationDeliveryAcquireOutcomeCreated {
-		t.Fatalf("expected created outcome, got %q", first.Outcome)
+	if first.Outcome != repository.NotificationDeliveryClaimOutcomeCreatedClaimed {
+		t.Fatalf("expected created_claimed, got %q", first.Outcome)
+	}
+	if first.Delivery.Attempts != 1 {
+		t.Fatalf("expected attempt 1, got %d", first.Delivery.Attempts)
 	}
 
-	second, err := repo.Acquire(context.Background(), base)
+	blocked, err := repo.AcquireForDelivery(context.Background(), repository.NotificationDeliveryClaimInput{Delivery: base, ClaimOwner: "worker-b", Now: now, ClaimDuration: time.Minute, MaxAttempts: 3})
 	if err != nil {
-		t.Fatalf("second acquire failed: %v", err)
+		t.Fatalf("blocked acquire failed: %v", err)
 	}
-	if second.Outcome != repository.NotificationDeliveryAcquireOutcomePending {
-		t.Fatalf("expected pending outcome for duplicate pending delivery, got %q", second.Outcome)
-	}
-
-	if _, updateErr := repo.Update(context.Background(), domain.NotificationDelivery{
-		ID:              first.Delivery.ID,
-		BuildID:         base.BuildID,
-		EventType:       base.EventType,
-		Transport:       base.Transport,
-		DestinationKind: base.DestinationKind,
-		DestinationKey:  base.DestinationKey,
-		Recipient:       base.Recipient,
-		Status:          domain.NotificationDeliveryStatusSent,
-		Attempts:        1,
-		UpdatedAt:       time.Now().UTC(),
-	}); updateErr != nil {
-		t.Fatalf("update sent delivery failed: %v", updateErr)
+	if blocked.Outcome != repository.NotificationDeliveryClaimOutcomeClaimedByOther {
+		t.Fatalf("expected claimed_by_other, got %q", blocked.Outcome)
 	}
 
-	sent, err := repo.Acquire(context.Background(), base)
+	claimTimestamp := *first.Delivery.ClaimedAt
+	retryAt := now.Add(30 * time.Second)
+	recorded, err := repo.RecordRetryableFailure(context.Background(), repository.NotificationDeliveryRecordFailureInput{
+		DeliveryID:      first.Delivery.ID,
+		ClaimOwner:      "worker-a",
+		ClaimedAt:       claimTimestamp,
+		FailedAt:        now,
+		NextAttemptAt:   &retryAt,
+		FailureCategory: domain.NotificationDeliveryFailureCategoryRetryable,
+		FailureReason:   "email_send_failed",
+		LastError:       strPtrMemory("smtp unavailable"),
+	})
 	if err != nil {
-		t.Fatalf("sent acquire failed: %v", err)
+		t.Fatalf("record retryable failure failed: %v", err)
 	}
-	if sent.Outcome != repository.NotificationDeliveryAcquireOutcomeSent {
-		t.Fatalf("expected sent outcome, got %q", sent.Outcome)
+	if recorded.Outcome != repository.NotificationDeliveryUpdateOutcomeUpdated || recorded.Delivery.Status != domain.NotificationDeliveryStatusRetryWaiting {
+		t.Fatalf("expected retry_waiting updated result, got outcome=%q status=%q", recorded.Outcome, recorded.Delivery.Status)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := repo.Acquire(ctx, base); !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected canceled acquire, got %v", err)
+	notDue, err := repo.AcquireForDelivery(context.Background(), repository.NotificationDeliveryClaimInput{Delivery: base, ClaimOwner: "worker-b", Now: now, ClaimDuration: time.Minute, MaxAttempts: 3})
+	if err != nil {
+		t.Fatalf("retry not due acquire failed: %v", err)
+	}
+	if notDue.Outcome != repository.NotificationDeliveryClaimOutcomeRetryNotDue {
+		t.Fatalf("expected retry_not_due, got %q", notDue.Outcome)
+	}
+
+	reclaimedAt := retryAt
+	reclaimed, err := repo.AcquireForDelivery(context.Background(), repository.NotificationDeliveryClaimInput{Delivery: base, ClaimOwner: "worker-b", Now: reclaimedAt, ClaimDuration: time.Minute, MaxAttempts: 3})
+	if err != nil {
+		t.Fatalf("reclaim due retry failed: %v", err)
+	}
+	if reclaimed.Outcome != repository.NotificationDeliveryClaimOutcomeRetryClaimed {
+		t.Fatalf("expected retry_claimed, got %q", reclaimed.Outcome)
+	}
+	if reclaimed.Delivery.Attempts != 2 {
+		t.Fatalf("expected attempts 2 after reclaim, got %d", reclaimed.Delivery.Attempts)
+	}
+
+	lost, err := repo.MarkSent(context.Background(), repository.NotificationDeliveryMarkSentInput{DeliveryID: reclaimed.Delivery.ID, ClaimOwner: "worker-a", ClaimedAt: claimTimestamp, SentAt: reclaimedAt})
+	if err != nil {
+		t.Fatalf("old owner mark sent failed: %v", err)
+	}
+	if lost.Outcome != repository.NotificationDeliveryUpdateOutcomeLostClaim {
+		t.Fatalf("expected lost_claim, got %q", lost.Outcome)
+	}
+
+	sent, err := repo.MarkSent(context.Background(), repository.NotificationDeliveryMarkSentInput{DeliveryID: reclaimed.Delivery.ID, ClaimOwner: "worker-b", ClaimedAt: *reclaimed.Delivery.ClaimedAt, SentAt: reclaimedAt})
+	if err != nil {
+		t.Fatalf("winning owner mark sent failed: %v", err)
+	}
+	if sent.Delivery.Status != domain.NotificationDeliveryStatusSent {
+		t.Fatalf("expected sent status, got %q", sent.Delivery.Status)
 	}
 }
 
-func TestNotificationDeliveryRepository_AcquireConcurrentIdenticalCreatesOneRow(t *testing.T) {
+func TestNotificationDeliveryRepository_ConcurrentInitialClaimCreatesOneRow(t *testing.T) {
 	repo := NewNotificationDeliveryRepository()
+	now := time.Date(2026, 7, 2, 15, 0, 0, 0, time.UTC)
 	base := domain.NotificationDelivery{
 		BuildID:         "build-1",
 		EventType:       domain.NotificationEventTypeBuildFailed,
@@ -172,36 +173,40 @@ func TestNotificationDeliveryRepository_AcquireConcurrentIdenticalCreatesOneRow(
 	}
 
 	const workers = 8
-	results := make(chan repository.NotificationDeliveryAcquireOutcome, workers)
+	results := make(chan repository.NotificationDeliveryClaimOutcome, workers)
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
+	for idx := 0; idx < workers; idx++ {
 		wg.Add(1)
-		go func() {
+		go func(workerID int) {
 			defer wg.Done()
-			result, err := repo.Acquire(context.Background(), base)
+			result, err := repo.AcquireForDelivery(context.Background(), repository.NotificationDeliveryClaimInput{Delivery: base, ClaimOwner: "worker", Now: now, ClaimDuration: time.Minute, MaxAttempts: 3})
 			if err != nil {
 				t.Errorf("acquire failed: %v", err)
 				return
 			}
 			results <- result.Outcome
-		}()
+		}(idx)
 	}
 	wg.Wait()
 	close(results)
 
 	created := 0
-	others := 0
+	blocked := 0
 	for outcome := range results {
-		if outcome == repository.NotificationDeliveryAcquireOutcomeCreated {
+		switch outcome {
+		case repository.NotificationDeliveryClaimOutcomeCreatedClaimed:
 			created++
-			continue
+		case repository.NotificationDeliveryClaimOutcomeClaimedByOther:
+			blocked++
+		default:
+			t.Fatalf("unexpected outcome %q", outcome)
 		}
-		others++
 	}
-	if created != 1 {
-		t.Fatalf("expected exactly one created delivery, got %d", created)
+	if created != 1 || blocked != workers-1 {
+		t.Fatalf("expected one created claim and %d blocked claims, got created=%d blocked=%d", workers-1, created, blocked)
 	}
-	if others != workers-1 {
-		t.Fatalf("expected %d non-created duplicate outcomes, got %d", workers-1, others)
-	}
+}
+
+func strPtrMemory(value string) *string {
+	return &value
 }

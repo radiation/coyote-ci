@@ -153,16 +153,16 @@ func TestSMTPSender_SendTextValidatesMessageAndContext(t *testing.T) {
 		t.Fatalf("expected canceled context to skip send")
 	}
 
-	if sendErr := sender.SendText(context.Background(), Message{Subject: "Build queued", Body: "test"}); sendErr == nil || !strings.Contains(sendErr.Error(), "email to address is required") {
+	if sendErr := sender.SendText(context.Background(), Message{Subject: "Build queued", Body: "test"}); sendErr == nil || !errors.Is(sendErr, ErrInvalidMessage) || !strings.Contains(sendErr.Error(), "to address is required") {
 		t.Fatalf("expected missing recipient error, got %v", sendErr)
 	}
-	if sendErr := sender.SendText(context.Background(), Message{To: "dev@example.com", Body: "test"}); sendErr == nil || !strings.Contains(sendErr.Error(), "email subject is required") {
+	if sendErr := sender.SendText(context.Background(), Message{To: "dev@example.com", Body: "test"}); sendErr == nil || !errors.Is(sendErr, ErrInvalidMessage) || !strings.Contains(sendErr.Error(), "subject is required") {
 		t.Fatalf("expected missing subject error, got %v", sendErr)
 	}
-	if sendErr := sender.SendText(context.Background(), Message{To: "dev@example.com", Subject: "Build queued"}); sendErr == nil || !strings.Contains(sendErr.Error(), "email body is required") {
+	if sendErr := sender.SendText(context.Background(), Message{To: "dev@example.com", Subject: "Build queued"}); sendErr == nil || !errors.Is(sendErr, ErrInvalidMessage) || !strings.Contains(sendErr.Error(), "body is required") {
 		t.Fatalf("expected missing body error, got %v", sendErr)
 	}
-	if sendErr := sender.SendText(context.Background(), Message{To: "not-an-email", Subject: "Build queued", Body: "test"}); sendErr == nil || !strings.Contains(sendErr.Error(), "invalid email to address") {
+	if sendErr := sender.SendText(context.Background(), Message{To: "not-an-email", Subject: "Build queued", Body: "test"}); sendErr == nil || !errors.Is(sendErr, ErrInvalidMessage) || !strings.Contains(sendErr.Error(), "invalid email to address") {
 		t.Fatalf("expected invalid recipient error, got %v", sendErr)
 	}
 }

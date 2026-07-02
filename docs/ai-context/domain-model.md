@@ -49,7 +49,8 @@ This file is a navigational summary of the main domain relationships. Use it to 
 - User notification preferences now store independent commit-author email and Slack enablement for failed and successful builds. Saved preference and current delivery availability remain separate concepts.
 - Notification deliveries are now logical transport-aware records keyed by build, event type, transport, and stable opaque destination key; source attribution is intentionally outside the dedupe identity.
 - Shared email and Slack webhook deliveries key off stable target ids, personal email deliveries key off owned personal email target ids, and personal Slack DM deliveries key off workspace integration id plus stable Slack member id.
-- Current delivery behavior remains duplicate-suppressing best effort: an existing sent, pending, or failed delivery row suppresses another send, and bounded retries plus stale-claim recovery remain a follow-up slice.
+- Notification deliveries now behave as a claimable bounded-retry ledger: non-terminal rows can move through `pending`, `sending`, and `retry_waiting`, claim ownership is used to prevent stale writers from overwriting newer attempts, retry scheduling metadata is persisted with the row, and terminal outcomes distinguish permanent from exhausted failure.
+- Periodic recovery draining of due retries/stale claims and recovery of terminal builds that never reached notification planning both remain deferred follow-up slices.
 - Future shared Slack channel destinations, if added, should remain separate from personal user identities.
 
 ## Practical edit routing

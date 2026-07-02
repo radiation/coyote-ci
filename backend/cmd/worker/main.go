@@ -178,6 +178,7 @@ func newWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepos
 		IdentityRepo:     identityRepo,
 		WorkspaceRepo:    workspaceRepo,
 		PublicBaseURL:    cfg.PublicURL,
+		ClaimOwner:       defaultWorkerID(),
 	})
 	if buildNotificationErr != nil {
 		return nil, buildNotificationErr

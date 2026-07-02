@@ -24,6 +24,7 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"../../../db/migrations/00029_rename_slack_workspace_bot_user_id_to_bot_id.sql",
 		"../../../db/migrations/00030_add_user_slack_identities.sql",
 		"../../../db/migrations/00032_refactor_notification_delivery_identity.sql",
+		"../../../db/migrations/00033_add_claimable_notification_delivery_ledger.sql",
 	}
 
 	var builder strings.Builder
@@ -79,6 +80,9 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS artifact_channels",
 		"CREATE TABLE IF NOT EXISTS notification_deliveries",
 		"notification_deliveries_build_event_transport_destination_key_key",
+		"max_attempts INTEGER",
+		"claim_expires_at TIMESTAMPTZ",
+		"retry_waiting",
 		"idx_notification_deliveries_build_id",
 		"CREATE TABLE IF NOT EXISTS notification_targets",
 		"origin TEXT",

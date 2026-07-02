@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+var ErrInvalidMessage = errors.New("email message is invalid")
+
 type Sender interface {
 	SendText(ctx context.Context, message Message) error
 }
@@ -118,22 +120,22 @@ func (s *smtpSender) SendText(ctx context.Context, message Message) error {
 func validateMessage(message Message) (*mail.Address, string, string, error) {
 	toAddress := strings.TrimSpace(message.To)
 	if toAddress == "" {
-		return nil, "", "", errors.New("email to address is required")
+		return nil, "", "", fmt.Errorf("%w: to address is required", ErrInvalidMessage)
 	}
 
 	parsedTo, parseErr := mail.ParseAddress(toAddress)
 	if parseErr != nil {
-		return nil, "", "", fmt.Errorf("invalid email to address: %w", parseErr)
+		return nil, "", "", fmt.Errorf("%w: invalid email to address: %v", ErrInvalidMessage, parseErr)
 	}
 
 	subject := strings.TrimSpace(message.Subject)
 	if subject == "" {
-		return nil, "", "", errors.New("email subject is required")
+		return nil, "", "", fmt.Errorf("%w: subject is required", ErrInvalidMessage)
 	}
 
 	body := strings.TrimSpace(message.Body)
 	if body == "" {
-		return nil, "", "", errors.New("email body is required")
+		return nil, "", "", fmt.Errorf("%w: body is required", ErrInvalidMessage)
 	}
 
 	return parsedTo, sanitizeHeaderValue(subject), normalizeBody(body), nil
