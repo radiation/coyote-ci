@@ -326,9 +326,10 @@ shadowing as a common commit blocker.
 
 Rules:
 - Once a function or test has an outer `err`, do not use `if _, err := ...; err != nil` or similar short declarations in an inner scope.
+- This applies especially to tests after setup code such as `value, err := ...`; subsequent assertions should use names like `createErr`, `updateErr`, `getErr`, or `wantErr` instead of another inner `err :=`.
 - Use operation-specific error names for scoped checks, such as `createErr`, `queueErr`, `cancelErr`, `completeErr`, `writeErr`, `closeErr`, or `markErr`.
 - When assigning additional return values later in the same scope, prefer reassignment with the existing `err` only when it does not create a new inner scope shadow.
-- Before finishing Go edits, scan touched code for `if .* err :=` patterns inside functions that already declared `err`.
+- Before finishing Go edits, scan touched code for `if .* err :=` patterns inside functions that already declared `err`, especially in tests with multiple setup and assertion blocks.
 
 ## Testing guidance
 
@@ -439,4 +440,4 @@ When generating code for this repo:
 - keep comments useful and brief
 - explain tradeoffs when making architectural choices
 - when multiple options exist, prefer the simpler one unless requirements clearly justify complexity
-- avoid `go vet` shadow warnings by not re-declaring `err` in inner scopes when an outer `err` is already in scope; prefer explicit names like `writeErr`, `closeErr`, `markErr`
+- avoid `go vet` shadow warnings by not re-declaring `err` in inner scopes when an outer `err` is already in scope; this includes test-only setup/assertion blocks, where explicit names like `createErr`, `updateErr`, `lookupErr`, `writeErr`, `closeErr`, and `markErr` are preferred

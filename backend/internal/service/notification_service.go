@@ -413,6 +413,7 @@ func (s *NotificationService) CreateTarget(ctx context.Context, input CreateNoti
 	return s.repo.CreateTarget(ctx, domain.NotificationTarget{
 		ID:        uuid.NewString(),
 		Type:      targetType,
+		Origin:    domain.NotificationTargetOriginManual,
 		Name:      name,
 		Recipient: recipient,
 		Enabled:   enabled,

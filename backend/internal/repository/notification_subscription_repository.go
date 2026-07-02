@@ -23,6 +23,14 @@ type EnsureOwnedNotificationEmailTargetInput struct {
 	UpdatedAt   time.Time
 }
 
+type EnsureConfigNotificationEmailTargetInput struct {
+	ID        string
+	Name      string
+	Recipient string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type NotificationSubscriptionListFilter struct {
 	ProjectID *string
 	JobID     *string
@@ -33,6 +41,7 @@ type NotificationSubscriptionRepository interface {
 	ListTargets(ctx context.Context) ([]domain.NotificationTarget, error)
 	GetTargetByID(ctx context.Context, id string) (domain.NotificationTarget, error)
 	GetOwnedEmailTargetByUserID(ctx context.Context, userID string) (domain.NotificationTarget, error)
+	EnsureConfigEmailTarget(ctx context.Context, input EnsureConfigNotificationEmailTargetInput) (domain.NotificationTarget, error)
 	SetOwnedEmailTargetEnabled(ctx context.Context, ownerUserID string, enabled bool, updatedAt time.Time) (domain.NotificationTarget, error)
 	EnsureOwnedEmailTarget(ctx context.Context, input EnsureOwnedNotificationEmailTargetInput) (domain.NotificationTarget, error)
 	EnsureOwnedEmailTargetInitialized(ctx context.Context, input EnsureOwnedNotificationEmailTargetInput) (domain.NotificationTarget, error)
