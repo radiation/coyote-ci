@@ -634,22 +634,14 @@ func toNotificationDefaultsResponse(state service.NotificationDefaultsState) api
 func toCommitAuthorFailureNotificationPreferenceResponse(state service.CommitAuthorNotificationPreferenceState) api.CommitAuthorFailureNotificationPreferenceResponse {
 	return api.CommitAuthorFailureNotificationPreferenceResponse{
 		Email: toCommitAuthorNotificationPreferenceChannelResponse(state.Email),
-		Slack: toCommitAuthorNotificationPreferenceChannelResponse(service.CommitAuthorEmailNotificationPreferenceState{
-			Enabled:           state.Slack.Enabled,
-			DeliveryActive:    state.Slack.DeliveryActive,
-			UnavailableReason: state.Slack.UnavailableReason,
-		}),
+		Slack: toCommitAuthorSlackNotificationPreferenceChannelResponse(state.Slack),
 	}
 }
 
 func toCommitAuthorSuccessNotificationPreferenceResponse(state service.CommitAuthorNotificationPreferenceState) api.CommitAuthorSuccessNotificationPreferenceResponse {
 	return api.CommitAuthorSuccessNotificationPreferenceResponse{
 		Email: toCommitAuthorNotificationPreferenceChannelResponse(state.Email),
-		Slack: toCommitAuthorNotificationPreferenceChannelResponse(service.CommitAuthorEmailNotificationPreferenceState{
-			Enabled:           state.Slack.Enabled,
-			DeliveryActive:    state.Slack.DeliveryActive,
-			UnavailableReason: state.Slack.UnavailableReason,
-		}),
+		Slack: toCommitAuthorSlackNotificationPreferenceChannelResponse(state.Slack),
 	}
 }
 
@@ -664,6 +656,14 @@ func toCommitAuthorNotificationPreferenceChannelResponse(state service.CommitAut
 		response.Target = &targetResponse
 	}
 	return response
+}
+
+func toCommitAuthorSlackNotificationPreferenceChannelResponse(state service.CommitAuthorSlackNotificationPreferenceState) api.CommitAuthorNotificationPreferenceChannelResponse {
+	return api.CommitAuthorNotificationPreferenceChannelResponse{
+		Enabled:           state.Enabled,
+		DeliveryActive:    state.DeliveryActive,
+		UnavailableReason: state.UnavailableReason,
+	}
 }
 
 func toNotificationTargetResponse(target domain.NotificationTarget) api.NotificationTargetResponse {

@@ -45,8 +45,8 @@ This file is a navigational summary of the main domain relationships. Use it to 
 - `slack_webhook` notification targets are shared delivery destinations used by build notifications today.
 - Slack workspace integration is instance-level infrastructure that stores the connected Slack workspace and bot credentials.
 - User Slack identity is a self-scoped mapping between one Coyote user and one stable Slack member ID in the connected workspace.
-- A personal Slack identity is not a notification target and does not deliver messages by itself.
-- Future personal Slack DM delivery can build on the stored Slack member ID without changing the shared target model.
+- A personal Slack identity is not a notification target; personal Slack DM delivery uses the stored workspace integration plus stable Slack member ID without creating a shared target or subscription.
+- User notification preferences now store independent commit-author email and Slack enablement for failed and successful builds. Saved preference and current delivery availability remain separate concepts.
 - Future shared Slack channel destinations, if added, should remain separate from personal user identities.
 
 ## Practical edit routing

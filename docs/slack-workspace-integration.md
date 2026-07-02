@@ -11,10 +11,10 @@ This integration is instance-level infrastructure and is separate from existing 
 - Persists stable Slack identity metadata (workspace ID and related bot/app metadata where available).
 - Stores bot credentials server-side and never returns the token in API responses.
 - Supports connection status, enable/disable, explicit replace, test connection, and disconnect.
+- Supports personal Slack direct-message delivery for commit-author build notifications when a user has linked a matching Slack identity and enabled Slack for the relevant event.
 
 ## What V1 does not do
 
-- Slack direct messages.
 - Channel discovery.
 - Project/job Slack destination routing.
 - Slack OAuth install flow.
@@ -28,7 +28,7 @@ Coyote users can link their own account to one stable Slack member identity in t
 - This requires the Slack app scope `users:read.email`.
 - After adding the scope in Slack, an administrator must reinstall or reauthorize the Slack app before Coyote can use it.
 - Coyote stores Slack’s stable member ID for the linked user. Display name, handle, and profile image are metadata snapshots only.
-- Linking does not enable Slack delivery yet.
+- Linking does not create a shared target or subscription by itself. Users still opt into Slack delivery separately for failed and successful commit-author notifications.
 - A previous failed admin connection test is shown as a warning only; users can still attempt a live lookup while the workspace remains enabled.
 - Users can view, pause, resume, and unlink their own Slack identity from **Settings > My notifications**.
 
@@ -41,8 +41,9 @@ If the Slack app is missing `users:read.email`, Coyote returns an actionable err
 3. Review the matched Slack account.
 4. Confirm the match to persist the stable Slack member ID.
 5. Optionally pause the link without deleting it, or unlink it entirely.
+6. Enable Slack for failed builds, successful builds, or both from **Commit notifications**.
 
-Pausing or unlinking the Slack identity does not change email notification preferences and does not send Slack messages.
+Pausing or unlinking the Slack identity does not change email notification preferences. Saved Slack preferences remain persisted, but Slack delivery pauses until the linked identity and workspace are active again.
 
 ## Admin workflow
 
@@ -79,6 +80,7 @@ Existing `slack_webhook` notification targets and their subscriptions remain unc
 
 - Connecting/disabling/disconnecting Slack workspace integration does not modify existing webhook targets.
 - Existing webhook delivery behavior remains independent.
+- Personal Slack DMs dedupe independently from shared Slack webhook deliveries and do not reuse shared target records.
 
 ## Disconnect and workspace-switch restrictions
 

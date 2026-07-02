@@ -30,6 +30,8 @@ export {
 } from "./job";
 
 export {
+  type CommitAuthorNotificationPreference,
+  type CommitAuthorNotificationPreferenceChannel,
   type NotificationEventType,
   type MySlackIdentityResponse,
   type NotificationSubscription,

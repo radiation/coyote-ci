@@ -281,9 +281,21 @@ func (s *NotificationService) GetCommitAuthorFailureNotificationPreference(ctx c
 	if err != nil {
 		return CommitAuthorNotificationPreferenceState{}, err
 	}
+	emailState, err := s.resolveEmailPreferenceState(ctx, ownerUserID)
+	if err != nil {
+		return CommitAuthorNotificationPreferenceState{}, err
+	}
+	emailState.Enabled = preference.CommitAuthorFailureEmailEnabled
+	emailState.DeliveryActive = emailState.Enabled && emailState.DeliveryActive
+	slackState, err := s.resolveSlackPreferenceState(ctx, ownerUserID, false)
+	if err != nil {
+		return CommitAuthorNotificationPreferenceState{}, err
+	}
+	slackState.Enabled = preference.CommitAuthorFailureSlackEnabled
+	slackState.DeliveryActive = slackState.Enabled && slackState.DeliveryActive
 	return CommitAuthorNotificationPreferenceState{
-		Email: s.resolveEmailPreferenceState(ctx, ownerUserID, preference.CommitAuthorFailureEmailEnabled),
-		Slack: s.resolveSlackPreferenceState(ctx, ownerUserID, preference.CommitAuthorFailureSlackEnabled),
+		Email: emailState,
+		Slack: slackState,
 	}, nil
 }
 
@@ -297,9 +309,21 @@ func (s *NotificationService) GetCommitAuthorSuccessNotificationPreference(ctx c
 	if err != nil {
 		return CommitAuthorNotificationPreferenceState{}, err
 	}
+	emailState, err := s.resolveEmailPreferenceState(ctx, ownerUserID)
+	if err != nil {
+		return CommitAuthorNotificationPreferenceState{}, err
+	}
+	emailState.Enabled = preference.CommitAuthorSuccessEmailEnabled
+	emailState.DeliveryActive = emailState.Enabled && emailState.DeliveryActive
+	slackState, err := s.resolveSlackPreferenceState(ctx, ownerUserID, false)
+	if err != nil {
+		return CommitAuthorNotificationPreferenceState{}, err
+	}
+	slackState.Enabled = preference.CommitAuthorSuccessSlackEnabled
+	slackState.DeliveryActive = slackState.Enabled && slackState.DeliveryActive
 	return CommitAuthorNotificationPreferenceState{
-		Email: s.resolveEmailPreferenceState(ctx, ownerUserID, preference.CommitAuthorSuccessEmailEnabled),
-		Slack: s.resolveSlackPreferenceState(ctx, ownerUserID, preference.CommitAuthorSuccessSlackEnabled),
+		Email: emailState,
+		Slack: slackState,
 	}, nil
 }
 
@@ -614,79 +638,98 @@ func (s *NotificationService) getUserNotificationPreference(ctx context.Context,
 	return stored, nil
 }
 
-func (s *NotificationService) resolveEmailPreferenceState(ctx context.Context, userID string, enabled bool) CommitAuthorEmailNotificationPreferenceState {
-	state := CommitAuthorEmailNotificationPreferenceState{Enabled: enabled}
+func (s *NotificationService) resolveEmailPreferenceState(ctx context.Context, userID string) (CommitAuthorEmailNotificationPreferenceState, error) {
+	state := CommitAuthorEmailNotificationPreferenceState{}
 	target, err := s.repo.GetOwnedEmailTargetByUserID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotificationTargetNotFound) {
 			reason := NotificationPreferenceUnavailableReasonPersonalTargetRequired
 			state.UnavailableReason = &reason
-			return state
+			return state, nil
 		}
-		return state
+		return CommitAuthorEmailNotificationPreferenceState{}, err
 	}
 	state.Target = &target
-	state.DeliveryActive = enabled && target.Enabled
+	state.DeliveryActive = target.Enabled
 	if !target.Enabled {
 		reason := NotificationPreferenceUnavailableReasonPersonalTargetDisabled
 		state.UnavailableReason = &reason
 	}
-	return state
+	return state, nil
 }
 
-func (s *NotificationService) resolveSlackPreferenceState(ctx context.Context, userID string, enabled bool) CommitAuthorSlackNotificationPreferenceState {
-	state := CommitAuthorSlackNotificationPreferenceState{Enabled: enabled}
+func (s *NotificationService) resolveSlackPreferenceState(ctx context.Context, userID string, requireDeliverable bool) (CommitAuthorSlackNotificationPreferenceState, error) {
+	state := CommitAuthorSlackNotificationPreferenceState{}
 	if s.workspaceRepo == nil || s.identityRepo == nil {
 		reason := NotificationPreferenceUnavailableReasonSlackWorkspaceNotConfigured
 		state.UnavailableReason = &reason
-		return state
+		return state, nil
 	}
 	integration, err := s.workspaceRepo.Get(ctx)
 	if err != nil {
+		if errors.Is(err, repository.ErrSlackWorkspaceIntegrationNotFound) {
+			reason := NotificationPreferenceUnavailableReasonSlackWorkspaceNotConfigured
+			state.UnavailableReason = &reason
+			return state, nil
+		}
+		return CommitAuthorSlackNotificationPreferenceState{}, err
+	}
+	if strings.TrimSpace(integration.BotTokenSecret) == "" {
 		reason := NotificationPreferenceUnavailableReasonSlackWorkspaceNotConfigured
 		state.UnavailableReason = &reason
-		return state
+		return state, nil
 	}
 	if !integration.Enabled {
 		reason := NotificationPreferenceUnavailableReasonSlackWorkspaceDisabled
 		state.UnavailableReason = &reason
-		return state
+		return state, nil
 	}
 	identity, err := s.identityRepo.GetByUserID(ctx, userID)
 	if err != nil {
+		if errors.Is(err, repository.ErrUserSlackIdentityNotFound) {
+			reason := NotificationPreferenceUnavailableReasonSlackIdentityRequired
+			state.UnavailableReason = &reason
+			return state, nil
+		}
+		return CommitAuthorSlackNotificationPreferenceState{}, err
+	}
+	if strings.TrimSpace(identity.SlackUserID) == "" {
 		reason := NotificationPreferenceUnavailableReasonSlackIdentityRequired
 		state.UnavailableReason = &reason
-		return state
+		return state, nil
 	}
 	if !identity.Enabled {
 		reason := NotificationPreferenceUnavailableReasonSlackIdentityDisabled
 		state.UnavailableReason = &reason
-		return state
+		return state, nil
 	}
 	if identity.SlackWorkspaceIntegrationID != integration.ID {
 		reason := NotificationPreferenceUnavailableReasonSlackWorkspaceMismatch
 		state.UnavailableReason = &reason
-		return state
+		return state, nil
 	}
-	state.DeliveryActive = enabled
-	return state
+	state.DeliveryActive = true
+	if requireDeliverable {
+		return state, nil
+	}
+	return state, nil
 }
 
 func (s *NotificationService) validateCommitAuthorPreferenceChannels(ctx context.Context, userID string, emailEnabled bool, slackEnabled bool) error {
 	if emailEnabled {
-		target, err := s.repo.GetOwnedEmailTargetByUserID(ctx, userID)
+		emailState, err := s.resolveEmailPreferenceState(ctx, userID)
 		if err != nil {
-			if errors.Is(err, repository.ErrNotificationTargetNotFound) {
-				return ErrNotificationPreferencePersonalTargetRequired
-			}
 			return err
 		}
-		if !target.Enabled {
+		if !emailState.DeliveryActive {
 			return ErrNotificationPreferencePersonalTargetRequired
 		}
 	}
 	if slackEnabled {
-		state := s.resolveSlackPreferenceState(ctx, userID, true)
+		state, err := s.resolveSlackPreferenceState(ctx, userID, true)
+		if err != nil {
+			return err
+		}
 		if !state.DeliveryActive {
 			return ErrNotificationPreferencePersonalSlackRequired
 		}

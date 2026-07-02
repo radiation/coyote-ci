@@ -282,7 +282,7 @@ func (c *Client) PostDirectMessage(ctx context.Context, token string, slackUserI
 		return PostMessageResult{}, ErrInvalidAuth
 	}
 	trimmedSlackUserID := strings.TrimSpace(slackUserID)
-	if !isSlackUserID(trimmedSlackUserID) {
+	if !IsSlackUserID(trimmedSlackUserID) {
 		return PostMessageResult{}, ErrSlackUserIDInvalid
 	}
 	trimmedText := strings.TrimSpace(message.Text)
@@ -339,7 +339,11 @@ func (c *Client) PostDirectMessage(ctx context.Context, token string, slackUserI
 		return PostMessageResult{}, ErrMalformedResponse
 	}
 	if !payloadResponse.OK {
-		switch strings.TrimSpace(payloadResponse.Error) {
+		errorCode, ok := normalizeSlackErrorCode(payloadResponse.Error)
+		if !ok {
+			return PostMessageResult{}, ErrPostMessageFailed
+		}
+		switch errorCode {
 		case "missing_scope":
 			return PostMessageResult{}, &MissingScopeError{Needed: payloadResponse.Needed, Provided: payloadResponse.Provided}
 		case "invalid_auth", "not_authed":
@@ -357,7 +361,7 @@ func (c *Client) PostDirectMessage(ctx context.Context, token string, slackUserI
 		case "ratelimited":
 			return PostMessageResult{}, ErrRateLimited
 		default:
-			return PostMessageResult{}, fmt.Errorf("%w: %s", ErrPostMessageFailed, strings.TrimSpace(payloadResponse.Error))
+			return PostMessageResult{}, fmt.Errorf("%w: %s", ErrPostMessageFailed, errorCode)
 		}
 	}
 
@@ -365,25 +369,39 @@ func (c *Client) PostDirectMessage(ctx context.Context, token string, slackUserI
 		ChannelID: optionalString(payloadResponse.Channel),
 		Timestamp: optionalString(payloadResponse.TS),
 	}
-	if result.ChannelID == nil && result.Timestamp == nil {
+	if result.ChannelID == nil || result.Timestamp == nil {
 		return PostMessageResult{}, ErrMalformedResponse
 	}
 	return result, nil
 }
 
-func isSlackUserID(value string) bool {
-	if value == "" {
+func IsSlackUserID(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
 		return false
 	}
-	if !strings.HasPrefix(value, "U") && !strings.HasPrefix(value, "W") {
+	if !strings.HasPrefix(trimmed, "U") && !strings.HasPrefix(trimmed, "W") {
 		return false
 	}
-	for _, ch := range value {
+	for _, ch := range trimmed {
 		if (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') {
 			return false
 		}
 	}
 	return true
+}
+
+func normalizeSlackErrorCode(value string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || len(trimmed) > 64 {
+		return "", false
+	}
+	for _, ch := range trimmed {
+		if (ch < 'a' || ch > 'z') && (ch < '0' || ch > '9') && ch != '_' {
+			return "", false
+		}
+	}
+	return trimmed, true
 }
 
 func optionalString(value string) *string {

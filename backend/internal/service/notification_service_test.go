@@ -18,6 +18,33 @@ type errNotificationInstanceSettingsRepo struct {
 	err error
 }
 
+type ownedEmailTargetErrorRepo struct {
+	*memoryrepo.NotificationSubscriptionRepository
+	err error
+}
+
+func (r *ownedEmailTargetErrorRepo) GetOwnedEmailTargetByUserID(context.Context, string) (domain.NotificationTarget, error) {
+	return domain.NotificationTarget{}, r.err
+}
+
+type slackWorkspaceGetErrorRepo struct {
+	*memoryrepo.SlackWorkspaceIntegrationRepository
+	err error
+}
+
+func (r *slackWorkspaceGetErrorRepo) Get(context.Context) (domain.SlackWorkspaceIntegration, error) {
+	return domain.SlackWorkspaceIntegration{}, r.err
+}
+
+type userSlackIdentityGetErrorRepo struct {
+	*memoryrepo.UserSlackIdentityRepository
+	err error
+}
+
+func (r *userSlackIdentityGetErrorRepo) GetByUserID(context.Context, string) (domain.UserSlackIdentity, error) {
+	return domain.UserSlackIdentity{}, r.err
+}
+
 func (r *errNotificationInstanceSettingsRepo) Get(context.Context) (domain.NotificationInstanceSettings, error) {
 	return domain.NotificationInstanceSettings{}, r.err
 }
@@ -1188,6 +1215,139 @@ func TestNotificationService_DefaultConfigurationBranches(t *testing.T) {
 	if err == nil || err.Error() != "get notification instance settings: settings failed" {
 		t.Fatalf("expected wrapped settings get error, got %v", err)
 	}
+}
+
+func TestNotificationService_CommitAuthorPreferenceState_PropagatesInfrastructureFailures(t *testing.T) {
+	ctx := context.Background()
+	user := domain.User{ID: uuid.NewString(), Email: "user@example.com"}
+
+	t.Run("unexpected email target repository failure surfaces from read state", func(t *testing.T) {
+		targetRepo := &ownedEmailTargetErrorRepo{
+			NotificationSubscriptionRepository: memoryrepo.NewNotificationSubscriptionRepository(),
+			err:                                errors.New("target lookup failed"),
+		}
+		preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+		svc := NewNotificationService(targetRepo).WithPreferenceRepository(preferenceRepo)
+
+		if _, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, user); err == nil || err.Error() != "target lookup failed" {
+			t.Fatalf("expected target lookup error to surface, got %v", err)
+		}
+	})
+
+	t.Run("unexpected slack workspace repository failure surfaces from read state", func(t *testing.T) {
+		targetRepo := memoryrepo.NewNotificationSubscriptionRepository()
+		preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+		identityRepo := memoryrepo.NewUserSlackIdentityRepository()
+		workspaceRepo := &slackWorkspaceGetErrorRepo{
+			SlackWorkspaceIntegrationRepository: memoryrepo.NewSlackWorkspaceIntegrationRepository(),
+			err:                                 errors.New("workspace lookup failed"),
+		}
+		svc := NewNotificationService(targetRepo).
+			WithPreferenceRepository(preferenceRepo).
+			WithUserSlackIdentityRepository(identityRepo).
+			WithSlackWorkspaceIntegrationRepository(workspaceRepo)
+
+		if _, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, user); err == nil || err.Error() != "workspace lookup failed" {
+			t.Fatalf("expected workspace lookup error to surface, got %v", err)
+		}
+	})
+
+	t.Run("unexpected slack identity repository failure surfaces from read state", func(t *testing.T) {
+		targetRepo := memoryrepo.NewNotificationSubscriptionRepository()
+		preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+		identityRepo := &userSlackIdentityGetErrorRepo{
+			UserSlackIdentityRepository: memoryrepo.NewUserSlackIdentityRepository(),
+			err:                         errors.New("identity lookup failed"),
+		}
+		workspaceRepo := memoryrepo.NewSlackWorkspaceIntegrationRepository()
+		workspaceRepo.SetUserSlackIdentityRepository(identityRepo)
+		now := time.Date(2026, 7, 1, 20, 0, 0, 0, time.UTC)
+		if _, err := workspaceRepo.ConnectOrReplace(ctx, domain.SlackWorkspaceIntegration{ID: "workspace-1", WorkspaceID: "T123", BotTokenSecret: "xoxb-secret", Enabled: true, ConnectedAt: now, CreatedAt: now, UpdatedAt: now}, false); err != nil {
+			t.Fatalf("seed workspace: %v", err)
+		}
+		svc := NewNotificationService(targetRepo).
+			WithPreferenceRepository(preferenceRepo).
+			WithUserSlackIdentityRepository(identityRepo).
+			WithSlackWorkspaceIntegrationRepository(workspaceRepo)
+
+		if _, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, user); err == nil || err.Error() != "identity lookup failed" {
+			t.Fatalf("expected identity lookup error to surface, got %v", err)
+		}
+	})
+
+	t.Run("context cancellation surfaces instead of looking like destination unavailability", func(t *testing.T) {
+		canceledCtx, cancel := context.WithCancel(ctx)
+		cancel()
+		targetRepo := &ownedEmailTargetErrorRepo{
+			NotificationSubscriptionRepository: memoryrepo.NewNotificationSubscriptionRepository(),
+			err:                                context.Canceled,
+		}
+		svc := NewNotificationService(targetRepo).WithPreferenceRepository(memoryrepo.NewUserNotificationPreferenceRepository())
+
+		if _, err := svc.GetCommitAuthorFailureNotificationPreference(canceledCtx, user); !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context cancellation to surface, got %v", err)
+		}
+	})
+
+	t.Run("slack validation failure does not become a user-correctable preference error", func(t *testing.T) {
+		targetRepo := memoryrepo.NewNotificationSubscriptionRepository()
+		preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+		identityRepo := &userSlackIdentityGetErrorRepo{
+			UserSlackIdentityRepository: memoryrepo.NewUserSlackIdentityRepository(),
+			err:                         errors.New("identity lookup failed"),
+		}
+		workspaceRepo := memoryrepo.NewSlackWorkspaceIntegrationRepository()
+		workspaceRepo.SetUserSlackIdentityRepository(identityRepo)
+		now := time.Date(2026, 7, 1, 20, 5, 0, 0, time.UTC)
+		if _, err := workspaceRepo.ConnectOrReplace(ctx, domain.SlackWorkspaceIntegration{ID: "workspace-1", WorkspaceID: "T123", BotTokenSecret: "xoxb-secret", Enabled: true, ConnectedAt: now, CreatedAt: now, UpdatedAt: now}, false); err != nil {
+			t.Fatalf("seed workspace: %v", err)
+		}
+		svc := NewNotificationService(targetRepo).
+			WithPreferenceRepository(preferenceRepo).
+			WithUserSlackIdentityRepository(identityRepo).
+			WithSlackWorkspaceIntegrationRepository(workspaceRepo)
+
+		_, err := svc.SetCommitAuthorFailureNotificationPreference(ctx, user, commitAuthorPreferenceInput(false, true))
+		if err == nil || err.Error() != "identity lookup failed" {
+			t.Fatalf("expected infrastructure failure to surface from validation, got %v", err)
+		}
+		if errors.Is(err, ErrNotificationPreferencePersonalSlackRequired) {
+			t.Fatalf("expected infrastructure failure, not user-correctable slack preference error: %v", err)
+		}
+	})
+
+	t.Run("true slack not-found states still map to expected user-facing reasons", func(t *testing.T) {
+		targetRepo := memoryrepo.NewNotificationSubscriptionRepository()
+		preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+		identityRepo := memoryrepo.NewUserSlackIdentityRepository()
+		workspaceRepo := memoryrepo.NewSlackWorkspaceIntegrationRepository()
+		workspaceRepo.SetUserSlackIdentityRepository(identityRepo)
+		svc := NewNotificationService(targetRepo).
+			WithPreferenceRepository(preferenceRepo).
+			WithUserSlackIdentityRepository(identityRepo).
+			WithSlackWorkspaceIntegrationRepository(workspaceRepo)
+
+		state, err := svc.GetCommitAuthorFailureNotificationPreference(ctx, user)
+		if err != nil {
+			t.Fatalf("expected missing workspace to resolve as state, got %v", err)
+		}
+		if state.Slack.UnavailableReason == nil || *state.Slack.UnavailableReason != NotificationPreferenceUnavailableReasonSlackWorkspaceNotConfigured {
+			t.Fatalf("expected workspace-not-configured reason, got %+v", state.Slack.UnavailableReason)
+		}
+
+		now := time.Date(2026, 7, 1, 20, 10, 0, 0, time.UTC)
+		if _, connectErr := workspaceRepo.ConnectOrReplace(ctx, domain.SlackWorkspaceIntegration{ID: "workspace-1", WorkspaceID: "T123", BotTokenSecret: "xoxb-secret", Enabled: true, ConnectedAt: now, CreatedAt: now, UpdatedAt: now}, false); connectErr != nil {
+			t.Fatalf("seed workspace: %v", connectErr)
+		}
+
+		state, err = svc.GetCommitAuthorFailureNotificationPreference(ctx, user)
+		if err != nil {
+			t.Fatalf("expected missing identity to resolve as state, got %v", err)
+		}
+		if state.Slack.UnavailableReason == nil || *state.Slack.UnavailableReason != NotificationPreferenceUnavailableReasonSlackIdentityRequired {
+			t.Fatalf("expected slack-identity-required reason, got %+v", state.Slack.UnavailableReason)
+		}
+	})
 }
 
 func TestNotificationService_InternalPreferenceHelpers(t *testing.T) {

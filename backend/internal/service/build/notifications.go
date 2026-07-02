@@ -453,7 +453,7 @@ func (s *BuildNotificationService) resolveCommitAuthorSlackDestination(ctx conte
 	if !integration.Enabled || integration.ID != identity.SlackWorkspaceIntegrationID {
 		return notificationDestination{}, false, nil
 	}
-	if strings.TrimSpace(integration.BotTokenSecret) == "" || !slackUserIDLooksValid(identity.SlackUserID) {
+	if strings.TrimSpace(integration.BotTokenSecret) == "" || !platformslack.IsSlackUserID(strings.TrimSpace(identity.SlackUserID)) {
 		return notificationDestination{}, false, nil
 	}
 
@@ -775,14 +775,6 @@ func notificationTargetDeliveryRecipient(target domain.NotificationTarget) strin
 		return fmt.Sprintf("%s:%s", target.Type, target.ID)
 	}
 	return strings.TrimSpace(target.Recipient)
-}
-
-func slackUserIDLooksValid(value string) bool {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return false
-	}
-	return strings.HasPrefix(trimmed, "U") || strings.HasPrefix(trimmed, "W")
 }
 
 func formatBuildStatusSlackText(details buildNotificationDetails) string {

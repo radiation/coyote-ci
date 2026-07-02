@@ -19,7 +19,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Project/job/build navigation: `ProjectsListPage.tsx`, `ProjectDetailPage.tsx`, `JobsListPage.tsx`, `JobDetailPage.tsx`, `JobCreatePage.tsx`, `BuildsListPage.tsx`.
 - Auth/token/user/credentials UI: `APITokensPage.tsx`, `UsersPage.tsx`, `CredentialsPage.tsx`, and auth state in `auth.tsx` and `auth-context.ts`.
 - Notification target/subscription admin UI: `NotificationsPage.tsx`, plus notification contracts in `api/client.ts` and `types/notification.ts`; this page now handles both email and Slack webhook targets and keeps webhook secrets masked during edits.
-- Personal notification self-service UI: `MyNotificationsPage.tsx`, plus `api/client.ts` and `types/notification.ts` for personal email targets, commit-email preferences, and personal Slack identity linking.
+- Personal notification self-service UI: `MyNotificationsPage.tsx`, plus `api/client.ts` and `types/notification.ts` for personal email targets, per-event email/Slack commit-author preferences, and personal Slack identity linking.
 
 ## Shared components and state
 
@@ -42,7 +42,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Queue operations changes: start in `QueuePage.tsx`, `WorkersPage.tsx`, and worker/build/job types.
 - Auth, tokens, membership, or role-based UI: start in `auth.tsx`, `auth-context.ts`, `types/identity.ts`, then the relevant settings or project page.
 - Notification settings/admin changes: start in `pages/NotificationsPage.tsx`, then `api/client.ts`, `types/notification.ts`, and the colocated page test.
-- Personal Slack identity or personal-notification changes: start in `pages/MyNotificationsPage.tsx`, then `api/client.ts`, `types/notification.ts`, and `pages/MyNotificationsPage.test.tsx`.
+- Personal Slack identity or personal-notification changes: start in `pages/MyNotificationsPage.tsx`, then `api/client.ts`, `types/notification.ts`, and `pages/MyNotificationsPage.test.tsx`. This page now owns personal Slack linking plus the four independent failure/success x email/Slack preference controls.
 
 ## Tests and patterns
 

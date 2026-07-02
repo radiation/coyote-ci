@@ -85,7 +85,13 @@ function normalizeCommitAuthorPreference(
   email: CommitAuthorNotificationPreferenceChannel;
   slack: CommitAuthorNotificationPreferenceChannel;
 } {
-  if (preference?.email && preference?.slack) {
+  if (
+    preference &&
+    "email" in preference &&
+    "slack" in preference &&
+    preference.email &&
+    preference.slack
+  ) {
     return {
       email: preference.email,
       slack: preference.slack,
