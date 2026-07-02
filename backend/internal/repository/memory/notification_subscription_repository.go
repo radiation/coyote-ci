@@ -263,18 +263,18 @@ func (r *NotificationSubscriptionRepository) EnsureOwnedEmailTargetInitialized(_
 	if existing, exists := r.preferences.preferences[trimmedUserID]; !exists {
 		successSource := domain.UserNotificationPreferenceSourceInstanceDefault
 		r.preferences.preferences[trimmedUserID] = domain.UserNotificationPreference{
-			UserID:                     trimmedUserID,
-			CommitAuthorFailureEnabled: defaultFailureEnabled,
-			CommitAuthorSuccessEnabled: defaultSuccessEnabled,
-			Source:                     domain.UserNotificationPreferenceSourceInstanceDefault,
-			CommitAuthorSuccessSource:  &successSource,
-			CreatedAt:                  input.CreatedAt,
-			UpdatedAt:                  input.UpdatedAt,
+			UserID:                          trimmedUserID,
+			CommitAuthorFailureEmailEnabled: defaultFailureEnabled,
+			CommitAuthorFailureEmailSource:  domain.UserNotificationPreferenceSourceInstanceDefault,
+			CommitAuthorSuccessEmailEnabled: defaultSuccessEnabled,
+			CommitAuthorSuccessEmailSource:  &successSource,
+			CreatedAt:                       input.CreatedAt,
+			UpdatedAt:                       input.UpdatedAt,
 		}
-	} else if existing.CommitAuthorSuccessSource == nil {
+	} else if existing.CommitAuthorSuccessEmailSource == nil {
 		successSource := domain.UserNotificationPreferenceSourceInstanceDefault
-		existing.CommitAuthorSuccessEnabled = defaultSuccessEnabled
-		existing.CommitAuthorSuccessSource = &successSource
+		existing.CommitAuthorSuccessEmailEnabled = defaultSuccessEnabled
+		existing.CommitAuthorSuccessEmailSource = &successSource
 		existing.UpdatedAt = input.UpdatedAt
 		r.preferences.preferences[trimmedUserID] = existing
 	}

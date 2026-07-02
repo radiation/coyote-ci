@@ -34,7 +34,7 @@ func (r *UserNotificationPreferenceRepository) InitializeIfAbsent(_ context.Cont
 	defer r.mu.Unlock()
 
 	preference.UserID = strings.TrimSpace(preference.UserID)
-	preference.CommitAuthorSuccessSource = clonePreferenceSource(preference.CommitAuthorSuccessSource)
+	preference.CommitAuthorSuccessEmailSource = clonePreferenceSource(preference.CommitAuthorSuccessEmailSource)
 	if existing, ok := r.preferences[preference.UserID]; ok {
 		return existing, false, nil
 	}
@@ -47,7 +47,7 @@ func (r *UserNotificationPreferenceRepository) Upsert(_ context.Context, prefere
 	defer r.mu.Unlock()
 
 	preference.UserID = strings.TrimSpace(preference.UserID)
-	preference.CommitAuthorSuccessSource = clonePreferenceSource(preference.CommitAuthorSuccessSource)
+	preference.CommitAuthorSuccessEmailSource = clonePreferenceSource(preference.CommitAuthorSuccessEmailSource)
 	r.preferences[preference.UserID] = preference
 	return preference, nil
 }

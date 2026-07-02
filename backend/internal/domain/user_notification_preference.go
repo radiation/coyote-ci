@@ -10,11 +10,13 @@ const (
 )
 
 type UserNotificationPreference struct {
-	UserID                     string
-	CommitAuthorFailureEnabled bool
-	CommitAuthorSuccessEnabled bool
-	Source                     UserNotificationPreferenceSource
-	CommitAuthorSuccessSource  *UserNotificationPreferenceSource
-	CreatedAt                  time.Time
-	UpdatedAt                  time.Time
+	UserID                          string
+	CommitAuthorFailureEmailEnabled bool
+	CommitAuthorFailureSlackEnabled bool
+	CommitAuthorFailureEmailSource  UserNotificationPreferenceSource
+	CommitAuthorSuccessEmailEnabled bool
+	CommitAuthorSuccessSlackEnabled bool
+	CommitAuthorSuccessEmailSource  *UserNotificationPreferenceSource
+	CreatedAt                       time.Time
+	UpdatedAt                       time.Time
 }

@@ -47,9 +47,9 @@ type notificationAdminService interface {
 	GetNotificationDefaults(ctx context.Context) (service.NotificationDefaultsState, error)
 	SetNotificationDefaults(ctx context.Context, failureEnabled *bool, successEnabled *bool) (service.NotificationDefaultsState, error)
 	GetCommitAuthorFailureNotificationPreference(ctx context.Context, user domain.User) (service.CommitAuthorNotificationPreferenceState, error)
-	SetCommitAuthorFailureNotificationPreference(ctx context.Context, user domain.User, enabled *bool) (service.CommitAuthorNotificationPreferenceState, error)
+	SetCommitAuthorFailureNotificationPreference(ctx context.Context, user domain.User, input service.UpdateCommitAuthorNotificationPreferenceInput) (service.CommitAuthorNotificationPreferenceState, error)
 	GetCommitAuthorSuccessNotificationPreference(ctx context.Context, user domain.User) (service.CommitAuthorNotificationPreferenceState, error)
-	SetCommitAuthorSuccessNotificationPreference(ctx context.Context, user domain.User, enabled *bool) (service.CommitAuthorNotificationPreferenceState, error)
+	SetCommitAuthorSuccessNotificationPreference(ctx context.Context, user domain.User, input service.UpdateCommitAuthorNotificationPreferenceInput) (service.CommitAuthorNotificationPreferenceState, error)
 	CreateTarget(ctx context.Context, input service.CreateNotificationTargetInput) (domain.NotificationTarget, error)
 	CreateEmailTarget(ctx context.Context, input service.CreateNotificationTargetInput) (domain.NotificationTarget, error)
 	UpdateTarget(ctx context.Context, id string, input service.UpdateNotificationTargetInput) (domain.NotificationTarget, error)
@@ -383,7 +383,10 @@ func (h *NotificationHandler) SetMyCommitAuthorFailureNotificationPreference(w h
 		return
 	}
 
-	state, err := h.admin.SetCommitAuthorFailureNotificationPreference(r.Context(), user, req.Enabled)
+	state, err := h.admin.SetCommitAuthorFailureNotificationPreference(r.Context(), user, service.UpdateCommitAuthorNotificationPreferenceInput{
+		EmailEnabled: req.EmailEnabled,
+		SlackEnabled: req.SlackEnabled,
+	})
 	if err != nil {
 		h.writeNotificationError(w, err)
 		return
@@ -424,7 +427,10 @@ func (h *NotificationHandler) SetMyCommitAuthorSuccessNotificationPreference(w h
 		return
 	}
 
-	state, err := h.admin.SetCommitAuthorSuccessNotificationPreference(r.Context(), user, req.Enabled)
+	state, err := h.admin.SetCommitAuthorSuccessNotificationPreference(r.Context(), user, service.UpdateCommitAuthorNotificationPreferenceInput{
+		EmailEnabled: req.EmailEnabled,
+		SlackEnabled: req.SlackEnabled,
+	})
 	if err != nil {
 		h.writeNotificationError(w, err)
 		return
@@ -588,6 +594,10 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 		writeErrorJSON(w, http.StatusConflict, "conflict", err.Error())
 		return
 	}
+	if errors.Is(err, service.ErrNotificationPreferencePersonalSlackRequired) {
+		writeErrorJSON(w, http.StatusConflict, "conflict", err.Error())
+		return
+	}
 	if errors.Is(err, service.ErrNotificationTargetNameRequired) ||
 		errors.Is(err, service.ErrNotificationTargetTypeInvalid) ||
 		errors.Is(err, service.ErrNotificationTargetAddressRequired) ||
@@ -605,7 +615,7 @@ func (h *NotificationHandler) writeNotificationError(w http.ResponseWriter, err 
 		errors.Is(err, service.ErrNotificationSubscriptionEventTypeInvalid) ||
 		errors.Is(err, service.ErrNotificationPersonalEmailRequired) ||
 		errors.Is(err, service.ErrNotificationPersonalUserIDRequired) ||
-		errors.Is(err, service.ErrNotificationPreferenceEnabledRequired) ||
+		errors.Is(err, service.ErrNotificationPreferenceChannelEnabledRequired) ||
 		errors.Is(err, service.ErrNotificationDefaultsUpdateRequired) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
@@ -621,9 +631,22 @@ func toNotificationDefaultsResponse(state service.NotificationDefaultsState) api
 }
 
 func toCommitAuthorFailureNotificationPreferenceResponse(state service.CommitAuthorNotificationPreferenceState) api.CommitAuthorFailureNotificationPreferenceResponse {
-	response := api.CommitAuthorFailureNotificationPreferenceResponse{
+	return api.CommitAuthorFailureNotificationPreferenceResponse{
+		Email: toCommitAuthorNotificationPreferenceChannelResponse(state.Email),
+		Slack: toCommitAuthorSlackNotificationPreferenceChannelResponse(state.Slack),
+	}
+}
+
+func toCommitAuthorSuccessNotificationPreferenceResponse(state service.CommitAuthorNotificationPreferenceState) api.CommitAuthorSuccessNotificationPreferenceResponse {
+	return api.CommitAuthorSuccessNotificationPreferenceResponse{
+		Email: toCommitAuthorNotificationPreferenceChannelResponse(state.Email),
+		Slack: toCommitAuthorSlackNotificationPreferenceChannelResponse(state.Slack),
+	}
+}
+
+func toCommitAuthorNotificationPreferenceChannelResponse(state service.CommitAuthorEmailNotificationPreferenceState) api.CommitAuthorNotificationPreferenceChannelResponse {
+	response := api.CommitAuthorNotificationPreferenceChannelResponse{
 		Enabled:           state.Enabled,
-		Eligible:          state.Eligible,
 		DeliveryActive:    state.DeliveryActive,
 		UnavailableReason: state.UnavailableReason,
 	}
@@ -634,18 +657,12 @@ func toCommitAuthorFailureNotificationPreferenceResponse(state service.CommitAut
 	return response
 }
 
-func toCommitAuthorSuccessNotificationPreferenceResponse(state service.CommitAuthorNotificationPreferenceState) api.CommitAuthorSuccessNotificationPreferenceResponse {
-	response := api.CommitAuthorSuccessNotificationPreferenceResponse{
+func toCommitAuthorSlackNotificationPreferenceChannelResponse(state service.CommitAuthorSlackNotificationPreferenceState) api.CommitAuthorNotificationPreferenceChannelResponse {
+	return api.CommitAuthorNotificationPreferenceChannelResponse{
 		Enabled:           state.Enabled,
-		Eligible:          state.Eligible,
 		DeliveryActive:    state.DeliveryActive,
 		UnavailableReason: state.UnavailableReason,
 	}
-	if state.Target != nil {
-		targetResponse := toNotificationTargetResponse(*state.Target)
-		response.Target = &targetResponse
-	}
-	return response
 }
 
 func toNotificationTargetResponse(target domain.NotificationTarget) api.NotificationTargetResponse {

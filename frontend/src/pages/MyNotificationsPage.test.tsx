@@ -268,6 +268,25 @@ describe("MyNotificationsPage", () => {
     });
   });
 
+  it("renders nothing when there is no authenticated user", () => {
+    const { container } = renderPage({
+      currentUser: null,
+      authStatus: "unauthenticated",
+    });
+
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders the Slack identity load error", async () => {
+    mockedGetMySlackIdentity.mockRejectedValue(new Error("boom"));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to load Slack identity/i)).toBeTruthy();
+    });
+  });
+
   it("shows a warning for a failed health test but keeps live lookup available", async () => {
     mockedGetMySlackIdentity.mockResolvedValue({
       workspace_status: "ready",
@@ -737,12 +756,12 @@ describe("MyNotificationsPage", () => {
       expect(screen.queryByText("<user@example.com>")).toBeNull();
       expect(
         screen.getByRole("checkbox", {
-          name: /Notify me when my commits fail/i,
+          name: /Email me when my commits fail/i,
         }),
       ).toBeTruthy();
       expect(
         screen.getByRole("checkbox", {
-          name: /Notify me when my commits succeed/i,
+          name: /Email me when my commits succeed/i,
         }),
       ).toBeTruthy();
     });
@@ -1070,10 +1089,10 @@ describe("MyNotificationsPage", () => {
     renderPage();
 
     const failureCheckbox = await screen.findByRole("checkbox", {
-      name: /Notify me when my commits fail/i,
+      name: /Email me when my commits fail/i,
     });
     const successCheckbox = await screen.findByRole("checkbox", {
-      name: /Notify me when my commits succeed/i,
+      name: /Email me when my commits succeed/i,
     });
     expect(failureCheckbox).toBeChecked();
     expect(successCheckbox).toBeChecked();
@@ -1256,10 +1275,10 @@ describe("MyNotificationsPage", () => {
     renderPage();
 
     const failureCheckbox = await screen.findByRole("checkbox", {
-      name: /Notify me when my commits fail/i,
+      name: /Email me when my commits fail/i,
     });
     const successCheckbox = await screen.findByRole("checkbox", {
-      name: /Notify me when my commits succeed/i,
+      name: /Email me when my commits succeed/i,
     });
     expect(failureCheckbox).toBeChecked();
     expect(successCheckbox).not.toBeChecked();
@@ -1334,7 +1353,7 @@ describe("MyNotificationsPage", () => {
     });
 
     const checkbox = screen.getByRole("checkbox", {
-      name: /Notify me when my commits fail/i,
+      name: /Email me when my commits fail/i,
     });
     expect(checkbox).toBeChecked();
     expect(checkbox).not.toBeDisabled();
@@ -1344,7 +1363,7 @@ describe("MyNotificationsPage", () => {
     await waitFor(() => {
       expect(
         mockedSetCommitAuthorFailureNotificationPreference.mock.calls[0]?.[0],
-      ).toEqual({ enabled: false });
+      ).toEqual({ email_enabled: false, slack_enabled: false });
     });
   });
 
@@ -1381,7 +1400,7 @@ describe("MyNotificationsPage", () => {
     renderPage();
 
     const checkbox = await screen.findByRole("checkbox", {
-      name: /Notify me when my commits fail/i,
+      name: /Email me when my commits fail/i,
     });
     expect(checkbox).not.toBeChecked();
     expect(checkbox).toBeDisabled();
@@ -1429,14 +1448,14 @@ describe("MyNotificationsPage", () => {
 
     fireEvent.click(
       await screen.findByRole("checkbox", {
-        name: /Notify me when my commits succeed/i,
+        name: /Email me when my commits succeed/i,
       }),
     );
 
     await waitFor(() => {
       expect(
         mockedSetCommitAuthorSuccessNotificationPreference.mock.calls[0]?.[0],
-      ).toEqual({ enabled: false });
+      ).toEqual({ email_enabled: false, slack_enabled: false });
     });
     expect(
       mockedSetCommitAuthorFailureNotificationPreference,
@@ -1473,6 +1492,338 @@ describe("MyNotificationsPage", () => {
     expect(
       screen.getByRole("button", { name: "Disable my email target" }),
     ).toBeTruthy();
+  });
+
+  it("shows paused Slack delivery without clearing the saved Slack preference", async () => {
+    mockedGetMyEmailNotificationTarget.mockResolvedValue({
+      id: "target-1",
+      owner_user_id: "user-1",
+      type: "email",
+      name: "User Example",
+      address: "<user@example.com>",
+      webhook_configured: false,
+      enabled: true,
+      created_at: "2026-06-24T00:00:00Z",
+      updated_at: "2026-06-24T00:00:00Z",
+    });
+    mockedGetCommitAuthorFailureNotificationPreference.mockResolvedValue({
+      email: {
+        enabled: false,
+        delivery_active: false,
+        target: null,
+        unavailable_reason: null,
+      },
+      slack: {
+        enabled: true,
+        delivery_active: false,
+        target: null,
+        unavailable_reason: "slack_identity_disabled",
+      },
+    });
+    mockedGetCommitAuthorSuccessNotificationPreference.mockResolvedValue({
+      email: {
+        enabled: false,
+        delivery_active: false,
+        target: null,
+        unavailable_reason: null,
+      },
+      slack: {
+        enabled: false,
+        delivery_active: false,
+        target: null,
+        unavailable_reason: null,
+      },
+    });
+
+    renderPage();
+
+    const slackCheckbox = await screen.findByRole("checkbox", {
+      name: /Send me a Slack DM when my commits fail/i,
+    });
+    expect(slackCheckbox).toBeChecked();
+    expect(slackCheckbox).not.toBeDisabled();
+    expect(
+      screen.getByText(
+        /Re-enable your linked Slack account to use failure Slack delivery/i,
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Slack delivery is paused until your linked Slack identity and workspace are active again/i,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("updates the failure Slack preference without invoking Slack identity actions", async () => {
+    mockedGetMyEmailNotificationTarget.mockResolvedValue({
+      id: "target-1",
+      owner_user_id: "user-1",
+      type: "email",
+      name: "User Example",
+      address: "<user@example.com>",
+      webhook_configured: false,
+      enabled: true,
+      created_at: "2026-06-24T00:00:00Z",
+      updated_at: "2026-06-24T00:00:00Z",
+    });
+    mockedGetCommitAuthorFailureNotificationPreference.mockResolvedValue({
+      email: {
+        enabled: true,
+        delivery_active: true,
+        unavailable_reason: null,
+        target: {
+          id: "target-1",
+          owner_user_id: "user-1",
+          type: "email",
+          name: "User Example",
+          address: "<user@example.com>",
+          webhook_configured: false,
+          enabled: true,
+          created_at: "2026-06-24T00:00:00Z",
+          updated_at: "2026-06-24T00:00:00Z",
+        },
+      },
+      slack: {
+        enabled: false,
+        delivery_active: true,
+        unavailable_reason: null,
+        target: null,
+      },
+    });
+
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("checkbox", {
+        name: /Send me a Slack DM when my commits fail/i,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        mockedSetCommitAuthorFailureNotificationPreference.mock.calls[0]?.[0],
+      ).toEqual({ email_enabled: true, slack_enabled: true });
+    });
+    expect(mockedResolveMySlackIdentity).not.toHaveBeenCalled();
+    expect(mockedCreateMySlackIdentity).not.toHaveBeenCalled();
+    expect(mockedPatchMySlackIdentity).not.toHaveBeenCalled();
+    expect(mockedDeleteMySlackIdentity).not.toHaveBeenCalled();
+  });
+
+  it("shows and updates the paused success Slack preference", async () => {
+    mockedGetMyEmailNotificationTarget.mockResolvedValue({
+      id: "target-1",
+      owner_user_id: "user-1",
+      type: "email",
+      name: "User Example",
+      address: "<user@example.com>",
+      webhook_configured: false,
+      enabled: true,
+      created_at: "2026-06-24T00:00:00Z",
+      updated_at: "2026-06-24T00:00:00Z",
+    });
+    mockedGetCommitAuthorFailureNotificationPreference.mockResolvedValue({
+      email: {
+        enabled: false,
+        delivery_active: false,
+        unavailable_reason: null,
+        target: null,
+      },
+      slack: {
+        enabled: false,
+        delivery_active: false,
+        unavailable_reason: null,
+        target: null,
+      },
+    });
+    mockedGetCommitAuthorSuccessNotificationPreference.mockResolvedValue({
+      email: {
+        enabled: false,
+        delivery_active: false,
+        unavailable_reason: null,
+        target: null,
+      },
+      slack: {
+        enabled: true,
+        delivery_active: false,
+        unavailable_reason: "slack_identity_disabled",
+        target: null,
+      },
+    });
+
+    renderPage();
+
+    const successSlackCheckbox = await screen.findByRole("checkbox", {
+      name: /Send me a Slack DM when my commits succeed/i,
+    });
+    expect(successSlackCheckbox).toBeChecked();
+    expect(successSlackCheckbox).not.toBeDisabled();
+    expect(
+      screen.getByText(
+        /Re-enable your linked Slack account to use success Slack delivery/i,
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getAllByText(
+        /Slack delivery is paused until your linked Slack identity and workspace are active again/i,
+      ).length,
+    ).toBeGreaterThan(0);
+
+    fireEvent.click(successSlackCheckbox);
+
+    await waitFor(() => {
+      expect(
+        mockedSetCommitAuthorSuccessNotificationPreference.mock.calls[0]?.[0],
+      ).toEqual({ email_enabled: false, slack_enabled: false });
+    });
+  });
+
+  it("refreshes failure preference state from the authoritative backend response after save", async () => {
+    mockedGetMyEmailNotificationTarget.mockResolvedValue({
+      id: "target-1",
+      owner_user_id: "user-1",
+      type: "email",
+      name: "User Example",
+      address: "<user@example.com>",
+      webhook_configured: false,
+      enabled: true,
+      created_at: "2026-06-24T00:00:00Z",
+      updated_at: "2026-06-24T00:00:00Z",
+    });
+    mockedGetCommitAuthorFailureNotificationPreference
+      .mockResolvedValueOnce({
+        email: {
+          enabled: true,
+          delivery_active: true,
+          unavailable_reason: null,
+          target: {
+            id: "target-1",
+            owner_user_id: "user-1",
+            type: "email",
+            name: "User Example",
+            address: "<user@example.com>",
+            webhook_configured: false,
+            enabled: true,
+            created_at: "2026-06-24T00:00:00Z",
+            updated_at: "2026-06-24T00:00:00Z",
+          },
+        },
+        slack: {
+          enabled: false,
+          delivery_active: true,
+          unavailable_reason: null,
+          target: null,
+        },
+      })
+      .mockResolvedValueOnce({
+        email: {
+          enabled: false,
+          delivery_active: false,
+          unavailable_reason: null,
+          target: {
+            id: "target-1",
+            owner_user_id: "user-1",
+            type: "email",
+            name: "User Example",
+            address: "<user@example.com>",
+            webhook_configured: false,
+            enabled: true,
+            created_at: "2026-06-24T00:00:00Z",
+            updated_at: "2026-06-24T00:00:00Z",
+          },
+        },
+        slack: {
+          enabled: true,
+          delivery_active: true,
+          unavailable_reason: null,
+          target: null,
+        },
+      });
+
+    renderPage();
+
+    const failureEmailCheckbox = await screen.findByRole("checkbox", {
+      name: /Email me when my commits fail/i,
+    });
+    const failureSlackCheckbox = screen.getByRole("checkbox", {
+      name: /Send me a Slack DM when my commits fail/i,
+    });
+
+    expect(failureEmailCheckbox).toBeChecked();
+    expect(failureSlackCheckbox).not.toBeChecked();
+
+    fireEvent.click(failureSlackCheckbox);
+
+    await waitFor(() => {
+      expect(
+        mockedSetCommitAuthorFailureNotificationPreference.mock.calls[0]?.[0],
+      ).toEqual({ email_enabled: true, slack_enabled: true });
+    });
+
+    await waitFor(() => {
+      expect(failureEmailCheckbox).not.toBeChecked();
+      expect(failureSlackCheckbox).toBeChecked();
+    });
+  });
+
+  it("keeps the visible commit preference state when the save fails", async () => {
+    mockedGetMyEmailNotificationTarget.mockResolvedValue({
+      id: "target-1",
+      owner_user_id: "user-1",
+      type: "email",
+      name: "User Example",
+      address: "<user@example.com>",
+      webhook_configured: false,
+      enabled: true,
+      created_at: "2026-06-24T00:00:00Z",
+      updated_at: "2026-06-24T00:00:00Z",
+    });
+    mockedGetCommitAuthorFailureNotificationPreference.mockResolvedValue({
+      email: {
+        enabled: true,
+        delivery_active: true,
+        unavailable_reason: null,
+        target: {
+          id: "target-1",
+          owner_user_id: "user-1",
+          type: "email",
+          name: "User Example",
+          address: "<user@example.com>",
+          webhook_configured: false,
+          enabled: true,
+          created_at: "2026-06-24T00:00:00Z",
+          updated_at: "2026-06-24T00:00:00Z",
+        },
+      },
+      slack: {
+        enabled: false,
+        delivery_active: true,
+        unavailable_reason: null,
+        target: null,
+      },
+    });
+    mockedSetCommitAuthorFailureNotificationPreference.mockRejectedValue(
+      new Error("conflict"),
+    );
+
+    renderPage();
+
+    const failureEmailCheckbox = await screen.findByRole("checkbox", {
+      name: /Email me when my commits fail/i,
+    });
+    const failureSlackCheckbox = screen.getByRole("checkbox", {
+      name: /Send me a Slack DM when my commits fail/i,
+    });
+
+    fireEvent.click(failureSlackCheckbox);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Failed to update commit notifications/i),
+      ).toBeTruthy();
+    });
+    expect(failureEmailCheckbox).toBeChecked();
+    expect(failureSlackCheckbox).not.toBeChecked();
   });
 
   it("shows the admin link only for authorized users", async () => {

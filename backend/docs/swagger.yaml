@@ -518,9 +518,14 @@ definitions:
     type: object
   api.CommitAuthorFailureNotificationPreferenceResponse:
     properties:
+      email:
+        $ref: '#/definitions/api.CommitAuthorNotificationPreferenceChannelResponse'
+      slack:
+        $ref: '#/definitions/api.CommitAuthorNotificationPreferenceChannelResponse'
+    type: object
+  api.CommitAuthorNotificationPreferenceChannelResponse:
+    properties:
       delivery_active:
-        type: boolean
-      eligible:
         type: boolean
       enabled:
         type: boolean
@@ -536,16 +541,10 @@ definitions:
     type: object
   api.CommitAuthorSuccessNotificationPreferenceResponse:
     properties:
-      delivery_active:
-        type: boolean
-      eligible:
-        type: boolean
-      enabled:
-        type: boolean
-      target:
-        $ref: '#/definitions/api.NotificationTargetResponse'
-      unavailable_reason:
-        type: string
+      email:
+        $ref: '#/definitions/api.CommitAuthorNotificationPreferenceChannelResponse'
+      slack:
+        $ref: '#/definitions/api.CommitAuthorNotificationPreferenceChannelResponse'
     type: object
   api.CreateAPITokenRequest:
     properties:
@@ -1124,12 +1123,16 @@ definitions:
     type: object
   api.PutCommitAuthorFailureNotificationPreferenceRequest:
     properties:
-      enabled:
+      email_enabled:
+        type: boolean
+      slack_enabled:
         type: boolean
     type: object
   api.PutCommitAuthorSuccessNotificationPreferenceRequest:
     properties:
-      enabled:
+      email_enabled:
+        type: boolean
+      slack_enabled:
         type: boolean
     type: object
   api.PutMyEmailNotificationTargetRequest:

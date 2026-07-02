@@ -326,6 +326,8 @@ func TestNewWorkerNotificationService(t *testing.T) {
 	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
 	userRepo := repositorymemory.NewUserRepository()
 	preferenceRepo := repositorymemory.NewUserNotificationPreferenceRepository()
+	identityRepo := repositorymemory.NewUserSlackIdentityRepository()
+	workspaceRepo := repositorymemory.NewSlackWorkspaceIntegrationRepository()
 	deliveryRepo := repositorymemory.NewNotificationDeliveryRepository()
 	subscriptionRepo := repositorymemory.NewNotificationSubscriptionRepository()
 
@@ -333,7 +335,7 @@ func TestNewWorkerNotificationService(t *testing.T) {
 		notifier, err := newWorkerNotificationService(config.Config{
 			EmailNotificationsEnabled:   false,
 			EmailNotificationRecipients: "not-an-email",
-		}, jobRepo, projectRepo, userRepo, preferenceRepo, deliveryRepo, subscriptionRepo)
+		}, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -347,7 +349,7 @@ func TestNewWorkerNotificationService(t *testing.T) {
 			EmailNotificationsEnabled: true,
 			SMTPHost:                  "mailpit",
 			SMTPPort:                  "1025",
-		}, jobRepo, projectRepo, userRepo, preferenceRepo, deliveryRepo, subscriptionRepo)
+		}, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo)
 		if !errors.Is(err, errConfigureEmailSender) {
 			t.Fatalf("expected sender configuration error, got %v", err)
 		}
@@ -360,7 +362,7 @@ func TestNewWorkerNotificationService(t *testing.T) {
 			SMTPHost:                    "mailpit",
 			SMTPPort:                    "1025",
 			SMTPFromAddress:             "coyote-ci@localhost",
-		}, jobRepo, projectRepo, userRepo, preferenceRepo, deliveryRepo, subscriptionRepo)
+		}, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo)
 		if err == nil || errors.Is(err, errConfigureEmailSender) {
 			t.Fatalf("expected recipient validation error, got %v", err)
 		}
@@ -372,12 +374,14 @@ func TestBuildWorkerNotificationService(t *testing.T) {
 	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
 	userRepo := repositorymemory.NewUserRepository()
 	preferenceRepo := repositorymemory.NewUserNotificationPreferenceRepository()
+	identityRepo := repositorymemory.NewUserSlackIdentityRepository()
+	workspaceRepo := repositorymemory.NewSlackWorkspaceIntegrationRepository()
 	deliveryRepo := repositorymemory.NewNotificationDeliveryRepository()
 	subscriptionRepo := repositorymemory.NewNotificationSubscriptionRepository()
 
 	t.Run("returns notifier on success", func(t *testing.T) {
 		called := false
-		notifier := buildWorkerNotificationService(config.Config{EmailNotificationsEnabled: false}, jobRepo, projectRepo, userRepo, preferenceRepo, deliveryRepo, subscriptionRepo, func(string, ...any) {
+		notifier := buildWorkerNotificationService(config.Config{EmailNotificationsEnabled: false}, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo, func(string, ...any) {
 			called = true
 		})
 		if called {
@@ -394,7 +398,7 @@ func TestBuildWorkerNotificationService(t *testing.T) {
 			EmailNotificationsEnabled: true,
 			SMTPHost:                  "mailpit",
 			SMTPPort:                  "1025",
-		}, jobRepo, projectRepo, userRepo, preferenceRepo, deliveryRepo, subscriptionRepo, func(format string, args ...any) {
+		}, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo, func(format string, args ...any) {
 			message = fmt.Sprintf(format, args...)
 		})
 		if notifier != nil {
@@ -413,7 +417,7 @@ func TestBuildWorkerNotificationService(t *testing.T) {
 			SMTPHost:                    "mailpit",
 			SMTPPort:                    "1025",
 			SMTPFromAddress:             "coyote-ci@localhost",
-		}, jobRepo, projectRepo, userRepo, preferenceRepo, deliveryRepo, subscriptionRepo, func(format string, args ...any) {
+		}, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo, func(format string, args ...any) {
 			message = fmt.Sprintf(format, args...)
 		})
 		if notifier != nil {

@@ -936,25 +936,25 @@ func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized(t 
 	if err != nil {
 		t.Fatalf("expected initialized preference, got %v", err)
 	}
-	if preference.CommitAuthorFailureEnabled {
+	if preference.CommitAuthorFailureEmailEnabled {
 		t.Fatalf("expected disabled initialized preference, got %+v", preference)
 	}
-	if preference.Source != domain.UserNotificationPreferenceSourceInstanceDefault {
+	if preference.CommitAuthorFailureEmailSource != domain.UserNotificationPreferenceSourceInstanceDefault {
 		t.Fatalf("expected instance-default preference source, got %+v", preference)
 	}
-	if preference.CommitAuthorSuccessEnabled {
+	if preference.CommitAuthorSuccessEmailEnabled {
 		t.Fatalf("expected success preference default to stay disabled, got %+v", preference)
 	}
-	if preference.CommitAuthorSuccessSource == nil || *preference.CommitAuthorSuccessSource != domain.UserNotificationPreferenceSourceInstanceDefault {
+	if preference.CommitAuthorSuccessEmailSource == nil || *preference.CommitAuthorSuccessEmailSource != domain.UserNotificationPreferenceSourceInstanceDefault {
 		t.Fatalf("expected success source to be initialized from instance default, got %+v", preference)
 	}
 
 	_, err = preferences.Upsert(ctx, domain.UserNotificationPreference{
-		UserID:                     "user-init",
-		CommitAuthorFailureEnabled: true,
-		Source:                     domain.UserNotificationPreferenceSourceUser,
-		CreatedAt:                  now,
-		UpdatedAt:                  now.Add(time.Minute),
+		UserID:                          "user-init",
+		CommitAuthorFailureEmailEnabled: true,
+		CommitAuthorFailureEmailSource:  domain.UserNotificationPreferenceSourceUser,
+		CreatedAt:                       now,
+		UpdatedAt:                       now.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("seed explicit preference failed: %v", err)
@@ -979,21 +979,21 @@ func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized(t 
 	if err != nil {
 		t.Fatalf("get explicit preference failed: %v", err)
 	}
-	if !explicitPreference.CommitAuthorFailureEnabled || explicitPreference.Source != domain.UserNotificationPreferenceSourceUser {
+	if !explicitPreference.CommitAuthorFailureEmailEnabled || explicitPreference.CommitAuthorFailureEmailSource != domain.UserNotificationPreferenceSourceUser {
 		t.Fatalf("expected explicit preference to be preserved, got %+v", explicitPreference)
 	}
 
 	legacyPreference, err := preferences.Upsert(ctx, domain.UserNotificationPreference{
-		UserID:                     "legacy-claimed-user",
-		CommitAuthorFailureEnabled: true,
-		Source:                     domain.UserNotificationPreferenceSourceUser,
-		CreatedAt:                  now,
-		UpdatedAt:                  now,
+		UserID:                          "legacy-claimed-user",
+		CommitAuthorFailureEmailEnabled: true,
+		CommitAuthorFailureEmailSource:  domain.UserNotificationPreferenceSourceUser,
+		CreatedAt:                       now,
+		UpdatedAt:                       now,
 	})
 	if err != nil {
 		t.Fatalf("seed legacy preference without success source failed: %v", err)
 	}
-	if legacyPreference.CommitAuthorSuccessSource != nil {
+	if legacyPreference.CommitAuthorSuccessEmailSource != nil {
 		t.Fatalf("expected seeded legacy preference to lack success source, got %+v", legacyPreference)
 	}
 	claimableLegacy, err := repo.CreateTarget(ctx, domain.NotificationTarget{
@@ -1026,10 +1026,10 @@ func TestNotificationSubscriptionRepository_EnsureOwnedEmailTargetInitialized(t 
 	if err != nil {
 		t.Fatalf("get backfilled legacy preference failed: %v", err)
 	}
-	if backfilledPreference.CommitAuthorSuccessEnabled {
+	if backfilledPreference.CommitAuthorSuccessEmailEnabled {
 		t.Fatalf("expected backfilled success preference to remain disabled, got %+v", backfilledPreference)
 	}
-	if backfilledPreference.CommitAuthorSuccessSource == nil || *backfilledPreference.CommitAuthorSuccessSource != domain.UserNotificationPreferenceSourceInstanceDefault {
+	if backfilledPreference.CommitAuthorSuccessEmailSource == nil || *backfilledPreference.CommitAuthorSuccessEmailSource != domain.UserNotificationPreferenceSourceInstanceDefault {
 		t.Fatalf("expected legacy preference success source backfill, got %+v", backfilledPreference)
 	}
 

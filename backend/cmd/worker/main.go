@@ -20,6 +20,7 @@ import (
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
 	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
+	platformslack "github.com/radiation/coyote-ci/backend/internal/platform/slack"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
@@ -77,7 +78,9 @@ func main() {
 	notificationDeliveryRepo := repositorypostgres.NewNotificationDeliveryRepository(db)
 	notificationSubscriptionRepo := repositorypostgres.NewNotificationSubscriptionRepository(db)
 	notificationPreferenceRepo := repositorypostgres.NewUserNotificationPreferenceRepository(db)
-	buildNotificationService := buildWorkerNotificationService(cfg, jobRepo, projectRepo, userRepo, notificationPreferenceRepo, notificationDeliveryRepo, notificationSubscriptionRepo, log.Fatalf)
+	userSlackIdentityRepo := repositorypostgres.NewUserSlackIdentityRepository(db)
+	slackWorkspaceIntegrationRepo := repositorypostgres.NewSlackWorkspaceIntegrationRepository(db)
+	buildNotificationService := buildWorkerNotificationService(cfg, jobRepo, projectRepo, userRepo, notificationPreferenceRepo, userSlackIdentityRepo, slackWorkspaceIntegrationRepo, notificationDeliveryRepo, notificationSubscriptionRepo, log.Fatalf)
 	artifactResolver, err := artifact.ResolveStores(artifact.StoreConfig{
 		Provider:    cfg.ArtifactStorageProvider,
 		StorageRoot: cfg.ArtifactStorageRoot,
@@ -147,7 +150,7 @@ func logEmailNotificationConfig(cfg config.Config) {
 	log.Printf("email notifications disabled")
 }
 
-func newWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepository, projectRepo repository.ProjectRepository, userRepo repository.UserRepository, preferenceRepo repository.UserNotificationPreferenceRepository, deliveryRepo repository.NotificationDeliveryRepository, subscriptionRepo repository.NotificationSubscriptionRepository) (*buildsvc.BuildNotificationService, error) {
+func newWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepository, projectRepo repository.ProjectRepository, userRepo repository.UserRepository, preferenceRepo repository.UserNotificationPreferenceRepository, identityRepo repository.UserSlackIdentityRepository, workspaceRepo repository.SlackWorkspaceIntegrationRepository, deliveryRepo repository.NotificationDeliveryRepository, subscriptionRepo repository.NotificationSubscriptionRepository) (*buildsvc.BuildNotificationService, error) {
 	emailSender, emailSenderErr := platformemail.NewSender(platformemail.Config{
 		Enabled:     cfg.EmailNotificationsEnabled,
 		Host:        cfg.SMTPHost,
@@ -165,12 +168,15 @@ func newWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepos
 		Recipients:       cfg.EmailNotificationRecipients,
 		Sender:           emailSender,
 		SlackSender:      buildsvc.NewSlackWebhookSender(nil),
+		SlackClient:      platformslack.NewClient(nil),
 		JobRepo:          jobRepo,
 		ProjectRepo:      projectRepo,
 		DeliveryRepo:     deliveryRepo,
 		SubscriptionRepo: subscriptionRepo,
 		UserRepo:         userRepo,
 		PreferenceRepo:   preferenceRepo,
+		IdentityRepo:     identityRepo,
+		WorkspaceRepo:    workspaceRepo,
 		PublicBaseURL:    cfg.PublicURL,
 	})
 	if buildNotificationErr != nil {
@@ -180,8 +186,8 @@ func newWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepos
 	return buildNotificationService, nil
 }
 
-func buildWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepository, projectRepo repository.ProjectRepository, userRepo repository.UserRepository, preferenceRepo repository.UserNotificationPreferenceRepository, deliveryRepo repository.NotificationDeliveryRepository, subscriptionRepo repository.NotificationSubscriptionRepository, fatalf func(string, ...any)) *buildsvc.BuildNotificationService {
-	buildNotificationService, notificationErr := newWorkerNotificationService(cfg, jobRepo, projectRepo, userRepo, preferenceRepo, deliveryRepo, subscriptionRepo)
+func buildWorkerNotificationService(cfg config.Config, jobRepo repository.JobRepository, projectRepo repository.ProjectRepository, userRepo repository.UserRepository, preferenceRepo repository.UserNotificationPreferenceRepository, identityRepo repository.UserSlackIdentityRepository, workspaceRepo repository.SlackWorkspaceIntegrationRepository, deliveryRepo repository.NotificationDeliveryRepository, subscriptionRepo repository.NotificationSubscriptionRepository, fatalf func(string, ...any)) *buildsvc.BuildNotificationService {
+	buildNotificationService, notificationErr := newWorkerNotificationService(cfg, jobRepo, projectRepo, userRepo, preferenceRepo, identityRepo, workspaceRepo, deliveryRepo, subscriptionRepo)
 	if notificationErr == nil {
 		return buildNotificationService
 	}
