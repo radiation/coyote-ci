@@ -53,8 +53,8 @@ func TestNotificationSubscriptionRepository_DeleteTargetCascadesSubscriptions_Po
 	}
 
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO notification_targets (id, type, name, recipient, enabled, created_at, updated_at)
-		VALUES ($1, 'email', $2, $3, TRUE, $4, $4)
+		INSERT INTO notification_targets (id, type, origin, name, recipient, enabled, created_at, updated_at)
+		VALUES ($1, 'email', 'manual', $2, $3, TRUE, $4, $4)
 	`, targetID, "Dev Mailbox", "dev+"+targetID+"@example.com", now)
 	if err != nil {
 		t.Fatalf("insert notification target %s: %v", targetID, err)
@@ -123,8 +123,8 @@ func TestNotificationSubscriptionRepository_CreateSubscriptionDuplicateConflict_
 	}
 
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO notification_targets (id, type, name, recipient, enabled, created_at, updated_at)
-		VALUES ($1, 'email', $2, $3, TRUE, $4, $4)
+		INSERT INTO notification_targets (id, type, origin, name, recipient, enabled, created_at, updated_at)
+		VALUES ($1, 'email', 'manual', $2, $3, TRUE, $4, $4)
 	`, targetID, "Build alerts", "dev+"+targetID+"@example.com", now)
 	if err != nil {
 		t.Fatalf("insert notification target %s: %v", targetID, err)

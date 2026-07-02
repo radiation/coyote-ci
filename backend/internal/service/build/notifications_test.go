@@ -59,37 +59,106 @@ func (c *recordingSlackDMClient) PostDirectMessage(_ context.Context, token stri
 }
 
 type scriptedNotificationDeliveryRepo struct {
-	acquireFunc func(context.Context, domain.NotificationDelivery) (repository.NotificationDeliveryAcquireResult, error)
-	createFunc  func(context.Context, domain.NotificationDelivery) (domain.NotificationDelivery, error)
-	getFunc     func(context.Context, string, domain.NotificationEventType, string) (domain.NotificationDelivery, error)
-	updateFunc  func(context.Context, domain.NotificationDelivery) (domain.NotificationDelivery, error)
+	acquireFunc                func(context.Context, repository.NotificationDeliveryClaimInput) (repository.NotificationDeliveryClaimResult, error)
+	markSentFunc               func(context.Context, repository.NotificationDeliveryMarkSentInput) (repository.NotificationDeliveryUpdateResult, error)
+	recordRetryableFailureFunc func(context.Context, repository.NotificationDeliveryRecordFailureInput) (repository.NotificationDeliveryUpdateResult, error)
+	recordPermanentFailureFunc func(context.Context, repository.NotificationDeliveryRecordFailureInput) (repository.NotificationDeliveryUpdateResult, error)
+	recordExhaustedFailureFunc func(context.Context, repository.NotificationDeliveryRecordFailureInput) (repository.NotificationDeliveryUpdateResult, error)
+	createFunc                 func(context.Context, domain.NotificationDelivery) (domain.NotificationDelivery, error)
+	getFunc                    func(context.Context, string, domain.NotificationEventType, string) (domain.NotificationDelivery, error)
+	updateFunc                 func(context.Context, domain.NotificationDelivery) (domain.NotificationDelivery, error)
 }
 
-func (r *scriptedNotificationDeliveryRepo) Acquire(ctx context.Context, delivery domain.NotificationDelivery) (repository.NotificationDeliveryAcquireResult, error) {
+func (r *scriptedNotificationDeliveryRepo) AcquireForDelivery(ctx context.Context, input repository.NotificationDeliveryClaimInput) (repository.NotificationDeliveryClaimResult, error) {
 	if r.acquireFunc != nil {
-		return r.acquireFunc(ctx, delivery)
+		return r.acquireFunc(ctx, input)
 	}
 	if r.createFunc != nil {
-		created, err := r.createFunc(ctx, delivery)
+		created, err := r.createFunc(ctx, input.Delivery)
 		if err != nil {
 			if errors.Is(err, repository.ErrNotificationDeliveryDuplicate) {
 				if r.getFunc == nil {
-					return repository.NotificationDeliveryAcquireResult{}, err
+					return repository.NotificationDeliveryClaimResult{}, err
 				}
-				existing, getErr := r.getFunc(ctx, delivery.BuildID, delivery.EventType, delivery.Recipient)
+				existing, getErr := r.getFunc(ctx, input.Delivery.BuildID, input.Delivery.EventType, input.Delivery.Recipient)
 				if getErr != nil {
-					return repository.NotificationDeliveryAcquireResult{}, getErr
+					return repository.NotificationDeliveryClaimResult{}, getErr
 				}
-				return repository.NotificationDeliveryAcquireResult{
+				return repository.NotificationDeliveryClaimResult{
 					Delivery: existing,
-					Outcome:  repository.NotificationDeliveryAcquireOutcomeFromStatus(existing.Status),
+					Outcome:  repository.NotificationDeliveryClaimOutcomeFromExisting(existing, input.Now),
 				}, nil
 			}
-			return repository.NotificationDeliveryAcquireResult{}, err
+			return repository.NotificationDeliveryClaimResult{}, err
 		}
-		return repository.NotificationDeliveryAcquireResult{Delivery: created, Outcome: repository.NotificationDeliveryAcquireOutcomeCreated}, nil
+		claimedAt := input.Now.UTC()
+		claimExpiresAt := claimedAt.Add(input.ClaimDuration)
+		created.Status = domain.NotificationDeliveryStatusSending
+		created.Attempts = 1
+		created.MaxAttempts = input.MaxAttempts
+		created.LastAttemptAt = &claimedAt
+		created.ClaimedAt = &claimedAt
+		created.ClaimExpiresAt = &claimExpiresAt
+		created.ClaimedBy = strPtr(input.ClaimOwner)
+		return repository.NotificationDeliveryClaimResult{Delivery: created, Outcome: repository.NotificationDeliveryClaimOutcomeCreatedClaimed}, nil
 	}
-	return repository.NotificationDeliveryAcquireResult{}, nil
+	return repository.NotificationDeliveryClaimResult{}, nil
+}
+
+func (r *scriptedNotificationDeliveryRepo) MarkSent(ctx context.Context, input repository.NotificationDeliveryMarkSentInput) (repository.NotificationDeliveryUpdateResult, error) {
+	if r.markSentFunc != nil {
+		return r.markSentFunc(ctx, input)
+	}
+	if r.updateFunc == nil {
+		return repository.NotificationDeliveryUpdateResult{}, nil
+	}
+	updated, err := r.updateFunc(ctx, domain.NotificationDelivery{ID: input.DeliveryID, Status: domain.NotificationDeliveryStatusSent, SentAt: &input.SentAt, UpdatedAt: input.SentAt})
+	if err != nil {
+		return repository.NotificationDeliveryUpdateResult{}, err
+	}
+	return repository.NotificationDeliveryUpdateResult{Delivery: updated, Outcome: repository.NotificationDeliveryUpdateOutcomeUpdated}, nil
+}
+
+func (r *scriptedNotificationDeliveryRepo) RecordRetryableFailure(ctx context.Context, input repository.NotificationDeliveryRecordFailureInput) (repository.NotificationDeliveryUpdateResult, error) {
+	if r.recordRetryableFailureFunc != nil {
+		return r.recordRetryableFailureFunc(ctx, input)
+	}
+	if r.updateFunc == nil {
+		return repository.NotificationDeliveryUpdateResult{}, nil
+	}
+	updated, err := r.updateFunc(ctx, domain.NotificationDelivery{ID: input.DeliveryID, Status: domain.NotificationDeliveryStatusRetryWaiting, LastError: input.LastError, UpdatedAt: input.FailedAt, NextAttemptAt: input.NextAttemptAt})
+	if err != nil {
+		return repository.NotificationDeliveryUpdateResult{}, err
+	}
+	return repository.NotificationDeliveryUpdateResult{Delivery: updated, Outcome: repository.NotificationDeliveryUpdateOutcomeUpdated}, nil
+}
+
+func (r *scriptedNotificationDeliveryRepo) RecordPermanentFailure(ctx context.Context, input repository.NotificationDeliveryRecordFailureInput) (repository.NotificationDeliveryUpdateResult, error) {
+	if r.recordPermanentFailureFunc != nil {
+		return r.recordPermanentFailureFunc(ctx, input)
+	}
+	if r.updateFunc == nil {
+		return repository.NotificationDeliveryUpdateResult{}, nil
+	}
+	updated, err := r.updateFunc(ctx, domain.NotificationDelivery{ID: input.DeliveryID, Status: domain.NotificationDeliveryStatusFailedPermanent, LastError: input.LastError, UpdatedAt: input.FailedAt})
+	if err != nil {
+		return repository.NotificationDeliveryUpdateResult{}, err
+	}
+	return repository.NotificationDeliveryUpdateResult{Delivery: updated, Outcome: repository.NotificationDeliveryUpdateOutcomeUpdated}, nil
+}
+
+func (r *scriptedNotificationDeliveryRepo) RecordExhaustedFailure(ctx context.Context, input repository.NotificationDeliveryRecordFailureInput) (repository.NotificationDeliveryUpdateResult, error) {
+	if r.recordExhaustedFailureFunc != nil {
+		return r.recordExhaustedFailureFunc(ctx, input)
+	}
+	if r.updateFunc == nil {
+		return repository.NotificationDeliveryUpdateResult{}, nil
+	}
+	updated, err := r.updateFunc(ctx, domain.NotificationDelivery{ID: input.DeliveryID, Status: domain.NotificationDeliveryStatusFailedExhausted, LastError: input.LastError, UpdatedAt: input.FailedAt})
+	if err != nil {
+		return repository.NotificationDeliveryUpdateResult{}, err
+	}
+	return repository.NotificationDeliveryUpdateResult{Delivery: updated, Outcome: repository.NotificationDeliveryUpdateOutcomeUpdated}, nil
 }
 
 func (r *scriptedNotificationDeliveryRepo) Create(ctx context.Context, delivery domain.NotificationDelivery) (domain.NotificationDelivery, error) {
@@ -376,6 +445,10 @@ func strPtr(value string) *string {
 	return &value
 }
 
+func failureCategoryPtr(value domain.NotificationDeliveryFailureCategory) *domain.NotificationDeliveryFailureCategory {
+	return &value
+}
+
 func assertNotificationDeliveryAbsent(t *testing.T, repo repository.NotificationDeliveryRepository, buildID string, eventType domain.NotificationEventType, recipient string) {
 	t.Helper()
 
@@ -627,8 +700,10 @@ func TestBuildNotificationService_CommitAuthorSuccessPreferenceDelivery(t *testi
 			DestinationKey:  "email-personal:" + mustGetOwnedEmailTargetID(t, fixture.subscriptionRepo, fixture.authorUser.ID),
 			RecipientUserID: &fixture.authorUser.ID,
 			Recipient:       "<author@example.com>",
-			Status:          domain.NotificationDeliveryStatusFailed,
+			Status:          domain.NotificationDeliveryStatusFailedPermanent,
 			Attempts:        1,
+			MaxAttempts:     3,
+			FailureCategory: failureCategoryPtr(domain.NotificationDeliveryFailureCategoryPermanent),
 			LastError:       &message,
 		}); err != nil {
 			t.Fatalf("seed failed success delivery record failed: %v", err)
@@ -641,7 +716,7 @@ func TestBuildNotificationService_CommitAuthorSuccessPreferenceDelivery(t *testi
 			t.Fatalf("expected no resend when failed success delivery record already exists, got %+v", fixture.sender.messages)
 		}
 		delivery := mustGetNotificationDelivery(t, fixture.deliveryRepo, "build-success-13", domain.NotificationEventTypeBuildSucceeded, "<author@example.com>")
-		if delivery.Status != domain.NotificationDeliveryStatusFailed {
+		if delivery.Status != domain.NotificationDeliveryStatusFailedPermanent {
 			t.Fatalf("expected failed success delivery status to remain unchanged, got %q", delivery.Status)
 		}
 		if delivery.Attempts != 1 {
@@ -1008,8 +1083,8 @@ func TestBuildService_FailBuild_SenderFailureDoesNotBreakPersistence(t *testing.
 		t.Fatalf("expected attempted notification email, got %d", len(sender.messages))
 	}
 	delivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildFailed, "<dev@example.com>")
-	if delivery.Status != domain.NotificationDeliveryStatusFailed {
-		t.Fatalf("expected failed delivery status, got %q", delivery.Status)
+	if delivery.Status != domain.NotificationDeliveryStatusRetryWaiting {
+		t.Fatalf("expected retry-waiting delivery status, got %q", delivery.Status)
 	}
 	if delivery.LastError == nil || !strings.Contains(*delivery.LastError, "smtp unavailable") {
 		t.Fatalf("expected last_error to contain smtp failure, got %v", delivery.LastError)
@@ -1563,8 +1638,8 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 		}
 
 		delivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildFailed, "<dev@example.com>")
-		if delivery.Status != domain.NotificationDeliveryStatusFailed {
-			t.Fatalf("expected failed delivery status, got %q", delivery.Status)
+		if delivery.Status != domain.NotificationDeliveryStatusRetryWaiting {
+			t.Fatalf("expected retry_waiting delivery status, got %q", delivery.Status)
 		}
 		if delivery.Attempts != 1 {
 			t.Fatalf("expected one attempt, got %d", delivery.Attempts)
@@ -1621,8 +1696,10 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 			DestinationKey:       "email-target:" + sharedTarget.ID,
 			NotificationTargetID: &sharedTarget.ID,
 			Recipient:            "<dev@example.com>",
-			Status:               domain.NotificationDeliveryStatusFailed,
+			Status:               domain.NotificationDeliveryStatusFailedPermanent,
 			Attempts:             1,
+			MaxAttempts:          3,
+			FailureCategory:      failureCategoryPtr(domain.NotificationDeliveryFailureCategoryPermanent),
 			LastError:            &message,
 		}); createErr != nil {
 			t.Fatalf("seed failed delivery record failed: %v", createErr)
@@ -1641,7 +1718,7 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 		}
 
 		delivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildFailed, "<dev@example.com>")
-		if delivery.Status != domain.NotificationDeliveryStatusFailed {
+		if delivery.Status != domain.NotificationDeliveryStatusFailedPermanent {
 			t.Fatalf("expected failed delivery status to remain unchanged, got %q", delivery.Status)
 		}
 		if delivery.Attempts != 1 {
@@ -1698,8 +1775,8 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 					}
 					return domain.NotificationDelivery{}, errors.New("write sent failed")
 				}
-				if delivery.Status != domain.NotificationDeliveryStatusFailed {
-					t.Fatalf("expected fallback update to mark failed, got %q", delivery.Status)
+				if delivery.Status != domain.NotificationDeliveryStatusRetryWaiting {
+					t.Fatalf("expected fallback update to schedule retry, got %q", delivery.Status)
 				}
 				if delivery.LastError == nil || !strings.Contains(*delivery.LastError, "persist sent delivery state failed") {
 					t.Fatalf("expected fallback last error to describe sent-state persistence failure, got %v", delivery.LastError)
@@ -1831,6 +1908,19 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 			t.Fatalf("expected configured shared and personal author targets to remain distinct, got %d", len(sender.messages))
 		}
 	})
+}
+
+func TestNewBuildNotificationService_RejectsClaimDurationBelowProviderSafetyMargin(t *testing.T) {
+	_, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:       true,
+		ClaimDuration: minimumNotificationClaimDuration() - time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected claim duration validation error")
+	}
+	if !strings.Contains(err.Error(), "notification claim duration") {
+		t.Fatalf("expected claim duration error, got %v", err)
+	}
 }
 
 func TestBuildNotificationService_CommitAuthorPreferenceDelivery(t *testing.T) {
@@ -2315,8 +2405,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureDoesNotBlockEm
 		t.Fatalf("expected email delivery sent, got %q", emailDelivery.Status)
 	}
 	slackDelivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildFailed, "slack_webhook:"+slackTarget.ID)
-	if slackDelivery.Status != domain.NotificationDeliveryStatusFailed {
-		t.Fatalf("expected slack delivery failed, got %q", slackDelivery.Status)
+	if slackDelivery.Status != domain.NotificationDeliveryStatusRetryWaiting {
+		t.Fatalf("expected slack delivery retry_waiting, got %q", slackDelivery.Status)
 	}
 }
 
@@ -2571,9 +2661,9 @@ func TestBuildNotificationService_NotifyTerminalBuild_PersonalChannelsFailIndepe
 		wantEmailDeliveries   int
 		wantSlackDMDeliveries int
 	}{
-		{name: "email fails slack succeeds", emailErr: errors.New("smtp unavailable"), wantEmailStatus: domain.NotificationDeliveryStatusFailed, wantSlackStatus: domain.NotificationDeliveryStatusSent, wantEmailDeliveries: 1, wantSlackDMDeliveries: 1},
-		{name: "slack fails email succeeds", slackErr: errors.New("chat.postMessage unavailable"), wantEmailStatus: domain.NotificationDeliveryStatusSent, wantSlackStatus: domain.NotificationDeliveryStatusFailed, wantEmailDeliveries: 1, wantSlackDMDeliveries: 1},
-		{name: "both fail", emailErr: errors.New("smtp unavailable"), slackErr: errors.New("chat.postMessage unavailable"), wantEmailStatus: domain.NotificationDeliveryStatusFailed, wantSlackStatus: domain.NotificationDeliveryStatusFailed, wantEmailDeliveries: 1, wantSlackDMDeliveries: 1},
+		{name: "email fails slack succeeds", emailErr: errors.New("smtp unavailable"), wantEmailStatus: domain.NotificationDeliveryStatusRetryWaiting, wantSlackStatus: domain.NotificationDeliveryStatusSent, wantEmailDeliveries: 1, wantSlackDMDeliveries: 1},
+		{name: "slack fails email succeeds", slackErr: errors.New("chat.postMessage unavailable"), wantEmailStatus: domain.NotificationDeliveryStatusSent, wantSlackStatus: domain.NotificationDeliveryStatusRetryWaiting, wantEmailDeliveries: 1, wantSlackDMDeliveries: 1},
+		{name: "both fail", emailErr: errors.New("smtp unavailable"), slackErr: errors.New("chat.postMessage unavailable"), wantEmailStatus: domain.NotificationDeliveryStatusRetryWaiting, wantSlackStatus: domain.NotificationDeliveryStatusRetryWaiting, wantEmailDeliveries: 1, wantSlackDMDeliveries: 1},
 	}
 
 	for _, tc := range tests {

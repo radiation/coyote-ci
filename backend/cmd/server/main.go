@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"expvar"
+	"fmt"
 	"log"
 	nethttp "net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -32,6 +34,8 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/source"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
+
+var osServerHostname = os.Hostname
 
 // @title Coyote CI API
 // @version 0.1
@@ -116,6 +120,7 @@ func main() {
 		IdentityRepo:     userSlackIdentityRepo,
 		WorkspaceRepo:    slackWorkspaceIntegrationRepo,
 		PublicBaseURL:    cfg.PublicURL,
+		ClaimOwner:       defaultServerNotificationClaimOwner(),
 	})
 	if buildNotificationErr != nil {
 		log.Fatalf("failed to configure build notifications: %v", buildNotificationErr)
@@ -305,4 +310,12 @@ func main() {
 	if err := nethttp.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
+}
+
+func defaultServerNotificationClaimOwner() string {
+	hostname, err := osServerHostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		hostname = "unknown-host"
+	}
+	return "server-" + hostname + "-" + fmt.Sprintf("%d", os.Getpid())
 }

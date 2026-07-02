@@ -62,6 +62,17 @@ func TestNewSlackWebhookSender_UsesDefaultClientWhenNil(t *testing.T) {
 	if sender == nil {
 		t.Fatal("expected sender instance")
 	}
+	impl, ok := sender.(*slackWebhookSender)
+	if !ok {
+		t.Fatalf("expected slack webhook sender implementation, got %T", sender)
+	}
+	httpClient, ok := impl.client.(*http.Client)
+	if !ok {
+		t.Fatalf("expected default http client, got %T", impl.client)
+	}
+	if httpClient.Timeout != defaultSlackWebhookTimeout {
+		t.Fatalf("expected default timeout %s, got %s", defaultSlackWebhookTimeout, httpClient.Timeout)
+	}
 }
 
 func TestSlackWebhookSender_SendErrorCases(t *testing.T) {

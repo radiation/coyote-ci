@@ -12,6 +12,34 @@ import (
 	"time"
 )
 
+var ErrSlackWebhookInvalidRequest = errors.New("slack webhook request is invalid")
+var ErrSlackWebhookUpstreamFailure = errors.New("slack webhook upstream failure")
+
+const defaultSlackWebhookTimeout = 5 * time.Second
+
+type slackWebhookUpstreamError struct {
+	timeout bool
+}
+
+func (e *slackWebhookUpstreamError) Error() string {
+	if e.timeout {
+		return "slack webhook request timed out"
+	}
+	return "slack webhook request failed"
+}
+
+func (e *slackWebhookUpstreamError) Unwrap() error {
+	return ErrSlackWebhookUpstreamFailure
+}
+
+type SlackWebhookHTTPError struct {
+	StatusCode int
+}
+
+func (e *SlackWebhookHTTPError) Error() string {
+	return fmt.Sprintf("slack webhook returned status %d", e.StatusCode)
+}
+
 type SlackWebhookMessage struct {
 	Text string `json:"text"`
 }
@@ -30,7 +58,7 @@ type slackWebhookSender struct {
 
 func NewSlackWebhookSender(client slackHTTPDoer) SlackWebhookSender {
 	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Second}
+		client = &http.Client{Timeout: defaultSlackWebhookTimeout}
 	}
 	return &slackWebhookSender{client: client}
 }
@@ -42,25 +70,28 @@ func (s *slackWebhookSender) Send(ctx context.Context, webhookURL string, messag
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSpace(webhookURL), bytes.NewReader(payload))
 	if err != nil {
-		return errors.New("build slack webhook request failed")
+		return fmt.Errorf("%w: %v", ErrSlackWebhookInvalidRequest, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	res, err := s.client.Do(req)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return errors.New("slack webhook request timed out")
+			return &slackWebhookUpstreamError{timeout: true}
 		}
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
-			return errors.New("slack webhook request timed out")
+			return &slackWebhookUpstreamError{timeout: true}
 		}
-		return errors.New("slack webhook request failed")
+		return &slackWebhookUpstreamError{}
 	}
 	defer func() {
 		_ = res.Body.Close()
 	}()
 	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("slack webhook returned status %d", res.StatusCode)
+		return &SlackWebhookHTTPError{StatusCode: res.StatusCode}
 	}
 	return nil
 }
