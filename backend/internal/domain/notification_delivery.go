@@ -30,7 +30,6 @@ type NotificationDeliveryFailureCategory string
 const (
 	NotificationDeliveryFailureCategoryRetryable NotificationDeliveryFailureCategory = "retryable"
 	NotificationDeliveryFailureCategoryPermanent NotificationDeliveryFailureCategory = "permanent"
-	NotificationDeliveryFailureCategoryCanceled  NotificationDeliveryFailureCategory = "canceled"
 )
 
 type NotificationTransport string
@@ -140,6 +139,9 @@ func (d NotificationDelivery) Validate() error {
 	if d.MaxAttempts <= 0 {
 		return fmt.Errorf("notification delivery max attempts must be positive")
 	}
+	if d.Attempts > d.MaxAttempts {
+		return fmt.Errorf("notification delivery attempts cannot exceed max attempts")
+	}
 	if !d.Status.IsValid() {
 		return fmt.Errorf("unsupported notification delivery status %q", d.Status)
 	}
@@ -161,6 +163,9 @@ func (d NotificationDelivery) Validate() error {
 	if d.IsTerminal() && d.ClaimExpiresAt != nil {
 		return fmt.Errorf("terminal notification delivery cannot retain claim_expires_at")
 	}
+	if d.IsTerminal() && d.NextAttemptAt != nil {
+		return fmt.Errorf("terminal notification delivery cannot retain next_attempt_at")
+	}
 	if d.Status == NotificationDeliveryStatusPending {
 		if d.NextAttemptAt != nil {
 			return fmt.Errorf("pending notification delivery cannot retain next_attempt_at")
@@ -170,14 +175,23 @@ func (d NotificationDelivery) Validate() error {
 		}
 	}
 	if d.Status == NotificationDeliveryStatusRetryWaiting {
+		if d.Attempts >= d.MaxAttempts {
+			return fmt.Errorf("retry-waiting notification delivery requires attempts below max attempts")
+		}
 		if d.NextAttemptAt == nil {
 			return fmt.Errorf("retry-waiting notification delivery requires next_attempt_at")
 		}
 		if d.ClaimedBy != nil || d.ClaimedAt != nil || d.ClaimExpiresAt != nil {
 			return fmt.Errorf("retry-waiting notification delivery cannot retain active claim metadata")
 		}
+		if d.FailureCategory == nil || *d.FailureCategory != NotificationDeliveryFailureCategoryRetryable {
+			return fmt.Errorf("retry-waiting notification delivery requires retryable failure category")
+		}
 	}
 	if d.Status == NotificationDeliveryStatusSending {
+		if d.Attempts < 1 {
+			return fmt.Errorf("sending notification delivery requires at least one attempt")
+		}
 		if d.ClaimedBy == nil || d.ClaimedAt == nil || d.ClaimExpiresAt == nil {
 			return fmt.Errorf("sending notification delivery requires claim owner and expiry")
 		}
@@ -188,11 +202,23 @@ func (d NotificationDelivery) Validate() error {
 			return fmt.Errorf("sending notification delivery cannot retain next_attempt_at")
 		}
 	}
-	if d.Status == NotificationDeliveryStatusFailedPermanent && d.FailureCategory == nil {
-		return fmt.Errorf("permanently failed notification delivery requires failure category")
+	if d.Status == NotificationDeliveryStatusFailedPermanent {
+		if d.FailureCategory == nil || *d.FailureCategory != NotificationDeliveryFailureCategoryPermanent {
+			return fmt.Errorf("permanently failed notification delivery requires permanent failure category")
+		}
 	}
-	if d.Status == NotificationDeliveryStatusFailedExhausted && d.Attempts < d.MaxAttempts {
-		return fmt.Errorf("exhausted notification delivery requires attempts to reach max attempts")
+	if d.Status == NotificationDeliveryStatusFailedExhausted {
+		if d.Attempts != d.MaxAttempts {
+			return fmt.Errorf("exhausted notification delivery requires attempts to equal max attempts")
+		}
+		if d.FailureCategory == nil || *d.FailureCategory != NotificationDeliveryFailureCategoryRetryable {
+			return fmt.Errorf("exhausted notification delivery requires retryable failure category")
+		}
+	}
+	if d.Status == NotificationDeliveryStatusSent {
+		if d.Attempts < 1 {
+			return fmt.Errorf("sent notification delivery requires at least one attempt")
+		}
 	}
 	return nil
 }
@@ -214,8 +240,7 @@ func (s NotificationDeliveryStatus) IsValid() bool {
 func (c NotificationDeliveryFailureCategory) IsValid() bool {
 	switch c {
 	case NotificationDeliveryFailureCategoryRetryable,
-		NotificationDeliveryFailureCategoryPermanent,
-		NotificationDeliveryFailureCategoryCanceled:
+		NotificationDeliveryFailureCategoryPermanent:
 		return true
 	default:
 		return false

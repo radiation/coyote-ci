@@ -15,6 +15,8 @@ import (
 var ErrSlackWebhookInvalidRequest = errors.New("slack webhook request is invalid")
 var ErrSlackWebhookUpstreamFailure = errors.New("slack webhook upstream failure")
 
+const defaultSlackWebhookTimeout = 5 * time.Second
+
 type slackWebhookUpstreamError struct {
 	timeout bool
 }
@@ -56,7 +58,7 @@ type slackWebhookSender struct {
 
 func NewSlackWebhookSender(client slackHTTPDoer) SlackWebhookSender {
 	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Second}
+		client = &http.Client{Timeout: defaultSlackWebhookTimeout}
 	}
 	return &slackWebhookSender{client: client}
 }

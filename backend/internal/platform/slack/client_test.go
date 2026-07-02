@@ -99,6 +99,17 @@ func TestClient_TestAuthentication_RejectsBlankToken(t *testing.T) {
 	}
 }
 
+func TestNewClient_UsesDefaultTimeoutWhenNil(t *testing.T) {
+	client := NewClient(nil)
+	httpClient, ok := client.httpClient.(*http.Client)
+	if !ok {
+		t.Fatalf("expected default http client, got %T", client.httpClient)
+	}
+	if httpClient.Timeout != DefaultAPITimeout {
+		t.Fatalf("expected default timeout %s, got %s", DefaultAPITimeout, httpClient.Timeout)
+	}
+}
+
 func TestClient_TestAuthentication_AuthFailureFallbacks(t *testing.T) {
 	tests := []struct {
 		name      string

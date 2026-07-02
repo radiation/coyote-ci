@@ -1,16 +1,42 @@
 package build
 
-import "time"
+import (
+	"fmt"
+	"time"
+
+	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
+	platformslack "github.com/radiation/coyote-ci/backend/internal/platform/slack"
+)
 
 const defaultNotificationDeliveryMaxAttempts = 3
 const defaultNotificationDeliveryClaimDuration = 2 * time.Minute
 const defaultNotificationRetryInitialDelay = 30 * time.Second
 const defaultNotificationRetryMaxDelay = 10 * time.Minute
+const notificationClaimSafetyMargin = 30 * time.Second
 
 type notificationRetryPolicy struct {
 	maxAttempts  int
 	initialDelay time.Duration
 	maxDelay     time.Duration
+}
+
+func minimumNotificationClaimDuration() time.Duration {
+	maxProviderTimeout := platformemail.DefaultSMTPTimeout
+	if platformslack.DefaultAPITimeout > maxProviderTimeout {
+		maxProviderTimeout = platformslack.DefaultAPITimeout
+	}
+	if defaultSlackWebhookTimeout > maxProviderTimeout {
+		maxProviderTimeout = defaultSlackWebhookTimeout
+	}
+	return maxProviderTimeout + notificationClaimSafetyMargin
+}
+
+func validateNotificationClaimDuration(value time.Duration) error {
+	minimum := minimumNotificationClaimDuration()
+	if value < minimum {
+		return fmt.Errorf("notification claim duration %s is too short: must be at least %s to exceed provider timeouts by the %s safety margin", value, minimum, notificationClaimSafetyMargin)
+	}
+	return nil
 }
 
 func defaultNotificationRetryPolicy() notificationRetryPolicy {

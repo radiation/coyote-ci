@@ -15,6 +15,7 @@ import (
 const authTestEndpoint = "https://slack.com/api/auth.test"
 const usersLookupByEmailEndpoint = "https://slack.com/api/users.lookupByEmail?email=%s"
 const chatPostMessageEndpoint = "https://slack.com/api/chat.postMessage"
+const DefaultAPITimeout = 5 * time.Second
 
 var ErrInvalidAuth = errors.New("slack invalid auth")
 var ErrTokenRevoked = errors.New("slack token revoked")
@@ -89,7 +90,7 @@ type Client struct {
 
 func NewClient(httpClient HTTPDoer) *Client {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 5 * time.Second}
+		httpClient = &http.Client{Timeout: DefaultAPITimeout}
 	}
 	return &Client{httpClient: httpClient}
 }

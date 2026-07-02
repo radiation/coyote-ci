@@ -1910,6 +1910,19 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 	})
 }
 
+func TestNewBuildNotificationService_RejectsClaimDurationBelowProviderSafetyMargin(t *testing.T) {
+	_, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:       true,
+		ClaimDuration: minimumNotificationClaimDuration() - time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected claim duration validation error")
+	}
+	if !strings.Contains(err.Error(), "notification claim duration") {
+		t.Fatalf("expected claim duration error, got %v", err)
+	}
+}
+
 func TestBuildNotificationService_CommitAuthorPreferenceDelivery(t *testing.T) {
 	newNotifier := func(t *testing.T, authorEmail string, targetEnabled bool, preferenceEnabled bool) (*BuildNotificationService, *recordingEmailSender, *memoryrepo.NotificationSubscriptionRepository) {
 		t.Helper()

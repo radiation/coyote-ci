@@ -40,6 +40,7 @@ func TestNotificationDeliveryRepository_CreateGetUpdateAndErrors(t *testing.T) {
 
 	now := time.Now().UTC()
 	nextAttemptAt := now.Add(time.Minute)
+	retryable := domain.NotificationDeliveryFailureCategoryRetryable
 	updated, err := repo.Update(context.Background(), domain.NotificationDelivery{
 		ID:              created.ID,
 		BuildID:         created.BuildID,
@@ -53,6 +54,7 @@ func TestNotificationDeliveryRepository_CreateGetUpdateAndErrors(t *testing.T) {
 		MaxAttempts:     2,
 		LastAttemptAt:   &now,
 		NextAttemptAt:   &nextAttemptAt,
+		FailureCategory: &retryable,
 		UpdatedAt:       now,
 	})
 	if err != nil {

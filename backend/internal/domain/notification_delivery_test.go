@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestNotificationDeliveryValidateIdentity(t *testing.T) {
 	tests := []struct {
@@ -203,4 +206,105 @@ func TestNotificationDeliveryDestinationKeyBuilderErrors(t *testing.T) {
 	if _, _, err := NotificationSlackDMDestinationKey("workspace-1", "   "); err == nil {
 		t.Fatal("expected blank slack user id to fail")
 	}
+}
+
+func TestNotificationDeliveryValidateStateInvariants(t *testing.T) {
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	nextAttempt := now.Add(time.Minute)
+	claimExpires := now.Add(2 * time.Minute)
+	retryable := NotificationDeliveryFailureCategoryRetryable
+	permanent := NotificationDeliveryFailureCategoryPermanent
+	claimOwner := "worker-a"
+
+	base := NotificationDelivery{
+		BuildID:         "build-1",
+		EventType:       NotificationEventTypeBuildFailed,
+		Transport:       NotificationTransportEmail,
+		DestinationKind: NotificationDestinationKindSharedTarget,
+		DestinationKey:  "email-target:target-1",
+		Recipient:       "<dev@example.com>",
+		MaxAttempts:     3,
+	}
+
+	tests := []struct {
+		name     string
+		delivery NotificationDelivery
+		wantErr  bool
+	}{
+		{name: "sending valid", delivery: withNotificationDelivery(base, func(d *NotificationDelivery) {
+			d.Status = NotificationDeliveryStatusSending
+			d.Attempts = 1
+			d.LastAttemptAt = &now
+			d.ClaimedAt = &now
+			d.ClaimExpiresAt = &claimExpires
+			d.ClaimedBy = &claimOwner
+		})},
+		{name: "attempts cannot exceed max", wantErr: true, delivery: withNotificationDelivery(base, func(d *NotificationDelivery) {
+			d.Status = NotificationDeliveryStatusPending
+			d.Attempts = 4
+		})},
+		{name: "sending requires attempt", wantErr: true, delivery: withNotificationDelivery(base, func(d *NotificationDelivery) {
+			d.Status = NotificationDeliveryStatusSending
+			d.Attempts = 0
+			d.ClaimedAt = &now
+			d.ClaimExpiresAt = &claimExpires
+			d.ClaimedBy = &claimOwner
+		})},
+		{name: "retry waiting requires retryable category", wantErr: true, delivery: withNotificationDelivery(base, func(d *NotificationDelivery) {
+			d.Status = NotificationDeliveryStatusRetryWaiting
+			d.Attempts = 1
+			d.NextAttemptAt = &nextAttempt
+			d.FailureCategory = &permanent
+		})},
+		{name: "retry waiting requires attempts below max", wantErr: true, delivery: withNotificationDelivery(base, func(d *NotificationDelivery) {
+			d.Status = NotificationDeliveryStatusRetryWaiting
+			d.Attempts = 3
+			d.NextAttemptAt = &nextAttempt
+			d.FailureCategory = &retryable
+		})},
+		{name: "exhausted requires exact max attempts", wantErr: true, delivery: withNotificationDelivery(base, func(d *NotificationDelivery) {
+			d.Status = NotificationDeliveryStatusFailedExhausted
+			d.Attempts = 2
+			d.FailureCategory = &retryable
+		})},
+		{name: "exhausted requires retryable category", wantErr: true, delivery: withNotificationDelivery(base, func(d *NotificationDelivery) {
+			d.Status = NotificationDeliveryStatusFailedExhausted
+			d.Attempts = 3
+			d.FailureCategory = &permanent
+		})},
+		{name: "permanent requires permanent category", wantErr: true, delivery: withNotificationDelivery(base, func(d *NotificationDelivery) {
+			d.Status = NotificationDeliveryStatusFailedPermanent
+			d.Attempts = 1
+			d.FailureCategory = &retryable
+		})},
+		{name: "sent requires attempt", wantErr: true, delivery: withNotificationDelivery(base, func(d *NotificationDelivery) {
+			d.Status = NotificationDeliveryStatusSent
+			d.Attempts = 0
+			d.SentAt = &now
+		})},
+		{name: "terminal status cannot keep retry scheduling", wantErr: true, delivery: withNotificationDelivery(base, func(d *NotificationDelivery) {
+			d.Status = NotificationDeliveryStatusFailedPermanent
+			d.Attempts = 1
+			d.FailureCategory = &permanent
+			d.NextAttemptAt = &nextAttempt
+		})},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.delivery.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected valid delivery, got %v", err)
+			}
+		})
+	}
+}
+
+func withNotificationDelivery(base NotificationDelivery, mutate func(*NotificationDelivery)) NotificationDelivery {
+	delivery := base
+	mutate(&delivery)
+	return delivery
 }

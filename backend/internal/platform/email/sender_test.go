@@ -6,6 +6,7 @@ import (
 	"net/smtp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewSender_DisabledReturnsNoop(t *testing.T) {
@@ -81,7 +82,8 @@ func TestSMTPSender_SendText(t *testing.T) {
 		Host:        "mailpit",
 		Port:        "1025",
 		FromAddress: "Coyote CI <coyote-ci@localhost>",
-	}, func(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+	}, func(ctx context.Context, addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+		_ = ctx
 		_ = auth
 		got = sendCall{addr: addr, from: from, to: to, msg: string(msg)}
 		return nil
@@ -131,7 +133,8 @@ func TestSMTPSender_SendTextValidatesMessageAndContext(t *testing.T) {
 		Host:        "mailpit",
 		Port:        "1025",
 		FromAddress: "coyote-ci@localhost",
-	}, func(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+	}, func(ctx context.Context, addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+		_ = ctx
 		called = true
 		_ = addr
 		_ = auth
@@ -175,7 +178,8 @@ func TestSMTPSender_SendTextWrapsSendError(t *testing.T) {
 		Host:        "mailpit",
 		Port:        "1025",
 		FromAddress: "coyote-ci@localhost",
-	}, func(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+	}, func(ctx context.Context, addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+		_ = ctx
 		_ = addr
 		_ = auth
 		_ = from
@@ -190,5 +194,57 @@ func TestSMTPSender_SendTextWrapsSendError(t *testing.T) {
 	sendErr := sender.SendText(context.Background(), Message{To: "dev@example.com", Subject: "Build queued", Body: "test"})
 	if sendErr == nil || !strings.Contains(sendErr.Error(), "send email: boom") {
 		t.Fatalf("expected wrapped send error, got %v", sendErr)
+	}
+}
+
+func TestNewSender_UsesBoundedSMTPTimeout(t *testing.T) {
+	t.Parallel()
+
+	sender, err := NewSender(Config{
+		Enabled:     true,
+		Host:        "mailpit",
+		Port:        "1025",
+		FromAddress: "coyote-ci@localhost",
+	})
+	if err != nil {
+		t.Fatalf("expected sender, got %v", err)
+	}
+
+	smtpSender, ok := sender.(*smtpSender)
+	if !ok {
+		t.Fatalf("expected smtp sender, got %T", sender)
+	}
+
+	started := make(chan struct{}, 1)
+	finished := make(chan struct{}, 1)
+	smtpSender.sendMail = func(ctx context.Context, addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+		_ = addr
+		_ = auth
+		_ = from
+		_ = to
+		_ = msg
+		started <- struct{}{}
+		<-ctx.Done()
+		finished <- struct{}{}
+		return ctx.Err()
+	}
+
+	start := time.Now()
+	err = smtpSender.SendText(context.Background(), Message{To: "dev@example.com", Subject: "Build queued", Body: "test"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded, got %v", err)
+	}
+	if time.Since(start) > DefaultSMTPTimeout+time.Second {
+		t.Fatalf("expected send to stop near the smtp timeout, took %s", time.Since(start))
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatal("expected wrapped send function to be invoked")
+	}
+	select {
+	case <-finished:
+	default:
+		t.Fatal("expected wrapped send function context to be canceled by timeout")
 	}
 }

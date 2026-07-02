@@ -2,14 +2,19 @@ package email
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/mail"
 	"net/smtp"
 	"strings"
+	"time"
 )
 
 var ErrInvalidMessage = errors.New("email message is invalid")
+
+const DefaultSMTPTimeout = 10 * time.Second
 
 type Sender interface {
 	SendText(ctx context.Context, message Message) error
@@ -30,7 +35,7 @@ type Config struct {
 	FromAddress string
 }
 
-type sendMailFunc func(addr string, auth smtp.Auth, from string, to []string, msg []byte) error
+type sendMailFunc func(ctx context.Context, addr string, auth smtp.Auth, from string, to []string, msg []byte) error
 
 type noopSender struct{}
 
@@ -47,7 +52,7 @@ func NewSender(cfg Config) (Sender, error) {
 		return noopSender{}, nil
 	}
 
-	return newSMTPSender(cfg, smtp.SendMail)
+	return newSMTPSender(cfg, smtpSendMailWithTimeout(DefaultSMTPTimeout))
 }
 
 func newSMTPSender(cfg Config, sendMail sendMailFunc) (Sender, error) {
@@ -110,7 +115,9 @@ func (s *smtpSender) SendText(ctx context.Context, message Message) error {
 	}
 
 	rawMessage := buildPlainTextMessage(s.headerFrom, parsedTo.String(), subject, body)
-	if sendErr := s.sendMail(s.addr, s.auth, s.envelopeFrom, []string{parsedTo.Address}, rawMessage); sendErr != nil {
+	sendCtx, cancel := context.WithTimeout(ctx, DefaultSMTPTimeout)
+	defer cancel()
+	if sendErr := s.sendMail(sendCtx, s.addr, s.auth, s.envelopeFrom, []string{parsedTo.Address}, rawMessage); sendErr != nil {
 		return fmt.Errorf("send email: %w", sendErr)
 	}
 
@@ -162,4 +169,67 @@ func normalizeBody(body string) string {
 	body = strings.ReplaceAll(body, "\r\n", "\n")
 	body = strings.ReplaceAll(body, "\r", "\n")
 	return strings.ReplaceAll(body, "\n", "\r\n")
+}
+
+func smtpSendMailWithTimeout(timeout time.Duration) sendMailFunc {
+	return func(ctx context.Context, addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+		host, _, splitErr := net.SplitHostPort(addr)
+		if splitErr != nil {
+			return splitErr
+		}
+
+		dialer := &net.Dialer{Timeout: timeout}
+		conn, dialErr := dialer.DialContext(ctx, "tcp", addr)
+		if dialErr != nil {
+			return dialErr
+		}
+		defer func() {
+			_ = conn.Close()
+		}()
+		if setErr := conn.SetDeadline(time.Now().Add(timeout)); setErr != nil {
+			return setErr
+		}
+
+		client, clientErr := smtp.NewClient(conn, host)
+		if clientErr != nil {
+			return clientErr
+		}
+		defer func() {
+			_ = client.Close()
+		}()
+
+		if ok, _ := client.Extension("STARTTLS"); ok {
+			if startTLSErr := client.StartTLS(&tls.Config{ServerName: host}); startTLSErr != nil {
+				return startTLSErr
+			}
+		}
+		if auth != nil {
+			if ok, _ := client.Extension("AUTH"); !ok {
+				return errors.New("smtp server does not support AUTH")
+			}
+			if authErr := client.Auth(auth); authErr != nil {
+				return authErr
+			}
+		}
+		if mailErr := client.Mail(from); mailErr != nil {
+			return mailErr
+		}
+		for _, recipient := range to {
+			if rcptErr := client.Rcpt(recipient); rcptErr != nil {
+				return rcptErr
+			}
+		}
+		writer, dataErr := client.Data()
+		if dataErr != nil {
+			return dataErr
+		}
+		if _, writeErr := writer.Write(msg); writeErr != nil {
+			_ = writer.Close()
+			return writeErr
+		}
+		if closeErr := writer.Close(); closeErr != nil {
+			return closeErr
+		}
+		return client.Quit()
+	}
 }

@@ -392,12 +392,16 @@ func TestNotificationDeliveryRepository_AcquireRejectsTerminalAndBlockedStates_P
 		t.Run(tc.name, func(t *testing.T) {
 			deliveryID := uuid.NewString()
 			destinationKey := "email-target:" + uuid.NewString()
+			sentAt := nullableTimeValue(nil)
+			if tc.status == "sent" {
+				sentAt = createdAt
+			}
 			_, insertErr := db.ExecContext(ctx, `
 				INSERT INTO notification_deliveries (
 					id, build_id, event_type, transport, destination_kind, destination_key, recipient, status,
 					attempts, max_attempts, last_attempt_at, next_attempt_at, claimed_at, claim_expires_at, claimed_by, created_at, updated_at, sent_at
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16, CASE WHEN $8 = 'sent' THEN $16 ELSE NULL END)
-			`, deliveryID, buildID, string(domain.NotificationEventTypeBuildFailed), string(domain.NotificationTransportEmail), string(domain.NotificationDestinationKindSharedTarget), destinationKey, tc.name+"@example.com", tc.status, tc.attempts, tc.maxAttempts, createdAt, nullableTimeValue(tc.nextAttemptAt), nullableTimeValue(tc.claimedAt), nullableTimeValue(tc.claimExpires), nullableStringValue(tc.claimedBy), createdAt)
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16, $17)
+			`, deliveryID, buildID, string(domain.NotificationEventTypeBuildFailed), string(domain.NotificationTransportEmail), string(domain.NotificationDestinationKindSharedTarget), destinationKey, tc.name+"@example.com", tc.status, tc.attempts, tc.maxAttempts, createdAt, nullableTimeValue(tc.nextAttemptAt), nullableTimeValue(tc.claimedAt), nullableTimeValue(tc.claimExpires), nullableStringValue(tc.claimedBy), createdAt, sentAt)
 			if insertErr != nil {
 				t.Fatalf("insert state row failed: %v", insertErr)
 			}
@@ -760,6 +764,239 @@ func TestMigration00032_DownFailsIntentionally_Postgres(t *testing.T) {
 	for _, want := range []string{
 		"intentionally irreversible",
 		"legacy notification_targets UNIQUE (type, recipient) model cannot represent valid post-migration data",
+		"manual data migration",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected rollback error to contain %q, got %v", want, err)
+		}
+	}
+}
+
+func TestMigration00033_BackfillsClaimableLedgerState_Postgres(t *testing.T) {
+	db := openNotificationIntegrationDB(t)
+	defer closeNotificationIntegrationDB(t, db)
+
+	ctx := context.Background()
+	schema := createNotificationIntegrationSchema(t, db, ctx)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open dedicated connection: %v", err)
+	}
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Fatalf("close dedicated connection: %v", closeErr)
+		}
+	}()
+
+	setSearchPath(t, ctx, conn, schema)
+	applyNotificationMigrationSeries(t, ctx, conn, "00032")
+
+	now := time.Now().UTC()
+	projectID := uuid.NewString()
+	jobID := uuid.NewString()
+	buildSent := uuid.NewString()
+	buildFailed := uuid.NewString()
+	buildPending := uuid.NewString()
+
+	mustExecNotificationIntegration(t, ctx, conn, `
+		INSERT INTO projects (id, name, slug, description, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, $4, $4)
+	`, projectID, "Project "+projectID, "project-"+uuid.NewString(), now)
+	mustExecNotificationIntegration(t, ctx, conn, `
+		INSERT INTO jobs (id, project_id, name, priority, repository_url, push_enabled, trigger_mode, branch_allowlist, tag_allowlist, enabled, created_at, updated_at)
+		VALUES ($1, $2, $3, 5, 'https://example.invalid/repo.git', FALSE, 'branches', '[]'::jsonb, '[]'::jsonb, TRUE, $4, $4)
+	`, jobID, projectID, "job-"+jobID, now)
+	for index, buildID := range []string{buildSent, buildFailed, buildPending} {
+		mustExecNotificationIntegration(t, ctx, conn, `
+			INSERT INTO builds (id, build_number, project_id, job_id, priority, status, created_at, current_step_index, attempt_number, trigger_kind, image_source_kind)
+			VALUES ($1, $2, $3, $4, 5, 'pending', $5, 0, 1, 'manual', 'external')
+		`, buildID, index+1, projectID, jobID, now)
+	}
+
+	mustExecNotificationIntegration(t, ctx, conn, `
+		INSERT INTO notification_deliveries (
+			id, build_id, event_type, transport, destination_kind, destination_key, recipient, status, attempts, created_at, updated_at, sent_at
+		) VALUES
+			('delivery-sent', $1, 'build_succeeded', 'email', 'shared_target', 'email-target:sent', '<sent@example.com>', 'sent', 1, $4, $4, $4),
+			('delivery-failed', $2, 'build_failed', 'email', 'shared_target', 'email-target:failed', '<failed@example.com>', 'failed', 2, $4, $4, NULL),
+			('delivery-pending', $3, 'build_failed', 'slack_webhook', 'shared_target', 'slack-webhook-target:pending', 'https://hooks.slack.example/services/T/B/X', 'pending', 0, $4, $4, NULL)
+	`, buildSent, buildFailed, buildPending, now)
+
+	applyNotificationMigrationFile(t, ctx, conn, "00033_add_claimable_notification_delivery_ledger.sql")
+
+	assertRow := func(id string, wantStatus string, wantAttempts int, wantMaxAttempts int, wantCategory string, wantReason string, wantSent bool) {
+		t.Helper()
+		var status string
+		var attempts int
+		var maxAttempts int
+		var failureCategory sql.NullString
+		var failureReason sql.NullString
+		var nextAttemptAt sql.NullTime
+		var claimedAt sql.NullTime
+		var claimExpiresAt sql.NullTime
+		var claimedBy sql.NullString
+		var sentAt sql.NullTime
+		rowErr := conn.QueryRowContext(ctx, `
+			SELECT status, attempts, max_attempts, failure_category, failure_reason, next_attempt_at, claimed_at, claim_expires_at, claimed_by, sent_at
+			FROM notification_deliveries
+			WHERE id = $1
+		`, id).Scan(&status, &attempts, &maxAttempts, &failureCategory, &failureReason, &nextAttemptAt, &claimedAt, &claimExpiresAt, &claimedBy, &sentAt)
+		if rowErr != nil {
+			t.Fatalf("lookup migrated row %s failed: %v", id, rowErr)
+		}
+		if status != wantStatus || attempts != wantAttempts || maxAttempts != wantMaxAttempts {
+			t.Fatalf("unexpected migrated row %s: status=%q attempts=%d max_attempts=%d", id, status, attempts, maxAttempts)
+		}
+		if wantCategory == "" {
+			if failureCategory.Valid {
+				t.Fatalf("expected no failure category for %s, got %q", id, failureCategory.String)
+			}
+		} else if !failureCategory.Valid || failureCategory.String != wantCategory {
+			t.Fatalf("unexpected failure category for %s: got %q want %q", id, failureCategory.String, wantCategory)
+		}
+		if wantReason == "" {
+			if failureReason.Valid {
+				t.Fatalf("expected no failure reason for %s, got %q", id, failureReason.String)
+			}
+		} else if !failureReason.Valid || failureReason.String != wantReason {
+			t.Fatalf("unexpected failure reason for %s: got %q want %q", id, failureReason.String, wantReason)
+		}
+		if nextAttemptAt.Valid || claimedAt.Valid || claimExpiresAt.Valid || claimedBy.Valid {
+			t.Fatalf("expected migrated row %s to clear retry scheduling and claim metadata", id)
+		}
+		if wantSent != sentAt.Valid {
+			t.Fatalf("unexpected sent_at presence for %s: wantSent=%t gotValid=%t", id, wantSent, sentAt.Valid)
+		}
+	}
+
+	assertRow("delivery-sent", string(domain.NotificationDeliveryStatusSent), 1, 1, "", "", true)
+	assertRow("delivery-failed", string(domain.NotificationDeliveryStatusFailedPermanent), 2, 2, string(domain.NotificationDeliveryFailureCategoryPermanent), "legacy_failed_no_retry", false)
+	assertRow("delivery-pending", string(domain.NotificationDeliveryStatusFailedExhausted), 1, 1, string(domain.NotificationDeliveryFailureCategoryRetryable), "legacy_pending_no_automatic_retry", false)
+}
+
+func TestNotificationDeliveryLedgerConstraintsRejectInvalidStates_Postgres(t *testing.T) {
+	db := openNotificationIntegrationDB(t)
+	defer closeNotificationIntegrationDB(t, db)
+
+	ctx := context.Background()
+	schema := createNotificationIntegrationSchema(t, db, ctx)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open dedicated connection: %v", err)
+	}
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Fatalf("close dedicated connection: %v", closeErr)
+		}
+	}()
+
+	setSearchPath(t, ctx, conn, schema)
+	applyNotificationMigrationSeries(t, ctx, conn, "00033")
+
+	now := time.Now().UTC()
+	projectID := uuid.NewString()
+	jobID := uuid.NewString()
+	buildID := uuid.NewString()
+
+	mustExecNotificationIntegration(t, ctx, conn, `
+		INSERT INTO projects (id, name, slug, description, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, $4, $4)
+	`, projectID, "Project "+projectID, "project-"+uuid.NewString(), now)
+	mustExecNotificationIntegration(t, ctx, conn, `
+		INSERT INTO jobs (id, project_id, name, priority, repository_url, push_enabled, trigger_mode, branch_allowlist, tag_allowlist, enabled, created_at, updated_at)
+		VALUES ($1, $2, $3, 5, 'https://example.invalid/repo.git', FALSE, 'branches', '[]'::jsonb, '[]'::jsonb, TRUE, $4, $4)
+	`, jobID, projectID, "job-"+jobID, now)
+	mustExecNotificationIntegration(t, ctx, conn, `
+		INSERT INTO builds (id, build_number, project_id, job_id, priority, status, created_at, current_step_index, attempt_number, trigger_kind, image_source_kind)
+		VALUES ($1, 1, $2, $3, 5, 'pending', $4, 0, 1, 'manual', 'external')
+	`, buildID, projectID, jobID, now)
+
+	assertConstraint := func(name string, expected string, query string, args ...any) {
+		t.Helper()
+		_, execErr := conn.ExecContext(ctx, query, args...)
+		if execErr == nil {
+			t.Fatalf("expected %s insert to fail", name)
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(execErr, &pgErr) {
+			t.Fatalf("expected pg error for %s, got %T: %v", name, execErr, execErr)
+		}
+		if pgErr.ConstraintName != expected {
+			t.Fatalf("expected constraint %q for %s, got %q", expected, name, pgErr.ConstraintName)
+		}
+	}
+
+	assertConstraint("attempts above max", "notification_deliveries_attempts_check", `
+		INSERT INTO notification_deliveries (
+			id, build_id, event_type, transport, destination_kind, destination_key, recipient, status,
+			attempts, max_attempts, created_at, updated_at
+		) VALUES ($1, $2, 'build_failed', 'email', 'shared_target', 'email-target:a', '<a@example.com>', 'pending', 2, 1, $3, $3)
+	`, uuid.NewString(), buildID, now)
+
+	assertConstraint("retry waiting permanent category", "notification_deliveries_claim_retry_state_check", `
+		INSERT INTO notification_deliveries (
+			id, build_id, event_type, transport, destination_kind, destination_key, recipient, status,
+			attempts, max_attempts, next_attempt_at, failure_category, created_at, updated_at
+		) VALUES ($1, $2, 'build_failed', 'email', 'shared_target', 'email-target:b', '<b@example.com>', 'retry_waiting', 1, 3, $3, 'permanent', $4, $4)
+	`, uuid.NewString(), buildID, now.Add(time.Minute), now)
+
+	assertConstraint("retry waiting active claim", "notification_deliveries_claim_retry_state_check", `
+		INSERT INTO notification_deliveries (
+			id, build_id, event_type, transport, destination_kind, destination_key, recipient, status,
+			attempts, max_attempts, next_attempt_at, claimed_at, claim_expires_at, claimed_by, failure_category, created_at, updated_at
+		) VALUES ($1, $2, 'build_failed', 'email', 'shared_target', 'email-target:c', '<c@example.com>', 'retry_waiting', 1, 3, $3, $4, $5, 'worker-a', 'retryable', $6, $6)
+	`, uuid.NewString(), buildID, now.Add(time.Minute), now, now.Add(2*time.Minute), now)
+
+	assertConstraint("failed exhausted below max", "notification_deliveries_claim_retry_state_check", `
+		INSERT INTO notification_deliveries (
+			id, build_id, event_type, transport, destination_kind, destination_key, recipient, status,
+			attempts, max_attempts, failure_category, created_at, updated_at
+		) VALUES ($1, $2, 'build_failed', 'email', 'shared_target', 'email-target:d', '<d@example.com>', 'failed_exhausted', 1, 3, 'retryable', $3, $3)
+	`, uuid.NewString(), buildID, now)
+
+	assertConstraint("failed permanent retryable category", "notification_deliveries_claim_retry_state_check", `
+		INSERT INTO notification_deliveries (
+			id, build_id, event_type, transport, destination_kind, destination_key, recipient, status,
+			attempts, max_attempts, failure_category, created_at, updated_at
+		) VALUES ($1, $2, 'build_failed', 'email', 'shared_target', 'email-target:e', '<e@example.com>', 'failed_permanent', 1, 3, 'retryable', $3, $3)
+	`, uuid.NewString(), buildID, now)
+
+	assertConstraint("sent retains retry schedule", "notification_deliveries_claim_retry_state_check", `
+		INSERT INTO notification_deliveries (
+			id, build_id, event_type, transport, destination_kind, destination_key, recipient, status,
+			attempts, max_attempts, next_attempt_at, sent_at, created_at, updated_at
+		) VALUES ($1, $2, 'build_failed', 'email', 'shared_target', 'email-target:f', '<f@example.com>', 'sent', 1, 3, $3, $4, $4, $4)
+	`, uuid.NewString(), buildID, now.Add(time.Minute), now)
+}
+
+func TestMigration00033_DownFailsIntentionally_Postgres(t *testing.T) {
+	db := openNotificationIntegrationDB(t)
+	defer closeNotificationIntegrationDB(t, db)
+
+	ctx := context.Background()
+	schema := createNotificationIntegrationSchema(t, db, ctx)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open dedicated connection: %v", err)
+	}
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Fatalf("close dedicated connection: %v", closeErr)
+		}
+	}()
+
+	setSearchPath(t, ctx, conn, schema)
+	applyNotificationMigrationSeries(t, ctx, conn, "00033")
+
+	err = applyNotificationMigrationDownExpectError(ctx, conn, "00033_add_claimable_notification_delivery_ledger.sql")
+	if err == nil {
+		t.Fatal("expected migration 00033 down to fail intentionally")
+	}
+	message := err.Error()
+	for _, want := range []string{
+		"intentionally irreversible",
+		"claimable notification delivery ledger",
+		"cannot be safely collapsed back into the legacy three-status model automatically",
 		"manual data migration",
 	} {
 		if !strings.Contains(message, want) {

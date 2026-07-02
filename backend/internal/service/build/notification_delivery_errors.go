@@ -14,12 +14,11 @@ type notificationFailureDecision struct {
 	category  domain.NotificationDeliveryFailureCategory
 	reason    string
 	retryable bool
-	canceled  bool
 }
 
 func classifyNotificationSendError(transport domain.NotificationTransport, err error) notificationFailureDecision {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return notificationFailureDecision{category: domain.NotificationDeliveryFailureCategoryCanceled, reason: "context_canceled", canceled: true}
+		return notificationFailureDecision{reason: "context_canceled"}
 	}
 
 	var netErr net.Error

@@ -113,6 +113,10 @@ func NewBuildNotificationService(cfg BuildNotificationConfig) (*BuildNotificatio
 			return nil, err
 		}
 	}
+	claimDuration := notificationClaimDuration(cfg.ClaimDuration)
+	if err := validateNotificationClaimDuration(claimDuration); err != nil {
+		return nil, err
+	}
 
 	return &BuildNotificationService{
 		enabled:           cfg.Enabled,
@@ -130,7 +134,7 @@ func NewBuildNotificationService(cfg BuildNotificationConfig) (*BuildNotificatio
 		workspaceRepo:     cfg.WorkspaceRepo,
 		publicBaseURL:     strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/"),
 		claimOwner:        notificationClaimOwner(cfg.ClaimOwner),
-		claimDuration:     notificationClaimDuration(cfg.ClaimDuration),
+		claimDuration:     claimDuration,
 		now:               func() time.Time { return time.Now().UTC() },
 		retryPolicy:       defaultNotificationRetryPolicy(),
 	}, nil
@@ -250,6 +254,8 @@ func (s *BuildNotificationService) sendTerminalNotification(ctx context.Context,
 		if sendErr != nil {
 			if s.deliveryRepo != nil {
 				if errors.Is(sendErr, context.Canceled) || errors.Is(sendErr, context.DeadlineExceeded) {
+					// Cancellation is ambiguous: the provider may have accepted the message,
+					// so the claim stays active until it expires and stale-claim recovery can decide later.
 					log.Printf("build notification claim left active for stale recovery: delivery_id=%s build_id=%s event_type=%s transport=%s destination_kind=%s claim_owner=%s attempt=%d reason=context_canceled", delivery.ID, buildID, eventType, destination.transport, destination.destinationKind, s.claimOwner, delivery.Attempts)
 					sendErrs = append(sendErrs, sendErr)
 					continue

@@ -10,6 +10,12 @@ ALTER TABLE notification_deliveries
     ADD COLUMN IF NOT EXISTS failure_category TEXT,
     ADD COLUMN IF NOT EXISTS failure_reason TEXT;
 
+ALTER TABLE notification_deliveries
+    DROP CONSTRAINT IF EXISTS notification_deliveries_status_check;
+
+ALTER TABLE notification_deliveries
+    DROP CONSTRAINT IF EXISTS notification_deliveries_attempts_check;
+
 UPDATE notification_deliveries
 SET attempts = CASE
         WHEN status IN ('sent', 'failed', 'pending') THEN GREATEST(attempts, 1)
@@ -33,7 +39,7 @@ SET attempts = CASE
     claimed_by = NULL,
     failure_category = CASE
         WHEN status = 'failed' THEN 'permanent'
-        WHEN status = 'pending' THEN 'canceled'
+        WHEN status = 'pending' THEN 'retryable'
         ELSE NULL
     END,
     failure_reason = CASE
@@ -52,30 +58,34 @@ ALTER TABLE notification_deliveries
     ALTER COLUMN max_attempts SET NOT NULL,
     ALTER COLUMN max_attempts SET DEFAULT 1;
 
-ALTER TABLE notification_deliveries
-    DROP CONSTRAINT IF EXISTS notification_deliveries_status_check;
+CREATE INDEX IF NOT EXISTS idx_notification_deliveries_retry_waiting_next_attempt_at
+    ON notification_deliveries (next_attempt_at)
+    WHERE status = 'retry_waiting';
 
-ALTER TABLE notification_deliveries
-    DROP CONSTRAINT IF EXISTS notification_deliveries_attempts_check;
+CREATE INDEX IF NOT EXISTS idx_notification_deliveries_sending_claim_expires_at
+    ON notification_deliveries (claim_expires_at)
+    WHERE status = 'sending';
 
 ALTER TABLE notification_deliveries
     ADD CONSTRAINT notification_deliveries_status_check
         CHECK (status IN ('pending', 'sending', 'retry_waiting', 'sent', 'failed_permanent', 'failed_exhausted')),
     ADD CONSTRAINT notification_deliveries_attempts_check
-        CHECK (attempts >= 0),
+        CHECK (attempts >= 0 AND attempts <= max_attempts),
     ADD CONSTRAINT notification_deliveries_max_attempts_check
         CHECK (max_attempts > 0),
     ADD CONSTRAINT notification_deliveries_failure_category_check
-        CHECK (failure_category IS NULL OR failure_category IN ('retryable', 'permanent', 'canceled')),
+        CHECK (failure_category IS NULL OR failure_category IN ('retryable', 'permanent')),
     ADD CONSTRAINT notification_deliveries_claim_retry_state_check
         CHECK (
             (status = 'pending'
+                AND attempts >= 0
                 AND claimed_at IS NULL
                 AND claim_expires_at IS NULL
                 AND claimed_by IS NULL
                 AND next_attempt_at IS NULL
                 AND sent_at IS NULL)
             OR (status = 'sending'
+                AND attempts >= 1
                 AND claimed_at IS NOT NULL
                 AND claim_expires_at IS NOT NULL
                 AND claimed_by IS NOT NULL
@@ -83,18 +93,23 @@ ALTER TABLE notification_deliveries
                 AND next_attempt_at IS NULL
                 AND sent_at IS NULL)
             OR (status = 'retry_waiting'
+                AND attempts < max_attempts
                 AND claimed_at IS NULL
                 AND claim_expires_at IS NULL
                 AND claimed_by IS NULL
                 AND next_attempt_at IS NOT NULL
+                AND failure_category = 'retryable'
                 AND sent_at IS NULL)
             OR (status = 'sent'
+                AND attempts >= 1
                 AND claimed_at IS NULL
                 AND claim_expires_at IS NULL
                 AND claimed_by IS NULL
                 AND next_attempt_at IS NULL
                 AND sent_at IS NOT NULL)
             OR (status = 'failed_permanent'
+                AND attempts >= 1
+                AND failure_category = 'permanent'
                 AND claimed_at IS NULL
                 AND claim_expires_at IS NULL
                 AND claimed_by IS NULL
@@ -104,43 +119,14 @@ ALTER TABLE notification_deliveries
                 AND claimed_at IS NULL
                 AND claim_expires_at IS NULL
                 AND claimed_by IS NULL
-                AND next_attempt_at IS NULL
-                AND sent_at IS NULL
-                AND attempts >= max_attempts)
+                AND failure_category = 'retryable'
+                AND attempts = max_attempts)
         );
 
-CREATE INDEX IF NOT EXISTS idx_notification_deliveries_retry_waiting_next_attempt_at
-    ON notification_deliveries (next_attempt_at)
-    WHERE status = 'retry_waiting';
-
-CREATE INDEX IF NOT EXISTS idx_notification_deliveries_sending_claim_expires_at
-    ON notification_deliveries (claim_expires_at)
-    WHERE status = 'sending';
-
 -- +goose Down
-
-DROP INDEX IF EXISTS idx_notification_deliveries_sending_claim_expires_at;
-DROP INDEX IF EXISTS idx_notification_deliveries_retry_waiting_next_attempt_at;
-
-ALTER TABLE notification_deliveries
-    DROP CONSTRAINT IF EXISTS notification_deliveries_claim_retry_state_check,
-    DROP CONSTRAINT IF EXISTS notification_deliveries_failure_category_check,
-    DROP CONSTRAINT IF EXISTS notification_deliveries_max_attempts_check,
-    DROP CONSTRAINT IF EXISTS notification_deliveries_attempts_check,
-    DROP CONSTRAINT IF EXISTS notification_deliveries_status_check;
-
-ALTER TABLE notification_deliveries
-    ADD CONSTRAINT notification_deliveries_status_check
-        CHECK (status IN ('pending', 'sent', 'failed')),
-    ADD CONSTRAINT notification_deliveries_attempts_check
-        CHECK (attempts >= 0);
-
-ALTER TABLE notification_deliveries
-    DROP COLUMN IF EXISTS failure_reason,
-    DROP COLUMN IF EXISTS failure_category,
-    DROP COLUMN IF EXISTS claimed_by,
-    DROP COLUMN IF EXISTS claim_expires_at,
-    DROP COLUMN IF EXISTS claimed_at,
-    DROP COLUMN IF EXISTS next_attempt_at,
-    DROP COLUMN IF EXISTS last_attempt_at,
-    DROP COLUMN IF EXISTS max_attempts;
+-- +goose StatementBegin
+DO $$
+BEGIN
+    RAISE EXCEPTION 'migration 00033 is intentionally irreversible: the claimable notification delivery ledger introduces richer sending, retry_waiting, failed_permanent, and failed_exhausted states that cannot be safely collapsed back into the legacy three-status model automatically, and rollback requires an intentional manual data migration';
+END $$;
+-- +goose StatementEnd
