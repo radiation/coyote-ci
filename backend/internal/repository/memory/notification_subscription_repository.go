@@ -136,6 +136,56 @@ func (r *NotificationSubscriptionRepository) GetOwnedEmailTargetByUserID(_ conte
 	return domain.NotificationTarget{}, repository.ErrNotificationTargetNotFound
 }
 
+func (r *NotificationSubscriptionRepository) EnsureSharedTarget(_ context.Context, input repository.EnsureSharedNotificationTargetInput) (domain.NotificationTarget, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	targetType := domain.NotificationTargetType(strings.TrimSpace(string(input.Type)))
+	if targetType == "" {
+		targetType = domain.NotificationTargetTypeEmail
+	}
+	if targetType != domain.NotificationTargetTypeEmail && targetType != domain.NotificationTargetTypeSlackWebhook {
+		return domain.NotificationTarget{}, fmt.Errorf("unsupported notification target type %q", targetType)
+	}
+	trimmedRecipient, err := normalizeNotificationTargetRecipient(targetType, input.Recipient)
+	if err != nil {
+		return domain.NotificationTarget{}, err
+	}
+	if existing, exists := r.findTargetByTypeAndRecipientLocked(targetType, trimmedRecipient); exists {
+		return existing, nil
+	}
+
+	now := time.Now().UTC()
+	createdAt := input.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	updatedAt := input.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = createdAt
+	}
+	id := strings.TrimSpace(input.ID)
+	if id == "" {
+		id = uuid.NewString()
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = trimmedRecipient
+	}
+
+	created := domain.NotificationTarget{
+		ID:        id,
+		Type:      targetType,
+		Name:      name,
+		Recipient: trimmedRecipient,
+		Enabled:   true,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}
+	r.targets[created.ID] = created
+	return created, nil
+}
+
 func (r *NotificationSubscriptionRepository) SetOwnedEmailTargetEnabled(_ context.Context, ownerUserID string, enabled bool, updatedAt time.Time) (domain.NotificationTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

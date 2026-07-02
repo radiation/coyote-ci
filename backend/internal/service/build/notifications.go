@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log"
@@ -54,21 +55,18 @@ type BuildNotificationConfig struct {
 	PublicBaseURL    string
 }
 
-type notificationTransport string
-
-const (
-	notificationTransportEmail        notificationTransport = "email"
-	notificationTransportSlackWebhook notificationTransport = "slack_webhook"
-	notificationTransportSlackDM      notificationTransport = "slack_dm"
-)
-
 type notificationDestination struct {
-	transport         notificationTransport
-	deliveryRecipient string
-	emailRecipient    string
-	webhookURL        string
-	slackUserID       string
-	slackBotToken     string
+	transport                   domain.NotificationTransport
+	destinationKind             domain.NotificationDestinationKind
+	destinationKey              string
+	notificationTargetID        *string
+	recipientUserID             *string
+	slackWorkspaceIntegrationID *string
+	recipient                   string
+	emailRecipient              string
+	webhookURL                  string
+	slackUserID                 string
+	slackBotToken               string
 }
 
 type slackDirectMessageClient interface {
@@ -229,7 +227,7 @@ func (s *BuildNotificationService) sendTerminalNotification(ctx context.Context,
 		shouldSend := true
 		var err error
 		if s.deliveryRepo != nil {
-			delivery, shouldSend, err = s.prepareDelivery(ctx, buildID, eventType, destination.deliveryRecipient)
+			delivery, shouldSend, err = s.prepareDelivery(ctx, buildID, eventType, destination)
 			if err != nil {
 				return err
 			}
@@ -252,15 +250,21 @@ func (s *BuildNotificationService) sendTerminalNotification(ctx context.Context,
 		}
 		if s.deliveryRepo != nil {
 			if _, updateErr := s.deliveryRepo.Update(ctx, domain.NotificationDelivery{
-				ID:        delivery.ID,
-				BuildID:   delivery.BuildID,
-				EventType: delivery.EventType,
-				Recipient: delivery.Recipient,
-				Status:    domain.NotificationDeliveryStatusSent,
-				Attempts:  delivery.Attempts + 1,
-				CreatedAt: delivery.CreatedAt,
-				UpdatedAt: attemptedAt,
-				SentAt:    &attemptedAt,
+				ID:                          delivery.ID,
+				BuildID:                     delivery.BuildID,
+				EventType:                   delivery.EventType,
+				Transport:                   delivery.Transport,
+				DestinationKind:             delivery.DestinationKind,
+				DestinationKey:              delivery.DestinationKey,
+				NotificationTargetID:        delivery.NotificationTargetID,
+				RecipientUserID:             delivery.RecipientUserID,
+				SlackWorkspaceIntegrationID: delivery.SlackWorkspaceIntegrationID,
+				Recipient:                   delivery.Recipient,
+				Status:                      domain.NotificationDeliveryStatusSent,
+				Attempts:                    delivery.Attempts + 1,
+				CreatedAt:                   delivery.CreatedAt,
+				UpdatedAt:                   attemptedAt,
+				SentAt:                      &attemptedAt,
 			}); updateErr != nil {
 				persistErr := fmt.Errorf("persist sent delivery state failed: %w", updateErr)
 				if markErr := s.markDeliveryFailed(ctx, delivery, persistErr, attemptedAt); markErr != nil {
@@ -279,11 +283,11 @@ func (s *BuildNotificationService) resolveTerminalDestinations(ctx context.Conte
 	var destinations []notificationDestination
 	if s.subscriptionRepo == nil {
 		for _, recipient := range s.defaultRecipients {
-			destinations = append(destinations, notificationDestination{
-				transport:         notificationTransportEmail,
-				deliveryRecipient: recipient,
-				emailRecipient:    recipient,
-			})
+			destination, err := s.resolveConfiguredEmailDestination(ctx, recipient)
+			if err != nil {
+				return nil, err
+			}
+			destinations = append(destinations, destination)
 		}
 	} else {
 		matches, err := s.subscriptionRepo.ListEnabledMatchesForBuildEvent(ctx, build, eventType)
@@ -292,33 +296,24 @@ func (s *BuildNotificationService) resolveTerminalDestinations(ctx context.Conte
 		}
 		if len(matches) == 0 {
 			for _, recipient := range s.defaultRecipients {
-				destinations = append(destinations, notificationDestination{
-					transport:         notificationTransportEmail,
-					deliveryRecipient: recipient,
-					emailRecipient:    recipient,
-				})
+				destination, destinationErr := s.resolveConfiguredEmailDestination(ctx, recipient)
+				if destinationErr != nil {
+					return nil, destinationErr
+				}
+				destinations = append(destinations, destination)
 			}
 		} else {
 			destinations = make([]notificationDestination, 0, len(matches))
 			for _, match := range matches {
 				target := match.Target
-				recipient := strings.TrimSpace(target.Recipient)
-				if recipient == "" {
+				destination, destinationErr := notificationTargetDestination(target)
+				if destinationErr != nil {
+					return nil, destinationErr
+				}
+				if destination.recipient == "" && destination.emailRecipient == "" && destination.webhookURL == "" {
 					continue
 				}
-				if target.Type == domain.NotificationTargetTypeSlackWebhook {
-					destinations = append(destinations, notificationDestination{
-						transport:         notificationTransportSlackWebhook,
-						deliveryRecipient: notificationTargetDeliveryRecipient(target),
-						webhookURL:        recipient,
-					})
-					continue
-				}
-				destinations = append(destinations, notificationDestination{
-					transport:         notificationTransportEmail,
-					deliveryRecipient: recipient,
-					emailRecipient:    recipient,
-				})
+				destinations = append(destinations, destination)
 			}
 		}
 	}
@@ -421,12 +416,11 @@ func (s *BuildNotificationService) resolveCommitAuthorEmailDestination(ctx conte
 	if recipient == "" {
 		return notificationDestination{}, false, nil
 	}
-
-	return notificationDestination{
-		transport:         notificationTransportEmail,
-		deliveryRecipient: recipient,
-		emailRecipient:    recipient,
-	}, true, nil
+	destination, err := personalEmailTargetDestination(target)
+	if err != nil {
+		return notificationDestination{}, false, err
+	}
+	return destination, true, nil
 }
 
 func (s *BuildNotificationService) resolveCommitAuthorSlackDestination(ctx context.Context, user domain.User) (notificationDestination, bool, error) {
@@ -457,22 +451,21 @@ func (s *BuildNotificationService) resolveCommitAuthorSlackDestination(ctx conte
 		return notificationDestination{}, false, nil
 	}
 
-	return notificationDestination{
-		transport:         notificationTransportSlackDM,
-		deliveryRecipient: fmt.Sprintf("slack_dm:%s:%s", integration.ID, strings.TrimSpace(identity.SlackUserID)),
-		slackUserID:       strings.TrimSpace(identity.SlackUserID),
-		slackBotToken:     strings.TrimSpace(integration.BotTokenSecret),
-	}, true, nil
+	destination, destinationErr := slackDMDestination(user.ID, integration.ID, identity.SlackUserID, integration.BotTokenSecret)
+	if destinationErr != nil {
+		return notificationDestination{}, false, destinationErr
+	}
+	return destination, true, nil
 }
 
 func (s *BuildNotificationService) sendDestination(ctx context.Context, destination notificationDestination, subject string, body string, slackText string, personalSlackText string) error {
-	if destination.transport == notificationTransportSlackWebhook {
+	if destination.transport == domain.NotificationTransportSlackWebhook {
 		if s.slackSender == nil {
 			return errors.New("slack sender is not configured")
 		}
 		return s.slackSender.Send(ctx, destination.webhookURL, SlackWebhookMessage{Text: slackText})
 	}
-	if destination.transport == notificationTransportSlackDM {
+	if destination.transport == domain.NotificationTransportSlackDM {
 		if s.slackClient == nil {
 			return errors.New("slack client is not configured")
 		}
@@ -489,44 +482,51 @@ func (s *BuildNotificationService) sendDestination(ctx context.Context, destinat
 	})
 }
 
-func (s *BuildNotificationService) prepareDelivery(ctx context.Context, buildID string, eventType domain.NotificationEventType, recipient string) (domain.NotificationDelivery, bool, error) {
-	delivery, err := s.deliveryRepo.Create(ctx, domain.NotificationDelivery{
-		BuildID:   buildID,
-		EventType: eventType,
-		Recipient: recipient,
-		Status:    domain.NotificationDeliveryStatusPending,
+func (s *BuildNotificationService) prepareDelivery(ctx context.Context, buildID string, eventType domain.NotificationEventType, destination notificationDestination) (domain.NotificationDelivery, bool, error) {
+	result, err := s.deliveryRepo.Acquire(ctx, domain.NotificationDelivery{
+		BuildID:                     buildID,
+		EventType:                   eventType,
+		Transport:                   destination.transport,
+		DestinationKind:             destination.destinationKind,
+		DestinationKey:              destination.destinationKey,
+		NotificationTargetID:        destination.notificationTargetID,
+		RecipientUserID:             destination.recipientUserID,
+		SlackWorkspaceIntegrationID: destination.slackWorkspaceIntegrationID,
+		Recipient:                   destination.recipient,
+		Status:                      domain.NotificationDeliveryStatusPending,
 	})
-	if err == nil {
-		return delivery, true, nil
-	}
-	if !errors.Is(err, repository.ErrNotificationDeliveryDuplicate) {
+	if err != nil {
 		return domain.NotificationDelivery{}, false, err
 	}
-
-	existing, getErr := s.deliveryRepo.GetByBuildEventRecipient(ctx, buildID, eventType, recipient)
-	if getErr != nil {
-		return domain.NotificationDelivery{}, false, getErr
+	if result.Outcome == repository.NotificationDeliveryAcquireOutcomeCreated {
+		return result.Delivery, true, nil
 	}
-	if existing.Status == domain.NotificationDeliveryStatusSent {
-		log.Printf("build notification skipped: build_id=%s event_type=%s recipient=%s reason=already_sent", buildID, eventType, recipient)
+	if result.Outcome == repository.NotificationDeliveryAcquireOutcomeSent {
+		log.Printf("build notification skipped: build_id=%s event_type=%s transport=%s destination_key=%s reason=already_sent", buildID, eventType, destination.transport, destination.destinationKey)
 	} else {
-		log.Printf("build notification skipped: build_id=%s event_type=%s recipient=%s reason=already_recorded status=%s", buildID, eventType, recipient, existing.Status)
+		log.Printf("build notification skipped: build_id=%s event_type=%s transport=%s destination_key=%s reason=already_recorded status=%s", buildID, eventType, destination.transport, destination.destinationKey, result.Delivery.Status)
 	}
-	return existing, false, nil
+	return result.Delivery, false, nil
 }
 
 func (s *BuildNotificationService) markDeliveryFailed(ctx context.Context, delivery domain.NotificationDelivery, sendErr error, attemptedAt time.Time) error {
 	message := strings.TrimSpace(sendErr.Error())
 	_, err := s.deliveryRepo.Update(ctx, domain.NotificationDelivery{
-		ID:        delivery.ID,
-		BuildID:   delivery.BuildID,
-		EventType: delivery.EventType,
-		Recipient: delivery.Recipient,
-		Status:    domain.NotificationDeliveryStatusFailed,
-		Attempts:  delivery.Attempts + 1,
-		LastError: &message,
-		CreatedAt: delivery.CreatedAt,
-		UpdatedAt: attemptedAt,
+		ID:                          delivery.ID,
+		BuildID:                     delivery.BuildID,
+		EventType:                   delivery.EventType,
+		Transport:                   delivery.Transport,
+		DestinationKind:             delivery.DestinationKind,
+		DestinationKey:              delivery.DestinationKey,
+		NotificationTargetID:        delivery.NotificationTargetID,
+		RecipientUserID:             delivery.RecipientUserID,
+		SlackWorkspaceIntegrationID: delivery.SlackWorkspaceIntegrationID,
+		Recipient:                   delivery.Recipient,
+		Status:                      domain.NotificationDeliveryStatusFailed,
+		Attempts:                    delivery.Attempts + 1,
+		LastError:                   &message,
+		CreatedAt:                   delivery.CreatedAt,
+		UpdatedAt:                   attemptedAt,
 	})
 	return err
 }
@@ -757,7 +757,7 @@ func dedupeDestinations(destinations []notificationDestination) []notificationDe
 	result := make([]notificationDestination, 0, len(destinations))
 	seen := make(map[string]struct{}, len(destinations))
 	for _, destination := range destinations {
-		key := strings.TrimSpace(destination.deliveryRecipient)
+		key := strings.TrimSpace(string(destination.transport)) + "|" + strings.TrimSpace(destination.destinationKey)
 		if key == "" {
 			continue
 		}
@@ -770,11 +770,111 @@ func dedupeDestinations(destinations []notificationDestination) []notificationDe
 	return result
 }
 
-func notificationTargetDeliveryRecipient(target domain.NotificationTarget) string {
-	if target.Type == domain.NotificationTargetTypeSlackWebhook {
-		return fmt.Sprintf("%s:%s", target.Type, target.ID)
+func (s *BuildNotificationService) resolveConfiguredEmailDestination(ctx context.Context, recipient string) (notificationDestination, error) {
+	if s.subscriptionRepo == nil {
+		if s.deliveryRepo != nil {
+			return notificationDestination{}, errors.New("notification subscription repository is required for shared email delivery identity")
+		}
+		return notificationDestination{
+			transport:       domain.NotificationTransportEmail,
+			destinationKind: domain.NotificationDestinationKindSharedTarget,
+			destinationKey:  transientConfiguredEmailDestinationKey(recipient),
+			recipient:       recipient,
+			emailRecipient:  recipient,
+		}, nil
 	}
-	return strings.TrimSpace(target.Recipient)
+	now := time.Now().UTC()
+	target, err := s.subscriptionRepo.EnsureSharedTarget(ctx, repository.EnsureSharedNotificationTargetInput{
+		Type:      domain.NotificationTargetTypeEmail,
+		Name:      recipient,
+		Recipient: recipient,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		return notificationDestination{}, err
+	}
+	return notificationTargetDestination(target)
+}
+
+func notificationTargetDestination(target domain.NotificationTarget) (notificationDestination, error) {
+	recipient := strings.TrimSpace(target.Recipient)
+	if recipient == "" {
+		return notificationDestination{}, nil
+	}
+	if target.Type == domain.NotificationTargetTypeEmail && target.OwnerUserID != nil {
+		return personalEmailTargetDestination(target)
+	}
+	targetID := strings.TrimSpace(target.ID)
+	if target.Type == domain.NotificationTargetTypeSlackWebhook {
+		destinationKind, destinationKey, err := domain.NotificationSharedSlackWebhookTargetKey(targetID)
+		if err != nil {
+			return notificationDestination{}, err
+		}
+		return notificationDestination{
+			transport:            domain.NotificationTransportSlackWebhook,
+			destinationKind:      destinationKind,
+			destinationKey:       destinationKey,
+			notificationTargetID: &targetID,
+			recipient:            fmt.Sprintf("%s:%s", target.Type, targetID),
+			webhookURL:           recipient,
+		}, nil
+	}
+	destinationKind, destinationKey, err := domain.NotificationSharedEmailTargetKey(targetID)
+	if err != nil {
+		return notificationDestination{}, err
+	}
+	return notificationDestination{
+		transport:            domain.NotificationTransportEmail,
+		destinationKind:      destinationKind,
+		destinationKey:       destinationKey,
+		notificationTargetID: &targetID,
+		recipient:            recipient,
+		emailRecipient:       recipient,
+	}, nil
+}
+
+func personalEmailTargetDestination(target domain.NotificationTarget) (notificationDestination, error) {
+	targetID := strings.TrimSpace(target.ID)
+	destinationKind, destinationKey, err := domain.NotificationPersonalEmailTargetKey(targetID)
+	if err != nil {
+		return notificationDestination{}, err
+	}
+	recipient := strings.TrimSpace(target.Recipient)
+	return notificationDestination{
+		transport:            domain.NotificationTransportEmail,
+		destinationKind:      destinationKind,
+		destinationKey:       destinationKey,
+		notificationTargetID: &targetID,
+		recipientUserID:      target.OwnerUserID,
+		recipient:            recipient,
+		emailRecipient:       recipient,
+	}, nil
+}
+
+func slackDMDestination(userID string, workspaceIntegrationID string, slackUserID string, slackBotToken string) (notificationDestination, error) {
+	destinationKind, destinationKey, err := domain.NotificationSlackDMDestinationKey(workspaceIntegrationID, slackUserID)
+	if err != nil {
+		return notificationDestination{}, err
+	}
+	trimmedUserID := strings.TrimSpace(userID)
+	trimmedWorkspaceID := strings.TrimSpace(workspaceIntegrationID)
+	trimmedSlackUserID := strings.TrimSpace(slackUserID)
+	return notificationDestination{
+		transport:                   domain.NotificationTransportSlackDM,
+		destinationKind:             destinationKind,
+		destinationKey:              destinationKey,
+		recipientUserID:             &trimmedUserID,
+		slackWorkspaceIntegrationID: &trimmedWorkspaceID,
+		recipient:                   "slack_dm:" + trimmedWorkspaceID + ":" + trimmedSlackUserID,
+		slackUserID:                 trimmedSlackUserID,
+		slackBotToken:               strings.TrimSpace(slackBotToken),
+	}, nil
+}
+
+func transientConfiguredEmailDestinationKey(recipient string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(recipient))))
+	return fmt.Sprintf("transient-config-email:%x", sum[:8])
 }
 
 func formatBuildStatusSlackText(details buildNotificationDetails) string {
