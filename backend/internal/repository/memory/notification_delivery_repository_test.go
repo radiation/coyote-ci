@@ -365,6 +365,79 @@ func TestClaimNotificationDeliveryBranches(t *testing.T) {
 	}
 }
 
+func TestNotificationDeliveryRepository_ListRecoverable(t *testing.T) {
+	repo := NewNotificationDeliveryRepository()
+	now := time.Date(2026, 7, 2, 16, 0, 0, 0, time.UTC)
+	buildID := "build-recoverable"
+	retryable := domain.NotificationDeliveryFailureCategoryRetryable
+	claimOwner := "worker-a"
+
+	mustCreate := func(t *testing.T, delivery domain.NotificationDelivery) {
+		t.Helper()
+		if _, err := repo.Create(context.Background(), delivery); err != nil {
+			t.Fatalf("create delivery failed: %v", err)
+		}
+	}
+	mustUpdate := func(t *testing.T, delivery domain.NotificationDelivery) {
+		t.Helper()
+		if _, err := repo.Update(context.Background(), delivery); err != nil {
+			t.Fatalf("update delivery failed: %v", err)
+		}
+	}
+
+	dueRetryAt := now.Add(-2 * time.Minute)
+	staleClaimAt := now.Add(-90 * time.Second)
+	staleClaimExpiresAt := now.Add(-time.Minute)
+	futureRetryAt := now.Add(time.Minute)
+	activeClaimAt := now.Add(-30 * time.Second)
+	activeClaimExpiresAt := now.Add(time.Minute)
+
+	mustCreate(t, domain.NotificationDelivery{ID: "retry-due-b", BuildID: buildID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:retry-due-b", Recipient: "retry-due-b@example.com", MaxAttempts: 3})
+	mustUpdate(t, domain.NotificationDelivery{ID: "retry-due-b", BuildID: buildID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:retry-due-b", Recipient: "retry-due-b@example.com", Status: domain.NotificationDeliveryStatusRetryWaiting, Attempts: 1, MaxAttempts: 3, LastAttemptAt: &staleClaimAt, NextAttemptAt: &dueRetryAt, FailureCategory: &retryable, UpdatedAt: dueRetryAt})
+
+	earlierRetryAt := now.Add(-3 * time.Minute)
+	mustCreate(t, domain.NotificationDelivery{ID: "retry-due-a", BuildID: buildID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:retry-due-a", Recipient: "retry-due-a@example.com", MaxAttempts: 3})
+	mustUpdate(t, domain.NotificationDelivery{ID: "retry-due-a", BuildID: buildID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:retry-due-a", Recipient: "retry-due-a@example.com", Status: domain.NotificationDeliveryStatusRetryWaiting, Attempts: 1, MaxAttempts: 3, LastAttemptAt: &staleClaimAt, NextAttemptAt: &earlierRetryAt, FailureCategory: &retryable, UpdatedAt: earlierRetryAt})
+
+	mustCreate(t, domain.NotificationDelivery{ID: "retry-future", BuildID: buildID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:retry-future", Recipient: "retry-future@example.com", MaxAttempts: 3})
+	mustUpdate(t, domain.NotificationDelivery{ID: "retry-future", BuildID: buildID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:retry-future", Recipient: "retry-future@example.com", Status: domain.NotificationDeliveryStatusRetryWaiting, Attempts: 1, MaxAttempts: 3, LastAttemptAt: &staleClaimAt, NextAttemptAt: &futureRetryAt, FailureCategory: &retryable, UpdatedAt: futureRetryAt})
+
+	mustCreate(t, domain.NotificationDelivery{ID: "claim-stale", BuildID: buildID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportSlackWebhook, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "slack-webhook:claim-stale", Recipient: "slack_webhook:claim-stale", MaxAttempts: 3})
+	mustUpdate(t, domain.NotificationDelivery{ID: "claim-stale", BuildID: buildID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportSlackWebhook, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "slack-webhook:claim-stale", Recipient: "slack_webhook:claim-stale", Status: domain.NotificationDeliveryStatusSending, Attempts: 1, MaxAttempts: 3, LastAttemptAt: &staleClaimAt, ClaimedAt: &staleClaimAt, ClaimExpiresAt: &staleClaimExpiresAt, ClaimedBy: &claimOwner, UpdatedAt: staleClaimAt})
+
+	mustCreate(t, domain.NotificationDelivery{ID: "claim-active", BuildID: buildID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportSlackWebhook, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "slack-webhook:claim-active", Recipient: "slack_webhook:claim-active", MaxAttempts: 3})
+	mustUpdate(t, domain.NotificationDelivery{ID: "claim-active", BuildID: buildID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportSlackWebhook, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "slack-webhook:claim-active", Recipient: "slack_webhook:claim-active", Status: domain.NotificationDeliveryStatusSending, Attempts: 1, MaxAttempts: 3, LastAttemptAt: &activeClaimAt, ClaimedAt: &activeClaimAt, ClaimExpiresAt: &activeClaimExpiresAt, ClaimedBy: &claimOwner, UpdatedAt: activeClaimAt})
+
+	mustCreate(t, domain.NotificationDelivery{ID: "sent-terminal", BuildID: buildID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:sent-terminal", Recipient: "sent@example.com", Status: domain.NotificationDeliveryStatusSent, Attempts: 1, MaxAttempts: 1, SentAt: &staleClaimAt, CreatedAt: staleClaimAt, UpdatedAt: staleClaimAt})
+
+	result, err := repo.ListRecoverable(context.Background(), repository.NotificationDeliveryRecoverableScanInput{Now: now, Limit: 10})
+	if err != nil {
+		t.Fatalf("list recoverable failed: %v", err)
+	}
+	if len(result) != 3 {
+		t.Fatalf("expected 3 recoverable deliveries, got %d", len(result))
+	}
+	gotIDs := []string{result[0].ID, result[1].ID, result[2].ID}
+	wantIDs := []string{"retry-due-a", "retry-due-b", "claim-stale"}
+	if strings.Join(gotIDs, ",") != strings.Join(wantIDs, ",") {
+		t.Fatalf("expected ordered ids %v, got %v", wantIDs, gotIDs)
+	}
+
+	limited, err := repo.ListRecoverable(context.Background(), repository.NotificationDeliveryRecoverableScanInput{Now: now, Limit: 2})
+	if err != nil {
+		t.Fatalf("list recoverable with limit failed: %v", err)
+	}
+	if len(limited) != 2 || limited[0].ID != "retry-due-a" || limited[1].ID != "retry-due-b" {
+		t.Fatalf("unexpected limited recoverable result: %+v", limited)
+	}
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := repo.ListRecoverable(canceledCtx, repository.NotificationDeliveryRecoverableScanInput{Now: now, Limit: 1}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled context error, got %v", err)
+	}
+}
+
 func TestNotificationDeliveryRepository_RecordFailureBranches(t *testing.T) {
 	repo := NewNotificationDeliveryRepository()
 	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
