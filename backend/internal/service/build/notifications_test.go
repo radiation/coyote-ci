@@ -609,8 +609,8 @@ func TestNewBuildNotificationService_EnabledRejectsInvalidRecipients(t *testing.
 func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 	t.Run("nil service is noop", func(t *testing.T) {
 		var notifier *BuildNotificationService
-		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); err != nil {
-			t.Fatalf("expected nil service to noop, got %v", err)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); notifyErr != nil {
+			t.Fatalf("expected nil service to noop, got %v", notifyErr)
 		}
 	})
 
@@ -619,7 +619,7 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
-		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); err == nil {
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); notifyErr == nil {
 			t.Fatal("expected missing sender error")
 		}
 	})
@@ -630,8 +630,8 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
-		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusCanceled}); err != nil {
-			t.Fatalf("expected canceled status to be ignored, got %v", err)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusCanceled}); notifyErr != nil {
+			t.Fatalf("expected canceled status to be ignored, got %v", notifyErr)
 		}
 		if len(sender.messages) != 0 {
 			t.Fatalf("expected no email for canceled status, got %d", len(sender.messages))
@@ -644,8 +644,8 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
-		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess}); err != nil {
-			t.Fatalf("expected success status to send, got %v", err)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess}); notifyErr != nil {
+			t.Fatalf("expected success status to send, got %v", notifyErr)
 		}
 		if len(sender.messages) != 1 {
 			t.Fatalf("expected one email for success status, got %d", len(sender.messages))
@@ -664,11 +664,11 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 		}
 
 		build := domain.Build{ID: "build-no-subscriptions", Status: domain.BuildStatusSuccess}
-		if err := notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
-			t.Fatalf("expected configured-recipient notifier without subscriptions to send, got %v", err)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), build); notifyErr != nil {
+			t.Fatalf("expected configured-recipient notifier without subscriptions to send, got %v", notifyErr)
 		}
-		if err := notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
-			t.Fatalf("expected duplicate configured-recipient notify to skip cleanly, got %v", err)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), build); notifyErr != nil {
+			t.Fatalf("expected duplicate configured-recipient notify to skip cleanly, got %v", notifyErr)
 		}
 		if len(sender.messages) != 1 {
 			t.Fatalf("expected one sent email after duplicate notify, got %d", len(sender.messages))
@@ -704,8 +704,8 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 			t.Fatalf("create notifier failed: %v", err)
 		}
 
-		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
-			t.Fatalf("notify terminal build failed: %v", err)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); notifyErr != nil {
+			t.Fatalf("notify terminal build failed: %v", notifyErr)
 		}
 		if len(sender.messages) != 2 {
 			t.Fatalf("expected default plus author recipient, got %d", len(sender.messages))
@@ -727,8 +727,8 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 			t.Fatalf("create notifier failed: %v", err)
 		}
 
-		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
-			t.Fatalf("notify terminal build failed: %v", err)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); notifyErr != nil {
+			t.Fatalf("notify terminal build failed: %v", notifyErr)
 		}
 		if len(sender.messages) != 2 {
 			t.Fatalf("expected configured shared and personal author targets to remain distinct, got %d", len(sender.messages))

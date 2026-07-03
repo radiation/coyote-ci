@@ -20,8 +20,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
-		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusSuccess}); err != nil {
-			t.Fatalf("notify terminal build failed: %v", err)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusSuccess}); notifyErr != nil {
+			t.Fatalf("notify terminal build failed: %v", notifyErr)
 		}
 
 		delivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildSucceeded, "<dev@example.com>")
@@ -43,7 +43,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
-		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); err == nil {
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); notifyErr == nil {
 			t.Fatal("expected sender failure")
 		}
 
@@ -71,11 +71,11 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 		}
 
 		build := domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}
-		if err := notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
-			t.Fatalf("first notify failed: %v", err)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), build); notifyErr != nil {
+			t.Fatalf("first notify failed: %v", notifyErr)
 		}
-		if err := notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
-			t.Fatalf("duplicate notify should skip cleanly, got %v", err)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), build); notifyErr != nil {
+			t.Fatalf("duplicate notify should skip cleanly, got %v", notifyErr)
 		}
 		if len(sender.messages) != 1 {
 			t.Fatalf("expected one sent email after duplicate hook, got %d", len(sender.messages))
@@ -104,8 +104,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
-		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); err != nil {
-			t.Fatalf("notify with existing failed record should skip cleanly, got %v", err)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); notifyErr != nil {
+			t.Fatalf("notify with existing failed record should skip cleanly, got %v", notifyErr)
 		}
 		if len(sender.messages) != 0 {
 			t.Fatalf("expected no resend when failed delivery record already exists, got %d", len(sender.messages))
@@ -128,8 +128,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
-		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); err == nil || err.Error() != "create failed" {
-			t.Fatalf("expected create failure, got %v", err)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); notifyErr == nil || notifyErr.Error() != "create failed" {
+			t.Fatalf("expected create failure, got %v", notifyErr)
 		}
 	})
 
@@ -143,8 +143,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
-		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); err == nil || err.Error() != "lookup failed" {
-			t.Fatalf("expected lookup failure, got %v", err)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}); notifyErr == nil || notifyErr.Error() != "lookup failed" {
+			t.Fatalf("expected lookup failure, got %v", notifyErr)
 		}
 	})
 
@@ -215,8 +215,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
-		if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusSuccess}); err != nil {
-			t.Fatalf("notify terminal build failed: %v", err)
+		if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusSuccess}); notifyErr != nil {
+			t.Fatalf("notify terminal build failed: %v", notifyErr)
 		}
 		if len(sender.messages) != 2 {
 			t.Fatalf("expected one message per recipient, got %d", len(sender.messages))

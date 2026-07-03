@@ -39,8 +39,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_SendsSlackWebhookSubscript
 	finishedAt := time.Now().UTC()
 	build := domain.Build{ID: "build-1", ProjectID: projectID, JobID: &jobID, Status: domain.BuildStatusFailed, BuildNumber: 42, SourceRef: &ref, SourceSHA: &sha, SourceAuthorName: &authorName, SourceAuthorEmail: &authorEmail, StartedAt: &startedAt, FinishedAt: &finishedAt}
 
-	if err := notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
-		t.Fatalf("notify terminal build failed: %v", err)
+	if notifyErr := notifier.NotifyTerminalBuild(context.Background(), build); notifyErr != nil {
+		t.Fatalf("notify terminal build failed: %v", notifyErr)
 	}
 	if len(slackSender.messages) != 1 {
 		t.Fatalf("expected one slack message, got %d", len(slackSender.messages))
@@ -92,8 +92,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureIncludesFailed
 	buildError := "build level failure text should not replace the failed step"
 	build := domain.Build{ID: "build-1", ProjectID: projectID, JobID: &jobID, Status: domain.BuildStatusFailed, BuildNumber: 42, SourceRef: &ref, SourceSHA: &sha, SourceAuthorName: &authorName, SourceAuthorEmail: &authorEmail, StartedAt: &startedAt, FinishedAt: &finishedAt, ErrorMessage: &buildError}
 
-	if err := notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
-		t.Fatalf("notify terminal build failed: %v", err)
+	if notifyErr := notifier.NotifyTerminalBuild(context.Background(), build); notifyErr != nil {
+		t.Fatalf("notify terminal build failed: %v", notifyErr)
 	}
 	message := slackSender.messages[0].Text
 	wantReason := truncateNotificationText(stepError, maxNotificationFailureMessageLength)
@@ -139,8 +139,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_PersonalSlackFailureUsesFa
 		t.Fatalf("create notifier failed: %v", err)
 	}
 
-	if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
-		t.Fatalf("notify terminal build failed: %v", err)
+	if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); notifyErr != nil {
+		t.Fatalf("notify terminal build failed: %v", notifyErr)
 	}
 	message := slackClient.messages[0].Text
 	if !strings.Contains(message, "Next: <https://ci.example.com/builds/build-1?step=0|Open failed step logs>") {
@@ -179,8 +179,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_PersonalSlackFailureFallba
 		t.Fatalf("create notifier failed: %v", err)
 	}
 
-	if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, ErrorMessage: &buildError, SourceAuthorEmail: &authorEmail}); err != nil {
-		t.Fatalf("notify terminal build failed: %v", err)
+	if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, ErrorMessage: &buildError, SourceAuthorEmail: &authorEmail}); notifyErr != nil {
+		t.Fatalf("notify terminal build failed: %v", notifyErr)
 	}
 	message := slackClient.messages[0].Text
 	if !strings.Contains(message, "Next: <https://ci.example.com/builds/build-1|View build details>") {
@@ -215,8 +215,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackSuccessArtifactsRemai
 	startedAt := finishedAt.Add(-2 * time.Minute)
 	build := domain.Build{ID: buildID, ProjectID: projectID, Status: domain.BuildStatusSuccess, BuildNumber: 42, StartedAt: &startedAt, FinishedAt: &finishedAt}
 
-	if err := notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
-		t.Fatalf("notify terminal build failed: %v", err)
+	if notifyErr := notifier.NotifyTerminalBuild(context.Background(), build); notifyErr != nil {
+		t.Fatalf("notify terminal build failed: %v", notifyErr)
 	}
 	message := slackSender.messages[0].Text
 	for _, want := range []string{"Artifacts: <https://ci.example.com/artifacts/artifact-a|pkg-a.tgz (1.2.3)>", "<https://ci.example.com/artifacts/artifact-b|pkg-b.tgz>", "<https://ci.example.com/artifacts/artifact-c|pkg-c.tgz>", "<https://ci.example.com/artifacts?build_id=build-1|+1 more>"} {
@@ -240,8 +240,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackMessageOmitsMissingOp
 		t.Fatalf("create notifier failed: %v", err)
 	}
 
-	if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: projectID, Status: domain.BuildStatusSuccess}); err != nil {
-		t.Fatalf("notify terminal build failed: %v", err)
+	if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: projectID, Status: domain.BuildStatusSuccess}); notifyErr != nil {
+		t.Fatalf("notify terminal build failed: %v", notifyErr)
 	}
 	message := slackSender.messages[0].Text
 	for _, unwanted := range []string{"Git:", "Commit author:", "Build detail:"} {

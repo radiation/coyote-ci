@@ -75,8 +75,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_PersonalSlackDMDistinctFro
 		t.Fatalf("create notifier failed: %v", err)
 	}
 
-	if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-dm-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
-		t.Fatalf("notify terminal build failed: %v", err)
+	if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-dm-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); notifyErr != nil {
+		t.Fatalf("notify terminal build failed: %v", notifyErr)
 	}
 	if len(emailSender.messages) != 1 || emailSender.messages[0].To != "<author@example.com>" {
 		t.Fatalf("expected one email delivery, got %+v", emailSender.messages)
@@ -124,8 +124,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_PersonalCommitAuthorPrefer
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := newPersonalCommitAuthorNotificationFixture(t, tc.options)
 			build := domain.Build{ID: tc.buildID, Status: tc.status, SourceAuthorEmail: &fixture.authorEmail}
-			if err := fixture.notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
-				t.Fatalf("notify terminal build failed: %v", err)
+			if notifyErr := fixture.notifier.NotifyTerminalBuild(context.Background(), build); notifyErr != nil {
+				t.Fatalf("notify terminal build failed: %v", notifyErr)
 			}
 			if len(fixture.emailSender.messages) != tc.wantEmails {
 				t.Fatalf("expected %d emails, got %d", tc.wantEmails, len(fixture.emailSender.messages))
@@ -175,8 +175,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_PersonalChannelAvailabilit
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := newPersonalCommitAuthorNotificationFixture(t, tc.options)
-			if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-availability-" + strings.ReplaceAll(tc.name, " ", "-"), Status: domain.BuildStatusFailed, SourceAuthorEmail: &fixture.authorEmail}); err != nil {
-				t.Fatalf("notify terminal build failed: %v", err)
+			if notifyErr := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-availability-" + strings.ReplaceAll(tc.name, " ", "-"), Status: domain.BuildStatusFailed, SourceAuthorEmail: &fixture.authorEmail}); notifyErr != nil {
+				t.Fatalf("notify terminal build failed: %v", notifyErr)
 			}
 			if len(fixture.emailSender.messages) != tc.wantEmails {
 				t.Fatalf("expected %d emails, got %d", tc.wantEmails, len(fixture.emailSender.messages))
@@ -241,11 +241,11 @@ func TestBuildNotificationService_NotifyTerminalBuild_PersonalSlackDMDedupesSepa
 	fixture := newPersonalCommitAuthorNotificationFixture(t, personalCommitAuthorNotificationOptions{failureEmailEnabled: true, failureSlackEnabled: true, createEmailTarget: true, emailTargetEnabled: true, createWorkspace: true, workspaceEnabled: true, createIdentity: true, identityEnabled: true, sharedSlackWebhook: true})
 	build := domain.Build{ID: "build-dedupe-1", ProjectID: "project-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &fixture.authorEmail}
 
-	if err := fixture.notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
-		t.Fatalf("first notify terminal build failed: %v", err)
+	if notifyErr := fixture.notifier.NotifyTerminalBuild(context.Background(), build); notifyErr != nil {
+		t.Fatalf("first notify terminal build failed: %v", notifyErr)
 	}
-	if err := fixture.notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
-		t.Fatalf("replayed notify terminal build failed: %v", err)
+	if notifyErr := fixture.notifier.NotifyTerminalBuild(context.Background(), build); notifyErr != nil {
+		t.Fatalf("replayed notify terminal build failed: %v", notifyErr)
 	}
 
 	if len(fixture.emailSender.messages) != 1 {
@@ -271,8 +271,8 @@ func TestBuildNotificationService_NotifyTerminalBuild_PersonalSlackDMDedupesSepa
 		t.Fatalf("expected one successful shared slack webhook delivery attempt, got status=%q attempts=%d", sharedSlackDelivery.Status, sharedSlackDelivery.Attempts)
 	}
 
-	if err := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: build.ID, ProjectID: build.ProjectID, Status: domain.BuildStatusSuccess, SourceAuthorEmail: &fixture.authorEmail}); err != nil {
-		t.Fatalf("success notify terminal build failed: %v", err)
+	if notifyErr := fixture.notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: build.ID, ProjectID: build.ProjectID, Status: domain.BuildStatusSuccess, SourceAuthorEmail: &fixture.authorEmail}); notifyErr != nil {
+		t.Fatalf("success notify terminal build failed: %v", notifyErr)
 	}
 	if len(fixture.emailSender.messages) != 1 {
 		t.Fatalf("expected success event with disabled success preferences not to resend email, got %d", len(fixture.emailSender.messages))
