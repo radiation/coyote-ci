@@ -209,6 +209,28 @@ steps:
 			t.Error("pipeline YAML snapshot should contain original YAML content")
 		}
 	})
+
+	t.Run("uses optional pipeline path to scope working dir", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		build, err := svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{
+			ProjectID:    "proj-1",
+			PipelineYAML: "version: 1\nsteps:\n  - name: run\n    run: ./scripts/run.sh\n",
+			PipelinePath: "scenarios/success-basic/coyote.yml",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if build.PipelinePath == nil || *build.PipelinePath != "scenarios/success-basic/coyote.yml" {
+			t.Fatalf("expected pipeline_path to be persisted, got %v", build.PipelinePath)
+		}
+		if len(repo.steps) != 1 {
+			t.Fatalf("expected 1 step, got %d", len(repo.steps))
+		}
+		if repo.steps[0].WorkingDir != "scenarios/success-basic" {
+			t.Fatalf("expected working_dir scenarios/success-basic, got %q", repo.steps[0].WorkingDir)
+		}
+	})
 }
 
 // fakeRepoFetcher implements source.RepoFetcher for testing.

@@ -555,6 +555,39 @@ func TestJobService_CreateAllowsRepoPipelinePathWithoutInlineYAML(t *testing.T) 
 	}
 }
 
+func TestJobService_CreatePrefersInlinePipelineWhenPathAlsoPresent(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService)
+
+	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-inline-preferred",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelinePath:  "scenarios/success-basic/coyote.yml",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: run\n    run: ./scripts/run.sh\n",
+	})
+	if err != nil {
+		t.Fatalf("expected create to succeed with inline pipeline, got %v", err)
+	}
+
+	builds, listErr := buildService.ListBuildsByJobID(context.Background(), job.ID)
+	if listErr != nil {
+		t.Fatalf("list builds failed: %v", listErr)
+	}
+	if len(builds) != 1 {
+		t.Fatalf("expected 1 build, got %d", len(builds))
+	}
+	if builds[0].PipelineSource == nil || *builds[0].PipelineSource != "inline" {
+		t.Fatalf("expected inline pipeline source, got %v", builds[0].PipelineSource)
+	}
+	if builds[0].PipelinePath == nil || *builds[0].PipelinePath != "scenarios/success-basic/coyote.yml" {
+		t.Fatalf("expected persisted pipeline_path for inline build context, got %v", builds[0].PipelinePath)
+	}
+}
+
 func TestJobService_RunNowCreatesNormalBuildAndSnapshotsPipeline(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()

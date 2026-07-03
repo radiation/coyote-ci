@@ -121,6 +121,35 @@ artifacts:
 	}
 }
 
+func TestArtifactPatternsFromBuild_InlinePipelinePathScoped(t *testing.T) {
+	source := pipelineSourceInline
+	pipelinePath := "scenarios/success-basic/coyote.yml"
+	yaml := `
+version: 1
+steps:
+  - name: run
+    run: ./scripts/run.sh
+artifacts:
+  paths:
+    - output/**
+`
+
+	patterns, err := artifactPatternsFromBuild(domain.Build{
+		PipelineConfigYAML: &yaml,
+		PipelineSource:     &source,
+		PipelinePath:       &pipelinePath,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(patterns) != 1 {
+		t.Fatalf("expected 1 pattern, got %d", len(patterns))
+	}
+	if patterns[0] != "scenarios/success-basic/output/**" {
+		t.Fatalf("expected scoped artifact path, got %q", patterns[0])
+	}
+}
+
 func TestArtifactPatternsFromBuild_RejectsTraversal(t *testing.T) {
 	source := pipelineSourceRepo
 	pipelinePath := "scenarios/success-basic/coyote.yml"

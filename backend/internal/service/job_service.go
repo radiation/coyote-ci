@@ -471,7 +471,20 @@ func (s *JobService) createBuildForJob(ctx context.Context, job domain.Job) (dom
 
 	var build domain.Build
 	var err error
-	if job.PipelinePath != nil && strings.TrimSpace(*job.PipelinePath) != "" {
+	if strings.TrimSpace(job.PipelineYAML) != "" {
+		build, err = s.buildService.CreateBuildFromPipeline(ctx, buildsvc.CreatePipelineBuildInput{
+			ProjectID:    job.ProjectID,
+			JobID:        &job.ID,
+			Priority:     job.Priority,
+			PipelineYAML: job.PipelineYAML,
+			PipelinePath: readStringPtr(job.PipelinePath),
+			Source: &buildsvc.CreateBuildSourceInput{
+				RepositoryURL: job.RepositoryURL,
+				Ref:           job.DefaultRef,
+				CommitSHA:     readStringPtr(job.DefaultCommitSHA),
+			},
+		})
+	} else if job.PipelinePath != nil && strings.TrimSpace(*job.PipelinePath) != "" {
 		build, err = s.buildService.CreateBuildFromRepo(ctx, buildsvc.CreateRepoBuildInput{
 			ProjectID:    job.ProjectID,
 			JobID:        &job.ID,
