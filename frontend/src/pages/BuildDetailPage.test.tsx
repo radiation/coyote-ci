@@ -7,7 +7,14 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Link, MemoryRouter, Outlet, Route, Routes } from "react-router-dom";
+import {
+  Link,
+  MemoryRouter,
+  Outlet,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router-dom";
 import { BuildDetailPage } from "./BuildDetailPage";
 import {
   buildStepLogStreamURL,
@@ -137,7 +144,7 @@ function makeArtifact(overrides: Partial<BuildArtifact> = {}): BuildArtifact {
   };
 }
 
-function renderPage() {
+function renderPage(initialEntry = "/builds/build-1") {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -146,7 +153,7 @@ function renderPage() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/builds/build-1"]}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route path="/builds/:id" element={<BuildDetailPage />} />
         </Routes>
@@ -169,9 +176,15 @@ function BuildDetailTestLayout() {
   return (
     <>
       <Link to="/builds/build-2">Go to build 2</Link>
+      <BuildDetailLocationSearch />
       <Outlet />
     </>
   );
+}
+
+function BuildDetailLocationSearch() {
+  const location = useLocation();
+  return <div data-testid="location-search">{location.search}</div>;
 }
 
 describe("BuildDetailPage", () => {
@@ -821,6 +834,84 @@ describe("BuildDetailPage", () => {
     });
     expect(screen.getByRole("button", { name: "Hide logs" })).toBeTruthy();
     expect(document.querySelector("#step-1 .step-log-panel")).toBeTruthy();
+  });
+
+  it("opens the matching step logs from the step query parameter", async () => {
+    renderPage("/builds/build-1?step=1");
+
+    await screen.findByRole("heading", { name: "Logs" });
+
+    await waitFor(() => {
+      expect(mockedGetStepLogs).toHaveBeenCalledWith("build-1", 1, 0, 500);
+    });
+    expect(screen.getByRole("button", { name: "Hide logs" })).toBeTruthy();
+    expect(document.querySelector("#step-1 .step-log-panel")).toBeTruthy();
+  });
+
+  it("updates and clears the step query parameter when logs are opened and hidden", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/builds/build-1"]}>
+          <Routes>
+            <Route element={<BuildDetailTestLayout />}>
+              <Route path="/builds/:id" element={<BuildDetailPage />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByRole("heading", { name: "Logs" });
+    expect(screen.getByTestId("location-search").textContent).toBe("");
+
+    fireEvent.click(screen.getByRole("link", { name: "Open logs for deploy" }));
+
+    await waitFor(() => {
+      expect(mockedGetStepLogs).toHaveBeenCalledWith("build-1", 1, 0, 500);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search").textContent).toBe("?step=1");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide logs" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Hide logs" })).toBeNull();
+    });
+    expect(screen.getByTestId("location-search").textContent).toBe("");
+  });
+
+  it.each(["2junk", "1.5", "-1", "", " 1 "])(
+    "ignores malformed step query parameter %p",
+    async (stepValue) => {
+      renderPage(`/builds/build-1?step=${encodeURIComponent(stepValue)}`);
+
+      await screen.findByRole("heading", { name: "Logs" });
+
+      await waitFor(() => {
+        expect(mockedGetStepLogs).not.toHaveBeenCalled();
+      });
+      expect(screen.queryByRole("button", { name: "Hide logs" })).toBeNull();
+      expect(document.querySelector(".step-log-panel")).toBeNull();
+    },
+  );
+
+  it("ignores a nonexistent but valid step query parameter", async () => {
+    renderPage("/builds/build-1?step=99");
+
+    await screen.findByRole("heading", { name: "Logs" });
+
+    await waitFor(() => {
+      expect(mockedGetStepLogs).not.toHaveBeenCalled();
+    });
+    expect(screen.queryByRole("button", { name: "Hide logs" })).toBeNull();
+    expect(document.querySelector(".step-log-panel")).toBeNull();
   });
 
   it("resets the open step when navigating to a different build", async () => {

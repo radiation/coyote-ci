@@ -118,6 +118,7 @@ type CreatePipelineBuildInput struct {
 	JobID        *string
 	Priority     int
 	PipelineYAML string
+	PipelinePath string
 	Source       *CreateBuildSourceInput
 	Trigger      *CreateBuildTriggerInput
 }
@@ -145,6 +146,13 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 	if err != nil {
 		return domain.Build{}, err
 	}
+	pipelinePath := strings.TrimSpace(input.PipelinePath)
+	if pipelinePath != "" {
+		resolved, err = resolveRepoStepWorkingDirs(pipelinePath, resolved)
+		if err != nil {
+			return domain.Build{}, err
+		}
+	}
 
 	buildID := uuid.NewString()
 	steps := pipelineStepsToDomain(buildID, resolved.Steps)
@@ -155,6 +163,10 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		pipelineNamePtr = &pipelineName
 	}
 	pipelineSource := pipelineSourceInline
+	var pipelinePathPtr *string
+	if pipelinePath != "" {
+		pipelinePathPtr = &pipelinePath
+	}
 
 	build := domain.Build{
 		ID:                 buildID,
@@ -168,6 +180,7 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		PipelineConfigYAML: &yamlText,
 		PipelineName:       pipelineNamePtr,
 		PipelineSource:     &pipelineSource,
+		PipelinePath:       pipelinePathPtr,
 		Source:             sourceSpec,
 		RepoURL:            buildOptionalStringPtr(buildSourceRepositoryURL(sourceSpec)),
 		Ref:                buildSourceRef(sourceSpec),

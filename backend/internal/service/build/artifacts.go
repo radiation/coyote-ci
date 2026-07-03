@@ -449,7 +449,7 @@ func artifactDeclarationsFromBuild(build domain.Build) ([]domain.ArtifactDeclara
 	}
 
 	declarations := append([]domain.ArtifactDeclaration(nil), pipelineFile.Artifacts.Declarations...)
-	if build.PipelineSource != nil && *build.PipelineSource == pipelineSourceRepo && build.PipelinePath != nil {
+	if build.PipelinePath != nil {
 		normalizedPipelinePath := path.Clean(filepath.ToSlash(strings.TrimSpace(*build.PipelinePath)))
 		if normalizedPipelinePath != pipelineFilePath {
 			pipelineDir := path.Clean(path.Dir(normalizedPipelinePath))

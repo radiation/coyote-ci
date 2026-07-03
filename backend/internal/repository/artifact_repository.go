@@ -42,12 +42,16 @@ type ArtifactCatalogRepository interface {
 	GetCatalogByID(ctx context.Context, artifactID string) (domain.ArtifactRecord, error)
 }
 
+type ArtifactBuildListRepository interface {
+	ListByBuildID(ctx context.Context, buildID string) ([]domain.BuildArtifact, error)
+}
+
 // ArtifactRepository persists and queries build artifact metadata.
 type ArtifactRepository interface {
 	ArtifactBrowseRepository
 	ArtifactCatalogRepository
+	ArtifactBuildListRepository
 	Create(ctx context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error)
-	ListByBuildID(ctx context.Context, buildID string) ([]domain.BuildArtifact, error)
 	GetByID(ctx context.Context, buildID string, artifactID string) (domain.BuildArtifact, error)
 	ListByStepID(ctx context.Context, stepID string) ([]domain.BuildArtifact, error)
 }

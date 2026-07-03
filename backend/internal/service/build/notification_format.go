@@ -5,11 +5,17 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
+
+const maxNotificationFailureMessageLength = 160
+const maxNotificationArtifactLabelLength = 80
+const maxNotificationArtifactLinks = 3
 
 type buildNotificationDetails struct {
 	statusSummary string
@@ -33,6 +39,25 @@ type buildNotificationDetails struct {
 	authorEmail   string
 	authorLabel   string
 	buildURL      string
+	failedStep    *buildNotificationStep
+	failureText   string
+	failureExit   *int
+	diagnosticURL string
+	artifactsURL  string
+	artifacts     []notificationArtifactLink
+	artifactCount int
+}
+
+type buildNotificationStep struct {
+	index int
+	name  string
+	label string
+	url   string
+}
+
+type notificationArtifactLink struct {
+	label string
+	url   string
 }
 
 var fullNotificationSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
@@ -113,6 +138,74 @@ func (s *BuildNotificationService) buildNotificationDetails(ctx context.Context,
 	return details
 }
 
+func (s *BuildNotificationService) enrichSlackNotificationDetails(ctx context.Context, build domain.Build, details buildNotificationDetails) (buildNotificationDetails, error) {
+	details = applyFallbackFailureContext(build, details)
+	if details.statusSummary == "failed" {
+		enriched, err := s.enrichFailedSlackNotificationDetails(ctx, build, details)
+		if err != nil {
+			return buildNotificationDetails{}, err
+		}
+		return applyFallbackFailureContext(build, enriched), nil
+	}
+	if details.statusSummary == "succeeded" {
+		enriched, err := s.enrichSuccessfulSlackNotificationDetails(ctx, build, details)
+		if err != nil {
+			return buildNotificationDetails{}, err
+		}
+		return enriched, nil
+	}
+	return details, nil
+}
+
+func (s *BuildNotificationService) enrichFailedSlackNotificationDetails(ctx context.Context, build domain.Build, details buildNotificationDetails) (buildNotificationDetails, error) {
+	if strings.TrimSpace(details.buildID) == "" {
+		return details, nil
+	}
+	if s.buildRepo == nil {
+		return details, nil
+	}
+	steps, err := s.buildRepo.GetStepsByBuildID(ctx, details.buildID)
+	if err != nil {
+		return buildNotificationDetails{}, retryableNotificationExecutionFailure("notification_step_enrichment_failed", "notification failed-step enrichment failed", err)
+	}
+	details.failedStep = buildNotificationFailedStep(s.publicBaseURL, details.buildID, steps)
+	if details.failedStep != nil {
+		if errorMessage := strings.TrimSpace(trimNotificationOptionalString(stepErrorPointer(steps, details.failedStep.index))); errorMessage != "" {
+			details.failureText = truncateNotificationText(errorMessage, maxNotificationFailureMessageLength)
+		}
+		details.failureExit = stepExitCodePointer(steps, details.failedStep.index)
+		details.diagnosticURL = details.failedStep.url
+	}
+	return details, nil
+}
+
+func (s *BuildNotificationService) enrichSuccessfulSlackNotificationDetails(ctx context.Context, build domain.Build, details buildNotificationDetails) (buildNotificationDetails, error) {
+	if s.publicBaseURL == "" || strings.TrimSpace(details.buildID) == "" {
+		return details, nil
+	}
+	if s.artifactRepo == nil {
+		return details, nil
+	}
+	artifacts, err := s.artifactRepo.ListByBuildID(ctx, details.buildID)
+	if err != nil {
+		return buildNotificationDetails{}, retryableNotificationExecutionFailure("notification_artifact_enrichment_failed", "notification artifact enrichment failed", err)
+	}
+	details.artifactCount = len(artifacts)
+	details.artifactsURL = buildArtifactsListURL(s.publicBaseURL, details.buildID)
+	details.artifacts = buildNotificationArtifactLinks(s.publicBaseURL, artifacts)
+	return details, nil
+}
+
+func applyFallbackFailureContext(build domain.Build, details buildNotificationDetails) buildNotificationDetails {
+	if details.failureText == "" && build.ErrorMessage != nil {
+		details.failureText = truncateNotificationText(strings.TrimSpace(*build.ErrorMessage), maxNotificationFailureMessageLength)
+	}
+	if details.diagnosticURL == "" {
+		details.diagnosticURL = details.buildURL
+	}
+	return details
+}
+
 func (s *BuildNotificationService) formatBuildStatusEmail(build domain.Build, details buildNotificationDetails) (string, string) {
 	subjectParts := []string{"Coyote CI", "build", details.statusSummary, build.ID}
 	if details.jobLabel != "" {
@@ -159,7 +252,7 @@ func (s *BuildNotificationService) formatBuildStatusEmail(build domain.Build, de
 }
 
 func formatBuildStatusSlackText(details buildNotificationDetails) string {
-	lines := []string{fmt.Sprintf("%s Build %s", slackStatusIndicator(details.statusSummary), details.statusSummary)}
+	lines := []string{formatBuildStatusHeadline(details)}
 	if details.projectLabel != "" {
 		projectText := slackEscapeMrkdwnLabel(details.projectLabel)
 		if details.projectURL != "" {
@@ -185,36 +278,44 @@ func formatBuildStatusSlackText(details buildNotificationDetails) string {
 	if details.buildLabel != "" {
 		buildText := slackEscapeMrkdwnLabel(details.buildLabel)
 		if details.buildURL != "" {
-			label := details.buildLabel
-			if details.buildNumber > 0 {
-				label = fmt.Sprintf("#%d", details.buildNumber)
-			}
-			buildText = slackMrkdwnLink(details.buildURL, label)
+			buildText = slackMrkdwnLink(details.buildURL, notificationBuildLinkLabel(details))
 		}
 		lines = append(lines, fmt.Sprintf("Build: %s", buildText))
+	}
+	if details.refLabel != "" || details.shaLabel != "" {
+		lines = append(lines, fmt.Sprintf("Commit: %s", notificationSlackCommitText(details)))
+	}
+	if details.statusSummary == "failed" {
+		if details.failedStep != nil {
+			lines = append(lines, fmt.Sprintf("Failed step: %s", notificationStepSlackText(*details.failedStep)))
+		}
+		if details.failureText != "" {
+			lines = append(lines, fmt.Sprintf("Reason: %s", slackEscapeMrkdwnLabel(details.failureText)))
+		}
+		if details.failureExit != nil {
+			lines = append(lines, fmt.Sprintf("Exit code: %d", *details.failureExit))
+		}
+	}
+	if details.statusSummary == "failed" {
+		authorText := formatNotificationAuthorSlack(details.authorName, details.authorEmail)
+		if authorText != "" {
+			lines = append(lines, fmt.Sprintf("Author: %s", authorText))
+		}
 	}
 	if details.durationLabel != "" {
 		lines = append(lines, fmt.Sprintf("Duration: %s", details.durationLabel))
 	}
-	if details.refLabel != "" || details.shaLabel != "" {
-		gitLabel := joinNotificationGitParts(details.refLabel, details.shaLabel)
-		gitText := slackEscapeMrkdwnLabel(gitLabel)
-		if details.commitURL != "" {
-			linkedRefLabel := slackGitRefLabel(details.refLabel)
-			linkedGitLabel := joinNotificationGitParts(linkedRefLabel, details.shaLabel)
-			if linkedGitLabel == "" {
-				linkedGitLabel = gitLabel
-			}
-			gitText = slackMrkdwnLink(details.commitURL, linkedGitLabel)
-		}
-		lines = append(lines, fmt.Sprintf("Git: %s", gitText))
+	if details.statusSummary == "failed" && details.diagnosticURL != "" {
+		lines = append(lines, fmt.Sprintf("Diagnostic: %s", slackMrkdwnLink(details.diagnosticURL, notificationDiagnosticLabel(details))))
 	}
-	authorText := formatNotificationAuthorSlack(details.authorName, details.authorEmail)
-	if authorText != "" {
-		lines = append(lines, fmt.Sprintf("Commit author: %s", authorText))
+	if details.statusSummary == "succeeded" {
+		artifactLine := formatNotificationArtifactSlackLine(details)
+		if artifactLine != "" {
+			lines = append(lines, artifactLine)
+		}
 	}
 	if details.buildURL != "" {
-		lines = append(lines, fmt.Sprintf("Build detail: %s", details.buildURL))
+		lines = append(lines, fmt.Sprintf("Build details: %s", slackMrkdwnLink(details.buildURL, "View build")))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -247,19 +348,256 @@ func formatPersonalBuildStatusSlackText(details buildNotificationDetails) string
 	}
 
 	lines := []string{headline}
-	if details.shaLabel != "" {
-		lines = append(lines, fmt.Sprintf("Commit: %s", details.shaLabel))
+	if details.refLabel != "" || details.shaLabel != "" {
+		lines = append(lines, fmt.Sprintf("Commit: %s", notificationSlackCommitText(details)))
 	}
-	if details.refLabel != "" {
-		lines = append(lines, fmt.Sprintf("Ref: %s", details.refLabel))
+	if details.statusSummary == "failed" {
+		if details.failedStep != nil {
+			lines = append(lines, fmt.Sprintf("Failed step: %s", notificationStepSlackText(*details.failedStep)))
+		}
+		if details.failureText != "" {
+			lines = append(lines, fmt.Sprintf("Reason: %s", slackEscapeMrkdwnLabel(details.failureText)))
+		}
+		if details.failureExit != nil {
+			lines = append(lines, fmt.Sprintf("Exit code: %d", *details.failureExit))
+		}
+		authorText := formatNotificationAuthorSlack(details.authorName, details.authorEmail)
+		if authorText != "" {
+			lines = append(lines, fmt.Sprintf("Author: %s", authorText))
+		}
 	}
-	if details.buildURL != "" {
-		lines = append(lines, fmt.Sprintf("View build: %s", details.buildURL))
-	}
-	if details.statusSummary == "failed" && details.durationLabel != "" {
+	if details.durationLabel != "" {
 		lines = append(lines, fmt.Sprintf("Duration: %s", details.durationLabel))
 	}
+	if details.statusSummary == "failed" && details.diagnosticURL != "" {
+		lines = append(lines, fmt.Sprintf("Next: %s", slackMrkdwnLink(details.diagnosticURL, notificationDiagnosticLabel(details))))
+	}
+	if details.statusSummary == "succeeded" {
+		artifactLine := formatNotificationArtifactSlackLine(details)
+		if artifactLine != "" {
+			lines = append(lines, artifactLine)
+		}
+	}
+	if details.buildURL != "" && (details.statusSummary != "failed" || details.buildURL != details.diagnosticURL) {
+		lines = append(lines, fmt.Sprintf("Build: %s", slackMrkdwnLink(details.buildURL, "View build")))
+	}
 	return strings.Join(lines, "\n")
+}
+
+func formatBuildStatusHeadline(details buildNotificationDetails) string {
+	context := strings.TrimSpace(details.jobName)
+	if context == "" {
+		context = strings.TrimSpace(details.jobLabel)
+	}
+	if context == "" {
+		context = notificationBuildContextLabel(details)
+	}
+	if context == "" {
+		return fmt.Sprintf("%s Build %s", slackStatusIndicator(details.statusSummary), details.statusSummary)
+	}
+	return fmt.Sprintf("%s Build %s: %s", slackStatusIndicator(details.statusSummary), details.statusSummary, slackEscapeMrkdwnLabel(context))
+}
+
+func notificationBuildContextLabel(details buildNotificationDetails) string {
+	if details.buildNumber > 0 {
+		return fmt.Sprintf("#%d", details.buildNumber)
+	}
+	return strings.TrimSpace(details.buildID)
+}
+
+func notificationBuildLinkLabel(details buildNotificationDetails) string {
+	if details.buildNumber > 0 {
+		if strings.TrimSpace(details.buildID) == "" {
+			return fmt.Sprintf("#%d", details.buildNumber)
+		}
+		return fmt.Sprintf("#%d (%s)", details.buildNumber, strings.TrimSpace(details.buildID))
+	}
+	return strings.TrimSpace(details.buildLabel)
+}
+
+func notificationSlackCommitText(details buildNotificationDetails) string {
+	gitLabel := joinNotificationGitParts(slackGitRefLabel(details.refLabel), details.shaLabel)
+	if gitLabel == "" {
+		gitLabel = joinNotificationGitParts(details.refLabel, details.shaLabel)
+	}
+	if details.commitURL != "" {
+		return slackMrkdwnLink(details.commitURL, gitLabel)
+	}
+	return slackEscapeMrkdwnLabel(gitLabel)
+}
+
+func notificationStepSlackText(step buildNotificationStep) string {
+	if step.url != "" {
+		return slackMrkdwnLink(step.url, step.label)
+	}
+	return slackEscapeMrkdwnLabel(step.label)
+}
+
+func notificationDiagnosticLabel(details buildNotificationDetails) string {
+	if details.failedStep != nil {
+		return "Open failed step logs"
+	}
+	return "View build details"
+}
+
+func formatNotificationArtifactSlackLine(details buildNotificationDetails) string {
+	if len(details.artifacts) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(details.artifacts)+1)
+	for _, artifact := range details.artifacts {
+		parts = append(parts, slackMrkdwnLink(artifact.url, artifact.label))
+	}
+	overflow := details.artifactCount - len(details.artifacts)
+	if overflow > 0 {
+		if details.artifactsURL != "" {
+			parts = append(parts, slackMrkdwnLink(details.artifactsURL, fmt.Sprintf("+%d more", overflow)))
+		} else {
+			parts = append(parts, fmt.Sprintf("+%d more", overflow))
+		}
+	}
+	return "Artifacts: " + strings.Join(parts, ", ")
+}
+
+func buildNotificationFailedStep(publicBaseURL string, buildID string, steps []domain.BuildStep) *buildNotificationStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	ordered := append([]domain.BuildStep(nil), steps...)
+	sort.Slice(ordered, func(i, j int) bool {
+		return ordered[i].StepIndex < ordered[j].StepIndex
+	})
+	for _, step := range ordered {
+		if step.Status != domain.BuildStepStatusFailed {
+			continue
+		}
+		stepCopy := step
+		return &buildNotificationStep{
+			index: stepCopy.StepIndex,
+			name:  strings.TrimSpace(stepCopy.Name),
+			label: formatNotificationStepLabel(stepCopy),
+			url:   buildBuildStepDetailURL(publicBaseURL, buildID, stepCopy.StepIndex),
+		}
+	}
+	return nil
+}
+
+func stepErrorPointer(steps []domain.BuildStep, stepIndex int) *string {
+	for i := range steps {
+		if steps[i].StepIndex == stepIndex {
+			return steps[i].ErrorMessage
+		}
+	}
+	return nil
+}
+
+func stepExitCodePointer(steps []domain.BuildStep, stepIndex int) *int {
+	for i := range steps {
+		if steps[i].StepIndex == stepIndex {
+			return steps[i].ExitCode
+		}
+	}
+	return nil
+}
+
+func formatNotificationStepLabel(step domain.BuildStep) string {
+	stepNumber := step.StepIndex + 1
+	name := strings.TrimSpace(step.Name)
+	if name == "" {
+		return fmt.Sprintf("Step %d", stepNumber)
+	}
+	return fmt.Sprintf("Step %d %s", stepNumber, name)
+}
+
+func buildNotificationArtifactLinks(publicBaseURL string, artifacts []domain.BuildArtifact) []notificationArtifactLink {
+	if publicBaseURL == "" || len(artifacts) == 0 {
+		return nil
+	}
+	ordered := append([]domain.BuildArtifact(nil), artifacts...)
+	sort.Slice(ordered, func(i, j int) bool {
+		left := notificationArtifactSortKey(ordered[i])
+		right := notificationArtifactSortKey(ordered[j])
+		if left == right {
+			return ordered[i].ID < ordered[j].ID
+		}
+		return left < right
+	})
+	links := make([]notificationArtifactLink, 0, minNotificationInt(len(ordered), maxNotificationArtifactLinks))
+	for _, artifact := range ordered {
+		artifactURL := buildArtifactDetailURL(publicBaseURL, artifact.ID)
+		if artifactURL == "" {
+			continue
+		}
+		links = append(links, notificationArtifactLink{
+			label: truncateNotificationText(notificationArtifactDisplayLabel(artifact), maxNotificationArtifactLabelLength),
+			url:   artifactURL,
+		})
+		if len(links) == maxNotificationArtifactLinks {
+			break
+		}
+	}
+	return links
+}
+
+func notificationArtifactDisplayLabel(artifact domain.BuildArtifact) string {
+	baseLabel := strings.TrimSpace(artifact.Name)
+	if baseLabel == "" {
+		baseLabel = strings.TrimSpace(artifact.LogicalPath)
+	}
+	if baseLabel == "" {
+		baseLabel = strings.TrimSpace(artifact.ID)
+	}
+	versionLabel := notificationArtifactVersionLabel(artifact.VersionTags)
+	if versionLabel == "" {
+		return baseLabel
+	}
+	return fmt.Sprintf("%s (%s)", baseLabel, versionLabel)
+}
+
+func notificationArtifactVersionLabel(tags []domain.VersionTag) string {
+	for _, tag := range tags {
+		if tag.Kind == domain.VersionTagKindVersion && strings.TrimSpace(tag.Version) != "" {
+			return strings.TrimSpace(tag.Version)
+		}
+	}
+	for _, tag := range tags {
+		if strings.TrimSpace(tag.Version) != "" {
+			return strings.TrimSpace(tag.Version)
+		}
+	}
+	return ""
+}
+
+func notificationArtifactSortKey(artifact domain.BuildArtifact) string {
+	if logicalPath := strings.TrimSpace(artifact.LogicalPath); logicalPath != "" {
+		return logicalPath
+	}
+	if name := strings.TrimSpace(artifact.Name); name != "" {
+		return name
+	}
+	return strings.TrimSpace(artifact.ID)
+}
+
+func truncateNotificationText(value string, maxRunes int) string {
+	trimmed := strings.TrimSpace(value)
+	if maxRunes <= 0 || trimmed == "" {
+		return trimmed
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= maxRunes {
+		return trimmed
+	}
+	if maxRunes <= 1 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-1]) + "…"
+}
+
+func minNotificationInt(left int, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func slackStatusIndicator(statusSummary string) string {
@@ -324,6 +662,29 @@ func buildJobDetailURL(publicBaseURL string, jobID string) string {
 
 func buildBuildDetailURL(publicBaseURL string, buildID string) string {
 	return buildFrontendEntityURL(publicBaseURL, "/builds/", buildID)
+}
+
+func buildBuildStepDetailURL(publicBaseURL string, buildID string, stepIndex int) string {
+	buildURL := buildBuildDetailURL(publicBaseURL, buildID)
+	if buildURL == "" || stepIndex < 0 {
+		return buildURL
+	}
+	return buildURL + "?step=" + url.QueryEscape(strconv.Itoa(stepIndex))
+}
+
+func buildArtifactDetailURL(publicBaseURL string, artifactID string) string {
+	return buildFrontendEntityURL(publicBaseURL, "/artifacts/", artifactID)
+}
+
+func buildArtifactsListURL(publicBaseURL string, buildID string) string {
+	base := strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	trimmedID := strings.TrimSpace(buildID)
+	if base == "" || trimmedID == "" {
+		return ""
+	}
+	values := url.Values{}
+	values.Set("build_id", trimmedID)
+	return base + "/artifacts?" + values.Encode()
 }
 
 func buildFrontendEntityURL(publicBaseURL string, pathPrefix string, id string) string {

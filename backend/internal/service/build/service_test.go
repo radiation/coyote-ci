@@ -97,6 +97,7 @@ type fakeBuildRepository struct {
 	steps         []domain.BuildStep
 	createErr     error
 	getErr        error
+	stepsErr      error
 	updateErr     error
 	updateCalls   int
 	updatedID     string
@@ -352,6 +353,9 @@ func (r *fakeBuildRepository) UpdateImageExecution(_ context.Context, id string,
 }
 
 func (r *fakeBuildRepository) GetStepsByBuildID(_ context.Context, _ string) ([]domain.BuildStep, error) {
+	if r.stepsErr != nil {
+		return nil, r.stepsErr
+	}
 	if r.getErr != nil {
 		return nil, r.getErr
 	}
@@ -689,6 +693,7 @@ type fakeLogSink struct {
 type fakeArtifactRepository struct {
 	artifacts map[string][]domain.BuildArtifact
 	onCreate  func(domain.BuildArtifact)
+	listErr   error
 }
 
 func (r *fakeArtifactRepository) Create(_ context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
@@ -703,6 +708,9 @@ func (r *fakeArtifactRepository) Create(_ context.Context, artifact domain.Build
 }
 
 func (r *fakeArtifactRepository) ListByBuildID(_ context.Context, buildID string) ([]domain.BuildArtifact, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
 	items := r.artifacts[buildID]
 	out := make([]domain.BuildArtifact, len(items))
 	copy(out, items)
