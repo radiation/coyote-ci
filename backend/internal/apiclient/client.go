@@ -1,0 +1,244 @@
+package apiclient
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/radiation/coyote-ci/backend/internal/api"
+)
+
+const defaultTimeout = 10 * time.Second
+
+type ErrorKind string
+
+const (
+	ErrorKindAuthentication ErrorKind = "authentication"
+	ErrorKindAuthorization  ErrorKind = "authorization"
+	ErrorKindNotFound       ErrorKind = "not_found"
+	ErrorKindConflict       ErrorKind = "conflict"
+	ErrorKindValidation     ErrorKind = "validation"
+	ErrorKindTransport      ErrorKind = "transport"
+	ErrorKindServer         ErrorKind = "server"
+	ErrorKindUnexpected     ErrorKind = "unexpected"
+)
+
+type Error struct {
+	Kind       ErrorKind
+	StatusCode int
+	Code       string
+	Message    string
+	RequestID  string
+	Err        error
+}
+
+func (e *Error) Error() string {
+	if e == nil {
+		return ""
+	}
+	message := strings.TrimSpace(e.Message)
+	if message == "" {
+		message = strings.TrimSpace(http.StatusText(e.StatusCode))
+	}
+	if e.RequestID == "" {
+		return message
+	}
+	return fmt.Sprintf("%s (request_id=%s)", message, e.RequestID)
+}
+
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+type Client struct {
+	baseURL    *url.URL
+	httpClient *http.Client
+	token      string
+	userAgent  string
+}
+
+func New(baseURL string, token string, userAgent string, httpClient *http.Client) (*Client, error) {
+	parsed, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: defaultTimeout}
+	} else if httpClient.Timeout == 0 {
+		clone := *httpClient
+		clone.Timeout = defaultTimeout
+		httpClient = &clone
+	}
+	return &Client{
+		baseURL:    parsed,
+		httpClient: httpClient,
+		token:      strings.TrimSpace(token),
+		userAgent:  strings.TrimSpace(userAgent),
+	}, nil
+}
+
+func (c *Client) GetMe(ctx context.Context) (api.MeResponse, error) {
+	var envelope api.MeEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, "api/me", nil, &envelope); err != nil {
+		return api.MeResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
+func (c *Client) GetServerInfo(ctx context.Context) (api.ServerInfoResponse, error) {
+	var envelope api.ServerInfoEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, "api/info", nil, &envelope); err != nil {
+		return api.ServerInfoResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
+func (c *Client) doJSON(ctx context.Context, method string, path string, requestBody io.Reader, out any) error {
+	requestURL, err := resolveRequestURL(c.baseURL, path)
+	if err != nil {
+		return &Error{Kind: ErrorKindUnexpected, Message: "invalid request path", Err: err}
+	}
+	request, err := http.NewRequestWithContext(ctx, method, requestURL.String(), requestBody)
+	if err != nil {
+		return &Error{Kind: ErrorKindUnexpected, Message: "build request", Err: err}
+	}
+	request.Header.Set("Accept", "application/json")
+	if c.userAgent != "" {
+		request.Header.Set("User-Agent", c.userAgent)
+	}
+	if c.token != "" {
+		request.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return &Error{Kind: ErrorKindTransport, Message: "request failed", Err: err}
+	}
+	defer func() {
+		_ = response.Body.Close()
+	}()
+
+	requestID := strings.TrimSpace(response.Header.Get("X-Request-Id"))
+	if requestID == "" {
+		requestID = strings.TrimSpace(response.Header.Get("X-Request-ID"))
+	}
+
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return decodeErrorResponse(response, requestID)
+	}
+
+	if out == nil {
+		_, _ = io.Copy(io.Discard, response.Body)
+		return nil
+	}
+	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+		return &Error{Kind: ErrorKindUnexpected, Message: "invalid json response", RequestID: requestID, Err: err}
+	}
+	return nil
+}
+
+func normalizeBaseURL(raw string) (*url.URL, error) {
+	trimmed := strings.TrimSpace(raw)
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("parse base url: %w", err)
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return nil, errors.New("base url must include scheme and host")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, errors.New("base url must use http or https")
+	}
+	if parsed.Fragment != "" {
+		return nil, errors.New("base url must not include a fragment")
+	}
+	if parsed.User != nil {
+		return nil, errors.New("base url must not include embedded credentials")
+	}
+	if parsed.RawQuery != "" {
+		return nil, errors.New("base url must not include a query")
+	}
+	path := strings.TrimSuffix(parsed.EscapedPath(), "/")
+	if path == "." || path == "/" {
+		path = ""
+	}
+	parsed.Path = path
+	parsed.RawPath = ""
+	return parsed, nil
+}
+
+func resolveRequestURL(baseURL *url.URL, requestPath string) (*url.URL, error) {
+	trimmed := strings.TrimSpace(requestPath)
+	if trimmed == "" {
+		return nil, errors.New("request path is required")
+	}
+	relative, err := url.Parse(strings.TrimPrefix(trimmed, "/"))
+	if err != nil {
+		return nil, err
+	}
+	if relative.Scheme != "" || relative.Host != "" || relative.User != nil || relative.Fragment != "" {
+		return nil, errors.New("request path must be relative")
+	}
+	baseCopy := *baseURL
+	basePath := strings.TrimSuffix(baseCopy.Path, "/")
+	if basePath != "" {
+		baseCopy.Path = basePath + "/"
+	} else {
+		baseCopy.Path = "/"
+	}
+	return baseCopy.ResolveReference(relative), nil
+}
+
+func decodeErrorResponse(response *http.Response, requestID string) error {
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, 4096))
+	if readErr != nil {
+		return &Error{Kind: classifyStatus(response.StatusCode), StatusCode: response.StatusCode, Message: http.StatusText(response.StatusCode), RequestID: requestID, Err: readErr}
+	}
+	var payload api.ErrorResponse
+	if err := json.Unmarshal(body, &payload); err == nil && strings.TrimSpace(payload.Error.Message) != "" {
+		return &Error{
+			Kind:       classifyStatus(response.StatusCode),
+			StatusCode: response.StatusCode,
+			Code:       strings.TrimSpace(payload.Error.Code),
+			Message:    strings.TrimSpace(payload.Error.Message),
+			RequestID:  requestID,
+		}
+	}
+	message := strings.TrimSpace(string(body))
+	if message == "" {
+		message = http.StatusText(response.StatusCode)
+	}
+	return &Error{Kind: classifyStatus(response.StatusCode), StatusCode: response.StatusCode, Message: message, RequestID: requestID}
+}
+
+func classifyStatus(statusCode int) ErrorKind {
+	switch statusCode {
+	case http.StatusUnauthorized:
+		return ErrorKindAuthentication
+	case http.StatusForbidden:
+		return ErrorKindAuthorization
+	case http.StatusNotFound:
+		return ErrorKindNotFound
+	case http.StatusConflict:
+		return ErrorKindConflict
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		return ErrorKindValidation
+	default:
+		if statusCode >= 500 {
+			return ErrorKindServer
+		}
+		return ErrorKindUnexpected
+	}
+}

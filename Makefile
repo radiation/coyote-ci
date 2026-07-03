@@ -1,4 +1,9 @@
-.PHONY: swagger swagger-check backend-format-check backend-vet backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status
+.PHONY: swagger swagger-check backend-format-check backend-vet backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix
+
+CLI_VERSION ?= dev
+CLI_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+CLI_BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+CLI_LDFLAGS := -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=$(CLI_VERSION) -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=$(CLI_COMMIT) -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=$(CLI_BUILD_DATE)
 
 GOOSE := go run github.com/pressly/goose/v3/cmd/goose@v3.24.1
 MIGRATIONS_DIR := backend/db/migrations
@@ -37,6 +42,15 @@ backend-unit-test:
 	go test $$packages
 
 backend-test: backend-architecture backend-unit-test
+
+cli-build:
+	cd backend && go build -ldflags "$(CLI_LDFLAGS)" -o ./tmp/coyote ./cmd/coyote
+
+cli-snapshot:
+	go run github.com/goreleaser/goreleaser/v2@v2.12.7 release --config .goreleaser.yml --snapshot --clean --skip=publish
+
+cli-validate-release-matrix:
+	bash ./scripts/validate_cli_snapshot.sh .
 
 frontend-lint:
 	cd frontend && npm run lint

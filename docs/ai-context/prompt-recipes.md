@@ -24,6 +24,10 @@ Treat source code, migrations, tests, and recent diffs as authoritative.
 
 "Add an API endpoint for [behavior]. Start with `.github/copilot-instructions.md`, `docs/ai-context/backend-map.md`, and `docs/ai-context/domain-model.md`. Identify the smallest handler, service, repository, domain, migration, and test file set needed. Keep handlers thin and business logic in services."
 
+## Adding or changing CLI behavior
+
+"Add or change CLI behavior for [command or workflow]. Start with `.github/copilot-instructions.md`, `docs/ai-context/current-priorities.md`, `docs/ai-context/backend-map.md`, and `docs/ai-context/domain-model.md`. Stay local to `backend/cmd/coyote`, `backend/internal/cli`, `backend/internal/apiclient`, `backend/internal/versioninfo`, and only the smallest backend handler/API files needed by the command. Keep the CLI as a thin HTTP client of the API. Do not add build, log, rerun, artifact, or other resource commands until token scopes are enforced server-side."
+
 ## Adding frontend polish
 
 "Improve frontend polish for [page or interaction] without broad redesign. Start with `.github/copilot-instructions.md`, `docs/ai-context/current-priorities.md`, and `docs/ai-context/frontend-map.md`. Identify the smallest page and component files plus their colocated tests. Preserve existing routes and API contracts unless explicitly changing them."

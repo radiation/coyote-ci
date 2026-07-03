@@ -8,14 +8,18 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 
 - `backend/cmd/server/main.go`: composition root for the HTTP API, storage, auth, services, and repositories.
 - `backend/cmd/worker/main.go`: worker process entry point for queue claiming and build execution.
+- `backend/cmd/coyote/main.go`: CLI entry point for remote API access, local context selection, and token-backed auth.
 - `backend/internal/http/router.go`: request routing surface before dropping into handlers.
 
 ## Main package map
 
 - `backend/internal/http/handler`: thin HTTP handlers. Start here when changing request parsing, response shaping, authz checks at the edge, or endpoint wiring.
+- `backend/internal/http/handler/server_info_handler.go`: unauthenticated server metadata endpoint used by the CLI for remote capability/version inspection.
 - `backend/internal/domain`: core business types and lifecycle helpers such as builds, steps, jobs, projects, queue items, workers, artifacts, source specs, users, memberships, and version tags.
 - `backend/internal/service`: orchestration and business rules. This is usually the first stop for behavioral changes.
 - `backend/internal/repository`: persistence logic, Postgres adapters, in-memory adapters, and transaction-safe state updates.
+- `backend/internal/apiclient`: focused typed HTTP client used by the CLI; keep it independent from CLI presentation.
+- `backend/internal/cli`: command parsing, context/config resolution, credential-store integration, and human/JSON terminal output.
 - `backend/db/migrations`: additive schema history. Add new numbered migrations here; do not edit applied migrations.
 - `backend/internal/artifact`: artifact key resolution and blob-store adapters.
 - `backend/internal/platform/config`: env loading for email/slack notification support, SMTP settings, and optional public build-detail base URL via `COYOTE_PUBLIC_URL` or `APP_BASE_URL`.
@@ -53,6 +57,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Personal Slack identity linking and DM delivery: start with `backend/internal/service/user_slack_identity_service.go`, `backend/internal/service/notification_service.go`, `backend/internal/service/notification_preferences.go`, `backend/internal/service/build/notifications.go`, `backend/internal/service/build/notification_planning.go`, `backend/internal/service/build/notification_destinations.go`, `backend/internal/service/build/notification_execution.go`, `backend/internal/service/build/notification_format.go`, `backend/internal/service/build/notification_recovery.go`, `backend/internal/http/handler/notification_personal_slack_identity_handler.go`, `backend/internal/http/handler/notification_preferences_handler.go`, `backend/internal/http/handler/notification_slack_workspace_handler.go`, `backend/internal/api/notification_dto.go`, `backend/internal/platform/slack/client.go`, `backend/internal/repository/user_notification_preference_repository.go`, `backend/internal/repository/user_slack_identity_repository.go`, `backend/internal/repository/memory/slack_workspace_integration_repository.go`, `backend/internal/repository/postgres/slack_workspace_integration_repository.go`, `backend/internal/repository/memory/user_slack_identity_repository.go`, `backend/internal/repository/postgres/user_slack_identity_repository.go`, `backend/db/migrations/00030_add_user_slack_identities.sql`, `backend/db/migrations/00031_add_personal_slack_notification_preferences.sql`, and the matching `*_test.go` files.
 - Artifacts/provenance/source linking: start with `backend/internal/domain/artifact.go`, `backend/internal/service/build/artifacts.go`, `backend/internal/repository/artifact_repository.go`, `backend/internal/repository/artifact_label_repository.go`, `backend/internal/api/artifact_dto.go`, `backend/internal/http/handler/artifact_handler.go`, `backend/internal/versioning/artifact_template.go`, and `backend/internal/source`.
 - Auth/RBAC/API tokens: start with `backend/internal/auth`, `backend/internal/service/api_token_service.go`, `backend/internal/service/project_membership_service.go`, and matching handlers/repositories.
+- CLI/context/auth status work: start with `backend/cmd/coyote/main.go`, `backend/internal/cli`, `backend/internal/apiclient`, `backend/internal/http/handler/server_info_handler.go`, `backend/internal/http/router.go`, and `backend/internal/versioninfo`.
 
 ## Focused docs worth checking first
 
