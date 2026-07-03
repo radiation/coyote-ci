@@ -322,6 +322,26 @@ func TestLogEmailNotificationConfig(t *testing.T) {
 	})
 }
 
+func TestLogNotificationLinkConfig(t *testing.T) {
+	t.Run("disabled when public url missing", func(t *testing.T) {
+		output := captureWorkerLogOutput(t, func() {
+			logNotificationLinkConfig("  ")
+		})
+		if !strings.Contains(output, "public url is not configured; slack project/job/build links are disabled") {
+			t.Fatalf("expected missing-public-url log, got %q", output)
+		}
+	})
+
+	t.Run("enabled when public url configured", func(t *testing.T) {
+		output := captureWorkerLogOutput(t, func() {
+			logNotificationLinkConfig("https://ci.example.com")
+		})
+		if !strings.Contains(output, "public url configured for notification links: https://ci.example.com") {
+			t.Fatalf("expected configured-public-url log, got %q", output)
+		}
+	})
+}
+
 func TestNewWorkerNotificationService(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
 	artifactRepo := repositorymemory.NewArtifactRepository()

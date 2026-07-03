@@ -48,11 +48,7 @@ func main() {
 	cfg := config.Load()
 	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
 	logEmailNotificationConfig(cfg)
-	if strings.TrimSpace(cfg.PublicURL) == "" {
-		log.Printf("public url is not configured; slack project/job/build links are disabled")
-	} else {
-		log.Printf("public url configured for notification links: %s", cfg.PublicURL)
-	}
+	logNotificationLinkConfig(cfg.PublicURL)
 
 	dbURL, dbPoolCfg := dbopen.FromConfig(cfg)
 	db, err := platformdb.Open(dbURL, dbPoolCfg)
@@ -150,6 +146,14 @@ func logEmailNotificationConfig(cfg config.Config) {
 		return
 	}
 	log.Printf("email notifications disabled")
+}
+
+func logNotificationLinkConfig(publicURL string) {
+	if strings.TrimSpace(publicURL) == "" {
+		log.Printf("public url is not configured; slack project/job/build links are disabled")
+		return
+	}
+	log.Printf("public url configured for notification links: %s", publicURL)
 }
 
 func newWorkerNotificationService(cfg config.Config, buildRepo repository.BuildRepository, artifactRepo repository.ArtifactBuildListRepository, jobRepo repository.JobRepository, projectRepo repository.ProjectRepository, userRepo repository.UserRepository, preferenceRepo repository.UserNotificationPreferenceRepository, identityRepo repository.UserSlackIdentityRepository, workspaceRepo repository.SlackWorkspaceIntegrationRepository, deliveryRepo repository.NotificationDeliveryRepository, subscriptionRepo repository.NotificationSubscriptionRepository, metrics observability.NotificationDeliveryMetrics) (*buildsvc.BuildNotificationService, error) {

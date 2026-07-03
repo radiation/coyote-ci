@@ -356,3 +356,43 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureSanitizedError
 		t.Fatalf("expected sanitized persisted last_error, got %q", *slackDelivery.LastError)
 	}
 }
+
+func TestBuildNotificationService_ExecutionHelpers(t *testing.T) {
+	t.Run("send destination requires configured transport clients", func(t *testing.T) {
+		notifier := &BuildNotificationService{}
+		if err := notifier.sendDestination(context.Background(), notificationDestination{transport: domain.NotificationTransportSlackWebhook, webhookURL: "https://hooks.slack.example/services/T/B/X"}, "", "", "payload", ""); err == nil || err.Error() != "slack sender is not configured" {
+			t.Fatalf("expected missing slack sender error, got %v", err)
+		}
+		if err := notifier.sendDestination(context.Background(), notificationDestination{transport: domain.NotificationTransportSlackDM, slackBotToken: "xoxb-token", slackUserID: "U123"}, "", "", "", "payload"); err == nil || err.Error() != "slack client is not configured" {
+			t.Fatalf("expected missing slack client error, got %v", err)
+		}
+		if err := notifier.sendDestination(context.Background(), notificationDestination{transport: domain.NotificationTransportEmail, emailRecipient: "<dev@example.com>"}, "subject", "body", "", ""); err == nil || err.Error() != "email sender is not configured" {
+			t.Fatalf("expected missing email sender error, got %v", err)
+		}
+	})
+
+	t.Run("context cancellation leaves claimed delivery active", func(t *testing.T) {
+		claimedAt := time.Now().UTC()
+		notifier := &BuildNotificationService{
+			sender: &recordingEmailSender{err: context.Canceled},
+			now:    func() time.Time { return claimedAt },
+		}
+		delivery := domain.NotificationDelivery{
+			ID:          "delivery-1",
+			BuildID:     "build-1",
+			EventType:   domain.NotificationEventTypeBuildFailed,
+			Transport:   domain.NotificationTransportEmail,
+			ClaimedAt:   &claimedAt,
+			Attempts:    1,
+			MaxAttempts: 3,
+		}
+
+		outcome, err := notifier.executeClaimedDelivery(context.Background(), delivery, notificationDestination{transport: domain.NotificationTransportEmail, emailRecipient: "<dev@example.com>"}, notificationContent{subject: "subject", body: "body"}, notificationRecoveryReasonInline)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context canceled error, got %v", err)
+		}
+		if outcome != notificationExecutionOutcomeNone {
+			t.Fatalf("expected no execution outcome on cancellation, got %q", outcome)
+		}
+	})
+}

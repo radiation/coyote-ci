@@ -419,6 +419,111 @@ func TestBuildNotificationHelpers_RepositoryRemoteParsing(t *testing.T) {
 	}
 }
 
+func TestBuildNotificationHelpers_NewBranches(t *testing.T) {
+	t.Run("headline and build labels fall back cleanly", func(t *testing.T) {
+		headline := formatBuildStatusHeadline(buildNotificationDetails{statusSummary: "failed", buildNumber: 42})
+		if headline != ":x: Build failed: #42" {
+			t.Fatalf("unexpected headline fallback: %q", headline)
+		}
+		headline = formatBuildStatusHeadline(buildNotificationDetails{statusSummary: "succeeded", buildID: "build-1"})
+		if headline != ":white_check_mark: Build succeeded: build-1" {
+			t.Fatalf("unexpected build-id headline fallback: %q", headline)
+		}
+		if got := notificationBuildLinkLabel(buildNotificationDetails{buildNumber: 7}); got != "#7" {
+			t.Fatalf("unexpected build link label without build id: %q", got)
+		}
+		if got := notificationBuildLinkLabel(buildNotificationDetails{buildLabel: " build-9 "}); got != "build-9" {
+			t.Fatalf("unexpected build label fallback: %q", got)
+		}
+	})
+
+	t.Run("step helpers select sorted failed step and handle misses", func(t *testing.T) {
+		stepError := "boom"
+		exitCode := 7
+		steps := []domain.BuildStep{
+			{StepIndex: 3, Name: "deploy", Status: domain.BuildStepStatusFailed, ErrorMessage: &stepError, ExitCode: &exitCode},
+			{StepIndex: 1, Name: "setup", Status: domain.BuildStepStatusSuccess},
+			{StepIndex: 2, Name: "verify", Status: domain.BuildStepStatusFailed},
+		}
+		failed := buildNotificationFailedStep("https://ci.example.com", "build-1", steps)
+		if failed == nil || failed.index != 2 || failed.label != "Step 3 verify" || failed.url != "https://ci.example.com/builds/build-1?step=2" {
+			t.Fatalf("unexpected failed step details: %+v", failed)
+		}
+		if got := notificationStepSlackText(buildNotificationStep{label: "Step <3>"}); got != "Step &lt;3&gt;" {
+			t.Fatalf("unexpected plain-text step label: %q", got)
+		}
+		if got := formatNotificationStepLabel(domain.BuildStep{StepIndex: 0, Name: "   "}); got != "Step 1" {
+			t.Fatalf("unexpected blank-name step label: %q", got)
+		}
+		if got := stepErrorPointer(steps, 3); got == nil || *got != "boom" {
+			t.Fatalf("expected step error pointer, got %v", got)
+		}
+		if got := stepExitCodePointer(steps, 3); got == nil || *got != 7 {
+			t.Fatalf("expected step exit pointer, got %v", got)
+		}
+		if got := stepErrorPointer(steps, 99); got != nil {
+			t.Fatalf("expected missing step error to return nil, got %v", *got)
+		}
+		if got := stepExitCodePointer(steps, 99); got != nil {
+			t.Fatalf("expected missing step exit code to return nil, got %v", *got)
+		}
+		if got := buildNotificationFailedStep("https://ci.example.com", "build-1", []domain.BuildStep{{StepIndex: 0, Status: domain.BuildStepStatusSuccess}}); got != nil {
+			t.Fatalf("expected no failed step, got %+v", got)
+		}
+	})
+
+	t.Run("artifact helpers handle fallback labels sorting and overflow", func(t *testing.T) {
+		if links := buildNotificationArtifactLinks("", []domain.BuildArtifact{{ID: "artifact-1"}}); links != nil {
+			t.Fatalf("expected nil links without base url, got %+v", links)
+		}
+		artifacts := []domain.BuildArtifact{
+			{ID: "artifact-3", Name: "", LogicalPath: "", VersionTags: []domain.VersionTag{{Kind: domain.VersionTagKindChannel, Version: "latest"}}},
+			{ID: "artifact-2", Name: "pkg-b.tgz", LogicalPath: "dist/pkg-b.tgz"},
+			{ID: "artifact-1", Name: "pkg-a.tgz", LogicalPath: "dist/pkg-a.tgz", VersionTags: []domain.VersionTag{{Kind: domain.VersionTagKindVersion, Version: "1.2.3"}}},
+			{ID: "", Name: "ignored"},
+		}
+		links := buildNotificationArtifactLinks("https://ci.example.com", artifacts)
+		if len(links) != 3 {
+			t.Fatalf("expected three artifact links, got %+v", links)
+		}
+		if links[0].url != "https://ci.example.com/artifacts/artifact-3" || links[0].label != "artifact-3 (latest)" {
+			t.Fatalf("unexpected first artifact link: %+v", links[0])
+		}
+		if links[1].url != "https://ci.example.com/artifacts/artifact-1" || links[1].label != "pkg-a.tgz (1.2.3)" {
+			t.Fatalf("unexpected second artifact link: %+v", links[1])
+		}
+		if links[2].label != "pkg-b.tgz" {
+			t.Fatalf("unexpected third artifact label: %+v", links[2])
+		}
+		line := formatNotificationArtifactSlackLine(buildNotificationDetails{artifacts: links[:2], artifactCount: 4})
+		if !strings.Contains(line, "Artifacts: ") || !strings.Contains(line, "+2 more") || strings.Contains(line, "artifacts?") {
+			t.Fatalf("unexpected artifact slack overflow line: %q", line)
+		}
+		if got := notificationArtifactSortKey(domain.BuildArtifact{ID: "artifact-9", Name: "  ", LogicalPath: "  "}); got != "artifact-9" {
+			t.Fatalf("unexpected artifact sort fallback: %q", got)
+		}
+	})
+
+	t.Run("truncate and minimum helpers cover edge cases", func(t *testing.T) {
+		if got := truncateNotificationText("  keep me  ", 0); got != "keep me" {
+			t.Fatalf("unexpected zero-limit truncate result: %q", got)
+		}
+		if got := truncateNotificationText("abcd", 1); got != "a" {
+			t.Fatalf("unexpected one-rune truncate result: %q", got)
+		}
+		want := "ab" + string(rune(0x2026))
+		if got := truncateNotificationText("abcd", 3); got != want {
+			t.Fatalf("unexpected truncated label: got %q want %q", got, want)
+		}
+		if got := minNotificationInt(2, 5); got != 2 {
+			t.Fatalf("unexpected min result for left-smaller case: %d", got)
+		}
+		if got := minNotificationInt(7, 3); got != 3 {
+			t.Fatalf("unexpected min result for right-smaller case: %d", got)
+		}
+	})
+}
+
 func TestBuildNotificationHelpers_SlackStatusIndicator(t *testing.T) {
 	tests := []struct {
 		status string
