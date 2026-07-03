@@ -14,17 +14,16 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
-func (s *BuildNotificationService) sendTerminalNotification(ctx context.Context, buildID string, eventType domain.NotificationEventType, destinations []notificationDestination, subject string, body string, slackText string, personalSlackText string) error {
+func (s *BuildNotificationService) sendTerminalNotification(ctx context.Context, build domain.Build, eventType domain.NotificationEventType, destinations []notificationDestination) error {
 	var sendErrs []error
-	content := notificationContent{
-		subject:           subject,
-		body:              body,
-		slackText:         slackText,
-		personalSlackText: personalSlackText,
-	}
 
 	for _, destination := range destinations {
 		if s.deliveryRepo == nil {
+			content, renderErr := s.renderNotificationContent(ctx, build, destination.transport)
+			if renderErr != nil {
+				sendErrs = append(sendErrs, renderErr)
+				continue
+			}
 			if sendErr := s.sendDestination(ctx, destination, content.subject, content.body, content.slackText, content.personalSlackText); sendErr != nil {
 				sendErrs = append(sendErrs, sendErr)
 			}
@@ -34,11 +33,24 @@ func (s *BuildNotificationService) sendTerminalNotification(ctx context.Context,
 		var delivery domain.NotificationDelivery
 		var shouldSend bool
 		var err error
-		delivery, shouldSend, err = s.prepareDelivery(ctx, buildID, eventType, destination)
+		delivery, shouldSend, err = s.prepareDelivery(ctx, build.ID, eventType, destination)
 		if err != nil {
 			return err
 		}
 		if !shouldSend {
+			continue
+		}
+		content, renderErr := s.renderNotificationContent(ctx, build, destination.transport)
+		if renderErr != nil {
+			if errors.Is(renderErr, context.Canceled) || errors.Is(renderErr, context.DeadlineExceeded) {
+				return renderErr
+			}
+			_, markErr := s.markDeliveryFailed(ctx, delivery, renderErr, s.now().UTC(), notificationRecoveryReasonInline)
+			if markErr != nil {
+				sendErrs = append(sendErrs, markErr)
+				continue
+			}
+			sendErrs = append(sendErrs, renderErr)
 			continue
 		}
 		if _, executeErr := s.executeClaimedDelivery(ctx, delivery, destination, content, notificationRecoveryReasonInline); executeErr != nil {

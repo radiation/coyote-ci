@@ -116,6 +116,7 @@ func main() {
 		SlackSender:      buildsvc.NewSlackWebhookSender(nil),
 		SlackClient:      platformslack.NewClient(nil),
 		BuildRepo:        buildRepo,
+		ArtifactRepo:     artifactRepo,
 		JobRepo:          jobRepo,
 		ProjectRepo:      projectRepo,
 		DeliveryRepo:     notificationDeliveryRepo,

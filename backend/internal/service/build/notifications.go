@@ -26,6 +26,7 @@ type BuildNotificationService struct {
 	slackSender       SlackWebhookSender
 	slackClient       slackDirectMessageClient
 	buildRepo         notificationBuildRepository
+	artifactRepo      notificationArtifactRepository
 	jobRepo           notificationJobRepository
 	projectRepo       notificationProjectRepository
 	deliveryRepo      notificationDeliveryRepository
@@ -44,6 +45,11 @@ type BuildNotificationService struct {
 
 type notificationBuildRepository interface {
 	GetByID(ctx context.Context, id string) (domain.Build, error)
+	GetStepsByBuildID(ctx context.Context, buildID string) ([]domain.BuildStep, error)
+}
+
+type notificationArtifactRepository interface {
+	ListByBuildID(ctx context.Context, buildID string) ([]domain.BuildArtifact, error)
 }
 
 type notificationJobRepository interface {
@@ -93,6 +99,7 @@ type BuildNotificationConfig struct {
 	SlackSender      SlackWebhookSender
 	SlackClient      slackDirectMessageClient
 	BuildRepo        repository.BuildRepository
+	ArtifactRepo     notificationArtifactRepository
 	JobRepo          repository.JobRepository
 	ProjectRepo      repository.ProjectRepository
 	DeliveryRepo     repository.NotificationDeliveryRepository
@@ -146,6 +153,7 @@ func NewBuildNotificationService(cfg BuildNotificationConfig) (*BuildNotificatio
 		slackSender:       cfg.SlackSender,
 		slackClient:       cfg.SlackClient,
 		buildRepo:         cfg.BuildRepo,
+		artifactRepo:      cfg.ArtifactRepo,
 		jobRepo:           cfg.JobRepo,
 		projectRepo:       cfg.ProjectRepo,
 		deliveryRepo:      cfg.DeliveryRepo,
@@ -188,12 +196,8 @@ func (s *BuildNotificationService) NotifyTerminalBuild(ctx context.Context, buil
 		return nil
 	}
 
-	details := s.buildNotificationDetails(ctx, build)
-	subject, body := s.formatBuildStatusEmail(build, details)
-	slackText := formatBuildStatusSlackText(details)
-	personalSlackText := formatPersonalBuildStatusSlackText(details)
 	log.Printf("build notification sending: build_id=%s status=%s recipients=%d", build.ID, build.Status, len(destinations))
-	sendErr := s.sendTerminalNotification(ctx, build.ID, eventType, destinations, subject, body, slackText, personalSlackText)
+	sendErr := s.sendTerminalNotification(ctx, build, eventType, destinations)
 	if sendErr != nil {
 		log.Printf("build notification send failed: build_id=%s status=%s err=%v", build.ID, build.Status, sendErr)
 		return sendErr

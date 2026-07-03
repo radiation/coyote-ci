@@ -2369,7 +2369,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SendsSlackWebhookSubscript
 		t.Fatalf("unexpected slack webhook urls %v", slackSender.webhookURLs)
 	}
 	message := slackSender.messages[0].Text
-	for _, want := range []string{":x:", "Project: <https://ci.example.com/projects/project-1|Payments API>", "Job: <https://ci.example.com/jobs/job-1|backend-ci>", "Build: <https://ci.example.com/builds/build-1|#42>", "Git: <https://github.com/example/payments/commit/deadbeefcafebabedeadbeefcafebabedeadbeef|main @ deadbee>", "Commit author: Octo Cat (octo@example.com)", "Build detail: https://ci.example.com/builds/build-1"} {
+	for _, want := range []string{":x: Build failed: backend-ci", "Project: <https://ci.example.com/projects/project-1|Payments API>", "Job: <https://ci.example.com/jobs/job-1|backend-ci>", "Build: <https://ci.example.com/builds/build-1|#42 (build-1)>", "Commit: <https://github.com/example/payments/commit/deadbeefcafebabedeadbeefcafebabedeadbeef|main @ deadbee>", "Author: Octo Cat (octo@example.com)", "Duration: 3m0s", "Diagnostic: <https://ci.example.com/builds/build-1|View build details>", "Build details: <https://ci.example.com/builds/build-1|View build>"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("expected slack text to contain %q, got %q", want, message)
 		}
@@ -2504,6 +2504,356 @@ func TestBuildNotificationService_NotifyTerminalBuild_PersonalSlackDMDistinctFro
 	slackDelivery := mustGetNotificationDelivery(t, deliveryRepo, "build-dm-1", domain.NotificationEventTypeBuildFailed, "slack_dm:workspace-integration-1:U123")
 	if slackDelivery.Status != domain.NotificationDeliveryStatusSent {
 		t.Fatalf("expected sent slack dm delivery, got %q", slackDelivery.Status)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureIncludesFailedStepContext(t *testing.T) {
+	slackSender := &recordingSlackSender{}
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	jobRepo := memoryrepo.NewJobRepository()
+	projectRepo := memoryrepo.NewProjectRepository(jobRepo)
+	target := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
+	projectID := "project-1"
+	jobID := "job-1"
+	now := time.Now().UTC()
+	if _, err := projectRepo.Create(context.Background(), domain.Project{ID: projectID, Name: "Payments API", Slug: "payments-api", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	if _, err := jobRepo.Create(context.Background(), domain.Job{ID: jobID, ProjectID: projectID, Name: "backend-ci", RepositoryURL: "https://github.com/example/payments.git", DefaultRef: "main", PipelineYAML: "version: 1", Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
+	exitCode := 7
+	stepError := strings.Repeat("deploy <prod> failed after verifying the release artifact manifest. ", 4)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		SlackSender:      slackSender,
+		BuildRepo:        &fakeBuildRepository{steps: []domain.BuildStep{{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "deploy <prod>", Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, ErrorMessage: &stepError}}},
+		JobRepo:          jobRepo,
+		ProjectRepo:      projectRepo,
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
+		PublicBaseURL:    "https://ci.example.com/",
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+	ref := "refs/heads/main"
+	sha := "deadbeefcafebabedeadbeefcafebabedeadbeef"
+	authorName := "Octo Cat"
+	authorEmail := "octo@example.com"
+	startedAt := time.Now().Add(-3 * time.Minute).UTC()
+	finishedAt := time.Now().UTC()
+	buildError := "build level failure text should not replace the failed step"
+	build := domain.Build{
+		ID:                "build-1",
+		ProjectID:         projectID,
+		JobID:             &jobID,
+		Status:            domain.BuildStatusFailed,
+		BuildNumber:       42,
+		SourceRef:         &ref,
+		SourceSHA:         &sha,
+		SourceAuthorName:  &authorName,
+		SourceAuthorEmail: &authorEmail,
+		StartedAt:         &startedAt,
+		FinishedAt:        &finishedAt,
+		ErrorMessage:      &buildError,
+	}
+
+	if err := notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
+		t.Fatalf("notify terminal build failed: %v", err)
+	}
+	message := slackSender.messages[0].Text
+	wantReason := truncateNotificationText(stepError, maxNotificationFailureMessageLength)
+	for _, want := range []string{
+		"Failed step: <https://ci.example.com/builds/build-1?step=0|Step 1 deploy &lt;prod&gt;>",
+		"Reason: " + slackEscapeMrkdwnLabel(wantReason),
+		"Exit code: 7",
+		"Diagnostic: <https://ci.example.com/builds/build-1?step=0|Open failed step logs>",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected slack text to contain %q, got %q", want, message)
+		}
+	}
+	if strings.Contains(message, "build level failure text") {
+		t.Fatalf("expected failed step message to take precedence, got %q", message)
+	}
+	if strings.Contains(message, "hooks.slack.example") {
+		t.Fatalf("expected slack payload not to contain the webhook url, got %q", message)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_PersonalSlackFailureUsesFailedStepDiagnosticLabel(t *testing.T) {
+	slackClient := &recordingSlackDMClient{}
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	userRepo := memoryrepo.NewUserRepository()
+	preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+	identityRepo := memoryrepo.NewUserSlackIdentityRepository()
+	workspaceRepo := memoryrepo.NewSlackWorkspaceIntegrationRepository()
+	workspaceRepo.SetUserSlackIdentityRepository(identityRepo)
+
+	authorEmail := "author@example.com"
+	authorUser := mustCreateNotificationUser(t, userRepo, authorEmail)
+	if _, err := preferenceRepo.Upsert(context.Background(), domain.UserNotificationPreference{
+		UserID:                          authorUser.ID,
+		CommitAuthorFailureSlackEnabled: true,
+		CommitAuthorFailureEmailSource:  domain.UserNotificationPreferenceSourceUser,
+		CreatedAt:                       time.Now().UTC(),
+		UpdatedAt:                       time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("upsert notification preference failed: %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := workspaceRepo.ConnectOrReplace(context.Background(), domain.SlackWorkspaceIntegration{
+		ID:             "workspace-integration-1",
+		WorkspaceID:    "T123",
+		BotTokenSecret: "xoxb-secret",
+		Enabled:        true,
+		ConnectedAt:    now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}, true); err != nil {
+		t.Fatalf("connect slack workspace failed: %v", err)
+	}
+	if _, err := identityRepo.Upsert(context.Background(), domain.UserSlackIdentity{
+		ID:                          "identity-1",
+		UserID:                      authorUser.ID,
+		SlackWorkspaceIntegrationID: "workspace-integration-1",
+		SlackUserID:                 "U123",
+		Enabled:                     true,
+		LinkedAt:                    now,
+		CreatedAt:                   now,
+		UpdatedAt:                   now,
+	}); err != nil {
+		t.Fatalf("upsert slack identity failed: %v", err)
+	}
+	exitCode := 7
+	stepError := "deploy failed"
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		SlackClient:      slackClient,
+		BuildRepo:        &fakeBuildRepository{steps: []domain.BuildStep{{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "deploy", Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, ErrorMessage: &stepError}}},
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
+		UserRepo:         userRepo,
+		PreferenceRepo:   preferenceRepo,
+		IdentityRepo:     identityRepo,
+		WorkspaceRepo:    workspaceRepo,
+		PublicBaseURL:    "https://ci.example.com/",
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, SourceAuthorEmail: &authorEmail}); err != nil {
+		t.Fatalf("notify terminal build failed: %v", err)
+	}
+	message := slackClient.messages[0].Text
+	if !strings.Contains(message, "Next: <https://ci.example.com/builds/build-1?step=0|Open failed step logs>") {
+		t.Fatalf("expected personal slack dm to use failed-step diagnostic label, got %q", message)
+	}
+	if !strings.Contains(message, "Build: <https://ci.example.com/builds/build-1|View build>") {
+		t.Fatalf("expected personal slack dm to keep a separate build link when diagnostic differs, got %q", message)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_PersonalSlackFailureFallbackUsesBuildDetailsLabelWithoutDuplicateBuildLink(t *testing.T) {
+	slackClient := &recordingSlackDMClient{}
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	userRepo := memoryrepo.NewUserRepository()
+	preferenceRepo := memoryrepo.NewUserNotificationPreferenceRepository()
+	identityRepo := memoryrepo.NewUserSlackIdentityRepository()
+	workspaceRepo := memoryrepo.NewSlackWorkspaceIntegrationRepository()
+	workspaceRepo.SetUserSlackIdentityRepository(identityRepo)
+
+	authorEmail := "author@example.com"
+	authorUser := mustCreateNotificationUser(t, userRepo, authorEmail)
+	if _, err := preferenceRepo.Upsert(context.Background(), domain.UserNotificationPreference{
+		UserID:                          authorUser.ID,
+		CommitAuthorFailureSlackEnabled: true,
+		CommitAuthorFailureEmailSource:  domain.UserNotificationPreferenceSourceUser,
+		CreatedAt:                       time.Now().UTC(),
+		UpdatedAt:                       time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("upsert notification preference failed: %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := workspaceRepo.ConnectOrReplace(context.Background(), domain.SlackWorkspaceIntegration{
+		ID:             "workspace-integration-1",
+		WorkspaceID:    "T123",
+		BotTokenSecret: "xoxb-secret",
+		Enabled:        true,
+		ConnectedAt:    now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}, true); err != nil {
+		t.Fatalf("connect slack workspace failed: %v", err)
+	}
+	if _, err := identityRepo.Upsert(context.Background(), domain.UserSlackIdentity{
+		ID:                          "identity-1",
+		UserID:                      authorUser.ID,
+		SlackWorkspaceIntegrationID: "workspace-integration-1",
+		SlackUserID:                 "U123",
+		Enabled:                     true,
+		LinkedAt:                    now,
+		CreatedAt:                   now,
+		UpdatedAt:                   now,
+	}); err != nil {
+		t.Fatalf("upsert slack identity failed: %v", err)
+	}
+	buildError := "build level failure"
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		SlackClient:      slackClient,
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
+		UserRepo:         userRepo,
+		PreferenceRepo:   preferenceRepo,
+		IdentityRepo:     identityRepo,
+		WorkspaceRepo:    workspaceRepo,
+		PublicBaseURL:    "https://ci.example.com/",
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	if err := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed, ErrorMessage: &buildError, SourceAuthorEmail: &authorEmail}); err != nil {
+		t.Fatalf("notify terminal build failed: %v", err)
+	}
+	message := slackClient.messages[0].Text
+	if !strings.Contains(message, "Next: <https://ci.example.com/builds/build-1|View build details>") {
+		t.Fatalf("expected personal slack dm fallback label to use build details wording, got %q", message)
+	}
+	if strings.Contains(message, "Build: <https://ci.example.com/builds/build-1|View build>") {
+		t.Fatalf("expected personal slack dm to omit duplicate build link when diagnostic falls back to build url, got %q", message)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_SlackSuccessArtifactsRemainConcise(t *testing.T) {
+	slackSender := &recordingSlackSender{}
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	artifactRepo := memoryrepo.NewArtifactRepository()
+	target := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
+	projectID := "project-1"
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildSucceeded, true)
+	versionArtifactID := "artifact-a"
+	artifactRepo.SeedBuilds(domain.Build{ID: "build-1", ProjectID: projectID})
+	for _, artifact := range []domain.BuildArtifact{
+		{ID: versionArtifactID, BuildID: "build-1", Name: "pkg-a.tgz", LogicalPath: "dist/pkg-a.tgz", VersionTags: []domain.VersionTag{{ID: "tag-1", Kind: domain.VersionTagKindVersion, Version: "1.2.3"}}, CreatedAt: time.Now().UTC()},
+		{ID: "artifact-b", BuildID: "build-1", Name: "pkg-b.tgz", LogicalPath: "dist/pkg-b.tgz", CreatedAt: time.Now().UTC()},
+		{ID: "artifact-c", BuildID: "build-1", Name: "pkg-c.tgz", LogicalPath: "dist/pkg-c.tgz", CreatedAt: time.Now().UTC()},
+		{ID: "artifact-d", BuildID: "build-1", Name: "pkg-d.tgz", LogicalPath: "dist/pkg-d.tgz", CreatedAt: time.Now().UTC()},
+	} {
+		if _, err := artifactRepo.Create(context.Background(), artifact); err != nil {
+			t.Fatalf("create artifact failed: %v", err)
+		}
+	}
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		SlackSender:      slackSender,
+		ArtifactRepo:     artifactRepo,
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
+		PublicBaseURL:    "https://ci.example.com/",
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+	buildID := "build-1"
+	finishedAt := time.Now().UTC()
+	startedAt := finishedAt.Add(-2 * time.Minute)
+	build := domain.Build{ID: buildID, ProjectID: projectID, Status: domain.BuildStatusSuccess, BuildNumber: 42, StartedAt: &startedAt, FinishedAt: &finishedAt}
+
+	if err := notifier.NotifyTerminalBuild(context.Background(), build); err != nil {
+		t.Fatalf("notify terminal build failed: %v", err)
+	}
+	message := slackSender.messages[0].Text
+	for _, want := range []string{
+		"Artifacts: <https://ci.example.com/artifacts/artifact-a|pkg-a.tgz (1.2.3)>",
+		"<https://ci.example.com/artifacts/artifact-b|pkg-b.tgz>",
+		"<https://ci.example.com/artifacts/artifact-c|pkg-c.tgz>",
+		"<https://ci.example.com/artifacts?build_id=build-1|+1 more>",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected slack text to contain %q, got %q", want, message)
+		}
+	}
+	if strings.Contains(message, "artifact-d") {
+		t.Fatalf("expected overflow artifacts to stay concise, got %q", message)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureEnrichmentErrorsAreRetryable(t *testing.T) {
+	slackSender := &recordingSlackSender{}
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	target := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
+	projectID := "project-1"
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		SlackSender:      slackSender,
+		BuildRepo:        &fakeBuildRepository{stepsErr: errors.New("db unavailable")},
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
+		PublicBaseURL:    "https://ci.example.com/",
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	err = notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: projectID, Status: domain.BuildStatusFailed})
+	if err == nil || !strings.Contains(err.Error(), "notification failed-step enrichment failed") {
+		t.Fatalf("expected retryable failed-step enrichment error, got %v", err)
+	}
+	if len(slackSender.messages) != 0 {
+		t.Fatalf("expected slack delivery not to send on failed-step enrichment error, got %d messages", len(slackSender.messages))
+	}
+	delivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildFailed, "slack_webhook:"+target.ID)
+	if delivery.Status != domain.NotificationDeliveryStatusRetryWaiting {
+		t.Fatalf("expected retry_waiting slack delivery, got %q", delivery.Status)
+	}
+	if delivery.LastError == nil || !strings.Contains(*delivery.LastError, "notification failed-step enrichment failed") {
+		t.Fatalf("expected delivery last_error to record enrichment failure, got %v", delivery.LastError)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_SlackSuccessEnrichmentErrorsAreRetryable(t *testing.T) {
+	slackSender := &recordingSlackSender{}
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	target := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
+	projectID := "project-1"
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildSucceeded, true)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		SlackSender:      slackSender,
+		ArtifactRepo:     &fakeArtifactRepository{listErr: errors.New("storage unavailable")},
+		DeliveryRepo:     deliveryRepo,
+		SubscriptionRepo: subscriptionRepo,
+		PublicBaseURL:    "https://ci.example.com/",
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	err = notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", ProjectID: projectID, Status: domain.BuildStatusSuccess})
+	if err == nil || !strings.Contains(err.Error(), "notification artifact enrichment failed") {
+		t.Fatalf("expected retryable artifact enrichment error, got %v", err)
+	}
+	if len(slackSender.messages) != 0 {
+		t.Fatalf("expected slack delivery not to send on artifact enrichment error, got %d messages", len(slackSender.messages))
+	}
+	delivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildSucceeded, "slack_webhook:"+target.ID)
+	if delivery.Status != domain.NotificationDeliveryStatusRetryWaiting {
+		t.Fatalf("expected retry_waiting slack delivery, got %q", delivery.Status)
+	}
+	if delivery.LastError == nil || !strings.Contains(*delivery.LastError, "notification artifact enrichment failed") {
+		t.Fatalf("expected delivery last_error to record artifact enrichment failure, got %v", delivery.LastError)
 	}
 }
 
@@ -2983,13 +3333,13 @@ func TestFormatBuildStatusSlackText_LinkPolish(t *testing.T) {
 
 		message := formatBuildStatusSlackText(details)
 		for _, want := range []string{
-			":x: Build failed",
+			":x: Build failed: Build &gt; Job",
 			"Project: <https://ci.example.com/projects/project-1|Core &amp; &lt;Proj&gt;>",
 			"Job: <https://ci.example.com/jobs/job-1|Build &gt; Job>",
 			"Build: <https://ci.example.com/builds/build-1|#42>",
-			"Git: <https://github.com/owner/repo/commit/" + fullSHA + "|main @ " + shortSHA + ">",
-			"Commit author: Bryan &amp; &lt;Choate&gt; (bryan.choate@gmail.com)",
-			"Build detail: https://ci.example.com/builds/build-1",
+			"Commit: <https://github.com/owner/repo/commit/" + fullSHA + "|main @ " + shortSHA + ">",
+			"Author: Bryan &amp; &lt;Choate&gt; (bryan.choate@gmail.com)",
+			"Build details: <https://ci.example.com/builds/build-1|View build>",
 		} {
 			if !strings.Contains(message, want) {
 				t.Fatalf("expected slack text to contain %q, got %q", want, message)
@@ -3014,12 +3364,11 @@ func TestFormatBuildStatusSlackText_LinkPolish(t *testing.T) {
 
 		message := formatBuildStatusSlackText(details)
 		for _, want := range []string{
-			":white_check_mark: Build succeeded",
+			":white_check_mark: Build succeeded: job-1",
 			"Project: project-1",
 			"Job: job-1",
 			"Build: #42 (build-1)",
-			"Git: refs/heads/main @ " + shortSHA,
-			"Commit author: Bryan Choate (bryan.choate@gmail.com)",
+			"Commit: main @ " + shortSHA,
 		} {
 			if !strings.Contains(message, want) {
 				t.Fatalf("expected slack text to contain %q, got %q", want, message)
@@ -3056,8 +3405,8 @@ func TestFormatBuildStatusSlackText_NonFullSHAFallbackStillLinksCoyoteEntities(t
 		"Project: <https://ci.example.com/projects/project-1|Payments API>",
 		"Job: <https://ci.example.com/jobs/job-1|backend-ci>",
 		"Build: <https://ci.example.com/builds/build-1|#42>",
-		"Git: refs/heads/main @ deadbee",
-		"Commit author: Octo Cat (octo@example.com)",
+		"Commit: main @ deadbee",
+		"Author: Octo Cat (octo@example.com)",
 	} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("expected slack text to contain %q, got %q", want, message)

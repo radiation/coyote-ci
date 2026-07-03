@@ -145,7 +145,7 @@ func TestBuildNotificationService_MarkDeliveryFailedRoutesPersistence(t *testing
 			emailRecipient:  "dev@example.com",
 		}}
 
-		err := service.sendTerminalNotification(context.Background(), "build-1", domain.NotificationEventTypeBuildFailed, destinations, "subject", "body", "slack", "personal slack")
+		err := service.sendTerminalNotification(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}, domain.NotificationEventTypeBuildFailed, destinations)
 		if err == nil || !strings.Contains(err.Error(), "smtp unavailable") {
 			t.Fatalf("expected provider error, got %v", err)
 		}
@@ -254,7 +254,7 @@ func TestBuildNotificationService_MarkDeliverySentAndCancellationBranches(t *tes
 			emailRecipient:  "dev@example.com",
 		}}
 
-		err := service.sendTerminalNotification(context.Background(), "build-1", domain.NotificationEventTypeBuildFailed, destinations, "subject", "body", "slack", "personal slack")
+		err := service.sendTerminalNotification(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}, domain.NotificationEventTypeBuildFailed, destinations)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected canceled send error, got %v", err)
 		}

@@ -13,7 +13,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 ## Pages and routes
 
 - `frontend/src/pages`: page-level containers. Start here for user-visible behavior, data loading, and page-specific interactions.
-- Build detail UI: `BuildDetailPage.tsx`, `BuildDetailPage.sections.tsx`, and `BuildDetailPage.helpers.ts`.
+- Build detail UI: `BuildDetailPage.tsx`, `BuildDetailPage.sections.tsx`, and `BuildDetailPage.helpers.ts`; `BuildDetailPage.tsx` now also owns the `?step=` deep link that opens a specific step log panel for actionable notification links.
 - Artifact browser/release/lineage UI: `ArtifactsPage.tsx`, `ArtifactLogicalBrowserPage.tsx`, `ArtifactDetailPage.tsx`, plus `components/ArtifactBrowser.tsx` and `components/BuildArtifactsSection.tsx`.
 - Queue operations UI: `QueuePage.tsx` and `WorkersPage.tsx`.
 - Project/job/build navigation: `ProjectsListPage.tsx`, `ProjectDetailPage.tsx`, `JobsListPage.tsx`, `JobDetailPage.tsx`, `JobCreatePage.tsx`, `BuildsListPage.tsx`.

@@ -1,6 +1,10 @@
-import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import {
   cancelBuild,
   createJobVersionTags,
@@ -40,15 +44,17 @@ export function BuildDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [openStepState, setOpenStepState] = useState<{
-    buildID: string | null;
-    stepIndex: number | null;
-  }>({ buildID: id ?? null, stepIndex: null });
-  const openStepIndex =
-    openStepState.buildID === id ? openStepState.stepIndex : null;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedOpenStepIndex = parseOpenStepIndex(searchParams.get("step"));
 
   function handleOpenStepChange(stepIndex: number | null) {
-    setOpenStepState({ buildID: id ?? null, stepIndex });
+    const nextParams = new URLSearchParams(searchParams);
+    if (stepIndex === null) {
+      nextParams.delete("step");
+    } else {
+      nextParams.set("step", String(stepIndex));
+    }
+    setSearchParams(nextParams, { replace: true });
   }
 
   const {
@@ -92,6 +98,12 @@ export function BuildDetailPage() {
       ? FAST_POLL_INTERVAL
       : SLOW_POLL_INTERVAL,
   });
+
+  const openStepIndex =
+    requestedOpenStepIndex !== null &&
+    steps?.some((step) => step.step_index === requestedOpenStepIndex)
+      ? requestedOpenStepIndex
+      : null;
 
   const {
     data: artifacts,
@@ -297,4 +309,18 @@ export function BuildDetailPage() {
       />
     </div>
   );
+}
+
+function parseOpenStepIndex(value: string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+  if (!/^(0|[1-9]\d*)$/.test(value)) {
+    return null;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
 }

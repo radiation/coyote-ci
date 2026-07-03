@@ -48,7 +48,7 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 			t.Fatalf("shared email key failed: %v", keyErr)
 		}
 		delivery := domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: kind, DestinationKey: key, NotificationTargetID: &target.ID, Recipient: "alerts@example.com"}
-		_, destination, _, rehydrateErr := notifier.rehydrateDelivery(context.Background(), delivery)
+		_, destination, rehydrateErr := notifier.rehydrateDelivery(context.Background(), delivery)
 		if rehydrateErr != nil {
 			t.Fatalf("rehydrate shared email failed: %v", rehydrateErr)
 		}
@@ -63,7 +63,7 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 			t.Fatalf("shared email key failed: %v", keyErr)
 		}
 		delivery := domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: kind, DestinationKey: key, Recipient: "alerts@example.com"}
-		_, _, _, rehydrateErr := notifier.rehydrateDelivery(context.Background(), delivery)
+		_, _, rehydrateErr := notifier.rehydrateDelivery(context.Background(), delivery)
 		var executionErr *notificationExecutionFailure
 		if !errors.As(rehydrateErr, &executionErr) {
 			t.Fatalf("expected execution failure, got %v", rehydrateErr)
@@ -106,11 +106,11 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 		}
 		sharedDelivery := domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: sharedKind, DestinationKey: sharedKey, NotificationTargetID: &sharedTarget.ID, Recipient: "same@example.com"}
 		personalDelivery := domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: personalKind, DestinationKey: personalKey, NotificationTargetID: &personalTarget.ID, RecipientUserID: &user.ID, Recipient: "same@example.com"}
-		_, sharedDestination, _, sharedRehydrateErr := notifier.rehydrateDelivery(context.Background(), sharedDelivery)
+		_, sharedDestination, sharedRehydrateErr := notifier.rehydrateDelivery(context.Background(), sharedDelivery)
 		if sharedRehydrateErr != nil {
 			t.Fatalf("rehydrate shared same-address delivery failed: %v", sharedRehydrateErr)
 		}
-		_, personalDestination, _, personalRehydrateErr := notifier.rehydrateDelivery(context.Background(), personalDelivery)
+		_, personalDestination, personalRehydrateErr := notifier.rehydrateDelivery(context.Background(), personalDelivery)
 		if personalRehydrateErr != nil {
 			t.Fatalf("rehydrate personal same-address delivery failed: %v", personalRehydrateErr)
 		}
@@ -134,7 +134,7 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 			t.Fatalf("personal email key failed: %v", keyErr)
 		}
 		delivery := domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: kind, DestinationKey: key, NotificationTargetID: &target.ID, RecipientUserID: &user.ID, Recipient: "author@example.com"}
-		_, destination, _, rehydrateErr := notifier.rehydrateDelivery(context.Background(), delivery)
+		_, destination, rehydrateErr := notifier.rehydrateDelivery(context.Background(), delivery)
 		if rehydrateErr != nil {
 			t.Fatalf("rehydrate personal email failed: %v", rehydrateErr)
 		}
@@ -154,7 +154,7 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 			t.Fatalf("slack webhook key failed: %v", keyErr)
 		}
 		delivery := domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportSlackWebhook, DestinationKind: kind, DestinationKey: key, NotificationTargetID: &target.ID, Recipient: "slack_webhook:" + target.ID}
-		_, destination, _, rehydrateErr := notifier.rehydrateDelivery(context.Background(), delivery)
+		_, destination, rehydrateErr := notifier.rehydrateDelivery(context.Background(), delivery)
 		if rehydrateErr != nil {
 			t.Fatalf("rehydrate slack webhook failed: %v", rehydrateErr)
 		}
@@ -181,7 +181,7 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 			t.Fatalf("slack dm key failed: %v", keyErr)
 		}
 		delivery := domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportSlackDM, DestinationKind: kind, DestinationKey: key, RecipientUserID: &identity.UserID, SlackWorkspaceIntegrationID: &workspace.ID, Recipient: "slack_dm:" + workspace.ID + ":" + identity.SlackUserID}
-		_, destination, _, rehydrateErr := notifier.rehydrateDelivery(context.Background(), delivery)
+		_, destination, rehydrateErr := notifier.rehydrateDelivery(context.Background(), delivery)
 		if rehydrateErr != nil {
 			t.Fatalf("rehydrate slack dm failed: %v", rehydrateErr)
 		}
@@ -233,7 +233,7 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				_, _, _, err := tc.notifier.rehydrateDelivery(context.Background(), tc.delivery)
+				_, _, err := tc.notifier.rehydrateDelivery(context.Background(), tc.delivery)
 				var executionErr *notificationExecutionFailure
 				if !errors.As(err, &executionErr) {
 					t.Fatalf("expected execution failure, got %v", err)
@@ -281,7 +281,7 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 				if err != nil {
 					t.Fatalf("create notifier failed: %v", err)
 				}
-				_, _, _, rehydrateErr := localNotifier.rehydrateDelivery(context.Background(), fixture.delivery)
+				_, _, rehydrateErr := localNotifier.rehydrateDelivery(context.Background(), fixture.delivery)
 				var executionErr *notificationExecutionFailure
 				if !errors.As(rehydrateErr, &executionErr) {
 					t.Fatalf("expected execution failure, got %v", rehydrateErr)
@@ -315,6 +315,81 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 			}
 		}
 	})
+}
+
+func TestBuildNotificationService_RehydrateDelivery_RendersSameContentAsInline(t *testing.T) {
+	projectID := "project-1"
+	jobID := "job-1"
+	ref := "refs/heads/main"
+	sha := "deadbeefcafebabedeadbeefcafebabedeadbeef"
+	authorEmail := "octo@example.com"
+	authorName := "Octo Cat"
+	buildError := "deploy failed"
+	startedAt := time.Now().Add(-2 * time.Minute).UTC()
+	finishedAt := time.Now().UTC()
+	build := domain.Build{
+		ID:                "build-1",
+		ProjectID:         projectID,
+		JobID:             &jobID,
+		Status:            domain.BuildStatusFailed,
+		BuildNumber:       42,
+		SourceRef:         &ref,
+		SourceSHA:         &sha,
+		SourceAuthorName:  &authorName,
+		SourceAuthorEmail: &authorEmail,
+		StartedAt:         &startedAt,
+		FinishedAt:        &finishedAt,
+		ErrorMessage:      &buildError,
+	}
+	stepError := "deploy failed"
+	stepExit := 1
+	buildRepo := &fakeBuildRepository{
+		build: build,
+		steps: []domain.BuildStep{{ID: "step-1", BuildID: build.ID, StepIndex: 0, Name: "deploy", Status: domain.BuildStepStatusFailed, ExitCode: &stepExit, ErrorMessage: &stepError}},
+	}
+	artifactRepo := memoryrepo.NewArtifactRepository()
+	artifactRepo.SeedBuilds(build)
+	if _, err := artifactRepo.Create(context.Background(), domain.BuildArtifact{ID: "artifact-1", BuildID: build.ID, Name: "pkg-a.tgz", LogicalPath: "dist/pkg-a.tgz", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("create artifact failed: %v", err)
+	}
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	target := mustCreateNotificationTarget(t, subscriptionRepo, "alerts@example.com", true)
+	kind, key, keyErr := domain.NotificationSharedEmailTargetKey(target.ID)
+	if keyErr != nil {
+		t.Fatalf("shared email key failed: %v", keyErr)
+	}
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+		Enabled:          true,
+		Recipients:       "alerts@example.com",
+		Sender:           &recordingEmailSender{},
+		BuildRepo:        buildRepo,
+		ArtifactRepo:     artifactRepo,
+		JobRepo:          memoryrepo.NewJobRepository(),
+		ProjectRepo:      memoryrepo.NewProjectRepository(memoryrepo.NewJobRepository()),
+		DeliveryRepo:     memoryrepo.NewNotificationDeliveryRepository(),
+		SubscriptionRepo: subscriptionRepo,
+		PublicBaseURL:    "https://ci.example.com/",
+		ClaimOwner:       "recovery-test",
+	})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+	inline, renderErr := notifier.renderNotificationContent(context.Background(), build, domain.NotificationTransportEmail)
+	if renderErr != nil {
+		t.Fatalf("render inline content failed: %v", renderErr)
+	}
+	delivery := domain.NotificationDelivery{BuildID: build.ID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: kind, DestinationKey: key, NotificationTargetID: &target.ID, Recipient: "alerts@example.com"}
+	_, destination, rehydrateErr := notifier.rehydrateDelivery(context.Background(), delivery)
+	if rehydrateErr != nil {
+		t.Fatalf("rehydrate delivery failed: %v", rehydrateErr)
+	}
+	recovered, recoveredErr := notifier.renderNotificationContent(context.Background(), build, destination.transport)
+	if recoveredErr != nil {
+		t.Fatalf("render recovered content failed: %v", recoveredErr)
+	}
+	if inline.subject != recovered.subject || inline.body != recovered.body || inline.slackText != recovered.slackText || inline.personalSlackText != recovered.personalSlackText {
+		t.Fatalf("expected inline and recovered content to match:\ninline=%+v\nrecovered=%+v", inline, recovered)
+	}
 }
 
 type destinationBranchFixture struct {

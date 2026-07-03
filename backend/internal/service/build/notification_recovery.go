@@ -116,8 +116,7 @@ func (s *BuildNotificationService) recoverDelivery(ctx context.Context, candidat
 		return result, nil
 	}
 
-	build, destination, content, rehydrateErr := s.rehydrateDelivery(ctx, claimed)
-	_ = build
+	build, destination, rehydrateErr := s.rehydrateDelivery(ctx, claimed)
 	if rehydrateErr != nil {
 		if errors.Is(rehydrateErr, context.Canceled) || errors.Is(rehydrateErr, context.DeadlineExceeded) {
 			return result, rehydrateErr
@@ -131,45 +130,66 @@ func (s *BuildNotificationService) recoverDelivery(ctx context.Context, candidat
 		}
 		return result, nil
 	}
+	content, renderErr := s.renderNotificationContent(ctx, build, destination.transport)
+	if renderErr != nil {
+		if errors.Is(renderErr, context.Canceled) || errors.Is(renderErr, context.DeadlineExceeded) {
+			return result, renderErr
+		}
+		result.rehydrationFailed = true
+		s.recordDeliveryMetric(claimed, recoveryReason, observability.NotificationDeliveryOutcomeRehydrationFailure)
+		outcome, markErr := s.markDeliveryFailed(ctx, claimed, renderErr, s.now().UTC(), recoveryReason)
+		result.executionOutcome = outcome
+		if markErr != nil {
+			return result, markErr
+		}
+		return result, nil
+	}
 
 	executionOutcome, executeErr := s.executeClaimedDelivery(ctx, claimed, destination, content, recoveryReason)
 	result.executionOutcome = executionOutcome
 	return result, executeErr
 }
 
-func (s *BuildNotificationService) rehydrateDelivery(ctx context.Context, delivery domain.NotificationDelivery) (domain.Build, notificationDestination, notificationContent, error) {
+func (s *BuildNotificationService) rehydrateDelivery(ctx context.Context, delivery domain.NotificationDelivery) (domain.Build, notificationDestination, error) {
 	if s.buildRepo == nil {
-		return domain.Build{}, notificationDestination{}, notificationContent{}, permanentNotificationExecutionFailure("delivery_metadata_invalid", "notification build repository is not configured", nil)
+		return domain.Build{}, notificationDestination{}, permanentNotificationExecutionFailure("delivery_metadata_invalid", "notification build repository is not configured", nil)
 	}
 	build, err := s.buildRepo.GetByID(ctx, delivery.BuildID)
 	if err != nil {
 		if errors.Is(err, repository.ErrBuildNotFound) {
-			return domain.Build{}, notificationDestination{}, notificationContent{}, permanentNotificationExecutionFailure("build_unavailable", "notification build is no longer available", err)
+			return domain.Build{}, notificationDestination{}, permanentNotificationExecutionFailure("build_unavailable", "notification build is no longer available", err)
 		}
-		return domain.Build{}, notificationDestination{}, notificationContent{}, retryableNotificationExecutionFailure("rehydration_failed", "notification build rehydration failed", err)
+		return domain.Build{}, notificationDestination{}, retryableNotificationExecutionFailure("rehydration_failed", "notification build rehydration failed", err)
 	}
 	eventType, ok := buildStatusNotificationEventType(build.Status)
 	if !ok || eventType != delivery.EventType {
-		return domain.Build{}, notificationDestination{}, notificationContent{}, permanentNotificationExecutionFailure("build_event_mismatch", "notification build event no longer matches the persisted delivery", nil)
+		return domain.Build{}, notificationDestination{}, permanentNotificationExecutionFailure("build_event_mismatch", "notification build event no longer matches the persisted delivery", nil)
 	}
 
 	destination, destinationErr := s.rehydrateDestination(ctx, delivery)
 	if destinationErr != nil {
-		return domain.Build{}, notificationDestination{}, notificationContent{}, destinationErr
+		return domain.Build{}, notificationDestination{}, destinationErr
 	}
-	content := s.renderNotificationContent(ctx, build)
-	return build, destination, content, nil
+	return build, destination, nil
 }
 
-func (s *BuildNotificationService) renderNotificationContent(ctx context.Context, build domain.Build) notificationContent {
+func (s *BuildNotificationService) renderNotificationContent(ctx context.Context, build domain.Build, transport domain.NotificationTransport) (notificationContent, error) {
 	details := s.buildNotificationDetails(ctx, build)
 	subject, body := s.formatBuildStatusEmail(build, details)
-	return notificationContent{
-		subject:           subject,
-		body:              body,
-		slackText:         formatBuildStatusSlackText(details),
-		personalSlackText: formatPersonalBuildStatusSlackText(details),
+	content := notificationContent{
+		subject: subject,
+		body:    body,
 	}
+	if transport != domain.NotificationTransportSlackWebhook && transport != domain.NotificationTransportSlackDM {
+		return content, nil
+	}
+	enrichedDetails, err := s.enrichSlackNotificationDetails(ctx, build, details)
+	if err != nil {
+		return notificationContent{}, err
+	}
+	content.slackText = formatBuildStatusSlackText(enrichedDetails)
+	content.personalSlackText = formatPersonalBuildStatusSlackText(enrichedDetails)
+	return content, nil
 }
 
 func (s *BuildNotificationService) rehydrateDestination(ctx context.Context, delivery domain.NotificationDelivery) (notificationDestination, error) {
