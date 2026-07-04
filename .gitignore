@@ -35,5 +35,11 @@ go.work.sum
 node_modules/
 frontend/node_modules/
 
+# Local AI/code-intelligence artifacts
+.codegraph/
+.codegraph-*/
+.claude/
+.mcp.json
+
 # Local scratch/build temp directories (any depth)
 **/tmp/
