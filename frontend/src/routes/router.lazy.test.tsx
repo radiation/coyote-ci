@@ -75,7 +75,7 @@ vi.mock("../pages/JobDetailPage", () => ({
 
 vi.mock("../pages/APITokensPage", () => ({
   APITokensPage() {
-    return <h2>API Tokens Mock</h2>;
+    return <h2>My API Tokens Mock</h2>;
   },
 }));
 
@@ -125,7 +125,7 @@ describe("router lazy route loaders", () => {
     ["/jobs", "Jobs Mock"],
     ["/jobs/new", "Job Create Mock"],
     ["/jobs/job-1", "Job Detail Mock"],
-    ["/settings/tokens", "API Tokens Mock"],
+    ["/settings/my-api-tokens", "My API Tokens Mock"],
     ["/settings/my-notifications", "My Notifications Mock"],
     ["/settings/users", "Users Mock"],
     ["/settings/credentials", "Credentials Mock"],

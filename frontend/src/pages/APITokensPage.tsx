@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createAPIToken,
   formatAPIErrorMessage,
+  isAPIErrorStatus,
   listAPITokens,
   revokeAPIToken,
 } from "../api";
@@ -15,7 +16,7 @@ const TOKEN_COPY_STATUS_RESET_MS = 2000;
 export function APITokensPage() {
   const { authMode } = useAuth();
   const queryClient = useQueryClient();
-  const [name, setName] = useState("fixture populator");
+  const [name, setName] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [createdToken, setCreatedToken] = useState<CreatedAPIToken | null>(
     null,
@@ -48,14 +49,15 @@ export function APITokensPage() {
       setExpiresAt("");
       await queryClient.invalidateQueries({ queryKey: ["api-tokens"] });
     },
-    onError: (mutationError) =>
+    onError: (mutationError) => {
       setErrorMessage(
         formatAPIErrorMessage(
           mutationError,
           "API tokens can only be managed from a signed-in user session.",
           "Failed to create API token",
         ),
-      ),
+      );
+    },
   });
 
   const revokeMutation = useMutation({
@@ -67,20 +69,30 @@ export function APITokensPage() {
       }
       await queryClient.invalidateQueries({ queryKey: ["api-tokens"] });
     },
-    onError: (mutationError) =>
+    onError: async (mutationError, tokenID) => {
+      if (isAPIErrorStatus(mutationError, 404)) {
+        if (createdToken?.id === tokenID) {
+          setCreatedToken(null);
+        }
+        await queryClient.invalidateQueries({ queryKey: ["api-tokens"] });
+        return;
+      }
+
       setErrorMessage(
         formatAPIErrorMessage(
           mutationError,
           "API tokens can only be managed from a signed-in user session.",
           "Failed to revoke API token",
         ),
-      ),
+      );
+    },
   });
 
   useEffect(() => {
     if (copyStatus === "idle") {
       return;
     }
+
     const timer = window.setTimeout(
       () => setCopyStatus("idle"),
       TOKEN_COPY_STATUS_RESET_MS,
@@ -106,6 +118,7 @@ export function APITokensPage() {
     if (!createdToken) {
       return;
     }
+
     try {
       if (!globalThis.navigator?.clipboard?.writeText) {
         throw new Error("Clipboard API unavailable");
@@ -117,14 +130,24 @@ export function APITokensPage() {
     }
   }
 
+  function dismissCreatedToken() {
+    setCreatedToken(null);
+    setCopyStatus("idle");
+  }
+
+  function confirmRevoke(tokenName: string, tokenPrefix: string): boolean {
+    return window.confirm(`Revoke API token ${tokenName} (${tokenPrefix})?`);
+  }
+
   if (authMode === "disabled") {
     return (
       <>
         <div className="page-header-row">
           <div>
-            <h2>API Tokens</h2>
+            <h2>My API Tokens</h2>
             <p className="subtle-text">
-              User-owned tokens for scripts, fixtures, and CLI access.
+              Personal tokens for the Coyote CLI and other authenticated API
+              clients.
             </p>
           </div>
         </div>
@@ -145,9 +168,10 @@ export function APITokensPage() {
     <>
       <div className="page-header-row">
         <div>
-          <h2>API Tokens</h2>
+          <h2>My API Tokens</h2>
           <p className="subtle-text">
-            User-owned tokens for scripts, fixtures, and CLI access.
+            Personal tokens for the Coyote CLI and other authenticated API
+            clients.
           </p>
         </div>
       </div>
@@ -155,14 +179,14 @@ export function APITokensPage() {
       {errorMessage && <p className="error-text">{errorMessage}</p>}
 
       <section className="settings-panel" style={{ marginTop: 14 }}>
-        <h3>Create Token</h3>
+        <h3>Create Personal Token</h3>
         <form className="job-form" onSubmit={onSubmit}>
           <label htmlFor="api-token-name">Name</label>
           <input
             id="api-token-name"
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="fixture populator"
+            placeholder="coyote cli"
             disabled={createMutation.isPending}
           />
 
@@ -174,6 +198,9 @@ export function APITokensPage() {
             onChange={(event) => setExpiresAt(event.target.value)}
             disabled={createMutation.isPending}
           />
+          <p className="subtle-text api-token-form-copy">
+            Leave expiration blank to create a token that does not expire.
+          </p>
 
           <div className="job-form-actions">
             <button type="submit" disabled={createMutation.isPending}>
@@ -185,12 +212,18 @@ export function APITokensPage() {
 
       {createdToken && (
         <section className="settings-panel api-token-created-panel">
-          <h3>New Token</h3>
+          <h3>Copy Your New Token Now</h3>
           <p className="subtle-text">
-            Copy this value now. Coyote will not show it again.
+            Copy this token now. Coyote will not show it again.
           </p>
-          <div className="api-token-created-value">
-            <input readOnly value={createdToken.token} aria-label="New token" />
+          <textarea
+            readOnly
+            value={createdToken.token}
+            aria-label="New token"
+            rows={3}
+            className="api-token-created-secret"
+          />
+          <div className="api-token-created-actions">
             <button
               type="button"
               className="table-action-button"
@@ -198,12 +231,23 @@ export function APITokensPage() {
             >
               Copy token
             </button>
+            <button
+              type="button"
+              className="table-action-button"
+              onClick={dismissCreatedToken}
+            >
+              Done
+            </button>
           </div>
+          <p className="subtle-text api-token-command-copy">Next CLI step</p>
+          <code className="api-token-command">coyote auth token set</code>
           {copyStatus === "copied" && (
-            <p className="subtle-text api-token-copy-status">Token copied.</p>
+            <p className="subtle-text api-token-copy-status" aria-live="polite">
+              Token copied.
+            </p>
           )}
           {copyStatus === "failed" && (
-            <p className="error-text api-token-copy-status">
+            <p className="error-text api-token-copy-status" aria-live="polite">
               Unable to copy token.
             </p>
           )}
@@ -223,7 +267,11 @@ export function APITokensPage() {
           </p>
         )}
         {tokens && tokens.length === 0 && (
-          <p className="subtle-text">No API tokens have been created yet.</p>
+          <p className="subtle-text">
+            No personal API tokens yet. Create one here to use the Coyote CLI or
+            another authenticated API client without relying on a browser
+            session.
+          </p>
         )}
         {tokens && tokens.length > 0 && (
           <table className="table">
@@ -255,14 +303,21 @@ export function APITokensPage() {
                         : "-"}
                     </td>
                     <td>
-                      {token.expires_at ? formatTime(token.expires_at) : "-"}
+                      {token.expires_at
+                        ? formatTime(token.expires_at)
+                        : "Never"}
                     </td>
                     <td>{isRevoked ? "Revoked" : "Active"}</td>
                     <td>
                       <button
                         type="button"
                         className="table-action-button"
-                        onClick={() => revokeMutation.mutate(token.id)}
+                        onClick={() => {
+                          if (!confirmRevoke(token.name, token.token_prefix)) {
+                            return;
+                          }
+                          revokeMutation.mutate(token.id);
+                        }}
                         disabled={revokeMutation.isPending || isRevoked}
                       >
                         {isRevoked ? "Revoked" : "Revoke"}

@@ -105,7 +105,15 @@ export const appRoutes: RouteObject[] = [
       { path: "/jobs", element: <JobsListPage /> },
       { path: "/jobs/new", element: <JobCreatePage /> },
       { path: "/jobs/:id", element: <JobDetailPage /> },
-      { path: "/settings/tokens", element: <APITokensPage /> },
+      {
+        path: "/settings/tokens",
+        element: <Navigate to="/settings/my-api-tokens" replace />,
+      },
+      {
+        path: "/settings/api-tokens",
+        element: <Navigate to="/settings/my-api-tokens" replace />,
+      },
+      { path: "/settings/my-api-tokens", element: <APITokensPage /> },
       { path: "/settings/profile", element: <ProfilePage /> },
       { path: "/settings/my-notifications", element: <MyNotificationsPage /> },
       { path: "/settings/users", element: <UsersPage /> },

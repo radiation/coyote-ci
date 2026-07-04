@@ -1,0 +1,28 @@
+version: 2
+
+project_name: coyote
+
+builds:
+  - id: coyote
+    main: ./backend/cmd/coyote
+    binary: coyote
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version={{ .Version }} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit={{ .Commit }} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate={{ .Date }}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt

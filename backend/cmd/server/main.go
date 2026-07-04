@@ -35,6 +35,7 @@ import (
 	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 	"github.com/radiation/coyote-ci/backend/internal/source"
+	"github.com/radiation/coyote-ci/backend/internal/versioninfo"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
@@ -60,6 +61,7 @@ func main() {
 		log.Fatalf("failed to configure email sender: %v", emailSenderErr)
 	}
 	docs.SwaggerInfo.BasePath = "/api"
+	docs.SwaggerInfo.Version = versioninfo.Current().Version
 	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
 	if cfg.EmailNotificationsEnabled {
 		log.Printf("email notifications enabled via smtp %s:%s", cfg.SMTPHost, cfg.SMTPPort)
@@ -212,6 +214,7 @@ func main() {
 	jobHandler.SetAuthorization(authMode, projectMembershipService)
 	projectHandler.SetAuthorization(authMode, projectMembershipService)
 	userHandler := handler.NewUserHandler(userService, authMode)
+	serverInfoHandler := handler.NewServerInfoHandler()
 	apiTokenHandler := handler.NewAPITokenHandler(apiTokenService)
 	projectMembershipHandler := handler.NewProjectMembershipHandler(projectMembershipService, authMode)
 	versionTagHandler := handler.NewVersionTagHandler(versionTagService)
@@ -308,6 +311,7 @@ func main() {
 		apphttp.WithAuthMiddleware(authMiddleware),
 		apphttp.WithNotificationHandler(notificationHandler),
 		apphttp.WithUserHandler(userHandler),
+		apphttp.WithServerInfoHandler(serverInfoHandler),
 		apphttp.WithAPITokenHandler(apiTokenHandler),
 		apphttp.WithProjectMembershipHandler(projectMembershipHandler),
 		apphttp.WithWorkerHandler(workerHandler),

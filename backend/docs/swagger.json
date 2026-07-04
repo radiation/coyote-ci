@@ -1279,6 +1279,26 @@
                 }
             }
         },
+        "/info": {
+            "get": {
+                "description": "Returns stable server metadata for remote clients.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Get server info",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ServerInfoEnvelope"
+                        }
+                    }
+                }
+            }
+        },
         "/jobs": {
             "get": {
                 "description": "Lists jobs with optional pagination.",
@@ -5614,6 +5634,37 @@
                 },
                 "job": {
                     "$ref": "#/definitions/api.ExecutionJobResponse"
+                }
+            }
+        },
+        "api.ServerInfoEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.ServerInfoResponse"
+                }
+            }
+        },
+        "api.ServerInfoResponse": {
+            "type": "object",
+            "properties": {
+                "api_version": {
+                    "type": "string"
+                },
+                "build_date": {
+                    "type": "string"
+                },
+                "capabilities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "commit": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
                 }
             }
         },

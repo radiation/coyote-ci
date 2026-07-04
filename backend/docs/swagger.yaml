@@ -1267,6 +1267,26 @@ definitions:
       job:
         $ref: '#/definitions/api.ExecutionJobResponse'
     type: object
+  api.ServerInfoEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.ServerInfoResponse'
+    type: object
+  api.ServerInfoResponse:
+    properties:
+      api_version:
+        type: string
+      build_date:
+        type: string
+      capabilities:
+        items:
+          type: string
+        type: array
+      commit:
+        type: string
+      version:
+        type: string
+    type: object
   api.SlackIdentityWorkspaceResponse:
     properties:
       id:
@@ -2387,6 +2407,19 @@ paths:
       summary: Health check
       tags:
       - health
+  /info:
+    get:
+      description: Returns stable server metadata for remote clients.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ServerInfoEnvelope'
+      summary: Get server info
+      tags:
+      - system
   /jobs:
     get:
       description: Lists jobs with optional pagination.

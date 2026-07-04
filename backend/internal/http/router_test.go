@@ -24,6 +24,7 @@ import (
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
+	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 )
 
 const routerBuildCreateProjectID = "11111111-1111-1111-1111-111111111111"
@@ -39,6 +40,20 @@ type fakeSampleBuildEmailSender struct {
 	recipients []string
 	err        error
 	calls      int
+}
+
+type routerWorkerBuildBoundary struct{}
+
+func (routerWorkerBuildBoundary) ListActiveBuilds(context.Context) ([]domain.Build, error) {
+	return []domain.Build{}, nil
+}
+
+func (routerWorkerBuildBoundary) GetBuildSteps(context.Context, string) ([]domain.BuildStep, error) {
+	return []domain.BuildStep{}, nil
+}
+
+func (routerWorkerBuildBoundary) GetJobsByBuildID(context.Context, string) ([]domain.ExecutionJob, error) {
+	return []domain.ExecutionJob{}, nil
 }
 
 func (s *fakeSampleBuildEmailSender) SendSampleBuildFailure(_ context.Context) ([]string, error) {
@@ -168,6 +183,82 @@ func TestNewRouter_ArtifactRoutesPreferCatalogAndVersionTags(t *testing.T) {
 	}
 	if len(artifactRepo.lookedUpIDs) != 1 || artifactRepo.lookedUpIDs[0] != "artifact-1" {
 		t.Fatalf("expected detail route lookup for artifact-1, got %v", artifactRepo.lookedUpIDs)
+	}
+}
+
+func TestNewRouter_ServerInfoAndWorkerRoutes(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	workerRepo := repositorymemory.NewWorkerRepository()
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	buildHandler := handler.NewBuildHandler(buildSvc)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jobHandler := handler.NewJobHandler(jobSvc)
+	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	workerSvc := workersvc.NewVisibilityService(workerRepo, routerWorkerBuildBoundary{})
+	workerHandler := handler.NewWorkerHandler(workerSvc)
+
+	router := NewRouter(
+		buildHandler,
+		nil,
+		jobHandler,
+		nil,
+		nil,
+		nil,
+		eventHandler,
+		"",
+		WithServerInfoHandler(handler.NewServerInfoHandler()),
+		WithWorkerHandler(workerHandler),
+	)
+
+	infoReq := httptest.NewRequest(http.MethodGet, "/api/info", nil)
+	infoRes := httptest.NewRecorder()
+	router.ServeHTTP(infoRes, infoReq)
+	if infoRes.Code != http.StatusOK {
+		t.Fatalf("expected server info status %d, got %d body=%s", http.StatusOK, infoRes.Code, infoRes.Body.String())
+	}
+	if !strings.Contains(infoRes.Body.String(), `"api_version"`) {
+		t.Fatalf("expected api_version in server info response, got %s", infoRes.Body.String())
+	}
+
+	workersReq := httptest.NewRequest(http.MethodGet, "/api/workers", nil)
+	workersRes := httptest.NewRecorder()
+	router.ServeHTTP(workersRes, workersReq)
+	if workersRes.Code != http.StatusOK {
+		t.Fatalf("expected workers status %d, got %d body=%s", http.StatusOK, workersRes.Code, workersRes.Body.String())
+	}
+	if !strings.Contains(workersRes.Body.String(), `"workers":[]`) {
+		t.Fatalf("expected empty workers list, got %s", workersRes.Body.String())
+	}
+}
+
+func TestNewRouter_ServerInfoRouteUsesAuthMiddlewareWhenConfigured(t *testing.T) {
+	headerRouter := newIdentityTestRouter(auth.ModeHeader, "push-secret", "github-secret", WithServerInfoHandler(handler.NewServerInfoHandler()))
+
+	unauthorizedReq := httptest.NewRequest(http.MethodGet, "/api/info", nil)
+	unauthorizedRes := httptest.NewRecorder()
+	headerRouter.ServeHTTP(unauthorizedRes, unauthorizedReq)
+	if unauthorizedRes.Code != http.StatusUnauthorized {
+		t.Fatalf("expected authenticated server info status %d, got %d body=%s", http.StatusUnauthorized, unauthorizedRes.Code, unauthorizedRes.Body.String())
+	}
+
+	authorizedReq := httptest.NewRequest(http.MethodGet, "/api/info", nil)
+	authorizedReq.Header.Set("X-Coyote-User-Email", "admin@example.com")
+	authorizedRes := httptest.NewRecorder()
+	headerRouter.ServeHTTP(authorizedRes, authorizedReq)
+	if authorizedRes.Code != http.StatusOK {
+		t.Fatalf("expected authorized server info status %d, got %d body=%s", http.StatusOK, authorizedRes.Code, authorizedRes.Body.String())
+	}
+	if !strings.Contains(authorizedRes.Body.String(), `"api_version"`) {
+		t.Fatalf("expected api_version in authorized server info response, got %s", authorizedRes.Body.String())
+	}
+
+	disabledRouter := newIdentityTestRouter(auth.ModeDisabled, "push-secret", "github-secret", WithServerInfoHandler(handler.NewServerInfoHandler()))
+	disabledReq := httptest.NewRequest(http.MethodGet, "/api/info", nil)
+	disabledRes := httptest.NewRecorder()
+	disabledRouter.ServeHTTP(disabledRes, disabledReq)
+	if disabledRes.Code != http.StatusOK {
+		t.Fatalf("expected disabled-mode server info status %d, got %d body=%s", http.StatusOK, disabledRes.Code, disabledRes.Body.String())
 	}
 }
 

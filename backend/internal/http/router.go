@@ -21,6 +21,7 @@ type routerConfig struct {
 	authHandler              *handler.AuthHandler
 	notificationHandler      *handler.NotificationHandler
 	userHandler              *handler.UserHandler
+	serverInfoHandler        *handler.ServerInfoHandler
 	apiTokenHandler          *handler.APITokenHandler
 	projectMembershipHandler *handler.ProjectMembershipHandler
 	workerHandler            *handler.WorkerHandler
@@ -43,6 +44,12 @@ func WithUserHandler(userHandler *handler.UserHandler) RouterOption {
 func WithNotificationHandler(notificationHandler *handler.NotificationHandler) RouterOption {
 	return func(cfg *routerConfig) {
 		cfg.notificationHandler = notificationHandler
+	}
+}
+
+func WithServerInfoHandler(serverInfoHandler *handler.ServerInfoHandler) RouterOption {
+	return func(cfg *routerConfig) {
+		cfg.serverInfoHandler = serverInfoHandler
 	}
 }
 
@@ -96,6 +103,14 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", handler.Health)
 		r.Get("/healthz", handler.Health)
+		if cfg.serverInfoHandler != nil {
+			r.Group(func(r chi.Router) {
+				if cfg.authMiddleware != nil {
+					r.Use(cfg.authMiddleware)
+				}
+				r.Get("/info", cfg.serverInfoHandler.GetInfo)
+			})
+		}
 		if cfg.userHandler != nil {
 			r.Get("/auth/config", cfg.userHandler.GetAuthConfig)
 		}

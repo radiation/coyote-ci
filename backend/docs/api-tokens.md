@@ -19,6 +19,8 @@ Authenticated users can manage their own tokens:
 - `POST /api/me/tokens`: create a token
 - `DELETE /api/me/tokens/{token_id}`: revoke a token
 
+Signed-in users can also manage personal tokens from the web UI at `/settings/api-tokens`.
+
 Create request:
 
 ```json

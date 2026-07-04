@@ -30,10 +30,6 @@ import type {
 } from "../types/project";
 import type {
   CreateUserRequest,
-  APIToken,
-  APITokenListResponse,
-  CreateAPITokenRequest,
-  CreatedAPIToken,
   AuthConfigResponse,
   MeResponse,
   ProjectMember,
@@ -96,6 +92,11 @@ export {
   updateNotificationSubscription,
   updateNotificationTarget,
 } from "./notificationClient";
+export {
+  createAPIToken,
+  listAPITokens,
+  revokeAPIToken,
+} from "./personalTokenClient";
 
 export function isAPIErrorStatus(error: unknown, status: number): boolean {
   return error instanceof APIError && error.status === status;
@@ -191,26 +192,6 @@ export async function updateUser(
 
 export async function deleteUser(id: string): Promise<void> {
   await deleteNoContent(`/users/${encodeURIComponent(id)}`);
-}
-
-export async function listAPITokens(): Promise<APIToken[]> {
-  const envelope =
-    await fetchJSON<DataEnvelope<APITokenListResponse>>("/me/tokens");
-  return envelope.data.tokens;
-}
-
-export async function createAPIToken(
-  input: CreateAPITokenRequest,
-): Promise<CreatedAPIToken> {
-  const envelope = await postJSON<
-    DataEnvelope<CreatedAPIToken>,
-    CreateAPITokenRequest
-  >("/me/tokens", input);
-  return envelope.data;
-}
-
-export async function revokeAPIToken(id: string): Promise<void> {
-  await deleteNoContent(`/me/tokens/${encodeURIComponent(id)}`);
 }
 
 export async function listProjectMembers(

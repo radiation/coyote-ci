@@ -102,7 +102,7 @@ describe("Layout", () => {
       expect(
         screen.getByRole("link", { name: "My notifications" }),
       ).toBeTruthy();
-      expect(screen.queryByRole("link", { name: "Tokens" })).toBeNull();
+      expect(screen.queryByRole("link", { name: "My API Tokens" })).toBeNull();
       expect(screen.getByRole("link", { name: "Notifications" })).toBeTruthy();
       expect(screen.getByRole("link", { name: "Users" })).toBeTruthy();
     });
@@ -136,7 +136,7 @@ describe("Layout", () => {
       ).toBeTruthy();
       expect(screen.queryByRole("link", { name: "Notifications" })).toBeNull();
       expect(screen.queryByRole("link", { name: "Users" })).toBeNull();
-      expect(screen.getByRole("link", { name: "Tokens" })).toBeTruthy();
+      expect(screen.getByRole("link", { name: "My API Tokens" })).toBeTruthy();
     });
   });
 

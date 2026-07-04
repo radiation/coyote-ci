@@ -922,22 +922,37 @@ fieldset {
   margin-top: 16px;
 }
 
-.api-token-created-value {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.api-token-created-secret {
+  width: 100%;
   margin-top: 10px;
-}
-
-.api-token-created-value input {
-  flex: 1;
-  min-width: 0;
   font-family:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     "Courier New", monospace;
 }
 
+.api-token-created-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.api-token-command-copy {
+  margin-top: 14px;
+  margin-bottom: 6px;
+}
+
+.api-token-command {
+  display: inline-block;
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+
 .api-token-copy-status {
+  margin-bottom: 0;
+}
+
+.api-token-form-copy {
+  margin-top: -2px;
   margin-bottom: 0;
 }
 
