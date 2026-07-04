@@ -173,4 +173,13 @@ describe("router dashboard home", () => {
       "is-active",
     );
   });
+
+  it("renders the my api tokens settings route", async () => {
+    renderRouter(["/settings/my-api-tokens"]);
+
+    expect(
+      await screen.findByRole("heading", { name: "My API Tokens" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "My API Tokens" })).toBeNull();
+  });
 });

@@ -40,7 +40,11 @@ export function Layout() {
       label: "Notifications",
       visible: showUsersLink,
     },
-    { to: "/settings/tokens", label: "Tokens", visible: showTokensLink },
+    {
+      to: "/settings/my-api-tokens",
+      label: "My API Tokens",
+      visible: showTokensLink,
+    },
     { to: "/settings/users", label: "Users", visible: showUsersLink },
   ];
 

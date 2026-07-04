@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { APITokensPage } from "./APITokensPage";
-import { createAPIToken, listAPITokens, revokeAPIToken } from "../api";
+import {
+  APIError,
+  createAPIToken,
+  listAPITokens,
+  revokeAPIToken,
+} from "../api";
 import { AuthContext, type AuthContextValue } from "../auth-context";
 
 vi.mock("../api", async () => {
@@ -58,9 +63,12 @@ describe("APITokensPage", () => {
   const mockedListAPITokens = vi.mocked(listAPITokens);
   const mockedRevokeAPIToken = vi.mocked(revokeAPIToken);
   const writeText = vi.fn();
+  const confirmSpy = vi.spyOn(window, "confirm");
 
   beforeEach(() => {
     vi.clearAllMocks();
+    confirmSpy.mockReset();
+    confirmSpy.mockReturnValue(true);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText },
@@ -76,7 +84,7 @@ describe("APITokensPage", () => {
     ]);
     mockedCreateAPIToken.mockResolvedValue({
       id: "token-2",
-      name: "fixture populator",
+      name: "coyote cli",
       token_prefix: "coyote_pat_rawtok12",
       token: "coyote_pat_rawtoken",
       created_at: "2026-05-12T01:00:00Z",
@@ -85,22 +93,30 @@ describe("APITokensPage", () => {
     writeText.mockResolvedValue(undefined);
   });
 
-  it("lists, creates, copies, and revokes API tokens", async () => {
+  it("lists, creates, copies, dismisses, and revokes API tokens", async () => {
     renderPage();
 
     await screen.findByText("fixture-token");
+    expect(screen.getByText("Never")).toBeTruthy();
 
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "coyote cli" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Create Token" }));
 
     await waitFor(() => {
       expect(mockedCreateAPIToken).toHaveBeenCalled();
       expect(mockedCreateAPIToken.mock.calls[0]?.[0]).toEqual({
-        name: "fixture populator",
+        name: "coyote cli",
         expires_at: undefined,
       });
     });
 
     expect(await screen.findByDisplayValue("coyote_pat_rawtoken")).toBeTruthy();
+    expect(
+      screen.getByText("Copy this token now. Coyote will not show it again."),
+    ).toBeTruthy();
+    expect(screen.getByText("coyote auth token set")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy token" }));
 
@@ -109,12 +125,36 @@ describe("APITokensPage", () => {
       expect(screen.getByText("Token copied.")).toBeTruthy();
     });
 
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    await waitFor(() => {
+      expect(screen.queryByDisplayValue("coyote_pat_rawtoken")).toBeNull();
+    });
+
     fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
 
     await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledWith(
+        "Revoke API token fixture-token (coyote_pat_abcd1234)?",
+      );
       expect(mockedRevokeAPIToken).toHaveBeenCalled();
       expect(mockedRevokeAPIToken.mock.calls[0]?.[0]).toBe("token-1");
     });
+  });
+
+  it("shows the CLI-focused empty state", async () => {
+    mockedListAPITokens.mockResolvedValue([]);
+
+    renderPage();
+
+    expect(
+      await screen.findByText(/No personal API tokens yet\./i),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        /use the Coyote CLI or another authenticated API client without relying on a browser session/i,
+      ),
+    ).toBeTruthy();
   });
 
   it("requires a token name", async () => {
@@ -131,6 +171,25 @@ describe("APITokensPage", () => {
     expect(mockedCreateAPIToken).not.toHaveBeenCalled();
   });
 
+  it("does not recreate the secret after a refresh", async () => {
+    const firstRender = renderPage();
+
+    await screen.findByText("fixture-token");
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "coyote cli" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create Token" }));
+
+    expect(await screen.findByDisplayValue("coyote_pat_rawtoken")).toBeTruthy();
+
+    firstRender.unmount();
+    renderPage();
+
+    await screen.findByText("fixture-token");
+    expect(screen.queryByDisplayValue("coyote_pat_rawtoken")).toBeNull();
+    expect(screen.queryByText("coyote auth token set")).toBeNull();
+  });
+
   it("shows a disabled-mode message and skips token loading", () => {
     renderPage({
       authMode: "disabled",
@@ -145,6 +204,45 @@ describe("APITokensPage", () => {
     expect(screen.getByText("Unavailable in disabled auth mode")).toBeTruthy();
     expect(mockedListAPITokens).not.toHaveBeenCalled();
     expect(screen.getByText(/token management is not available/i)).toBeTruthy();
+  });
+
+  it("shows create validation errors from the API", async () => {
+    mockedCreateAPIToken.mockRejectedValueOnce(
+      new APIError(400, "api token name is required"),
+    );
+
+    renderPage();
+
+    await screen.findByText("fixture-token");
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "bad token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create Token" }));
+
+    expect(
+      await screen.findByText(
+        /Failed to create API token: API 400: api token name is required/i,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("refreshes the authoritative list when revoke returns not found", async () => {
+    mockedRevokeAPIToken.mockRejectedValueOnce(
+      new APIError(404, "api token not found"),
+    );
+
+    renderPage();
+
+    await screen.findByText("fixture-token");
+    fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+
+    await waitFor(() => {
+      expect(mockedRevokeAPIToken).toHaveBeenCalled();
+      expect(mockedRevokeAPIToken.mock.calls[0]?.[0]).toBe("token-1");
+      expect(mockedListAPITokens).toHaveBeenCalledTimes(2);
+    });
+
+    expect(screen.queryByText(/Failed to revoke API token/i)).toBeNull();
   });
 
   it("shows revoked tokens as revoked and disables their action", async () => {
@@ -169,6 +267,18 @@ describe("APITokensPage", () => {
 
     fireEvent.click(revokedButton);
 
+    expect(mockedRevokeAPIToken).not.toHaveBeenCalled();
+  });
+
+  it("does not revoke when confirmation is canceled", async () => {
+    confirmSpy.mockReturnValue(false);
+
+    renderPage();
+
+    await screen.findByText("fixture-token");
+    fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+
+    expect(confirmSpy).toHaveBeenCalled();
     expect(mockedRevokeAPIToken).not.toHaveBeenCalled();
   });
 });

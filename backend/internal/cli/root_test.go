@@ -55,25 +55,45 @@ func TestContextCommandsAndRemoteCalls(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 
-	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"auth", "status", "--output", "json"}}); code != 0 {
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"auth", "status", "--json"}}); code != 0 {
 		t.Fatalf("auth status exit code %d stderr=%s", code, stderr.String())
 	}
 	var status map[string]any
 	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
 		t.Fatalf("decode status: %v", err)
 	}
-	if status["server_url"] != server.URL || status["auth_source"] != "credential_store" {
+	if strings.Contains(stdout.String(), "Context:") {
+		t.Fatalf("unexpected human prose in auth status JSON: %s", stdout.String())
+	}
+	contextData, ok := status["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected context object in payload: %+v", status)
+	}
+	authData, ok := status["auth"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected auth object in payload: %+v", status)
+	}
+	if contextData["server_url"] != server.URL || authData["source"] != "credential_store" {
 		t.Fatalf("unexpected status payload: %+v", status)
+	}
+	if authData["authenticated"] != true {
+		t.Fatalf("expected authenticated true, got %+v", authData)
+	}
+	if strings.Contains(stdout.String(), "stored-token") {
+		t.Fatalf("auth status JSON leaked token: %s", stdout.String())
 	}
 	stdout.Reset()
 	stderr.Reset()
 
-	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"server", "info", "--output", "json"}}); code != 0 {
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"server", "info", "--json"}}); code != 0 {
 		t.Fatalf("server info exit code %d stderr=%s", code, stderr.String())
 	}
 	var info map[string]any
 	if err := json.Unmarshal(stdout.Bytes(), &info); err != nil {
 		t.Fatalf("decode info: %v", err)
+	}
+	if strings.Contains(stdout.String(), "Server:") {
+		t.Fatalf("unexpected human prose in server info JSON: %s", stdout.String())
 	}
 	serverData, ok := info["server"].(map[string]any)
 	if !ok {
@@ -159,8 +179,16 @@ func TestVersionJSONAndContextPrecedence(t *testing.T) {
 	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: store, Args: []string{"version", "--json"}}); code != 0 {
 		t.Fatalf("version exit code %d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), `"version":"2.0.0"`) {
+	var versionPayload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &versionPayload); err != nil {
+		t.Fatalf("decode version: %v", err)
+	}
+	cliData, ok := versionPayload["cli"].(map[string]any)
+	if !ok || cliData["version"] != "2.0.0" {
 		t.Fatalf("unexpected version output: %s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "coyote 2.0.0") {
+		t.Fatalf("unexpected human prose in version JSON: %s", stdout.String())
 	}
 	stdout.Reset()
 	stderr.Reset()
@@ -170,11 +198,101 @@ func TestVersionJSONAndContextPrecedence(t *testing.T) {
 			return "other"
 		}
 		return ""
-	}, Args: []string{"context", "current", "--output", "json"}}); code != 0 {
+	}, Args: []string{"context", "current", "--json"}}); code != 0 {
 		t.Fatalf("context current exit code %d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), `"name":"other"`) {
+	var currentPayload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &currentPayload); err != nil {
+		t.Fatalf("decode context current: %v", err)
+	}
+	currentContext, ok := currentPayload["context"].(map[string]any)
+	if !ok || currentContext["name"] != "other" {
 		t.Fatalf("unexpected context current output: %s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), " -> ") {
+		t.Fatalf("unexpected human prose in context current JSON: %s", stdout.String())
+	}
+}
+
+func TestContextListJSON(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	store := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := store.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: "http://localhost:8080", CredentialRef: "context:local"},
+			"prod":  {Name: "prod", ServerURL: "https://example.com", CredentialRef: "context:prod"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: store, Args: []string{"context", "list", "--json"}}); code != 0 {
+		t.Fatalf("context list exit code %d stderr=%s", code, stderr.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode context list: %v", err)
+	}
+	if payload["current_context"] != "local" {
+		t.Fatalf("unexpected current_context: %+v", payload)
+	}
+	contexts, ok := payload["contexts"].([]any)
+	if !ok || len(contexts) != 2 {
+		t.Fatalf("unexpected contexts payload: %+v", payload)
+	}
+	if strings.Contains(stdout.String(), "No contexts configured") || strings.Contains(stdout.String(), " -> ") {
+		t.Fatalf("unexpected human prose in context list JSON: %s", stdout.String())
+	}
+}
+
+func TestJSONErrorsStillGoToStderr(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	store := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: store, Args: []string{"context", "current", "--json"}})
+	if code != 3 {
+		t.Fatalf("expected exit code 3, got %d", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no stdout on error, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "no context is selected") {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+}
+
+func TestAuthStatusJSONFailureReturnsNonzeroWithoutSuccessPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeHeader := http.StatusUnauthorized
+		w.WriteHeader(writeHeader)
+		_, _ = w.Write([]byte(`{"error":{"code":"unauthorized","message":"authentication required"}}`))
+	}))
+	defer server.Close()
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	store := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := store.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: store, Args: []string{"auth", "status", "--json"}})
+	if code == 0 {
+		t.Fatal("expected nonzero exit code")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no stdout on auth failure, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "authentication required") {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
 	}
 }
 

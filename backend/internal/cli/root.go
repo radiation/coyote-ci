@@ -73,6 +73,7 @@ type app struct {
 	flagContext string
 	flagServer  string
 	flagOutput  string
+	flagJSON    bool
 }
 
 type resolvedTarget struct {
@@ -162,6 +163,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 	rootCmd.PersistentFlags().StringVar(&application.flagContext, "context", "", "Context name")
 	rootCmd.PersistentFlags().StringVar(&application.flagServer, "server", "", "Server URL override")
 	rootCmd.PersistentFlags().StringVar(&application.flagOutput, "output", "", "Output mode: human or json")
+	rootCmd.PersistentFlags().BoolVar(&application.flagJSON, "json", false, "Emit JSON output")
 
 	rootCmd.AddCommand(application.newVersionCommand())
 	rootCmd.AddCommand(application.newContextCommand())
@@ -172,12 +174,11 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 }
 
 func (a *app) newVersionCommand() *cobra.Command {
-	var jsonOutput bool
 	command := &cobra.Command{
 		Use:   "version",
 		Short: "Show CLI version information",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			mode, err := a.resolveOutputMode(cliconfig.Context{}, jsonOutput)
+			mode, err := a.resolveOutputMode(cliconfig.Context{}, false)
 			if err != nil {
 				return err
 			}
@@ -189,7 +190,6 @@ func (a *app) newVersionCommand() *cobra.Command {
 			}, payload)
 		},
 	}
-	command.Flags().BoolVar(&jsonOutput, "json", false, "Emit JSON output")
 	return command
 }
 
@@ -425,12 +425,17 @@ func (a *app) newAuthCommand() *cobra.Command {
 				return mapCommandError(err)
 			}
 			payload := map[string]any{
-				"context":     resolved.ContextName,
-				"server_url":  resolved.ServerURL,
-				"auth_source": resolved.AuthSource,
-				"auth_mode":   me.AuthMode,
-				"auth_method": me.AuthMethod,
-				"user":        me.User,
+				"context": map[string]any{
+					"name":       resolved.ContextName,
+					"server_url": resolved.ServerURL,
+				},
+				"auth": map[string]any{
+					"source":        resolved.AuthSource,
+					"authenticated": strings.TrimSpace(resolved.Token) != "",
+					"auth_mode":     me.AuthMode,
+					"auth_method":   me.AuthMethod,
+				},
+				"user": me.User,
 			}
 			return output.Write(resolved.OutputMode, a.stdout, func(w io.Writer) error {
 				_, err := fmt.Fprintf(w, "Context: %s\nServer: %s\nAuth source: %s\nAuth mode: %s\nAuth method: %s\nUser: %s (%s)\n", emptyOr(resolved.ContextName, "none"), resolved.ServerURL, emptyOr(resolved.AuthSource, "none"), me.AuthMode, emptyOr(me.AuthMethod, "none"), me.User.Email, me.User.ID)
@@ -585,7 +590,7 @@ func (a *app) newClient(target resolvedTarget) (*apiclient.Client, error) {
 
 func (a *app) resolveOutputMode(ctx cliconfig.Context, forceJSON bool) (output.Mode, error) {
 	raw := strings.TrimSpace(a.flagOutput)
-	if forceJSON {
+	if forceJSON || a.flagJSON {
 		raw = string(output.ModeJSON)
 	}
 	if raw == "" {
