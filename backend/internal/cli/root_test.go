@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -18,6 +19,12 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/cli/credentials"
 	"github.com/radiation/coyote-ci/backend/internal/versioninfo"
 )
+
+type errWriter struct{}
+
+func (errWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}
 
 func TestContextCommandsAndRemoteCalls(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -526,5 +533,176 @@ func TestMapCommandErrorExitCodes(t *testing.T) {
 	var exitErr *ExitError
 	if !errors.As(wrapped, &exitErr) || exitErr.Code != 4 {
 		t.Fatalf("expected wrapped authentication code 4, got %v", wrapped)
+	}
+}
+
+func TestRunUsesDefaultStderrAndExitErrorFallbacks(t *testing.T) {
+	code := Run(Dependencies{Stdout: io.Discard, ConfigStore: config.NewStore(filepath.Join(t.TempDir(), "config.json")), Args: []string{"context", "current"}})
+	if code != 3 {
+		t.Fatalf("expected exit code 3, got %d", code)
+	}
+
+	if (&ExitError{}).Error() != "" {
+		t.Fatal("expected empty error string for nil inner error")
+	}
+	if (&ExitError{}).Unwrap() != nil {
+		t.Fatal("expected nil unwrap for nil inner error")
+	}
+	inner := errors.New("boom")
+	if !errors.Is((&ExitError{Code: 1, Err: inner}).Unwrap(), inner) {
+		t.Fatal("expected unwrap to expose inner error")
+	}
+}
+
+func TestAuthStatusAndServerInfoHumanOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/me":
+			_, _ = w.Write([]byte(`{"data":{"auth_mode":"header","auth_method":"","email_verified":true,"user":{"id":"user-2","email":"person@example.com","global_role":"user"}}}`))
+		case "/api/info":
+			_, _ = w.Write([]byte(`{"data":{"version":"1.2.3","commit":"","build_date":"","api_version":"0.2"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	store := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := store.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, DefaultOutput: "human"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: store, Args: []string{"auth", "status"}}); code != 0 {
+		t.Fatalf("auth status exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Context: local") || !strings.Contains(stdout.String(), "Auth source: none") || !strings.Contains(stdout.String(), "Auth method: none") {
+		t.Fatalf("unexpected auth status output: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: store, Args: []string{"server", "info"}}); code != 0 {
+		t.Fatalf("server info exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Server: "+server.URL) || !strings.Contains(stdout.String(), "Commit: unknown") || !strings.Contains(stdout.String(), "Build date: unknown") {
+		t.Fatalf("unexpected server info output: %s", stdout.String())
+	}
+}
+
+func TestResolveTargetAndDefaultPromptSecretEdges(t *testing.T) {
+	creds := credentials.NewMemoryStore()
+	store := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := store.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: "https://stored.example.com", CredentialRef: "context:local", DefaultOutput: "json"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set credential: %v", setErr)
+	}
+
+	application := &app{
+		configStore: store,
+		credentials: creds,
+		getenv: func(key string) string {
+			switch key {
+			case config.EnvServer:
+				return " https://override.example.com/api/ "
+			case config.EnvToken:
+				return " env-token "
+			default:
+				return ""
+			}
+		},
+	}
+	resolved, err := application.resolveTarget()
+	if err != nil {
+		t.Fatalf("resolve target: %v", err)
+	}
+	if resolved.ServerURL != "https://override.example.com/api" || resolved.Token != "env-token" || resolved.AuthSource != "environment" || resolved.OutputMode != "json" {
+		t.Fatalf("unexpected resolved target: %+v", resolved)
+	}
+
+	missingApplication := &app{configStore: store, credentials: creds, getenv: func(string) string { return "" }, flagContext: "missing"}
+	_, err = missingApplication.resolveTarget()
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
+		t.Fatalf("expected missing context exit error, got %v", err)
+	}
+
+	promptApp := &app{stdin: strings.NewReader("secret-without-newline"), stderr: &bytes.Buffer{}}
+	secret, promptErr := promptApp.defaultPromptSecret("API token: ")
+	if promptErr != nil {
+		t.Fatalf("defaultPromptSecret with EOF: %v", promptErr)
+	}
+	if secret != "secret-without-newline" {
+		t.Fatalf("unexpected EOF prompt secret: %q", secret)
+	}
+
+	writeFailApp := &app{stdin: strings.NewReader("ignored"), stderr: errWriter{}}
+	_, promptErr = writeFailApp.defaultPromptSecret("API token: ")
+	if promptErr == nil || !strings.Contains(promptErr.Error(), "write failed") {
+		t.Fatalf("expected prompt write failure, got %v", promptErr)
+	}
+
+	if (*ExitError)(nil).Unwrap() != nil {
+		t.Fatal("expected nil unwrap for nil receiver")
+	}
+}
+
+func TestAuthTokenSetAddsDefaultCredentialRefAndUsesPrompt(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	creds := credentials.NewMemoryStore()
+	store := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := store.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: "https://example.com"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	if code := Run(Dependencies{
+		Stdout:      stdout,
+		Stderr:      stderr,
+		ConfigStore: store,
+		Credentials: creds,
+		Getenv:      func(string) string { return "" },
+		PromptSecret: func(prompt string) (string, error) {
+			if prompt != "API token: " {
+				t.Fatalf("unexpected prompt: %q", prompt)
+			}
+			return "prompted-token", nil
+		},
+		Args: []string{"auth", "token", "set"},
+	}); code != 0 {
+		t.Fatalf("auth token set exit code %d stderr=%s", code, stderr.String())
+	}
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if loaded.Contexts["local"].CredentialRef != "context:local" {
+		t.Fatalf("expected default credential ref, got %+v", loaded.Contexts["local"])
+	}
+	storedToken, getErr := creds.Get("context:local")
+	if getErr != nil {
+		t.Fatalf("get stored token: %v", getErr)
+	}
+	if storedToken != "prompted-token" {
+		t.Fatalf("unexpected stored token: %q", storedToken)
 	}
 }

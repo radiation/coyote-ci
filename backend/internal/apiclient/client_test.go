@@ -300,3 +300,41 @@ func TestDecodeErrorResponseAndClassifyStatus(t *testing.T) {
 		t.Fatalf("unexpected unwrap value: %v", wrapped)
 	}
 }
+
+func TestErrorFallbackFormattingAndWrappers(t *testing.T) {
+	if (*Error)(nil).Error() != "" {
+		t.Fatal("expected nil error string")
+	}
+	if (*Error)(nil).Unwrap() != nil {
+		t.Fatal("expected nil unwrap for nil error")
+	}
+	err := &Error{StatusCode: http.StatusUnauthorized}
+	if err.Error() != http.StatusText(http.StatusUnauthorized) {
+		t.Fatalf("expected status text fallback, got %q", err.Error())
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/me":
+			_, _ = w.Write([]byte(`{"data":{"auth_mode":"header","auth_method":"api_token","email_verified":true,"user":{"id":"user-3","email":"me@example.com","global_role":"user"}}}`))
+		case "/api/info":
+			_, _ = w.Write([]byte(`{"data":{"version":"1.0.1","commit":"abc","build_date":"2026-07-04","api_version":"0.1"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, newErr := New(server.URL, " token ", "agent", nil)
+	if newErr != nil {
+		t.Fatalf("new client: %v", newErr)
+	}
+	me, getMeErr := client.GetMe(context.Background())
+	if getMeErr != nil || me.User.Email != "me@example.com" {
+		t.Fatalf("unexpected get me result: %+v err=%v", me, getMeErr)
+	}
+	info, infoErr := client.GetServerInfo(context.Background())
+	if infoErr != nil || info.Version != "1.0.1" {
+		t.Fatalf("unexpected server info result: %+v err=%v", info, infoErr)
+	}
+}

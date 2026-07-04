@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -178,7 +179,7 @@ func TestStorePathAndLoadHelpers(t *testing.T) {
 			t.Fatalf("write invalid config: %v", writeErr)
 		}
 		_, err = store.Load()
-		if err == nil || !errors.Is(err, err) || err.Error() == "" {
+		if err == nil || !strings.Contains(err.Error(), "parse config") {
 			t.Fatalf("expected parse error, got %v", err)
 		}
 

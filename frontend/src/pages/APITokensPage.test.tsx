@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { APITokensPage } from "./APITokensPage";
@@ -9,6 +9,7 @@ import {
   revokeAPIToken,
 } from "../api";
 import { AuthContext, type AuthContextValue } from "../auth-context";
+import { formatTime } from "../utils/time";
 
 vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
@@ -91,6 +92,10 @@ describe("APITokensPage", () => {
     });
     mockedRevokeAPIToken.mockResolvedValue();
     writeText.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("lists, creates, copies, dismisses, and revokes API tokens", async () => {
@@ -270,6 +275,25 @@ describe("APITokensPage", () => {
     expect(mockedRevokeAPIToken).not.toHaveBeenCalled();
   });
 
+  it("renders last-used and expiration timestamps when present", async () => {
+    mockedListAPITokens.mockResolvedValue([
+      {
+        id: "token-3",
+        name: "dated-token",
+        token_prefix: "coyote_pat_dates",
+        created_at: "2026-05-10T00:00:00Z",
+        last_used_at: "2026-05-11T08:30:00Z",
+        expires_at: "2026-06-01T12:00:00Z",
+      },
+    ]);
+
+    renderPage();
+
+    expect(await screen.findByText("dated-token")).toBeTruthy();
+    expect(screen.getByText(formatTime("2026-05-11T08:30:00Z"))).toBeTruthy();
+    expect(screen.getByText(formatTime("2026-06-01T12:00:00Z"))).toBeTruthy();
+  });
+
   it("does not revoke when confirmation is canceled", async () => {
     confirmSpy.mockReturnValue(false);
 
@@ -292,6 +316,28 @@ describe("APITokensPage", () => {
       target: { value: "coyote cli" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Create Token" }));
+
+    expect(await screen.findByDisplayValue("coyote_pat_rawtoken")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Copy token" }));
+
+    expect(await screen.findByText("Unable to copy token.")).toBeTruthy();
+  });
+
+  it("shows copy failure feedback when the clipboard API is unavailable", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    });
+
+    renderPage();
+
+    await screen.findByText("fixture-token");
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "coyote cli" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Create Token|Creating\.\.\./ }),
+    );
 
     expect(await screen.findByDisplayValue("coyote_pat_rawtoken")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Copy token" }));
