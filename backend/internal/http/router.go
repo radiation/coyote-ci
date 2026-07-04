@@ -104,7 +104,12 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 		r.Get("/health", handler.Health)
 		r.Get("/healthz", handler.Health)
 		if cfg.serverInfoHandler != nil {
-			r.Get("/info", cfg.serverInfoHandler.GetInfo)
+			r.Group(func(r chi.Router) {
+				if cfg.authMiddleware != nil {
+					r.Use(cfg.authMiddleware)
+				}
+				r.Get("/info", cfg.serverInfoHandler.GetInfo)
+			})
 		}
 		if cfg.userHandler != nil {
 			r.Get("/auth/config", cfg.userHandler.GetAuthConfig)

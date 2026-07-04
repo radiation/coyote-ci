@@ -281,4 +281,21 @@ describe("APITokensPage", () => {
     expect(confirmSpy).toHaveBeenCalled();
     expect(mockedRevokeAPIToken).not.toHaveBeenCalled();
   });
+
+  it("shows copy failure feedback when clipboard write fails", async () => {
+    writeText.mockRejectedValueOnce(new Error("clipboard unavailable"));
+
+    renderPage();
+
+    await screen.findByText("fixture-token");
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "coyote cli" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create Token" }));
+
+    expect(await screen.findByDisplayValue("coyote_pat_rawtoken")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Copy token" }));
+
+    expect(await screen.findByText("Unable to copy token.")).toBeTruthy();
+  });
 });

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/radiation/coyote-ci/backend/internal/apiclient"
 	"github.com/radiation/coyote-ci/backend/internal/cli/config"
 	"github.com/radiation/coyote-ci/backend/internal/cli/credentials"
 	"github.com/radiation/coyote-ci/backend/internal/versioninfo"
@@ -142,8 +144,8 @@ func TestCanceledCommandContextCancelsHTTPRequests(t *testing.T) {
 		if code != 130 {
 			t.Fatalf("expected exit code 130, got %d stderr=%s", code, stderr.String())
 		}
-		if !errors.Is(context.Canceled, context.Canceled) {
-			t.Fatal("unexpected cancellation check")
+		if !strings.Contains(stderr.String(), "context canceled") {
+			t.Fatalf("expected cancellation message in stderr, got %q", stderr.String())
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("command did not return promptly after cancellation")
@@ -306,5 +308,223 @@ func TestUnknownContextReturnsConfigExitCode(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), `unknown context "missing"`) {
 		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+}
+
+func TestContextHumanCommandsAndAuthTokenSetFromStdin(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	creds := credentials.NewMemoryStore()
+	store := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := store.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: "http://localhost:8080", CredentialRef: "context:local"},
+			"prod":  {Name: "prod", ServerURL: "https://example.com", CredentialRef: "context:prod"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: store, Args: []string{"context", "list"}}); code != 0 {
+		t.Fatalf("context list exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "* local -> http://localhost:8080") {
+		t.Fatalf("unexpected context list output: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("stdin-token\n"), ConfigStore: store, Credentials: creds, Args: []string{"auth", "token", "set", "--stdin"}}); code != 0 {
+		t.Fatalf("auth token set exit code %d stderr=%s", code, stderr.String())
+	}
+	storedToken, getErr := creds.Get("context:local")
+	if getErr != nil {
+		t.Fatalf("get stored token: %v", getErr)
+	}
+	if storedToken != "stdin-token" {
+		t.Fatalf("unexpected stored token: %q", storedToken)
+	}
+	if !strings.Contains(stdout.String(), "Stored token for context local") {
+		t.Fatalf("unexpected auth token set output: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: store, Args: []string{"context", "use", "prod"}}); code != 0 {
+		t.Fatalf("context use exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Current context: prod") {
+		t.Fatalf("unexpected context use output: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: store, Args: []string{"context", "current"}}); code != 0 {
+		t.Fatalf("context current exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "prod -> https://example.com") {
+		t.Fatalf("unexpected context current output: %s", stdout.String())
+	}
+}
+
+func TestContextListEmptyAndVersionHumanOutput(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	store := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: store, Args: []string{"context", "list"}}); code != 0 {
+		t.Fatalf("context list exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "No contexts configured") {
+		t.Fatalf("unexpected empty context output: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	originalBuildDate := versioninfo.BuildDate
+	t.Cleanup(func() {
+		versioninfo.BuildDate = originalBuildDate
+	})
+	versioninfo.BuildDate = ""
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Args: []string{"version"}}); code != 0 {
+		t.Fatalf("version exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "build date: unknown") {
+		t.Fatalf("unexpected version output: %s", stdout.String())
+	}
+}
+
+func TestReadTokenForSetSourcesAndPromptFallback(t *testing.T) {
+	t.Run("stdin", func(t *testing.T) {
+		application := &app{stdin: strings.NewReader(" stdin-token \n")}
+		token, source, err := application.readTokenForSet(true)
+		if err != nil {
+			t.Fatalf("read token from stdin: %v", err)
+		}
+		if token != "stdin-token" || source != "stdin" {
+			t.Fatalf("unexpected stdin token result: %q %q", token, source)
+		}
+	})
+
+	t.Run("environment", func(t *testing.T) {
+		application := &app{getenv: func(key string) string {
+			if key == config.EnvToken {
+				return " env-token "
+			}
+			return ""
+		}}
+		token, source, err := application.readTokenForSet(false)
+		if err != nil {
+			t.Fatalf("read token from env: %v", err)
+		}
+		if token != "env-token" || source != "environment" {
+			t.Fatalf("unexpected env token result: %q %q", token, source)
+		}
+	})
+
+	t.Run("prompt", func(t *testing.T) {
+		application := &app{getenv: func(string) string { return "" }, promptSecret: func(prompt string) (string, error) {
+			if prompt != "API token: " {
+				t.Fatalf("unexpected prompt: %q", prompt)
+			}
+			return " prompt-token \n", nil
+		}}
+		token, source, err := application.readTokenForSet(false)
+		if err != nil {
+			t.Fatalf("read token from prompt: %v", err)
+		}
+		if token != "prompt-token" || source != "prompt" {
+			t.Fatalf("unexpected prompt token result: %q %q", token, source)
+		}
+	})
+
+	t.Run("blank prompt token", func(t *testing.T) {
+		application := &app{getenv: func(string) string { return "" }, promptSecret: func(string) (string, error) {
+			return "   ", nil
+		}}
+		_, _, err := application.readTokenForSet(false)
+		var exitErr *ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+			t.Fatalf("expected exit error code 2, got %v", err)
+		}
+	})
+}
+
+func TestDefaultPromptSecretAndOutputModeHelpers(t *testing.T) {
+	stderr := &bytes.Buffer{}
+	application := &app{stdin: strings.NewReader("secret\n"), stderr: stderr}
+	secret, err := application.defaultPromptSecret("API token: ")
+	if err != nil {
+		t.Fatalf("defaultPromptSecret: %v", err)
+	}
+	if secret != "secret\n" {
+		t.Fatalf("unexpected secret value: %q", secret)
+	}
+	if stderr.String() != "API token: " {
+		t.Fatalf("unexpected prompt output: %q", stderr.String())
+	}
+
+	application.flagJSON = true
+	mode, modeErr := application.resolveOutputMode(config.Context{DefaultOutput: "human"}, false)
+	if modeErr != nil {
+		t.Fatalf("resolve output mode with json flag: %v", modeErr)
+	}
+	if mode != "json" {
+		t.Fatalf("expected json output mode, got %q", mode)
+	}
+
+	application.flagJSON = false
+	application.flagOutput = "bad"
+	_, modeErr = application.resolveOutputMode(config.Context{}, false)
+	var exitErr *ExitError
+	if !errors.As(modeErr, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("expected invalid output exit error, got %v", modeErr)
+	}
+
+	if emptyOr("", "fallback") != "fallback" || valueOrUnknown("") != "unknown" {
+		t.Fatal("unexpected helper fallback values")
+	}
+	if derefContext(nil).Name != "" {
+		t.Fatal("expected zero value context from nil dereference")
+	}
+}
+
+func TestMapCommandErrorExitCodes(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		code int
+	}{
+		{name: "context deadline", err: context.DeadlineExceeded, code: 130},
+		{name: "authentication", err: &apiclient.Error{Kind: apiclient.ErrorKindAuthentication}, code: 4},
+		{name: "authorization", err: &apiclient.Error{Kind: apiclient.ErrorKindAuthorization}, code: 5},
+		{name: "not found", err: &apiclient.Error{Kind: apiclient.ErrorKindNotFound}, code: 6},
+		{name: "conflict", err: &apiclient.Error{Kind: apiclient.ErrorKindConflict}, code: 2},
+		{name: "validation", err: &apiclient.Error{Kind: apiclient.ErrorKindValidation}, code: 2},
+		{name: "transport", err: &apiclient.Error{Kind: apiclient.ErrorKindTransport}, code: 8},
+		{name: "server", err: &apiclient.Error{Kind: apiclient.ErrorKindServer}, code: 9},
+		{name: "unexpected api", err: &apiclient.Error{Kind: apiclient.ErrorKindUnexpected}, code: 1},
+		{name: "generic", err: errors.New("boom"), code: 1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mapped := mapCommandError(tc.err)
+			var exitErr *ExitError
+			if !errors.As(mapped, &exitErr) {
+				t.Fatalf("expected exit error, got %T", mapped)
+			}
+			if exitErr.Code != tc.code {
+				t.Fatalf("expected code %d, got %d", tc.code, exitErr.Code)
+			}
+		})
+	}
+
+	wrapped := mapCommandError(fmt.Errorf("wrapped: %w", &apiclient.Error{Kind: apiclient.ErrorKindAuthentication}))
+	var exitErr *ExitError
+	if !errors.As(wrapped, &exitErr) || exitErr.Code != 4 {
+		t.Fatalf("expected wrapped authentication code 4, got %v", wrapped)
 	}
 }

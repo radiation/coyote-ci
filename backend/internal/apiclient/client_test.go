@@ -3,6 +3,8 @@ package apiclient
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +12,12 @@ import (
 	"testing"
 	"time"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
 
 func TestClient_GetMeSendsBearerAndUserAgent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -184,5 +192,111 @@ func TestResolveRequestURLRejectsAbsoluteRequestURLs(t *testing.T) {
 	_, err := resolveRequestURL(baseURL, "https://other.example.com/api/me")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestErrorFormattingTimeoutAndHelpers(t *testing.T) {
+	wrapped := errors.New("boom")
+	err := &Error{StatusCode: http.StatusUnauthorized, Message: "auth failed", RequestID: "req-1", Err: wrapped}
+	if err.Error() != "auth failed (request_id=req-1)" {
+		t.Fatalf("unexpected error string: %q", err.Error())
+	}
+	if !errors.Is(err, wrapped) {
+		t.Fatalf("expected unwrap to expose wrapped error")
+	}
+
+	client, newErr := New("https://example.com", "", "agent", &http.Client{})
+	if newErr != nil {
+		t.Fatalf("new client: %v", newErr)
+	}
+	if client.httpClient.Timeout != defaultTimeout {
+		t.Fatalf("expected default timeout, got %v", client.httpClient.Timeout)
+	}
+
+	customClient := &http.Client{Timeout: 3 * time.Second}
+	client, newErr = New("https://example.com", "", "agent", customClient)
+	if newErr != nil {
+		t.Fatalf("new client with custom timeout: %v", newErr)
+	}
+	if client.httpClient.Timeout != 3*time.Second {
+		t.Fatalf("expected preserved timeout, got %v", client.httpClient.Timeout)
+	}
+}
+
+func TestClientDoJSONRequestPathTransportAndNoOutput(t *testing.T) {
+	client, err := New("https://example.com/coyote", "", "agent", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("network down")
+	})})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	err = client.doJSON(context.Background(), http.MethodGet, "", nil, nil)
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || apiErr.Kind != ErrorKindUnexpected {
+		t.Fatalf("expected invalid request path error, got %v", err)
+	}
+
+	err = client.doJSON(context.Background(), http.MethodGet, "api/info", nil, nil)
+	if !errors.As(err, &apiErr) || apiErr.Kind != ErrorKindTransport {
+		t.Fatalf("expected transport error, got %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client, err = New(server.URL, "", "agent", nil)
+	if err != nil {
+		t.Fatalf("new client no output: %v", err)
+	}
+	if err := client.doJSON(context.Background(), http.MethodGet, "api/info", nil, nil); err != nil {
+		t.Fatalf("doJSON with nil output: %v", err)
+	}
+}
+
+func TestDecodeErrorResponseAndClassifyStatus(t *testing.T) {
+	response := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Body:       io.NopCloser(strings.NewReader("")),
+	}
+	err := decodeErrorResponse(response, "req-2")
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || apiErr.Message != http.StatusText(http.StatusBadGateway) {
+		t.Fatalf("unexpected decoded empty-body error: %v", err)
+	}
+
+	tests := []struct {
+		status int
+		want   ErrorKind
+	}{
+		{status: http.StatusUnauthorized, want: ErrorKindAuthentication},
+		{status: http.StatusForbidden, want: ErrorKindAuthorization},
+		{status: http.StatusNotFound, want: ErrorKindNotFound},
+		{status: http.StatusConflict, want: ErrorKindConflict},
+		{status: http.StatusBadRequest, want: ErrorKindValidation},
+		{status: http.StatusUnprocessableEntity, want: ErrorKindValidation},
+		{status: http.StatusInternalServerError, want: ErrorKindServer},
+		{status: http.StatusTeapot, want: ErrorKindUnexpected},
+	}
+	for _, tc := range tests {
+		if got := classifyStatus(tc.status); got != tc.want {
+			t.Fatalf("classifyStatus(%d) = %q, want %q", tc.status, got, tc.want)
+		}
+	}
+
+	client, err := New("https://example.com", "", "agent", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if _, err := resolveRequestURL(client.baseURL, " /api/info "); err != nil {
+		t.Fatalf("resolve request url with trimmed path: %v", err)
+	}
+
+	transportErr := fmt.Errorf("wrapped transport")
+	wrapped := (&Error{Err: transportErr}).Unwrap()
+	if wrapped != transportErr {
+		t.Fatalf("unexpected unwrap value: %v", wrapped)
 	}
 }

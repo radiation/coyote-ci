@@ -112,16 +112,20 @@ func (s *Store) Save(cfg File) error {
 			_ = os.Remove(tmpName)
 		}
 	}()
-	if err := tmpFile.Chmod(0o600); err != nil {
+	err = tmpFile.Chmod(0o600)
+	if err != nil {
 		return err
 	}
-	if _, err := tmpFile.Write(body); err != nil {
+	_, err = tmpFile.Write(body)
+	if err != nil {
 		return err
 	}
-	if err := tmpFile.Close(); err != nil {
+	err = tmpFile.Close()
+	if err != nil {
 		return err
 	}
-	if err := s.replaceFile(tmpName, path); err != nil {
+	err = s.replaceFile(tmpName, path)
+	if err != nil {
 		return err
 	}
 	cleanup = false

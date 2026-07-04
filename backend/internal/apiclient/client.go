@@ -143,8 +143,8 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, request
 		_, _ = io.Copy(io.Discard, response.Body)
 		return nil
 	}
-	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
-		return &Error{Kind: ErrorKindUnexpected, Message: "invalid json response", RequestID: requestID, Err: err}
+	if decodeErr := json.NewDecoder(response.Body).Decode(out); decodeErr != nil {
+		return &Error{Kind: ErrorKindUnexpected, Message: "invalid json response", RequestID: requestID, Err: decodeErr}
 	}
 	return nil
 }
