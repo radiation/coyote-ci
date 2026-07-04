@@ -19,10 +19,14 @@ This repository may be used with AI coding agents that have usage-based token co
 
 Prefer targeted context over broad repository scans:
 - inspect existing instructions and recent diffs first
+- read the relevant `docs/ai-context/` file set before scanning implementation files
+- for frontend/backend contract questions, check `backend/docs/swagger.yaml`, `backend/docs/swagger.json`, and existing API client/types before opening handlers
+- query local CodeGraph context before broad `grep`/`find`/file-read sweeps when a `.codegraph/` index is present
 - use symbol/file search before opening large files
 - avoid reading generated, vendored, build-output, coverage, `dist`, and dependency directories unless necessary
 - when asked to plan, identify the smallest relevant file set before proposing edits
-- when available, use generated repo-index, graph, or AI-context artifacts as navigation aids, but do not treat them as more authoritative than source code and tests
+- use tests, targeted typechecks, or narrow commands as the correctness gate after edits
+- treat CodeGraph and AI-context artifacts as navigation aids, not as more authoritative than source code and tests
 
 Do not make broad exploratory changes just because related files exist.
 
@@ -38,6 +42,14 @@ Before scanning large parts of the repository, check the curated context files w
 - `docs/ai-context/prompt-recipes.md` contains low-token prompt templates for planning, review, debugging, and scoped architecture questions.
 
 Use these files as navigation and intent aids. Do not treat them as more authoritative than source code, migrations, or tests.
+
+Preferred context flow for future agents:
+
+1. Read the smallest relevant curated AI context docs first.
+2. Check Swagger/OpenAPI docs and existing frontend API types for contract questions.
+3. Query CodeGraph before broad grep/find/read scans when `.codegraph/` exists.
+4. Read only the concrete files identified by the docs and CodeGraph.
+5. Validate with the narrowest relevant tests, checks, or hooks.
 
 ### Context maintenance
 

@@ -3,14 +3,15 @@
 These prompts are intentionally short. They are meant to help future assistants stay local, identify the smallest relevant file set, and avoid broad scans.
 
 Treat source code, migrations, tests, and recent diffs as authoritative.
+When a local `.codegraph/` index exists, query CodeGraph before broad grep/find/read sweeps. For frontend/backend contract questions, check `backend/docs/swagger.yaml`, `backend/docs/swagger.json`, and existing frontend API client/types before opening backend handlers.
 
 ## Planning a backend change
 
-"Plan a backend change for [feature or bug]. Start with `.github/copilot-instructions.md`, `docs/ai-context/current-priorities.md`, `docs/ai-context/backend-map.md`, and `docs/ai-context/domain-model.md`. Identify the smallest relevant file set across handler, service, repository, domain, and migrations. Explain where the behavior is controlled and what tests should be checked before editing. Do not scan unrelated packages."
+"Plan a backend change for [feature or bug]. Start with `.github/copilot-instructions.md`, `docs/ai-context/current-priorities.md`, `docs/ai-context/backend-map.md`, and `docs/ai-context/domain-model.md`. Query CodeGraph before broad scans, then identify the smallest relevant file set across handler, service, repository, domain, and migrations. Explain where the behavior is controlled and what tests should be checked before editing. Do not scan unrelated packages."
 
 ## Planning a frontend change
 
-"Plan a frontend change for [feature or bug]. Start with `.github/copilot-instructions.md`, `docs/ai-context/current-priorities.md`, `docs/ai-context/frontend-map.md`, and `docs/ai-context/domain-model.md`. Identify the smallest relevant route, page, component, API client, and test files. Explain which file likely owns the behavior. Avoid broad scans."
+"Plan a frontend change for [feature or bug]. Start with `.github/copilot-instructions.md`, `docs/ai-context/current-priorities.md`, `docs/ai-context/frontend-map.md`, and `docs/ai-context/domain-model.md`. Check Swagger/OpenAPI and existing frontend API client/types for contract questions, query CodeGraph before broad scans, then identify the smallest relevant route, page, component, API client, and test files. Explain which file likely owns the behavior. Avoid broad scans."
 
 ## Reviewing a PR diff
 
