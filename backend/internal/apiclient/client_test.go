@@ -1,6 +1,7 @@
 package apiclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -91,6 +92,72 @@ func TestClient_BuildInspectionMethods(t *testing.T) {
 	}
 	if logs.BuildID != "build-1" || logs.SelectedStep == nil || logs.SelectedStep.Name != "test" || len(logs.Logs) != 1 {
 		t.Fatalf("unexpected logs response: %+v", logs)
+	}
+}
+
+func TestClient_BuildArtifactMethods(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1/artifacts":
+			if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+				t.Fatalf("expected bearer header, got %q", got)
+			}
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","artifacts":[{"id":"artifact-1","build_id":"build-1","name":"report.xml","path":"reports/report.xml","size_bytes":42,"content_type":"application/xml","storage_provider":"filesystem","download_url_path":"/builds/build-1/artifacts/artifact-1/download","created_at":"2026-07-05T00:00:00Z"}]}}`))
+		case "/api/builds/build-1/artifacts/artifact-1/download":
+			if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+				t.Fatalf("expected bearer header, got %q", got)
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte("artifact-body"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	artifacts, listErr := client.ListBuildArtifacts(context.Background(), "build-1")
+	if listErr != nil {
+		t.Fatalf("list build artifacts: %v", listErr)
+	}
+	if artifacts.BuildID != "build-1" || len(artifacts.Artifacts) != 1 || artifacts.Artifacts[0].Path != "reports/report.xml" {
+		t.Fatalf("unexpected artifacts response: %+v", artifacts)
+	}
+
+	var body bytes.Buffer
+	if downloadErr := client.DownloadBuildArtifact(context.Background(), "build-1", "artifact-1", &body); downloadErr != nil {
+		t.Fatalf("download build artifact: %v", downloadErr)
+	}
+	if body.String() != "artifact-body" {
+		t.Fatalf("unexpected artifact body: %q", body.String())
+	}
+}
+
+func TestClient_DownloadBuildArtifactReturnsTypedError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"api token does not have the required scope: artifact:read"}}`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var sink bytes.Buffer
+	err = client.DownloadBuildArtifact(context.Background(), "build-1", "artifact-1", &sink)
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected typed api error, got %T", err)
+	}
+	if apiErr.Kind != ErrorKindAuthorization || apiErr.Code != "missing_token_scope" {
+		t.Fatalf("unexpected api error: %+v", apiErr)
 	}
 }
 

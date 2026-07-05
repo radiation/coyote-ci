@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
+	"github.com/radiation/coyote-ci/backend/internal/apiclient"
 	"github.com/radiation/coyote-ci/backend/internal/cli/output"
 )
 
@@ -308,6 +313,196 @@ func TestConfirmBuildRetry(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+}
+
+func TestBuildArtifactHelpers(t *testing.T) {
+	stepID := "step-1"
+	contentType := "application/xml"
+	artifacts := []api.BuildArtifactResponse{
+		{ID: "artifact-2", BuildID: "build-1", Name: "coverage.html", Path: "reports/coverage.html", SizeBytes: 2048, CreatedAt: "2026-07-05T00:00:01Z"},
+		{ID: "artifact-1", BuildID: "build-1", StepID: &stepID, Name: "report.xml", Path: "reports/report.xml", SizeBytes: 42, ContentType: &contentType, CreatedAt: "2026-07-05T00:00:02Z"},
+	}
+
+	payload := makeBuildArtifactsPayload("build-1", artifacts)
+	if payload.BuildID != "build-1" || len(payload.Artifacts) != 2 {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+	if payload.Artifacts[0].ID != "artifact-1" || payload.Artifacts[0].StepID == nil || *payload.Artifacts[0].StepID != "step-1" {
+		t.Fatalf("expected newest artifact with step metadata first, got %+v", payload.Artifacts[0])
+	}
+
+	buf := &bytes.Buffer{}
+	if err := writeBuildArtifactsHuman(buf, payload); err != nil {
+		t.Fatalf("writeBuildArtifactsHuman failed: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"Artifacts for build build-1", "artifact-1", "reports/report.xml", "2 KB", "coyote build artifacts download build-1 --artifact artifact-1"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected %q in output, got %s", want, out)
+		}
+	}
+
+	selected, err := selectBuildArtifact(artifacts, "reports/report.xml")
+	if err != nil || selected.ID != "artifact-1" {
+		t.Fatalf("expected select by path to return artifact-1, got %+v err=%v", selected, err)
+	}
+	selected, err = selectBuildArtifact(artifacts, "coverage.html")
+	if err != nil || selected.ID != "artifact-2" {
+		t.Fatalf("expected select by name to return artifact-2, got %+v err=%v", selected, err)
+	}
+	if _, selectMissingErr := selectBuildArtifact(artifacts, "missing"); selectMissingErr == nil || !strings.Contains(selectMissingErr.Error(), "not found") {
+		t.Fatalf("expected not found error, got %v", selectMissingErr)
+	}
+
+	duplicateArtifacts := []api.BuildArtifactResponse{
+		{ID: "artifact-a", Path: "reports/a/report.xml", Name: "report.xml"},
+		{ID: "artifact-b", Path: "reports/b/report.xml", Name: "report.xml"},
+	}
+	if _, selectAmbiguousErr := selectBuildArtifact(duplicateArtifacts, "report.xml"); selectAmbiguousErr == nil || !strings.Contains(selectAmbiguousErr.Error(), "matched multiple artifact names") {
+		t.Fatalf("expected ambiguity error, got %v", selectAmbiguousErr)
+	}
+
+	reportArtifact := artifacts[1]
+	tempDir := t.TempDir()
+	if got, resolveDefaultErr := resolveArtifactOutputPath("", reportArtifact); resolveDefaultErr != nil || got != "report.xml" {
+		t.Fatalf("expected default file name, got %q err=%v", got, resolveDefaultErr)
+	}
+	if got, resolveDirErr := resolveArtifactOutputPath(tempDir, reportArtifact); resolveDirErr != nil || got != filepath.Join(tempDir, "report.xml") {
+		t.Fatalf("expected directory output path, got %q err=%v", got, resolveDirErr)
+	}
+	if got := displayPath("report.xml"); got != "./report.xml" {
+		t.Fatalf("unexpected display path: %s", got)
+	}
+	if got := formatArtifactSize(42); got != "42 B" {
+		t.Fatalf("unexpected byte format: %s", got)
+	}
+	if got := formatArtifactSize(2048); got != "2 KB" {
+		t.Fatalf("unexpected kilobyte format: %s", got)
+	}
+	if _, traversalErr := resolveArtifactOutputPath("", api.BuildArtifactResponse{ID: "artifact-unsafe", Path: "../secrets.txt"}); traversalErr == nil || !strings.Contains(traversalErr.Error(), "not safe") {
+		t.Fatalf("expected traversal path rejection, got %v", traversalErr)
+	}
+	if _, absolutePathErr := resolveArtifactOutputPath(tempDir, api.BuildArtifactResponse{ID: "artifact-unsafe", Path: "/etc/passwd"}); absolutePathErr == nil || !strings.Contains(absolutePathErr.Error(), "not safe") {
+		t.Fatalf("expected absolute path rejection, got %v", absolutePathErr)
+	}
+	if _, drivePathErr := resolveArtifactOutputPath("", api.BuildArtifactResponse{ID: "artifact-unsafe", Path: `C:\temp\evil.txt`}); drivePathErr == nil || !strings.Contains(drivePathErr.Error(), "not safe") {
+		t.Fatalf("expected drive path rejection, got %v", drivePathErr)
+	}
+
+	downloadPayload := buildArtifactDownloadPayload{BuildID: "build-1", Downloaded: []buildArtifactDownloadView{{ArtifactID: "artifact-1", Name: "report.xml", Path: "./report.xml", SizeBytes: 42}}}
+	buf.Reset()
+	if writeDownloadErr := writeBuildArtifactDownloadHuman(buf, downloadPayload); writeDownloadErr != nil {
+		t.Fatalf("writeBuildArtifactDownloadHuman failed: %v", writeDownloadErr)
+	}
+	if !strings.Contains(buf.String(), "Downloaded report.xml -> ./report.xml") {
+		t.Fatalf("unexpected download human output: %s", buf.String())
+	}
+	if writeFailErr := writeBuildArtifactDownloadHuman(failWriter{}, downloadPayload); writeFailErr == nil {
+		t.Fatal("expected download human writer to surface write errors")
+	}
+
+	destination := filepath.Join(tempDir, "nested", "report.xml")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.String() != "/api/builds/build-1/artifacts/artifact-1/download" {
+			t.Fatalf("unexpected download path %q", r.URL.String())
+		}
+		_, _ = w.Write([]byte("artifact-body"))
+	}))
+	defer server.Close()
+	client, err := apiclient.New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	originalReplace := replaceFileAtomicFunc
+	t.Cleanup(func() {
+		replaceFileAtomicFunc = originalReplace
+	})
+	written, err := downloadBuildArtifactToPath(t.Context(), client, "build-1", reportArtifact, destination, false)
+	if err != nil {
+		t.Fatalf("downloadBuildArtifactToPath failed: %v", err)
+	}
+	if written != int64(len("artifact-body")) {
+		t.Fatalf("unexpected written bytes: %d", written)
+	}
+	body, readErr := os.ReadFile(destination)
+	if readErr != nil {
+		t.Fatalf("read downloaded file: %v", readErr)
+	}
+	if string(body) != "artifact-body" {
+		t.Fatalf("unexpected downloaded file body: %q", string(body))
+	}
+	if _, overwriteErr := downloadBuildArtifactToPath(t.Context(), client, "build-1", reportArtifact, destination, false); overwriteErr == nil || !strings.Contains(overwriteErr.Error(), "already exists") {
+		t.Fatalf("expected overwrite protection, got %v", overwriteErr)
+	}
+	if _, forceOverwriteErr := downloadBuildArtifactToPath(t.Context(), client, "build-1", reportArtifact, destination, true); forceOverwriteErr != nil {
+		t.Fatalf("expected force overwrite to succeed, got %v", forceOverwriteErr)
+	}
+	tempMatches, err := filepath.Glob(filepath.Join(filepath.Dir(destination), ".coyote-artifact-*"))
+	if err != nil {
+		t.Fatalf("glob temp files: %v", err)
+	}
+	if len(tempMatches) != 0 {
+		t.Fatalf("expected temp files to be cleaned up, got %v", tempMatches)
+	}
+
+	originalContent := []byte("old-content")
+	if seedWriteErr := os.WriteFile(destination, originalContent, 0o640); seedWriteErr != nil {
+		t.Fatalf("seed destination: %v", seedWriteErr)
+	}
+	failingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"api token does not have the required scope: artifact:read"}}`))
+	}))
+	defer failingServer.Close()
+	failingClient, err := apiclient.New(failingServer.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new failing client: %v", err)
+	}
+	if _, failingDownloadErr := downloadBuildArtifactToPath(t.Context(), failingClient, "build-1", reportArtifact, destination, true); failingDownloadErr == nil {
+		t.Fatal("expected download failure")
+	}
+	body, readErr = os.ReadFile(destination)
+	if readErr != nil {
+		t.Fatalf("read preserved destination: %v", readErr)
+	}
+	if string(body) != string(originalContent) {
+		t.Fatalf("expected destination to remain intact after download failure, got %q", string(body))
+	}
+
+	replaceFileAtomicFunc = func(source string, destination string) error {
+		if filepath.Dir(source) != filepath.Dir(destination) {
+			t.Fatalf("expected temp file in destination directory, got %s for %s", source, destination)
+		}
+		return errors.New("replace failed")
+	}
+	if _, replaceErr := downloadBuildArtifactToPath(t.Context(), client, "build-1", reportArtifact, destination, true); replaceErr == nil || !strings.Contains(replaceErr.Error(), "replace failed") {
+		t.Fatalf("expected replacement failure, got %v", replaceErr)
+	}
+	body, readErr = os.ReadFile(destination)
+	if readErr != nil {
+		t.Fatalf("read destination after replace failure: %v", readErr)
+	}
+	if string(body) != string(originalContent) {
+		t.Fatalf("expected destination to remain intact after replace failure, got %q", string(body))
+	}
+	tempMatches, err = filepath.Glob(filepath.Join(filepath.Dir(destination), ".coyote-artifact-*"))
+	if err != nil {
+		t.Fatalf("glob temp files after replace failure: %v", err)
+	}
+	if len(tempMatches) != 0 {
+		t.Fatalf("expected temp files to be cleaned up after replace failure, got %v", tempMatches)
+	}
+
+	if err := writeBuildArtifactsHuman(failWriter{}, payload); err == nil {
+		t.Fatal("expected writeBuildArtifactsHuman to surface write errors")
+	}
+	emptyBuf := &bytes.Buffer{}
+	if err := writeBuildArtifactsHuman(emptyBuf, buildArtifactsPayload{BuildID: "build-empty"}); err != nil {
+		t.Fatalf("writeBuildArtifactsHuman empty failed: %v", err)
+	}
+	if !strings.Contains(emptyBuf.String(), "No artifacts found") {
+		t.Fatalf("unexpected empty artifacts output: %s", emptyBuf.String())
+	}
 }
 
 func intPtr(value int) *int { return &value }

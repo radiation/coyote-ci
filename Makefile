@@ -1,4 +1,4 @@
-.PHONY: swagger swagger-check backend-format-check backend-vet backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix
+.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix
 
 CLI_VERSION ?= dev
 CLI_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -29,6 +29,14 @@ backend-format-check:
 
 backend-vet:
 	cd backend && go vet ./...
+
+backend-lint: backend-vet
+	@set -e; \
+	if command -v golangci-lint >/dev/null 2>&1; then \
+		cd backend && golangci-lint run ./...; \
+	else \
+		cd backend && go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.4.0 run ./...; \
+	fi
 
 backend-architecture:
 	cd backend && go test ./architecture
@@ -61,7 +69,7 @@ frontend-test:
 frontend-build:
 	cd frontend && npm run build
 
-pre-push-check: backend-test frontend-lint frontend-test frontend-build swagger-check
+pre-push-check: backend-lint backend-test frontend-lint frontend-test frontend-build swagger-check
 
 check-go-version:
 	@echo "Checking Go version consistency (source of truth: backend/go.mod)..."

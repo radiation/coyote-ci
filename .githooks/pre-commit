@@ -24,18 +24,9 @@ if command -v go >/dev/null 2>&1; then
 		echo "  gofmt formatted files and staged"
 	fi
 
-	echo "  go vet"
-	if ! (cd backend && go vet ./...) ; then
+	echo "  backend lint"
+	if ! make backend-lint ; then
 		failed=1
-	fi
-
-	if command -v golangci-lint >/dev/null 2>&1; then
-		echo "  golangci-lint"
-		if ! (cd backend && golangci-lint run ./...) ; then
-			failed=1
-		fi
-	else
-		echo "  golangci-lint (skipped: not installed)"
 	fi
 else
 	echo "== Backend (skipped: go not found) =="

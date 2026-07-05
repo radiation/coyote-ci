@@ -56,13 +56,14 @@ These rules run through [the frontend ESLint boundaries](../frontend/eslint.conf
 
 ## Local enforcement
 
+- `make backend-lint`
 - `make backend-architecture`
 - `make backend-test`
 - `make frontend-lint`
 - `make pre-push-check`
 - `.githooks/pre-push`
 
-The pre-push hook now reuses the same root commands for backend architecture checks, backend tests, frontend lint, frontend tests, frontend build, and Swagger drift detection.
+The pre-push hook now reuses the same root commands for backend lint, backend architecture checks, backend tests, frontend lint, frontend tests, frontend build, and Swagger drift detection.
 
 ## CI enforcement
 

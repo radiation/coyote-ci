@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/radiation/coyote-ci/backend/internal/cli/atomicfile"
 )
 
 const (
@@ -35,7 +37,7 @@ type Store struct {
 }
 
 func NewStore(configPath string) *Store {
-	return &Store{configPath: strings.TrimSpace(configPath), userConfigDir: os.UserConfigDir, replaceFile: replaceFileAtomic}
+	return &Store{configPath: strings.TrimSpace(configPath), userConfigDir: os.UserConfigDir, replaceFile: atomicfile.ReplaceFileAtomic}
 }
 
 func (s *Store) Path() (string, error) {

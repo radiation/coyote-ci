@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -228,6 +229,202 @@ func TestBuildStatusAndLogsCommands(t *testing.T) {
 	}
 }
 
+func TestBuildArtifactsCommands(t *testing.T) {
+	stepsCalled := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1/artifacts":
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","artifacts":[{"id":"artifact-1","build_id":"build-1","step_id":"step-1","name":"report.xml","path":"reports/report.xml","size_bytes":42,"content_type":"application/xml","storage_provider":"filesystem","download_url_path":"/builds/build-1/artifacts/artifact-1/download","created_at":"2026-07-05T00:00:00Z"}]}}`))
+		case "/api/builds/build-1/steps":
+			stepsCalled++
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"api token does not have the required scope: build:read"}}`))
+		case "/api/builds/build-1/artifacts/artifact-1/download":
+			_, _ = w.Write([]byte("artifact-body"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "build-1"}}); code != 0 {
+		t.Fatalf("build artifacts exit code %d stderr=%s", code, stderr.String())
+	}
+	for _, want := range []string{"Artifacts for build build-1", "artifact-1", "reports/report.xml", "coyote build artifacts download build-1 --artifact artifact-1"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected %q in human output, got %s", want, stdout.String())
+		}
+	}
+	if stepsCalled != 0 {
+		t.Fatalf("expected artifact list to avoid build-step endpoint, got %d calls", stepsCalled)
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "build-1", "--json"}}); code != 0 {
+		t.Fatalf("build artifacts json exit code %d stderr=%s", code, stderr.String())
+	}
+	var listPayload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &listPayload); err != nil {
+		t.Fatalf("decode build artifacts json: %v", err)
+	}
+	artifacts, ok := listPayload["artifacts"].([]any)
+	if !ok || len(artifacts) != 1 {
+		t.Fatalf("unexpected artifacts payload: %+v", listPayload)
+	}
+	first, ok := artifacts[0].(map[string]any)
+	if !ok || first["id"] != "artifact-1" || first["step_id"] != "step-1" {
+		t.Fatalf("unexpected first artifact payload: %+v", first)
+	}
+	if strings.Contains(stdout.String(), "Artifacts for build") {
+		t.Fatalf("unexpected human prose in build artifacts JSON: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	outputFile := filepath.Join(t.TempDir(), "downloads", "report.xml")
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "download", "build-1", "--artifact", "artifact-1", "--output", outputFile}}); code != 0 {
+		t.Fatalf("build artifacts download exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Downloaded report.xml ->") {
+		t.Fatalf("unexpected download human output: %s", stdout.String())
+	}
+	body, readErr := os.ReadFile(outputFile)
+	if readErr != nil {
+		t.Fatalf("read downloaded artifact: %v", readErr)
+	}
+	if string(body) != "artifact-body" {
+		t.Fatalf("unexpected artifact file body: %q", string(body))
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	outputDir := t.TempDir()
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "download", "build-1", "--artifact", "reports/report.xml", "--output", outputDir, "--json"}}); code != 0 {
+		t.Fatalf("build artifacts download json exit code %d stderr=%s", code, stderr.String())
+	}
+	var downloadPayload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &downloadPayload); err != nil {
+		t.Fatalf("decode build artifact download json: %v", err)
+	}
+	downloaded, ok := downloadPayload["downloaded"].([]any)
+	if !ok || len(downloaded) != 1 {
+		t.Fatalf("unexpected download payload: %+v", downloadPayload)
+	}
+	downloadedFirst, ok := downloaded[0].(map[string]any)
+	if !ok || downloadedFirst["artifact_id"] != "artifact-1" {
+		t.Fatalf("unexpected downloaded entry: %+v", downloadedFirst)
+	}
+	if strings.Contains(stdout.String(), "Downloaded report.xml") {
+		t.Fatalf("unexpected human prose in artifact download JSON: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "download", "build-1", "--artifact", "missing"}})
+	if code != 2 {
+		t.Fatalf("expected selector validation exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "artifact \"missing\" not found") {
+		t.Fatalf("unexpected selector stderr: %s", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	code = Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "download", "build-1", "--artifact", "artifact-1", "--output", outputFile}})
+	if code == 0 {
+		t.Fatal("expected overwrite protection to fail")
+	}
+	if !strings.Contains(stderr.String(), "already exists") {
+		t.Fatalf("unexpected overwrite stderr: %s", stderr.String())
+	}
+}
+
+func TestBuildArtifactsCommands_ArtifactReadOnlyScope(t *testing.T) {
+	stepsCalled := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1/artifacts":
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","artifacts":[{"id":"artifact-1","build_id":"build-1","step_id":"step-1","name":"report.xml","path":"reports/report.xml","size_bytes":42,"content_type":"application/xml","storage_provider":"filesystem","download_url_path":"/builds/build-1/artifacts/artifact-1/download","created_at":"2026-07-05T00:00:00Z"}]}}`))
+		case "/api/builds/build-1/artifacts/artifact-1/download":
+			_, _ = w.Write([]byte("artifact-body"))
+		case "/api/builds/build-1":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"api token does not have the required scope: build:read"}}`))
+		case "/api/builds/build-1/steps":
+			stepsCalled++
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"api token does not have the required scope: build:read"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "build-1", "--json"}}); code != 0 {
+		t.Fatalf("artifact-read-only list exit code %d stderr=%s", code, stderr.String())
+	}
+	if stepsCalled != 0 {
+		t.Fatalf("expected no build-step requests for artifact list, got %d", stepsCalled)
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	outputFile := filepath.Join(t.TempDir(), "artifact.txt")
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "download", "build-1", "--artifact", "artifact-1", "--output", outputFile, "--json"}}); code != 0 {
+		t.Fatalf("artifact-read-only download exit code %d stderr=%s", code, stderr.String())
+	}
+	body, readErr := os.ReadFile(outputFile)
+	if readErr != nil {
+		t.Fatalf("read downloaded artifact: %v", readErr)
+	}
+	if string(body) != "artifact-body" {
+		t.Fatalf("unexpected artifact body: %q", string(body))
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "status", "build-1", "--json"}})
+	if code == 0 {
+		t.Fatal("expected build status to fail without build:read")
+	}
+	if !strings.Contains(stderr.String(), "api token does not have the required scope: build:read") {
+		t.Fatalf("unexpected status stderr: %s", stderr.String())
+	}
+}
+
 func TestBuildRetryCommand(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.String() {
@@ -343,6 +540,8 @@ func TestBuildCommands_MissingTokenScopeErrors(t *testing.T) {
 		message := "api token does not have the required scope: build:read"
 		if strings.Contains(r.URL.Path, "/logs") {
 			message = "api token does not have the required scope: build:logs"
+		} else if strings.Contains(r.URL.Path, "/artifacts") {
+			message = "api token does not have the required scope: artifact:read"
 		} else if strings.Contains(r.URL.Path, "/rerun") {
 			message = "api token does not have the required scope: build:run"
 		}
@@ -372,6 +571,8 @@ func TestBuildCommands_MissingTokenScopeErrors(t *testing.T) {
 	}{
 		{name: "status missing scope", args: []string{"build", "status", "build-1", "--json"}, wantContains: "api token does not have the required scope: build:read"},
 		{name: "logs missing scope", args: []string{"build", "logs", "build-1", "--json"}, wantContains: "api token does not have the required scope: build:logs"},
+		{name: "artifacts missing scope", args: []string{"build", "artifacts", "build-1", "--json"}, wantContains: "api token does not have the required scope: artifact:read"},
+		{name: "artifact download missing scope", args: []string{"build", "artifacts", "download", "build-1", "--artifact", "artifact-1", "--json"}, wantContains: "api token does not have the required scope: artifact:read"},
 		{name: "retry missing scope", args: []string{"build", "retry", "build-1", "--yes", "--json"}, wantContains: "api token does not have the required scope: build:run"},
 	}
 
