@@ -63,8 +63,10 @@ type buildRetryView struct {
 	WebURL        string `json:"web_url,omitempty"`
 }
 
+var isInteractiveInputFunc = isInteractiveInput
+
 func (a *app) newBuildCommand() *cobra.Command {
-	command := &cobra.Command{Use: "build", Short: "Inspect builds"}
+	command := &cobra.Command{Use: "build", Short: "Inspect and manage builds"}
 	command.AddCommand(a.newBuildStatusCommand())
 	command.AddCommand(a.newBuildLogsCommand())
 	command.AddCommand(a.newBuildRetryCommand())
@@ -386,7 +388,7 @@ func (a *app) confirmBuildRetry(buildID string, mode output.Mode, assumeYes bool
 	if mode == output.ModeJSON {
 		return &ExitError{Code: 2, Err: errors.New("build retry with --json requires --yes")}
 	}
-	if !isInteractiveInput(a.stdin) {
+	if !isInteractiveInputFunc(a.stdin) {
 		return &ExitError{Code: 2, Err: errors.New("build retry requires --yes when stdin is not interactive")}
 	}
 	if _, err := fmt.Fprintf(a.stderr, "Retry build %s? This may start a new build. [y/N] ", strings.TrimSpace(buildID)); err != nil {

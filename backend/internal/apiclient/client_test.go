@@ -120,6 +120,29 @@ func TestClient_RerunBuild(t *testing.T) {
 	}
 }
 
+func TestClient_RerunBuildReturnsTypedError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"api token does not have the required scope: build:run"}}`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, rerunErr := client.RerunBuild(context.Background(), "build-1")
+	var apiErr *Error
+	if !errors.As(rerunErr, &apiErr) {
+		t.Fatalf("expected typed api error, got %T", rerunErr)
+	}
+	if apiErr.Kind != ErrorKindAuthorization || apiErr.Code != "missing_token_scope" {
+		t.Fatalf("unexpected api error: %+v", apiErr)
+	}
+}
+
 func TestClient_GetBuildLogsWithoutExplicitTailUsesServerDefaultBehavior(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.String() != "/api/builds/build-1/logs" {
