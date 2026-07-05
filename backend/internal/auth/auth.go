@@ -23,6 +23,7 @@ const (
 
 type contextKey struct{}
 type authMethodContextKey struct{}
+type apiTokenContextKey struct{}
 
 type Method string
 
@@ -45,7 +46,7 @@ type MiddlewareConfig struct {
 }
 
 type APITokenAuthenticator interface {
-	AuthenticateAPIToken(ctx context.Context, plaintext string) (domain.User, error)
+	AuthenticateAPIToken(ctx context.Context, plaintext string) (service.AuthenticatedAPIToken, error)
 }
 
 func ParseMode(value string) Mode {
@@ -97,14 +98,15 @@ func Middleware(cfg MiddlewareConfig, resolver UserResolver) func(http.Handler) 
 					writeUnauthorized(w, "api token auth is not configured")
 					return
 				}
-				user, err := cfg.APITokens.AuthenticateAPIToken(r.Context(), token)
+				authenticated, err := cfg.APITokens.AuthenticateAPIToken(r.Context(), token)
 				if err != nil {
 					writeUnauthorized(w, "invalid api token")
 					return
 				}
 
-				ctx := WithUser(r.Context(), user)
+				ctx := WithUser(r.Context(), authenticated.User)
 				ctx = WithAuthMethod(ctx, MethodAPIToken)
+				ctx = WithAuthenticatedAPIToken(ctx, authenticated.Token.ID, authenticated.Token.Scopes)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -172,6 +174,24 @@ func WithAuthMethod(ctx context.Context, method Method) context.Context {
 func CurrentAuthMethod(ctx context.Context) (Method, bool) {
 	method, ok := ctx.Value(authMethodContextKey{}).(Method)
 	return method, ok
+}
+
+type AuthenticatedAPIToken struct {
+	ID     string
+	Scopes []domain.APITokenScope
+}
+
+func WithAuthenticatedAPIToken(ctx context.Context, tokenID string, scopes []domain.APITokenScope) context.Context {
+	return context.WithValue(ctx, apiTokenContextKey{}, AuthenticatedAPIToken{ID: tokenID, Scopes: domain.CloneAPITokenScopes(scopes)})
+}
+
+func CurrentAuthenticatedAPIToken(ctx context.Context) (AuthenticatedAPIToken, bool) {
+	token, ok := ctx.Value(apiTokenContextKey{}).(AuthenticatedAPIToken)
+	if !ok {
+		return AuthenticatedAPIToken{}, false
+	}
+	token.Scopes = domain.CloneAPITokenScopes(token.Scopes)
+	return token, true
 }
 
 func bearerToken(r *http.Request) (string, bool) {

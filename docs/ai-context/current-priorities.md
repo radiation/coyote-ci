@@ -16,7 +16,7 @@ Near-term priorities include:
 - queue operational visibility
 - auth, RBAC, project membership, and API token foundations
 - CLI-first remote workflow foundations
-- scope-aware API-token authorization as the next mandatory CLI backend prerequisite
+- scope-aware API-token authorization for build, log, artifact, and rerun APIs
 - notifications
 - behavior-preserving refactors that improve maintainability
 - frontend polish that improves clarity without broad redesigns
@@ -32,7 +32,8 @@ Recent completed slice:
 - the current Slack notification slice adds instance-level Slack workspace connection metadata for admins, self-scoped personal Slack identity linking, and commit-author personal Slack DM delivery with independent per-event email/Slack preference controls; linking persists stable Slack member IDs only, delivery uses `chat.postMessage`, and shared Slack webhook targets remain separate
 - the current notification delivery refactor replaces recipient-string dedupe with a claimable transport-aware delivery ledger backed by stable internal destination ids; the current slice now includes atomic claim acquisition, bounded retry eligibility and scheduling metadata, stale-claim reclamation, permanent-vs-retryable failure handling, lost-claim-safe sent/failure transitions, and a server-owned recovery drain that actively processes due retries and expired sending claims across memory and Postgres implementations while keeping the ledger claim authoritative
 - the current CLI slice adds a thin `coyote` binary under `backend/cmd/coyote` plus `backend/internal/cli` and `backend/internal/apiclient`; it currently focuses on version reporting, named server contexts, token storage, auth status, and server info without adding build-execution behavior to the client, and JSON output is the stable automation interface for those inspection commands
-- token scopes are still not enforced; build status, logs, rerun, artifact access, and other CLI resource commands must not be added until backend authorization requires both the owning user's permission and the token's required scope, and tokens must never elevate their owner
+- API tokens now persist sorted scopes and backend authorization requires both the owning user's permission and the token's required scope for build metadata, log reads, artifact reads, and build-run style actions; valid tokens may still call `/api/me` without a resource scope
+- the next CLI slice after scoped tokens is build status and build log inspection using least-privilege diagnostic tokens such as `build:read` plus `build:logs`
 
 ## Next likely notification slice
 

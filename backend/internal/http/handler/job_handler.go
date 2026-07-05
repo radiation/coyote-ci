@@ -237,6 +237,9 @@ func (h *JobHandler) RunNow(w http.ResponseWriter, r *http.Request) {
 	if !authorizeProject(w, r, h.authMode, h.projectRoles, job.ProjectID, auth.CanTriggerBuild, "project owner or maintainer is required") {
 		return
 	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRun) {
+		return
+	}
 
 	build, err := h.jobService.RunJobNow(r.Context(), jobID)
 	if err != nil {
@@ -269,6 +272,9 @@ func (h *JobHandler) ListJobBuilds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !authorizeProject(w, r, h.authMode, h.projectRoles, job.ProjectID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRead) {
 		return
 	}
 

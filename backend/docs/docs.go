@@ -3742,6 +3742,12 @@ const docTemplate = `{
                 "revoked_at": {
                     "type": "string"
                 },
+                "scopes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "token_prefix": {
                     "type": "string"
                 }
@@ -4538,6 +4544,12 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                },
+                "scopes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -4774,6 +4786,12 @@ const docTemplate = `{
                 },
                 "revoked_at": {
                     "type": "string"
+                },
+                "scopes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "token": {
                     "type": "string"

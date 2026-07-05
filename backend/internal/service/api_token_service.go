@@ -40,11 +40,17 @@ type CreateAPITokenInput struct {
 	UserID    string
 	Name      string
 	ExpiresAt *time.Time
+	Scopes    []string
 }
 
 type CreatedAPIToken struct {
 	Token          domain.APIToken
 	PlaintextToken string
+}
+
+type AuthenticatedAPIToken struct {
+	User  domain.User
+	Token domain.APIToken
 }
 
 func (s *APITokenService) CreateAPIToken(ctx context.Context, input CreateAPITokenInput) (CreatedAPIToken, error) {
@@ -59,6 +65,10 @@ func (s *APITokenService) CreateAPIToken(ctx context.Context, input CreateAPITok
 	name := strings.TrimSpace(input.Name)
 	if name == "" {
 		return CreatedAPIToken{}, ErrAPITokenNameRequired
+	}
+	scopes, err := domain.NormalizeAPITokenScopes(input.Scopes)
+	if err != nil {
+		return CreatedAPIToken{}, err
 	}
 	now := s.now().UTC()
 	var expiresAt *time.Time
@@ -78,6 +88,7 @@ func (s *APITokenService) CreateAPIToken(ctx context.Context, input CreateAPITok
 		ID:          uuid.NewString(),
 		UserID:      userID,
 		Name:        name,
+		Scopes:      scopes,
 		TokenHash:   HashAPIToken(plaintext),
 		TokenPrefix: DisplayAPITokenPrefix(plaintext),
 		ExpiresAt:   expiresAt,
@@ -107,33 +118,33 @@ func (s *APITokenService) RevokeAPIToken(ctx context.Context, userID string, tok
 	return s.tokens.RevokeByID(ctx, trimmedUserID, trimmedTokenID, s.now().UTC())
 }
 
-func (s *APITokenService) AuthenticateAPIToken(ctx context.Context, plaintext string) (domain.User, error) {
+func (s *APITokenService) AuthenticateAPIToken(ctx context.Context, plaintext string) (AuthenticatedAPIToken, error) {
 	trimmed := strings.TrimSpace(plaintext)
 	if !strings.HasPrefix(trimmed, APITokenPrefix) {
-		return domain.User{}, ErrAPITokenInvalid
+		return AuthenticatedAPIToken{}, ErrAPITokenInvalid
 	}
 	token, err := s.tokens.GetByHash(ctx, HashAPIToken(trimmed))
 	if err != nil {
 		if errors.Is(err, repository.ErrAPITokenNotFound) {
-			return domain.User{}, ErrAPITokenInvalid
+			return AuthenticatedAPIToken{}, ErrAPITokenInvalid
 		}
-		return domain.User{}, err
+		return AuthenticatedAPIToken{}, err
 	}
 	now := s.now().UTC()
 	if token.RevokedAt != nil {
-		return domain.User{}, ErrAPITokenInvalid
+		return AuthenticatedAPIToken{}, ErrAPITokenInvalid
 	}
 	if token.ExpiresAt != nil && !token.ExpiresAt.After(now) {
-		return domain.User{}, ErrAPITokenInvalid
+		return AuthenticatedAPIToken{}, ErrAPITokenInvalid
 	}
 	user, err := s.users.GetByID(ctx, token.UserID)
 	if err != nil {
-		return domain.User{}, err
+		return AuthenticatedAPIToken{}, err
 	}
 	if shouldTouchAPITokenLastUsed(token, now) {
 		_ = s.tokens.TouchLastUsed(ctx, token.ID, now)
 	}
-	return user, nil
+	return AuthenticatedAPIToken{User: user, Token: token}, nil
 }
 
 func shouldTouchAPITokenLastUsed(token domain.APIToken, now time.Time) bool {

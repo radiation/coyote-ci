@@ -82,6 +82,9 @@ func (h *ArtifactHandler) ListArtifactCatalog(w http.ResponseWriter, r *http.Req
 	if projectID != "" && !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanReadProjectResources, "project membership is required") {
 		return
 	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeArtifactRead) {
+		return
+	}
 
 	records, err := h.service.ListCatalog(r.Context(), artifactsvc.ListCatalogInput{
 		Query:     strings.TrimSpace(r.URL.Query().Get("q")),
@@ -154,6 +157,9 @@ func (h *ArtifactHandler) GetArtifact(w http.ResponseWriter, r *http.Request) {
 	if !authorizeProject(w, r, h.authMode, h.projectRoles, record.Build.ProjectID, auth.CanReadProjectResources, "project membership is required") {
 		return
 	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeArtifactRead) {
+		return
+	}
 	if h.versionTags != nil {
 		tags, listErr := h.versionTags.ListArtifactTags(r.Context(), record.Artifact.ID)
 		if listErr != nil {
@@ -203,6 +209,9 @@ func (h *ArtifactHandler) ListArtifacts(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if projectID != "" && !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeArtifactRead) {
 		return
 	}
 

@@ -122,6 +122,7 @@ func TestMiddleware_BearerTokenAuthenticatesAsOwner(t *testing.T) {
 
 	var got domain.User
 	var method Method
+	var token AuthenticatedAPIToken
 	middleware := Middleware(MiddlewareConfig{Mode: ModeOIDC, APITokens: tokenService}, userService)
 	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var ok bool
@@ -132,6 +133,10 @@ func TestMiddleware_BearerTokenAuthenticatesAsOwner(t *testing.T) {
 		method, ok = CurrentAuthMethod(r.Context())
 		if !ok {
 			t.Fatalf("expected auth method in context")
+		}
+		token, ok = CurrentAuthenticatedAPIToken(r.Context())
+		if !ok {
+			t.Fatalf("expected authenticated token in context")
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -148,6 +153,12 @@ func TestMiddleware_BearerTokenAuthenticatesAsOwner(t *testing.T) {
 	}
 	if method != MethodAPIToken {
 		t.Fatalf("expected api_token auth method, got %q", method)
+	}
+	if token.ID != created.Token.ID {
+		t.Fatalf("expected token id %q, got %q", created.Token.ID, token.ID)
+	}
+	if len(token.Scopes) != 0 {
+		t.Fatalf("expected empty scopes by default, got %v", token.Scopes)
 	}
 }
 

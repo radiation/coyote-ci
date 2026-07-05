@@ -79,6 +79,7 @@ describe("APITokensPage", () => {
       {
         id: "token-1",
         name: "fixture-token",
+        scopes: ["build:read", "build:logs"],
         token_prefix: "coyote_pat_abcd1234",
         created_at: "2026-05-12T00:00:00Z",
       },
@@ -86,6 +87,7 @@ describe("APITokensPage", () => {
     mockedCreateAPIToken.mockResolvedValue({
       id: "token-2",
       name: "coyote cli",
+      scopes: ["build:read", "build:logs"],
       token_prefix: "coyote_pat_rawtok12",
       token: "coyote_pat_rawtoken",
       created_at: "2026-05-12T01:00:00Z",
@@ -114,8 +116,11 @@ describe("APITokensPage", () => {
       expect(mockedCreateAPIToken.mock.calls[0]?.[0]).toEqual({
         name: "coyote cli",
         expires_at: undefined,
+        scopes: ["build:read", "build:logs"],
       });
     });
+
+    expect(screen.getByText("build:read, build:logs")).toBeTruthy();
 
     expect(await screen.findByDisplayValue("coyote_pat_rawtoken")).toBeTruthy();
     expect(
@@ -255,6 +260,7 @@ describe("APITokensPage", () => {
       {
         id: "token-2",
         name: "old-token",
+        scopes: [],
         token_prefix: "coyote_pat_revoked",
         created_at: "2026-05-10T00:00:00Z",
         revoked_at: "2026-05-12T00:00:00Z",
@@ -280,6 +286,7 @@ describe("APITokensPage", () => {
       {
         id: "token-3",
         name: "dated-token",
+        scopes: ["artifact:read"],
         token_prefix: "coyote_pat_dates",
         created_at: "2026-05-10T00:00:00Z",
         last_used_at: "2026-05-11T08:30:00Z",
@@ -343,5 +350,15 @@ describe("APITokensPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy token" }));
 
     expect(await screen.findByText("Unable to copy token.")).toBeTruthy();
+  });
+
+  it("defaults to least-privilege diagnostic scopes and leaves build:run unselected", async () => {
+    renderPage();
+
+    await screen.findByText("fixture-token");
+    expect(screen.getByLabelText(/Build status/i)).toBeChecked();
+    expect(screen.getByLabelText(/Build logs/i)).toBeChecked();
+    expect(screen.getByLabelText(/Rerun builds/i)).not.toBeChecked();
+    expect(screen.getByLabelText(/Read artifacts/i)).not.toBeChecked();
   });
 });

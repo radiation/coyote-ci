@@ -1009,8 +1009,11 @@ func newRBACTestRouter(t *testing.T) rbacRouterFixture {
 	}
 	tokens := map[string]string{}
 	tokenIDs := map[string]string{}
+	tokenScopesByUserID := map[string][]string{
+		"maintainer-rbac": {string(domain.APITokenScopeBuildRun)},
+	}
 	for _, user := range users {
-		created, tokenErr := apiTokenService.CreateAPIToken(ctx, service.CreateAPITokenInput{UserID: user.ID, Name: "test-token"})
+		created, tokenErr := apiTokenService.CreateAPIToken(ctx, service.CreateAPITokenInput{UserID: user.ID, Name: "test-token", Scopes: tokenScopesByUserID[user.ID]})
 		if tokenErr != nil {
 			t.Fatalf("create api token for %s failed: %v", user.ID, tokenErr)
 		}

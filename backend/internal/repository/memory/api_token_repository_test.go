@@ -46,6 +46,7 @@ func TestAPITokenRepository_CreateListGetRevokeAndTouch(t *testing.T) {
 		ID:          "token-1",
 		UserID:      "user-1",
 		Name:        "cli",
+		Scopes:      []domain.APITokenScope{domain.APITokenScopeBuildRead},
 		TokenHash:   "hash-1",
 		TokenPrefix: "coyote_pat_12345678",
 		ExpiresAt:   &expiresAt,
@@ -94,6 +95,9 @@ func TestAPITokenRepository_CreateListGetRevokeAndTouch(t *testing.T) {
 	}
 	if byHash.ID != "token-1" {
 		t.Fatalf("expected token-1, got %q", byHash.ID)
+	}
+	if len(byHash.Scopes) != 1 || byHash.Scopes[0] != domain.APITokenScopeBuildRead {
+		t.Fatalf("expected build:read scope, got %v", byHash.Scopes)
 	}
 
 	revokedAt := now.Add(2 * time.Hour)

@@ -3738,6 +3738,12 @@
                 "revoked_at": {
                     "type": "string"
                 },
+                "scopes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "token_prefix": {
                     "type": "string"
                 }
@@ -4534,6 +4540,12 @@
                 },
                 "name": {
                     "type": "string"
+                },
+                "scopes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -4770,6 +4782,12 @@
                 },
                 "revoked_at": {
                     "type": "string"
+                },
+                "scopes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "token": {
                     "type": "string"

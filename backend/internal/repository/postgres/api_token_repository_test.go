@@ -14,7 +14,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
-var apiTokenMockColumns = []string{"id", "user_id", "name", "token_hash", "token_prefix", "expires_at", "last_used_at", "revoked_at", "created_at", "updated_at"}
+var apiTokenMockColumns = []string{"id", "user_id", "name", "scopes", "token_hash", "token_prefix", "expires_at", "last_used_at", "revoked_at", "created_at", "updated_at"}
 
 func TestNewAPITokenRepository(t *testing.T) {
 	repo := NewAPITokenRepository(&sql.DB{})
@@ -66,6 +66,7 @@ func TestAPITokenRepository_Create(t *testing.T) {
 				ID:          "token-1",
 				UserID:      "user-1",
 				Name:        "cli",
+				Scopes:      []domain.APITokenScope{domain.APITokenScopeBuildRead, domain.APITokenScopeBuildLogs},
 				TokenHash:   "hash-1",
 				TokenPrefix: "coyote_pat_12345678",
 				ExpiresAt:   &expiresAt,
@@ -76,11 +77,11 @@ func TestAPITokenRepository_Create(t *testing.T) {
 			}
 
 			expect := mock.ExpectQuery("INSERT INTO api_tokens").
-				WithArgs(token.ID, token.UserID, token.Name, token.TokenHash, token.TokenPrefix, token.ExpiresAt, token.LastUsedAt, token.RevokedAt, token.CreatedAt, token.UpdatedAt)
+				WithArgs(token.ID, token.UserID, token.Name, []byte(`["build:read","build:logs"]`), token.TokenHash, token.TokenPrefix, token.ExpiresAt, token.LastUsedAt, token.RevokedAt, token.CreatedAt, token.UpdatedAt)
 			if tc.queryErr != nil {
 				expect.WillReturnError(tc.queryErr)
 			} else {
-				expect.WillReturnRows(apiTokenRows().AddRow(token.ID, token.UserID, token.Name, token.TokenHash, token.TokenPrefix, expiresAt, lastUsedAt, revokedAt, now, now))
+				expect.WillReturnRows(apiTokenRows().AddRow(token.ID, token.UserID, token.Name, []byte(`["build:read","build:logs"]`), token.TokenHash, token.TokenPrefix, expiresAt, lastUsedAt, revokedAt, now, now))
 			}
 
 			created, err := repo.Create(context.Background(), token)
@@ -92,6 +93,8 @@ func TestAPITokenRepository_Create(t *testing.T) {
 				t.Fatalf("expected no error, got %v", err)
 			} else if created.ID != token.ID || created.ExpiresAt == nil || created.LastUsedAt == nil || created.RevokedAt == nil {
 				t.Fatalf("unexpected created token: %+v", created)
+			} else if len(created.Scopes) != 2 || created.Scopes[0] != domain.APITokenScopeBuildLogs || created.Scopes[1] != domain.APITokenScopeBuildRead {
+				t.Fatalf("expected persisted scopes, got %+v", created.Scopes)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatalf("unmet sql expectations: %v", err)
@@ -109,11 +112,11 @@ func TestAPITokenRepository_ListByUserID(t *testing.T) {
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
 	repo := NewAPITokenRepository(db)
-	mock.ExpectQuery("SELECT id, user_id, name, token_hash, token_prefix").
+	mock.ExpectQuery("SELECT id, user_id, name, scopes, token_hash, token_prefix").
 		WithArgs("user-1").
 		WillReturnRows(apiTokenRows().
-			AddRow("token-1", "user-1", "cli", "hash-1", "coyote_pat_12345678", expiresAt, nil, nil, now, now).
-			AddRow("token-2", "user-1", "release", "hash-2", "coyote_pat_87654321", nil, nil, nil, now.Add(time.Minute), now.Add(time.Minute)))
+			AddRow("token-1", "user-1", "cli", []byte(`["build:read"]`), "hash-1", "coyote_pat_12345678", expiresAt, nil, nil, now, now).
+			AddRow("token-2", "user-1", "release", []byte(`[]`), "hash-2", "coyote_pat_87654321", nil, nil, nil, now.Add(time.Minute), now.Add(time.Minute)))
 
 	tokens, err := repo.ListByUserID(context.Background(), "user-1")
 	if err != nil {
@@ -124,6 +127,12 @@ func TestAPITokenRepository_ListByUserID(t *testing.T) {
 	}
 	if tokens[0].ExpiresAt == nil || tokens[1].ExpiresAt != nil {
 		t.Fatalf("unexpected optional times: %+v", tokens)
+	}
+	if len(tokens[0].Scopes) != 1 || tokens[0].Scopes[0] != domain.APITokenScopeBuildRead {
+		t.Fatalf("expected scopes on first token, got %+v", tokens[0].Scopes)
+	}
+	if len(tokens[1].Scopes) != 0 {
+		t.Fatalf("expected empty scopes on second token, got %+v", tokens[1].Scopes)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
@@ -140,7 +149,7 @@ func TestAPITokenRepository_ListByUserIDErrors(t *testing.T) {
 	}{
 		{name: "query error", queryErr: queryErr},
 		{name: "scan error", rows: sqlmock.NewRows([]string{"id"}).AddRow("token-1")},
-		{name: "rows error", rows: apiTokenRows().AddRow("token-1", "user-1", "cli", "hash-1", "prefix", nil, nil, nil, time.Now().UTC(), time.Now().UTC()).RowError(0, rowsErr)},
+		{name: "rows error", rows: apiTokenRows().AddRow("token-1", "user-1", "cli", []byte(`[]`), "hash-1", "prefix", nil, nil, nil, time.Now().UTC(), time.Now().UTC()).RowError(0, rowsErr)},
 	}
 
 	for _, tc := range tests {
@@ -153,7 +162,7 @@ func TestAPITokenRepository_ListByUserIDErrors(t *testing.T) {
 				t.Fatalf("failed to create sqlmock: %v", err)
 			}
 			repo := NewAPITokenRepository(db)
-			expect := mock.ExpectQuery("SELECT id, user_id, name, token_hash, token_prefix").WithArgs("user-1")
+			expect := mock.ExpectQuery("SELECT id, user_id, name, scopes, token_hash, token_prefix").WithArgs("user-1")
 			if tc.queryErr != nil {
 				expect.WillReturnError(tc.queryErr)
 			} else {
@@ -193,11 +202,11 @@ func TestAPITokenRepository_GetByHash(t *testing.T) {
 				t.Fatalf("failed to create sqlmock: %v", err)
 			}
 			repo := NewAPITokenRepository(db)
-			expect := mock.ExpectQuery("SELECT id, user_id, name, token_hash, token_prefix").WithArgs("hash-1")
+			expect := mock.ExpectQuery("SELECT id, user_id, name, scopes, token_hash, token_prefix").WithArgs("hash-1")
 			if tc.queryErr != nil {
 				expect.WillReturnError(tc.queryErr)
 			} else {
-				expect.WillReturnRows(apiTokenRows().AddRow("token-1", "user-1", "cli", "hash-1", "prefix", nil, nil, nil, now, now))
+				expect.WillReturnRows(apiTokenRows().AddRow("token-1", "user-1", "cli", []byte(`["artifact:read"]`), "hash-1", "prefix", nil, nil, nil, now, now))
 			}
 
 			token, err := repo.GetByHash(context.Background(), "hash-1")
@@ -209,6 +218,8 @@ func TestAPITokenRepository_GetByHash(t *testing.T) {
 				t.Fatalf("expected no error, got %v", err)
 			} else if token.ID != "token-1" {
 				t.Fatalf("expected token-1, got %q", token.ID)
+			} else if len(token.Scopes) != 1 || token.Scopes[0] != domain.APITokenScopeArtifactRead {
+				t.Fatalf("expected artifact:read scope, got %+v", token.Scopes)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatalf("unmet sql expectations: %v", err)

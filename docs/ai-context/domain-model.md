@@ -38,6 +38,7 @@ This file is a navigational summary of the main domain relationships. Use it to 
 - Users have a global role and may also hold project memberships.
 - Project memberships apply project-scoped roles such as owner, maintainer, or viewer.
 - API tokens are user-scoped credentials used to call the API without an interactive session.
+- API tokens now persist explicit scopes such as `build:read`, `build:logs`, `build:run`, and `artifact:read`; a token never grants more access than the owning user's normal authorization.
 - CLI contexts are local client-side records that bind a human-chosen name to one server URL plus an optional credential reference and default output mode.
 - Authorization checks sit at handler/service boundaries but are grounded in user role and project membership state.
 

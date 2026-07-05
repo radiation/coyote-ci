@@ -29,12 +29,19 @@ export interface AuthConfigResponse {
 export interface APIToken {
   id: string;
   name: string;
+  scopes: APITokenScope[];
   token_prefix: string;
   expires_at?: string;
   last_used_at?: string;
   created_at: string;
   revoked_at?: string;
 }
+
+export type APITokenScope =
+  | "build:read"
+  | "build:logs"
+  | "build:run"
+  | "artifact:read";
 
 export interface APITokenListResponse {
   tokens: APIToken[];
@@ -47,6 +54,7 @@ export interface CreatedAPIToken extends APIToken {
 export interface CreateAPITokenRequest {
   name: string;
   expires_at?: string;
+  scopes?: APITokenScope[];
 }
 
 export interface CreateUserRequest {

@@ -453,6 +453,59 @@ func TestBuildHandler_RetryJobAuthorizesSourceBuildBeforeMutation(t *testing.T) 
 	}
 }
 
+func TestScopedAPITokenRouteEnforcement(t *testing.T) {
+	fixture := newHandlerAuthzFixture(t)
+	ctx := context.Background()
+	build, err := fixture.buildService.CreateBuild(ctx, buildsvc.CreateBuildInput{
+		ProjectID: fixture.projectViewer.ID,
+		Steps:     []buildsvc.CreateBuildStepInput{{Name: "test", Command: "sh", Args: []string{"-c", "echo ok"}}},
+	})
+	if err != nil {
+		t.Fatalf("create fixture build failed: %v", err)
+	}
+	h := NewBuildHandler(fixture.buildService)
+	h.SetAuthorization(auth.ModeHeader, fixture.membershipService)
+
+	readReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/"+build.ID, nil), build.ID)
+	readReq = withScopedAPIToken(readReq, fixture.viewer, domain.APITokenScopeBuildLogs)
+	readRes := httptest.NewRecorder()
+	h.GetBuild(readRes, readReq)
+	if readRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing build:read scope status %d, got %d body=%s", http.StatusForbidden, readRes.Code, readRes.Body.String())
+	}
+
+	logsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/"+build.ID+"/logs", nil), build.ID)
+	logsReq = withScopedAPIToken(logsReq, fixture.viewer, domain.APITokenScopeBuildLogs)
+	logsRes := httptest.NewRecorder()
+	h.GetBuildLogs(logsRes, logsReq)
+	if logsRes.Code != http.StatusOK {
+		t.Fatalf("expected build:logs status %d, got %d body=%s", http.StatusOK, logsRes.Code, logsRes.Body.String())
+	}
+
+	artifactReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/"+build.ID+"/artifacts", nil), build.ID)
+	artifactReq = withScopedAPIToken(artifactReq, fixture.viewer, domain.APITokenScopeBuildRead)
+	artifactRes := httptest.NewRecorder()
+	h.GetBuildArtifacts(artifactRes, artifactReq)
+	if artifactRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing artifact:read scope status %d, got %d body=%s", http.StatusForbidden, artifactRes.Code, artifactRes.Body.String())
+	}
+
+	createReq := httptest.NewRequest(http.MethodPost, "/builds", bytes.NewBufferString(`{"project_id":"`+fixture.projectViewer.ID+`","steps":[{"name":"build","command":"go","args":["test","./..."]}]}`))
+	createReq = withScopedAPIToken(createReq, fixture.maintainer, domain.APITokenScopeBuildRead)
+	createRes := httptest.NewRecorder()
+	h.CreateBuild(createRes, createReq)
+	if createRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing build:run scope status %d, got %d body=%s", http.StatusForbidden, createRes.Code, createRes.Body.String())
+	}
+}
+
+func withScopedAPIToken(req *http.Request, user domain.User, scopes ...domain.APITokenScope) *http.Request {
+	ctx := auth.WithUser(req.Context(), user)
+	ctx = auth.WithAuthMethod(ctx, auth.MethodAPIToken)
+	ctx = auth.WithAuthenticatedAPIToken(ctx, "token-1", scopes)
+	return req.WithContext(ctx)
+}
+
 type handlerAuthzFixture struct {
 	now               time.Time
 	projectViewer     domain.Project

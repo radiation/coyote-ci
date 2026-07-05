@@ -30,6 +30,7 @@ type APIToken struct {
 	ID          string
 	UserID      string
 	Name        string
+	Scopes      []APITokenScope
 	TokenHash   string
 	TokenPrefix string
 	ExpiresAt   *time.Time

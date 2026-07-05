@@ -8,16 +8,47 @@ import {
   revokeAPIToken,
 } from "../api";
 import { useAuth } from "../auth-context";
-import type { CreatedAPIToken } from "../types/identity";
+import type { APITokenScope, CreatedAPIToken } from "../types/identity";
 import { formatTime } from "../utils/time";
 
 const TOKEN_COPY_STATUS_RESET_MS = 2000;
+
+const TOKEN_SCOPE_OPTIONS: Array<{
+  value: APITokenScope;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "build:read",
+    label: "Build status",
+    description: "Read build metadata, status, and project or job context.",
+  },
+  {
+    value: "build:logs",
+    label: "Build logs",
+    description: "Read build logs and failed-step diagnostics.",
+  },
+  {
+    value: "build:run",
+    label: "Rerun builds",
+    description: "Trigger reruns and other build-run actions.",
+  },
+  {
+    value: "artifact:read",
+    label: "Read artifacts",
+    description: "List artifact metadata and download build artifacts.",
+  },
+];
+
+const DEFAULT_TOKEN_SCOPES: APITokenScope[] = ["build:read", "build:logs"];
 
 export function APITokensPage() {
   const { authMode } = useAuth();
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
+  const [selectedScopes, setSelectedScopes] =
+    useState<APITokenScope[]>(DEFAULT_TOKEN_SCOPES);
   const [createdToken, setCreatedToken] = useState<CreatedAPIToken | null>(
     null,
   );
@@ -47,6 +78,7 @@ export function APITokensPage() {
       setCreatedToken(token);
       setName("");
       setExpiresAt("");
+      setSelectedScopes(DEFAULT_TOKEN_SCOPES);
       await queryClient.invalidateQueries({ queryKey: ["api-tokens"] });
     },
     onError: (mutationError) => {
@@ -111,6 +143,16 @@ export function APITokensPage() {
     createMutation.mutate({
       name: trimmedName,
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : undefined,
+      scopes: selectedScopes,
+    });
+  }
+
+  function toggleScope(scope: APITokenScope) {
+    setSelectedScopes((current) => {
+      if (current.includes(scope)) {
+        return current.filter((value) => value !== scope);
+      }
+      return [...current, scope].sort();
     });
   }
 
@@ -202,6 +244,26 @@ export function APITokensPage() {
             Leave expiration blank to create a token that does not expire.
           </p>
 
+          <fieldset className="job-form-fieldset">
+            <legend>Scopes</legend>
+            <p className="subtle-text api-token-form-copy">
+              Choose the smallest set of permissions this token needs. The
+              default is a read-only diagnostic token for IDE agents.
+            </p>
+            {TOKEN_SCOPE_OPTIONS.map((scope) => (
+              <label key={scope.value}>
+                <input
+                  type="checkbox"
+                  checked={selectedScopes.includes(scope.value)}
+                  onChange={() => toggleScope(scope.value)}
+                  disabled={createMutation.isPending}
+                />
+                <span>{scope.label}</span>
+                <span className="subtle-text"> {scope.description}</span>
+              </label>
+            ))}
+          </fieldset>
+
           <div className="job-form-actions">
             <button type="submit" disabled={createMutation.isPending}>
               {createMutation.isPending ? "Creating..." : "Create Token"}
@@ -279,6 +341,7 @@ export function APITokensPage() {
               <tr>
                 <th>Name</th>
                 <th>Prefix</th>
+                <th>Scopes</th>
                 <th>Created</th>
                 <th>Last Used</th>
                 <th>Expires</th>
@@ -295,6 +358,11 @@ export function APITokensPage() {
                     <td>{token.name}</td>
                     <td>
                       <code>{token.token_prefix}</code>
+                    </td>
+                    <td>
+                      {token.scopes.length > 0
+                        ? token.scopes.join(", ")
+                        : "Identity only"}
                     </td>
                     <td>{formatTime(token.created_at)}</td>
                     <td>

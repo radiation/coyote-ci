@@ -91,6 +91,7 @@ func (h *APITokenHandler) CreateMyToken(w http.ResponseWriter, r *http.Request) 
 		UserID:    user.ID,
 		Name:      req.Name,
 		ExpiresAt: expiresAt,
+		Scopes:    req.Scopes,
 	})
 	if err != nil {
 		h.writeAPITokenError(w, err)
@@ -141,7 +142,7 @@ func (h *APITokenHandler) writeAPITokenError(w http.ResponseWriter, err error) {
 		writeErrorJSON(w, http.StatusNotFound, "not_found", err.Error())
 		return
 	}
-	if errors.Is(err, service.ErrAPITokenNameRequired) || errors.Is(err, service.ErrAPITokenExpirationInvalid) {
+	if errors.Is(err, service.ErrAPITokenNameRequired) || errors.Is(err, service.ErrAPITokenExpirationInvalid) || errors.Is(err, domain.ErrUnknownAPITokenScope) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -164,12 +165,24 @@ func toAPITokenResponse(token domain.APIToken) api.APITokenResponse {
 	return api.APITokenResponse{
 		ID:          token.ID,
 		Name:        token.Name,
+		Scopes:      toAPITokenScopeStrings(token.Scopes),
 		TokenPrefix: token.TokenPrefix,
 		ExpiresAt:   formatOptionalAPITokenTime(token.ExpiresAt),
 		LastUsedAt:  formatOptionalAPITokenTime(token.LastUsedAt),
 		CreatedAt:   formatUserTime(token.CreatedAt),
 		RevokedAt:   formatOptionalAPITokenTime(token.RevokedAt),
 	}
+}
+
+func toAPITokenScopeStrings(scopes []domain.APITokenScope) []string {
+	if len(scopes) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		out = append(out, string(scope))
+	}
+	return out
 }
 
 func formatOptionalAPITokenTime(value *time.Time) string {
