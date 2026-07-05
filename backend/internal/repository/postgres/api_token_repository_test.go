@@ -77,7 +77,7 @@ func TestAPITokenRepository_Create(t *testing.T) {
 			}
 
 			expect := mock.ExpectQuery("INSERT INTO api_tokens").
-				WithArgs(token.ID, token.UserID, token.Name, []byte(`["build:read","build:logs"]`), token.TokenHash, token.TokenPrefix, token.ExpiresAt, token.LastUsedAt, token.RevokedAt, token.CreatedAt, token.UpdatedAt)
+				WithArgs(token.ID, token.UserID, token.Name, `["build:read","build:logs"]`, token.TokenHash, token.TokenPrefix, token.ExpiresAt, token.LastUsedAt, token.RevokedAt, token.CreatedAt, token.UpdatedAt)
 			if tc.queryErr != nil {
 				expect.WillReturnError(tc.queryErr)
 			} else {
@@ -318,6 +318,40 @@ func TestAPITokenRepository_TouchLastUsed(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMarshalAPITokenScopes(t *testing.T) {
+	raw, err := marshalAPITokenScopes([]domain.APITokenScope{domain.APITokenScopeBuildRead, domain.APITokenScopeBuildLogs})
+	if err != nil {
+		t.Fatalf("marshalAPITokenScopes returned error: %v", err)
+	}
+	if got, want := string(raw), `["build:read","build:logs"]`; got != want {
+		t.Fatalf("expected %s, got %s", want, got)
+	}
+}
+
+func TestUnmarshalAPITokenScopes(t *testing.T) {
+	t.Run("empty raw returns empty scopes", func(t *testing.T) {
+		scopes, err := unmarshalAPITokenScopes(nil)
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if len(scopes) != 0 {
+			t.Fatalf("expected empty scopes, got %v", scopes)
+		}
+	})
+
+	t.Run("invalid json returns error", func(t *testing.T) {
+		if _, err := unmarshalAPITokenScopes([]byte("{")); err == nil {
+			t.Fatal("expected invalid json error, got nil")
+		}
+	})
+
+	t.Run("unknown scope returns sentinel error", func(t *testing.T) {
+		if _, err := unmarshalAPITokenScopes([]byte(`["build:read","unknown"]`)); !errors.Is(err, domain.ErrUnknownAPITokenScope) {
+			t.Fatalf("expected unknown scope error, got %v", err)
+		}
+	})
 }
 
 func apiTokenRows() *sqlmock.Rows {

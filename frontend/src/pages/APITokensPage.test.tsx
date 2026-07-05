@@ -181,6 +181,70 @@ describe("APITokensPage", () => {
     expect(mockedCreateAPIToken).not.toHaveBeenCalled();
   });
 
+  it("renders scope options separately and preserves defaults", async () => {
+    renderPage();
+
+    await screen.findByText("fixture-token");
+
+    const buildStatus = screen.getByRole("checkbox", { name: "Build status" });
+    const buildLogs = screen.getByRole("checkbox", { name: "Build logs" });
+    const rerunBuilds = screen.getByRole("checkbox", { name: "Rerun builds" });
+    const readArtifacts = screen.getByRole("checkbox", {
+      name: "Read artifacts",
+    });
+
+    expect(buildStatus).toBeChecked();
+    expect(buildLogs).toBeChecked();
+    expect(rerunBuilds).not.toBeChecked();
+    expect(readArtifacts).not.toBeChecked();
+
+    expect(
+      screen.getByText(
+        "Read build metadata, status, and project or job context.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Read build logs and failed-step diagnostics."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Trigger reruns and other build-run actions."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("List artifact metadata and download build artifacts."),
+    ).toBeTruthy();
+  });
+
+  it("toggles scopes from the label and submits the selected values", async () => {
+    renderPage();
+
+    await screen.findByText("fixture-token");
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "narrow token" },
+    });
+
+    fireEvent.click(screen.getByText("Rerun builds"));
+    fireEvent.click(screen.getByText("Build logs"));
+
+    expect(
+      screen.getByRole("checkbox", { name: "Rerun builds" }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "Build logs" }),
+    ).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Token" }));
+
+    await waitFor(() => {
+      expect(mockedCreateAPIToken).toHaveBeenCalled();
+      expect(mockedCreateAPIToken.mock.calls[0]?.[0]).toEqual({
+        name: "narrow token",
+        expires_at: undefined,
+        scopes: ["build:read", "build:run"],
+      });
+    });
+  });
+
   it("does not recreate the secret after a refresh", async () => {
     const firstRender = renderPage();
 

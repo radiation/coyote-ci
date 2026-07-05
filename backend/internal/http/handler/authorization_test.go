@@ -196,6 +196,19 @@ func TestRequireAPITokenScope(t *testing.T) {
 		}
 	})
 
+	t.Run("api token auth without token context is internal error", func(t *testing.T) {
+		ctx := auth.WithUser(context.Background(), user)
+		ctx = auth.WithAuthMethod(ctx, auth.MethodAPIToken)
+		req := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
+		res := httptest.NewRecorder()
+		if requireAPITokenScope(res, req, domain.APITokenScopeBuildRead) {
+			t.Fatal("expected missing token context to be rejected")
+		}
+		if res.Code != http.StatusInternalServerError {
+			t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, res.Code)
+		}
+	})
+
 	t.Run("api token with scope is allowed", func(t *testing.T) {
 		ctx := auth.WithUser(context.Background(), user)
 		ctx = auth.WithAuthMethod(ctx, auth.MethodAPIToken)

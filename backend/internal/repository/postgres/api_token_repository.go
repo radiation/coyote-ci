@@ -36,7 +36,7 @@ func (r *APITokenRepository) Create(ctx context.Context, token domain.APIToken) 
 		token.ID,
 		token.UserID,
 		token.Name,
-		scopesJSON,
+		string(scopesJSON),
 		token.TokenHash,
 		token.TokenPrefix,
 		token.ExpiresAt,

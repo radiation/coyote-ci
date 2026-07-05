@@ -250,18 +250,38 @@ export function APITokensPage() {
               Choose the smallest set of permissions this token needs. The
               default is a read-only diagnostic token for IDE agents.
             </p>
-            {TOKEN_SCOPE_OPTIONS.map((scope) => (
-              <label key={scope.value}>
-                <input
-                  type="checkbox"
-                  checked={selectedScopes.includes(scope.value)}
-                  onChange={() => toggleScope(scope.value)}
-                  disabled={createMutation.isPending}
-                />
-                <span>{scope.label}</span>
-                <span className="subtle-text"> {scope.description}</span>
-              </label>
-            ))}
+            <div className="api-token-scope-list">
+              {TOKEN_SCOPE_OPTIONS.map((scope) => {
+                const checkboxID = `api-token-scope-${scope.value.replace(/[^a-z0-9]+/gi, "-")}`;
+                const labelID = `${checkboxID}-label`;
+                const descriptionID = `${checkboxID}-description`;
+
+                return (
+                  <label key={scope.value} className="api-token-scope-option">
+                    <input
+                      id={checkboxID}
+                      type="checkbox"
+                      checked={selectedScopes.includes(scope.value)}
+                      onChange={() => toggleScope(scope.value)}
+                      aria-labelledby={labelID}
+                      aria-describedby={descriptionID}
+                      disabled={createMutation.isPending}
+                    />
+                    <span className="api-token-scope-copy">
+                      <span id={labelID} className="api-token-scope-label">
+                        {scope.label}
+                      </span>
+                      <span
+                        id={descriptionID}
+                        className="subtle-text api-token-scope-description"
+                      >
+                        {scope.description}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
           </fieldset>
 
           <div className="job-form-actions">

@@ -465,6 +465,16 @@ func TestScopedAPITokenRouteEnforcement(t *testing.T) {
 	}
 	h := NewBuildHandler(fixture.buildService)
 	h.SetAuthorization(auth.ModeHeader, fixture.membershipService)
+	job, err := fixture.jobService.CreateJob(ctx, service.CreateJobInput{
+		ProjectID:     fixture.projectViewer.ID,
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+	})
+	if err != nil {
+		t.Fatalf("create fixture job failed: %v", err)
+	}
 
 	readReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/"+build.ID, nil), build.ID)
 	readReq = withScopedAPIToken(readReq, fixture.viewer, domain.APITokenScopeBuildLogs)
@@ -482,6 +492,22 @@ func TestScopedAPITokenRouteEnforcement(t *testing.T) {
 		t.Fatalf("expected build:logs status %d, got %d body=%s", http.StatusOK, logsRes.Code, logsRes.Body.String())
 	}
 
+	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/"+build.ID+"/steps", nil), build.ID)
+	stepsReq = withScopedAPIToken(stepsReq, fixture.viewer, domain.APITokenScopeBuildLogs)
+	stepsRes := httptest.NewRecorder()
+	h.GetBuildSteps(stepsRes, stepsReq)
+	if stepsRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing build:read for steps status %d, got %d body=%s", http.StatusForbidden, stepsRes.Code, stepsRes.Body.String())
+	}
+
+	stepLogsReq := addStepIndexParam(addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/"+build.ID+"/steps/0/logs", nil), build.ID), "0")
+	stepLogsReq = withScopedAPIToken(stepLogsReq, fixture.viewer, domain.APITokenScopeBuildRead)
+	stepLogsRes := httptest.NewRecorder()
+	h.GetBuildStepLogs(stepLogsRes, stepLogsReq)
+	if stepLogsRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing build:logs for step logs status %d, got %d body=%s", http.StatusForbidden, stepLogsRes.Code, stepLogsRes.Body.String())
+	}
+
 	artifactReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/"+build.ID+"/artifacts", nil), build.ID)
 	artifactReq = withScopedAPIToken(artifactReq, fixture.viewer, domain.APITokenScopeBuildRead)
 	artifactRes := httptest.NewRecorder()
@@ -490,12 +516,83 @@ func TestScopedAPITokenRouteEnforcement(t *testing.T) {
 		t.Fatalf("expected missing artifact:read scope status %d, got %d body=%s", http.StatusForbidden, artifactRes.Code, artifactRes.Body.String())
 	}
 
+	queueReq := addBuildIDParam(httptest.NewRequest(http.MethodPost, "/builds/"+build.ID+"/queue", nil), build.ID)
+	queueReq = withScopedAPIToken(queueReq, fixture.maintainer, domain.APITokenScopeBuildRead)
+	queueRes := httptest.NewRecorder()
+	h.QueueBuild(queueRes, queueReq)
+	if queueRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing build:run for queue status %d, got %d body=%s", http.StatusForbidden, queueRes.Code, queueRes.Body.String())
+	}
+
 	createReq := httptest.NewRequest(http.MethodPost, "/builds", bytes.NewBufferString(`{"project_id":"`+fixture.projectViewer.ID+`","steps":[{"name":"build","command":"go","args":["test","./..."]}]}`))
 	createReq = withScopedAPIToken(createReq, fixture.maintainer, domain.APITokenScopeBuildRead)
 	createRes := httptest.NewRecorder()
 	h.CreateBuild(createRes, createReq)
 	if createRes.Code != http.StatusForbidden {
 		t.Fatalf("expected missing build:run scope status %d, got %d body=%s", http.StatusForbidden, createRes.Code, createRes.Body.String())
+	}
+
+	pipelineReq := httptest.NewRequest(http.MethodPost, "/builds/pipeline", bytes.NewBufferString(`{"project_id":"`+fixture.projectViewer.ID+`","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n"}`))
+	pipelineReq = withScopedAPIToken(pipelineReq, fixture.maintainer, domain.APITokenScopeBuildRead)
+	pipelineRes := httptest.NewRecorder()
+	h.CreatePipelineBuild(pipelineRes, pipelineReq)
+	if pipelineRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing build:run for pipeline create status %d, got %d body=%s", http.StatusForbidden, pipelineRes.Code, pipelineRes.Body.String())
+	}
+
+	repoReq := httptest.NewRequest(http.MethodPost, "/builds/repo", bytes.NewBufferString(`{"project_id":"`+fixture.projectViewer.ID+`","repo_url":"https://github.com/example/backend.git","ref":"main"}`))
+	repoReq = withScopedAPIToken(repoReq, fixture.maintainer, domain.APITokenScopeBuildRead)
+	repoRes := httptest.NewRecorder()
+	h.CreateRepoBuild(repoRes, repoReq)
+	if repoRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing build:run for repo create status %d, got %d body=%s", http.StatusForbidden, repoRes.Code, repoRes.Body.String())
+	}
+
+	jobHandler := NewJobHandler(fixture.jobService)
+	jobHandler.SetAuthorization(auth.ModeHeader, fixture.membershipService)
+
+	runReq := addURLParam(httptest.NewRequest(http.MethodPost, "/jobs/"+job.ID+"/run", nil), "jobID", job.ID)
+	runReq = withScopedAPIToken(runReq, fixture.maintainer, domain.APITokenScopeBuildRead)
+	runRes := httptest.NewRecorder()
+	jobHandler.RunNow(runRes, runReq)
+	if runRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing build:run for run-now status %d, got %d body=%s", http.StatusForbidden, runRes.Code, runRes.Body.String())
+	}
+
+	jobBuildsReq := addURLParam(httptest.NewRequest(http.MethodGet, "/jobs/"+job.ID+"/builds", nil), "jobID", job.ID)
+	jobBuildsReq = withScopedAPIToken(jobBuildsReq, fixture.viewer, domain.APITokenScopeBuildLogs)
+	jobBuildsRes := httptest.NewRecorder()
+	jobHandler.ListJobBuilds(jobBuildsRes, jobBuildsReq)
+	if jobBuildsRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing build:read for list job builds status %d, got %d body=%s", http.StatusForbidden, jobBuildsRes.Code, jobBuildsRes.Body.String())
+	}
+
+	artifactCatalogRepo := &fakeArtifactCatalogRepo{records: []domain.ArtifactRecord{{
+		Artifact: domain.BuildArtifact{ID: "artifact-1", BuildID: build.ID, LogicalPath: "dist/app.tgz", CreatedAt: fixture.now, StorageProvider: domain.StorageProviderFilesystem},
+		Build:    domain.Build{ID: build.ID, ProjectID: fixture.projectViewer.ID, Status: domain.BuildStatusSuccess, CreatedAt: fixture.now},
+	}}, record: domain.ArtifactRecord{
+		Artifact: domain.BuildArtifact{ID: "artifact-1", BuildID: build.ID, LogicalPath: "dist/app.tgz", CreatedAt: fixture.now, StorageProvider: domain.StorageProviderFilesystem},
+		Build:    domain.Build{ID: build.ID, ProjectID: fixture.projectViewer.ID, Status: domain.BuildStatusSuccess, CreatedAt: fixture.now},
+	}}
+	artifactHandler := NewArtifactHandler(artifactsvc.NewService(artifactCatalogRepo))
+	artifactHandler.SetProjectService(fixture.projectService)
+	artifactHandler.SetJobService(fixture.jobService)
+	artifactHandler.SetAuthorization(auth.ModeHeader, fixture.membershipService)
+
+	catalogReq := httptest.NewRequest(http.MethodGet, "/artifacts/catalog?project_id="+fixture.projectViewer.ID, nil)
+	catalogReq = withScopedAPIToken(catalogReq, fixture.viewer, domain.APITokenScopeBuildRead)
+	catalogRes := httptest.NewRecorder()
+	artifactHandler.ListArtifactCatalog(catalogRes, catalogReq)
+	if catalogRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing artifact:read for catalog status %d, got %d body=%s", http.StatusForbidden, catalogRes.Code, catalogRes.Body.String())
+	}
+
+	getArtifactReq := addURLParams(httptest.NewRequest(http.MethodGet, "/artifacts/artifact-1", nil), map[string]string{"artifactID": "artifact-1"})
+	getArtifactReq = withScopedAPIToken(getArtifactReq, fixture.viewer, domain.APITokenScopeBuildRead)
+	getArtifactRes := httptest.NewRecorder()
+	artifactHandler.GetArtifact(getArtifactRes, getArtifactReq)
+	if getArtifactRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing artifact:read for get artifact status %d, got %d body=%s", http.StatusForbidden, getArtifactRes.Code, getArtifactRes.Body.String())
 	}
 }
 
