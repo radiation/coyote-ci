@@ -194,6 +194,31 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 	if got := firstNonEmptyPtr(nil, stringPtr("  "), &author); got == nil || *got != author {
 		t.Fatalf("unexpected first non-empty ptr result: %+v", got)
 	}
+
+	retryPayload := makeBuildRetryPayload("https://example.com/base", "build-1", api.BuildResponse{ID: "build-2", Status: "queued"})
+	if retryPayload.Retried.SourceBuildID != "build-1" || retryPayload.Retried.BuildID != "build-2" || !strings.Contains(retryPayload.Retried.WebURL, "/base/builds/build-2") {
+		t.Fatalf("unexpected retry payload: %+v", retryPayload)
+	}
+	buf.Reset()
+	if err := writeBuildRetryHuman(buf, retryPayload); err != nil {
+		t.Fatalf("writeBuildRetryHuman failed: %v", err)
+	}
+	if got := buf.String(); !strings.Contains(got, "Retried build build-1 -> build-2") || !strings.Contains(got, "Status: queued") {
+		t.Fatalf("unexpected retry output: %s", got)
+	}
+	buf.Reset()
+	if err := writeBuildRetryHuman(buf, buildRetryPayload{Retried: buildRetryView{SourceBuildID: "build-1", BuildID: "build-1", Status: "queued"}}); err != nil {
+		t.Fatalf("writeBuildRetryHuman same-id failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Retried build build-1\n") {
+		t.Fatalf("expected same-id retry output, got %q", buf.String())
+	}
+	if err := writeBuildRetryHuman(failWriter{}, retryPayload); err == nil {
+		t.Fatal("expected writeBuildRetryHuman to surface write errors")
+	}
+	if isInteractiveInput(strings.NewReader("y\n")) {
+		t.Fatal("expected strings reader to be treated as non-interactive")
+	}
 }
 
 func intPtr(value int) *int { return &value }

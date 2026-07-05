@@ -94,6 +94,32 @@ func TestClient_BuildInspectionMethods(t *testing.T) {
 	}
 }
 
+func TestClient_RerunBuild(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if r.URL.String() != "/api/builds/build-1/rerun" {
+			t.Fatalf("unexpected request path %q", r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"data":{"id":"build-2","project_id":"project-1","project_name":"Coyote","job_id":"job-1","status":"queued","created_at":"2026-07-04T00:02:00Z","queued_at":"2026-07-04T00:02:00Z","started_at":null,"finished_at":null,"current_step_index":0,"attempt_number":2,"rerun_of_build_id":"build-1","error_message":null,"trigger_type":"rerun","trigger_kind":"manual","image":{"source_kind":"external"}}}`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	build, rerunErr := client.RerunBuild(context.Background(), "build-1")
+	if rerunErr != nil {
+		t.Fatalf("rerun build: %v", rerunErr)
+	}
+	if build.ID != "build-2" || build.RerunOfBuildID == nil || *build.RerunOfBuildID != "build-1" || build.Status != "queued" {
+		t.Fatalf("unexpected rerun response: %+v", build)
+	}
+}
+
 func TestClient_GetBuildLogsWithoutExplicitTailUsesServerDefaultBehavior(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.String() != "/api/builds/build-1/logs" {
