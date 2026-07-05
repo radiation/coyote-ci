@@ -2049,6 +2049,18 @@ paths:
         name: buildID
         required: true
         type: string
+      - description: Limit logs to one step index
+        in: query
+        name: step
+        type: integer
+      - description: Select the failed step when exactly one step failed
+        in: query
+        name: failed
+        type: boolean
+      - description: Show only the last N log entries
+        in: query
+        name: tail
+        type: integer
       produces:
       - application/json
       responses:

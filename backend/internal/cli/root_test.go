@@ -213,6 +213,19 @@ func TestBuildStatusAndLogsCommands(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("expected no stdout on validation error, got %q", stdout.String())
 	}
+	stdout.Reset()
+	stderr.Reset()
+
+	code = Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "logs", "build-1", "--tail", "0"}})
+	if code != 2 {
+		t.Fatalf("expected tail validation exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "tail must be a positive integer") {
+		t.Fatalf("unexpected stderr for tail validation: %s", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no stdout on tail validation error, got %q", stdout.String())
+	}
 }
 
 func TestBuildCommands_MissingTokenScopeErrors(t *testing.T) {

@@ -99,6 +99,9 @@ func (h *BuildHandler) GetBuildSteps(w http.ResponseWriter, r *http.Request) {
 // @Tags builds
 // @Produce json
 // @Param buildID path string true "Build ID"
+// @Param step query int false "Limit logs to one step index"
+// @Param failed query bool false "Select the failed step when exactly one step failed"
+// @Param tail query int false "Show only the last N log entries"
 // @Success 200 {object} api.BuildLogsEnvelope
 // @Failure 400 {object} api.ErrorResponse
 // @Failure 404 {object} api.ErrorResponse

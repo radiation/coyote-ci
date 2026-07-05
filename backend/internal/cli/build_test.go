@@ -21,21 +21,23 @@ func TestParseBuildLogsOptions(t *testing.T) {
 		stepRaw    string
 		failed     bool
 		tail       int
+		tailSet    bool
 		wantStep   *int
 		wantFailed bool
 		wantTail   int
 		wantErr    string
 	}{
 		{name: "empty step uses defaults", tail: 0, wantFailed: false, wantTail: 0},
+		{name: "explicit zero tail rejected", tail: 0, tailSet: true, wantErr: "tail must be a positive integer"},
 		{name: "step and failed conflict", stepRaw: "2", failed: true, wantErr: "step and failed cannot be used together"},
 		{name: "negative step", stepRaw: "-1", wantErr: "step must be a non-negative integer"},
 		{name: "negative tail", tail: -1, wantErr: "tail must be a positive integer"},
-		{name: "step and tail", stepRaw: " 3 ", tail: 5, wantStep: intPtr(3), wantTail: 5},
+		{name: "step and tail", stepRaw: " 3 ", tail: 5, tailSet: true, wantStep: intPtr(3), wantTail: 5},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseBuildLogsOptions(tc.stepRaw, tc.failed, tc.tail)
+			got, err := parseBuildLogsOptions(tc.stepRaw, tc.failed, tc.tail, tc.tailSet)
 			if tc.wantErr != "" {
 				if err == nil || err.Error() != tc.wantErr {
 					t.Fatalf("expected error %q, got %v", tc.wantErr, err)

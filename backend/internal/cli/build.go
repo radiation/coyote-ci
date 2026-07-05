@@ -98,7 +98,7 @@ func (a *app) newBuildLogsCommand() *cobra.Command {
 		Long:  "Fetch a snapshot of current build logs. Re-run the command to fetch newer logs. Live log following is deferred.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			options, err := parseBuildLogsOptions(stepRaw, failed, tail)
+			options, err := parseBuildLogsOptions(stepRaw, failed, tail, cmd.Flags().Changed("tail"))
 			if err != nil {
 				return &ExitError{Code: 2, Err: err}
 			}
@@ -128,7 +128,7 @@ func (a *app) newBuildLogsCommand() *cobra.Command {
 	return command
 }
 
-func parseBuildLogsOptions(stepRaw string, failed bool, tail int) (apiclient.BuildLogsOptions, error) {
+func parseBuildLogsOptions(stepRaw string, failed bool, tail int, tailSet bool) (apiclient.BuildLogsOptions, error) {
 	var options apiclient.BuildLogsOptions
 	trimmedStep := strings.TrimSpace(stepRaw)
 	if trimmedStep != "" {
@@ -141,7 +141,7 @@ func parseBuildLogsOptions(stepRaw string, failed bool, tail int) (apiclient.Bui
 	if options.Step != nil && failed {
 		return apiclient.BuildLogsOptions{}, fmt.Errorf("step and failed cannot be used together")
 	}
-	if tail < 0 {
+	if tail < 0 || (tailSet && tail == 0) {
 		return apiclient.BuildLogsOptions{}, fmt.Errorf("tail must be a positive integer")
 	}
 	options.Failed = failed

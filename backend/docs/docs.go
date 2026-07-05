@@ -844,6 +844,24 @@ const docTemplate = `{
                         "name": "buildID",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Limit logs to one step index",
+                        "name": "step",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Select the failed step when exactly one step failed",
+                        "name": "failed",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Show only the last N log entries",
+                        "name": "tail",
+                        "in": "query"
                     }
                 ],
                 "responses": {

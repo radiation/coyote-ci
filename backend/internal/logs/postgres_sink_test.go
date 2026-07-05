@@ -38,12 +38,12 @@ func TestPostgresSink_AppendStepLogChunk(t *testing.T) {
 	if chunk.SequenceNo != 1 {
 		t.Fatalf("expected sequence 1, got %d", chunk.SequenceNo)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("failed to close db: %v", err)
+	if closeErr := db.Close(); closeErr != nil {
+		t.Fatalf("failed to close db: %v", closeErr)
 	}
 
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet sql expectations: %v", err)
+	if expectErr := mock.ExpectationsWereMet(); expectErr != nil {
+		t.Fatalf("unmet sql expectations: %v", expectErr)
 	}
 }
 
@@ -73,12 +73,12 @@ func TestPostgresSink_ListStepLogChunks(t *testing.T) {
 	if chunks[0].SequenceNo != 1 || chunks[1].SequenceNo != 2 {
 		t.Fatalf("unexpected sequence ordering: %+v", chunks)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("failed to close db: %v", err)
+	if closeErr := db.Close(); closeErr != nil {
+		t.Fatalf("failed to close db: %v", closeErr)
 	}
 
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet sql expectations: %v", err)
+	if expectErr := mock.ExpectationsWereMet(); expectErr != nil {
+		t.Fatalf("unmet sql expectations: %v", expectErr)
 	}
 }
 
@@ -110,11 +110,11 @@ func TestPostgresSink_ListStepLogChunksTail(t *testing.T) {
 	if len(chunks) != 2 || chunks[0].SequenceNo != 3 || chunks[1].SequenceNo != 4 {
 		t.Fatalf("unexpected sequence ordering: %+v", chunks)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("failed to close db: %v", err)
+	if closeErr := db.Close(); closeErr != nil {
+		t.Fatalf("failed to close db: %v", closeErr)
 	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet sql expectations: %v", err)
+	if expectErr := mock.ExpectationsWereMet(); expectErr != nil {
+		t.Fatalf("unmet sql expectations: %v", expectErr)
 	}
 }
 
@@ -144,11 +144,11 @@ func TestPostgresSink_ListStepLogChunksTail_DefaultLimitWithoutStepFilter(t *tes
 	if len(chunks) != 2 || chunks[0].SequenceNo != 1 || chunks[1].SequenceNo != 2 {
 		t.Fatalf("unexpected chunks: %+v", chunks)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("failed to close db: %v", err)
+	if closeErr := db.Close(); closeErr != nil {
+		t.Fatalf("failed to close db: %v", closeErr)
 	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet sql expectations: %v", err)
+	if expectErr := mock.ExpectationsWereMet(); expectErr != nil {
+		t.Fatalf("unmet sql expectations: %v", expectErr)
 	}
 }
 
@@ -174,7 +174,7 @@ func TestPostgresSink_ListStepLogChunksTail_ValidationAndScanErrors(t *testing.T
 	if _, _, err := sink.ListStepLogChunksTail(context.Background(), "build-1", nil, 1); err == nil || err.Error() != "query failed" {
 		t.Fatalf("expected query error, got %v", err)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("failed to close db: %v", err)
+	if closeErr := db.Close(); closeErr != nil {
+		t.Fatalf("failed to close db: %v", closeErr)
 	}
 }
