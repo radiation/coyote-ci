@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -98,6 +99,51 @@ func (c *Client) GetServerInfo(ctx context.Context) (api.ServerInfoResponse, err
 	var envelope api.ServerInfoEnvelope
 	if err := c.doJSON(ctx, http.MethodGet, "api/info", nil, &envelope); err != nil {
 		return api.ServerInfoResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
+func (c *Client) GetBuild(ctx context.Context, buildID string) (api.BuildResponse, error) {
+	var envelope api.BuildEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, buildResourcePath(buildID, ""), nil, &envelope); err != nil {
+		return api.BuildResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
+func (c *Client) GetBuildSteps(ctx context.Context, buildID string) ([]api.BuildStepResponse, error) {
+	var envelope api.BuildStepsEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, buildResourcePath(buildID, "/steps"), nil, &envelope); err != nil {
+		return nil, err
+	}
+	return envelope.Data.Steps, nil
+}
+
+type BuildLogsOptions struct {
+	Step   *int
+	Failed bool
+	Tail   int
+}
+
+func (c *Client) GetBuildLogs(ctx context.Context, buildID string, options BuildLogsOptions) (api.BuildLogsResponse, error) {
+	requestPath := buildResourcePath(buildID, "/logs")
+	params := url.Values{}
+	if options.Step != nil {
+		params.Set("step", strconv.Itoa(*options.Step))
+	}
+	if options.Failed {
+		params.Set("failed", "true")
+	}
+	if options.Tail > 0 {
+		params.Set("tail", strconv.Itoa(options.Tail))
+	}
+	if encoded := params.Encode(); encoded != "" {
+		requestPath += "?" + encoded
+	}
+
+	var envelope api.BuildLogsEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, requestPath, nil, &envelope); err != nil {
+		return api.BuildLogsResponse{}, err
 	}
 	return envelope.Data, nil
 }
@@ -199,6 +245,10 @@ func resolveRequestURL(baseURL *url.URL, requestPath string) (*url.URL, error) {
 		baseCopy.Path = "/"
 	}
 	return baseCopy.ResolveReference(relative), nil
+}
+
+func buildResourcePath(buildID string, suffix string) string {
+	return "api/builds/" + url.PathEscape(strings.TrimSpace(buildID)) + suffix
 }
 
 func decodeErrorResponse(response *http.Response, requestID string) error {

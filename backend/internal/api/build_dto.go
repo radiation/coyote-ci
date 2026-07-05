@@ -260,14 +260,26 @@ type RetryJobResponse struct {
 }
 
 type BuildLogResponse struct {
+	StepIndex int    `json:"step_index"`
 	StepName  string `json:"step_name"`
 	Timestamp string `json:"timestamp"`
+	Stream    string `json:"stream,omitempty"`
+	Line      string `json:"line"`
 	Message   string `json:"message"`
 }
 
+type BuildLogSelectedStepResponse struct {
+	StepIndex int    `json:"step_index"`
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	ExitCode  *int   `json:"exit_code,omitempty"`
+}
+
 type BuildLogsResponse struct {
-	BuildID string             `json:"build_id"`
-	Logs    []BuildLogResponse `json:"logs"`
+	BuildID      string                        `json:"build_id"`
+	SelectedStep *BuildLogSelectedStepResponse `json:"selected_step,omitempty"`
+	Logs         []BuildLogResponse            `json:"logs"`
+	Truncated    bool                          `json:"truncated"`
 }
 
 type StepLogChunkResponse struct {

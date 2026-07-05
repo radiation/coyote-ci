@@ -113,6 +113,176 @@ func TestContextCommandsAndRemoteCalls(t *testing.T) {
 	}
 }
 
+func TestBuildStatusAndLogsCommands(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1":
+			if got := r.Header.Get("Authorization"); got != "Bearer stored-token" {
+				t.Fatalf("expected bearer token, got %q", got)
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":"build-1","build_number":12,"project_id":"project-1","project_name":"Coyote CI","job_id":"job-1","status":"failed","created_at":"2026-07-04T00:00:00Z","queued_at":"2026-07-04T00:00:01Z","started_at":"2026-07-04T00:00:02Z","finished_at":"2026-07-04T00:00:12Z","current_step_index":1,"attempt_number":1,"error_message":null,"source_ref":"refs/heads/main","source_commit_sha":"abcdef1234567890","source_author_name":"Bryan","trigger_type":"manual","trigger_kind":"manual","image":{"source_kind":"external"}}}`))
+		case "/api/builds/build-1/steps":
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","steps":[{"id":"step-1","build_id":"build-1","step_index":1,"name":"test","command":"go test ./...","status":"failed","image":{"source_kind":"external"},"job":{"id":"job-exec-1","build_id":"build-1","step_id":"step-1","name":"test","step_index":1,"attempt_number":1,"status":"failed","image":"golang:1.24","working_dir":"/workspace","command":["go","test","./..."],"command_preview":"go test ./...","environment":{},"spec_version":1,"created_at":"2026-07-04T00:00:00Z","outputs":[]},"worker_id":null,"started_at":"2026-07-04T00:00:02Z","finished_at":"2026-07-04T00:00:12Z","exit_code":1,"stdout":null,"stderr":null,"error_message":null}]}}`))
+		case "/api/builds/build-1/logs?failed=true&tail=1":
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","selected_step":{"step_index":1,"name":"test","status":"failed","exit_code":1},"logs":[{"step_index":1,"step_name":"test","timestamp":"2026-07-04T00:00:10Z","stream":"stderr","line":"FAIL\n","message":"FAIL\n"}],"truncated":true}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "status", "build-1", "--json"}}); code != 0 {
+		t.Fatalf("build status exit code %d stderr=%s", code, stderr.String())
+	}
+	var statusPayload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &statusPayload); err != nil {
+		t.Fatalf("decode build status: %v", err)
+	}
+	buildData, ok := statusPayload["build"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected build object, got %+v", statusPayload)
+	}
+	if buildData["status"] != "failed" || buildData["job_name"] != "test" || buildData["duration_ms"] != float64(10000) {
+		t.Fatalf("unexpected build status payload: %+v", statusPayload)
+	}
+	failedStep, ok := statusPayload["failed_step"].(map[string]any)
+	if !ok || failedStep["index"] != float64(1) || failedStep["name"] != "test" {
+		t.Fatalf("unexpected failed step payload: %+v", statusPayload)
+	}
+	if strings.Contains(stdout.String(), "Build:") {
+		t.Fatalf("unexpected human prose in build status JSON: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "logs", "build-1", "--failed", "--tail", "1"}}); code != 0 {
+		t.Fatalf("build logs exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "== step 1: test (failed) ==") || !strings.Contains(stdout.String(), "[stderr] FAIL") {
+		t.Fatalf("unexpected build logs output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "[truncated] Showing the most recent log entries.") {
+		t.Fatalf("expected truncation note, got %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "logs", "build-1", "--failed", "--tail", "1", "--json"}}); code != 0 {
+		t.Fatalf("build logs json exit code %d stderr=%s", code, stderr.String())
+	}
+	var logsPayload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &logsPayload); err != nil {
+		t.Fatalf("decode build logs: %v", err)
+	}
+	if logsPayload["build_id"] != "build-1" || logsPayload["truncated"] != true {
+		t.Fatalf("unexpected build logs payload: %+v", logsPayload)
+	}
+	selectedStep, ok := logsPayload["selected_step"].(map[string]any)
+	if !ok || selectedStep["name"] != "test" {
+		t.Fatalf("unexpected selected_step payload: %+v", logsPayload)
+	}
+	if strings.Contains(stdout.String(), "== step") {
+		t.Fatalf("unexpected human prose in build logs JSON: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "logs", "build-1", "--failed", "--step", "1"}})
+	if code != 2 {
+		t.Fatalf("expected validation exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "step and failed cannot be used together") {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no stdout on validation error, got %q", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	code = Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "logs", "build-1", "--tail", "0"}})
+	if code != 2 {
+		t.Fatalf("expected tail validation exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "tail must be a positive integer") {
+		t.Fatalf("unexpected stderr for tail validation: %s", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no stdout on tail validation error, got %q", stdout.String())
+	}
+}
+
+func TestBuildCommands_MissingTokenScopeErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		message := "api token does not have the required scope: build:read"
+		if strings.Contains(r.URL.Path, "/logs") {
+			message = "api token does not have the required scope: build:logs"
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"` + message + `"}}`))
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	tests := []struct {
+		name         string
+		args         []string
+		wantContains string
+	}{
+		{name: "status missing scope", args: []string{"build", "status", "build-1", "--json"}, wantContains: "api token does not have the required scope: build:read"},
+		{name: "logs missing scope", args: []string{"build", "logs", "build-1", "--json"}, wantContains: "api token does not have the required scope: build:logs"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout := &bytes.Buffer{}
+			stderr := &bytes.Buffer{}
+			code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: tc.args})
+			if code == 0 {
+				t.Fatal("expected nonzero exit code")
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("expected no stdout on scope failure, got %q", stdout.String())
+			}
+			if !strings.Contains(stderr.String(), tc.wantContains) {
+				t.Fatalf("unexpected stderr: %s", stderr.String())
+			}
+			if strings.Contains(stderr.String(), "stored-token") {
+				t.Fatalf("stderr leaked token: %s", stderr.String())
+			}
+		})
+	}
+}
+
 func TestCanceledCommandContextCancelsHTTPRequests(t *testing.T) {
 	requestSeen := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

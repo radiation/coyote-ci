@@ -25,6 +25,7 @@ var _ LogSink = (*MemorySink)(nil)
 var _ LogReader = (*MemorySink)(nil)
 var _ StepLogChunkAppender = (*MemorySink)(nil)
 var _ StepLogChunkReader = (*MemorySink)(nil)
+var _ StepLogChunkTailReader = (*MemorySink)(nil)
 
 func NewMemorySink() *MemorySink {
 	return &MemorySink{entries: make([]memoryLogEntry, 0), stepChunks: make([]StepLogChunk, 0), nextSequence: 1}
@@ -96,6 +97,41 @@ func (s *MemorySink) ListStepLogChunks(_ context.Context, buildID string, stepIn
 	})
 
 	return out, nil
+}
+
+func (s *MemorySink) ListStepLogChunksTail(_ context.Context, buildID string, stepIndex *int, limit int) ([]StepLogChunk, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+
+	out := make([]StepLogChunk, 0)
+	truncated := false
+	for idx := len(s.stepChunks) - 1; idx >= 0; idx-- {
+		chunk := s.stepChunks[idx]
+		if chunk.BuildID != buildID {
+			continue
+		}
+		if stepIndex != nil && chunk.StepIndex != *stepIndex {
+			continue
+		}
+		if len(out) >= limit {
+			truncated = true
+			break
+		}
+		out = append(out, chunk)
+	}
+
+	for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
+		out[left], out[right] = out[right], out[left]
+	}
+
+	return out, truncated, nil
 }
 
 func (s *MemorySink) GetBuildLogs(_ context.Context, buildID string) ([]BuildLogLine, error) {

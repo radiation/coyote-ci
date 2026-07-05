@@ -492,6 +492,14 @@ func TestScopedAPITokenRouteEnforcement(t *testing.T) {
 		t.Fatalf("expected build:logs status %d, got %d body=%s", http.StatusOK, logsRes.Code, logsRes.Body.String())
 	}
 
+	logsFailedReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/"+build.ID+"/logs?failed=true", nil), build.ID)
+	logsFailedReq = withScopedAPIToken(logsFailedReq, fixture.viewer, domain.APITokenScopeBuildLogs)
+	logsFailedRes := httptest.NewRecorder()
+	h.GetBuildLogs(logsFailedRes, logsFailedReq)
+	if logsFailedRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected failed-step selection to reach handler logic under build:logs scope, got %d body=%s", logsFailedRes.Code, logsFailedRes.Body.String())
+	}
+
 	stepsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/"+build.ID+"/steps", nil), build.ID)
 	stepsReq = withScopedAPIToken(stepsReq, fixture.viewer, domain.APITokenScopeBuildLogs)
 	stepsRes := httptest.NewRecorder()

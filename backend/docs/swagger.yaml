@@ -338,12 +338,29 @@ definitions:
     type: object
   api.BuildLogResponse:
     properties:
+      line:
+        type: string
       message:
         type: string
+      step_index:
+        type: integer
       step_name:
+        type: string
+      stream:
         type: string
       timestamp:
         type: string
+    type: object
+  api.BuildLogSelectedStepResponse:
+    properties:
+      exit_code:
+        type: integer
+      name:
+        type: string
+      status:
+        type: string
+      step_index:
+        type: integer
     type: object
   api.BuildLogsEnvelope:
     properties:
@@ -358,6 +375,10 @@ definitions:
         items:
           $ref: '#/definitions/api.BuildLogResponse'
         type: array
+      selected_step:
+        $ref: '#/definitions/api.BuildLogSelectedStepResponse'
+      truncated:
+        type: boolean
     type: object
   api.BuildResponse:
     properties:
@@ -2028,6 +2049,18 @@ paths:
         name: buildID
         required: true
         type: string
+      - description: Limit logs to one step index
+        in: query
+        name: step
+        type: integer
+      - description: Select the failed step when exactly one step failed
+        in: query
+        name: failed
+        type: boolean
+      - description: Show only the last N log entries
+        in: query
+        name: tail
+        type: integer
       produces:
       - application/json
       responses:

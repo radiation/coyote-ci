@@ -17,6 +17,7 @@ var _ LogSink = (*PostgresSink)(nil)
 var _ LogReader = (*PostgresSink)(nil)
 var _ StepLogChunkAppender = (*PostgresSink)(nil)
 var _ StepLogChunkReader = (*PostgresSink)(nil)
+var _ StepLogChunkTailReader = (*PostgresSink)(nil)
 
 func NewPostgresSink(db *sql.DB) *PostgresSink {
 	return &PostgresSink{db: db}
@@ -142,6 +143,76 @@ func (s *PostgresSink) ListStepLogChunks(ctx context.Context, buildID string, st
 	}
 
 	return chunks, nil
+}
+
+func (s *PostgresSink) ListStepLogChunksTail(ctx context.Context, buildID string, stepIndex *int, limit int) (chunks []StepLogChunk, truncated bool, err error) {
+	if strings.TrimSpace(buildID) == "" {
+		return nil, false, errors.New("build_id is required")
+	}
+	if stepIndex != nil && *stepIndex < 0 {
+		return nil, false, errors.New("step_index must be >= 0")
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+
+	query := `
+		SELECT sequence_no, build_id, step_id, step_index, step_name, stream, chunk_text, created_at
+		FROM build_step_logs
+		WHERE build_id = $1`
+	args := []any{buildID}
+	argIndex := 2
+	if stepIndex != nil {
+		query += fmt.Sprintf("\n\t\t  AND step_index = $%d", argIndex)
+		args = append(args, *stepIndex)
+		argIndex++
+	}
+	query += fmt.Sprintf("\n\t\tORDER BY sequence_no DESC\n\t\tLIMIT $%d", argIndex)
+	args = append(args, limit+1)
+
+	rows, queryErr := s.db.QueryContext(ctx, query, args...)
+	if queryErr != nil {
+		return nil, false, queryErr
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	chunks = make([]StepLogChunk, 0)
+	for rows.Next() {
+		var chunk StepLogChunk
+		if scanErr := rows.Scan(
+			&chunk.SequenceNo,
+			&chunk.BuildID,
+			&chunk.StepID,
+			&chunk.StepIndex,
+			&chunk.StepName,
+			&chunk.Stream,
+			&chunk.ChunkText,
+			&chunk.CreatedAt,
+		); scanErr != nil {
+			return nil, false, scanErr
+		}
+		chunks = append(chunks, chunk)
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, false, rowsErr
+	}
+	if len(chunks) > limit {
+		truncated = true
+		chunks = chunks[:limit]
+	}
+	for left, right := 0, len(chunks)-1; left < right; left, right = left+1, right-1 {
+		chunks[left], chunks[right] = chunks[right], chunks[left]
+	}
+
+	return chunks, truncated, nil
 }
 
 func (s *PostgresSink) GetBuildLogs(ctx context.Context, buildID string) (out []BuildLogLine, err error) {
