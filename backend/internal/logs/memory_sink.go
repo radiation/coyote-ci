@@ -110,7 +110,7 @@ func (s *MemorySink) ListStepLogChunksTail(_ context.Context, buildID string, st
 		limit = 5000
 	}
 
-	out := make([]StepLogChunk, 0, limit)
+	out := make([]StepLogChunk, 0)
 	truncated := false
 	for idx := len(s.stepChunks) - 1; idx >= 0; idx-- {
 		chunk := s.stepChunks[idx]

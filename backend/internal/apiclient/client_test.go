@@ -117,6 +117,25 @@ func TestClient_GetBuildLogsWithoutExplicitTailUsesServerDefaultBehavior(t *test
 	}
 }
 
+func TestClient_GetBuildLogs_WithStepSelection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.String() != "/api/builds/build-1/logs?step=3&tail=2" {
+			t.Fatalf("unexpected request path %q", r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","logs":[],"truncated":false}}`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	step := 3
+	if _, getErr := client.GetBuildLogs(context.Background(), "build-1", BuildLogsOptions{Step: &step, Tail: 2}); getErr != nil {
+		t.Fatalf("get build logs: %v", getErr)
+	}
+}
+
 func TestClient_RequestURLPreservesPathPrefixAndQuery(t *testing.T) {
 	baseURL, err := normalizeBaseURL("https://example.com/platform/coyote/")
 	if err != nil {

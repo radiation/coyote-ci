@@ -183,7 +183,7 @@ func (s *PostgresSink) ListStepLogChunksTail(ctx context.Context, buildID string
 		}
 	}()
 
-	chunks = make([]StepLogChunk, 0, limit)
+	chunks = make([]StepLogChunk, 0)
 	for rows.Next() {
 		var chunk StepLogChunk
 		if scanErr := rows.Scan(

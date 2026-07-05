@@ -145,3 +145,32 @@ func TestMemorySink_ListStepLogChunksTail(t *testing.T) {
 		t.Fatalf("unexpected tailed chunks: %+v", chunks)
 	}
 }
+
+func TestMemorySink_ListStepLogChunksTail_DefaultLimitAndNilStep(t *testing.T) {
+	sink := NewMemorySink()
+	for idx := 0; idx < 3; idx++ {
+		_, err := sink.AppendStepLogChunk(context.Background(), StepLogChunk{
+			BuildID:   "build-1",
+			StepID:    "step-1",
+			StepIndex: idx,
+			StepName:  "step",
+			Stream:    StepLogStreamStdout,
+			ChunkText: string(rune('x' + idx)),
+			CreatedAt: time.Now().UTC().Add(time.Duration(idx) * time.Second),
+		})
+		if err != nil {
+			t.Fatalf("append chunk failed: %v", err)
+		}
+	}
+
+	chunks, truncated, err := sink.ListStepLogChunksTail(context.Background(), "build-1", nil, 0)
+	if err != nil {
+		t.Fatalf("tail list failed: %v", err)
+	}
+	if truncated {
+		t.Fatal("expected untruncated result")
+	}
+	if len(chunks) != 3 || chunks[0].ChunkText != "x" || chunks[2].ChunkText != "z" {
+		t.Fatalf("unexpected tail chunks: %+v", chunks)
+	}
+}
