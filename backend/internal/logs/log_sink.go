@@ -35,6 +35,10 @@ type StepLogChunkReader interface {
 	ListStepLogChunks(ctx context.Context, buildID string, stepIndex int, afterSequence int64, limit int) ([]StepLogChunk, error)
 }
 
+type StepLogChunkTailReader interface {
+	ListStepLogChunksTail(ctx context.Context, buildID string, stepIndex *int, limit int) ([]StepLogChunk, bool, error)
+}
+
 type LogSink interface {
 	WriteStepLog(ctx context.Context, buildID string, stepName string, line string) error
 }

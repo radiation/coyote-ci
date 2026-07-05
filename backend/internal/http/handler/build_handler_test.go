@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1491,8 +1492,17 @@ func TestBuildHandler_GetBuildSteps_EmptyForExistingBuild(t *testing.T) {
 
 func TestBuildHandler_GetBuildLogs(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	repo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}}
-	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, nil))
+	repo := &fakeRepo{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now},
+		steps: map[string][]domain.BuildStep{
+			"build-1": {
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusRunning},
+			},
+		},
+	}
+	logSink := logs.NewMemorySink()
+	_, _ = logSink.AppendStepLogChunk(context.Background(), logs.StepLogChunk{BuildID: "build-1", StepID: "step-1", StepIndex: 0, StepName: "setup", Stream: logs.StepLogStreamStdout, ChunkText: "setup-line", CreatedAt: now})
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, logSink))
 
 	logsReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/logs", nil), "build-1")
 	logsRes := httptest.NewRecorder()
@@ -1503,6 +1513,169 @@ func TestBuildHandler_GetBuildLogs(t *testing.T) {
 	logsData := decodeDataMap(t, logsRes)
 	if logsData["build_id"] != "build-1" {
 		t.Fatalf("expected build_id build-1, got %v", logsData["build_id"])
+	}
+	if logsData["truncated"] != false {
+		t.Fatalf("expected truncated false, got %v", logsData["truncated"])
+	}
+	logsList, ok := logsData["logs"].([]any)
+	if !ok || len(logsList) != 1 {
+		t.Fatalf("expected one log entry, got %+v", logsData["logs"])
+	}
+	entry, ok := logsList[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected object log entry, got %T", logsList[0])
+	}
+	if entry["line"] != "setup-line" || entry["message"] != "setup-line" {
+		t.Fatalf("unexpected log entry payload: %+v", entry)
+	}
+}
+
+func TestBuildHandler_GetBuildLogs_FilteredByStepAndTail(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	exitCode := 1
+	repo := &fakeRepo{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusFailed, CreatedAt: now},
+		steps: map[string][]domain.BuildStep{
+			"build-1": {
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusSuccess},
+				{ID: "step-2", BuildID: "build-1", StepIndex: 1, Name: "test", Status: domain.BuildStepStatusFailed, ExitCode: &exitCode},
+			},
+		},
+	}
+	logSink := logs.NewMemorySink()
+	_, _ = logSink.AppendStepLogChunk(context.Background(), logs.StepLogChunk{BuildID: "build-1", StepID: "step-1", StepIndex: 0, StepName: "setup", Stream: logs.StepLogStreamStdout, ChunkText: "setup-line", CreatedAt: now})
+	_, _ = logSink.AppendStepLogChunk(context.Background(), logs.StepLogChunk{BuildID: "build-1", StepID: "step-2", StepIndex: 1, StepName: "test", Stream: logs.StepLogStreamStdout, ChunkText: "test-line-1", CreatedAt: now.Add(time.Second)})
+	_, _ = logSink.AppendStepLogChunk(context.Background(), logs.StepLogChunk{BuildID: "build-1", StepID: "step-2", StepIndex: 1, StepName: "test", Stream: logs.StepLogStreamStderr, ChunkText: "test-line-2", CreatedAt: now.Add(2 * time.Second)})
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, logSink))
+
+	req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/logs?failed=true&tail=1", nil), "build-1")
+	res := httptest.NewRecorder()
+
+	h.GetBuildLogs(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, res.Code)
+	}
+	data := decodeDataMap(t, res)
+	selectedStep, ok := data["selected_step"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected selected_step object, got %T", data["selected_step"])
+	}
+	if selectedStep["step_index"] != float64(1) || selectedStep["name"] != "test" || selectedStep["status"] != "failed" {
+		t.Fatalf("unexpected selected_step payload: %+v", selectedStep)
+	}
+	if data["truncated"] != true {
+		t.Fatalf("expected truncated true, got %v", data["truncated"])
+	}
+	logsList, ok := data["logs"].([]any)
+	if !ok || len(logsList) != 1 {
+		t.Fatalf("expected single tailed log entry, got %+v", data["logs"])
+	}
+	entry, ok := logsList[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected object log entry, got %T", logsList[0])
+	}
+	if entry["step_index"] != float64(1) || entry["stream"] != "stderr" || entry["line"] != "test-line-2" {
+		t.Fatalf("unexpected tailed log entry payload: %+v", entry)
+	}
+}
+
+func TestBuildHandler_GetBuildLogs_DefaultTailAndCap(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	repo := &fakeRepo{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now},
+		steps: map[string][]domain.BuildStep{
+			"build-1": {
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusRunning},
+			},
+		},
+	}
+	logSink := logs.NewMemorySink()
+	for idx := 0; idx < 600; idx++ {
+		_, appendErr := logSink.AppendStepLogChunk(context.Background(), logs.StepLogChunk{BuildID: "build-1", StepID: "step-1", StepIndex: 0, StepName: "setup", Stream: logs.StepLogStreamStdout, ChunkText: fmt.Sprintf("line-%03d", idx), CreatedAt: now.Add(time.Duration(idx) * time.Second)})
+		if appendErr != nil {
+			t.Fatalf("append chunk failed at index %d: %v", idx, appendErr)
+		}
+	}
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, logSink))
+
+	req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/logs", nil), "build-1")
+	res := httptest.NewRecorder()
+	h.GetBuildLogs(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, res.Code)
+	}
+	data := decodeDataMap(t, res)
+	if data["truncated"] != true {
+		t.Fatalf("expected truncated true, got %v", data["truncated"])
+	}
+	logsList, ok := data["logs"].([]any)
+	if !ok || len(logsList) != defaultBuildLogsTail {
+		t.Fatalf("expected %d logs, got %+v", defaultBuildLogsTail, data["logs"])
+	}
+	first, _ := logsList[0].(map[string]any)
+	last, _ := logsList[len(logsList)-1].(map[string]any)
+	if first["line"] != "line-100" || last["line"] != "line-599" {
+		t.Fatalf("unexpected default tail window: first=%+v last=%+v", first, last)
+	}
+
+	req = addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/logs?tail=999999", nil), "build-1")
+	res = httptest.NewRecorder()
+	h.GetBuildLogs(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, res.Code)
+	}
+	data = decodeDataMap(t, res)
+	logsList, ok = data["logs"].([]any)
+	if !ok || len(logsList) != 600 {
+		t.Fatalf("expected full log list capped by available entries, got %+v", data["logs"])
+	}
+	if data["truncated"] != false {
+		t.Fatalf("expected truncated false when available entries fit inside cap, got %v", data["truncated"])
+	}
+}
+
+func TestBuildHandler_GetBuildLogs_InvalidFilters(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	repo := &fakeRepo{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusFailed, CreatedAt: now},
+		steps: map[string][]domain.BuildStep{
+			"build-1": {
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "setup", Status: domain.BuildStepStatusFailed},
+				{ID: "step-2", BuildID: "build-1", StepIndex: 1, Name: "test", Status: domain.BuildStepStatusFailed},
+			},
+		},
+	}
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, logs.NewMemorySink()))
+
+	tests := []struct {
+		name       string
+		url        string
+		wantStatus int
+		wantText   string
+	}{
+		{name: "step and failed", url: "/builds/build-1/logs?step=0&failed=true", wantStatus: http.StatusBadRequest, wantText: "step and failed cannot be used together"},
+		{name: "bad step", url: "/builds/build-1/logs?step=nope", wantStatus: http.StatusBadRequest, wantText: "step must be a non-negative integer"},
+		{name: "missing step", url: "/builds/build-1/logs?step=9", wantStatus: http.StatusNotFound, wantText: "build step not found"},
+		{name: "negative tail", url: "/builds/build-1/logs?tail=-1", wantStatus: http.StatusBadRequest, wantText: "tail must be a positive integer"},
+		{name: "bad tail", url: "/builds/build-1/logs?tail=0", wantStatus: http.StatusBadRequest, wantText: "tail must be a positive integer"},
+		{name: "ambiguous failed", url: "/builds/build-1/logs?failed=true", wantStatus: http.StatusBadRequest, wantText: "failed step selection requires exactly one failed step"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := addBuildIDParam(httptest.NewRequest(http.MethodGet, tc.url, nil), "build-1")
+			res := httptest.NewRecorder()
+
+			h.GetBuildLogs(res, req)
+
+			if res.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d", tc.wantStatus, res.Code)
+			}
+			if got := decodeErrorMessage(t, res); got != tc.wantText {
+				t.Fatalf("expected message %q, got %q", tc.wantText, got)
+			}
+		})
 	}
 }
 

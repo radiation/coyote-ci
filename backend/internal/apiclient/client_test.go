@@ -49,6 +49,74 @@ func TestClient_GetMeSendsBearerAndUserAgent(t *testing.T) {
 	}
 }
 
+func TestClient_BuildInspectionMethods(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1":
+			_, _ = w.Write([]byte(`{"data":{"id":"build-1","project_id":"project-1","project_name":"Coyote","job_id":"job-1","status":"failed","created_at":"2026-07-04T00:00:00Z","queued_at":null,"started_at":"2026-07-04T00:00:10Z","finished_at":"2026-07-04T00:01:10Z","current_step_index":1,"attempt_number":1,"error_message":null,"trigger_type":"manual","trigger_kind":"manual","image":{"source_kind":"external"}}}`))
+		case "/api/builds/build-1/steps":
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","steps":[{"id":"step-1","build_id":"build-1","step_index":1,"name":"test","command":"go test ./...","status":"failed","image":{"source_kind":"external"},"job":{"id":"job-exec-1","build_id":"build-1","step_id":"step-1","name":"test","step_index":1,"attempt_number":1,"status":"failed","image":"golang:1.24","working_dir":"/workspace","command":["go","test","./..."],"command_preview":"go test ./...","environment":{},"spec_version":1,"created_at":"2026-07-04T00:00:00Z","outputs":[]},"worker_id":null,"started_at":"2026-07-04T00:00:10Z","finished_at":"2026-07-04T00:01:10Z","exit_code":1,"stdout":null,"stderr":null,"error_message":null}]}}`))
+		case "/api/builds/build-1/logs?failed=true&tail=5":
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","selected_step":{"step_index":1,"name":"test","status":"failed","exit_code":1},"logs":[{"step_index":1,"step_name":"test","timestamp":"2026-07-04T00:01:00Z","stream":"stderr","line":"FAIL","message":"FAIL"}],"truncated":false}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	build, buildErr := client.GetBuild(context.Background(), "build-1")
+	if buildErr != nil {
+		t.Fatalf("get build: %v", buildErr)
+	}
+	steps, stepsErr := client.GetBuildSteps(context.Background(), "build-1")
+	if stepsErr != nil {
+		t.Fatalf("get build steps: %v", stepsErr)
+	}
+	tail := 5
+	logs, logsErr := client.GetBuildLogs(context.Background(), "build-1", BuildLogsOptions{Failed: true, Tail: tail})
+	if logsErr != nil {
+		t.Fatalf("get build logs: %v", logsErr)
+	}
+
+	if build.ID != "build-1" || build.ProjectID != "project-1" {
+		t.Fatalf("unexpected build response: %+v", build)
+	}
+	if len(steps) != 1 || steps[0].Job == nil || steps[0].Job.Name != "test" {
+		t.Fatalf("unexpected step response: %+v", steps)
+	}
+	if logs.BuildID != "build-1" || logs.SelectedStep == nil || logs.SelectedStep.Name != "test" || len(logs.Logs) != 1 {
+		t.Fatalf("unexpected logs response: %+v", logs)
+	}
+}
+
+func TestClient_GetBuildLogsWithoutExplicitTailUsesServerDefaultBehavior(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.String() != "/api/builds/build-1/logs" {
+			t.Fatalf("unexpected request path %q", r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","logs":[],"truncated":true}}`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	logs, getErr := client.GetBuildLogs(context.Background(), "build-1", BuildLogsOptions{})
+	if getErr != nil {
+		t.Fatalf("get build logs: %v", getErr)
+	}
+	if !logs.Truncated {
+		t.Fatalf("expected truncated flag to round-trip, got %+v", logs)
+	}
+}
+
 func TestClient_RequestURLPreservesPathPrefixAndQuery(t *testing.T) {
 	baseURL, err := normalizeBaseURL("https://example.com/platform/coyote/")
 	if err != nil {

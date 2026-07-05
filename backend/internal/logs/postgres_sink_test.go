@@ -80,3 +80,39 @@ func TestPostgresSink_ListStepLogChunks(t *testing.T) {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
+
+func TestPostgresSink_ListStepLogChunksTail(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	sink := NewPostgresSink(db)
+	now := time.Now().UTC()
+	stepIndex := 0
+
+	mock.ExpectQuery("SELECT sequence_no, build_id, step_id, step_index, step_name, stream, chunk_text, created_at").
+		WithArgs("build-1", stepIndex, 3).
+		WillReturnRows(sqlmock.NewRows([]string{"sequence_no", "build_id", "step_id", "step_index", "step_name", "stream", "chunk_text", "created_at"}).
+			AddRow(4, "build-1", "step-1", 0, "setup", "stdout", "line-4", now.Add(3*time.Second)).
+			AddRow(3, "build-1", "step-1", 0, "setup", "stdout", "line-3", now.Add(2*time.Second)).
+			AddRow(2, "build-1", "step-1", 0, "setup", "stdout", "line-2", now.Add(1*time.Second)))
+	mock.ExpectClose()
+
+	chunks, truncated, tailErr := sink.ListStepLogChunksTail(context.Background(), "build-1", &stepIndex, 2)
+	if tailErr != nil {
+		t.Fatalf("tail list failed: %v", tailErr)
+	}
+	if !truncated {
+		t.Fatal("expected truncated result")
+	}
+	if len(chunks) != 2 || chunks[0].SequenceNo != 3 || chunks[1].SequenceNo != 4 {
+		t.Fatalf("unexpected sequence ordering: %+v", chunks)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("failed to close db: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}

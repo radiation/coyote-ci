@@ -156,6 +156,19 @@ func (s *BuildService) GetStepLogChunks(ctx context.Context, buildID string, ste
 	return reader.ListStepLogChunks(ctx, buildID, stepIndex, afterSequence, limit)
 }
 
+func (s *BuildService) GetBuildLogChunksTail(ctx context.Context, buildID string, stepIndex *int, limit int) ([]logs.StepLogChunk, bool, error) {
+	if _, err := s.buildRepo.GetByID(ctx, buildID); err != nil {
+		return nil, false, mapRepoErr(err)
+	}
+
+	reader, ok := s.logSink.(logs.StepLogChunkTailReader)
+	if !ok {
+		return []logs.StepLogChunk{}, false, nil
+	}
+
+	return reader.ListStepLogChunksTail(ctx, buildID, stepIndex, limit)
+}
+
 func (s *BuildService) GetBuildArtifacts(ctx context.Context, buildID string) ([]domain.BuildArtifact, error) {
 	if _, err := s.buildRepo.GetByID(ctx, buildID); err != nil {
 		return nil, mapRepoErr(err)

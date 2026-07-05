@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,11 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+)
+
+const (
+	defaultBuildLogsTail = 500
+	maxBuildLogsTail     = 5000
 )
 
 // GetBuildSteps godoc
@@ -111,25 +117,146 @@ func (h *BuildHandler) GetBuildLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logs, err := h.buildService.GetBuildLogs(r.Context(), id)
+	logRequest, err := parseBuildLogsRequest(r)
+	if err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	steps, err := h.buildService.GetBuildSteps(r.Context(), id)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	sort.Slice(steps, func(i, j int) bool {
+		return steps[i].StepIndex < steps[j].StepIndex
+	})
+
+	selectedStep, ok, err := resolveRequestedBuildLogStep(steps, logRequest)
+	if err != nil {
+		statusCode := http.StatusBadRequest
+		if errors.Is(err, buildsvc.ErrBuildStepNotFound) {
+			statusCode = http.StatusNotFound
+		}
+		writeErrorJSON(w, statusCode, "invalid_request", err.Error())
+		return
+	}
+
+	var selectedStepIndex *int
+	if ok {
+		selectedStepIndex = &selectedStep.StepIndex
+	}
+
+	chunks, truncated, err := h.buildService.GetBuildLogChunksTail(r.Context(), id, selectedStepIndex, logRequest.Tail)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
 
-	respLogs := make([]api.BuildLogResponse, 0, len(logs))
-	for _, logLine := range logs {
+	respLogs := make([]api.BuildLogResponse, 0, len(chunks))
+	for _, chunk := range chunks {
 		respLogs = append(respLogs, api.BuildLogResponse{
-			StepName:  logLine.StepName,
-			Timestamp: logLine.Timestamp.Format(time.RFC3339),
-			Message:   logLine.Message,
+			StepIndex: chunk.StepIndex,
+			StepName:  chunk.StepName,
+			Timestamp: chunk.CreatedAt.Format(time.RFC3339),
+			Stream:    string(chunk.Stream),
+			Line:      chunk.ChunkText,
+			Message:   chunk.ChunkText,
 		})
 	}
 
+	var selectedStepResp *api.BuildLogSelectedStepResponse
+	if ok {
+		selectedStepResp = &api.BuildLogSelectedStepResponse{
+			StepIndex: selectedStep.StepIndex,
+			Name:      selectedStep.Name,
+			Status:    string(selectedStep.Status),
+			ExitCode:  selectedStep.ExitCode,
+		}
+	}
+
 	writeDataJSON(w, http.StatusOK, api.BuildLogsResponse{
-		BuildID: id,
-		Logs:    respLogs,
+		BuildID:      id,
+		SelectedStep: selectedStepResp,
+		Logs:         respLogs,
+		Truncated:    truncated,
 	})
+}
+
+type buildLogsRequest struct {
+	Step   *int
+	Failed bool
+	Tail   int
+}
+
+func parseBuildLogsRequest(r *http.Request) (buildLogsRequest, error) {
+	query := r.URL.Query()
+	request := buildLogsRequest{}
+
+	stepRaw := strings.TrimSpace(query.Get("step"))
+	if stepRaw != "" {
+		stepIndex, err := strconv.Atoi(stepRaw)
+		if err != nil || stepIndex < 0 {
+			return buildLogsRequest{}, errors.New("step must be a non-negative integer")
+		}
+		request.Step = &stepIndex
+	}
+
+	failedRaw := strings.TrimSpace(query.Get("failed"))
+	if failedRaw != "" {
+		failed, err := strconv.ParseBool(failedRaw)
+		if err != nil {
+			return buildLogsRequest{}, errors.New("failed must be true or false")
+		}
+		request.Failed = failed
+	}
+
+	if request.Step != nil && request.Failed {
+		return buildLogsRequest{}, errors.New("step and failed cannot be used together")
+	}
+
+	tailRaw := strings.TrimSpace(query.Get("tail"))
+	if tailRaw == "" {
+		request.Tail = defaultBuildLogsTail
+		return request, nil
+	}
+	if tailRaw != "" {
+		tail, err := strconv.Atoi(tailRaw)
+		if err != nil || tail < 1 {
+			return buildLogsRequest{}, errors.New("tail must be a positive integer")
+		}
+		if tail > maxBuildLogsTail {
+			tail = maxBuildLogsTail
+		}
+		request.Tail = tail
+	}
+
+	return request, nil
+}
+
+func resolveRequestedBuildLogStep(steps []domain.BuildStep, request buildLogsRequest) (domain.BuildStep, bool, error) {
+	if request.Step != nil {
+		for _, step := range steps {
+			if step.StepIndex == *request.Step {
+				return step, true, nil
+			}
+		}
+		return domain.BuildStep{}, false, buildsvc.ErrBuildStepNotFound
+	}
+	if !request.Failed {
+		return domain.BuildStep{}, false, nil
+	}
+
+	failedSteps := make([]domain.BuildStep, 0, 1)
+	for _, step := range steps {
+		if step.Status == domain.BuildStepStatusFailed {
+			failedSteps = append(failedSteps, step)
+		}
+	}
+	if len(failedSteps) != 1 {
+		return domain.BuildStep{}, false, errors.New("failed step selection requires exactly one failed step")
+	}
+	return failedSteps[0], true, nil
 }
 
 // QueueBuild godoc

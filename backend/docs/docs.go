@@ -4211,14 +4211,40 @@ const docTemplate = `{
         "api.BuildLogResponse": {
             "type": "object",
             "properties": {
+                "line": {
+                    "type": "string"
+                },
                 "message": {
                     "type": "string"
+                },
+                "step_index": {
+                    "type": "integer"
                 },
                 "step_name": {
                     "type": "string"
                 },
+                "stream": {
+                    "type": "string"
+                },
                 "timestamp": {
                     "type": "string"
+                }
+            }
+        },
+        "api.BuildLogSelectedStepResponse": {
+            "type": "object",
+            "properties": {
+                "exit_code": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "step_index": {
+                    "type": "integer"
                 }
             }
         },
@@ -4241,6 +4267,12 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/api.BuildLogResponse"
                     }
+                },
+                "selected_step": {
+                    "$ref": "#/definitions/api.BuildLogSelectedStepResponse"
+                },
+                "truncated": {
+                    "type": "boolean"
                 }
             }
         },
