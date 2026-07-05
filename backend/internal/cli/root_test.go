@@ -228,11 +228,123 @@ func TestBuildStatusAndLogsCommands(t *testing.T) {
 	}
 }
 
+func TestBuildRetryCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1/rerun":
+			if r.Method != http.MethodPost {
+				t.Fatalf("expected POST, got %s", r.Method)
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":"build-2","build_number":13,"project_id":"project-1","project_name":"Coyote CI","job_id":"job-1","status":"queued","created_at":"2026-07-04T00:01:00Z","queued_at":"2026-07-04T00:01:00Z","started_at":null,"finished_at":null,"current_step_index":0,"attempt_number":2,"rerun_of_build_id":"build-1","error_message":null,"trigger_type":"rerun","trigger_kind":"manual","image":{"source_kind":"external"}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("ignored"), ConfigStore: configStore, Credentials: creds, Args: []string{"build", "retry", "build-1", "--yes"}}); code != 0 {
+		t.Fatalf("build retry exit code %d stderr=%s", code, stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "Retried build build-1 -> build-2") || !strings.Contains(got, "Status: queued") || !strings.Contains(got, "/builds/build-2") {
+		t.Fatalf("unexpected retry output: %s", got)
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("ignored"), ConfigStore: configStore, Credentials: creds, Args: []string{"build", "rerun", "build-1", "--yes", "--json"}}); code != 0 {
+		t.Fatalf("build rerun json exit code %d stderr=%s", code, stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode build retry json: %v", err)
+	}
+	retried, ok := payload["retried"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected retried object, got %+v", payload)
+	}
+	if retried["source_build_id"] != "build-1" || retried["build_id"] != "build-2" || retried["status"] != "queued" {
+		t.Fatalf("unexpected retry payload: %+v", payload)
+	}
+	if strings.Contains(stdout.String(), "Retried build") {
+		t.Fatalf("unexpected human prose in build retry JSON: %s", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+}
+
+func TestBuildRetryCommandRequiresExplicitYesWhenNonInteractive(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader(""), ConfigStore: configStore, Credentials: creds, Args: []string{"build", "retry", "build-1"}})
+	if code != 2 {
+		t.Fatalf("expected exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+	if called {
+		t.Fatal("expected retry command to stop before making an HTTP request")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no stdout, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "build retry requires --yes when stdin is not interactive") {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	code = Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader(""), ConfigStore: configStore, Credentials: creds, Args: []string{"build", "retry", "build-1", "--json"}})
+	if code != 2 {
+		t.Fatalf("expected json retry exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "build retry with --json requires --yes") {
+		t.Fatalf("unexpected json stderr: %s", stderr.String())
+	}
+}
+
 func TestBuildCommands_MissingTokenScopeErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		message := "api token does not have the required scope: build:read"
 		if strings.Contains(r.URL.Path, "/logs") {
 			message = "api token does not have the required scope: build:logs"
+		} else if strings.Contains(r.URL.Path, "/rerun") {
+			message = "api token does not have the required scope: build:run"
 		}
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"` + message + `"}}`))
@@ -260,6 +372,7 @@ func TestBuildCommands_MissingTokenScopeErrors(t *testing.T) {
 	}{
 		{name: "status missing scope", args: []string{"build", "status", "build-1", "--json"}, wantContains: "api token does not have the required scope: build:read"},
 		{name: "logs missing scope", args: []string{"build", "logs", "build-1", "--json"}, wantContains: "api token does not have the required scope: build:logs"},
+		{name: "retry missing scope", args: []string{"build", "retry", "build-1", "--yes", "--json"}, wantContains: "api token does not have the required scope: build:run"},
 	}
 
 	for _, tc := range tests {

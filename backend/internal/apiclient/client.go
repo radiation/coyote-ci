@@ -111,6 +111,14 @@ func (c *Client) GetBuild(ctx context.Context, buildID string) (api.BuildRespons
 	return envelope.Data, nil
 }
 
+func (c *Client) RerunBuild(ctx context.Context, buildID string) (api.BuildResponse, error) {
+	var envelope api.BuildEnvelope
+	if err := c.doJSON(ctx, http.MethodPost, buildResourcePath(buildID, "/rerun"), nil, &envelope); err != nil {
+		return api.BuildResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
 func (c *Client) GetBuildSteps(ctx context.Context, buildID string) ([]api.BuildStepResponse, error) {
 	var envelope api.BuildStepsEnvelope
 	if err := c.doJSON(ctx, http.MethodGet, buildResourcePath(buildID, "/steps"), nil, &envelope); err != nil {

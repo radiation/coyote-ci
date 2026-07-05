@@ -3,16 +3,24 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
+	"github.com/radiation/coyote-ci/backend/internal/cli/output"
 )
 
 type failWriter struct{}
 
 func (failWriter) Write([]byte) (int, error) {
 	return 0, errors.New("write failed")
+}
+
+type failReader struct{}
+
+func (failReader) Read([]byte) (int, error) {
+	return 0, errors.New("read failed")
 }
 
 func TestParseBuildLogsOptions(t *testing.T) {
@@ -194,6 +202,112 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 	if got := firstNonEmptyPtr(nil, stringPtr("  "), &author); got == nil || *got != author {
 		t.Fatalf("unexpected first non-empty ptr result: %+v", got)
 	}
+
+	retryPayload := makeBuildRetryPayload("https://example.com/base", "build-1", api.BuildResponse{ID: "build-2", Status: "queued"})
+	if retryPayload.Retried.SourceBuildID != "build-1" || retryPayload.Retried.BuildID != "build-2" || !strings.Contains(retryPayload.Retried.WebURL, "/base/builds/build-2") {
+		t.Fatalf("unexpected retry payload: %+v", retryPayload)
+	}
+	buf.Reset()
+	if err := writeBuildRetryHuman(buf, retryPayload); err != nil {
+		t.Fatalf("writeBuildRetryHuman failed: %v", err)
+	}
+	if got := buf.String(); !strings.Contains(got, "Retried build build-1 -> build-2") || !strings.Contains(got, "Status: queued") {
+		t.Fatalf("unexpected retry output: %s", got)
+	}
+	buf.Reset()
+	if err := writeBuildRetryHuman(buf, buildRetryPayload{Retried: buildRetryView{SourceBuildID: "build-1", BuildID: "build-1", Status: "queued"}}); err != nil {
+		t.Fatalf("writeBuildRetryHuman same-id failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Retried build build-1\n") {
+		t.Fatalf("expected same-id retry output, got %q", buf.String())
+	}
+	if err := writeBuildRetryHuman(failWriter{}, retryPayload); err == nil {
+		t.Fatal("expected writeBuildRetryHuman to surface write errors")
+	}
+	if isInteractiveInput(strings.NewReader("y\n")) {
+		t.Fatal("expected strings reader to be treated as non-interactive")
+	}
+}
+
+func TestConfirmBuildRetry(t *testing.T) {
+	originalInteractiveCheck := isInteractiveInputFunc
+	t.Cleanup(func() {
+		isInteractiveInputFunc = originalInteractiveCheck
+	})
+
+	t.Run("assume yes skips prompt", func(t *testing.T) {
+		app := &app{stdin: strings.NewReader("ignored"), stderr: &bytes.Buffer{}}
+		if err := app.confirmBuildRetry("build-1", output.ModeHuman, true); err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+	})
+
+	t.Run("json requires yes", func(t *testing.T) {
+		app := &app{stdin: strings.NewReader("ignored"), stderr: &bytes.Buffer{}}
+		err := app.confirmBuildRetry("build-1", output.ModeJSON, false)
+		var exitErr *ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "requires --yes") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("noninteractive requires yes", func(t *testing.T) {
+		isInteractiveInputFunc = func(io.Reader) bool { return false }
+		app := &app{stdin: strings.NewReader("ignored"), stderr: &bytes.Buffer{}}
+		err := app.confirmBuildRetry("build-1", output.ModeHuman, false)
+		var exitErr *ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "stdin is not interactive") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts confirmation", func(t *testing.T) {
+		isInteractiveInputFunc = func(io.Reader) bool { return true }
+		stderr := &bytes.Buffer{}
+		app := &app{stdin: strings.NewReader("yes\n"), stderr: stderr}
+		if err := app.confirmBuildRetry("build-1", output.ModeHuman, false); err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if !strings.Contains(stderr.String(), "Retry build build-1?") {
+			t.Fatalf("expected prompt in stderr, got %q", stderr.String())
+		}
+	})
+
+	t.Run("declines confirmation", func(t *testing.T) {
+		isInteractiveInputFunc = func(io.Reader) bool { return true }
+		app := &app{stdin: strings.NewReader("n\n"), stderr: &bytes.Buffer{}}
+		err := app.confirmBuildRetry("build-1", output.ModeHuman, false)
+		var exitErr *ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "canceled") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("stderr write failure is returned", func(t *testing.T) {
+		isInteractiveInputFunc = func(io.Reader) bool { return true }
+		app := &app{stdin: strings.NewReader("yes\n"), stderr: failWriter{}}
+		if err := app.confirmBuildRetry("build-1", output.ModeHuman, false); err == nil || err.Error() != "write failed" {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("stdin read failure is returned", func(t *testing.T) {
+		isInteractiveInputFunc = func(io.Reader) bool { return true }
+		app := &app{stdin: failReader{}, stderr: &bytes.Buffer{}}
+		if err := app.confirmBuildRetry("build-1", output.ModeHuman, false); err == nil || err.Error() != "read failed" {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("eof without yes cancels", func(t *testing.T) {
+		isInteractiveInputFunc = func(io.Reader) bool { return true }
+		app := &app{stdin: strings.NewReader(""), stderr: &bytes.Buffer{}}
+		err := app.confirmBuildRetry("build-1", output.ModeHuman, false)
+		var exitErr *ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "canceled") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
 func intPtr(value int) *int { return &value }
