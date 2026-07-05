@@ -49,9 +49,14 @@ func TestBuildNotificationService_NotifyTerminalBuild_SendsSlackWebhookSubscript
 		t.Fatalf("unexpected slack webhook urls %v", slackSender.webhookURLs)
 	}
 	message := slackSender.messages[0].Text
-	for _, want := range []string{":x: Build failed: backend-ci", "Project: <https://ci.example.com/projects/project-1|Payments API>", "Job: <https://ci.example.com/jobs/job-1|backend-ci>", "Build: <https://ci.example.com/builds/build-1|#42 (build-1)>", "Commit: <https://github.com/example/payments/commit/deadbeefcafebabedeadbeefcafebabedeadbeef|main @ deadbee>", "Author: Octo Cat (octo@example.com)", "Duration: 3m0s", "Diagnostic: <https://ci.example.com/builds/build-1|View build details>", "Build details: <https://ci.example.com/builds/build-1|View build>"} {
+	for _, want := range []string{":x: Build failed: backend-ci", "Project: <https://ci.example.com/projects/project-1|Payments API>", "Job: <https://ci.example.com/jobs/job-1|backend-ci>", "Build: <https://ci.example.com/builds/build-1|#42 (build-1)>", "Commit: <https://github.com/example/payments/commit/deadbeefcafebabedeadbeefcafebabedeadbeef|main @ deadbee>", "Author: Octo Cat (octo@example.com)", "Duration: 3m0s", "Diagnostic: <https://ci.example.com/builds/build-1|View build details>", "CLI:", "`coyote build status build-1`", "`coyote build logs build-1 --failed --tail 200`", "`coyote build retry build-1 --yes`", "Build details: <https://ci.example.com/builds/build-1|View build>"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("expected slack text to contain %q, got %q", want, message)
+		}
+	}
+	for _, unwanted := range []string{"coyote build logs build-1 --step", "coyote build rerun build-1 --yes", "step retry", "artifact download"} {
+		if strings.Contains(message, unwanted) {
+			t.Fatalf("did not expect slack text to contain %q, got %q", unwanted, message)
 		}
 	}
 	delivery := mustGetNotificationDelivery(t, deliveryRepo, "build-1", domain.NotificationEventTypeBuildFailed, "slack_webhook:"+target.ID)
@@ -97,10 +102,13 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureIncludesFailed
 	}
 	message := slackSender.messages[0].Text
 	wantReason := truncateNotificationText(stepError, maxNotificationFailureMessageLength)
-	for _, want := range []string{"Failed step: <https://ci.example.com/builds/build-1?step=0|Step 1 deploy &lt;prod&gt;>", "Reason: " + slackEscapeMrkdwnLabel(wantReason), "Exit code: 7", "Diagnostic: <https://ci.example.com/builds/build-1?step=0|Open failed step logs>"} {
+	for _, want := range []string{"Failed step: <https://ci.example.com/builds/build-1?step=0|Step 1 deploy &lt;prod&gt;>", "Reason: " + slackEscapeMrkdwnLabel(wantReason), "Exit code: 7", "Diagnostic: <https://ci.example.com/builds/build-1?step=0|Open failed step logs>", "`coyote build status build-1`", "`coyote build logs build-1 --step 0 --tail 200`", "`coyote build retry build-1 --yes`"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("expected slack text to contain %q, got %q", want, message)
 		}
+	}
+	if strings.Contains(message, "`coyote build logs build-1 --failed --tail 200`") {
+		t.Fatalf("expected known failed step to use step-specific logs command, got %q", message)
 	}
 	if strings.Contains(message, "build level failure text") {
 		t.Fatalf("expected failed step message to take precedence, got %q", message)
@@ -145,6 +153,11 @@ func TestBuildNotificationService_NotifyTerminalBuild_PersonalSlackFailureUsesFa
 	message := slackClient.messages[0].Text
 	if !strings.Contains(message, "Next: <https://ci.example.com/builds/build-1?step=0|Open failed step logs>") {
 		t.Fatalf("expected personal slack dm to use failed-step diagnostic label, got %q", message)
+	}
+	for _, want := range []string{"CLI:", "`coyote build status build-1`", "`coyote build logs build-1 --step 0 --tail 200`", "`coyote build retry build-1 --yes`"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected personal slack dm to contain %q, got %q", want, message)
+		}
 	}
 	if !strings.Contains(message, "Build: <https://ci.example.com/builds/build-1|View build>") {
 		t.Fatalf("expected personal slack dm to keep a separate build link when diagnostic differs, got %q", message)
@@ -222,6 +235,14 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackSuccessArtifactsRemai
 	for _, want := range []string{"Artifacts: <https://ci.example.com/artifacts/artifact-a|pkg-a.tgz (1.2.3)>", "<https://ci.example.com/artifacts/artifact-b|pkg-b.tgz>", "<https://ci.example.com/artifacts/artifact-c|pkg-c.tgz>", "<https://ci.example.com/artifacts?build_id=build-1|+1 more>"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("expected slack text to contain %q, got %q", want, message)
+		}
+	}
+	if !strings.Contains(message, "CLI: `coyote build status build-1`") {
+		t.Fatalf("expected success slack text to contain status command, got %q", message)
+	}
+	for _, unwanted := range []string{"coyote build retry build-1 --yes", "coyote build logs build-1"} {
+		if strings.Contains(message, unwanted) {
+			t.Fatalf("did not expect success slack text to contain %q, got %q", unwanted, message)
 		}
 	}
 	if strings.Contains(message, "artifact-d") {
@@ -343,6 +364,30 @@ func TestFormatBuildStatusSlackText_LinkPolish(t *testing.T) {
 		}
 		if strings.Contains(message, "<http") {
 			t.Fatalf("did not expect mrkdwn links without urls, got %q", message)
+		}
+	})
+
+	t.Run("cli hint helper uses failed-step fallback rules", func(t *testing.T) {
+		failedDetails := buildNotificationDetails{statusSummary: "failed", buildID: "build-1", failedStep: &buildNotificationStep{index: 2}}
+		joinedFailed := strings.Join(notificationSlackCLIHintLines(failedDetails), "\n")
+		for _, want := range []string{"CLI:", "`coyote build status build-1`", "`coyote build logs build-1 --step 2 --tail 200`", "`coyote build retry build-1 --yes`"} {
+			if !strings.Contains(joinedFailed, want) {
+				t.Fatalf("expected failed cli hints to contain %q, got %q", want, joinedFailed)
+			}
+		}
+
+		joinedFallback := strings.Join(notificationSlackCLIHintLines(buildNotificationDetails{statusSummary: "failed", buildID: "build-2"}), "\n")
+		if !strings.Contains(joinedFallback, "`coyote build logs build-2 --failed --tail 200`") {
+			t.Fatalf("expected fallback failed cli hint to use --failed, got %q", joinedFallback)
+		}
+
+		joinedSuccess := strings.Join(notificationSlackCLIHintLines(buildNotificationDetails{statusSummary: "succeeded", buildID: "build-3"}), "\n")
+		if joinedSuccess != "CLI: `coyote build status build-3`" {
+			t.Fatalf("unexpected success cli hint output: %q", joinedSuccess)
+		}
+
+		if got := notificationSlackCLIHintLines(buildNotificationDetails{statusSummary: "failed"}); got != nil {
+			t.Fatalf("expected missing build id to omit cli hints, got %q", strings.Join(got, "\n"))
 		}
 	})
 }

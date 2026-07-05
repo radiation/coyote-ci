@@ -29,7 +29,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - `backend/internal/service/build/notification_planning.go`: terminal-event planning, subscription selection, commit-author preference evaluation, and delivery-plan preparation.
 - `backend/internal/service/build/notification_destinations.go`: shared target and personal destination resolution for email, Slack webhooks, and personal Slack DM delivery.
 - `backend/internal/service/build/notification_execution.go`: delivery claiming, provider dispatch, and claim-safe sent/failure finalization.
-- `backend/internal/service/build/notification_format.go`: provider-neutral notification view-model construction, failed-step/actionable Slack rendering, public-link helpers, and compact artifact summary formatting.
+- `backend/internal/service/build/notification_format.go`: provider-neutral notification view-model construction, failed-step/actionable Slack rendering, copyable CLI hint formatting, public-link helpers, and compact artifact summary formatting.
 - `backend/internal/service/build/notification_delivery_policy.go`, `backend/internal/service/build/notification_delivery_errors.go`: retry policy, claim timing validation, and transport-aware failure classification.
 - `backend/internal/service/build/notification_recovery.go`, `backend/internal/service/build/notification_recovery_drain.go`: persisted delivery rehydration, shared recovery execution, and the server-owned retry/stale-claim recovery drain.
 - `backend/internal/service/build/slack_sender.go`: small incoming-webhook sender abstraction used by build notifications for Slack-compatible webhook delivery.

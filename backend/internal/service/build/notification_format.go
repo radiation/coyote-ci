@@ -314,6 +314,7 @@ func formatBuildStatusSlackText(details buildNotificationDetails) string {
 			lines = append(lines, artifactLine)
 		}
 	}
+	lines = append(lines, notificationSlackCLIHintLines(details)...)
 	if details.buildURL != "" {
 		lines = append(lines, fmt.Sprintf("Build details: %s", slackMrkdwnLink(details.buildURL, "View build")))
 	}
@@ -378,6 +379,7 @@ func formatPersonalBuildStatusSlackText(details buildNotificationDetails) string
 			lines = append(lines, artifactLine)
 		}
 	}
+	lines = append(lines, notificationSlackCLIHintLines(details)...)
 	if details.buildURL != "" && (details.statusSummary != "failed" || details.buildURL != details.diagnosticURL) {
 		lines = append(lines, fmt.Sprintf("Build: %s", slackMrkdwnLink(details.buildURL, "View build")))
 	}
@@ -438,6 +440,36 @@ func notificationDiagnosticLabel(details buildNotificationDetails) string {
 		return "Open failed step logs"
 	}
 	return "View build details"
+}
+
+func notificationSlackCLIHintLines(details buildNotificationDetails) []string {
+	buildID := strings.TrimSpace(details.buildID)
+	if buildID == "" {
+		return nil
+	}
+
+	statusCommand := notificationSlackInlineCode(fmt.Sprintf("coyote build status %s", buildID))
+	switch details.statusSummary {
+	case "failed":
+		logsCommand := notificationSlackInlineCode(notificationSlackFailedLogsCommand(buildID, details.failedStep))
+		retryCommand := notificationSlackInlineCode(fmt.Sprintf("coyote build retry %s --yes", buildID))
+		return []string{"CLI:", statusCommand, logsCommand, retryCommand}
+	case "succeeded":
+		return []string{fmt.Sprintf("CLI: %s", statusCommand)}
+	default:
+		return nil
+	}
+}
+
+func notificationSlackFailedLogsCommand(buildID string, failedStep *buildNotificationStep) string {
+	if failedStep != nil {
+		return fmt.Sprintf("coyote build logs %s --step %d --tail 200", buildID, failedStep.index)
+	}
+	return fmt.Sprintf("coyote build logs %s --failed --tail 200", buildID)
+}
+
+func notificationSlackInlineCode(command string) string {
+	return fmt.Sprintf("`%s`", strings.TrimSpace(command))
 }
 
 func formatNotificationArtifactSlackLine(details buildNotificationDetails) string {
