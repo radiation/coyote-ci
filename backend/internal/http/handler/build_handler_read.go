@@ -38,6 +38,9 @@ func (h *BuildHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
 	if projectID != "" && !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanReadProjectResources, "project membership is required") {
 		return
 	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRead) {
+		return
+	}
 
 	builds, err := h.buildService.ListBuildsPaged(r.Context(), repository.ListParams{
 		Limit:     limit,
@@ -86,6 +89,9 @@ func (h *BuildHandler) ListQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if projectID != "" && !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRead) {
 		return
 	}
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
@@ -140,6 +146,9 @@ func (h *BuildHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !authorizeProject(w, r, h.authMode, h.projectRoles, build.ProjectID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRead) {
 		return
 	}
 
@@ -238,6 +247,9 @@ func (h *BuildHandler) authorizeBuildDownload(w http.ResponseWriter, r *http.Req
 	if !authorizeProject(w, r, h.authMode, h.projectRoles, build.ProjectID, auth.CanDownloadArtifact, "project membership is required") {
 		return domain.Build{}, false
 	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeArtifactRead) {
+		return domain.Build{}, false
+	}
 	return build, true
 }
 
@@ -248,6 +260,9 @@ func (h *BuildHandler) authorizeBuildAction(w http.ResponseWriter, r *http.Reque
 		return domain.Build{}, false
 	}
 	if !authorizeProject(w, r, h.authMode, h.projectRoles, build.ProjectID, check, "project owner or maintainer is required") {
+		return domain.Build{}, false
+	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRun) {
 		return domain.Build{}, false
 	}
 	return build, true

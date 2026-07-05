@@ -28,8 +28,9 @@ func (r *APITokenRepository) Create(_ context.Context, token domain.APIToken) (d
 	if token.ID == "" {
 		token.ID = uuid.NewString()
 	}
+	token.Scopes = domain.CloneAPITokenScopes(token.Scopes)
 	r.tokens[token.ID] = token
-	return token, nil
+	return cloneAPIToken(token), nil
 }
 
 func (r *APITokenRepository) ListByUserID(_ context.Context, userID string) ([]domain.APIToken, error) {
@@ -39,7 +40,7 @@ func (r *APITokenRepository) ListByUserID(_ context.Context, userID string) ([]d
 	out := make([]domain.APIToken, 0)
 	for _, token := range r.tokens {
 		if token.UserID == userID {
-			out = append(out, token)
+			out = append(out, cloneAPIToken(token))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -57,7 +58,7 @@ func (r *APITokenRepository) GetByHash(_ context.Context, tokenHash string) (dom
 
 	for _, token := range r.tokens {
 		if token.TokenHash == tokenHash {
-			return token, nil
+			return cloneAPIToken(token), nil
 		}
 	}
 	return domain.APIToken{}, repository.ErrAPITokenNotFound
@@ -89,4 +90,9 @@ func (r *APITokenRepository) TouchLastUsed(_ context.Context, tokenID string, la
 	token.UpdatedAt = lastUsedAt
 	r.tokens[tokenID] = token
 	return nil
+}
+
+func cloneAPIToken(token domain.APIToken) domain.APIToken {
+	token.Scopes = domain.CloneAPITokenScopes(token.Scopes)
+	return token
 }

@@ -170,6 +170,57 @@ func TestAllowedProjectsForUserUsesBatchedMembershipLookup(t *testing.T) {
 	}
 }
 
+func TestRequireAPITokenScope(t *testing.T) {
+	user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+
+	t.Run("session auth bypasses token scope checks", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(auth.WithUser(context.Background(), user))
+		res := httptest.NewRecorder()
+		if !requireAPITokenScope(res, req, domain.APITokenScopeBuildRead) {
+			t.Fatal("expected session auth to bypass token scope checks")
+		}
+	})
+
+	t.Run("api token without scope is forbidden", func(t *testing.T) {
+		ctx := auth.WithUser(context.Background(), user)
+		ctx = auth.WithAuthMethod(ctx, auth.MethodAPIToken)
+		ctx = auth.WithAuthenticatedAPIToken(ctx, "token-1", []domain.APITokenScope{domain.APITokenScopeBuildLogs})
+		req := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
+		res := httptest.NewRecorder()
+		if requireAPITokenScope(res, req, domain.APITokenScopeBuildRead) {
+			t.Fatal("expected missing scope to be rejected")
+		}
+		payload := decodeErrorResponse(t, res)
+		if payload.Error.Code != "missing_token_scope" {
+			t.Fatalf("expected missing_token_scope code, got %+v", payload.Error)
+		}
+	})
+
+	t.Run("api token auth without token context is internal error", func(t *testing.T) {
+		ctx := auth.WithUser(context.Background(), user)
+		ctx = auth.WithAuthMethod(ctx, auth.MethodAPIToken)
+		req := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
+		res := httptest.NewRecorder()
+		if requireAPITokenScope(res, req, domain.APITokenScopeBuildRead) {
+			t.Fatal("expected missing token context to be rejected")
+		}
+		if res.Code != http.StatusInternalServerError {
+			t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, res.Code)
+		}
+	})
+
+	t.Run("api token with scope is allowed", func(t *testing.T) {
+		ctx := auth.WithUser(context.Background(), user)
+		ctx = auth.WithAuthMethod(ctx, auth.MethodAPIToken)
+		ctx = auth.WithAuthenticatedAPIToken(ctx, "token-1", []domain.APITokenScope{domain.APITokenScopeBuildRead})
+		req := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
+		res := httptest.NewRecorder()
+		if !requireAPITokenScope(res, req, domain.APITokenScopeBuildRead) {
+			t.Fatal("expected required scope to pass")
+		}
+	})
+}
+
 type stubProjectRoleLookup struct {
 	membership           domain.ProjectMembership
 	membershipsByProject map[string]domain.ProjectMembership

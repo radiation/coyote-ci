@@ -11,6 +11,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/auth"
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
@@ -37,6 +38,9 @@ func (h *BuildHandler) CreateBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanTriggerBuild, "project owner or maintainer is required") {
+		return
+	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRun) {
 		return
 	}
 
@@ -116,6 +120,9 @@ func (h *BuildHandler) CreatePipelineBuild(w http.ResponseWriter, r *http.Reques
 	if !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanTriggerBuild, "project owner or maintainer is required") {
 		return
 	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRun) {
+		return
+	}
 
 	build, err := h.buildService.CreateBuildFromPipeline(r.Context(), buildsvc.CreatePipelineBuildInput{
 		ProjectID:    projectID,
@@ -165,6 +172,9 @@ func (h *BuildHandler) CreateRepoBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanTriggerBuild, "project owner or maintainer is required") {
+		return
+	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRun) {
 		return
 	}
 

@@ -72,6 +72,23 @@ func authorizeProject(w http.ResponseWriter, r *http.Request, mode auth.Mode, lo
 	return true
 }
 
+func requireAPITokenScope(w http.ResponseWriter, r *http.Request, scope domain.APITokenScope) bool {
+	method, ok := auth.CurrentAuthMethod(r.Context())
+	if !ok || method != auth.MethodAPIToken {
+		return true
+	}
+	token, ok := auth.CurrentAuthenticatedAPIToken(r.Context())
+	if !ok {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "api token context is not available")
+		return false
+	}
+	if domain.HasAPITokenScope(token.Scopes, scope) {
+		return true
+	}
+	writeErrorJSON(w, http.StatusForbidden, "missing_token_scope", "api token does not have the required scope: "+string(scope))
+	return false
+}
+
 func projectAllowed(ctx context.Context, mode auth.Mode, lookup auth.ProjectRoleLookup, projectID string, check projectAuthorizer) (bool, error) {
 	mode = normalizedAuthMode(mode)
 	if mode == auth.ModeDisabled {

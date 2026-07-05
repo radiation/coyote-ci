@@ -49,7 +49,7 @@ func runAPITokenManagementFlow(t *testing.T, method auth.Method) {
 	h := NewAPITokenHandler(tokenService)
 	expiresAt := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
 
-	createReq := httptest.NewRequest(http.MethodPost, "/api/me/tokens", bytes.NewBufferString(`{"name":"fixtures","expires_at":"`+expiresAt+`"}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/me/tokens", bytes.NewBufferString(`{"name":"fixtures","expires_at":"`+expiresAt+`","scopes":["build:logs","build:read"]}`))
 	createReq = withUserAndAuthMethod(createReq, user, method)
 	createRes := httptest.NewRecorder()
 	h.CreateMyToken(createRes, createReq)
@@ -58,10 +58,11 @@ func runAPITokenManagementFlow(t *testing.T, method auth.Method) {
 	}
 	var createBody struct {
 		Data struct {
-			ID          string `json:"id"`
-			Name        string `json:"name"`
-			TokenPrefix string `json:"token_prefix"`
-			Token       string `json:"token"`
+			ID          string   `json:"id"`
+			Name        string   `json:"name"`
+			Scopes      []string `json:"scopes"`
+			TokenPrefix string   `json:"token_prefix"`
+			Token       string   `json:"token"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(createRes.Body.Bytes(), &createBody); err != nil {
@@ -69,6 +70,9 @@ func runAPITokenManagementFlow(t *testing.T, method auth.Method) {
 	}
 	if createBody.Data.ID == "" || createBody.Data.Token == "" || !strings.HasPrefix(createBody.Data.Token, service.APITokenPrefix) {
 		t.Fatalf("unexpected create token response: %+v", createBody.Data)
+	}
+	if len(createBody.Data.Scopes) != 2 || createBody.Data.Scopes[0] != "build:logs" || createBody.Data.Scopes[1] != "build:read" {
+		t.Fatalf("unexpected create scopes: %+v", createBody.Data.Scopes)
 	}
 	if strings.Contains(createRes.Body.String(), "token_hash") {
 		t.Fatalf("create response exposed token_hash: %s", createRes.Body.String())
@@ -83,6 +87,9 @@ func runAPITokenManagementFlow(t *testing.T, method auth.Method) {
 	}
 	if strings.Contains(listRes.Body.String(), "token_hash") || strings.Contains(listRes.Body.String(), createBody.Data.Token) {
 		t.Fatalf("list response exposed sensitive token data: %s", listRes.Body.String())
+	}
+	if !strings.Contains(listRes.Body.String(), `"scopes":["build:logs","build:read"]`) {
+		t.Fatalf("expected list response to include scopes, got %s", listRes.Body.String())
 	}
 
 	revokeReq := addURLParam(httptest.NewRequest(http.MethodDelete, "/api/me/tokens/"+createBody.Data.ID, nil), "token_id", createBody.Data.ID)

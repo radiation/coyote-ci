@@ -31,6 +31,10 @@ definitions:
         type: string
       revoked_at:
         type: string
+      scopes:
+        items:
+          type: string
+        type: array
       token_prefix:
         type: string
     type: object
@@ -552,6 +556,10 @@ definitions:
         type: string
       name:
         type: string
+      scopes:
+        items:
+          type: string
+        type: array
     type: object
   api.CreateBuildRequest:
     properties:
@@ -706,6 +714,10 @@ definitions:
         type: string
       revoked_at:
         type: string
+      scopes:
+        items:
+          type: string
+        type: array
       token:
         type: string
       token_prefix:

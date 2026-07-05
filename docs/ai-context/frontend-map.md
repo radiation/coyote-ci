@@ -17,7 +17,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Artifact browser/release/lineage UI: `ArtifactsPage.tsx`, `ArtifactLogicalBrowserPage.tsx`, `ArtifactDetailPage.tsx`, plus `components/ArtifactBrowser.tsx` and `components/BuildArtifactsSection.tsx`.
 - Queue operations UI: `QueuePage.tsx` and `WorkersPage.tsx`.
 - Project/job/build navigation: `ProjectsListPage.tsx`, `ProjectDetailPage.tsx`, `JobsListPage.tsx`, `JobDetailPage.tsx`, `JobCreatePage.tsx`, `BuildsListPage.tsx`.
-- Auth/token/user/credentials UI: `APITokensPage.tsx` for `/settings/my-api-tokens`, `UsersPage.tsx`, `CredentialsPage.tsx`, token API helpers in `api/personalTokenClient.ts`, and auth state in `auth.tsx` and `auth-context.ts`.
+- Auth/token/user/credentials UI: `APITokensPage.tsx` for `/settings/my-api-tokens`, `UsersPage.tsx`, `CredentialsPage.tsx`, token API helpers in `api/personalTokenClient.ts`, and auth state in `auth.tsx` and `auth-context.ts`; the personal token page now shows persisted scopes and creates least-privilege scoped tokens.
 - Notification target/subscription admin UI: `NotificationsPage.tsx` as the composition owner, plus `NotificationsPage.helpers.ts`, `NotificationsPage.sections.tsx`, `api/notificationClient.ts`, and `types/notification.ts`; this page handles both email and Slack webhook targets and keeps webhook secrets masked during edits.
 - Personal notification self-service UI: `MyNotificationsPage.tsx` as the composition owner, plus `MyNotificationsPage.helpers.ts`, `MyNotificationsPage.sections.tsx`, `api/notificationClient.ts`, and `types/notification.ts` for personal email targets, per-event email/Slack commit-author preferences, and personal Slack identity linking.
 

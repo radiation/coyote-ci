@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
 
 // GetBuildArtifacts godoc
@@ -32,6 +33,9 @@ func (h *BuildHandler) GetBuildArtifacts(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if _, ok := h.authorizeBuildRead(w, r, buildID); !ok {
+		return
+	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeArtifactRead) {
 		return
 	}
 

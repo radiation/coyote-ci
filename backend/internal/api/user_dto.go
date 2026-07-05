@@ -33,18 +33,20 @@ type MeResponse struct {
 }
 
 type CreateAPITokenRequest struct {
-	Name      string  `json:"name"`
-	ExpiresAt *string `json:"expires_at,omitempty"`
+	Name      string   `json:"name"`
+	ExpiresAt *string  `json:"expires_at,omitempty"`
+	Scopes    []string `json:"scopes,omitempty"`
 }
 
 type APITokenResponse struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	TokenPrefix string `json:"token_prefix"`
-	ExpiresAt   string `json:"expires_at,omitempty"`
-	LastUsedAt  string `json:"last_used_at,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	RevokedAt   string `json:"revoked_at,omitempty"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Scopes      []string `json:"scopes"`
+	TokenPrefix string   `json:"token_prefix"`
+	ExpiresAt   string   `json:"expires_at,omitempty"`
+	LastUsedAt  string   `json:"last_used_at,omitempty"`
+	CreatedAt   string   `json:"created_at"`
+	RevokedAt   string   `json:"revoked_at,omitempty"`
 }
 
 type APITokenListResponse struct {

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -22,15 +23,20 @@ func NewAPITokenRepository(db *sql.DB) *APITokenRepository {
 
 func (r *APITokenRepository) Create(ctx context.Context, token domain.APIToken) (domain.APIToken, error) {
 	const query = `
-		INSERT INTO api_tokens (id, user_id, name, token_hash, token_prefix, expires_at, last_used_at, revoked_at, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id, user_id, name, token_hash, token_prefix, expires_at, last_used_at, revoked_at, created_at, updated_at
+		INSERT INTO api_tokens (id, user_id, name, scopes, token_hash, token_prefix, expires_at, last_used_at, revoked_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, user_id, name, scopes, token_hash, token_prefix, expires_at, last_used_at, revoked_at, created_at, updated_at
 	`
+	scopesJSON, err := marshalAPITokenScopes(token.Scopes)
+	if err != nil {
+		return domain.APIToken{}, err
+	}
 
 	created, err := scanAPIToken(r.db.QueryRowContext(ctx, query,
 		token.ID,
 		token.UserID,
 		token.Name,
+		string(scopesJSON),
 		token.TokenHash,
 		token.TokenPrefix,
 		token.ExpiresAt,
@@ -47,7 +53,7 @@ func (r *APITokenRepository) Create(ctx context.Context, token domain.APIToken) 
 
 func (r *APITokenRepository) ListByUserID(ctx context.Context, userID string) (tokens []domain.APIToken, err error) {
 	const query = `
-		SELECT id, user_id, name, token_hash, token_prefix, expires_at, last_used_at, revoked_at, created_at, updated_at
+		SELECT id, user_id, name, scopes, token_hash, token_prefix, expires_at, last_used_at, revoked_at, created_at, updated_at
 		FROM api_tokens
 		WHERE user_id = $1
 		ORDER BY created_at ASC, id ASC
@@ -79,7 +85,7 @@ func (r *APITokenRepository) ListByUserID(ctx context.Context, userID string) (t
 
 func (r *APITokenRepository) GetByHash(ctx context.Context, tokenHash string) (domain.APIToken, error) {
 	const query = `
-		SELECT id, user_id, name, token_hash, token_prefix, expires_at, last_used_at, revoked_at, created_at, updated_at
+		SELECT id, user_id, name, scopes, token_hash, token_prefix, expires_at, last_used_at, revoked_at, created_at, updated_at
 		FROM api_tokens
 		WHERE token_hash = $1
 	`
@@ -138,6 +144,7 @@ func (r *APITokenRepository) TouchLastUsed(ctx context.Context, tokenID string, 
 
 func scanAPIToken(scanner rowScanner) (domain.APIToken, error) {
 	var token domain.APIToken
+	var scopesJSON []byte
 	var expiresAt sql.NullTime
 	var lastUsedAt sql.NullTime
 	var revokedAt sql.NullTime
@@ -145,6 +152,7 @@ func scanAPIToken(scanner rowScanner) (domain.APIToken, error) {
 		&token.ID,
 		&token.UserID,
 		&token.Name,
+		&scopesJSON,
 		&token.TokenHash,
 		&token.TokenPrefix,
 		&expiresAt,
@@ -156,6 +164,11 @@ func scanAPIToken(scanner rowScanner) (domain.APIToken, error) {
 	if err != nil {
 		return domain.APIToken{}, err
 	}
+	scopes, err := unmarshalAPITokenScopes(scopesJSON)
+	if err != nil {
+		return domain.APIToken{}, err
+	}
+	token.Scopes = scopes
 	if expiresAt.Valid {
 		token.ExpiresAt = &expiresAt.Time
 	}
@@ -174,4 +187,23 @@ func mapAPITokenWriteError(err error) error {
 		return repository.ErrUserNotFound
 	}
 	return err
+}
+
+func marshalAPITokenScopes(scopes []domain.APITokenScope) ([]byte, error) {
+	values := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		values = append(values, string(scope))
+	}
+	return json.Marshal(values)
+}
+
+func unmarshalAPITokenScopes(raw []byte) ([]domain.APITokenScope, error) {
+	if len(raw) == 0 {
+		return []domain.APITokenScope{}, nil
+	}
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil, err
+	}
+	return domain.NormalizeAPITokenScopes(values)
 }

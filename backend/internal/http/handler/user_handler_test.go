@@ -41,6 +41,32 @@ func TestUserHandler_GetMeUsesCurrentUser(t *testing.T) {
 	}
 }
 
+func TestUserHandler_GetMeSupportsAPITokenAuth(t *testing.T) {
+	handler := NewUserHandler(service.NewUserService(memory.NewUserRepository()), auth.ModeOIDC)
+	user := domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser}
+	ctx := auth.WithUser(httptest.NewRequest(http.MethodGet, "/api/me", nil).Context(), user)
+	ctx = auth.WithAuthMethod(ctx, auth.MethodAPIToken)
+	ctx = auth.WithAuthenticatedAPIToken(ctx, "token-1", []domain.APITokenScope{domain.APITokenScopeBuildRead})
+	request := httptest.NewRequest(http.MethodGet, "/api/me", nil).WithContext(ctx)
+	response := httptest.NewRecorder()
+
+	handler.GetMe(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, response.Code, response.Body.String())
+	}
+	var payload api.MeEnvelope
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response failed: %v", err)
+	}
+	if payload.Data.AuthMethod != string(auth.MethodAPIToken) {
+		t.Fatalf("expected auth method api_token, got %q", payload.Data.AuthMethod)
+	}
+	if payload.Data.User.Email != user.Email {
+		t.Fatalf("expected current user email %q, got %q", user.Email, payload.Data.User.Email)
+	}
+}
+
 func TestUserHandler_GetMeFallsBackToDisabledModeUser(t *testing.T) {
 	handler := NewUserHandler(service.NewUserService(memory.NewUserRepository()), auth.ModeDisabled)
 	response := httptest.NewRecorder()

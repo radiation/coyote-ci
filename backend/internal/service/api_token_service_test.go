@@ -23,7 +23,7 @@ func TestAPITokenService_CreateStoresHashAndReturnsPlaintextOnce(t *testing.T) {
 	}
 
 	tokenService := NewAPITokenService(tokenRepo, userRepo)
-	created, err := tokenService.CreateAPIToken(ctx, CreateAPITokenInput{UserID: user.ID, Name: "fixtures"})
+	created, err := tokenService.CreateAPIToken(ctx, CreateAPITokenInput{UserID: user.ID, Name: "fixtures", Scopes: []string{"build:logs", "artifact:read", "build:logs"}})
 	if err != nil {
 		t.Fatalf("create token failed: %v", err)
 	}
@@ -39,6 +39,9 @@ func TestAPITokenService_CreateStoresHashAndReturnsPlaintextOnce(t *testing.T) {
 	if created.Token.TokenPrefix == "" || created.Token.TokenPrefix == created.PlaintextToken {
 		t.Fatalf("expected short display prefix, got %q", created.Token.TokenPrefix)
 	}
+	if got, want := created.Token.Scopes, []domain.APITokenScope{domain.APITokenScopeArtifactRead, domain.APITokenScopeBuildLogs}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("expected canonical scopes %v, got %v", want, got)
+	}
 
 	listed, err := tokenService.ListAPITokens(ctx, user.ID)
 	if err != nil {
@@ -49,6 +52,9 @@ func TestAPITokenService_CreateStoresHashAndReturnsPlaintextOnce(t *testing.T) {
 	}
 	if listed[0].TokenHash == created.PlaintextToken || listed[0].TokenPrefix == created.PlaintextToken {
 		t.Fatalf("plaintext token leaked into stored metadata: %+v", listed[0])
+	}
+	if got := listed[0].Scopes; len(got) != 2 || got[0] != domain.APITokenScopeArtifactRead || got[1] != domain.APITokenScopeBuildLogs {
+		t.Fatalf("expected scopes in list response, got %v", got)
 	}
 }
 
@@ -73,8 +79,11 @@ func TestAPITokenService_AuthenticateAndRejectInvalidStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authenticate token failed: %v", err)
 	}
-	if authenticated.ID != user.ID {
-		t.Fatalf("expected owner %q, got %q", user.ID, authenticated.ID)
+	if authenticated.User.ID != user.ID {
+		t.Fatalf("expected owner %q, got %q", user.ID, authenticated.User.ID)
+	}
+	if authenticated.Token.ID != created.Token.ID {
+		t.Fatalf("expected token id %q, got %q", created.Token.ID, authenticated.Token.ID)
 	}
 	stored, err := tokenRepo.GetByHash(ctx, HashAPIToken(created.PlaintextToken))
 	if err != nil {
@@ -183,6 +192,9 @@ func TestAPITokenService_ValidationAndDependencyErrors(t *testing.T) {
 	if _, createErr := tokenService.CreateAPIToken(ctx, CreateAPITokenInput{UserID: user.ID, Name: "   "}); !errors.Is(createErr, ErrAPITokenNameRequired) {
 		t.Fatalf("expected name required error, got %v", createErr)
 	}
+	if _, createErr := tokenService.CreateAPIToken(ctx, CreateAPITokenInput{UserID: user.ID, Name: "cli", Scopes: []string{"invalid:scope"}}); !errors.Is(createErr, domain.ErrUnknownAPITokenScope) {
+		t.Fatalf("expected invalid scope error, got %v", createErr)
+	}
 
 	tokenService.random = strings.NewReader("short")
 	if _, createErr := tokenService.CreateAPIToken(ctx, CreateAPITokenInput{UserID: user.ID, Name: "cli"}); createErr == nil {
@@ -199,6 +211,25 @@ func TestAPITokenService_ValidationAndDependencyErrors(t *testing.T) {
 	short := APITokenPrefix + "short"
 	if got := DisplayAPITokenPrefix(short); got != short {
 		t.Fatalf("expected short display prefix %q, got %q", short, got)
+	}
+}
+
+func TestAPITokenScopeNormalization(t *testing.T) {
+	scopes, err := domain.NormalizeAPITokenScopes([]string{" build:run ", "build:read", "artifact:read", "build:read"})
+	if err != nil {
+		t.Fatalf("normalize scopes failed: %v", err)
+	}
+	want := []domain.APITokenScope{domain.APITokenScopeArtifactRead, domain.APITokenScopeBuildRead, domain.APITokenScopeBuildRun}
+	if len(scopes) != len(want) {
+		t.Fatalf("expected %d scopes, got %d (%v)", len(want), len(scopes), scopes)
+	}
+	for idx := range want {
+		if scopes[idx] != want[idx] {
+			t.Fatalf("expected scope[%d]=%q, got %q", idx, want[idx], scopes[idx])
+		}
+	}
+	if _, err := domain.NormalizeAPITokenScopes([]string{"build:read", "unknown"}); err == nil {
+		t.Fatal("expected unknown scope normalization error")
 	}
 }
 
@@ -227,8 +258,8 @@ func TestAPITokenService_AuthenticateDependencyErrors(t *testing.T) {
 	if authErr != nil {
 		t.Fatalf("expected touch failure to be ignored, got %v", authErr)
 	}
-	if authenticated.ID != user.ID {
-		t.Fatalf("expected authenticated user %q, got %q", user.ID, authenticated.ID)
+	if authenticated.User.ID != user.ID {
+		t.Fatalf("expected authenticated user %q, got %q", user.ID, authenticated.User.ID)
 	}
 }
 

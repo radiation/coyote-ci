@@ -956,6 +956,48 @@ fieldset {
   margin-bottom: 0;
 }
 
+.api-token-scope-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.api-token-scope-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface-muted);
+  cursor: pointer;
+}
+
+.api-token-scope-option:hover {
+  border-color: var(--color-accent);
+}
+
+.api-token-scope-option input {
+  margin-top: 2px;
+}
+
+.api-token-scope-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.api-token-scope-label {
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.api-token-scope-description {
+  margin: 0;
+  line-height: 1.4;
+}
+
 .table-action-button {
   min-height: 32px;
   padding: 6px 10px;
@@ -1010,6 +1052,13 @@ fieldset {
 
 .profile-details-list dd {
   margin: 0;
+}
+
+@media (max-width: 640px) {
+  .api-token-scope-option {
+    gap: 10px;
+    padding: 12px;
+  }
 }
 
 .my-notifications-target-summary {

@@ -38,6 +38,9 @@ func (h *BuildHandler) GetBuildSteps(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authorizeBuildRead(w, r, id); !ok {
 		return
 	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRead) {
+		return
+	}
 
 	steps, err := h.buildService.GetBuildSteps(r.Context(), id)
 	if err != nil {
@@ -102,6 +105,9 @@ func (h *BuildHandler) GetBuildLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, ok := h.authorizeBuildRead(w, r, id); !ok {
+		return
+	}
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildLogs) {
 		return
 	}
 
