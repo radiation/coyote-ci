@@ -156,6 +156,63 @@ func (c *Client) GetBuildLogs(ctx context.Context, buildID string, options Build
 	return envelope.Data, nil
 }
 
+func (c *Client) ListBuildArtifacts(ctx context.Context, buildID string) (api.BuildArtifactsResponse, error) {
+	var envelope api.BuildArtifactsEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, buildResourcePath(buildID, "/artifacts"), nil, &envelope); err != nil {
+		return api.BuildArtifactsResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
+func (c *Client) DownloadBuildArtifact(ctx context.Context, buildID string, artifactID string, writer io.Writer) error {
+	requestURL, err := resolveRequestURL(c.baseURL, buildArtifactDownloadPath(buildID, artifactID))
+	if err != nil {
+		return &Error{Kind: ErrorKindUnexpected, Message: "invalid request path", Err: err}
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
+	if err != nil {
+		return &Error{Kind: ErrorKindUnexpected, Message: "build request", Err: err}
+	}
+	request.Header.Set("Accept", "application/octet-stream")
+	if c.userAgent != "" {
+		request.Header.Set("User-Agent", c.userAgent)
+	}
+	if c.token != "" {
+		request.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return &Error{Kind: ErrorKindTransport, Message: "request failed", Err: err}
+	}
+	defer func() {
+		_ = response.Body.Close()
+	}()
+
+	requestID := strings.TrimSpace(response.Header.Get("X-Request-Id"))
+	if requestID == "" {
+		requestID = strings.TrimSpace(response.Header.Get("X-Request-ID"))
+	}
+
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return decodeErrorResponse(response, requestID)
+	}
+	if writer == nil {
+		_, _ = io.Copy(io.Discard, response.Body)
+		return nil
+	}
+	if _, err := io.Copy(writer, response.Body); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return &Error{Kind: ErrorKindUnexpected, Message: "stream artifact response", RequestID: requestID, Err: err}
+	}
+	return nil
+}
+
 func (c *Client) doJSON(ctx context.Context, method string, path string, requestBody io.Reader, out any) error {
 	requestURL, err := resolveRequestURL(c.baseURL, path)
 	if err != nil {
@@ -257,6 +314,10 @@ func resolveRequestURL(baseURL *url.URL, requestPath string) (*url.URL, error) {
 
 func buildResourcePath(buildID string, suffix string) string {
 	return "api/builds/" + url.PathEscape(strings.TrimSpace(buildID)) + suffix
+}
+
+func buildArtifactDownloadPath(buildID string, artifactID string) string {
+	return buildResourcePath(buildID, "/artifacts/"+url.PathEscape(strings.TrimSpace(artifactID))+"/download")
 }
 
 func decodeErrorResponse(response *http.Response, requestID string) error {

@@ -2,14 +2,18 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
+	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -17,6 +21,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/apiclient"
+	"github.com/radiation/coyote-ci/backend/internal/cli/atomicfile"
 	"github.com/radiation/coyote-ci/backend/internal/cli/output"
 )
 
@@ -63,13 +68,137 @@ type buildRetryView struct {
 	WebURL        string `json:"web_url,omitempty"`
 }
 
+type buildArtifactsPayload struct {
+	BuildID   string                  `json:"build_id"`
+	Artifacts []buildArtifactListView `json:"artifacts"`
+}
+
+type buildArtifactListView struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name,omitempty"`
+	Path        string  `json:"path"`
+	StepID      *string `json:"step_id,omitempty"`
+	SizeBytes   int64   `json:"size_bytes"`
+	ContentType *string `json:"content_type,omitempty"`
+	CreatedAt   string  `json:"created_at"`
+}
+
+type buildArtifactDownloadPayload struct {
+	BuildID    string                      `json:"build_id"`
+	Downloaded []buildArtifactDownloadView `json:"downloaded"`
+}
+
+type buildArtifactDownloadView struct {
+	ArtifactID string `json:"artifact_id"`
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	SizeBytes  int64  `json:"size_bytes"`
+}
+
+var replaceFileAtomicFunc = atomicfile.ReplaceFileAtomic
+
 var isInteractiveInputFunc = isInteractiveInput
 
 func (a *app) newBuildCommand() *cobra.Command {
 	command := &cobra.Command{Use: "build", Short: "Inspect and manage builds"}
 	command.AddCommand(a.newBuildStatusCommand())
 	command.AddCommand(a.newBuildLogsCommand())
+	command.AddCommand(a.newBuildArtifactsCommand())
 	command.AddCommand(a.newBuildRetryCommand())
+	return command
+}
+
+func (a *app) newBuildArtifactsCommand() *cobra.Command {
+	command := &cobra.Command{
+		Use:   "artifacts <build-id>",
+		Short: "List build artifacts",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resolved, err := a.resolveTarget()
+			if err != nil {
+				return err
+			}
+			client, err := a.newClient(resolved)
+			if err != nil {
+				return &ExitError{Code: 3, Err: err}
+			}
+
+			artifactsResponse, artifactsErr := client.ListBuildArtifacts(cmd.Context(), args[0])
+			if artifactsErr != nil {
+				return mapCommandError(artifactsErr)
+			}
+
+			payload := makeBuildArtifactsPayload(args[0], artifactsResponse.Artifacts)
+			return output.Write(resolved.OutputMode, a.stdout, func(w io.Writer) error {
+				return writeBuildArtifactsHuman(w, payload)
+			}, payload)
+		},
+	}
+	command.AddCommand(a.newBuildArtifactsDownloadCommand())
+	return command
+}
+
+func (a *app) newBuildArtifactsDownloadCommand() *cobra.Command {
+	var selector string
+	var outputPath string
+	var force bool
+
+	command := &cobra.Command{
+		Use:   "download <build-id>",
+		Short: "Download one build artifact",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			selector = strings.TrimSpace(selector)
+			if selector == "" {
+				return &ExitError{Code: 2, Err: errors.New("artifact selector is required")}
+			}
+
+			resolved, err := a.resolveTarget()
+			if err != nil {
+				return err
+			}
+			client, err := a.newClient(resolved)
+			if err != nil {
+				return &ExitError{Code: 3, Err: err}
+			}
+
+			artifactsResponse, artifactsErr := client.ListBuildArtifacts(cmd.Context(), args[0])
+			if artifactsErr != nil {
+				return mapCommandError(artifactsErr)
+			}
+
+			artifact, selectErr := selectBuildArtifact(artifactsResponse.Artifacts, selector)
+			if selectErr != nil {
+				return &ExitError{Code: 2, Err: selectErr}
+			}
+
+			destinationPath, pathErr := resolveArtifactOutputPath(outputPath, artifact)
+			if pathErr != nil {
+				return &ExitError{Code: 2, Err: pathErr}
+			}
+
+			written, downloadErr := downloadBuildArtifactToPath(cmd.Context(), client, args[0], artifact, destinationPath, force)
+			if downloadErr != nil {
+				var apiErr *apiclient.Error
+				if errors.As(downloadErr, &apiErr) {
+					return mapCommandError(downloadErr)
+				}
+				return &ExitError{Code: 1, Err: downloadErr}
+			}
+
+			displayPath := displayPath(destinationPath)
+			payload := buildArtifactDownloadPayload{
+				BuildID:    args[0],
+				Downloaded: []buildArtifactDownloadView{buildArtifactDownloadViewFromArtifact(artifact, displayPath, written)},
+			}
+			return output.Write(resolved.OutputMode, a.stdout, func(w io.Writer) error {
+				return writeBuildArtifactDownloadHuman(w, payload)
+			}, payload)
+		},
+	}
+	command.Flags().StringVar(&selector, "artifact", "", "Artifact ID, path, or name")
+	command.Flags().StringVar(&outputPath, "output", "", "Output file or directory path")
+	command.Flags().BoolVar(&force, "force", false, "Overwrite an existing file")
 	return command
 }
 
@@ -203,6 +332,29 @@ func parseBuildLogsOptions(stepRaw string, failed bool, tail int, tailSet bool) 
 	options.Failed = failed
 	options.Tail = tail
 	return options, nil
+}
+
+func makeBuildArtifactsPayload(buildID string, artifacts []api.BuildArtifactResponse) buildArtifactsPayload {
+	items := make([]buildArtifactListView, 0, len(artifacts))
+	for _, artifact := range sortBuildArtifacts(artifacts) {
+		stepID := trimStringPtr(artifact.StepID)
+		item := buildArtifactListView{
+			ID:          artifact.ID,
+			Name:        strings.TrimSpace(artifact.Name),
+			Path:        artifact.Path,
+			StepID:      stepID,
+			SizeBytes:   artifact.SizeBytes,
+			ContentType: trimStringPtr(artifact.ContentType),
+			CreatedAt:   artifact.CreatedAt,
+		}
+		items = append(items, item)
+	}
+
+	resolvedBuildID := strings.TrimSpace(buildID)
+	if len(artifacts) > 0 && strings.TrimSpace(artifacts[0].BuildID) != "" {
+		resolvedBuildID = artifacts[0].BuildID
+	}
+	return buildArtifactsPayload{BuildID: resolvedBuildID, Artifacts: items}
 }
 
 func makeBuildStatusPayload(serverURL string, build api.BuildResponse, steps []api.BuildStepResponse) buildStatusPayload {
@@ -348,6 +500,44 @@ func writeBuildLogsHuman(w io.Writer, response api.BuildLogsResponse) error {
 	return nil
 }
 
+func writeBuildArtifactsHuman(w io.Writer, payload buildArtifactsPayload) error {
+	if _, err := fmt.Fprintf(w, "Artifacts for build %s\n", payload.BuildID); err != nil {
+		return err
+	}
+	if len(payload.Artifacts) == 0 {
+		_, err := fmt.Fprintln(w, "\nNo artifacts found")
+		return err
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "ID\tSTEP ID\tPATH\tSIZE\tTYPE"); err != nil {
+		return err
+	}
+	for _, artifact := range payload.Artifacts {
+		step := "-"
+		if artifact.StepID != nil {
+			step = *artifact.StepID
+		}
+		contentType := "-"
+		if artifact.ContentType != nil && strings.TrimSpace(*artifact.ContentType) != "" {
+			contentType = *artifact.ContentType
+		}
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", artifact.ID, step, artifact.Path, formatArtifactSize(artifact.SizeBytes), contentType); err != nil {
+			return err
+		}
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "\nDownload:\n  coyote build artifacts download %s --artifact %s\n", payload.BuildID, payload.Artifacts[0].ID); err != nil {
+		return err
+	}
+	return nil
+}
+
 func makeBuildRetryPayload(serverURL string, sourceBuildID string, build api.BuildResponse) buildRetryPayload {
 	return buildRetryPayload{
 		Retried: buildRetryView{
@@ -375,6 +565,15 @@ func writeBuildRetryHuman(w io.Writer, payload buildRetryPayload) error {
 	}
 	if retried.WebURL != "" {
 		if _, err := fmt.Fprintf(w, "URL: %s\n", retried.WebURL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeBuildArtifactDownloadHuman(w io.Writer, payload buildArtifactDownloadPayload) error {
+	for _, item := range payload.Downloaded {
+		if _, err := fmt.Fprintf(w, "Downloaded %s -> %s\n", item.Name, item.Path); err != nil {
 			return err
 		}
 	}
@@ -412,6 +611,272 @@ func isInteractiveInput(reader io.Reader) bool {
 		return false
 	}
 	return term.IsTerminal(int(file.Fd()))
+}
+
+func sortBuildArtifacts(artifacts []api.BuildArtifactResponse) []api.BuildArtifactResponse {
+	sorted := append([]api.BuildArtifactResponse(nil), artifacts...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].CreatedAt != sorted[j].CreatedAt {
+			return sorted[i].CreatedAt > sorted[j].CreatedAt
+		}
+		if sorted[i].Path != sorted[j].Path {
+			return sorted[i].Path < sorted[j].Path
+		}
+		return sorted[i].ID < sorted[j].ID
+	})
+	return sorted
+}
+
+func trimStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func selectBuildArtifact(artifacts []api.BuildArtifactResponse, selector string) (api.BuildArtifactResponse, error) {
+	trimmed := strings.TrimSpace(selector)
+	for _, artifact := range artifacts {
+		if artifact.ID == trimmed {
+			return artifact, nil
+		}
+	}
+
+	pathMatches := make([]api.BuildArtifactResponse, 0)
+	nameMatches := make([]api.BuildArtifactResponse, 0)
+	for _, artifact := range artifacts {
+		if strings.TrimSpace(artifact.Path) == trimmed {
+			pathMatches = append(pathMatches, artifact)
+		}
+		if artifactNameMatches(artifact, trimmed) {
+			nameMatches = append(nameMatches, artifact)
+		}
+	}
+
+	if len(pathMatches) == 1 {
+		return pathMatches[0], nil
+	}
+	if len(pathMatches) > 1 {
+		return api.BuildArtifactResponse{}, fmt.Errorf("artifact selector %q matched multiple artifact paths; use an artifact ID", trimmed)
+	}
+	if len(nameMatches) == 1 {
+		return nameMatches[0], nil
+	}
+	if len(nameMatches) > 1 {
+		return api.BuildArtifactResponse{}, fmt.Errorf("artifact selector %q matched multiple artifact names; use an artifact ID or full path", trimmed)
+	}
+	return api.BuildArtifactResponse{}, fmt.Errorf("artifact %q not found for build", trimmed)
+}
+
+func artifactNameMatches(artifact api.BuildArtifactResponse, selector string) bool {
+	if strings.TrimSpace(artifact.Name) == selector {
+		return true
+	}
+	return path.Base(strings.TrimSpace(artifact.Path)) == selector
+}
+
+func resolveArtifactOutputPath(outputPath string, artifact api.BuildArtifactResponse) (string, error) {
+	trimmedOutput := strings.TrimSpace(outputPath)
+	if trimmedOutput == "" {
+		defaultName, err := artifactDownloadName(artifact)
+		if err != nil {
+			return "", err
+		}
+		return defaultName, nil
+	}
+
+	if info, err := os.Stat(trimmedOutput); err == nil {
+		if info.IsDir() {
+			defaultName, nameErr := artifactDownloadName(artifact)
+			if nameErr != nil {
+				return "", nameErr
+			}
+			return filepath.Join(trimmedOutput, defaultName), nil
+		}
+		return trimmedOutput, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+
+	if strings.HasSuffix(trimmedOutput, string(os.PathSeparator)) || strings.HasSuffix(trimmedOutput, "/") {
+		defaultName, nameErr := artifactDownloadName(artifact)
+		if nameErr != nil {
+			return "", nameErr
+		}
+		return filepath.Join(trimmedOutput, defaultName), nil
+	}
+	return trimmedOutput, nil
+}
+
+func artifactDownloadName(artifact api.BuildArtifactResponse) (string, error) {
+	relativePath, err := artifactDownloadRelativePath(artifact)
+	if err != nil {
+		return "", err
+	}
+	base := path.Base(relativePath)
+	if base == "" || base == "." || base == "/" {
+		return "", fmt.Errorf("artifact path %q does not resolve to a safe filename", artifact.Path)
+	}
+	return base, nil
+}
+
+func artifactDownloadRelativePath(artifact api.BuildArtifactResponse) (string, error) {
+	for _, candidate := range []string{strings.TrimSpace(artifact.Path), strings.TrimSpace(artifact.Name), strings.TrimSpace(artifact.ID)} {
+		if candidate == "" {
+			continue
+		}
+		relativePath, err := validateArtifactRelativePath(candidate)
+		if err != nil {
+			return "", err
+		}
+		return relativePath, nil
+	}
+	return "", errors.New("artifact does not have a safe local filename")
+}
+
+func validateArtifactRelativePath(candidate string) (string, error) {
+	normalized := strings.TrimSpace(strings.ReplaceAll(candidate, "\\", "/"))
+	if normalized == "" {
+		return "", errors.New("artifact does not have a safe local filename")
+	}
+	if path.IsAbs(normalized) || strings.HasPrefix(normalized, "/") || hasWindowsDrivePrefix(normalized) {
+		return "", fmt.Errorf("artifact path %q is not safe for local output", candidate)
+	}
+	for _, segment := range strings.Split(normalized, "/") {
+		if segment == ".." {
+			return "", fmt.Errorf("artifact path %q is not safe for local output", candidate)
+		}
+	}
+	cleaned := path.Clean(normalized)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", fmt.Errorf("artifact path %q is not safe for local output", candidate)
+	}
+	return cleaned, nil
+}
+
+func hasWindowsDrivePrefix(value string) bool {
+	if len(value) < 2 || value[1] != ':' {
+		return false
+	}
+	first := value[0]
+	return (first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z')
+}
+
+type countingWriter struct {
+	writer io.Writer
+	count  int64
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	n, err := w.writer.Write(p)
+	w.count += int64(n)
+	return n, err
+}
+
+func downloadBuildArtifactToPath(ctx context.Context, client *apiclient.Client, buildID string, artifact api.BuildArtifactResponse, destinationPath string, force bool) (int64, error) {
+	trimmedDestination := strings.TrimSpace(destinationPath)
+	if trimmedDestination == "" {
+		return 0, errors.New("output path is required")
+	}
+
+	parentDir := filepath.Dir(trimmedDestination)
+	if parentDir == "" {
+		parentDir = "."
+	}
+	if parentDir != "." {
+		if err := os.MkdirAll(parentDir, 0o755); err != nil {
+			return 0, err
+		}
+	}
+	destinationPerm := os.FileMode(0o600)
+	if info, err := os.Stat(trimmedDestination); err == nil {
+		destinationPerm = info.Mode().Perm()
+		if !force {
+			return 0, fmt.Errorf("output file already exists: %s (use --force to overwrite)", trimmedDestination)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return 0, err
+	}
+	if !force {
+		if _, err := os.Stat(trimmedDestination); err == nil {
+			return 0, fmt.Errorf("output file already exists: %s (use --force to overwrite)", trimmedDestination)
+		}
+	}
+
+	tempFile, err := os.CreateTemp(parentDir, ".coyote-artifact-*")
+	if err != nil {
+		return 0, err
+	}
+	tempPath := tempFile.Name()
+	defer func() {
+		_ = os.Remove(tempPath)
+	}()
+	if err := tempFile.Chmod(destinationPerm); err != nil {
+		return 0, err
+	}
+
+	counting := &countingWriter{writer: tempFile}
+	if err := client.DownloadBuildArtifact(ctx, buildID, artifact.ID, counting); err != nil {
+		_ = tempFile.Close()
+		return 0, err
+	}
+	if err := tempFile.Sync(); err != nil {
+		_ = tempFile.Close()
+		return 0, err
+	}
+	if err := tempFile.Close(); err != nil {
+		return 0, err
+	}
+	if err := replaceFileAtomicFunc(tempPath, trimmedDestination); err != nil {
+		return 0, err
+	}
+	return counting.count, nil
+}
+
+func buildArtifactDownloadViewFromArtifact(artifact api.BuildArtifactResponse, destinationPath string, written int64) buildArtifactDownloadView {
+	sizeBytes := written
+	if sizeBytes == 0 && artifact.SizeBytes > 0 {
+		sizeBytes = artifact.SizeBytes
+	}
+	name, err := artifactDownloadName(artifact)
+	if err != nil {
+		name = strings.TrimSpace(artifact.ID)
+	}
+	return buildArtifactDownloadView{
+		ArtifactID: artifact.ID,
+		Name:       name,
+		Path:       destinationPath,
+		SizeBytes:  sizeBytes,
+	}
+}
+
+func displayPath(pathValue string) string {
+	trimmed := strings.TrimSpace(pathValue)
+	if trimmed == "" || filepath.IsAbs(trimmed) || strings.HasPrefix(trimmed, ".") {
+		return trimmed
+	}
+	return "." + string(os.PathSeparator) + trimmed
+}
+
+func formatArtifactSize(sizeBytes int64) string {
+	if sizeBytes < 1024 {
+		return fmt.Sprintf("%d B", sizeBytes)
+	}
+	units := []string{"KB", "MB", "GB", "TB"}
+	size := float64(sizeBytes)
+	unitIndex := -1
+	for size >= 1024 && unitIndex < len(units)-1 {
+		size /= 1024
+		unitIndex++
+	}
+	if size >= 10 || size == float64(int64(size)) {
+		return fmt.Sprintf("%.0f %s", size, units[unitIndex])
+	}
+	return fmt.Sprintf("%.1f %s", size, units[unitIndex])
 }
 
 func logHeader(selected *api.BuildLogSelectedStepResponse, entry api.BuildLogResponse) string {

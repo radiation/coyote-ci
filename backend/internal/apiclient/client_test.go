@@ -1,6 +1,7 @@
 package apiclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -17,6 +18,12 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
 }
 
 func TestClient_GetMeSendsBearerAndUserAgent(t *testing.T) {
@@ -91,6 +98,150 @@ func TestClient_BuildInspectionMethods(t *testing.T) {
 	}
 	if logs.BuildID != "build-1" || logs.SelectedStep == nil || logs.SelectedStep.Name != "test" || len(logs.Logs) != 1 {
 		t.Fatalf("unexpected logs response: %+v", logs)
+	}
+}
+
+func TestClient_BuildArtifactMethods(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1/artifacts":
+			if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+				t.Fatalf("expected bearer header, got %q", got)
+			}
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","artifacts":[{"id":"artifact-1","build_id":"build-1","name":"report.xml","path":"reports/report.xml","size_bytes":42,"content_type":"application/xml","storage_provider":"filesystem","download_url_path":"/builds/build-1/artifacts/artifact-1/download","created_at":"2026-07-05T00:00:00Z"}]}}`))
+		case "/api/builds/build-1/artifacts/artifact-1/download":
+			if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+				t.Fatalf("expected bearer header, got %q", got)
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte("artifact-body"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	artifacts, listErr := client.ListBuildArtifacts(context.Background(), "build-1")
+	if listErr != nil {
+		t.Fatalf("list build artifacts: %v", listErr)
+	}
+	if artifacts.BuildID != "build-1" || len(artifacts.Artifacts) != 1 || artifacts.Artifacts[0].Path != "reports/report.xml" {
+		t.Fatalf("unexpected artifacts response: %+v", artifacts)
+	}
+
+	var body bytes.Buffer
+	if downloadErr := client.DownloadBuildArtifact(context.Background(), "build-1", "artifact-1", &body); downloadErr != nil {
+		t.Fatalf("download build artifact: %v", downloadErr)
+	}
+	if body.String() != "artifact-body" {
+		t.Fatalf("unexpected artifact body: %q", body.String())
+	}
+}
+
+func TestClient_DownloadBuildArtifactReturnsTypedError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"api token does not have the required scope: artifact:read"}}`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var sink bytes.Buffer
+	err = client.DownloadBuildArtifact(context.Background(), "build-1", "artifact-1", &sink)
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected typed api error, got %T", err)
+	}
+	if apiErr.Kind != ErrorKindAuthorization || apiErr.Code != "missing_token_scope" {
+		t.Fatalf("unexpected api error: %+v", apiErr)
+	}
+}
+
+func TestClient_ListBuildArtifactsReturnsTypedError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"api token does not have the required scope: artifact:read"}}`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = client.ListBuildArtifacts(context.Background(), "build-1")
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected typed api error, got %T", err)
+	}
+	if apiErr.Kind != ErrorKindAuthorization || apiErr.Code != "missing_token_scope" {
+		t.Fatalf("unexpected api error: %+v", apiErr)
+	}
+}
+
+func TestClient_DownloadBuildArtifactNilWriterAndWriterFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-ID", "req-alt")
+		_, _ = w.Write([]byte("artifact-body"))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "", "", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if nilWriterErr := client.DownloadBuildArtifact(context.Background(), "build-1", "artifact-1", nil); nilWriterErr != nil {
+		t.Fatalf("expected nil writer download to succeed, got %v", nilWriterErr)
+	}
+
+	err = client.DownloadBuildArtifact(context.Background(), "build-1", "artifact-1", failingWriter{})
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected typed api error, got %T", err)
+	}
+	if apiErr.Kind != ErrorKindUnexpected || apiErr.RequestID != "req-alt" || !strings.Contains(apiErr.Error(), "stream artifact response") {
+		t.Fatalf("unexpected api error: %+v", apiErr)
+	}
+}
+
+func TestClient_DownloadBuildArtifactTransportAndCancellation(t *testing.T) {
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client, err := New("https://example.com", "token", "agent", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return nil, context.Canceled
+	})})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if canceledErr := client.DownloadBuildArtifact(canceledCtx, "build-1", "artifact-1", &bytes.Buffer{}); !errors.Is(canceledErr, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", canceledErr)
+	}
+
+	client, err = New("https://example.com", "token", "agent", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	})})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	err = client.DownloadBuildArtifact(context.Background(), "build-1", "artifact-1", &bytes.Buffer{})
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected typed api error, got %T", err)
+	}
+	if apiErr.Kind != ErrorKindTransport || !strings.Contains(apiErr.Error(), "request failed") {
+		t.Fatalf("unexpected transport error: %+v", apiErr)
 	}
 }
 
@@ -328,6 +479,16 @@ func TestResolveRequestURLRejectsAbsoluteRequestURLs(t *testing.T) {
 	_, err := resolveRequestURL(baseURL, "https://other.example.com/api/me")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestResolveRequestURLEmptyPathAndDownloadPathEncoding(t *testing.T) {
+	baseURL := &url.URL{Scheme: "https", Host: "example.com", Path: "/coyote"}
+	if _, err := resolveRequestURL(baseURL, "   "); err == nil {
+		t.Fatal("expected empty path error")
+	}
+	if got := buildArtifactDownloadPath(" build 1 ", "artifact/1"); got != "api/builds/build%201/artifacts/artifact%2F1/download" {
+		t.Fatalf("unexpected download path: %s", got)
 	}
 }
 
