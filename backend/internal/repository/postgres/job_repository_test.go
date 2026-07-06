@@ -184,3 +184,31 @@ func TestJobRepository_FindByProjectIDAndName(t *testing.T) {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
+
+func TestJobRepository_FindByProjectIDAndNameDefaultsLimitToOne(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+
+	repo := NewJobRepository(db)
+	mock.ExpectQuery("SELECT id, project_id, name, priority, repository_url").
+		WithArgs("project-1", "missing", 1).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "name", "priority", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}))
+	mock.ExpectClose()
+
+	jobs, err := repo.FindByProjectIDAndName(context.Background(), "project-1", "missing", 0)
+	if err != nil {
+		t.Fatalf("FindByProjectIDAndName with default limit failed: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("expected 0 jobs, got %d", len(jobs))
+	}
+	if closeErr := db.Close(); closeErr != nil {
+		t.Fatalf("failed to close sqlmock db: %v", closeErr)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}

@@ -274,6 +274,58 @@ func TestJobService_ResolveJobByProjectAndName(t *testing.T) {
 	}
 }
 
+func TestJobService_ResolveJobByProjectAndNameValidationAndErrors(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	jobService := NewJobService(jobRepo, nil).WithProjectRepository(projectRepo)
+
+	if _, err := jobService.ResolveJobByProjectAndName(context.Background(), " ", "backend-ci"); !errors.Is(err, ErrProjectIDRequired) {
+		t.Fatalf("expected ErrProjectIDRequired, got %v", err)
+	}
+	if _, err := jobService.ResolveJobByProjectAndName(context.Background(), "00000000-0000-0000-0000-000000000111", " "); !errors.Is(err, ErrJobNameRequired) {
+		t.Fatalf("expected ErrJobNameRequired, got %v", err)
+	}
+	if _, err := jobService.ResolveJobByProjectAndName(context.Background(), "00000000-0000-0000-0000-000000000111", "backend-ci"); !errors.Is(err, repository.ErrProjectNotFound) {
+		t.Fatalf("expected ErrProjectNotFound, got %v", err)
+	}
+
+	project, err := projectRepo.Create(context.Background(), domain.Project{
+		ID:        "00000000-0000-0000-0000-000000000555",
+		Name:      "Platform",
+		Slug:      "platform",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	job, err := jobRepo.Create(context.Background(), domain.Job{
+		ID:            "job-1",
+		ProjectID:     project.ID,
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       true,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	resolved, err := jobService.ResolveJobByProjectAndName(context.Background(), project.ID, job.Name)
+	if err != nil {
+		t.Fatalf("resolve job without build service failed: %v", err)
+	}
+	if resolved.ID != job.ID {
+		t.Fatalf("expected resolved id %q, got %q", job.ID, resolved.ID)
+	}
+	if resolved.LatestBuild != nil {
+		t.Fatalf("expected nil latest build without build service, got %+v", resolved.LatestBuild)
+	}
+}
+
 func TestJobService_CreateJobFailureQueuesNoInitialBuild(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()

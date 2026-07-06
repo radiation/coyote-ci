@@ -2,13 +2,30 @@ package cli
 
 import (
 	"bytes"
+	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
+	"github.com/radiation/coyote-ci/backend/internal/cli/config"
+	"github.com/radiation/coyote-ci/backend/internal/cli/credentials"
 )
+
+type failOnWriteWriter struct {
+	failAt int
+	writes int
+}
+
+func (w *failOnWriteWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == w.failAt {
+		return 0, errors.New("write failed")
+	}
+	return len(p), nil
+}
 
 func TestProjectDiscoveryHelpers(t *testing.T) {
 	desc := "Core services"
@@ -45,6 +62,37 @@ func TestProjectDiscoveryHelpers(t *testing.T) {
 
 	if got := resourceWebURL("://bad", "/projects/project-1"); got != "" {
 		t.Fatalf("expected invalid server url to return blank web url, got %q", got)
+	}
+
+	var list bytes.Buffer
+	if err := writeProjectListHuman(&list, projectListPayload{Projects: []projectView{project}}); err != nil {
+		t.Fatalf("write project list human: %v", err)
+	}
+	for _, want := range []string{"Projects", "project-1", "platform", "Platform"} {
+		if !strings.Contains(list.String(), want) {
+			t.Fatalf("expected %q in project list output, got %s", want, list.String())
+		}
+	}
+
+	list.Reset()
+	if err := writeProjectListHuman(&list, projectListPayload{}); err != nil {
+		t.Fatalf("write empty project list human: %v", err)
+	}
+	if strings.TrimSpace(list.String()) != "No projects found." {
+		t.Fatalf("unexpected empty project list output: %q", list.String())
+	}
+
+	if err := writeProjectHuman(errWriter{}, projectPayload{Project: project}); err == nil || !strings.Contains(err.Error(), "write failed") {
+		t.Fatalf("expected writeProjectHuman to surface writer error, got %v", err)
+	}
+	if err := writeProjectListHuman(errWriter{}, projectListPayload{}); err == nil || !strings.Contains(err.Error(), "write failed") {
+		t.Fatalf("expected writeProjectListHuman empty branch to surface writer error, got %v", err)
+	}
+	for failAt := 1; failAt <= 6; failAt++ {
+		writer := &failOnWriteWriter{failAt: failAt}
+		if err := writeProjectHuman(writer, projectPayload{Project: project}); err == nil || !strings.Contains(err.Error(), "write failed") {
+			t.Fatalf("expected writeProjectHuman failAt=%d to return write error, got %v", failAt, err)
+		}
 	}
 }
 
@@ -116,6 +164,52 @@ func TestJobDiscoveryHelpers(t *testing.T) {
 		t.Fatalf("expected generic jobs heading, got %s", human.String())
 	}
 
+	human.Reset()
+	if err := writeJobListHuman(&human, jobListPayload{ProjectSelector: "platform", Jobs: []jobView{{ID: "job-1", Name: "backend-ci", Enabled: true}}}); err != nil {
+		t.Fatalf("write project-scoped job list human: %v", err)
+	}
+	if !strings.Contains(human.String(), "Jobs for project platform") {
+		t.Fatalf("expected project-scoped jobs heading, got %s", human.String())
+	}
+
+	human.Reset()
+	if err := writeJobListHuman(&human, jobListPayload{}); err != nil {
+		t.Fatalf("write empty job list human: %v", err)
+	}
+	if strings.TrimSpace(human.String()) != "No jobs found." {
+		t.Fatalf("unexpected empty job list output: %q", human.String())
+	}
+
+	minimalJob := job
+	minimalJob.RepositoryURL = ""
+	minimalJob.DefaultRef = ""
+	minimalJob.TriggerMode = ""
+	minimalJob.PipelineSource = ""
+	minimalJob.LatestBuild = nil
+	minimalJob.WebURL = ""
+	human.Reset()
+	if err := writeJobHuman(&human, jobPayload{Job: minimalJob}); err != nil {
+		t.Fatalf("write minimal job human: %v", err)
+	}
+	for _, unwanted := range []string{"Repo:", "Ref:", "Trigger:", "Pipeline:", "Latest:", "URL:"} {
+		if strings.Contains(human.String(), unwanted) {
+			t.Fatalf("did not expect %q in minimal job output: %s", unwanted, human.String())
+		}
+	}
+
+	if err := writeJobHuman(errWriter{}, jobPayload{Job: job}); err == nil || !strings.Contains(err.Error(), "write failed") {
+		t.Fatalf("expected writeJobHuman to surface writer error, got %v", err)
+	}
+	if err := writeJobListHuman(errWriter{}, jobListPayload{}); err == nil || !strings.Contains(err.Error(), "write failed") {
+		t.Fatalf("expected writeJobListHuman empty branch to surface writer error, got %v", err)
+	}
+	for failAt := 1; failAt <= 10; failAt++ {
+		writer := &failOnWriteWriter{failAt: failAt}
+		if err := writeJobHuman(writer, jobPayload{Job: job}); err == nil || !strings.Contains(err.Error(), "write failed") {
+			t.Fatalf("expected writeJobHuman failAt=%d to return write error, got %v", failAt, err)
+		}
+	}
+
 	if looksLikeDirectJobID("") {
 		t.Fatal("expected blank selector not to look like direct id")
 	}
@@ -127,5 +221,48 @@ func TestJobDiscoveryHelpers(t *testing.T) {
 	}
 	if looksLikeDirectJobID("backend-ci") {
 		t.Fatal("expected plain name not to look like direct id")
+	}
+}
+
+func TestDiscoveryCommandsResolveTargetErrors(t *testing.T) {
+	store := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := store.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: "https://stored.example.com", CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if err := creds.Set("context:local", "stored-token"); err != nil {
+		t.Fatalf("set credential: %v", err)
+	}
+	application := &app{configStore: store, credentials: creds, flagContext: "missing", stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}, getenv: func(string) string { return "" }}
+
+	projectListCmd := application.newProjectListCommand()
+	if err := projectListCmd.RunE(projectListCmd, nil); err == nil || !strings.Contains(err.Error(), "unknown context \"missing\"") {
+		t.Fatalf("expected project list resolveTarget error, got %v", err)
+	}
+
+	projectShowCmd := application.newProjectShowCommand()
+	if err := projectShowCmd.RunE(projectShowCmd, []string{"platform"}); err == nil || !strings.Contains(err.Error(), "unknown context \"missing\"") {
+		t.Fatalf("expected project show resolveTarget error, got %v", err)
+	}
+
+	jobListCmd := application.newJobListCommand()
+	if err := jobListCmd.Flags().Set("project", "platform"); err != nil {
+		t.Fatalf("set job list project flag: %v", err)
+	}
+	if err := jobListCmd.RunE(jobListCmd, nil); err == nil || !strings.Contains(err.Error(), "unknown context \"missing\"") {
+		t.Fatalf("expected job list resolveTarget error, got %v", err)
+	}
+
+	jobShowCmd := application.newJobShowCommand()
+	if err := jobShowCmd.Flags().Set("project", "platform"); err != nil {
+		t.Fatalf("set job show project flag: %v", err)
+	}
+	if err := jobShowCmd.RunE(jobShowCmd, []string{"backend-ci"}); err == nil || !strings.Contains(err.Error(), "unknown context \"missing\"") {
+		t.Fatalf("expected job show resolveTarget error, got %v", err)
 	}
 }
