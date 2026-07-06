@@ -464,6 +464,51 @@ func TestJobHandler_ResolveJobSelectorWithinProjectUsesDirectIDAndRejectsMismatc
 	}
 }
 
+func TestJobHandler_ResolveJobSelectorWithinProjectFallsBackToNameWhenUUIDLookupMisses(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := &selectorAwareJobRepository{JobRepository: repositorymemory.NewJobRepository()}
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
+	h := NewJobHandler(jobSvc)
+
+	project, err := projectRepo.Create(context.Background(), domain.Project{ID: "project-1", Name: "Platform", Slug: "platform", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	selector := "00000000-0000-0000-0000-000000000999"
+	job, err := jobRepo.Create(context.Background(), domain.Job{
+		ID:            "job-real-id",
+		ProjectID:     project.ID,
+		Name:          selector,
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       true,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+	jobRepo.getByIDCalls = nil
+	jobRepo.findByProjectAndNameCalls = nil
+
+	resolved, resolveErr := h.resolveJobSelectorWithinProject(context.Background(), selector, project.ID)
+	if resolveErr != nil {
+		t.Fatalf("resolve uuid-like name fallback failed: %v", resolveErr)
+	}
+	if resolved.ID != job.ID || resolved.Name != selector {
+		t.Fatalf("unexpected resolved job: %+v", resolved)
+	}
+	if len(jobRepo.getByIDCalls) == 0 || jobRepo.getByIDCalls[0] != selector {
+		t.Fatalf("expected direct uuid lookup attempt, got %+v", jobRepo.getByIDCalls)
+	}
+	if len(jobRepo.findByProjectAndNameCalls) == 0 {
+		t.Fatalf("expected name fallback lookup, got %+v", jobRepo.findByProjectAndNameCalls)
+	}
+}
+
 type selectorAwareJobRepository struct {
 	repository.JobRepository
 	getByIDCalls              []string

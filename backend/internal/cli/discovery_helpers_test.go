@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/cli/config"
 	"github.com/radiation/coyote-ci/backend/internal/cli/credentials"
+	"github.com/radiation/coyote-ci/backend/internal/cli/output"
 )
 
 type failOnWriteWriter struct {
@@ -25,6 +27,12 @@ func (w *failOnWriteWriter) Write(p []byte) (int, error) {
 		return 0, errors.New("write failed")
 	}
 	return len(p), nil
+}
+
+type failReadReader struct{}
+
+func (failReadReader) Read([]byte) (int, error) {
+	return 0, errors.New("read failed")
 }
 
 func TestProjectDiscoveryHelpers(t *testing.T) {
@@ -213,14 +221,119 @@ func TestJobDiscoveryHelpers(t *testing.T) {
 	if looksLikeDirectJobID("") {
 		t.Fatal("expected blank selector not to look like direct id")
 	}
-	if !looksLikeDirectJobID("job-123") {
-		t.Fatal("expected job- prefix selector to look like direct id")
+	if looksLikeDirectJobID("job-123") {
+		t.Fatal("expected job- prefix selector without uuid format not to look like direct id")
 	}
 	if !looksLikeDirectJobID(uuid.NewString()) {
 		t.Fatal("expected uuid selector to look like direct id")
 	}
 	if looksLikeDirectJobID("backend-ci") {
 		t.Fatal("expected plain name not to look like direct id")
+	}
+}
+
+func TestJobRunHelpersAndValidation(t *testing.T) {
+	payload := makeJobRunPayload("https://ci.example.com/base?token=ignored#frag", api.JobResponse{
+		ID:        "job-1",
+		ProjectID: "project-1",
+		Name:      "backend-ci",
+	}, " main ", api.BuildResponse{ID: "build-1", Status: "queued"})
+	if payload.Run.JobName != "backend-ci" || payload.Run.Ref != "main" || payload.Run.ProjectID != "project-1" {
+		t.Fatalf("unexpected job run payload: %+v", payload)
+	}
+	if payload.Run.WebURL != "https://ci.example.com/base/builds/build-1" {
+		t.Fatalf("unexpected job run web url: %q", payload.Run.WebURL)
+	}
+
+	var human bytes.Buffer
+	if err := writeJobRunHuman(&human, payload); err != nil {
+		t.Fatalf("write job run human: %v", err)
+	}
+	for _, want := range []string{"Started job backend-ci", "Build:  build-1", "Status: queued", "coyote build status build-1"} {
+		if !strings.Contains(human.String(), want) {
+			t.Fatalf("expected %q in job run output, got %s", want, human.String())
+		}
+	}
+
+	human.Reset()
+	if err := writeJobRunHuman(&human, jobRunPayload{Run: jobRunView{JobID: "job-2", BuildID: "build-2", Status: "queued"}}); err != nil {
+		t.Fatalf("write job run fallback human: %v", err)
+	}
+	if !strings.Contains(human.String(), "Started job job-2") {
+		t.Fatalf("expected job id fallback in output, got %s", human.String())
+	}
+	if err := writeJobRunHuman(errWriter{}, payload); err == nil || !strings.Contains(err.Error(), "write failed") {
+		t.Fatalf("expected writeJobRunHuman to surface writer error, got %v", err)
+	}
+
+	originalInteractiveCheck := isInteractiveInputFunc
+	t.Cleanup(func() {
+		isInteractiveInputFunc = originalInteractiveCheck
+	})
+
+	application := &app{stdin: strings.NewReader("ignored"), stderr: &bytes.Buffer{}}
+	if err := application.validateJobRunInvocation(output.ModeHuman, true); err != nil {
+		t.Fatalf("assume yes should bypass validation, got %v", err)
+	}
+
+	err := application.validateJobRunInvocation(output.ModeJSON, false)
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "requires --yes") {
+		t.Fatalf("unexpected json validation error: %v", err)
+	}
+
+	isInteractiveInputFunc = func(io.Reader) bool { return false }
+	err = application.validateJobRunInvocation(output.ModeHuman, false)
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "stdin is not interactive") {
+		t.Fatalf("unexpected noninteractive validation error: %v", err)
+	}
+
+	isInteractiveInputFunc = func(io.Reader) bool { return true }
+	if validationErr := application.validateJobRunInvocation(output.ModeHuman, false); validationErr != nil {
+		t.Fatalf("interactive validation should pass, got %v", validationErr)
+	}
+	if confirmErr := application.confirmJobRun("backend-ci", "main", true); confirmErr != nil {
+		t.Fatalf("assume yes confirmation should pass, got %v", confirmErr)
+	}
+
+	stderr := &bytes.Buffer{}
+	application = &app{stdin: strings.NewReader("yes\n"), stderr: stderr}
+	if confirmErr := application.confirmJobRun("backend-ci", "main", false); confirmErr != nil {
+		t.Fatalf("expected confirmation success, got %v", confirmErr)
+	}
+	if !strings.Contains(stderr.String(), "Run job backend-ci on ref main?") {
+		t.Fatalf("expected prompt in stderr, got %q", stderr.String())
+	}
+
+	stderr.Reset()
+	application = &app{stdin: strings.NewReader("yes\n"), stderr: stderr}
+	if confirmErr := application.confirmJobRun("   ", "main", false); confirmErr != nil {
+		t.Fatalf("expected blank-name confirmation success, got %v", confirmErr)
+	}
+	if !strings.Contains(stderr.String(), "Run job job on ref main?") {
+		t.Fatalf("expected generic job label prompt, got %q", stderr.String())
+	}
+
+	application = &app{stdin: strings.NewReader("n\n"), stderr: &bytes.Buffer{}}
+	err = application.confirmJobRun("backend-ci", "main", false)
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "job run canceled") {
+		t.Fatalf("unexpected declined confirmation error: %v", err)
+	}
+
+	application = &app{stdin: strings.NewReader("yes\n"), stderr: errWriter{}}
+	if confirmErr := application.confirmJobRun("backend-ci", "main", false); confirmErr == nil || confirmErr.Error() != "write failed" {
+		t.Fatalf("unexpected stderr write error: %v", confirmErr)
+	}
+
+	application = &app{stdin: failReadReader{}, stderr: &bytes.Buffer{}}
+	if confirmErr := application.confirmJobRun("backend-ci", "main", false); confirmErr == nil || confirmErr.Error() != "read failed" {
+		t.Fatalf("unexpected stdin read error: %v", confirmErr)
+	}
+
+	application = &app{stdin: strings.NewReader(""), stderr: &bytes.Buffer{}}
+	err = application.confirmJobRun("backend-ci", "main", false)
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "job run canceled") {
+		t.Fatalf("unexpected eof confirmation error: %v", err)
 	}
 }
 

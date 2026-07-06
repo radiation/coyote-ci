@@ -505,6 +505,74 @@ func TestClient_RunJobResolvesNameWithinProject(t *testing.T) {
 	}
 }
 
+func TestClient_RunJobResolvesJobPrefixedNameWithinProject(t *testing.T) {
+	requestPaths := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPaths = append(requestPaths, r.URL.String())
+		switch r.URL.String() {
+		case "/api/jobs/resolve?name=job-lint&project=default":
+			_, _ = w.Write([]byte(`{"data":{"id":"job-1","project_id":"project-1","name":"job-lint","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}}`))
+		case "/api/jobs/job-1/run":
+			_, _ = w.Write([]byte(`{"data":{"id":"build-2","project_id":"project-1","project_name":"Coyote","job_id":"job-1","status":"queued","created_at":"2026-07-04T00:02:00Z","queued_at":"2026-07-04T00:02:00Z","started_at":null,"finished_at":null,"current_step_index":0,"attempt_number":1,"error_message":null,"trigger_type":"manual","trigger_kind":"manual","image":{"source_kind":"external"}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	build, runErr := client.RunJob(context.Background(), "job-lint", RunJobOptions{Project: "default", Ref: "main"})
+	if runErr != nil {
+		t.Fatalf("run job by job-prefixed name: %v", runErr)
+	}
+	if build.ID != "build-2" {
+		t.Fatalf("unexpected build response: %+v", build)
+	}
+	if len(requestPaths) != 2 || requestPaths[0] != "/api/jobs/resolve?name=job-lint&project=default" || requestPaths[1] != "/api/jobs/job-1/run" {
+		t.Fatalf("unexpected request path sequence: %+v", requestPaths)
+	}
+}
+
+func TestClient_RunJobDirectUUIDSkipsResolveAndOmitsJSONContentTypeWithoutRef(t *testing.T) {
+	directJobID := "00000000-0000-0000-0000-000000000111"
+	requestPaths := make([]string, 0, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPaths = append(requestPaths, r.URL.String())
+		if r.URL.String() != "/api/jobs/"+directJobID+"/run" {
+			t.Fatalf("unexpected request path %q", r.URL.String())
+		}
+		if got := r.Header.Get("Content-Type"); got != "" {
+			t.Fatalf("expected empty content type without request body, got %q", got)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		if len(body) != 0 {
+			t.Fatalf("expected empty request body, got %q", string(body))
+		}
+		_, _ = w.Write([]byte(`{"data":{"id":"build-2","project_id":"project-1","project_name":"Coyote","job_id":"` + directJobID + `","status":"queued","created_at":"2026-07-04T00:02:00Z","queued_at":"2026-07-04T00:02:00Z","started_at":null,"finished_at":null,"current_step_index":0,"attempt_number":1,"error_message":null,"trigger_type":"manual","trigger_kind":"manual","image":{"source_kind":"external"}}}`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	build, runErr := client.RunJob(context.Background(), directJobID, RunJobOptions{Project: "default"})
+	if runErr != nil {
+		t.Fatalf("run job by direct uuid: %v", runErr)
+	}
+	if build.ID != "build-2" || len(requestPaths) != 1 {
+		t.Fatalf("unexpected direct uuid run result: build=%+v requestPaths=%+v", build, requestPaths)
+	}
+}
+
 func TestClient_GetBuildLogsWithoutExplicitTailUsesServerDefaultBehavior(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.String() != "/api/builds/build-1/logs" {

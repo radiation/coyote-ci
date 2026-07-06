@@ -243,6 +243,38 @@ func TestProjectHandler_ListProjectJobsUnknownSlugReturnsNotFound(t *testing.T) 
 	}
 }
 
+func TestProjectHandler_GetProjectUUIDSelectorFallsBackToSlugWhenIDNotFound(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := &selectorAwareProjectRepository{ProjectRepository: memory.NewProjectRepository(jobRepo)}
+	projectService := service.NewProjectService(projectRepo)
+	h := NewProjectHandler(projectService, service.NewJobService(jobRepo, buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)).WithProjectRepository(projectRepo))
+
+	uuidSlug := "00000000-0000-0000-0000-000000000999"
+	project, err := projectRepo.Create(context.Background(), serviceProject("project-slug-uuid", "Platform", uuidSlug))
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	projectRepo.getByIDCalls = nil
+	projectRepo.getBySlugCalls = nil
+
+	getReq := addURLParam(httptest.NewRequest(http.MethodGet, "/projects/"+uuidSlug, nil), "id", uuidSlug)
+	getRes := httptest.NewRecorder()
+	h.GetProject(getRes, getReq)
+	if getRes.Code != http.StatusOK {
+		t.Fatalf("expected uuid-slug fallback status %d, got %d body=%s", http.StatusOK, getRes.Code, getRes.Body.String())
+	}
+	data := decodeDataMap(t, getRes)
+	if data["id"] != project.ID || data["slug"] != uuidSlug {
+		t.Fatalf("unexpected fallback project payload: %+v", data)
+	}
+	if len(projectRepo.getByIDCalls) == 0 || projectRepo.getByIDCalls[0] != uuidSlug {
+		t.Fatalf("expected uuid lookup attempt before slug fallback, got %+v", projectRepo.getByIDCalls)
+	}
+	if len(projectRepo.getBySlugCalls) == 0 || projectRepo.getBySlugCalls[0] != uuidSlug {
+		t.Fatalf("expected slug fallback lookup, got %+v", projectRepo.getBySlugCalls)
+	}
+}
+
 func serviceProject(id string, name string, slug string) domain.Project {
 	now := time.Now().UTC()
 	return domain.Project{ID: id, Name: name, Slug: slug, CreatedAt: now, UpdatedAt: now}

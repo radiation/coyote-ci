@@ -450,10 +450,8 @@ func looksLikeDirectJobID(selector string) bool {
 	if trimmedSelector == "" {
 		return false
 	}
-	if _, err := uuid.Parse(trimmedSelector); err == nil {
-		return true
-	}
-	return strings.HasPrefix(trimmedSelector, "job-")
+	_, err := uuid.Parse(trimmedSelector)
+	return err == nil
 }
 
 func resourceWebURL(serverURL string, resourcePath string) string {
