@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -158,6 +159,18 @@ func (h *BuildHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := toBuildResponse(build, projectLookup[build.ProjectID])
+	jobLookup, err := h.jobLookup(r.Context(), []domain.Build{build})
+	if err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+	resp.JobName = jobLookup[jobIDValue(build.JobID)]
+	steps, err := h.buildService.GetBuildSteps(r.Context(), build.ID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	resp.CurrentSteps = currentBuildSteps(steps)
 	if h.versionTags != nil && build.JobID != nil && build.ManagedImageVersionID != nil {
 		tags, listErr := h.versionTags.ListManagedImageVersionTags(r.Context(), *build.ManagedImageVersionID)
 		if listErr != nil {
@@ -216,6 +229,65 @@ func (h *BuildHandler) projectLookup(ctx context.Context, builds []domain.Build)
 		lookup[project.ID] = &copyProject
 	}
 	return lookup, nil
+}
+
+func (h *BuildHandler) jobLookup(ctx context.Context, builds []domain.Build) (map[string]*string, error) {
+	lookup := make(map[string]*string)
+	if h.jobs == nil || len(builds) == 0 {
+		return lookup, nil
+	}
+	jobIDs := make([]string, 0, len(builds))
+	for _, build := range builds {
+		if build.JobID == nil {
+			continue
+		}
+		trimmed := strings.TrimSpace(*build.JobID)
+		if trimmed == "" {
+			continue
+		}
+		jobIDs = append(jobIDs, trimmed)
+	}
+	if len(jobIDs) == 0 {
+		return lookup, nil
+	}
+	jobs, err := h.jobs.GetJobsByIDs(ctx, jobIDs)
+	if err != nil {
+		return nil, err
+	}
+	for idx := range jobs {
+		job := jobs[idx]
+		name := strings.TrimSpace(job.Name)
+		if name == "" {
+			continue
+		}
+		nameCopy := name
+		lookup[job.ID] = &nameCopy
+	}
+	return lookup, nil
+}
+
+func currentBuildSteps(steps []domain.BuildStep) []api.BuildCurrentStepResponse {
+	current := make([]api.BuildCurrentStepResponse, 0)
+	for _, step := range steps {
+		if step.Status != domain.BuildStepStatusRunning {
+			continue
+		}
+		current = append(current, toBuildCurrentStepResponse(step))
+	}
+	sort.Slice(current, func(i, j int) bool {
+		if current[i].Index == current[j].Index {
+			return current[i].ID < current[j].ID
+		}
+		return current[i].Index < current[j].Index
+	})
+	return current
+}
+
+func jobIDValue(jobID *string) string {
+	if jobID == nil {
+		return ""
+	}
+	return strings.TrimSpace(*jobID)
 }
 
 func (h *BuildHandler) writeProjectLookupError(w http.ResponseWriter, err error) {

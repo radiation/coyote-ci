@@ -1,6 +1,7 @@
 package apiclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
 )
@@ -163,6 +166,37 @@ func (c *Client) RerunBuild(ctx context.Context, buildID string) (api.BuildRespo
 	return envelope.Data, nil
 }
 
+type RunJobOptions struct {
+	Project string
+	Ref     string
+}
+
+func (c *Client) RunJob(ctx context.Context, selector string, options RunJobOptions) (api.BuildResponse, error) {
+	requestPath := jobResourcePath(selector, "/run")
+	if trimmedProject := strings.TrimSpace(options.Project); trimmedProject != "" && !looksLikeDirectJobID(selector) {
+		job, err := c.GetJob(ctx, selector, GetJobOptions{Project: trimmedProject})
+		if err != nil {
+			return api.BuildResponse{}, err
+		}
+		requestPath = jobResourcePath(job.ID, "/run")
+	}
+
+	var requestBody io.Reader
+	if trimmedRef := strings.TrimSpace(options.Ref); trimmedRef != "" {
+		payload, err := json.Marshal(api.RunJobRequest{Ref: &trimmedRef})
+		if err != nil {
+			return api.BuildResponse{}, &Error{Kind: ErrorKindUnexpected, Message: "encode request", Err: err}
+		}
+		requestBody = bytes.NewReader(payload)
+	}
+
+	var envelope api.BuildEnvelope
+	if err := c.doJSON(ctx, http.MethodPost, requestPath, requestBody, &envelope); err != nil {
+		return api.BuildResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
 func (c *Client) GetBuildSteps(ctx context.Context, buildID string) ([]api.BuildStepResponse, error) {
 	var envelope api.BuildStepsEnvelope
 	if err := c.doJSON(ctx, http.MethodGet, buildResourcePath(buildID, "/steps"), nil, &envelope); err != nil {
@@ -267,6 +301,9 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, request
 		return &Error{Kind: ErrorKindUnexpected, Message: "build request", Err: err}
 	}
 	request.Header.Set("Accept", "application/json")
+	if requestBody != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	if c.userAgent != "" {
 		request.Header.Set("User-Agent", c.userAgent)
 	}
@@ -366,6 +403,15 @@ func projectResourcePath(selector string, suffix string) string {
 
 func jobResourcePath(selector string, suffix string) string {
 	return "api/jobs/" + url.PathEscape(strings.TrimSpace(selector)) + suffix
+}
+
+func looksLikeDirectJobID(selector string) bool {
+	trimmedSelector := strings.TrimSpace(selector)
+	if trimmedSelector == "" {
+		return false
+	}
+	_, err := uuid.Parse(trimmedSelector)
+	return err == nil
 }
 
 func buildArtifactDownloadPath(buildID string, artifactID string) string {

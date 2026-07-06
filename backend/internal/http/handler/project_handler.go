@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/auth"
@@ -222,12 +223,14 @@ func (h *ProjectHandler) ListProjectJobs(w http.ResponseWriter, r *http.Request)
 
 func (h *ProjectHandler) resolveProjectSelector(ctx context.Context, selector string) (domain.Project, error) {
 	trimmedSelector := strings.TrimSpace(selector)
-	project, err := h.projects.GetProject(ctx, trimmedSelector)
-	if err == nil {
-		return project, nil
-	}
-	if !errors.Is(err, repository.ErrProjectNotFound) {
-		return domain.Project{}, err
+	if _, err := uuid.Parse(trimmedSelector); err == nil {
+		project, projectErr := h.projects.GetProject(ctx, trimmedSelector)
+		if projectErr == nil {
+			return project, nil
+		}
+		if !errors.Is(projectErr, repository.ErrProjectNotFound) {
+			return domain.Project{}, projectErr
+		}
 	}
 	return h.projects.GetProjectBySlug(ctx, trimmedSelector)
 }

@@ -26,6 +26,27 @@ type nonFlushingResponseWriter struct {
 	body   bytes.Buffer
 }
 
+type failingGetByIDsJobRepo struct {
+	*repositorymemory.JobRepository
+	err error
+}
+
+func (r *failingGetByIDsJobRepo) GetByIDs(_ context.Context, _ []string) ([]domain.Job, error) {
+	return nil, r.err
+}
+
+type stepLookupFailRepo struct {
+	*fakeRepo
+	stepsErr error
+}
+
+func (r *stepLookupFailRepo) GetStepsByBuildID(ctx context.Context, buildID string) ([]domain.BuildStep, error) {
+	if r.stepsErr != nil {
+		return nil, r.stepsErr
+	}
+	return r.fakeRepo.GetStepsByBuildID(ctx, buildID)
+}
+
 func (w *nonFlushingResponseWriter) Header() http.Header {
 	if w.header == nil {
 		w.header = http.Header{}
@@ -323,6 +344,101 @@ func TestBuildHandlerProjectLookupSkipsBlankProjectIDs(t *testing.T) {
 	if projectRepo.getByIDsCalls != 0 {
 		t.Fatalf("expected no project batch fetch for blank project IDs, got %d", projectRepo.getByIDsCalls)
 	}
+}
+
+func TestBuildHandlerJobLookupCurrentStepsAndJobIDHelpers(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	jobRepo := repositorymemory.NewJobRepository()
+	if _, createErr := jobRepo.Create(context.Background(), domain.Job{ID: "job-1", ProjectID: "project-1", Name: "backend-ci", CreatedAt: now, UpdatedAt: now}); createErr != nil {
+		t.Fatalf("create named job: %v", createErr)
+	}
+	if _, createErr := jobRepo.Create(context.Background(), domain.Job{ID: "job-blank", ProjectID: "project-1", Name: "   ", CreatedAt: now, UpdatedAt: now}); createErr != nil {
+		t.Fatalf("create blank-name job: %v", createErr)
+	}
+
+	h := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{}, nil, nil))
+	h.SetJobService(service.NewJobService(jobRepo, nil))
+	jobID := "job-1"
+	blankNameJobID := "job-blank"
+	blankJobID := "   "
+	lookup, lookupErr := h.jobLookup(context.Background(), []domain.Build{{ID: "build-1", JobID: &jobID}, {ID: "build-2", JobID: &blankNameJobID}, {ID: "build-3", JobID: &blankJobID}, {ID: "build-4"}})
+	if lookupErr != nil {
+		t.Fatalf("job lookup failed: %v", lookupErr)
+	}
+	if len(lookup) != 1 {
+		t.Fatalf("expected only named jobs in lookup, got %+v", lookup)
+	}
+	name, ok := lookup[jobID]
+	if !ok || name == nil || *name != "backend-ci" {
+		t.Fatalf("expected backend-ci lookup entry, got %+v", lookup)
+	}
+	if _, ok := lookup[blankNameJobID]; ok {
+		t.Fatalf("expected blank-name job to be omitted, got %+v", lookup)
+	}
+
+	emptyHandler := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{}, nil, nil))
+	emptyLookup, emptyErr := emptyHandler.jobLookup(context.Background(), []domain.Build{{ID: "build-5", JobID: &jobID}})
+	if emptyErr != nil {
+		t.Fatalf("job lookup without service failed: %v", emptyErr)
+	}
+	if len(emptyLookup) != 0 {
+		t.Fatalf("expected empty lookup without job service, got %+v", emptyLookup)
+	}
+
+	current := currentBuildSteps([]domain.BuildStep{{ID: "step-b", StepIndex: 2, Name: "test", Status: domain.BuildStepStatusRunning, StartedAt: &now}, {ID: "step-a", StepIndex: 2, Name: "lint", Status: domain.BuildStepStatusRunning, StartedAt: &now}, {ID: "step-0", StepIndex: 0, Name: "checkout", Status: domain.BuildStepStatusRunning, StartedAt: &now}, {ID: "step-done", StepIndex: 1, Name: "done", Status: domain.BuildStepStatusSuccess, StartedAt: &now, FinishedAt: &now}})
+	if len(current) != 3 {
+		t.Fatalf("expected three running steps, got %+v", current)
+	}
+	if current[0].ID != "step-0" || current[1].ID != "step-a" || current[2].ID != "step-b" {
+		t.Fatalf("unexpected current step ordering: %+v", current)
+	}
+	if got := currentBuildSteps(nil); len(got) != 0 {
+		t.Fatalf("expected empty current steps for nil input, got %+v", got)
+	}
+	if got := jobIDValue(nil); got != "" {
+		t.Fatalf("expected blank job id for nil pointer, got %q", got)
+	}
+	trimmedJobID := "  job-1  "
+	if got := jobIDValue(&trimmedJobID); got != "job-1" {
+		t.Fatalf("expected trimmed job id, got %q", got)
+	}
+}
+
+func TestBuildHandlerGetBuildHandlesJobAndStepLookupFailures(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	jobID := "job-1"
+	build := domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, Status: domain.BuildStatusRunning, CreatedAt: now}
+
+	t.Run("job lookup failure returns internal error", func(t *testing.T) {
+		h := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{build: build}, nil, nil))
+		h.SetJobService(service.NewJobService(&failingGetByIDsJobRepo{JobRepository: repositorymemory.NewJobRepository(), err: errors.New("job lookup failed")}, nil))
+
+		req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1", nil), "build-1")
+		res := httptest.NewRecorder()
+		h.GetBuild(res, req)
+
+		if res.Code != http.StatusInternalServerError {
+			t.Fatalf("expected status %d, got %d body=%s", http.StatusInternalServerError, res.Code, res.Body.String())
+		}
+		if got := decodeErrorMessage(t, res); got != "internal server error" {
+			t.Fatalf("expected internal error message, got %q", got)
+		}
+	})
+
+	t.Run("step lookup failure maps through service error handling", func(t *testing.T) {
+		h := NewBuildHandler(buildsvc.NewBuildService(&stepLookupFailRepo{fakeRepo: &fakeRepo{build: build}, stepsErr: errors.New("step lookup failed")}, nil, nil))
+
+		req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1", nil), "build-1")
+		res := httptest.NewRecorder()
+		h.GetBuild(res, req)
+
+		if res.Code != http.StatusInternalServerError {
+			t.Fatalf("expected status %d, got %d body=%s", http.StatusInternalServerError, res.Code, res.Body.String())
+		}
+		if got := decodeErrorMessage(t, res); got != "internal server error" {
+			t.Fatalf("expected internal error message, got %q", got)
+		}
+	})
 }
 
 func TestBuildHandlerAuthorizeBuildHelpersMapServiceErrors(t *testing.T) {

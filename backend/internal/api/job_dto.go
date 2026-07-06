@@ -24,6 +24,10 @@ type CreateJobRequest struct {
 	Enabled          *bool                               `json:"enabled,omitempty"`
 }
 
+type RunJobRequest struct {
+	Ref *string `json:"ref,omitempty"`
+}
+
 type UpdateJobRequest struct {
 	Name             *string                             `json:"name,omitempty"`
 	Priority         *int                                `json:"priority,omitempty"`

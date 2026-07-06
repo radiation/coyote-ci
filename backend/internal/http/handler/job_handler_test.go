@@ -9,12 +9,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
@@ -157,6 +160,58 @@ func TestJobHandler_CreateListGetUpdateRunNow(t *testing.T) {
 	if source["ref"] != "main" {
 		t.Fatalf("expected build source.ref from job, got %v", source["ref"])
 	}
+
+	overrideRunReq := addURLParam(httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/run", bytes.NewBufferString(`{"ref":"release/2026.07"}`)), "jobID", jobID)
+	overrideRunRes := httptest.NewRecorder()
+	h.RunNow(overrideRunRes, overrideRunReq)
+	if overrideRunRes.Code != http.StatusCreated {
+		t.Fatalf("expected override run-now status %d, got %d body=%s", http.StatusCreated, overrideRunRes.Code, overrideRunRes.Body.String())
+	}
+	overridePayload := decodeDataMap(t, overrideRunRes)
+	overrideSource, ok := overridePayload["source"].(map[string]interface{})
+	if !ok || overrideSource == nil {
+		t.Fatal("expected source object in override run-now response")
+	}
+	if overrideSource["ref"] != "release/2026.07" {
+		t.Fatalf("expected override ref in response, got %v", overrideSource["ref"])
+	}
+}
+
+func TestJobHandler_RunNowRejectsInvalidBodyAndBlankRef(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	h := NewJobHandler(jobSvc)
+
+	job, err := jobSvc.CreateJob(context.Background(), service.CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       boolPtr(true),
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	invalidReq := addURLParam(httptest.NewRequest(http.MethodPost, "/jobs/"+job.ID+"/run", bytes.NewBufferString(`{"ref":`)), "jobID", job.ID)
+	invalidRes := httptest.NewRecorder()
+	h.RunNow(invalidRes, invalidReq)
+	if invalidRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid body status %d, got %d", http.StatusBadRequest, invalidRes.Code)
+	}
+
+	blankReq := addURLParam(httptest.NewRequest(http.MethodPost, "/jobs/"+job.ID+"/run", bytes.NewBufferString(`{"ref":"   "}`)), "jobID", job.ID)
+	blankRes := httptest.NewRecorder()
+	h.RunNow(blankRes, blankReq)
+	if blankRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected blank ref status %d, got %d body=%s", http.StatusBadRequest, blankRes.Code, blankRes.Body.String())
+	}
+	if !strings.Contains(blankRes.Body.String(), "job run ref is required") {
+		t.Fatalf("unexpected blank ref body: %s", blankRes.Body.String())
+	}
 }
 
 func serviceCredential(id string, name string) domain.SourceCredential {
@@ -241,7 +296,7 @@ func TestJobHandler_CreateAcceptsLegacyProjectSlugInProjectID(t *testing.T) {
 
 func TestJobHandler_ResolveJobSupportsSlashInName(t *testing.T) {
 	buildRepo := repositorymemory.NewBuildRepository()
-	jobRepo := repositorymemory.NewJobRepository()
+	jobRepo := &selectorAwareJobRepository{JobRepository: repositorymemory.NewJobRepository()}
 	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
 	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
 	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
@@ -271,6 +326,8 @@ func TestJobHandler_ResolveJobSupportsSlashInName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create job failed: %v", err)
 	}
+	jobRepo.getByIDCalls = nil
+	jobRepo.findByProjectAndNameCalls = nil
 
 	req := httptest.NewRequest(http.MethodGet, "/jobs/resolve?project=platform%2Fteam&name=folder%2Fjob", nil)
 	res := httptest.NewRecorder()
@@ -282,6 +339,12 @@ func TestJobHandler_ResolveJobSupportsSlashInName(t *testing.T) {
 	data := decodeDataMap(t, res)
 	if data["id"] != job.ID || data["name"] != job.Name {
 		t.Fatalf("unexpected resolved job payload: %+v", data)
+	}
+	if len(jobRepo.getByIDCalls) != 0 {
+		t.Fatalf("expected non-uuid name selector to avoid GetByID, got %+v", jobRepo.getByIDCalls)
+	}
+	if len(jobRepo.findByProjectAndNameCalls) != 1 {
+		t.Fatalf("expected one name lookup, got %+v", jobRepo.findByProjectAndNameCalls)
 	}
 }
 
@@ -334,6 +397,20 @@ func TestJobHandler_ResolveJobValidationAndAmbiguity(t *testing.T) {
 		t.Fatalf("expected missing name status %d, got %d body=%s", http.StatusBadRequest, missingNameRes.Code, missingNameRes.Body.String())
 	}
 
+	unknownProjectReq := httptest.NewRequest(http.MethodGet, "/jobs/resolve?project=definitely-not-a-project&name=duplicate", nil)
+	unknownProjectRes := httptest.NewRecorder()
+	h.ResolveJob(unknownProjectRes, unknownProjectReq)
+	if unknownProjectRes.Code != http.StatusNotFound {
+		t.Fatalf("expected unknown project status %d, got %d body=%s", http.StatusNotFound, unknownProjectRes.Code, unknownProjectRes.Body.String())
+	}
+
+	missingJobReq := httptest.NewRequest(http.MethodGet, "/jobs/resolve?project=platform&name=missing-job", nil)
+	missingJobRes := httptest.NewRecorder()
+	h.ResolveJob(missingJobRes, missingJobReq)
+	if missingJobRes.Code != http.StatusNotFound {
+		t.Fatalf("expected missing job status %d, got %d body=%s", http.StatusNotFound, missingJobRes.Code, missingJobRes.Body.String())
+	}
+
 	ambiguousReq := httptest.NewRequest(http.MethodGet, "/jobs/resolve?project=platform&name=duplicate", nil)
 	ambiguousRes := httptest.NewRecorder()
 	h.ResolveJob(ambiguousRes, ambiguousReq)
@@ -359,7 +436,7 @@ func TestJobHandler_ResolveJobSelectorWithinProjectUsesDirectIDAndRejectsMismatc
 		t.Fatalf("create project B failed: %v", err)
 	}
 	job, err := jobRepo.Create(context.Background(), domain.Job{
-		ID:            "job-1",
+		ID:            "00000000-0000-0000-0000-000000000911",
 		ProjectID:     projectA.ID,
 		Name:          "backend-ci",
 		RepositoryURL: "https://github.com/example/backend.git",
@@ -385,6 +462,70 @@ func TestJobHandler_ResolveJobSelectorWithinProjectUsesDirectIDAndRejectsMismatc
 	if !errors.Is(mismatchErr, service.ErrJobNotFound) {
 		t.Fatalf("expected mismatched project to return ErrJobNotFound, got %v", mismatchErr)
 	}
+}
+
+func TestJobHandler_ResolveJobSelectorWithinProjectFallsBackToNameWhenUUIDLookupMisses(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := &selectorAwareJobRepository{JobRepository: repositorymemory.NewJobRepository()}
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
+	h := NewJobHandler(jobSvc)
+
+	project, err := projectRepo.Create(context.Background(), domain.Project{ID: "project-1", Name: "Platform", Slug: "platform", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	selector := "00000000-0000-0000-0000-000000000999"
+	job, err := jobRepo.Create(context.Background(), domain.Job{
+		ID:            "job-real-id",
+		ProjectID:     project.ID,
+		Name:          selector,
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       true,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+	jobRepo.getByIDCalls = nil
+	jobRepo.findByProjectAndNameCalls = nil
+
+	resolved, resolveErr := h.resolveJobSelectorWithinProject(context.Background(), selector, project.ID)
+	if resolveErr != nil {
+		t.Fatalf("resolve uuid-like name fallback failed: %v", resolveErr)
+	}
+	if resolved.ID != job.ID || resolved.Name != selector {
+		t.Fatalf("unexpected resolved job: %+v", resolved)
+	}
+	if len(jobRepo.getByIDCalls) == 0 || jobRepo.getByIDCalls[0] != selector {
+		t.Fatalf("expected direct uuid lookup attempt, got %+v", jobRepo.getByIDCalls)
+	}
+	if len(jobRepo.findByProjectAndNameCalls) == 0 {
+		t.Fatalf("expected name fallback lookup, got %+v", jobRepo.findByProjectAndNameCalls)
+	}
+}
+
+type selectorAwareJobRepository struct {
+	repository.JobRepository
+	getByIDCalls              []string
+	findByProjectAndNameCalls []string
+}
+
+func (r *selectorAwareJobRepository) GetByID(ctx context.Context, id string) (domain.Job, error) {
+	r.getByIDCalls = append(r.getByIDCalls, id)
+	if _, err := uuid.Parse(strings.TrimSpace(id)); err != nil {
+		return domain.Job{}, errors.New("non-uuid selector reached GetByID")
+	}
+	return r.JobRepository.GetByID(ctx, id)
+}
+
+func (r *selectorAwareJobRepository) FindByProjectIDAndName(ctx context.Context, projectID string, name string, limit int) ([]domain.Job, error) {
+	r.findByProjectAndNameCalls = append(r.findByProjectAndNameCalls, projectID+"/"+name)
+	return r.JobRepository.FindByProjectIDAndName(ctx, projectID, name, limit)
 }
 
 func TestJobHandler_CreateAcceptsPipelinePathWithoutInlineYAML(t *testing.T) {
