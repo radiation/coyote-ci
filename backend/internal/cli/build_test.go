@@ -13,6 +13,8 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/apiclient"
+	"github.com/radiation/coyote-ci/backend/internal/cli/config"
+	"github.com/radiation/coyote-ci/backend/internal/cli/credentials"
 	"github.com/radiation/coyote-ci/backend/internal/cli/output"
 )
 
@@ -493,6 +495,10 @@ func TestBuildArtifactHelpers(t *testing.T) {
 		t.Fatalf("expected temp files to be cleaned up after replace failure, got %v", tempMatches)
 	}
 
+	if got := buildArtifactDownloadViewFromArtifact(api.BuildArtifactResponse{ID: "artifact-fallback", Path: "../unsafe"}, "./artifact-fallback", 0); got.Name != "artifact-fallback" || got.SizeBytes != 0 {
+		t.Fatalf("expected fallback download view, got %+v", got)
+	}
+
 	if err := writeBuildArtifactsHuman(failWriter{}, payload); err == nil {
 		t.Fatal("expected writeBuildArtifactsHuman to surface write errors")
 	}
@@ -503,6 +509,229 @@ func TestBuildArtifactHelpers(t *testing.T) {
 	if !strings.Contains(emptyBuf.String(), "No artifacts found") {
 		t.Fatalf("unexpected empty artifacts output: %s", emptyBuf.String())
 	}
+}
+
+func TestBuildArtifactHelperEdgeCases(t *testing.T) {
+	blankStepID := "  "
+	blankContentType := "  "
+	payload := makeBuildArtifactsPayload(" trimmed-build ", []api.BuildArtifactResponse{{
+		ID:          "artifact-1",
+		BuildID:     "",
+		Name:        " report.xml ",
+		Path:        "reports/report.xml",
+		StepID:      &blankStepID,
+		ContentType: &blankContentType,
+		SizeBytes:   512,
+		CreatedAt:   "2026-07-05T00:00:00Z",
+	}})
+	if payload.BuildID != "trimmed-build" {
+		t.Fatalf("expected trimmed build id fallback, got %+v", payload)
+	}
+	if payload.Artifacts[0].StepID != nil || payload.Artifacts[0].ContentType != nil || payload.Artifacts[0].Name != "report.xml" {
+		t.Fatalf("expected trimmed metadata in payload, got %+v", payload.Artifacts[0])
+	}
+
+	buf := &bytes.Buffer{}
+	if err := writeBuildArtifactsHuman(buf, payload); err != nil {
+		t.Fatalf("writeBuildArtifactsHuman failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "artifact-1") || !strings.Contains(buf.String(), "reports/report.xml") || !strings.Contains(buf.String(), "512 B") {
+		t.Fatalf("expected nil step/content type placeholders in output, got %s", buf.String())
+	}
+
+	duplicatePaths := []api.BuildArtifactResponse{
+		{ID: "artifact-a", Path: "reports/report.xml"},
+		{ID: "artifact-b", Path: "reports/report.xml"},
+	}
+	if _, duplicatePathErr := selectBuildArtifact(duplicatePaths, "reports/report.xml"); duplicatePathErr == nil || !strings.Contains(duplicatePathErr.Error(), "multiple artifact paths") {
+		t.Fatalf("expected duplicate path error, got %v", duplicatePathErr)
+	}
+
+	if !artifactNameMatches(api.BuildArtifactResponse{Name: "other", Path: "reports/report.xml"}, "report.xml") {
+		t.Fatal("expected artifactNameMatches to match path basename")
+	}
+	if artifactNameMatches(api.BuildArtifactResponse{Name: "other", Path: "reports/report.xml"}, "missing") {
+		t.Fatal("expected artifactNameMatches to reject non-matches")
+	}
+
+	if got, err := artifactDownloadRelativePath(api.BuildArtifactResponse{Name: "reports/from-name.xml"}); err != nil || got != "reports/from-name.xml" {
+		t.Fatalf("expected name fallback path, got %q err=%v", got, err)
+	}
+	if got, err := artifactDownloadRelativePath(api.BuildArtifactResponse{ID: "artifact-id-only"}); err != nil || got != "artifact-id-only" {
+		t.Fatalf("expected id fallback path, got %q err=%v", got, err)
+	}
+	if _, err := artifactDownloadRelativePath(api.BuildArtifactResponse{}); err == nil || !strings.Contains(err.Error(), "safe local filename") {
+		t.Fatalf("expected empty artifact path error, got %v", err)
+	}
+
+	if got, err := validateArtifactRelativePath("reports/nested/output.txt"); err != nil || got != "reports/nested/output.txt" {
+		t.Fatalf("expected safe nested path, got %q err=%v", got, err)
+	}
+	if _, err := validateArtifactRelativePath("."); err == nil || !strings.Contains(err.Error(), "not safe") {
+		t.Fatalf("expected dot path rejection, got %v", err)
+	}
+	if _, err := validateArtifactRelativePath("   "); err == nil || !strings.Contains(err.Error(), "safe local filename") {
+		t.Fatalf("expected blank path rejection, got %v", err)
+	}
+
+	fileOutput := filepath.Join(t.TempDir(), "artifact.out")
+	if err := os.WriteFile(fileOutput, []byte("existing"), 0o600); err != nil {
+		t.Fatalf("seed file output: %v", err)
+	}
+	if got, err := resolveArtifactOutputPath(fileOutput, api.BuildArtifactResponse{Path: "reports/report.xml"}); err != nil || got != fileOutput {
+		t.Fatalf("expected existing file output path, got %q err=%v", got, err)
+	}
+	missingDirOutput := filepath.Join(t.TempDir(), "missing-dir") + string(os.PathSeparator)
+	if got, err := resolveArtifactOutputPath(missingDirOutput, api.BuildArtifactResponse{Path: "reports/report.xml"}); err != nil || got != filepath.Join(missingDirOutput, "report.xml") {
+		t.Fatalf("expected trailing separator directory output path, got %q err=%v", got, err)
+	}
+
+	if got, err := artifactDownloadName(api.BuildArtifactResponse{Name: "report.xml"}); err != nil || got != "report.xml" {
+		t.Fatalf("expected artifactDownloadName name fallback, got %q err=%v", got, err)
+	}
+	if got := displayPath("./report.xml"); got != "./report.xml" {
+		t.Fatalf("expected dotted display path to remain unchanged, got %s", got)
+	}
+	if got := displayPath(filepath.Join(string(os.PathSeparator), "tmp", "report.xml")); got != filepath.Join(string(os.PathSeparator), "tmp", "report.xml") {
+		t.Fatalf("expected absolute display path to remain unchanged, got %s", got)
+	}
+	if hasWindowsDrivePrefix("artifact.txt") {
+		t.Fatal("expected non-drive path to be false")
+	}
+
+	unsorted := []api.BuildArtifactResponse{
+		{ID: "b", Path: "zeta", CreatedAt: "2026-07-05T00:00:00Z"},
+		{ID: "a", Path: "alpha", CreatedAt: "2026-07-05T00:00:00Z"},
+		{ID: "c", Path: "latest", CreatedAt: "2026-07-05T00:00:01Z"},
+		{ID: "d", Path: "alpha", CreatedAt: "2026-07-05T00:00:00Z"},
+	}
+	sorted := sortBuildArtifacts(unsorted)
+	if sorted[0].ID != "c" || sorted[1].ID != "a" || sorted[2].ID != "d" || sorted[3].ID != "b" {
+		t.Fatalf("unexpected artifact sort order: %+v", sorted)
+	}
+}
+
+func TestBuildArtifactsCommandValidationAndErrorPaths(t *testing.T) {
+	t.Run("download requires artifact selector before network", func(t *testing.T) {
+		called := false
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+
+		configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+		if err := configStore.Save(config.File{
+			CurrentContext: "local",
+			Contexts: map[string]config.Context{
+				"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+			},
+		}); err != nil {
+			t.Fatalf("save config: %v", err)
+		}
+		creds := credentials.NewMemoryStore()
+		if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+			t.Fatalf("set token: %v", setErr)
+		}
+
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+		code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "download", "build-1"}})
+		if code != 2 {
+			t.Fatalf("expected exit code 2, got %d stderr=%s", code, stderr.String())
+		}
+		if called {
+			t.Fatal("expected selector validation to stop before HTTP requests")
+		}
+		if !strings.Contains(stderr.String(), "artifact selector is required") {
+			t.Fatalf("unexpected stderr: %s", stderr.String())
+		}
+	})
+
+	t.Run("download rejects unsafe artifact metadata", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.String() {
+			case "/api/builds/build-1/artifacts":
+				_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","artifacts":[{"id":"artifact-1","build_id":"build-1","name":"report.xml","path":"../secrets.txt","size_bytes":42,"storage_provider":"filesystem","download_url_path":"/builds/build-1/artifacts/artifact-1/download","created_at":"2026-07-05T00:00:00Z"}]}}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+		if err := configStore.Save(config.File{
+			CurrentContext: "local",
+			Contexts: map[string]config.Context{
+				"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+			},
+		}); err != nil {
+			t.Fatalf("save config: %v", err)
+		}
+		creds := credentials.NewMemoryStore()
+		if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+			t.Fatalf("set token: %v", setErr)
+		}
+
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+		code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "download", "build-1", "--artifact", "artifact-1"}})
+		if code != 2 {
+			t.Fatalf("expected exit code 2, got %d stderr=%s", code, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "not safe for local output") {
+			t.Fatalf("unexpected stderr: %s", stderr.String())
+		}
+		if strings.Contains(stderr.String(), "stored-token") {
+			t.Fatalf("stderr leaked token: %s", stderr.String())
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("expected no stdout, got %q", stdout.String())
+		}
+	})
+
+	t.Run("download returns exit 1 for local write errors", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.String() {
+			case "/api/builds/build-1/artifacts":
+				_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","artifacts":[{"id":"artifact-1","build_id":"build-1","name":"report.xml","path":"reports/report.xml","size_bytes":42,"storage_provider":"filesystem","download_url_path":"/builds/build-1/artifacts/artifact-1/download","created_at":"2026-07-05T00:00:00Z"}]}}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+		if err := configStore.Save(config.File{
+			CurrentContext: "local",
+			Contexts: map[string]config.Context{
+				"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+			},
+		}); err != nil {
+			t.Fatalf("save config: %v", err)
+		}
+		creds := credentials.NewMemoryStore()
+		if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+			t.Fatalf("set token: %v", setErr)
+		}
+
+		existingOutput := filepath.Join(t.TempDir(), "report.xml")
+		if err := os.WriteFile(existingOutput, []byte("existing"), 0o600); err != nil {
+			t.Fatalf("seed existing output: %v", err)
+		}
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+		code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "download", "build-1", "--artifact", "artifact-1", "--output", existingOutput}})
+		if code != 1 {
+			t.Fatalf("expected exit code 1, got %d stderr=%s", code, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "already exists") {
+			t.Fatalf("unexpected stderr: %s", stderr.String())
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("expected no stdout on local write error, got %q", stdout.String())
+		}
+	})
 }
 
 func intPtr(value int) *int { return &value }

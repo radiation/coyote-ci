@@ -9,7 +9,7 @@ set -eu
 failed=0
 
 # ── Backend ──────────────────────────────────────────────────────────────────
-if command -v go >/dev/null 2>&1; then
+if command -v go >/dev/null 2>&1 && command -v make >/dev/null 2>&1; then
 	echo "== Backend =="
 
 	echo "  go fmt"
@@ -29,7 +29,7 @@ if command -v go >/dev/null 2>&1; then
 		failed=1
 	fi
 else
-	echo "== Backend (skipped: go not found) =="
+	echo "== Backend (skipped: go or make not found) =="
 fi
 
 # ── Frontend ─────────────────────────────────────────────────────────────────
