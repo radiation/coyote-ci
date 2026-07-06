@@ -42,6 +42,9 @@ func (h *ProjectHandler) SetAuthorization(mode auth.Mode, projectRoles auth.Proj
 // @Failure 500 {object} api.ErrorResponse
 // @Router /projects [get]
 func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRead) {
+		return
+	}
 	projects, err := h.projects.ListProjects(r.Context())
 	if err != nil {
 		h.writeProjectError(w, err)
@@ -107,8 +110,11 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} api.ErrorResponse
 // @Router /projects/{id} [get]
 func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimSpace(chi.URLParam(r, "id"))
-	project, err := h.projects.GetProject(r.Context(), id)
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRead) {
+		return
+	}
+	selector := strings.TrimSpace(chi.URLParam(r, "id"))
+	project, err := h.resolveProjectSelector(r.Context(), selector)
 	if err != nil {
 		h.writeProjectError(w, err)
 		return
@@ -190,11 +196,18 @@ func (h *ProjectHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} api.ErrorResponse
 // @Router /projects/{id}/jobs [get]
 func (h *ProjectHandler) ListProjectJobs(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimSpace(chi.URLParam(r, "id"))
-	if !authorizeProject(w, r, h.authMode, h.projectRoles, id, auth.CanReadProjectResources, "project membership is required") {
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRead) {
 		return
 	}
-	jobs, err := h.jobs.ListJobsByProject(r.Context(), id)
+	project, err := h.resolveProjectSelector(r.Context(), strings.TrimSpace(chi.URLParam(r, "id")))
+	if err != nil {
+		h.writeProjectError(w, err)
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, project.ID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
+	jobs, err := h.jobs.ListJobsByProject(r.Context(), project.ID)
 	if err != nil {
 		h.writeProjectError(w, err)
 		return
@@ -205,6 +218,18 @@ func (h *ProjectHandler) ListProjectJobs(w http.ResponseWriter, r *http.Request)
 		responses = append(responses, toJobResponse(job))
 	}
 	writeDataJSON(w, http.StatusOK, api.JobListResponse{Jobs: responses})
+}
+
+func (h *ProjectHandler) resolveProjectSelector(ctx context.Context, selector string) (domain.Project, error) {
+	trimmedSelector := strings.TrimSpace(selector)
+	project, err := h.projects.GetProject(ctx, trimmedSelector)
+	if err == nil {
+		return project, nil
+	}
+	if !errors.Is(err, repository.ErrProjectNotFound) {
+		return domain.Project{}, err
+	}
+	return h.projects.GetProjectBySlug(ctx, trimmedSelector)
 }
 
 func (h *ProjectHandler) filterProjectsForRead(ctx context.Context, projects []domain.Project) ([]domain.Project, error) {

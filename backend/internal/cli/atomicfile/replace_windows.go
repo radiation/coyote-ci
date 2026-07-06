@@ -1,10 +1,10 @@
 //go:build windows
 
-package config
+package atomicfile
 
 import "golang.org/x/sys/windows"
 
-func replaceFileAtomic(source string, destination string) error {
+func ReplaceFileAtomic(source string, destination string) error {
 	from, fromErr := windows.UTF16PtrFromString(source)
 	if fromErr != nil {
 		return fromErr

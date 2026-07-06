@@ -103,6 +103,51 @@ func (c *Client) GetServerInfo(ctx context.Context) (api.ServerInfoResponse, err
 	return envelope.Data, nil
 }
 
+func (c *Client) ListProjects(ctx context.Context) (api.ProjectListResponse, error) {
+	var envelope api.ProjectListEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, "api/projects", nil, &envelope); err != nil {
+		return api.ProjectListResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
+func (c *Client) GetProject(ctx context.Context, selector string) (api.ProjectResponse, error) {
+	var envelope api.ProjectEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, projectResourcePath(selector, ""), nil, &envelope); err != nil {
+		return api.ProjectResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
+func (c *Client) ListJobs(ctx context.Context, projectSelector string) (api.JobListResponse, error) {
+	var envelope api.JobListEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, projectResourcePath(projectSelector, "/jobs"), nil, &envelope); err != nil {
+		return api.JobListResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
+type GetJobOptions struct {
+	Project string
+}
+
+func (c *Client) GetJob(ctx context.Context, selector string, options GetJobOptions) (api.JobResponse, error) {
+	requestPath := jobResourcePath(selector, "")
+	params := url.Values{}
+	if trimmedProject := strings.TrimSpace(options.Project); trimmedProject != "" {
+		params.Set("project", trimmedProject)
+	}
+	if encoded := params.Encode(); encoded != "" {
+		requestPath += "?" + encoded
+	}
+
+	var envelope api.JobEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, requestPath, nil, &envelope); err != nil {
+		return api.JobResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
 func (c *Client) GetBuild(ctx context.Context, buildID string) (api.BuildResponse, error) {
 	var envelope api.BuildEnvelope
 	if err := c.doJSON(ctx, http.MethodGet, buildResourcePath(buildID, ""), nil, &envelope); err != nil {
@@ -154,6 +199,63 @@ func (c *Client) GetBuildLogs(ctx context.Context, buildID string, options Build
 		return api.BuildLogsResponse{}, err
 	}
 	return envelope.Data, nil
+}
+
+func (c *Client) ListBuildArtifacts(ctx context.Context, buildID string) (api.BuildArtifactsResponse, error) {
+	var envelope api.BuildArtifactsEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, buildResourcePath(buildID, "/artifacts"), nil, &envelope); err != nil {
+		return api.BuildArtifactsResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
+func (c *Client) DownloadBuildArtifact(ctx context.Context, buildID string, artifactID string, writer io.Writer) error {
+	requestURL, err := resolveRequestURL(c.baseURL, buildArtifactDownloadPath(buildID, artifactID))
+	if err != nil {
+		return &Error{Kind: ErrorKindUnexpected, Message: "invalid request path", Err: err}
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
+	if err != nil {
+		return &Error{Kind: ErrorKindUnexpected, Message: "build request", Err: err}
+	}
+	request.Header.Set("Accept", "application/octet-stream")
+	if c.userAgent != "" {
+		request.Header.Set("User-Agent", c.userAgent)
+	}
+	if c.token != "" {
+		request.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return &Error{Kind: ErrorKindTransport, Message: "request failed", Err: err}
+	}
+	defer func() {
+		_ = response.Body.Close()
+	}()
+
+	requestID := strings.TrimSpace(response.Header.Get("X-Request-Id"))
+	if requestID == "" {
+		requestID = strings.TrimSpace(response.Header.Get("X-Request-ID"))
+	}
+
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return decodeErrorResponse(response, requestID)
+	}
+	if writer == nil {
+		_, _ = io.Copy(io.Discard, response.Body)
+		return nil
+	}
+	if _, err := io.Copy(writer, response.Body); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return &Error{Kind: ErrorKindUnexpected, Message: "stream artifact response", RequestID: requestID, Err: err}
+	}
+	return nil
 }
 
 func (c *Client) doJSON(ctx context.Context, method string, path string, requestBody io.Reader, out any) error {
@@ -257,6 +359,18 @@ func resolveRequestURL(baseURL *url.URL, requestPath string) (*url.URL, error) {
 
 func buildResourcePath(buildID string, suffix string) string {
 	return "api/builds/" + url.PathEscape(strings.TrimSpace(buildID)) + suffix
+}
+
+func projectResourcePath(selector string, suffix string) string {
+	return "api/projects/" + url.PathEscape(strings.TrimSpace(selector)) + suffix
+}
+
+func jobResourcePath(selector string, suffix string) string {
+	return "api/jobs/" + url.PathEscape(strings.TrimSpace(selector)) + suffix
+}
+
+func buildArtifactDownloadPath(buildID string, artifactID string) string {
+	return buildResourcePath(buildID, "/artifacts/"+url.PathEscape(strings.TrimSpace(artifactID))+"/download")
 }
 
 func decodeErrorResponse(response *http.Response, requestID string) error {
