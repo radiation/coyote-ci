@@ -268,6 +268,79 @@ func TestJobHandler_HeaderModeAuthorizationAndFiltering(t *testing.T) {
 	}
 }
 
+func TestProjectAndJobDiscoveryHandlers_RequireBuildReadScopeForAPITokens(t *testing.T) {
+	fixture := newHandlerAuthzFixture(t)
+	job, err := fixture.jobService.CreateJob(context.Background(), service.CreateJobInput{
+		ProjectID:     fixture.projectViewer.ID,
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+	})
+	if err != nil {
+		t.Fatalf("create fixture job failed: %v", err)
+	}
+
+	projectHandler := NewProjectHandler(fixture.projectService, fixture.jobService)
+	projectHandler.SetAuthorization(auth.ModeHeader, fixture.membershipService)
+	jobHandler := NewJobHandler(fixture.jobService)
+	jobHandler.SetAuthorization(auth.ModeHeader, fixture.membershipService)
+
+	listProjectsReq := withScopedAPIToken(httptest.NewRequest(http.MethodGet, "/projects", nil), fixture.viewer, domain.APITokenScopeBuildRead)
+	listProjectsRes := httptest.NewRecorder()
+	projectHandler.ListProjects(listProjectsRes, listProjectsReq)
+	if listProjectsRes.Code != http.StatusOK {
+		t.Fatalf("expected scoped project list status %d, got %d body=%s", http.StatusOK, listProjectsRes.Code, listProjectsRes.Body.String())
+	}
+
+	getProjectReq := addURLParam(httptest.NewRequest(http.MethodGet, "/projects/platform", nil), "id", fixture.projectViewer.Slug)
+	getProjectReq = withScopedAPIToken(getProjectReq, fixture.viewer, domain.APITokenScopeBuildRead)
+	getProjectRes := httptest.NewRecorder()
+	projectHandler.GetProject(getProjectRes, getProjectReq)
+	if getProjectRes.Code != http.StatusOK {
+		t.Fatalf("expected scoped project get status %d, got %d body=%s", http.StatusOK, getProjectRes.Code, getProjectRes.Body.String())
+	}
+
+	listJobsReq := addURLParam(httptest.NewRequest(http.MethodGet, "/projects/platform/jobs", nil), "id", fixture.projectViewer.Slug)
+	listJobsReq = withScopedAPIToken(listJobsReq, fixture.viewer, domain.APITokenScopeBuildRead)
+	listJobsRes := httptest.NewRecorder()
+	projectHandler.ListProjectJobs(listJobsRes, listJobsReq)
+	if listJobsRes.Code != http.StatusOK {
+		t.Fatalf("expected scoped project jobs status %d, got %d body=%s", http.StatusOK, listJobsRes.Code, listJobsRes.Body.String())
+	}
+
+	getJobReq := addURLParam(httptest.NewRequest(http.MethodGet, "/jobs/"+job.ID, nil), "jobID", job.ID)
+	getJobReq = withScopedAPIToken(getJobReq, fixture.viewer, domain.APITokenScopeBuildRead)
+	getJobRes := httptest.NewRecorder()
+	jobHandler.GetJob(getJobRes, getJobReq)
+	if getJobRes.Code != http.StatusOK {
+		t.Fatalf("expected scoped job get status %d, got %d body=%s", http.StatusOK, getJobRes.Code, getJobRes.Body.String())
+	}
+
+	missingScopeReq := withScopedAPIToken(httptest.NewRequest(http.MethodGet, "/projects", nil), fixture.viewer, domain.APITokenScopeBuildLogs)
+	missingScopeRes := httptest.NewRecorder()
+	projectHandler.ListProjects(missingScopeRes, missingScopeReq)
+	if missingScopeRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing scope project list status %d, got %d body=%s", http.StatusForbidden, missingScopeRes.Code, missingScopeRes.Body.String())
+	}
+
+	missingJobScopeReq := addURLParam(httptest.NewRequest(http.MethodGet, "/jobs/"+job.ID, nil), "jobID", job.ID)
+	missingJobScopeReq = withScopedAPIToken(missingJobScopeReq, fixture.viewer, domain.APITokenScopeBuildLogs)
+	missingJobScopeRes := httptest.NewRecorder()
+	jobHandler.GetJob(missingJobScopeRes, missingJobScopeReq)
+	if missingJobScopeRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing scope job get status %d, got %d body=%s", http.StatusForbidden, missingJobScopeRes.Code, missingJobScopeRes.Body.String())
+	}
+
+	outsiderReq := addURLParam(httptest.NewRequest(http.MethodGet, "/jobs/"+job.ID, nil), "jobID", job.ID)
+	outsiderReq = withScopedAPIToken(outsiderReq, fixture.outsider, domain.APITokenScopeBuildRead)
+	outsiderRes := httptest.NewRecorder()
+	jobHandler.GetJob(outsiderRes, outsiderReq)
+	if outsiderRes.Code != http.StatusForbidden {
+		t.Fatalf("expected outsider job get status %d, got %d body=%s", http.StatusForbidden, outsiderRes.Code, outsiderRes.Body.String())
+	}
+}
+
 func TestBuildHandler_HeaderModeAuthorizationAndFiltering(t *testing.T) {
 	fixture := newHandlerAuthzFixture(t)
 	buildViewer, err := fixture.buildService.CreateBuild(context.Background(), buildsvc.CreateBuildInput{
@@ -618,6 +691,7 @@ type handlerAuthzFixture struct {
 	viewer            domain.User
 	maintainer        domain.User
 	owner             domain.User
+	outsider          domain.User
 	admin             domain.User
 	projectService    *service.ProjectService
 	jobService        *service.JobService
@@ -660,6 +734,10 @@ func newHandlerAuthzFixture(t *testing.T) handlerAuthzFixture {
 	if err != nil {
 		t.Fatalf("create owner failed: %v", err)
 	}
+	outsider, err := userRepo.Create(ctx, domain.User{ID: "outsider-1", Email: "outsider@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("create outsider failed: %v", err)
+	}
 	admin, err := userRepo.Create(ctx, domain.User{ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin, CreatedAt: now, UpdatedAt: now})
 	if err != nil {
 		t.Fatalf("create admin failed: %v", err)
@@ -686,6 +764,7 @@ func newHandlerAuthzFixture(t *testing.T) handlerAuthzFixture {
 		viewer:            viewer,
 		maintainer:        maintainer,
 		owner:             owner,
+		outsider:          outsider,
 		admin:             admin,
 		projectService:    projectService,
 		jobService:        jobService,
