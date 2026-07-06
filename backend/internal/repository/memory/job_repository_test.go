@@ -152,6 +152,18 @@ func TestJobRepository_ListFiltersAndPaging(t *testing.T) {
 	}
 	assertJobIDs(t, projectJobs, []string{"job-new-a", "job-old"})
 
+	nameMatches, err := repo.FindByProjectIDAndName(ctx, "project-1", "old", 2)
+	if err != nil {
+		t.Fatalf("find jobs by project and name failed: %v", err)
+	}
+	assertJobIDs(t, nameMatches, []string{"job-old"})
+
+	limitedMatches, err := repo.FindByProjectIDAndName(ctx, "project-1", "new-a", 0)
+	if err != nil {
+		t.Fatalf("find limited jobs by project and name failed: %v", err)
+	}
+	assertJobIDs(t, limitedMatches, []string{"job-new-a"})
+
 	page, err := repo.ListPaged(ctx, repository.ListParams{Limit: 2, Offset: 1})
 	if err != nil {
 		t.Fatalf("list paged jobs failed: %v", err)

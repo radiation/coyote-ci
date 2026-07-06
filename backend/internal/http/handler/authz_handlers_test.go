@@ -317,6 +317,13 @@ func TestProjectAndJobDiscoveryHandlers_RequireBuildReadScopeForAPITokens(t *tes
 		t.Fatalf("expected scoped job get status %d, got %d body=%s", http.StatusOK, getJobRes.Code, getJobRes.Body.String())
 	}
 
+	resolveJobReq := withScopedAPIToken(httptest.NewRequest(http.MethodGet, "/jobs/resolve?project="+fixture.projectViewer.Slug+"&name="+job.Name, nil), fixture.viewer, domain.APITokenScopeBuildRead)
+	resolveJobRes := httptest.NewRecorder()
+	jobHandler.ResolveJob(resolveJobRes, resolveJobReq)
+	if resolveJobRes.Code != http.StatusOK {
+		t.Fatalf("expected scoped job resolve status %d, got %d body=%s", http.StatusOK, resolveJobRes.Code, resolveJobRes.Body.String())
+	}
+
 	missingScopeReq := withScopedAPIToken(httptest.NewRequest(http.MethodGet, "/projects", nil), fixture.viewer, domain.APITokenScopeBuildLogs)
 	missingScopeRes := httptest.NewRecorder()
 	projectHandler.ListProjects(missingScopeRes, missingScopeReq)
@@ -330,6 +337,13 @@ func TestProjectAndJobDiscoveryHandlers_RequireBuildReadScopeForAPITokens(t *tes
 	jobHandler.GetJob(missingJobScopeRes, missingJobScopeReq)
 	if missingJobScopeRes.Code != http.StatusForbidden {
 		t.Fatalf("expected missing scope job get status %d, got %d body=%s", http.StatusForbidden, missingJobScopeRes.Code, missingJobScopeRes.Body.String())
+	}
+
+	missingResolveScopeReq := withScopedAPIToken(httptest.NewRequest(http.MethodGet, "/jobs/resolve?project="+fixture.projectViewer.Slug+"&name="+job.Name, nil), fixture.viewer, domain.APITokenScopeBuildLogs)
+	missingResolveScopeRes := httptest.NewRecorder()
+	jobHandler.ResolveJob(missingResolveScopeRes, missingResolveScopeReq)
+	if missingResolveScopeRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing scope job resolve status %d, got %d body=%s", http.StatusForbidden, missingResolveScopeRes.Code, missingResolveScopeRes.Body.String())
 	}
 
 	outsiderReq := addURLParam(httptest.NewRequest(http.MethodGet, "/jobs/"+job.ID, nil), "jobID", job.ID)

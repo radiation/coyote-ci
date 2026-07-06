@@ -20,8 +20,6 @@ import (
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
-var errAmbiguousJobSelector = errors.New("job selector matched multiple jobs in project")
-
 type JobHandler struct {
 	jobService   *service.JobService
 	authMode     auth.Mode
@@ -148,18 +146,43 @@ func (h *JobHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	job, err := h.jobService.GetJob(r.Context(), jobID)
+	if err != nil {
+		h.writeJobServiceError(w, err)
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, job.ProjectID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
+
+	writeDataJSON(w, http.StatusOK, toJobResponse(job))
+}
+
+// ResolveJob godoc
+// @Summary Resolve job by project and name
+// @Description Returns job details by resolving an exact job name within a project.
+// @Tags jobs
+// @Produce json
+// @Param project query string true "Project ID or slug"
+// @Param name query string true "Exact job name"
+// @Success 200 {object} api.JobEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /jobs/resolve [get]
+func (h *JobHandler) ResolveJob(w http.ResponseWriter, r *http.Request) {
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRead) {
+		return
+	}
 	projectSelector := strings.TrimSpace(r.URL.Query().Get("project"))
 	if projectSelector == "" {
-		job, err := h.jobService.GetJob(r.Context(), jobID)
-		if err != nil {
-			h.writeJobServiceError(w, err)
-			return
-		}
-		if !authorizeProject(w, r, h.authMode, h.projectRoles, job.ProjectID, auth.CanReadProjectResources, "project membership is required") {
-			return
-		}
-
-		writeDataJSON(w, http.StatusOK, toJobResponse(job))
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "project query parameter is required")
+		return
+	}
+	jobName := strings.TrimSpace(r.URL.Query().Get("name"))
+	if jobName == "" {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "name query parameter is required")
 		return
 	}
 
@@ -172,9 +195,9 @@ func (h *JobHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, err := h.resolveJobSelectorWithinProject(r.Context(), jobID, projectID)
+	job, err := h.resolveJobSelectorWithinProject(r.Context(), jobName, projectID)
 	if err != nil {
-		if errors.Is(err, errAmbiguousJobSelector) {
+		if errors.Is(err, service.ErrJobNameAmbiguous) {
 			writeErrorJSON(w, http.StatusConflict, "ambiguous_selector", err.Error())
 			return
 		}
@@ -336,28 +359,7 @@ func (h *JobHandler) resolveJobSelectorWithinProject(ctx context.Context, select
 	if !errors.Is(err, service.ErrJobNotFound) {
 		return domain.Job{}, err
 	}
-
-	jobs, err := h.jobService.ListJobsByProject(ctx, projectID)
-	if err != nil {
-		return domain.Job{}, err
-	}
-
-	trimmedSelector := strings.TrimSpace(selector)
-	var matched *domain.Job
-	for _, candidate := range jobs {
-		if strings.TrimSpace(candidate.Name) != trimmedSelector {
-			continue
-		}
-		if matched != nil {
-			return domain.Job{}, errAmbiguousJobSelector
-		}
-		copyCandidate := candidate
-		matched = &copyCandidate
-	}
-	if matched == nil {
-		return domain.Job{}, service.ErrJobNotFound
-	}
-	return *matched, nil
+	return h.jobService.ResolveJobByProjectAndName(ctx, projectID, selector)
 }
 
 func (h *JobHandler) filterJobsForRead(ctx context.Context, jobs []domain.Job) ([]domain.Job, error) {

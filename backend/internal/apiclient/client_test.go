@@ -110,8 +110,8 @@ func TestClient_ProjectAndJobDiscoveryMethods(t *testing.T) {
 			_, _ = w.Write([]byte(`{"data":{"id":"project-1","name":"Platform","slug":"platform","created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}}`))
 		case "/base/api/projects/platform/jobs":
 			_, _ = w.Write([]byte(`{"data":{"jobs":[{"id":"job-1","project_id":"project-1","name":"backend-ci","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}]}}`))
-		case "/base/api/jobs/job%2Fname?project=platform%2Fteam":
-			_, _ = w.Write([]byte(`{"data":{"id":"job-1","project_id":"project-1","name":"job/name","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}}`))
+		case "/base/api/jobs/resolve?name=job-name&project=platform%2Fteam":
+			_, _ = w.Write([]byte(`{"data":{"id":"job-1","project_id":"project-1","name":"job-name","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -135,7 +135,7 @@ func TestClient_ProjectAndJobDiscoveryMethods(t *testing.T) {
 	if listJobsErr != nil {
 		t.Fatalf("list jobs: %v", listJobsErr)
 	}
-	job, getJobErr := client.GetJob(context.Background(), "job/name", GetJobOptions{Project: "platform/team"})
+	job, getJobErr := client.GetJob(context.Background(), "job-name", GetJobOptions{Project: "platform/team"})
 	if getJobErr != nil {
 		t.Fatalf("get job: %v", getJobErr)
 	}
@@ -149,7 +149,7 @@ func TestClient_ProjectAndJobDiscoveryMethods(t *testing.T) {
 	if len(jobs.Jobs) != 1 || jobs.Jobs[0].ID != "job-1" {
 		t.Fatalf("unexpected job list: %+v", jobs)
 	}
-	if job.Name != "job/name" || job.ProjectID != "project-1" {
+	if job.Name != "job-name" || job.ProjectID != "project-1" {
 		t.Fatalf("unexpected job detail: %+v", job)
 	}
 }

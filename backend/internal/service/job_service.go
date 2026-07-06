@@ -28,6 +28,7 @@ var ErrJobPriorityOutOfRange = errors.New("job priority must be between 1 and 10
 var ErrPushEventRepositoryURLRequired = errors.New("push event repository_url is required")
 var ErrPushEventRefRequired = errors.New("push event ref is required")
 var ErrPushEventCommitSHARequired = errors.New("push event commit_sha is required")
+var ErrJobNameAmbiguous = errors.New("job selector matched multiple jobs in project")
 var ErrJobDisabled = errors.New("job is disabled")
 var ErrJobBuildServiceNotConfigured = errors.New("job build service not configured")
 var ErrJobManagedImageConfigNotConfigured = errors.New("job managed image config repository not configured")
@@ -341,6 +342,43 @@ func (s *JobService) GetJob(ctx context.Context, id string) (domain.Job, error) 
 	}
 
 	return job, nil
+}
+
+func (s *JobService) ResolveJobByProjectAndName(ctx context.Context, projectID string, name string) (domain.Job, error) {
+	trimmedProjectID := strings.TrimSpace(projectID)
+	if trimmedProjectID == "" {
+		return domain.Job{}, ErrProjectIDRequired
+	}
+	trimmedName := strings.TrimSpace(name)
+	if trimmedName == "" {
+		return domain.Job{}, ErrJobNameRequired
+	}
+	if s.projects != nil {
+		if _, err := s.projects.GetByID(ctx, trimmedProjectID); err != nil {
+			return domain.Job{}, err
+		}
+	}
+
+	matches, err := s.jobRepo.FindByProjectIDAndName(ctx, trimmedProjectID, trimmedName, 2)
+	if err != nil {
+		return domain.Job{}, err
+	}
+	if len(matches) == 0 {
+		return domain.Job{}, ErrJobNotFound
+	}
+	if len(matches) > 1 {
+		return domain.Job{}, ErrJobNameAmbiguous
+	}
+
+	job := matches[0]
+	if err := s.attachManagedImageConfig(ctx, &job); err != nil {
+		return domain.Job{}, err
+	}
+	enriched := []domain.Job{job}
+	if err := s.attachLatestBuilds(ctx, enriched); err != nil {
+		return domain.Job{}, err
+	}
+	return enriched[0], nil
 }
 
 func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobInput) (domain.Job, error) {

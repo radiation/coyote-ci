@@ -225,6 +225,45 @@ func (r *JobRepository) ListByProjectID(ctx context.Context, projectID string) (
 	return jobs, nil
 }
 
+func (r *JobRepository) FindByProjectIDAndName(ctx context.Context, projectID string, name string, limit int) (jobs []domain.Job, err error) {
+	if limit <= 0 {
+		limit = 1
+	}
+
+	const query = `
+		SELECT id, project_id, name, priority, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		FROM jobs
+		WHERE project_id = $1 AND name = $2
+		ORDER BY created_at DESC, id ASC
+		LIMIT $3
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, projectID, name, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	jobs = make([]domain.Job, 0)
+	for rows.Next() {
+		job, scanErr := scanJob(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		jobs = append(jobs, job)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return jobs, nil
+}
+
 func (r *JobRepository) ListPushEnabledByRepository(ctx context.Context, repositoryURL string) (jobs []domain.Job, err error) {
 	normalizedRepo := normalizeRepositoryURLForMatch(repositoryURL)
 	if normalizedRepo == "" {

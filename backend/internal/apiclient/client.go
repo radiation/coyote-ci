@@ -133,12 +133,11 @@ type GetJobOptions struct {
 
 func (c *Client) GetJob(ctx context.Context, selector string, options GetJobOptions) (api.JobResponse, error) {
 	requestPath := jobResourcePath(selector, "")
-	params := url.Values{}
 	if trimmedProject := strings.TrimSpace(options.Project); trimmedProject != "" {
+		params := url.Values{}
 		params.Set("project", trimmedProject)
-	}
-	if encoded := params.Encode(); encoded != "" {
-		requestPath += "?" + encoded
+		params.Set("name", strings.TrimSpace(selector))
+		requestPath = "api/jobs/resolve?" + params.Encode()
 	}
 
 	var envelope api.JobEnvelope

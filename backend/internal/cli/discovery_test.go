@@ -161,9 +161,9 @@ func TestJobDiscoveryCommands(t *testing.T) {
 			_, _ = w.Write([]byte(`{"error":{"code":"forbidden","message":"project membership is required"}}`))
 		case "/api/jobs/job-1":
 			_, _ = w.Write([]byte(`{"data":{"id":"job-1","project_id":"project-1","name":"backend-ci","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1\nsteps:\n  - name: test","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z","latest_build":{"id":"build-1","build_number":14,"status":"failed","created_at":"2026-07-06T00:00:00Z"}}}`))
-		case "/api/jobs/backend-ci?project=platform":
+		case "/api/jobs/resolve?name=backend-ci&project=platform":
 			_, _ = w.Write([]byte(`{"data":{"id":"job-1","project_id":"project-1","name":"backend-ci","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1\nsteps:\n  - name: test","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}}`))
-		case "/api/jobs/duplicate?project=platform":
+		case "/api/jobs/resolve?name=duplicate&project=platform":
 			w.WriteHeader(http.StatusConflict)
 			_, _ = w.Write([]byte(`{"error":{"code":"ambiguous_selector","message":"job selector matched multiple jobs in project"}}`))
 		case "/api/jobs/job-2":

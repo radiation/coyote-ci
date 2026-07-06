@@ -67,6 +67,10 @@ func (f fakeVisibilityJobRepository) Delete(context.Context, string) error {
 	panic("unexpected call")
 }
 
+func (f fakeVisibilityJobRepository) FindByProjectIDAndName(context.Context, string, string, int) ([]domain.Job, error) {
+	panic("unexpected call")
+}
+
 func (f fakeVisibilityJobRepository) GetByIDs(context.Context, []string) ([]domain.Job, error) {
 	panic("unexpected call")
 }
