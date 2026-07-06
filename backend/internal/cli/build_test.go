@@ -90,6 +90,7 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 		ProjectID:    "project-1",
 		ProjectName:  &projectName,
 		JobID:        &jobID,
+		JobName:      stringPtr("coyote-ci"),
 		Status:       "failed",
 		CreatedAt:    "2026-07-04T00:00:00Z",
 		StartedAt:    stringPtr("2026-07-04T00:00:01Z"),
@@ -99,11 +100,15 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 		TriggeredBy:  stringPtr("trigger-user"),
 		ErrorMessage: &errorMessage,
 		PipelineName: &pipeline,
+		CurrentSteps: []api.BuildCurrentStepResponse{{ID: "step-0", Index: 0, Name: "lint", Status: "running", StartedAt: stringPtr("2026-07-04T00:00:01Z")}, {ID: "step-2", Index: 2, Name: "test", Status: "running", StartedAt: stringPtr("2026-07-04T00:00:02Z")}},
 	}
 	steps := []api.BuildStepResponse{{StepIndex: 1, Name: "test", Status: "failed", ExitCode: intPtr(1), Job: &api.ExecutionJobResponse{Name: jobName}}}
 	payload := makeBuildStatusPayload("https://example.com/base", build, steps)
-	if payload.Build.JobName == nil || *payload.Build.JobName != jobName {
+	if payload.Build.JobName == nil || *payload.Build.JobName != "coyote-ci" {
 		t.Fatalf("expected derived job name, got %+v", payload)
+	}
+	if len(payload.Build.CurrentSteps) != 2 || payload.Build.CurrentSteps[0].Name != "lint" || payload.Build.CurrentSteps[1].Index != 2 {
+		t.Fatalf("unexpected current steps payload: %+v", payload.Build.CurrentSteps)
 	}
 	if payload.Build.Author == nil || *payload.Build.Author != "trigger-user" {
 		t.Fatalf("expected author fallback from trigger, got %+v", payload.Build.Author)
@@ -120,7 +125,7 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 		t.Fatalf("writeBuildStatusHuman failed: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"Project: Project X", "Job:     unit", "Commit:  abcdef1", "Failed:  step 1 test exited 1"} {
+	for _, want := range []string{"Project: Project X", "Job:     coyote-ci", "Commit:  abcdef1", "Failed:  step 1 test exited 1", "Running:", "[0] lint", "[2] test"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected %q in output, got %s", want, out)
 		}
@@ -133,6 +138,9 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "Job:     manual") {
 		t.Fatalf("expected manual job fallback, got %s", buf.String())
+	}
+	if strings.Contains(buf.String(), "Running:") {
+		t.Fatalf("did not expect running section for minimal payload, got %s", buf.String())
 	}
 	if err := writeBuildStatusHuman(failWriter{}, payload); err == nil {
 		t.Fatal("expected writeBuildStatusHuman to surface write errors")

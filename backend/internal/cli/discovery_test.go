@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -151,6 +152,8 @@ func TestJobDiscoveryCommands(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 		switch r.URL.String() {
+		case "/api/projects/default/jobs":
+			_, _ = w.Write([]byte(`{"data":{"jobs":[{"id":"job-1","project_id":"project-1","name":"coyote-ci","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1\nsteps:\n  - name: test","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z","latest_build":{"id":"build-1","build_number":14,"status":"failed","created_at":"2026-07-06T00:00:00Z"}}]}}`))
 		case "/api/projects/platform/jobs":
 			_, _ = w.Write([]byte(`{"data":{"jobs":[{"id":"job-1","project_id":"project-1","name":"backend-ci","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1\nsteps:\n  - name: test","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z","latest_build":{"id":"build-1","build_number":14,"status":"failed","created_at":"2026-07-06T00:00:00Z"}}]}}`))
 		case "/api/projects/missing/jobs":
@@ -281,6 +284,218 @@ func TestJobDiscoveryCommands(t *testing.T) {
 		t.Fatalf("expected missing scope exit code 5, got %d stderr=%s", code, stderr.String())
 	}
 	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "api token does not have the required scope: build:read") {
+		t.Fatalf("unexpected missing scope result stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if strings.Contains(stderr.String(), "stored-token") {
+		t.Fatalf("stderr leaked token: %s", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	code = Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"job", "list", "--project", "default"}})
+	if code != 0 {
+		t.Fatalf("job list default selector exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "coyote-ci") {
+		t.Fatalf("unexpected default selector job list output: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	code = Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"job", "list", "--project", "default", "--ref", "main", "--yes"}})
+	if code != 1 {
+		t.Fatalf("expected unknown flag exit code 1, got %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "unknown flag: --ref") {
+		t.Fatalf("unexpected unknown flag stderr: %s", stderr.String())
+	}
+}
+
+func TestJobRunCommand(t *testing.T) {
+	originalInteractiveCheck := isInteractiveInputFunc
+	t.Cleanup(func() {
+		isInteractiveInputFunc = originalInteractiveCheck
+	})
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		switch r.URL.String() {
+		case "/api/jobs/job-1":
+			_, _ = w.Write([]byte(`{"data":{"id":"job-1","project_id":"project-1","name":"backend-ci","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1\nsteps:\n  - name: test","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}}`))
+		case "/api/jobs/resolve?name=coyote-ci&project=default":
+			_, _ = w.Write([]byte(`{"data":{"id":"job-1","project_id":"project-1","name":"coyote-ci","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1\nsteps:\n  - name: test","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}}`))
+		case "/api/jobs/resolve?name=backend-ci&project=platform":
+			_, _ = w.Write([]byte(`{"data":{"id":"job-1","project_id":"project-1","name":"backend-ci","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1\nsteps:\n  - name: test","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}}`))
+		case "/api/jobs/resolve?name=duplicate&project=platform":
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":{"code":"ambiguous_selector","message":"job selector matched multiple jobs in project"}}`))
+		case "/api/jobs/job-1/run":
+			if r.Method != http.MethodPost {
+				t.Fatalf("expected POST, got %s", r.Method)
+			}
+			var req map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode run request: %v", err)
+			}
+			if req["ref"] != "release/2026.07" && req["ref"] != "main" {
+				t.Fatalf("unexpected run ref payload: %+v", req)
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":"build-2","build_number":15,"project_id":"project-1","project_name":"Coyote CI","job_id":"job-1","status":"queued","created_at":"2026-07-06T00:01:00Z","queued_at":"2026-07-06T00:01:00Z","started_at":null,"finished_at":null,"current_step_index":0,"attempt_number":1,"error_message":null,"trigger_type":"manual","trigger_kind":"manual","source":{"repository_url":"https://github.com/example/backend.git","ref":"release/2026.07"},"image":{"source_kind":"external"}}}`))
+		case "/api/jobs/job-2":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"api token does not have the required scope: build:run"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore, creds := discoveryTestConfig(t, server.URL)
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("ignored"), ConfigStore: configStore, Credentials: creds, Args: []string{"job", "run", "job-1", "--ref", "release/2026.07", "--yes"}}); code != 0 {
+		t.Fatalf("job run exit code %d stderr=%s", code, stderr.String())
+	}
+	for _, want := range []string{"Started job backend-ci", "Build:  build-2", "Status: queued", "/builds/build-2", "coyote build status build-2"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected %q in job run output, got %s", want, stdout.String())
+		}
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("ignored"), ConfigStore: configStore, Credentials: creds, Args: []string{"job", "run", "backend-ci", "--project", "platform", "--ref", "main", "--yes", "--json"}}); code != 0 {
+		t.Fatalf("job run json exit code %d stderr=%s", code, stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode job run json: %v", err)
+	}
+	runPayload, ok := payload["run"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected run object, got %+v", payload)
+	}
+	if runPayload["job_id"] != "job-1" || runPayload["ref"] != "main" || runPayload["build_id"] != "build-2" || runPayload["status"] != "queued" {
+		t.Fatalf("unexpected run payload: %+v", payload)
+	}
+	if strings.Contains(stdout.String(), "Started job") {
+		t.Fatalf("unexpected human prose in job run JSON: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("ignored"), ConfigStore: configStore, Credentials: creds, Args: []string{"job", "show", "coyote-ci", "--project", "default"}}); code != 0 {
+		t.Fatalf("job show default selector exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Job:        coyote-ci") {
+		t.Fatalf("unexpected default selector job show output: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("ignored"), ConfigStore: configStore, Credentials: creds, Args: []string{"job", "run", "coyote-ci", "--project", "default", "--ref", "main", "--yes"}}); code != 0 {
+		t.Fatalf("job run default selector exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Started job coyote-ci") {
+		t.Fatalf("unexpected default selector job run output: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	isInteractiveInputFunc = func(io.Reader) bool { return true }
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("yes\n"), ConfigStore: configStore, Credentials: creds, Args: []string{"job", "run", "job-1", "--ref", "main"}}); code != 0 {
+		t.Fatalf("interactive job run exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Run job backend-ci on ref main?") {
+		t.Fatalf("expected prompt in stderr, got %q", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("n\n"), ConfigStore: configStore, Credentials: creds, Args: []string{"job", "run", "job-1", "--ref", "main"}})
+	if code != 2 {
+		t.Fatalf("expected declined confirmation exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "job run canceled") {
+		t.Fatalf("unexpected declined confirmation stderr: %s", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	isInteractiveInputFunc = originalInteractiveCheck
+
+	beforeMissingProject := requestCount
+	code = Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("ignored"), ConfigStore: configStore, Credentials: creds, Args: []string{"job", "run", "backend-ci", "--ref", "main", "--yes"}})
+	if code != 2 {
+		t.Fatalf("expected missing project exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+	if requestCount != beforeMissingProject {
+		t.Fatalf("expected missing project to stop before HTTP request, got %d requests", requestCount-beforeMissingProject)
+	}
+	if !strings.Contains(stderr.String(), "job name requires --project") {
+		t.Fatalf("unexpected missing project stderr: %s", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	beforeMissingRef := requestCount
+	code = Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("ignored"), ConfigStore: configStore, Credentials: creds, Args: []string{"job", "run", "job-1", "--yes"}})
+	if code != 2 {
+		t.Fatalf("expected missing ref exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+	if requestCount != beforeMissingRef {
+		t.Fatalf("expected missing ref to stop before HTTP request, got %d requests", requestCount-beforeMissingRef)
+	}
+	if !strings.Contains(stderr.String(), "ref is required") {
+		t.Fatalf("unexpected missing ref stderr: %s", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	beforeNonInteractive := requestCount
+	code = Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader(""), ConfigStore: configStore, Credentials: creds, Args: []string{"job", "run", "job-1", "--ref", "main"}})
+	if code != 2 {
+		t.Fatalf("expected noninteractive exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+	if requestCount != beforeNonInteractive {
+		t.Fatalf("expected noninteractive refusal before any HTTP request, got %d", requestCount-beforeNonInteractive)
+	}
+	if !strings.Contains(stderr.String(), "job run requires --yes when stdin is not interactive") {
+		t.Fatalf("unexpected noninteractive stderr: %s", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	beforeJSON := requestCount
+	code = Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("ignored"), ConfigStore: configStore, Credentials: creds, Args: []string{"job", "run", "job-1", "--ref", "main", "--json"}})
+	if code != 2 {
+		t.Fatalf("expected json without yes exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+	if requestCount != beforeJSON {
+		t.Fatalf("expected json refusal before any HTTP request, got %d", requestCount-beforeJSON)
+	}
+	if !strings.Contains(stderr.String(), "job run with --json requires --yes") {
+		t.Fatalf("unexpected json stderr: %s", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	code = Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("ignored"), ConfigStore: configStore, Credentials: creds, Args: []string{"job", "run", "duplicate", "--project", "platform", "--ref", "main", "--yes", "--json"}})
+	if code != 2 {
+		t.Fatalf("expected ambiguous selector exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "job selector matched multiple jobs in project") {
+		t.Fatalf("unexpected ambiguous selector stderr: %s", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	code = Run(Dependencies{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("ignored"), ConfigStore: configStore, Credentials: creds, Args: []string{"job", "run", "job-2", "--ref", "main", "--yes", "--json"}})
+	if code != 5 {
+		t.Fatalf("expected missing scope exit code 5, got %d stderr=%s", code, stderr.String())
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "api token does not have the required scope: build:run") {
 		t.Fatalf("unexpected missing scope result stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 	if strings.Contains(stderr.String(), "stored-token") {

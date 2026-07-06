@@ -11,6 +11,7 @@ type BuildHandler struct {
 	buildService *buildsvc.BuildService
 	versionTags  *versiontagsvc.Service
 	projects     *service.ProjectService
+	jobs         *service.JobService
 	authMode     auth.Mode
 	projectRoles auth.ProjectRoleLookup
 }
@@ -27,6 +28,10 @@ func (h *BuildHandler) SetVersionTagService(service *versiontagsvc.Service) {
 
 func (h *BuildHandler) SetProjectService(projects *service.ProjectService) {
 	h.projects = projects
+}
+
+func (h *BuildHandler) SetJobService(jobs *service.JobService) {
+	h.jobs = jobs
 }
 
 func (h *BuildHandler) SetAuthorization(mode auth.Mode, projectRoles auth.ProjectRoleLookup) {

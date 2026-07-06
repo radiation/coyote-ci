@@ -319,6 +319,19 @@ definitions:
       build_id:
         type: string
     type: object
+  api.BuildCurrentStepResponse:
+    properties:
+      id:
+        type: string
+      index:
+        type: integer
+      name:
+        type: string
+      started_at:
+        type: string
+      status:
+        type: string
+    type: object
   api.BuildEnvelope:
     properties:
       data:
@@ -392,6 +405,10 @@ definitions:
         type: string
       current_step_index:
         type: integer
+      current_steps:
+        items:
+          $ref: '#/definitions/api.BuildCurrentStepResponse'
+        type: array
       delivery_id:
         type: string
       error_message:
@@ -405,6 +422,8 @@ definitions:
       image:
         $ref: '#/definitions/api.ImageExecutionResponse'
       job_id:
+        type: string
+      job_name:
         type: string
       pipeline_config_yaml:
         type: string
@@ -1299,6 +1318,11 @@ definitions:
         $ref: '#/definitions/api.BuildResponse'
       job:
         $ref: '#/definitions/api.ExecutionJobResponse'
+    type: object
+  api.RunJobRequest:
+    properties:
+      ref:
+        type: string
     type: object
   api.ServerInfoEnvelope:
     properties:
@@ -2618,6 +2642,8 @@ paths:
       - jobs
   /jobs/{jobID}/run:
     post:
+      consumes:
+      - application/json
       description: Triggers an immediate build for a job.
       parameters:
       - description: Job ID
@@ -2625,6 +2651,11 @@ paths:
         name: jobID
         required: true
         type: string
+      - description: Optional run request
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/api.RunJobRequest'
       produces:
       - application/json
       responses:

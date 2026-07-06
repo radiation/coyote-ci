@@ -4,12 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
@@ -151,7 +156,7 @@ func TestProjectHandler_GetProjectWithMissingIDReturnsBadRequest(t *testing.T) {
 
 func TestProjectHandler_GetAndListJobsResolveSlugSelectors(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
-	projectRepo := memory.NewProjectRepository(jobRepo)
+	projectRepo := &selectorAwareProjectRepository{ProjectRepository: memory.NewProjectRepository(jobRepo)}
 	buildRepo := memory.NewBuildRepository()
 	jobService := service.NewJobService(jobRepo, buildsvc.NewBuildService(buildRepo, nil, nil)).WithProjectRepository(projectRepo)
 	projectService := service.NewProjectService(projectRepo)
@@ -170,12 +175,17 @@ func TestProjectHandler_GetAndListJobsResolveSlugSelectors(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create job failed: %v", err)
 	}
+	projectRepo.getByIDCalls = nil
+	projectRepo.getBySlugCalls = nil
 
 	getReq := addURLParam(httptest.NewRequest(http.MethodGet, "/projects/platform", nil), "id", project.Slug)
 	getRes := httptest.NewRecorder()
 	h.GetProject(getRes, getReq)
 	if getRes.Code != http.StatusOK {
 		t.Fatalf("expected slug get status %d, got %d body=%s", http.StatusOK, getRes.Code, getRes.Body.String())
+	}
+	if len(projectRepo.getByIDCalls) != 0 {
+		t.Fatalf("expected slug get to avoid GetByID, got %+v", projectRepo.getByIDCalls)
 	}
 
 	jobsReq := addURLParam(httptest.NewRequest(http.MethodGet, "/projects/platform/jobs", nil), "id", project.Slug)
@@ -184,9 +194,75 @@ func TestProjectHandler_GetAndListJobsResolveSlugSelectors(t *testing.T) {
 	if jobsRes.Code != http.StatusOK {
 		t.Fatalf("expected slug jobs status %d, got %d body=%s", http.StatusOK, jobsRes.Code, jobsRes.Body.String())
 	}
+	if len(projectRepo.getBySlugCalls) == 0 || projectRepo.getBySlugCalls[0] != project.Slug {
+		t.Fatalf("expected slug lookup for project selector, got %+v", projectRepo.getBySlugCalls)
+	}
+	for _, idCall := range projectRepo.getByIDCalls {
+		if idCall == project.Slug {
+			t.Fatalf("unexpected slug selector reached GetByID: %+v", projectRepo.getByIDCalls)
+		}
+	}
+}
+
+func TestProjectHandler_GetProjectUnknownSlugReturnsNotFound(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := &selectorAwareProjectRepository{ProjectRepository: memory.NewProjectRepository(jobRepo)}
+	projectService := service.NewProjectService(projectRepo)
+	h := NewProjectHandler(projectService, service.NewJobService(jobRepo, buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)).WithProjectRepository(projectRepo))
+
+	getReq := addURLParam(httptest.NewRequest(http.MethodGet, "/projects/definitely-not-a-project", nil), "id", "definitely-not-a-project")
+	getRes := httptest.NewRecorder()
+	h.GetProject(getRes, getReq)
+	if getRes.Code != http.StatusNotFound {
+		t.Fatalf("expected missing slug project status %d, got %d body=%s", http.StatusNotFound, getRes.Code, getRes.Body.String())
+	}
+	if !bytes.Contains(getRes.Body.Bytes(), []byte("project not found")) {
+		t.Fatalf("unexpected missing slug body: %s", getRes.Body.String())
+	}
+	if len(projectRepo.getByIDCalls) != 0 {
+		t.Fatalf("expected missing slug project lookup to avoid GetByID, got %+v", projectRepo.getByIDCalls)
+	}
+}
+
+func TestProjectHandler_ListProjectJobsUnknownSlugReturnsNotFound(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	buildRepo := memory.NewBuildRepository()
+	jobService := service.NewJobService(jobRepo, buildsvc.NewBuildService(buildRepo, nil, nil)).WithProjectRepository(projectRepo)
+	projectService := service.NewProjectService(projectRepo)
+	h := NewProjectHandler(projectService, jobService)
+
+	jobsReq := addURLParam(httptest.NewRequest(http.MethodGet, "/projects/definitely-not-a-project/jobs", nil), "id", "definitely-not-a-project")
+	jobsRes := httptest.NewRecorder()
+	h.ListProjectJobs(jobsRes, jobsReq)
+	if jobsRes.Code != http.StatusNotFound {
+		t.Fatalf("expected missing slug jobs status %d, got %d body=%s", http.StatusNotFound, jobsRes.Code, jobsRes.Body.String())
+	}
+	if !bytes.Contains(jobsRes.Body.Bytes(), []byte("project not found")) {
+		t.Fatalf("unexpected missing slug body: %s", jobsRes.Body.String())
+	}
 }
 
 func serviceProject(id string, name string, slug string) domain.Project {
 	now := time.Now().UTC()
 	return domain.Project{ID: id, Name: name, Slug: slug, CreatedAt: now, UpdatedAt: now}
+}
+
+type selectorAwareProjectRepository struct {
+	repository.ProjectRepository
+	getByIDCalls   []string
+	getBySlugCalls []string
+}
+
+func (r *selectorAwareProjectRepository) GetByID(ctx context.Context, id string) (domain.Project, error) {
+	r.getByIDCalls = append(r.getByIDCalls, id)
+	if _, err := uuid.Parse(strings.TrimSpace(id)); err != nil {
+		return domain.Project{}, errors.New("non-uuid selector reached GetByID")
+	}
+	return r.ProjectRepository.GetByID(ctx, id)
+}
+
+func (r *selectorAwareProjectRepository) GetBySlug(ctx context.Context, slug string) (domain.Project, error) {
+	r.getBySlugCalls = append(r.getBySlugCalls, slug)
+	return r.ProjectRepository.GetBySlug(ctx, slug)
 }

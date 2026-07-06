@@ -1613,6 +1613,9 @@ const docTemplate = `{
         "/jobs/{jobID}/run": {
             "post": {
                 "description": "Triggers an immediate build for a job.",
+                "consumes": [
+                    "application/json"
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -1627,6 +1630,14 @@ const docTemplate = `{
                         "name": "jobID",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "description": "Optional run request",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/api.RunJobRequest"
+                        }
                     }
                 ],
                 "responses": {
@@ -4259,6 +4270,26 @@ const docTemplate = `{
                 }
             }
         },
+        "api.BuildCurrentStepResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "api.BuildEnvelope": {
             "type": "object",
             "properties": {
@@ -4372,6 +4403,12 @@ const docTemplate = `{
                 "current_step_index": {
                     "type": "integer"
                 },
+                "current_steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.BuildCurrentStepResponse"
+                    }
+                },
                 "delivery_id": {
                     "type": "string"
                 },
@@ -4391,6 +4428,9 @@ const docTemplate = `{
                     "$ref": "#/definitions/api.ImageExecutionResponse"
                 },
                 "job_id": {
+                    "type": "string"
+                },
+                "job_name": {
                     "type": "string"
                 },
                 "pipeline_config_yaml": {
@@ -5766,6 +5806,14 @@ const docTemplate = `{
                 },
                 "job": {
                     "$ref": "#/definitions/api.ExecutionJobResponse"
+                }
+            }
+        },
+        "api.RunJobRequest": {
+            "type": "object",
+            "properties": {
+                "ref": {
+                    "type": "string"
                 }
             }
         },

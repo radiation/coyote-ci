@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +24,10 @@ type jobListPayload struct {
 
 type jobPayload struct {
 	Job jobView `json:"job"`
+}
+
+type jobRunPayload struct {
+	Run jobRunView `json:"run"`
 }
 
 type jobView struct {
@@ -51,10 +56,21 @@ type jobLatestBuildView struct {
 	ErrorMessage *string `json:"error_message,omitempty"`
 }
 
+type jobRunView struct {
+	JobID     string `json:"job_id"`
+	JobName   string `json:"job_name"`
+	ProjectID string `json:"project_id"`
+	Ref       string `json:"ref"`
+	BuildID   string `json:"build_id"`
+	Status    string `json:"status"`
+	WebURL    string `json:"web_url,omitempty"`
+}
+
 func (a *app) newJobCommand() *cobra.Command {
 	command := &cobra.Command{Use: "job", Short: "Discover jobs"}
 	command.AddCommand(a.newJobListCommand())
 	command.AddCommand(a.newJobShowCommand())
+	command.AddCommand(a.newJobRunCommand())
 	return command
 }
 
@@ -133,6 +149,71 @@ func (a *app) newJobShowCommand() *cobra.Command {
 	return command
 }
 
+func (a *app) newJobRunCommand() *cobra.Command {
+	var projectSelector string
+	var ref string
+	var assumeYes bool
+
+	command := &cobra.Command{
+		Use:   "run <job-id-or-name>",
+		Short: "Start a new build for a job",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			selector := strings.TrimSpace(args[0])
+			if selector == "" {
+				return &ExitError{Code: 2, Err: errors.New("job selector is required")}
+			}
+			trimmedRef := strings.TrimSpace(ref)
+			if trimmedRef == "" {
+				return &ExitError{Code: 2, Err: errors.New("ref is required")}
+			}
+			if strings.TrimSpace(projectSelector) == "" && !looksLikeDirectJobID(selector) {
+				return &ExitError{Code: 2, Err: errors.New("job name requires --project; use a job id or pass --project")}
+			}
+
+			resolved, err := a.resolveTarget()
+			if err != nil {
+				return err
+			}
+			if validationErr := a.validateJobRunInvocation(resolved.OutputMode, assumeYes); validationErr != nil {
+				return validationErr
+			}
+			client, err := a.newClient(resolved)
+			if err != nil {
+				return &ExitError{Code: 3, Err: err}
+			}
+
+			getOptions := apiclient.GetJobOptions{}
+			if !looksLikeDirectJobID(selector) {
+				getOptions.Project = projectSelector
+			}
+			job, jobErr := client.GetJob(cmd.Context(), selector, getOptions)
+			if jobErr != nil {
+				return mapCommandError(jobErr)
+			}
+
+			confirmErr := a.confirmJobRun(job.Name, trimmedRef, assumeYes)
+			if confirmErr != nil {
+				return confirmErr
+			}
+
+			build, runErr := client.RunJob(cmd.Context(), job.ID, apiclient.RunJobOptions{Ref: trimmedRef})
+			if runErr != nil {
+				return mapCommandError(runErr)
+			}
+
+			payload := makeJobRunPayload(resolved.ServerURL, job, trimmedRef, build)
+			return output.Write(resolved.OutputMode, a.stdout, func(w io.Writer) error {
+				return writeJobRunHuman(w, payload)
+			}, payload)
+		},
+	}
+	command.Flags().StringVar(&projectSelector, "project", "", "Project ID or slug for name-based lookup")
+	command.Flags().StringVar(&ref, "ref", "", "Branch, tag, or commit SHA to run")
+	command.Flags().BoolVar(&assumeYes, "yes", false, "Skip confirmation prompt")
+	return command
+}
+
 func makeJobListPayload(serverURL string, projectSelector string, jobs []api.JobResponse) jobListPayload {
 	items := make([]jobView, 0, len(jobs))
 	for _, job := range jobs {
@@ -143,6 +224,20 @@ func makeJobListPayload(serverURL string, projectSelector string, jobs []api.Job
 
 func makeJobPayload(serverURL string, job api.JobResponse) jobPayload {
 	return jobPayload{Job: makeJobView(serverURL, job)}
+}
+
+func makeJobRunPayload(serverURL string, job api.JobResponse, ref string, build api.BuildResponse) jobRunPayload {
+	return jobRunPayload{
+		Run: jobRunView{
+			JobID:     job.ID,
+			JobName:   strings.TrimSpace(job.Name),
+			ProjectID: strings.TrimSpace(job.ProjectID),
+			Ref:       strings.TrimSpace(ref),
+			BuildID:   build.ID,
+			Status:    build.Status,
+			WebURL:    buildWebURL(serverURL, build.ID, nil),
+		},
+	}
 }
 
 func makeJobView(serverURL string, job api.JobResponse) jobView {
@@ -259,6 +354,73 @@ func writeJobHuman(w io.Writer, payload jobPayload) error {
 		if _, err := fmt.Fprintf(w, "URL:        %s\n", job.WebURL); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func writeJobRunHuman(w io.Writer, payload jobRunPayload) error {
+	run := payload.Run
+	jobLabel := run.JobName
+	if jobLabel == "" {
+		jobLabel = run.JobID
+	}
+	if _, err := fmt.Fprintf(w, "Started job %s\n", jobLabel); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Build:  %s\n", run.BuildID); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Status: %s\n", run.Status); err != nil {
+		return err
+	}
+	if run.WebURL != "" {
+		if _, err := fmt.Fprintf(w, "URL:    %s\n", run.WebURL); err != nil {
+			return err
+		}
+	}
+	if run.BuildID != "" {
+		if _, err := fmt.Fprintf(w, "\nNext:\n  coyote build status %s\n", run.BuildID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *app) validateJobRunInvocation(mode output.Mode, assumeYes bool) error {
+	if assumeYes {
+		return nil
+	}
+	if mode == output.ModeJSON {
+		return &ExitError{Code: 2, Err: errors.New("job run with --json requires --yes")}
+	}
+	if !isInteractiveInputFunc(a.stdin) {
+		return &ExitError{Code: 2, Err: errors.New("job run requires --yes when stdin is not interactive")}
+	}
+	return nil
+}
+
+func (a *app) confirmJobRun(jobName string, ref string, assumeYes bool) error {
+	if assumeYes {
+		return nil
+	}
+	if validationErr := a.validateJobRunInvocation(output.ModeHuman, assumeYes); validationErr != nil {
+		return validationErr
+	}
+	trimmedJobName := strings.TrimSpace(jobName)
+	if trimmedJobName == "" {
+		trimmedJobName = "job"
+	}
+	if _, err := fmt.Fprintf(a.stderr, "Run job %s on ref %s? This will start a new build. [y/N] ", trimmedJobName, strings.TrimSpace(ref)); err != nil {
+		return err
+	}
+	reader := bufio.NewReader(a.stdin)
+	answer, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	trimmed := strings.ToLower(strings.TrimSpace(answer))
+	if trimmed != "y" && trimmed != "yes" {
+		return &ExitError{Code: 2, Err: errors.New("job run canceled")}
 	}
 	return nil
 }

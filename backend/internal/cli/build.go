@@ -31,23 +31,32 @@ type buildStatusPayload struct {
 }
 
 type buildStatusView struct {
-	ID          string  `json:"id"`
-	BuildNumber int64   `json:"build_number,omitempty"`
-	ProjectID   string  `json:"project_id"`
-	ProjectName *string `json:"project_name,omitempty"`
-	JobID       *string `json:"job_id,omitempty"`
-	JobName     *string `json:"job_name,omitempty"`
-	Status      string  `json:"status"`
-	Ref         *string `json:"ref,omitempty"`
-	SHA         *string `json:"sha,omitempty"`
-	Author      *string `json:"author,omitempty"`
-	CreatedAt   string  `json:"created_at"`
-	StartedAt   *string `json:"started_at,omitempty"`
-	FinishedAt  *string `json:"finished_at,omitempty"`
-	DurationMS  *int64  `json:"duration_ms,omitempty"`
-	WebURL      string  `json:"web_url"`
-	Error       *string `json:"error_message,omitempty"`
-	Pipeline    *string `json:"pipeline_name,omitempty"`
+	ID           string                 `json:"id"`
+	BuildNumber  int64                  `json:"build_number,omitempty"`
+	ProjectID    string                 `json:"project_id"`
+	ProjectName  *string                `json:"project_name,omitempty"`
+	JobID        *string                `json:"job_id,omitempty"`
+	JobName      *string                `json:"job_name,omitempty"`
+	Status       string                 `json:"status"`
+	Ref          *string                `json:"ref,omitempty"`
+	SHA          *string                `json:"sha,omitempty"`
+	Author       *string                `json:"author,omitempty"`
+	CreatedAt    string                 `json:"created_at"`
+	StartedAt    *string                `json:"started_at,omitempty"`
+	FinishedAt   *string                `json:"finished_at,omitempty"`
+	DurationMS   *int64                 `json:"duration_ms,omitempty"`
+	WebURL       string                 `json:"web_url"`
+	Error        *string                `json:"error_message,omitempty"`
+	Pipeline     *string                `json:"pipeline_name,omitempty"`
+	CurrentSteps []buildCurrentStepView `json:"current_steps"`
+}
+
+type buildCurrentStepView struct {
+	ID        string  `json:"id"`
+	Index     int     `json:"index"`
+	Name      string  `json:"name"`
+	Status    string  `json:"status"`
+	StartedAt *string `json:"started_at,omitempty"`
 }
 
 type buildFailedStepView struct {
@@ -358,33 +367,35 @@ func makeBuildArtifactsPayload(buildID string, artifacts []api.BuildArtifactResp
 }
 
 func makeBuildStatusPayload(serverURL string, build api.BuildResponse, steps []api.BuildStepResponse) buildStatusPayload {
-	jobName := firstJobName(steps)
+	jobName := firstNonEmptyPtr(build.JobName, firstJobName(steps))
 	refValue := firstNonEmptyPtr(build.SourceRef, build.TriggerRef)
 	shaValue := firstNonEmptyPtr(build.SourceCommitSHA, build.SourceSHA, build.TriggerCommitSHA)
 	authorValue := firstNonEmptyPtr(build.SourceAuthorName, build.TriggeredBy, build.Actor)
 	failedStep := firstFailedStep(steps)
 	durationMS := buildDurationMS(build.StartedAt, build.FinishedAt)
 	webURL := buildWebURL(serverURL, build.ID, failedStep)
+	currentSteps := makeBuildCurrentStepViews(build.CurrentSteps)
 
 	payload := buildStatusPayload{
 		Build: buildStatusView{
-			ID:          build.ID,
-			BuildNumber: build.BuildNumber,
-			ProjectID:   build.ProjectID,
-			ProjectName: build.ProjectName,
-			JobID:       build.JobID,
-			JobName:     jobName,
-			Status:      build.Status,
-			Ref:         refValue,
-			SHA:         shaValue,
-			Author:      authorValue,
-			CreatedAt:   build.CreatedAt,
-			StartedAt:   build.StartedAt,
-			FinishedAt:  build.FinishedAt,
-			DurationMS:  durationMS,
-			WebURL:      webURL,
-			Error:       build.ErrorMessage,
-			Pipeline:    build.PipelineName,
+			ID:           build.ID,
+			BuildNumber:  build.BuildNumber,
+			ProjectID:    build.ProjectID,
+			ProjectName:  build.ProjectName,
+			JobID:        build.JobID,
+			JobName:      jobName,
+			Status:       build.Status,
+			Ref:          refValue,
+			SHA:          shaValue,
+			Author:       authorValue,
+			CreatedAt:    build.CreatedAt,
+			StartedAt:    build.StartedAt,
+			FinishedAt:   build.FinishedAt,
+			DurationMS:   durationMS,
+			WebURL:       webURL,
+			Error:        build.ErrorMessage,
+			Pipeline:     build.PipelineName,
+			CurrentSteps: currentSteps,
 		},
 		FailedStep: failedStep,
 	}
@@ -450,6 +461,16 @@ func writeBuildStatusHuman(w io.Writer, payload buildStatusPayload) error {
 	if build.WebURL != "" {
 		if _, err := fmt.Fprintf(w, "URL:     %s\n", build.WebURL); err != nil {
 			return err
+		}
+	}
+	if len(build.CurrentSteps) > 0 {
+		if _, err := fmt.Fprintln(w, "\nRunning:"); err != nil {
+			return err
+		}
+		for _, step := range build.CurrentSteps {
+			if _, err := fmt.Fprintf(w, "  [%d] %s\n", step.Index, step.Name); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -910,6 +931,29 @@ func firstFailedStep(steps []api.BuildStepResponse) *buildFailedStepView {
 		}
 	}
 	return nil
+}
+
+func makeBuildCurrentStepViews(steps []api.BuildCurrentStepResponse) []buildCurrentStepView {
+	if len(steps) == 0 {
+		return []buildCurrentStepView{}
+	}
+	items := make([]buildCurrentStepView, 0, len(steps))
+	for _, step := range steps {
+		items = append(items, buildCurrentStepView{
+			ID:        step.ID,
+			Index:     step.Index,
+			Name:      step.Name,
+			Status:    step.Status,
+			StartedAt: trimStringPtr(step.StartedAt),
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Index == items[j].Index {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].Index < items[j].Index
+	})
+	return items
 }
 
 func firstNonEmptyPtr(values ...*string) *string {

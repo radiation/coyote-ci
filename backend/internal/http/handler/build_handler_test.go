@@ -1378,6 +1378,9 @@ func TestBuildHandler_GetBuild(t *testing.T) {
 					t.Fatalf("expected build detail field %q, got %v", field, data)
 				}
 			}
+			if currentSteps, ok := data["current_steps"].([]any); !ok || len(currentSteps) != 0 {
+				t.Fatalf("expected empty current_steps array, got %v", data["current_steps"])
+			}
 			if data["source_author_email"] != "ada@example.com" {
 				t.Fatalf("expected source_author_email ada@example.com, got %v", data["source_author_email"])
 			}
@@ -1385,6 +1388,59 @@ func TestBuildHandler_GetBuild(t *testing.T) {
 				t.Fatalf("expected source_committer_email grace@example.com, got %v", data["source_committer_email"])
 			}
 		})
+	}
+}
+
+func TestBuildHandler_GetBuildIncludesJobNameAndCurrentSteps(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	jobService := service.NewJobService(jobRepo, nil).WithProjectRepository(projectRepo)
+	jobID := "job-1"
+	if _, err := projectRepo.Create(context.Background(), domain.Project{ID: "project-1", Name: "Default Project", Slug: "default", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	if _, err := jobRepo.Create(context.Background(), domain.Job{ID: jobID, ProjectID: "project-1", Name: "coyote-ci", RepositoryURL: "https://github.com/example/repo.git", DefaultRef: "main", PipelineYAML: "version: 1", Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+	repo := &fakeRepo{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, Status: domain.BuildStatusRunning, CreatedAt: now},
+		steps: map[string][]domain.BuildStep{
+			"build-1": {
+				{ID: "step-2", BuildID: "build-1", StepIndex: 2, Name: "frontend", Status: domain.BuildStepStatusRunning, StartedAt: &now},
+				{ID: "step-0", BuildID: "build-1", StepIndex: 0, Name: "backend", Status: domain.BuildStepStatusRunning, StartedAt: &now},
+				{ID: "step-3", BuildID: "build-1", StepIndex: 3, Name: "done", Status: domain.BuildStepStatusSuccess, StartedAt: &now, FinishedAt: &now},
+			},
+		},
+	}
+	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, nil))
+	h.SetProjectService(service.NewProjectService(projectRepo))
+	h.SetJobService(jobService)
+
+	req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1", nil), "build-1")
+	rr := httptest.NewRecorder()
+	h.GetBuild(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+	data := decodeDataMap(t, rr)
+	if data["job_name"] != "coyote-ci" {
+		t.Fatalf("expected job_name coyote-ci, got %v", data["job_name"])
+	}
+	currentSteps, ok := data["current_steps"].([]any)
+	if !ok || len(currentSteps) != 2 {
+		t.Fatalf("expected two running current_steps, got %+v", data["current_steps"])
+	}
+	first, firstOK := currentSteps[0].(map[string]any)
+	second, secondOK := currentSteps[1].(map[string]any)
+	if !firstOK || !secondOK {
+		t.Fatalf("expected current_steps objects, got %+v", currentSteps)
+	}
+	if first["index"] != float64(0) || first["name"] != "backend" || second["index"] != float64(2) || second["name"] != "frontend" {
+		t.Fatalf("unexpected current_steps order/content: %+v", currentSteps)
+	}
+	if _, ok := first["started_at"]; !ok {
+		t.Fatalf("expected started_at on current step, got %+v", first)
 	}
 }
 

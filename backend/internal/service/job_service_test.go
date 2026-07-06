@@ -9,12 +9,33 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
 )
+
+type selectorAwareProjectRepo struct {
+	repository.ProjectRepository
+	getByIDCalls   []string
+	getBySlugCalls []string
+}
+
+func (r *selectorAwareProjectRepo) GetByID(ctx context.Context, id string) (domain.Project, error) {
+	r.getByIDCalls = append(r.getByIDCalls, id)
+	if _, err := uuid.Parse(strings.TrimSpace(id)); err != nil {
+		return domain.Project{}, errors.New("non-uuid selector reached GetByID")
+	}
+	return r.ProjectRepository.GetByID(ctx, id)
+}
+
+func (r *selectorAwareProjectRepo) GetBySlug(ctx context.Context, slug string) (domain.Project, error) {
+	r.getBySlugCalls = append(r.getBySlugCalls, slug)
+	return r.ProjectRepository.GetBySlug(ctx, slug)
+}
 
 func TestJobService_CreateListGetUpdate(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
@@ -188,6 +209,62 @@ func TestJobService_ResolveProjectIDUsesWrapper(t *testing.T) {
 	}
 	if resolved != project.ID {
 		t.Fatalf("expected resolved project id %q, got %q", project.ID, resolved)
+	}
+}
+
+func TestJobService_ListJobsByProjectAcceptsSlugSelector(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	baseProjectRepo := memory.NewProjectRepository(jobRepo)
+	projectRepo := &selectorAwareProjectRepo{ProjectRepository: baseProjectRepo}
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService).WithProjectRepository(projectRepo)
+
+	project, err := baseProjectRepo.Create(context.Background(), domain.Project{
+		ID:        "00000000-0000-0000-0000-000000000124",
+		Name:      "Default",
+		Slug:      "default",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     project.ID,
+		Name:          "coyote-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	jobs, err := jobService.ListJobsByProject(context.Background(), "default")
+	if err != nil {
+		t.Fatalf("list jobs by slug selector failed: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].ID != job.ID {
+		t.Fatalf("unexpected jobs payload: %+v", jobs)
+	}
+	for _, call := range projectRepo.getByIDCalls {
+		if call == "default" {
+			t.Fatalf("non-uuid selector unexpectedly hit GetByID")
+		}
+	}
+	if len(projectRepo.getBySlugCalls) == 0 || projectRepo.getBySlugCalls[0] != "default" {
+		t.Fatalf("expected slug lookup for default selector, got %+v", projectRepo.getBySlugCalls)
+	}
+
+	_, err = jobService.ListJobsByProject(context.Background(), "definitely-not-a-project")
+	if !errors.Is(err, repository.ErrProjectNotFound) {
+		t.Fatalf("expected ErrProjectNotFound for unknown slug selector, got %v", err)
+	}
+	for _, call := range projectRepo.getByIDCalls {
+		if call == "definitely-not-a-project" {
+			t.Fatalf("unknown non-uuid selector unexpectedly hit GetByID")
+		}
 	}
 }
 
@@ -741,7 +818,7 @@ func TestJobService_RunNowCreatesNormalBuildAndSnapshotsPipeline(t *testing.T) {
 		t.Fatalf("create job failed: %v", err)
 	}
 
-	build, err := jobService.RunJobNow(context.Background(), job.ID)
+	build, err := jobService.RunJobNow(context.Background(), job.ID, nil)
 	if err != nil {
 		t.Fatalf("run job now failed: %v", err)
 	}
@@ -788,9 +865,53 @@ func TestJobService_RunNowDisabledJobRejected(t *testing.T) {
 		t.Fatalf("create job failed: %v", err)
 	}
 
-	_, err = jobService.RunJobNow(context.Background(), job.ID)
+	_, err = jobService.RunJobNow(context.Background(), job.ID, nil)
 	if !errors.Is(err, ErrJobDisabled) {
 		t.Fatalf("expected ErrJobDisabled, got %v", err)
+	}
+}
+
+func TestJobService_RunNowOverrideRefReplacesDefaultSourceTarget(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService)
+
+	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:        "project-1",
+		Name:             "backend-ci",
+		RepositoryURL:    "https://github.com/example/backend.git",
+		DefaultRef:       "main",
+		DefaultCommitSHA: "abcdef1234567890",
+		PipelineYAML:     "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:          boolPtr(true),
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	overrideRef := "release/2026.07"
+	build, err := jobService.RunJobNow(context.Background(), job.ID, &overrideRef)
+	if err != nil {
+		t.Fatalf("run job now with override ref failed: %v", err)
+	}
+	if build.Ref == nil || *build.Ref != overrideRef {
+		t.Fatalf("expected build ref %q, got %v", overrideRef, build.Ref)
+	}
+	if build.CommitSHA != nil {
+		t.Fatalf("expected override ref to clear default commit SHA, got %v", build.CommitSHA)
+	}
+	if build.Source == nil || build.Source.Ref == nil || *build.Source.Ref != overrideRef {
+		t.Fatalf("expected source ref %q, got %+v", overrideRef, build.Source)
+	}
+	if build.Source != nil && build.Source.CommitSHA != nil && strings.TrimSpace(*build.Source.CommitSHA) != "" {
+		t.Fatalf("expected source commit SHA cleared, got %+v", build.Source)
+	}
+
+	emptyRef := "   "
+	_, err = jobService.RunJobNow(context.Background(), job.ID, &emptyRef)
+	if !errors.Is(err, ErrJobRunRefRequired) {
+		t.Fatalf("expected ErrJobRunRefRequired, got %v", err)
 	}
 }
 

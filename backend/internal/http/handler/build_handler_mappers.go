@@ -27,6 +27,7 @@ func toBuildResponse(build domain.Build, project ...*domain.Project) api.BuildRe
 		ProjectName:          projectName,
 		ProjectSlug:          projectSlug,
 		JobID:                build.JobID,
+		CurrentSteps:         []api.BuildCurrentStepResponse{},
 		Priority:             domain.NormalizePriority(build.Priority),
 		Status:               string(build.Status),
 		CreatedAt:            build.CreatedAt.Format(time.RFC3339),
@@ -64,6 +65,16 @@ func toBuildResponse(build domain.Build, project ...*domain.Project) api.BuildRe
 		Actor:                trigger.Actor,
 		Source:               toBuildSourceResponse(build),
 		Image:                toImageExecutionResponse(build.RequestedImageRef, build.ResolvedImageRef, build.ImageSourceKind, build.ManagedImageID, build.ManagedImageVersionID),
+	}
+}
+
+func toBuildCurrentStepResponse(step domain.BuildStep) api.BuildCurrentStepResponse {
+	return api.BuildCurrentStepResponse{
+		ID:        step.ID,
+		Index:     step.StepIndex,
+		Name:      step.Name,
+		Status:    string(step.Status),
+		StartedAt: formatOptionalTime(step.StartedAt),
 	}
 }
 

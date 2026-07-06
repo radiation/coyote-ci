@@ -162,6 +162,10 @@ func TestBuildStatusAndLogsCommands(t *testing.T) {
 	if buildData["status"] != "failed" || buildData["job_name"] != "test" || buildData["duration_ms"] != float64(10000) {
 		t.Fatalf("unexpected build status payload: %+v", statusPayload)
 	}
+	currentSteps, ok := buildData["current_steps"].([]any)
+	if !ok || len(currentSteps) != 0 {
+		t.Fatalf("expected empty current_steps array, got %+v", buildData["current_steps"])
+	}
 	failedStep, ok := statusPayload["failed_step"].(map[string]any)
 	if !ok || failedStep["index"] != float64(1) || failedStep["name"] != "test" {
 		t.Fatalf("unexpected failed step payload: %+v", statusPayload)

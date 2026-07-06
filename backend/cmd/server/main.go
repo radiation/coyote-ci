@@ -201,6 +201,7 @@ func main() {
 	workerHandler := handler.NewWorkerHandler(workerVisibilityService)
 	buildHandler.SetVersionTagService(versionTagService)
 	buildHandler.SetProjectService(projectService)
+	buildHandler.SetJobService(jobService)
 	artifactHandler := handler.NewArtifactHandler(artifactService)
 	artifactHandler.SetVersionTagService(versionTagService)
 	artifactHandler.SetProjectService(projectService)

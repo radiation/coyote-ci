@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/auth"
@@ -188,6 +190,10 @@ func (h *JobHandler) ResolveJob(w http.ResponseWriter, r *http.Request) {
 
 	projectID, err := h.jobService.ResolveProjectID(r.Context(), projectSelector, "")
 	if err != nil {
+		if errors.Is(err, repository.ErrProjectNotFound) {
+			writeErrorJSON(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
 		h.writeJobServiceError(w, err)
 		return
 	}
@@ -271,8 +277,10 @@ func (h *JobHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 // @Summary Run job now
 // @Description Triggers an immediate build for a job.
 // @Tags jobs
+// @Accept json
 // @Produce json
 // @Param jobID path string true "Job ID"
+// @Param request body api.RunJobRequest false "Optional run request"
 // @Success 201 {object} api.BuildEnvelope
 // @Failure 400 {object} api.ErrorResponse
 // @Failure 404 {object} api.ErrorResponse
@@ -283,6 +291,11 @@ func (h *JobHandler) RunNow(w http.ResponseWriter, r *http.Request) {
 	jobID := strings.TrimSpace(chi.URLParam(r, "jobID"))
 	if jobID == "" {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "job id is required")
+		return
+	}
+	var req api.RunJobRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
 	job, jobErr := h.jobService.GetJob(r.Context(), jobID)
@@ -297,7 +310,7 @@ func (h *JobHandler) RunNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	build, err := h.jobService.RunJobNow(r.Context(), jobID)
+	build, err := h.jobService.RunJobNow(r.Context(), jobID, req.Ref)
 	if err != nil {
 		h.writeJobServiceError(w, err)
 		return
@@ -349,17 +362,20 @@ func (h *JobHandler) ListJobBuilds(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) resolveJobSelectorWithinProject(ctx context.Context, selector string, projectID string) (domain.Job, error) {
-	job, err := h.jobService.GetJob(ctx, selector)
-	if err == nil {
-		if job.ProjectID != projectID {
-			return domain.Job{}, service.ErrJobNotFound
+	trimmedSelector := strings.TrimSpace(selector)
+	if _, err := uuid.Parse(trimmedSelector); err == nil {
+		job, getErr := h.jobService.GetJob(ctx, trimmedSelector)
+		if getErr == nil {
+			if job.ProjectID != projectID {
+				return domain.Job{}, service.ErrJobNotFound
+			}
+			return job, nil
 		}
-		return job, nil
+		if !errors.Is(getErr, service.ErrJobNotFound) {
+			return domain.Job{}, getErr
+		}
 	}
-	if !errors.Is(err, service.ErrJobNotFound) {
-		return domain.Job{}, err
-	}
-	return h.jobService.ResolveJobByProjectAndName(ctx, projectID, selector)
+	return h.jobService.ResolveJobByProjectAndName(ctx, projectID, trimmedSelector)
 }
 
 func (h *JobHandler) filterJobsForRead(ctx context.Context, jobs []domain.Job) ([]domain.Job, error) {
@@ -420,6 +436,7 @@ func (h *JobHandler) writeJobServiceError(w http.ResponseWriter, err error) {
 func isBadRequestError(err error) bool {
 	return errors.Is(err, service.ErrJobIDRequired) ||
 		errors.Is(err, service.ErrJobNameRequired) ||
+		errors.Is(err, service.ErrJobRunRefRequired) ||
 		errors.Is(err, service.ErrJobPriorityOutOfRange) ||
 		errors.Is(err, service.ErrJobProjectIDRequired) ||
 		errors.Is(err, repository.ErrProjectNotFound) ||

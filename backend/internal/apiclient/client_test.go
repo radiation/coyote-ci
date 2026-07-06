@@ -3,6 +3,7 @@ package apiclient
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/radiation/coyote-ci/backend/internal/api"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -60,7 +63,7 @@ func TestClient_BuildInspectionMethods(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.String() {
 		case "/api/builds/build-1":
-			_, _ = w.Write([]byte(`{"data":{"id":"build-1","project_id":"project-1","project_name":"Coyote","job_id":"job-1","status":"failed","created_at":"2026-07-04T00:00:00Z","queued_at":null,"started_at":"2026-07-04T00:00:10Z","finished_at":"2026-07-04T00:01:10Z","current_step_index":1,"attempt_number":1,"error_message":null,"trigger_type":"manual","trigger_kind":"manual","image":{"source_kind":"external"}}}`))
+			_, _ = w.Write([]byte(`{"data":{"id":"build-1","project_id":"project-1","project_name":"Coyote","job_id":"job-1","job_name":"coyote-ci","status":"failed","created_at":"2026-07-04T00:00:00Z","queued_at":null,"started_at":"2026-07-04T00:00:10Z","finished_at":"2026-07-04T00:01:10Z","current_step_index":1,"attempt_number":1,"error_message":null,"trigger_type":"manual","trigger_kind":"manual","image":{"source_kind":"external"},"current_steps":[{"id":"step-run-1","index":0,"name":"lint","status":"running","started_at":"2026-07-04T00:00:12Z"}]}}`))
 		case "/api/builds/build-1/steps":
 			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","steps":[{"id":"step-1","build_id":"build-1","step_index":1,"name":"test","command":"go test ./...","status":"failed","image":{"source_kind":"external"},"job":{"id":"job-exec-1","build_id":"build-1","step_id":"step-1","name":"test","step_index":1,"attempt_number":1,"status":"failed","image":"golang:1.24","working_dir":"/workspace","command":["go","test","./..."],"command_preview":"go test ./...","environment":{},"spec_version":1,"created_at":"2026-07-04T00:00:00Z","outputs":[]},"worker_id":null,"started_at":"2026-07-04T00:00:10Z","finished_at":"2026-07-04T00:01:10Z","exit_code":1,"stdout":null,"stderr":null,"error_message":null}]}}`))
 		case "/api/builds/build-1/logs?failed=true&tail=5":
@@ -93,6 +96,9 @@ func TestClient_BuildInspectionMethods(t *testing.T) {
 	if build.ID != "build-1" || build.ProjectID != "project-1" {
 		t.Fatalf("unexpected build response: %+v", build)
 	}
+	if build.JobName == nil || *build.JobName != "coyote-ci" || len(build.CurrentSteps) != 1 || build.CurrentSteps[0].Name != "lint" {
+		t.Fatalf("unexpected build response details: %+v", build)
+	}
 	if len(steps) != 1 || steps[0].Job == nil || steps[0].Job.Name != "test" {
 		t.Fatalf("unexpected step response: %+v", steps)
 	}
@@ -108,8 +114,12 @@ func TestClient_ProjectAndJobDiscoveryMethods(t *testing.T) {
 			_, _ = w.Write([]byte(`{"data":{"projects":[{"id":"project-1","name":"Platform","slug":"platform","created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}]}}`))
 		case "/base/api/projects/platform":
 			_, _ = w.Write([]byte(`{"data":{"id":"project-1","name":"Platform","slug":"platform","created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}}`))
+		case "/base/api/projects/default/jobs":
+			_, _ = w.Write([]byte(`{"data":{"jobs":[{"id":"job-1","project_id":"project-1","name":"coyote-ci","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}]}}`))
 		case "/base/api/projects/platform/jobs":
 			_, _ = w.Write([]byte(`{"data":{"jobs":[{"id":"job-1","project_id":"project-1","name":"backend-ci","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}]}}`))
+		case "/base/api/jobs/resolve?name=coyote-ci&project=default":
+			_, _ = w.Write([]byte(`{"data":{"id":"job-1","project_id":"project-1","name":"coyote-ci","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}}`))
 		case "/base/api/jobs/resolve?name=job-name&project=platform%2Fteam":
 			_, _ = w.Write([]byte(`{"data":{"id":"job-1","project_id":"project-1","name":"job-name","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}}`))
 		default:
@@ -135,9 +145,17 @@ func TestClient_ProjectAndJobDiscoveryMethods(t *testing.T) {
 	if listJobsErr != nil {
 		t.Fatalf("list jobs: %v", listJobsErr)
 	}
+	defaultJobs, defaultListJobsErr := client.ListJobs(context.Background(), "default")
+	if defaultListJobsErr != nil {
+		t.Fatalf("list jobs by default selector: %v", defaultListJobsErr)
+	}
 	job, getJobErr := client.GetJob(context.Background(), "job-name", GetJobOptions{Project: "platform/team"})
 	if getJobErr != nil {
 		t.Fatalf("get job: %v", getJobErr)
+	}
+	defaultJob, defaultGetJobErr := client.GetJob(context.Background(), "coyote-ci", GetJobOptions{Project: "default"})
+	if defaultGetJobErr != nil {
+		t.Fatalf("get job by default selector: %v", defaultGetJobErr)
 	}
 
 	if len(projects.Projects) != 1 || projects.Projects[0].Slug != "platform" {
@@ -149,8 +167,14 @@ func TestClient_ProjectAndJobDiscoveryMethods(t *testing.T) {
 	if len(jobs.Jobs) != 1 || jobs.Jobs[0].ID != "job-1" {
 		t.Fatalf("unexpected job list: %+v", jobs)
 	}
+	if len(defaultJobs.Jobs) != 1 || defaultJobs.Jobs[0].Name != "coyote-ci" {
+		t.Fatalf("unexpected default job list: %+v", defaultJobs)
+	}
 	if job.Name != "job-name" || job.ProjectID != "project-1" {
 		t.Fatalf("unexpected job detail: %+v", job)
+	}
+	if defaultJob.Name != "coyote-ci" || defaultJob.ProjectID != "project-1" {
+		t.Fatalf("unexpected default job detail: %+v", defaultJob)
 	}
 }
 
@@ -410,6 +434,74 @@ func TestClient_RerunBuildReturnsTypedError(t *testing.T) {
 	}
 	if apiErr.Kind != ErrorKindAuthorization || apiErr.Code != "missing_token_scope" {
 		t.Fatalf("unexpected api error: %+v", apiErr)
+	}
+}
+
+func TestClient_RunJob(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if r.URL.String() != "/api/jobs/job-1/run" {
+			t.Fatalf("unexpected request path %q", r.URL.String())
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("expected json content type, got %q", got)
+		}
+		var request api.RunJobRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if request.Ref == nil || *request.Ref != "release/2026.07" {
+			t.Fatalf("unexpected request payload: %+v", request)
+		}
+		_, _ = w.Write([]byte(`{"data":{"id":"build-2","project_id":"project-1","project_name":"Coyote","job_id":"job-1","status":"queued","created_at":"2026-07-04T00:02:00Z","queued_at":"2026-07-04T00:02:00Z","started_at":null,"finished_at":null,"current_step_index":0,"attempt_number":1,"error_message":null,"trigger_type":"manual","trigger_kind":"manual","source":{"repository_url":"https://github.com/example/backend.git","ref":"release/2026.07"},"image":{"source_kind":"external"}}}`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	build, runErr := client.RunJob(context.Background(), "job-1", RunJobOptions{Ref: "release/2026.07"})
+	if runErr != nil {
+		t.Fatalf("run job: %v", runErr)
+	}
+	if build.ID != "build-2" || build.Status != "queued" {
+		t.Fatalf("unexpected run job response: %+v", build)
+	}
+}
+
+func TestClient_RunJobResolvesNameWithinProject(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch r.URL.String() {
+		case "/api/jobs/resolve?name=coyote-ci&project=default":
+			_, _ = w.Write([]byte(`{"data":{"id":"job-1","project_id":"project-1","name":"coyote-ci","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}}`))
+		case "/api/jobs/job-1/run":
+			if r.Method != http.MethodPost {
+				t.Fatalf("expected POST, got %s", r.Method)
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":"build-2","project_id":"project-1","project_name":"Coyote","job_id":"job-1","status":"queued","created_at":"2026-07-04T00:02:00Z","queued_at":"2026-07-04T00:02:00Z","started_at":null,"finished_at":null,"current_step_index":0,"attempt_number":1,"error_message":null,"trigger_type":"manual","trigger_kind":"manual","image":{"source_kind":"external"}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	build, runErr := client.RunJob(context.Background(), "coyote-ci", RunJobOptions{Project: "default", Ref: "main"})
+	if runErr != nil {
+		t.Fatalf("run job by name: %v", runErr)
+	}
+	if build.ID != "build-2" || requests != 2 {
+		t.Fatalf("unexpected run job result: build=%+v requests=%d", build, requests)
 	}
 }
 

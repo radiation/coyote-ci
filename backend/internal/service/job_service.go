@@ -30,6 +30,7 @@ var ErrPushEventRefRequired = errors.New("push event ref is required")
 var ErrPushEventCommitSHARequired = errors.New("push event commit_sha is required")
 var ErrJobNameAmbiguous = errors.New("job selector matched multiple jobs in project")
 var ErrJobDisabled = errors.New("job is disabled")
+var ErrJobRunRefRequired = errors.New("job run ref is required")
 var ErrJobBuildServiceNotConfigured = errors.New("job build service not configured")
 var ErrJobManagedImageConfigNotConfigured = errors.New("job managed image config repository not configured")
 var ErrJobManagedImageNameRequired = errors.New("job managed image managed_image_name is required")
@@ -262,12 +263,15 @@ func (s *JobService) ListJobsByProject(ctx context.Context, projectID string) ([
 	if trimmedID == "" {
 		return nil, ErrProjectIDRequired
 	}
+	resolvedProjectID := trimmedID
 	if s.projects != nil {
-		if _, err := s.projects.GetByID(ctx, trimmedID); err != nil {
+		var err error
+		resolvedProjectID, err = s.resolveProjectID(ctx, trimmedID, "")
+		if err != nil {
 			return nil, err
 		}
 	}
-	jobs, err := s.jobRepo.ListByProjectID(ctx, trimmedID)
+	jobs, err := s.jobRepo.ListByProjectID(ctx, resolvedProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -490,13 +494,21 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 	return updated, nil
 }
 
-func (s *JobService) RunJobNow(ctx context.Context, id string) (domain.Build, error) {
+func (s *JobService) RunJobNow(ctx context.Context, id string, ref *string) (domain.Build, error) {
 	job, err := s.GetJob(ctx, id)
 	if err != nil {
 		return domain.Build{}, err
 	}
 	if !job.Enabled {
 		return domain.Build{}, ErrJobDisabled
+	}
+	if ref != nil {
+		trimmedRef := strings.TrimSpace(*ref)
+		if trimmedRef == "" {
+			return domain.Build{}, ErrJobRunRefRequired
+		}
+		job.DefaultRef = trimmedRef
+		job.DefaultCommitSHA = nil
 	}
 
 	return s.createBuildForJob(ctx, job)
