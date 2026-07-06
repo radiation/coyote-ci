@@ -215,6 +215,7 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 			r.Route("/jobs", func(r chi.Router) {
 				r.Post("/", jobHandler.CreateJob)
 				r.Get("/", jobHandler.ListJobs)
+				r.Get("/resolve", jobHandler.ResolveJob)
 				r.Get("/{jobID}", jobHandler.GetJob)
 				r.Put("/{jobID}", jobHandler.UpdateJob)
 				r.Get("/{jobID}/builds", jobHandler.ListJobBuilds)

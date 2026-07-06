@@ -149,6 +149,43 @@ func TestProjectHandler_GetProjectWithMissingIDReturnsBadRequest(t *testing.T) {
 	}
 }
 
+func TestProjectHandler_GetAndListJobsResolveSlugSelectors(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	buildRepo := memory.NewBuildRepository()
+	jobService := service.NewJobService(jobRepo, buildsvc.NewBuildService(buildRepo, nil, nil)).WithProjectRepository(projectRepo)
+	projectService := service.NewProjectService(projectRepo)
+	h := NewProjectHandler(projectService, jobService)
+
+	project, err := projectRepo.Create(context.Background(), serviceProject("00000000-0000-0000-0000-000000000777", "Platform", "platform"))
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	if _, err := jobService.CreateJob(context.Background(), service.CreateJobInput{
+		ProjectID:     project.ID,
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+	}); err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	getReq := addURLParam(httptest.NewRequest(http.MethodGet, "/projects/platform", nil), "id", project.Slug)
+	getRes := httptest.NewRecorder()
+	h.GetProject(getRes, getReq)
+	if getRes.Code != http.StatusOK {
+		t.Fatalf("expected slug get status %d, got %d body=%s", http.StatusOK, getRes.Code, getRes.Body.String())
+	}
+
+	jobsReq := addURLParam(httptest.NewRequest(http.MethodGet, "/projects/platform/jobs", nil), "id", project.Slug)
+	jobsRes := httptest.NewRecorder()
+	h.ListProjectJobs(jobsRes, jobsReq)
+	if jobsRes.Code != http.StatusOK {
+		t.Fatalf("expected slug jobs status %d, got %d body=%s", http.StatusOK, jobsRes.Code, jobsRes.Body.String())
+	}
+}
+
 func serviceProject(id string, name string, slug string) domain.Project {
 	now := time.Now().UTC()
 	return domain.Project{ID: id, Name: name, Slug: slug, CreatedAt: now, UpdatedAt: now}

@@ -27,7 +27,7 @@ When a local `.codegraph/` index exists, query CodeGraph before broad grep/find/
 
 ## Adding or changing CLI behavior
 
-"Add or change CLI behavior for [command or workflow]. Start with `.github/copilot-instructions.md`, `docs/ai-context/current-priorities.md`, `docs/ai-context/backend-map.md`, and `docs/ai-context/domain-model.md`. Stay local to `backend/cmd/coyote`, `backend/internal/cli`, `backend/internal/apiclient`, `backend/internal/versioninfo`, and only the smallest backend handler/API files needed by the command. Keep the CLI as a thin HTTP client of the API. For build or artifact resource commands, verify the required API-token scopes first and preserve least-privilege defaults."
+"Add or change CLI behavior for [command or workflow]. Start with `.github/copilot-instructions.md`, `docs/ai-context/current-priorities.md`, `docs/ai-context/backend-map.md`, and `docs/ai-context/domain-model.md`. Stay local to `backend/cmd/coyote`, `backend/internal/cli`, `backend/internal/apiclient`, `backend/internal/versioninfo`, and only the smallest backend handler/API files needed by the command. Keep the CLI as a thin HTTP client of the API. For build, artifact, project, or job discovery commands, verify the required API-token scopes first and preserve least-privilege defaults; when selectors depend on authorization or ambiguity checks, prefer server-side resolution over client-side guessing."
 
 ## Adding frontend polish
 

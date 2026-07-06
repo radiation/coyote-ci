@@ -19,7 +19,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - `backend/internal/service`: orchestration and business rules. This is usually the first stop for behavioral changes.
 - `backend/internal/repository`: persistence logic, Postgres adapters, in-memory adapters, and transaction-safe state updates.
 - `backend/internal/apiclient`: focused typed HTTP client used by the CLI; keep it independent from CLI presentation.
-- `backend/internal/cli`: command parsing, context/config resolution, credential-store integration, and human/JSON terminal output.
+- `backend/internal/cli`: command parsing, context/config resolution, credential-store integration, and human/JSON terminal output. Build commands live in `build.go`; read-only discovery commands live in `project.go` and `job.go`.
 - `backend/db/migrations`: additive schema history. Add new numbered migrations here; do not edit applied migrations.
 - `backend/internal/artifact`: artifact key resolution and blob-store adapters.
 - `backend/internal/platform/config`: env loading for email/slack notification support, SMTP settings, and optional public build-detail base URL via `COYOTE_PUBLIC_URL` or `APP_BASE_URL`.
@@ -58,6 +58,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - Artifacts/provenance/source linking: start with `backend/internal/domain/artifact.go`, `backend/internal/service/build/artifacts.go`, `backend/internal/repository/artifact_repository.go`, `backend/internal/repository/artifact_label_repository.go`, `backend/internal/api/artifact_dto.go`, `backend/internal/http/handler/artifact_handler.go`, `backend/internal/versioning/artifact_template.go`, and `backend/internal/source`.
 - Auth/RBAC/API tokens: start with `backend/internal/domain/api_token_scope.go`, `backend/internal/auth`, `backend/internal/service/api_token_service.go`, `backend/internal/service/project_membership_service.go`, `backend/internal/http/handler/authorization.go`, and matching handlers/repositories.
 - CLI/context/auth status work: start with `backend/cmd/coyote/main.go`, `backend/internal/cli`, `backend/internal/apiclient`, `backend/internal/http/handler/server_info_handler.go`, `backend/internal/http/router.go`, and `backend/internal/versioninfo`.
+- CLI project/job discovery work: start with `backend/internal/cli/project.go`, `backend/internal/cli/job.go`, `backend/internal/apiclient/client.go`, `backend/internal/http/handler/project_handler.go`, `backend/internal/http/handler/job_handler.go`, `backend/internal/service/project_service.go`, `backend/internal/service/job_service.go`, and the matching `*_test.go` files. API-token access for these read-only discovery routes now requires `build:read`, project selectors resolve id-or-slug server-side, and job name selectors resolve only within a provided project.
 
 ## Focused docs worth checking first
 

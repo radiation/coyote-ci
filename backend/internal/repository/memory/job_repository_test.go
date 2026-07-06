@@ -152,6 +152,18 @@ func TestJobRepository_ListFiltersAndPaging(t *testing.T) {
 	}
 	assertJobIDs(t, projectJobs, []string{"job-new-a", "job-old"})
 
+	nameMatches, err := repo.FindByProjectIDAndName(ctx, "project-1", "old", 2)
+	if err != nil {
+		t.Fatalf("find jobs by project and name failed: %v", err)
+	}
+	assertJobIDs(t, nameMatches, []string{"job-old"})
+
+	limitedMatches, err := repo.FindByProjectIDAndName(ctx, "project-1", "new-a", 0)
+	if err != nil {
+		t.Fatalf("find limited jobs by project and name failed: %v", err)
+	}
+	assertJobIDs(t, limitedMatches, []string{"job-new-a"})
+
 	page, err := repo.ListPaged(ctx, repository.ListParams{Limit: 2, Offset: 1})
 	if err != nil {
 		t.Fatalf("list paged jobs failed: %v", err)
@@ -178,6 +190,23 @@ func TestJobRepository_ListFiltersAndPaging(t *testing.T) {
 	}
 	if len(blankMatches) != 0 {
 		t.Fatalf("expected no blank-repository matches, got %d", len(blankMatches))
+	}
+
+	if _, createErr := repo.Create(ctx, domain.Job{ID: "job-dup", ProjectID: "project-1", Name: "old", CreatedAt: baseTime.Add(2 * time.Hour)}); createErr != nil {
+		t.Fatalf("create duplicate-name job failed: %v", createErr)
+	}
+	truncatedMatches, err := repo.FindByProjectIDAndName(ctx, "project-1", "old", 1)
+	if err != nil {
+		t.Fatalf("find truncated jobs by project and name failed: %v", err)
+	}
+	assertJobIDs(t, truncatedMatches, []string{"job-dup"})
+
+	emptyMatches, err := repo.FindByProjectIDAndName(ctx, "project-1", "missing", 2)
+	if err != nil {
+		t.Fatalf("find missing jobs by project and name failed: %v", err)
+	}
+	if len(emptyMatches) != 0 {
+		t.Fatalf("expected no name matches, got %d", len(emptyMatches))
 	}
 
 	if deleteErr := repo.Delete(ctx, "job-old"); deleteErr != nil {

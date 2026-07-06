@@ -191,6 +191,141 @@ func TestJobService_ResolveProjectIDUsesWrapper(t *testing.T) {
 	}
 }
 
+func TestJobService_ResolveJobByProjectAndName(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService).WithProjectRepository(projectRepo)
+
+	project, err := projectRepo.Create(context.Background(), domain.Project{
+		ID:        "00000000-0000-0000-0000-000000000321",
+		Name:      "Platform",
+		Slug:      "platform",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     project.ID,
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       boolPtr(true),
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	resolved, err := jobService.ResolveJobByProjectAndName(context.Background(), project.ID, " backend-ci ")
+	if err != nil {
+		t.Fatalf("resolve job by name failed: %v", err)
+	}
+	if resolved.ID != job.ID {
+		t.Fatalf("expected resolved id %q, got %q", job.ID, resolved.ID)
+	}
+	if resolved.LatestBuild == nil {
+		t.Fatal("expected latest build summary on resolved job")
+	}
+	if resolved.LatestBuild.Status != domain.BuildStatusQueued {
+		t.Fatalf("expected queued latest build, got %q", resolved.LatestBuild.Status)
+	}
+
+	_, missingErr := jobService.ResolveJobByProjectAndName(context.Background(), project.ID, "missing")
+	if !errors.Is(missingErr, ErrJobNotFound) {
+		t.Fatalf("expected ErrJobNotFound, got %v", missingErr)
+	}
+
+	_, err = jobRepo.Create(context.Background(), domain.Job{
+		ID:            "job-dup-a",
+		ProjectID:     project.ID,
+		Name:          "duplicate",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       true,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create duplicate job a failed: %v", err)
+	}
+	_, err = jobRepo.Create(context.Background(), domain.Job{
+		ID:            "job-dup-b",
+		ProjectID:     project.ID,
+		Name:          "duplicate",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       true,
+		CreatedAt:     time.Now().UTC().Add(time.Second),
+		UpdatedAt:     time.Now().UTC().Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("create duplicate job b failed: %v", err)
+	}
+
+	_, ambiguousErr := jobService.ResolveJobByProjectAndName(context.Background(), project.ID, "duplicate")
+	if !errors.Is(ambiguousErr, ErrJobNameAmbiguous) {
+		t.Fatalf("expected ErrJobNameAmbiguous, got %v", ambiguousErr)
+	}
+}
+
+func TestJobService_ResolveJobByProjectAndNameValidationAndErrors(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	jobService := NewJobService(jobRepo, nil).WithProjectRepository(projectRepo)
+
+	if _, err := jobService.ResolveJobByProjectAndName(context.Background(), " ", "backend-ci"); !errors.Is(err, ErrProjectIDRequired) {
+		t.Fatalf("expected ErrProjectIDRequired, got %v", err)
+	}
+	if _, err := jobService.ResolveJobByProjectAndName(context.Background(), "00000000-0000-0000-0000-000000000111", " "); !errors.Is(err, ErrJobNameRequired) {
+		t.Fatalf("expected ErrJobNameRequired, got %v", err)
+	}
+	if _, err := jobService.ResolveJobByProjectAndName(context.Background(), "00000000-0000-0000-0000-000000000111", "backend-ci"); !errors.Is(err, repository.ErrProjectNotFound) {
+		t.Fatalf("expected ErrProjectNotFound, got %v", err)
+	}
+
+	project, err := projectRepo.Create(context.Background(), domain.Project{
+		ID:        "00000000-0000-0000-0000-000000000555",
+		Name:      "Platform",
+		Slug:      "platform",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	job, err := jobRepo.Create(context.Background(), domain.Job{
+		ID:            "job-1",
+		ProjectID:     project.ID,
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       true,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	resolved, err := jobService.ResolveJobByProjectAndName(context.Background(), project.ID, job.Name)
+	if err != nil {
+		t.Fatalf("resolve job without build service failed: %v", err)
+	}
+	if resolved.ID != job.ID {
+		t.Fatalf("expected resolved id %q, got %q", job.ID, resolved.ID)
+	}
+	if resolved.LatestBuild != nil {
+		t.Fatalf("expected nil latest build without build service, got %+v", resolved.LatestBuild)
+	}
+}
+
 func TestJobService_CreateJobFailureQueuesNoInitialBuild(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
@@ -958,6 +1093,10 @@ func (r *failingCreateJobRepository) Create(_ context.Context, _ domain.Job) (do
 
 func (r *failingCreateJobRepository) Delete(_ context.Context, _ string) error {
 	return repository.ErrJobNotFound
+}
+
+func (r *failingCreateJobRepository) FindByProjectIDAndName(_ context.Context, _ string, _ string, _ int) ([]domain.Job, error) {
+	return []domain.Job{}, nil
 }
 
 func (r *failingCreateJobRepository) GetByIDs(_ context.Context, _ []string) ([]domain.Job, error) {

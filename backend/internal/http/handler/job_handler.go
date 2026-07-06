@@ -97,6 +97,9 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} api.ErrorResponse
 // @Router /jobs [get]
 func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRead) {
+		return
+	}
 	limit := parseQueryInt(r, "limit", 0)
 	offset := parseQueryInt(r, "offset", 0)
 
@@ -134,6 +137,9 @@ func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} api.ErrorResponse
 // @Router /jobs/{jobID} [get]
 func (h *JobHandler) GetJob(w http.ResponseWriter, r *http.Request) {
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRead) {
+		return
+	}
 	jobID := strings.TrimSpace(chi.URLParam(r, "jobID"))
 	if jobID == "" {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "job id is required")
@@ -146,6 +152,56 @@ func (h *JobHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !authorizeProject(w, r, h.authMode, h.projectRoles, job.ProjectID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
+
+	writeDataJSON(w, http.StatusOK, toJobResponse(job))
+}
+
+// ResolveJob godoc
+// @Summary Resolve job by project and name
+// @Description Returns job details by resolving an exact job name within a project.
+// @Tags jobs
+// @Produce json
+// @Param project query string true "Project ID or slug"
+// @Param name query string true "Exact job name"
+// @Success 200 {object} api.JobEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /jobs/resolve [get]
+func (h *JobHandler) ResolveJob(w http.ResponseWriter, r *http.Request) {
+	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRead) {
+		return
+	}
+	projectSelector := strings.TrimSpace(r.URL.Query().Get("project"))
+	if projectSelector == "" {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "project query parameter is required")
+		return
+	}
+	jobName := strings.TrimSpace(r.URL.Query().Get("name"))
+	if jobName == "" {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "name query parameter is required")
+		return
+	}
+
+	projectID, err := h.jobService.ResolveProjectID(r.Context(), projectSelector, "")
+	if err != nil {
+		h.writeJobServiceError(w, err)
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, projectID, auth.CanReadProjectResources, "project membership is required") {
+		return
+	}
+
+	job, err := h.resolveJobSelectorWithinProject(r.Context(), jobName, projectID)
+	if err != nil {
+		if errors.Is(err, service.ErrJobNameAmbiguous) {
+			writeErrorJSON(w, http.StatusConflict, "ambiguous_selector", err.Error())
+			return
+		}
+		h.writeJobServiceError(w, err)
 		return
 	}
 
@@ -290,6 +346,20 @@ func (h *JobHandler) ListJobBuilds(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeDataJSON(w, http.StatusOK, api.BuildListResponse{Builds: responses})
+}
+
+func (h *JobHandler) resolveJobSelectorWithinProject(ctx context.Context, selector string, projectID string) (domain.Job, error) {
+	job, err := h.jobService.GetJob(ctx, selector)
+	if err == nil {
+		if job.ProjectID != projectID {
+			return domain.Job{}, service.ErrJobNotFound
+		}
+		return job, nil
+	}
+	if !errors.Is(err, service.ErrJobNotFound) {
+		return domain.Job{}, err
+	}
+	return h.jobService.ResolveJobByProjectAndName(ctx, projectID, selector)
 }
 
 func (h *JobHandler) filterJobsForRead(ctx context.Context, jobs []domain.Job) ([]domain.Job, error) {

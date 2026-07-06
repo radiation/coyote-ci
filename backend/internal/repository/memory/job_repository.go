@@ -132,6 +132,35 @@ func (r *JobRepository) ListByProjectID(_ context.Context, projectID string) ([]
 	return out, nil
 }
 
+func (r *JobRepository) FindByProjectIDAndName(_ context.Context, projectID string, name string, limit int) ([]domain.Job, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if limit <= 0 {
+		limit = 1
+	}
+
+	out := make([]domain.Job, 0)
+	for _, job := range r.jobs {
+		if job.ProjectID != projectID || job.Name != name {
+			continue
+		}
+		out = append(out, job)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func (r *JobRepository) ListPushEnabledByRepository(_ context.Context, repositoryURL string) ([]domain.Job, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

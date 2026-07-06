@@ -101,6 +101,125 @@ func TestClient_BuildInspectionMethods(t *testing.T) {
 	}
 }
 
+func TestClient_ProjectAndJobDiscoveryMethods(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/base/api/projects":
+			_, _ = w.Write([]byte(`{"data":{"projects":[{"id":"project-1","name":"Platform","slug":"platform","created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}]}}`))
+		case "/base/api/projects/platform":
+			_, _ = w.Write([]byte(`{"data":{"id":"project-1","name":"Platform","slug":"platform","created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}}`))
+		case "/base/api/projects/platform/jobs":
+			_, _ = w.Write([]byte(`{"data":{"jobs":[{"id":"job-1","project_id":"project-1","name":"backend-ci","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}]}}`))
+		case "/base/api/jobs/resolve?name=job-name&project=platform%2Fteam":
+			_, _ = w.Write([]byte(`{"data":{"id":"job-1","project_id":"project-1","name":"job-name","priority":5,"repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"trigger_mode":"branches","pipeline_yaml":"version: 1","enabled":true,"created_at":"2026-07-06T00:00:00Z","updated_at":"2026-07-06T00:00:00Z"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL+"/base", "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	projects, listProjectsErr := client.ListProjects(context.Background())
+	if listProjectsErr != nil {
+		t.Fatalf("list projects: %v", listProjectsErr)
+	}
+	project, getProjectErr := client.GetProject(context.Background(), "platform")
+	if getProjectErr != nil {
+		t.Fatalf("get project: %v", getProjectErr)
+	}
+	jobs, listJobsErr := client.ListJobs(context.Background(), "platform")
+	if listJobsErr != nil {
+		t.Fatalf("list jobs: %v", listJobsErr)
+	}
+	job, getJobErr := client.GetJob(context.Background(), "job-name", GetJobOptions{Project: "platform/team"})
+	if getJobErr != nil {
+		t.Fatalf("get job: %v", getJobErr)
+	}
+
+	if len(projects.Projects) != 1 || projects.Projects[0].Slug != "platform" {
+		t.Fatalf("unexpected project list: %+v", projects)
+	}
+	if project.ID != "project-1" || project.Slug != "platform" {
+		t.Fatalf("unexpected project detail: %+v", project)
+	}
+	if len(jobs.Jobs) != 1 || jobs.Jobs[0].ID != "job-1" {
+		t.Fatalf("unexpected job list: %+v", jobs)
+	}
+	if job.Name != "job-name" || job.ProjectID != "project-1" {
+		t.Fatalf("unexpected job detail: %+v", job)
+	}
+}
+
+func TestClient_ProjectAndJobDiscoveryTypedErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"api token does not have the required scope: build:read"}}`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	for _, call := range []struct {
+		name string
+		run  func() error
+	}{
+		{name: "list projects", run: func() error { _, err := client.ListProjects(context.Background()); return err }},
+		{name: "get project", run: func() error { _, err := client.GetProject(context.Background(), "platform"); return err }},
+		{name: "list jobs", run: func() error { _, err := client.ListJobs(context.Background(), "platform"); return err }},
+		{name: "get job", run: func() error {
+			_, err := client.GetJob(context.Background(), "job-1", GetJobOptions{Project: "platform"})
+			return err
+		}},
+	} {
+		t.Run(call.name, func(t *testing.T) {
+			err := call.run()
+			var apiErr *Error
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("expected typed api error, got %T", err)
+			}
+			if apiErr.Kind != ErrorKindAuthorization || apiErr.Code != "missing_token_scope" {
+				t.Fatalf("unexpected api error: %+v", apiErr)
+			}
+		})
+	}
+}
+
+func TestClient_ProjectAndJobDiscoveryCancellation(t *testing.T) {
+	client, err := New("https://example.com/base", "token", "agent", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return nil, context.Canceled
+	})})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	for _, call := range []struct {
+		name string
+		run  func() error
+	}{
+		{name: "list projects", run: func() error { _, err := client.ListProjects(context.Background()); return err }},
+		{name: "get project", run: func() error { _, err := client.GetProject(context.Background(), "platform"); return err }},
+		{name: "list jobs", run: func() error { _, err := client.ListJobs(context.Background(), "platform"); return err }},
+		{name: "get job", run: func() error {
+			_, err := client.GetJob(context.Background(), "job-1", GetJobOptions{Project: "platform"})
+			return err
+		}},
+	} {
+		t.Run(call.name, func(t *testing.T) {
+			if err := call.run(); !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected context canceled, got %v", err)
+			}
+		})
+	}
+}
+
 func TestClient_BuildArtifactMethods(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.String() {

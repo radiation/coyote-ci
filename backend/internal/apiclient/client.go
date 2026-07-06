@@ -103,6 +103,50 @@ func (c *Client) GetServerInfo(ctx context.Context) (api.ServerInfoResponse, err
 	return envelope.Data, nil
 }
 
+func (c *Client) ListProjects(ctx context.Context) (api.ProjectListResponse, error) {
+	var envelope api.ProjectListEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, "api/projects", nil, &envelope); err != nil {
+		return api.ProjectListResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
+func (c *Client) GetProject(ctx context.Context, selector string) (api.ProjectResponse, error) {
+	var envelope api.ProjectEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, projectResourcePath(selector, ""), nil, &envelope); err != nil {
+		return api.ProjectResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
+func (c *Client) ListJobs(ctx context.Context, projectSelector string) (api.JobListResponse, error) {
+	var envelope api.JobListEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, projectResourcePath(projectSelector, "/jobs"), nil, &envelope); err != nil {
+		return api.JobListResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
+type GetJobOptions struct {
+	Project string
+}
+
+func (c *Client) GetJob(ctx context.Context, selector string, options GetJobOptions) (api.JobResponse, error) {
+	requestPath := jobResourcePath(selector, "")
+	if trimmedProject := strings.TrimSpace(options.Project); trimmedProject != "" {
+		params := url.Values{}
+		params.Set("project", trimmedProject)
+		params.Set("name", strings.TrimSpace(selector))
+		requestPath = "api/jobs/resolve?" + params.Encode()
+	}
+
+	var envelope api.JobEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, requestPath, nil, &envelope); err != nil {
+		return api.JobResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
 func (c *Client) GetBuild(ctx context.Context, buildID string) (api.BuildResponse, error) {
 	var envelope api.BuildEnvelope
 	if err := c.doJSON(ctx, http.MethodGet, buildResourcePath(buildID, ""), nil, &envelope); err != nil {
@@ -314,6 +358,14 @@ func resolveRequestURL(baseURL *url.URL, requestPath string) (*url.URL, error) {
 
 func buildResourcePath(buildID string, suffix string) string {
 	return "api/builds/" + url.PathEscape(strings.TrimSpace(buildID)) + suffix
+}
+
+func projectResourcePath(selector string, suffix string) string {
+	return "api/projects/" + url.PathEscape(strings.TrimSpace(selector)) + suffix
+}
+
+func jobResourcePath(selector string, suffix string) string {
+	return "api/jobs/" + url.PathEscape(strings.TrimSpace(selector)) + suffix
 }
 
 func buildArtifactDownloadPath(buildID string, artifactID string) string {

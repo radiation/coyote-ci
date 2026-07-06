@@ -2726,6 +2726,46 @@ paths:
       summary: Create immutable version tags for job targets
       tags:
       - version-tags
+  /jobs/resolve:
+    get:
+      description: Returns job details by resolving an exact job name within a project.
+      parameters:
+      - description: Project ID or slug
+        in: query
+        name: project
+        required: true
+        type: string
+      - description: Exact job name
+        in: query
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.JobEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Resolve job by project and name
+      tags:
+      - jobs
   /managed-image-versions/{managedImageVersionID}/version-tags:
     get:
       description: Returns immutable version tags attached to one managed image version.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -235,6 +236,154 @@ func TestJobHandler_CreateAcceptsLegacyProjectSlugInProjectID(t *testing.T) {
 	data := decodeDataMap(t, res)
 	if data["project_id"] != project.ID {
 		t.Fatalf("expected project_id %q, got %v", project.ID, data["project_id"])
+	}
+}
+
+func TestJobHandler_ResolveJobSupportsSlashInName(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
+	h := NewJobHandler(jobSvc)
+
+	project, err := projectRepo.Create(context.Background(), domain.Project{
+		ID:        "project-1",
+		Name:      "Platform",
+		Slug:      "platform/team",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	job, err := jobRepo.Create(context.Background(), domain.Job{
+		ID:            "job-1",
+		ProjectID:     project.ID,
+		Name:          "folder/job",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       true,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/jobs/resolve?project=platform%2Fteam&name=folder%2Fjob", nil)
+	res := httptest.NewRecorder()
+	h.ResolveJob(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected resolve status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+
+	data := decodeDataMap(t, res)
+	if data["id"] != job.ID || data["name"] != job.Name {
+		t.Fatalf("unexpected resolved job payload: %+v", data)
+	}
+}
+
+func TestJobHandler_ResolveJobValidationAndAmbiguity(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
+	h := NewJobHandler(jobSvc)
+
+	project, err := projectRepo.Create(context.Background(), domain.Project{
+		ID:        "00000000-0000-0000-0000-000000000888",
+		Name:      "Platform",
+		Slug:      "platform",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	for _, id := range []string{"job-dup-a", "job-dup-b"} {
+		_, err = jobRepo.Create(context.Background(), domain.Job{
+			ID:            id,
+			ProjectID:     project.ID,
+			Name:          "duplicate",
+			RepositoryURL: "https://github.com/example/backend.git",
+			DefaultRef:    "main",
+			PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+			Enabled:       true,
+			CreatedAt:     time.Now().UTC(),
+			UpdatedAt:     time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatalf("create duplicate job failed: %v", err)
+		}
+	}
+
+	missingProjectReq := httptest.NewRequest(http.MethodGet, "/jobs/resolve?name=duplicate", nil)
+	missingProjectRes := httptest.NewRecorder()
+	h.ResolveJob(missingProjectRes, missingProjectReq)
+	if missingProjectRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected missing project status %d, got %d body=%s", http.StatusBadRequest, missingProjectRes.Code, missingProjectRes.Body.String())
+	}
+
+	missingNameReq := httptest.NewRequest(http.MethodGet, "/jobs/resolve?project=platform", nil)
+	missingNameRes := httptest.NewRecorder()
+	h.ResolveJob(missingNameRes, missingNameReq)
+	if missingNameRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected missing name status %d, got %d body=%s", http.StatusBadRequest, missingNameRes.Code, missingNameRes.Body.String())
+	}
+
+	ambiguousReq := httptest.NewRequest(http.MethodGet, "/jobs/resolve?project=platform&name=duplicate", nil)
+	ambiguousRes := httptest.NewRecorder()
+	h.ResolveJob(ambiguousRes, ambiguousReq)
+	if ambiguousRes.Code != http.StatusConflict {
+		t.Fatalf("expected ambiguous status %d, got %d body=%s", http.StatusConflict, ambiguousRes.Code, ambiguousRes.Body.String())
+	}
+}
+
+func TestJobHandler_ResolveJobSelectorWithinProjectUsesDirectIDAndRejectsMismatchedProject(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
+	h := NewJobHandler(jobSvc)
+
+	projectA, err := projectRepo.Create(context.Background(), domain.Project{ID: "00000000-0000-0000-0000-000000000901", Name: "A", Slug: "a", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("create project A failed: %v", err)
+	}
+	projectB, err := projectRepo.Create(context.Background(), domain.Project{ID: "00000000-0000-0000-0000-000000000902", Name: "B", Slug: "b", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("create project B failed: %v", err)
+	}
+	job, err := jobRepo.Create(context.Background(), domain.Job{
+		ID:            "job-1",
+		ProjectID:     projectA.ID,
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       true,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	resolved, resolveErr := h.resolveJobSelectorWithinProject(context.Background(), job.ID, projectA.ID)
+	if resolveErr != nil {
+		t.Fatalf("resolve direct id failed: %v", resolveErr)
+	}
+	if resolved.ID != job.ID {
+		t.Fatalf("expected resolved job id %q, got %q", job.ID, resolved.ID)
+	}
+
+	_, mismatchErr := h.resolveJobSelectorWithinProject(context.Background(), job.ID, projectB.ID)
+	if !errors.Is(mismatchErr, service.ErrJobNotFound) {
+		t.Fatalf("expected mismatched project to return ErrJobNotFound, got %v", mismatchErr)
 	}
 }
 

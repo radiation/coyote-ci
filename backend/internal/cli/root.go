@@ -169,6 +169,8 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 	rootCmd.AddCommand(application.newContextCommand())
 	rootCmd.AddCommand(application.newAuthCommand())
 	rootCmd.AddCommand(application.newBuildCommand())
+	rootCmd.AddCommand(application.newProjectCommand())
+	rootCmd.AddCommand(application.newJobCommand())
 	rootCmd.AddCommand(application.newServerCommand())
 
 	return rootCmd
