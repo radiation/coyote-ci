@@ -218,16 +218,36 @@ func (a *app) newBuildArtifactsCommand() *cobra.Command {
 func (a *app) newBuildArtifactsDownloadCommand() *cobra.Command {
 	var selector string
 	var outputPath string
+	var downloadAll bool
 	var force bool
 
 	command := &cobra.Command{
 		Use:   "download <build-id>",
-		Short: "Download one build artifact",
-		Args:  cobra.ExactArgs(1),
+		Short: "Download build artifacts",
+		Long: `Download one artifact by selector, or download all artifacts into a directory.
+
+Use --artifact to select one artifact by ID, exact artifact path, name, or basename.
+Use --all with --output <dir> to download every artifact while preserving safe artifact paths.
+--artifact and --all are mutually exclusive.`,
+		Example: `  coyote build artifacts download <build-id> --artifact report.xml
+  coyote build artifacts download <build-id> --artifact artifacts/images/frontend-image.tar --output ./downloads/
+  coyote build artifacts download <build-id> --all --output ./artifacts/`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			selector = strings.TrimSpace(selector)
-			if selector == "" {
-				return &ExitError{Code: 2, Err: errors.New("artifact selector is required")}
+			bulkOutputDir := ""
+			if downloadAll && selector != "" {
+				return &ExitError{Code: 2, Err: errors.New("--artifact and --all are mutually exclusive")}
+			}
+			if !downloadAll && selector == "" {
+				return &ExitError{Code: 2, Err: errors.New("one of --artifact or --all is required")}
+			}
+			if downloadAll {
+				var dirErr error
+				bulkOutputDir, dirErr = resolveArtifactBulkOutputDir(outputPath)
+				if dirErr != nil {
+					return &ExitError{Code: 2, Err: dirErr}
+				}
 			}
 
 			resolved, err := a.resolveTarget()
@@ -242,6 +262,34 @@ func (a *app) newBuildArtifactsDownloadCommand() *cobra.Command {
 			artifactsResponse, artifactsErr := client.ListBuildArtifacts(cmd.Context(), args[0])
 			if artifactsErr != nil {
 				return mapCommandError(artifactsErr)
+			}
+
+			if downloadAll {
+				if mkdirErr := os.MkdirAll(bulkOutputDir, 0o755); mkdirErr != nil {
+					return &ExitError{Code: 1, Err: mkdirErr}
+				}
+
+				plannedDownloads, planErr := planBulkArtifactDownloads(artifactsResponse.Artifacts, bulkOutputDir, force)
+				if planErr != nil {
+					return &ExitError{Code: 2, Err: planErr}
+				}
+
+				payload := buildArtifactDownloadPayload{BuildID: args[0], Downloaded: make([]buildArtifactDownloadView, 0, len(plannedDownloads))}
+				for _, planned := range plannedDownloads {
+					written, downloadErr := downloadBuildArtifactToPath(cmd.Context(), client, args[0], planned.Artifact, planned.DestinationPath, force)
+					if downloadErr != nil {
+						var apiErr *apiclient.Error
+						if errors.As(downloadErr, &apiErr) {
+							return mapCommandError(downloadErr)
+						}
+						return &ExitError{Code: 1, Err: downloadErr}
+					}
+					payload.Downloaded = append(payload.Downloaded, buildArtifactDownloadViewFromArtifact(planned.Artifact, displayPath(planned.DestinationPath), written))
+				}
+
+				return output.Write(resolved.OutputMode, a.stdout, func(w io.Writer) error {
+					return writeBuildArtifactDownloadHuman(w, payload)
+				}, payload)
 			}
 
 			artifact, selectErr := selectBuildArtifact(artifactsResponse.Artifacts, selector)
@@ -274,7 +322,8 @@ func (a *app) newBuildArtifactsDownloadCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&selector, "artifact", "", "Artifact selector: ID first, exact path second, then name or basename; ambiguous matches require ID or full path")
-	command.Flags().StringVar(&outputPath, "output", "", "Output file or directory path")
+	command.Flags().BoolVar(&downloadAll, "all", false, "Download all artifacts for the build")
+	command.Flags().StringVar(&outputPath, "output", "", "Output file or directory path; required as a directory with --all")
 	command.Flags().BoolVar(&force, "force", false, "Overwrite an existing file")
 	return command
 }
@@ -890,6 +939,12 @@ func writeBuildRetryHuman(w io.Writer, payload buildRetryPayload) error {
 }
 
 func writeBuildArtifactDownloadHuman(w io.Writer, payload buildArtifactDownloadPayload) error {
+	if len(payload.Downloaded) == 0 {
+		if _, err := fmt.Fprintf(w, "No artifacts found for build %s\n", strings.TrimSpace(payload.BuildID)); err != nil {
+			return err
+		}
+		return nil
+	}
 	for _, item := range payload.Downloaded {
 		if _, err := fmt.Fprintf(w, "Downloaded %s -> %s\n", item.Name, item.Path); err != nil {
 			return err
@@ -1030,6 +1085,25 @@ func resolveArtifactOutputPath(outputPath string, artifact api.BuildArtifactResp
 	return trimmedOutput, nil
 }
 
+func resolveArtifactBulkOutputDir(outputPath string) (string, error) {
+	trimmedOutput := strings.TrimSpace(outputPath)
+	if trimmedOutput == "" {
+		return "", errors.New("--all requires --output <dir>")
+	}
+
+	info, err := os.Stat(trimmedOutput)
+	if err == nil {
+		if !info.IsDir() {
+			return "", fmt.Errorf("bulk download output must be a directory: %s", trimmedOutput)
+		}
+		return trimmedOutput, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	return trimmedOutput, nil
+}
+
 func artifactDownloadName(artifact api.BuildArtifactResponse) (string, error) {
 	relativePath, err := artifactDownloadRelativePath(artifact)
 	if err != nil {
@@ -1089,6 +1163,47 @@ type countingWriter struct {
 	count  int64
 }
 
+type plannedArtifactDownload struct {
+	Artifact        api.BuildArtifactResponse
+	DestinationPath string
+}
+
+func planBulkArtifactDownloads(artifacts []api.BuildArtifactResponse, outputDir string, force bool) ([]plannedArtifactDownload, error) {
+	trimmedOutputDir := strings.TrimSpace(outputDir)
+	if trimmedOutputDir == "" {
+		return nil, errors.New("bulk download output directory is required")
+	}
+
+	planned := make([]plannedArtifactDownload, 0, len(artifacts))
+	seenPaths := make(map[string]string, len(artifacts))
+	for _, artifact := range artifacts {
+		relativePath, err := artifactDownloadRelativePath(artifact)
+		if err != nil {
+			return nil, err
+		}
+		destinationPath := filepath.Clean(filepath.Join(trimmedOutputDir, filepath.FromSlash(relativePath)))
+		if existingArtifactID, exists := seenPaths[destinationPath]; exists {
+			return nil, fmt.Errorf("artifacts %q and %q map to the same output path: %s", existingArtifactID, strings.TrimSpace(artifact.ID), destinationPath)
+		}
+		seenPaths[destinationPath] = strings.TrimSpace(artifact.ID)
+
+		if info, err := os.Stat(destinationPath); err == nil {
+			if info.IsDir() {
+				return nil, fmt.Errorf("output path already exists as a directory: %s", destinationPath)
+			}
+			if !force {
+				return nil, fmt.Errorf("output file already exists: %s (use --force to overwrite)", destinationPath)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+
+		planned = append(planned, plannedArtifactDownload{Artifact: artifact, DestinationPath: destinationPath})
+	}
+
+	return planned, nil
+}
+
 func (w *countingWriter) Write(p []byte) (int, error) {
 	n, err := w.writer.Write(p)
 	w.count += int64(n)
@@ -1112,6 +1227,9 @@ func downloadBuildArtifactToPath(ctx context.Context, client *apiclient.Client, 
 	}
 	destinationPerm := os.FileMode(0o600)
 	if info, err := os.Stat(trimmedDestination); err == nil {
+		if info.IsDir() {
+			return 0, fmt.Errorf("output path already exists as a directory: %s", trimmedDestination)
+		}
 		destinationPerm = info.Mode().Perm()
 		if !force {
 			return 0, fmt.Errorf("output file already exists: %s (use --force to overwrite)", trimmedDestination)
