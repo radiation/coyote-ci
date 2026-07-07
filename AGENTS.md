@@ -24,13 +24,16 @@ For detailed coding conventions, use `.github/copilot-instructions.md` as the so
 Before making changes:
 
 1. Identify the smallest PR-sized slice.
-2. Read the smallest relevant `docs/ai-context/` files first.
-3. For API-contract questions, check `backend/docs/swagger.yaml`, `backend/docs/swagger.json`, and existing frontend API client/types before opening handlers.
-4. Query CodeGraph before broad grep/find/read scans when `.codegraph/` exists.
-5. Inspect only the concrete files needed for that slice.
-6. Preserve existing package/layer boundaries.
-7. Update or add tests for changed behavior.
-8. Avoid widening scope without calling it out.
+2. For non-trivial PR slices, use the discovery and implementation recipes in `docs/ai-context/prompt-recipes.md`.
+3. Read the smallest relevant `docs/ai-context/` files first.
+4. For API-contract questions, check `backend/docs/swagger.yaml`, `backend/docs/swagger.json`, and existing frontend API client/types before opening handlers.
+5. Query CodeGraph before broad grep/find/read scans when `.codegraph/` exists.
+6. Identify concrete files with full repo-relative paths, not just basenames.
+7. Inspect only the concrete files needed for that slice.
+8. Before editing, summarize the docs read, CodeGraph queries used, files selected, validation planned, and any related files intentionally left out of scope.
+9. Preserve existing package/layer boundaries.
+10. Update or add tests for changed behavior.
+11. Avoid widening scope without calling it out.
 
 ## Current development posture
 
