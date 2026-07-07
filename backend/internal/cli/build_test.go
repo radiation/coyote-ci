@@ -504,7 +504,7 @@ func TestBuildArtifactHelpers(t *testing.T) {
 		t.Fatalf("expected drive path rejection, got %v", drivePathErr)
 	}
 
-	downloadPayload := buildArtifactDownloadPayload{BuildID: "build-1", Downloaded: []buildArtifactDownloadView{{ArtifactID: "artifact-1", Name: "report.xml", Path: "./report.xml", SizeBytes: 42}}}
+	downloadPayload := buildArtifactDownloadPayload{BuildID: "build-1", Downloaded: []buildArtifactDownloadView{{ArtifactID: "artifact-1", Name: "report.xml", ArtifactPath: "reports/report.xml", StepID: &stepID, ContentType: &contentType, SizeBytes: 42, Path: "./report.xml", LocalPath: "./report.xml", DownloadedBytes: 13}}}
 	buf.Reset()
 	if writeDownloadErr := writeBuildArtifactDownloadHuman(buf, downloadPayload); writeDownloadErr != nil {
 		t.Fatalf("writeBuildArtifactDownloadHuman failed: %v", writeDownloadErr)
@@ -608,7 +608,7 @@ func TestBuildArtifactHelpers(t *testing.T) {
 		t.Fatalf("expected temp files to be cleaned up after replace failure, got %v", tempMatches)
 	}
 
-	if got := buildArtifactDownloadViewFromArtifact(api.BuildArtifactResponse{ID: "artifact-fallback", Path: "../unsafe"}, "./artifact-fallback", 0); got.Name != "artifact-fallback" || got.SizeBytes != 0 {
+	if got := buildArtifactDownloadViewFromArtifact(api.BuildArtifactResponse{ID: "artifact-fallback", Path: "../unsafe"}, "./artifact-fallback", 0); got.Name != "artifact-fallback" || got.SizeBytes != 0 || got.DownloadedBytes != 0 || got.LocalPath != "./artifact-fallback" || got.Path != "./artifact-fallback" {
 		t.Fatalf("expected fallback download view, got %+v", got)
 	}
 
@@ -701,6 +701,20 @@ func TestBuildArtifactHelperEdgeCases(t *testing.T) {
 
 	if got, err := artifactDownloadName(api.BuildArtifactResponse{Name: "report.xml"}); err != nil || got != "report.xml" {
 		t.Fatalf("expected artifactDownloadName name fallback, got %q err=%v", got, err)
+	}
+
+	stepID := " step-7 "
+	contentType := " application/xml "
+	view := buildArtifactDownloadViewFromArtifact(api.BuildArtifactResponse{
+		ID:          "artifact-7",
+		Name:        "report.xml",
+		Path:        "reports/report.xml",
+		StepID:      &stepID,
+		ContentType: &contentType,
+		SizeBytes:   42,
+	}, "./downloads/report.xml", 13)
+	if view.ArtifactID != "artifact-7" || view.Name != "report.xml" || view.ArtifactPath != "reports/report.xml" || view.StepID == nil || *view.StepID != "step-7" || view.ContentType == nil || *view.ContentType != "application/xml" || view.SizeBytes != 42 || view.Path != "./downloads/report.xml" || view.LocalPath != "./downloads/report.xml" || view.DownloadedBytes != 13 {
+		t.Fatalf("unexpected download view: %+v", view)
 	}
 	if got := displayPath("./report.xml"); got != "./report.xml" {
 		t.Fatalf("expected dotted display path to remain unchanged, got %s", got)

@@ -100,10 +100,15 @@ type buildArtifactDownloadPayload struct {
 }
 
 type buildArtifactDownloadView struct {
-	ArtifactID string `json:"artifact_id"`
-	Name       string `json:"name"`
-	Path       string `json:"path"`
-	SizeBytes  int64  `json:"size_bytes"`
+	ArtifactID      string  `json:"artifact_id"`
+	Name            string  `json:"name"`
+	ArtifactPath    string  `json:"artifact_path"`
+	StepID          *string `json:"step_id,omitempty"`
+	ContentType     *string `json:"content_type,omitempty"`
+	SizeBytes       int64   `json:"size_bytes"`
+	Path            string  `json:"path,omitempty"`
+	LocalPath       string  `json:"local_path"`
+	DownloadedBytes int64   `json:"downloaded_bytes"`
 }
 
 var buildWatchPollInterval = 3 * time.Second
@@ -268,7 +273,7 @@ func (a *app) newBuildArtifactsDownloadCommand() *cobra.Command {
 			}, payload)
 		},
 	}
-	command.Flags().StringVar(&selector, "artifact", "", "Artifact ID, path, or name")
+	command.Flags().StringVar(&selector, "artifact", "", "Artifact selector: ID first, exact path second, then name or basename; ambiguous matches require ID or full path")
 	command.Flags().StringVar(&outputPath, "output", "", "Output file or directory path")
 	command.Flags().BoolVar(&force, "force", false, "Overwrite an existing file")
 	return command
@@ -1151,19 +1156,20 @@ func downloadBuildArtifactToPath(ctx context.Context, client *apiclient.Client, 
 }
 
 func buildArtifactDownloadViewFromArtifact(artifact api.BuildArtifactResponse, destinationPath string, written int64) buildArtifactDownloadView {
-	sizeBytes := written
-	if sizeBytes == 0 && artifact.SizeBytes > 0 {
-		sizeBytes = artifact.SizeBytes
-	}
 	name, err := artifactDownloadName(artifact)
 	if err != nil {
 		name = strings.TrimSpace(artifact.ID)
 	}
 	return buildArtifactDownloadView{
-		ArtifactID: artifact.ID,
-		Name:       name,
-		Path:       destinationPath,
-		SizeBytes:  sizeBytes,
+		ArtifactID:      artifact.ID,
+		Name:            name,
+		ArtifactPath:    strings.TrimSpace(artifact.Path),
+		StepID:          trimStringPtr(artifact.StepID),
+		ContentType:     trimStringPtr(artifact.ContentType),
+		SizeBytes:       artifact.SizeBytes,
+		Path:            destinationPath,
+		LocalPath:       destinationPath,
+		DownloadedBytes: written,
 	}
 }
 
