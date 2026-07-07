@@ -377,6 +377,59 @@ func TestBuildWatchEmitterOutputs(t *testing.T) {
 	}
 }
 
+func TestBuildWatchHelpers(t *testing.T) {
+	t.Run("log chunk event trims step metadata", func(t *testing.T) {
+		event := buildWatchLogChunkEvent("build-1", api.StepLogChunkResponse{
+			StepIndex: 3,
+			StepName:  "  test-step  ",
+			StepID:    "  step-3  ",
+			Stream:    " stderr ",
+			ChunkText: "boom\n",
+			CreatedAt: "2026-07-07T00:00:00Z",
+		})
+		if event.StepIndex == nil || *event.StepIndex != 3 || event.StepName == nil || *event.StepName != "test-step" || event.StepID == nil || *event.StepID != "step-3" || event.Stream != "stderr" {
+			t.Fatalf("unexpected log chunk event: %+v", event)
+		}
+	})
+
+	t.Run("step event uses finished timestamp for finished events", func(t *testing.T) {
+		step := api.BuildStepResponse{ID: " step-1 ", StepIndex: 1, Name: " test ", Status: "failed", StartedAt: stringPtr("2026-07-07T00:00:01Z"), FinishedAt: stringPtr("2026-07-07T00:00:02Z")}
+		started := buildWatchStepEvent("step_started", "build-1", step, nil)
+		finished := buildWatchStepEvent("step_finished", "build-1", step, intPtr(1))
+		if started.Timestamp != "2026-07-07T00:00:01Z" || finished.Timestamp != "2026-07-07T00:00:02Z" {
+			t.Fatalf("unexpected step timestamps: started=%+v finished=%+v", started, finished)
+		}
+	})
+
+	t.Run("watch helper fallbacks", func(t *testing.T) {
+		if got := watchTimestamp(nil); strings.TrimSpace(got) == "" {
+			t.Fatal("expected fallback timestamp")
+		}
+		steps := sortBuildSteps([]api.BuildStepResponse{{ID: "b", StepIndex: 2}, {ID: "a", StepIndex: 2}, {ID: "c", StepIndex: 1}})
+		if steps[0].ID != "c" || steps[1].ID != "a" || steps[2].ID != "b" {
+			t.Fatalf("unexpected step ordering: %+v", steps)
+		}
+		if got := maxInt64(1, 5); got != 5 {
+			t.Fatalf("expected maxInt64 to pick 5, got %d", got)
+		}
+		if got := maxInt64(7, 2); got != 7 {
+			t.Fatalf("expected maxInt64 to keep 7, got %d", got)
+		}
+		if got := valueOrZero(nil); got != 0 {
+			t.Fatalf("expected zero fallback, got %d", got)
+		}
+		if got := valueOrZero(intPtr(4)); got != 4 {
+			t.Fatalf("expected value fallback 4, got %d", got)
+		}
+		if got := valueOrUnknownPtr(nil); got != "unknown" {
+			t.Fatalf("expected unknown fallback, got %q", got)
+		}
+		if got := valueOrUnknownPtr(stringPtr("  named-step  ")); got != "named-step" {
+			t.Fatalf("expected trimmed value, got %q", got)
+		}
+	})
+}
+
 func TestBuildArtifactHelpers(t *testing.T) {
 	stepID := "step-1"
 	contentType := "application/xml"

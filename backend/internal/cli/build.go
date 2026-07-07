@@ -408,10 +408,10 @@ func parseBuildLogsOptions(stepRaw string, failed bool, tail int, tailSet bool) 
 
 func watchBuild(ctx context.Context, client *apiclient.Client, emitter *buildWatchEmitter, buildID string) (string, error) {
 	logsCtx, cancelLogs := context.WithCancel(ctx)
-	defer cancelLogs()
 
 	var streamWG sync.WaitGroup
 	defer streamWG.Wait()
+	defer cancelLogs()
 	streamErrors := make(chan error, 1)
 
 	activeStreams := make(map[int]struct{})

@@ -155,6 +155,144 @@ func TestClient_StreamBuildStepLogs(t *testing.T) {
 	}
 }
 
+type errReadCloser struct {
+	err  error
+	read bool
+}
+
+func (r *errReadCloser) Read([]byte) (int, error) {
+	if r.read {
+		return 0, io.EOF
+	}
+	r.read = true
+	return 0, r.err
+}
+
+func (r *errReadCloser) Close() error {
+	return nil
+}
+
+func TestClient_StreamBuildStepLogsBranches(t *testing.T) {
+	t.Run("nil handler ignores chunk and succeeds", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if got := r.Header.Get("Last-Event-ID"); got != "" {
+				t.Fatalf("expected empty Last-Event-ID, got %q", got)
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: chunk\n")
+			_, _ = io.WriteString(w, "data: {\"sequence_no\":1,\"build_id\":\"build-1\",\"step_id\":\"step-1\",\"step_index\":0,\"step_name\":\"test\",\"stream\":\"stdout\",\"chunk_text\":\"ok\\n\",\"created_at\":\"2026-07-07T00:00:01Z\"}\n\n")
+		}))
+		defer server.Close()
+
+		client, err := New(server.URL, "", "coyote/dev", nil)
+		if err != nil {
+			t.Fatalf("new client: %v", err)
+		}
+		if err := client.StreamBuildStepLogs(context.Background(), "build-1", 0, 0, nil); err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+	})
+
+	t.Run("chunk decode failure returns unexpected error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: chunk\n")
+			_, _ = io.WriteString(w, "data: {not-json}\n\n")
+		}))
+		defer server.Close()
+
+		client, err := New(server.URL, "", "coyote/dev", nil)
+		if err != nil {
+			t.Fatalf("new client: %v", err)
+		}
+
+		err = client.StreamBuildStepLogs(context.Background(), "build-1", 0, 0, func(StepLogStreamEvent) error { return nil })
+		var apiErr *Error
+		if !errors.As(err, &apiErr) || apiErr.Kind != ErrorKindUnexpected || !strings.Contains(apiErr.Error(), "invalid sse response") {
+			t.Fatalf("expected invalid sse response error, got %v", err)
+		}
+	})
+
+	t.Run("error event with empty message falls back to default", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: error\n")
+			_, _ = io.WriteString(w, "data: {}\n\n")
+		}))
+		defer server.Close()
+
+		client, err := New(server.URL, "", "coyote/dev", nil)
+		if err != nil {
+			t.Fatalf("new client: %v", err)
+		}
+
+		err = client.StreamBuildStepLogs(context.Background(), "build-1", 0, 0, func(StepLogStreamEvent) error { return nil })
+		var apiErr *Error
+		if !errors.As(err, &apiErr) || apiErr.Kind != ErrorKindServer || apiErr.Message != "step log stream failed" {
+			t.Fatalf("expected default stream failure, got %v", err)
+		}
+	})
+
+	t.Run("error event with invalid payload falls back to default", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: error\n")
+			_, _ = io.WriteString(w, "data: nope\n\n")
+		}))
+		defer server.Close()
+
+		client, err := New(server.URL, "", "coyote/dev", nil)
+		if err != nil {
+			t.Fatalf("new client: %v", err)
+		}
+
+		err = client.StreamBuildStepLogs(context.Background(), "build-1", 0, 0, func(StepLogStreamEvent) error { return nil })
+		var apiErr *Error
+		if !errors.As(err, &apiErr) || apiErr.Kind != ErrorKindServer || apiErr.Message != "step log stream failed" {
+			t.Fatalf("expected default stream failure, got %v", err)
+		}
+	})
+
+	t.Run("handler error is returned", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: chunk\n")
+			_, _ = io.WriteString(w, "data: {\"sequence_no\":1,\"build_id\":\"build-1\",\"step_id\":\"step-1\",\"step_index\":0,\"step_name\":\"test\",\"stream\":\"stdout\",\"chunk_text\":\"ok\\n\",\"created_at\":\"2026-07-07T00:00:01Z\"}\n\n")
+		}))
+		defer server.Close()
+
+		client, err := New(server.URL, "", "coyote/dev", nil)
+		if err != nil {
+			t.Fatalf("new client: %v", err)
+		}
+
+		wantErr := errors.New("stop")
+		err = client.StreamBuildStepLogs(context.Background(), "build-1", 0, 0, func(StepLogStreamEvent) error { return wantErr })
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("expected handler error, got %v", err)
+		}
+	})
+
+	t.Run("read failure returns unexpected error", func(t *testing.T) {
+		client, err := New("https://example.com", "", "coyote/dev", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       &errReadCloser{err: errors.New("broken stream")},
+			}, nil
+		})})
+		if err != nil {
+			t.Fatalf("new client: %v", err)
+		}
+
+		err = client.StreamBuildStepLogs(context.Background(), "build-1", 0, 0, func(StepLogStreamEvent) error { return nil })
+		var apiErr *Error
+		if !errors.As(err, &apiErr) || apiErr.Kind != ErrorKindUnexpected || !strings.Contains(apiErr.Error(), "read sse response") {
+			t.Fatalf("expected read sse response error, got %v", err)
+		}
+	})
+}
+
 func TestClient_ProjectAndJobDiscoveryMethods(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.String() {
