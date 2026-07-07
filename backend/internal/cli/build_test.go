@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -321,6 +322,110 @@ func TestConfirmBuildRetry(t *testing.T) {
 		var exitErr *ExitError
 		if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "canceled") {
 			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestBuildWatchEmitterOutputs(t *testing.T) {
+	human := &bytes.Buffer{}
+	humanEmitter := newBuildWatchEmitter(output.ModeHuman, human)
+	stepIndex := 2
+	stepName := "test"
+	exitCode := 1
+	for _, event := range []buildWatchEvent{
+		{Type: "build_status", BuildID: "build-1", Timestamp: "2026-07-07T00:00:00Z", Status: "running"},
+		{Type: "step_started", BuildID: "build-1", Timestamp: "2026-07-07T00:00:01Z", StepIndex: &stepIndex, StepName: &stepName, Status: "running"},
+		{Type: "log_chunk", BuildID: "build-1", Timestamp: "2026-07-07T00:00:02Z", StepIndex: &stepIndex, StepName: &stepName, Stream: "stderr", Text: "boom\n"},
+		{Type: "logs_unavailable", BuildID: "build-1", Timestamp: "2026-07-07T00:00:03Z"},
+		{Type: "step_finished", BuildID: "build-1", Timestamp: "2026-07-07T00:00:04Z", StepIndex: &stepIndex, StepName: &stepName, Status: "failed", ExitCode: &exitCode},
+		{Type: "terminal", BuildID: "build-1", Timestamp: "2026-07-07T00:00:05Z", Status: "failed", ExitCode: &exitCode},
+	} {
+		if err := humanEmitter.emit(event); err != nil {
+			t.Fatalf("emit human event: %v", err)
+		}
+	}
+	out := human.String()
+	for _, want := range []string{
+		"Build build-1: running",
+		"==> step 2: test started",
+		"[step 2 test][stderr] boom",
+		"Live logs unavailable for this token; continuing with status-only watch.",
+		"<== step 2: test failed (exit code 1)",
+		"Build build-1 completed with status failed (exit 1)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected %q in output, got %s", want, out)
+		}
+	}
+
+	jsonBuf := &bytes.Buffer{}
+	jsonEmitter := newBuildWatchEmitter(output.ModeJSON, jsonBuf)
+	if err := jsonEmitter.emit(buildWatchEvent{Type: "terminal", BuildID: "build-1", Timestamp: "2026-07-07T00:00:05Z", Status: "success", ExitCode: intPtr(0)}); err != nil {
+		t.Fatalf("emit json event: %v", err)
+	}
+	var decoded buildWatchEvent
+	if err := json.Unmarshal(jsonBuf.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode json event: %v", err)
+	}
+	if decoded.Type != "terminal" || decoded.BuildID != "build-1" || decoded.Status != "success" || decoded.ExitCode == nil || *decoded.ExitCode != 0 {
+		t.Fatalf("unexpected decoded event: %+v", decoded)
+	}
+
+	failingEmitter := newBuildWatchEmitter(output.ModeHuman, failWriter{})
+	if err := failingEmitter.emit(buildWatchEvent{Type: "build_status", BuildID: "build-1", Timestamp: "2026-07-07T00:00:00Z", Status: "running"}); err == nil || err.Error() != "write failed" {
+		t.Fatalf("expected write failure, got %v", err)
+	}
+}
+
+func TestBuildWatchHelpers(t *testing.T) {
+	t.Run("log chunk event trims step metadata", func(t *testing.T) {
+		event := buildWatchLogChunkEvent("build-1", api.StepLogChunkResponse{
+			StepIndex: 3,
+			StepName:  "  test-step  ",
+			StepID:    "  step-3  ",
+			Stream:    " stderr ",
+			ChunkText: "boom\n",
+			CreatedAt: "2026-07-07T00:00:00Z",
+		})
+		if event.StepIndex == nil || *event.StepIndex != 3 || event.StepName == nil || *event.StepName != "test-step" || event.StepID == nil || *event.StepID != "step-3" || event.Stream != "stderr" {
+			t.Fatalf("unexpected log chunk event: %+v", event)
+		}
+	})
+
+	t.Run("step event uses finished timestamp for finished events", func(t *testing.T) {
+		step := api.BuildStepResponse{ID: " step-1 ", StepIndex: 1, Name: " test ", Status: "failed", StartedAt: stringPtr("2026-07-07T00:00:01Z"), FinishedAt: stringPtr("2026-07-07T00:00:02Z")}
+		started := buildWatchStepEvent("step_started", "build-1", step, nil)
+		finished := buildWatchStepEvent("step_finished", "build-1", step, intPtr(1))
+		if started.Timestamp != "2026-07-07T00:00:01Z" || finished.Timestamp != "2026-07-07T00:00:02Z" {
+			t.Fatalf("unexpected step timestamps: started=%+v finished=%+v", started, finished)
+		}
+	})
+
+	t.Run("watch helper fallbacks", func(t *testing.T) {
+		if got := watchTimestamp(nil); strings.TrimSpace(got) == "" {
+			t.Fatal("expected fallback timestamp")
+		}
+		steps := sortBuildSteps([]api.BuildStepResponse{{ID: "b", StepIndex: 2}, {ID: "a", StepIndex: 2}, {ID: "c", StepIndex: 1}})
+		if steps[0].ID != "c" || steps[1].ID != "a" || steps[2].ID != "b" {
+			t.Fatalf("unexpected step ordering: %+v", steps)
+		}
+		if got := maxInt64(1, 5); got != 5 {
+			t.Fatalf("expected maxInt64 to pick 5, got %d", got)
+		}
+		if got := maxInt64(7, 2); got != 7 {
+			t.Fatalf("expected maxInt64 to keep 7, got %d", got)
+		}
+		if got := valueOrZero(nil); got != 0 {
+			t.Fatalf("expected zero fallback, got %d", got)
+		}
+		if got := valueOrZero(intPtr(4)); got != 4 {
+			t.Fatalf("expected value fallback 4, got %d", got)
+		}
+		if got := valueOrUnknownPtr(nil); got != "unknown" {
+			t.Fatalf("expected unknown fallback, got %q", got)
+		}
+		if got := valueOrUnknownPtr(stringPtr("  named-step  ")); got != "named-step" {
+			t.Fatalf("expected trimmed value, got %q", got)
 		}
 	})
 }

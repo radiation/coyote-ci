@@ -1,6 +1,7 @@
 package apiclient
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -234,6 +235,130 @@ func (c *Client) GetBuildLogs(ctx context.Context, buildID string, options Build
 	return envelope.Data, nil
 }
 
+var ErrStepLogStreamTimeout = errors.New("step log stream timeout")
+
+type StepLogStreamEvent struct {
+	Type  string
+	Chunk *api.StepLogChunkResponse
+}
+
+func (c *Client) StreamBuildStepLogs(ctx context.Context, buildID string, stepIndex int, after int64, handle func(StepLogStreamEvent) error) error {
+	requestPath := buildStepLogStreamPath(buildID, stepIndex, after)
+	requestURL, err := resolveRequestURL(c.baseURL, requestPath)
+	if err != nil {
+		return &Error{Kind: ErrorKindUnexpected, Message: "invalid request path", Err: err}
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
+	if err != nil {
+		return &Error{Kind: ErrorKindUnexpected, Message: "build request", Err: err}
+	}
+	request.Header.Set("Accept", "text/event-stream")
+	if after > 0 {
+		request.Header.Set("Last-Event-ID", strconv.FormatInt(after, 10))
+	}
+	if c.userAgent != "" {
+		request.Header.Set("User-Agent", c.userAgent)
+	}
+	if c.token != "" {
+		request.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return &Error{Kind: ErrorKindTransport, Message: "request failed", Err: err}
+	}
+	defer func() {
+		_ = response.Body.Close()
+	}()
+
+	requestID := strings.TrimSpace(response.Header.Get("X-Request-Id"))
+	if requestID == "" {
+		requestID = strings.TrimSpace(response.Header.Get("X-Request-ID"))
+	}
+
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return decodeErrorResponse(response, requestID)
+	}
+
+	reader := bufio.NewReader(response.Body)
+	currentType := "message"
+	var dataLines []string
+
+	flushEvent := func() error {
+		if len(dataLines) == 0 {
+			currentType = "message"
+			return nil
+		}
+		data := strings.Join(dataLines, "\n")
+		dataLines = nil
+
+		switch currentType {
+		case "chunk":
+			var chunk api.StepLogChunkResponse
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				return &Error{Kind: ErrorKindUnexpected, Message: "invalid sse response", RequestID: requestID, Err: err}
+			}
+			if handle == nil {
+				currentType = "message"
+				return nil
+			}
+			if err := handle(StepLogStreamEvent{Type: currentType, Chunk: &chunk}); err != nil {
+				return err
+			}
+		case "timeout":
+			currentType = "message"
+			return ErrStepLogStreamTimeout
+		case "error":
+			var payload map[string]string
+			if err := json.Unmarshal([]byte(data), &payload); err == nil {
+				message := strings.TrimSpace(payload["message"])
+				if message == "" {
+					message = "step log stream failed"
+				}
+				return &Error{Kind: ErrorKindServer, Message: message, RequestID: requestID}
+			}
+			return &Error{Kind: ErrorKindServer, Message: "step log stream failed", RequestID: requestID}
+		}
+
+		currentType = "message"
+		return nil
+	}
+
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
+				return readErr
+			}
+			return &Error{Kind: ErrorKindUnexpected, Message: "read sse response", RequestID: requestID, Err: readErr}
+		}
+
+		trimmedLine := strings.TrimRight(line, "\r\n")
+		if trimmedLine == "" {
+			if err := flushEvent(); err != nil {
+				return err
+			}
+		} else if strings.HasPrefix(trimmedLine, ":") {
+			// Ignore SSE comments.
+		} else if strings.HasPrefix(trimmedLine, "event:") {
+			currentType = strings.TrimSpace(strings.TrimPrefix(trimmedLine, "event:"))
+		} else if strings.HasPrefix(trimmedLine, "data:") {
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(trimmedLine, "data:")))
+		}
+
+		if errors.Is(readErr, io.EOF) {
+			if err := flushEvent(); err != nil {
+				return err
+			}
+			return nil
+		}
+	}
+}
+
 func (c *Client) ListBuildArtifacts(ctx context.Context, buildID string) (api.BuildArtifactsResponse, error) {
 	var envelope api.BuildArtifactsEnvelope
 	if err := c.doJSON(ctx, http.MethodGet, buildResourcePath(buildID, "/artifacts"), nil, &envelope); err != nil {
@@ -339,6 +464,18 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, request
 		return &Error{Kind: ErrorKindUnexpected, Message: "invalid json response", RequestID: requestID, Err: decodeErr}
 	}
 	return nil
+}
+
+func buildStepLogStreamPath(buildID string, stepIndex int, after int64) string {
+	params := url.Values{}
+	if after > 0 {
+		params.Set("after", strconv.FormatInt(after, 10))
+	}
+	requestPath := buildResourcePath(buildID, "/steps/"+strconv.Itoa(stepIndex)+"/logs/stream")
+	if encoded := params.Encode(); encoded != "" {
+		requestPath += "?" + encoded
+	}
+	return requestPath
 }
 
 func normalizeBaseURL(raw string) (*url.URL, error) {
