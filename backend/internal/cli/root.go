@@ -102,7 +102,9 @@ func Run(deps Dependencies) int {
 		if stderr == nil {
 			stderr = os.Stderr
 		}
-		_, _ = fmt.Fprintln(stderr, err.Error())
+		if message := strings.TrimSpace(err.Error()); message != "" {
+			_, _ = fmt.Fprintln(stderr, message)
+		}
 		var exitErr *ExitError
 		if errors.As(err, &exitErr) {
 			return exitErr.Code

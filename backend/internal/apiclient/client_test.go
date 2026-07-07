@@ -107,6 +107,54 @@ func TestClient_BuildInspectionMethods(t *testing.T) {
 	}
 }
 
+func TestClient_StreamBuildStepLogs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.String() != "/api/builds/build-1/steps/2/logs/stream?after=4" {
+			t.Fatalf("unexpected request path %q", r.URL.String())
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("expected bearer header, got %q", got)
+		}
+		if got := r.Header.Get("Accept"); got != "text/event-stream" {
+			t.Fatalf("expected event-stream accept header, got %q", got)
+		}
+		if got := r.Header.Get("Last-Event-ID"); got != "4" {
+			t.Fatalf("expected Last-Event-ID 4, got %q", got)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, ": connected\n\n")
+		_, _ = io.WriteString(w, "id: 5\n")
+		_, _ = io.WriteString(w, "event: chunk\n")
+		_, _ = io.WriteString(w, "data: {\"sequence_no\":5,\"build_id\":\"build-1\",\"step_id\":\"step-2\",\"step_index\":2,\"step_name\":\"test\",\"stream\":\"stdout\",\"chunk_text\":\"hello\\n\",\"created_at\":\"2026-07-07T00:00:01Z\"}\n\n")
+		_, _ = io.WriteString(w, "event: timeout\n")
+		_, _ = io.WriteString(w, "data: {\"message\":\"maximum stream duration exceeded\"}\n\n")
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var events []StepLogStreamEvent
+	streamErr := client.StreamBuildStepLogs(context.Background(), "build-1", 2, 4, func(event StepLogStreamEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	if !errors.Is(streamErr, ErrStepLogStreamTimeout) {
+		t.Fatalf("expected timeout sentinel, got %v", streamErr)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected one chunk event, got %+v", events)
+	}
+	if events[0].Type != "chunk" || events[0].Chunk == nil || events[0].Chunk.SequenceNo != 5 || events[0].Chunk.StepName != "test" {
+		t.Fatalf("unexpected chunk event: %+v", events[0])
+	}
+	if events[0].Chunk.ChunkText != "hello\n" {
+		t.Fatalf("unexpected chunk text: %+v", events[0].Chunk)
+	}
+}
+
 func TestClient_ProjectAndJobDiscoveryMethods(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.String() {

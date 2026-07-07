@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -230,6 +231,236 @@ func TestBuildStatusAndLogsCommands(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("expected no stdout on tail validation error, got %q", stdout.String())
+	}
+}
+
+func TestBuildWatchCommandHuman(t *testing.T) {
+	originalPollInterval := buildWatchPollInterval
+	buildWatchPollInterval = 5 * time.Millisecond
+	t.Cleanup(func() {
+		buildWatchPollInterval = originalPollInterval
+	})
+
+	var buildCalls int32
+	var stepsCalls int32
+	var streamHit int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1":
+			call := atomic.AddInt32(&buildCalls, 1)
+			if call == 1 || atomic.LoadInt32(&streamHit) == 0 {
+				_, _ = w.Write([]byte(`{"data":{"id":"build-1","project_id":"project-1","project_name":"Coyote CI","job_id":"job-1","job_name":"watch-job","status":"running","created_at":"2026-07-07T00:00:00Z","started_at":"2026-07-07T00:00:01Z","finished_at":null,"current_step_index":0,"attempt_number":1,"error_message":null,"trigger_type":"manual","trigger_kind":"manual","image":{"source_kind":"external"},"current_steps":[{"id":"step-1","index":0,"name":"test","status":"running","started_at":"2026-07-07T00:00:01Z"}]}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":"build-1","project_id":"project-1","project_name":"Coyote CI","job_id":"job-1","job_name":"watch-job","status":"success","created_at":"2026-07-07T00:00:00Z","started_at":"2026-07-07T00:00:01Z","finished_at":"2026-07-07T00:00:03Z","current_step_index":0,"attempt_number":1,"error_message":null,"trigger_type":"manual","trigger_kind":"manual","image":{"source_kind":"external"},"current_steps":[]}}`))
+		case "/api/builds/build-1/steps":
+			call := atomic.AddInt32(&stepsCalls, 1)
+			if call == 1 || atomic.LoadInt32(&streamHit) == 0 {
+				_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","steps":[{"id":"step-1","build_id":"build-1","step_index":0,"name":"test","command":"go test ./...","status":"running","image":{"source_kind":"external"},"job":null,"worker_id":null,"started_at":"2026-07-07T00:00:01Z","finished_at":null,"exit_code":null,"stdout":null,"stderr":null,"error_message":null}]}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","steps":[{"id":"step-1","build_id":"build-1","step_index":0,"name":"test","command":"go test ./...","status":"success","image":{"source_kind":"external"},"job":null,"worker_id":null,"started_at":"2026-07-07T00:00:01Z","finished_at":"2026-07-07T00:00:03Z","exit_code":0,"stdout":null,"stderr":null,"error_message":null}]}}`))
+		case "/api/builds/build-1/steps/0/logs/stream":
+			atomic.StoreInt32(&streamHit, 1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: chunk\n")
+			_, _ = io.WriteString(w, "data: {\"sequence_no\":1,\"build_id\":\"build-1\",\"step_id\":\"step-1\",\"step_index\":0,\"step_name\":\"test\",\"stream\":\"stdout\",\"chunk_text\":\"ok\\n\",\"created_at\":\"2026-07-07T00:00:02Z\"}\n\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "watch", "build-1"}}); code != 0 {
+		t.Fatalf("build watch exit code %d stderr=%s", code, stderr.String())
+	}
+	for _, want := range []string{
+		"Build build-1: running",
+		"==> step 0: test started",
+		"[step 0 test] ok",
+		"<== step 0: test success (exit code 0)",
+		"Build build-1 completed with status success (exit 0)",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected %q in output, got %s", want, stdout.String())
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+	if atomic.LoadInt32(&buildCalls) < 2 || atomic.LoadInt32(&stepsCalls) < 2 {
+		t.Fatalf("expected repeated polling, got buildCalls=%d stepsCalls=%d", atomic.LoadInt32(&buildCalls), atomic.LoadInt32(&stepsCalls))
+	}
+}
+
+func TestBuildWatchCommandJSONLogsUnavailable(t *testing.T) {
+	originalPollInterval := buildWatchPollInterval
+	buildWatchPollInterval = 5 * time.Millisecond
+	t.Cleanup(func() {
+		buildWatchPollInterval = originalPollInterval
+	})
+
+	var buildCalls int32
+	var stepsCalls int32
+	var streamAttempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1":
+			call := atomic.AddInt32(&buildCalls, 1)
+			if call == 1 || atomic.LoadInt32(&streamAttempts) == 0 {
+				_, _ = w.Write([]byte(`{"data":{"id":"build-1","project_id":"project-1","project_name":"Coyote CI","job_id":"job-1","job_name":"watch-job","status":"running","created_at":"2026-07-07T00:00:00Z","started_at":"2026-07-07T00:00:01Z","finished_at":null,"current_step_index":0,"attempt_number":1,"error_message":null,"trigger_type":"manual","trigger_kind":"manual","image":{"source_kind":"external"},"current_steps":[{"id":"step-1","index":0,"name":"test","status":"running","started_at":"2026-07-07T00:00:01Z"}]}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":"build-1","project_id":"project-1","project_name":"Coyote CI","job_id":"job-1","job_name":"watch-job","status":"failed","created_at":"2026-07-07T00:00:00Z","started_at":"2026-07-07T00:00:01Z","finished_at":"2026-07-07T00:00:03Z","current_step_index":0,"attempt_number":1,"error_message":"boom","trigger_type":"manual","trigger_kind":"manual","image":{"source_kind":"external"},"current_steps":[]}}`))
+		case "/api/builds/build-1/steps":
+			call := atomic.AddInt32(&stepsCalls, 1)
+			if call == 1 || atomic.LoadInt32(&streamAttempts) == 0 {
+				_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","steps":[{"id":"step-1","build_id":"build-1","step_index":0,"name":"test","command":"go test ./...","status":"running","image":{"source_kind":"external"},"job":null,"worker_id":null,"started_at":"2026-07-07T00:00:01Z","finished_at":null,"exit_code":null,"stdout":null,"stderr":null,"error_message":null}]}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","steps":[{"id":"step-1","build_id":"build-1","step_index":0,"name":"test","command":"go test ./...","status":"failed","image":{"source_kind":"external"},"job":null,"worker_id":null,"started_at":"2026-07-07T00:00:01Z","finished_at":"2026-07-07T00:00:03Z","exit_code":1,"stdout":null,"stderr":null,"error_message":"boom"}]}}`))
+		case "/api/builds/build-1/steps/0/logs/stream":
+			atomic.AddInt32(&streamAttempts, 1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"api token does not have the required scope: build:logs"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "watch", "build-1", "--json"}})
+	if code != 1 {
+		t.Fatalf("expected failed build watch exit code 1, got %d stderr=%s", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) < 5 {
+		t.Fatalf("expected multiple ndjson events, got %q", stdout.String())
+	}
+	seenTypes := map[string]buildWatchEvent{}
+	typeCounts := map[string]int{}
+	for _, line := range lines {
+		var event buildWatchEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("decode ndjson line %q: %v", line, err)
+		}
+		if event.Type == "" || event.BuildID != "build-1" || strings.TrimSpace(event.Timestamp) == "" {
+			t.Fatalf("event missing required fields: %+v", event)
+		}
+		typeCounts[event.Type]++
+		seenTypes[event.Type] = event
+	}
+	for _, wantType := range []string{"build_status", "step_started", "logs_unavailable", "step_finished", "terminal"} {
+		if _, ok := seenTypes[wantType]; !ok {
+			t.Fatalf("expected event type %q, got %+v", wantType, seenTypes)
+		}
+	}
+	if typeCounts["logs_unavailable"] != 1 {
+		t.Fatalf("expected logs_unavailable once, got counts=%+v", typeCounts)
+	}
+	terminal := seenTypes["terminal"]
+	if terminal.Status != "failed" || terminal.ExitCode == nil || *terminal.ExitCode != 1 {
+		t.Fatalf("unexpected terminal event: %+v", terminal)
+	}
+	if seenTypes["logs_unavailable"].StepIndex != nil {
+		t.Fatalf("logs_unavailable should not be step scoped: %+v", seenTypes["logs_unavailable"])
+	}
+	stepStarted := seenTypes["step_started"]
+	if stepStarted.StepIndex == nil || *stepStarted.StepIndex != 0 || stepStarted.StepName == nil || *stepStarted.StepName != "test" || stepStarted.StepID == nil || *stepStarted.StepID != "step-1" {
+		t.Fatalf("unexpected step_started event: %+v", stepStarted)
+	}
+}
+
+func TestBuildWatchCommandStreamFailureSurfaces(t *testing.T) {
+	originalPollInterval := buildWatchPollInterval
+	buildWatchPollInterval = 5 * time.Millisecond
+	t.Cleanup(func() {
+		buildWatchPollInterval = originalPollInterval
+	})
+
+	var streamAttempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1":
+			_, _ = w.Write([]byte(`{"data":{"id":"build-1","project_id":"project-1","project_name":"Coyote CI","job_id":"job-1","job_name":"watch-job","status":"running","created_at":"2026-07-07T00:00:00Z","started_at":"2026-07-07T00:00:01Z","finished_at":null,"current_step_index":0,"attempt_number":1,"error_message":null,"trigger_type":"manual","trigger_kind":"manual","image":{"source_kind":"external"},"current_steps":[{"id":"step-1","index":0,"name":"test","status":"running","started_at":"2026-07-07T00:00:01Z"}]}}`))
+		case "/api/builds/build-1/steps":
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","steps":[{"id":"step-1","build_id":"build-1","step_index":0,"name":"test","command":"go test ./...","status":"running","image":{"source_kind":"external"},"job":null,"worker_id":null,"started_at":"2026-07-07T00:00:01Z","finished_at":null,"exit_code":null,"stdout":null,"stderr":null,"error_message":null}]}}`))
+		case "/api/builds/build-1/steps/0/logs/stream":
+			atomic.AddInt32(&streamAttempts, 1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":{"code":"bad_gateway","message":"upstream stream failed"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "watch", "build-1"}})
+	if code != 9 {
+		t.Fatalf("expected server error exit code 9, got %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if atomic.LoadInt32(&streamAttempts) == 0 {
+		t.Fatal("expected log stream request before failure")
+	}
+	if !strings.Contains(stderr.String(), "upstream stream failed") {
+		t.Fatalf("expected surfaced stream error, got %q", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "Live logs unavailable") {
+		t.Fatalf("did not expect logs_unavailable output for non-scope failure: %q", stdout.String())
 	}
 }
 
