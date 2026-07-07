@@ -566,6 +566,27 @@ func TestBuildArtifactsCommands(t *testing.T) {
 	if !ok || downloadedFirst["artifact_id"] != "artifact-1" {
 		t.Fatalf("unexpected downloaded entry: %+v", downloadedFirst)
 	}
+	if downloadedFirst["artifact_path"] != "reports/report.xml" {
+		t.Fatalf("expected artifact_path reports/report.xml, got %+v", downloadedFirst)
+	}
+	if downloadedFirst["step_id"] != "step-1" {
+		t.Fatalf("expected step_id step-1, got %+v", downloadedFirst)
+	}
+	if downloadedFirst["content_type"] != "application/xml" {
+		t.Fatalf("expected content_type application/xml, got %+v", downloadedFirst)
+	}
+	if downloadedFirst["size_bytes"] != float64(42) {
+		t.Fatalf("expected size_bytes 42, got %+v", downloadedFirst)
+	}
+	if downloadedFirst["local_path"] != filepath.Join(outputDir, "report.xml") {
+		t.Fatalf("expected local_path to match output file, got %+v", downloadedFirst)
+	}
+	if downloadedFirst["path"] != filepath.Join(outputDir, "report.xml") {
+		t.Fatalf("expected legacy path alias to match local_path, got %+v", downloadedFirst)
+	}
+	if downloadedFirst["downloaded_bytes"] != float64(len("artifact-body")) {
+		t.Fatalf("expected downloaded_bytes %d, got %+v", len("artifact-body"), downloadedFirst)
+	}
 	if strings.Contains(stdout.String(), "Downloaded report.xml") {
 		t.Fatalf("unexpected human prose in artifact download JSON: %s", stdout.String())
 	}
@@ -588,6 +609,47 @@ func TestBuildArtifactsCommands(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "already exists") {
 		t.Fatalf("unexpected overwrite stderr: %s", stderr.String())
+	}
+}
+
+func TestBuildArtifactsDownloadCommandRejectsAmbiguousNameAtCommandLevel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1/artifacts":
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","artifacts":[{"id":"artifact-1","build_id":"build-1","name":"report.xml","path":"reports/a/report.xml","size_bytes":42,"storage_provider":"filesystem","download_url_path":"/builds/build-1/artifacts/artifact-1/download","created_at":"2026-07-05T00:00:00Z"},{"id":"artifact-2","build_id":"build-1","name":"report.xml","path":"reports/b/report.xml","size_bytes":84,"storage_provider":"filesystem","download_url_path":"/builds/build-1/artifacts/artifact-2/download","created_at":"2026-07-05T00:00:01Z"}]}}`))
+		case "/api/builds/build-1/artifacts/artifact-1/download", "/api/builds/build-1/artifacts/artifact-2/download":
+			t.Fatalf("download endpoint should not be called for ambiguous selector")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "download", "build-1", "--artifact", "report.xml", "--json"}})
+	if code != 2 {
+		t.Fatalf("expected ambiguity exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no stdout on ambiguity error, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "matched multiple artifact names") {
+		t.Fatalf("unexpected ambiguity stderr: %s", stderr.String())
 	}
 }
 
