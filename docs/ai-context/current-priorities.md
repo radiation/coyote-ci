@@ -10,18 +10,18 @@ Current work is focused on making Coyote CI easier to inspect, operate, and reas
 
 Near-term priorities include:
 
+- CLI-first remote workflow foundations, especially build inspection, logs, artifacts, rerun/retry, and agent-friendly JSON output
 - build detail UX polish
 - artifact browser and release browsing polish
 - source and provenance linking polish
 - queue operational visibility
 - auth, RBAC, project membership, and API token foundations
-- CLI-first remote workflow foundations
 - scope-aware API-token authorization for build, log, artifact, and rerun APIs
 - notifications
 - behavior-preserving refactors that improve maintainability
 - frontend polish that improves clarity without broad redesigns
 
-Recent completed slice:
+## Recent completed capabilities and current baseline
 
 - artifact lineage plus automatic generated artifact version/channel labels V1 is complete
 - generated artifact versions and channels are configured per artifact declaration, not a top-level `release` block
@@ -36,13 +36,12 @@ Recent completed slice:
 - API tokens now persist sorted scopes and backend authorization requires both the owning user's permission and the token's required scope for build metadata, log reads, artifact reads, and build-run style actions; valid tokens may still call `/api/me` without a resource scope
 - project and job discovery for API-token callers now also requires `build:read`; project selectors accept id or slug, and job name selectors require a project-scoped lookup to resolve ambiguity server-side
 
-## Next likely notification slice
+## Next likely notification follow-ups
 
-- Shared project/job Slack channel routing is the next likely Slack-delivery follow-on after personal DM delivery.
 - Additional notification observability and operator inspection around per-transport delivery records is a likely follow-up now that personal DM delivery exists.
+- Shared project/job Slack channel routing is a future follow-up, but should remain deferred until owner-or-maintainer authorization for shared destinations is designed.
 - A dedicated notification-runner process remains deferred; the current recovery loop runs inside server processes and multiple servers may run it safely because the delivery ledger claim remains authoritative.
 - Recovery from terminal builds that were persisted but never reached notification planning is still deferred.
-- Shared project/job Slack channel routing remains deferred until owner-or-maintainer authorization for shared destinations is designed.
 
 ## Current development style
 
@@ -91,8 +90,11 @@ The backend should preserve clear layered boundaries:
 
 When using AI coding agents:
 
-- start from this file, `docs/ai-context/product-context.md`, and `.github/copilot-instructions.md`
+- start from this file, `.github/copilot-instructions.md`, and the smallest relevant `docs/ai-context/` files
+- for non-trivial PR slices, use the discovery and implementation recipes in `docs/ai-context/prompt-recipes.md`
+- query CodeGraph before broad grep/find/read scans when `.codegraph/` exists
+- for frontend/backend contract questions, check Swagger/OpenAPI and existing frontend API client/types before opening backend handlers
+- identify concrete files with full repo-relative paths
 - inspect only the smallest relevant file set
-- use generated repo maps or code graphs as navigation aids when available
-- treat source code, migrations, and tests as authoritative
+- treat source code, migrations, tests, and recent diffs as authoritative
 - do not scan broad directories unless necessary
