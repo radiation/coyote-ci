@@ -701,6 +701,56 @@ func TestBuildArtifactsBulkDownloadCommand(t *testing.T) {
 	}
 }
 
+func TestBuildArtifactsBulkDownloadCommand_NoArtifacts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1/artifacts":
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","artifacts":[]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	outputDir := filepath.Join(t.TempDir(), "downloads")
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "download", "build-1", "--all", "--output", outputDir}}); code != 0 {
+		t.Fatalf("bulk empty artifact download exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "No artifacts found for build build-1") {
+		t.Fatalf("unexpected empty bulk human output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "download", "build-1", "--all", "--output", outputDir, "--json"}}); code != 0 {
+		t.Fatalf("bulk empty artifact download json exit code %d stderr=%s", code, stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode empty bulk download json: %v", err)
+	}
+	downloaded, ok := payload["downloaded"].([]any)
+	if !ok || len(downloaded) != 0 {
+		t.Fatalf("unexpected empty bulk download payload: %+v", payload)
+	}
+}
+
 func TestBuildArtifactsBulkDownloadMidFailureDoesNotEmitPartialJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.String() {
@@ -755,6 +805,75 @@ func TestBuildArtifactsBulkDownloadMidFailureDoesNotEmitPartialJSON(t *testing.T
 	secondPath := filepath.Join(outputDir, "logs", "summary.txt")
 	if _, statErr := os.Stat(secondPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("expected second bulk artifact to be absent, got %v", statErr)
+	}
+}
+
+func TestBuildArtifactsBulkDownloadLocalFailureDoesNotEmitPartialJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1/artifacts":
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","artifacts":[{"id":"artifact-1","build_id":"build-1","name":"report.xml","path":"reports/report.xml","size_bytes":42,"storage_provider":"filesystem","download_url_path":"/builds/build-1/artifacts/artifact-1/download","created_at":"2026-07-05T00:00:00Z"},{"id":"artifact-2","build_id":"build-1","name":"summary.txt","path":"logs/summary.txt","size_bytes":13,"storage_provider":"filesystem","download_url_path":"/builds/build-1/artifacts/artifact-2/download","created_at":"2026-07-05T00:00:01Z"}]}}`))
+		case "/api/builds/build-1/artifacts/artifact-1/download":
+			_, _ = w.Write([]byte("artifact-body-1"))
+		case "/api/builds/build-1/artifacts/artifact-2/download":
+			_, _ = w.Write([]byte("artifact-body-2"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	originalReplace := replaceFileAtomicFunc
+	replaceCalls := 0
+	t.Cleanup(func() {
+		replaceFileAtomicFunc = originalReplace
+	})
+	replaceFileAtomicFunc = func(source string, destination string) error {
+		replaceCalls++
+		if replaceCalls == 2 {
+			return errors.New("replace failed")
+		}
+		return originalReplace(source, destination)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	outputDir := filepath.Join(t.TempDir(), "downloads")
+	code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "download", "build-1", "--all", "--output", outputDir, "--json"}})
+	if code != 1 {
+		t.Fatalf("expected local mid-download failure exit code 1, got %d stderr=%s", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no stdout for local mid-download failure, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "replace failed") {
+		t.Fatalf("unexpected local mid-download stderr: %s", stderr.String())
+	}
+	firstPath := filepath.Join(outputDir, "reports", "report.xml")
+	firstBody, readErr := os.ReadFile(firstPath)
+	if readErr != nil {
+		t.Fatalf("read first bulk artifact after local failure: %v", readErr)
+	}
+	if string(firstBody) != "artifact-body-1" {
+		t.Fatalf("unexpected first bulk artifact body after local failure: %q", string(firstBody))
+	}
+	secondPath := filepath.Join(outputDir, "logs", "summary.txt")
+	if _, statErr := os.Stat(secondPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected second bulk artifact to be absent after local failure, got %v", statErr)
 	}
 }
 

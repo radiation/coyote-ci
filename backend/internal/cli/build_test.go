@@ -711,9 +711,9 @@ func TestBuildArtifactHelperEdgeCases(t *testing.T) {
 	}
 
 	bulkOutputDir := filepath.Join(t.TempDir(), "bulk-artifacts")
-	plannedBulk, err := planBulkArtifactDownloads([]api.BuildArtifactResponse{{ID: "artifact-1", Path: "reports/report.xml"}, {ID: "artifact-2", Path: "logs/summary.txt"}}, bulkOutputDir, false)
-	if err != nil {
-		t.Fatalf("planBulkArtifactDownloads failed: %v", err)
+	plannedBulk, planErr := planBulkArtifactDownloads([]api.BuildArtifactResponse{{ID: "artifact-1", Path: "reports/report.xml"}, {ID: "artifact-2", Path: "logs/summary.txt"}}, bulkOutputDir, false)
+	if planErr != nil {
+		t.Fatalf("planBulkArtifactDownloads failed: %v", planErr)
 	}
 	if len(plannedBulk) != 2 || plannedBulk[0].DestinationPath != filepath.Join(bulkOutputDir, "reports", "report.xml") || plannedBulk[1].DestinationPath != filepath.Join(bulkOutputDir, "logs", "summary.txt") {
 		t.Fatalf("unexpected bulk plan: %+v", plannedBulk)
@@ -732,11 +732,21 @@ func TestBuildArtifactHelperEdgeCases(t *testing.T) {
 	if _, err := resolveArtifactBulkOutputDir(existingBulkFile); err == nil || !strings.Contains(err.Error(), "must be a directory") {
 		t.Fatalf("expected bulk output file rejection, got %v", err)
 	}
+	bulkParentFile := filepath.Join(t.TempDir(), "bulk-parent-file")
+	if err := os.WriteFile(bulkParentFile, []byte("existing"), 0o600); err != nil {
+		t.Fatalf("seed bulk parent file: %v", err)
+	}
+	if _, err := resolveArtifactBulkOutputDir(filepath.Join(bulkParentFile, "child")); err == nil {
+		t.Fatal("expected bulk output stat failure when parent is a file")
+	}
 	if _, err := resolveArtifactBulkOutputDir("   "); err == nil || !strings.Contains(err.Error(), "requires --output") {
 		t.Fatalf("expected missing bulk output rejection, got %v", err)
 	}
 	if _, err := planBulkArtifactDownloads([]api.BuildArtifactResponse{{ID: "artifact-1", Path: "reports/report.xml"}, {ID: "artifact-2", Path: "reports/report.xml"}}, bulkOutputDir, false); err == nil || !strings.Contains(err.Error(), "map to the same output path") {
 		t.Fatalf("expected duplicate bulk path rejection, got %v", err)
+	}
+	if _, err := planBulkArtifactDownloads([]api.BuildArtifactResponse{{ID: "artifact-1", Path: "reports/report.xml"}}, filepath.Join(bulkParentFile, "child"), false); err == nil {
+		t.Fatal("expected bulk plan stat failure when output parent is a file")
 	}
 	existingDestination := filepath.Join(existingBulkDir, "reports", "report.xml")
 	if err := os.MkdirAll(filepath.Dir(existingDestination), 0o755); err != nil {
@@ -757,6 +767,25 @@ func TestBuildArtifactHelperEdgeCases(t *testing.T) {
 	}
 	if _, err := planBulkArtifactDownloads([]api.BuildArtifactResponse{{ID: "artifact-2", Path: "logs/summary.txt"}}, existingBulkDir, true); err == nil || !strings.Contains(err.Error(), "exists as a directory") {
 		t.Fatalf("expected directory collision rejection, got %v", err)
+	}
+	directoryDestination := filepath.Join(existingBulkDir, "reports-dir")
+	if err := os.MkdirAll(directoryDestination, 0o755); err != nil {
+		t.Fatalf("seed directory output path: %v", err)
+	}
+	directoryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.String() != "/api/builds/build-1/artifacts/artifact-1/download" {
+			t.Fatalf("unexpected download path %q", r.URL.String())
+		}
+		_, _ = w.Write([]byte("artifact-body"))
+	}))
+	defer directoryServer.Close()
+	directoryClient, err := apiclient.New(directoryServer.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new directory client: %v", err)
+	}
+	reportArtifactForDirectory := api.BuildArtifactResponse{ID: "artifact-1", Path: "reports/report.xml"}
+	if _, err := downloadBuildArtifactToPath(t.Context(), directoryClient, "build-1", reportArtifactForDirectory, directoryDestination, true); err == nil || !strings.Contains(err.Error(), "exists as a directory") {
+		t.Fatalf("expected directory output rejection, got %v", err)
 	}
 
 	stepID := " step-7 "
