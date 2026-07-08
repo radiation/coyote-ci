@@ -956,6 +956,7 @@ func TestToCreateBuildSourceInput(t *testing.T) {
 	})
 	if result == nil {
 		t.Fatal("expected source input")
+		return
 	}
 	if result.RepositoryURL != "https://github.com/org/repo.git" {
 		t.Fatalf("expected repository URL to round trip, got %q", result.RepositoryURL)
