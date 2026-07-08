@@ -512,6 +512,13 @@ func TestBuildArtifactHelpers(t *testing.T) {
 	if !strings.Contains(buf.String(), "Downloaded report.xml -> ./report.xml") {
 		t.Fatalf("unexpected download human output: %s", buf.String())
 	}
+	buf.Reset()
+	if writeDownloadErr := writeBuildArtifactDownloadHuman(buf, buildArtifactDownloadPayload{BuildID: "build-empty"}); writeDownloadErr != nil {
+		t.Fatalf("writeBuildArtifactDownloadHuman empty failed: %v", writeDownloadErr)
+	}
+	if !strings.Contains(buf.String(), "No artifacts found for build build-empty") {
+		t.Fatalf("unexpected empty download output: %s", buf.String())
+	}
 	if writeFailErr := writeBuildArtifactDownloadHuman(failWriter{}, downloadPayload); writeFailErr == nil {
 		t.Fatal("expected download human writer to surface write errors")
 	}
@@ -703,6 +710,84 @@ func TestBuildArtifactHelperEdgeCases(t *testing.T) {
 		t.Fatalf("expected artifactDownloadName name fallback, got %q err=%v", got, err)
 	}
 
+	bulkOutputDir := filepath.Join(t.TempDir(), "bulk-artifacts")
+	plannedBulk, planErr := planBulkArtifactDownloads([]api.BuildArtifactResponse{{ID: "artifact-1", Path: "reports/report.xml"}, {ID: "artifact-2", Path: "logs/summary.txt"}}, bulkOutputDir, false)
+	if planErr != nil {
+		t.Fatalf("planBulkArtifactDownloads failed: %v", planErr)
+	}
+	if len(plannedBulk) != 2 || plannedBulk[0].DestinationPath != filepath.Join(bulkOutputDir, "reports", "report.xml") || plannedBulk[1].DestinationPath != filepath.Join(bulkOutputDir, "logs", "summary.txt") {
+		t.Fatalf("unexpected bulk plan: %+v", plannedBulk)
+	}
+	if got, err := resolveArtifactBulkOutputDir(bulkOutputDir); err != nil || got != bulkOutputDir {
+		t.Fatalf("expected missing bulk output directory to be accepted, got %q err=%v", got, err)
+	}
+	existingBulkDir := t.TempDir()
+	if got, err := resolveArtifactBulkOutputDir(existingBulkDir); err != nil || got != existingBulkDir {
+		t.Fatalf("expected existing bulk output directory, got %q err=%v", got, err)
+	}
+	existingBulkFile := filepath.Join(t.TempDir(), "bulk.out")
+	if err := os.WriteFile(existingBulkFile, []byte("existing"), 0o600); err != nil {
+		t.Fatalf("seed bulk output file: %v", err)
+	}
+	if _, err := resolveArtifactBulkOutputDir(existingBulkFile); err == nil || !strings.Contains(err.Error(), "must be a directory") {
+		t.Fatalf("expected bulk output file rejection, got %v", err)
+	}
+	bulkParentFile := filepath.Join(t.TempDir(), "bulk-parent-file")
+	if err := os.WriteFile(bulkParentFile, []byte("existing"), 0o600); err != nil {
+		t.Fatalf("seed bulk parent file: %v", err)
+	}
+	if _, err := resolveArtifactBulkOutputDir(filepath.Join(bulkParentFile, "child")); err == nil {
+		t.Fatal("expected bulk output stat failure when parent is a file")
+	}
+	if _, err := resolveArtifactBulkOutputDir("   "); err == nil || !strings.Contains(err.Error(), "requires --output") {
+		t.Fatalf("expected missing bulk output rejection, got %v", err)
+	}
+	if _, err := planBulkArtifactDownloads([]api.BuildArtifactResponse{{ID: "artifact-1", Path: "reports/report.xml"}, {ID: "artifact-2", Path: "reports/report.xml"}}, bulkOutputDir, false); err == nil || !strings.Contains(err.Error(), "map to the same output path") {
+		t.Fatalf("expected duplicate bulk path rejection, got %v", err)
+	}
+	if _, err := planBulkArtifactDownloads([]api.BuildArtifactResponse{{ID: "artifact-1", Path: "reports/report.xml"}}, filepath.Join(bulkParentFile, "child"), false); err == nil {
+		t.Fatal("expected bulk plan stat failure when output parent is a file")
+	}
+	existingDestination := filepath.Join(existingBulkDir, "reports", "report.xml")
+	if err := os.MkdirAll(filepath.Dir(existingDestination), 0o755); err != nil {
+		t.Fatalf("mkdir existing destination parent: %v", err)
+	}
+	if err := os.WriteFile(existingDestination, []byte("existing"), 0o600); err != nil {
+		t.Fatalf("seed existing destination: %v", err)
+	}
+	if _, err := planBulkArtifactDownloads([]api.BuildArtifactResponse{{ID: "artifact-1", Path: "reports/report.xml"}}, existingBulkDir, false); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected existing bulk file rejection, got %v", err)
+	}
+	if _, err := planBulkArtifactDownloads([]api.BuildArtifactResponse{{ID: "artifact-1", Path: "reports/report.xml"}}, existingBulkDir, true); err != nil {
+		t.Fatalf("expected force bulk overwrite preflight to succeed, got %v", err)
+	}
+	existingDestinationDir := filepath.Join(existingBulkDir, "logs", "summary.txt")
+	if err := os.MkdirAll(existingDestinationDir, 0o755); err != nil {
+		t.Fatalf("seed directory destination: %v", err)
+	}
+	if _, err := planBulkArtifactDownloads([]api.BuildArtifactResponse{{ID: "artifact-2", Path: "logs/summary.txt"}}, existingBulkDir, true); err == nil || !strings.Contains(err.Error(), "exists as a directory") {
+		t.Fatalf("expected directory collision rejection, got %v", err)
+	}
+	directoryDestination := filepath.Join(existingBulkDir, "reports-dir")
+	if err := os.MkdirAll(directoryDestination, 0o755); err != nil {
+		t.Fatalf("seed directory output path: %v", err)
+	}
+	directoryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.String() != "/api/builds/build-1/artifacts/artifact-1/download" {
+			t.Fatalf("unexpected download path %q", r.URL.String())
+		}
+		_, _ = w.Write([]byte("artifact-body"))
+	}))
+	defer directoryServer.Close()
+	directoryClient, err := apiclient.New(directoryServer.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new directory client: %v", err)
+	}
+	reportArtifactForDirectory := api.BuildArtifactResponse{ID: "artifact-1", Path: "reports/report.xml"}
+	if _, err := downloadBuildArtifactToPath(t.Context(), directoryClient, "build-1", reportArtifactForDirectory, directoryDestination, true); err == nil || !strings.Contains(err.Error(), "exists as a directory") {
+		t.Fatalf("expected directory output rejection, got %v", err)
+	}
+
 	stepID := " step-7 "
 	contentType := " application/xml "
 	view := buildArtifactDownloadViewFromArtifact(api.BuildArtifactResponse{
@@ -739,6 +824,34 @@ func TestBuildArtifactHelperEdgeCases(t *testing.T) {
 }
 
 func TestBuildArtifactsCommandValidationAndErrorPaths(t *testing.T) {
+	t.Run("download help describes single and bulk modes", func(t *testing.T) {
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+		cmd := NewRootCommand(Dependencies{Stdout: stdout, Stderr: stderr})
+		cmd.SetOut(stdout)
+		cmd.SetErr(stderr)
+		cmd.SetArgs([]string{"build", "artifacts", "download", "--help"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("expected help to succeed, got %v stderr=%s", err, stderr.String())
+		}
+		out := stdout.String()
+		for _, want := range []string{
+			"Download one artifact by selector, or download all artifacts into a directory.",
+			"Use --artifact to select one artifact by ID, exact artifact path, name, or basename.",
+			"Use --all with --output <dir> to download every artifact while preserving safe artifact paths.",
+			"--artifact and --all are mutually exclusive.",
+			"coyote build artifacts download <build-id> --artifact report.xml",
+			"coyote build artifacts download <build-id> --all --output ./artifacts/",
+		} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("expected %q in help output, got %s", want, out)
+			}
+		}
+		if stderr.Len() != 0 {
+			t.Fatalf("expected no stderr for help, got %q", stderr.String())
+		}
+	})
+
 	t.Run("download requires artifact selector before network", func(t *testing.T) {
 		called := false
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -770,7 +883,79 @@ func TestBuildArtifactsCommandValidationAndErrorPaths(t *testing.T) {
 		if called {
 			t.Fatal("expected selector validation to stop before HTTP requests")
 		}
-		if !strings.Contains(stderr.String(), "artifact selector is required") {
+		if !strings.Contains(stderr.String(), "one of --artifact or --all is required") {
+			t.Fatalf("unexpected stderr: %s", stderr.String())
+		}
+	})
+
+	t.Run("download rejects mutually exclusive artifact and all before network", func(t *testing.T) {
+		called := false
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+
+		configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+		if err := configStore.Save(config.File{
+			CurrentContext: "local",
+			Contexts: map[string]config.Context{
+				"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+			},
+		}); err != nil {
+			t.Fatalf("save config: %v", err)
+		}
+		creds := credentials.NewMemoryStore()
+		if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+			t.Fatalf("set token: %v", setErr)
+		}
+
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+		code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "download", "build-1", "--artifact", "artifact-1", "--all", "--output", t.TempDir()}})
+		if code != 2 {
+			t.Fatalf("expected exit code 2, got %d stderr=%s", code, stderr.String())
+		}
+		if called {
+			t.Fatal("expected mutually exclusive validation to stop before HTTP requests")
+		}
+		if !strings.Contains(stderr.String(), "mutually exclusive") {
+			t.Fatalf("unexpected stderr: %s", stderr.String())
+		}
+	})
+
+	t.Run("bulk download requires output directory before network", func(t *testing.T) {
+		called := false
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+
+		configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+		if err := configStore.Save(config.File{
+			CurrentContext: "local",
+			Contexts: map[string]config.Context{
+				"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+			},
+		}); err != nil {
+			t.Fatalf("save config: %v", err)
+		}
+		creds := credentials.NewMemoryStore()
+		if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+			t.Fatalf("set token: %v", setErr)
+		}
+
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+		code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifacts", "download", "build-1", "--all"}})
+		if code != 2 {
+			t.Fatalf("expected exit code 2, got %d stderr=%s", code, stderr.String())
+		}
+		if called {
+			t.Fatal("expected bulk output validation to stop before HTTP requests")
+		}
+		if !strings.Contains(stderr.String(), "requires --output") {
 			t.Fatalf("unexpected stderr: %s", stderr.String())
 		}
 	})

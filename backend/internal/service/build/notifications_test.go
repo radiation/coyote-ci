@@ -593,6 +593,7 @@ func TestNewBuildNotificationService_DisabledIgnoresInvalidRecipients(t *testing
 	}
 	if notifier == nil {
 		t.Fatal("expected notifier")
+		return
 	}
 	if len(notifier.defaultRecipients) != 0 {
 		t.Fatalf("expected disabled notifier to keep no parsed recipients, got %v", notifier.defaultRecipients)
