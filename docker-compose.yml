@@ -17,7 +17,7 @@ services:
       retries: 10
 
   migrate:
-    image: golang:${GO_VERSION:-1.26.3}
+    image: golang:${GO_VERSION}
     container_name: coyote-ci-migrate
     depends_on:
       db:
@@ -44,7 +44,7 @@ services:
       dockerfile: Dockerfile
       target: dev
       args:
-        GO_VERSION: ${GO_VERSION:-1.26.3}
+        GO_VERSION: ${GO_VERSION}
     container_name: coyote-ci-server
     depends_on:
       db:
@@ -99,7 +99,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
       args:
-        GO_VERSION: ${GO_VERSION:-1.26.3}
+        GO_VERSION: ${GO_VERSION}
     depends_on:
       db:
         condition: service_healthy
