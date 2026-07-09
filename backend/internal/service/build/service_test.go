@@ -32,6 +32,12 @@ type recordingBuildNotifier struct {
 	err    error
 }
 
+type noopArtifactTriggerDispatcher struct{}
+
+func (noopArtifactTriggerDispatcher) DispatchArtifactTriggers(context.Context, domain.Build, domain.BuildArtifact) error {
+	return nil
+}
+
 func (n *recordingBuildNotifier) NotifyTerminalBuild(_ context.Context, build domain.Build) error {
 	n.builds = append(n.builds, build)
 	return n.err
@@ -1861,6 +1867,25 @@ func TestBuildService_LateWorkerReportAfterCancelDoesNotResurrectState(t *testin
 	}
 	if jobs[0].Status != domain.ExecutionJobStatusCanceled {
 		t.Fatalf("expected persisted job to remain canceled, got %q", jobs[0].Status)
+	}
+}
+
+func TestBuildService_ArtifactTriggerDispatcherWiring(t *testing.T) {
+	repo := &fakeBuildRepository{}
+	dispatcher := noopArtifactTriggerDispatcher{}
+	svc := NewBuildServiceFromConfig(repo, nil, nil, BuildServiceConfig{ArtifactTriggerDispatcher: dispatcher})
+	if svc.artifactTriggerDispatcher == nil {
+		t.Fatal("expected dispatcher from config")
+	}
+
+	svc.SetArtifactTriggerDispatcher(nil)
+	if svc.artifactTriggerDispatcher != nil {
+		t.Fatal("expected setter to clear dispatcher")
+	}
+
+	svc.SetArtifactTriggerDispatcher(dispatcher)
+	if svc.artifactTriggerDispatcher == nil {
+		t.Fatal("expected setter to restore dispatcher")
 	}
 }
 

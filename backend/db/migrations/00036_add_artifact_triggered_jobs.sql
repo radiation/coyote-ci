@@ -1,3 +1,5 @@
+-- +goose Up
+
 ALTER TABLE jobs
 ADD COLUMN IF NOT EXISTS artifact_triggers JSONB NOT NULL DEFAULT '[]'::jsonb;
 
@@ -32,3 +34,24 @@ CREATE INDEX IF NOT EXISTS idx_artifact_trigger_deliveries_consumer_job_id
 
 CREATE INDEX IF NOT EXISTS idx_artifact_trigger_deliveries_producer_build_id
 	ON artifact_trigger_deliveries (producer_build_id, created_at DESC);
+
+-- +goose Down
+
+DROP INDEX IF EXISTS idx_artifact_trigger_deliveries_producer_build_id;
+
+DROP INDEX IF EXISTS idx_artifact_trigger_deliveries_consumer_job_id;
+
+DROP TABLE IF EXISTS artifact_trigger_deliveries;
+
+ALTER TABLE builds
+DROP COLUMN IF EXISTS trigger_artifact_checksum_sha256,
+DROP COLUMN IF EXISTS trigger_artifact_size_bytes,
+DROP COLUMN IF EXISTS trigger_artifact_name,
+DROP COLUMN IF EXISTS trigger_artifact_path,
+DROP COLUMN IF EXISTS trigger_artifact_id,
+DROP COLUMN IF EXISTS trigger_producer_build_id,
+DROP COLUMN IF EXISTS trigger_producer_job_id,
+DROP COLUMN IF EXISTS trigger_producer_project_id;
+
+ALTER TABLE jobs
+DROP COLUMN IF EXISTS artifact_triggers;

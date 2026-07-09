@@ -424,6 +424,84 @@ func TestJobService_DispatchArtifactTriggers_QueuesManagedImageConfiguredRepoJob
 	}
 }
 
+func TestJobService_DispatchArtifactTriggers_QueueFailureMarksDeliveryFailed(t *testing.T) {
+	ctx := context.Background()
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	deliveryRepo := memory.NewArtifactTriggerDeliveryRepository()
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService).WithArtifactTriggerDeliveryRepository(deliveryRepo)
+
+	now := time.Now().UTC()
+	pipelinePath := ".coyote/pipeline.yml"
+	producerJob, err := jobRepo.Create(ctx, domain.Job{
+		ID:            "job-upstream",
+		ProjectID:     "project-1",
+		Name:          "upstream",
+		Priority:      5,
+		RepositoryURL: "https://github.com/example/repo.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: build\n    run: make build\n",
+		Enabled:       true,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("create producer job failed: %v", err)
+	}
+	consumerJob, err := jobRepo.Create(ctx, domain.Job{
+		ID:            "job-downstream",
+		ProjectID:     "project-1",
+		Name:          "downstream",
+		Priority:      5,
+		RepositoryURL: "https://github.com/example/repo.git",
+		DefaultRef:    "main",
+		PipelinePath:  &pipelinePath,
+		ArtifactTriggers: []domain.JobArtifactTrigger{{
+			ProducerJobID: producerJob.ID,
+			Path:          "dist/app.tgz",
+		}},
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create consumer job failed: %v", err)
+	}
+
+	producerBuild, err := buildRepo.CreateQueuedBuild(ctx, domain.Build{
+		ID:        "build-upstream",
+		ProjectID: "project-1",
+		JobID:     &producerJob.ID,
+		Status:    domain.BuildStatusQueued,
+		CreatedAt: now,
+		Trigger:   domain.BuildTrigger{Kind: domain.BuildTriggerKindManual},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create producer build failed: %v", err)
+	}
+
+	artifact := domain.BuildArtifact{ID: "artifact-1", BuildID: producerBuild.ID, LogicalPath: "dist/app.tgz", CreatedAt: now}
+	dispatchErr := jobService.DispatchArtifactTriggers(ctx, producerBuild, artifact)
+	if !errors.Is(dispatchErr, buildsvc.ErrRepoFetcherNotConfigured) {
+		t.Fatalf("expected repo fetcher error, got %v", dispatchErr)
+	}
+
+	delivery, err := deliveryRepo.GetByArtifactIDAndConsumerJobID(ctx, artifact.ID, consumerJob.ID)
+	if err != nil {
+		t.Fatalf("get delivery failed: %v", err)
+	}
+	if delivery.Status != domain.ArtifactTriggerDeliveryStatusFailed {
+		t.Fatalf("expected failed delivery status, got %q", delivery.Status)
+	}
+	if delivery.ErrorMessage == nil || !strings.Contains(*delivery.ErrorMessage, buildsvc.ErrRepoFetcherNotConfigured.Error()) {
+		t.Fatalf("expected stored error message, got %#v", delivery.ErrorMessage)
+	}
+	if delivery.QueuedBuildID != nil {
+		t.Fatalf("expected no queued build id on failure, got %#v", delivery.QueuedBuildID)
+	}
+}
+
 func TestJobService_CreateJobAcceptsLegacyProjectSlugInProjectID(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
