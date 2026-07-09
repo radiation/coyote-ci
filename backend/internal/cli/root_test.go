@@ -862,6 +862,47 @@ func TestBuildArtifactTriggersCommand_EmptyStates(t *testing.T) {
 	}
 }
 
+func TestBuildArtifactTriggersCommand_MissingScope(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1/artifact-triggers":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"api token does not have the required scope: build:read"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifact-triggers", "build-1"}})
+	if code != 5 {
+		t.Fatalf("expected missing scope exit code 5, got %d stderr=%s", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no stdout on missing scope, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "build:read") {
+		t.Fatalf("expected build:read scope error in stderr, got %s", stderr.String())
+	}
+}
+
 func TestBuildArtifactsBulkDownloadMidFailureDoesNotEmitPartialJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.String() {

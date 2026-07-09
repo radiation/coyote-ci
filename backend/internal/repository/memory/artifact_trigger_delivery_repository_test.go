@@ -112,4 +112,12 @@ func TestArtifactTriggerDeliveryRepository_CreateDuplicateGetAndUpdate(t *testin
 	if len(deliveries) != 1 || deliveries[0].ID != third.ID {
 		t.Fatalf("unexpected build-2 deliveries: %+v", deliveries)
 	}
+
+	deliveries, err = repo.ListByProducerBuildID(context.Background(), "missing-build")
+	if err != nil {
+		t.Fatalf("list by missing producer build failed: %v", err)
+	}
+	if len(deliveries) != 0 {
+		t.Fatalf("expected no deliveries for missing build, got %+v", deliveries)
+	}
 }

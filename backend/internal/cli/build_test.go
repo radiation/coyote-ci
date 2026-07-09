@@ -237,6 +237,40 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 	if artifactTriggersPayload.Summary.DeliveryCount != 2 || len(artifactTriggersPayload.Deliveries) != 2 || artifactTriggersPayload.Deliveries[0].ConsumerJobName == nil || *artifactTriggersPayload.Deliveries[0].ConsumerJobName != "deploy" {
 		t.Fatalf("unexpected artifact trigger payload: %+v", artifactTriggersPayload)
 	}
+	trimmedTriggerPayload := makeBuildArtifactTriggerDeliveriesPayload(" build-fallback ", api.BuildArtifactTriggerDeliveriesResponse{
+		BuildID:                  "",
+		BuildTriggerKind:         "  ",
+		RecursiveDispatchBlocked: false,
+		Summary:                  api.BuildArtifactTriggerDeliverySummaryResponse{},
+		Deliveries:               []api.BuildArtifactTriggerDeliveryResponse{{ArtifactID: "artifact-1", ArtifactPath: "  path/from/api.tgz  ", ArtifactName: stringPtr("  "), ConsumerJobID: "job-1", ConsumerJobName: stringPtr("  "), DownstreamBuildID: stringPtr("  "), ErrorMessage: stringPtr("  ")}},
+	})
+	if trimmedTriggerPayload.BuildID != "build-fallback" || trimmedTriggerPayload.BuildTriggerKind != "" {
+		t.Fatalf("unexpected fallback trigger payload metadata: %+v", trimmedTriggerPayload)
+	}
+	if trimmedTriggerPayload.Deliveries[0].ArtifactName != nil || trimmedTriggerPayload.Deliveries[0].ConsumerJobName != nil || trimmedTriggerPayload.Deliveries[0].DownstreamBuildID != nil || trimmedTriggerPayload.Deliveries[0].ErrorMessage != nil {
+		t.Fatalf("expected blank optional fields to be trimmed away, got %+v", trimmedTriggerPayload.Deliveries[0])
+	}
+	if got := displayArtifactTriggerArtifact(buildArtifactTriggerDeliveryView{ArtifactName: stringPtr("artifact-name"), ArtifactPath: "path", ArtifactID: "id"}); got != "artifact-name" {
+		t.Fatalf("unexpected artifact display from name: %s", got)
+	}
+	if got := displayArtifactTriggerArtifact(buildArtifactTriggerDeliveryView{ArtifactPath: " path/from/delivery.tgz ", ArtifactID: "id"}); got != "path/from/delivery.tgz" {
+		t.Fatalf("unexpected artifact display from path: %s", got)
+	}
+	if got := displayArtifactTriggerArtifact(buildArtifactTriggerDeliveryView{ArtifactID: "artifact-id"}); got != "artifact-id" {
+		t.Fatalf("unexpected artifact display from id fallback: %s", got)
+	}
+	if got := displayArtifactTriggerConsumerJob(buildArtifactTriggerDeliveryView{ConsumerJobName: stringPtr("deploy"), ConsumerJobID: "job-1"}); got != "deploy" {
+		t.Fatalf("unexpected consumer job display from name: %s", got)
+	}
+	if got := displayArtifactTriggerConsumerJob(buildArtifactTriggerDeliveryView{ConsumerJobID: "job-1"}); got != "job-1" {
+		t.Fatalf("unexpected consumer job display fallback: %s", got)
+	}
+	if got := displayTriggerKind("  "); got != "unknown" {
+		t.Fatalf("unexpected trigger kind fallback: %s", got)
+	}
+	if got := displayTriggerKind(" manual "); got != "manual" {
+		t.Fatalf("unexpected trigger kind trim: %s", got)
+	}
 	buf.Reset()
 	if err := writeBuildArtifactTriggersHuman(buf, artifactTriggersPayload); err != nil {
 		t.Fatalf("writeBuildArtifactTriggersHuman failed: %v", err)

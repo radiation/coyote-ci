@@ -46,6 +46,15 @@ type fakeServiceManagedImageRefresher struct {
 	err     error
 }
 
+type erroringArtifactTriggerJobRepo struct {
+	*memory.JobRepository
+	getByIDsErr error
+}
+
+func (r *erroringArtifactTriggerJobRepo) GetByIDs(_ context.Context, _ []string) ([]domain.Job, error) {
+	return nil, r.getByIDsErr
+}
+
 func (f *fakeServiceManagedImageRefresher) RefreshManagedPipelineImage(_ context.Context, req buildsvc.ManagedImageRefreshInput) (buildsvc.ManagedImageRefreshResult, error) {
 	f.calls++
 	f.lastReq = req
@@ -672,6 +681,71 @@ func TestJobService_ListArtifactTriggerDeliveriesByProducerBuildID(t *testing.T)
 	if len(emptyViews) != 0 {
 		t.Fatalf("expected no delivery views, got %+v", emptyViews)
 	}
+}
+
+func TestJobService_ListArtifactTriggerDeliveriesByProducerBuildID_Branches(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("missing delivery repository", func(t *testing.T) {
+		jobService := NewJobService(memory.NewJobRepository(), nil)
+		_, err := jobService.ListArtifactTriggerDeliveriesByProducerBuildID(ctx, "build-1")
+		if !errors.Is(err, ErrJobArtifactTriggerDeliveryRepositoryNotConfigured) {
+			t.Fatalf("expected missing delivery repo error, got %v", err)
+		}
+	})
+
+	t.Run("nil job repository leaves consumer name empty", func(t *testing.T) {
+		deliveryRepo := memory.NewArtifactTriggerDeliveryRepository()
+		jobService := NewJobService(nil, nil).WithArtifactTriggerDeliveryRepository(deliveryRepo)
+		now := time.Now().UTC()
+		if _, err := deliveryRepo.Create(ctx, domain.ArtifactTriggerDelivery{ID: "delivery-1", ArtifactID: "artifact-1", ConsumerJobID: "job-downstream", ProducerBuildID: "build-1", ProducerProjectID: "project-1", ProducerJobID: "job-upstream", ArtifactPath: "dist/app.tgz", Status: domain.ArtifactTriggerDeliveryStatusQueued, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatalf("create delivery failed: %v", err)
+		}
+
+		views, err := jobService.ListArtifactTriggerDeliveriesByProducerBuildID(ctx, "build-1")
+		if err != nil {
+			t.Fatalf("list artifact trigger deliveries failed: %v", err)
+		}
+		if len(views) != 1 || views[0].ConsumerJobName != nil {
+			t.Fatalf("expected nil consumer job name without job repo, got %+v", views)
+		}
+	})
+
+	t.Run("blank job name is omitted", func(t *testing.T) {
+		jobRepo := memory.NewJobRepository()
+		deliveryRepo := memory.NewArtifactTriggerDeliveryRepository()
+		jobService := NewJobService(jobRepo, nil).WithArtifactTriggerDeliveryRepository(deliveryRepo)
+		now := time.Now().UTC()
+		if _, err := jobRepo.Create(ctx, domain.Job{ID: "job-blank", ProjectID: "project-1", Name: "   ", RepositoryURL: "https://github.com/example/repo.git", DefaultRef: "main", PipelineYAML: "version: 1", Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatalf("create blank-name job failed: %v", err)
+		}
+		if _, err := deliveryRepo.Create(ctx, domain.ArtifactTriggerDelivery{ID: "delivery-1", ArtifactID: "artifact-1", ConsumerJobID: "job-blank", ProducerBuildID: "build-1", ProducerProjectID: "project-1", ProducerJobID: "job-upstream", ArtifactPath: "dist/app.tgz", Status: domain.ArtifactTriggerDeliveryStatusQueued, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatalf("create delivery failed: %v", err)
+		}
+
+		views, err := jobService.ListArtifactTriggerDeliveriesByProducerBuildID(ctx, "build-1")
+		if err != nil {
+			t.Fatalf("list artifact trigger deliveries failed: %v", err)
+		}
+		if len(views) != 1 || views[0].ConsumerJobName != nil {
+			t.Fatalf("expected blank consumer job name to be omitted, got %+v", views)
+		}
+	})
+
+	t.Run("job repository lookup failure is returned", func(t *testing.T) {
+		jobRepo := &erroringArtifactTriggerJobRepo{JobRepository: memory.NewJobRepository(), getByIDsErr: errors.New("lookup failed")}
+		deliveryRepo := memory.NewArtifactTriggerDeliveryRepository()
+		jobService := NewJobService(jobRepo, nil).WithArtifactTriggerDeliveryRepository(deliveryRepo)
+		now := time.Now().UTC()
+		if _, err := deliveryRepo.Create(ctx, domain.ArtifactTriggerDelivery{ID: "delivery-1", ArtifactID: "artifact-1", ConsumerJobID: "job-downstream", ProducerBuildID: "build-1", ProducerProjectID: "project-1", ProducerJobID: "job-upstream", ArtifactPath: "dist/app.tgz", Status: domain.ArtifactTriggerDeliveryStatusQueued, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatalf("create delivery failed: %v", err)
+		}
+
+		_, err := jobService.ListArtifactTriggerDeliveriesByProducerBuildID(ctx, "build-1")
+		if err == nil || err.Error() != "lookup failed" {
+			t.Fatalf("expected lookup error, got %v", err)
+		}
+	})
 }
 
 func TestJobService_CreateJobAcceptsLegacyProjectSlugInProjectID(t *testing.T) {

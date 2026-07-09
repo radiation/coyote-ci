@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,6 +107,34 @@ func TestArtifactTriggerDeliveryRepository_CreateGetAndUpdate(t *testing.T) {
 	}
 	if deliveries[0].ID != "delivery-1" || deliveries[1].ID != "delivery-2" {
 		t.Fatalf("unexpected listed deliveries: %+v", deliveries)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestArtifactTriggerDeliveryRepository_ListByProducerBuildIDErrors(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+
+	repo := NewArtifactTriggerDeliveryRepository(db)
+
+	mock.ExpectQuery("SELECT .*FROM artifact_trigger_deliveries").WithArgs("build-1").WillReturnError(errors.New("query failed"))
+	_, err = repo.ListByProducerBuildID(context.Background(), "build-1")
+	if err == nil || err.Error() != "query failed" {
+		t.Fatalf("expected query failure, got %v", err)
+	}
+
+	row := []string{"id", "artifact_id", "consumer_job_id", "producer_build_id", "producer_project_id", "producer_job_id", "artifact_path", "queued_build_id", "error_message", "status", "created_at", "updated_at"}
+	mock.ExpectQuery("SELECT .*FROM artifact_trigger_deliveries").WithArgs("build-2").WillReturnRows(sqlmock.NewRows(row).AddRow(
+		"delivery-1", "artifact-1", "job-1", "build-2", "project-1", "producer-1", "dist/app.tgz", nil, nil, "queued", "not-a-time", "not-a-time",
+	))
+	_, err = repo.ListByProducerBuildID(context.Background(), "build-2")
+	if err == nil || !strings.Contains(err.Error(), "Scan") {
+		t.Fatalf("expected scan failure, got %v", err)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

@@ -99,6 +99,7 @@ func (r *failingProjectRepo) Delete(_ context.Context, _ string) error {
 
 type fakeArtifactRepo struct {
 	artifactsByBuild map[string][]domain.BuildArtifact
+	listByBuildErr   error
 }
 
 func (r *fakeArtifactRepo) Create(_ context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
@@ -110,6 +111,9 @@ func (r *fakeArtifactRepo) Create(_ context.Context, artifact domain.BuildArtifa
 }
 
 func (r *fakeArtifactRepo) ListByBuildID(_ context.Context, buildID string) ([]domain.BuildArtifact, error) {
+	if r.listByBuildErr != nil {
+		return nil, r.listByBuildErr
+	}
 	items := r.artifactsByBuild[buildID]
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
@@ -120,6 +124,15 @@ func (r *fakeArtifactRepo) ListByBuildID(_ context.Context, buildID string) ([]d
 	out := make([]domain.BuildArtifact, len(items))
 	copy(out, items)
 	return out, nil
+}
+
+type erroringArtifactTriggerJobRepo struct {
+	*repositorymemory.JobRepository
+	getByIDsErr error
+}
+
+func (r *erroringArtifactTriggerJobRepo) GetByIDs(_ context.Context, _ []string) ([]domain.Job, error) {
+	return nil, r.getByIDsErr
 }
 
 func (r *fakeArtifactRepo) Browse(_ context.Context, _ repository.BrowseArtifactsParams) ([]domain.ArtifactBrowseRecord, error) {
@@ -1541,6 +1554,93 @@ func TestBuildHandler_GetBuildArtifactTriggersRecursiveBlockedEmpty(t *testing.T
 	deliveries, ok := data["deliveries"].([]any)
 	if !ok || len(deliveries) != 0 {
 		t.Fatalf("expected empty deliveries, got %+v", data["deliveries"])
+	}
+}
+
+func TestBuildHandler_GetBuildArtifactTriggersErrorPaths(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+
+	t.Run("missing build id", func(t *testing.T) {
+		h := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{}, nil, nil))
+		rr := httptest.NewRecorder()
+		h.GetBuildArtifactTriggers(rr, httptest.NewRequest(http.MethodGet, "/builds//artifact-triggers", nil))
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("expected status %d, got %d body=%s", http.StatusBadRequest, rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("missing job service", func(t *testing.T) {
+		buildRepo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now, Trigger: domain.BuildTrigger{Kind: domain.BuildTriggerKindManual}}}
+		h := NewBuildHandler(buildsvc.NewBuildService(buildRepo, nil, nil))
+		req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/artifact-triggers", nil), "build-1")
+		rr := httptest.NewRecorder()
+		h.GetBuildArtifactTriggers(rr, req)
+		if rr.Code != http.StatusInternalServerError || !strings.Contains(rr.Body.String(), "job service is not configured") {
+			t.Fatalf("unexpected missing job service response: status=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("missing delivery repository", func(t *testing.T) {
+		buildRepo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now, Trigger: domain.BuildTrigger{Kind: domain.BuildTriggerKindManual}}}
+		buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+		h := NewBuildHandler(buildService)
+		h.SetJobService(service.NewJobService(repositorymemory.NewJobRepository(), buildService))
+		req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/artifact-triggers", nil), "build-1")
+		rr := httptest.NewRecorder()
+		h.GetBuildArtifactTriggers(rr, req)
+		if rr.Code != http.StatusInternalServerError || !strings.Contains(rr.Body.String(), "artifact trigger delivery repository is not configured") {
+			t.Fatalf("unexpected missing delivery repo response: status=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("artifact lookup failure maps through service error writer", func(t *testing.T) {
+		buildRepo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now, Trigger: domain.BuildTrigger{Kind: domain.BuildTriggerKindManual}}}
+		artifactRepo := &fakeArtifactRepo{listByBuildErr: repository.ErrBuildNotFound}
+		buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+		buildService.SetArtifactPersistence(artifactRepo, nil, "")
+		h := NewBuildHandler(buildService)
+		h.SetJobService(service.NewJobService(repositorymemory.NewJobRepository(), buildService).WithArtifactTriggerDeliveryRepository(repositorymemory.NewArtifactTriggerDeliveryRepository()))
+		req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/artifact-triggers", nil), "build-1")
+		rr := httptest.NewRecorder()
+		h.GetBuildArtifactTriggers(rr, req)
+		if rr.Code != http.StatusInternalServerError || !strings.Contains(rr.Body.String(), "internal server error") {
+			t.Fatalf("unexpected artifact lookup failure response: status=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("job lookup failure becomes generic internal error", func(t *testing.T) {
+		buildRepo := &fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: now, Trigger: domain.BuildTrigger{Kind: domain.BuildTriggerKindManual}}}
+		artifactRepo := &fakeArtifactRepo{artifactsByBuild: map[string][]domain.BuildArtifact{"build-1": {{ID: "artifact-1", BuildID: "build-1", Name: "app.tgz", LogicalPath: "dist/app.tgz", SizeBytes: 42, CreatedAt: now}}}}
+		buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+		buildService.SetArtifactPersistence(artifactRepo, nil, "")
+		jobRepo := &erroringArtifactTriggerJobRepo{JobRepository: repositorymemory.NewJobRepository(), getByIDsErr: errors.New("lookup failed")}
+		deliveryRepo := repositorymemory.NewArtifactTriggerDeliveryRepository()
+		if _, err := deliveryRepo.Create(context.Background(), domain.ArtifactTriggerDelivery{ID: "delivery-1", ArtifactID: "artifact-1", ConsumerJobID: "job-downstream", ProducerBuildID: "build-1", ProducerProjectID: "project-1", ProducerJobID: "job-upstream", ArtifactPath: "dist/app.tgz", Status: domain.ArtifactTriggerDeliveryStatusQueued, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatalf("create delivery failed: %v", err)
+		}
+		h := NewBuildHandler(buildService)
+		h.SetJobService(service.NewJobService(jobRepo, buildService).WithArtifactTriggerDeliveryRepository(deliveryRepo))
+		req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1/artifact-triggers", nil), "build-1")
+		rr := httptest.NewRecorder()
+		h.GetBuildArtifactTriggers(rr, req)
+		if rr.Code != http.StatusInternalServerError || !strings.Contains(rr.Body.String(), "internal server error") {
+			t.Fatalf("unexpected generic internal error response: status=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+}
+
+func TestArtifactTriggerHandlerHelpers(t *testing.T) {
+	if got := timeFormatRFC3339(); got != time.RFC3339 {
+		t.Fatalf("expected RFC3339 layout, got %q", got)
+	}
+	if got := trimOptionalArtifactTriggerString(nil); got != nil {
+		t.Fatalf("expected nil for nil input, got %v", got)
+	}
+	if got := trimOptionalArtifactTriggerString(stringPtr("   ")); got != nil {
+		t.Fatalf("expected nil for blank input, got %v", got)
+	}
+	if got := trimOptionalArtifactTriggerString(stringPtr(" value ")); got == nil || *got != "value" {
+		t.Fatalf("expected trimmed value, got %v", got)
 	}
 }
 
