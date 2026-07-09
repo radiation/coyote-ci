@@ -104,6 +104,13 @@ func (r *Runner) ResolveStepImage(stepImage string) string {
 	return r.resolveExecutionImage(stepImage)
 }
 
+func (r *Runner) StepVisibleWorkspaceRoot(buildID string) (string, bool) {
+	if strings.TrimSpace(buildID) == "" {
+		return "", false
+	}
+	return workspaceMountPath, true
+}
+
 func (r *Runner) ensureBuildWorkspaceReady(ctx context.Context, request runner.PrepareBuildRequest) (string, error) {
 	if r.workspace == nil {
 		return "", errors.New("workspace materializer is required")
@@ -608,9 +615,10 @@ func mergeStepEnvironment(request runner.RunStepRequest) []string {
 		merged[k] = v
 	}
 	merged["CI"] = "true"
-	merged["COYOTE_BUILD_ID"] = request.BuildID
-	merged["COYOTE_STEP_ID"] = request.StepID
-	merged["COYOTE_WORKSPACE"] = workspaceMountPath
+	merged[runner.EnvBuildID] = request.BuildID
+	merged[runner.EnvStepID] = request.StepID
+	merged[runner.EnvWorkspace] = workspaceMountPath
+	augmentTriggerArtifactEnvironment(merged, workspaceMountPath)
 
 	keys := make([]string, 0, len(merged))
 	for k := range merged {
@@ -623,6 +631,15 @@ func mergeStepEnvironment(request runner.RunStepRequest) []string {
 		out = append(out, k+"="+merged[k])
 	}
 	return out
+}
+
+func augmentTriggerArtifactEnvironment(env map[string]string, workspacePath string) {
+	relativePath := strings.TrimSpace(env[runner.EnvTriggerArtifactLocalRelative])
+	if relativePath == "" {
+		return
+	}
+	env[runner.EnvTriggerArtifactLocalDir] = path.Join(workspacePath, workspace.TriggerArtifactsRelativeRoot)
+	env[runner.EnvTriggerArtifactLocalPath] = path.Join(workspacePath, relativePath)
 }
 
 func timeoutFailureReason(timeout time.Duration) string {

@@ -252,6 +252,21 @@ func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (do
 		}
 		s.emitBuildPreparationLog(ctx, buildID, "Source checkout complete")
 	}
+	if domain.NormalizeBuildTrigger(build.Trigger).Kind == domain.BuildTriggerKindArtifact {
+		s.emitBuildPreparationLog(ctx, buildID, "Preparing trigger artifact handoff")
+		if handoffErr := s.prepareTriggerArtifactHandoff(ctx, build); handoffErr != nil {
+			s.emitBuildPreparationLog(ctx, buildID, "Trigger artifact handoff failed")
+			s.emitBuildPreparationLog(ctx, buildID, formatFailureReasonLine(handoffErr.Error()))
+			message := handoffErr.Error()
+			failed, updateErr := s.persistBuildStatus(ctx, buildID, domain.BuildStatusFailed, &message)
+			if updateErr != nil {
+				return domain.Build{}, mapRepoErr(updateErr)
+			}
+			log.Printf("build preparation failed: build_id=%s duration_ms=%d reason=%q", buildID, time.Since(prepStartedAt).Milliseconds(), handoffErr.Error())
+			return failed, nil
+		}
+		s.emitBuildPreparationLog(ctx, buildID, "Trigger artifact handoff complete")
+	}
 	s.emitBuildPreparationLog(ctx, buildID, "Build workspace ready")
 
 	runningBuild, transitionErr := s.transitionBuildStatus(ctx, buildID, domain.BuildStatusRunning, nil)

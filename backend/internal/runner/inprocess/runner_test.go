@@ -166,3 +166,80 @@ func TestRunner_CleanupBuild_RemovesPreparedWorkspace(t *testing.T) {
 		t.Fatalf("expected workspace to be removed, got err=%v", err)
 	}
 }
+
+func TestMergeEnvironment_AddsWorkspaceAndTriggerArtifactPaths(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	env := mergeEnvironment(runner.RunStepRequest{
+		BuildID: "build-1",
+		StepID:  "step-1",
+		Env: map[string]string{
+			runner.EnvTriggerArtifactLocalRelative: ".coyote/trigger-artifacts/dist/app.tgz",
+		},
+	}, workspaceRoot)
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, runner.EnvWorkspace+"="+workspaceRoot) {
+		t.Fatalf("expected workspace env, got %q", joined)
+	}
+	if !strings.Contains(joined, runner.EnvTriggerArtifactLocalDir+"="+filepath.Join(workspaceRoot, ".coyote", "trigger-artifacts")) {
+		t.Fatalf("expected local dir env, got %q", joined)
+	}
+	if !strings.Contains(joined, runner.EnvTriggerArtifactLocalPath+"="+filepath.Join(workspaceRoot, ".coyote", "trigger-artifacts", "dist", "app.tgz")) {
+		t.Fatalf("expected local path env, got %q", joined)
+	}
+	if !strings.Contains(joined, runner.EnvBuildID+"=build-1") || !strings.Contains(joined, runner.EnvStepID+"=step-1") {
+		t.Fatalf("expected build and step env, got %q", joined)
+	}
+	if !strings.Contains(joined, "CI=true") {
+		t.Fatalf("expected CI env, got %q", joined)
+	}
+}
+
+func TestMergeEnvironment_WithoutWorkspaceSkipsLocalArtifactAbsolutePaths(t *testing.T) {
+	env := mergeEnvironment(runner.RunStepRequest{
+		BuildID: "build-1",
+		StepID:  "step-1",
+		Env: map[string]string{
+			runner.EnvTriggerArtifactLocalRelative: ".coyote/trigger-artifacts/dist/app.tgz",
+		},
+	}, "")
+	joined := strings.Join(env, "\n")
+	if strings.Contains(joined, runner.EnvWorkspace+"=") || strings.Contains(joined, runner.EnvTriggerArtifactLocalPath+"=") || strings.Contains(joined, runner.EnvTriggerArtifactLocalDir+"=") {
+		t.Fatalf("expected no workspace-derived env without workspace path, got %q", joined)
+	}
+}
+
+func TestRunner_StepVisibleWorkspaceRoot_FallbackLookup(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	buildWorkspace := filepath.Join(workspaceRoot, "build-1")
+	if err := os.MkdirAll(buildWorkspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	r := NewWithWorkspaceRoot(workspaceRoot)
+	resolvedExpected, err := filepath.EvalSymlinks(buildWorkspace)
+	if err != nil {
+		t.Fatalf("resolve expected workspace path: %v", err)
+	}
+	if got, ok := r.StepVisibleWorkspaceRoot("build-1"); !ok || got != resolvedExpected {
+		t.Fatalf("expected fallback workspace lookup %q, got %q ok=%v", resolvedExpected, got, ok)
+	}
+	if got, ok := r.StepVisibleWorkspaceRoot(" "); ok || got != "" {
+		t.Fatalf("expected blank build id to fail lookup, got %q ok=%v", got, ok)
+	}
+}
+
+func TestResolveWorkingDir(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if _, err := resolveWorkingDir("", "."); err == nil {
+		t.Fatal("expected empty workspace path error")
+	}
+	if got, err := resolveWorkingDir(workspaceRoot, "."); err != nil || got != workspaceRoot {
+		t.Fatalf("expected workspace root for dot, got %q err=%v", got, err)
+	}
+	abs := filepath.Join(workspaceRoot, "backend")
+	if got, err := resolveWorkingDir(workspaceRoot, abs); err != nil || got != abs {
+		t.Fatalf("expected absolute path to pass through, got %q err=%v", got, err)
+	}
+	if _, err := resolveWorkingDir(workspaceRoot, "../escape"); err == nil {
+		t.Fatal("expected traversal working dir error")
+	}
+}

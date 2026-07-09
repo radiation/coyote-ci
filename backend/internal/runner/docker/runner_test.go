@@ -376,6 +376,53 @@ func TestStepContainerRunArgs_BuildsCorrectArgs(t *testing.T) {
 	}
 }
 
+func TestMergeStepEnvironment_DerivesTriggerArtifactVisiblePaths(t *testing.T) {
+	envEntries := mergeStepEnvironment(runner.RunStepRequest{
+		BuildID: "build-1",
+		StepID:  "step-1",
+		Env: map[string]string{
+			runner.EnvTriggerArtifactLocalRelative: ".coyote/trigger-artifacts/dist/app.tar.gz",
+		},
+	})
+
+	envMap := map[string]string{}
+	for _, entry := range envEntries {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		envMap[parts[0]] = parts[1]
+	}
+
+	if envMap[runner.EnvWorkspace] != "/workspace" {
+		t.Fatalf("expected docker workspace env /workspace, got %q", envMap[runner.EnvWorkspace])
+	}
+	if envMap[runner.EnvTriggerArtifactLocalDir] != "/workspace/.coyote/trigger-artifacts" {
+		t.Fatalf("expected trigger artifact local dir under docker workspace, got %q", envMap[runner.EnvTriggerArtifactLocalDir])
+	}
+	if envMap[runner.EnvTriggerArtifactLocalPath] != "/workspace/.coyote/trigger-artifacts/dist/app.tar.gz" {
+		t.Fatalf("expected trigger artifact local path under docker workspace, got %q", envMap[runner.EnvTriggerArtifactLocalPath])
+	}
+}
+
+func TestRunner_StepVisibleWorkspaceRoot(t *testing.T) {
+	r := New(Options{})
+	if got, ok := r.StepVisibleWorkspaceRoot("build-1"); !ok || got != "/workspace" {
+		t.Fatalf("expected docker-visible workspace root, got %q ok=%v", got, ok)
+	}
+	if got, ok := r.StepVisibleWorkspaceRoot(" "); ok || got != "" {
+		t.Fatalf("expected blank build id to fail, got %q ok=%v", got, ok)
+	}
+}
+
+func TestAugmentTriggerArtifactEnvironment_NoRelativePathNoop(t *testing.T) {
+	env := map[string]string{}
+	augmentTriggerArtifactEnvironment(env, "/workspace")
+	if len(env) != 0 {
+		t.Fatalf("expected noop env augmentation, got %#v", env)
+	}
+}
+
 func TestResolveContainerWorkingDirForStep_SymlinkEscapeFallsBackToWorkspaceRoot(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	outsideRoot := t.TempDir()

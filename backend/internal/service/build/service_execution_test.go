@@ -7,6 +7,8 @@ package build
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -641,6 +643,105 @@ func TestBuildService_RunStep_InprocessRunner_PersistsArtifactsToStorageRoot(t *
 		if _, statErr := os.Stat(storagePath); statErr != nil {
 			t.Fatalf("expected persisted artifact at %s (logical=%s), stat failed: %v", storagePath, a.LogicalPath, statErr)
 		}
+	}
+}
+
+func TestBuildService_RunStep_InprocessRunner_ReadsTriggerArtifactFromInjectedLocalPath(t *testing.T) {
+	ctx := context.Background()
+	workspaceRoot := t.TempDir()
+	storageRoot := t.TempDir()
+	body := []byte("artifact-body")
+	checksumBytes := sha256.Sum256(body)
+	checksum := hex.EncodeToString(checksumBytes[:])
+	store := artifact.NewFilesystemStore(storageRoot)
+	if _, saveErr := store.Save(ctx, "producer/dist/app.tgz", strings.NewReader(string(body))); saveErr != nil {
+		t.Fatalf("seed artifact store: %v", saveErr)
+	}
+
+	projectID := "project-1"
+	producerBuildID := "build-upstream"
+	downstreamBuildID := "build-downstream"
+	artifactID := "artifact-1"
+	artifactPath := "dist/app.tgz"
+	claimToken := "claim-active"
+
+	repo := &fakeBuildRepository{
+		build: domain.Build{
+			ID:        downstreamBuildID,
+			ProjectID: projectID,
+			Status:    domain.BuildStatusQueued,
+			Trigger: domain.BuildTrigger{
+				Kind:                   domain.BuildTriggerKindArtifact,
+				ProducerProjectID:      &projectID,
+				ProducerBuildID:        &producerBuildID,
+				ArtifactID:             &artifactID,
+				ArtifactPath:           &artifactPath,
+				ArtifactChecksumSHA256: &checksum,
+			},
+		},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "consume", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	artifactRepo := &fakeArtifactRepository{artifacts: map[string][]domain.BuildArtifact{
+		producerBuildID: {{
+			ID:              artifactID,
+			BuildID:         producerBuildID,
+			LogicalPath:     artifactPath,
+			StorageKey:      "producer/dist/app.tgz",
+			StorageProvider: domain.StorageProviderFilesystem,
+			SizeBytes:       int64(len(body)),
+			ChecksumSHA256:  &checksum,
+		}},
+	}}
+
+	svc := NewBuildService(repo, inprocessrunner.NewWithWorkspaceRoot(workspaceRoot), &fakeLogSink{})
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(store), workspaceRoot)
+
+	preparedBuild, prepErr := svc.PrepareBuildExecution(ctx, downstreamBuildID)
+	if prepErr != nil {
+		t.Fatalf("prepare build execution: %v", prepErr)
+	}
+	if preparedBuild.Status != domain.BuildStatusRunning {
+		t.Fatalf("expected running build after prep, got %q", preparedBuild.Status)
+	}
+
+	result, report, runErr := svc.RunStep(ctx, steprunner.RunStepRequest{
+		BuildID:    downstreamBuildID,
+		StepIndex:  0,
+		StepName:   "consume",
+		ClaimToken: claimToken,
+		WorkingDir: ".",
+		Command:    "sh",
+		Args: []string{
+			"-c",
+			`printf '%s\n%s\n%s\n' "$COYOTE_TRIGGER_ARTIFACT_LOCAL_PATH" "$COYOTE_TRIGGER_ARTIFACT_LOCAL_DIR" "$COYOTE_TRIGGER_ARTIFACT_LOCAL_RELATIVE_PATH" && cat "$COYOTE_TRIGGER_ARTIFACT_LOCAL_PATH"`,
+		},
+	})
+	if runErr != nil {
+		t.Fatalf("run step failed: %v", runErr)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed outcome, got %q", report.CompletionOutcome)
+	}
+	if report.SideEffectErr != nil {
+		t.Fatalf("expected nil side effect error, got %v", report.SideEffectErr)
+	}
+	if result.Status != steprunner.RunStepStatusSuccess {
+		t.Fatalf("expected successful result, got %q", result.Status)
+	}
+
+	expectedLocalDir := filepath.Join(workspaceRoot, downstreamBuildID, ".coyote", "trigger-artifacts")
+	expectedLocalPath := filepath.Join(expectedLocalDir, "dist", "app.tgz")
+	if !strings.Contains(result.Stdout, expectedLocalPath) {
+		t.Fatalf("expected stdout to include trigger artifact local path %q, got %q", expectedLocalPath, result.Stdout)
+	}
+	if !strings.Contains(result.Stdout, expectedLocalDir) {
+		t.Fatalf("expected stdout to include trigger artifact local dir %q, got %q", expectedLocalDir, result.Stdout)
+	}
+	if !strings.Contains(result.Stdout, ".coyote/trigger-artifacts/dist/app.tgz") {
+		t.Fatalf("expected stdout to include trigger artifact relative path, got %q", result.Stdout)
+	}
+	if !strings.Contains(result.Stdout, string(body)) {
+		t.Fatalf("expected stdout to include handed off artifact body %q, got %q", string(body), result.Stdout)
 	}
 }
 
