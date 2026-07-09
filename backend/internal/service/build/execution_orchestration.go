@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
+	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 func (s *BuildService) createDurableJobsForBuild(ctx context.Context, build domain.Build, steps []domain.BuildStep) error {
@@ -91,6 +93,7 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	if err != nil {
 		return runner.RunStepResult{}, StepCompletionReport{}, mapExecutionErr(err)
 	}
+	executionContext = s.enrichExecutionContextForRunner(executionContext)
 
 	logManager := NewExecutionLogManager(s, executionContext)
 	completionManager := NewStepCompletionManager(s)
@@ -149,6 +152,42 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	}
 
 	return runOutcome.Result, report, nil
+}
+
+func (s *BuildService) enrichExecutionContextForRunner(executionContext StepExecutionContext) StepExecutionContext {
+	visibleWorkspace := workspace.DefaultContainerRoot
+	if provider, ok := s.runner.(runner.WorkspacePathProvider); ok {
+		if root, found := provider.StepVisibleWorkspaceRoot(executionContext.Build.ID); found && strings.TrimSpace(root) != "" {
+			visibleWorkspace = root
+		}
+	}
+
+	executionContext.StepWorkingDir = workspace.ResolveVisibleWorkingDir(visibleWorkspace, executionContext.ExecutionRequest.WorkingDir)
+	env := cloneEnv(executionContext.ExecutionRequest.Env)
+	env[runner.EnvWorkspace] = visibleWorkspace
+	if executionContext.ExecutionRequest.BuildID != "" {
+		env[runner.EnvBuildID] = executionContext.ExecutionRequest.BuildID
+	}
+	if executionContext.ExecutionRequest.StepID != "" {
+		env[runner.EnvStepID] = executionContext.ExecutionRequest.StepID
+	}
+
+	trigger := domain.NormalizeBuildTrigger(executionContext.Build.Trigger)
+	if trigger.Kind == domain.BuildTriggerKindArtifact {
+		relativePath, relativeErr := workspace.TriggerArtifactRelativePath(readOptionalString(trigger.ArtifactPath))
+		if relativeErr == nil {
+			env[runner.EnvTriggerArtifactLocalRelative] = relativePath
+			env[runner.EnvTriggerArtifactLocalDir] = workspace.ResolveVisiblePath(visibleWorkspace, workspace.TriggerArtifactsRelativeRoot)
+			if path.Clean(strings.ReplaceAll(visibleWorkspace, "\\", "/")) == workspace.DefaultContainerRoot {
+				env[runner.EnvTriggerArtifactLocalPath] = path.Join(visibleWorkspace, relativePath)
+			} else {
+				env[runner.EnvTriggerArtifactLocalPath] = workspace.ResolveVisiblePath(visibleWorkspace, relativePath)
+			}
+		}
+	}
+
+	executionContext.ExecutionRequest.Env = env
+	return executionContext
 }
 
 func (s *BuildService) resolveExecutionImage(build domain.Build) string {

@@ -11,12 +11,17 @@ package build
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 )
@@ -306,5 +311,189 @@ func TestPrepareBuildExecution_EmitsOneTimeBuildPrepLogMessages(t *testing.T) {
 		if !slices.Contains(logSink.lines, message) {
 			t.Fatalf("expected build prep log message %q, got %#v", message, logSink.lines)
 		}
+	}
+}
+
+func TestPrepareBuildExecution_HandsOffTriggerArtifactIntoWorkspace(t *testing.T) {
+	ctx := context.Background()
+	workspaceRoot := t.TempDir()
+	storageRoot := t.TempDir()
+	body := []byte("artifact-body")
+	checksumBytes := sha256.Sum256(body)
+	checksum := hex.EncodeToString(checksumBytes[:])
+	store := artifact.NewFilesystemStore(storageRoot)
+	if _, saveErr := store.Save(ctx, "producer/dist/app.tgz", strings.NewReader(string(body))); saveErr != nil {
+		t.Fatalf("seed artifact store: %v", saveErr)
+	}
+
+	producerProjectID := "project-1"
+	producerBuildID := "build-upstream"
+	artifactID := "artifact-1"
+	artifactPath := "dist/app.tgz"
+	repo := &fakeBuildRepository{build: domain.Build{
+		ID:        "build-downstream",
+		ProjectID: producerProjectID,
+		Status:    domain.BuildStatusQueued,
+		Trigger: domain.BuildTrigger{
+			Kind:                   domain.BuildTriggerKindArtifact,
+			ProducerProjectID:      &producerProjectID,
+			ProducerBuildID:        &producerBuildID,
+			ArtifactID:             &artifactID,
+			ArtifactPath:           &artifactPath,
+			ArtifactChecksumSHA256: &checksum,
+		},
+	}}
+	artifactRepo := &fakeArtifactRepository{artifacts: map[string][]domain.BuildArtifact{
+		producerBuildID: {{
+			ID:              artifactID,
+			BuildID:         producerBuildID,
+			LogicalPath:     artifactPath,
+			StorageKey:      "producer/dist/app.tgz",
+			StorageProvider: domain.StorageProviderFilesystem,
+			SizeBytes:       int64(len(body)),
+			ChecksumSHA256:  &checksum,
+		}},
+	}}
+	logSink := &fakeLogSink{}
+
+	svc := NewBuildService(repo, nil, logSink)
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(store), workspaceRoot)
+
+	build, prepErr := svc.PrepareBuildExecution(ctx, "build-downstream")
+	if prepErr != nil {
+		t.Fatalf("prepare build execution: %v", prepErr)
+	}
+	if build.Status != domain.BuildStatusRunning {
+		t.Fatalf("expected running build after handoff, got %q", build.Status)
+	}
+
+	handedOffPath := filepath.Join(workspaceRoot, "build-downstream", ".coyote", "trigger-artifacts", "dist", "app.tgz")
+	handedOffBody, readErr := os.ReadFile(handedOffPath)
+	if readErr != nil {
+		t.Fatalf("read handed off artifact: %v", readErr)
+	}
+	if string(handedOffBody) != string(body) {
+		t.Fatalf("expected handed off artifact body %q, got %q", string(body), string(handedOffBody))
+	}
+	if !slices.Contains(logSink.lines, "Preparing trigger artifact handoff") || !slices.Contains(logSink.lines, "Trigger artifact handoff complete") {
+		t.Fatalf("expected trigger handoff log lines, got %#v", logSink.lines)
+	}
+}
+
+func TestPrepareBuildExecution_FailsBuildWhenTriggerArtifactMissing(t *testing.T) {
+	producerProjectID := "project-1"
+	producerBuildID := "build-upstream"
+	artifactID := "artifact-1"
+	artifactPath := "dist/app.tgz"
+	repo := &fakeBuildRepository{build: domain.Build{
+		ID:        "build-downstream",
+		ProjectID: producerProjectID,
+		Status:    domain.BuildStatusQueued,
+		Trigger: domain.BuildTrigger{
+			Kind:              domain.BuildTriggerKindArtifact,
+			ProducerProjectID: &producerProjectID,
+			ProducerBuildID:   &producerBuildID,
+			ArtifactID:        &artifactID,
+			ArtifactPath:      &artifactPath,
+		},
+	}}
+
+	svc := NewBuildService(repo, nil, &fakeLogSink{})
+	svc.SetArtifactPersistence(&fakeArtifactRepository{}, testStoreResolver(artifact.NewFilesystemStore(t.TempDir())), t.TempDir())
+
+	build, prepErr := svc.PrepareBuildExecution(context.Background(), "build-downstream")
+	if prepErr != nil {
+		t.Fatalf("expected build failure without hard error, got %v", prepErr)
+	}
+	if build.Status != domain.BuildStatusFailed {
+		t.Fatalf("expected failed build when trigger artifact is missing, got %q", build.Status)
+	}
+	if build.ErrorMessage == nil || !strings.Contains(*build.ErrorMessage, "artifact not found") {
+		t.Fatalf("expected missing artifact error message, got %v", build.ErrorMessage)
+	}
+}
+
+func TestPrepareBuildExecution_FailsBuildWhenTriggerArtifactChecksumMismatches(t *testing.T) {
+	ctx := context.Background()
+	workspaceRoot := t.TempDir()
+	storageRoot := t.TempDir()
+	store := artifact.NewFilesystemStore(storageRoot)
+	if _, saveErr := store.Save(ctx, "producer/dist/app.tgz", strings.NewReader("artifact-body")); saveErr != nil {
+		t.Fatalf("seed artifact store: %v", saveErr)
+	}
+
+	producerProjectID := "project-1"
+	producerBuildID := "build-upstream"
+	artifactID := "artifact-1"
+	artifactPath := "dist/app.tgz"
+	wrongChecksum := strings.Repeat("a", 64)
+	repo := &fakeBuildRepository{build: domain.Build{
+		ID:        "build-downstream",
+		ProjectID: producerProjectID,
+		Status:    domain.BuildStatusQueued,
+		Trigger: domain.BuildTrigger{
+			Kind:                   domain.BuildTriggerKindArtifact,
+			ProducerProjectID:      &producerProjectID,
+			ProducerBuildID:        &producerBuildID,
+			ArtifactID:             &artifactID,
+			ArtifactPath:           &artifactPath,
+			ArtifactChecksumSHA256: &wrongChecksum,
+		},
+	}}
+	artifactRepo := &fakeArtifactRepository{artifacts: map[string][]domain.BuildArtifact{
+		producerBuildID: {{
+			ID:              artifactID,
+			BuildID:         producerBuildID,
+			LogicalPath:     artifactPath,
+			StorageKey:      "producer/dist/app.tgz",
+			StorageProvider: domain.StorageProviderFilesystem,
+		}},
+	}}
+
+	svc := NewBuildService(repo, nil, &fakeLogSink{})
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(store), workspaceRoot)
+
+	build, prepErr := svc.PrepareBuildExecution(ctx, "build-downstream")
+	if prepErr != nil {
+		t.Fatalf("expected build failure without hard error, got %v", prepErr)
+	}
+	if build.Status != domain.BuildStatusFailed {
+		t.Fatalf("expected failed build on checksum mismatch, got %q", build.Status)
+	}
+	if build.ErrorMessage == nil || !strings.Contains(*build.ErrorMessage, "checksum mismatch") {
+		t.Fatalf("expected checksum mismatch error, got %v", build.ErrorMessage)
+	}
+}
+
+func TestPrepareBuildExecution_FailsBuildWhenTriggerProducerProjectMismatches(t *testing.T) {
+	producerProjectID := "project-1"
+	producerBuildID := "build-upstream"
+	artifactID := "artifact-1"
+	artifactPath := "dist/app.tgz"
+	repo := &fakeBuildRepository{build: domain.Build{
+		ID:        "build-downstream",
+		ProjectID: "project-2",
+		Status:    domain.BuildStatusQueued,
+		Trigger: domain.BuildTrigger{
+			Kind:              domain.BuildTriggerKindArtifact,
+			ProducerProjectID: &producerProjectID,
+			ProducerBuildID:   &producerBuildID,
+			ArtifactID:        &artifactID,
+			ArtifactPath:      &artifactPath,
+		},
+	}}
+
+	svc := NewBuildService(repo, nil, &fakeLogSink{})
+	svc.SetArtifactPersistence(&fakeArtifactRepository{}, testStoreResolver(artifact.NewFilesystemStore(t.TempDir())), t.TempDir())
+
+	build, prepErr := svc.PrepareBuildExecution(context.Background(), "build-downstream")
+	if prepErr != nil {
+		t.Fatalf("expected build failure without hard error, got %v", prepErr)
+	}
+	if build.Status != domain.BuildStatusFailed {
+		t.Fatalf("expected failed build on producer project mismatch, got %q", build.Status)
+	}
+	if build.ErrorMessage == nil || !strings.Contains(*build.ErrorMessage, "producer project mismatch") {
+		t.Fatalf("expected producer project mismatch error, got %v", build.ErrorMessage)
 	}
 }

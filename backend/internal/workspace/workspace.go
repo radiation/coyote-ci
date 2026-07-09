@@ -8,6 +8,7 @@ import (
 )
 
 const DefaultContainerRoot = "/workspace"
+const TriggerArtifactsRelativeRoot = ".coyote/trigger-artifacts"
 
 // Workspace defines the host/container path contract for one build workspace.
 type Workspace struct {
@@ -61,10 +62,83 @@ func (w Workspace) ContainerWorkingDir(requested string) string {
 	return containerRoot
 }
 
+func TriggerArtifactRelativePath(logicalPath string) (string, error) {
+	trimmed := strings.TrimSpace(logicalPath)
+	if trimmed == "" {
+		return "", fmt.Errorf("trigger artifact path is required")
+	}
+	if looksLikeWindowsDrivePath(trimmed) {
+		return "", fmt.Errorf("trigger artifact path must be workspace-relative")
+	}
+
+	validator := New("", "")
+	if err := validator.ValidateArtifactPath(trimmed); err != nil {
+		return "", err
+	}
+
+	cleanRel := path.Clean(strings.ReplaceAll(trimmed, "\\", "/"))
+	return path.Clean(path.Join(TriggerArtifactsRelativeRoot, cleanRel)), nil
+}
+
+func ResolveVisiblePath(workspaceRoot string, relativePath string) string {
+	trimmedRoot := strings.TrimSpace(workspaceRoot)
+	if trimmedRoot == "" {
+		return ""
+	}
+	trimmedRel := strings.TrimSpace(relativePath)
+	if trimmedRel == "" || trimmedRel == "." {
+		if isContainerWorkspaceRoot(trimmedRoot) {
+			return path.Clean(trimmedRoot)
+		}
+		return filepath.Clean(trimmedRoot)
+	}
+
+	cleanRel := path.Clean(strings.ReplaceAll(trimmedRel, "\\", "/"))
+	if isContainerWorkspaceRoot(trimmedRoot) {
+		return path.Join(trimmedRoot, cleanRel)
+	}
+	return filepath.Join(filepath.Clean(trimmedRoot), filepath.FromSlash(cleanRel))
+}
+
+func ResolveVisibleWorkingDir(workspaceRoot string, requested string) string {
+	trimmedRoot := strings.TrimSpace(workspaceRoot)
+	if trimmedRoot == "" {
+		trimmedRoot = DefaultContainerRoot
+	}
+	if isContainerWorkspaceRoot(trimmedRoot) {
+		ws := Workspace{ContainerRoot: trimmedRoot}
+		return ws.ContainerWorkingDir(requested)
+	}
+
+	hostRoot := filepath.Clean(trimmedRoot)
+	ws := Workspace{HostRoot: hostRoot}
+	trimmedRequested := strings.TrimSpace(requested)
+	if trimmedRequested == "" || trimmedRequested == "." {
+		return hostRoot
+	}
+	if filepath.IsAbs(trimmedRequested) || looksLikeWindowsDrivePath(trimmedRequested) {
+		resolved := filepath.Clean(trimmedRequested)
+		relCheck, err := filepath.Rel(hostRoot, resolved)
+		if err == nil && relCheck != ".." && !strings.HasPrefix(relCheck, ".."+string(filepath.Separator)) {
+			return resolved
+		}
+		return hostRoot
+	}
+
+	resolved, err := ws.ResolveRelativePath(trimmedRequested)
+	if err != nil {
+		return hostRoot
+	}
+	return resolved
+}
+
 func (w Workspace) ValidateArtifactPath(rel string) error {
 	trimmed := strings.TrimSpace(rel)
 	if trimmed == "" {
 		return fmt.Errorf("artifact path is required")
+	}
+	if looksLikeWindowsDrivePath(trimmed) {
+		return fmt.Errorf("artifact path must be workspace-relative")
 	}
 
 	normalized := strings.ReplaceAll(trimmed, "\\", "/")
@@ -107,4 +181,17 @@ func (w Workspace) ResolveRelativePath(rel string) (string, error) {
 	}
 
 	return resolved, nil
+}
+
+func looksLikeWindowsDrivePath(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) < 2 || trimmed[1] != ':' {
+		return false
+	}
+	first := trimmed[0]
+	return (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')
+}
+
+func isContainerWorkspaceRoot(root string) bool {
+	return path.Clean(strings.ReplaceAll(strings.TrimSpace(root), "\\", "/")) == DefaultContainerRoot
 }

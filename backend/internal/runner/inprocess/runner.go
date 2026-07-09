@@ -17,6 +17,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	"github.com/radiation/coyote-ci/backend/internal/source"
+	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 var _ runner.Runner = (*Runner)(nil)
@@ -94,6 +95,10 @@ func (r *Runner) CleanupBuild(ctx context.Context, buildID string) error {
 	return nil
 }
 
+func (r *Runner) StepVisibleWorkspaceRoot(buildID string) (string, bool) {
+	return r.lookupWorkspacePath(buildID)
+}
+
 func (r *Runner) RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, error) {
 	return r.RunStepStream(ctx, request, nil)
 }
@@ -119,10 +124,13 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 		}
 		cmd.Dir = resolvedDir
 		log.Printf("inprocess run step: build_id=%s workspace_path=%s working_dir=%s resolved_dir=%s", strings.TrimSpace(request.BuildID), workspacePath, strings.TrimSpace(request.WorkingDir), resolvedDir)
+		cmd.Env = mergeEnvironment(request, workspacePath)
 	} else if request.WorkingDir != "" {
 		cmd.Dir = request.WorkingDir
+		cmd.Env = mergeEnvironment(request, "")
+	} else {
+		cmd.Env = mergeEnvironment(request, "")
 	}
-	cmd.Env = mergeEnvironment(request.Env)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -260,26 +268,37 @@ var safeEnvKeys = []string{
 	"SHELL",
 }
 
-func mergeEnvironment(extra map[string]string) []string {
-	base := make([]string, 0, len(safeEnvKeys)+len(extra))
+func mergeEnvironment(request runner.RunStepRequest, workspacePath string) []string {
+	base := make([]string, 0, len(safeEnvKeys)+len(request.Env)+4)
 	for _, key := range safeEnvKeys {
 		if val, ok := os.LookupEnv(key); ok {
 			base = append(base, key+"="+val)
 		}
 	}
 
-	if len(extra) == 0 {
-		return base
+	merged := make(map[string]string, len(request.Env)+4)
+	for key, value := range request.Env {
+		merged[key] = value
+	}
+	merged["CI"] = "true"
+	merged[runner.EnvBuildID] = request.BuildID
+	merged[runner.EnvStepID] = request.StepID
+	if strings.TrimSpace(workspacePath) != "" {
+		merged[runner.EnvWorkspace] = workspacePath
+		if relativePath := strings.TrimSpace(merged[runner.EnvTriggerArtifactLocalRelative]); relativePath != "" {
+			merged[runner.EnvTriggerArtifactLocalDir] = filepath.Join(workspacePath, filepath.FromSlash(workspace.TriggerArtifactsRelativeRoot))
+			merged[runner.EnvTriggerArtifactLocalPath] = filepath.Join(workspacePath, filepath.FromSlash(relativePath))
+		}
 	}
 
-	keys := make([]string, 0, len(extra))
-	for key := range extra {
+	keys := make([]string, 0, len(merged))
+	for key := range merged {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 
 	for _, key := range keys {
-		base = append(base, key+"="+extra[key])
+		base = append(base, key+"="+merged[key])
 	}
 
 	return base

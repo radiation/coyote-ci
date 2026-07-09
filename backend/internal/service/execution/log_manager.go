@@ -50,7 +50,11 @@ func (m *ExecutionLogManager) EmitSystemLines(ctx context.Context, lines []strin
 
 func (m *ExecutionLogManager) EmitExecutionStart(ctx context.Context) {
 	if m.executionContext.StepNumber == 1 && (m.executionContext.Build.StartedAt == nil || m.executionContext.Build.StartedAt.IsZero()) {
-		m.EmitSystemLines(ctx, formatBuildStartLines(m.executionContext.ExecutionImage, workspace.DefaultContainerRoot, m.executionContext.TotalSteps))
+		workspacePath := strings.TrimSpace(m.executionContext.ExecutionRequest.Env[runner.EnvWorkspace])
+		if workspacePath == "" {
+			workspacePath = workspace.DefaultContainerRoot
+		}
+		m.EmitSystemLines(ctx, formatBuildStartLines(m.executionContext.ExecutionImage, workspacePath, m.executionContext.TotalSteps))
 	}
 	if m.executionContext.StepNumber == 1 {
 		m.EmitSystemLine(ctx, "Executing pipeline steps")

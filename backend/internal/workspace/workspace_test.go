@@ -85,3 +85,33 @@ func TestWorkspace_ResolveRelativePath_EmptyHostRootErrors(t *testing.T) {
 		t.Fatal("expected resolve to fail when host root is empty")
 	}
 }
+
+func TestTriggerArtifactRelativePath(t *testing.T) {
+	relativePath, err := TriggerArtifactRelativePath("dist/app.tar.gz")
+	if err != nil {
+		t.Fatalf("expected valid trigger artifact path, got %v", err)
+	}
+	if relativePath != ".coyote/trigger-artifacts/dist/app.tar.gz" {
+		t.Fatalf("unexpected relative handoff path %q", relativePath)
+	}
+
+	invalid := []string{"../secret.txt", "/tmp/secret.txt", `C:\\temp\\secret.txt`}
+	for _, item := range invalid {
+		if _, err := TriggerArtifactRelativePath(item); err == nil {
+			t.Fatalf("expected invalid trigger artifact path %q to fail", item)
+		}
+	}
+}
+
+func TestResolveVisibleWorkingDir_LocalWorkspace(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	resolved := ResolveVisibleWorkingDir(workspaceRoot, "backend")
+	want := filepath.Join(workspaceRoot, "backend")
+	if resolved != want {
+		t.Fatalf("expected %q, got %q", want, resolved)
+	}
+
+	if got := ResolveVisibleWorkingDir(workspaceRoot, "../../etc"); got != workspaceRoot {
+		t.Fatalf("expected escape attempt to clamp to workspace root, got %q", got)
+	}
+}

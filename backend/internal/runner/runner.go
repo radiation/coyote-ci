@@ -74,6 +74,15 @@ type RunStepResult struct {
 	FinishedAt time.Time
 }
 
+const (
+	EnvBuildID                      = "COYOTE_BUILD_ID"
+	EnvStepID                       = "COYOTE_STEP_ID"
+	EnvWorkspace                    = "COYOTE_WORKSPACE"
+	EnvTriggerArtifactLocalRelative = "COYOTE_TRIGGER_ARTIFACT_LOCAL_RELATIVE_PATH"
+	EnvTriggerArtifactLocalDir      = "COYOTE_TRIGGER_ARTIFACT_LOCAL_DIR"
+	EnvTriggerArtifactLocalPath     = "COYOTE_TRIGGER_ARTIFACT_LOCAL_PATH"
+)
+
 type Runner interface {
 	RunStep(ctx context.Context, request RunStepRequest) (RunStepResult, error)
 }
@@ -88,4 +97,10 @@ type BuildScopedRunner interface {
 	StreamingRunner
 	PrepareBuild(ctx context.Context, request PrepareBuildRequest) error
 	CleanupBuild(ctx context.Context, buildID string) error
+}
+
+// WorkspacePathProvider reports the workspace root path visible to executed
+// steps for a prepared build.
+type WorkspacePathProvider interface {
+	StepVisibleWorkspaceRoot(buildID string) (string, bool)
 }
