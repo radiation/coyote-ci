@@ -8,6 +8,7 @@ const (
 	BuildTriggerTypeManual   BuildTriggerType = "manual"
 	BuildTriggerTypeRerun    BuildTriggerType = "rerun"
 	BuildTriggerTypeWebhook  BuildTriggerType = "webhook"
+	BuildTriggerTypeArtifact BuildTriggerType = "artifact"
 	BuildTriggerTypeSchedule BuildTriggerType = "schedule"
 	BuildTriggerTypeAPI      BuildTriggerType = "api"
 )
@@ -15,25 +16,34 @@ const (
 type BuildTriggerKind string
 
 const (
-	BuildTriggerKindManual  BuildTriggerKind = "manual"
-	BuildTriggerKindWebhook BuildTriggerKind = "webhook"
+	BuildTriggerKindManual   BuildTriggerKind = "manual"
+	BuildTriggerKindWebhook  BuildTriggerKind = "webhook"
+	BuildTriggerKindArtifact BuildTriggerKind = "artifact"
 )
 
 type BuildTrigger struct {
-	Kind            BuildTriggerKind
-	SCMProvider     *string
-	EventType       *string
-	RepositoryOwner *string
-	RepositoryName  *string
-	RepositoryURL   *string
-	RawRef          *string
-	Ref             *string
-	RefType         *string
-	RefName         *string
-	Deleted         *bool
-	CommitSHA       *string
-	DeliveryID      *string
-	Actor           *string
+	Kind                   BuildTriggerKind
+	SCMProvider            *string
+	EventType              *string
+	RepositoryOwner        *string
+	RepositoryName         *string
+	RepositoryURL          *string
+	RawRef                 *string
+	Ref                    *string
+	RefType                *string
+	RefName                *string
+	Deleted                *bool
+	CommitSHA              *string
+	DeliveryID             *string
+	Actor                  *string
+	ProducerProjectID      *string
+	ProducerJobID          *string
+	ProducerBuildID        *string
+	ArtifactID             *string
+	ArtifactPath           *string
+	ArtifactName           *string
+	ArtifactSizeBytes      *int64
+	ArtifactChecksumSHA256 *string
 }
 
 func NormalizeBuildTrigger(in BuildTrigger) BuildTrigger {
@@ -55,6 +65,13 @@ func NormalizeBuildTrigger(in BuildTrigger) BuildTrigger {
 	in.CommitSHA = trimOptional(in.CommitSHA)
 	in.DeliveryID = trimOptional(in.DeliveryID)
 	in.Actor = trimOptional(in.Actor)
+	in.ProducerProjectID = trimOptional(in.ProducerProjectID)
+	in.ProducerJobID = trimOptional(in.ProducerJobID)
+	in.ProducerBuildID = trimOptional(in.ProducerBuildID)
+	in.ArtifactID = trimOptional(in.ArtifactID)
+	in.ArtifactPath = trimOptional(in.ArtifactPath)
+	in.ArtifactName = trimOptional(in.ArtifactName)
+	in.ArtifactChecksumSHA256 = trimOptional(in.ArtifactChecksumSHA256)
 	if in.RefName == nil && in.Ref != nil {
 		in.RefName = in.Ref
 	}

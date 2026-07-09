@@ -28,6 +28,7 @@ func (r *JobRepository) Create(_ context.Context, job domain.Job) (domain.Job, e
 	if job.ID == "" {
 		job.ID = uuid.NewString()
 	}
+	job.ArtifactTriggers = domain.NormalizeJobArtifactTriggers(job.ArtifactTriggers)
 	r.jobs[job.ID] = job
 	return job, nil
 }
@@ -219,6 +220,7 @@ func (r *JobRepository) Update(_ context.Context, job domain.Job) (domain.Job, e
 	if _, ok := r.jobs[job.ID]; !ok {
 		return domain.Job{}, repository.ErrJobNotFound
 	}
+	job.ArtifactTriggers = domain.NormalizeJobArtifactTriggers(job.ArtifactTriggers)
 	r.jobs[job.ID] = job
 	return job, nil
 }

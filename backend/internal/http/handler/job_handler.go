@@ -75,6 +75,7 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		TriggerMode:      req.TriggerMode,
 		BranchAllowlist:  req.BranchAllowlist,
 		TagAllowlist:     req.TagAllowlist,
+		ArtifactTriggers: toDomainJobArtifactTriggers(req.ArtifactTriggers),
 		PipelineYAML:     req.PipelineYAML,
 		PipelinePath:     req.PipelinePath,
 		ManagedImage:     toCreateManagedImageConfigInput(req.ManagedImage),
@@ -259,6 +260,7 @@ func (h *JobHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 		TriggerMode:      req.TriggerMode,
 		BranchAllowlist:  req.BranchAllowlist,
 		TagAllowlist:     req.TagAllowlist,
+		ArtifactTriggers: toOptionalDomainJobArtifactTriggers(req.ArtifactTriggers),
 		PipelineYAML:     req.PipelineYAML,
 		PipelinePath:     req.PipelinePath,
 		ManagedImageSet:  req.ManagedImagePresent(),
@@ -487,6 +489,7 @@ func toJobResponse(job domain.Job) api.JobResponse {
 		TriggerMode:      triggerMode,
 		BranchAllowlist:  job.BranchAllowlist,
 		TagAllowlist:     job.TagAllowlist,
+		ArtifactTriggers: toJobArtifactTriggerResponses(job.ArtifactTriggers),
 		PipelineYAML:     job.PipelineYAML,
 		PipelinePath:     job.PipelinePath,
 		ManagedImage:     toManagedImageConfigResponse(job.ManagedImageConfig),
@@ -525,6 +528,42 @@ func toUpdateManagedImageConfigInput(req *api.UpdateJobManagedImageConfigRequest
 		CommitAuthorName:  req.CommitAuthorName,
 		CommitAuthorEmail: req.CommitAuthorEmail,
 	}
+}
+
+func toDomainJobArtifactTriggers(requests []api.JobArtifactTriggerRequest) []domain.JobArtifactTrigger {
+	if len(requests) == 0 {
+		return nil
+	}
+	triggers := make([]domain.JobArtifactTrigger, 0, len(requests))
+	for _, item := range requests {
+		triggers = append(triggers, domain.JobArtifactTrigger{
+			ProducerJobID: item.ProducerJobID,
+			Path:          item.Path,
+		})
+	}
+	return triggers
+}
+
+func toOptionalDomainJobArtifactTriggers(requests *[]api.JobArtifactTriggerRequest) *[]domain.JobArtifactTrigger {
+	if requests == nil {
+		return nil
+	}
+	triggers := toDomainJobArtifactTriggers(*requests)
+	return &triggers
+}
+
+func toJobArtifactTriggerResponses(triggers []domain.JobArtifactTrigger) []api.JobArtifactTriggerResponse {
+	if len(triggers) == 0 {
+		return nil
+	}
+	responses := make([]api.JobArtifactTriggerResponse, 0, len(triggers))
+	for _, item := range triggers {
+		responses = append(responses, api.JobArtifactTriggerResponse{
+			ProducerJobID: item.ProducerJobID,
+			Path:          item.Path,
+		})
+	}
+	return responses
 }
 
 func toManagedImageConfigResponse(config *domain.JobManagedImageConfig) *api.JobManagedImageConfigResponse {

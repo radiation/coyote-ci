@@ -214,6 +214,68 @@ func TestJobHandler_RunNowRejectsInvalidBodyAndBlankRef(t *testing.T) {
 	}
 }
 
+func TestJobHandler_CreateAndUpdateArtifactTriggers(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	h := NewJobHandler(jobSvc)
+
+	createBody := `{"project_id":"project-1","name":"artifact-consumer","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","artifact_triggers":[{"producer_job_id":" producer-a ","path":" dist/app.tgz "},{"producer_job_id":"producer-a","path":"dist/app.tgz"}],"enabled":false}`
+	createReq := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(createBody))
+	createRes := httptest.NewRecorder()
+	h.CreateJob(createRes, createReq)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d body=%s", http.StatusCreated, createRes.Code, createRes.Body.String())
+	}
+
+	createData := decodeDataMap(t, createRes)
+	createdTriggers, ok := createData["artifact_triggers"].([]any)
+	if !ok || len(createdTriggers) != 1 {
+		t.Fatalf("expected one normalized artifact trigger, got %v", createData["artifact_triggers"])
+	}
+	createdTrigger, ok := createdTriggers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected artifact trigger object, got %T", createdTriggers[0])
+	}
+	if createdTrigger["producer_job_id"] != "producer-a" || createdTrigger["path"] != "dist/app.tgz" {
+		t.Fatalf("unexpected created artifact trigger: %v", createdTrigger)
+	}
+	jobID, ok := createData["id"].(string)
+	if !ok || jobID == "" {
+		t.Fatalf("expected created job id, got %v", createData["id"])
+	}
+
+	updateBody := `{"artifact_triggers":[{"producer_job_id":"producer-b","path":"release/app.tgz"}]}`
+	updateReq := addURLParam(httptest.NewRequest(http.MethodPut, "/jobs/"+jobID, bytes.NewBufferString(updateBody)), "jobID", jobID)
+	updateRes := httptest.NewRecorder()
+	h.UpdateJob(updateRes, updateReq)
+	if updateRes.Code != http.StatusOK {
+		t.Fatalf("expected update status %d, got %d body=%s", http.StatusOK, updateRes.Code, updateRes.Body.String())
+	}
+
+	updateData := decodeDataMap(t, updateRes)
+	updatedTriggers, ok := updateData["artifact_triggers"].([]any)
+	if !ok || len(updatedTriggers) != 1 {
+		t.Fatalf("expected one updated artifact trigger, got %v", updateData["artifact_triggers"])
+	}
+	updatedTrigger, ok := updatedTriggers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected updated artifact trigger object, got %T", updatedTriggers[0])
+	}
+	if updatedTrigger["producer_job_id"] != "producer-b" || updatedTrigger["path"] != "release/app.tgz" {
+		t.Fatalf("unexpected updated artifact trigger: %v", updatedTrigger)
+	}
+
+	stored, err := jobSvc.GetJob(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("get job failed: %v", err)
+	}
+	if len(stored.ArtifactTriggers) != 1 || stored.ArtifactTriggers[0].ProducerJobID != "producer-b" {
+		t.Fatalf("expected stored artifact trigger update, got %#v", stored.ArtifactTriggers)
+	}
+}
+
 func serviceCredential(id string, name string) domain.SourceCredential {
 	return domain.SourceCredential{
 		ID:        id,

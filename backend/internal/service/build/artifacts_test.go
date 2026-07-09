@@ -1,11 +1,38 @@
 package build
 
 import (
+	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	artifactpkg "github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
+
+type failingArtifactTriggerDispatcher struct {
+	err   error
+	calls int
+}
+
+func (d *failingArtifactTriggerDispatcher) DispatchArtifactTriggers(_ context.Context, _ domain.Build, _ domain.BuildArtifact) error {
+	d.calls++
+	return d.err
+}
+
+type fakeArtifactStore struct{}
+
+func (s *fakeArtifactStore) Save(_ context.Context, _ string, src io.Reader) (int64, error) {
+	return io.Copy(io.Discard, src)
+}
+
+func (s *fakeArtifactStore) Open(_ context.Context, _ string) (io.ReadCloser, error) {
+	return nil, os.ErrNotExist
+}
 
 func TestArtifactPatternsFromBuild_RepoPipelinePathScoped(t *testing.T) {
 	source := pipelineSourceRepo
@@ -228,6 +255,99 @@ artifacts:
 	}
 	if declarations[0].Name != "coyote-ci/backend" {
 		t.Fatalf("expected named declaration, got %q", declarations[0].Name)
+	}
+}
+
+func TestCollectAndPersistArtifacts_DispatchFailureDoesNotFailCollection(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	artifactPath := filepath.Join(workspaceRoot, "dist", "app.tgz")
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	if err := os.WriteFile(artifactPath, []byte("artifact-bytes"), 0o644); err != nil {
+		t.Fatalf("write artifact file: %v", err)
+	}
+
+	jobID := "job-upstream"
+	buildRepo := &fakeBuildRepository{build: domain.Build{
+		ID:        "build-1",
+		ProjectID: "project-1",
+		JobID:     &jobID,
+		Status:    domain.BuildStatusSuccess,
+		CreatedAt: time.Now().UTC(),
+		Trigger:   domain.BuildTrigger{Kind: domain.BuildTriggerKindManual},
+	}}
+	artifactRepo := &fakeArtifactRepository{}
+	dispatcher := &failingArtifactTriggerDispatcher{err: errors.New("downstream queue failed")}
+	svc := NewBuildService(buildRepo, nil, nil)
+	svc.artifactRepo = artifactRepo
+	svc.artifactCollector = artifactpkg.NewCollector(&fakeArtifactStore{})
+	svc.artifactWorkspaceRoot = workspaceRoot
+	svc.artifactTriggerDispatcher = dispatcher
+
+	collected, err := svc.collectAndPersistArtifacts(context.Background(), "build-1", nil, domain.StorageProviderFilesystem, workspaceRoot, []domain.ArtifactDeclaration{{Path: "dist/app.tgz"}}, map[string]struct{}{}, map[string]struct{}{})
+	if err != nil {
+		t.Fatalf("expected dispatch failure to be non-fatal, got %v", err)
+	}
+	if len(collected) != 1 || collected[0] != "dist/app.tgz" {
+		t.Fatalf("expected collected artifact path, got %+v", collected)
+	}
+	artifacts, listErr := artifactRepo.ListByBuildID(context.Background(), "build-1")
+	if listErr != nil {
+		t.Fatalf("list artifacts failed: %v", listErr)
+	}
+	if len(artifacts) != 1 {
+		t.Fatalf("expected persisted artifact despite dispatch failure, got %d", len(artifacts))
+	}
+	if dispatcher.calls != 1 {
+		t.Fatalf("expected one dispatch attempt, got %d", dispatcher.calls)
+	}
+}
+
+func TestCollectAndPersistArtifacts_FetchesBuildOnceForMultipleDispatches(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	artifactPaths := []string{
+		filepath.Join(workspaceRoot, "dist", "app-a.tgz"),
+		filepath.Join(workspaceRoot, "dist", "app-b.tgz"),
+	}
+	for _, artifactPath := range artifactPaths {
+		if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+			t.Fatalf("mkdir artifact dir: %v", err)
+		}
+		if err := os.WriteFile(artifactPath, []byte("artifact-bytes"), 0o644); err != nil {
+			t.Fatalf("write artifact file: %v", err)
+		}
+	}
+
+	jobID := "job-upstream"
+	buildRepo := &fakeBuildRepository{build: domain.Build{
+		ID:        "build-1",
+		ProjectID: "project-1",
+		JobID:     &jobID,
+		Status:    domain.BuildStatusSuccess,
+		CreatedAt: time.Now().UTC(),
+		Trigger:   domain.BuildTrigger{Kind: domain.BuildTriggerKindManual},
+	}}
+	artifactRepo := &fakeArtifactRepository{}
+	dispatcher := &failingArtifactTriggerDispatcher{}
+	svc := NewBuildService(buildRepo, nil, nil)
+	svc.artifactRepo = artifactRepo
+	svc.artifactCollector = artifactpkg.NewCollector(&fakeArtifactStore{})
+	svc.artifactWorkspaceRoot = workspaceRoot
+	svc.artifactTriggerDispatcher = dispatcher
+
+	collected, err := svc.collectAndPersistArtifacts(context.Background(), "build-1", nil, domain.StorageProviderFilesystem, workspaceRoot, []domain.ArtifactDeclaration{{Path: "dist/app-a.tgz"}, {Path: "dist/app-b.tgz"}}, map[string]struct{}{}, map[string]struct{}{})
+	if err != nil {
+		t.Fatalf("collectAndPersistArtifacts failed: %v", err)
+	}
+	if len(collected) != 2 {
+		t.Fatalf("expected two collected artifact paths, got %+v", collected)
+	}
+	if buildRepo.getCalls != 1 {
+		t.Fatalf("expected one build lookup for dispatch reuse, got %d", buildRepo.getCalls)
+	}
+	if dispatcher.calls != 2 {
+		t.Fatalf("expected dispatch per artifact, got %d", dispatcher.calls)
 	}
 }
 

@@ -18,6 +18,7 @@ type CreateJobRequest struct {
 	TriggerMode      *string                             `json:"trigger_mode,omitempty"`
 	BranchAllowlist  []string                            `json:"branch_allowlist,omitempty"`
 	TagAllowlist     []string                            `json:"tag_allowlist,omitempty"`
+	ArtifactTriggers []JobArtifactTriggerRequest         `json:"artifact_triggers,omitempty"`
 	PipelineYAML     string                              `json:"pipeline_yaml,omitempty"`
 	PipelinePath     string                              `json:"pipeline_path,omitempty"`
 	ManagedImage     *CreateJobManagedImageConfigRequest `json:"managed_image,omitempty"`
@@ -39,6 +40,7 @@ type UpdateJobRequest struct {
 	TriggerMode      *string                             `json:"trigger_mode,omitempty"`
 	BranchAllowlist  *[]string                           `json:"branch_allowlist,omitempty"`
 	TagAllowlist     *[]string                           `json:"tag_allowlist,omitempty"`
+	ArtifactTriggers *[]JobArtifactTriggerRequest        `json:"artifact_triggers,omitempty"`
 	PipelineYAML     *string                             `json:"pipeline_yaml,omitempty"`
 	PipelinePath     *string                             `json:"pipeline_path,omitempty"`
 	ManagedImage     *UpdateJobManagedImageConfigRequest `json:"managed_image,omitempty"`
@@ -59,6 +61,7 @@ func (r *UpdateJobRequest) UnmarshalJSON(data []byte) error {
 		TriggerMode      *string                             `json:"trigger_mode,omitempty"`
 		BranchAllowlist  *[]string                           `json:"branch_allowlist,omitempty"`
 		TagAllowlist     *[]string                           `json:"tag_allowlist,omitempty"`
+		ArtifactTriggers *[]JobArtifactTriggerRequest        `json:"artifact_triggers,omitempty"`
 		PipelineYAML     *string                             `json:"pipeline_yaml,omitempty"`
 		PipelinePath     *string                             `json:"pipeline_path,omitempty"`
 		ManagedImage     *UpdateJobManagedImageConfigRequest `json:"managed_image,omitempty"`
@@ -80,6 +83,7 @@ func (r *UpdateJobRequest) UnmarshalJSON(data []byte) error {
 	r.TriggerMode = alias.TriggerMode
 	r.BranchAllowlist = alias.BranchAllowlist
 	r.TagAllowlist = alias.TagAllowlist
+	r.ArtifactTriggers = alias.ArtifactTriggers
 	r.PipelineYAML = alias.PipelineYAML
 	r.PipelinePath = alias.PipelinePath
 	r.ManagedImage = alias.ManagedImage
@@ -146,6 +150,16 @@ type JobBuildSummaryResponse struct {
 	ErrorMessage *string `json:"error_message,omitempty"`
 }
 
+type JobArtifactTriggerRequest struct {
+	ProducerJobID string `json:"producer_job_id"`
+	Path          string `json:"path"`
+}
+
+type JobArtifactTriggerResponse struct {
+	ProducerJobID string `json:"producer_job_id"`
+	Path          string `json:"path"`
+}
+
 type JobResponse struct {
 	ID               string                         `json:"id"`
 	ProjectID        string                         `json:"project_id"`
@@ -159,6 +173,7 @@ type JobResponse struct {
 	TriggerMode      string                         `json:"trigger_mode"`
 	BranchAllowlist  []string                       `json:"branch_allowlist,omitempty"`
 	TagAllowlist     []string                       `json:"tag_allowlist,omitempty"`
+	ArtifactTriggers []JobArtifactTriggerResponse   `json:"artifact_triggers,omitempty"`
 	PipelineYAML     string                         `json:"pipeline_yaml"`
 	PipelinePath     *string                        `json:"pipeline_path,omitempty"`
 	ManagedImage     *JobManagedImageConfigResponse `json:"managed_image,omitempty"`

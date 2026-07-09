@@ -27,6 +27,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	dockerrunner "github.com/radiation/coyote-ci/backend/internal/runner/docker"
 	"github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
+	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
@@ -65,10 +66,13 @@ func main() {
 	executionJobRepo := repositorypostgres.NewExecutionJobRepository(db)
 	executionJobOutputRepo := repositorypostgres.NewExecutionJobOutputRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
+	artifactTriggerDeliveryRepo := repositorypostgres.NewArtifactTriggerDeliveryRepository(db)
 	cacheEntryRepo := repositorypostgres.NewCacheEntryRepository(db)
 	workerRepo := repositorypostgres.NewWorkerRepository(db)
 	jobRepo := repositorypostgres.NewJobRepository(db)
+	jobManagedImageConfigRepo := repositorypostgres.NewJobManagedImageConfigRepository(db)
 	projectRepo := repositorypostgres.NewProjectRepository(db)
+	sourceCredentialRepo := repositorypostgres.NewSourceCredentialRepository(db)
 	userRepo := repositorypostgres.NewUserRepository(db)
 	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
 	artifactLabelRepo := repositorypostgres.NewArtifactLabelRepository(db)
@@ -119,6 +123,11 @@ func main() {
 		ArtifactResolver:    artifactResolver,
 		ArtifactWorkspace:   cfg.ExecutionWorkspaceRoot,
 	})
+	jobService := service.NewJobService(jobRepo, buildService).
+		WithProjectRepository(projectRepo).
+		WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo).
+		WithArtifactTriggerDeliveryRepository(artifactTriggerDeliveryRepo)
+	buildService.SetArtifactTriggerDispatcher(jobService)
 	leaseDuration := time.Duration(cfg.StepLeaseSeconds) * time.Second
 	workerService := workersvc.NewExecutionWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)
 	workerService.SetWorkerRepository(workerRepo)

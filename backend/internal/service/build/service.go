@@ -63,16 +63,17 @@ type BuildService struct {
 	sourceResolver         source.WorkspaceSourceResolver
 	executionWorkspaceRoot string
 
-	artifactRepo            repository.ArtifactRepository
-	executionOutputRepo     repository.ExecutionJobOutputRepository
-	artifactStore           artifact.Store
-	artifactStoreResolver   *artifact.StoreResolver
-	artifactCollector       *artifact.Collector
-	artifactWorkspaceRoot   string
-	artifactStorageProvider domain.StorageProvider
-	stepCacheManager        *StepCacheManager
-	versionTagger           BuildVersionTagger
-	buildNotifier           BuildLifecycleNotifier
+	artifactRepo              repository.ArtifactRepository
+	executionOutputRepo       repository.ExecutionJobOutputRepository
+	artifactStore             artifact.Store
+	artifactStoreResolver     *artifact.StoreResolver
+	artifactCollector         *artifact.Collector
+	artifactWorkspaceRoot     string
+	artifactStorageProvider   domain.StorageProvider
+	stepCacheManager          *StepCacheManager
+	versionTagger             BuildVersionTagger
+	buildNotifier             BuildLifecycleNotifier
+	artifactTriggerDispatcher ArtifactTriggerDispatcher
 
 	defaultExecutionImage string
 }
@@ -85,24 +86,29 @@ type BuildLifecycleNotifier interface {
 	NotifyTerminalBuild(ctx context.Context, build domain.Build) error
 }
 
+type ArtifactTriggerDispatcher interface {
+	DispatchArtifactTriggers(ctx context.Context, build domain.Build, artifact domain.BuildArtifact) error
+}
+
 // BuildServiceConfig groups all optional dependencies for BuildService. Zero
 // values are safe — each field is only used when set.
 type BuildServiceConfig struct {
-	ExecutionJobRepo      repository.ExecutionJobRepository
-	ExecutionOutputRepo   repository.ExecutionJobOutputRepository
-	RepoFetcher           source.RepoFetcher
-	ManagedImageRefresher ManagedImageRefresher
-	SourceResolver        source.WorkspaceSourceResolver
-	ArtifactRepo          repository.ArtifactRepository
-	ArtifactLabelRepo     repository.ArtifactLabelRepository
-	ArtifactResolver      *artifact.StoreResolver
-	ArtifactWorkspace     string
-	ExecutionWorkspace    string
-	DefaultImage          string
-	CacheStore            cachepkg.Store
-	CacheEntryRepo        repository.CacheEntryRepository
-	VersionTagger         BuildVersionTagger
-	BuildNotifier         BuildLifecycleNotifier
+	ExecutionJobRepo          repository.ExecutionJobRepository
+	ExecutionOutputRepo       repository.ExecutionJobOutputRepository
+	RepoFetcher               source.RepoFetcher
+	ManagedImageRefresher     ManagedImageRefresher
+	SourceResolver            source.WorkspaceSourceResolver
+	ArtifactRepo              repository.ArtifactRepository
+	ArtifactLabelRepo         repository.ArtifactLabelRepository
+	ArtifactResolver          *artifact.StoreResolver
+	ArtifactWorkspace         string
+	ExecutionWorkspace        string
+	DefaultImage              string
+	CacheStore                cachepkg.Store
+	CacheEntryRepo            repository.CacheEntryRepository
+	VersionTagger             BuildVersionTagger
+	BuildNotifier             BuildLifecycleNotifier
+	ArtifactTriggerDispatcher ArtifactTriggerDispatcher
 }
 
 // NewBuildServiceFromConfig creates a fully-wired BuildService in one call.
@@ -119,6 +125,7 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 	svc.executionWorkspaceRoot = buildNormalizeWorkspaceRoot(cfg.ExecutionWorkspace)
 	svc.versionTagger = cfg.VersionTagger
 	svc.buildNotifier = cfg.BuildNotifier
+	svc.artifactTriggerDispatcher = cfg.ArtifactTriggerDispatcher
 	if cfg.ArtifactLabelRepo != nil {
 		type artifactLabelRepoAware interface {
 			SetArtifactLabelRepository(repository.ArtifactLabelRepository)
@@ -209,6 +216,10 @@ func (s *BuildService) SetExecutionJobRepository(repo repository.ExecutionJobRep
 
 func (s *BuildService) SetExecutionJobOutputRepository(repo repository.ExecutionJobOutputRepository) {
 	s.executionOutputRepo = repo
+}
+
+func (s *BuildService) SetArtifactTriggerDispatcher(dispatcher ArtifactTriggerDispatcher) {
+	s.artifactTriggerDispatcher = dispatcher
 }
 
 func (s *BuildService) SetStepCacheStore(store cachepkg.Store, entryRepo repository.CacheEntryRepository) {

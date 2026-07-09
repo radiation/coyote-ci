@@ -2,10 +2,11 @@
 set -euo pipefail
 
 API_URL="${API_URL:-http://localhost:8080}"
-STEP_API_URL="${STEP_API_URL:-http://host.docker.internal:8080}"
 PROJECT_ID="${PROJECT_ID:-fixtures}"
 FIXTURE_REPO_URL="${FIXTURE_REPO_URL:-https://github.com/radiation/coyote-ci-fixtures.git}"
 FIXTURE_REF="${FIXTURE_REF:-main}"
+TRIGGER_WAIT_TIMEOUT_SECONDS="${TRIGGER_WAIT_TIMEOUT_SECONDS:-120}"
+POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-2}"
 
 SCENARIOS=(
   "success-basic"
@@ -52,10 +53,11 @@ Scenarios:
 
 Optional environment variables:
   API_URL            Default: http://localhost:8080
-  STEP_API_URL       Default: http://host.docker.internal:8080
   PROJECT_ID         Default: fixtures
   FIXTURE_REPO_URL   Default: https://github.com/radiation/coyote-ci-fixtures.git
   FIXTURE_REF        Default: main
+  TRIGGER_WAIT_TIMEOUT_SECONDS  Default: 120
+  POLL_INTERVAL_SECONDS         Default: 2
 EOF
 }
 
@@ -114,14 +116,44 @@ wait_for_build_terminal() {
       printf '%s\n' "$status"
       return 0
     fi
-    sleep 2
+    sleep "$POLL_INTERVAL_SECONDS"
   done
 }
 
-lookup_artifact_id() {
-  local build_id="$1"
-  local artifact_name="$2"
-  api_get "/api/builds/${build_id}/artifacts" | jq -r --arg artifact_name "$artifact_name" '.data.artifacts[] | select(.name == $artifact_name) | .id' | head -n 1
+resolve_job_id() {
+  local job_name="$1"
+  api_get "/api/jobs/resolve?project=${PROJECT_ID}&name=${job_name}" | jq -r '.data.id // empty'
+}
+
+lookup_triggered_build_id() {
+  local job_id="$1"
+  local producer_build_id="$2"
+  api_get "/api/jobs/${job_id}/builds" | jq -r --arg producer_build_id "$producer_build_id" '.data.builds[] | select(.trigger_producer_build_id == $producer_build_id) | .id' | head -n 1
+}
+
+wait_for_triggered_build() {
+  local job_id="$1"
+  local producer_build_id="$2"
+  local build_id=""
+  local start_time elapsed_seconds
+
+  start_time=$(date +%s)
+
+  while true; do
+    build_id=$(lookup_triggered_build_id "$job_id" "$producer_build_id")
+    if [[ -n "$build_id" ]]; then
+      printf '%s\n' "$build_id"
+      return 0
+    fi
+
+	elapsed_seconds=$(( $(date +%s) - start_time ))
+	if (( elapsed_seconds >= TRIGGER_WAIT_TIMEOUT_SECONDS )); then
+	  echo "Timed out waiting ${TRIGGER_WAIT_TIMEOUT_SECONDS}s for triggered build for consumer_job_id=${job_id} producer_build_id=${producer_build_id}" >&2
+	  return 1
+	fi
+
+    sleep "$POLL_INTERVAL_SECONDS"
+  done
 }
 
 queue_one_build_id() {
@@ -163,38 +195,17 @@ EOF
   return 1
 }
 
-consumer_pipeline_yaml() {
-  local artifact_url="$1"
-
-  cat <<EOF
-version: 1
-
-pipeline:
-  name: npm-artifact-download-consumer
-  image: node:22-alpine
-
-env:
-  COYOTE_ARTIFACT_URL: ${artifact_url}
-
-steps:
-  - name: consume-downloaded-package
-    command: cd scenarios/npm-artifact-download-consumer && sh ./scripts/run.sh
-
-artifacts:
-  - path: scenarios/npm-artifact-download-consumer/downloads/acme-widget-network-smoke-0.4.0.tgz
-    name: npm/acme-widget-network-downloaded-input
-    type: npm_package
-  - path: scenarios/npm-artifact-download-consumer/artifacts/consumer-report.json
-    name: npm/acme-widget-network-consumer-report
-    type: generic
-EOF
-}
-
 queue_artifact_download_chain() {
   require_jq
 
   local producer_scenario="npm-install-cache-smoke"
-  local producer_artifact_name="npm/acme-widget-network"
+  local consumer_job_name="npm-artifact-download-consumer"
+  local consumer_job_id
+  consumer_job_id=$(resolve_job_id "$consumer_job_name")
+  if [[ -z "$consumer_job_id" ]]; then
+    echo "Failed to resolve consumer job ${consumer_job_name}. Bootstrap fixture jobs first." >&2
+    return 1
+  fi
 
   echo "=== Queueing producer scenario: ${producer_scenario} ==="
   local producer_build_id
@@ -209,22 +220,15 @@ queue_artifact_download_chain() {
     return 1
   fi
 
-  local producer_artifact_id
-  producer_artifact_id=$(lookup_artifact_id "$producer_build_id" "$producer_artifact_name")
-  if [[ -z "$producer_artifact_id" ]]; then
-    echo "Failed to locate producer artifact ${producer_artifact_name} for build ${producer_build_id}" >&2
-    return 1
-  fi
-
-  local artifact_url="${STEP_API_URL}/api/builds/${producer_build_id}/artifacts/${producer_artifact_id}/download"
-  local pipeline_yaml
-  pipeline_yaml=$(consumer_pipeline_yaml "$artifact_url")
-
-  echo "=== Queueing consumer build from inline pipeline ==="
+  echo "=== Waiting for triggered consumer build: ${consumer_job_name} ==="
   local consumer_build_id
-  consumer_build_id=$(queue_pipeline_build "$pipeline_yaml")
+  consumer_build_id=$(wait_for_triggered_build "$consumer_job_id" "$producer_build_id")
 
-  echo "producer_build_id=${producer_build_id} producer_artifact_id=${producer_artifact_id} consumer_build_id=${consumer_build_id}"
+  echo "=== Waiting for consumer build: ${consumer_build_id} ==="
+  local consumer_status
+  consumer_status=$(wait_for_build_terminal "$consumer_build_id")
+
+  echo "producer_build_id=${producer_build_id} consumer_job_id=${consumer_job_id} consumer_build_id=${consumer_build_id} consumer_status=${consumer_status}"
 }
 
 scenario_exists() {

@@ -2,6 +2,7 @@ package build
 
 import (
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ func (p *BuildExecutionPlanner) Plan(build domain.Build, steps []domain.BuildSte
 	contextDir := plannerContextDirFromPipelinePath(build.PipelinePath)
 	pipelinePath := optionalValue(build.PipelinePath)
 	sourceRef := plannerSourceRef(build.Source)
+	triggerEnv := plannerTriggerEnv(build.Trigger)
 
 	jobs := make([]domain.ExecutionJob, 0, len(steps))
 	for _, step := range steps {
@@ -46,7 +48,7 @@ func (p *BuildExecutionPlanner) Plan(build domain.Build, steps []domain.BuildSte
 			Image:            stepImage,
 			WorkingDir:       defaultValue(step.WorkingDir, "."),
 			Command:          append([]string{defaultValue(step.Command, "sh")}, append([]string(nil), step.Args...)...),
-			Environment:      cloneEnv(step.Env),
+			Environment:      mergePlannerEnv(step.Env, triggerEnv),
 			TimeoutSeconds:   maxInt(step.TimeoutSeconds, 0),
 			PipelineFilePath: pipelinePath,
 			ContextDir:       contextDir,
@@ -156,6 +158,49 @@ func cloneEnv(env map[string]string) map[string]string {
 		out[key] = value
 	}
 	return out
+}
+
+func mergePlannerEnv(base map[string]string, extra map[string]string) map[string]string {
+	merged := cloneEnv(base)
+	for key, value := range extra {
+		merged[key] = value
+	}
+	return merged
+}
+
+func plannerTriggerEnv(trigger domain.BuildTrigger) map[string]string {
+	trigger = domain.NormalizeBuildTrigger(trigger)
+	if trigger.Kind != domain.BuildTriggerKindArtifact {
+		return nil
+	}
+	env := map[string]string{
+		"COYOTE_TRIGGER_TYPE": "artifact_uploaded",
+	}
+	if trigger.ProducerProjectID != nil {
+		env["COYOTE_TRIGGER_PROJECT_ID"] = *trigger.ProducerProjectID
+	}
+	if trigger.ProducerJobID != nil {
+		env["COYOTE_TRIGGER_JOB_ID"] = *trigger.ProducerJobID
+	}
+	if trigger.ProducerBuildID != nil {
+		env["COYOTE_TRIGGER_BUILD_ID"] = *trigger.ProducerBuildID
+	}
+	if trigger.ArtifactID != nil {
+		env["COYOTE_TRIGGER_ARTIFACT_ID"] = *trigger.ArtifactID
+	}
+	if trigger.ArtifactPath != nil {
+		env["COYOTE_TRIGGER_ARTIFACT_PATH"] = *trigger.ArtifactPath
+	}
+	if trigger.ArtifactName != nil {
+		env["COYOTE_TRIGGER_ARTIFACT_NAME"] = *trigger.ArtifactName
+	}
+	if trigger.ArtifactSizeBytes != nil {
+		env["COYOTE_TRIGGER_ARTIFACT_SIZE_BYTES"] = strconv.FormatInt(*trigger.ArtifactSizeBytes, 10)
+	}
+	if trigger.ArtifactChecksumSHA256 != nil {
+		env["COYOTE_TRIGGER_ARTIFACT_CHECKSUM_SHA256"] = *trigger.ArtifactChecksumSHA256
+	}
+	return env
 }
 
 func optionalPointer(value string) *string {

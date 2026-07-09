@@ -111,6 +111,57 @@ func TestBuildService_QueueBuildWithTemplate_PersistsDurableJobs(t *testing.T) {
 	}
 }
 
+func TestBuildService_CreateBuildFromPipeline_ArtifactTriggerInjectsEnv(t *testing.T) {
+	buildRepo := &fakeBuildRepository{}
+	execRepo := memoryrepo.NewExecutionJobRepository()
+	svc := NewBuildService(buildRepo, nil, &fakeLogSink{})
+	svc.SetExecutionJobRepository(execRepo)
+	svc.SetDefaultExecutionImage("golang:1.24")
+
+	pipelineYAML := `
+version: 1
+steps:
+  - name: test
+    run: go test ./...
+`
+	artifactSize := int64(123)
+	build, err := svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{
+		ProjectID:    "project-1",
+		PipelineYAML: pipelineYAML,
+		Trigger: &CreateBuildTriggerInput{
+			Kind:                   string(domain.BuildTriggerKindArtifact),
+			ProducerProjectID:      "project-1",
+			ProducerJobID:          "job-upstream",
+			ProducerBuildID:        "build-upstream",
+			ArtifactID:             "artifact-1",
+			ArtifactPath:           "dist/app.tgz",
+			ArtifactName:           "app",
+			ArtifactSizeBytes:      &artifactSize,
+			ArtifactChecksumSHA256: "abc123",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create build from pipeline failed: %v", err)
+	}
+
+	jobs, err := execRepo.GetJobsByBuildID(context.Background(), build.ID)
+	if err != nil {
+		t.Fatalf("get jobs by build failed: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("expected one execution job, got %d", len(jobs))
+	}
+	if jobs[0].Environment["COYOTE_TRIGGER_TYPE"] != "artifact_uploaded" {
+		t.Fatalf("expected artifact trigger env, got %#v", jobs[0].Environment)
+	}
+	if jobs[0].Environment["COYOTE_TRIGGER_ARTIFACT_PATH"] != "dist/app.tgz" {
+		t.Fatalf("expected artifact path env, got %#v", jobs[0].Environment)
+	}
+	if jobs[0].Environment["COYOTE_TRIGGER_ARTIFACT_SIZE_BYTES"] != "123" {
+		t.Fatalf("expected artifact size env, got %#v", jobs[0].Environment)
+	}
+}
+
 func defaultBuild(id string) domain.Build {
 	now := time.Now().UTC()
 	return domain.Build{ID: id, ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: now}

@@ -102,6 +102,7 @@ func main() {
 	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
 	artifactLabelRepo := repositorypostgres.NewArtifactLabelRepository(db)
 	webhookDeliveryRepo := repositorypostgres.NewWebhookDeliveryRepository(db)
+	artifactTriggerDeliveryRepo := repositorypostgres.NewArtifactTriggerDeliveryRepository(db)
 	notificationDeliveryRepo := repositorypostgres.NewNotificationDeliveryRepository(db)
 	notificationSubscriptionRepo := repositorypostgres.NewNotificationSubscriptionRepository(db)
 	notificationPreferenceRepo := repositorypostgres.NewUserNotificationPreferenceRepository(db)
@@ -182,7 +183,11 @@ func main() {
 	userService := service.NewUserService(userRepo)
 	apiTokenService := service.NewAPITokenService(apiTokenRepo, userRepo)
 	projectMembershipService := service.NewProjectMembershipService(projectRepo, projectMembershipRepo)
-	jobService := service.NewJobService(jobRepo, buildService).WithProjectRepository(projectRepo).WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo)
+	jobService := service.NewJobService(jobRepo, buildService).
+		WithProjectRepository(projectRepo).
+		WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo).
+		WithArtifactTriggerDeliveryRepository(artifactTriggerDeliveryRepo)
+	buildService.SetArtifactTriggerDispatcher(jobService)
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
 	notificationService := service.NewNotificationService(notificationSubscriptionRepo).
 		WithPreferenceRepository(notificationPreferenceRepo).
