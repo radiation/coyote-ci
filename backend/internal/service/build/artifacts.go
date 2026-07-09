@@ -228,7 +228,7 @@ func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID s
 		if artifactType == "" {
 			artifactType = domain.InferArtifactType(item.LogicalPath, item.ContentType)
 		}
-		_, err := s.artifactRepo.Create(ctx, domain.BuildArtifact{
+		createdArtifact := domain.BuildArtifact{
 			ID:              item.GeneratedID,
 			BuildID:         buildID,
 			StepID:          stepID,
@@ -241,10 +241,21 @@ func (s *BuildService) collectAndPersistArtifacts(ctx context.Context, buildID s
 			ContentType:     item.ContentType,
 			ChecksumSHA256:  item.ChecksumSHA256,
 			CreatedAt:       time.Now().UTC(),
-		})
+		}
+		_, err := s.artifactRepo.Create(ctx, createdArtifact)
 		if err != nil {
 			log.Printf("artifact metadata persistence error: build_id=%s logical_path=%s err=%v", buildID, item.LogicalPath, err)
 			return nil, fmt.Errorf("persisting artifact metadata for %q from %s declarations %q: %w", item.LogicalPath, artifactCollectionScopeLabel(stepID), declarationPaths(declarations), err)
+		}
+		if s.artifactTriggerDispatcher != nil {
+			build, buildErr := s.buildRepo.GetByID(ctx, buildID)
+			if buildErr != nil {
+				log.Printf("artifact trigger dispatch failed: build_id=%s artifact_id=%s logical_path=%s err=%v", buildID, createdArtifact.ID, createdArtifact.LogicalPath, buildErr)
+			} else if build.Trigger.Kind != domain.BuildTriggerKindArtifact {
+				if dispatchErr := s.artifactTriggerDispatcher.DispatchArtifactTriggers(ctx, build, createdArtifact); dispatchErr != nil {
+					log.Printf("artifact trigger dispatch failed: build_id=%s artifact_id=%s logical_path=%s err=%v", buildID, createdArtifact.ID, createdArtifact.LogicalPath, dispatchErr)
+				}
+			}
 		}
 		identityKeys[artifactInstanceScopeKey(stepID, item.LogicalPath)] = struct{}{}
 		collected = append(collected, item.LogicalPath)

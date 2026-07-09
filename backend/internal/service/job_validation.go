@@ -26,14 +26,16 @@ func normalizeCreateJobInput(input CreateJobInput) (CreateJobInput, error) {
 		mode := strings.ToLower(strings.TrimSpace(*normalized.TriggerMode))
 		normalized.TriggerMode = &mode
 	}
-	normalized.BranchAllowlist = normalizeBranchAllowlist(normalized.BranchAllowlist)
-	normalized.TagAllowlist = normalizeTagAllowlist(normalized.TagAllowlist)
 	normalized.PipelineYAML = strings.TrimSpace(normalized.PipelineYAML)
 	normalized.PipelinePath = strings.TrimSpace(normalized.PipelinePath)
 
 	if err := validateCreateJobRequiredFields(normalized); err != nil {
 		return CreateJobInput{}, err
 	}
+
+	normalized.BranchAllowlist = normalizeBranchAllowlist(normalized.BranchAllowlist)
+	normalized.TagAllowlist = normalizeTagAllowlist(normalized.TagAllowlist)
+	normalized.ArtifactTriggers = domain.NormalizeJobArtifactTriggers(normalized.ArtifactTriggers)
 
 	return normalized, nil
 }
@@ -59,7 +61,22 @@ func validateCreateJobRequiredFields(input CreateJobInput) error {
 	if input.Priority != nil && !domain.ValidPriority(*input.Priority) {
 		return ErrJobPriorityOutOfRange
 	}
+	if err := validateRawArtifactTriggers(input.ArtifactTriggers); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func validateRawArtifactTriggers(triggers []domain.JobArtifactTrigger) error {
+	for _, trigger := range triggers {
+		if strings.TrimSpace(trigger.ProducerJobID) == "" {
+			return ErrJobArtifactTriggerProducerJobIDRequired
+		}
+		if strings.TrimSpace(trigger.Path) == "" {
+			return ErrJobArtifactTriggerPathRequired
+		}
+	}
 	return nil
 }
 
@@ -109,6 +126,7 @@ func validateJobRequiredFields(job domain.Job) error {
 		DefaultRef:       strings.TrimSpace(job.DefaultRef),
 		DefaultCommitSHA: strings.TrimSpace(readStringPtr(job.DefaultCommitSHA)),
 		TriggerMode:      optionalTrimmedStringPtr(string(job.TriggerMode)),
+		ArtifactTriggers: domain.NormalizeJobArtifactTriggers(job.ArtifactTriggers),
 		PipelineYAML:     strings.TrimSpace(job.PipelineYAML),
 		PipelinePath:     strings.TrimSpace(readStringPtr(job.PipelinePath)),
 	})

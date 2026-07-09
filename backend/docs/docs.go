@@ -4511,10 +4511,34 @@ const docTemplate = `{
                 "status": {
                     "type": "string"
                 },
+                "trigger_artifact_checksum_sha256": {
+                    "type": "string"
+                },
+                "trigger_artifact_id": {
+                    "type": "string"
+                },
+                "trigger_artifact_name": {
+                    "type": "string"
+                },
+                "trigger_artifact_path": {
+                    "type": "string"
+                },
+                "trigger_artifact_size_bytes": {
+                    "type": "integer"
+                },
                 "trigger_commit_sha": {
                     "type": "string"
                 },
                 "trigger_kind": {
+                    "type": "string"
+                },
+                "trigger_producer_build_id": {
+                    "type": "string"
+                },
+                "trigger_producer_job_id": {
+                    "type": "string"
+                },
+                "trigger_producer_project_id": {
                     "type": "string"
                 },
                 "trigger_ref": {
@@ -4781,6 +4805,12 @@ const docTemplate = `{
         "api.CreateJobRequest": {
             "type": "object",
             "properties": {
+                "artifact_triggers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.JobArtifactTriggerRequest"
+                    }
+                },
                 "branch_allowlist": {
                     "type": "array",
                     "items": {
@@ -5138,6 +5168,28 @@ const docTemplate = `{
                 }
             }
         },
+        "api.JobArtifactTriggerRequest": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string"
+                },
+                "producer_job_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.JobArtifactTriggerResponse": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string"
+                },
+                "producer_job_id": {
+                    "type": "string"
+                }
+            }
+        },
         "api.JobBuildSummaryResponse": {
             "type": "object",
             "properties": {
@@ -5223,6 +5275,12 @@ const docTemplate = `{
         "api.JobResponse": {
             "type": "object",
             "properties": {
+                "artifact_triggers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.JobArtifactTriggerResponse"
+                    }
+                },
                 "branch_allowlist": {
                     "type": "array",
                     "items": {
@@ -6028,6 +6086,12 @@ const docTemplate = `{
         "api.UpdateJobRequest": {
             "type": "object",
             "properties": {
+                "artifact_triggers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.JobArtifactTriggerRequest"
+                    }
+                },
                 "branch_allowlist": {
                     "type": "array",
                     "items": {

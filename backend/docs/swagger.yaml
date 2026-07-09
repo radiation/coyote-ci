@@ -477,9 +477,25 @@ definitions:
         type: string
       status:
         type: string
+      trigger_artifact_checksum_sha256:
+        type: string
+      trigger_artifact_id:
+        type: string
+      trigger_artifact_name:
+        type: string
+      trigger_artifact_path:
+        type: string
+      trigger_artifact_size_bytes:
+        type: integer
       trigger_commit_sha:
         type: string
       trigger_kind:
+        type: string
+      trigger_producer_build_id:
+        type: string
+      trigger_producer_job_id:
+        type: string
+      trigger_producer_project_id:
         type: string
       trigger_ref:
         type: string
@@ -652,6 +668,10 @@ definitions:
     type: object
   api.CreateJobRequest:
     properties:
+      artifact_triggers:
+        items:
+          $ref: '#/definitions/api.JobArtifactTriggerRequest'
+        type: array
       branch_allowlist:
         items:
           type: string
@@ -886,6 +906,20 @@ definitions:
           $ref: '#/definitions/api.VersionTagResponse'
         type: array
     type: object
+  api.JobArtifactTriggerRequest:
+    properties:
+      path:
+        type: string
+      producer_job_id:
+        type: string
+    type: object
+  api.JobArtifactTriggerResponse:
+    properties:
+      path:
+        type: string
+      producer_job_id:
+        type: string
+    type: object
   api.JobBuildSummaryResponse:
     properties:
       build_number:
@@ -941,6 +975,10 @@ definitions:
     type: object
   api.JobResponse:
     properties:
+      artifact_triggers:
+        items:
+          $ref: '#/definitions/api.JobArtifactTriggerResponse'
+        type: array
       branch_allowlist:
         items:
           type: string
@@ -1461,6 +1499,10 @@ definitions:
     type: object
   api.UpdateJobRequest:
     properties:
+      artifact_triggers:
+        items:
+          $ref: '#/definitions/api.JobArtifactTriggerRequest'
+        type: array
       branch_allowlist:
         items:
           type: string

@@ -78,6 +78,54 @@ func TestValidateCreateJobRequiredFields_Errors(t *testing.T) {
 	}
 }
 
+func TestNormalizeCreateJobInput_InvalidArtifactTriggersAreNotSilentlyDropped(t *testing.T) {
+	tests := []struct {
+		name  string
+		input CreateJobInput
+		want  error
+	}{
+		{
+			name: "missing producer job id",
+			input: CreateJobInput{
+				ProjectID:     "project-1",
+				Name:          "backend",
+				RepositoryURL: "https://example.com/repo.git",
+				DefaultRef:    "main",
+				PipelineYAML:  "version: 1",
+				ArtifactTriggers: []domain.JobArtifactTrigger{{
+					ProducerJobID: " ",
+					Path:          "dist/app.tgz",
+				}},
+			},
+			want: ErrJobArtifactTriggerProducerJobIDRequired,
+		},
+		{
+			name: "missing path",
+			input: CreateJobInput{
+				ProjectID:     "project-1",
+				Name:          "backend",
+				RepositoryURL: "https://example.com/repo.git",
+				DefaultRef:    "main",
+				PipelineYAML:  "version: 1",
+				ArtifactTriggers: []domain.JobArtifactTrigger{{
+					ProducerJobID: "job-upstream",
+					Path:          " ",
+				}},
+			},
+			want: ErrJobArtifactTriggerPathRequired,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := normalizeCreateJobInput(tc.input)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("expected %v, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
 func TestJobServiceResolveProjectID_DefaultsAndSlugLookup(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	projectRepo := memory.NewProjectRepository(jobRepo)

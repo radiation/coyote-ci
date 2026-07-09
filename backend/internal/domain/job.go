@@ -24,6 +24,7 @@ type Job struct {
 	TriggerMode        JobTriggerMode
 	BranchAllowlist    []string
 	TagAllowlist       []string
+	ArtifactTriggers   []JobArtifactTrigger
 	PipelineYAML       string
 	PipelinePath       *string
 	ManagedImageConfig *JobManagedImageConfig

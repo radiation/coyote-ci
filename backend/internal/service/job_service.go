@@ -36,13 +36,17 @@ var ErrJobManagedImageConfigNotConfigured = errors.New("job managed image config
 var ErrJobManagedImageNameRequired = errors.New("job managed image managed_image_name is required")
 var ErrJobManagedImagePipelinePathRequired = errors.New("job managed image pipeline_path is required")
 var ErrJobManagedImageWriteCredentialIDRequired = errors.New("job managed image write_credential_id is required")
+var ErrJobArtifactTriggerProducerJobIDRequired = errors.New("job artifact_triggers producer_job_id is required")
+var ErrJobArtifactTriggerPathRequired = errors.New("job artifact_triggers path is required")
+var ErrJobArtifactTriggerSelfReference = errors.New("job artifact_triggers cannot reference the same job")
 
 type JobService struct {
-	jobRepo             repository.JobRepository
-	projects            repository.ProjectRepository
-	managedImageConfigs repository.JobManagedImageConfigRepository
-	credentials         repository.SourceCredentialRepository
-	buildService        *buildsvc.BuildService
+	jobRepo                   repository.JobRepository
+	artifactTriggerDeliveries repository.ArtifactTriggerDeliveryRepository
+	projects                  repository.ProjectRepository
+	managedImageConfigs       repository.JobManagedImageConfigRepository
+	credentials               repository.SourceCredentialRepository
+	buildService              *buildsvc.BuildService
 }
 
 func NewJobService(jobRepo repository.JobRepository, buildService *buildsvc.BuildService) *JobService {
@@ -57,6 +61,11 @@ func (s *JobService) WithProjectRepository(projects repository.ProjectRepository
 func (s *JobService) WithManagedImageConfigRepository(configs repository.JobManagedImageConfigRepository, credentials repository.SourceCredentialRepository) *JobService {
 	s.managedImageConfigs = configs
 	s.credentials = credentials
+	return s
+}
+
+func (s *JobService) WithArtifactTriggerDeliveryRepository(deliveries repository.ArtifactTriggerDeliveryRepository) *JobService {
+	s.artifactTriggerDeliveries = deliveries
 	return s
 }
 
@@ -93,6 +102,7 @@ type CreateJobInput struct {
 	TriggerMode      *string
 	BranchAllowlist  []string
 	TagAllowlist     []string
+	ArtifactTriggers []domain.JobArtifactTrigger
 	PipelineYAML     string
 	PipelinePath     string
 	ManagedImage     *ManagedImageConfigInput
@@ -110,6 +120,7 @@ type UpdateJobInput struct {
 	TriggerMode      *string
 	BranchAllowlist  *[]string
 	TagAllowlist     *[]string
+	ArtifactTriggers *[]domain.JobArtifactTrigger
 	PipelineYAML     *string
 	PipelinePath     *string
 	ManagedImageSet  bool
@@ -186,11 +197,17 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 		TriggerMode:      triggerMode,
 		BranchAllowlist:  branchAllowlist,
 		TagAllowlist:     tagAllowlist,
+		ArtifactTriggers: domain.NormalizeJobArtifactTriggers(normalized.ArtifactTriggers),
 		PipelineYAML:     normalized.PipelineYAML,
 		PipelinePath:     pipelinePath,
 		Enabled:          enabled,
 		CreatedAt:        now,
 		UpdatedAt:        now,
+	}
+	for _, trigger := range job.ArtifactTriggers {
+		if trigger.ProducerJobID == job.ID {
+			return domain.Job{}, ErrJobArtifactTriggerSelfReference
+		}
 	}
 
 	created, err := s.jobRepo.Create(ctx, job)
@@ -438,6 +455,12 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 	if input.TagAllowlist != nil {
 		job.TagAllowlist = normalizeTagAllowlist(*input.TagAllowlist)
 	}
+	if input.ArtifactTriggers != nil {
+		if validateErr := validateRawArtifactTriggers(*input.ArtifactTriggers); validateErr != nil {
+			return domain.Job{}, validateErr
+		}
+		job.ArtifactTriggers = domain.NormalizeJobArtifactTriggers(*input.ArtifactTriggers)
+	}
 	// If push has been explicitly disabled and no new push branch was provided,
 	// clear any existing branch filter to avoid leaving stale configuration.
 	if input.PushEnabled != nil && !*input.PushEnabled && input.PushBranch == nil {
@@ -459,6 +482,11 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 	}
 	if input.Enabled != nil {
 		job.Enabled = *input.Enabled
+	}
+	for _, trigger := range job.ArtifactTriggers {
+		if trigger.ProducerJobID == job.ID {
+			return domain.Job{}, ErrJobArtifactTriggerSelfReference
+		}
 	}
 
 	if validateErr := validateJobRequiredFields(job); validateErr != nil {
@@ -515,6 +543,10 @@ func (s *JobService) RunJobNow(ctx context.Context, id string, ref *string) (dom
 }
 
 func (s *JobService) createBuildForJob(ctx context.Context, job domain.Job) (domain.Build, error) {
+	return s.createBuildForJobWithTrigger(ctx, job, nil)
+}
+
+func (s *JobService) createBuildForJobWithTrigger(ctx context.Context, job domain.Job, trigger *buildsvc.CreateBuildTriggerInput) (domain.Build, error) {
 	if s.buildService == nil {
 		return domain.Build{}, ErrJobBuildServiceNotConfigured
 	}
@@ -528,6 +560,7 @@ func (s *JobService) createBuildForJob(ctx context.Context, job domain.Job) (dom
 			Priority:     job.Priority,
 			PipelineYAML: job.PipelineYAML,
 			PipelinePath: readStringPtr(job.PipelinePath),
+			Trigger:      trigger,
 			Source: &buildsvc.CreateBuildSourceInput{
 				RepositoryURL: job.RepositoryURL,
 				Ref:           job.DefaultRef,
@@ -543,6 +576,7 @@ func (s *JobService) createBuildForJob(ctx context.Context, job domain.Job) (dom
 			Ref:          job.DefaultRef,
 			CommitSHA:    readStringPtr(job.DefaultCommitSHA),
 			PipelinePath: strings.TrimSpace(*job.PipelinePath),
+			Trigger:      trigger,
 		})
 	} else {
 		build, err = s.buildService.CreateBuildFromPipeline(ctx, buildsvc.CreatePipelineBuildInput{
@@ -550,6 +584,7 @@ func (s *JobService) createBuildForJob(ctx context.Context, job domain.Job) (dom
 			JobID:        &job.ID,
 			Priority:     job.Priority,
 			PipelineYAML: job.PipelineYAML,
+			Trigger:      trigger,
 			Source: &buildsvc.CreateBuildSourceInput{
 				RepositoryURL: job.RepositoryURL,
 				Ref:           job.DefaultRef,
@@ -562,4 +597,84 @@ func (s *JobService) createBuildForJob(ctx context.Context, job domain.Job) (dom
 	}
 
 	return build, nil
+}
+
+func (s *JobService) DispatchArtifactTriggers(ctx context.Context, build domain.Build, artifact domain.BuildArtifact) error {
+	if s.artifactTriggerDeliveries == nil || s.buildService == nil || build.Trigger.Kind == domain.BuildTriggerKindArtifact {
+		return nil
+	}
+	if build.JobID == nil || strings.TrimSpace(*build.JobID) == "" {
+		return nil
+	}
+
+	producerJobID := strings.TrimSpace(*build.JobID)
+	jobs, err := s.jobRepo.ListByProjectID(ctx, build.ProjectID)
+	if err != nil {
+		return err
+	}
+	for _, job := range jobs {
+		if !job.Enabled || strings.TrimSpace(job.ID) == "" || job.ID == producerJobID {
+			continue
+		}
+		for _, triggerConfig := range domain.NormalizeJobArtifactTriggers(job.ArtifactTriggers) {
+			if triggerConfig.ProducerJobID != producerJobID || triggerConfig.Path != artifact.LogicalPath {
+				continue
+			}
+			if dispatchErr := s.dispatchArtifactTriggerToJob(ctx, build, artifact, job); dispatchErr != nil {
+				return dispatchErr
+			}
+			break
+		}
+	}
+	return nil
+}
+
+func (s *JobService) dispatchArtifactTriggerToJob(ctx context.Context, producerBuild domain.Build, artifact domain.BuildArtifact, consumerJob domain.Job) error {
+	now := time.Now().UTC()
+	producerJobID := strings.TrimSpace(readStringPtr(producerBuild.JobID))
+	delivery := domain.ArtifactTriggerDelivery{
+		ID:                uuid.NewString(),
+		ArtifactID:        artifact.ID,
+		ConsumerJobID:     consumerJob.ID,
+		ProducerBuildID:   producerBuild.ID,
+		ProducerProjectID: producerBuild.ProjectID,
+		ProducerJobID:     producerJobID,
+		ArtifactPath:      artifact.LogicalPath,
+		Status:            domain.ArtifactTriggerDeliveryStatusPending,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	created, err := s.artifactTriggerDeliveries.Create(ctx, delivery)
+	if err != nil {
+		if errors.Is(err, repository.ErrArtifactTriggerDeliveryDuplicate) {
+			return nil
+		}
+		return err
+	}
+	artifactSizeBytes := artifact.SizeBytes
+
+	queuedBuild, queueErr := s.createBuildForJobWithTrigger(ctx, consumerJob, &buildsvc.CreateBuildTriggerInput{
+		Kind:                   string(domain.BuildTriggerKindArtifact),
+		ProducerProjectID:      producerBuild.ProjectID,
+		ProducerJobID:          producerJobID,
+		ProducerBuildID:        producerBuild.ID,
+		ArtifactID:             artifact.ID,
+		ArtifactPath:           artifact.LogicalPath,
+		ArtifactName:           artifact.Name,
+		ArtifactSizeBytes:      &artifactSizeBytes,
+		ArtifactChecksumSHA256: readStringPtr(artifact.ChecksumSHA256),
+	})
+	if queueErr != nil {
+		message := queueErr.Error()
+		created.Status = domain.ArtifactTriggerDeliveryStatusFailed
+		created.ErrorMessage = &message
+		created.UpdatedAt = time.Now().UTC()
+		_, _ = s.artifactTriggerDeliveries.Update(ctx, created)
+		return queueErr
+	}
+	created.Status = domain.ArtifactTriggerDeliveryStatusQueued
+	created.QueuedBuildID = &queuedBuild.ID
+	created.UpdatedAt = time.Now().UTC()
+	_, err = s.artifactTriggerDeliveries.Update(ctx, created)
+	return err
 }
