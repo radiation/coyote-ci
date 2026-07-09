@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,7 +64,7 @@ func (r *ArtifactTriggerDeliveryRepository) ListByProducerBuildID(_ context.Cont
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	trimmedProducerBuildID := producerBuildID
+	trimmedProducerBuildID := strings.TrimSpace(producerBuildID)
 	out := make([]domain.ArtifactTriggerDelivery, 0)
 	for _, delivery := range r.deliveries {
 		if delivery.ProducerBuildID != trimmedProducerBuildID {

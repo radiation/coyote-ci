@@ -795,8 +795,8 @@ func makeBuildArtifactTriggerDeliveriesPayload(buildID string, response api.Buil
 		})
 	}
 	resolvedBuildID := strings.TrimSpace(buildID)
-	if strings.TrimSpace(response.BuildID) != "" {
-		resolvedBuildID = response.BuildID
+	if trimmedResponseBuildID := strings.TrimSpace(response.BuildID); trimmedResponseBuildID != "" {
+		resolvedBuildID = trimmedResponseBuildID
 	}
 	return buildArtifactTriggerDeliveriesPayload{
 		BuildID:                  resolvedBuildID,

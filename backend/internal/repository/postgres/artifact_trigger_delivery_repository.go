@@ -95,8 +95,8 @@ func (r *ArtifactTriggerDeliveryRepository) ListByProducerBuildID(ctx context.Co
 		}
 		result = append(result, delivery)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, rowsErr
 	}
 	return result, nil
 }
