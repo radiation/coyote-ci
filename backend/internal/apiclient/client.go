@@ -367,6 +367,14 @@ func (c *Client) ListBuildArtifacts(ctx context.Context, buildID string) (api.Bu
 	return envelope.Data, nil
 }
 
+func (c *Client) ListBuildArtifactTriggers(ctx context.Context, buildID string) (api.BuildArtifactTriggerDeliveriesResponse, error) {
+	var envelope api.BuildArtifactTriggerDeliveriesEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, buildResourcePath(buildID, "/artifact-triggers"), nil, &envelope); err != nil {
+		return api.BuildArtifactTriggerDeliveriesResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
 func (c *Client) DownloadBuildArtifact(ctx context.Context, buildID string, artifactID string, writer io.Writer) error {
 	requestURL, err := resolveRequestURL(c.baseURL, buildArtifactDownloadPath(buildID, artifactID))
 	if err != nil {

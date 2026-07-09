@@ -567,6 +567,53 @@ const docTemplate = `{
                 }
             }
         },
+        "/builds/{buildID}/artifact-triggers": {
+            "get": {
+                "description": "Returns persisted producer-side artifact trigger delivery records for a build.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "builds"
+                ],
+                "summary": "List build artifact trigger deliveries",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Build ID",
+                        "name": "buildID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.BuildArtifactTriggerDeliveriesEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/builds/{buildID}/artifacts": {
             "get": {
                 "description": "Returns persisted artifact metadata for a build.",
@@ -4245,6 +4292,101 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/api.VersionTagResponse"
                     }
+                }
+            }
+        },
+        "api.BuildArtifactTriggerDeliveriesEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.BuildArtifactTriggerDeliveriesResponse"
+                }
+            }
+        },
+        "api.BuildArtifactTriggerDeliveriesResponse": {
+            "type": "object",
+            "properties": {
+                "build_id": {
+                    "type": "string"
+                },
+                "build_trigger_kind": {
+                    "type": "string"
+                },
+                "deliveries": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.BuildArtifactTriggerDeliveryResponse"
+                    }
+                },
+                "recursive_dispatch_blocked": {
+                    "type": "boolean"
+                },
+                "summary": {
+                    "$ref": "#/definitions/api.BuildArtifactTriggerDeliverySummaryResponse"
+                }
+            }
+        },
+        "api.BuildArtifactTriggerDeliveryResponse": {
+            "type": "object",
+            "properties": {
+                "artifact_id": {
+                    "type": "string"
+                },
+                "artifact_name": {
+                    "type": "string"
+                },
+                "artifact_path": {
+                    "type": "string"
+                },
+                "artifact_size_bytes": {
+                    "type": "integer"
+                },
+                "consumer_job_id": {
+                    "type": "string"
+                },
+                "consumer_job_name": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "delivery_id": {
+                    "type": "string"
+                },
+                "downstream_build_id": {
+                    "type": "string"
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "producer_build_id": {
+                    "type": "string"
+                },
+                "producer_job_id": {
+                    "type": "string"
+                },
+                "producer_project_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.BuildArtifactTriggerDeliverySummaryResponse": {
+            "type": "object",
+            "properties": {
+                "delivery_count": {
+                    "type": "integer"
+                },
+                "failed_count": {
+                    "type": "integer"
+                },
+                "queued_count": {
+                    "type": "integer"
                 }
             }
         },

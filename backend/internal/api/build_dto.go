@@ -102,6 +102,10 @@ type BuildArtifactsEnvelope struct {
 	Data BuildArtifactsResponse `json:"data"`
 }
 
+type BuildArtifactTriggerDeliveriesEnvelope struct {
+	Data BuildArtifactTriggerDeliveriesResponse `json:"data"`
+}
+
 type StepLogsEnvelope struct {
 	Data StepLogsResponse `json:"data"`
 }
@@ -338,4 +342,36 @@ type BuildArtifactResponse struct {
 type BuildArtifactsResponse struct {
 	BuildID   string                  `json:"build_id"`
 	Artifacts []BuildArtifactResponse `json:"artifacts"`
+}
+
+type BuildArtifactTriggerDeliverySummaryResponse struct {
+	DeliveryCount int `json:"delivery_count"`
+	QueuedCount   int `json:"queued_count"`
+	FailedCount   int `json:"failed_count"`
+}
+
+type BuildArtifactTriggerDeliveryResponse struct {
+	DeliveryID        string  `json:"delivery_id"`
+	Status            string  `json:"status"`
+	CreatedAt         string  `json:"created_at"`
+	UpdatedAt         string  `json:"updated_at"`
+	ProducerBuildID   string  `json:"producer_build_id"`
+	ProducerProjectID string  `json:"producer_project_id"`
+	ProducerJobID     string  `json:"producer_job_id"`
+	ArtifactID        string  `json:"artifact_id"`
+	ArtifactPath      string  `json:"artifact_path"`
+	ArtifactName      *string `json:"artifact_name,omitempty"`
+	ArtifactSizeBytes *int64  `json:"artifact_size_bytes,omitempty"`
+	ConsumerJobID     string  `json:"consumer_job_id"`
+	ConsumerJobName   *string `json:"consumer_job_name,omitempty"`
+	DownstreamBuildID *string `json:"downstream_build_id,omitempty"`
+	ErrorMessage      *string `json:"error_message,omitempty"`
+}
+
+type BuildArtifactTriggerDeliveriesResponse struct {
+	BuildID                  string                                      `json:"build_id"`
+	BuildTriggerKind         string                                      `json:"build_trigger_kind"`
+	RecursiveDispatchBlocked bool                                        `json:"recursive_dispatch_blocked"`
+	Summary                  BuildArtifactTriggerDeliverySummaryResponse `json:"summary"`
+	Deliveries               []BuildArtifactTriggerDeliveryResponse      `json:"deliveries"`
 }

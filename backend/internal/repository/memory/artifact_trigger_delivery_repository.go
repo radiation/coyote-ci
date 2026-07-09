@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,6 +58,29 @@ func (r *ArtifactTriggerDeliveryRepository) GetByArtifactIDAndConsumerJobID(_ co
 		return domain.ArtifactTriggerDelivery{}, repository.ErrArtifactTriggerDeliveryNotFound
 	}
 	return r.deliveries[id], nil
+}
+
+func (r *ArtifactTriggerDeliveryRepository) ListByProducerBuildID(_ context.Context, producerBuildID string) ([]domain.ArtifactTriggerDelivery, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	trimmedProducerBuildID := strings.TrimSpace(producerBuildID)
+	out := make([]domain.ArtifactTriggerDelivery, 0)
+	for _, delivery := range r.deliveries {
+		if delivery.ProducerBuildID != trimmedProducerBuildID {
+			continue
+		}
+		out = append(out, delivery)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+
+	return out, nil
 }
 
 func (r *ArtifactTriggerDeliveryRepository) Update(_ context.Context, delivery domain.ArtifactTriggerDelivery) (domain.ArtifactTriggerDelivery, error) {

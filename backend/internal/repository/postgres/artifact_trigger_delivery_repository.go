@@ -69,6 +69,38 @@ func (r *ArtifactTriggerDeliveryRepository) GetByArtifactIDAndConsumerJobID(ctx 
 	return delivery, nil
 }
 
+func (r *ArtifactTriggerDeliveryRepository) ListByProducerBuildID(ctx context.Context, producerBuildID string) (result []domain.ArtifactTriggerDelivery, err error) {
+	const query = `
+		SELECT ` + artifactTriggerDeliveryColumns + `
+		FROM artifact_trigger_deliveries
+		WHERE producer_build_id = $1
+		ORDER BY created_at ASC, id ASC
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, strings.TrimSpace(producerBuildID))
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	result = make([]domain.ArtifactTriggerDelivery, 0)
+	for rows.Next() {
+		delivery, scanErr := scanArtifactTriggerDelivery(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		result = append(result, delivery)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, rowsErr
+	}
+	return result, nil
+}
+
 func (r *ArtifactTriggerDeliveryRepository) Update(ctx context.Context, delivery domain.ArtifactTriggerDelivery) (domain.ArtifactTriggerDelivery, error) {
 	const query = `
 		UPDATE artifact_trigger_deliveries

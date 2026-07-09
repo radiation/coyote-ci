@@ -372,6 +372,7 @@ func TestBuildHandler_HeaderModeAuthorizationAndFiltering(t *testing.T) {
 	}
 
 	h := NewBuildHandler(fixture.buildService)
+	h.SetJobService(fixture.jobService)
 	h.SetAuthorization(auth.ModeHeader, fixture.membershipService)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/builds", bytes.NewBufferString(`{"project_id":"`+fixture.projectViewer.ID+`","steps":[{"name":"build","command":"go","args":["test","./..."]}]}`))
@@ -521,6 +522,7 @@ func TestBuildHandler_RetryJobAuthorizesSourceBuildBeforeMutation(t *testing.T) 
 		t.Fatalf("list builds before retry failed: %v", err)
 	}
 	h := NewBuildHandler(fixture.buildService)
+	h.SetJobService(fixture.jobService)
 	h.SetAuthorization(auth.ModeHeader, fixture.membershipService)
 
 	retryReq := addURLParam(httptest.NewRequest(http.MethodPost, "/builds/jobs/"+failedJob.ID+"/retry", nil), "jobID", failedJob.ID)
@@ -551,6 +553,7 @@ func TestScopedAPITokenRouteEnforcement(t *testing.T) {
 		t.Fatalf("create fixture build failed: %v", err)
 	}
 	h := NewBuildHandler(fixture.buildService)
+	h.SetJobService(fixture.jobService)
 	h.SetAuthorization(auth.ModeHeader, fixture.membershipService)
 	job, err := fixture.jobService.CreateJob(ctx, service.CreateJobInput{
 		ProjectID:     fixture.projectViewer.ID,
@@ -609,6 +612,22 @@ func TestScopedAPITokenRouteEnforcement(t *testing.T) {
 	h.GetBuildArtifacts(artifactRes, artifactReq)
 	if artifactRes.Code != http.StatusForbidden {
 		t.Fatalf("expected missing artifact:read scope status %d, got %d body=%s", http.StatusForbidden, artifactRes.Code, artifactRes.Body.String())
+	}
+
+	artifactTriggersReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/"+build.ID+"/artifact-triggers", nil), build.ID)
+	artifactTriggersReq = withScopedAPIToken(artifactTriggersReq, fixture.viewer, domain.APITokenScopeBuildRead)
+	artifactTriggersRes := httptest.NewRecorder()
+	h.GetBuildArtifactTriggers(artifactTriggersRes, artifactTriggersReq)
+	if artifactTriggersRes.Code != http.StatusOK {
+		t.Fatalf("expected build:read artifact trigger status %d, got %d body=%s", http.StatusOK, artifactTriggersRes.Code, artifactTriggersRes.Body.String())
+	}
+
+	artifactTriggersWrongScopeReq := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/"+build.ID+"/artifact-triggers", nil), build.ID)
+	artifactTriggersWrongScopeReq = withScopedAPIToken(artifactTriggersWrongScopeReq, fixture.viewer, domain.APITokenScopeArtifactRead)
+	artifactTriggersWrongScopeRes := httptest.NewRecorder()
+	h.GetBuildArtifactTriggers(artifactTriggersWrongScopeRes, artifactTriggersWrongScopeReq)
+	if artifactTriggersWrongScopeRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing build:read for artifact triggers status %d, got %d body=%s", http.StatusForbidden, artifactTriggersWrongScopeRes.Code, artifactTriggersWrongScopeRes.Body.String())
 	}
 
 	queueReq := addBuildIDParam(httptest.NewRequest(http.MethodPost, "/builds/"+build.ID+"/queue", nil), build.ID)
@@ -719,12 +738,13 @@ func newHandlerAuthzFixture(t *testing.T) handlerAuthzFixture {
 	now := time.Now().UTC()
 	jobRepo := repositorymemory.NewJobRepository()
 	buildRepo := repositorymemory.NewBuildRepository()
+	deliveryRepo := repositorymemory.NewArtifactTriggerDeliveryRepository()
 	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
 	userRepo := repositorymemory.NewUserRepository()
 	membershipRepo := repositorymemory.NewProjectMembershipRepository(projectRepo, userRepo)
 	buildService := buildsvc.NewBuildService(buildRepo, nil, logs.NewNoopSink())
 	projectService := service.NewProjectService(projectRepo)
-	jobService := service.NewJobService(jobRepo, buildService).WithProjectRepository(projectRepo)
+	jobService := service.NewJobService(jobRepo, buildService).WithProjectRepository(projectRepo).WithArtifactTriggerDeliveryRepository(deliveryRepo)
 	membershipService := service.NewProjectMembershipService(projectRepo, membershipRepo)
 
 	projectViewer, err := projectService.CreateProject(ctx, service.CreateProjectInput{Name: "Platform", Slug: "platform"})
