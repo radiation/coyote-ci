@@ -5,6 +5,8 @@ API_URL="${API_URL:-http://localhost:8080}"
 PROJECT_ID="${PROJECT_ID:-fixtures}"
 FIXTURE_REPO_URL="${FIXTURE_REPO_URL:-https://github.com/radiation/coyote-ci-fixtures.git}"
 FIXTURE_REF="${FIXTURE_REF:-main}"
+TRIGGER_WAIT_TIMEOUT_SECONDS="${TRIGGER_WAIT_TIMEOUT_SECONDS:-120}"
+POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-2}"
 
 SCENARIOS=(
   "success-basic"
@@ -54,6 +56,8 @@ Optional environment variables:
   PROJECT_ID         Default: fixtures
   FIXTURE_REPO_URL   Default: https://github.com/radiation/coyote-ci-fixtures.git
   FIXTURE_REF        Default: main
+  TRIGGER_WAIT_TIMEOUT_SECONDS  Default: 120
+  POLL_INTERVAL_SECONDS         Default: 2
 EOF
 }
 
@@ -112,7 +116,7 @@ wait_for_build_terminal() {
       printf '%s\n' "$status"
       return 0
     fi
-    sleep 2
+    sleep "$POLL_INTERVAL_SECONDS"
   done
 }
 
@@ -131,6 +135,9 @@ wait_for_triggered_build() {
   local job_id="$1"
   local producer_build_id="$2"
   local build_id=""
+  local start_time elapsed_seconds
+
+  start_time=$(date +%s)
 
   while true; do
     build_id=$(lookup_triggered_build_id "$job_id" "$producer_build_id")
@@ -138,7 +145,14 @@ wait_for_triggered_build() {
       printf '%s\n' "$build_id"
       return 0
     fi
-    sleep 2
+
+	elapsed_seconds=$(( $(date +%s) - start_time ))
+	if (( elapsed_seconds >= TRIGGER_WAIT_TIMEOUT_SECONDS )); then
+	  echo "Timed out waiting ${TRIGGER_WAIT_TIMEOUT_SECONDS}s for triggered build for consumer_job_id=${job_id} producer_build_id=${producer_build_id}" >&2
+	  return 1
+	fi
+
+    sleep "$POLL_INTERVAL_SECONDS"
   done
 }
 

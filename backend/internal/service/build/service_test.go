@@ -103,6 +103,7 @@ type fakeBuildRepository struct {
 	steps         []domain.BuildStep
 	createErr     error
 	getErr        error
+	getCalls      int
 	stepsErr      error
 	updateErr     error
 	updateCalls   int
@@ -268,6 +269,7 @@ func (r *fakeBuildRepository) ListQueue(ctx context.Context, _ repository.QueueL
 }
 
 func (r *fakeBuildRepository) GetByID(_ context.Context, _ string) (domain.Build, error) {
+	r.getCalls++
 	if r.getErr != nil {
 		return domain.Build{}, r.getErr
 	}

@@ -304,6 +304,53 @@ func TestCollectAndPersistArtifacts_DispatchFailureDoesNotFailCollection(t *test
 	}
 }
 
+func TestCollectAndPersistArtifacts_FetchesBuildOnceForMultipleDispatches(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	artifactPaths := []string{
+		filepath.Join(workspaceRoot, "dist", "app-a.tgz"),
+		filepath.Join(workspaceRoot, "dist", "app-b.tgz"),
+	}
+	for _, artifactPath := range artifactPaths {
+		if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+			t.Fatalf("mkdir artifact dir: %v", err)
+		}
+		if err := os.WriteFile(artifactPath, []byte("artifact-bytes"), 0o644); err != nil {
+			t.Fatalf("write artifact file: %v", err)
+		}
+	}
+
+	jobID := "job-upstream"
+	buildRepo := &fakeBuildRepository{build: domain.Build{
+		ID:        "build-1",
+		ProjectID: "project-1",
+		JobID:     &jobID,
+		Status:    domain.BuildStatusSuccess,
+		CreatedAt: time.Now().UTC(),
+		Trigger:   domain.BuildTrigger{Kind: domain.BuildTriggerKindManual},
+	}}
+	artifactRepo := &fakeArtifactRepository{}
+	dispatcher := &failingArtifactTriggerDispatcher{}
+	svc := NewBuildService(buildRepo, nil, nil)
+	svc.artifactRepo = artifactRepo
+	svc.artifactCollector = artifactpkg.NewCollector(&fakeArtifactStore{})
+	svc.artifactWorkspaceRoot = workspaceRoot
+	svc.artifactTriggerDispatcher = dispatcher
+
+	collected, err := svc.collectAndPersistArtifacts(context.Background(), "build-1", nil, domain.StorageProviderFilesystem, workspaceRoot, []domain.ArtifactDeclaration{{Path: "dist/app-a.tgz"}, {Path: "dist/app-b.tgz"}}, map[string]struct{}{}, map[string]struct{}{})
+	if err != nil {
+		t.Fatalf("collectAndPersistArtifacts failed: %v", err)
+	}
+	if len(collected) != 2 {
+		t.Fatalf("expected two collected artifact paths, got %+v", collected)
+	}
+	if buildRepo.getCalls != 1 {
+		t.Fatalf("expected one build lookup for dispatch reuse, got %d", buildRepo.getCalls)
+	}
+	if dispatcher.calls != 2 {
+		t.Fatalf("expected dispatch per artifact, got %d", dispatcher.calls)
+	}
+}
+
 func TestStepArtifactDeclarationsFromBuild_UsesResolvedStepOrder(t *testing.T) {
 	yaml := `
 version: 1

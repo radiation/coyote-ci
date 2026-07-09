@@ -502,6 +502,116 @@ func TestJobService_DispatchArtifactTriggers_QueueFailureMarksDeliveryFailed(t *
 	}
 }
 
+func TestJobService_DispatchArtifactTriggers_RetriesFailedDelivery(t *testing.T) {
+	ctx := context.Background()
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	deliveryRepo := memory.NewArtifactTriggerDeliveryRepository()
+	repoDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoDir, ".coyote"), 0o755); err != nil {
+		t.Fatalf("mkdir repo dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".coyote", "pipeline.yml"), []byte("version: 1\nsteps:\n  - name: consume\n    run: echo consume\n"), 0o644); err != nil {
+		t.Fatalf("write pipeline: %v", err)
+	}
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService).WithArtifactTriggerDeliveryRepository(deliveryRepo)
+
+	now := time.Now().UTC()
+	pipelinePath := ".coyote/pipeline.yml"
+	producerJob, err := jobRepo.Create(ctx, domain.Job{
+		ID:            "job-upstream",
+		ProjectID:     "project-1",
+		Name:          "upstream",
+		Priority:      5,
+		RepositoryURL: "https://github.com/example/repo.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: build\n    run: make build\n",
+		Enabled:       true,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("create producer job failed: %v", err)
+	}
+	consumerJob, err := jobRepo.Create(ctx, domain.Job{
+		ID:            "job-downstream",
+		ProjectID:     "project-1",
+		Name:          "downstream",
+		Priority:      5,
+		RepositoryURL: "https://github.com/example/repo.git",
+		DefaultRef:    "main",
+		PipelinePath:  &pipelinePath,
+		ArtifactTriggers: []domain.JobArtifactTrigger{{
+			ProducerJobID: producerJob.ID,
+			Path:          "dist/app.tgz",
+		}},
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create consumer job failed: %v", err)
+	}
+
+	producerBuild, err := buildRepo.CreateQueuedBuild(ctx, domain.Build{
+		ID:        "build-upstream",
+		ProjectID: "project-1",
+		JobID:     &producerJob.ID,
+		Status:    domain.BuildStatusQueued,
+		CreatedAt: now,
+		Trigger:   domain.BuildTrigger{Kind: domain.BuildTriggerKindManual},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create producer build failed: %v", err)
+	}
+
+	artifact := domain.BuildArtifact{ID: "artifact-1", BuildID: producerBuild.ID, LogicalPath: "dist/app.tgz", CreatedAt: now}
+	firstDispatchErr := jobService.DispatchArtifactTriggers(ctx, producerBuild, artifact)
+	if !errors.Is(firstDispatchErr, buildsvc.ErrRepoFetcherNotConfigured) {
+		t.Fatalf("expected repo fetcher error on first dispatch, got %v", firstDispatchErr)
+	}
+
+	failedDelivery, err := deliveryRepo.GetByArtifactIDAndConsumerJobID(ctx, artifact.ID, consumerJob.ID)
+	if err != nil {
+		t.Fatalf("get failed delivery failed: %v", err)
+	}
+	if failedDelivery.Status != domain.ArtifactTriggerDeliveryStatusFailed {
+		t.Fatalf("expected failed status after first dispatch, got %q", failedDelivery.Status)
+	}
+
+	buildService.SetRepoFetcher(&fakeServiceRepoFetcher{localPath: repoDir, commitSHA: "abc123"})
+	secondDispatchErr := jobService.DispatchArtifactTriggers(ctx, producerBuild, artifact)
+	if secondDispatchErr != nil {
+		t.Fatalf("expected retry dispatch to succeed, got %v", secondDispatchErr)
+	}
+
+	builds, err := buildService.ListBuildsByJobID(ctx, consumerJob.ID)
+	if err != nil {
+		t.Fatalf("list builds by consumer job failed: %v", err)
+	}
+	if len(builds) != 1 {
+		t.Fatalf("expected one downstream build after retry, got %d", len(builds))
+	}
+
+	retriedDelivery, err := deliveryRepo.GetByArtifactIDAndConsumerJobID(ctx, artifact.ID, consumerJob.ID)
+	if err != nil {
+		t.Fatalf("get retried delivery failed: %v", err)
+	}
+	if retriedDelivery.ID != failedDelivery.ID {
+		t.Fatalf("expected retry to reuse delivery %q, got %q", failedDelivery.ID, retriedDelivery.ID)
+	}
+	if retriedDelivery.Status != domain.ArtifactTriggerDeliveryStatusQueued {
+		t.Fatalf("expected queued status after retry, got %q", retriedDelivery.Status)
+	}
+	if retriedDelivery.QueuedBuildID == nil || *retriedDelivery.QueuedBuildID != builds[0].ID {
+		t.Fatalf("expected queued build id %q, got %#v", builds[0].ID, retriedDelivery.QueuedBuildID)
+	}
+	if retriedDelivery.ErrorMessage != nil {
+		t.Fatalf("expected error message cleared after retry, got %#v", retriedDelivery.ErrorMessage)
+	}
+}
+
 func TestJobService_CreateJobAcceptsLegacyProjectSlugInProjectID(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()

@@ -647,9 +647,28 @@ func (s *JobService) dispatchArtifactTriggerToJob(ctx context.Context, producerB
 	created, err := s.artifactTriggerDeliveries.Create(ctx, delivery)
 	if err != nil {
 		if errors.Is(err, repository.ErrArtifactTriggerDeliveryDuplicate) {
-			return nil
+			existing, getErr := s.artifactTriggerDeliveries.GetByArtifactIDAndConsumerJobID(ctx, artifact.ID, consumerJob.ID)
+			if getErr != nil {
+				return getErr
+			}
+			if existing.Status != domain.ArtifactTriggerDeliveryStatusFailed {
+				return nil
+			}
+			existing.ProducerBuildID = producerBuild.ID
+			existing.ProducerProjectID = producerBuild.ProjectID
+			existing.ProducerJobID = producerJobID
+			existing.ArtifactPath = artifact.LogicalPath
+			existing.Status = domain.ArtifactTriggerDeliveryStatusPending
+			existing.QueuedBuildID = nil
+			existing.ErrorMessage = nil
+			existing.UpdatedAt = now
+			created, err = s.artifactTriggerDeliveries.Update(ctx, existing)
+			if err != nil {
+				return err
+			}
+		} else {
+			return err
 		}
-		return err
 	}
 	artifactSizeBytes := artifact.SizeBytes
 
