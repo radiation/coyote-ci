@@ -312,6 +312,37 @@ Expected response fields for repo-backed fixture builds:
 
 For a faster workflow, use `scripts/run-fixtures.sh` to queue all scenarios or a single scenario.
 
+## Real-Network Worker Smoke Scenarios
+
+The default fixture flow above stays lightweight. Opt-in real-network worker validation lives in dedicated scenarios in the fixtures repository and is intentionally separate from normal unit tests.
+
+Available opt-in scenarios include:
+
+- `docker-image-pull-smoke`
+- `maven-dependency-smoke`
+- `npm-install-cache-smoke`
+- `python-pip-install-smoke`
+- `missing-tool-failure-smoke` for intentional failure diagnostics
+
+Queueing helpers:
+
+```bash
+scripts/run-fixtures.sh real-network
+scripts/run-fixtures.sh manual-failure
+```
+
+Preferred CLI-first validation loop after bootstrapping fixture jobs:
+
+```bash
+BUILD_ID=$(coyote job run npm-install-cache-smoke --project fixtures --ref main --yes --json | jq -r '.run.build_id')
+coyote build watch "$BUILD_ID"
+coyote build logs "$BUILD_ID"
+coyote build artifacts "$BUILD_ID"
+coyote build artifacts download "$BUILD_ID" --all --output ./artifacts/npm-install-cache-smoke
+```
+
+Use that same loop for the Maven, Python, and Docker pull scenarios. For cache validation, run `npm-install-cache-smoke` twice and inspect the second build logs for `cache lookup`, `cache restore end`, and `cache save end` lines.
+
 Migrations are applied automatically during `docker compose up` by a one-shot `migrate` service that runs Goose before backend and worker start.
 
 Schema evolution policy:
