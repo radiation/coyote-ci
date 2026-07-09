@@ -438,6 +438,11 @@ func TestClient_BuildArtifactMethods(t *testing.T) {
 				t.Fatalf("expected bearer header, got %q", got)
 			}
 			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","artifacts":[{"id":"artifact-1","build_id":"build-1","name":"report.xml","path":"reports/report.xml","size_bytes":42,"content_type":"application/xml","storage_provider":"filesystem","download_url_path":"/builds/build-1/artifacts/artifact-1/download","created_at":"2026-07-05T00:00:00Z"}]}}`))
+		case "/api/builds/build-1/artifact-triggers":
+			if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+				t.Fatalf("expected bearer header, got %q", got)
+			}
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","build_trigger_kind":"manual","recursive_dispatch_blocked":false,"summary":{"delivery_count":1,"queued_count":1,"failed_count":0},"deliveries":[{"delivery_id":"delivery-1","status":"queued","created_at":"2026-07-05T00:00:01Z","updated_at":"2026-07-05T00:00:02Z","producer_build_id":"build-1","producer_project_id":"project-1","producer_job_id":"job-upstream","artifact_id":"artifact-1","artifact_path":"reports/report.xml","artifact_name":"report.xml","artifact_size_bytes":42,"consumer_job_id":"job-downstream","consumer_job_name":"deploy","downstream_build_id":"build-2"}]}}`))
 		case "/api/builds/build-1/artifacts/artifact-1/download":
 			if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
 				t.Fatalf("expected bearer header, got %q", got)
@@ -461,6 +466,16 @@ func TestClient_BuildArtifactMethods(t *testing.T) {
 	}
 	if artifacts.BuildID != "build-1" || len(artifacts.Artifacts) != 1 || artifacts.Artifacts[0].Path != "reports/report.xml" {
 		t.Fatalf("unexpected artifacts response: %+v", artifacts)
+	}
+	artifactTriggers, triggersErr := client.ListBuildArtifactTriggers(context.Background(), "build-1")
+	if triggersErr != nil {
+		t.Fatalf("list build artifact triggers: %v", triggersErr)
+	}
+	if artifactTriggers.BuildID != "build-1" || artifactTriggers.BuildTriggerKind != "manual" || artifactTriggers.RecursiveDispatchBlocked || artifactTriggers.Summary.DeliveryCount != 1 || len(artifactTriggers.Deliveries) != 1 {
+		t.Fatalf("unexpected artifact trigger response: %+v", artifactTriggers)
+	}
+	if artifactTriggers.Deliveries[0].ConsumerJobName == nil || *artifactTriggers.Deliveries[0].ConsumerJobName != "deploy" {
+		t.Fatalf("unexpected artifact trigger delivery payload: %+v", artifactTriggers.Deliveries[0])
 	}
 
 	var body bytes.Buffer
@@ -510,6 +525,29 @@ func TestClient_ListBuildArtifactsReturnsTypedError(t *testing.T) {
 	}
 
 	_, err = client.ListBuildArtifacts(context.Background(), "build-1")
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected typed api error, got %T", err)
+	}
+	if apiErr.Kind != ErrorKindAuthorization || apiErr.Code != "missing_token_scope" {
+		t.Fatalf("unexpected api error: %+v", apiErr)
+	}
+}
+
+func TestClient_ListBuildArtifactTriggersReturnsTypedError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":"missing_token_scope","message":"api token does not have the required scope: build:read"}}`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = client.ListBuildArtifactTriggers(context.Background(), "build-1")
 	var apiErr *Error
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("expected typed api error, got %T", err)

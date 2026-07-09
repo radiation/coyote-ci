@@ -86,7 +86,8 @@ func TestNewRouter_HealthAndNotFound(t *testing.T) {
 	jobRepo := repositorymemory.NewJobRepository()
 	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
 	h := handler.NewBuildHandler(buildSvc)
-	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithArtifactTriggerDeliveryRepository(repositorymemory.NewArtifactTriggerDeliveryRepository())
+	h.SetJobService(jobSvc)
 	jh := handler.NewJobHandler(jobSvc)
 	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
@@ -650,7 +651,8 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 	jobRepo := repositorymemory.NewJobRepository()
 	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
 	h := handler.NewBuildHandler(buildSvc)
-	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithArtifactTriggerDeliveryRepository(repositorymemory.NewArtifactTriggerDeliveryRepository())
+	h.SetJobService(jobSvc)
 	jh := handler.NewJobHandler(jobSvc)
 	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
 	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
@@ -683,6 +685,7 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 	}{
 		{name: "list builds", method: http.MethodGet, path: "/api/builds/", statusCode: http.StatusOK},
 		{name: "get build", method: http.MethodGet, path: "/api/builds/" + id, statusCode: http.StatusOK},
+		{name: "build artifact triggers", method: http.MethodGet, path: "/api/builds/" + id + "/artifact-triggers", statusCode: http.StatusOK},
 		{name: "build steps", method: http.MethodGet, path: "/api/builds/" + id + "/steps", statusCode: http.StatusOK},
 		{name: "build step logs", method: http.MethodGet, path: "/api/builds/" + id + "/steps/0/logs", statusCode: http.StatusOK},
 		{name: "build logs", method: http.MethodGet, path: "/api/builds/" + id + "/logs", statusCode: http.StatusOK},

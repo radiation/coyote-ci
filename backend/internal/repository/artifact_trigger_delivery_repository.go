@@ -13,5 +13,6 @@ var ErrArtifactTriggerDeliveryDuplicate = errors.New("artifact trigger delivery 
 type ArtifactTriggerDeliveryRepository interface {
 	Create(ctx context.Context, delivery domain.ArtifactTriggerDelivery) (domain.ArtifactTriggerDelivery, error)
 	GetByArtifactIDAndConsumerJobID(ctx context.Context, artifactID string, consumerJobID string) (domain.ArtifactTriggerDelivery, error)
+	ListByProducerBuildID(ctx context.Context, producerBuildID string) ([]domain.ArtifactTriggerDelivery, error)
 	Update(ctx context.Context, delivery domain.ArtifactTriggerDelivery) (domain.ArtifactTriggerDelivery, error)
 }

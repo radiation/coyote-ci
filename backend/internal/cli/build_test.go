@@ -223,6 +223,47 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 	if retryPayload.Retried.SourceBuildID != "build-1" || retryPayload.Retried.BuildID != "build-2" || !strings.Contains(retryPayload.Retried.WebURL, "/base/builds/build-2") {
 		t.Fatalf("unexpected retry payload: %+v", retryPayload)
 	}
+
+	artifactTriggersPayload := makeBuildArtifactTriggerDeliveriesPayload("build-1", api.BuildArtifactTriggerDeliveriesResponse{
+		BuildID:                  "build-1",
+		BuildTriggerKind:         "manual",
+		RecursiveDispatchBlocked: false,
+		Summary:                  api.BuildArtifactTriggerDeliverySummaryResponse{DeliveryCount: 2, QueuedCount: 1, FailedCount: 1},
+		Deliveries: []api.BuildArtifactTriggerDeliveryResponse{
+			{DeliveryID: "delivery-1", Status: "queued", ArtifactID: "artifact-1", ArtifactName: stringPtr("report.xml"), ArtifactPath: "reports/report.xml", ConsumerJobID: "job-1", ConsumerJobName: stringPtr("deploy"), DownstreamBuildID: stringPtr("build-2")},
+			{DeliveryID: "delivery-2", Status: "failed", ArtifactID: "artifact-2", ArtifactPath: "docs/summary.txt", ConsumerJobID: "job-2", ErrorMessage: stringPtr("queue failed")},
+		},
+	})
+	if artifactTriggersPayload.Summary.DeliveryCount != 2 || len(artifactTriggersPayload.Deliveries) != 2 || artifactTriggersPayload.Deliveries[0].ConsumerJobName == nil || *artifactTriggersPayload.Deliveries[0].ConsumerJobName != "deploy" {
+		t.Fatalf("unexpected artifact trigger payload: %+v", artifactTriggersPayload)
+	}
+	buf.Reset()
+	if err := writeBuildArtifactTriggersHuman(buf, artifactTriggersPayload); err != nil {
+		t.Fatalf("writeBuildArtifactTriggersHuman failed: %v", err)
+	}
+	artifactTriggersOut := buf.String()
+	for _, want := range []string{"Artifact trigger deliveries for build build-1", "Summary: 2 deliveries, 1 queued, 1 failed", "queued", "report.xml", "deploy", "build-2", "queue failed"} {
+		if !strings.Contains(artifactTriggersOut, want) {
+			t.Fatalf("expected %q in artifact trigger output, got %s", want, artifactTriggersOut)
+		}
+	}
+	buf.Reset()
+	if err := writeBuildArtifactTriggersHuman(buf, buildArtifactTriggerDeliveriesPayload{BuildID: "build-1", BuildTriggerKind: "artifact", RecursiveDispatchBlocked: true, Summary: buildArtifactTriggerSummaryView{}}); err != nil {
+		t.Fatalf("writeBuildArtifactTriggersHuman blocked-empty failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Recursive artifact-trigger dispatch is blocked for artifact-triggered builds.") {
+		t.Fatalf("unexpected blocked-empty output: %s", buf.String())
+	}
+	buf.Reset()
+	if err := writeBuildArtifactTriggersHuman(buf, buildArtifactTriggerDeliveriesPayload{BuildID: "build-1", BuildTriggerKind: "manual", Summary: buildArtifactTriggerSummaryView{}}); err != nil {
+		t.Fatalf("writeBuildArtifactTriggersHuman empty failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "No artifact-trigger deliveries were recorded for this build.") {
+		t.Fatalf("unexpected empty output: %s", buf.String())
+	}
+	if err := writeBuildArtifactTriggersHuman(failWriter{}, artifactTriggersPayload); err == nil {
+		t.Fatal("expected writeBuildArtifactTriggersHuman to surface write errors")
+	}
 	buf.Reset()
 	if err := writeBuildRetryHuman(buf, retryPayload); err != nil {
 		t.Fatalf("writeBuildRetryHuman failed: %v", err)

@@ -305,6 +305,68 @@ definitions:
           $ref: '#/definitions/api.VersionTagResponse'
         type: array
     type: object
+  api.BuildArtifactTriggerDeliveriesEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.BuildArtifactTriggerDeliveriesResponse'
+    type: object
+  api.BuildArtifactTriggerDeliveriesResponse:
+    properties:
+      build_id:
+        type: string
+      build_trigger_kind:
+        type: string
+      deliveries:
+        items:
+          $ref: '#/definitions/api.BuildArtifactTriggerDeliveryResponse'
+        type: array
+      recursive_dispatch_blocked:
+        type: boolean
+      summary:
+        $ref: '#/definitions/api.BuildArtifactTriggerDeliverySummaryResponse'
+    type: object
+  api.BuildArtifactTriggerDeliveryResponse:
+    properties:
+      artifact_id:
+        type: string
+      artifact_name:
+        type: string
+      artifact_path:
+        type: string
+      artifact_size_bytes:
+        type: integer
+      consumer_job_id:
+        type: string
+      consumer_job_name:
+        type: string
+      created_at:
+        type: string
+      delivery_id:
+        type: string
+      downstream_build_id:
+        type: string
+      error_message:
+        type: string
+      producer_build_id:
+        type: string
+      producer_job_id:
+        type: string
+      producer_project_id:
+        type: string
+      status:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  api.BuildArtifactTriggerDeliverySummaryResponse:
+    properties:
+      delivery_count:
+        type: integer
+      failed_count:
+        type: integer
+      queued_count:
+        type: integer
+    type: object
   api.BuildArtifactsEnvelope:
     properties:
       data:
@@ -1931,6 +1993,38 @@ paths:
           schema:
             $ref: '#/definitions/api.ErrorResponse'
       summary: Get build
+      tags:
+      - builds
+  /builds/{buildID}/artifact-triggers:
+    get:
+      description: Returns persisted producer-side artifact trigger delivery records
+        for a build.
+      parameters:
+      - description: Build ID
+        in: path
+        name: buildID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuildArtifactTriggerDeliveriesEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List build artifact trigger deliveries
       tags:
       - builds
   /builds/{buildID}/artifacts:

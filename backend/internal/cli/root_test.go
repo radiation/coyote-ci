@@ -751,6 +751,117 @@ func TestBuildArtifactsBulkDownloadCommand_NoArtifacts(t *testing.T) {
 	}
 }
 
+func TestBuildArtifactTriggersCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-1/artifact-triggers":
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","build_trigger_kind":"manual","recursive_dispatch_blocked":false,"summary":{"delivery_count":2,"queued_count":1,"failed_count":1},"deliveries":[{"delivery_id":"delivery-1","status":"queued","created_at":"2026-07-05T00:00:01Z","updated_at":"2026-07-05T00:00:02Z","producer_build_id":"build-1","producer_project_id":"project-1","producer_job_id":"job-upstream","artifact_id":"artifact-1","artifact_path":"reports/report.xml","artifact_name":"report.xml","artifact_size_bytes":42,"consumer_job_id":"job-deploy","consumer_job_name":"deploy","downstream_build_id":"build-2"},{"delivery_id":"delivery-2","status":"failed","created_at":"2026-07-05T00:00:03Z","updated_at":"2026-07-05T00:00:04Z","producer_build_id":"build-1","producer_project_id":"project-1","producer_job_id":"job-upstream","artifact_id":"artifact-2","artifact_path":"docs/summary.txt","consumer_job_id":"job-docs","error_message":"queue failed"}]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifact-triggers", "build-1"}}); code != 0 {
+		t.Fatalf("build artifact-triggers exit code %d stderr=%s", code, stderr.String())
+	}
+	for _, want := range []string{"Artifact trigger deliveries for build build-1", "Summary: 2 deliveries, 1 queued, 1 failed", "report.xml", "deploy", "build-2", "queue failed"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected %q in human output, got %s", want, stdout.String())
+		}
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifact-triggers", "build-1", "--json"}}); code != 0 {
+		t.Fatalf("build artifact-triggers json exit code %d stderr=%s", code, stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode build artifact triggers json: %v", err)
+	}
+	if payload["build_id"] != "build-1" || payload["build_trigger_kind"] != "manual" || payload["recursive_dispatch_blocked"] != false {
+		t.Fatalf("unexpected artifact trigger payload: %+v", payload)
+	}
+	summary, ok := payload["summary"].(map[string]any)
+	if !ok || summary["delivery_count"] != float64(2) || summary["queued_count"] != float64(1) || summary["failed_count"] != float64(1) {
+		t.Fatalf("unexpected artifact trigger summary: %+v", payload)
+	}
+	deliveries, ok := payload["deliveries"].([]any)
+	if !ok || len(deliveries) != 2 {
+		t.Fatalf("unexpected artifact trigger deliveries: %+v", payload)
+	}
+	first, ok := deliveries[0].(map[string]any)
+	if !ok || first["consumer_job_name"] != "deploy" || first["artifact_name"] != "report.xml" {
+		t.Fatalf("unexpected first artifact trigger delivery: %+v", first)
+	}
+	if strings.Contains(stdout.String(), "Artifact trigger deliveries for build") {
+		t.Fatalf("unexpected human prose in artifact trigger JSON: %s", stdout.String())
+	}
+}
+
+func TestBuildArtifactTriggersCommand_EmptyStates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-blocked/artifact-triggers":
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-blocked","build_trigger_kind":"artifact","recursive_dispatch_blocked":true,"summary":{"delivery_count":0,"queued_count":0,"failed_count":0},"deliveries":[]}}`))
+		case "/api/builds/build-empty/artifact-triggers":
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-empty","build_trigger_kind":"manual","recursive_dispatch_blocked":false,"summary":{"delivery_count":0,"queued_count":0,"failed_count":0},"deliveries":[]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{
+		CurrentContext: "local",
+		Contexts: map[string]config.Context{
+			"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifact-triggers", "build-blocked"}}); code != 0 {
+		t.Fatalf("build artifact-triggers blocked exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Recursive artifact-trigger dispatch is blocked for artifact-triggered builds.") {
+		t.Fatalf("unexpected blocked output: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifact-triggers", "build-empty"}}); code != 0 {
+		t.Fatalf("build artifact-triggers empty exit code %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "No artifact-trigger deliveries were recorded for this build.") {
+		t.Fatalf("unexpected empty output: %s", stdout.String())
+	}
+}
+
 func TestBuildArtifactsBulkDownloadMidFailureDoesNotEmitPartialJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.String() {

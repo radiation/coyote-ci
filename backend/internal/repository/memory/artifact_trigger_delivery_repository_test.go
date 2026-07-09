@@ -68,4 +68,48 @@ func TestArtifactTriggerDeliveryRepository_CreateDuplicateGetAndUpdate(t *testin
 	if !errors.Is(err, repository.ErrArtifactTriggerDeliveryNotFound) {
 		t.Fatalf("expected update not found, got %v", err)
 	}
+
+	other, err := repo.Create(context.Background(), domain.ArtifactTriggerDelivery{
+		ArtifactID:        "artifact-2",
+		ConsumerJobID:     "job-2",
+		ProducerBuildID:   "build-1",
+		ProducerProjectID: "project-1",
+		ProducerJobID:     "producer-1",
+		ArtifactPath:      "dist/docs.tgz",
+		Status:            domain.ArtifactTriggerDeliveryStatusFailed,
+	})
+	if err != nil {
+		t.Fatalf("create second delivery failed: %v", err)
+	}
+	third, err := repo.Create(context.Background(), domain.ArtifactTriggerDelivery{
+		ArtifactID:        "artifact-3",
+		ConsumerJobID:     "job-3",
+		ProducerBuildID:   "build-2",
+		ProducerProjectID: "project-1",
+		ProducerJobID:     "producer-1",
+		ArtifactPath:      "dist/other.tgz",
+		Status:            domain.ArtifactTriggerDeliveryStatusQueued,
+	})
+	if err != nil {
+		t.Fatalf("create third delivery failed: %v", err)
+	}
+
+	deliveries, err := repo.ListByProducerBuildID(context.Background(), "build-1")
+	if err != nil {
+		t.Fatalf("list by producer build failed: %v", err)
+	}
+	if len(deliveries) != 2 {
+		t.Fatalf("expected 2 deliveries for build-1, got %d", len(deliveries))
+	}
+	if deliveries[0].ID != created.ID || deliveries[1].ID != other.ID {
+		t.Fatalf("unexpected delivery order: %+v", deliveries)
+	}
+
+	deliveries, err = repo.ListByProducerBuildID(context.Background(), "build-2")
+	if err != nil {
+		t.Fatalf("list by second producer build failed: %v", err)
+	}
+	if len(deliveries) != 1 || deliveries[0].ID != third.ID {
+		t.Fatalf("unexpected build-2 deliveries: %+v", deliveries)
+	}
 }

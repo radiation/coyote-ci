@@ -94,6 +94,20 @@ func TestArtifactTriggerDeliveryRepository_CreateGetAndUpdate(t *testing.T) {
 		t.Fatalf("expected update not found, got %v", err)
 	}
 
+	mock.ExpectQuery("SELECT .*FROM artifact_trigger_deliveries").WithArgs("build-1").WillReturnRows(sqlmock.NewRows(row).
+		AddRow("delivery-1", "artifact-1", "job-1", "build-1", "project-1", "producer-1", "dist/app.tgz", queuedBuildID, nil, "queued", now, now).
+		AddRow("delivery-2", "artifact-2", "job-2", "build-1", "project-1", "producer-1", "dist/docs.tgz", nil, errorMessage, "failed", now.Add(time.Second), now.Add(time.Second)))
+	deliveries, err := repo.ListByProducerBuildID(context.Background(), " build-1 ")
+	if err != nil {
+		t.Fatalf("list by producer build failed: %v", err)
+	}
+	if len(deliveries) != 2 {
+		t.Fatalf("expected 2 deliveries, got %d", len(deliveries))
+	}
+	if deliveries[0].ID != "delivery-1" || deliveries[1].ID != "delivery-2" {
+		t.Fatalf("unexpected listed deliveries: %+v", deliveries)
+	}
+
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
