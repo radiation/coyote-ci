@@ -14,12 +14,25 @@ SCENARIOS=(
   "multi-step-failure"
 )
 
+REAL_NETWORK_SCENARIOS=(
+  "docker-image-pull-smoke"
+  "maven-dependency-smoke"
+  "npm-install-cache-smoke"
+  "python-pip-install-smoke"
+)
+
+MANUAL_FAILURE_SCENARIOS=(
+  "missing-tool-failure-smoke"
+)
+
 usage() {
   cat <<'EOF'
 Queue Coyote CI fixture scenarios against one repository with different pipeline_path values.
 
 Usage:
   scripts/run-fixtures.sh all
+  scripts/run-fixtures.sh real-network
+  scripts/run-fixtures.sh manual-failure
   scripts/run-fixtures.sh <scenario>
 
 Scenarios:
@@ -28,6 +41,11 @@ Scenarios:
   logs-long-running
   artifacts-basic
   multi-step-failure
+  docker-image-pull-smoke
+  maven-dependency-smoke
+  npm-install-cache-smoke
+  python-pip-install-smoke
+  missing-tool-failure-smoke
 
 Optional environment variables:
   API_URL            Default: http://localhost:8080
@@ -41,6 +59,16 @@ scenario_exists() {
   local wanted="$1"
   local s
   for s in "${SCENARIOS[@]}"; do
+    if [[ "$s" == "$wanted" ]]; then
+      return 0
+    fi
+  done
+  for s in "${REAL_NETWORK_SCENARIOS[@]}"; do
+    if [[ "$s" == "$wanted" ]]; then
+      return 0
+    fi
+  done
+  for s in "${MANUAL_FAILURE_SCENARIOS[@]}"; do
     if [[ "$s" == "$wanted" ]]; then
       return 0
     fi
@@ -101,6 +129,22 @@ main() {
   if [[ "$target" == "all" ]]; then
     local s
     for s in "${SCENARIOS[@]}"; do
+      queue_one "$s"
+    done
+    return 0
+  fi
+
+  if [[ "$target" == "real-network" ]]; then
+    local s
+    for s in "${REAL_NETWORK_SCENARIOS[@]}"; do
+      queue_one "$s"
+    done
+    return 0
+  fi
+
+  if [[ "$target" == "manual-failure" ]]; then
+    local s
+    for s in "${MANUAL_FAILURE_SCENARIOS[@]}"; do
       queue_one "$s"
     done
     return 0
