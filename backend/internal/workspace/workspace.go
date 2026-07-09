@@ -85,19 +85,28 @@ func ResolveVisiblePath(workspaceRoot string, relativePath string) string {
 	if trimmedRoot == "" {
 		return ""
 	}
+	cleanRoot := filepath.Clean(trimmedRoot)
+	containerRoot := path.Clean(trimmedRoot)
 	trimmedRel := strings.TrimSpace(relativePath)
 	if trimmedRel == "" || trimmedRel == "." {
 		if isContainerWorkspaceRoot(trimmedRoot) {
-			return path.Clean(trimmedRoot)
+			return containerRoot
 		}
-		return filepath.Clean(trimmedRoot)
+		return cleanRoot
+	}
+
+	if err := (Workspace{}).ValidateArtifactPath(trimmedRel); err != nil {
+		if isContainerWorkspaceRoot(trimmedRoot) {
+			return containerRoot
+		}
+		return cleanRoot
 	}
 
 	cleanRel := path.Clean(strings.ReplaceAll(trimmedRel, "\\", "/"))
 	if isContainerWorkspaceRoot(trimmedRoot) {
 		return path.Join(trimmedRoot, cleanRel)
 	}
-	return filepath.Join(filepath.Clean(trimmedRoot), filepath.FromSlash(cleanRel))
+	return filepath.Join(cleanRoot, filepath.FromSlash(cleanRel))
 }
 
 func ResolveVisibleWorkingDir(workspaceRoot string, requested string) string {

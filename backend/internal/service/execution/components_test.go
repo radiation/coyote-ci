@@ -296,6 +296,44 @@ func TestExecutionLogOutput_ClassifiesFailuresAndWritesOutput(t *testing.T) {
 	}
 }
 
+func TestExecutionLogManager_EmitExecutionStart_UsesWorkspaceEnvAndFallback(t *testing.T) {
+	logSink := &recordingLogSink{}
+	executionContext := testExecutionContext(nil)
+	executionContext.Build.StartedAt = nil
+	executionContext.ExecutionRequest.Env = map[string]string{runner.EnvWorkspace: "/tmp/build-1"}
+	logManager := NewExecutionLogManager(logSink, executionContext)
+	logManager.EmitExecutionStart(context.Background())
+	if len(logSink.lines) == 0 || logSink.lines[2] != "Workspace: /tmp/build-1" {
+		t.Fatalf("expected workspace line from env, got %#v", logSink.lines)
+	}
+
+	fallbackSink := &recordingLogSink{}
+	fallbackContext := testExecutionContext(nil)
+	fallbackContext.Build.StartedAt = nil
+	fallbackContext.ExecutionRequest.Env = map[string]string{}
+	NewExecutionLogManager(fallbackSink, fallbackContext).EmitExecutionStart(context.Background())
+	if len(fallbackSink.lines) == 0 || fallbackSink.lines[2] != "Workspace: /workspace" {
+		t.Fatalf("expected fallback workspace line, got %#v", fallbackSink.lines)
+	}
+}
+
+func TestExecutionLogManager_PersistRunnerChunk_NoAppenderAndApplyBufferedErrors(t *testing.T) {
+	ctx := context.Background()
+	logSink := &recordingLogSink{writeErr: errors.New("write failed")}
+	executionContext := testExecutionContext(nil)
+	executionContext.ExecutionRequest.Env = map[string]string{}
+	manager := NewExecutionLogManager(logSink, executionContext)
+	if err := manager.PersistRunnerChunk(ctx, runner.StepOutputChunk{Stream: runner.StepOutputStreamStdout, ChunkText: "output"}); err != nil {
+		t.Fatalf("expected no error when no appender is present, got %v", err)
+	}
+	manager.EmitSystemLine(ctx, "system line")
+	report := &StepCompletionReport{}
+	manager.ApplyBufferedErrors(report)
+	if !errors.Is(report.SideEffectErr, logSink.writeErr) {
+		t.Fatalf("expected buffered visibility error in report, got %v", report.SideEffectErr)
+	}
+}
+
 func TestSourceSpecFromBuild_PrefersSnapshotAndFallsBackToLegacyFields(t *testing.T) {
 	sourceRef := " main "
 	sourceCommit := " abc123 "

@@ -103,6 +103,34 @@ func TestTriggerArtifactRelativePath(t *testing.T) {
 	}
 }
 
+func TestResolveVisiblePath(t *testing.T) {
+	if got := ResolveVisiblePath("", "dist/app.tgz"); got != "" {
+		t.Fatalf("expected empty path when workspace root is empty, got %q", got)
+	}
+	if got := ResolveVisiblePath("/workspace", ""); got != "/workspace" {
+		t.Fatalf("expected container workspace root, got %q", got)
+	}
+	if got := ResolveVisiblePath("/workspace", ".coyote/trigger-artifacts/dist/app.tgz"); got != "/workspace/.coyote/trigger-artifacts/dist/app.tgz" {
+		t.Fatalf("unexpected container visible path %q", got)
+	}
+	root := t.TempDir()
+	if got := ResolveVisiblePath(root, ".coyote/trigger-artifacts/dist/app.tgz"); got != filepath.Join(root, ".coyote", "trigger-artifacts", "dist", "app.tgz") {
+		t.Fatalf("unexpected local visible path %q", got)
+	}
+	if got := ResolveVisiblePath("/workspace", "../etc"); got != "/workspace" {
+		t.Fatalf("expected container traversal to clamp to workspace root, got %q", got)
+	}
+	if got := ResolveVisiblePath(root, "../etc"); got != filepath.Clean(root) {
+		t.Fatalf("expected local traversal to clamp to workspace root, got %q", got)
+	}
+	if got := ResolveVisiblePath("/workspace", "/etc/passwd"); got != "/workspace" {
+		t.Fatalf("expected container absolute path to clamp to workspace root, got %q", got)
+	}
+	if got := ResolveVisiblePath(root, `C:\\temp\\bad`); got != filepath.Clean(root) {
+		t.Fatalf("expected windows-style path to clamp to workspace root, got %q", got)
+	}
+}
+
 func TestResolveVisibleWorkingDir_LocalWorkspace(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	resolved := ResolveVisibleWorkingDir(workspaceRoot, "backend")
@@ -113,5 +141,22 @@ func TestResolveVisibleWorkingDir_LocalWorkspace(t *testing.T) {
 
 	if got := ResolveVisibleWorkingDir(workspaceRoot, "../../etc"); got != workspaceRoot {
 		t.Fatalf("expected escape attempt to clamp to workspace root, got %q", got)
+	}
+}
+
+func TestResolveVisibleWorkingDir_ContainerAndAbsoluteLocal(t *testing.T) {
+	if got := ResolveVisibleWorkingDir("", "backend"); got != "/workspace/backend" {
+		t.Fatalf("expected default container workspace path, got %q", got)
+	}
+	if got := ResolveVisibleWorkingDir("/workspace", "/etc"); got != "/workspace" {
+		t.Fatalf("expected container absolute path outside workspace to clamp, got %q", got)
+	}
+	workspaceRoot := t.TempDir()
+	inside := filepath.Join(workspaceRoot, "backend")
+	if got := ResolveVisibleWorkingDir(workspaceRoot, inside); got != inside {
+		t.Fatalf("expected local absolute path inside workspace, got %q", got)
+	}
+	if got := ResolveVisibleWorkingDir(workspaceRoot, `C:\\temp\\bad`); got != workspaceRoot {
+		t.Fatalf("expected Windows-style path to clamp to workspace root, got %q", got)
 	}
 }

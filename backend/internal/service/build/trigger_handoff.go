@@ -73,26 +73,36 @@ func (s *BuildService) prepareTriggerArtifactHandoff(ctx context.Context, build 
 		_ = reader.Close()
 	}()
 	if strings.TrimSpace(meta.LogicalPath) != artifactPath {
-		return fmt.Errorf("trigger artifact path mismatch: expected %s, got %s", artifactPath, strings.TrimSpace(meta.LogicalPath))
+		return fmt.Errorf("trigger artifact path mismatch: expected %q, got %q", artifactPath, strings.TrimSpace(meta.LogicalPath))
 	}
 
 	expectedChecksum := readOptionalString(trigger.ArtifactChecksumSHA256)
 	if expectedChecksum == "" {
 		expectedChecksum = readOptionalString(meta.ChecksumSHA256)
 	}
-	if err := copyTriggerArtifactToWorkspace(destinationPath, reader, expectedChecksum); err != nil {
+	if err := copyTriggerArtifactToWorkspace(buildWorkspace.HostRoot, destinationPath, reader, expectedChecksum); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func copyTriggerArtifactToWorkspace(destinationPath string, src io.Reader, expectedChecksum string) error {
-	if mkdirErr := os.MkdirAll(filepath.Dir(destinationPath), 0o755); mkdirErr != nil {
+func copyTriggerArtifactToWorkspace(workspaceRoot string, destinationPath string, src io.Reader, expectedChecksum string) error {
+	if mkdirErr := os.MkdirAll(workspaceRoot, 0o755); mkdirErr != nil {
+		return fmt.Errorf("creating build workspace root: %w", mkdirErr)
+	}
+	destinationDir := filepath.Dir(destinationPath)
+	if err := ensurePathUsesWorkspaceRoot(workspaceRoot, destinationDir); err != nil {
+		return err
+	}
+	if mkdirErr := os.MkdirAll(destinationDir, 0o755); mkdirErr != nil {
 		return fmt.Errorf("creating trigger artifact directory: %w", mkdirErr)
 	}
+	if err := ensurePathUsesWorkspaceRoot(workspaceRoot, destinationDir); err != nil {
+		return err
+	}
 
-	tmpFile, err := os.CreateTemp(filepath.Dir(destinationPath), ".trigger-artifact-*")
+	tmpFile, err := os.CreateTemp(destinationDir, ".trigger-artifact-*")
 	if err != nil {
 		return fmt.Errorf("creating trigger artifact temp file: %w", err)
 	}
@@ -125,4 +135,51 @@ func copyTriggerArtifactToWorkspace(destinationPath string, src io.Reader, expec
 		return fmt.Errorf("moving trigger artifact into place: %w", err)
 	}
 	return nil
+}
+
+func ensurePathUsesWorkspaceRoot(workspaceRoot string, targetPath string) error {
+	trimmedRoot := strings.TrimSpace(workspaceRoot)
+	if trimmedRoot == "" {
+		return fmt.Errorf("workspace root is required")
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(filepath.Clean(trimmedRoot))
+	if err != nil {
+		return fmt.Errorf("resolve workspace root: %w", err)
+	}
+
+	resolvedTarget, err := resolveExistingPathWithinTarget(targetPath)
+	if err != nil {
+		return err
+	}
+
+	rel, err := filepath.Rel(resolvedRoot, resolvedTarget)
+	if err != nil {
+		return fmt.Errorf("compare trigger artifact path against workspace root: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("trigger artifact handoff path escapes workspace root")
+	}
+	return nil
+}
+
+func resolveExistingPathWithinTarget(targetPath string) (string, error) {
+	current := filepath.Clean(targetPath)
+	for {
+		_, statErr := os.Lstat(current)
+		if statErr == nil {
+			resolvedPath, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return "", fmt.Errorf("resolve trigger artifact path: %w", err)
+			}
+			return resolvedPath, nil
+		}
+		if !os.IsNotExist(statErr) {
+			return "", fmt.Errorf("stat trigger artifact path: %w", statErr)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("resolve trigger artifact path: no existing ancestor for %q", targetPath)
+		}
+		current = parent
+	}
 }

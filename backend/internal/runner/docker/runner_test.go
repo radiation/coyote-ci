@@ -405,6 +405,24 @@ func TestMergeStepEnvironment_DerivesTriggerArtifactVisiblePaths(t *testing.T) {
 	}
 }
 
+func TestRunner_StepVisibleWorkspaceRoot(t *testing.T) {
+	r := New(Options{})
+	if got, ok := r.StepVisibleWorkspaceRoot("build-1"); !ok || got != "/workspace" {
+		t.Fatalf("expected docker-visible workspace root, got %q ok=%v", got, ok)
+	}
+	if got, ok := r.StepVisibleWorkspaceRoot(" "); ok || got != "" {
+		t.Fatalf("expected blank build id to fail, got %q ok=%v", got, ok)
+	}
+}
+
+func TestAugmentTriggerArtifactEnvironment_NoRelativePathNoop(t *testing.T) {
+	env := map[string]string{}
+	augmentTriggerArtifactEnvironment(env, "/workspace")
+	if len(env) != 0 {
+		t.Fatalf("expected noop env augmentation, got %#v", env)
+	}
+}
+
 func TestResolveContainerWorkingDirForStep_SymlinkEscapeFallsBackToWorkspaceRoot(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	outsideRoot := t.TempDir()
