@@ -481,11 +481,6 @@ func downloadBuildArtifactToPath(ctx context.Context, client *apiclient.Client, 
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return 0, err
 	}
-	if !force {
-		if _, err := os.Stat(trimmedDestination); err == nil {
-			return 0, fmt.Errorf("output file already exists: %s (use --force to overwrite)", trimmedDestination)
-		}
-	}
 
 	tempFile, err := os.CreateTemp(parentDir, ".coyote-artifact-*")
 	if err != nil {
