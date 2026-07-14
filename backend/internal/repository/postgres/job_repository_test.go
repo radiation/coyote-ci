@@ -26,7 +26,8 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	pipelinePath := ".coyote/pipeline.yml"
 	branchAllowlistJSON := ` ["main"] `
 	tagAllowlistJSON := ` [] `
-	artifactTriggersJSON := ` [] `
+	artifactTriggerPath := "dist/report.xml"
+	artifactProducerJobID := "job-upstream"
 
 	job := domain.Job{
 		ID:              "job-1",
@@ -39,12 +40,17 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 		PushBranch:      &pushBranch,
 		TriggerMode:     domain.JobTriggerModeBranches,
 		BranchAllowlist: []string{"main"},
-		PipelineYAML:    "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
-		PipelinePath:    &pipelinePath,
-		Enabled:         true,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ArtifactTriggers: []domain.JobArtifactTrigger{{
+			ProducerJobID: artifactProducerJobID,
+			Path:          artifactTriggerPath,
+		}},
+		PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		PipelinePath: &pipelinePath,
+		Enabled:      true,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
+	artifactTriggersJSON := `[{"ProducerJobID":"` + artifactProducerJobID + `","Path":"` + artifactTriggerPath + `"}]`
 
 	mock.ExpectQuery("INSERT INTO jobs").WillReturnRows(sqlmock.NewRows(row).AddRow(
 		job.ID, job.ProjectID, job.Name, job.Priority, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
@@ -66,6 +72,9 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	}
 	if got.Name != "backend-ci" {
 		t.Fatalf("expected name backend-ci, got %q", got.Name)
+	}
+	if len(got.ArtifactTriggers) != 1 || got.ArtifactTriggers[0].ProducerJobID != artifactProducerJobID || got.ArtifactTriggers[0].Path != artifactTriggerPath {
+		t.Fatalf("expected artifact triggers to round-trip, got %+v", got.ArtifactTriggers)
 	}
 
 	mock.ExpectQuery("SELECT id, project_id, name, priority, repository_url").WillReturnRows(sqlmock.NewRows(row).AddRow(

@@ -324,7 +324,7 @@ func normalizeRepositoryURLForMatch(value string) string {
 
 func (r *JobRepository) GetByID(ctx context.Context, id string) (domain.Job, error) {
 	const query = `
-		SELECT id, project_id, name, priority, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		SELECT id, project_id, name, priority, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		WHERE id = $1
 	`
