@@ -212,6 +212,7 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 				r.Post("/{buildID}/fail", buildHandler.FailBuild)
 				r.Post("/{buildID}/cancel", buildHandler.CancelBuild)
 			})
+			r.Post("/artifact-trigger-deliveries/{deliveryID}/retry", buildHandler.RetryArtifactTriggerDelivery)
 
 			r.Route("/jobs", func(r chi.Router) {
 				r.Post("/", jobHandler.CreateJob)

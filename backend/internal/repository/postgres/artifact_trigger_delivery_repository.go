@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -19,6 +20,35 @@ func NewArtifactTriggerDeliveryRepository(db *sql.DB) *ArtifactTriggerDeliveryRe
 }
 
 const artifactTriggerDeliveryColumns = `id, artifact_id, consumer_job_id, producer_build_id, producer_project_id, producer_job_id, artifact_path, queued_build_id, error_message, status, created_at, updated_at`
+
+func (r *ArtifactTriggerDeliveryRepository) ClaimFailedForRetry(ctx context.Context, id string, updatedAt time.Time) (domain.ArtifactTriggerDelivery, error) {
+	const query = `
+		UPDATE artifact_trigger_deliveries
+		SET queued_build_id = NULL,
+			error_message = NULL,
+			status = $2,
+			updated_at = COALESCE($3, NOW())
+		WHERE id = $1 AND status = $4 AND queued_build_id IS NULL
+		RETURNING ` + artifactTriggerDeliveryColumns + `
+	`
+
+	claimed, err := scanArtifactTriggerDelivery(r.db.QueryRowContext(ctx, query,
+		strings.TrimSpace(id),
+		string(domain.ArtifactTriggerDeliveryStatusPending),
+		nullableTime(updatedAt),
+		string(domain.ArtifactTriggerDeliveryStatusFailed),
+	))
+	if err == nil {
+		return claimed, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return domain.ArtifactTriggerDelivery{}, err
+	}
+	if _, getErr := r.GetByID(ctx, id); getErr != nil {
+		return domain.ArtifactTriggerDelivery{}, getErr
+	}
+	return domain.ArtifactTriggerDelivery{}, repository.ErrArtifactTriggerDeliveryRetryNotClaimable
+}
 
 func (r *ArtifactTriggerDeliveryRepository) Create(ctx context.Context, delivery domain.ArtifactTriggerDelivery) (domain.ArtifactTriggerDelivery, error) {
 	const query = `
@@ -50,6 +80,23 @@ func (r *ArtifactTriggerDeliveryRepository) Create(ctx context.Context, delivery
 		return domain.ArtifactTriggerDelivery{}, err
 	}
 	return created, nil
+}
+
+func (r *ArtifactTriggerDeliveryRepository) GetByID(ctx context.Context, id string) (domain.ArtifactTriggerDelivery, error) {
+	const query = `
+		SELECT ` + artifactTriggerDeliveryColumns + `
+		FROM artifact_trigger_deliveries
+		WHERE id = $1
+	`
+
+	delivery, err := scanArtifactTriggerDelivery(r.db.QueryRowContext(ctx, query, strings.TrimSpace(id)))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.ArtifactTriggerDelivery{}, repository.ErrArtifactTriggerDeliveryNotFound
+		}
+		return domain.ArtifactTriggerDelivery{}, err
+	}
+	return delivery, nil
 }
 
 func (r *ArtifactTriggerDeliveryRepository) GetByArtifactIDAndConsumerJobID(ctx context.Context, artifactID string, consumerJobID string) (domain.ArtifactTriggerDelivery, error) {

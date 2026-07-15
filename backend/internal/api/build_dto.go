@@ -106,6 +106,10 @@ type BuildArtifactTriggerDeliveriesEnvelope struct {
 	Data BuildArtifactTriggerDeliveriesResponse `json:"data"`
 }
 
+type BuildArtifactTriggerDeliveryRetryEnvelope struct {
+	Data BuildArtifactTriggerDeliveryRetryResponse `json:"data"`
+}
+
 type StepLogsEnvelope struct {
 	Data StepLogsResponse `json:"data"`
 }
@@ -374,4 +378,10 @@ type BuildArtifactTriggerDeliveriesResponse struct {
 	RecursiveDispatchBlocked bool                                        `json:"recursive_dispatch_blocked"`
 	Summary                  BuildArtifactTriggerDeliverySummaryResponse `json:"summary"`
 	Deliveries               []BuildArtifactTriggerDeliveryResponse      `json:"deliveries"`
+}
+
+type BuildArtifactTriggerDeliveryRetryResponse struct {
+	Result   string                               `json:"result"`
+	Message  string                               `json:"message,omitempty"`
+	Delivery BuildArtifactTriggerDeliveryResponse `json:"delivery"`
 }

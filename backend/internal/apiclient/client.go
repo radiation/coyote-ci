@@ -375,6 +375,14 @@ func (c *Client) ListBuildArtifactTriggers(ctx context.Context, buildID string) 
 	return envelope.Data, nil
 }
 
+func (c *Client) RetryArtifactTriggerDelivery(ctx context.Context, deliveryID string) (api.BuildArtifactTriggerDeliveryRetryResponse, error) {
+	var envelope api.BuildArtifactTriggerDeliveryRetryEnvelope
+	if err := c.doJSON(ctx, http.MethodPost, artifactTriggerDeliveryResourcePath(deliveryID, "/retry"), nil, &envelope); err != nil {
+		return api.BuildArtifactTriggerDeliveryRetryResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
 func (c *Client) DownloadBuildArtifact(ctx context.Context, buildID string, artifactID string, writer io.Writer) error {
 	requestURL, err := resolveRequestURL(c.baseURL, buildArtifactDownloadPath(buildID, artifactID))
 	if err != nil {
@@ -548,6 +556,10 @@ func projectResourcePath(selector string, suffix string) string {
 
 func jobResourcePath(selector string, suffix string) string {
 	return "api/jobs/" + url.PathEscape(strings.TrimSpace(selector)) + suffix
+}
+
+func artifactTriggerDeliveryResourcePath(deliveryID string, suffix string) string {
+	return "api/artifact-trigger-deliveries/" + url.PathEscape(strings.TrimSpace(deliveryID)) + suffix
 }
 
 func looksLikeDirectJobID(selector string) bool {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,73 @@ type fakeServiceRepoFetcher struct {
 	commitSHA string
 	err       error
 	calls     int
+}
+
+type fakeJobServiceArtifactRepo struct {
+	artifactsByBuild map[string][]domain.BuildArtifact
+	listByBuildErr   error
+}
+
+func (r *fakeJobServiceArtifactRepo) Create(_ context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
+	if r.artifactsByBuild == nil {
+		r.artifactsByBuild = map[string][]domain.BuildArtifact{}
+	}
+	r.artifactsByBuild[artifact.BuildID] = append(r.artifactsByBuild[artifact.BuildID], artifact)
+	return artifact, nil
+}
+
+func (r *fakeJobServiceArtifactRepo) ListByBuildID(_ context.Context, buildID string) ([]domain.BuildArtifact, error) {
+	if r.listByBuildErr != nil {
+		return nil, r.listByBuildErr
+	}
+	items := append([]domain.BuildArtifact(nil), r.artifactsByBuild[buildID]...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].CreatedAt.Before(items[j].CreatedAt)
+	})
+	return items, nil
+}
+
+func (r *fakeJobServiceArtifactRepo) Browse(_ context.Context, _ repository.BrowseArtifactsParams) ([]domain.ArtifactBrowseRecord, error) {
+	return nil, nil
+}
+
+func (r *fakeJobServiceArtifactRepo) ListCatalog(_ context.Context, _ repository.ArtifactCatalogParams) ([]domain.ArtifactRecord, error) {
+	return nil, nil
+}
+
+func (r *fakeJobServiceArtifactRepo) GetCatalogByID(_ context.Context, artifactID string) (domain.ArtifactRecord, error) {
+	for buildID, items := range r.artifactsByBuild {
+		for _, item := range items {
+			if item.ID == artifactID {
+				return domain.ArtifactRecord{Artifact: item, Build: domain.Build{ID: buildID}}, nil
+			}
+		}
+	}
+	return domain.ArtifactRecord{}, repository.ErrArtifactNotFound
+}
+
+func (r *fakeJobServiceArtifactRepo) GetByID(_ context.Context, buildID string, artifactID string) (domain.BuildArtifact, error) {
+	for _, item := range r.artifactsByBuild[buildID] {
+		if item.ID == artifactID {
+			return item, nil
+		}
+	}
+	return domain.BuildArtifact{}, repository.ErrArtifactNotFound
+}
+
+func (r *fakeJobServiceArtifactRepo) ListByStepID(_ context.Context, stepID string) ([]domain.BuildArtifact, error) {
+	var out []domain.BuildArtifact
+	for _, items := range r.artifactsByBuild {
+		for _, item := range items {
+			if item.StepID != nil && *item.StepID == stepID {
+				out = append(out, item)
+			}
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeServiceRepoFetcher) Fetch(_ context.Context, _ string, _ string) (string, string, error) {
@@ -618,6 +686,98 @@ func TestJobService_DispatchArtifactTriggers_RetriesFailedDelivery(t *testing.T)
 	}
 	if retriedDelivery.ErrorMessage != nil {
 		t.Fatalf("expected error message cleared after retry, got %#v", retriedDelivery.ErrorMessage)
+	}
+}
+
+func TestJobService_RetryArtifactTriggerDelivery(t *testing.T) {
+	ctx := context.Background()
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	deliveryRepo := memory.NewArtifactTriggerDeliveryRepository()
+	artifactRepo := &fakeJobServiceArtifactRepo{}
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	buildService.SetArtifactPersistence(artifactRepo, nil, "")
+	jobService := NewJobService(jobRepo, buildService).WithArtifactTriggerDeliveryRepository(deliveryRepo)
+
+	now := time.Now().UTC()
+	producerJob, err := jobRepo.Create(ctx, domain.Job{ID: "job-upstream", ProjectID: "project-1", Name: "upstream", Priority: 5, RepositoryURL: "https://github.com/example/repo.git", DefaultRef: "main", PipelineYAML: "version: 1\nsteps:\n  - name: build\n    run: make build\n", Enabled: true, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("create producer job failed: %v", err)
+	}
+	consumerJob, err := jobRepo.Create(ctx, domain.Job{ID: "job-downstream", ProjectID: "project-1", Name: "downstream", Priority: 5, RepositoryURL: "https://github.com/example/repo.git", DefaultRef: "main", PipelineYAML: "version: 1\nsteps:\n  - name: consume\n    run: echo consume\n", Enabled: true, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("create consumer job failed: %v", err)
+	}
+	producerBuild, err := buildRepo.CreateQueuedBuild(ctx, domain.Build{ID: "build-upstream", ProjectID: "project-1", JobID: &producerJob.ID, Status: domain.BuildStatusQueued, CreatedAt: now, Trigger: domain.BuildTrigger{Kind: domain.BuildTriggerKindManual}}, nil)
+	if err != nil {
+		t.Fatalf("create producer build failed: %v", err)
+	}
+	if _, createArtifactErr := artifactRepo.Create(ctx, domain.BuildArtifact{ID: "artifact-1", BuildID: producerBuild.ID, Name: "app.tgz", LogicalPath: "dist/app.tgz", SizeBytes: 42, CreatedAt: now}); createArtifactErr != nil {
+		t.Fatalf("create artifact failed: %v", createArtifactErr)
+	}
+	errorMessage := "queue failed"
+	if _, createFailedDeliveryErr := deliveryRepo.Create(ctx, domain.ArtifactTriggerDelivery{ID: "delivery-1", ArtifactID: "artifact-1", ConsumerJobID: consumerJob.ID, ProducerBuildID: producerBuild.ID, ProducerProjectID: producerBuild.ProjectID, ProducerJobID: producerJob.ID, ArtifactPath: "dist/app.tgz", ErrorMessage: &errorMessage, Status: domain.ArtifactTriggerDeliveryStatusFailed, CreatedAt: now, UpdatedAt: now}); createFailedDeliveryErr != nil {
+		t.Fatalf("create failed delivery failed: %v", createFailedDeliveryErr)
+	}
+
+	result, err := jobService.RetryArtifactTriggerDelivery(ctx, "delivery-1")
+	if err != nil {
+		t.Fatalf("retry artifact trigger delivery failed: %v", err)
+	}
+	if result.Result != "retried" || result.View.Delivery.Status != domain.ArtifactTriggerDeliveryStatusQueued {
+		t.Fatalf("unexpected retry result: %+v", result)
+	}
+	if result.View.Delivery.QueuedBuildID == nil {
+		t.Fatalf("expected queued build id after retry, got %+v", result.View.Delivery)
+	}
+	builds, err := buildService.ListBuildsByJobID(ctx, consumerJob.ID)
+	if err != nil {
+		t.Fatalf("list builds by consumer job failed: %v", err)
+	}
+	if len(builds) != 1 {
+		t.Fatalf("expected one downstream build after retry, got %d", len(builds))
+	}
+
+	if _, createPendingDeliveryErr := deliveryRepo.Create(ctx, domain.ArtifactTriggerDelivery{ID: "delivery-pending", ArtifactID: "artifact-pending", ConsumerJobID: consumerJob.ID, ProducerBuildID: producerBuild.ID, ProducerProjectID: producerBuild.ProjectID, ProducerJobID: producerJob.ID, ArtifactPath: "dist/app.tgz", Status: domain.ArtifactTriggerDeliveryStatusPending, CreatedAt: now, UpdatedAt: now}); createPendingDeliveryErr != nil {
+		t.Fatalf("create pending delivery failed: %v", createPendingDeliveryErr)
+	}
+	_, err = jobService.RetryArtifactTriggerDelivery(ctx, "delivery-pending")
+	if !errors.Is(err, ErrArtifactTriggerDeliveryPendingRetryDeferred) {
+		t.Fatalf("expected pending retry deferred error, got %v", err)
+	}
+
+	queuedBuildID := "build-downstream-existing"
+	if _, createQueuedDeliveryErr := deliveryRepo.Create(ctx, domain.ArtifactTriggerDelivery{ID: "delivery-queued", ArtifactID: "artifact-queued", ConsumerJobID: consumerJob.ID, ProducerBuildID: producerBuild.ID, ProducerProjectID: producerBuild.ProjectID, ProducerJobID: producerJob.ID, ArtifactPath: "dist/app.tgz", QueuedBuildID: &queuedBuildID, Status: domain.ArtifactTriggerDeliveryStatusQueued, CreatedAt: now, UpdatedAt: now}); createQueuedDeliveryErr != nil {
+		t.Fatalf("create queued delivery failed: %v", createQueuedDeliveryErr)
+	}
+	alreadySatisfied, err := jobService.RetryArtifactTriggerDelivery(ctx, "delivery-queued")
+	if err != nil {
+		t.Fatalf("expected already satisfied retry to succeed, got %v", err)
+	}
+	if alreadySatisfied.Result != "already_satisfied" || alreadySatisfied.View.Delivery.QueuedBuildID == nil || *alreadySatisfied.View.Delivery.QueuedBuildID != queuedBuildID {
+		t.Fatalf("unexpected already satisfied result: %+v", alreadySatisfied)
+	}
+
+	strandedMessage := "old failure"
+	if _, createMissingJobDeliveryErr := deliveryRepo.Create(ctx, domain.ArtifactTriggerDelivery{ID: "delivery-missing-job", ArtifactID: "artifact-1", ConsumerJobID: "job-missing", ProducerBuildID: producerBuild.ID, ProducerProjectID: producerBuild.ProjectID, ProducerJobID: producerJob.ID, ArtifactPath: "dist/app.tgz", ErrorMessage: &strandedMessage, Status: domain.ArtifactTriggerDeliveryStatusFailed, CreatedAt: now, UpdatedAt: now}); createMissingJobDeliveryErr != nil {
+		t.Fatalf("create missing-job delivery failed: %v", createMissingJobDeliveryErr)
+	}
+	_, err = jobService.RetryArtifactTriggerDelivery(ctx, "delivery-missing-job")
+	if !errors.Is(err, repository.ErrJobNotFound) {
+		t.Fatalf("expected missing consumer job error, got %v", err)
+	}
+	restoredDelivery, err := deliveryRepo.GetByID(ctx, "delivery-missing-job")
+	if err != nil {
+		t.Fatalf("get restored delivery failed: %v", err)
+	}
+	if restoredDelivery.Status != domain.ArtifactTriggerDeliveryStatusFailed {
+		t.Fatalf("expected failed status after pre-enqueue retry error, got %q", restoredDelivery.Status)
+	}
+	if restoredDelivery.QueuedBuildID != nil {
+		t.Fatalf("expected nil queued build id after pre-enqueue retry error, got %#v", restoredDelivery.QueuedBuildID)
+	}
+	if restoredDelivery.ErrorMessage == nil || !strings.Contains(*restoredDelivery.ErrorMessage, repository.ErrJobNotFound.Error()) {
+		t.Fatalf("expected useful persisted error message, got %#v", restoredDelivery.ErrorMessage)
 	}
 }
 

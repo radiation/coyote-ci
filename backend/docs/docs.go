@@ -15,6 +15,59 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/artifact-trigger-deliveries/{deliveryID}/retry": {
+            "post": {
+                "description": "Retries a failed artifact-trigger delivery by delivery id.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "artifact-trigger-deliveries"
+                ],
+                "summary": "Retry artifact trigger delivery",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Delivery ID",
+                        "name": "deliveryID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.BuildArtifactTriggerDeliveryRetryEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/artifacts": {
             "get": {
                 "description": "Returns logical artifacts grouped with their available versions for artifact repository browsing.",
@@ -4372,6 +4425,28 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.BuildArtifactTriggerDeliveryRetryEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.BuildArtifactTriggerDeliveryRetryResponse"
+                }
+            }
+        },
+        "api.BuildArtifactTriggerDeliveryRetryResponse": {
+            "type": "object",
+            "properties": {
+                "delivery": {
+                    "$ref": "#/definitions/api.BuildArtifactTriggerDeliveryResponse"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "result": {
                     "type": "string"
                 }
             }
