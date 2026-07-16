@@ -156,6 +156,15 @@ func TestArtifactTriggerDeliveryRepository_ClaimFailedForRetry(t *testing.T) {
 	}
 
 	mock.ExpectQuery("UPDATE artifact_trigger_deliveries").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT .*FROM artifact_trigger_deliveries").WithArgs("delivery-queued").WillReturnRows(sqlmock.NewRows(row).AddRow(
+		"delivery-queued", "artifact-queued", "job-queued", "build-1", "project-1", "producer-1", "dist/queued.tgz", "build-2", nil, "failed", now, now,
+	))
+	_, err = repo.ClaimFailedForRetry(context.Background(), "delivery-queued", now)
+	if !errors.Is(err, repository.ErrArtifactTriggerDeliveryRetryNotClaimable) {
+		t.Fatalf("expected queued delivery retry not claimable, got %v", err)
+	}
+
+	mock.ExpectQuery("UPDATE artifact_trigger_deliveries").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT .*FROM artifact_trigger_deliveries").WithArgs("missing").WillReturnError(sql.ErrNoRows)
 	_, err = repo.ClaimFailedForRetry(context.Background(), "missing", now)
 	if !errors.Is(err, repository.ErrArtifactTriggerDeliveryNotFound) {

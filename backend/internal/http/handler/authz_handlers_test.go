@@ -195,14 +195,14 @@ func TestJobHandler_HeaderModeAuthorizationAndFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create fixture job failed: %v", err)
 	}
-	if _, err := fixture.jobService.CreateJob(context.Background(), service.CreateJobInput{
+	if _, createOtherJobErr := fixture.jobService.CreateJob(context.Background(), service.CreateJobInput{
 		ProjectID:     fixture.projectOther.ID,
 		Name:          "backend-other",
 		RepositoryURL: "https://github.com/example/other.git",
 		DefaultRef:    "main",
 		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
-	}); err != nil {
-		t.Fatalf("create other job failed: %v", err)
+	}); createOtherJobErr != nil {
+		t.Fatalf("create other job failed: %v", createOtherJobErr)
 	}
 
 	h := NewJobHandler(fixture.jobService)
@@ -366,11 +366,11 @@ func TestBuildHandler_HeaderModeAuthorizationAndFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create viewer build failed: %v", err)
 	}
-	if _, err := fixture.buildService.CreateBuild(context.Background(), buildsvc.CreateBuildInput{
+	if _, createOtherBuildErr := fixture.buildService.CreateBuild(context.Background(), buildsvc.CreateBuildInput{
 		ProjectID: fixture.projectOther.ID,
 		Steps:     []buildsvc.CreateBuildStepInput{{Name: "test", Command: "go", Args: []string{"test", "./..."}}},
-	}); err != nil {
-		t.Fatalf("create other build failed: %v", err)
+	}); createOtherBuildErr != nil {
+		t.Fatalf("create other build failed: %v", createOtherBuildErr)
 	}
 
 	h := NewBuildHandler(fixture.buildService)
@@ -833,8 +833,8 @@ func newHandlerAuthzFixture(t *testing.T) handlerAuthzFixture {
 		{projectID: projectViewer.ID, userID: maintainer.ID, role: "maintainer"},
 		{projectID: projectViewer.ID, userID: owner.ID, role: "owner"},
 	} {
-		if _, err := membershipService.UpsertProjectMembership(ctx, service.UpsertProjectMembershipInput{ProjectID: membership.projectID, UserID: membership.userID, Role: membership.role}); err != nil {
-			t.Fatalf("create membership failed: %v", err)
+		if _, upsertMembershipErr := membershipService.UpsertProjectMembership(ctx, service.UpsertProjectMembershipInput{ProjectID: membership.projectID, UserID: membership.userID, Role: membership.role}); upsertMembershipErr != nil {
+			t.Fatalf("create membership failed: %v", upsertMembershipErr)
 		}
 	}
 

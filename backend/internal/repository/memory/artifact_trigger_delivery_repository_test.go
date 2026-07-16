@@ -171,6 +171,25 @@ func TestArtifactTriggerDeliveryRepository_ClaimFailedForRetry(t *testing.T) {
 		t.Fatalf("expected retry not claimable, got %v", err)
 	}
 
+	queuedBuildID := "build-2"
+	if _, createQueuedErr := repo.Create(context.Background(), domain.ArtifactTriggerDelivery{
+		ID:                "delivery-queued",
+		ArtifactID:        "artifact-queued",
+		ConsumerJobID:     "job-queued",
+		ProducerBuildID:   "build-1",
+		ProducerProjectID: "project-1",
+		ProducerJobID:     "producer-1",
+		ArtifactPath:      "dist/queued.tgz",
+		QueuedBuildID:     &queuedBuildID,
+		Status:            domain.ArtifactTriggerDeliveryStatusFailed,
+	}); createQueuedErr != nil {
+		t.Fatalf("create queued delivery failed: %v", createQueuedErr)
+	}
+	_, err = repo.ClaimFailedForRetry(context.Background(), "delivery-queued", time.Time{})
+	if !errors.Is(err, repository.ErrArtifactTriggerDeliveryRetryNotClaimable) {
+		t.Fatalf("expected queued delivery retry not claimable, got %v", err)
+	}
+
 	_, err = repo.ClaimFailedForRetry(context.Background(), "missing", time.Time{})
 	if !errors.Is(err, repository.ErrArtifactTriggerDeliveryNotFound) {
 		t.Fatalf("expected not found, got %v", err)

@@ -100,6 +100,7 @@ func (r *failingProjectRepo) Delete(_ context.Context, _ string) error {
 type fakeArtifactRepo struct {
 	artifactsByBuild map[string][]domain.BuildArtifact
 	listByBuildErr   error
+	listByBuildErrs  []error
 }
 
 func (r *fakeArtifactRepo) Create(_ context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
@@ -111,6 +112,13 @@ func (r *fakeArtifactRepo) Create(_ context.Context, artifact domain.BuildArtifa
 }
 
 func (r *fakeArtifactRepo) ListByBuildID(_ context.Context, buildID string) ([]domain.BuildArtifact, error) {
+	if len(r.listByBuildErrs) > 0 {
+		err := r.listByBuildErrs[0]
+		r.listByBuildErrs = r.listByBuildErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	if r.listByBuildErr != nil {
 		return nil, r.listByBuildErr
 	}
@@ -1418,11 +1426,11 @@ func TestBuildHandler_GetBuildIncludesJobNameAndCurrentSteps(t *testing.T) {
 	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
 	jobService := service.NewJobService(jobRepo, nil).WithProjectRepository(projectRepo)
 	jobID := "job-1"
-	if _, err := projectRepo.Create(context.Background(), domain.Project{ID: "project-1", Name: "Default Project", Slug: "default", CreatedAt: now, UpdatedAt: now}); err != nil {
-		t.Fatalf("create project failed: %v", err)
+	if _, createProjectErr := projectRepo.Create(context.Background(), domain.Project{ID: "project-1", Name: "Default Project", Slug: "default", CreatedAt: now, UpdatedAt: now}); createProjectErr != nil {
+		t.Fatalf("create project failed: %v", createProjectErr)
 	}
-	if _, err := jobRepo.Create(context.Background(), domain.Job{ID: jobID, ProjectID: "project-1", Name: "coyote-ci", RepositoryURL: "https://github.com/example/repo.git", DefaultRef: "main", PipelineYAML: "version: 1", Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
-		t.Fatalf("create job failed: %v", err)
+	if _, createJobErr := jobRepo.Create(context.Background(), domain.Job{ID: jobID, ProjectID: "project-1", Name: "coyote-ci", RepositoryURL: "https://github.com/example/repo.git", DefaultRef: "main", PipelineYAML: "version: 1", Enabled: true, CreatedAt: now, UpdatedAt: now}); createJobErr != nil {
+		t.Fatalf("create job failed: %v", createJobErr)
 	}
 	repo := &fakeRepo{
 		build: domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, Status: domain.BuildStatusRunning, CreatedAt: now},
@@ -1476,16 +1484,16 @@ func TestBuildHandler_GetBuildArtifactTriggers(t *testing.T) {
 	jobRepo := repositorymemory.NewJobRepository()
 	deliveryRepo := repositorymemory.NewArtifactTriggerDeliveryRepository()
 	jobService := service.NewJobService(jobRepo, buildService).WithArtifactTriggerDeliveryRepository(deliveryRepo)
-	if _, err := jobRepo.Create(context.Background(), domain.Job{ID: "job-downstream", ProjectID: "project-1", Name: "downstream", RepositoryURL: "https://github.com/example/repo.git", DefaultRef: "main", PipelineYAML: "version: 1", Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
-		t.Fatalf("create downstream job failed: %v", err)
+	if _, createDownstreamJobErr := jobRepo.Create(context.Background(), domain.Job{ID: "job-downstream", ProjectID: "project-1", Name: "downstream", RepositoryURL: "https://github.com/example/repo.git", DefaultRef: "main", PipelineYAML: "version: 1", Enabled: true, CreatedAt: now, UpdatedAt: now}); createDownstreamJobErr != nil {
+		t.Fatalf("create downstream job failed: %v", createDownstreamJobErr)
 	}
 	errorMessage := "queue failed"
 	queuedBuildID := "build-2"
-	if _, err := deliveryRepo.Create(context.Background(), domain.ArtifactTriggerDelivery{ID: "delivery-1", ArtifactID: "artifact-1", ConsumerJobID: "job-downstream", ProducerBuildID: "build-1", ProducerProjectID: "project-1", ProducerJobID: "job-upstream", ArtifactPath: "dist/app.tgz", QueuedBuildID: &queuedBuildID, Status: domain.ArtifactTriggerDeliveryStatusQueued, CreatedAt: now, UpdatedAt: now}); err != nil {
-		t.Fatalf("create queued delivery failed: %v", err)
+	if _, createQueuedDeliveryErr := deliveryRepo.Create(context.Background(), domain.ArtifactTriggerDelivery{ID: "delivery-1", ArtifactID: "artifact-1", ConsumerJobID: "job-downstream", ProducerBuildID: "build-1", ProducerProjectID: "project-1", ProducerJobID: "job-upstream", ArtifactPath: "dist/app.tgz", QueuedBuildID: &queuedBuildID, Status: domain.ArtifactTriggerDeliveryStatusQueued, CreatedAt: now, UpdatedAt: now}); createQueuedDeliveryErr != nil {
+		t.Fatalf("create queued delivery failed: %v", createQueuedDeliveryErr)
 	}
-	if _, err := deliveryRepo.Create(context.Background(), domain.ArtifactTriggerDelivery{ID: "delivery-2", ArtifactID: "artifact-missing", ConsumerJobID: "job-missing", ProducerBuildID: "build-1", ProducerProjectID: "project-1", ProducerJobID: "job-upstream", ArtifactPath: "dist/docs.tgz", ErrorMessage: &errorMessage, Status: domain.ArtifactTriggerDeliveryStatusFailed, CreatedAt: now.Add(time.Second), UpdatedAt: now.Add(time.Second)}); err != nil {
-		t.Fatalf("create failed delivery failed: %v", err)
+	if _, createFailedDeliveryErr := deliveryRepo.Create(context.Background(), domain.ArtifactTriggerDelivery{ID: "delivery-2", ArtifactID: "artifact-missing", ConsumerJobID: "job-missing", ProducerBuildID: "build-1", ProducerProjectID: "project-1", ProducerJobID: "job-upstream", ArtifactPath: "dist/docs.tgz", ErrorMessage: &errorMessage, Status: domain.ArtifactTriggerDeliveryStatusFailed, CreatedAt: now.Add(time.Second), UpdatedAt: now.Add(time.Second)}); createFailedDeliveryErr != nil {
+		t.Fatalf("create failed delivery failed: %v", createFailedDeliveryErr)
 	}
 
 	h := NewBuildHandler(buildService)
@@ -1615,8 +1623,8 @@ func TestBuildHandler_GetBuildArtifactTriggersErrorPaths(t *testing.T) {
 		buildService.SetArtifactPersistence(artifactRepo, nil, "")
 		jobRepo := &erroringArtifactTriggerJobRepo{JobRepository: repositorymemory.NewJobRepository(), getByIDsErr: errors.New("lookup failed")}
 		deliveryRepo := repositorymemory.NewArtifactTriggerDeliveryRepository()
-		if _, err := deliveryRepo.Create(context.Background(), domain.ArtifactTriggerDelivery{ID: "delivery-1", ArtifactID: "artifact-1", ConsumerJobID: "job-downstream", ProducerBuildID: "build-1", ProducerProjectID: "project-1", ProducerJobID: "job-upstream", ArtifactPath: "dist/app.tgz", Status: domain.ArtifactTriggerDeliveryStatusQueued, CreatedAt: now, UpdatedAt: now}); err != nil {
-			t.Fatalf("create delivery failed: %v", err)
+		if _, createDeliveryErr := deliveryRepo.Create(context.Background(), domain.ArtifactTriggerDelivery{ID: "delivery-1", ArtifactID: "artifact-1", ConsumerJobID: "job-downstream", ProducerBuildID: "build-1", ProducerProjectID: "project-1", ProducerJobID: "job-upstream", ArtifactPath: "dist/app.tgz", Status: domain.ArtifactTriggerDeliveryStatusQueued, CreatedAt: now, UpdatedAt: now}); createDeliveryErr != nil {
+			t.Fatalf("create delivery failed: %v", createDeliveryErr)
 		}
 		h := NewBuildHandler(buildService)
 		h.SetJobService(service.NewJobService(jobRepo, buildService).WithArtifactTriggerDeliveryRepository(deliveryRepo))
@@ -1646,6 +1654,13 @@ func TestArtifactTriggerHandlerHelpers(t *testing.T) {
 	if artifactName == nil || *artifactName != "app.tgz" || artifactSize == nil || *artifactSize != 42 {
 		t.Fatalf("unexpected artifact trigger helper metadata: name=%v size=%v", artifactName, artifactSize)
 	}
+	buildService := buildsvc.NewBuildService(&fakeRepo{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusSuccess, CreatedAt: time.Now().UTC()}}, nil, nil)
+	buildService.SetArtifactPersistence(&fakeArtifactRepo{artifactsByBuild: map[string][]domain.BuildArtifact{"build-1": {}}}, nil, "")
+	h := NewBuildHandler(buildService)
+	artifactName, artifactSize, err := h.buildArtifactTriggerArtifactMetadata(httptest.NewRequest(http.MethodGet, "/", nil), domain.ArtifactTriggerDelivery{ProducerBuildID: "build-1", ArtifactID: "missing"})
+	if err != nil || artifactName != nil || artifactSize != nil {
+		t.Fatalf("expected missing artifact metadata lookup to return nil metadata without error, got name=%v size=%v err=%v", artifactName, artifactSize, err)
+	}
 }
 
 func TestBuildHandler_RetryArtifactTriggerDelivery(t *testing.T) {
@@ -1671,12 +1686,12 @@ func TestBuildHandler_RetryArtifactTriggerDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create producer build failed: %v", err)
 	}
-	if _, err := artifactRepo.Create(ctx, domain.BuildArtifact{ID: "artifact-1", BuildID: producerBuild.ID, Name: "app.tgz", LogicalPath: "dist/app.tgz", SizeBytes: 42, CreatedAt: now}); err != nil {
-		t.Fatalf("create artifact failed: %v", err)
+	if _, createArtifactErr := artifactRepo.Create(ctx, domain.BuildArtifact{ID: "artifact-1", BuildID: producerBuild.ID, Name: "app.tgz", LogicalPath: "dist/app.tgz", SizeBytes: 42, CreatedAt: now}); createArtifactErr != nil {
+		t.Fatalf("create artifact failed: %v", createArtifactErr)
 	}
 	errorMessage := "queue failed"
-	if _, err := deliveryRepo.Create(ctx, domain.ArtifactTriggerDelivery{ID: "delivery-1", ArtifactID: "artifact-1", ConsumerJobID: consumerJob.ID, ProducerBuildID: producerBuild.ID, ProducerProjectID: producerBuild.ProjectID, ProducerJobID: producerJob.ID, ArtifactPath: "dist/app.tgz", ErrorMessage: &errorMessage, Status: domain.ArtifactTriggerDeliveryStatusFailed, CreatedAt: now, UpdatedAt: now}); err != nil {
-		t.Fatalf("create failed delivery failed: %v", err)
+	if _, createFailedDeliveryErr := deliveryRepo.Create(ctx, domain.ArtifactTriggerDelivery{ID: "delivery-1", ArtifactID: "artifact-1", ConsumerJobID: consumerJob.ID, ProducerBuildID: producerBuild.ID, ProducerProjectID: producerBuild.ProjectID, ProducerJobID: producerJob.ID, ArtifactPath: "dist/app.tgz", ErrorMessage: &errorMessage, Status: domain.ArtifactTriggerDeliveryStatusFailed, CreatedAt: now, UpdatedAt: now}); createFailedDeliveryErr != nil {
+		t.Fatalf("create failed delivery failed: %v", createFailedDeliveryErr)
 	}
 
 	h := NewBuildHandler(buildService)
@@ -1699,8 +1714,8 @@ func TestBuildHandler_RetryArtifactTriggerDelivery(t *testing.T) {
 		t.Fatalf("expected downstream build id in retry payload, got %+v", delivery)
 	}
 
-	if _, err := deliveryRepo.Create(ctx, domain.ArtifactTriggerDelivery{ID: "delivery-pending", ArtifactID: "artifact-pending", ConsumerJobID: consumerJob.ID, ProducerBuildID: producerBuild.ID, ProducerProjectID: producerBuild.ProjectID, ProducerJobID: producerJob.ID, ArtifactPath: "dist/app.tgz", Status: domain.ArtifactTriggerDeliveryStatusPending, CreatedAt: now, UpdatedAt: now}); err != nil {
-		t.Fatalf("create pending delivery failed: %v", err)
+	if _, createPendingDeliveryErr := deliveryRepo.Create(ctx, domain.ArtifactTriggerDelivery{ID: "delivery-pending", ArtifactID: "artifact-pending", ConsumerJobID: consumerJob.ID, ProducerBuildID: producerBuild.ID, ProducerProjectID: producerBuild.ProjectID, ProducerJobID: producerJob.ID, ArtifactPath: "dist/app.tgz", Status: domain.ArtifactTriggerDeliveryStatusPending, CreatedAt: now, UpdatedAt: now}); createPendingDeliveryErr != nil {
+		t.Fatalf("create pending delivery failed: %v", createPendingDeliveryErr)
 	}
 	pendingReq := addURLParam(httptest.NewRequest(http.MethodPost, "/artifact-trigger-deliveries/delivery-pending/retry", nil), "deliveryID", "delivery-pending")
 	pendingRes := httptest.NewRecorder()
@@ -1715,6 +1730,89 @@ func TestBuildHandler_RetryArtifactTriggerDelivery(t *testing.T) {
 	if missingRes.Code != http.StatusNotFound {
 		t.Fatalf("expected missing status %d, got %d body=%s", http.StatusNotFound, missingRes.Code, missingRes.Body.String())
 	}
+}
+
+func TestBuildHandler_RetryArtifactTriggerDeliveryErrorPaths(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+
+	t.Run("missing delivery id", func(t *testing.T) {
+		h := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{}, nil, nil))
+		rr := httptest.NewRecorder()
+		h.RetryArtifactTriggerDelivery(rr, httptest.NewRequest(http.MethodPost, "/artifact-trigger-deliveries//retry", nil))
+		if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "delivery id is required") {
+			t.Fatalf("unexpected missing delivery id response: status=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("missing job service", func(t *testing.T) {
+		h := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{}, nil, nil))
+		req := addURLParam(httptest.NewRequest(http.MethodPost, "/artifact-trigger-deliveries/delivery-1/retry", nil), "deliveryID", "delivery-1")
+		rr := httptest.NewRecorder()
+		h.RetryArtifactTriggerDelivery(rr, req)
+		if rr.Code != http.StatusInternalServerError || !strings.Contains(rr.Body.String(), "job service is not configured") {
+			t.Fatalf("unexpected missing job service response: status=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("artifact metadata lookup failure after retry returns internal error", func(t *testing.T) {
+		ctx := context.Background()
+		jobRepo := repositorymemory.NewJobRepository()
+		buildRepo := repositorymemory.NewBuildRepository()
+		deliveryRepo := repositorymemory.NewArtifactTriggerDeliveryRepository()
+		artifactRepo := &fakeArtifactRepo{artifactsByBuild: map[string][]domain.BuildArtifact{}, listByBuildErrs: []error{nil, repository.ErrBuildNotFound}}
+		buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+		buildService.SetArtifactPersistence(artifactRepo, nil, "")
+		jobService := service.NewJobService(jobRepo, buildService).WithArtifactTriggerDeliveryRepository(deliveryRepo)
+		producerJob, err := jobRepo.Create(ctx, domain.Job{ID: "job-upstream", ProjectID: "project-1", Name: "upstream", Priority: 5, RepositoryURL: "https://github.com/example/repo.git", DefaultRef: "main", PipelineYAML: "version: 1\nsteps:\n  - name: build\n    run: make build\n", Enabled: true, CreatedAt: now, UpdatedAt: now})
+		if err != nil {
+			t.Fatalf("create producer job failed: %v", err)
+		}
+		consumerJob, err := jobRepo.Create(ctx, domain.Job{ID: "job-downstream", ProjectID: "project-1", Name: "downstream", Priority: 5, RepositoryURL: "https://github.com/example/repo.git", DefaultRef: "main", PipelineYAML: "version: 1\nsteps:\n  - name: consume\n    run: echo consume\n", Enabled: true, CreatedAt: now, UpdatedAt: now})
+		if err != nil {
+			t.Fatalf("create consumer job failed: %v", err)
+		}
+		producerBuild, err := buildRepo.CreateQueuedBuild(ctx, domain.Build{ID: "build-upstream", ProjectID: "project-1", JobID: &producerJob.ID, Status: domain.BuildStatusQueued, CreatedAt: now, Trigger: domain.BuildTrigger{Kind: domain.BuildTriggerKindManual}}, nil)
+		if err != nil {
+			t.Fatalf("create producer build failed: %v", err)
+		}
+		if _, createArtifactErr := artifactRepo.Create(ctx, domain.BuildArtifact{ID: "artifact-1", BuildID: producerBuild.ID, Name: "app.tgz", LogicalPath: "dist/app.tgz", SizeBytes: 42, CreatedAt: now}); createArtifactErr != nil {
+			t.Fatalf("create artifact failed: %v", createArtifactErr)
+		}
+		errorMessage := "queue failed"
+		if _, createDeliveryErr := deliveryRepo.Create(ctx, domain.ArtifactTriggerDelivery{ID: "delivery-1", ArtifactID: "artifact-1", ConsumerJobID: consumerJob.ID, ProducerBuildID: producerBuild.ID, ProducerProjectID: producerBuild.ProjectID, ProducerJobID: producerJob.ID, ArtifactPath: "dist/app.tgz", ErrorMessage: &errorMessage, Status: domain.ArtifactTriggerDeliveryStatusFailed, CreatedAt: now, UpdatedAt: now}); createDeliveryErr != nil {
+			t.Fatalf("create failed delivery failed: %v", createDeliveryErr)
+		}
+		h := NewBuildHandler(buildService)
+		h.SetJobService(jobService)
+		req := addURLParam(httptest.NewRequest(http.MethodPost, "/artifact-trigger-deliveries/delivery-1/retry", nil), "deliveryID", "delivery-1")
+		rr := httptest.NewRecorder()
+		h.RetryArtifactTriggerDelivery(rr, req)
+		if rr.Code != http.StatusInternalServerError || !strings.Contains(rr.Body.String(), "internal server error") {
+			t.Fatalf("unexpected metadata lookup failure response: status=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("error mapper covers internal and conflict responses", func(t *testing.T) {
+		h := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{}, nil, nil))
+		for _, tc := range []struct {
+			name       string
+			err        error
+			statusCode int
+			bodyText   string
+		}{
+			{name: "missing repo", err: service.ErrJobArtifactTriggerDeliveryRepositoryNotConfigured, statusCode: http.StatusInternalServerError, bodyText: service.ErrJobArtifactTriggerDeliveryRepositoryNotConfigured.Error()},
+			{name: "missing build service", err: service.ErrJobBuildServiceNotConfigured, statusCode: http.StatusInternalServerError, bodyText: service.ErrJobBuildServiceNotConfigured.Error()},
+			{name: "conflict", err: service.ErrArtifactTriggerDeliveryRetryNotSupported, statusCode: http.StatusConflict, bodyText: service.ErrArtifactTriggerDeliveryRetryNotSupported.Error()},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				rr := httptest.NewRecorder()
+				h.writeArtifactTriggerDeliveryError(rr, tc.err)
+				if rr.Code != tc.statusCode || !strings.Contains(rr.Body.String(), tc.bodyText) {
+					t.Fatalf("unexpected mapped response: status=%d body=%s", rr.Code, rr.Body.String())
+				}
+			})
+		}
+	})
 }
 
 func TestBuildHandler_GetBuildSteps_HappyPathOrdered(t *testing.T) {

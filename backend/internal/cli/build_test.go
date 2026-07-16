@@ -290,6 +290,13 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 		t.Fatalf("unexpected artifact trigger retry output: %s", got)
 	}
 	buf.Reset()
+	if err := writeBuildArtifactTriggerRetryHuman(buf, buildArtifactTriggerRetryPayload{Result: "retried", Delivery: buildArtifactTriggerDeliveryView{DeliveryID: "delivery-3", Status: "pending"}}); err != nil {
+		t.Fatalf("writeBuildArtifactTriggerRetryHuman no-downstream failed: %v", err)
+	}
+	if got := buf.String(); !strings.Contains(got, "Retried artifact-trigger delivery delivery-3\n") || !strings.Contains(got, "Status: pending") || strings.Contains(got, "Message:") {
+		t.Fatalf("unexpected no-downstream retry output: %s", got)
+	}
+	buf.Reset()
 	if err := writeBuildArtifactTriggerRetryHuman(buf, buildArtifactTriggerRetryPayload{Result: "already_satisfied", Message: "artifact trigger delivery already points at a downstream build", Delivery: buildArtifactTriggerDeliveryView{DeliveryID: "delivery-2", Status: "queued", DownstreamBuildID: stringPtr("build-9")}}); err != nil {
 		t.Fatalf("writeBuildArtifactTriggerRetryHuman already satisfied failed: %v", err)
 	}

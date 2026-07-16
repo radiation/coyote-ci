@@ -569,6 +569,32 @@ func TestClient_ListBuildArtifactTriggersReturnsTypedError(t *testing.T) {
 	}
 }
 
+func TestClient_RetryArtifactTriggerDeliveryReturnsTypedError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/artifact-trigger-deliveries/delivery-1/retry" {
+			t.Fatalf("unexpected retry path %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":{"code":"artifact_trigger_delivery_not_retryable","message":"artifact trigger delivery retry is not supported for this delivery state"}}`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", "coyote/dev", nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = client.RetryArtifactTriggerDelivery(context.Background(), " delivery-1 ")
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected typed api error, got %T", err)
+	}
+	if apiErr.Kind != ErrorKindConflict || apiErr.Code != "artifact_trigger_delivery_not_retryable" {
+		t.Fatalf("unexpected api error: %+v", apiErr)
+	}
+}
+
 func TestClient_DownloadBuildArtifactNilWriterAndWriterFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Request-ID", "req-alt")
