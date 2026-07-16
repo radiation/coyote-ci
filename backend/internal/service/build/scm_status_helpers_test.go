@@ -124,11 +124,26 @@ func TestSCMStatusBuildHelpers(t *testing.T) {
 		if scmStatusBuildCreatedAt(domain.Build{}, time.Unix(123, 0).UTC()) != time.Unix(123, 0).UTC() {
 			t.Fatal("expected fallback build creation time")
 		}
+		repoURLOnly := domain.Build{RepoURL: strPtr("https://github.com/octo/repo.git")}
+		fallbackProvider, fallbackOwner, fallbackRepo, fallbackOK := scmStatusRepositoryIdentity(repoURLOnly)
+		if !fallbackOK || fallbackProvider != "github" || fallbackOwner != "octo" || fallbackRepo != "repo" {
+			t.Fatalf("unexpected repo-url fallback identity: %s %s %s %v", fallbackProvider, fallbackOwner, fallbackRepo, fallbackOK)
+		}
 		if got := scmStatusContextName(strings.Repeat("project", 30), "job-1"); len([]rune(got)) > maxSCMStatusContextLength {
 			t.Fatalf("expected bounded context name, got %q", got)
 		}
+		if got := scmStatusDetailsURL("", "build-1"); got != nil {
+			t.Fatalf("expected nil details url without public base, got %v", *got)
+		}
+		if got := scmStatusDetailsURL("https://ci.example.com", "build-1"); got == nil || *got != "https://ci.example.com/builds/build-1" {
+			t.Fatalf("unexpected details url: %v", got)
+		}
 		detailsURL := "https://ci.example.com/builds/1"
 		left := domain.SCMStatusDelivery{Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: "deadbeef", Context: "ctx", DesiredState: domain.SCMCommitStatusStatePending, Description: "desc", DetailsURL: &detailsURL}
+		publishRequest := scmStatusPublishRequest(left)
+		if publishRequest.Provider != left.Provider || publishRequest.RepositoryOwner != left.RepositoryOwner || publishRequest.RepositoryName != left.RepositoryName || publishRequest.CommitSHA != left.CommitSHA || publishRequest.Context != left.Context || publishRequest.State != left.DesiredState || publishRequest.Description != left.Description || publishRequest.DetailsURL != left.DetailsURL {
+			t.Fatalf("unexpected publish request: %+v", publishRequest)
+		}
 		right := left
 		if !scmStatusPublishEquivalent(left, right) {
 			t.Fatal("expected equal publish payloads to match")
@@ -140,8 +155,16 @@ func TestSCMStatusBuildHelpers(t *testing.T) {
 		if truncateSCMStatusText("  hello  ", 0) != "hello" {
 			t.Fatal("unexpected truncation result")
 		}
+		if got := truncateSCMStatusText("  alphabet  ", 5); got != "alpha" {
+			t.Fatalf("expected truncated text, got %q", got)
+		}
 		if _, err := claimedSCMStatusTimestamp(domain.SCMStatusDelivery{}); err == nil {
 			t.Fatal("expected missing claimed timestamp error")
+		}
+		claimedAt := time.Date(2026, 7, 16, 10, 0, 0, 0, time.FixedZone("UTC-4", -4*60*60))
+		claimedTime, claimedErr := claimedSCMStatusTimestamp(domain.SCMStatusDelivery{ClaimedAt: &claimedAt})
+		if claimedErr != nil || !claimedTime.Equal(claimedAt.UTC()) {
+			t.Fatalf("expected claimed timestamp in UTC, got %v err=%v", claimedTime, claimedErr)
 		}
 		if parsedOwner, parsedRepo, parsedOK := parseGitHubRepositoryURL("https://gitlab.com/octo/repo"); parsedOK || parsedOwner != "" || parsedRepo != "" {
 			t.Fatalf("expected invalid github url to fail, got %q %q %v", parsedOwner, parsedRepo, parsedOK)
