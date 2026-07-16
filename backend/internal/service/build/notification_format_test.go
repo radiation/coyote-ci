@@ -250,6 +250,155 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackSuccessArtifactsRemai
 	}
 }
 
+func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureIncludesArtifactTriggerContext(t *testing.T) {
+	slackSender := &recordingSlackSender{}
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	jobRepo := memoryrepo.NewJobRepository()
+	projectRepo := memoryrepo.NewProjectRepository(jobRepo)
+	target := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
+	projectID := "project-1"
+	jobID := "job-downstream"
+	producerProjectID := "project-upstream"
+	producerJobID := "job-upstream"
+	producerBuildID := "build-upstream"
+	now := time.Now().UTC()
+	if _, err := projectRepo.Create(context.Background(), domain.Project{ID: projectID, Name: "Payments API", Slug: "payments-api", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create downstream project failed: %v", err)
+	}
+	if _, err := projectRepo.Create(context.Background(), domain.Project{ID: producerProjectID, Name: "Artifact Producer", Slug: "artifact-producer", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create producer project failed: %v", err)
+	}
+	if _, err := jobRepo.Create(context.Background(), domain.Job{ID: jobID, ProjectID: projectID, Name: "package-consumer", RepositoryURL: "https://github.com/example/payments.git", DefaultRef: "main", PipelineYAML: "version: 1", Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create downstream job failed: %v", err)
+	}
+	if _, err := jobRepo.Create(context.Background(), domain.Job{ID: producerJobID, ProjectID: producerProjectID, Name: "package-producer", RepositoryURL: "https://github.com/example/payments.git", DefaultRef: "main", PipelineYAML: "version: 1", Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create producer job failed: %v", err)
+	}
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
+	buildError := "artifact consumer failed"
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+	build := domain.Build{
+		ID:        "build-downstream",
+		ProjectID: projectID,
+		JobID:     &jobID,
+		Status:    domain.BuildStatusFailed,
+		Trigger: domain.BuildTrigger{
+			Kind:              domain.BuildTriggerKindArtifact,
+			ProducerProjectID: &producerProjectID,
+			ProducerJobID:     &producerJobID,
+			ProducerBuildID:   &producerBuildID,
+			ArtifactPath:      stringPtr("dist/service-client.jar"),
+			ArtifactName:      stringPtr("service-client.jar"),
+		},
+		ErrorMessage: &buildError,
+	}
+
+	if notifyErr := notifier.NotifyTerminalBuild(context.Background(), build); notifyErr != nil {
+		t.Fatalf("notify terminal build failed: %v", notifyErr)
+	}
+	message := slackSender.messages[0].Text
+	for _, want := range []string{
+		"Triggered by: <https://ci.example.com/projects/project-upstream|Artifact Producer> / <https://ci.example.com/jobs/job-upstream|package-producer> / <https://ci.example.com/builds/build-upstream|build-upstream>",
+		"Artifact: service-client.jar (dist/service-client.jar)",
+		"`coyote build watch build-downstream`",
+		"`coyote build artifact-triggers build-upstream`",
+		"`coyote build status build-downstream --json`",
+		"`coyote build retry build-downstream --yes`",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected artifact-trigger slack text to contain %q, got %q", want, message)
+		}
+	}
+	if strings.Contains(message, "`coyote build status build-downstream`") {
+		t.Fatalf("expected artifact-trigger message to prefer json status command, got %q", message)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_SlackSuccessIncludesArtifactTriggerContext(t *testing.T) {
+	slackSender := &recordingSlackSender{}
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	jobRepo := memoryrepo.NewJobRepository()
+	projectRepo := memoryrepo.NewProjectRepository(jobRepo)
+	target := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
+	projectID := "project-1"
+	jobID := "job-downstream"
+	producerProjectID := "project-upstream"
+	producerJobID := "job-upstream"
+	producerBuildID := "build-upstream"
+	now := time.Now().UTC()
+	if _, err := projectRepo.Create(context.Background(), domain.Project{ID: projectID, Name: "Payments API", Slug: "payments-api", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create downstream project failed: %v", err)
+	}
+	if _, err := jobRepo.Create(context.Background(), domain.Job{ID: jobID, ProjectID: projectID, Name: "package-consumer", RepositoryURL: "https://github.com/example/payments.git", DefaultRef: "main", PipelineYAML: "version: 1", Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create downstream job failed: %v", err)
+	}
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildSucceeded, true)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+	build := domain.Build{
+		ID:        "build-downstream",
+		ProjectID: projectID,
+		JobID:     &jobID,
+		Status:    domain.BuildStatusSuccess,
+		Trigger: domain.BuildTrigger{
+			Kind:              domain.BuildTriggerKindArtifact,
+			ProducerProjectID: &producerProjectID,
+			ProducerJobID:     &producerJobID,
+			ProducerBuildID:   &producerBuildID,
+			ArtifactPath:      stringPtr("dist/service-client.jar"),
+		},
+	}
+
+	if notifyErr := notifier.NotifyTerminalBuild(context.Background(), build); notifyErr != nil {
+		t.Fatalf("notify terminal build failed: %v", notifyErr)
+	}
+	message := slackSender.messages[0].Text
+	for _, want := range []string{
+		"Triggered by: <https://ci.example.com/projects/project-upstream|project-upstream> / <https://ci.example.com/jobs/job-upstream|job-upstream> / <https://ci.example.com/builds/build-upstream|build-upstream>",
+		"Artifact: dist/service-client.jar",
+		"CLI: `coyote build watch build-downstream`",
+		"`coyote build artifact-triggers build-upstream`",
+		"`coyote build status build-downstream --json`",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected artifact-trigger success slack text to contain %q, got %q", want, message)
+		}
+	}
+	if strings.Contains(message, "`coyote build status build-downstream`") {
+		t.Fatalf("expected artifact-trigger success message to prefer json status command, got %q", message)
+	}
+}
+
+func TestBuildNotificationService_NotifyTerminalBuild_SlackOrdinaryBuildOmitsArtifactTriggerContext(t *testing.T) {
+	slackSender := &recordingSlackSender{}
+	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
+	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
+	target := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
+	projectID := "project-1"
+	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
+	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
+	if err != nil {
+		t.Fatalf("create notifier failed: %v", err)
+	}
+
+	if notifyErr := notifier.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-ordinary", ProjectID: projectID, Status: domain.BuildStatusFailed}); notifyErr != nil {
+		t.Fatalf("notify terminal build failed: %v", notifyErr)
+	}
+	message := slackSender.messages[0].Text
+	for _, unwanted := range []string{"Triggered by:", "Artifact:", "coyote build watch build-ordinary", "coyote build artifact-triggers"} {
+		if strings.Contains(message, unwanted) {
+			t.Fatalf("did not expect ordinary slack message to contain %q, got %q", unwanted, message)
+		}
+	}
+}
+
 func TestBuildNotificationService_NotifyTerminalBuild_SlackMessageOmitsMissingOptionalFields(t *testing.T) {
 	slackSender := &recordingSlackSender{}
 	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()

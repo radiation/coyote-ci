@@ -23,6 +23,7 @@ type buildNotificationDetails struct {
 	projectName   string
 	projectLabel  string
 	projectURL    string
+	trigger       *buildNotificationArtifactTrigger
 	jobID         string
 	jobName       string
 	jobLabel      string
@@ -53,6 +54,20 @@ type buildNotificationStep struct {
 	name  string
 	label string
 	url   string
+}
+
+type buildNotificationArtifactTrigger struct {
+	producerProjectID    string
+	producerProjectName  string
+	producerProjectURL   string
+	producerJobID        string
+	producerJobName      string
+	producerJobURL       string
+	producerBuildID      string
+	producerBuildURL     string
+	artifactPath         string
+	artifactName         string
+	artifactDisplayLabel string
 }
 
 type notificationArtifactLink struct {
@@ -138,8 +153,54 @@ func (s *BuildNotificationService) buildNotificationDetails(ctx context.Context,
 	return details
 }
 
+func (s *BuildNotificationService) buildNotificationArtifactTrigger(ctx context.Context, build domain.Build) *buildNotificationArtifactTrigger {
+	trigger := domain.NormalizeBuildTrigger(build.Trigger)
+	if trigger.Kind != domain.BuildTriggerKindArtifact {
+		return nil
+	}
+
+	producerProjectID := trimNotificationOptionalString(trigger.ProducerProjectID)
+	producerJobID := trimNotificationOptionalString(trigger.ProducerJobID)
+	producerBuildID := trimNotificationOptionalString(trigger.ProducerBuildID)
+	artifactPath := trimNotificationOptionalString(trigger.ArtifactPath)
+	artifactName := trimNotificationOptionalString(trigger.ArtifactName)
+	if producerProjectID == "" && producerJobID == "" && producerBuildID == "" && artifactPath == "" && artifactName == "" {
+		return nil
+	}
+
+	artifactTrigger := &buildNotificationArtifactTrigger{
+		producerProjectID:    producerProjectID,
+		producerProjectName:  producerProjectID,
+		producerJobID:        producerJobID,
+		producerJobName:      producerJobID,
+		producerBuildID:      producerBuildID,
+		artifactPath:         artifactPath,
+		artifactName:         artifactName,
+		artifactDisplayLabel: notificationTriggerArtifactDisplayLabel(artifactName, artifactPath),
+	}
+	if s.publicBaseURL != "" {
+		artifactTrigger.producerProjectURL = buildProjectDetailURL(s.publicBaseURL, producerProjectID)
+		artifactTrigger.producerJobURL = buildJobDetailURL(s.publicBaseURL, producerJobID)
+		artifactTrigger.producerBuildURL = buildBuildDetailURL(s.publicBaseURL, producerBuildID)
+	}
+	if s.projectRepo != nil && producerProjectID != "" {
+		project, err := s.projectRepo.GetByID(ctx, producerProjectID)
+		if err == nil && strings.TrimSpace(project.Name) != "" {
+			artifactTrigger.producerProjectName = strings.TrimSpace(project.Name)
+		}
+	}
+	if s.jobRepo != nil && producerJobID != "" {
+		job, err := s.jobRepo.GetByID(ctx, producerJobID)
+		if err == nil && strings.TrimSpace(job.Name) != "" {
+			artifactTrigger.producerJobName = strings.TrimSpace(job.Name)
+		}
+	}
+	return artifactTrigger
+}
+
 func (s *BuildNotificationService) enrichSlackNotificationDetails(ctx context.Context, build domain.Build, details buildNotificationDetails) (buildNotificationDetails, error) {
 	details = applyFallbackFailureContext(build, details)
+	details.trigger = s.buildNotificationArtifactTrigger(ctx, build)
 	if details.statusSummary == "failed" {
 		enriched, err := s.enrichFailedSlackNotificationDetails(ctx, build, details)
 		if err != nil {
@@ -314,6 +375,7 @@ func formatBuildStatusSlackText(details buildNotificationDetails) string {
 			lines = append(lines, artifactLine)
 		}
 	}
+	lines = append(lines, notificationArtifactTriggerSlackLines(details)...)
 	lines = append(lines, notificationSlackCLIHintLines(details)...)
 	if details.buildURL != "" {
 		lines = append(lines, fmt.Sprintf("Build details: %s", slackMrkdwnLink(details.buildURL, "View build")))
@@ -379,6 +441,7 @@ func formatPersonalBuildStatusSlackText(details buildNotificationDetails) string
 			lines = append(lines, artifactLine)
 		}
 	}
+	lines = append(lines, notificationArtifactTriggerSlackLines(details)...)
 	lines = append(lines, notificationSlackCLIHintLines(details)...)
 	if details.buildURL != "" && (details.statusSummary != "failed" || details.buildURL != details.diagnosticURL) {
 		lines = append(lines, fmt.Sprintf("Build: %s", slackMrkdwnLink(details.buildURL, "View build")))
@@ -449,15 +512,108 @@ func notificationSlackCLIHintLines(details buildNotificationDetails) []string {
 	}
 
 	statusCommand := notificationSlackInlineCode(fmt.Sprintf("coyote build status %s", buildID))
+	artifactTriggerCommands := notificationArtifactTriggerCLIHintLines(details)
 	switch details.statusSummary {
 	case "failed":
 		logsCommand := notificationSlackInlineCode(notificationSlackFailedLogsCommand(buildID, details.failedStep))
 		retryCommand := notificationSlackInlineCode(fmt.Sprintf("coyote build retry %s --yes", buildID))
-		return []string{"CLI:", statusCommand, logsCommand, retryCommand}
+		lines := []string{"CLI:"}
+		if len(artifactTriggerCommands) > 0 {
+			lines = append(lines, artifactTriggerCommands...)
+		} else {
+			lines = append(lines, statusCommand)
+		}
+		return append(lines, logsCommand, retryCommand)
 	case "succeeded":
+		if len(artifactTriggerCommands) > 0 {
+			lines := []string{fmt.Sprintf("CLI: %s", artifactTriggerCommands[0])}
+			return append(lines, artifactTriggerCommands[1:]...)
+		}
 		return []string{fmt.Sprintf("CLI: %s", statusCommand)}
 	default:
 		return nil
+	}
+}
+
+func notificationArtifactTriggerSlackLines(details buildNotificationDetails) []string {
+	if details.trigger == nil {
+		return nil
+	}
+	lines := []string{}
+	triggeredBy := notificationArtifactTriggerProducerText(*details.trigger)
+	if triggeredBy != "" {
+		lines = append(lines, fmt.Sprintf("Triggered by: %s", triggeredBy))
+	}
+	if details.trigger.artifactDisplayLabel != "" {
+		lines = append(lines, fmt.Sprintf("Artifact: %s", slackEscapeMrkdwnLabel(details.trigger.artifactDisplayLabel)))
+	}
+	return lines
+}
+
+func notificationArtifactTriggerProducerText(trigger buildNotificationArtifactTrigger) string {
+	parts := make([]string, 0, 3)
+	if label := notificationArtifactTriggerEntityText(trigger.producerProjectName, trigger.producerProjectID, trigger.producerProjectURL); label != "" {
+		parts = append(parts, label)
+	}
+	if label := notificationArtifactTriggerEntityText(trigger.producerJobName, trigger.producerJobID, trigger.producerJobURL); label != "" {
+		parts = append(parts, label)
+	}
+	if label := notificationArtifactTriggerBuildText(trigger.producerBuildID, trigger.producerBuildURL); label != "" {
+		parts = append(parts, label)
+	}
+	return strings.Join(parts, " / ")
+}
+
+func notificationArtifactTriggerEntityText(name string, fallbackID string, entityURL string) string {
+	label := strings.TrimSpace(name)
+	if label == "" {
+		label = strings.TrimSpace(fallbackID)
+	}
+	if label == "" {
+		return ""
+	}
+	if entityURL != "" {
+		return slackMrkdwnLink(entityURL, label)
+	}
+	return slackEscapeMrkdwnLabel(label)
+}
+
+func notificationArtifactTriggerBuildText(buildID string, buildURL string) string {
+	trimmedBuildID := strings.TrimSpace(buildID)
+	if trimmedBuildID == "" {
+		return ""
+	}
+	if buildURL != "" {
+		return slackMrkdwnLink(buildURL, trimmedBuildID)
+	}
+	return slackEscapeMrkdwnLabel(trimmedBuildID)
+}
+
+func notificationTriggerArtifactDisplayLabel(name string, logicalPath string) string {
+	trimmedName := strings.TrimSpace(name)
+	trimmedPath := strings.TrimSpace(logicalPath)
+	if trimmedName == "" {
+		return trimmedPath
+	}
+	if trimmedPath == "" || trimmedPath == trimmedName {
+		return trimmedName
+	}
+	return fmt.Sprintf("%s (%s)", trimmedName, trimmedPath)
+}
+
+func notificationArtifactTriggerCLIHintLines(details buildNotificationDetails) []string {
+	if details.trigger == nil {
+		return nil
+	}
+	buildID := strings.TrimSpace(details.buildID)
+	producerBuildID := strings.TrimSpace(details.trigger.producerBuildID)
+	if buildID == "" || producerBuildID == "" {
+		return nil
+	}
+	return []string{
+		notificationSlackInlineCode(fmt.Sprintf("coyote build watch %s", buildID)),
+		notificationSlackInlineCode(fmt.Sprintf("coyote build artifact-triggers %s", producerBuildID)),
+		notificationSlackInlineCode(fmt.Sprintf("coyote build status %s --json", buildID)),
 	}
 }
 
