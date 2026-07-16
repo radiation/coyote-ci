@@ -291,6 +291,7 @@ func (s *BuildService) QueueBuildWithTemplateAndCustomSteps(ctx context.Context,
 			log.Printf("WARNING: durable job creation failed for build_id=%s (build already persisted): %v", queuedBuild.ID, durableJobsErr)
 			return domain.Build{}, fmt.Errorf("create execution jobs for build %s: %w", queuedBuild.ID, durableJobsErr)
 		}
+		s.notifySCMBuildStatus(ctx, queuedBuild)
 		return queuedBuild, nil
 	}
 
@@ -303,6 +304,7 @@ func (s *BuildService) QueueBuildWithTemplateAndCustomSteps(ctx context.Context,
 		log.Printf("WARNING: durable job creation failed for build_id=%s (build already persisted): %v", queuedBuild.ID, err)
 		return domain.Build{}, fmt.Errorf("create execution jobs for build %s: %w", queuedBuild.ID, err)
 	}
+	s.notifySCMBuildStatus(ctx, queuedBuild)
 	return queuedBuild, nil
 }
 

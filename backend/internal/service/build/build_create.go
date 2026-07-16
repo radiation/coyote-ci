@@ -98,18 +98,24 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 			})
 		}
 
-		queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
-		if err != nil {
-			return domain.Build{}, err
+		queuedBuild, createErr := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+		if createErr != nil {
+			return domain.Build{}, createErr
 		}
-		if err := s.createDurableJobsForBuild(ctx, queuedBuild, steps); err != nil {
-			log.Printf("WARNING: durable job creation failed for build_id=%s (build already persisted): %v", queuedBuild.ID, err)
-			return domain.Build{}, fmt.Errorf("create execution jobs for build %s: %w", queuedBuild.ID, err)
+		if durableJobsErr := s.createDurableJobsForBuild(ctx, queuedBuild, steps); durableJobsErr != nil {
+			log.Printf("WARNING: durable job creation failed for build_id=%s (build already persisted): %v", queuedBuild.ID, durableJobsErr)
+			return domain.Build{}, fmt.Errorf("create execution jobs for build %s: %w", queuedBuild.ID, durableJobsErr)
 		}
+		s.notifySCMBuildStatus(ctx, queuedBuild)
 		return queuedBuild, nil
 	}
 
-	return s.buildRepo.Create(ctx, build)
+	createdBuild, err := s.buildRepo.Create(ctx, build)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	s.notifySCMBuildStatus(ctx, createdBuild)
+	return createdBuild, nil
 }
 
 // CreatePipelineBuildInput is the service-level input for creating a build from pipeline YAML.
@@ -199,5 +205,6 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		log.Printf("WARNING: durable job creation failed for build_id=%s (build already persisted): %v", queuedBuild.ID, err)
 		return domain.Build{}, fmt.Errorf("create execution jobs for build %s: %w", queuedBuild.ID, err)
 	}
+	s.notifySCMBuildStatus(ctx, queuedBuild)
 	return queuedBuild, nil
 }

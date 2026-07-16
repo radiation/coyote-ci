@@ -167,7 +167,7 @@ func (s *BuildService) resolveBuildSourceInWorkspace(ctx context.Context, buildI
 	if err != nil {
 		return "", fmt.Errorf("persisting resolved commit SHA: %w", err)
 	}
-	_ = build
+	s.notifySCMBuildStatus(ctx, build)
 
 	return trimmedResolvedCommit, nil
 }

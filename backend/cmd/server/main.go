@@ -104,6 +104,7 @@ func main() {
 	webhookDeliveryRepo := repositorypostgres.NewWebhookDeliveryRepository(db)
 	artifactTriggerDeliveryRepo := repositorypostgres.NewArtifactTriggerDeliveryRepository(db)
 	notificationDeliveryRepo := repositorypostgres.NewNotificationDeliveryRepository(db)
+	scmStatusDeliveryRepo := repositorypostgres.NewSCMStatusDeliveryRepository(db)
 	notificationSubscriptionRepo := repositorypostgres.NewNotificationSubscriptionRepository(db)
 	notificationPreferenceRepo := repositorypostgres.NewUserNotificationPreferenceRepository(db)
 	notificationInstanceSettingsRepo := repositorypostgres.NewNotificationInstanceSettingsRepository(db)
@@ -143,6 +144,31 @@ func main() {
 	if notificationRecoveryErr != nil {
 		log.Fatalf("failed to configure notification recovery drain: %v", notificationRecoveryErr)
 	}
+	var scmStatusReporter *buildsvc.SCMStatusReporter
+	var scmStatusRecoveryDrain *buildsvc.SCMStatusRecoveryDrain
+	if strings.TrimSpace(cfg.GitHubStatusToken) != "" {
+		scmStatusReporter, err = buildsvc.NewSCMStatusReporter(buildsvc.SCMStatusReporterConfig{
+			BuildRepo:     buildRepo,
+			ProjectRepo:   projectRepo,
+			DeliveryRepo:  scmStatusDeliveryRepo,
+			Publisher:     buildsvc.NewGitHubCommitStatusClient("", nil, cfg.GitHubStatusToken),
+			PublicBaseURL: cfg.PublicURL,
+			ClaimOwner:    defaultServerNotificationClaimOwner(),
+		})
+		if err != nil {
+			log.Fatalf("failed to configure scm status reporter: %v", err)
+		}
+		scmStatusRecoveryDrain, err = buildsvc.NewSCMStatusRecoveryDrain(buildsvc.SCMStatusRecoveryDrainConfig{
+			Reporter:  scmStatusReporter,
+			Interval:  cfg.SCMStatusRecoveryInterval,
+			BatchSize: cfg.SCMStatusRecoveryBatchSize,
+		})
+		if err != nil {
+			log.Fatalf("failed to configure scm status recovery drain: %v", err)
+		}
+	} else {
+		log.Printf("github commit status reporting disabled: GITHUB_STATUS_TOKEN is not configured")
+	}
 	managedImageRefresher := managedimagesvc.NewService(
 		source.NewGitFetcher(),
 		jobManagedImageConfigRepo,
@@ -170,6 +196,7 @@ func main() {
 		ExecutionJobRepo:      executionJobRepo,
 		ExecutionOutputRepo:   executionJobOutputRepo,
 		BuildNotifier:         buildNotificationService,
+		SCMStatusReporter:     scmStatusReporter,
 		RepoFetcher:           source.NewGitFetcher(),
 		ManagedImageRefresher: managedImageRefresher,
 		VersionTagger:         versionTagService,
@@ -342,6 +369,15 @@ func main() {
 			log.Printf("notification recovery drain stopped with error: %v", err)
 		}
 	}()
+	if scmStatusRecoveryDrain != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := scmStatusRecoveryDrain.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Printf("scm status recovery drain stopped with error: %v", err)
+			}
+		}()
+	}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

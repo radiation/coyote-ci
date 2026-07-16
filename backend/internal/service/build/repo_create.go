@@ -145,6 +145,7 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		log.Printf("WARNING: durable job creation failed for build_id=%s (build already persisted): %v", queuedBuild.ID, err)
 		return domain.Build{}, fmt.Errorf("create execution jobs for build %s: %w", queuedBuild.ID, err)
 	}
+	s.notifySCMBuildStatus(ctx, queuedBuild)
 	if s.managedImageRefresher != nil {
 		refreshRef := strings.TrimSpace(input.CommitSHA)
 		if refreshRef == "" {
