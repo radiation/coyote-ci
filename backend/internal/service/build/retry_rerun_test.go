@@ -551,6 +551,224 @@ func TestBuildService_RerunBuild_RejectsMissingBuildContext(t *testing.T) {
 	}
 }
 
+func TestBuildService_RerunBuildFromJob_DelegatesToStepRerun(t *testing.T) {
+	buildRepo := memoryrepo.NewBuildRepository()
+	execRepo := memoryrepo.NewExecutionJobRepository()
+	svc := NewBuildService(buildRepo, nil, &fakeLogSink{})
+	svc.SetExecutionJobRepository(execRepo)
+
+	now := time.Now().UTC()
+	sourceBuild := domain.Build{
+		ID:            "build-rerun-from-job",
+		ProjectID:     "project-1",
+		Status:        domain.BuildStatusFailed,
+		AttemptNumber: 1,
+		CreatedAt:     now,
+		RepoURL:       stringPtr("https://github.com/acme/repo.git"),
+		Ref:           stringPtr("refs/heads/main"),
+		CommitSHA:     stringPtr("abc123"),
+	}
+	sourceSteps := []domain.BuildStep{
+		{ID: "step-0", BuildID: sourceBuild.ID, StepIndex: 0, Name: "setup", Command: "sh", Args: []string{"-c", "echo setup"}, Env: map[string]string{}, WorkingDir: ".", TimeoutSeconds: 60, Status: domain.BuildStepStatusSuccess},
+		{ID: "step-1", BuildID: sourceBuild.ID, StepIndex: 1, Name: "test", Command: "sh", Args: []string{"-c", "go test ./..."}, Env: map[string]string{"A": "1"}, WorkingDir: "backend", TimeoutSeconds: 120, Status: domain.BuildStepStatusFailed},
+	}
+	_, createBuildErr := buildRepo.CreateQueuedBuild(context.Background(), sourceBuild, sourceSteps)
+	if createBuildErr != nil {
+		t.Fatalf("create source build failed: %v", createBuildErr)
+	}
+	terminalBuild, terminalErr := buildRepo.UpdateStatus(context.Background(), sourceBuild.ID, domain.BuildStatusFailed, stringPtr("failed"))
+	if terminalErr != nil {
+		t.Fatalf("terminalize source build failed: %v", terminalErr)
+	}
+
+	timeout := 120
+	lineageRoot := "job-1"
+	sourceJob := domain.ExecutionJob{
+		ID:               "job-1",
+		BuildID:          terminalBuild.ID,
+		StepID:           "step-1",
+		Name:             "test",
+		StepIndex:        1,
+		AttemptNumber:    1,
+		LineageRootJobID: &lineageRoot,
+		Status:           domain.ExecutionJobStatusFailed,
+		Image:            "golang:1.24",
+		WorkingDir:       "backend",
+		Command:          []string{"sh", "-c", "go test ./..."},
+		Environment:      map[string]string{"A": "1"},
+		TimeoutSeconds:   &timeout,
+		Source:           domain.SourceSnapshotRef{RepositoryURL: "https://github.com/acme/repo.git", CommitSHA: "abc123", RefName: stringPtr("refs/heads/main")},
+		SpecVersion:      1,
+		ResolvedSpecJSON: `{"step":"test","attempt":1}`,
+		CreatedAt:        now,
+		FinishedAt:       timePtr(now.Add(time.Minute)),
+		ErrorMessage:     stringPtr("failed"),
+		ExitCode:         intPtr(1),
+	}
+	_, createJobsErr := execRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{sourceJob})
+	if createJobsErr != nil {
+		t.Fatalf("seed source job failed: %v", createJobsErr)
+	}
+
+	rerunBuild, rerunErr := svc.RerunBuildFromJob(context.Background(), sourceJob.ID)
+	if rerunErr != nil {
+		t.Fatalf("rerun from job failed: %v", rerunErr)
+	}
+	if rerunBuild.RerunOfBuildID == nil || *rerunBuild.RerunOfBuildID != terminalBuild.ID {
+		t.Fatalf("expected rerun_of_build_id=%s, got %v", terminalBuild.ID, rerunBuild.RerunOfBuildID)
+	}
+	if rerunBuild.RerunFromStepIdx == nil || *rerunBuild.RerunFromStepIdx != 1 {
+		t.Fatalf("expected rerun_from_step_idx=1, got %v", rerunBuild.RerunFromStepIdx)
+	}
+
+	createdJobs, jobsErr := execRepo.GetJobsByBuildID(context.Background(), rerunBuild.ID)
+	if jobsErr != nil {
+		t.Fatalf("get rerun jobs failed: %v", jobsErr)
+	}
+	if len(createdJobs) != 1 {
+		t.Fatalf("expected one rerun job, got %d", len(createdJobs))
+	}
+	if createdJobs[0].RetryOfJobID == nil || *createdJobs[0].RetryOfJobID != sourceJob.ID {
+		t.Fatalf("expected retry_of_job_id=%s, got %v", sourceJob.ID, createdJobs[0].RetryOfJobID)
+	}
+	if createdJobs[0].LineageRootJobID == nil || *createdJobs[0].LineageRootJobID != lineageRoot {
+		t.Fatalf("expected lineage root %s, got %v", lineageRoot, createdJobs[0].LineageRootJobID)
+	}
+}
+
+func TestBuildService_RerunBuildFromJob_ErrorBranches(t *testing.T) {
+	svc := NewBuildService(memoryrepo.NewBuildRepository(), nil, &fakeLogSink{})
+	if _, err := svc.RerunBuildFromJob(context.Background(), "job-1"); !errors.Is(err, ErrExecutionJobRepoNotConfigured) {
+		t.Fatalf("expected ErrExecutionJobRepoNotConfigured, got %v", err)
+	}
+
+	execRepo := memoryrepo.NewExecutionJobRepository()
+	svc.SetExecutionJobRepository(execRepo)
+	if _, err := svc.RerunBuildFromJob(context.Background(), "missing"); !errors.Is(err, ErrExecutionJobNotFound) {
+		t.Fatalf("expected ErrExecutionJobNotFound, got %v", err)
+	}
+}
+
+func TestBuildService_RerunBuildFromStep_FallsBackWhenSourceJobMissing(t *testing.T) {
+	buildRepo := memoryrepo.NewBuildRepository()
+	execRepo := memoryrepo.NewExecutionJobRepository()
+	svc := NewBuildService(buildRepo, nil, &fakeLogSink{})
+	svc.SetExecutionJobRepository(execRepo)
+	svc.SetDefaultExecutionImage("golang:1.24")
+
+	now := time.Now().UTC()
+	jobID := "job-1"
+	pipelinePath := ".coyote/pipeline.yml"
+	sourceBuild := domain.Build{
+		ID:                "build-fallback-rerun",
+		ProjectID:         "project-1",
+		JobID:             &jobID,
+		Status:            domain.BuildStatusFailed,
+		AttemptNumber:     1,
+		CreatedAt:         now,
+		PipelinePath:      &pipelinePath,
+		RepoURL:           stringPtr("https://github.com/acme/repo.git"),
+		Ref:               stringPtr("refs/heads/main"),
+		CommitSHA:         stringPtr("abc123"),
+		RequestedImageRef: stringPtr("golang:1.24"),
+		Source:            domain.NewSourceSpec("https://github.com/acme/repo.git", "refs/heads/main", "abc123"),
+	}
+	sourceSteps := []domain.BuildStep{
+		{ID: "step-0", BuildID: sourceBuild.ID, StepIndex: 0, Name: "setup", Command: "sh", Args: []string{"-c", "echo setup"}, Env: map[string]string{}, WorkingDir: ".", TimeoutSeconds: 60, Status: domain.BuildStepStatusSuccess},
+		{ID: "step-1", BuildID: sourceBuild.ID, StepIndex: 1, Name: "test", Command: "sh", Args: []string{"-c", "go test ./..."}, Env: map[string]string{"GOFLAGS": "-mod=readonly"}, WorkingDir: "backend", TimeoutSeconds: 120, Status: domain.BuildStepStatusFailed},
+		{ID: "step-2", BuildID: sourceBuild.ID, StepIndex: 2, Name: "package", Command: "sh", Args: []string{"-c", "go build ./..."}, Env: map[string]string{"CGO_ENABLED": "0"}, WorkingDir: "backend", TimeoutSeconds: 180, Status: domain.BuildStepStatusPending},
+	}
+	_, createBuildErr := buildRepo.CreateQueuedBuild(context.Background(), sourceBuild, sourceSteps)
+	if createBuildErr != nil {
+		t.Fatalf("create source build failed: %v", createBuildErr)
+	}
+	_, terminalErr := buildRepo.UpdateStatus(context.Background(), sourceBuild.ID, domain.BuildStatusFailed, stringPtr("failed"))
+	if terminalErr != nil {
+		t.Fatalf("terminalize source build failed: %v", terminalErr)
+	}
+
+	timeout := 120
+	root := "job-step-1"
+	onlySourceJob := domain.ExecutionJob{
+		ID:               "job-step-1",
+		BuildID:          sourceBuild.ID,
+		StepID:           "step-1",
+		Name:             "test",
+		StepIndex:        1,
+		AttemptNumber:    1,
+		LineageRootJobID: &root,
+		Status:           domain.ExecutionJobStatusFailed,
+		Image:            "golang:1.24",
+		WorkingDir:       "backend",
+		Command:          []string{"sh", "-c", "go test ./..."},
+		Environment:      map[string]string{"GOFLAGS": "-mod=readonly"},
+		TimeoutSeconds:   &timeout,
+		Source:           domain.SourceSnapshotRef{RepositoryURL: "https://github.com/acme/repo.git", CommitSHA: "abc123", RefName: stringPtr("refs/heads/main")},
+		SpecVersion:      1,
+		ResolvedSpecJSON: `{"step":"test","attempt":1}`,
+		CreatedAt:        now,
+	}
+	_, createJobsErr := execRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{onlySourceJob})
+	if createJobsErr != nil {
+		t.Fatalf("seed source job failed: %v", createJobsErr)
+	}
+
+	rerunBuild, rerunErr := svc.RerunBuildFromStep(context.Background(), sourceBuild.ID, 1)
+	if rerunErr != nil {
+		t.Fatalf("rerun from step failed: %v", rerunErr)
+	}
+
+	createdJobs, jobsErr := execRepo.GetJobsByBuildID(context.Background(), rerunBuild.ID)
+	if jobsErr != nil {
+		t.Fatalf("get rerun jobs failed: %v", jobsErr)
+	}
+	if len(createdJobs) != 2 {
+		t.Fatalf("expected two rerun jobs, got %d", len(createdJobs))
+	}
+
+	clonedJob := createdJobs[0]
+	fallbackJob := createdJobs[1]
+	if clonedJob.RetryOfJobID == nil || *clonedJob.RetryOfJobID != onlySourceJob.ID {
+		t.Fatalf("expected cloned job to reference %s, got %v", onlySourceJob.ID, clonedJob.RetryOfJobID)
+	}
+	if fallbackJob.RetryOfJobID != nil {
+		t.Fatalf("expected fallback job to have no retry_of_job_id, got %v", fallbackJob.RetryOfJobID)
+	}
+	if fallbackJob.LineageRootJobID == nil || *fallbackJob.LineageRootJobID != fallbackJob.ID {
+		t.Fatalf("expected fallback job lineage root to self, got %v", fallbackJob.LineageRootJobID)
+	}
+	if fallbackJob.AttemptNumber != 1 {
+		t.Fatalf("expected fallback attempt 1, got %d", fallbackJob.AttemptNumber)
+	}
+	if fallbackJob.Image != "golang:1.24" || fallbackJob.WorkingDir != "backend" {
+		t.Fatalf("expected fallback image/workdir to come from build+step, got image=%q workdir=%q", fallbackJob.Image, fallbackJob.WorkingDir)
+	}
+	if len(fallbackJob.Command) != 3 || fallbackJob.Command[0] != "sh" || fallbackJob.Command[2] != "go build ./..." {
+		t.Fatalf("unexpected fallback command: %+v", fallbackJob.Command)
+	}
+	if fallbackJob.TimeoutSeconds == nil || *fallbackJob.TimeoutSeconds != 180 {
+		t.Fatalf("expected fallback timeout 180, got %v", fallbackJob.TimeoutSeconds)
+	}
+	if fallbackJob.PipelineFilePath == nil || *fallbackJob.PipelineFilePath != pipelinePath {
+		t.Fatalf("expected pipeline path %q, got %v", pipelinePath, fallbackJob.PipelineFilePath)
+	}
+	if fallbackJob.ContextDir == nil || *fallbackJob.ContextDir != ".coyote" {
+		t.Fatalf("expected context dir .coyote, got %v", fallbackJob.ContextDir)
+	}
+	if fallbackJob.Source.RepositoryURL != "https://github.com/acme/repo.git" || fallbackJob.Source.CommitSHA != "abc123" {
+		t.Fatalf("expected fallback source identity to be preserved, got %+v", fallbackJob.Source)
+	}
+	if fallbackJob.SpecDigest == nil || fallbackJob.ResolvedSpecJSON == "" {
+		t.Fatalf("expected fallback job to have resolved spec and digest, got %+v", fallbackJob)
+	}
+	if fallbackJob.Environment["CGO_ENABLED"] != "0" {
+		t.Fatalf("expected fallback environment to preserve step env, got %+v", fallbackJob.Environment)
+	}
+	if len(fallbackJob.OutputRefs) != 0 {
+		t.Fatalf("expected fallback output refs empty, got %+v", fallbackJob.OutputRefs)
+	}
+}
+
 func seedRerunnableBuild(t *testing.T, buildRepo *memoryrepo.BuildRepository, status domain.BuildStatus) (domain.Build, []domain.BuildStep) {
 	t.Helper()
 	now := time.Now().UTC()

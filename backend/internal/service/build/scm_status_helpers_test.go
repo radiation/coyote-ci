@@ -14,28 +14,52 @@ import (
 )
 
 type helperSCMDeliveryRepo struct {
-	getByKey func(context.Context, string, string, string, string, string) (domain.SCMStatusDelivery, error)
+	acquireForDelivery     func(context.Context, repository.SCMStatusDeliveryClaimInput) (repository.SCMStatusDeliveryClaimResult, error)
+	markSent               func(context.Context, repository.SCMStatusDeliveryMarkSentInput) (repository.SCMStatusDeliveryUpdateResult, error)
+	recordRetryableFailure func(context.Context, repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error)
+	recordPermanentFailure func(context.Context, repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error)
+	recordExhaustedFailure func(context.Context, repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error)
+	markSuperseded         func(context.Context, repository.SCMStatusDeliveryMarkSupersededInput) (repository.SCMStatusDeliveryUpdateResult, error)
+	getByKey               func(context.Context, string, string, string, string, string) (domain.SCMStatusDelivery, error)
 }
 
-func (r *helperSCMDeliveryRepo) AcquireForDelivery(context.Context, repository.SCMStatusDeliveryClaimInput) (repository.SCMStatusDeliveryClaimResult, error) {
+func (r *helperSCMDeliveryRepo) AcquireForDelivery(ctx context.Context, input repository.SCMStatusDeliveryClaimInput) (repository.SCMStatusDeliveryClaimResult, error) {
+	if r.acquireForDelivery != nil {
+		return r.acquireForDelivery(ctx, input)
+	}
 	return repository.SCMStatusDeliveryClaimResult{}, nil
 }
 func (r *helperSCMDeliveryRepo) ListRecoverable(context.Context, repository.SCMStatusDeliveryRecoverableScanInput) ([]domain.SCMStatusDelivery, error) {
 	return nil, nil
 }
-func (r *helperSCMDeliveryRepo) MarkSent(context.Context, repository.SCMStatusDeliveryMarkSentInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+func (r *helperSCMDeliveryRepo) MarkSent(ctx context.Context, input repository.SCMStatusDeliveryMarkSentInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+	if r.markSent != nil {
+		return r.markSent(ctx, input)
+	}
 	return repository.SCMStatusDeliveryUpdateResult{}, nil
 }
-func (r *helperSCMDeliveryRepo) RecordRetryableFailure(context.Context, repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+func (r *helperSCMDeliveryRepo) RecordRetryableFailure(ctx context.Context, input repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+	if r.recordRetryableFailure != nil {
+		return r.recordRetryableFailure(ctx, input)
+	}
 	return repository.SCMStatusDeliveryUpdateResult{}, nil
 }
-func (r *helperSCMDeliveryRepo) RecordPermanentFailure(context.Context, repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+func (r *helperSCMDeliveryRepo) RecordPermanentFailure(ctx context.Context, input repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+	if r.recordPermanentFailure != nil {
+		return r.recordPermanentFailure(ctx, input)
+	}
 	return repository.SCMStatusDeliveryUpdateResult{}, nil
 }
-func (r *helperSCMDeliveryRepo) RecordExhaustedFailure(context.Context, repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+func (r *helperSCMDeliveryRepo) RecordExhaustedFailure(ctx context.Context, input repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+	if r.recordExhaustedFailure != nil {
+		return r.recordExhaustedFailure(ctx, input)
+	}
 	return repository.SCMStatusDeliveryUpdateResult{}, nil
 }
-func (r *helperSCMDeliveryRepo) MarkSuperseded(context.Context, repository.SCMStatusDeliveryMarkSupersededInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+func (r *helperSCMDeliveryRepo) MarkSuperseded(ctx context.Context, input repository.SCMStatusDeliveryMarkSupersededInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+	if r.markSuperseded != nil {
+		return r.markSuperseded(ctx, input)
+	}
 	return repository.SCMStatusDeliveryUpdateResult{}, nil
 }
 func (r *helperSCMDeliveryRepo) GetByKey(ctx context.Context, provider string, repositoryOwner string, repositoryName string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error) {
@@ -267,6 +291,135 @@ func TestSCMStatusReporter_ReassertAuthoritativeDelivery(t *testing.T) {
 		}}, publisher: publisher}
 		if err := reporter.reassertAuthoritativeDelivery(context.Background(), stale); err != nil {
 			t.Fatalf("expected nil error, got %v", err)
+		}
+	})
+}
+
+func TestSCMStatusReporter_ExecutionHelpers(t *testing.T) {
+	claimedAt := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	baseDelivery := domain.SCMStatusDelivery{
+		ID:              "delivery-1",
+		BuildID:         "build-1",
+		Provider:        "github",
+		RepositoryOwner: "octo",
+		RepositoryName:  "repo",
+		CommitSHA:       "deadbeef",
+		Context:         "ctx",
+		DesiredState:    domain.SCMCommitStatusStatePending,
+		Description:     "pending",
+		Attempts:        1,
+		MaxAttempts:     3,
+		ClaimedAt:       &claimedAt,
+	}
+
+	t.Run("mark sent and reassert pending outcomes", func(t *testing.T) {
+		reporter := &SCMStatusReporter{claimOwner: "worker", deliveryRepo: &helperSCMDeliveryRepo{
+			markSent: func(_ context.Context, input repository.SCMStatusDeliveryMarkSentInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+				if input.DeliveryID != baseDelivery.ID || input.ClaimOwner != "worker" || input.State != baseDelivery.DesiredState {
+					t.Fatalf("unexpected mark sent input: %+v", input)
+				}
+				return repository.SCMStatusDeliveryUpdateResult{Outcome: repository.SCMStatusDeliveryUpdateOutcomeUpdated}, nil
+			},
+			recordRetryableFailure: func(_ context.Context, input repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+				if input.DeliveryID != baseDelivery.ID || input.FailureReason != scmStatusFailureReasonAuthoritativeReassert || input.NextAttemptAt == nil {
+					t.Fatalf("unexpected reassert pending input: %+v", input)
+				}
+				return repository.SCMStatusDeliveryUpdateResult{Outcome: repository.SCMStatusDeliveryUpdateOutcomeUpdated}, nil
+			},
+		}}
+
+		outcome, err := reporter.markDeliverySent(context.Background(), baseDelivery, claimedAt.Add(time.Minute))
+		if err != nil || outcome != scmStatusExecutionOutcomeSent {
+			t.Fatalf("expected sent outcome, got outcome=%v err=%v", outcome, err)
+		}
+
+		reassertOutcome, reassertErr := reporter.markDeliveryReassertPending(context.Background(), baseDelivery, claimedAt.Add(2*time.Minute), claimedAt.Add(3*time.Minute))
+		if reassertErr != nil || reassertOutcome != scmStatusExecutionOutcomeReassertScheduled {
+			t.Fatalf("expected reassert scheduled outcome, got outcome=%v err=%v", reassertOutcome, reassertErr)
+		}
+	})
+
+	t.Run("mark delivery failed routes retryable permanent exhausted and lost claim", func(t *testing.T) {
+		retryableReporter := &SCMStatusReporter{claimOwner: "worker", retryPolicy: defaultSCMStatusRetryPolicy(), deliveryRepo: &helperSCMDeliveryRepo{
+			recordRetryableFailure: func(_ context.Context, input repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+				if input.FailureCategory != domain.SCMStatusDeliveryFailureCategoryRetryable || input.NextAttemptAt == nil || input.LastError == nil {
+					t.Fatalf("unexpected retryable failure input: %+v", input)
+				}
+				return repository.SCMStatusDeliveryUpdateResult{Outcome: repository.SCMStatusDeliveryUpdateOutcomeUpdated}, nil
+			},
+		}}
+		retryableOutcome, retryableErr := retryableReporter.markDeliveryFailed(context.Background(), baseDelivery, scmTimeoutNetError{}, claimedAt.Add(time.Minute), scmStatusRecoveryReasonInline)
+		if retryableErr != nil || retryableOutcome != scmStatusExecutionOutcomeRetryScheduled {
+			t.Fatalf("expected retry scheduled outcome, got outcome=%v err=%v", retryableOutcome, retryableErr)
+		}
+
+		permanentReporter := &SCMStatusReporter{claimOwner: "worker", retryPolicy: defaultSCMStatusRetryPolicy(), deliveryRepo: &helperSCMDeliveryRepo{
+			recordPermanentFailure: func(_ context.Context, input repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+				if input.FailureCategory != domain.SCMStatusDeliveryFailureCategoryPermanent || input.NextAttemptAt != nil {
+					t.Fatalf("unexpected permanent failure input: %+v", input)
+				}
+				return repository.SCMStatusDeliveryUpdateResult{Outcome: repository.SCMStatusDeliveryUpdateOutcomeUpdated}, nil
+			},
+		}}
+		permanentOutcome, permanentErr := permanentReporter.markDeliveryFailed(context.Background(), baseDelivery, helperPublisherError{retryable: false, reason: "bad_request"}, claimedAt.Add(2*time.Minute), scmStatusRecoveryReasonInline)
+		if permanentErr != nil || permanentOutcome != scmStatusExecutionOutcomePermanentlyFailed {
+			t.Fatalf("expected permanently failed outcome, got outcome=%v err=%v", permanentOutcome, permanentErr)
+		}
+
+		exhaustedDelivery := baseDelivery
+		exhaustedDelivery.Attempts = exhaustedDelivery.MaxAttempts
+		exhaustedReporter := &SCMStatusReporter{claimOwner: "worker", retryPolicy: defaultSCMStatusRetryPolicy(), deliveryRepo: &helperSCMDeliveryRepo{
+			recordExhaustedFailure: func(_ context.Context, input repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+				if input.FailureCategory != domain.SCMStatusDeliveryFailureCategoryRetryable || input.NextAttemptAt != nil {
+					t.Fatalf("unexpected exhausted failure input: %+v", input)
+				}
+				return repository.SCMStatusDeliveryUpdateResult{Outcome: repository.SCMStatusDeliveryUpdateOutcomeUpdated}, nil
+			},
+		}}
+		exhaustedOutcome, exhaustedErr := exhaustedReporter.markDeliveryFailed(context.Background(), exhaustedDelivery, scmTimeoutNetError{}, claimedAt.Add(3*time.Minute), scmStatusRecoveryReasonInline)
+		if exhaustedErr != nil || exhaustedOutcome != scmStatusExecutionOutcomeAttemptsExhausted {
+			t.Fatalf("expected attempts exhausted outcome, got outcome=%v err=%v", exhaustedOutcome, exhaustedErr)
+		}
+
+		lostClaimReporter := &SCMStatusReporter{claimOwner: "worker", retryPolicy: defaultSCMStatusRetryPolicy(), deliveryRepo: &helperSCMDeliveryRepo{
+			recordPermanentFailure: func(_ context.Context, input repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+				return repository.SCMStatusDeliveryUpdateResult{Outcome: repository.SCMStatusDeliveryUpdateOutcomeLostClaim}, nil
+			},
+		}}
+		lostClaimOutcome, lostClaimErr := lostClaimReporter.markDeliveryFailed(context.Background(), baseDelivery, helperPublisherError{retryable: false, reason: "forbidden"}, claimedAt.Add(4*time.Minute), scmStatusRecoveryReasonInline)
+		if lostClaimErr != nil || lostClaimOutcome != scmStatusExecutionOutcomeLostClaim {
+			t.Fatalf("expected lost claim outcome, got outcome=%v err=%v", lostClaimOutcome, lostClaimErr)
+		}
+	})
+
+	t.Run("execute claimed delivery build lookup failure and recover rehydration failure", func(t *testing.T) {
+		reporter := &SCMStatusReporter{
+			buildRepo:   &multiBuildRepository{err: repository.ErrBuildNotFound},
+			claimOwner:  "worker",
+			retryPolicy: defaultSCMStatusRetryPolicy(),
+			publisher:   &helperPublisher{},
+			deliveryRepo: &helperSCMDeliveryRepo{
+				recordRetryableFailure: func(_ context.Context, input repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+					return repository.SCMStatusDeliveryUpdateResult{Outcome: repository.SCMStatusDeliveryUpdateOutcomeUpdated}, nil
+				},
+				acquireForDelivery: func(_ context.Context, input repository.SCMStatusDeliveryClaimInput) (repository.SCMStatusDeliveryClaimResult, error) {
+					return repository.SCMStatusDeliveryClaimResult{Delivery: baseDelivery, Outcome: repository.SCMStatusDeliveryClaimOutcomeRetryClaimed}, nil
+				},
+			},
+			now: func() time.Time { return claimedAt.Add(5 * time.Minute) },
+		}
+
+		outcome, executeErr := reporter.executeClaimedDelivery(context.Background(), baseDelivery, nil, scmStatusRecoveryReasonInline)
+		if !errors.Is(executeErr, repository.ErrBuildNotFound) || outcome != scmStatusExecutionOutcomeRetryScheduled {
+			t.Fatalf("expected retry scheduled with original build error, got outcome=%v err=%v", outcome, executeErr)
+		}
+
+		attempt, recoverErr := reporter.recoverDelivery(context.Background(), baseDelivery, scmStatusRecoveryReasonDrain)
+		if recoverErr != nil {
+			t.Fatalf("expected nil recover error, got %v", recoverErr)
+		}
+		if attempt.claimOutcome != repository.SCMStatusDeliveryClaimOutcomeRetryClaimed || !attempt.rehydrationFailed || attempt.executionOutcome != scmStatusExecutionOutcomeRetryScheduled {
+			t.Fatalf("unexpected recover attempt: %+v", attempt)
 		}
 	})
 }
