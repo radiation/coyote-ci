@@ -39,6 +39,9 @@ var ErrJobManagedImageWriteCredentialIDRequired = errors.New("job managed image 
 var ErrJobArtifactTriggerProducerJobIDRequired = errors.New("job artifact_triggers producer_job_id is required")
 var ErrJobArtifactTriggerPathRequired = errors.New("job artifact_triggers path is required")
 var ErrJobArtifactTriggerSelfReference = errors.New("job artifact_triggers cannot reference the same job")
+var ErrArtifactTriggerDeliveryQueuedBuildConflict = errors.New("artifact trigger delivery already references a downstream build")
+var ErrArtifactTriggerDeliveryPendingRetryDeferred = errors.New("artifact trigger delivery pending recovery is not retryable in v1.3")
+var ErrArtifactTriggerDeliveryRetryNotSupported = errors.New("artifact trigger delivery retry is not supported for this delivery state")
 
 type JobService struct {
 	jobRepo                   repository.JobRepository
@@ -654,15 +657,19 @@ func (s *JobService) dispatchArtifactTriggerToJob(ctx context.Context, producerB
 			if existing.Status != domain.ArtifactTriggerDeliveryStatusFailed {
 				return nil
 			}
-			existing.ProducerBuildID = producerBuild.ID
-			existing.ProducerProjectID = producerBuild.ProjectID
-			existing.ProducerJobID = producerJobID
-			existing.ArtifactPath = artifact.LogicalPath
-			existing.Status = domain.ArtifactTriggerDeliveryStatusPending
-			existing.QueuedBuildID = nil
-			existing.ErrorMessage = nil
-			existing.UpdatedAt = now
-			created, err = s.artifactTriggerDeliveries.Update(ctx, existing)
+			claimed, claimErr := s.artifactTriggerDeliveries.ClaimFailedForRetry(ctx, existing.ID, now)
+			if claimErr != nil {
+				if errors.Is(claimErr, repository.ErrArtifactTriggerDeliveryRetryNotClaimable) {
+					return nil
+				}
+				return claimErr
+			}
+			claimed.ProducerBuildID = producerBuild.ID
+			claimed.ProducerProjectID = producerBuild.ProjectID
+			claimed.ProducerJobID = producerJobID
+			claimed.ArtifactPath = artifact.LogicalPath
+			claimed.UpdatedAt = now
+			created, err = s.artifactTriggerDeliveries.Update(ctx, claimed)
 			if err != nil {
 				return err
 			}
@@ -670,12 +677,16 @@ func (s *JobService) dispatchArtifactTriggerToJob(ctx context.Context, producerB
 			return err
 		}
 	}
-	artifactSizeBytes := artifact.SizeBytes
+	_, err = s.queueArtifactTriggerDelivery(ctx, created, producerBuild, artifact, consumerJob)
+	return err
+}
 
+func (s *JobService) queueArtifactTriggerDelivery(ctx context.Context, delivery domain.ArtifactTriggerDelivery, producerBuild domain.Build, artifact domain.BuildArtifact, consumerJob domain.Job) (domain.ArtifactTriggerDelivery, error) {
+	artifactSizeBytes := artifact.SizeBytes
 	queuedBuild, queueErr := s.createBuildForJobWithTrigger(ctx, consumerJob, &buildsvc.CreateBuildTriggerInput{
 		Kind:                   string(domain.BuildTriggerKindArtifact),
 		ProducerProjectID:      producerBuild.ProjectID,
-		ProducerJobID:          producerJobID,
+		ProducerJobID:          strings.TrimSpace(readStringPtr(producerBuild.JobID)),
 		ProducerBuildID:        producerBuild.ID,
 		ArtifactID:             artifact.ID,
 		ArtifactPath:           artifact.LogicalPath,
@@ -685,15 +696,21 @@ func (s *JobService) dispatchArtifactTriggerToJob(ctx context.Context, producerB
 	})
 	if queueErr != nil {
 		message := queueErr.Error()
-		created.Status = domain.ArtifactTriggerDeliveryStatusFailed
-		created.ErrorMessage = &message
-		created.UpdatedAt = time.Now().UTC()
-		_, _ = s.artifactTriggerDeliveries.Update(ctx, created)
-		return queueErr
+		delivery.Status = domain.ArtifactTriggerDeliveryStatusFailed
+		delivery.ErrorMessage = &message
+		delivery.UpdatedAt = time.Now().UTC()
+		updated, updateErr := s.artifactTriggerDeliveries.Update(ctx, delivery)
+		if updateErr != nil {
+			return domain.ArtifactTriggerDelivery{}, updateErr
+		}
+		return updated, queueErr
 	}
-	created.Status = domain.ArtifactTriggerDeliveryStatusQueued
-	created.QueuedBuildID = &queuedBuild.ID
-	created.UpdatedAt = time.Now().UTC()
-	_, err = s.artifactTriggerDeliveries.Update(ctx, created)
-	return err
+	delivery.Status = domain.ArtifactTriggerDeliveryStatusQueued
+	delivery.QueuedBuildID = &queuedBuild.ID
+	delivery.UpdatedAt = time.Now().UTC()
+	updated, err := s.artifactTriggerDeliveries.Update(ctx, delivery)
+	if err != nil {
+		return domain.ArtifactTriggerDelivery{}, err
+	}
+	return updated, nil
 }

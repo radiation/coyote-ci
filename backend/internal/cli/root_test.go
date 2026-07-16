@@ -756,6 +756,8 @@ func TestBuildArtifactTriggersCommand(t *testing.T) {
 		switch r.URL.String() {
 		case "/api/builds/build-1/artifact-triggers":
 			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","build_trigger_kind":"manual","recursive_dispatch_blocked":false,"summary":{"delivery_count":2,"queued_count":1,"failed_count":1},"deliveries":[{"delivery_id":"delivery-1","status":"queued","created_at":"2026-07-05T00:00:01Z","updated_at":"2026-07-05T00:00:02Z","producer_build_id":"build-1","producer_project_id":"project-1","producer_job_id":"job-upstream","artifact_id":"artifact-1","artifact_path":"reports/report.xml","artifact_name":"report.xml","artifact_size_bytes":42,"consumer_job_id":"job-deploy","consumer_job_name":"deploy","downstream_build_id":"build-2"},{"delivery_id":"delivery-2","status":"failed","created_at":"2026-07-05T00:00:03Z","updated_at":"2026-07-05T00:00:04Z","producer_build_id":"build-1","producer_project_id":"project-1","producer_job_id":"job-upstream","artifact_id":"artifact-2","artifact_path":"docs/summary.txt","consumer_job_id":"job-docs","error_message":"queue failed"}]}}`))
+		case "/api/artifact-trigger-deliveries/delivery-2/retry":
+			_, _ = w.Write([]byte(`{"data":{"result":"retried","message":"queued downstream build","delivery":{"delivery_id":"delivery-2","status":"queued","created_at":"2026-07-05T00:00:03Z","updated_at":"2026-07-05T00:00:05Z","producer_build_id":"build-1","producer_project_id":"project-1","producer_job_id":"job-upstream","artifact_id":"artifact-2","artifact_path":"docs/summary.txt","consumer_job_id":"job-docs","downstream_build_id":"build-3"}}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -781,7 +783,7 @@ func TestBuildArtifactTriggersCommand(t *testing.T) {
 	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifact-triggers", "build-1"}}); code != 0 {
 		t.Fatalf("build artifact-triggers exit code %d stderr=%s", code, stderr.String())
 	}
-	for _, want := range []string{"Artifact trigger deliveries for build build-1", "Summary: 2 deliveries, 1 queued, 1 failed", "report.xml", "deploy", "build-2", "queue failed"} {
+	for _, want := range []string{"Artifact trigger deliveries for build build-1", "Summary: 2 deliveries, 1 queued, 1 failed", "delivery-1", "delivery-2", "report.xml", "deploy", "build-2", "queue failed"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("expected %q in human output, got %s", want, stdout.String())
 		}
@@ -813,6 +815,28 @@ func TestBuildArtifactTriggersCommand(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "Artifact trigger deliveries for build") {
 		t.Fatalf("unexpected human prose in artifact trigger JSON: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifact-triggers", "retry", "delivery-2"}}); code != 0 {
+		t.Fatalf("build artifact-triggers retry exit code %d stderr=%s", code, stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "Retried artifact-trigger delivery delivery-2 -> build-3") || !strings.Contains(got, "Status: queued") {
+		t.Fatalf("unexpected artifact trigger retry output: %s", got)
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "artifact-triggers", "retry", "delivery-2", "--json"}}); code != 0 {
+		t.Fatalf("build artifact-triggers retry json exit code %d stderr=%s", code, stderr.String())
+	}
+	payload = map[string]any{}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode build artifact trigger retry json: %v", err)
+	}
+	if payload["result"] != "retried" {
+		t.Fatalf("unexpected artifact trigger retry payload: %+v", payload)
 	}
 }
 

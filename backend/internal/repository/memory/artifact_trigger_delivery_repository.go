@@ -26,6 +26,29 @@ func NewArtifactTriggerDeliveryRepository() *ArtifactTriggerDeliveryRepository {
 	}
 }
 
+func (r *ArtifactTriggerDeliveryRepository) ClaimFailedForRetry(_ context.Context, id string, updatedAt time.Time) (domain.ArtifactTriggerDelivery, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delivery, ok := r.deliveries[strings.TrimSpace(id)]
+	if !ok {
+		return domain.ArtifactTriggerDelivery{}, repository.ErrArtifactTriggerDeliveryNotFound
+	}
+	if delivery.Status != domain.ArtifactTriggerDeliveryStatusFailed || delivery.QueuedBuildID != nil {
+		return domain.ArtifactTriggerDelivery{}, repository.ErrArtifactTriggerDeliveryRetryNotClaimable
+	}
+	now := updatedAt.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	delivery.Status = domain.ArtifactTriggerDeliveryStatusPending
+	delivery.QueuedBuildID = nil
+	delivery.ErrorMessage = nil
+	delivery.UpdatedAt = now
+	r.deliveries[delivery.ID] = delivery
+	return delivery, nil
+}
+
 func (r *ArtifactTriggerDeliveryRepository) Create(_ context.Context, delivery domain.ArtifactTriggerDelivery) (domain.ArtifactTriggerDelivery, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -96,4 +119,15 @@ func (r *ArtifactTriggerDeliveryRepository) Update(_ context.Context, delivery d
 
 func artifactTriggerDeliveryKey(artifactID string, consumerJobID string) string {
 	return artifactID + "\x00" + consumerJobID
+}
+
+func (r *ArtifactTriggerDeliveryRepository) GetByID(_ context.Context, id string) (domain.ArtifactTriggerDelivery, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	delivery, ok := r.deliveries[strings.TrimSpace(id)]
+	if !ok {
+		return domain.ArtifactTriggerDelivery{}, repository.ErrArtifactTriggerDeliveryNotFound
+	}
+	return delivery, nil
 }

@@ -237,6 +237,7 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 	if artifactTriggersPayload.Summary.DeliveryCount != 2 || len(artifactTriggersPayload.Deliveries) != 2 || artifactTriggersPayload.Deliveries[0].ConsumerJobName == nil || *artifactTriggersPayload.Deliveries[0].ConsumerJobName != "deploy" {
 		t.Fatalf("unexpected artifact trigger payload: %+v", artifactTriggersPayload)
 	}
+	retryTriggerPayload := buildArtifactTriggerRetryPayload{Result: "retried", Message: "queued downstream build", Delivery: buildArtifactTriggerDeliveryView{DeliveryID: "delivery-1", Status: "queued", DownstreamBuildID: stringPtr("build-2")}}
 	trimmedTriggerPayload := makeBuildArtifactTriggerDeliveriesPayload(" build-fallback ", api.BuildArtifactTriggerDeliveriesResponse{
 		BuildID:                  "",
 		BuildTriggerKind:         "  ",
@@ -276,10 +277,34 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 		t.Fatalf("writeBuildArtifactTriggersHuman failed: %v", err)
 	}
 	artifactTriggersOut := buf.String()
-	for _, want := range []string{"Artifact trigger deliveries for build build-1", "Summary: 2 deliveries, 1 queued, 1 failed", "queued", "report.xml", "deploy", "build-2", "queue failed"} {
+	for _, want := range []string{"Artifact trigger deliveries for build build-1", "Summary: 2 deliveries, 1 queued, 1 failed", "delivery-1", "delivery-2", "queued", "report.xml", "deploy", "build-2", "queue failed"} {
 		if !strings.Contains(artifactTriggersOut, want) {
 			t.Fatalf("expected %q in artifact trigger output, got %s", want, artifactTriggersOut)
 		}
+	}
+	buf.Reset()
+	if err := writeBuildArtifactTriggerRetryHuman(buf, retryTriggerPayload); err != nil {
+		t.Fatalf("writeBuildArtifactTriggerRetryHuman failed: %v", err)
+	}
+	if got := buf.String(); !strings.Contains(got, "Retried artifact-trigger delivery delivery-1 -> build-2") || !strings.Contains(got, "Status: queued") {
+		t.Fatalf("unexpected artifact trigger retry output: %s", got)
+	}
+	buf.Reset()
+	if err := writeBuildArtifactTriggerRetryHuman(buf, buildArtifactTriggerRetryPayload{Result: "retried", Delivery: buildArtifactTriggerDeliveryView{DeliveryID: "delivery-3", Status: "pending"}}); err != nil {
+		t.Fatalf("writeBuildArtifactTriggerRetryHuman no-downstream failed: %v", err)
+	}
+	if got := buf.String(); !strings.Contains(got, "Retried artifact-trigger delivery delivery-3\n") || !strings.Contains(got, "Status: pending") || strings.Contains(got, "Message:") {
+		t.Fatalf("unexpected no-downstream retry output: %s", got)
+	}
+	buf.Reset()
+	if err := writeBuildArtifactTriggerRetryHuman(buf, buildArtifactTriggerRetryPayload{Result: "already_satisfied", Message: "artifact trigger delivery already points at a downstream build", Delivery: buildArtifactTriggerDeliveryView{DeliveryID: "delivery-2", Status: "queued", DownstreamBuildID: stringPtr("build-9")}}); err != nil {
+		t.Fatalf("writeBuildArtifactTriggerRetryHuman already satisfied failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "already points at downstream build build-9") {
+		t.Fatalf("unexpected already satisfied retry output: %s", buf.String())
+	}
+	if err := writeBuildArtifactTriggerRetryHuman(failWriter{}, retryTriggerPayload); err == nil {
+		t.Fatal("expected writeBuildArtifactTriggerRetryHuman to surface write errors")
 	}
 	buf.Reset()
 	if err := writeBuildArtifactTriggersHuman(buf, buildArtifactTriggerDeliveriesPayload{BuildID: "build-1", BuildTriggerKind: "artifact", RecursiveDispatchBlocked: true, Summary: buildArtifactTriggerSummaryView{}}); err != nil {

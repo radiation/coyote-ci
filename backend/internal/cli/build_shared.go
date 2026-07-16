@@ -99,6 +99,12 @@ type buildArtifactTriggerDeliveryView struct {
 	ErrorMessage      *string `json:"error_message,omitempty"`
 }
 
+type buildArtifactTriggerRetryPayload struct {
+	Result   string                           `json:"result"`
+	Message  string                           `json:"message,omitempty"`
+	Delivery buildArtifactTriggerDeliveryView `json:"delivery"`
+}
+
 type buildArtifactListView struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name,omitempty"`

@@ -358,6 +358,20 @@ definitions:
       updated_at:
         type: string
     type: object
+  api.BuildArtifactTriggerDeliveryRetryEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.BuildArtifactTriggerDeliveryRetryResponse'
+    type: object
+  api.BuildArtifactTriggerDeliveryRetryResponse:
+    properties:
+      delivery:
+        $ref: '#/definitions/api.BuildArtifactTriggerDeliveryResponse'
+      message:
+        type: string
+      result:
+        type: string
+    type: object
   api.BuildArtifactTriggerDeliverySummaryResponse:
     properties:
       delivery_count:
@@ -1721,6 +1735,41 @@ info:
   title: Coyote CI API
   version: "0.1"
 paths:
+  /artifact-trigger-deliveries/{deliveryID}/retry:
+    post:
+      description: Retries a failed artifact-trigger delivery by delivery id.
+      parameters:
+      - description: Delivery ID
+        in: path
+        name: deliveryID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuildArtifactTriggerDeliveryRetryEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Retry artifact trigger delivery
+      tags:
+      - artifact-trigger-deliveries
   /artifacts:
     get:
       description: Returns logical artifacts grouped with their available versions

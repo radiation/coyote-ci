@@ -5,12 +5,14 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	artifactsvc "github.com/radiation/coyote-ci/backend/internal/service/artifact"
@@ -193,14 +195,14 @@ func TestJobHandler_HeaderModeAuthorizationAndFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create fixture job failed: %v", err)
 	}
-	if _, err := fixture.jobService.CreateJob(context.Background(), service.CreateJobInput{
+	if _, createOtherJobErr := fixture.jobService.CreateJob(context.Background(), service.CreateJobInput{
 		ProjectID:     fixture.projectOther.ID,
 		Name:          "backend-other",
 		RepositoryURL: "https://github.com/example/other.git",
 		DefaultRef:    "main",
 		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
-	}); err != nil {
-		t.Fatalf("create other job failed: %v", err)
+	}); createOtherJobErr != nil {
+		t.Fatalf("create other job failed: %v", createOtherJobErr)
 	}
 
 	h := NewJobHandler(fixture.jobService)
@@ -364,11 +366,11 @@ func TestBuildHandler_HeaderModeAuthorizationAndFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create viewer build failed: %v", err)
 	}
-	if _, err := fixture.buildService.CreateBuild(context.Background(), buildsvc.CreateBuildInput{
+	if _, createOtherBuildErr := fixture.buildService.CreateBuild(context.Background(), buildsvc.CreateBuildInput{
 		ProjectID: fixture.projectOther.ID,
 		Steps:     []buildsvc.CreateBuildStepInput{{Name: "test", Command: "go", Args: []string{"test", "./..."}}},
-	}); err != nil {
-		t.Fatalf("create other build failed: %v", err)
+	}); createOtherBuildErr != nil {
+		t.Fatalf("create other build failed: %v", createOtherBuildErr)
 	}
 
 	h := NewBuildHandler(fixture.buildService)
@@ -630,6 +632,51 @@ func TestScopedAPITokenRouteEnforcement(t *testing.T) {
 		t.Fatalf("expected missing build:read for artifact triggers status %d, got %d body=%s", http.StatusForbidden, artifactTriggersWrongScopeRes.Code, artifactTriggersWrongScopeRes.Body.String())
 	}
 
+	retryArtifactRepo := &authzFakeArtifactRepo{artifactsByBuild: map[string][]domain.BuildArtifact{}}
+	retryBuildRepo := repositorymemory.NewBuildRepository()
+	retryJobRepo := repositorymemory.NewJobRepository()
+	retryDeliveryRepo := repositorymemory.NewArtifactTriggerDeliveryRepository()
+	retryBuildService := buildsvc.NewBuildService(retryBuildRepo, nil, logs.NewNoopSink())
+	retryBuildService.SetArtifactPersistence(retryArtifactRepo, nil, "")
+	retryJobService := service.NewJobService(retryJobRepo, retryBuildService).WithArtifactTriggerDeliveryRepository(retryDeliveryRepo)
+	retryHandler := NewBuildHandler(retryBuildService)
+	retryHandler.SetJobService(retryJobService)
+	retryHandler.SetAuthorization(auth.ModeHeader, fixture.membershipService)
+	retryProducerJob, createErr := retryJobRepo.Create(ctx, domain.Job{ID: "job-retry-upstream", ProjectID: fixture.projectViewer.ID, Name: "retry-upstream", Priority: 5, RepositoryURL: "https://github.com/example/repo.git", DefaultRef: "main", PipelineYAML: "version: 1\nsteps:\n  - name: build\n    run: echo build\n", Enabled: true, CreatedAt: fixture.now, UpdatedAt: fixture.now})
+	if createErr != nil {
+		t.Fatalf("create retry producer job failed: %v", createErr)
+	}
+	retryConsumerJob, createErr := retryJobRepo.Create(ctx, domain.Job{ID: "job-retry-consumer", ProjectID: fixture.projectViewer.ID, Name: "retry-consumer", Priority: 5, RepositoryURL: "https://github.com/example/repo.git", DefaultRef: "main", PipelineYAML: "version: 1\nsteps:\n  - name: consume\n    run: echo consume\n", Enabled: true, CreatedAt: fixture.now, UpdatedAt: fixture.now})
+	if createErr != nil {
+		t.Fatalf("create retry consumer job failed: %v", createErr)
+	}
+	retryProducerBuild, createErr := retryBuildRepo.CreateQueuedBuild(ctx, domain.Build{ID: "build-retry-upstream", ProjectID: fixture.projectViewer.ID, JobID: &retryProducerJob.ID, Status: domain.BuildStatusQueued, CreatedAt: fixture.now, Trigger: domain.BuildTrigger{Kind: domain.BuildTriggerKindManual}}, nil)
+	if createErr != nil {
+		t.Fatalf("create retry producer build failed: %v", createErr)
+	}
+	if _, createErr := retryArtifactRepo.Create(ctx, domain.BuildArtifact{ID: "artifact-retry-1", BuildID: retryProducerBuild.ID, Name: "app.tgz", LogicalPath: "dist/app.tgz", SizeBytes: 42, CreatedAt: fixture.now}); createErr != nil {
+		t.Fatalf("create retry artifact failed: %v", createErr)
+	}
+	errorMessage := "queue failed"
+	if _, createErr := retryDeliveryRepo.Create(ctx, domain.ArtifactTriggerDelivery{ID: "delivery-retry-1", ArtifactID: "artifact-retry-1", ConsumerJobID: retryConsumerJob.ID, ProducerBuildID: retryProducerBuild.ID, ProducerProjectID: fixture.projectViewer.ID, ProducerJobID: retryProducerJob.ID, ArtifactPath: "dist/app.tgz", ErrorMessage: &errorMessage, Status: domain.ArtifactTriggerDeliveryStatusFailed, CreatedAt: fixture.now, UpdatedAt: fixture.now}); createErr != nil {
+		t.Fatalf("create retry delivery failed: %v", createErr)
+	}
+	retryWrongScopeReq := addURLParam(httptest.NewRequest(http.MethodPost, "/artifact-trigger-deliveries/delivery-retry-1/retry", nil), "deliveryID", "delivery-retry-1")
+	retryWrongScopeReq = withScopedAPIToken(retryWrongScopeReq, fixture.maintainer, domain.APITokenScopeBuildRead)
+	retryWrongScopeRes := httptest.NewRecorder()
+	retryHandler.RetryArtifactTriggerDelivery(retryWrongScopeRes, retryWrongScopeReq)
+	if retryWrongScopeRes.Code != http.StatusForbidden {
+		t.Fatalf("expected missing build:run for artifact trigger retry status %d, got %d body=%s", http.StatusForbidden, retryWrongScopeRes.Code, retryWrongScopeRes.Body.String())
+	}
+
+	retryReq := addURLParam(httptest.NewRequest(http.MethodPost, "/artifact-trigger-deliveries/delivery-retry-1/retry", nil), "deliveryID", "delivery-retry-1")
+	retryReq = withScopedAPIToken(retryReq, fixture.maintainer, domain.APITokenScopeBuildRun)
+	retryRes := httptest.NewRecorder()
+	retryHandler.RetryArtifactTriggerDelivery(retryRes, retryReq)
+	if retryRes.Code != http.StatusOK {
+		t.Fatalf("expected build:run artifact trigger retry status %d, got %d body=%s", http.StatusOK, retryRes.Code, retryRes.Body.String())
+	}
+
 	queueReq := addBuildIDParam(httptest.NewRequest(http.MethodPost, "/builds/"+build.ID+"/queue", nil), build.ID)
 	queueReq = withScopedAPIToken(queueReq, fixture.maintainer, domain.APITokenScopeBuildRead)
 	queueRes := httptest.NewRecorder()
@@ -786,8 +833,8 @@ func newHandlerAuthzFixture(t *testing.T) handlerAuthzFixture {
 		{projectID: projectViewer.ID, userID: maintainer.ID, role: "maintainer"},
 		{projectID: projectViewer.ID, userID: owner.ID, role: "owner"},
 	} {
-		if _, err := membershipService.UpsertProjectMembership(ctx, service.UpsertProjectMembershipInput{ProjectID: membership.projectID, UserID: membership.userID, Role: membership.role}); err != nil {
-			t.Fatalf("create membership failed: %v", err)
+		if _, upsertMembershipErr := membershipService.UpsertProjectMembership(ctx, service.UpsertProjectMembershipInput{ProjectID: membership.projectID, UserID: membership.userID, Role: membership.role}); upsertMembershipErr != nil {
+			t.Fatalf("create membership failed: %v", upsertMembershipErr)
 		}
 	}
 
@@ -805,4 +852,67 @@ func newHandlerAuthzFixture(t *testing.T) handlerAuthzFixture {
 		buildService:      buildService,
 		membershipService: membershipService,
 	}
+}
+
+type authzFakeArtifactRepo struct {
+	artifactsByBuild map[string][]domain.BuildArtifact
+}
+
+func (r *authzFakeArtifactRepo) Create(_ context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
+	if r.artifactsByBuild == nil {
+		r.artifactsByBuild = map[string][]domain.BuildArtifact{}
+	}
+	r.artifactsByBuild[artifact.BuildID] = append(r.artifactsByBuild[artifact.BuildID], artifact)
+	return artifact, nil
+}
+
+func (r *authzFakeArtifactRepo) ListByBuildID(_ context.Context, buildID string) ([]domain.BuildArtifact, error) {
+	items := append([]domain.BuildArtifact(nil), r.artifactsByBuild[buildID]...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].CreatedAt.Before(items[j].CreatedAt)
+	})
+	return items, nil
+}
+
+func (r *authzFakeArtifactRepo) Browse(_ context.Context, _ repository.BrowseArtifactsParams) ([]domain.ArtifactBrowseRecord, error) {
+	return nil, nil
+}
+
+func (r *authzFakeArtifactRepo) ListCatalog(_ context.Context, _ repository.ArtifactCatalogParams) ([]domain.ArtifactRecord, error) {
+	return nil, nil
+}
+
+func (r *authzFakeArtifactRepo) GetCatalogByID(_ context.Context, artifactID string) (domain.ArtifactRecord, error) {
+	for buildID, items := range r.artifactsByBuild {
+		for _, item := range items {
+			if item.ID == artifactID {
+				return domain.ArtifactRecord{Artifact: item, Build: domain.Build{ID: buildID}}, nil
+			}
+		}
+	}
+	return domain.ArtifactRecord{}, repository.ErrArtifactNotFound
+}
+
+func (r *authzFakeArtifactRepo) GetByID(_ context.Context, buildID string, artifactID string) (domain.BuildArtifact, error) {
+	for _, item := range r.artifactsByBuild[buildID] {
+		if item.ID == artifactID {
+			return item, nil
+		}
+	}
+	return domain.BuildArtifact{}, repository.ErrArtifactNotFound
+}
+
+func (r *authzFakeArtifactRepo) ListByStepID(_ context.Context, stepID string) ([]domain.BuildArtifact, error) {
+	var out []domain.BuildArtifact
+	for _, items := range r.artifactsByBuild {
+		for _, item := range items {
+			if item.StepID != nil && *item.StepID == stepID {
+				out = append(out, item)
+			}
+		}
+	}
+	return out, nil
 }
