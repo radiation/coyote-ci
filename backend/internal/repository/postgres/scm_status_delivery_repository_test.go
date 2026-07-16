@@ -243,6 +243,75 @@ func TestSCMStatusDeliveryRepository_ListRecoverable_ValidationAndQuery(t *testi
 	}
 }
 
+func TestSCMStatusDeliveryRepository_UpdateConflictAndFailureWrappers(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewSCMStatusDeliveryRepository(db)
+	now := time.Now().UTC()
+	row := scmStatusDeliveryTestColumns()
+	claimExpiresAt := now.Add(time.Minute)
+
+	staleRow := sqlmock.NewRows(row).AddRow(
+		"delivery-1", "build-1", 1, now, "github", "octo", "repo", "abcdef", "coyote/default/job-1", "pending", nil, "desc", nil, "sending", 1, 3, now, nil, now, claimExpiresAt, "worker-a", nil, nil, nil, nil, nil, now, now,
+	)
+	mock.ExpectQuery("UPDATE scm_status_deliveries").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT .* FROM scm_status_deliveries WHERE id = \$1`).WithArgs("delivery-1").WillReturnRows(staleRow)
+	lostClaim, lostClaimErr := repo.RecordPermanentFailure(context.Background(), repository.SCMStatusDeliveryRecordFailureInput{DeliveryID: "delivery-1", ClaimOwner: "worker-a", ClaimedAt: now, FailedAt: now, FailureCategory: domain.SCMStatusDeliveryFailureCategoryPermanent, FailureReason: "bad_request"})
+	if lostClaimErr != nil {
+		t.Fatalf("expected lost-claim conflict resolution, got %v", lostClaimErr)
+	}
+	if lostClaim.Outcome != repository.SCMStatusDeliveryUpdateOutcomeLostClaim {
+		t.Fatalf("expected lost claim outcome, got %q", lostClaim.Outcome)
+	}
+
+	mock.ExpectQuery("UPDATE scm_status_deliveries").WillReturnRows(sqlmock.NewRows(row).AddRow(
+		"delivery-2", "build-2", 1, now, "github", "octo", "repo", "123456", "coyote/default/job-2", "failure", nil, "desc", nil, "retry_waiting", 2, 3, now, now.Add(time.Minute), nil, nil, nil, "retryable", "temporary", "boom", nil, nil, now, now,
+	))
+	retryAt := now.Add(time.Minute)
+	retryResult, retryErr := repo.RecordRetryableFailure(context.Background(), repository.SCMStatusDeliveryRecordFailureInput{DeliveryID: "delivery-2", ClaimOwner: "worker-b", ClaimedAt: now, FailedAt: now, NextAttemptAt: &retryAt, FailureCategory: domain.SCMStatusDeliveryFailureCategoryRetryable, FailureReason: "temporary", LastError: strPtrPGSCM("boom")})
+	if retryErr != nil || retryResult.Delivery.Status != domain.SCMStatusDeliveryStatusRetryWaiting {
+		t.Fatalf("unexpected retryable failure result: %+v err=%v", retryResult, retryErr)
+	}
+
+	mock.ExpectQuery("UPDATE scm_status_deliveries").WillReturnRows(sqlmock.NewRows(row).AddRow(
+		"delivery-3", "build-3", 1, now, "github", "octo", "repo", "654321", "coyote/default/job-3", "failure", nil, "desc", nil, "failed_exhausted", 3, 3, now, nil, nil, nil, nil, "retryable", "exhausted", "boom", nil, nil, now, now,
+	))
+	exhaustedResult, exhaustedErr := repo.RecordExhaustedFailure(context.Background(), repository.SCMStatusDeliveryRecordFailureInput{DeliveryID: "delivery-3", ClaimOwner: "worker-c", ClaimedAt: now, FailedAt: now, FailureCategory: domain.SCMStatusDeliveryFailureCategoryRetryable, FailureReason: "exhausted", LastError: strPtrPGSCM("boom")})
+	if exhaustedErr != nil || exhaustedResult.Delivery.Status != domain.SCMStatusDeliveryStatusFailedExhausted {
+		t.Fatalf("unexpected exhausted failure result: %+v err=%v", exhaustedResult, exhaustedErr)
+	}
+
+	claimOwner := "worker-d"
+	mock.ExpectQuery("UPDATE scm_status_deliveries").WillReturnRows(sqlmock.NewRows(row).AddRow(
+		"delivery-4", "build-4", 1, now, "github", "octo", "repo", "999999", "coyote/default/job-4", "pending", nil, "desc", nil, "superseded", 1, 3, now, nil, nil, nil, nil, "permanent", "newer_build_attempt_exists", nil, nil, now, now, now,
+	))
+	supersededResult, supersededErr := repo.MarkSuperseded(context.Background(), repository.SCMStatusDeliveryMarkSupersededInput{DeliveryID: "delivery-4", ClaimOwner: &claimOwner, ClaimedAt: &now, SupersededAt: now, Reason: "newer_build_attempt_exists"})
+	if supersededErr != nil || supersededResult.Delivery.Status != domain.SCMStatusDeliveryStatusSuperseded {
+		t.Fatalf("unexpected superseded result: %+v err=%v", supersededResult, supersededErr)
+	}
+
+	mock.ExpectQuery(`SELECT .* FROM scm_status_deliveries WHERE provider = \$1 AND repository_owner = \$2 AND repository_name = \$3 AND commit_sha = \$4 AND context_name = \$5`).WithArgs("github", "octo", "repo", "missing", "ctx").WillReturnError(sql.ErrNoRows)
+	if _, getErr := repo.GetByKey(context.Background(), "github", "octo", "repo", "missing", "ctx"); getErr != repository.ErrSCMStatusDeliveryNotFound {
+		t.Fatalf("expected not found, got %v", getErr)
+	}
+
+	if nullableSCMCommitStatusStateLocal(nil) != nil {
+		t.Fatal("expected nil scm state value")
+	}
+	state := domain.SCMCommitStatusStatePending
+	if nullableSCMCommitStatusStateLocal(&state) != "pending" {
+		t.Fatal("expected trimmed scm state string")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 func scmStatusDeliveryTestColumns() []string {
 	return []string{"id", "build_id", "build_attempt_number", "build_created_at", "provider", "repository_owner", "repository_name", "commit_sha", "context_name", "desired_state", "last_sent_state", "description", "details_url", "status", "attempts", "max_attempts", "last_attempt_at", "next_attempt_at", "claimed_at", "claim_expires_at", "claimed_by", "failure_category", "failure_reason", "last_error", "sent_at", "superseded_at", "created_at", "updated_at"}
 }

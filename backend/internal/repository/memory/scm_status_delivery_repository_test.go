@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -161,6 +162,145 @@ func TestSCMStatusDeliveryRepository_ConcurrentInitialClaimCreatesOneRow(t *test
 	}
 	if created != 1 || blocked != workers-1 {
 		t.Fatalf("expected one created claim and %d blocked claims, got created=%d blocked=%d", workers-1, created, blocked)
+	}
+}
+
+func TestSCMStatusDeliveryRepository_RecoverableAndFailures(t *testing.T) {
+	repo := NewSCMStatusDeliveryRepository()
+	now := time.Date(2026, 7, 16, 17, 0, 0, 0, time.UTC)
+	base := domain.SCMStatusDelivery{
+		BuildID:         "build-1",
+		BuildAttempt:    1,
+		BuildCreatedAt:  now,
+		Provider:        "github",
+		RepositoryOwner: "octo",
+		RepositoryName:  "repo",
+		CommitSHA:       "abcdef",
+		Context:         "coyote/default/job-1",
+		DesiredState:    domain.SCMCommitStatusStatePending,
+		Description:     "Coyote build is pending",
+	}
+
+	claimed, claimErr := repo.AcquireForDelivery(context.Background(), repository.SCMStatusDeliveryClaimInput{Delivery: base, ClaimOwner: "worker-a", Now: now, ClaimDuration: time.Minute, MaxAttempts: 3})
+	if claimErr != nil {
+		t.Fatalf("initial claim failed: %v", claimErr)
+	}
+	retryAt := now.Add(30 * time.Second)
+	retryResult, retryErr := repo.RecordRetryableFailure(context.Background(), repository.SCMStatusDeliveryRecordFailureInput{DeliveryID: claimed.Delivery.ID, ClaimOwner: "worker-a", ClaimedAt: *claimed.Delivery.ClaimedAt, FailedAt: now, NextAttemptAt: &retryAt, FailureCategory: domain.SCMStatusDeliveryFailureCategoryRetryable, FailureReason: "retry_later", LastError: strPtrSCMMemory("temporary")})
+	if retryErr != nil {
+		t.Fatalf("retryable failure failed: %v", retryErr)
+	}
+	if retryResult.Delivery.Status != domain.SCMStatusDeliveryStatusRetryWaiting {
+		t.Fatalf("expected retry waiting status, got %q", retryResult.Delivery.Status)
+	}
+
+	second := base
+	second.BuildID = "build-2"
+	second.CommitSHA = "123456"
+	staleClaim, staleErr := repo.AcquireForDelivery(context.Background(), repository.SCMStatusDeliveryClaimInput{Delivery: second, ClaimOwner: "worker-b", Now: now, ClaimDuration: time.Minute, MaxAttempts: 3})
+	if staleErr != nil {
+		t.Fatalf("stale claim failed: %v", staleErr)
+	}
+
+	recoverable, listErr := repo.ListRecoverable(context.Background(), repository.SCMStatusDeliveryRecoverableScanInput{Now: now.Add(2 * time.Minute), Limit: 5})
+	if listErr != nil {
+		t.Fatalf("list recoverable failed: %v", listErr)
+	}
+	if len(recoverable) != 2 || recoverable[0].ID != retryResult.Delivery.ID || recoverable[1].ID != staleClaim.Delivery.ID {
+		t.Fatalf("unexpected recoverable deliveries: %+v", recoverable)
+	}
+
+	permanentBase := base
+	permanentBase.BuildID = "build-3"
+	permanentBase.CommitSHA = "999999"
+	permanentClaim, permanentClaimErr := repo.AcquireForDelivery(context.Background(), repository.SCMStatusDeliveryClaimInput{Delivery: permanentBase, ClaimOwner: "worker-c", Now: now, ClaimDuration: time.Minute, MaxAttempts: 2})
+	if permanentClaimErr != nil {
+		t.Fatalf("permanent claim failed: %v", permanentClaimErr)
+	}
+	permanent, permanentErr := repo.RecordPermanentFailure(context.Background(), repository.SCMStatusDeliveryRecordFailureInput{DeliveryID: permanentClaim.Delivery.ID, ClaimOwner: "worker-c", ClaimedAt: *permanentClaim.Delivery.ClaimedAt, FailedAt: now, FailureCategory: domain.SCMStatusDeliveryFailureCategoryPermanent, FailureReason: "bad_request", LastError: strPtrSCMMemory("nope")})
+	if permanentErr != nil {
+		t.Fatalf("permanent failure failed: %v", permanentErr)
+	}
+	if permanent.Delivery.Status != domain.SCMStatusDeliveryStatusFailedPermanent {
+		t.Fatalf("expected permanent status, got %q", permanent.Delivery.Status)
+	}
+
+	exhaustedBase := base
+	exhaustedBase.BuildID = "build-4"
+	exhaustedBase.CommitSHA = "777777"
+	exhaustedClaim, exhaustedClaimErr := repo.AcquireForDelivery(context.Background(), repository.SCMStatusDeliveryClaimInput{Delivery: exhaustedBase, ClaimOwner: "worker-d", Now: now, ClaimDuration: time.Minute, MaxAttempts: 4})
+	if exhaustedClaimErr != nil {
+		t.Fatalf("exhausted claim failed: %v", exhaustedClaimErr)
+	}
+	exhaustedDelivery := repo.deliveries[exhaustedClaim.Delivery.ID]
+	exhaustedDelivery.Attempts = 2
+	repo.deliveries[exhaustedClaim.Delivery.ID] = exhaustedDelivery
+	exhausted, exhaustedErr := repo.RecordExhaustedFailure(context.Background(), repository.SCMStatusDeliveryRecordFailureInput{DeliveryID: exhaustedClaim.Delivery.ID, ClaimOwner: "worker-d", ClaimedAt: *exhaustedClaim.Delivery.ClaimedAt, FailedAt: now, FailureCategory: domain.SCMStatusDeliveryFailureCategoryRetryable, FailureReason: "retries_exhausted", LastError: strPtrSCMMemory("still failing")})
+	if exhaustedErr != nil {
+		t.Fatalf("exhausted failure failed: %v", exhaustedErr)
+	}
+	if exhausted.Delivery.Status != domain.SCMStatusDeliveryStatusFailedExhausted || exhausted.Delivery.Attempts != exhausted.Delivery.MaxAttempts {
+		t.Fatalf("expected exhausted delivery to clamp attempts, got %+v", exhausted.Delivery)
+	}
+
+	if _, err := repo.GetByKey(context.Background(), "github", "octo", "repo", "missing", "ctx"); !errors.Is(err, repository.ErrSCMStatusDeliveryNotFound) {
+		t.Fatalf("expected not found, got %v", err)
+	}
+}
+
+func TestSCMStatusDeliveryRepository_InternalHelpers(t *testing.T) {
+	now := time.Date(2026, 7, 16, 18, 0, 0, 0, time.UTC)
+	claimExpiresAt := now.Add(time.Minute)
+	retryAt := now.Add(-time.Minute)
+	claimOwner := "worker-a"
+	lastSentState := domain.SCMCommitStatusStateSuccess
+
+	if _, _, _, _, err := normalizeSCMClaimInput(repository.SCMStatusDeliveryClaimInput{}); err == nil {
+		t.Fatal("expected invalid claim input error")
+	}
+	valid := domain.SCMStatusDelivery{BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: now, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: "abcdef", Context: "ctx", DesiredState: domain.SCMCommitStatusStatePending}
+	if _, _, _, _, err := normalizeSCMClaimInput(repository.SCMStatusDeliveryClaimInput{Delivery: valid, ClaimOwner: "worker-a", Now: now, ClaimDuration: time.Minute, MaxAttempts: 2}); err != nil {
+		t.Fatalf("expected valid claim input, got %v", err)
+	}
+
+	claimed, outcome := claimSCMStatusDelivery(domain.SCMStatusDelivery{Status: domain.SCMStatusDeliveryStatusRetryWaiting, Attempts: 1, MaxAttempts: 3, NextAttemptAt: &retryAt}, now, claimOwner, time.Minute)
+	if outcome != repository.SCMStatusDeliveryClaimOutcomeRetryClaimed || claimed.Status != domain.SCMStatusDeliveryStatusSending {
+		t.Fatalf("unexpected retry claim result: outcome=%q delivery=%+v", outcome, claimed)
+	}
+	if _, outcome = claimSCMStatusDelivery(domain.SCMStatusDelivery{Status: domain.SCMStatusDeliveryStatusSending, Attempts: 1, MaxAttempts: 3, ClaimExpiresAt: &claimExpiresAt}, now, claimOwner, time.Minute); outcome != repository.SCMStatusDeliveryClaimOutcomeClaimedByOther {
+		t.Fatalf("expected claimed by other, got %q", outcome)
+	}
+
+	replaced, replaceOutcome, persist, reassertAfter, replaceErr := reconcileSCMStatusDeliveryForClaim(
+		domain.SCMStatusDelivery{ID: "delivery-1", BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: now, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: "abcdef", Context: "ctx", DesiredState: domain.SCMCommitStatusStatePending, Status: domain.SCMStatusDeliveryStatusSending, ClaimExpiresAt: &claimExpiresAt, LastSentState: &lastSentState},
+		domain.SCMStatusDelivery{BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: now, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: "abcdef", Context: "ctx", DesiredState: domain.SCMCommitStatusStateFailure},
+		now,
+		claimOwner,
+		time.Minute,
+		3,
+	)
+	if replaceErr != nil || replaceOutcome != repository.SCMStatusDeliveryClaimOutcomeCreatedClaimed || !persist || reassertAfter == nil || replaced.LastSentState == nil || *replaced.LastSentState != lastSentState {
+		t.Fatalf("unexpected reconcile replacement result: delivery=%+v outcome=%q persist=%v reassertAfter=%v err=%v", replaced, replaceOutcome, persist, reassertAfter, replaceErr)
+	}
+
+	fresh, freshErr := claimFreshSCMStatusDelivery("", time.Time{}, valid, now, claimOwner, time.Minute, 2, nil)
+	if freshErr != nil || fresh.ID == "" || fresh.Attempts != 1 {
+		t.Fatalf("unexpected fresh claim result: %+v err=%v", fresh, freshErr)
+	}
+	if dueAt, ok := scmStatusDeliveryRecoverableDueAt(domain.SCMStatusDelivery{Status: domain.SCMStatusDeliveryStatusRetryWaiting, NextAttemptAt: &retryAt}, now); !ok || !dueAt.Equal(retryAt.UTC()) {
+		t.Fatalf("expected retry delivery due at %v, got %v %v", retryAt.UTC(), dueAt, ok)
+	}
+	if dueAt, ok := scmStatusDeliveryRecoverableDueAt(domain.SCMStatusDelivery{Status: domain.SCMStatusDeliveryStatusSending, ClaimExpiresAt: &retryAt}, now); !ok || !dueAt.Equal(retryAt.UTC()) {
+		t.Fatalf("expected stale claim due at %v, got %v %v", retryAt.UTC(), dueAt, ok)
+	}
+	if !scmStatusDeliveryClaimMatches(domain.SCMStatusDelivery{ClaimedBy: &claimOwner, ClaimedAt: &now}, claimOwner, now) {
+		t.Fatal("expected claim to match")
+	}
+	if scmStatusDeliveryStreamKey(" github ", " octo ", " repo ", " abcdef ", " ctx ") != "github|octo|repo|abcdef|ctx" {
+		t.Fatal("unexpected stream key normalization")
+	}
+	if normalizeSCMRecordFailureTime(nil) != nil || scmFailureCategoryPtr(domain.SCMStatusDeliveryFailureCategoryPermanent) == nil || scmOptionalTrimmedString("  ") != nil || scmNormalizeOptionalString(strPtrSCMMemory(" ")) != nil {
+		t.Fatal("unexpected optional helper result")
 	}
 }
 

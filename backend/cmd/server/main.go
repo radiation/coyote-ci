@@ -144,10 +144,11 @@ func main() {
 	if notificationRecoveryErr != nil {
 		log.Fatalf("failed to configure notification recovery drain: %v", notificationRecoveryErr)
 	}
-	var scmStatusReporter *buildsvc.SCMStatusReporter
+	var scmStatusReporter buildsvc.BuildSCMStatusReporter
+	var scmStatusReporterImpl *buildsvc.SCMStatusReporter
 	var scmStatusRecoveryDrain *buildsvc.SCMStatusRecoveryDrain
 	if strings.TrimSpace(cfg.GitHubStatusToken) != "" {
-		scmStatusReporter, err = buildsvc.NewSCMStatusReporter(buildsvc.SCMStatusReporterConfig{
+		scmStatusReporterImpl, err = buildsvc.NewSCMStatusReporter(buildsvc.SCMStatusReporterConfig{
 			BuildRepo:     buildRepo,
 			ProjectRepo:   projectRepo,
 			DeliveryRepo:  scmStatusDeliveryRepo,
@@ -158,8 +159,9 @@ func main() {
 		if err != nil {
 			log.Fatalf("failed to configure scm status reporter: %v", err)
 		}
+		scmStatusReporter = scmStatusReporterImpl
 		scmStatusRecoveryDrain, err = buildsvc.NewSCMStatusRecoveryDrain(buildsvc.SCMStatusRecoveryDrainConfig{
-			Reporter:  scmStatusReporter,
+			Reporter:  scmStatusReporterImpl,
 			Interval:  cfg.SCMStatusRecoveryInterval,
 			BatchSize: cfg.SCMStatusRecoveryBatchSize,
 		})

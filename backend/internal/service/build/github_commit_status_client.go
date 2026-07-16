@@ -43,7 +43,7 @@ func NewGitHubCommitStatusClient(baseURL string, httpClient *http.Client, token 
 
 func (c *GitHubCommitStatusClient) PublishCommitStatus(ctx context.Context, req SCMCommitStatusPublishRequest) error {
 	if strings.TrimSpace(c.token) == "" {
-		return &GitHubCommitStatusError{reason: "github_status_token_missing", message: "github status token is not configured"}
+		return &GitHubCommitStatusError{statusCode: http.StatusUnauthorized, reason: "github_status_token_missing", message: "github status token is not configured"}
 	}
 	if inputErr := validateGitHubCommitStatusRequest(req); inputErr != nil {
 		return inputErr
