@@ -150,7 +150,6 @@ func (s *BuildNotificationService) buildNotificationDetails(ctx context.Context,
 			details.commitURL = commitURL
 		}
 	}
-	details.trigger = s.buildNotificationArtifactTrigger(ctx, build)
 	return details
 }
 
@@ -201,6 +200,7 @@ func (s *BuildNotificationService) buildNotificationArtifactTrigger(ctx context.
 
 func (s *BuildNotificationService) enrichSlackNotificationDetails(ctx context.Context, build domain.Build, details buildNotificationDetails) (buildNotificationDetails, error) {
 	details = applyFallbackFailureContext(build, details)
+	details.trigger = s.buildNotificationArtifactTrigger(ctx, build)
 	if details.statusSummary == "failed" {
 		enriched, err := s.enrichFailedSlackNotificationDetails(ctx, build, details)
 		if err != nil {
