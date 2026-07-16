@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -183,13 +184,15 @@ func (r *SCMStatusReporter) planDelivery(ctx context.Context, build domain.Build
 	}
 	delivery := domain.SCMStatusDelivery{
 		BuildID:         strings.TrimSpace(build.ID),
+		BuildAttempt:    build.AttemptNumber,
+		BuildCreatedAt:  scmStatusBuildCreatedAt(build, r.now().UTC()),
 		Provider:        provider,
 		RepositoryOwner: owner,
 		RepositoryName:  repo,
 		CommitSHA:       commitSHA,
 		Context:         contextName,
 		DesiredState:    state,
-		Description:     description,
+		Description:     truncateSCMStatusText(description, maxSCMStatusDescriptionLength),
 		DetailsURL:      scmStatusDetailsURL(r.publicBaseURL, build.ID),
 	}
 	return delivery.Normalize(), true, nil
@@ -207,7 +210,7 @@ func (r *SCMStatusReporter) buildContextName(ctx context.Context, build domain.B
 	if projectSlug == "" {
 		return "", false, nil
 	}
-	return "coyote/" + projectSlug + "/" + strings.TrimSpace(*build.JobID), true, nil
+	return scmStatusContextName(projectSlug, strings.TrimSpace(*build.JobID)), true, nil
 }
 
 func (r *SCMStatusReporter) executeClaimedDelivery(ctx context.Context, delivery domain.SCMStatusDelivery, recoveryReason string) (scmStatusExecutionOutcome, error) {
@@ -329,7 +332,8 @@ func (r *SCMStatusReporter) markDeliveryFailed(ctx context.Context, delivery dom
 		return scmStatusExecutionOutcomeNone, claimErr
 	}
 	decision := classifySCMStatusDeliveryFailure(sendErr)
-	message := strings.TrimSpace(sendErr.Error())
+	message := truncateSCMStatusText(strings.TrimSpace(sendErr.Error()), maxSCMStatusStoredErrorLength)
+	logMessage := truncateSCMStatusText(strings.TrimSpace(sendErr.Error()), maxSCMStatusLoggedErrorLength)
 	input := repository.SCMStatusDeliveryRecordFailureInput{
 		DeliveryID:      delivery.ID,
 		ClaimOwner:      r.claimOwner,
@@ -358,6 +362,7 @@ func (r *SCMStatusReporter) markDeliveryFailed(ctx context.Context, delivery dom
 	if result.Outcome == repository.SCMStatusDeliveryUpdateOutcomeLostClaim {
 		return scmStatusExecutionOutcomeLostClaim, nil
 	}
+	log.Printf("scm status delivery failed: build_id=%s provider=%s state=%s category=%s reason=%s recovery_reason=%s err=%s", delivery.BuildID, delivery.Provider, delivery.DesiredState, decision.category, decision.reason, recoveryReason, logMessage)
 	if decision.retryable && delivery.Attempts < delivery.MaxAttempts {
 		log.Printf("scm status retry scheduled: build_id=%s provider=%s state=%s reason=%s recovery_reason=%s", delivery.BuildID, delivery.Provider, delivery.DesiredState, decision.reason, recoveryReason)
 		return scmStatusExecutionOutcomeRetryScheduled, nil
@@ -452,6 +457,36 @@ func scmStatusDetailsURL(publicBaseURL string, buildID string) *string {
 	return &urlValue
 }
 
+func scmStatusBuildCreatedAt(build domain.Build, fallback time.Time) time.Time {
+	if !build.CreatedAt.IsZero() {
+		return build.CreatedAt.UTC()
+	}
+	return fallback.UTC()
+}
+
+func scmStatusContextName(projectSlug string, jobID string) string {
+	prefix := "coyote/"
+	trimmedJobID := strings.TrimSpace(jobID)
+	trimmedSlug := strings.TrimSpace(projectSlug)
+	availableSlugRunes := maxSCMStatusContextLength - utf8.RuneCountInString(prefix) - utf8.RuneCountInString(trimmedJobID) - 1
+	if availableSlugRunes <= 0 {
+		return truncateSCMStatusText(prefix+trimmedJobID, maxSCMStatusContextLength)
+	}
+	return prefix + truncateSCMStatusText(trimmedSlug, availableSlugRunes) + "/" + trimmedJobID
+}
+
+func truncateSCMStatusText(value string, maxRunes int) string {
+	trimmed := strings.TrimSpace(value)
+	if maxRunes <= 0 || trimmed == "" {
+		return trimmed
+	}
+	if utf8.RuneCountInString(trimmed) <= maxRunes {
+		return trimmed
+	}
+	runes := []rune(trimmed)
+	return strings.TrimSpace(string(runes[:maxRunes]))
+}
+
 func claimedSCMStatusTimestamp(delivery domain.SCMStatusDelivery) (time.Time, error) {
 	if delivery.ClaimedAt == nil || delivery.ClaimedAt.IsZero() {
 		return time.Time{}, fmt.Errorf("scm status delivery claim timestamp is required")
@@ -506,3 +541,8 @@ type scmStatusRecoveryAttemptResult struct {
 	executionOutcome  scmStatusExecutionOutcome
 	rehydrationFailed bool
 }
+
+const maxSCMStatusContextLength = 100
+const maxSCMStatusDescriptionLength = 140
+const maxSCMStatusStoredErrorLength = 1024
+const maxSCMStatusLoggedErrorLength = 256

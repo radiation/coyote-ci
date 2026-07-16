@@ -3,6 +3,8 @@
 CREATE TABLE IF NOT EXISTS scm_status_deliveries (
     id UUID PRIMARY KEY,
     build_id UUID NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+    build_attempt_number INTEGER NOT NULL DEFAULT 0,
+    build_created_at TIMESTAMPTZ NOT NULL,
     provider TEXT NOT NULL,
     repository_owner TEXT NOT NULL,
     repository_name TEXT NOT NULL,
@@ -27,7 +29,8 @@ CREATE TABLE IF NOT EXISTS scm_status_deliveries (
     superseded_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT scm_status_deliveries_logical_key_unique UNIQUE (build_id, provider, context_name, desired_state),
+    CONSTRAINT scm_status_deliveries_stream_key_unique UNIQUE (provider, repository_owner, repository_name, commit_sha, context_name),
+    CONSTRAINT scm_status_deliveries_build_attempt_number_check CHECK (build_attempt_number >= 0),
     CONSTRAINT scm_status_deliveries_provider_check CHECK (provider <> ''),
     CONSTRAINT scm_status_deliveries_repository_owner_check CHECK (repository_owner <> ''),
     CONSTRAINT scm_status_deliveries_repository_name_check CHECK (repository_name <> ''),
@@ -115,9 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_scm_status_deliveries_repo_sha_context_build
     ON scm_status_deliveries (provider, repository_owner, repository_name, commit_sha, context_name, build_id);
 
 -- +goose Down
--- +goose StatementBegin
-DO $$
-BEGIN
-    RAISE EXCEPTION 'migration 00038 is intentionally irreversible: scm_status_deliveries adds a durable claimable SCM delivery ledger with richer retry and supersession states that cannot be safely collapsed automatically';
-END $$;
--- +goose StatementEnd
+DROP INDEX IF EXISTS idx_scm_status_deliveries_repo_sha_context_build;
+DROP INDEX IF EXISTS idx_scm_status_deliveries_sending_claim_expires_at;
+DROP INDEX IF EXISTS idx_scm_status_deliveries_retry_waiting_next_attempt_at;
+DROP TABLE IF EXISTS scm_status_deliveries;

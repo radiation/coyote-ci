@@ -9,6 +9,8 @@ func TestSCMStatusDeliveryNormalizeAndHelpers(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	delivery := SCMStatusDelivery{
 		BuildID:         " build-1 ",
+		BuildAttempt:    1,
+		BuildCreatedAt:  now,
 		Provider:        " GitHub ",
 		RepositoryOwner: " octo ",
 		RepositoryName:  " repo ",
@@ -42,6 +44,8 @@ func TestSCMStatusDeliveryValidateSentAndSuperseded(t *testing.T) {
 	sentState := SCMCommitStatusStateSuccess
 	sent := SCMStatusDelivery{
 		BuildID:         "build-1",
+		BuildAttempt:    1,
+		BuildCreatedAt:  now,
 		Provider:        "github",
 		RepositoryOwner: "octo",
 		RepositoryName:  "repo",
@@ -60,6 +64,8 @@ func TestSCMStatusDeliveryValidateSentAndSuperseded(t *testing.T) {
 
 	superseded := SCMStatusDelivery{
 		BuildID:         "build-2",
+		BuildAttempt:    2,
+		BuildCreatedAt:  now,
 		Provider:        "github",
 		RepositoryOwner: "octo",
 		RepositoryName:  "repo",

@@ -37,6 +37,8 @@ const (
 type SCMStatusDelivery struct {
 	ID              string
 	BuildID         string
+	BuildAttempt    int
+	BuildCreatedAt  time.Time
 	Provider        string
 	RepositoryOwner string
 	RepositoryName  string
@@ -66,6 +68,9 @@ type SCMStatusDelivery struct {
 
 func (d SCMStatusDelivery) Normalize() SCMStatusDelivery {
 	d.BuildID = strings.TrimSpace(d.BuildID)
+	if d.BuildCreatedAt = d.BuildCreatedAt.UTC(); d.BuildCreatedAt.IsZero() {
+		d.BuildCreatedAt = time.Time{}
+	}
 	d.Provider = strings.ToLower(strings.TrimSpace(d.Provider))
 	d.RepositoryOwner = strings.TrimSpace(d.RepositoryOwner)
 	d.RepositoryName = strings.TrimSpace(d.RepositoryName)
@@ -110,6 +115,12 @@ func (d SCMStatusDelivery) ValidateIdentity() error {
 	if d.BuildID == "" {
 		return fmt.Errorf("scm status delivery build id is required")
 	}
+	if d.BuildAttempt < 0 {
+		return fmt.Errorf("scm status delivery build attempt cannot be negative")
+	}
+	if d.BuildCreatedAt.IsZero() {
+		return fmt.Errorf("scm status delivery build created_at is required")
+	}
 	if d.Provider == "" {
 		return fmt.Errorf("scm status delivery provider is required")
 	}
@@ -126,6 +137,15 @@ func (d SCMStatusDelivery) ValidateIdentity() error {
 		return fmt.Errorf("unsupported scm commit status state %q", d.DesiredState)
 	}
 	return nil
+}
+
+func (s SCMCommitStatusState) IsTerminal() bool {
+	switch s {
+	case SCMCommitStatusStateSuccess, SCMCommitStatusStateFailure, SCMCommitStatusStateError:
+		return true
+	default:
+		return false
+	}
 }
 
 func (d SCMStatusDelivery) Validate() error {

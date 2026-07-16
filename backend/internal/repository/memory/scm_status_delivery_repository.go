@@ -39,11 +39,14 @@ func (r *SCMStatusDeliveryRepository) AcquireForDelivery(ctx context.Context, in
 		return repository.SCMStatusDeliveryClaimResult{}, err
 	}
 
-	key := scmStatusDeliveryLogicalKey(delivery.BuildID, delivery.Provider, delivery.Context, delivery.DesiredState)
+	key := scmStatusDeliveryStreamKey(delivery.Provider, delivery.RepositoryOwner, delivery.RepositoryName, delivery.CommitSHA, delivery.Context)
 	if existingID, exists := r.index[key]; exists {
 		existing := r.deliveries[existingID]
-		claimed, outcome := claimSCMStatusDelivery(existing, now, claimOwner, claimDuration)
-		if outcome == repository.SCMStatusDeliveryClaimOutcomeRetryClaimed || outcome == repository.SCMStatusDeliveryClaimOutcomeStaleClaimReclaimed {
+		claimed, outcome, persist, claimErr := reconcileSCMStatusDeliveryForClaim(existing, delivery, now, claimOwner, claimDuration, input.MaxAttempts)
+		if claimErr != nil {
+			return repository.SCMStatusDeliveryClaimResult{}, claimErr
+		}
+		if persist {
 			r.deliveries[existingID] = claimed
 		}
 		return repository.SCMStatusDeliveryClaimResult{Delivery: claimed, Outcome: outcome}, nil
@@ -208,14 +211,14 @@ func (r *SCMStatusDeliveryRepository) MarkSuperseded(ctx context.Context, input 
 	return repository.SCMStatusDeliveryUpdateResult{Delivery: current, Outcome: repository.SCMStatusDeliveryUpdateOutcomeUpdated}, nil
 }
 
-func (r *SCMStatusDeliveryRepository) GetByBuildContextState(ctx context.Context, buildID string, provider string, contextName string, desiredState domain.SCMCommitStatusState) (domain.SCMStatusDelivery, error) {
+func (r *SCMStatusDeliveryRepository) GetByKey(ctx context.Context, provider string, repositoryOwner string, repositoryName string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.SCMStatusDelivery{}, err
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	key := scmStatusDeliveryLogicalKey(strings.TrimSpace(buildID), strings.ToLower(strings.TrimSpace(provider)), strings.TrimSpace(contextName), desiredState)
+	key := scmStatusDeliveryStreamKey(strings.ToLower(strings.TrimSpace(provider)), strings.TrimSpace(repositoryOwner), strings.TrimSpace(repositoryName), strings.TrimSpace(commitSHA), strings.TrimSpace(contextName))
 	id, ok := r.index[key]
 	if !ok {
 		return domain.SCMStatusDelivery{}, repository.ErrSCMStatusDeliveryNotFound
@@ -302,6 +305,110 @@ func claimSCMStatusDelivery(delivery domain.SCMStatusDelivery, now time.Time, cl
 	return delivery, outcome
 }
 
+func reconcileSCMStatusDeliveryForClaim(existing domain.SCMStatusDelivery, incoming domain.SCMStatusDelivery, now time.Time, claimOwner string, claimDuration time.Duration, maxAttempts int) (domain.SCMStatusDelivery, repository.SCMStatusDeliveryClaimOutcome, bool, error) {
+	existing = existing.Normalize()
+	incoming = incoming.Normalize()
+	ownerComparison := compareSCMStatusDeliveryOwners(existing, incoming)
+	if ownerComparison > 0 {
+		return existing, repository.SCMStatusDeliveryClaimOutcomeSuperseded, false, nil
+	}
+	if ownerComparison < 0 {
+		replaced, err := claimFreshSCMStatusDelivery(existing.ID, existing.CreatedAt, incoming, now, claimOwner, claimDuration, maxAttempts, nil)
+		if err != nil {
+			return domain.SCMStatusDelivery{}, "", false, err
+		}
+		return replaced, repository.SCMStatusDeliveryClaimOutcomeCreatedClaimed, true, nil
+	}
+	if scmStatusDeliveryIncomingStateObsolete(existing, incoming) {
+		return existing, repository.SCMStatusDeliveryClaimOutcomeSuperseded, false, nil
+	}
+	if scmStatusDeliveryShouldReplaceCurrentState(existing, incoming) {
+		replaced, err := claimFreshSCMStatusDelivery(existing.ID, existing.CreatedAt, incoming, now, claimOwner, claimDuration, maxAttempts, existing.LastSentState)
+		if err != nil {
+			return domain.SCMStatusDelivery{}, "", false, err
+		}
+		return replaced, repository.SCMStatusDeliveryClaimOutcomeCreatedClaimed, true, nil
+	}
+	claimed, outcome := claimSCMStatusDelivery(existing, now, claimOwner, claimDuration)
+	persist := outcome == repository.SCMStatusDeliveryClaimOutcomeRetryClaimed || outcome == repository.SCMStatusDeliveryClaimOutcomeStaleClaimReclaimed
+	return claimed, outcome, persist, nil
+}
+
+func claimFreshSCMStatusDelivery(id string, createdAt time.Time, delivery domain.SCMStatusDelivery, now time.Time, claimOwner string, claimDuration time.Duration, maxAttempts int, lastSentState *domain.SCMCommitStatusState) (domain.SCMStatusDelivery, error) {
+	delivery = delivery.Normalize()
+	delivery.ID = strings.TrimSpace(id)
+	if delivery.ID == "" {
+		delivery.ID = uuid.NewString()
+	}
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	delivery.CreatedAt = createdAt.UTC()
+	delivery.UpdatedAt = now
+	delivery.Status = domain.SCMStatusDeliveryStatusSending
+	delivery.Attempts = 1
+	delivery.MaxAttempts = maxAttempts
+	delivery.LastAttemptAt = &now
+	delivery.NextAttemptAt = nil
+	delivery.ClaimedAt = &now
+	claimExpiresAt := now.Add(claimDuration)
+	delivery.ClaimExpiresAt = &claimExpiresAt
+	delivery.ClaimedBy = &claimOwner
+	delivery.FailureCategory = nil
+	delivery.FailureReason = nil
+	delivery.LastError = nil
+	delivery.SentAt = nil
+	delivery.SupersededAt = nil
+	if lastSentState == nil {
+		delivery.LastSentState = nil
+	} else {
+		state := *lastSentState
+		delivery.LastSentState = &state
+	}
+	if err := delivery.Validate(); err != nil {
+		return domain.SCMStatusDelivery{}, err
+	}
+	return delivery, nil
+}
+
+func compareSCMStatusDeliveryOwners(existing domain.SCMStatusDelivery, incoming domain.SCMStatusDelivery) int {
+	existing = existing.Normalize()
+	incoming = incoming.Normalize()
+	if strings.TrimSpace(existing.BuildID) == strings.TrimSpace(incoming.BuildID) {
+		return 0
+	}
+	if existing.BuildAttempt != incoming.BuildAttempt {
+		if existing.BuildAttempt > incoming.BuildAttempt {
+			return 1
+		}
+		return -1
+	}
+	if existing.BuildCreatedAt.After(incoming.BuildCreatedAt) {
+		return 1
+	}
+	if existing.BuildCreatedAt.Before(incoming.BuildCreatedAt) {
+		return -1
+	}
+	if strings.Compare(strings.TrimSpace(existing.BuildID), strings.TrimSpace(incoming.BuildID)) > 0 {
+		return 1
+	}
+	return -1
+}
+
+func scmStatusDeliveryIncomingStateObsolete(existing domain.SCMStatusDelivery, incoming domain.SCMStatusDelivery) bool {
+	if existing.DesiredState.IsTerminal() && !incoming.DesiredState.IsTerminal() {
+		return true
+	}
+	if existing.LastSentState != nil && existing.LastSentState.IsTerminal() && !incoming.DesiredState.IsTerminal() {
+		return true
+	}
+	return false
+}
+
+func scmStatusDeliveryShouldReplaceCurrentState(existing domain.SCMStatusDelivery, incoming domain.SCMStatusDelivery) bool {
+	return existing.DesiredState != incoming.DesiredState
+}
+
 func scmStatusDeliveryRecoverableDueAt(delivery domain.SCMStatusDelivery, now time.Time) (time.Time, bool) {
 	delivery = delivery.Normalize()
 	switch delivery.Status {
@@ -330,8 +437,8 @@ func scmStatusDeliveryClaimMatches(delivery domain.SCMStatusDelivery, claimOwner
 	return delivery.ClaimedAt.UTC().Equal(claimedAt.UTC())
 }
 
-func scmStatusDeliveryLogicalKey(buildID string, provider string, contextName string, desiredState domain.SCMCommitStatusState) string {
-	return strings.TrimSpace(buildID) + "|" + strings.ToLower(strings.TrimSpace(provider)) + "|" + strings.TrimSpace(contextName) + "|" + strings.TrimSpace(string(desiredState))
+func scmStatusDeliveryStreamKey(provider string, repositoryOwner string, repositoryName string, commitSHA string, contextName string) string {
+	return strings.ToLower(strings.TrimSpace(provider)) + "|" + strings.TrimSpace(repositoryOwner) + "|" + strings.TrimSpace(repositoryName) + "|" + strings.TrimSpace(commitSHA) + "|" + strings.TrimSpace(contextName)
 }
 
 func normalizeSCMRecordFailureTime(value *time.Time) *time.Time {

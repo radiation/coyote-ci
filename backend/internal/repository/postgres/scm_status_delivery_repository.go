@@ -22,12 +22,14 @@ func NewSCMStatusDeliveryRepository(db *sql.DB) *SCMStatusDeliveryRepository {
 	return &SCMStatusDeliveryRepository{db: db}
 }
 
-const scmStatusDeliveryColumns = `id, build_id, provider, repository_owner, repository_name, commit_sha, context_name, desired_state, last_sent_state, description, details_url, status, attempts, max_attempts, last_attempt_at, next_attempt_at, claimed_at, claim_expires_at, claimed_by, failure_category, failure_reason, last_error, sent_at, superseded_at, created_at, updated_at`
+const scmStatusDeliveryColumns = `id, build_id, build_attempt_number, build_created_at, provider, repository_owner, repository_name, commit_sha, context_name, desired_state, last_sent_state, description, details_url, status, attempts, max_attempts, last_attempt_at, next_attempt_at, claimed_at, claim_expires_at, claimed_by, failure_category, failure_reason, last_error, sent_at, superseded_at, created_at, updated_at`
 
 const scmStatusDeliveryInsertClaimQuery = `
 	INSERT INTO scm_status_deliveries (
 		id,
 		build_id,
+		build_attempt_number,
+		build_created_at,
 		provider,
 		repository_owner,
 		repository_name,
@@ -54,18 +56,18 @@ const scmStatusDeliveryInsertClaimQuery = `
 		updated_at
 	)
 	VALUES (
-		$1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10,
-		$11, $12, $13, $14, NULL, $15, $16, $17, NULL, NULL, NULL, NULL, NULL,
-		$18, $19
+		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12,
+		$13, $14, $15, $16, NULL, $17, $18, $19, NULL, NULL, NULL, NULL, NULL,
+		$20, $21
 	)
-	ON CONFLICT (build_id, provider, context_name, desired_state) DO NOTHING
+	ON CONFLICT (provider, repository_owner, repository_name, commit_sha, context_name) DO NOTHING
 	RETURNING ` + scmStatusDeliveryColumns + `
 `
 
 const scmStatusDeliverySelectForClaimQuery = `
 	SELECT ` + scmStatusDeliveryColumns + `
 	FROM scm_status_deliveries
-	WHERE build_id = $1 AND provider = $2 AND context_name = $3 AND desired_state = $4
+	WHERE provider = $1 AND repository_owner = $2 AND repository_name = $3 AND commit_sha = $4 AND context_name = $5
 	FOR UPDATE
 `
 
@@ -83,16 +85,43 @@ const scmStatusDeliveryUpdateClaimQuery = `
 	RETURNING ` + scmStatusDeliveryColumns + `
 `
 
+const scmStatusDeliveryReplaceClaimQuery = `
+	UPDATE scm_status_deliveries
+	SET build_id = $2,
+		build_attempt_number = $3,
+		build_created_at = $4,
+		desired_state = $5,
+		description = $6,
+		details_url = $7,
+		status = 'sending',
+		attempts = 1,
+		max_attempts = $8,
+		last_attempt_at = $9,
+		next_attempt_at = NULL,
+		claimed_at = $9,
+		claim_expires_at = $10,
+		claimed_by = $11,
+		failure_category = NULL,
+		failure_reason = NULL,
+		last_error = NULL,
+		sent_at = NULL,
+		superseded_at = NULL,
+		last_sent_state = $12,
+		updated_at = $9
+	WHERE id = $1
+	RETURNING ` + scmStatusDeliveryColumns + `
+`
+
 const scmStatusDeliverySelectByIDQuery = `
 	SELECT ` + scmStatusDeliveryColumns + `
 	FROM scm_status_deliveries
 	WHERE id = $1
 `
 
-const scmStatusDeliverySelectByLogicalKeyQuery = `
+const scmStatusDeliverySelectByKeyQuery = `
 	SELECT ` + scmStatusDeliveryColumns + `
 	FROM scm_status_deliveries
-	WHERE build_id = $1 AND provider = $2 AND context_name = $3 AND desired_state = $4
+	WHERE provider = $1 AND repository_owner = $2 AND repository_name = $3 AND commit_sha = $4 AND context_name = $5
 `
 
 const scmStatusDeliveryListRecoverableQuery = `
@@ -206,6 +235,8 @@ func (r *SCMStatusDeliveryRepository) AcquireForDelivery(ctx context.Context, in
 		scmStatusDeliveryInsertClaimQuery,
 		delivery.ID,
 		delivery.BuildID,
+		delivery.BuildAttempt,
+		delivery.BuildCreatedAt,
 		delivery.Provider,
 		delivery.RepositoryOwner,
 		delivery.RepositoryName,
@@ -237,16 +268,75 @@ func (r *SCMStatusDeliveryRepository) AcquireForDelivery(ctx context.Context, in
 	existing, err := scanSCMStatusDelivery(tx.QueryRowContext(
 		ctx,
 		scmStatusDeliverySelectForClaimQuery,
-		delivery.BuildID,
 		delivery.Provider,
+		delivery.RepositoryOwner,
+		delivery.RepositoryName,
+		delivery.CommitSHA,
 		delivery.Context,
-		string(delivery.DesiredState),
 	))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return repository.SCMStatusDeliveryClaimResult{}, fmt.Errorf("scm status delivery acquire conflict did not resolve to an existing row")
 		}
 		return repository.SCMStatusDeliveryClaimResult{}, err
+	}
+
+	ownerComparison := comparePostgresSCMStatusDeliveryOwners(existing, delivery)
+	if ownerComparison > 0 {
+		return repository.SCMStatusDeliveryClaimResult{Delivery: existing, Outcome: repository.SCMStatusDeliveryClaimOutcomeSuperseded}, nil
+	}
+	if ownerComparison < 0 {
+		replaced, replaceErr := scanSCMStatusDelivery(tx.QueryRowContext(
+			ctx,
+			scmStatusDeliveryReplaceClaimQuery,
+			existing.ID,
+			delivery.BuildID,
+			delivery.BuildAttempt,
+			delivery.BuildCreatedAt,
+			string(delivery.DesiredState),
+			delivery.Description,
+			nullableOptionalStringLocal(delivery.DetailsURL),
+			input.MaxAttempts,
+			now,
+			claimExpiresAt,
+			claimOwner,
+			nil,
+		))
+		if replaceErr != nil {
+			return repository.SCMStatusDeliveryClaimResult{}, replaceErr
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return repository.SCMStatusDeliveryClaimResult{}, commitErr
+		}
+		return repository.SCMStatusDeliveryClaimResult{Delivery: replaced, Outcome: repository.SCMStatusDeliveryClaimOutcomeCreatedClaimed}, nil
+	}
+	if scmStatusDeliveryIncomingStateObsolete(existing, delivery) {
+		return repository.SCMStatusDeliveryClaimResult{Delivery: existing, Outcome: repository.SCMStatusDeliveryClaimOutcomeSuperseded}, nil
+	}
+	if scmStatusDeliveryShouldReplaceCurrentState(existing, delivery) {
+		replaced, replaceErr := scanSCMStatusDelivery(tx.QueryRowContext(
+			ctx,
+			scmStatusDeliveryReplaceClaimQuery,
+			existing.ID,
+			delivery.BuildID,
+			delivery.BuildAttempt,
+			delivery.BuildCreatedAt,
+			string(delivery.DesiredState),
+			delivery.Description,
+			nullableOptionalStringLocal(delivery.DetailsURL),
+			input.MaxAttempts,
+			now,
+			claimExpiresAt,
+			claimOwner,
+			nullableSCMCommitStatusStateLocal(existing.LastSentState),
+		))
+		if replaceErr != nil {
+			return repository.SCMStatusDeliveryClaimResult{}, replaceErr
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return repository.SCMStatusDeliveryClaimResult{}, commitErr
+		}
+		return repository.SCMStatusDeliveryClaimResult{Delivery: replaced, Outcome: repository.SCMStatusDeliveryClaimOutcomeCreatedClaimed}, nil
 	}
 
 	claimOutcome := repository.SCMStatusDeliveryClaimOutcomeFromExisting(existing, now)
@@ -353,14 +443,15 @@ func (r *SCMStatusDeliveryRepository) MarkSuperseded(ctx context.Context, input 
 	return r.resolveSCMStatusDeliveryUpdateConflict(ctx, input.DeliveryID, err)
 }
 
-func (r *SCMStatusDeliveryRepository) GetByBuildContextState(ctx context.Context, buildID string, provider string, contextName string, desiredState domain.SCMCommitStatusState) (domain.SCMStatusDelivery, error) {
+func (r *SCMStatusDeliveryRepository) GetByKey(ctx context.Context, provider string, repositoryOwner string, repositoryName string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error) {
 	delivery, err := scanSCMStatusDelivery(r.db.QueryRowContext(
 		ctx,
-		scmStatusDeliverySelectByLogicalKeyQuery,
-		strings.TrimSpace(buildID),
+		scmStatusDeliverySelectByKeyQuery,
 		strings.ToLower(strings.TrimSpace(provider)),
+		strings.TrimSpace(repositoryOwner),
+		strings.TrimSpace(repositoryName),
+		strings.TrimSpace(commitSHA),
 		strings.TrimSpace(contextName),
-		strings.TrimSpace(string(desiredState)),
 	))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -429,6 +520,7 @@ func normalizePostgresSCMStatusDeliveryClaimInput(input repository.SCMStatusDeli
 
 func scanSCMStatusDelivery(scanner rowScanner) (domain.SCMStatusDelivery, error) {
 	var delivery domain.SCMStatusDelivery
+	var buildCreatedAt time.Time
 	var provider string
 	var desiredState string
 	var lastSentState sql.NullString
@@ -448,6 +540,8 @@ func scanSCMStatusDelivery(scanner rowScanner) (domain.SCMStatusDelivery, error)
 	err := scanner.Scan(
 		&delivery.ID,
 		&delivery.BuildID,
+		&delivery.BuildAttempt,
+		&buildCreatedAt,
 		&provider,
 		&delivery.RepositoryOwner,
 		&delivery.RepositoryName,
@@ -478,6 +572,7 @@ func scanSCMStatusDelivery(scanner rowScanner) (domain.SCMStatusDelivery, error)
 	}
 
 	delivery.Provider = provider
+	delivery.BuildCreatedAt = buildCreatedAt.UTC()
 	delivery.DesiredState = domain.SCMCommitStatusState(desiredState)
 	delivery.Status = domain.SCMStatusDeliveryStatus(status)
 	if lastSentState.Valid {
@@ -530,4 +625,53 @@ func scanSCMStatusDelivery(scanner rowScanner) (domain.SCMStatusDelivery, error)
 	}
 
 	return delivery.Normalize(), nil
+}
+
+func comparePostgresSCMStatusDeliveryOwners(existing domain.SCMStatusDelivery, incoming domain.SCMStatusDelivery) int {
+	existing = existing.Normalize()
+	incoming = incoming.Normalize()
+	if strings.TrimSpace(existing.BuildID) == strings.TrimSpace(incoming.BuildID) {
+		return 0
+	}
+	if existing.BuildAttempt != incoming.BuildAttempt {
+		if existing.BuildAttempt > incoming.BuildAttempt {
+			return 1
+		}
+		return -1
+	}
+	if existing.BuildCreatedAt.After(incoming.BuildCreatedAt) {
+		return 1
+	}
+	if existing.BuildCreatedAt.Before(incoming.BuildCreatedAt) {
+		return -1
+	}
+	if strings.Compare(strings.TrimSpace(existing.BuildID), strings.TrimSpace(incoming.BuildID)) > 0 {
+		return 1
+	}
+	return -1
+}
+
+func scmStatusDeliveryIncomingStateObsolete(existing domain.SCMStatusDelivery, incoming domain.SCMStatusDelivery) bool {
+	if existing.DesiredState.IsTerminal() && !incoming.DesiredState.IsTerminal() {
+		return true
+	}
+	if existing.LastSentState != nil && existing.LastSentState.IsTerminal() && !incoming.DesiredState.IsTerminal() {
+		return true
+	}
+	return false
+}
+
+func scmStatusDeliveryShouldReplaceCurrentState(existing domain.SCMStatusDelivery, incoming domain.SCMStatusDelivery) bool {
+	return existing.DesiredState != incoming.DesiredState
+}
+
+func nullableSCMCommitStatusStateLocal(value *domain.SCMCommitStatusState) any {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(string(*value))
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
 }

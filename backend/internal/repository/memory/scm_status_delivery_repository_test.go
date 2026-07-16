@@ -15,6 +15,8 @@ func TestSCMStatusDeliveryRepository_ClaimAndStateUpdates(t *testing.T) {
 	now := time.Date(2026, 7, 16, 14, 0, 0, 0, time.UTC)
 	base := domain.SCMStatusDelivery{
 		BuildID:         "build-1",
+		BuildAttempt:    1,
+		BuildCreatedAt:  now,
 		Provider:        "github",
 		RepositoryOwner: "octo",
 		RepositoryName:  "repo",
@@ -48,9 +50,9 @@ func TestSCMStatusDeliveryRepository_ClaimAndStateUpdates(t *testing.T) {
 		t.Fatalf("expected sent status, got %q", sent.Delivery.Status)
 	}
 
-	fetched, err := repo.GetByBuildContextState(context.Background(), "build-1", "github", "coyote/default/job-1", domain.SCMCommitStatusStatePending)
+	fetched, err := repo.GetByKey(context.Background(), "github", "octo", "repo", "abcdef", "coyote/default/job-1")
 	if err != nil {
-		t.Fatalf("get by logical key failed: %v", err)
+		t.Fatalf("get by stream key failed: %v", err)
 	}
 	if fetched.ID != claimed.Delivery.ID {
 		t.Fatalf("expected claimed delivery id, got %q", fetched.ID)
@@ -62,6 +64,8 @@ func TestSCMStatusDeliveryRepository_RetryAndSupersede(t *testing.T) {
 	now := time.Date(2026, 7, 16, 15, 0, 0, 0, time.UTC)
 	base := domain.SCMStatusDelivery{
 		BuildID:         "build-1",
+		BuildAttempt:    1,
+		BuildCreatedAt:  now,
 		Provider:        "github",
 		RepositoryOwner: "octo",
 		RepositoryName:  "repo",
@@ -114,6 +118,8 @@ func TestSCMStatusDeliveryRepository_ConcurrentInitialClaimCreatesOneRow(t *test
 	now := time.Date(2026, 7, 16, 16, 0, 0, 0, time.UTC)
 	base := domain.SCMStatusDelivery{
 		BuildID:         "build-1",
+		BuildAttempt:    1,
+		BuildCreatedAt:  now,
 		Provider:        "github",
 		RepositoryOwner: "octo",
 		RepositoryName:  "repo",
