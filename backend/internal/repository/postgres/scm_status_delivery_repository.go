@@ -281,11 +281,12 @@ func (r *SCMStatusDeliveryRepository) AcquireForDelivery(ctx context.Context, in
 		return repository.SCMStatusDeliveryClaimResult{}, err
 	}
 
-	ownerComparison := comparePostgresSCMStatusDeliveryOwners(existing, delivery)
+	ownerComparison := repository.CompareSCMStatusDeliveryOwners(existing, delivery)
 	if ownerComparison > 0 {
 		return repository.SCMStatusDeliveryClaimResult{Delivery: existing, Outcome: repository.SCMStatusDeliveryClaimOutcomeSuperseded}, nil
 	}
 	if ownerComparison < 0 {
+		reassertAfter := repository.SCMStatusDeliveryReassertAfterReplacement(existing, now)
 		replaced, replaceErr := scanSCMStatusDelivery(tx.QueryRowContext(
 			ctx,
 			scmStatusDeliveryReplaceClaimQuery,
@@ -308,12 +309,13 @@ func (r *SCMStatusDeliveryRepository) AcquireForDelivery(ctx context.Context, in
 		if commitErr := tx.Commit(); commitErr != nil {
 			return repository.SCMStatusDeliveryClaimResult{}, commitErr
 		}
-		return repository.SCMStatusDeliveryClaimResult{Delivery: replaced, Outcome: repository.SCMStatusDeliveryClaimOutcomeCreatedClaimed}, nil
+		return repository.SCMStatusDeliveryClaimResult{Delivery: replaced, Outcome: repository.SCMStatusDeliveryClaimOutcomeCreatedClaimed, ReassertAfter: reassertAfter}, nil
 	}
-	if scmStatusDeliveryIncomingStateObsolete(existing, delivery) {
+	if repository.SCMStatusDeliveryIncomingStateObsolete(existing, delivery) {
 		return repository.SCMStatusDeliveryClaimResult{Delivery: existing, Outcome: repository.SCMStatusDeliveryClaimOutcomeSuperseded}, nil
 	}
-	if scmStatusDeliveryShouldReplaceCurrentState(existing, delivery) {
+	if repository.SCMStatusDeliveryShouldReplaceCurrentState(existing, delivery) {
+		reassertAfter := repository.SCMStatusDeliveryReassertAfterReplacement(existing, now)
 		replaced, replaceErr := scanSCMStatusDelivery(tx.QueryRowContext(
 			ctx,
 			scmStatusDeliveryReplaceClaimQuery,
@@ -336,7 +338,7 @@ func (r *SCMStatusDeliveryRepository) AcquireForDelivery(ctx context.Context, in
 		if commitErr := tx.Commit(); commitErr != nil {
 			return repository.SCMStatusDeliveryClaimResult{}, commitErr
 		}
-		return repository.SCMStatusDeliveryClaimResult{Delivery: replaced, Outcome: repository.SCMStatusDeliveryClaimOutcomeCreatedClaimed}, nil
+		return repository.SCMStatusDeliveryClaimResult{Delivery: replaced, Outcome: repository.SCMStatusDeliveryClaimOutcomeCreatedClaimed, ReassertAfter: reassertAfter}, nil
 	}
 
 	claimOutcome := repository.SCMStatusDeliveryClaimOutcomeFromExisting(existing, now)
@@ -625,44 +627,6 @@ func scanSCMStatusDelivery(scanner rowScanner) (domain.SCMStatusDelivery, error)
 	}
 
 	return delivery.Normalize(), nil
-}
-
-func comparePostgresSCMStatusDeliveryOwners(existing domain.SCMStatusDelivery, incoming domain.SCMStatusDelivery) int {
-	existing = existing.Normalize()
-	incoming = incoming.Normalize()
-	if strings.TrimSpace(existing.BuildID) == strings.TrimSpace(incoming.BuildID) {
-		return 0
-	}
-	if existing.BuildAttempt != incoming.BuildAttempt {
-		if existing.BuildAttempt > incoming.BuildAttempt {
-			return 1
-		}
-		return -1
-	}
-	if existing.BuildCreatedAt.After(incoming.BuildCreatedAt) {
-		return 1
-	}
-	if existing.BuildCreatedAt.Before(incoming.BuildCreatedAt) {
-		return -1
-	}
-	if strings.Compare(strings.TrimSpace(existing.BuildID), strings.TrimSpace(incoming.BuildID)) > 0 {
-		return 1
-	}
-	return -1
-}
-
-func scmStatusDeliveryIncomingStateObsolete(existing domain.SCMStatusDelivery, incoming domain.SCMStatusDelivery) bool {
-	if existing.DesiredState.IsTerminal() && !incoming.DesiredState.IsTerminal() {
-		return true
-	}
-	if existing.LastSentState != nil && existing.LastSentState.IsTerminal() && !incoming.DesiredState.IsTerminal() {
-		return true
-	}
-	return false
-}
-
-func scmStatusDeliveryShouldReplaceCurrentState(existing domain.SCMStatusDelivery, incoming domain.SCMStatusDelivery) bool {
-	return existing.DesiredState != incoming.DesiredState
 }
 
 func nullableSCMCommitStatusStateLocal(value *domain.SCMCommitStatusState) any {

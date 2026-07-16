@@ -47,6 +47,7 @@ type scmStatusDeliveryRepository interface {
 	RecordPermanentFailure(ctx context.Context, input repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error)
 	RecordExhaustedFailure(ctx context.Context, input repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error)
 	MarkSuperseded(ctx context.Context, input repository.SCMStatusDeliveryMarkSupersededInput) (repository.SCMStatusDeliveryUpdateResult, error)
+	GetByKey(ctx context.Context, provider string, repositoryOwner string, repositoryName string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error)
 }
 
 type SCMStatusReporterConfig struct {
@@ -88,6 +89,7 @@ type scmStatusExecutionOutcome int
 const (
 	scmStatusExecutionOutcomeNone scmStatusExecutionOutcome = iota
 	scmStatusExecutionOutcomeSent
+	scmStatusExecutionOutcomeReassertScheduled
 	scmStatusExecutionOutcomeRetryScheduled
 	scmStatusExecutionOutcomePermanentlyFailed
 	scmStatusExecutionOutcomeAttemptsExhausted
@@ -136,7 +138,7 @@ func (r *SCMStatusReporter) NotifyBuildStatus(ctx context.Context, build domain.
 	if !shouldSend {
 		return nil
 	}
-	_, executeErr := r.executeClaimedDelivery(ctx, result.Delivery, scmStatusRecoveryReasonInline)
+	_, executeErr := r.executeClaimedDelivery(ctx, result.Delivery, result.ReassertAfter, scmStatusRecoveryReasonInline)
 	return executeErr
 }
 
@@ -213,7 +215,7 @@ func (r *SCMStatusReporter) buildContextName(ctx context.Context, build domain.B
 	return scmStatusContextName(projectSlug, strings.TrimSpace(*build.JobID)), true, nil
 }
 
-func (r *SCMStatusReporter) executeClaimedDelivery(ctx context.Context, delivery domain.SCMStatusDelivery, recoveryReason string) (scmStatusExecutionOutcome, error) {
+func (r *SCMStatusReporter) executeClaimedDelivery(ctx context.Context, delivery domain.SCMStatusDelivery, reassertAfter *time.Time, recoveryReason string) (scmStatusExecutionOutcome, error) {
 	build, err := r.buildRepo.GetByID(ctx, delivery.BuildID)
 	if err != nil {
 		outcome, markErr := r.markDeliveryFailed(ctx, delivery, err, r.now().UTC(), recoveryReason)
@@ -271,7 +273,25 @@ func (r *SCMStatusReporter) executeClaimedDelivery(ctx context.Context, delivery
 		}
 		return outcome, publishErr
 	}
-	return r.markDeliverySent(ctx, delivery, r.now().UTC())
+	attemptedAt := r.now().UTC()
+	if reassertAfter != nil && reassertAfter.After(attemptedAt) {
+		outcome, scheduleErr := r.markDeliveryReassertPending(ctx, delivery, attemptedAt, *reassertAfter)
+		if scheduleErr != nil {
+			return scmStatusExecutionOutcomeNone, scheduleErr
+		}
+		if outcome == scmStatusExecutionOutcomeLostClaim {
+			return outcome, r.reassertAuthoritativeDelivery(ctx, delivery)
+		}
+		return outcome, nil
+	}
+	outcome, markErr := r.markDeliverySent(ctx, delivery, attemptedAt)
+	if markErr != nil {
+		return scmStatusExecutionOutcomeNone, markErr
+	}
+	if outcome == scmStatusExecutionOutcomeLostClaim {
+		return outcome, r.reassertAuthoritativeDelivery(ctx, delivery)
+	}
+	return outcome, nil
 }
 
 func (r *SCMStatusReporter) recoverDelivery(ctx context.Context, candidate domain.SCMStatusDelivery, recoveryReason string) (scmStatusRecoveryAttemptResult, error) {
@@ -300,7 +320,7 @@ func (r *SCMStatusReporter) recoverDelivery(ctx context.Context, candidate domai
 		}
 		return attempt, nil
 	}
-	outcome, executeErr := r.executeClaimedDelivery(ctx, result.Delivery, recoveryReason)
+	outcome, executeErr := r.executeClaimedDelivery(ctx, result.Delivery, result.ReassertAfter, recoveryReason)
 	attempt.executionOutcome = outcome
 	return attempt, executeErr
 }
@@ -324,6 +344,31 @@ func (r *SCMStatusReporter) markDeliverySent(ctx context.Context, delivery domai
 		return scmStatusExecutionOutcomeLostClaim, nil
 	}
 	return scmStatusExecutionOutcomeSent, nil
+}
+
+func (r *SCMStatusReporter) markDeliveryReassertPending(ctx context.Context, delivery domain.SCMStatusDelivery, attemptedAt time.Time, reassertAt time.Time) (scmStatusExecutionOutcome, error) {
+	claimedAt, claimErr := claimedSCMStatusTimestamp(delivery)
+	if claimErr != nil {
+		return scmStatusExecutionOutcomeNone, claimErr
+	}
+	retryAt := reassertAt.UTC()
+	result, err := r.deliveryRepo.RecordRetryableFailure(ctx, repository.SCMStatusDeliveryRecordFailureInput{
+		DeliveryID:      delivery.ID,
+		ClaimOwner:      r.claimOwner,
+		ClaimedAt:       claimedAt,
+		FailedAt:        attemptedAt,
+		NextAttemptAt:   &retryAt,
+		FailureCategory: domain.SCMStatusDeliveryFailureCategoryRetryable,
+		FailureReason:   scmStatusFailureReasonAuthoritativeReassert,
+	})
+	if err != nil {
+		return scmStatusExecutionOutcomeNone, err
+	}
+	if result.Outcome == repository.SCMStatusDeliveryUpdateOutcomeLostClaim {
+		return scmStatusExecutionOutcomeLostClaim, nil
+	}
+	log.Printf("scm status authoritative reassert scheduled: build_id=%s provider=%s state=%s retry_at=%s", delivery.BuildID, delivery.Provider, delivery.DesiredState, retryAt.Format(time.RFC3339))
+	return scmStatusExecutionOutcomeReassertScheduled, nil
 }
 
 func (r *SCMStatusReporter) markDeliveryFailed(ctx context.Context, delivery domain.SCMStatusDelivery, sendErr error, attemptedAt time.Time, recoveryReason string) (scmStatusExecutionOutcome, error) {
@@ -371,6 +416,25 @@ func (r *SCMStatusReporter) markDeliveryFailed(ctx context.Context, delivery dom
 		return scmStatusExecutionOutcomeAttemptsExhausted, nil
 	}
 	return scmStatusExecutionOutcomePermanentlyFailed, nil
+}
+
+func (r *SCMStatusReporter) reassertAuthoritativeDelivery(ctx context.Context, staleDelivery domain.SCMStatusDelivery) error {
+	authoritative, err := r.deliveryRepo.GetByKey(ctx, staleDelivery.Provider, staleDelivery.RepositoryOwner, staleDelivery.RepositoryName, staleDelivery.CommitSHA, staleDelivery.Context)
+	if err != nil {
+		if errors.Is(err, repository.ErrSCMStatusDeliveryNotFound) {
+			return nil
+		}
+		return err
+	}
+	if scmStatusPublishEquivalent(authoritative, staleDelivery) {
+		return nil
+	}
+	if err := r.publisher.PublishCommitStatus(ctx, scmStatusPublishRequest(authoritative)); err != nil {
+		log.Printf("scm status authoritative reassert failed: build_id=%s provider=%s state=%s err=%s", authoritative.BuildID, authoritative.Provider, authoritative.DesiredState, truncateSCMStatusText(strings.TrimSpace(err.Error()), maxSCMStatusLoggedErrorLength))
+		return nil
+	}
+	log.Printf("scm status authoritative state reasserted after lost claim: build_id=%s provider=%s state=%s", authoritative.BuildID, authoritative.Provider, authoritative.DesiredState)
+	return nil
 }
 
 func (r *SCMStatusReporter) isSuperseded(ctx context.Context, build domain.Build, delivery domain.SCMStatusDelivery) (bool, error) {
@@ -475,6 +539,31 @@ func scmStatusContextName(projectSlug string, jobID string) string {
 	return prefix + truncateSCMStatusText(trimmedSlug, availableSlugRunes) + "/" + trimmedJobID
 }
 
+func scmStatusPublishRequest(delivery domain.SCMStatusDelivery) SCMCommitStatusPublishRequest {
+	return SCMCommitStatusPublishRequest{
+		Provider:        delivery.Provider,
+		RepositoryOwner: delivery.RepositoryOwner,
+		RepositoryName:  delivery.RepositoryName,
+		CommitSHA:       delivery.CommitSHA,
+		Context:         delivery.Context,
+		State:           delivery.DesiredState,
+		Description:     delivery.Description,
+		DetailsURL:      delivery.DetailsURL,
+	}
+}
+
+func scmStatusPublishEquivalent(left domain.SCMStatusDelivery, right domain.SCMStatusDelivery) bool {
+	left = left.Normalize()
+	right = right.Normalize()
+	if left.Provider != right.Provider || left.RepositoryOwner != right.RepositoryOwner || left.RepositoryName != right.RepositoryName || left.CommitSHA != right.CommitSHA || left.Context != right.Context {
+		return false
+	}
+	if left.DesiredState != right.DesiredState || left.Description != right.Description {
+		return false
+	}
+	return buildReadOptionalString(left.DetailsURL) == buildReadOptionalString(right.DetailsURL)
+}
+
 func truncateSCMStatusText(value string, maxRunes int) string {
 	trimmed := strings.TrimSpace(value)
 	if maxRunes <= 0 || trimmed == "" {
@@ -535,6 +624,8 @@ func parseGitHubRepositoryURL(rawURL string) (string, string, bool) {
 
 const scmStatusRecoveryReasonInline = "inline"
 const scmStatusRecoveryReasonDrain = "recovery_drain"
+
+const scmStatusFailureReasonAuthoritativeReassert = "authoritative_reassert_pending"
 
 type scmStatusRecoveryAttemptResult struct {
 	claimOutcome      repository.SCMStatusDeliveryClaimOutcome

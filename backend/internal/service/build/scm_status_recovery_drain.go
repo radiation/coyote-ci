@@ -32,6 +32,7 @@ type SCMStatusRecoveryIterationResult struct {
 	SkippedNotDue       int
 	SkippedTerminal     int
 	Sent                int
+	ReassertScheduled   int
 	RetryScheduled      int
 	PermanentlyFailed   int
 	AttemptsExhausted   int
@@ -106,7 +107,7 @@ func (d *SCMStatusRecoveryDrain) RunIteration(ctx context.Context) (SCMStatusRec
 		}
 	}
 	if result.Scanned > 0 || result.Errors > 0 {
-		log.Printf("scm status recovery iteration completed: scanned=%d claim_acquired=%d retry_claimed=%d stale_claim_reclaimed=%d skipped=%d skipped_contention=%d skipped_not_due=%d skipped_terminal=%d sent=%d retry_scheduled=%d permanently_failed=%d attempts_exhausted=%d lost_claim=%d superseded=%d rehydration_failed=%d errors=%d", result.Scanned, result.ClaimAcquired, result.RetryClaimed, result.StaleClaimReclaimed, result.Skipped, result.SkippedContention, result.SkippedNotDue, result.SkippedTerminal, result.Sent, result.RetryScheduled, result.PermanentlyFailed, result.AttemptsExhausted, result.LostClaim, result.Superseded, result.RehydrationFailed, result.Errors)
+		log.Printf("scm status recovery iteration completed: scanned=%d claim_acquired=%d retry_claimed=%d stale_claim_reclaimed=%d skipped=%d skipped_contention=%d skipped_not_due=%d skipped_terminal=%d sent=%d reassert_scheduled=%d retry_scheduled=%d permanently_failed=%d attempts_exhausted=%d lost_claim=%d superseded=%d rehydration_failed=%d errors=%d", result.Scanned, result.ClaimAcquired, result.RetryClaimed, result.StaleClaimReclaimed, result.Skipped, result.SkippedContention, result.SkippedNotDue, result.SkippedTerminal, result.Sent, result.ReassertScheduled, result.RetryScheduled, result.PermanentlyFailed, result.AttemptsExhausted, result.LostClaim, result.Superseded, result.RehydrationFailed, result.Errors)
 	}
 	return result, errors.Join(iterationErrs...)
 }
@@ -140,6 +141,8 @@ func (d *SCMStatusRecoveryDrain) applyAttemptResult(result *SCMStatusRecoveryIte
 	switch attempt.executionOutcome {
 	case scmStatusExecutionOutcomeSent:
 		result.Sent++
+	case scmStatusExecutionOutcomeReassertScheduled:
+		result.ReassertScheduled++
 	case scmStatusExecutionOutcomeRetryScheduled:
 		result.RetryScheduled++
 	case scmStatusExecutionOutcomePermanentlyFailed:

@@ -33,8 +33,9 @@ type SCMStatusDeliveryClaimInput struct {
 }
 
 type SCMStatusDeliveryClaimResult struct {
-	Delivery domain.SCMStatusDelivery
-	Outcome  SCMStatusDeliveryClaimOutcome
+	Delivery      domain.SCMStatusDelivery
+	Outcome       SCMStatusDeliveryClaimOutcome
+	ReassertAfter *time.Time
 }
 
 type SCMStatusDeliveryRecoverableScanInput struct {

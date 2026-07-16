@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,12 +42,15 @@ func (r *fakeSCMProjectRepository) GetByID(_ context.Context, _ string) (domain.
 }
 
 type multiBuildRepository struct {
+	mu     sync.RWMutex
 	builds map[string]domain.Build
 	byJob  map[string][]domain.Build
 	err    error
 }
 
 func (r *multiBuildRepository) GetByID(_ context.Context, id string) (domain.Build, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if r.err != nil {
 		return domain.Build{}, r.err
 	}
@@ -58,10 +62,24 @@ func (r *multiBuildRepository) GetByID(_ context.Context, id string) (domain.Bui
 }
 
 func (r *multiBuildRepository) ListByJobID(_ context.Context, jobID string) ([]domain.Build, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if r.err != nil {
 		return nil, r.err
 	}
 	return append([]domain.Build(nil), r.byJob[jobID]...), nil
+}
+
+func (r *multiBuildRepository) setBuild(build domain.Build) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.builds[build.ID] = build
+}
+
+func (r *multiBuildRepository) setJobBuilds(jobID string, builds []domain.Build) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.byJob[jobID] = append([]domain.Build(nil), builds...)
 }
 
 func TestSCMStatusReporter_NotifyBuildStatus_PendingAndSuccess(t *testing.T) {
@@ -91,8 +109,8 @@ func TestSCMStatusReporter_NotifyBuildStatus_PendingAndSuccess(t *testing.T) {
 	}
 
 	build.Status = domain.BuildStatusSuccess
-	buildRepo.builds[build.ID] = build
-	buildRepo.byJob[jobID] = []domain.Build{build}
+	buildRepo.setBuild(build)
+	buildRepo.setJobBuilds(jobID, []domain.Build{build})
 	if notifyErr := reporter.NotifyBuildStatus(context.Background(), build); notifyErr != nil {
 		t.Fatalf("notify success build failed: %v", notifyErr)
 	}
@@ -188,8 +206,8 @@ func TestSCMStatusReporter_NotifyBuildStatus_TerminalReplacesSameBuildPending(t 
 		t.Fatalf("notify pending build failed: %v", notifyErr)
 	}
 	build.Status = domain.BuildStatusSuccess
-	buildRepo.builds[build.ID] = build
-	buildRepo.byJob[jobID] = []domain.Build{build}
+	buildRepo.setBuild(build)
+	buildRepo.setJobBuilds(jobID, []domain.Build{build})
 	if notifyErr := reporter.NotifyBuildStatus(context.Background(), build); notifyErr != nil {
 		t.Fatalf("notify terminal build failed: %v", notifyErr)
 	}
@@ -233,6 +251,73 @@ func TestSCMStatusReporter_NotifyBuildStatus_NewerAttemptDurablyFencesOlderAttem
 	}
 	if delivery.BuildID != newer.ID || delivery.BuildAttempt != newer.AttemptNumber {
 		t.Fatalf("expected newer build to remain stream owner, got %+v", delivery)
+	}
+}
+
+func TestSCMStatusReporter_NotifyBuildStatus_ReassertsAuthoritativeStateAfterStaleSendLosesClaim(t *testing.T) {
+	jobID := "job-1"
+	older := domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 1, CreatedAt: time.Date(2026, 7, 16, 18, 0, 0, 0, time.UTC), Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")}
+	newer := domain.Build{ID: "build-2", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 2, CreatedAt: time.Date(2026, 7, 16, 18, 5, 0, 0, time.UTC), Status: domain.BuildStatusSuccess, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")}
+	buildRepo := &multiBuildRepository{builds: map[string]domain.Build{"build-1": older, "build-2": newer}, byJob: map[string][]domain.Build{jobID: {older}}}
+	deliveryRepo := memoryrepo.NewSCMStatusDeliveryRepository()
+	olderStarted := make(chan struct{})
+	releaseOlder := make(chan struct{})
+	newerPublished := make(chan struct{})
+	publisher := newBlockingSCMPublisher(func(req SCMCommitStatusPublishRequest) {
+		if req.State == domain.SCMCommitStatusStatePending && req.Description == "Coyote build is queued" {
+			closeOnce(olderStarted)
+			<-releaseOlder
+		}
+	}, func(req SCMCommitStatusPublishRequest) {
+		if req.State == domain.SCMCommitStatusStateSuccess {
+			closeOnce(newerPublished)
+		}
+	})
+	reporter, err := NewSCMStatusReporter(SCMStatusReporterConfig{BuildRepo: buildRepo, ProjectRepo: &fakeSCMProjectRepository{project: domain.Project{ID: "project-1", Slug: "payments"}}, DeliveryRepo: deliveryRepo, Publisher: publisher})
+	if err != nil {
+		t.Fatalf("new reporter failed: %v", err)
+	}
+	now := time.Date(2026, 7, 16, 18, 6, 0, 0, time.UTC)
+	reporter.now = func() time.Time { return now }
+
+	olderErrCh := make(chan error, 1)
+	go func() {
+		olderErrCh <- reporter.NotifyBuildStatus(context.Background(), older)
+	}()
+
+	<-olderStarted
+	buildRepo.setJobBuilds(jobID, []domain.Build{newer, older})
+	if notifyErr := reporter.NotifyBuildStatus(context.Background(), newer); notifyErr != nil {
+		t.Fatalf("notify newer build failed: %v", notifyErr)
+	}
+	<-newerPublished
+	close(releaseOlder)
+	if olderErr := <-olderErrCh; olderErr != nil {
+		t.Fatalf("notify older build failed: %v", olderErr)
+	}
+
+	finalRemote, ok := publisher.remoteState("github", "octo", "repo", "deadbeef", "coyote/payments/job-1")
+	if !ok {
+		t.Fatal("expected remote state to be recorded")
+	}
+	if finalRemote.State != domain.SCMCommitStatusStateSuccess {
+		t.Fatalf("expected authoritative success state to win remotely, got %+v", finalRemote)
+	}
+	delivery, getErr := deliveryRepo.GetByKey(context.Background(), "github", "octo", "repo", "deadbeef", "coyote/payments/job-1")
+	if getErr != nil {
+		t.Fatalf("get delivery failed: %v", getErr)
+	}
+	if delivery.BuildID != newer.ID || delivery.BuildAttempt != newer.AttemptNumber {
+		t.Fatalf("expected newer build to remain authoritative, got %+v", delivery)
+	}
+	if delivery.Status != domain.SCMStatusDeliveryStatusRetryWaiting {
+		t.Fatalf("expected persisted reassert backstop after replacement, got %+v", delivery)
+	}
+	if delivery.FailureReason == nil || *delivery.FailureReason != scmStatusFailureReasonAuthoritativeReassert {
+		t.Fatalf("expected authoritative reassert reason, got %+v", delivery)
+	}
+	if !publisher.sawState(domain.SCMCommitStatusStatePending) || publisher.countState(domain.SCMCommitStatusStateSuccess) < 2 {
+		t.Fatalf("expected stale pending send and prompt authoritative success reassert, got %+v", publisher.requests())
 	}
 }
 
@@ -339,4 +424,89 @@ func (r *stubWorkspaceSourceResolver) CheckoutWorkspaceSource(_ context.Context,
 
 func executionResolvedBuildSourceSpec(repoURL string, ref string, commitSHA string) execution.ResolvedBuildSourceSpec {
 	return execution.ResolvedBuildSourceSpec{RepositoryURL: repoURL, Ref: ref, CommitSHA: commitSHA, HasSource: true}
+}
+
+type blockingSCMPublisher struct {
+	mu          sync.Mutex
+	reqs        []SCMCommitStatusPublishRequest
+	remote      map[string]SCMCommitStatusPublishRequest
+	beforeWrite func(SCMCommitStatusPublishRequest)
+	afterWrite  func(SCMCommitStatusPublishRequest)
+}
+
+func newBlockingSCMPublisher(beforeWrite func(SCMCommitStatusPublishRequest), afterWrite func(SCMCommitStatusPublishRequest)) *blockingSCMPublisher {
+	return &blockingSCMPublisher{remote: make(map[string]SCMCommitStatusPublishRequest), beforeWrite: beforeWrite, afterWrite: afterWrite}
+}
+
+func (p *blockingSCMPublisher) PublishCommitStatus(_ context.Context, req SCMCommitStatusPublishRequest) error {
+	if p.beforeWrite != nil {
+		p.beforeWrite(req)
+	}
+	p.mu.Lock()
+	p.reqs = append(p.reqs, req)
+	p.remote[scmRequestKey(req)] = req
+	p.mu.Unlock()
+	if p.afterWrite != nil {
+		p.afterWrite(req)
+	}
+	return nil
+}
+
+func (p *blockingSCMPublisher) remoteState(provider string, owner string, repo string, sha string, contextName string) (SCMCommitStatusPublishRequest, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	req, ok := p.remote[scmRequestKey(SCMCommitStatusPublishRequest{Provider: provider, RepositoryOwner: owner, RepositoryName: repo, CommitSHA: sha, Context: contextName})]
+	return req, ok
+}
+
+func (p *blockingSCMPublisher) forceRemote(req SCMCommitStatusPublishRequest) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.remote[scmRequestKey(req)] = req
+}
+
+func (p *blockingSCMPublisher) sawState(state domain.SCMCommitStatusState) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, req := range p.reqs {
+		if req.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *blockingSCMPublisher) countState(state domain.SCMCommitStatusState) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	count := 0
+	for _, req := range p.reqs {
+		if req.State == state {
+			count++
+		}
+	}
+	return count
+}
+
+func (p *blockingSCMPublisher) requests() []SCMCommitStatusPublishRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]SCMCommitStatusPublishRequest(nil), p.reqs...)
+}
+
+var closeOnceMu sync.Mutex
+var closeOnceMap = map[chan struct{}]bool{}
+
+func closeOnce(ch chan struct{}) {
+	closeOnceMu.Lock()
+	defer closeOnceMu.Unlock()
+	if closeOnceMap[ch] {
+		return
+	}
+	closeOnceMap[ch] = true
+	close(ch)
+}
+
+func scmRequestKey(req SCMCommitStatusPublishRequest) string {
+	return strings.Join([]string{strings.TrimSpace(req.Provider), strings.TrimSpace(req.RepositoryOwner), strings.TrimSpace(req.RepositoryName), strings.TrimSpace(req.CommitSHA), strings.TrimSpace(req.Context)}, "|")
 }
