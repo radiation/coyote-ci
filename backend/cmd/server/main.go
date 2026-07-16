@@ -26,6 +26,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
 	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
 	platformslack "github.com/radiation/coyote-ci/backend/internal/platform/slack"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	artifactsvc "github.com/radiation/coyote-ci/backend/internal/service/artifact"
@@ -40,6 +41,12 @@ import (
 )
 
 var osServerHostname = os.Hostname
+
+type scmStatusRuntime struct {
+	reporter      buildsvc.BuildSCMStatusReporter
+	reporterImpl  *buildsvc.SCMStatusReporter
+	recoveryDrain *buildsvc.SCMStatusRecoveryDrain
+}
 
 // @title Coyote CI API
 // @version 0.1
@@ -145,29 +152,14 @@ func main() {
 		log.Fatalf("failed to configure notification recovery drain: %v", notificationRecoveryErr)
 	}
 	var scmStatusReporter buildsvc.BuildSCMStatusReporter
-	var scmStatusReporterImpl *buildsvc.SCMStatusReporter
 	var scmStatusRecoveryDrain *buildsvc.SCMStatusRecoveryDrain
-	if strings.TrimSpace(cfg.GitHubStatusToken) != "" {
-		scmStatusReporterImpl, err = buildsvc.NewSCMStatusReporter(buildsvc.SCMStatusReporterConfig{
-			BuildRepo:     buildRepo,
-			ProjectRepo:   projectRepo,
-			DeliveryRepo:  scmStatusDeliveryRepo,
-			Publisher:     buildsvc.NewGitHubCommitStatusClient("", nil, cfg.GitHubStatusToken),
-			PublicBaseURL: cfg.PublicURL,
-			ClaimOwner:    defaultServerNotificationClaimOwner(),
-		})
-		if err != nil {
-			log.Fatalf("failed to configure scm status reporter: %v", err)
-		}
-		scmStatusReporter = scmStatusReporterImpl
-		scmStatusRecoveryDrain, err = buildsvc.NewSCMStatusRecoveryDrain(buildsvc.SCMStatusRecoveryDrainConfig{
-			Reporter:  scmStatusReporterImpl,
-			Interval:  cfg.SCMStatusRecoveryInterval,
-			BatchSize: cfg.SCMStatusRecoveryBatchSize,
-		})
-		if err != nil {
-			log.Fatalf("failed to configure scm status recovery drain: %v", err)
-		}
+	scmStatusDeps, err := configureSCMStatusRuntime(cfg, buildRepo, projectRepo, scmStatusDeliveryRepo)
+	if err != nil {
+		log.Fatalf("failed to configure scm status reporting: %v", err)
+	}
+	if scmStatusDeps.reporterImpl != nil {
+		scmStatusRecoveryDrain = scmStatusDeps.recoveryDrain
+		scmStatusReporter = scmStatusDeps.reporter
 	} else {
 		log.Printf("github commit status reporting disabled: GITHUB_STATUS_TOKEN is not configured")
 	}
@@ -393,6 +385,35 @@ func main() {
 		log.Fatalf("server failed: %v", err)
 	}
 	wg.Wait()
+}
+
+func configureSCMStatusRuntime(cfg config.Config, buildRepo repository.BuildRepository, projectRepo repository.ProjectRepository, deliveryRepo repository.SCMStatusDeliveryRepository) (scmStatusRuntime, error) {
+	if strings.TrimSpace(cfg.GitHubStatusToken) == "" {
+		return scmStatusRuntime{}, nil
+	}
+
+	reporterImpl, err := buildsvc.NewSCMStatusReporter(buildsvc.SCMStatusReporterConfig{
+		BuildRepo:     buildRepo,
+		ProjectRepo:   projectRepo,
+		DeliveryRepo:  deliveryRepo,
+		Publisher:     buildsvc.NewGitHubCommitStatusClient("", nil, cfg.GitHubStatusToken),
+		PublicBaseURL: cfg.PublicURL,
+		ClaimOwner:    defaultServerNotificationClaimOwner(),
+	})
+	if err != nil {
+		return scmStatusRuntime{}, err
+	}
+
+	recoveryDrain, err := buildsvc.NewSCMStatusRecoveryDrain(buildsvc.SCMStatusRecoveryDrainConfig{
+		Reporter:  reporterImpl,
+		Interval:  cfg.SCMStatusRecoveryInterval,
+		BatchSize: cfg.SCMStatusRecoveryBatchSize,
+	})
+	if err != nil {
+		return scmStatusRuntime{}, err
+	}
+
+	return scmStatusRuntime{reporter: reporterImpl, reporterImpl: reporterImpl, recoveryDrain: recoveryDrain}, nil
 }
 
 func defaultServerNotificationClaimOwner() string {
