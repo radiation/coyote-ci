@@ -165,9 +165,29 @@ type BuildResponse struct {
 	TriggerArtifactName           *string                    `json:"trigger_artifact_name,omitempty"`
 	TriggerArtifactSizeBytes      *int64                     `json:"trigger_artifact_size_bytes,omitempty"`
 	TriggerArtifactChecksumSHA256 *string                    `json:"trigger_artifact_checksum_sha256,omitempty"`
+	SCMStatus                     *BuildSCMStatusResponse    `json:"scm_status,omitempty"`
 	Source                        *BuildSourceResponse       `json:"source,omitempty"`
 	Image                         ImageExecutionResponse     `json:"image"`
 	CurrentSteps                  []BuildCurrentStepResponse `json:"current_steps"`
+}
+
+type BuildSCMStatusResponse struct {
+	Reportable          bool    `json:"reportable"`
+	Configured          bool    `json:"configured"`
+	Provider            string  `json:"provider"`
+	RepositoryOwner     string  `json:"repository_owner"`
+	RepositoryName      string  `json:"repository_name"`
+	CommitSHA           *string `json:"commit_sha,omitempty"`
+	Context             *string `json:"context,omitempty"`
+	DesiredState        *string `json:"desired_state,omitempty"`
+	LastSentState       *string `json:"last_sent_state,omitempty"`
+	DeliveryState       *string `json:"delivery_state,omitempty"`
+	CurrentOwnerBuildID *string `json:"current_owner_build_id,omitempty"`
+	CurrentOwnerAttempt *int    `json:"current_owner_attempt_number,omitempty"`
+	Attempts            *int    `json:"attempts,omitempty"`
+	NextAttemptAt       *string `json:"next_attempt_at,omitempty"`
+	LastError           *string `json:"last_error,omitempty"`
+	AwaitingReassertion bool    `json:"awaiting_reassertion,omitempty"`
 }
 
 type BuildCurrentStepResponse struct {

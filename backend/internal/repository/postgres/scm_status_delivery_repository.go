@@ -118,6 +118,14 @@ const scmStatusDeliverySelectByIDQuery = `
 	WHERE id = $1
 `
 
+const scmStatusDeliverySelectByBuildIDQuery = `
+	SELECT ` + scmStatusDeliveryColumns + `
+	FROM scm_status_deliveries
+	WHERE build_id = $1
+	ORDER BY updated_at DESC, created_at DESC
+	LIMIT 1
+`
+
 const scmStatusDeliverySelectByKeyQuery = `
 	SELECT ` + scmStatusDeliveryColumns + `
 	FROM scm_status_deliveries
@@ -454,6 +462,21 @@ func (r *SCMStatusDeliveryRepository) GetByKey(ctx context.Context, provider str
 		strings.TrimSpace(repositoryName),
 		strings.TrimSpace(commitSHA),
 		strings.TrimSpace(contextName),
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.SCMStatusDelivery{}, repository.ErrSCMStatusDeliveryNotFound
+		}
+		return domain.SCMStatusDelivery{}, err
+	}
+	return delivery, nil
+}
+
+func (r *SCMStatusDeliveryRepository) GetByBuildID(ctx context.Context, buildID string) (domain.SCMStatusDelivery, error) {
+	delivery, err := scanSCMStatusDelivery(r.db.QueryRowContext(
+		ctx,
+		scmStatusDeliverySelectByBuildIDQuery,
+		strings.TrimSpace(buildID),
 	))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

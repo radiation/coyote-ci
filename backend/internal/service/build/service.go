@@ -74,6 +74,7 @@ type BuildService struct {
 	versionTagger             BuildVersionTagger
 	buildNotifier             BuildLifecycleNotifier
 	scmStatusReporter         BuildSCMStatusReporter
+	scmStatusDeliveryRepo     repository.SCMStatusDeliveryRepository
 	artifactTriggerDispatcher ArtifactTriggerDispatcher
 
 	defaultExecutionImage string
@@ -114,6 +115,7 @@ type BuildServiceConfig struct {
 	VersionTagger             BuildVersionTagger
 	BuildNotifier             BuildLifecycleNotifier
 	SCMStatusReporter         BuildSCMStatusReporter
+	SCMStatusDeliveryRepo     repository.SCMStatusDeliveryRepository
 	ArtifactTriggerDispatcher ArtifactTriggerDispatcher
 }
 
@@ -132,6 +134,7 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 	svc.versionTagger = cfg.VersionTagger
 	svc.buildNotifier = cfg.BuildNotifier
 	svc.scmStatusReporter = cfg.SCMStatusReporter
+	svc.scmStatusDeliveryRepo = cfg.SCMStatusDeliveryRepo
 	svc.artifactTriggerDispatcher = cfg.ArtifactTriggerDispatcher
 	if cfg.ArtifactLabelRepo != nil {
 		type artifactLabelRepoAware interface {

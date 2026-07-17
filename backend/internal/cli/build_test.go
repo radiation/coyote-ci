@@ -101,6 +101,7 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 		TriggeredBy:  stringPtr("trigger-user"),
 		ErrorMessage: &errorMessage,
 		PipelineName: &pipeline,
+		SCMStatus:    &api.BuildSCMStatusResponse{Reportable: true, Configured: true, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: stringPtr("abcdef1234567890"), Context: stringPtr("coyote/project-1/job-1"), DesiredState: stringPtr("failure"), DeliveryState: stringPtr("retry_waiting"), Attempts: intPtr(2), NextAttemptAt: stringPtr("2026-07-17T14:30:00Z"), LastError: stringPtr("GitHub rate limit exceeded")},
 		CurrentSteps: []api.BuildCurrentStepResponse{{ID: "step-0", Index: 0, Name: "lint", Status: "running", StartedAt: stringPtr("2026-07-04T00:00:01Z")}, {ID: "step-2", Index: 2, Name: "test", Status: "running", StartedAt: stringPtr("2026-07-04T00:00:02Z")}},
 	}
 	steps := []api.BuildStepResponse{{StepIndex: 1, Name: "test", Status: "failed", ExitCode: intPtr(1), Job: &api.ExecutionJobResponse{Name: jobName}}}
@@ -126,7 +127,7 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 		t.Fatalf("writeBuildStatusHuman failed: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"Project: Project X", "Job:     coyote-ci", "Commit:  abcdef1", "Failed:  step 1 test exited 1", "Running:", "[0] lint", "[2] test"} {
+	for _, want := range []string{"Project: Project X", "Job:     coyote-ci", "Commit:  abcdef1", "Failed:  step 1 test exited 1", "SCM status", "Provider:       github", "Repository:     octo/repo", "Context:        coyote/project-1/job-1", "Desired state:  failure", "Delivery state: retry_waiting", "Attempts:       2", "Next retry:     2026-07-17T14:30:00Z", "Last error:     GitHub rate limit exceeded", "Running:", "[0] lint", "[2] test"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected %q in output, got %s", want, out)
 		}

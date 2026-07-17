@@ -31,6 +31,17 @@ Prefer targeted context over broad repository scans:
 
 Do not make broad exploratory changes just because related files exist.
 
+### CodeGraph usage
+
+Use CodeGraph to narrow repository discovery, not as a prerequisite to implementation.
+
+- For planning/discovery work, use at most 2–3 targeted CodeGraph queries.
+- For implementation work with an already-approved scope, use at most 1–2 targeted queries only when needed.
+- For narrow follow-up fixes, prefer direct inspection of the known files and usually skip CodeGraph.
+- `codegraph explore` is optional. If it stalls, repeats results, or does not materially narrow the relevant file set, stop it and continue with the curated `docs/ai-context/` files and direct file inspection.
+- Do not repeatedly reformulate CodeGraph queries once the likely implementation files are known.
+- Never treat successful CodeGraph exploration as a prerequisite to editing or completing the task.
+
 ## AI context files
 
 Before scanning large parts of the repository, check the curated context files when they are relevant:

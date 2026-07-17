@@ -191,6 +191,7 @@ func main() {
 		ExecutionOutputRepo:   executionJobOutputRepo,
 		BuildNotifier:         buildNotificationService,
 		SCMStatusReporter:     scmStatusReporter,
+		SCMStatusDeliveryRepo: scmStatusDeliveryRepo,
 		RepoFetcher:           source.NewGitFetcher(),
 		ManagedImageRefresher: managedImageRefresher,
 		VersionTagger:         versionTagService,

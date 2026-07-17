@@ -29,6 +29,10 @@ import (
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
+type noopSCMBuildReporter struct{}
+
+func (noopSCMBuildReporter) NotifyBuildStatus(context.Context, domain.Build) error { return nil }
+
 const createBuildTestProjectID = "11111111-1111-1111-1111-111111111111"
 
 type trackingProjectRepo struct {
@@ -1470,6 +1474,64 @@ func TestBuildHandler_GetBuildIncludesJobNameAndCurrentSteps(t *testing.T) {
 	}
 	if _, ok := first["started_at"]; !ok {
 		t.Fatalf("expected started_at on current step, got %+v", first)
+	}
+}
+
+func TestBuildHandler_GetBuildIncludesSCMStatusAndDoesNotLeakClaims(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	provider := "github"
+	repoOwner := "octo"
+	repoName := "repo"
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	projectService := service.NewProjectService(projectRepo)
+	project, err := projectService.CreateProject(context.Background(), service.CreateProjectInput{Name: "Payments", Slug: "payments"})
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	jobID := "job-1"
+	if _, createJobErr := jobRepo.Create(context.Background(), domain.Job{ID: jobID, ProjectID: project.ID, Name: "ci", RepositoryURL: "https://github.com/octo/repo.git", DefaultRef: "main", PipelineYAML: "version: 1", Enabled: true, CreatedAt: now, UpdatedAt: now}); createJobErr != nil {
+		t.Fatalf("create job failed: %v", createJobErr)
+	}
+	deliveryRepo := repositorymemory.NewSCMStatusDeliveryRepository()
+	build := domain.Build{ID: "build-1", ProjectID: project.ID, JobID: &jobID, Status: domain.BuildStatusFailed, AttemptNumber: 1, CreatedAt: now, CommitSHA: stringPtr("deadbeefcafebabe"), Trigger: domain.BuildTrigger{SCMProvider: &provider, RepositoryOwner: &repoOwner, RepositoryName: &repoName}}
+	claimed, claimErr := deliveryRepo.AcquireForDelivery(context.Background(), repository.SCMStatusDeliveryClaimInput{Delivery: domain.SCMStatusDelivery{BuildID: build.ID, BuildAttempt: build.AttemptNumber, BuildCreatedAt: build.CreatedAt, Provider: provider, RepositoryOwner: repoOwner, RepositoryName: repoName, CommitSHA: "deadbeefcafebabe", Context: "coyote/payments/job-1", DesiredState: domain.SCMCommitStatusStateFailure, Description: "Coyote build failed"}, ClaimOwner: "server-1", Now: now, ClaimDuration: time.Minute, MaxAttempts: 3})
+	if claimErr != nil {
+		t.Fatalf("claim delivery failed: %v", claimErr)
+	}
+	retryAt := now.Add(2 * time.Minute)
+	if _, updateErr := deliveryRepo.RecordRetryableFailure(context.Background(), repository.SCMStatusDeliveryRecordFailureInput{DeliveryID: claimed.Delivery.ID, ClaimOwner: "server-1", ClaimedAt: *claimed.Delivery.ClaimedAt, FailedAt: now, NextAttemptAt: &retryAt, FailureCategory: domain.SCMStatusDeliveryFailureCategoryRetryable, FailureReason: "github_status_http_retryable", LastError: stringPtr("GitHub rate limit exceeded")}); updateErr != nil {
+		t.Fatalf("record retryable failure failed: %v", updateErr)
+	}
+
+	buildService := buildsvc.NewBuildServiceFromConfig(&fakeRepo{build: build}, nil, nil, buildsvc.BuildServiceConfig{SCMStatusReporter: noopSCMBuildReporter{}, SCMStatusDeliveryRepo: deliveryRepo})
+	h := NewBuildHandler(buildService)
+	h.SetProjectService(projectService)
+	h.SetJobService(service.NewJobService(jobRepo, nil).WithProjectRepository(projectRepo))
+
+	req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1", nil), "build-1")
+	rr := httptest.NewRecorder()
+	h.GetBuild(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "claimed_by") || strings.Contains(body, "claim_expires_at") || strings.Contains(body, "server-1") {
+		t.Fatalf("response leaked internal claim metadata: %s", body)
+	}
+	data := decodeDataMap(t, rr)
+	scmData, ok := data["scm_status"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected scm_status object, got %+v", data["scm_status"])
+	}
+	if scmData["reportable"] != true || scmData["configured"] != true || scmData["provider"] != "github" || scmData["repository_owner"] != "octo" || scmData["repository_name"] != "repo" {
+		t.Fatalf("unexpected scm identity payload: %+v", scmData)
+	}
+	if scmData["commit_sha"] != "deadbeefcafebabe" || scmData["context"] != "coyote/payments/job-1" || scmData["desired_state"] != "failure" || scmData["delivery_state"] != "retry_waiting" {
+		t.Fatalf("unexpected scm state payload: %+v", scmData)
+	}
+	if scmData["attempts"] != float64(1) || scmData["last_error"] != "GitHub rate limit exceeded" || scmData["next_attempt_at"] != retryAt.Format(time.RFC3339) {
+		t.Fatalf("unexpected scm retry payload: %+v", scmData)
 	}
 }
 

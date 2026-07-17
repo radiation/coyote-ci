@@ -58,6 +58,14 @@ func TestSCMStatusDeliveryRepository_ClaimAndStateUpdates(t *testing.T) {
 	if fetched.ID != claimed.Delivery.ID {
 		t.Fatalf("expected claimed delivery id, got %q", fetched.ID)
 	}
+
+	byBuild, getByBuildErr := repo.GetByBuildID(context.Background(), "build-1")
+	if getByBuildErr != nil {
+		t.Fatalf("get by build id failed: %v", getByBuildErr)
+	}
+	if byBuild.ID != claimed.Delivery.ID {
+		t.Fatalf("expected claimed delivery id by build, got %q", byBuild.ID)
+	}
 }
 
 func TestSCMStatusDeliveryRepository_RetryAndSupersede(t *testing.T) {

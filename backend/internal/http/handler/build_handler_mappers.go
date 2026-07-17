@@ -7,6 +7,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
 func toBuildResponse(build domain.Build, project ...*domain.Project) api.BuildResponse {
@@ -84,6 +85,46 @@ func toBuildCurrentStepResponse(step domain.BuildStep) api.BuildCurrentStepRespo
 		Status:    string(step.Status),
 		StartedAt: formatOptionalTime(step.StartedAt),
 	}
+}
+
+func toBuildSCMStatusResponse(view *buildsvc.BuildSCMStatusView) *api.BuildSCMStatusResponse {
+	if view == nil {
+		return nil
+	}
+	return &api.BuildSCMStatusResponse{
+		Reportable:          view.Reportable,
+		Configured:          view.Configured,
+		Provider:            view.Provider,
+		RepositoryOwner:     view.RepositoryOwner,
+		RepositoryName:      view.RepositoryName,
+		CommitSHA:           cloneStringPointer(view.CommitSHA),
+		Context:             cloneStringPointer(view.Context),
+		DesiredState:        cloneStringPointer(view.DesiredState),
+		LastSentState:       cloneStringPointer(view.LastSentState),
+		DeliveryState:       cloneStringPointer(view.DeliveryState),
+		CurrentOwnerBuildID: cloneStringPointer(view.CurrentOwnerBuildID),
+		CurrentOwnerAttempt: cloneIntPointer(view.CurrentOwnerAttempt),
+		Attempts:            cloneIntPointer(view.Attempts),
+		NextAttemptAt:       formatOptionalTime(view.NextAttemptAt),
+		LastError:           cloneStringPointer(view.LastError),
+		AwaitingReassertion: view.AwaitingReassertion,
+	}
+}
+
+func cloneStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copyValue := *value
+	return &copyValue
+}
+
+func cloneIntPointer(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copyValue := *value
+	return &copyValue
 }
 
 func toQueueEntryResponse(entry domain.QueueEntry) api.QueueEntryResponse {

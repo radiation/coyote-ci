@@ -72,6 +72,7 @@ func makeBuildStatusPayload(serverURL string, build api.BuildResponse, steps []a
 			WebURL:       webURL,
 			Error:        build.ErrorMessage,
 			Pipeline:     build.PipelineName,
+			SCMStatus:    build.SCMStatus,
 			CurrentSteps: currentSteps,
 		},
 		FailedStep: failedStep,
@@ -138,6 +139,79 @@ func writeBuildStatusHuman(w io.Writer, payload buildStatusPayload) error {
 	if build.WebURL != "" {
 		if _, err := fmt.Fprintf(w, "URL:     %s\n", build.WebURL); err != nil {
 			return err
+		}
+	}
+	if build.SCMStatus != nil {
+		if _, err := fmt.Fprintln(w, "\nSCM status"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  Provider:       %s\n", build.SCMStatus.Provider); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  Repository:     %s/%s\n", build.SCMStatus.RepositoryOwner, build.SCMStatus.RepositoryName); err != nil {
+			return err
+		}
+		if build.SCMStatus.CommitSHA != nil {
+			if _, err := fmt.Fprintf(w, "  Commit:         %s\n", shortSHA(*build.SCMStatus.CommitSHA)); err != nil {
+				return err
+			}
+		}
+		if build.SCMStatus.Context != nil {
+			if _, err := fmt.Fprintf(w, "  Context:        %s\n", *build.SCMStatus.Context); err != nil {
+				return err
+			}
+		}
+		if !build.SCMStatus.Reportable {
+			if _, err := fmt.Fprintln(w, "  Reportable:     no"); err != nil {
+				return err
+			}
+		} else if !build.SCMStatus.Configured {
+			if _, err := fmt.Fprintln(w, "  Configured:     no"); err != nil {
+				return err
+			}
+		}
+		if build.SCMStatus.DesiredState != nil {
+			if _, err := fmt.Fprintf(w, "  Desired state:  %s\n", *build.SCMStatus.DesiredState); err != nil {
+				return err
+			}
+		}
+		if build.SCMStatus.LastSentState != nil {
+			if _, err := fmt.Fprintf(w, "  Last sent:      %s\n", *build.SCMStatus.LastSentState); err != nil {
+				return err
+			}
+		}
+		if build.SCMStatus.DeliveryState != nil {
+			label := *build.SCMStatus.DeliveryState
+			if build.SCMStatus.AwaitingReassertion {
+				label = label + " (awaiting reassertion)"
+			}
+			if _, err := fmt.Fprintf(w, "  Delivery state: %s\n", label); err != nil {
+				return err
+			}
+		}
+		if build.SCMStatus.Attempts != nil {
+			if _, err := fmt.Fprintf(w, "  Attempts:       %d\n", *build.SCMStatus.Attempts); err != nil {
+				return err
+			}
+		}
+		if build.SCMStatus.NextAttemptAt != nil {
+			if _, err := fmt.Fprintf(w, "  Next retry:     %s\n", *build.SCMStatus.NextAttemptAt); err != nil {
+				return err
+			}
+		}
+		if build.SCMStatus.CurrentOwnerBuildID != nil {
+			ownerLine := *build.SCMStatus.CurrentOwnerBuildID
+			if build.SCMStatus.CurrentOwnerAttempt != nil {
+				ownerLine = fmt.Sprintf("%s (attempt %d)", ownerLine, *build.SCMStatus.CurrentOwnerAttempt)
+			}
+			if _, err := fmt.Fprintf(w, "  Current owner:  %s\n", ownerLine); err != nil {
+				return err
+			}
+		}
+		if build.SCMStatus.LastError != nil {
+			if _, err := fmt.Fprintf(w, "  Last error:     %s\n", *build.SCMStatus.LastError); err != nil {
+				return err
+			}
 		}
 	}
 	if len(build.CurrentSteps) > 0 {

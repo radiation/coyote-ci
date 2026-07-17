@@ -4698,6 +4698,9 @@ const docTemplate = `{
                 "scm_provider": {
                     "type": "string"
                 },
+                "scm_status": {
+                    "$ref": "#/definitions/api.BuildSCMStatusResponse"
+                },
                 "source": {
                     "$ref": "#/definitions/api.BuildSourceResponse"
                 },
@@ -4765,6 +4768,59 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "triggered_by": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.BuildSCMStatusResponse": {
+            "type": "object",
+            "properties": {
+                "attempts": {
+                    "type": "integer"
+                },
+                "awaiting_reassertion": {
+                    "type": "boolean"
+                },
+                "commit_sha": {
+                    "type": "string"
+                },
+                "configured": {
+                    "type": "boolean"
+                },
+                "context": {
+                    "type": "string"
+                },
+                "current_owner_attempt_number": {
+                    "type": "integer"
+                },
+                "current_owner_build_id": {
+                    "type": "string"
+                },
+                "delivery_state": {
+                    "type": "string"
+                },
+                "desired_state": {
+                    "type": "string"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "last_sent_state": {
+                    "type": "string"
+                },
+                "next_attempt_at": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "reportable": {
+                    "type": "boolean"
+                },
+                "repository_name": {
+                    "type": "string"
+                },
+                "repository_owner": {
                     "type": "string"
                 }
             }

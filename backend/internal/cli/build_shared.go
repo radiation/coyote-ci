@@ -16,24 +16,25 @@ type buildStatusPayload struct {
 }
 
 type buildStatusView struct {
-	ID           string                 `json:"id"`
-	BuildNumber  int64                  `json:"build_number,omitempty"`
-	ProjectID    string                 `json:"project_id"`
-	ProjectName  *string                `json:"project_name,omitempty"`
-	JobID        *string                `json:"job_id,omitempty"`
-	JobName      *string                `json:"job_name,omitempty"`
-	Status       string                 `json:"status"`
-	Ref          *string                `json:"ref,omitempty"`
-	SHA          *string                `json:"sha,omitempty"`
-	Author       *string                `json:"author,omitempty"`
-	CreatedAt    string                 `json:"created_at"`
-	StartedAt    *string                `json:"started_at,omitempty"`
-	FinishedAt   *string                `json:"finished_at,omitempty"`
-	DurationMS   *int64                 `json:"duration_ms,omitempty"`
-	WebURL       string                 `json:"web_url"`
-	Error        *string                `json:"error_message,omitempty"`
-	Pipeline     *string                `json:"pipeline_name,omitempty"`
-	CurrentSteps []buildCurrentStepView `json:"current_steps"`
+	ID           string                      `json:"id"`
+	BuildNumber  int64                       `json:"build_number,omitempty"`
+	ProjectID    string                      `json:"project_id"`
+	ProjectName  *string                     `json:"project_name,omitempty"`
+	JobID        *string                     `json:"job_id,omitempty"`
+	JobName      *string                     `json:"job_name,omitempty"`
+	Status       string                      `json:"status"`
+	Ref          *string                     `json:"ref,omitempty"`
+	SHA          *string                     `json:"sha,omitempty"`
+	Author       *string                     `json:"author,omitempty"`
+	CreatedAt    string                      `json:"created_at"`
+	StartedAt    *string                     `json:"started_at,omitempty"`
+	FinishedAt   *string                     `json:"finished_at,omitempty"`
+	DurationMS   *int64                      `json:"duration_ms,omitempty"`
+	WebURL       string                      `json:"web_url"`
+	Error        *string                     `json:"error_message,omitempty"`
+	Pipeline     *string                     `json:"pipeline_name,omitempty"`
+	SCMStatus    *api.BuildSCMStatusResponse `json:"scm_status,omitempty"`
+	CurrentSteps []buildCurrentStepView      `json:"current_steps"`
 }
 
 type buildCurrentStepView struct {
