@@ -36,8 +36,8 @@ func TestSCMRepositoryRegistrationRepository_CreateGetListAndUpdate(t *testing.T
 	}
 
 	mock.ExpectQuery(`SELECT id, connection_id, provider_repository_id, owner_name, repository_name, full_name, clone_url, web_url, default_branch, archived, disabled, metadata_refreshed_at, created_at, updated_at FROM scm_registered_repositories WHERE id = \$1`).WithArgs("repo-1").WillReturnRows(scmRepositoryRegistrationTestRows(now))
-	if _, err := repo.GetByID(context.Background(), "repo-1"); err != nil {
-		t.Fatalf("get failed: %v", err)
+	if _, getErr := repo.GetByID(context.Background(), "repo-1"); getErr != nil {
+		t.Fatalf("get failed: %v", getErr)
 	}
 
 	mock.ExpectQuery(`SELECT id, connection_id, provider_repository_id, owner_name, repository_name, full_name, clone_url, web_url, default_branch, archived, disabled, metadata_refreshed_at, created_at, updated_at FROM scm_registered_repositories ORDER BY`).WillReturnRows(scmRepositoryRegistrationTestRows(now))
@@ -64,8 +64,8 @@ func TestSCMRepositoryRegistrationRepository_CreateGetListAndUpdate(t *testing.T
 		t.Fatalf("expected updated full name, got %q", updated.FullName)
 	}
 
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationsErr)
 	}
 }
 

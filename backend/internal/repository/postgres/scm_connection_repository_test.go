@@ -36,8 +36,8 @@ func TestSCMConnectionRepository_CreateGitHubAppRegistration(t *testing.T) {
 		t.Fatalf("expected registration id to round-trip, got %q", created.ID)
 	}
 
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationsErr)
 	}
 }
 
@@ -82,8 +82,8 @@ func TestSCMConnectionRepository_ListAndGetGitHubAppRegistrations(t *testing.T) 
 		t.Fatalf("expected not found error, got %v", missingErr)
 	}
 
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationsErr)
 	}
 }
 
@@ -117,8 +117,8 @@ func TestSCMConnectionRepository_CreateGitHubAppInstallationConnection(t *testin
 		t.Fatalf("expected registration to round-trip, got %+v", created.GitHubAppRegistration)
 	}
 
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationsErr)
 	}
 }
 
@@ -210,8 +210,8 @@ func TestSCMConnectionRepository_GetListAndSetEnabled(t *testing.T) {
 		t.Fatalf("expected updated connection id, got %q", updated.Connection.ID)
 	}
 
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationsErr)
 	}
 }
 

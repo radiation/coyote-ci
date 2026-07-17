@@ -13,7 +13,7 @@ import (
 )
 
 var ErrSCMConnectionDisplayNameRequired = errors.New("display_name is required")
-var ErrSCMGitHubAppRegistrationIDRequired = errors.New("github app app_registration_id is required")
+var ErrSCMGitHubAppRegistrationIDRequired = errors.New("github installation app_registration_id is required")
 var ErrSCMGitHubAppIDRequired = errors.New("github app app_id is required")
 var ErrSCMGitHubPrivateKeySecretRefRequired = errors.New("github app private_key_secret_ref is required")
 var ErrSCMGitHubWebhookSecretRefRequired = errors.New("github app webhook_secret_ref is required")
