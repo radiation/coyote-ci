@@ -230,33 +230,6 @@ func (r *SCMStatusDeliveryRepository) GetByKey(ctx context.Context, provider str
 	return delivery, nil
 }
 
-func (r *SCMStatusDeliveryRepository) GetByBuildID(ctx context.Context, buildID string) (domain.SCMStatusDelivery, error) {
-	if err := ctx.Err(); err != nil {
-		return domain.SCMStatusDelivery{}, err
-	}
-	trimmedBuildID := strings.TrimSpace(buildID)
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	var (
-		matched domain.SCMStatusDelivery
-		found   bool
-	)
-	for _, delivery := range r.deliveries {
-		if strings.TrimSpace(delivery.BuildID) != trimmedBuildID {
-			continue
-		}
-		if !found || delivery.UpdatedAt.After(matched.UpdatedAt) {
-			matched = delivery
-			found = true
-		}
-	}
-	if !found {
-		return domain.SCMStatusDelivery{}, repository.ErrSCMStatusDeliveryNotFound
-	}
-	return matched, nil
-}
-
 func (r *SCMStatusDeliveryRepository) recordFailure(ctx context.Context, input repository.SCMStatusDeliveryRecordFailureInput, status domain.SCMStatusDeliveryStatus) (repository.SCMStatusDeliveryUpdateResult, error) {
 	if err := ctx.Err(); err != nil {
 		return repository.SCMStatusDeliveryUpdateResult{}, err

@@ -58,27 +58,18 @@ func (s *BuildService) GetBuildSCMStatus(ctx context.Context, build domain.Build
 		return view, nil
 	}
 
-	delivery, err := s.scmStatusDeliveryRepo.GetByBuildID(ctx, build.ID)
+	delivery, err := s.scmStatusDeliveryRepo.GetByKey(ctx, provider, owner, repo, *view.CommitSHA, *view.Context)
 	if err != nil {
 		if errors.Is(err, repository.ErrSCMStatusDeliveryNotFound) {
 			return view, nil
 		}
 		return nil, err
 	}
-	applyBuildSCMDelivery(view, delivery)
-	if delivery.Status == domain.SCMStatusDeliveryStatusSuperseded {
-		authoritative, authErr := s.scmStatusDeliveryRepo.GetByKey(ctx, delivery.Provider, delivery.RepositoryOwner, delivery.RepositoryName, delivery.CommitSHA, delivery.Context)
-		if authErr != nil {
-			if !errors.Is(authErr, repository.ErrSCMStatusDeliveryNotFound) {
-				return nil, authErr
-			}
-			return view, nil
-		}
-		if strings.TrimSpace(authoritative.BuildID) != strings.TrimSpace(build.ID) || authoritative.BuildAttempt != build.AttemptNumber {
-			view.CurrentOwnerBuildID = buildSCMStringPtr(strings.TrimSpace(authoritative.BuildID))
-			view.CurrentOwnerAttempt = buildSCMIntPtr(authoritative.BuildAttempt)
-		}
+	if strings.TrimSpace(delivery.BuildID) == strings.TrimSpace(build.ID) && delivery.BuildAttempt == build.AttemptNumber {
+		applyBuildSCMDelivery(view, delivery)
+		return view, nil
 	}
+	applyBuildSCMSupersededDelivery(view, delivery)
 
 	return view, nil
 }
@@ -107,6 +98,21 @@ func applyBuildSCMDelivery(view *BuildSCMStatusView, delivery domain.SCMStatusDe
 		view.LastSentState = buildSCMStringPtr(string(*delivery.LastSentState))
 	}
 	view.AwaitingReassertion = delivery.Status == domain.SCMStatusDeliveryStatusRetryWaiting && strings.TrimSpace(buildSCMOptionalString(delivery.FailureReason)) == scmStatusFailureReasonAuthoritativeReassert
+}
+
+func applyBuildSCMSupersededDelivery(view *BuildSCMStatusView, delivery domain.SCMStatusDelivery) {
+	delivery = delivery.Normalize()
+	view.CommitSHA = buildSCMStringPtr(delivery.CommitSHA)
+	view.Context = buildSCMStringPtr(delivery.Context)
+	view.DesiredState = buildSCMStringPtr(string(delivery.DesiredState))
+	view.DeliveryState = buildSCMStringPtr(string(domain.SCMStatusDeliveryStatusSuperseded))
+	view.CurrentOwnerBuildID = buildSCMStringPtr(delivery.BuildID)
+	view.CurrentOwnerAttempt = buildSCMIntPtr(delivery.BuildAttempt)
+	view.LastSentState = nil
+	view.Attempts = nil
+	view.NextAttemptAt = nil
+	view.LastError = nil
+	view.AwaitingReassertion = false
 }
 
 func buildSCMStringPtr(value string) *string {

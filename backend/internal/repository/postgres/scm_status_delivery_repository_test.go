@@ -77,17 +77,6 @@ func TestSCMStatusDeliveryRepository_AcquireForDelivery_CreateAndMarkSent(t *tes
 		t.Fatalf("expected sent status, got %q", updated.Delivery.Status)
 	}
 
-	mock.ExpectQuery("SELECT .* FROM scm_status_deliveries.*build_id = \\$1").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		"delivery-1", "build-1", 1, now, "github", "octo", "repo", "abcdef", "coyote/default/job-1", "pending", "pending", "Coyote build is in progress", "https://coyote.example/builds/build-1", "sent", 1, 3, now, nil, nil, nil, nil, nil, nil, nil, now, nil, now, now,
-	))
-	byBuild, getByBuildErr := repo.GetByBuildID(context.Background(), "build-1")
-	if getByBuildErr != nil {
-		t.Fatalf("get by build id failed: %v", getByBuildErr)
-	}
-	if byBuild.ID != "delivery-1" {
-		t.Fatalf("expected delivery-1 by build id, got %q", byBuild.ID)
-	}
-
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
