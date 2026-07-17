@@ -56,7 +56,9 @@ func TestSCMStatusDeliveryOrderingHelpers(t *testing.T) {
 			{name: "higher attempt wins", existing: domain.SCMStatusDelivery{BuildID: "build-2", BuildAttempt: 2, BuildCreatedAt: now}, incoming: domain.SCMStatusDelivery{BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: later}, want: 1},
 			{name: "lower attempt loses", existing: domain.SCMStatusDelivery{BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: now}, incoming: domain.SCMStatusDelivery{BuildID: "build-2", BuildAttempt: 2, BuildCreatedAt: later}, want: -1},
 			{name: "later created wins", existing: domain.SCMStatusDelivery{BuildID: "build-2", BuildAttempt: 1, BuildCreatedAt: later}, incoming: domain.SCMStatusDelivery{BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: now}, want: 1},
+			{name: "earlier created loses", existing: domain.SCMStatusDelivery{BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: now}, incoming: domain.SCMStatusDelivery{BuildID: "build-2", BuildAttempt: 1, BuildCreatedAt: later}, want: -1},
 			{name: "build id tie break", existing: domain.SCMStatusDelivery{BuildID: "build-z", BuildAttempt: 1, BuildCreatedAt: now}, incoming: domain.SCMStatusDelivery{BuildID: "build-a", BuildAttempt: 1, BuildCreatedAt: now}, want: 1},
+			{name: "build id tie break reverse", existing: domain.SCMStatusDelivery{BuildID: "build-a", BuildAttempt: 1, BuildCreatedAt: now}, incoming: domain.SCMStatusDelivery{BuildID: "build-z", BuildAttempt: 1, BuildCreatedAt: now}, want: -1},
 		}
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {

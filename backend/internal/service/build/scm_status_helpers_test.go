@@ -111,8 +111,8 @@ func TestSCMStatusBuildHelpers(t *testing.T) {
 
 	t.Run("retry policy and claim helpers", func(t *testing.T) {
 		policy := defaultSCMStatusRetryPolicy()
-		if policy.delayForAttempt(1) != defaultSCMStatusRetryInitialDelay || policy.delayForAttempt(6) != defaultSCMStatusRetryMaxDelay {
-			t.Fatalf("unexpected retry delays: attempt1=%v attempt6=%v", policy.delayForAttempt(1), policy.delayForAttempt(6))
+		if policy.delayForAttempt(0) != defaultSCMStatusRetryInitialDelay || policy.delayForAttempt(1) != defaultSCMStatusRetryInitialDelay || policy.delayForAttempt(2) != defaultSCMStatusRetryInitialDelay*2 || policy.delayForAttempt(3) != defaultSCMStatusRetryInitialDelay*4 || policy.delayForAttempt(6) != defaultSCMStatusRetryMaxDelay {
+			t.Fatalf("unexpected retry delays: attempt0=%v attempt1=%v attempt2=%v attempt3=%v attempt6=%v", policy.delayForAttempt(0), policy.delayForAttempt(1), policy.delayForAttempt(2), policy.delayForAttempt(3), policy.delayForAttempt(6))
 		}
 		if scmStatusClaimDuration(0) != defaultSCMStatusDeliveryClaimDuration || scmStatusClaimDuration(time.Second) != time.Second {
 			t.Fatal("unexpected claim duration normalization")
@@ -420,6 +420,199 @@ func TestSCMStatusReporter_ExecutionHelpers(t *testing.T) {
 		}
 		if attempt.claimOutcome != repository.SCMStatusDeliveryClaimOutcomeRetryClaimed || !attempt.rehydrationFailed || attempt.executionOutcome != scmStatusExecutionOutcomeRetryScheduled {
 			t.Fatalf("unexpected recover attempt: %+v", attempt)
+		}
+	})
+}
+
+func TestSCMStatusReporter_ControlFlowBranches(t *testing.T) {
+	baseNow := time.Date(2026, 7, 17, 9, 0, 0, 0, time.UTC)
+	jobID := "job-1"
+	projectID := "project-1"
+	build := domain.Build{
+		ID:            "build-1",
+		ProjectID:     projectID,
+		JobID:         &jobID,
+		AttemptNumber: 1,
+		CreatedAt:     baseNow,
+		Status:        domain.BuildStatusQueued,
+		CommitSHA:     strPtr("deadbeef"),
+		RepoURL:       strPtr("https://github.com/octo/repo.git"),
+	}
+
+	t.Run("constructor validates each dependency", func(t *testing.T) {
+		projectRepo := &fakeSCMProjectRepository{project: domain.Project{ID: projectID, Slug: "payments"}}
+		deliveryRepo := memoryrepo.NewSCMStatusDeliveryRepository()
+		publisher := &recordingSCMPublisher{}
+		cases := []SCMStatusReporterConfig{
+			{ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, Publisher: publisher},
+			{BuildRepo: &multiBuildRepository{}, DeliveryRepo: deliveryRepo, Publisher: publisher},
+			{BuildRepo: &multiBuildRepository{}, ProjectRepo: projectRepo, Publisher: publisher},
+			{BuildRepo: &multiBuildRepository{}, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo},
+		}
+		for idx, cfg := range cases {
+			if _, err := NewSCMStatusReporter(cfg); err == nil {
+				t.Fatalf("expected constructor error for case %d", idx)
+			}
+		}
+	})
+
+	t.Run("nil reporter and plan-delivery skips", func(t *testing.T) {
+		var nilReporter *SCMStatusReporter
+		if err := nilReporter.NotifyBuildStatus(context.Background(), build); err != nil {
+			t.Fatalf("expected nil reporter to no-op, got %v", err)
+		}
+
+		reporter := &SCMStatusReporter{
+			projectRepo: &fakeSCMProjectRepository{project: domain.Project{ID: projectID, Slug: "payments"}},
+			now:         func() time.Time { return baseNow },
+		}
+		if _, ok, err := reporter.planDelivery(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusQueued}); err != nil || ok {
+			t.Fatalf("expected build without github identity to skip, got ok=%v err=%v", ok, err)
+		}
+		withoutCommit := build
+		withoutCommit.CommitSHA = nil
+		withoutCommit.RepoURL = strPtr("https://github.com/octo/repo.git")
+		if _, ok, err := reporter.planDelivery(context.Background(), withoutCommit); err != nil || ok {
+			t.Fatalf("expected build without commit sha to skip, got ok=%v err=%v", ok, err)
+		}
+	})
+
+	t.Run("build context and acquire delivery branches", func(t *testing.T) {
+		projectErr := errors.New("project lookup failed")
+		reporter := &SCMStatusReporter{
+			projectRepo:   &fakeSCMProjectRepository{err: projectErr},
+			deliveryRepo:  &helperSCMDeliveryRepo{},
+			claimOwner:    "worker",
+			claimDuration: time.Minute,
+			retryPolicy:   defaultSCMStatusRetryPolicy(),
+			now:           func() time.Time { return baseNow },
+		}
+		if _, ok, err := reporter.buildContextName(context.Background(), build); !errors.Is(err, projectErr) || ok {
+			t.Fatalf("expected project lookup error, got ok=%v err=%v", ok, err)
+		}
+
+		reporter.projectRepo = &fakeSCMProjectRepository{project: domain.Project{ID: projectID, Slug: "   "}}
+		if _, ok, err := reporter.buildContextName(context.Background(), build); err != nil || ok {
+			t.Fatalf("expected empty slug to skip, got ok=%v err=%v", ok, err)
+		}
+
+		acquireErr := errors.New("acquire failed")
+		reporter.projectRepo = &fakeSCMProjectRepository{project: domain.Project{ID: projectID, Slug: "payments"}}
+		reporter.deliveryRepo = &helperSCMDeliveryRepo{acquireForDelivery: func(_ context.Context, input repository.SCMStatusDeliveryClaimInput) (repository.SCMStatusDeliveryClaimResult, error) {
+			if input.ClaimOwner != "worker" || input.MaxAttempts != defaultSCMStatusDeliveryMaxAttempts {
+				t.Fatalf("unexpected claim input: %+v", input)
+			}
+			return repository.SCMStatusDeliveryClaimResult{}, acquireErr
+		}}
+		if _, shouldSend, err := reporter.acquireDelivery(context.Background(), build, scmStatusRecoveryReasonInline); !errors.Is(err, acquireErr) || shouldSend {
+			t.Fatalf("expected acquire error, got shouldSend=%v err=%v", shouldSend, err)
+		}
+
+		for _, outcome := range []repository.SCMStatusDeliveryClaimOutcome{
+			repository.SCMStatusDeliveryClaimOutcomeAlreadySent,
+			repository.SCMStatusDeliveryClaimOutcomeClaimedByOther,
+			repository.SCMStatusDeliveryClaimOutcomeRetryNotDue,
+		} {
+			reporter.deliveryRepo = &helperSCMDeliveryRepo{acquireForDelivery: func(_ context.Context, input repository.SCMStatusDeliveryClaimInput) (repository.SCMStatusDeliveryClaimResult, error) {
+				return repository.SCMStatusDeliveryClaimResult{Delivery: input.Delivery, Outcome: outcome}, nil
+			}}
+			result, shouldSend, err := reporter.acquireDelivery(context.Background(), build, scmStatusRecoveryReasonInline)
+			if err != nil || shouldSend || result.Outcome != outcome {
+				t.Fatalf("expected skip outcome %q, got result=%+v shouldSend=%v err=%v", outcome, result, shouldSend, err)
+			}
+		}
+	})
+
+	t.Run("execute claimed delivery handles superseded and lost-claim reassert paths", func(t *testing.T) {
+		claimedAt := baseNow.Add(time.Minute)
+		baseDelivery := domain.SCMStatusDelivery{
+			ID:              "delivery-1",
+			BuildID:         build.ID,
+			BuildAttempt:    build.AttemptNumber,
+			BuildCreatedAt:  build.CreatedAt,
+			Provider:        "github",
+			RepositoryOwner: "octo",
+			RepositoryName:  "repo",
+			CommitSHA:       "deadbeef",
+			Context:         "coyote/payments/job-1",
+			DesiredState:    domain.SCMCommitStatusStatePending,
+			Description:     "Coyote build is queued",
+			Attempts:        1,
+			MaxAttempts:     3,
+			ClaimedAt:       &claimedAt,
+		}
+
+		newer := build
+		newer.ID = "build-2"
+		newer.AttemptNumber = 2
+		newer.CreatedAt = build.CreatedAt.Add(time.Minute)
+		buildRepo := &multiBuildRepository{builds: map[string]domain.Build{build.ID: build, newer.ID: newer}, byJob: map[string][]domain.Build{jobID: {newer, build}}}
+		supersededReporter := &SCMStatusReporter{
+			buildRepo:  buildRepo,
+			claimOwner: "worker",
+			deliveryRepo: &helperSCMDeliveryRepo{markSuperseded: func(_ context.Context, input repository.SCMStatusDeliveryMarkSupersededInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+				if input.Reason != "newer_build_attempt_exists" || input.ClaimOwner == nil || *input.ClaimOwner != "worker" {
+					t.Fatalf("unexpected supersede input: %+v", input)
+				}
+				return repository.SCMStatusDeliveryUpdateResult{Outcome: repository.SCMStatusDeliveryUpdateOutcomeLostClaim}, nil
+			}},
+			publisher: &helperPublisher{},
+			now:       func() time.Time { return baseNow.Add(2 * time.Minute) },
+		}
+		outcome, execErr := supersededReporter.executeClaimedDelivery(context.Background(), baseDelivery, nil, scmStatusRecoveryReasonInline)
+		if execErr != nil || outcome != scmStatusExecutionOutcomeLostClaim {
+			t.Fatalf("expected lost claim on superseded update, got outcome=%v err=%v", outcome, execErr)
+		}
+
+		publisher := &helperPublisher{}
+		buildRepo = &multiBuildRepository{builds: map[string]domain.Build{build.ID: build}, byJob: map[string][]domain.Build{jobID: {build}}}
+		authoritative := baseDelivery
+		authoritative.DesiredState = domain.SCMCommitStatusStateSuccess
+		authoritative.Description = "Coyote build succeeded"
+		reassertReporter := &SCMStatusReporter{
+			buildRepo:  buildRepo,
+			claimOwner: "worker",
+			deliveryRepo: &helperSCMDeliveryRepo{markSent: func(_ context.Context, input repository.SCMStatusDeliveryMarkSentInput) (repository.SCMStatusDeliveryUpdateResult, error) {
+				return repository.SCMStatusDeliveryUpdateResult{Outcome: repository.SCMStatusDeliveryUpdateOutcomeLostClaim}, nil
+			}, getByKey: func(_ context.Context, provider string, repositoryOwner string, repositoryName string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error) {
+				return authoritative, nil
+			}},
+			publisher: publisher,
+			now:       func() time.Time { return baseNow.Add(3 * time.Minute) },
+		}
+		outcome, execErr = reassertReporter.executeClaimedDelivery(context.Background(), baseDelivery, nil, scmStatusRecoveryReasonInline)
+		if execErr != nil || outcome != scmStatusExecutionOutcomeLostClaim {
+			t.Fatalf("expected lost claim with successful reassert, got outcome=%v err=%v", outcome, execErr)
+		}
+		if len(publisher.reqs) != 2 || publisher.reqs[0].State != domain.SCMCommitStatusStatePending || publisher.reqs[1].State != domain.SCMCommitStatusStateSuccess {
+			t.Fatalf("expected publish plus authoritative reassert, got %+v", publisher.reqs)
+		}
+	})
+
+	t.Run("notify build status returns canceled publish errors and isSuperseded checks same-attempt recency", func(t *testing.T) {
+		publisher := &helperPublisher{err: context.Canceled}
+		buildRepo := &multiBuildRepository{builds: map[string]domain.Build{build.ID: build}, byJob: map[string][]domain.Build{jobID: {build}}}
+		reporter, err := NewSCMStatusReporter(SCMStatusReporterConfig{
+			BuildRepo:    buildRepo,
+			ProjectRepo:  &fakeSCMProjectRepository{project: domain.Project{ID: projectID, Slug: "payments"}},
+			DeliveryRepo: memoryrepo.NewSCMStatusDeliveryRepository(),
+			Publisher:    publisher,
+		})
+		if err != nil {
+			t.Fatalf("new reporter failed: %v", err)
+		}
+		reporter.now = func() time.Time { return baseNow }
+		if notifyErr := reporter.NotifyBuildStatus(context.Background(), build); !errors.Is(notifyErr, context.Canceled) {
+			t.Fatalf("expected canceled publish error, got %v", notifyErr)
+		}
+
+		newerSameAttempt := build
+		newerSameAttempt.ID = "build-3"
+		newerSameAttempt.CreatedAt = build.CreatedAt.Add(time.Second)
+		buildRepo.setJobBuilds(jobID, []domain.Build{build, newerSameAttempt})
+		isNewer, supersedeErr := reporter.isSuperseded(context.Background(), build, domain.SCMStatusDelivery{CommitSHA: "deadbeef"})
+		if supersedeErr != nil || !isNewer {
+			t.Fatalf("expected newer same-attempt build to supersede, got superseded=%v err=%v", isNewer, supersedeErr)
 		}
 	})
 }

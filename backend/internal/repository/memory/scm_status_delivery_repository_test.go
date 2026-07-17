@@ -302,6 +302,81 @@ func TestSCMStatusDeliveryRepository_InternalHelpers(t *testing.T) {
 	if normalizeSCMRecordFailureTime(nil) != nil || scmFailureCategoryPtr(domain.SCMStatusDeliveryFailureCategoryPermanent) == nil || scmOptionalTrimmedString("  ") != nil || scmNormalizeOptionalString(strPtrSCMMemory(" ")) != nil {
 		t.Fatal("unexpected optional helper result")
 	}
+
+	olderExisting := valid
+	olderExisting.ID = "delivery-older"
+	olderExisting.Status = domain.SCMStatusDeliveryStatusSent
+	olderExisting.DesiredState = domain.SCMCommitStatusStateFailure
+	olderExisting.LastSentState = &lastSentState
+	newerIncoming := valid
+	newerIncoming.BuildID = "build-2"
+	newerIncoming.BuildAttempt = 2
+	replacedByOlder, olderOutcome, olderPersist, olderReassertAfter, olderErr := reconcileSCMStatusDeliveryForClaim(olderExisting, valid, now, claimOwner, time.Minute, 2)
+	if olderErr != nil || olderOutcome != repository.SCMStatusDeliveryClaimOutcomeSuperseded || olderPersist || olderReassertAfter != nil || replacedByOlder.ID != olderExisting.ID {
+		t.Fatalf("expected older owner to win, got delivery=%+v outcome=%q persist=%v reassertAfter=%v err=%v", replacedByOlder, olderOutcome, olderPersist, olderReassertAfter, olderErr)
+	}
+
+	obsoleteExisting := valid
+	obsoleteExisting.Status = domain.SCMStatusDeliveryStatusSent
+	obsoleteExisting.DesiredState = domain.SCMCommitStatusStateSuccess
+	obsoleteExisting.LastSentState = &lastSentState
+	obsoleteIncoming := valid
+	obsoleteIncoming.DesiredState = domain.SCMCommitStatusStatePending
+	obsoleteResult, obsoleteOutcome, obsoletePersist, obsoleteReassertAfter, obsoleteErr := reconcileSCMStatusDeliveryForClaim(obsoleteExisting, obsoleteIncoming, now, claimOwner, time.Minute, 2)
+	if obsoleteErr != nil || obsoleteOutcome != repository.SCMStatusDeliveryClaimOutcomeSuperseded || obsoletePersist || obsoleteReassertAfter != nil || obsoleteResult.DesiredState != obsoleteExisting.DesiredState {
+		t.Fatalf("expected obsolete incoming state to be skipped, got delivery=%+v outcome=%q persist=%v reassertAfter=%v err=%v", obsoleteResult, obsoleteOutcome, obsoletePersist, obsoleteReassertAfter, obsoleteErr)
+	}
+}
+
+func TestSCMStatusDeliveryRepository_LostClaimAndContextErrors(t *testing.T) {
+	repo := NewSCMStatusDeliveryRepository()
+	now := time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)
+	base := domain.SCMStatusDelivery{
+		BuildID:         "build-1",
+		BuildAttempt:    1,
+		BuildCreatedAt:  now,
+		Provider:        "github",
+		RepositoryOwner: "octo",
+		RepositoryName:  "repo",
+		CommitSHA:       "abcdef",
+		Context:         "coyote/default/job-1",
+		DesiredState:    domain.SCMCommitStatusStatePending,
+		Description:     "Coyote build is pending",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := repo.ListRecoverable(ctx, repository.SCMStatusDeliveryRecoverableScanInput{Now: now, Limit: 1}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled list recoverable error, got %v", err)
+	}
+
+	claimed, claimErr := repo.AcquireForDelivery(context.Background(), repository.SCMStatusDeliveryClaimInput{Delivery: base, ClaimOwner: "worker-a", Now: now, ClaimDuration: time.Minute, MaxAttempts: 2})
+	if claimErr != nil {
+		t.Fatalf("claim failed: %v", claimErr)
+	}
+	if _, err := repo.MarkSent(context.Background(), repository.SCMStatusDeliveryMarkSentInput{DeliveryID: "missing", ClaimOwner: "worker-a", ClaimedAt: now, SentAt: now, State: domain.SCMCommitStatusStatePending}); !errors.Is(err, repository.ErrSCMStatusDeliveryNotFound) {
+		t.Fatalf("expected mark sent not found, got %v", err)
+	}
+	lostSent, lostSentErr := repo.MarkSent(context.Background(), repository.SCMStatusDeliveryMarkSentInput{DeliveryID: claimed.Delivery.ID, ClaimOwner: "worker-b", ClaimedAt: *claimed.Delivery.ClaimedAt, SentAt: now, State: domain.SCMCommitStatusStatePending})
+	if lostSentErr != nil || lostSent.Outcome != repository.SCMStatusDeliveryUpdateOutcomeLostClaim {
+		t.Fatalf("expected lost claim on mark sent, got result=%+v err=%v", lostSent, lostSentErr)
+	}
+
+	lostPermanent, lostPermanentErr := repo.RecordPermanentFailure(context.Background(), repository.SCMStatusDeliveryRecordFailureInput{DeliveryID: claimed.Delivery.ID, ClaimOwner: "worker-b", ClaimedAt: *claimed.Delivery.ClaimedAt, FailedAt: now, FailureCategory: domain.SCMStatusDeliveryFailureCategoryPermanent, FailureReason: "bad_request"})
+	if lostPermanentErr != nil || lostPermanent.Outcome != repository.SCMStatusDeliveryUpdateOutcomeLostClaim {
+		t.Fatalf("expected lost claim on permanent failure, got result=%+v err=%v", lostPermanent, lostPermanentErr)
+	}
+
+	lostSuperseded, lostSupersededErr := repo.MarkSuperseded(context.Background(), repository.SCMStatusDeliveryMarkSupersededInput{DeliveryID: claimed.Delivery.ID, ClaimOwner: strPtrSCMMemory("worker-a"), SupersededAt: now, Reason: "newer_build_attempt_exists"})
+	if lostSupersededErr != nil || lostSuperseded.Outcome != repository.SCMStatusDeliveryUpdateOutcomeLostClaim {
+		t.Fatalf("expected lost claim on partial supersede claim metadata, got result=%+v err=%v", lostSuperseded, lostSupersededErr)
+	}
+
+	key := scmStatusDeliveryStreamKey(base.Provider, base.RepositoryOwner, base.RepositoryName, base.CommitSHA, base.Context)
+	repo.index[key] = "missing-id"
+	if _, err := repo.GetByKey(context.Background(), base.Provider, base.RepositoryOwner, base.RepositoryName, base.CommitSHA, base.Context); !errors.Is(err, repository.ErrSCMStatusDeliveryNotFound) {
+		t.Fatalf("expected missing delivery behind index to return not found, got %v", err)
+	}
 }
 
 func strPtrSCMMemory(value string) *string {

@@ -95,6 +95,31 @@ func TestConfigureSCMStatusRuntime(t *testing.T) {
 	if !strings.Contains(invalidErr.Error(), "interval") && !strings.Contains(invalidErr.Error(), "batch size") {
 		t.Fatalf("expected recovery validation error, got %v", invalidErr)
 	}
+
+	t.Run("reporter dependency errors bubble up", func(t *testing.T) {
+		cfg := config.Config{
+			GitHubStatusToken:          "token",
+			SCMStatusRecoveryInterval:  time.Second,
+			SCMStatusRecoveryBatchSize: 1,
+		}
+		cases := []struct {
+			name         string
+			buildRepo    repository.BuildRepository
+			projectRepo  repository.ProjectRepository
+			deliveryRepo repository.SCMStatusDeliveryRepository
+		}{
+			{name: "missing build repo", projectRepo: &stubProjectRepository{project: domain.Project{ID: "project-1", Slug: "payments"}}, deliveryRepo: memoryrepo.NewSCMStatusDeliveryRepository()},
+			{name: "missing project repo", buildRepo: memoryrepo.NewBuildRepository(), deliveryRepo: memoryrepo.NewSCMStatusDeliveryRepository()},
+			{name: "missing delivery repo", buildRepo: memoryrepo.NewBuildRepository(), projectRepo: &stubProjectRepository{project: domain.Project{ID: "project-1", Slug: "payments"}}},
+		}
+		for _, test := range cases {
+			t.Run(test.name, func(t *testing.T) {
+				if _, err := configureSCMStatusRuntime(cfg, test.buildRepo, test.projectRepo, test.deliveryRepo); err == nil {
+					t.Fatal("expected configureSCMStatusRuntime to return dependency error")
+				}
+			})
+		}
+	})
 }
 
 func TestDefaultServerNotificationClaimOwner(t *testing.T) {
