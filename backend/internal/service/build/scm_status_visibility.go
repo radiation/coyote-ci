@@ -107,7 +107,7 @@ func applyBuildSCMSupersededDelivery(view *BuildSCMStatusView, delivery domain.S
 	view.DesiredState = buildSCMStringPtr(string(delivery.DesiredState))
 	view.DeliveryState = buildSCMStringPtr(string(domain.SCMStatusDeliveryStatusSuperseded))
 	view.CurrentOwnerBuildID = buildSCMStringPtr(delivery.BuildID)
-	view.CurrentOwnerAttempt = buildSCMIntPtr(delivery.BuildAttempt)
+	view.CurrentOwnerAttempt = buildSCMIntPtr(max(delivery.BuildAttempt, 1))
 	view.LastSentState = nil
 	view.Attempts = nil
 	view.NextAttemptAt = nil

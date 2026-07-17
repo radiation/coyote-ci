@@ -276,6 +276,41 @@ func TestBuildService_GetBuildSCMStatus(t *testing.T) {
 		}
 	})
 
+	t.Run("reportable build without persisted delivery returns derived fields", func(t *testing.T) {
+		svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
+		svc.scmStatusReporter = noopSCMStatusReporter{}
+		svc.scmStatusDeliveryRepo = &helperSCMDeliveryRepo{}
+		view, err := svc.GetBuildSCMStatus(context.Background(), baseBuild, project)
+		if err != nil {
+			t.Fatalf("GetBuildSCMStatus failed: %v", err)
+		}
+		if view == nil || !view.Reportable || !view.Configured || view.DeliveryState != nil {
+			t.Fatalf("unexpected missing-delivery view: %+v", view)
+		}
+	})
+
+	t.Run("delivery lookup errors bubble up", func(t *testing.T) {
+		svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
+		svc.scmStatusReporter = noopSCMStatusReporter{}
+		svc.scmStatusDeliveryRepo = &helperSCMDeliveryRepo{getByKey: func(context.Context, string, string, string, string, string) (domain.SCMStatusDelivery, error) {
+			return domain.SCMStatusDelivery{}, errors.New("boom")
+		}}
+		if _, err := svc.GetBuildSCMStatus(context.Background(), baseBuild, project); err == nil || err.Error() != "boom" {
+			t.Fatalf("expected boom error, got %v", err)
+		}
+	})
+
+	t.Run("missing project context keeps linked build non-reportable", func(t *testing.T) {
+		svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
+		view, err := svc.GetBuildSCMStatus(context.Background(), baseBuild, nil)
+		if err != nil {
+			t.Fatalf("GetBuildSCMStatus failed: %v", err)
+		}
+		if view == nil || view.Reportable || view.Context != nil {
+			t.Fatalf("expected missing context to keep view non-reportable, got %+v", view)
+		}
+	})
+
 	configuredService := func(authoritative domain.SCMStatusDelivery) *BuildService {
 		svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
 		svc.scmStatusReporter = noopSCMStatusReporter{}
