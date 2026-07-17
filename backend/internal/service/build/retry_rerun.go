@@ -76,6 +76,7 @@ func (s *BuildService) RetryJob(ctx context.Context, jobID string) (RetryJobResu
 	if cloneErr := s.cloneDeclaredOutputsForAttempts(ctx, map[string]string{failedJob.ID: createdJobs[0].ID}, createdBuild.ID); cloneErr != nil {
 		return RetryJobResult{}, cloneErr
 	}
+	s.notifySCMBuildStatus(ctx, createdBuild)
 
 	return RetryJobResult{Build: createdBuild, Job: createdJobs[0]}, nil
 }
@@ -153,6 +154,7 @@ func (s *BuildService) RerunBuildFromStep(ctx context.Context, buildID string, s
 	if cloneErr := s.cloneDeclaredOutputsForAttempts(ctx, sourceToCreatedJobID, createdBuild.ID); cloneErr != nil {
 		return domain.Build{}, cloneErr
 	}
+	s.notifySCMBuildStatus(ctx, createdBuild)
 
 	return createdBuild, nil
 }
@@ -190,6 +192,7 @@ func (s *BuildService) RerunBuild(ctx context.Context, buildID string) (domain.B
 	if createJobsErr != nil {
 		return domain.Build{}, createJobsErr
 	}
+	s.notifySCMBuildStatus(ctx, createdBuild)
 
 	return createdBuild, nil
 }

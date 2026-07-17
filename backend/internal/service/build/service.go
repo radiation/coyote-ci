@@ -73,6 +73,7 @@ type BuildService struct {
 	stepCacheManager          *StepCacheManager
 	versionTagger             BuildVersionTagger
 	buildNotifier             BuildLifecycleNotifier
+	scmStatusReporter         BuildSCMStatusReporter
 	artifactTriggerDispatcher ArtifactTriggerDispatcher
 
 	defaultExecutionImage string
@@ -84,6 +85,10 @@ type BuildVersionTagger interface {
 
 type BuildLifecycleNotifier interface {
 	NotifyTerminalBuild(ctx context.Context, build domain.Build) error
+}
+
+type BuildSCMStatusReporter interface {
+	NotifyBuildStatus(ctx context.Context, build domain.Build) error
 }
 
 type ArtifactTriggerDispatcher interface {
@@ -108,6 +113,7 @@ type BuildServiceConfig struct {
 	CacheEntryRepo            repository.CacheEntryRepository
 	VersionTagger             BuildVersionTagger
 	BuildNotifier             BuildLifecycleNotifier
+	SCMStatusReporter         BuildSCMStatusReporter
 	ArtifactTriggerDispatcher ArtifactTriggerDispatcher
 }
 
@@ -125,6 +131,7 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 	svc.executionWorkspaceRoot = buildNormalizeWorkspaceRoot(cfg.ExecutionWorkspace)
 	svc.versionTagger = cfg.VersionTagger
 	svc.buildNotifier = cfg.BuildNotifier
+	svc.scmStatusReporter = cfg.SCMStatusReporter
 	svc.artifactTriggerDispatcher = cfg.ArtifactTriggerDispatcher
 	if cfg.ArtifactLabelRepo != nil {
 		type artifactLabelRepoAware interface {

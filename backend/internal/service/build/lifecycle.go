@@ -28,8 +28,18 @@ func (s *BuildService) persistBuildStatus(ctx context.Context, id string, toStat
 	if err != nil {
 		return domain.Build{}, err
 	}
+	s.notifySCMBuildStatus(ctx, build)
 	s.notifyTerminalBuild(ctx, build)
 	return build, nil
+}
+
+func (s *BuildService) notifySCMBuildStatus(ctx context.Context, build domain.Build) {
+	if s.scmStatusReporter == nil {
+		return
+	}
+	if reportErr := s.scmStatusReporter.NotifyBuildStatus(ctx, build); reportErr != nil {
+		log.Printf("WARNING: build scm status reporting failed: build_id=%s status=%s err=%v", build.ID, build.Status, reportErr)
+	}
 }
 
 func (s *BuildService) notifyTerminalBuild(ctx context.Context, build domain.Build) {

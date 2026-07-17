@@ -45,6 +45,7 @@ type Config struct {
 	ArtifactGCSProject            string
 	PushEventSecret               string
 	GitHubWebhookSecret           string
+	GitHubStatusToken             string
 	AuthMode                      string
 	BootstrapAdminEmails          string
 	OIDCIssuerURL                 string
@@ -62,6 +63,8 @@ type Config struct {
 	EmailNotificationRecipients   string
 	NotificationRecoveryInterval  time.Duration
 	NotificationRecoveryBatchSize int
+	SCMStatusRecoveryInterval     time.Duration
+	SCMStatusRecoveryBatchSize    int
 	SMTPHost                      string
 	SMTPPort                      string
 	SMTPUsername                  string
@@ -107,6 +110,7 @@ func Load() Config {
 		ArtifactGCSProject:            getEnv("ARTIFACT_GCS_PROJECT", ""),
 		PushEventSecret:               getEnv("PUSH_EVENT_SECRET", ""),
 		GitHubWebhookSecret:           getEnv("GITHUB_WEBHOOK_SECRET", getEnv("PUSH_EVENT_SECRET", "")),
+		GitHubStatusToken:             getEnv("GITHUB_STATUS_TOKEN", ""),
 		AuthMode:                      getEnv("AUTH_MODE", "disabled"),
 		BootstrapAdminEmails:          getEnv("BOOTSTRAP_ADMIN_EMAILS", ""),
 		OIDCIssuerURL:                 getEnv("OIDC_ISSUER_URL", ""),
@@ -124,6 +128,8 @@ func Load() Config {
 		EmailNotificationRecipients:   getEnv("EMAIL_NOTIFICATION_RECIPIENTS", "dev@localhost"),
 		NotificationRecoveryInterval:  getEnvDuration("NOTIFICATION_RECOVERY_INTERVAL", 15*time.Second),
 		NotificationRecoveryBatchSize: getEnvInt("NOTIFICATION_RECOVERY_BATCH_SIZE", 25),
+		SCMStatusRecoveryInterval:     getEnvDuration("SCM_STATUS_RECOVERY_INTERVAL", 15*time.Second),
+		SCMStatusRecoveryBatchSize:    getEnvInt("SCM_STATUS_RECOVERY_BATCH_SIZE", 25),
 		SMTPHost:                      getEnv("SMTP_HOST", "mailpit"),
 		SMTPPort:                      getEnv("SMTP_PORT", "1025"),
 		SMTPUsername:                  getEnv("SMTP_USERNAME", ""),
