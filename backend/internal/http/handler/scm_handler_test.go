@@ -227,3 +227,59 @@ func TestToGitHubAppRegistrationResponse_ConfiguredBooleans(t *testing.T) {
 		t.Fatal("expected webhook configured to be false")
 	}
 }
+
+func TestSCMHandler_ErrorPaths(t *testing.T) {
+	unavailable := &SCMHandler{}
+	unavailableReq := httptest.NewRequest(http.MethodGet, "/settings/scm/github-apps", nil)
+	unavailableRes := httptest.NewRecorder()
+	unavailable.ListGitHubAppRegistrations(unavailableRes, unavailableReq)
+	if unavailableRes.Code != http.StatusNotFound {
+		t.Fatalf("expected unavailable handler status %d, got %d body=%s", http.StatusNotFound, unavailableRes.Code, unavailableRes.Body.String())
+	}
+
+	connectionRepo := repositorymemory.NewSCMConnectionRepository()
+	repositoryRepo := repositorymemory.NewSCMRepositoryRegistrationRepository()
+	h := NewSCMHandler(service.NewSCMAdminService(connectionRepo, repositoryRepo))
+
+	badCreateRegistrationReq := httptest.NewRequest(http.MethodPost, "/settings/scm/github-apps", bytes.NewBufferString(`{"app_id":`))
+	badCreateRegistrationRes := httptest.NewRecorder()
+	h.CreateGitHubAppRegistration(badCreateRegistrationRes, badCreateRegistrationReq)
+	if badCreateRegistrationRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad registration request status %d, got %d body=%s", http.StatusBadRequest, badCreateRegistrationRes.Code, badCreateRegistrationRes.Body.String())
+	}
+
+	badCreateConnectionReq := httptest.NewRequest(http.MethodPost, "/settings/scm/connections/github-app-installations", bytes.NewBufferString(`{"app_registration_id":`))
+	badCreateConnectionRes := httptest.NewRecorder()
+	h.CreateGitHubAppInstallationConnection(badCreateConnectionRes, badCreateConnectionReq)
+	if badCreateConnectionRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad connection request status %d, got %d body=%s", http.StatusBadRequest, badCreateConnectionRes.Code, badCreateConnectionRes.Body.String())
+	}
+
+	badPatchReq := addURLParam(httptest.NewRequest(http.MethodPatch, "/settings/scm/connections/connection-1", bytes.NewBufferString(`{"enabled":`)), "connectionID", "connection-1")
+	badPatchRes := httptest.NewRecorder()
+	h.PatchConnection(badPatchRes, badPatchReq)
+	if badPatchRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad patch request status %d, got %d body=%s", http.StatusBadRequest, badPatchRes.Code, badPatchRes.Body.String())
+	}
+
+	badCreateRepositoryReq := httptest.NewRequest(http.MethodPost, "/settings/scm/repositories", bytes.NewBufferString(`{"connection_id":`))
+	badCreateRepositoryRes := httptest.NewRecorder()
+	h.CreateRegisteredRepository(badCreateRepositoryRes, badCreateRepositoryReq)
+	if badCreateRepositoryRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad repository request status %d, got %d body=%s", http.StatusBadRequest, badCreateRepositoryRes.Code, badCreateRepositoryRes.Body.String())
+	}
+
+	missingConnectionReq := addURLParam(httptest.NewRequest(http.MethodGet, "/settings/scm/connections/missing", nil), "connectionID", "missing")
+	missingConnectionRes := httptest.NewRecorder()
+	h.GetConnection(missingConnectionRes, missingConnectionReq)
+	if missingConnectionRes.Code != http.StatusNotFound {
+		t.Fatalf("expected missing connection status %d, got %d body=%s", http.StatusNotFound, missingConnectionRes.Code, missingConnectionRes.Body.String())
+	}
+
+	missingRepositoryReq := addURLParam(httptest.NewRequest(http.MethodGet, "/settings/scm/repositories/missing", nil), "repositoryID", "missing")
+	missingRepositoryRes := httptest.NewRecorder()
+	h.GetRegisteredRepository(missingRepositoryRes, missingRepositoryReq)
+	if missingRepositoryRes.Code != http.StatusNotFound {
+		t.Fatalf("expected missing repository status %d, got %d body=%s", http.StatusNotFound, missingRepositoryRes.Code, missingRepositoryRes.Body.String())
+	}
+}

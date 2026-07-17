@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -82,6 +83,33 @@ func TestSCMRepositoryRegistrationRepository_CreateDuplicateMapsToConflict(t *te
 	_, createErr := repo.Create(context.Background(), registration)
 	if createErr != repository.ErrSCMRepositoryRegistrationDuplicate {
 		t.Fatalf("expected duplicate error, got %v", createErr)
+	}
+}
+
+func TestSCMRepositoryRegistrationRepository_GetAndUpdateNotFoundAndUpdateDuplicate(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewSCMRepositoryRegistrationRepository(db)
+	now := time.Now().UTC()
+	registration := domain.SCMRepositoryRegistration{ID: "repo-1", ConnectionID: "connection-1", ProviderRepositoryID: "1001", Owner: "octo", Name: "widgets", FullName: "octo/widgets", CloneURL: "https://github.com/octo/widgets.git", WebURL: "https://github.com/octo/widgets", MetadataRefreshedAt: now, CreatedAt: now, UpdatedAt: now}
+	mock.ExpectQuery(`SELECT id, connection_id, provider_repository_id, owner_name, repository_name, full_name, clone_url, web_url, default_branch, archived, disabled, metadata_refreshed_at, created_at, updated_at FROM scm_registered_repositories WHERE id = \$1`).WithArgs("missing").WillReturnError(sql.ErrNoRows)
+	if _, err := repo.GetByID(context.Background(), "missing"); err != repository.ErrSCMRepositoryRegistrationNotFound {
+		t.Fatalf("expected missing repository error, got %v", err)
+	}
+	mock.ExpectQuery("UPDATE scm_registered_repositories").WillReturnError(sql.ErrNoRows)
+	if _, err := repo.Update(context.Background(), registration); err != repository.ErrSCMRepositoryRegistrationNotFound {
+		t.Fatalf("expected update missing repository error, got %v", err)
+	}
+	mock.ExpectQuery("UPDATE scm_registered_repositories").WillReturnError(&pgconn.PgError{Code: "23505", ConstraintName: "scm_registered_repositories_connection_id_provider_repository_id_key"})
+	if _, err := repo.Update(context.Background(), registration); err != repository.ErrSCMRepositoryRegistrationDuplicate {
+		t.Fatalf("expected update duplicate error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }
 

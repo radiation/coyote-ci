@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 )
@@ -193,5 +194,82 @@ func TestSCMAdminService_GitHubRegistrationSharedAcrossInstallationsAndSiblingDi
 	})
 	if duplicateErr != repository.ErrSCMGitHubAppInstallationConflict {
 		t.Fatalf("expected duplicate installation conflict, got %v", duplicateErr)
+	}
+}
+
+func TestSCMAdminServiceValidationAndReadBranches(t *testing.T) {
+	connectionRepo := repositorymemory.NewSCMConnectionRepository()
+	repositoryRepo := repositorymemory.NewSCMRepositoryRegistrationRepository()
+	svc := NewSCMAdminService(connectionRepo, repositoryRepo)
+	now := time.Now().UTC()
+	svc.now = func() time.Time { return now }
+
+	if _, err := svc.ListConnections(context.Background()); err != nil {
+		t.Fatalf("list connections should succeed on empty repo: %v", err)
+	}
+	if _, err := svc.ListGitHubAppRegistrations(context.Background()); err != nil {
+		t.Fatalf("list registrations should succeed on empty repo: %v", err)
+	}
+	if _, err := svc.CreateGitHubAppRegistration(context.Background(), CreateGitHubAppRegistrationInput{}); err != ErrSCMGitHubAppIDRequired {
+		t.Fatalf("expected missing app id error, got %v", err)
+	}
+	if _, err := svc.CreateGitHubAppRegistration(context.Background(), CreateGitHubAppRegistrationInput{AppID: "12345"}); err != ErrSCMGitHubPrivateKeySecretRefRequired {
+		t.Fatalf("expected missing private key ref error, got %v", err)
+	}
+	if _, err := svc.CreateGitHubAppRegistration(context.Background(), CreateGitHubAppRegistrationInput{AppID: "12345", PrivateKeySecretRef: "secret/a"}); err != ErrSCMGitHubWebhookSecretRefRequired {
+		t.Fatalf("expected missing webhook ref error, got %v", err)
+	}
+
+	enabled := true
+	if _, err := svc.CreateGitHubAppInstallationConnection(context.Background(), CreateGitHubAppInstallationConnectionInput{}); err != ErrSCMGitHubAppRegistrationIDRequired {
+		t.Fatalf("expected missing app registration id error, got %v", err)
+	}
+	if _, err := svc.CreateGitHubAppInstallationConnection(context.Background(), CreateGitHubAppInstallationConnectionInput{AppRegistrationID: "reg"}); err != ErrSCMConnectionDisplayNameRequired {
+		t.Fatalf("expected missing display name error, got %v", err)
+	}
+	if _, err := svc.CreateGitHubAppInstallationConnection(context.Background(), CreateGitHubAppInstallationConnectionInput{AppRegistrationID: "reg", DisplayName: "name"}); err != ErrSCMConnectionEnabledRequired {
+		t.Fatalf("expected missing enabled error, got %v", err)
+	}
+	if _, err := svc.CreateGitHubAppInstallationConnection(context.Background(), CreateGitHubAppInstallationConnectionInput{AppRegistrationID: "reg", DisplayName: "name", Enabled: &enabled}); err != ErrSCMGitHubInstallationIDRequired {
+		t.Fatalf("expected missing installation id error, got %v", err)
+	}
+	if _, err := svc.CreateGitHubAppInstallationConnection(context.Background(), CreateGitHubAppInstallationConnectionInput{AppRegistrationID: "reg", DisplayName: "name", Enabled: &enabled, InstallationID: "inst"}); err != ErrSCMGitHubAccountLoginRequired {
+		t.Fatalf("expected missing account login error, got %v", err)
+	}
+	if _, err := svc.CreateGitHubAppInstallationConnection(context.Background(), CreateGitHubAppInstallationConnectionInput{AppRegistrationID: "reg", DisplayName: "name", Enabled: &enabled, InstallationID: "inst", AccountLogin: "octo"}); err != ErrSCMGitHubAccountTypeRequired {
+		t.Fatalf("expected missing account type error, got %v", err)
+	}
+	if _, err := svc.CreateGitHubAppInstallationConnection(context.Background(), CreateGitHubAppInstallationConnectionInput{AppRegistrationID: "reg", DisplayName: "name", Enabled: &enabled, InstallationID: "inst", AccountLogin: "octo", AccountType: "organization"}); err != ErrSCMGitHubTargetIDRequired {
+		t.Fatalf("expected missing target id error, got %v", err)
+	}
+	if _, err := svc.SetConnectionEnabled(context.Background(), "connection-1", nil); err != ErrSCMConnectionEnabledRequired {
+		t.Fatalf("expected missing enabled patch error, got %v", err)
+	}
+	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{}); err != ErrSCMRegisteredRepositoryConnectionIDRequired {
+		t.Fatalf("expected missing connection id error, got %v", err)
+	}
+	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: "connection-1"}); err != ErrSCMRegisteredRepositoryProviderRepositoryIDRequired {
+		t.Fatalf("expected missing provider repository id error, got %v", err)
+	}
+	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: "connection-1", ProviderRepositoryID: "1001"}); err != ErrSCMRegisteredRepositoryOwnerRequired {
+		t.Fatalf("expected missing owner error, got %v", err)
+	}
+	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: "connection-1", ProviderRepositoryID: "1001", Owner: "octo"}); err != ErrSCMRegisteredRepositoryNameRequired {
+		t.Fatalf("expected missing name error, got %v", err)
+	}
+	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: "connection-1", ProviderRepositoryID: "1001", Owner: "octo", Name: "repo"}); err != ErrSCMRegisteredRepositoryFullNameRequired {
+		t.Fatalf("expected missing full name error, got %v", err)
+	}
+	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: "connection-1", ProviderRepositoryID: "1001", Owner: "octo", Name: "repo", FullName: "octo/repo"}); err != ErrSCMRegisteredRepositoryCloneURLRequired {
+		t.Fatalf("expected missing clone url error, got %v", err)
+	}
+	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: "connection-1", ProviderRepositoryID: "1001", Owner: "octo", Name: "repo", FullName: "octo/repo", CloneURL: "https://github.com/octo/repo.git"}); err != ErrSCMRegisteredRepositoryWebURLRequired {
+		t.Fatalf("expected missing web url error, got %v", err)
+	}
+	if inferGitHubDeploymentKind("https://api.github.com", "https://github.com") != domain.SCMDeploymentKindCloud {
+		t.Fatal("expected public GitHub hosts to infer cloud deployment")
+	}
+	if inferGitHubDeploymentKind("https://ghe.example/api/v3", "https://ghe.example") != domain.SCMDeploymentKindSelfHosted {
+		t.Fatal("expected non-public GitHub hosts to infer self-hosted deployment")
 	}
 }
