@@ -3588,6 +3588,220 @@ const docTemplate = `{
                 }
             }
         },
+        "/settings/scm/connections/github-app-installations": {
+            "post": {
+                "description": "Creates a GitHub App installation-backed SCM connection that references an existing GitHub App registration.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scm"
+                ],
+                "summary": "Create installation-backed SCM connection",
+                "parameters": [
+                    {
+                        "description": "GitHub App installation connection request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.CreateGitHubAppInstallationConnectionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/api.SCMConnectionEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/settings/scm/github-apps": {
+            "get": {
+                "description": "Returns safe GitHub App registration metadata for operator rediscovery.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scm"
+                ],
+                "summary": "List GitHub App registrations",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.GitHubAppRegistrationListEnvelope"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Creates reusable GitHub App registration metadata and secret references without creating an installation-backed SCM connection.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scm"
+                ],
+                "summary": "Create GitHub App registration",
+                "parameters": [
+                    {
+                        "description": "GitHub App registration request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.CreateGitHubAppRegistrationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/api.GitHubAppRegistrationEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/settings/scm/github-apps/{registrationID}": {
+            "get": {
+                "description": "Returns safe GitHub App registration metadata by ID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scm"
+                ],
+                "summary": "Get GitHub App registration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.GitHubAppRegistrationEnvelope"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/users": {
             "get": {
                 "description": "Lists Coyote users.",
@@ -5049,6 +5263,55 @@ const docTemplate = `{
                 }
             }
         },
+        "api.CreateGitHubAppInstallationConnectionRequest": {
+            "type": "object",
+            "properties": {
+                "account_login": {
+                    "type": "string"
+                },
+                "account_type": {
+                    "type": "string"
+                },
+                "app_registration_id": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "installation_id": {
+                    "type": "string"
+                },
+                "target_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.CreateGitHubAppRegistrationRequest": {
+            "type": "object",
+            "properties": {
+                "api_base_url": {
+                    "type": "string"
+                },
+                "app_id": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "private_key_secret_ref": {
+                    "type": "string"
+                },
+                "web_base_url": {
+                    "type": "string"
+                },
+                "webhook_secret_ref": {
+                    "type": "string"
+                }
+            }
+        },
         "api.CreateJobManagedImageConfigRequest": {
             "type": "object",
             "properties": {
@@ -5412,6 +5675,94 @@ const docTemplate = `{
                 },
                 "working_dir": {
                     "type": "string"
+                }
+            }
+        },
+        "api.GitHubAppInstallationResponse": {
+            "type": "object",
+            "properties": {
+                "account_login": {
+                    "type": "string"
+                },
+                "account_type": {
+                    "type": "string"
+                },
+                "app_registration_id": {
+                    "type": "string"
+                },
+                "connection_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "installation_id": {
+                    "type": "string"
+                },
+                "target_id": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.GitHubAppRegistrationEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.GitHubAppRegistrationResponse"
+                }
+            }
+        },
+        "api.GitHubAppRegistrationListEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.GitHubAppRegistrationListResponse"
+                }
+            }
+        },
+        "api.GitHubAppRegistrationListResponse": {
+            "type": "object",
+            "properties": {
+                "github_apps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.GitHubAppRegistrationResponse"
+                    }
+                }
+            }
+        },
+        "api.GitHubAppRegistrationResponse": {
+            "type": "object",
+            "properties": {
+                "api_base_url": {
+                    "type": "string"
+                },
+                "app_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "private_key_configured": {
+                    "type": "boolean"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "web_base_url": {
+                    "type": "string"
+                },
+                "webhook_configured": {
+                    "type": "boolean"
                 }
             }
         },
@@ -6144,6 +6495,61 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "ref": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.SCMConnectionEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.SCMConnectionResponse"
+                }
+            }
+        },
+        "api.SCMConnectionResponse": {
+            "type": "object",
+            "properties": {
+                "api_base_url": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "deployment_kind": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "github_app": {
+                    "$ref": "#/definitions/api.GitHubAppRegistrationResponse"
+                },
+                "github_installation": {
+                    "$ref": "#/definitions/api.GitHubAppInstallationResponse"
+                },
+                "health_status": {
+                    "type": "string"
+                },
+                "health_summary": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "last_health_checked_at": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "web_base_url": {
                     "type": "string"
                 }
             }

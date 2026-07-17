@@ -1,0 +1,285 @@
+package handler
+
+import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/radiation/coyote-ci/backend/internal/domain"
+	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
+	"github.com/radiation/coyote-ci/backend/internal/service"
+)
+
+func TestSCMHandler_CRUDFoundationRoutes(t *testing.T) {
+	connectionRepo := repositorymemory.NewSCMConnectionRepository()
+	repositoryRepo := repositorymemory.NewSCMRepositoryRegistrationRepository()
+	h := NewSCMHandler(service.NewSCMAdminService(connectionRepo, repositoryRepo))
+
+	listEmptyRegistrationsReq := httptest.NewRequest(http.MethodGet, "/settings/scm/github-apps", nil)
+	listEmptyRegistrationsRes := httptest.NewRecorder()
+	h.ListGitHubAppRegistrations(listEmptyRegistrationsRes, listEmptyRegistrationsReq)
+	if listEmptyRegistrationsRes.Code != http.StatusOK {
+		t.Fatalf("expected empty registration list status %d, got %d body=%s", http.StatusOK, listEmptyRegistrationsRes.Code, listEmptyRegistrationsRes.Body.String())
+	}
+	if body := listEmptyRegistrationsRes.Body.String(); !bytes.Contains([]byte(body), []byte(`"github_apps":[]`)) {
+		t.Fatalf("expected empty github app list, got %s", body)
+	}
+
+	createRegistrationReq := httptest.NewRequest(http.MethodPost, "/settings/scm/github-apps", bytes.NewBufferString(`{"app_id":"12345","private_key_secret_ref":"secret/github/private-key","webhook_secret_ref":"secret/github/webhook"}`))
+	createRegistrationRes := httptest.NewRecorder()
+	h.CreateGitHubAppRegistration(createRegistrationRes, createRegistrationReq)
+	if createRegistrationRes.Code != http.StatusCreated {
+		t.Fatalf("expected create registration status %d, got %d body=%s", http.StatusCreated, createRegistrationRes.Code, createRegistrationRes.Body.String())
+	}
+	createdRegistration := decodeDataMap(t, createRegistrationRes)
+	registrationID, hasRegistrationID := createdRegistration["id"].(string)
+	if !hasRegistrationID || registrationID == "" {
+		t.Fatalf("expected registration id, got %v", createdRegistration["id"])
+	}
+	if _, hasPrivateKeySecretRef := createdRegistration["private_key_secret_ref"]; hasPrivateKeySecretRef {
+		t.Fatalf("expected registration response to omit secret refs, got %v", createdRegistration)
+	}
+	if _, hasWebhookSecretRef := createdRegistration["webhook_secret_ref"]; hasWebhookSecretRef {
+		t.Fatalf("expected registration response to omit secret refs, got %v", createdRegistration)
+	}
+	privateKeyConfigured, hasPrivateKeyConfigured := createdRegistration["private_key_configured"].(bool)
+	if !hasPrivateKeyConfigured || !privateKeyConfigured {
+		t.Fatalf("expected private_key_configured to be true, got %v", createdRegistration["private_key_configured"])
+	}
+	webhookConfigured, hasWebhookConfigured := createdRegistration["webhook_configured"].(bool)
+	if !hasWebhookConfigured || !webhookConfigured {
+		t.Fatalf("expected webhook_configured to be true, got %v", createdRegistration["webhook_configured"])
+	}
+
+	createSecondRegistrationReq := httptest.NewRequest(http.MethodPost, "/settings/scm/github-apps", bytes.NewBufferString(`{"app_id":"54321","api_base_url":"https://ghe.example/api/v3","web_base_url":"https://ghe.example","private_key_secret_ref":"secret/github/private-key-2","webhook_secret_ref":"secret/github/webhook-2"}`))
+	createSecondRegistrationRes := httptest.NewRecorder()
+	h.CreateGitHubAppRegistration(createSecondRegistrationRes, createSecondRegistrationReq)
+	if createSecondRegistrationRes.Code != http.StatusCreated {
+		t.Fatalf("expected second registration status %d, got %d body=%s", http.StatusCreated, createSecondRegistrationRes.Code, createSecondRegistrationRes.Body.String())
+	}
+	createdSecondRegistration := decodeDataMap(t, createSecondRegistrationRes)
+	secondRegistrationID, hasSecondRegistrationID := createdSecondRegistration["id"].(string)
+	if !hasSecondRegistrationID || secondRegistrationID == "" {
+		t.Fatalf("expected second registration id, got %v", createdSecondRegistration["id"])
+	}
+
+	listRegistrationsReq := httptest.NewRequest(http.MethodGet, "/settings/scm/github-apps", nil)
+	listRegistrationsRes := httptest.NewRecorder()
+	h.ListGitHubAppRegistrations(listRegistrationsRes, listRegistrationsReq)
+	if listRegistrationsRes.Code != http.StatusOK {
+		t.Fatalf("expected list registration status %d, got %d body=%s", http.StatusOK, listRegistrationsRes.Code, listRegistrationsRes.Body.String())
+	}
+	listRegistrations := decodeDataMap(t, listRegistrationsRes)
+	items, hasRegistrations := listRegistrations["github_apps"].([]any)
+	if !hasRegistrations || len(items) != 2 {
+		t.Fatalf("expected two github app registrations, got %v", listRegistrations["github_apps"])
+	}
+
+	getRegistrationReq := addURLParam(httptest.NewRequest(http.MethodGet, "/settings/scm/github-apps/"+registrationID, nil), "registrationID", registrationID)
+	getRegistrationRes := httptest.NewRecorder()
+	h.GetGitHubAppRegistration(getRegistrationRes, getRegistrationReq)
+	if getRegistrationRes.Code != http.StatusOK {
+		t.Fatalf("expected get registration status %d, got %d body=%s", http.StatusOK, getRegistrationRes.Code, getRegistrationRes.Body.String())
+	}
+	gotRegistration := decodeDataMap(t, getRegistrationRes)
+	if _, hasPrivateKeySecretRef := gotRegistration["private_key_secret_ref"]; hasPrivateKeySecretRef {
+		t.Fatalf("expected get registration response to omit private key secret ref, got %v", gotRegistration)
+	}
+	if _, hasWebhookSecretRef := gotRegistration["webhook_secret_ref"]; hasWebhookSecretRef {
+		t.Fatalf("expected get registration response to omit webhook secret ref, got %v", gotRegistration)
+	}
+
+	getMissingRegistrationReq := addURLParam(httptest.NewRequest(http.MethodGet, "/settings/scm/github-apps/missing", nil), "registrationID", "missing")
+	getMissingRegistrationRes := httptest.NewRecorder()
+	h.GetGitHubAppRegistration(getMissingRegistrationRes, getMissingRegistrationReq)
+	if getMissingRegistrationRes.Code != http.StatusNotFound {
+		t.Fatalf("expected missing registration status %d, got %d body=%s", http.StatusNotFound, getMissingRegistrationRes.Code, getMissingRegistrationRes.Body.String())
+	}
+
+	createConnectionReq := httptest.NewRequest(http.MethodPost, "/settings/scm/connections/github-app-installations", bytes.NewBufferString(`{"app_registration_id":"`+registrationID+`","display_name":"octo cloud","enabled":true,"installation_id":"999","account_login":"octo","account_type":"organization","target_id":"42"}`))
+	createConnectionRes := httptest.NewRecorder()
+	h.CreateGitHubAppInstallationConnection(createConnectionRes, createConnectionReq)
+	if createConnectionRes.Code != http.StatusCreated {
+		t.Fatalf("expected create connection status %d, got %d body=%s", http.StatusCreated, createConnectionRes.Code, createConnectionRes.Body.String())
+	}
+	createdConnection := decodeDataMap(t, createConnectionRes)
+	connectionID, hasConnectionID := createdConnection["id"].(string)
+	if !hasConnectionID || connectionID == "" {
+		t.Fatalf("expected connection id, got %v", createdConnection["id"])
+	}
+	githubApp, hasGitHubApp := createdConnection["github_app"].(map[string]any)
+	if !hasGitHubApp {
+		t.Fatalf("expected github app metadata in response, got %v", createdConnection["github_app"])
+	}
+	if _, hasPrivateKeySecretRef := githubApp["private_key_secret_ref"]; hasPrivateKeySecretRef {
+		t.Fatalf("expected connection response to omit private key secret ref, got %v", githubApp)
+	}
+	if _, hasWebhookSecretRef := githubApp["webhook_secret_ref"]; hasWebhookSecretRef {
+		t.Fatalf("expected connection response to omit webhook secret ref, got %v", githubApp)
+	}
+
+	listConnectionsReq := httptest.NewRequest(http.MethodGet, "/settings/scm/connections", nil)
+	listConnectionsRes := httptest.NewRecorder()
+	h.ListConnections(listConnectionsRes, listConnectionsReq)
+	if listConnectionsRes.Code != http.StatusOK {
+		t.Fatalf("expected list connections status %d, got %d", http.StatusOK, listConnectionsRes.Code)
+	}
+
+	getConnectionReq := addURLParam(httptest.NewRequest(http.MethodGet, "/settings/scm/connections/"+connectionID, nil), "connectionID", connectionID)
+	getConnectionRes := httptest.NewRecorder()
+	h.GetConnection(getConnectionRes, getConnectionReq)
+	if getConnectionRes.Code != http.StatusOK {
+		t.Fatalf("expected get connection status %d, got %d", http.StatusOK, getConnectionRes.Code)
+	}
+
+	patchConnectionReq := addURLParam(httptest.NewRequest(http.MethodPatch, "/settings/scm/connections/"+connectionID, bytes.NewBufferString(`{"enabled":false}`)), "connectionID", connectionID)
+	patchConnectionRes := httptest.NewRecorder()
+	h.PatchConnection(patchConnectionRes, patchConnectionReq)
+	if patchConnectionRes.Code != http.StatusOK {
+		t.Fatalf("expected patch connection status %d, got %d", http.StatusOK, patchConnectionRes.Code)
+	}
+	patchedConnection := decodeDataMap(t, patchConnectionRes)
+	if enabled, hasEnabledFlag := patchedConnection["enabled"].(bool); !hasEnabledFlag || enabled {
+		t.Fatalf("expected connection to be disabled, got %v", patchedConnection["enabled"])
+	}
+
+	createSiblingReq := httptest.NewRequest(http.MethodPost, "/settings/scm/connections/github-app-installations", bytes.NewBufferString(`{"app_registration_id":"`+registrationID+`","display_name":"octo sibling","enabled":true,"installation_id":"1000","account_login":"octo-two","account_type":"organization","target_id":"84"}`))
+	createSiblingRes := httptest.NewRecorder()
+	h.CreateGitHubAppInstallationConnection(createSiblingRes, createSiblingReq)
+	if createSiblingRes.Code != http.StatusCreated {
+		t.Fatalf("expected create sibling connection status %d, got %d body=%s", http.StatusCreated, createSiblingRes.Code, createSiblingRes.Body.String())
+	}
+	createdSibling := decodeDataMap(t, createSiblingRes)
+	siblingID, hasSiblingID := createdSibling["id"].(string)
+	if !hasSiblingID || siblingID == "" {
+		t.Fatalf("expected sibling connection id, got %v", createdSibling["id"])
+	}
+	getSiblingReq := addURLParam(httptest.NewRequest(http.MethodGet, "/settings/scm/connections/"+siblingID, nil), "connectionID", siblingID)
+	getSiblingRes := httptest.NewRecorder()
+	h.GetConnection(getSiblingRes, getSiblingReq)
+	if getSiblingRes.Code != http.StatusOK {
+		t.Fatalf("expected get sibling connection status %d, got %d body=%s", http.StatusOK, getSiblingRes.Code, getSiblingRes.Body.String())
+	}
+	siblingConnection := decodeDataMap(t, getSiblingRes)
+	if enabled, hasEnabledFlag := siblingConnection["enabled"].(bool); !hasEnabledFlag || !enabled {
+		t.Fatalf("expected sibling connection to remain enabled, got %v", siblingConnection["enabled"])
+	}
+
+	duplicateConnectionReq := httptest.NewRequest(http.MethodPost, "/settings/scm/connections/github-app-installations", bytes.NewBufferString(`{"app_registration_id":"`+registrationID+`","display_name":"duplicate","enabled":true,"installation_id":"999","account_login":"octo-dup","account_type":"organization","target_id":"126"}`))
+	duplicateConnectionRes := httptest.NewRecorder()
+	h.CreateGitHubAppInstallationConnection(duplicateConnectionRes, duplicateConnectionReq)
+	if duplicateConnectionRes.Code != http.StatusConflict {
+		t.Fatalf("expected duplicate connection status %d, got %d body=%s", http.StatusConflict, duplicateConnectionRes.Code, duplicateConnectionRes.Body.String())
+	}
+
+	missingRegistrationReq := httptest.NewRequest(http.MethodPost, "/settings/scm/connections/github-app-installations", bytes.NewBufferString(`{"app_registration_id":"missing","display_name":"missing","enabled":true,"installation_id":"1001","account_login":"octo-missing","account_type":"organization","target_id":"168"}`))
+	missingRegistrationRes := httptest.NewRecorder()
+	h.CreateGitHubAppInstallationConnection(missingRegistrationRes, missingRegistrationReq)
+	if missingRegistrationRes.Code != http.StatusNotFound {
+		t.Fatalf("expected missing registration status %d, got %d body=%s", http.StatusNotFound, missingRegistrationRes.Code, missingRegistrationRes.Body.String())
+	}
+
+	createRepositoryReq := httptest.NewRequest(http.MethodPost, "/settings/scm/repositories", bytes.NewBufferString(`{"connection_id":"`+connectionID+`","provider_repository_id":"1001","owner":"octo","name":"widgets","full_name":"octo/widgets","clone_url":"https://github.com/octo/widgets.git","web_url":"https://github.com/octo/widgets","default_branch":"main"}`))
+	createRepositoryRes := httptest.NewRecorder()
+	h.CreateRegisteredRepository(createRepositoryRes, createRepositoryReq)
+	if createRepositoryRes.Code != http.StatusCreated {
+		t.Fatalf("expected create repository status %d, got %d body=%s", http.StatusCreated, createRepositoryRes.Code, createRepositoryRes.Body.String())
+	}
+	createdRepository := decodeDataMap(t, createRepositoryRes)
+	repositoryID, hasRepositoryID := createdRepository["id"].(string)
+	if !hasRepositoryID || repositoryID == "" {
+		t.Fatalf("expected repository id, got %v", createdRepository["id"])
+	}
+
+	listRepositoriesReq := httptest.NewRequest(http.MethodGet, "/settings/scm/repositories", nil)
+	listRepositoriesRes := httptest.NewRecorder()
+	h.ListRegisteredRepositories(listRepositoriesRes, listRepositoriesReq)
+	if listRepositoriesRes.Code != http.StatusOK {
+		t.Fatalf("expected list repositories status %d, got %d", http.StatusOK, listRepositoriesRes.Code)
+	}
+
+	getRepositoryReq := addURLParam(httptest.NewRequest(http.MethodGet, "/settings/scm/repositories/"+repositoryID, nil), "repositoryID", repositoryID)
+	getRepositoryRes := httptest.NewRecorder()
+	h.GetRegisteredRepository(getRepositoryRes, getRepositoryReq)
+	if getRepositoryRes.Code != http.StatusOK {
+		t.Fatalf("expected get repository status %d, got %d", http.StatusOK, getRepositoryRes.Code)
+	}
+}
+
+func TestToGitHubAppRegistrationResponse_ConfiguredBooleans(t *testing.T) {
+	now := time.Now().UTC()
+	response := toGitHubAppRegistrationResponse(domain.GitHubAppRegistration{
+		ID:                  "registration-1",
+		AppID:               "12345",
+		APIBaseURL:          "https://api.github.com",
+		WebBaseURL:          "https://github.com",
+		PrivateKeySecretRef: "",
+		WebhookSecretRef:    "",
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	})
+	if response.PrivateKeyConfigured {
+		t.Fatal("expected private key configured to be false")
+	}
+	if response.WebhookConfigured {
+		t.Fatal("expected webhook configured to be false")
+	}
+}
+
+func TestSCMHandler_ErrorPaths(t *testing.T) {
+	unavailable := &SCMHandler{}
+	unavailableReq := httptest.NewRequest(http.MethodGet, "/settings/scm/github-apps", nil)
+	unavailableRes := httptest.NewRecorder()
+	unavailable.ListGitHubAppRegistrations(unavailableRes, unavailableReq)
+	if unavailableRes.Code != http.StatusNotFound {
+		t.Fatalf("expected unavailable handler status %d, got %d body=%s", http.StatusNotFound, unavailableRes.Code, unavailableRes.Body.String())
+	}
+
+	connectionRepo := repositorymemory.NewSCMConnectionRepository()
+	repositoryRepo := repositorymemory.NewSCMRepositoryRegistrationRepository()
+	h := NewSCMHandler(service.NewSCMAdminService(connectionRepo, repositoryRepo))
+
+	badCreateRegistrationReq := httptest.NewRequest(http.MethodPost, "/settings/scm/github-apps", bytes.NewBufferString(`{"app_id":`))
+	badCreateRegistrationRes := httptest.NewRecorder()
+	h.CreateGitHubAppRegistration(badCreateRegistrationRes, badCreateRegistrationReq)
+	if badCreateRegistrationRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad registration request status %d, got %d body=%s", http.StatusBadRequest, badCreateRegistrationRes.Code, badCreateRegistrationRes.Body.String())
+	}
+
+	badCreateConnectionReq := httptest.NewRequest(http.MethodPost, "/settings/scm/connections/github-app-installations", bytes.NewBufferString(`{"app_registration_id":`))
+	badCreateConnectionRes := httptest.NewRecorder()
+	h.CreateGitHubAppInstallationConnection(badCreateConnectionRes, badCreateConnectionReq)
+	if badCreateConnectionRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad connection request status %d, got %d body=%s", http.StatusBadRequest, badCreateConnectionRes.Code, badCreateConnectionRes.Body.String())
+	}
+
+	badPatchReq := addURLParam(httptest.NewRequest(http.MethodPatch, "/settings/scm/connections/connection-1", bytes.NewBufferString(`{"enabled":`)), "connectionID", "connection-1")
+	badPatchRes := httptest.NewRecorder()
+	h.PatchConnection(badPatchRes, badPatchReq)
+	if badPatchRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad patch request status %d, got %d body=%s", http.StatusBadRequest, badPatchRes.Code, badPatchRes.Body.String())
+	}
+
+	badCreateRepositoryReq := httptest.NewRequest(http.MethodPost, "/settings/scm/repositories", bytes.NewBufferString(`{"connection_id":`))
+	badCreateRepositoryRes := httptest.NewRecorder()
+	h.CreateRegisteredRepository(badCreateRepositoryRes, badCreateRepositoryReq)
+	if badCreateRepositoryRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad repository request status %d, got %d body=%s", http.StatusBadRequest, badCreateRepositoryRes.Code, badCreateRepositoryRes.Body.String())
+	}
+
+	missingConnectionReq := addURLParam(httptest.NewRequest(http.MethodGet, "/settings/scm/connections/missing", nil), "connectionID", "missing")
+	missingConnectionRes := httptest.NewRecorder()
+	h.GetConnection(missingConnectionRes, missingConnectionReq)
+	if missingConnectionRes.Code != http.StatusNotFound {
+		t.Fatalf("expected missing connection status %d, got %d body=%s", http.StatusNotFound, missingConnectionRes.Code, missingConnectionRes.Body.String())
+	}
+
+	missingRepositoryReq := addURLParam(httptest.NewRequest(http.MethodGet, "/settings/scm/repositories/missing", nil), "repositoryID", "missing")
+	missingRepositoryRes := httptest.NewRecorder()
+	h.GetRegisteredRepository(missingRepositoryRes, missingRepositoryReq)
+	if missingRepositoryRes.Code != http.StatusNotFound {
+		t.Fatalf("expected missing repository status %d, got %d body=%s", http.StatusNotFound, missingRepositoryRes.Code, missingRepositoryRes.Body.String())
+	}
+}

@@ -105,6 +105,8 @@ func main() {
 	projectMembershipRepo := repositorypostgres.NewProjectMembershipRepository(db)
 	jobManagedImageConfigRepo := repositorypostgres.NewJobManagedImageConfigRepository(db)
 	sourceCredentialRepo := repositorypostgres.NewSourceCredentialRepository(db)
+	scmConnectionRepo := repositorypostgres.NewSCMConnectionRepository(db)
+	scmRepositoryRegistrationRepo := repositorypostgres.NewSCMRepositoryRegistrationRepository(db)
 	managedImageCatalogRepo := repositorypostgres.NewManagedImageCatalogRepository(db)
 	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
 	artifactLabelRepo := repositorypostgres.NewArtifactLabelRepository(db)
@@ -211,6 +213,7 @@ func main() {
 		WithArtifactTriggerDeliveryRepository(artifactTriggerDeliveryRepo)
 	buildService.SetArtifactTriggerDispatcher(jobService)
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
+	scmAdminService := service.NewSCMAdminService(scmConnectionRepo, scmRepositoryRegistrationRepo)
 	notificationService := service.NewNotificationService(notificationSubscriptionRepo).
 		WithPreferenceRepository(notificationPreferenceRepo).
 		WithInstanceSettingsRepository(notificationInstanceSettingsRepo).
@@ -248,6 +251,8 @@ func main() {
 	versionTagHandler := handler.NewVersionTagHandler(versionTagService)
 	credentialHandler := handler.NewSourceCredentialHandler(sourceCredentialService)
 	credentialHandler.SetAuthorization(authMode)
+	scmHandler := handler.NewSCMHandler(scmAdminService)
+	scmHandler.SetAuthorization(authMode)
 	notificationHandler := handler.NewNotificationHandler(nil)
 	notificationHandler.SetAdminService(notificationService)
 	notificationHandler.SetSlackWorkspaceIntegrationService(slackWorkspaceIntegrationService)
@@ -337,6 +342,7 @@ func main() {
 		cfg.PushEventSecret,
 		apphttp.WithAuthHandler(authHandler),
 		apphttp.WithAuthMiddleware(authMiddleware),
+		apphttp.WithSCMHandler(scmHandler),
 		apphttp.WithNotificationHandler(notificationHandler),
 		apphttp.WithUserHandler(userHandler),
 		apphttp.WithServerInfoHandler(serverInfoHandler),

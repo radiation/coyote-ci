@@ -233,6 +233,56 @@ func TestNewRouter_ServerInfoAndWorkerRoutes(t *testing.T) {
 	}
 }
 
+func TestNewRouter_SCMRoutes(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	buildHandler := handler.NewBuildHandler(buildSvc)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jobHandler := handler.NewJobHandler(jobSvc)
+	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	scmHandler := handler.NewSCMHandler(service.NewSCMAdminService(repositorymemory.NewSCMConnectionRepository(), repositorymemory.NewSCMRepositoryRegistrationRepository()))
+
+	router := NewRouter(buildHandler, nil, jobHandler, nil, nil, nil, eventHandler, "", WithSCMHandler(scmHandler))
+
+	githubAppsReq := httptest.NewRequest(http.MethodGet, "/api/settings/scm/github-apps", nil)
+	githubAppsRes := httptest.NewRecorder()
+	router.ServeHTTP(githubAppsRes, githubAppsReq)
+	if githubAppsRes.Code != http.StatusOK {
+		t.Fatalf("expected github app registrations status %d, got %d body=%s", http.StatusOK, githubAppsRes.Code, githubAppsRes.Body.String())
+	}
+	if !strings.Contains(githubAppsRes.Body.String(), `"github_apps":[]`) {
+		t.Fatalf("expected empty github app registration list, got %s", githubAppsRes.Body.String())
+	}
+
+	connectionsReq := httptest.NewRequest(http.MethodGet, "/api/settings/scm/connections", nil)
+	connectionsRes := httptest.NewRecorder()
+	router.ServeHTTP(connectionsRes, connectionsReq)
+	if connectionsRes.Code != http.StatusOK {
+		t.Fatalf("expected scm connections status %d, got %d body=%s", http.StatusOK, connectionsRes.Code, connectionsRes.Body.String())
+	}
+	if !strings.Contains(connectionsRes.Body.String(), `"connections":[]`) {
+		t.Fatalf("expected empty scm connections list, got %s", connectionsRes.Body.String())
+	}
+
+	repositoriesReq := httptest.NewRequest(http.MethodGet, "/api/settings/scm/repositories", nil)
+	repositoriesRes := httptest.NewRecorder()
+	router.ServeHTTP(repositoriesRes, repositoriesReq)
+	if repositoriesRes.Code != http.StatusOK {
+		t.Fatalf("expected scm repositories status %d, got %d body=%s", http.StatusOK, repositoriesRes.Code, repositoriesRes.Body.String())
+	}
+	if !strings.Contains(repositoriesRes.Body.String(), `"repositories":[]`) {
+		t.Fatalf("expected empty scm repositories list, got %s", repositoriesRes.Body.String())
+	}
+
+	createGitHubAppReq := httptest.NewRequest(http.MethodPost, "/api/settings/scm/github-apps", strings.NewReader(`{"app_id":"12345","private_key_secret_ref":"secret/github/private-key","webhook_secret_ref":"secret/github/webhook"}`))
+	createGitHubAppRes := httptest.NewRecorder()
+	router.ServeHTTP(createGitHubAppRes, createGitHubAppReq)
+	if createGitHubAppRes.Code != http.StatusCreated {
+		t.Fatalf("expected github app registration status %d, got %d body=%s", http.StatusCreated, createGitHubAppRes.Code, createGitHubAppRes.Body.String())
+	}
+}
+
 func TestNewRouter_ServerInfoRouteUsesAuthMiddlewareWhenConfigured(t *testing.T) {
 	headerRouter := newIdentityTestRouter(auth.ModeHeader, "push-secret", "github-secret", WithServerInfoHandler(handler.NewServerInfoHandler()))
 
