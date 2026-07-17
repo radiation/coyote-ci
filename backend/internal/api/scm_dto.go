@@ -1,18 +1,22 @@
 package api
 
-type CreateGitHubAppInstallationConnectionRequest struct {
-	DisplayName         string  `json:"display_name"`
-	DeploymentKind      string  `json:"deployment_kind"`
+type CreateGitHubAppRegistrationRequest struct {
+	AppID               string  `json:"app_id"`
+	DisplayName         *string `json:"display_name,omitempty"`
 	APIBaseURL          string  `json:"api_base_url,omitempty"`
 	WebBaseURL          string  `json:"web_base_url,omitempty"`
-	AppID               string  `json:"app_id"`
-	AppDisplayName      *string `json:"app_display_name,omitempty"`
 	PrivateKeySecretRef string  `json:"private_key_secret_ref"`
 	WebhookSecretRef    string  `json:"webhook_secret_ref"`
-	InstallationID      string  `json:"installation_id"`
-	AccountLogin        string  `json:"account_login"`
-	AccountType         string  `json:"account_type"`
-	AccountID           string  `json:"account_id"`
+}
+
+type CreateGitHubAppInstallationConnectionRequest struct {
+	AppRegistrationID string `json:"app_registration_id"`
+	DisplayName       string `json:"display_name"`
+	Enabled           *bool  `json:"enabled"`
+	InstallationID    string `json:"installation_id"`
+	AccountLogin      string `json:"account_login"`
+	AccountType       string `json:"account_type"`
+	TargetID          string `json:"target_id"`
 }
 
 type PatchSCMConnectionRequest struct {
@@ -37,15 +41,15 @@ type SCMConnectionResponse struct {
 }
 
 type GitHubAppRegistrationResponse struct {
-	ID                  string  `json:"id"`
-	AppID               string  `json:"app_id"`
-	DisplayName         *string `json:"display_name,omitempty"`
-	APIBaseURL          string  `json:"api_base_url"`
-	WebBaseURL          string  `json:"web_base_url"`
-	PrivateKeySecretRef string  `json:"private_key_secret_ref"`
-	WebhookSecretRef    string  `json:"webhook_secret_ref"`
-	CreatedAt           string  `json:"created_at"`
-	UpdatedAt           string  `json:"updated_at"`
+	ID                   string  `json:"id"`
+	AppID                string  `json:"app_id"`
+	DisplayName          *string `json:"display_name,omitempty"`
+	APIBaseURL           string  `json:"api_base_url"`
+	WebBaseURL           string  `json:"web_base_url"`
+	PrivateKeyConfigured bool    `json:"private_key_configured"`
+	WebhookConfigured    bool    `json:"webhook_configured"`
+	CreatedAt            string  `json:"created_at"`
+	UpdatedAt            string  `json:"updated_at"`
 }
 
 type GitHubAppInstallationResponse struct {
@@ -54,9 +58,21 @@ type GitHubAppInstallationResponse struct {
 	InstallationID    string `json:"installation_id"`
 	AccountLogin      string `json:"account_login"`
 	AccountType       string `json:"account_type"`
-	AccountID         string `json:"account_id"`
+	TargetID          string `json:"target_id"`
 	CreatedAt         string `json:"created_at"`
 	UpdatedAt         string `json:"updated_at"`
+}
+
+type GitHubAppRegistrationEnvelope struct {
+	Data GitHubAppRegistrationResponse `json:"data"`
+}
+
+type GitHubAppRegistrationListResponse struct {
+	GitHubApps []GitHubAppRegistrationResponse `json:"github_apps"`
+}
+
+type GitHubAppRegistrationListEnvelope struct {
+	Data GitHubAppRegistrationListResponse `json:"data"`
 }
 
 type SCMConnectionListResponse struct {

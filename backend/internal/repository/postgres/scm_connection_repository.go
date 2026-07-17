@@ -24,6 +24,80 @@ const scmConnectionColumns = `c.id, c.provider, c.display_name, c.deployment_kin
 	ga.id, ga.app_id, ga.display_name, ga.api_base_url, ga.web_base_url, ga.private_key_secret_ref, ga.webhook_secret_ref, ga.created_at, ga.updated_at,
 	gi.connection_id, gi.app_registration_id, gi.installation_id, gi.account_login, gi.account_type, gi.account_id, gi.created_at, gi.updated_at`
 
+func (r *SCMConnectionRepository) CreateGitHubAppRegistration(ctx context.Context, registration domain.GitHubAppRegistration) (domain.GitHubAppRegistration, error) {
+	registration = registration.Normalize()
+	if err := registration.Validate(); err != nil {
+		return domain.GitHubAppRegistration{}, err
+	}
+
+	const query = `
+		INSERT INTO github_app_registrations (
+			id, app_id, display_name, api_base_url, web_base_url, private_key_secret_ref, webhook_secret_ref, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, app_id, display_name, api_base_url, web_base_url, private_key_secret_ref, webhook_secret_ref, created_at, updated_at
+	`
+	created, err := scanGitHubAppRegistration(r.db.QueryRowContext(ctx, query,
+		registration.ID,
+		registration.AppID,
+		registration.DisplayName,
+		registration.APIBaseURL,
+		registration.WebBaseURL,
+		registration.PrivateKeySecretRef,
+		registration.WebhookSecretRef,
+		registration.CreatedAt,
+		registration.UpdatedAt,
+	))
+	if err != nil {
+		if isSCMConnectionUniqueViolation(err, "github_app_registrations_app_id_api_base_url_web_base_url_key") || isSCMConnectionUniqueViolation(err, "github_app_registrations_pkey") {
+			return domain.GitHubAppRegistration{}, repository.ErrSCMGitHubAppRegistrationConflict
+		}
+		return domain.GitHubAppRegistration{}, err
+	}
+	return created, nil
+}
+
+func (r *SCMConnectionRepository) ListGitHubAppRegistrations(ctx context.Context) ([]domain.GitHubAppRegistration, error) {
+	const query = `
+		SELECT id, app_id, display_name, api_base_url, web_base_url, private_key_secret_ref, webhook_secret_ref, created_at, updated_at
+		FROM github_app_registrations
+		ORDER BY created_at DESC, id DESC
+	`
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	items := make([]domain.GitHubAppRegistration, 0)
+	for rows.Next() {
+		item, scanErr := scanGitHubAppRegistration(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (r *SCMConnectionRepository) GetGitHubAppRegistrationByID(ctx context.Context, id string) (domain.GitHubAppRegistration, error) {
+	const query = `
+		SELECT id, app_id, display_name, api_base_url, web_base_url, private_key_secret_ref, webhook_secret_ref, created_at, updated_at
+		FROM github_app_registrations
+		WHERE id = $1
+	`
+	registration, err := scanGitHubAppRegistration(r.db.QueryRowContext(ctx, query, id))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.GitHubAppRegistration{}, repository.ErrSCMGitHubAppRegistrationNotFound
+		}
+		return domain.GitHubAppRegistration{}, err
+	}
+	return registration, nil
+}
+
 func (r *SCMConnectionRepository) CreateGitHubAppInstallationConnection(ctx context.Context, detail domain.SCMConnectionDetail) (domain.SCMConnectionDetail, error) {
 	detail = detail.Normalize()
 	if err := detail.Validate(); err != nil {
@@ -35,8 +109,7 @@ func (r *SCMConnectionRepository) CreateGitHubAppInstallationConnection(ctx cont
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	registration := *detail.GitHubAppRegistration
-	registration, err = resolveOrCreateGitHubAppRegistration(ctx, tx, registration)
+	registration, err := getGitHubAppRegistrationForUpdate(ctx, tx, detail.GitHubAppRegistration.ID)
 	if err != nil {
 		return domain.SCMConnectionDetail{}, err
 	}
@@ -69,7 +142,6 @@ func (r *SCMConnectionRepository) CreateGitHubAppInstallationConnection(ctx cont
 	}
 
 	installation := *detail.GitHubAppInstallation
-	installation.AppRegistrationID = registration.ID
 	const insertInstallationQuery = `
 		INSERT INTO github_app_installations (
 			connection_id, app_registration_id, installation_id, account_login, account_type, account_id, created_at, updated_at
@@ -161,48 +233,21 @@ func (r *SCMConnectionRepository) SetEnabled(ctx context.Context, id string, ena
 	return r.GetByID(ctx, returnedID)
 }
 
-func resolveOrCreateGitHubAppRegistration(ctx context.Context, tx *sql.Tx, registration domain.GitHubAppRegistration) (domain.GitHubAppRegistration, error) {
-	const selectQuery = `
+func getGitHubAppRegistrationForUpdate(ctx context.Context, tx *sql.Tx, registrationID string) (domain.GitHubAppRegistration, error) {
+	const query = `
 		SELECT id, app_id, display_name, api_base_url, web_base_url, private_key_secret_ref, webhook_secret_ref, created_at, updated_at
 		FROM github_app_registrations
-		WHERE app_id = $1 AND api_base_url = $2 AND web_base_url = $3
+		WHERE id = $1
+		FOR UPDATE
 	`
-	existing, err := scanGitHubAppRegistration(tx.QueryRowContext(ctx, selectQuery, registration.AppID, registration.APIBaseURL, registration.WebBaseURL))
-	if err == nil {
-		if existing.PrivateKeySecretRef != registration.PrivateKeySecretRef || existing.WebhookSecretRef != registration.WebhookSecretRef {
-			return domain.GitHubAppRegistration{}, repository.ErrSCMGitHubAppRegistrationConflict
+	registration, err := scanGitHubAppRegistration(tx.QueryRowContext(ctx, query, registrationID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.GitHubAppRegistration{}, repository.ErrSCMGitHubAppRegistrationNotFound
 		}
-		return existing, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
 		return domain.GitHubAppRegistration{}, err
 	}
-
-	const insertQuery = `
-		INSERT INTO github_app_registrations (
-			id, app_id, display_name, api_base_url, web_base_url, private_key_secret_ref, webhook_secret_ref, created_at, updated_at
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING id, app_id, display_name, api_base_url, web_base_url, private_key_secret_ref, webhook_secret_ref, created_at, updated_at
-	`
-	inserted, insertErr := scanGitHubAppRegistration(tx.QueryRowContext(ctx, insertQuery,
-		registration.ID,
-		registration.AppID,
-		registration.DisplayName,
-		registration.APIBaseURL,
-		registration.WebBaseURL,
-		registration.PrivateKeySecretRef,
-		registration.WebhookSecretRef,
-		registration.CreatedAt,
-		registration.UpdatedAt,
-	))
-	if insertErr != nil {
-		if isSCMConnectionUniqueViolation(insertErr, "github_app_registrations_app_id_api_base_url_web_base_url_key") {
-			return domain.GitHubAppRegistration{}, repository.ErrSCMGitHubAppRegistrationConflict
-		}
-		return domain.GitHubAppRegistration{}, insertErr
-	}
-	return inserted, nil
+	return registration, nil
 }
 
 type scmConnectionDetailScanner interface{ Scan(dest ...any) error }

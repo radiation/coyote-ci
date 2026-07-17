@@ -20,6 +20,9 @@ import (
 type scmAdminService interface {
 	ListConnections(ctx context.Context) ([]domain.SCMConnectionDetail, error)
 	GetConnection(ctx context.Context, id string) (domain.SCMConnectionDetail, error)
+	ListGitHubAppRegistrations(ctx context.Context) ([]domain.GitHubAppRegistration, error)
+	GetGitHubAppRegistration(ctx context.Context, id string) (domain.GitHubAppRegistration, error)
+	CreateGitHubAppRegistration(ctx context.Context, input service.CreateGitHubAppRegistrationInput) (domain.GitHubAppRegistration, error)
 	CreateGitHubAppInstallationConnection(ctx context.Context, input service.CreateGitHubAppInstallationConnectionInput) (domain.SCMConnectionDetail, error)
 	SetConnectionEnabled(ctx context.Context, id string, enabled *bool) (domain.SCMConnectionDetail, error)
 	ListRegisteredRepositories(ctx context.Context) ([]domain.SCMRepositoryRegistration, error)
@@ -40,6 +43,93 @@ func (h *SCMHandler) SetAuthorization(mode auth.Mode) {
 	h.authMode = mode
 }
 
+// ListGitHubAppRegistrations godoc
+// @Summary List GitHub App registrations
+// @Description Returns safe GitHub App registration metadata for operator rediscovery.
+// @Tags scm
+// @Produce json
+// @Success 200 {object} api.GitHubAppRegistrationListEnvelope
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 403 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /settings/scm/github-apps [get]
+func (h *SCMHandler) ListGitHubAppRegistrations(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeAdmin(w, r) {
+		return
+	}
+	registrations, err := h.admin.ListGitHubAppRegistrations(r.Context())
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	responses := make([]api.GitHubAppRegistrationResponse, 0, len(registrations))
+	for _, item := range registrations {
+		responses = append(responses, toGitHubAppRegistrationResponse(item))
+	}
+	writeDataJSON(w, http.StatusOK, api.GitHubAppRegistrationListResponse{GitHubApps: responses})
+}
+
+// GetGitHubAppRegistration godoc
+// @Summary Get GitHub App registration
+// @Description Returns safe GitHub App registration metadata by ID.
+// @Tags scm
+// @Produce json
+// @Success 200 {object} api.GitHubAppRegistrationEnvelope
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 403 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /settings/scm/github-apps/{registrationID} [get]
+func (h *SCMHandler) GetGitHubAppRegistration(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeAdmin(w, r) {
+		return
+	}
+	registration, err := h.admin.GetGitHubAppRegistration(r.Context(), strings.TrimSpace(chi.URLParam(r, "registrationID")))
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeDataJSON(w, http.StatusOK, toGitHubAppRegistrationResponse(registration))
+}
+
+// CreateGitHubAppRegistration godoc
+// @Summary Create GitHub App registration
+// @Description Creates reusable GitHub App registration metadata and secret references without creating an installation-backed SCM connection.
+// @Tags scm
+// @Accept json
+// @Produce json
+// @Param request body api.CreateGitHubAppRegistrationRequest true "GitHub App registration request"
+// @Success 201 {object} api.GitHubAppRegistrationEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 403 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /settings/scm/github-apps [post]
+func (h *SCMHandler) CreateGitHubAppRegistration(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeAdmin(w, r) {
+		return
+	}
+	var req api.CreateGitHubAppRegistrationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+	registration, err := h.admin.CreateGitHubAppRegistration(r.Context(), service.CreateGitHubAppRegistrationInput{
+		AppID:               req.AppID,
+		DisplayName:         req.DisplayName,
+		APIBaseURL:          req.APIBaseURL,
+		WebBaseURL:          req.WebBaseURL,
+		PrivateKeySecretRef: req.PrivateKeySecretRef,
+		WebhookSecretRef:    req.WebhookSecretRef,
+	})
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeDataJSON(w, http.StatusCreated, toGitHubAppRegistrationResponse(registration))
+}
+
 func (h *SCMHandler) ListConnections(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeAdmin(w, r) {
 		return
@@ -56,6 +146,21 @@ func (h *SCMHandler) ListConnections(w http.ResponseWriter, r *http.Request) {
 	writeDataJSON(w, http.StatusOK, api.SCMConnectionListResponse{Connections: responses})
 }
 
+// CreateGitHubAppInstallationConnection godoc
+// @Summary Create installation-backed SCM connection
+// @Description Creates a GitHub App installation-backed SCM connection that references an existing GitHub App registration.
+// @Tags scm
+// @Accept json
+// @Produce json
+// @Param request body api.CreateGitHubAppInstallationConnectionRequest true "GitHub App installation connection request"
+// @Success 201 {object} api.SCMConnectionEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 403 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /settings/scm/connections/github-app-installations [post]
 func (h *SCMHandler) CreateGitHubAppInstallationConnection(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeAdmin(w, r) {
 		return
@@ -66,18 +171,13 @@ func (h *SCMHandler) CreateGitHubAppInstallationConnection(w http.ResponseWriter
 		return
 	}
 	connection, err := h.admin.CreateGitHubAppInstallationConnection(r.Context(), service.CreateGitHubAppInstallationConnectionInput{
-		DisplayName:         req.DisplayName,
-		DeploymentKind:      req.DeploymentKind,
-		APIBaseURL:          req.APIBaseURL,
-		WebBaseURL:          req.WebBaseURL,
-		AppID:               req.AppID,
-		AppDisplayName:      req.AppDisplayName,
-		PrivateKeySecretRef: req.PrivateKeySecretRef,
-		WebhookSecretRef:    req.WebhookSecretRef,
-		InstallationID:      req.InstallationID,
-		AccountLogin:        req.AccountLogin,
-		AccountType:         req.AccountType,
-		AccountID:           req.AccountID,
+		AppRegistrationID: req.AppRegistrationID,
+		DisplayName:       req.DisplayName,
+		Enabled:           req.Enabled,
+		InstallationID:    req.InstallationID,
+		AccountLogin:      req.AccountLogin,
+		AccountType:       req.AccountType,
+		TargetID:          req.TargetID,
 	})
 	if err != nil {
 		h.writeError(w, err)
@@ -182,7 +282,7 @@ func (h *SCMHandler) authorizeAdmin(w http.ResponseWriter, r *http.Request) bool
 }
 
 func (h *SCMHandler) writeError(w http.ResponseWriter, err error) {
-	if errors.Is(err, repository.ErrSCMConnectionNotFound) || errors.Is(err, repository.ErrSCMRepositoryRegistrationNotFound) {
+	if errors.Is(err, repository.ErrSCMConnectionNotFound) || errors.Is(err, repository.ErrSCMGitHubAppRegistrationNotFound) || errors.Is(err, repository.ErrSCMRepositoryRegistrationNotFound) {
 		writeErrorJSON(w, http.StatusNotFound, "not_found", err.Error())
 		return
 	}
@@ -191,14 +291,14 @@ func (h *SCMHandler) writeError(w http.ResponseWriter, err error) {
 		return
 	}
 	if errors.Is(err, service.ErrSCMConnectionDisplayNameRequired) ||
-		errors.Is(err, service.ErrSCMConnectionDeploymentKindInvalid) ||
+		errors.Is(err, service.ErrSCMGitHubAppRegistrationIDRequired) ||
 		errors.Is(err, service.ErrSCMGitHubAppIDRequired) ||
 		errors.Is(err, service.ErrSCMGitHubPrivateKeySecretRefRequired) ||
 		errors.Is(err, service.ErrSCMGitHubWebhookSecretRefRequired) ||
 		errors.Is(err, service.ErrSCMGitHubInstallationIDRequired) ||
 		errors.Is(err, service.ErrSCMGitHubAccountLoginRequired) ||
 		errors.Is(err, service.ErrSCMGitHubAccountTypeRequired) ||
-		errors.Is(err, service.ErrSCMGitHubAccountIDRequired) ||
+		errors.Is(err, service.ErrSCMGitHubTargetIDRequired) ||
 		errors.Is(err, service.ErrSCMConnectionEnabledRequired) ||
 		errors.Is(err, service.ErrSCMRegisteredRepositoryConnectionIDRequired) ||
 		errors.Is(err, service.ErrSCMRegisteredRepositoryProviderRepositoryIDRequired) ||
@@ -232,17 +332,8 @@ func toSCMConnectionResponse(detail domain.SCMConnectionDetail) api.SCMConnectio
 		response.LastHealthCheckedAt = &formatted
 	}
 	if detail.GitHubAppRegistration != nil {
-		response.GitHubApp = &api.GitHubAppRegistrationResponse{
-			ID:                  detail.GitHubAppRegistration.ID,
-			AppID:               detail.GitHubAppRegistration.AppID,
-			DisplayName:         detail.GitHubAppRegistration.DisplayName,
-			APIBaseURL:          detail.GitHubAppRegistration.APIBaseURL,
-			WebBaseURL:          detail.GitHubAppRegistration.WebBaseURL,
-			PrivateKeySecretRef: detail.GitHubAppRegistration.PrivateKeySecretRef,
-			WebhookSecretRef:    detail.GitHubAppRegistration.WebhookSecretRef,
-			CreatedAt:           detail.GitHubAppRegistration.CreatedAt.Format(time.RFC3339),
-			UpdatedAt:           detail.GitHubAppRegistration.UpdatedAt.Format(time.RFC3339),
-		}
+		githubApp := toGitHubAppRegistrationResponse(*detail.GitHubAppRegistration)
+		response.GitHubApp = &githubApp
 	}
 	if detail.GitHubAppInstallation != nil {
 		response.GitHubInstallation = &api.GitHubAppInstallationResponse{
@@ -251,12 +342,26 @@ func toSCMConnectionResponse(detail domain.SCMConnectionDetail) api.SCMConnectio
 			InstallationID:    detail.GitHubAppInstallation.InstallationID,
 			AccountLogin:      detail.GitHubAppInstallation.AccountLogin,
 			AccountType:       detail.GitHubAppInstallation.AccountType,
-			AccountID:         detail.GitHubAppInstallation.AccountID,
+			TargetID:          detail.GitHubAppInstallation.AccountID,
 			CreatedAt:         detail.GitHubAppInstallation.CreatedAt.Format(time.RFC3339),
 			UpdatedAt:         detail.GitHubAppInstallation.UpdatedAt.Format(time.RFC3339),
 		}
 	}
 	return response
+}
+
+func toGitHubAppRegistrationResponse(registration domain.GitHubAppRegistration) api.GitHubAppRegistrationResponse {
+	return api.GitHubAppRegistrationResponse{
+		ID:                   registration.ID,
+		AppID:                registration.AppID,
+		DisplayName:          registration.DisplayName,
+		APIBaseURL:           registration.APIBaseURL,
+		WebBaseURL:           registration.WebBaseURL,
+		PrivateKeyConfigured: strings.TrimSpace(registration.PrivateKeySecretRef) != "",
+		WebhookConfigured:    strings.TrimSpace(registration.WebhookSecretRef) != "",
+		CreatedAt:            registration.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:            registration.UpdatedAt.Format(time.RFC3339),
+	}
 }
 
 func toSCMRepositoryRegistrationResponse(registration domain.SCMRepositoryRegistration) api.SCMRepositoryRegistrationResponse {

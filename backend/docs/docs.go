@@ -3659,6 +3659,42 @@ const docTemplate = `{
             }
         },
         "/settings/scm/github-apps": {
+            "get": {
+                "description": "Returns safe GitHub App registration metadata for operator rediscovery.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scm"
+                ],
+                "summary": "List GitHub App registrations",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.GitHubAppRegistrationListEnvelope"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            },
             "post": {
                 "description": "Creates reusable GitHub App registration metadata and secret references without creating an installation-backed SCM connection.",
                 "consumes": [
@@ -3709,6 +3745,50 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/settings/scm/github-apps/{registrationID}": {
+            "get": {
+                "description": "Returns safe GitHub App registration metadata by ID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scm"
+                ],
+                "summary": "Get GitHub App registration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.GitHubAppRegistrationEnvelope"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/api.ErrorResponse"
                         }
@@ -5635,6 +5715,25 @@ const docTemplate = `{
                 }
             }
         },
+        "api.GitHubAppRegistrationListEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.GitHubAppRegistrationListResponse"
+                }
+            }
+        },
+        "api.GitHubAppRegistrationListResponse": {
+            "type": "object",
+            "properties": {
+                "github_apps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.GitHubAppRegistrationResponse"
+                    }
+                }
+            }
+        },
         "api.GitHubAppRegistrationResponse": {
             "type": "object",
             "properties": {
@@ -5653,11 +5752,17 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "private_key_configured": {
+                    "type": "boolean"
+                },
                 "updated_at": {
                     "type": "string"
                 },
                 "web_base_url": {
                     "type": "string"
+                },
+                "webhook_configured": {
+                    "type": "boolean"
                 }
             }
         },

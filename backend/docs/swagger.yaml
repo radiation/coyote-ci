@@ -1058,6 +1058,18 @@ definitions:
       data:
         $ref: '#/definitions/api.GitHubAppRegistrationResponse'
     type: object
+  api.GitHubAppRegistrationListEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.GitHubAppRegistrationListResponse'
+    type: object
+  api.GitHubAppRegistrationListResponse:
+    properties:
+      github_apps:
+        items:
+          $ref: '#/definitions/api.GitHubAppRegistrationResponse'
+        type: array
+    type: object
   api.GitHubAppRegistrationResponse:
     properties:
       api_base_url:
@@ -1070,10 +1082,14 @@ definitions:
         type: string
       id:
         type: string
+      private_key_configured:
+        type: boolean
       updated_at:
         type: string
       web_base_url:
         type: string
+      webhook_configured:
+        type: boolean
     type: object
   api.ImageExecutionResponse:
     properties:
@@ -4321,6 +4337,30 @@ paths:
       tags:
       - scm
   /settings/scm/github-apps:
+    get:
+      description: Returns safe GitHub App registration metadata for operator rediscovery.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.GitHubAppRegistrationListEnvelope'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: List GitHub App registrations
+      tags:
+      - scm
     post:
       consumes:
       - application/json
@@ -4361,6 +4401,35 @@ paths:
           schema:
             $ref: '#/definitions/api.ErrorResponse'
       summary: Create GitHub App registration
+      tags:
+      - scm
+  /settings/scm/github-apps/{registrationID}:
+    get:
+      description: Returns safe GitHub App registration metadata by ID.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.GitHubAppRegistrationEnvelope'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get GitHub App registration
       tags:
       - scm
   /users:

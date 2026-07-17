@@ -200,6 +200,11 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 
 			if cfg.scmHandler != nil {
 				r.Route("/settings/scm", func(r chi.Router) {
+					r.Route("/github-apps", func(r chi.Router) {
+						r.Get("/", cfg.scmHandler.ListGitHubAppRegistrations)
+						r.Post("/", cfg.scmHandler.CreateGitHubAppRegistration)
+						r.Get("/{registrationID}", cfg.scmHandler.GetGitHubAppRegistration)
+					})
 					r.Route("/connections", func(r chi.Router) {
 						r.Get("/", cfg.scmHandler.ListConnections)
 						r.Post("/github-app-installations", cfg.scmHandler.CreateGitHubAppInstallationConnection)

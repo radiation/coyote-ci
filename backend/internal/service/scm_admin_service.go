@@ -13,14 +13,14 @@ import (
 )
 
 var ErrSCMConnectionDisplayNameRequired = errors.New("display_name is required")
-var ErrSCMConnectionDeploymentKindInvalid = errors.New("deployment_kind must be one of cloud, self_hosted")
+var ErrSCMGitHubAppRegistrationIDRequired = errors.New("github app app_registration_id is required")
 var ErrSCMGitHubAppIDRequired = errors.New("github app app_id is required")
 var ErrSCMGitHubPrivateKeySecretRefRequired = errors.New("github app private_key_secret_ref is required")
 var ErrSCMGitHubWebhookSecretRefRequired = errors.New("github app webhook_secret_ref is required")
 var ErrSCMGitHubInstallationIDRequired = errors.New("github installation installation_id is required")
 var ErrSCMGitHubAccountLoginRequired = errors.New("github installation account_login is required")
 var ErrSCMGitHubAccountTypeRequired = errors.New("github installation account_type is required")
-var ErrSCMGitHubAccountIDRequired = errors.New("github installation account_id is required")
+var ErrSCMGitHubTargetIDRequired = errors.New("github installation target_id is required")
 var ErrSCMConnectionEnabledRequired = errors.New("enabled is required")
 var ErrSCMRegisteredRepositoryConnectionIDRequired = errors.New("connection_id is required")
 var ErrSCMRegisteredRepositoryProviderRepositoryIDRequired = errors.New("provider_repository_id is required")
@@ -37,18 +37,22 @@ type SCMAdminService struct {
 }
 
 type CreateGitHubAppInstallationConnectionInput struct {
-	DisplayName         string
-	DeploymentKind      string
+	AppRegistrationID string
+	DisplayName       string
+	Enabled           *bool
+	InstallationID    string
+	AccountLogin      string
+	AccountType       string
+	TargetID          string
+}
+
+type CreateGitHubAppRegistrationInput struct {
+	AppID               string
+	DisplayName         *string
 	APIBaseURL          string
 	WebBaseURL          string
-	AppID               string
-	AppDisplayName      *string
 	PrivateKeySecretRef string
 	WebhookSecretRef    string
-	InstallationID      string
-	AccountLogin        string
-	AccountType         string
-	AccountID           string
 }
 
 type CreateSCMRepositoryRegistrationInput struct {
@@ -77,23 +81,50 @@ func (s *SCMAdminService) GetConnection(ctx context.Context, id string) (domain.
 	return s.connections.GetByID(ctx, strings.TrimSpace(id))
 }
 
+func (s *SCMAdminService) ListGitHubAppRegistrations(ctx context.Context) ([]domain.GitHubAppRegistration, error) {
+	return s.connections.ListGitHubAppRegistrations(ctx)
+}
+
+func (s *SCMAdminService) GetGitHubAppRegistration(ctx context.Context, id string) (domain.GitHubAppRegistration, error) {
+	return s.connections.GetGitHubAppRegistrationByID(ctx, strings.TrimSpace(id))
+}
+
+func (s *SCMAdminService) CreateGitHubAppRegistration(ctx context.Context, input CreateGitHubAppRegistrationInput) (domain.GitHubAppRegistration, error) {
+	if strings.TrimSpace(input.AppID) == "" {
+		return domain.GitHubAppRegistration{}, ErrSCMGitHubAppIDRequired
+	}
+	if strings.TrimSpace(input.PrivateKeySecretRef) == "" {
+		return domain.GitHubAppRegistration{}, ErrSCMGitHubPrivateKeySecretRefRequired
+	}
+	if strings.TrimSpace(input.WebhookSecretRef) == "" {
+		return domain.GitHubAppRegistration{}, ErrSCMGitHubWebhookSecretRefRequired
+	}
+
+	now := s.now().UTC()
+	registration := domain.GitHubAppRegistration{
+		ID:                  uuid.NewString(),
+		AppID:               strings.TrimSpace(input.AppID),
+		DisplayName:         input.DisplayName,
+		APIBaseURL:          input.APIBaseURL,
+		WebBaseURL:          input.WebBaseURL,
+		PrivateKeySecretRef: strings.TrimSpace(input.PrivateKeySecretRef),
+		WebhookSecretRef:    strings.TrimSpace(input.WebhookSecretRef),
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}
+	return s.connections.CreateGitHubAppRegistration(ctx, registration)
+}
+
 func (s *SCMAdminService) CreateGitHubAppInstallationConnection(ctx context.Context, input CreateGitHubAppInstallationConnectionInput) (domain.SCMConnectionDetail, error) {
+	if strings.TrimSpace(input.AppRegistrationID) == "" {
+		return domain.SCMConnectionDetail{}, ErrSCMGitHubAppRegistrationIDRequired
+	}
 	displayName := strings.TrimSpace(input.DisplayName)
 	if displayName == "" {
 		return domain.SCMConnectionDetail{}, ErrSCMConnectionDisplayNameRequired
 	}
-	deploymentKind := domain.SCMDeploymentKind(strings.TrimSpace(input.DeploymentKind))
-	if !deploymentKind.IsValid() {
-		return domain.SCMConnectionDetail{}, ErrSCMConnectionDeploymentKindInvalid
-	}
-	if strings.TrimSpace(input.AppID) == "" {
-		return domain.SCMConnectionDetail{}, ErrSCMGitHubAppIDRequired
-	}
-	if strings.TrimSpace(input.PrivateKeySecretRef) == "" {
-		return domain.SCMConnectionDetail{}, ErrSCMGitHubPrivateKeySecretRefRequired
-	}
-	if strings.TrimSpace(input.WebhookSecretRef) == "" {
-		return domain.SCMConnectionDetail{}, ErrSCMGitHubWebhookSecretRefRequired
+	if input.Enabled == nil {
+		return domain.SCMConnectionDetail{}, ErrSCMConnectionEnabledRequired
 	}
 	if strings.TrimSpace(input.InstallationID) == "" {
 		return domain.SCMConnectionDetail{}, ErrSCMGitHubInstallationIDRequired
@@ -104,17 +135,21 @@ func (s *SCMAdminService) CreateGitHubAppInstallationConnection(ctx context.Cont
 	if strings.TrimSpace(input.AccountType) == "" {
 		return domain.SCMConnectionDetail{}, ErrSCMGitHubAccountTypeRequired
 	}
-	if strings.TrimSpace(input.AccountID) == "" {
-		return domain.SCMConnectionDetail{}, ErrSCMGitHubAccountIDRequired
+	if strings.TrimSpace(input.TargetID) == "" {
+		return domain.SCMConnectionDetail{}, ErrSCMGitHubTargetIDRequired
+	}
+	registration, err := s.connections.GetGitHubAppRegistrationByID(ctx, strings.TrimSpace(input.AppRegistrationID))
+	if err != nil {
+		return domain.SCMConnectionDetail{}, err
 	}
 
 	now := s.now().UTC()
 	connectionID := uuid.NewString()
-	registrationID := uuid.NewString()
+	deploymentKind := inferGitHubDeploymentKind(registration.APIBaseURL, registration.WebBaseURL)
 	detail := domain.SCMConnectionDetail{
-		Connection:            domain.SCMConnection{ID: connectionID, Provider: domain.SCMProviderGitHub, DisplayName: displayName, DeploymentKind: deploymentKind, APIBaseURL: input.APIBaseURL, WebBaseURL: input.WebBaseURL, Enabled: true, HealthStatus: domain.SCMConnectionHealthStatusUnknown, CreatedAt: now, UpdatedAt: now},
-		GitHubAppRegistration: &domain.GitHubAppRegistration{ID: registrationID, AppID: strings.TrimSpace(input.AppID), DisplayName: input.AppDisplayName, APIBaseURL: input.APIBaseURL, WebBaseURL: input.WebBaseURL, PrivateKeySecretRef: strings.TrimSpace(input.PrivateKeySecretRef), WebhookSecretRef: strings.TrimSpace(input.WebhookSecretRef), CreatedAt: now, UpdatedAt: now},
-		GitHubAppInstallation: &domain.GitHubAppInstallation{ConnectionID: connectionID, AppRegistrationID: registrationID, InstallationID: strings.TrimSpace(input.InstallationID), AccountLogin: strings.TrimSpace(input.AccountLogin), AccountType: strings.TrimSpace(input.AccountType), AccountID: strings.TrimSpace(input.AccountID), CreatedAt: now, UpdatedAt: now},
+		Connection:            domain.SCMConnection{ID: connectionID, Provider: domain.SCMProviderGitHub, DisplayName: displayName, DeploymentKind: deploymentKind, APIBaseURL: registration.APIBaseURL, WebBaseURL: registration.WebBaseURL, Enabled: *input.Enabled, HealthStatus: domain.SCMConnectionHealthStatusUnknown, CreatedAt: now, UpdatedAt: now},
+		GitHubAppRegistration: &registration,
+		GitHubAppInstallation: &domain.GitHubAppInstallation{ConnectionID: connectionID, AppRegistrationID: registration.ID, InstallationID: strings.TrimSpace(input.InstallationID), AccountLogin: strings.TrimSpace(input.AccountLogin), AccountType: strings.TrimSpace(input.AccountType), AccountID: strings.TrimSpace(input.TargetID), CreatedAt: now, UpdatedAt: now},
 	}
 	return s.connections.CreateGitHubAppInstallationConnection(ctx, detail)
 }
@@ -186,4 +221,11 @@ func (s *SCMAdminService) CreateRegisteredRepository(ctx context.Context, input 
 func (s *SCMAdminService) UpdateRegisteredRepository(ctx context.Context, registration domain.SCMRepositoryRegistration) (domain.SCMRepositoryRegistration, error) {
 	registration.UpdatedAt = s.now().UTC()
 	return s.repositories.Update(ctx, registration)
+}
+
+func inferGitHubDeploymentKind(apiBaseURL string, webBaseURL string) domain.SCMDeploymentKind {
+	if strings.TrimSpace(apiBaseURL) == "https://api.github.com" && strings.TrimSpace(webBaseURL) == "https://github.com" {
+		return domain.SCMDeploymentKindCloud
+	}
+	return domain.SCMDeploymentKindSelfHosted
 }
