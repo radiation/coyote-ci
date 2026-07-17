@@ -25,6 +25,19 @@ func (failWriter) Write([]byte) (int, error) {
 	return 0, errors.New("write failed")
 }
 
+type failAfterWriter struct {
+	failAt int
+	writes int
+}
+
+func (w *failAfterWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == w.failAt {
+		return 0, errors.New("write failed")
+	}
+	return len(p), nil
+}
+
 type failReader struct{}
 
 func (failReader) Read([]byte) (int, error) {
@@ -101,6 +114,7 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 		TriggeredBy:  stringPtr("trigger-user"),
 		ErrorMessage: &errorMessage,
 		PipelineName: &pipeline,
+		SCMStatus:    &api.BuildSCMStatusResponse{Reportable: true, Configured: true, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: stringPtr("abcdef1234567890"), Context: stringPtr("coyote/project-1/job-1"), DesiredState: stringPtr("failure"), DeliveryState: stringPtr("retry_waiting"), Attempts: intPtr(2), NextAttemptAt: stringPtr("2026-07-17T14:30:00Z"), LastError: stringPtr("GitHub rate limit exceeded")},
 		CurrentSteps: []api.BuildCurrentStepResponse{{ID: "step-0", Index: 0, Name: "lint", Status: "running", StartedAt: stringPtr("2026-07-04T00:00:01Z")}, {ID: "step-2", Index: 2, Name: "test", Status: "running", StartedAt: stringPtr("2026-07-04T00:00:02Z")}},
 	}
 	steps := []api.BuildStepResponse{{StepIndex: 1, Name: "test", Status: "failed", ExitCode: intPtr(1), Job: &api.ExecutionJobResponse{Name: jobName}}}
@@ -126,7 +140,7 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 		t.Fatalf("writeBuildStatusHuman failed: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"Project: Project X", "Job:     coyote-ci", "Commit:  abcdef1", "Failed:  step 1 test exited 1", "Running:", "[0] lint", "[2] test"} {
+	for _, want := range []string{"Project: Project X", "Job:     coyote-ci", "Commit:  abcdef1", "Failed:  step 1 test exited 1", "SCM status", "Provider:       github", "Repository:     octo/repo", "Context:        coyote/project-1/job-1", "Desired state:  failure", "Delivery state: retry_waiting", "Attempts:       2", "Next retry:     2026-07-17T14:30:00Z", "Last error:     GitHub rate limit exceeded", "Running:", "[0] lint", "[2] test"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected %q in output, got %s", want, out)
 		}
@@ -145,6 +159,108 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 	}
 	if err := writeBuildStatusHuman(failWriter{}, payload); err == nil {
 		t.Fatal("expected writeBuildStatusHuman to surface write errors")
+	}
+
+	reportableDisabled := payload
+	reportableDisabled.Build.SCMStatus = &api.BuildSCMStatusResponse{
+		Reportable:      false,
+		Configured:      true,
+		Provider:        "github",
+		RepositoryOwner: "octo",
+		RepositoryName:  "repo",
+	}
+	buf.Reset()
+	if err := writeBuildStatusHuman(buf, reportableDisabled); err != nil {
+		t.Fatalf("writeBuildStatusHuman reportable disabled failed: %v", err)
+	}
+	reportableOutput := buf.String()
+	if !strings.Contains(reportableOutput, "Reportable:     no") {
+		t.Fatalf("expected reportable disabled output, got %s", reportableOutput)
+	}
+	if strings.Contains(reportableOutput, "Configured:     no") {
+		t.Fatalf("did not expect configured disabled output when reportable is false, got %s", reportableOutput)
+	}
+
+	configuredDisabled := payload
+	configuredDisabled.Build.SCMStatus = &api.BuildSCMStatusResponse{
+		Reportable:          true,
+		Configured:          false,
+		Provider:            "github",
+		RepositoryOwner:     "octo",
+		RepositoryName:      "repo",
+		CommitSHA:           stringPtr("abcdef1234567890"),
+		Context:             stringPtr("coyote/project-1/job-1"),
+		DesiredState:        stringPtr("pending"),
+		LastSentState:       stringPtr("pending"),
+		DeliveryState:       stringPtr("retry_waiting"),
+		AwaitingReassertion: true,
+		CurrentOwnerBuildID: stringPtr("build-2"),
+	}
+	buf.Reset()
+	if err := writeBuildStatusHuman(buf, configuredDisabled); err != nil {
+		t.Fatalf("writeBuildStatusHuman configured disabled failed: %v", err)
+	}
+	configuredOutput := buf.String()
+	for _, want := range []string{"Configured:     no", "Last sent:      pending", "Delivery state: retry_waiting (awaiting reassertion)", "Current owner:  build-2"} {
+		if !strings.Contains(configuredOutput, want) {
+			t.Fatalf("expected %q in configured disabled output, got %s", want, configuredOutput)
+		}
+	}
+
+	superseded := payload
+	superseded.Build.SCMStatus = &api.BuildSCMStatusResponse{
+		Reportable:          true,
+		Configured:          true,
+		Provider:            "github",
+		RepositoryOwner:     "octo",
+		RepositoryName:      "repo",
+		CommitSHA:           stringPtr("abcdef1234567890"),
+		Context:             stringPtr("coyote/project-1/job-1"),
+		DesiredState:        stringPtr("failure"),
+		DeliveryState:       stringPtr("superseded"),
+		CurrentOwnerBuildID: stringPtr("build-2"),
+		CurrentOwnerAttempt: intPtr(2),
+	}
+	buf.Reset()
+	if err := writeBuildStatusHuman(buf, superseded); err != nil {
+		t.Fatalf("writeBuildStatusHuman superseded failed: %v", err)
+	}
+	supersededOutput := buf.String()
+	for _, want := range []string{"Delivery state: superseded", "Current owner:  build-2 (attempt 2)"} {
+		if !strings.Contains(supersededOutput, want) {
+			t.Fatalf("expected %q in superseded output, got %s", want, supersededOutput)
+		}
+	}
+	for _, unwanted := range []string{"Attempts:       ", "Next retry:     ", "Last error:     "} {
+		if strings.Contains(supersededOutput, unwanted) {
+			t.Fatalf("did not expect %q in superseded output, got %s", unwanted, supersededOutput)
+		}
+	}
+
+	errorSweep := payload
+	errorSweep.Build.SCMStatus = &api.BuildSCMStatusResponse{
+		Reportable:          true,
+		Configured:          true,
+		Provider:            "github",
+		RepositoryOwner:     "octo",
+		RepositoryName:      "repo",
+		CommitSHA:           stringPtr("abcdef1234567890"),
+		Context:             stringPtr("coyote/project-1/job-1"),
+		DesiredState:        stringPtr("failure"),
+		LastSentState:       stringPtr("pending"),
+		DeliveryState:       stringPtr("retry_waiting"),
+		Attempts:            intPtr(2),
+		NextAttemptAt:       stringPtr("2026-07-17T14:30:00Z"),
+		CurrentOwnerBuildID: stringPtr("build-2"),
+		CurrentOwnerAttempt: intPtr(2),
+		LastError:           stringPtr("GitHub rate limit exceeded"),
+	}
+	errorSweep.FailedStep = &buildFailedStepView{Index: 1, Name: "test", Status: "failed"}
+	for failAt := 1; failAt <= 28; failAt++ {
+		writer := &failAfterWriter{failAt: failAt}
+		if err := writeBuildStatusHuman(writer, errorSweep); err == nil {
+			t.Fatalf("expected writeBuildStatusHuman to fail on write %d", failAt)
+		}
 	}
 
 	logsBuf := &bytes.Buffer{}

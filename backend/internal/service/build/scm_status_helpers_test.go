@@ -69,6 +69,10 @@ func (r *helperSCMDeliveryRepo) GetByKey(ctx context.Context, provider string, r
 	return domain.SCMStatusDelivery{}, repository.ErrSCMStatusDeliveryNotFound
 }
 
+type noopSCMStatusReporter struct{}
+
+func (noopSCMStatusReporter) NotifyBuildStatus(context.Context, domain.Build) error { return nil }
+
 type helperPublisher struct {
 	reqs []SCMCommitStatusPublishRequest
 	err  error
@@ -213,6 +217,292 @@ func TestSCMStatusBuildHelpers(t *testing.T) {
 			t.Fatalf("unexpected generic decision: %+v", decision)
 		}
 	})
+}
+
+func TestBuildService_GetBuildSCMStatus(t *testing.T) {
+	now := time.Date(2026, 7, 17, 14, 0, 0, 0, time.UTC)
+	provider := "github"
+	repoOwner := "octo"
+	repoName := "repo"
+	jobID := "job-1"
+	project := &domain.Project{ID: "project-1", Slug: "payments"}
+	baseBuild := domain.Build{
+		ID:            "build-1",
+		ProjectID:     project.ID,
+		JobID:         &jobID,
+		Status:        domain.BuildStatusFailed,
+		AttemptNumber: 1,
+		CreatedAt:     now,
+		Trigger: domain.BuildTrigger{
+			SCMProvider:     &provider,
+			RepositoryOwner: &repoOwner,
+			RepositoryName:  &repoName,
+		},
+		CommitSHA: stringPtr("deadbeef"),
+	}
+
+	t.Run("unlinked returns nil", func(t *testing.T) {
+		svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
+		view, err := svc.GetBuildSCMStatus(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusQueued, CreatedAt: now}, project)
+		if err != nil {
+			t.Fatalf("GetBuildSCMStatus failed: %v", err)
+		}
+		if view != nil {
+			t.Fatalf("expected nil scm status for unlinked build, got %+v", view)
+		}
+	})
+
+	t.Run("linked without authoritative sha is not reportable", func(t *testing.T) {
+		svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
+		build := baseBuild
+		build.CommitSHA = nil
+		view, err := svc.GetBuildSCMStatus(context.Background(), build, project)
+		if err != nil {
+			t.Fatalf("GetBuildSCMStatus failed: %v", err)
+		}
+		if view == nil || view.Reportable || view.CommitSHA != nil || view.Provider != "github" || view.RepositoryOwner != "octo" || view.RepositoryName != "repo" {
+			t.Fatalf("unexpected unresolved-sha view: %+v", view)
+		}
+	})
+
+	t.Run("reportable but publishing disabled exposes derived fields", func(t *testing.T) {
+		svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
+		view, err := svc.GetBuildSCMStatus(context.Background(), baseBuild, project)
+		if err != nil {
+			t.Fatalf("GetBuildSCMStatus failed: %v", err)
+		}
+		if view == nil || !view.Reportable || view.Configured || view.Context == nil || *view.Context != "coyote/payments/job-1" || view.DesiredState == nil || *view.DesiredState != "failure" {
+			t.Fatalf("unexpected disabled view: %+v", view)
+		}
+	})
+
+	t.Run("reportable build without persisted delivery returns derived fields", func(t *testing.T) {
+		svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
+		svc.scmStatusReporter = noopSCMStatusReporter{}
+		svc.scmStatusDeliveryRepo = &helperSCMDeliveryRepo{}
+		view, err := svc.GetBuildSCMStatus(context.Background(), baseBuild, project)
+		if err != nil {
+			t.Fatalf("GetBuildSCMStatus failed: %v", err)
+		}
+		if view == nil || !view.Reportable || !view.Configured || view.DeliveryState != nil {
+			t.Fatalf("unexpected missing-delivery view: %+v", view)
+		}
+	})
+
+	t.Run("delivery lookup errors bubble up", func(t *testing.T) {
+		svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
+		svc.scmStatusReporter = noopSCMStatusReporter{}
+		svc.scmStatusDeliveryRepo = &helperSCMDeliveryRepo{getByKey: func(context.Context, string, string, string, string, string) (domain.SCMStatusDelivery, error) {
+			return domain.SCMStatusDelivery{}, errors.New("boom")
+		}}
+		if _, err := svc.GetBuildSCMStatus(context.Background(), baseBuild, project); err == nil || err.Error() != "boom" {
+			t.Fatalf("expected boom error, got %v", err)
+		}
+	})
+
+	t.Run("missing project context keeps linked build non-reportable", func(t *testing.T) {
+		svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
+		view, err := svc.GetBuildSCMStatus(context.Background(), baseBuild, nil)
+		if err != nil {
+			t.Fatalf("GetBuildSCMStatus failed: %v", err)
+		}
+		if view == nil || view.Reportable || view.Context != nil {
+			t.Fatalf("expected missing context to keep view non-reportable, got %+v", view)
+		}
+	})
+
+	configuredService := func(authoritative domain.SCMStatusDelivery) *BuildService {
+		svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
+		svc.scmStatusReporter = noopSCMStatusReporter{}
+		svc.scmStatusDeliveryRepo = &helperSCMDeliveryRepo{
+			getByKey: func(context.Context, string, string, string, string, string) (domain.SCMStatusDelivery, error) {
+				return authoritative, nil
+			},
+		}
+		return svc
+	}
+
+	cases := []struct {
+		name                 string
+		authoritative        domain.SCMStatusDelivery
+		build                domain.Build
+		wantDeliveryState    string
+		wantAwaitingReassert bool
+		wantLastSentState    *string
+		wantLastError        *string
+		wantOwnerBuildID     *string
+		wantOwnerAttempt     *int
+	}{
+		{
+			name:              "pending state maps directly",
+			authoritative:     domain.SCMStatusDelivery{ID: "delivery-1", BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: now, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: "deadbeef", Context: "coyote/payments/job-1", DesiredState: domain.SCMCommitStatusStatePending, Status: domain.SCMStatusDeliveryStatusPending, MaxAttempts: 3},
+			build:             baseBuild,
+			wantDeliveryState: "pending",
+		},
+		{
+			name:              "sending state maps directly",
+			authoritative:     domain.SCMStatusDelivery{ID: "delivery-1", BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: now, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: "deadbeef", Context: "coyote/payments/job-1", DesiredState: domain.SCMCommitStatusStatePending, Status: domain.SCMStatusDeliveryStatusSending, Attempts: 1, MaxAttempts: 3, ClaimedAt: &now, ClaimExpiresAt: scmTimePtr(now.Add(time.Minute)), ClaimedBy: stringPtr("server-1")},
+			build:             baseBuild,
+			wantDeliveryState: "sending",
+		},
+		{
+			name:              "sent exposes last sent state",
+			authoritative:     domain.SCMStatusDelivery{ID: "delivery-1", BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: now, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: "deadbeef", Context: "coyote/payments/job-1", DesiredState: domain.SCMCommitStatusStateSuccess, LastSentState: scmStatePtr(domain.SCMCommitStatusStateSuccess), Status: domain.SCMStatusDeliveryStatusSent, Attempts: 1, MaxAttempts: 3, SentAt: &now},
+			build:             baseBuild,
+			wantDeliveryState: "sent",
+			wantLastSentState: stringPtr("success"),
+		},
+		{
+			name:              "retry waiting surfaces retry metadata",
+			authoritative:     domain.SCMStatusDelivery{ID: "delivery-1", BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: now, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: "deadbeef", Context: "coyote/payments/job-1", DesiredState: domain.SCMCommitStatusStateFailure, Status: domain.SCMStatusDeliveryStatusRetryWaiting, Attempts: 2, MaxAttempts: 3, NextAttemptAt: scmTimePtr(now.Add(2 * time.Minute)), FailureCategory: scmDeliveryFailureCategoryPtr(domain.SCMStatusDeliveryFailureCategoryRetryable), FailureReason: stringPtr("github_status_http_retryable"), LastError: stringPtr("GitHub rate limit exceeded")},
+			build:             baseBuild,
+			wantDeliveryState: "retry_waiting",
+			wantLastError:     stringPtr("GitHub rate limit exceeded"),
+		},
+		{
+			name:                 "awaiting reassertion is distinguished structurally",
+			authoritative:        domain.SCMStatusDelivery{ID: "delivery-1", BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: now, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: "deadbeef", Context: "coyote/payments/job-1", DesiredState: domain.SCMCommitStatusStatePending, Status: domain.SCMStatusDeliveryStatusRetryWaiting, Attempts: 1, MaxAttempts: 3, NextAttemptAt: scmTimePtr(now.Add(3 * time.Minute)), FailureCategory: scmDeliveryFailureCategoryPtr(domain.SCMStatusDeliveryFailureCategoryRetryable), FailureReason: stringPtr(scmStatusFailureReasonAuthoritativeReassert)},
+			build:                baseBuild,
+			wantDeliveryState:    "retry_waiting",
+			wantAwaitingReassert: true,
+		},
+		{
+			name:              "permanent failure preserves bounded error",
+			authoritative:     domain.SCMStatusDelivery{ID: "delivery-1", BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: now, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: "deadbeef", Context: "coyote/payments/job-1", DesiredState: domain.SCMCommitStatusStateFailure, Status: domain.SCMStatusDeliveryStatusFailedPermanent, Attempts: 1, MaxAttempts: 3, FailureCategory: scmDeliveryFailureCategoryPtr(domain.SCMStatusDeliveryFailureCategoryPermanent), FailureReason: stringPtr("github_status_invalid_input"), LastError: stringPtr("bad request")},
+			build:             baseBuild,
+			wantDeliveryState: "failed_permanent",
+			wantLastError:     stringPtr("bad request"),
+		},
+		{
+			name:              "exhausted failure maps directly",
+			authoritative:     domain.SCMStatusDelivery{ID: "delivery-1", BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: now, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: "deadbeef", Context: "coyote/payments/job-1", DesiredState: domain.SCMCommitStatusStateFailure, Status: domain.SCMStatusDeliveryStatusFailedExhausted, Attempts: 3, MaxAttempts: 3, FailureCategory: scmDeliveryFailureCategoryPtr(domain.SCMStatusDeliveryFailureCategoryRetryable), FailureReason: stringPtr("github_status_http_retryable"), LastError: stringPtr("still failing")},
+			build:             baseBuild,
+			wantDeliveryState: "failed_exhausted",
+			wantLastError:     stringPtr("still failing"),
+		},
+		{
+			name:              "superseded view includes authoritative owner without leaking active retry state",
+			authoritative:     domain.SCMStatusDelivery{ID: "delivery-new", BuildID: "build-2", BuildAttempt: 2, BuildCreatedAt: now.Add(time.Second), Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: "deadbeef", Context: "coyote/payments/job-1", DesiredState: domain.SCMCommitStatusStateSuccess, Status: domain.SCMStatusDeliveryStatusRetryWaiting, Attempts: 4, MaxAttempts: 5, LastSentState: scmStatePtr(domain.SCMCommitStatusStatePending), NextAttemptAt: scmTimePtr(now.Add(2 * time.Minute)), LastError: stringPtr("owner retrying")},
+			build:             baseBuild,
+			wantDeliveryState: "superseded",
+			wantOwnerBuildID:  stringPtr("build-2"),
+			wantOwnerAttempt:  buildSCMIntPtr(2),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := configuredService(tc.authoritative)
+			view, err := svc.GetBuildSCMStatus(context.Background(), tc.build, project)
+			if err != nil {
+				t.Fatalf("GetBuildSCMStatus failed: %v", err)
+			}
+			if view == nil || !view.Reportable || !view.Configured || view.DeliveryState == nil || *view.DeliveryState != tc.wantDeliveryState {
+				t.Fatalf("unexpected scm view: %+v", view)
+			}
+			if view.AwaitingReassertion != tc.wantAwaitingReassert {
+				t.Fatalf("expected awaiting_reassertion=%v, got %+v", tc.wantAwaitingReassert, view)
+			}
+			if !equalStringPtrs(view.LastSentState, tc.wantLastSentState) {
+				t.Fatalf("unexpected last sent state: got=%v want=%v", view.LastSentState, tc.wantLastSentState)
+			}
+			if !equalStringPtrs(view.LastError, tc.wantLastError) {
+				t.Fatalf("unexpected last error: got=%v want=%v", view.LastError, tc.wantLastError)
+			}
+			if !equalStringPtrs(view.CurrentOwnerBuildID, tc.wantOwnerBuildID) {
+				t.Fatalf("unexpected owner build id: got=%v want=%v", view.CurrentOwnerBuildID, tc.wantOwnerBuildID)
+			}
+			if !equalIntPtrs(view.CurrentOwnerAttempt, tc.wantOwnerAttempt) {
+				t.Fatalf("unexpected owner attempt: got=%v want=%v", view.CurrentOwnerAttempt, tc.wantOwnerAttempt)
+			}
+			if tc.wantDeliveryState == "superseded" && (view.Attempts != nil || view.NextAttemptAt != nil || view.LastError != nil || view.LastSentState != nil) {
+				t.Fatalf("superseded view leaked authoritative delivery details: %+v", view)
+			}
+		})
+	}
+
+	t.Run("older attempt resolves shared stream as superseded while current owner remains authoritative", func(t *testing.T) {
+		older := baseBuild
+		older.ID = "build-1"
+		older.AttemptNumber = 1
+		older.Status = domain.BuildStatusQueued
+		newer := baseBuild
+		newer.ID = "build-2"
+		newer.AttemptNumber = 2
+		newer.CreatedAt = now.Add(time.Minute)
+		newer.Status = domain.BuildStatusFailed
+
+		buildRepo := &multiBuildRepository{builds: map[string]domain.Build{"build-1": older, "build-2": newer}, byJob: map[string][]domain.Build{jobID: {newer, older}}}
+		deliveryRepo := memoryrepo.NewSCMStatusDeliveryRepository()
+		reporter, err := NewSCMStatusReporter(SCMStatusReporterConfig{BuildRepo: buildRepo, ProjectRepo: &fakeSCMProjectRepository{project: *project}, DeliveryRepo: deliveryRepo, Publisher: &recordingSCMPublisher{err: timeoutPublisherError{}}})
+		if err != nil {
+			t.Fatalf("new reporter failed: %v", err)
+		}
+		reporter.now = func() time.Time { return now }
+		if notifyErr := reporter.NotifyBuildStatus(context.Background(), older); notifyErr != nil {
+			t.Fatalf("notify older build failed: %v", notifyErr)
+		}
+		reporter.now = func() time.Time { return now.Add(2 * time.Minute) }
+		if notifyErr := reporter.NotifyBuildStatus(context.Background(), newer); notifyErr == nil {
+			t.Fatal("expected retryable publish error for newer build")
+		}
+
+		svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
+		svc.scmStatusReporter = noopSCMStatusReporter{}
+		svc.scmStatusDeliveryRepo = deliveryRepo
+
+		olderView, olderErr := svc.GetBuildSCMStatus(context.Background(), older, project)
+		if olderErr != nil {
+			t.Fatalf("older view failed: %v", olderErr)
+		}
+		if olderView == nil || olderView.DeliveryState == nil || *olderView.DeliveryState != "superseded" {
+			t.Fatalf("expected superseded older view, got %+v", olderView)
+		}
+		if !equalStringPtrs(olderView.CurrentOwnerBuildID, stringPtr("build-2")) || !equalIntPtrs(olderView.CurrentOwnerAttempt, buildSCMIntPtr(2)) {
+			t.Fatalf("unexpected older view owner fields: %+v", olderView)
+		}
+		if olderView.Attempts != nil || olderView.NextAttemptAt != nil || olderView.LastError != nil || olderView.LastSentState != nil {
+			t.Fatalf("older superseded view leaked authoritative delivery details: %+v", olderView)
+		}
+
+		newerView, newerErr := svc.GetBuildSCMStatus(context.Background(), newer, project)
+		if newerErr != nil {
+			t.Fatalf("newer view failed: %v", newerErr)
+		}
+		if newerView == nil || newerView.DeliveryState == nil || *newerView.DeliveryState != "retry_waiting" {
+			t.Fatalf("expected retry_waiting newer view, got %+v", newerView)
+		}
+		if newerView.Attempts == nil || *newerView.Attempts < 1 || newerView.LastError == nil {
+			t.Fatalf("expected active retry metadata on newer view, got %+v", newerView)
+		}
+	})
+}
+
+func scmStatePtr(state domain.SCMCommitStatusState) *domain.SCMCommitStatusState {
+	return &state
+}
+
+func scmTimePtr(value time.Time) *time.Time {
+	copyValue := value.UTC()
+	return &copyValue
+}
+
+func scmDeliveryFailureCategoryPtr(value domain.SCMStatusDeliveryFailureCategory) *domain.SCMStatusDeliveryFailureCategory {
+	return &value
+}
+
+func equalStringPtrs(left *string, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func equalIntPtrs(left *int, right *int) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func TestSCMStatusRecoveryDrainHelpers(t *testing.T) {

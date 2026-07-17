@@ -234,6 +234,56 @@ func TestBuildStatusAndLogsCommands(t *testing.T) {
 	}
 }
 
+func TestBuildStatusCommandJSONIncludesSCMStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.String() {
+		case "/api/builds/build-2":
+			_, _ = w.Write([]byte(`{"data":{"id":"build-2","build_number":13,"project_id":"project-1","project_name":"Coyote CI","job_id":"job-1","job_name":"test","status":"failed","created_at":"2026-07-04T00:00:00Z","started_at":"2026-07-04T00:00:02Z","finished_at":"2026-07-04T00:00:12Z","current_step_index":1,"attempt_number":2,"source_ref":"refs/heads/main","source_commit_sha":"abcdef1234567890","trigger_type":"manual","trigger_kind":"manual","scm_status":{"reportable":true,"configured":true,"provider":"github","repository_owner":"octo","repository_name":"repo","commit_sha":"abcdef1234567890","context":"coyote/payments/job-1","desired_state":"failure","last_sent_state":"pending","delivery_state":"retry_waiting","attempts":2,"next_attempt_at":"2026-07-17T14:30:00Z","last_error":"GitHub rate limit exceeded"},"image":{"source_kind":"external"}}}`))
+		case "/api/builds/build-2/steps":
+			_, _ = w.Write([]byte(`{"data":{"build_id":"build-2","steps":[{"id":"step-1","build_id":"build-2","step_index":1,"name":"test","command":"go test ./...","status":"failed","image":{"source_kind":"external"},"job":{"id":"job-exec-1","build_id":"build-2","step_id":"step-1","name":"test","step_index":1,"attempt_number":1,"status":"failed","image":"golang:1.24","working_dir":"/workspace","command":["go","test","./..."],"command_preview":"go test ./...","environment":{},"spec_version":1,"created_at":"2026-07-04T00:00:00Z","outputs":[]},"started_at":"2026-07-04T00:00:02Z","finished_at":"2026-07-04T00:00:12Z","exit_code":1}]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if err := configStore.Save(config.File{CurrentContext: "local", Contexts: map[string]config.Context{"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"}}}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	creds := credentials.NewMemoryStore()
+	if setErr := creds.Set("context:local", "stored-token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, ConfigStore: configStore, Credentials: creds, Args: []string{"build", "status", "build-2", "--json"}}); code != 0 {
+		t.Fatalf("build status exit code %d stderr=%s", code, stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode build status: %v", err)
+	}
+	buildData, ok := payload["build"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected build object, got %+v", payload)
+	}
+	scmData, ok := buildData["scm_status"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected scm_status object, got %+v", buildData["scm_status"])
+	}
+	if scmData["provider"] != "github" || scmData["repository_owner"] != "octo" || scmData["delivery_state"] != "retry_waiting" || scmData["last_sent_state"] != "pending" {
+		t.Fatalf("unexpected scm status payload: %+v", scmData)
+	}
+	if scmData["attempts"] != float64(2) || scmData["last_error"] != "GitHub rate limit exceeded" || scmData["next_attempt_at"] != "2026-07-17T14:30:00Z" {
+		t.Fatalf("unexpected scm retry payload: %+v", scmData)
+	}
+	if strings.Contains(stdout.String(), "SCM status") {
+		t.Fatalf("unexpected human prose in build status JSON: %s", stdout.String())
+	}
+}
+
 func TestBuildWatchCommandHuman(t *testing.T) {
 	originalPollInterval := buildWatchPollInterval
 	buildWatchPollInterval = 5 * time.Millisecond

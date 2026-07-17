@@ -159,6 +159,12 @@ func (h *BuildHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := toBuildResponse(build, projectLookup[build.ProjectID])
+	scmStatus, err := h.buildService.GetBuildSCMStatus(r.Context(), build, projectLookup[build.ProjectID])
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	resp.SCMStatus = toBuildSCMStatusResponse(scmStatus)
 	jobLookup, err := h.jobLookup(r.Context(), []domain.Build{build})
 	if err != nil {
 		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
