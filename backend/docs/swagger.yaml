@@ -762,6 +762,38 @@ definitions:
       working_dir:
         type: string
     type: object
+  api.CreateGitHubAppInstallationConnectionRequest:
+    properties:
+      account_login:
+        type: string
+      account_type:
+        type: string
+      app_registration_id:
+        type: string
+      display_name:
+        type: string
+      enabled:
+        type: boolean
+      installation_id:
+        type: string
+      target_id:
+        type: string
+    type: object
+  api.CreateGitHubAppRegistrationRequest:
+    properties:
+      api_base_url:
+        type: string
+      app_id:
+        type: string
+      display_name:
+        type: string
+      private_key_secret_ref:
+        type: string
+      web_base_url:
+        type: string
+      webhook_secret_ref:
+        type: string
+    type: object
   api.CreateJobManagedImageConfigRequest:
     properties:
       bot_branch_prefix:
@@ -1000,6 +1032,47 @@ definitions:
       timeout_seconds:
         type: integer
       working_dir:
+        type: string
+    type: object
+  api.GitHubAppInstallationResponse:
+    properties:
+      account_login:
+        type: string
+      account_type:
+        type: string
+      app_registration_id:
+        type: string
+      connection_id:
+        type: string
+      created_at:
+        type: string
+      installation_id:
+        type: string
+      target_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  api.GitHubAppRegistrationEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.GitHubAppRegistrationResponse'
+    type: object
+  api.GitHubAppRegistrationResponse:
+    properties:
+      api_base_url:
+        type: string
+      app_id:
+        type: string
+      created_at:
+        type: string
+      display_name:
+        type: string
+      id:
+        type: string
+      updated_at:
+        type: string
+      web_base_url:
         type: string
     type: object
   api.ImageExecutionResponse:
@@ -1473,6 +1546,42 @@ definitions:
   api.RunJobRequest:
     properties:
       ref:
+        type: string
+    type: object
+  api.SCMConnectionEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.SCMConnectionResponse'
+    type: object
+  api.SCMConnectionResponse:
+    properties:
+      api_base_url:
+        type: string
+      created_at:
+        type: string
+      deployment_kind:
+        type: string
+      display_name:
+        type: string
+      enabled:
+        type: boolean
+      github_app:
+        $ref: '#/definitions/api.GitHubAppRegistrationResponse'
+      github_installation:
+        $ref: '#/definitions/api.GitHubAppInstallationResponse'
+      health_status:
+        type: string
+      health_summary:
+        type: string
+      id:
+        type: string
+      last_health_checked_at:
+        type: string
+      provider:
+        type: string
+      updated_at:
+        type: string
+      web_base_url:
         type: string
     type: object
   api.ServerInfoEnvelope:
@@ -4164,6 +4273,96 @@ paths:
       summary: Update notification defaults
       tags:
       - notifications
+  /settings/scm/connections/github-app-installations:
+    post:
+      consumes:
+      - application/json
+      description: Creates a GitHub App installation-backed SCM connection that references
+        an existing GitHub App registration.
+      parameters:
+      - description: GitHub App installation connection request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.CreateGitHubAppInstallationConnectionRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.SCMConnectionEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Create installation-backed SCM connection
+      tags:
+      - scm
+  /settings/scm/github-apps:
+    post:
+      consumes:
+      - application/json
+      description: Creates reusable GitHub App registration metadata and secret references
+        without creating an installation-backed SCM connection.
+      parameters:
+      - description: GitHub App registration request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.CreateGitHubAppRegistrationRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.GitHubAppRegistrationEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Create GitHub App registration
+      tags:
+      - scm
   /users:
     get:
       description: Lists Coyote users.

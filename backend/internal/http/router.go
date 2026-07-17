@@ -25,6 +25,7 @@ type routerConfig struct {
 	apiTokenHandler          *handler.APITokenHandler
 	projectMembershipHandler *handler.ProjectMembershipHandler
 	workerHandler            *handler.WorkerHandler
+	scmHandler               *handler.SCMHandler
 }
 
 type RouterOption func(*routerConfig)
@@ -74,6 +75,12 @@ func WithProjectMembershipHandler(projectMembershipHandler *handler.ProjectMembe
 func WithWorkerHandler(workerHandler *handler.WorkerHandler) RouterOption {
 	return func(cfg *routerConfig) {
 		cfg.workerHandler = workerHandler
+	}
+}
+
+func WithSCMHandler(scmHandler *handler.SCMHandler) RouterOption {
+	return func(cfg *routerConfig) {
+		cfg.scmHandler = scmHandler
 	}
 }
 
@@ -188,6 +195,22 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 					r.Post("/", cfg.notificationHandler.CreateSubscription)
 					r.Patch("/{subscriptionID}", cfg.notificationHandler.UpdateSubscription)
 					r.Delete("/{subscriptionID}", cfg.notificationHandler.DeleteSubscription)
+				})
+			}
+
+			if cfg.scmHandler != nil {
+				r.Route("/settings/scm", func(r chi.Router) {
+					r.Route("/connections", func(r chi.Router) {
+						r.Get("/", cfg.scmHandler.ListConnections)
+						r.Post("/github-app-installations", cfg.scmHandler.CreateGitHubAppInstallationConnection)
+						r.Get("/{connectionID}", cfg.scmHandler.GetConnection)
+						r.Patch("/{connectionID}", cfg.scmHandler.PatchConnection)
+					})
+					r.Route("/repositories", func(r chi.Router) {
+						r.Get("/", cfg.scmHandler.ListRegisteredRepositories)
+						r.Post("/", cfg.scmHandler.CreateRegisteredRepository)
+						r.Get("/{repositoryID}", cfg.scmHandler.GetRegisteredRepository)
+					})
 				})
 			}
 

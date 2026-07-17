@@ -26,6 +26,7 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"../../../db/migrations/00032_refactor_notification_delivery_identity.sql",
 		"../../../db/migrations/00033_add_claimable_notification_delivery_ledger.sql",
 		"../../../db/migrations/00034_add_notification_recovery_scan_indexes.sql",
+		"../../../db/migrations/00039_add_scm_connection_foundation.sql",
 	}
 
 	var builder strings.Builder
@@ -87,6 +88,11 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"idx_notification_deliveries_retry_waiting_next_attempt_at_id",
 		"idx_notification_deliveries_sending_claim_expires_at_id",
 		"idx_notification_deliveries_build_id",
+		"CREATE TABLE IF NOT EXISTS scm_connections",
+		"CREATE TABLE IF NOT EXISTS github_app_registrations",
+		"CREATE TABLE IF NOT EXISTS github_app_installations",
+		"CREATE TABLE IF NOT EXISTS scm_registered_repositories",
+		"scm_registered_repositories_connection_id_provider_repository_id_key",
 		"CREATE TABLE IF NOT EXISTS notification_targets",
 		"origin TEXT",
 		"notification_targets_origin_semantics_check",

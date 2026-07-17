@@ -233,6 +233,39 @@ func TestNewRouter_ServerInfoAndWorkerRoutes(t *testing.T) {
 	}
 }
 
+func TestNewRouter_SCMRoutes(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	buildHandler := handler.NewBuildHandler(buildSvc)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	jobHandler := handler.NewJobHandler(jobSvc)
+	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	scmHandler := handler.NewSCMHandler(service.NewSCMAdminService(repositorymemory.NewSCMConnectionRepository(), repositorymemory.NewSCMRepositoryRegistrationRepository()))
+
+	router := NewRouter(buildHandler, nil, jobHandler, nil, nil, nil, eventHandler, "", WithSCMHandler(scmHandler))
+
+	connectionsReq := httptest.NewRequest(http.MethodGet, "/api/settings/scm/connections", nil)
+	connectionsRes := httptest.NewRecorder()
+	router.ServeHTTP(connectionsRes, connectionsReq)
+	if connectionsRes.Code != http.StatusOK {
+		t.Fatalf("expected scm connections status %d, got %d body=%s", http.StatusOK, connectionsRes.Code, connectionsRes.Body.String())
+	}
+	if !strings.Contains(connectionsRes.Body.String(), `"connections":[]`) {
+		t.Fatalf("expected empty scm connections list, got %s", connectionsRes.Body.String())
+	}
+
+	repositoriesReq := httptest.NewRequest(http.MethodGet, "/api/settings/scm/repositories", nil)
+	repositoriesRes := httptest.NewRecorder()
+	router.ServeHTTP(repositoriesRes, repositoriesReq)
+	if repositoriesRes.Code != http.StatusOK {
+		t.Fatalf("expected scm repositories status %d, got %d body=%s", http.StatusOK, repositoriesRes.Code, repositoriesRes.Body.String())
+	}
+	if !strings.Contains(repositoriesRes.Body.String(), `"repositories":[]`) {
+		t.Fatalf("expected empty scm repositories list, got %s", repositoriesRes.Body.String())
+	}
+}
+
 func TestNewRouter_ServerInfoRouteUsesAuthMiddlewareWhenConfigured(t *testing.T) {
 	headerRouter := newIdentityTestRouter(auth.ModeHeader, "push-secret", "github-secret", WithServerInfoHandler(handler.NewServerInfoHandler()))
 
