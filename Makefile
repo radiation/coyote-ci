@@ -101,7 +101,7 @@ db-migrate-up:
 	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(MIGRATE_DSN)" up
 
 db-migrate-down-one:
-	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(MIGRATE_DSN)" down-by-one
+	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(MIGRATE_DSN)" down
 
 db-migrate-status:
 	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(MIGRATE_DSN)" status

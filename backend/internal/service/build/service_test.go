@@ -1967,6 +1967,45 @@ func TestBuildService_QueueBuildWithTemplate(t *testing.T) {
 	}
 }
 
+func TestBuildService_QueueBuildWithTemplate_NotifiesSCMReporter(t *testing.T) {
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC()},
+	}
+	reporter := &recordingSCMBuildReporter{}
+	svc := NewBuildServiceFromConfig(repo, nil, nil, BuildServiceConfig{SCMStatusReporter: reporter})
+
+	queuedBuild, queueErr := svc.QueueBuildWithTemplate(context.Background(), "build-1", BuildTemplateDefault)
+	if queueErr != nil {
+		t.Fatalf("queue with template returned error: %v", queueErr)
+	}
+	if len(reporter.builds) != 1 || reporter.builds[0].ID != queuedBuild.ID || reporter.builds[0].Status != domain.BuildStatusQueued {
+		t.Fatalf("expected reporter call for queued build, got %+v", reporter.builds)
+	}
+
+	repo = &fakeBuildRepository{
+		build: domain.Build{ID: "build-2", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC()},
+	}
+	reporter = &recordingSCMBuildReporter{}
+	svc = NewBuildServiceFromConfig(repo, nil, nil, BuildServiceConfig{SCMStatusReporter: reporter})
+	_, customErr := svc.QueueBuildWithTemplateAndCustomSteps(context.Background(), "build-2", BuildTemplateCustom, []QueueBuildCustomStepInput{{Command: "echo ok"}})
+	if customErr != nil {
+		t.Fatalf("queue custom template returned error: %v", customErr)
+	}
+	if len(reporter.builds) != 1 || reporter.builds[0].ID != "build-2" || reporter.builds[0].Status != domain.BuildStatusQueued {
+		t.Fatalf("expected reporter call for custom queued build, got %+v", reporter.builds)
+	}
+
+	errorReporter := &recordingSCMBuildReporter{err: errors.New("boom")}
+	svc = NewBuildServiceFromConfig(repo, nil, nil, BuildServiceConfig{SCMStatusReporter: errorReporter})
+	svc.notifySCMBuildStatus(context.Background(), domain.Build{ID: "build-err", Status: domain.BuildStatusQueued})
+	if len(errorReporter.builds) != 1 || errorReporter.builds[0].ID != "build-err" {
+		t.Fatalf("expected reporter error path to still receive build, got %+v", errorReporter.builds)
+	}
+
+	nilReporterSvc := NewBuildService(repo, nil, nil)
+	nilReporterSvc.notifySCMBuildStatus(context.Background(), domain.Build{ID: "build-nil", Status: domain.BuildStatusQueued})
+}
+
 func TestBuildService_QueueBuildWithTemplate_FailTemplateCommands(t *testing.T) {
 	repo := &fakeBuildRepository{
 		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC()},

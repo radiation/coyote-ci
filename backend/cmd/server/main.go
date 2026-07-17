@@ -26,6 +26,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
 	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
 	platformslack "github.com/radiation/coyote-ci/backend/internal/platform/slack"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	artifactsvc "github.com/radiation/coyote-ci/backend/internal/service/artifact"
@@ -40,6 +41,12 @@ import (
 )
 
 var osServerHostname = os.Hostname
+
+type scmStatusRuntime struct {
+	reporter      buildsvc.BuildSCMStatusReporter
+	reporterImpl  *buildsvc.SCMStatusReporter
+	recoveryDrain *buildsvc.SCMStatusRecoveryDrain
+}
 
 // @title Coyote CI API
 // @version 0.1
@@ -104,6 +111,7 @@ func main() {
 	webhookDeliveryRepo := repositorypostgres.NewWebhookDeliveryRepository(db)
 	artifactTriggerDeliveryRepo := repositorypostgres.NewArtifactTriggerDeliveryRepository(db)
 	notificationDeliveryRepo := repositorypostgres.NewNotificationDeliveryRepository(db)
+	scmStatusDeliveryRepo := repositorypostgres.NewSCMStatusDeliveryRepository(db)
 	notificationSubscriptionRepo := repositorypostgres.NewNotificationSubscriptionRepository(db)
 	notificationPreferenceRepo := repositorypostgres.NewUserNotificationPreferenceRepository(db)
 	notificationInstanceSettingsRepo := repositorypostgres.NewNotificationInstanceSettingsRepository(db)
@@ -143,6 +151,18 @@ func main() {
 	if notificationRecoveryErr != nil {
 		log.Fatalf("failed to configure notification recovery drain: %v", notificationRecoveryErr)
 	}
+	var scmStatusReporter buildsvc.BuildSCMStatusReporter
+	var scmStatusRecoveryDrain *buildsvc.SCMStatusRecoveryDrain
+	scmStatusDeps, err := configureSCMStatusRuntime(cfg, buildRepo, projectRepo, scmStatusDeliveryRepo)
+	if err != nil {
+		log.Fatalf("failed to configure scm status reporting: %v", err)
+	}
+	if scmStatusDeps.reporterImpl != nil {
+		scmStatusRecoveryDrain = scmStatusDeps.recoveryDrain
+		scmStatusReporter = scmStatusDeps.reporter
+	} else {
+		log.Printf("github commit status reporting disabled: GITHUB_STATUS_TOKEN is not configured")
+	}
 	managedImageRefresher := managedimagesvc.NewService(
 		source.NewGitFetcher(),
 		jobManagedImageConfigRepo,
@@ -170,6 +190,7 @@ func main() {
 		ExecutionJobRepo:      executionJobRepo,
 		ExecutionOutputRepo:   executionJobOutputRepo,
 		BuildNotifier:         buildNotificationService,
+		SCMStatusReporter:     scmStatusReporter,
 		RepoFetcher:           source.NewGitFetcher(),
 		ManagedImageRefresher: managedImageRefresher,
 		VersionTagger:         versionTagService,
@@ -342,6 +363,15 @@ func main() {
 			log.Printf("notification recovery drain stopped with error: %v", err)
 		}
 	}()
+	if scmStatusRecoveryDrain != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := scmStatusRecoveryDrain.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Printf("scm status recovery drain stopped with error: %v", err)
+			}
+		}()
+	}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -355,6 +385,35 @@ func main() {
 		log.Fatalf("server failed: %v", err)
 	}
 	wg.Wait()
+}
+
+func configureSCMStatusRuntime(cfg config.Config, buildRepo repository.BuildRepository, projectRepo repository.ProjectRepository, deliveryRepo repository.SCMStatusDeliveryRepository) (scmStatusRuntime, error) {
+	if strings.TrimSpace(cfg.GitHubStatusToken) == "" {
+		return scmStatusRuntime{}, nil
+	}
+
+	reporterImpl, err := buildsvc.NewSCMStatusReporter(buildsvc.SCMStatusReporterConfig{
+		BuildRepo:     buildRepo,
+		ProjectRepo:   projectRepo,
+		DeliveryRepo:  deliveryRepo,
+		Publisher:     buildsvc.NewGitHubCommitStatusClient("", nil, cfg.GitHubStatusToken),
+		PublicBaseURL: cfg.PublicURL,
+		ClaimOwner:    defaultServerNotificationClaimOwner(),
+	})
+	if err != nil {
+		return scmStatusRuntime{}, err
+	}
+
+	recoveryDrain, err := buildsvc.NewSCMStatusRecoveryDrain(buildsvc.SCMStatusRecoveryDrainConfig{
+		Reporter:  reporterImpl,
+		Interval:  cfg.SCMStatusRecoveryInterval,
+		BatchSize: cfg.SCMStatusRecoveryBatchSize,
+	})
+	if err != nil {
+		return scmStatusRuntime{}, err
+	}
+
+	return scmStatusRuntime{reporter: reporterImpl, reporterImpl: reporterImpl, recoveryDrain: recoveryDrain}, nil
 }
 
 func defaultServerNotificationClaimOwner() string {
