@@ -91,44 +91,167 @@ func TestClient_GetInstallationToken_ClassifiesResponses(t *testing.T) {
 
 func TestClient_ProbeInstallation_SuspendedAndHealthy(t *testing.T) {
 	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
+	for _, tc := range []struct {
+		name       string
+		apiBaseURL string
+		wantPath   string
+	}{
+		{name: "github.com", apiBaseURL: "https://api.github.com", wantPath: "/installation/repositories"},
+		{name: "ghes", apiBaseURL: "/api/v3", wantPath: "/api/v3/installation/repositories"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case tc.wantPath:
+					if got := r.URL.Query().Get("per_page"); got != "1" {
+						t.Fatalf("expected per_page=1, got %q", got)
+					}
+					if got := r.Header.Get("Authorization"); got != "Bearer ghs_probe" {
+						t.Fatalf("expected installation token auth, got %q", got)
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"total_count": 1, "repositories": []map[string]any{{"id": 1}}})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			client := NewClient(server.Client())
+			client.cache = map[string]cachedInstallationToken{
+				installationCacheKey(InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: probeBaseURL(server.URL, tc.apiBaseURL), PrivateKeyPEM: privateKeyPEM}): {
+					token: InstallationToken{Value: "ghs_probe", ExpiresAt: time.Now().Add(10 * time.Minute).UTC()},
+				},
+			}
+			result, err := client.ProbeInstallation(context.Background(), InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: probeBaseURL(server.URL, tc.apiBaseURL), PrivateKeyPEM: privateKeyPEM})
+			if err != nil {
+				t.Fatalf("probe installation: %v", err)
+			}
+			if result.InstallationID != "999" {
+				t.Fatalf("unexpected probe result: %+v", result)
+			}
+		})
+	}
+}
+
+func TestClient_ProbeInstallation_Cached401InvalidatesRefreshesAndRetriesOnce(t *testing.T) {
+	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
+	var exchangeCalls atomic.Int32
+	var probeCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/app/installations/999/access_tokens":
+			exchangeCalls.Add(1)
 			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(map[string]string{"token": "ghs_probe", "expires_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)})
-		case "/installation":
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": 999, "account": map[string]any{"login": "octo"}})
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "ghs_fresh", "expires_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)})
+		case "/installation/repositories":
+			probeCalls.Add(1)
+			switch r.Header.Get("Authorization") {
+			case "Bearer ghs_cached":
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"message":"bad credentials"}`))
+			case "Bearer ghs_fresh":
+				_ = json.NewEncoder(w).Encode(map[string]any{"total_count": 0, "repositories": []map[string]any{}})
+			default:
+				t.Fatalf("unexpected auth header %q", r.Header.Get("Authorization"))
+			}
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()
 	client := NewClient(server.Client())
-	result, err := client.ProbeInstallation(context.Background(), InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: server.URL, PrivateKeyPEM: privateKeyPEM})
+	request := InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: server.URL, PrivateKeyPEM: privateKeyPEM}
+	client.cache[installationCacheKey(request)] = cachedInstallationToken{token: InstallationToken{Value: "ghs_cached", ExpiresAt: time.Now().Add(10 * time.Minute).UTC()}}
+
+	result, err := client.ProbeInstallation(context.Background(), request)
 	if err != nil {
 		t.Fatalf("probe installation: %v", err)
 	}
-	if result.InstallationID != "999" || result.AccountLogin != "octo" {
-		t.Fatalf("unexpected probe result: %+v", result)
+	if result.InstallationID != "999" {
+		t.Fatalf("unexpected result: %+v", result)
 	}
+	if exchangeCalls.Load() != 1 || probeCalls.Load() != 2 {
+		t.Fatalf("expected 1 exchange and 2 probe calls, got exchanges=%d probes=%d", exchangeCalls.Load(), probeCalls.Load())
+	}
+}
 
-	suspendedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestClient_ProbeInstallation_Second401ReturnsFailureWithoutExtraRetry(t *testing.T) {
+	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
+	var exchangeCalls atomic.Int32
+	var probeCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/app/installations/999/access_tokens":
+			exchangeCalls.Add(1)
 			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(map[string]string{"token": "ghs_probe", "expires_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)})
-		case "/installation":
-			timestamp := time.Now().UTC().Format(time.RFC3339)
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": 999, "suspended_at": timestamp})
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "ghs_fresh", "expires_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)})
+		case "/installation/repositories":
+			probeCalls.Add(1)
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"message":"bad credentials"}`))
 		default:
 			http.NotFound(w, r)
 		}
 	}))
-	defer suspendedServer.Close()
-	client = NewClient(suspendedServer.Client())
-	_, err = client.ProbeInstallation(context.Background(), InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: suspendedServer.URL, PrivateKeyPEM: privateKeyPEM})
-	if err != ErrInstallationUnavailable {
-		t.Fatalf("expected installation unavailable, got %v", err)
+	defer server.Close()
+	client := NewClient(server.Client())
+	request := InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: server.URL, PrivateKeyPEM: privateKeyPEM}
+	client.cache[installationCacheKey(request)] = cachedInstallationToken{token: InstallationToken{Value: "ghs_cached", ExpiresAt: time.Now().Add(10 * time.Minute).UTC()}}
+
+	_, err := client.ProbeInstallation(context.Background(), request)
+	if err != ErrAuthentication {
+		t.Fatalf("expected auth failure, got %v", err)
+	}
+	if exchangeCalls.Load() != 1 || probeCalls.Load() != 2 {
+		t.Fatalf("expected one refresh retry, got exchanges=%d probes=%d", exchangeCalls.Load(), probeCalls.Load())
+	}
+}
+
+func TestClient_ProbeInstallation_ConditionalInvalidationKeepsNewerToken(t *testing.T) {
+	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
+	request := InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: "https://api.github.com", PrivateKeyPEM: privateKeyPEM}
+	cacheKey := installationCacheKey(request)
+	client := NewClient(nil)
+	oldToken := InstallationToken{Value: "ghs_old", ExpiresAt: time.Now().Add(10 * time.Minute).UTC()}
+	newToken := InstallationToken{Value: "ghs_new", ExpiresAt: time.Now().Add(20 * time.Minute).UTC()}
+	client.cache[cacheKey] = cachedInstallationToken{token: newToken}
+	client.invalidateCachedToken(request, oldToken)
+	entry, ok := client.cache[cacheKey]
+	if !ok || entry.token != newToken {
+		t.Fatalf("expected newer token to remain cached, got %+v exists=%t", entry.token, ok)
+	}
+}
+
+func TestClient_ProbeInstallation_MalformedAndFailureClassification(t *testing.T) {
+	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
+	for _, tc := range []struct {
+		name       string
+		statusCode int
+		headers    map[string]string
+		body       string
+		wantErr    error
+	}{
+		{name: "malformed success", statusCode: http.StatusOK, body: `{"repositories":[]}`, wantErr: ErrMalformedResponse},
+		{name: "installation unavailable", statusCode: http.StatusNotFound, body: `{"message":"not found"}`, wantErr: ErrInstallationUnavailable},
+		{name: "rate limited", statusCode: http.StatusForbidden, headers: map[string]string{"X-RateLimit-Remaining": "0"}, body: `{"message":"API rate limit exceeded"}`, wantErr: ErrRateLimited},
+		{name: "provider unavailable", statusCode: http.StatusBadGateway, body: `{"message":"bad gateway"}`, wantErr: ErrProviderUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				for key, value := range tc.headers {
+					w.Header().Set(key, value)
+				}
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			client := NewClient(server.Client())
+			request := InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: server.URL, PrivateKeyPEM: privateKeyPEM}
+			client.cache[installationCacheKey(request)] = cachedInstallationToken{token: InstallationToken{Value: "ghs_probe", ExpiresAt: time.Now().Add(10 * time.Minute).UTC()}}
+			_, err := client.ProbeInstallation(context.Background(), request)
+			if err != tc.wantErr {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
+			}
+		})
 	}
 }
 
@@ -255,4 +378,11 @@ func TestClient_TokenCacheKeyIsolation(t *testing.T) {
 	if callCount.Load() != int32(len(requests)) {
 		t.Fatalf("expected isolated cache keys, got %d calls", callCount.Load())
 	}
+}
+
+func probeBaseURL(serverURL string, apiBaseURL string) string {
+	if apiBaseURL == "https://api.github.com" {
+		return serverURL
+	}
+	return serverURL + apiBaseURL
 }

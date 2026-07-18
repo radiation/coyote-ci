@@ -40,6 +40,13 @@ type InstallationProbeResult struct {
 	Suspended      bool
 }
 
+type installationProbeResponse struct {
+	TotalCount   *int `json:"total_count"`
+	Repositories []struct {
+		ID int64 `json:"id"`
+	} `json:"repositories"`
+}
+
 type Client struct {
 	httpClient  httpDoer
 	signer      *JWTSigner
@@ -70,6 +77,11 @@ func NewClient(httpClient *http.Client) *Client {
 }
 
 func (c *Client) GetInstallationToken(ctx context.Context, input InstallationTokenRequest) (InstallationToken, error) {
+	token, _, err := c.getInstallationToken(ctx, input)
+	return token, err
+}
+
+func (c *Client) getInstallationToken(ctx context.Context, input InstallationTokenRequest) (InstallationToken, bool, error) {
 	key := installationCacheKey(input)
 	for {
 		now := c.now().UTC()
@@ -77,13 +89,13 @@ func (c *Client) GetInstallationToken(ctx context.Context, input InstallationTok
 		if entry, ok := c.cache[key]; ok && entry.token.Value != "" && now.Before(entry.token.ExpiresAt.Add(-c.refreshSkew)) {
 			token := entry.token
 			c.mu.Unlock()
-			return token, nil
+			return token, true, nil
 		}
 		if waitCh, ok := c.wait[key]; ok {
 			c.mu.Unlock()
 			select {
 			case <-ctx.Done():
-				return InstallationToken{}, ctx.Err()
+				return InstallationToken{}, false, ctx.Err()
 			case <-waitCh:
 				continue
 			}
@@ -104,56 +116,30 @@ func (c *Client) GetInstallationToken(ctx context.Context, input InstallationTok
 		c.mu.Unlock()
 
 		if err != nil {
-			return InstallationToken{}, err
+			return InstallationToken{}, false, err
 		}
-		return token, nil
+		return token, false, nil
 	}
 }
 
 func (c *Client) ProbeInstallation(ctx context.Context, input InstallationTokenRequest) (InstallationProbeResult, error) {
-	token, err := c.GetInstallationToken(ctx, input)
+	token, fromCache, err := c.getInstallationToken(ctx, input)
 	if err != nil {
 		return InstallationProbeResult{}, err
 	}
-	probeURL := strings.TrimRight(strings.TrimSpace(input.APIBaseURL), "/") + "/installation"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
-	if err != nil {
-		return InstallationProbeResult{}, err
+	result, err := c.probeInstallationWithToken(ctx, input, token)
+	if err == nil {
+		return result, nil
 	}
-	setGitHubHeaders(req, token.Value)
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return InstallationProbeResult{}, ctx.Err()
+	if err == ErrAuthentication && fromCache {
+		c.invalidateCachedToken(input, token)
+		refreshedToken, _, refreshErr := c.getInstallationToken(ctx, input)
+		if refreshErr != nil {
+			return InstallationProbeResult{}, refreshErr
 		}
-		return InstallationProbeResult{}, ErrProviderUnavailable
+		return c.probeInstallationWithToken(ctx, input, refreshedToken)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return InstallationProbeResult{}, classifyGitHubResponse(resp)
-	}
-	var payload struct {
-		ID          json.Number `json:"id"`
-		SuspendedAt *string     `json:"suspended_at"`
-		Account     struct {
-			Login string `json:"login"`
-		} `json:"account"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return InstallationProbeResult{}, ErrMalformedResponse
-	}
-	installationID := strings.TrimSpace(payload.ID.String())
-	if installationID == "" {
-		return InstallationProbeResult{}, ErrMalformedResponse
-	}
-	if installationID != strings.TrimSpace(input.InstallationID) {
-		return InstallationProbeResult{}, ErrInstallationUnavailable
-	}
-	suspended := payload.SuspendedAt != nil && strings.TrimSpace(*payload.SuspendedAt) != ""
-	if suspended {
-		return InstallationProbeResult{}, ErrInstallationUnavailable
-	}
-	return InstallationProbeResult{InstallationID: installationID, AccountLogin: strings.TrimSpace(payload.Account.Login), Suspended: false}, nil
+	return InstallationProbeResult{}, err
 }
 
 func (c *Client) exchangeInstallationToken(ctx context.Context, input InstallationTokenRequest) (InstallationToken, error) {
@@ -199,6 +185,19 @@ func (c *Client) exchangeInstallationToken(ctx context.Context, input Installati
 
 func installationCacheKey(input InstallationTokenRequest) string {
 	return strings.TrimSpace(input.AppRegistrationID) + "|" + strings.TrimSpace(input.InstallationID) + "|" + strings.TrimRight(strings.TrimSpace(input.APIBaseURL), "/")
+}
+
+func (c *Client) invalidateCachedToken(input InstallationTokenRequest, failedToken InstallationToken) {
+	key := installationCacheKey(input)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.cache[key]
+	if !ok {
+		return
+	}
+	if entry.token == failedToken {
+		delete(c.cache, key)
+	}
 }
 
 func setGitHubHeaders(req *http.Request, bearerToken string) {
@@ -266,4 +265,33 @@ func readGitHubMessage(body io.Reader) string {
 
 func installationIDString(value int64) string {
 	return strconv.FormatInt(value, 10)
+}
+
+func (c *Client) probeInstallationWithToken(ctx context.Context, input InstallationTokenRequest, token InstallationToken) (InstallationProbeResult, error) {
+	probeURL := strings.TrimRight(strings.TrimSpace(input.APIBaseURL), "/") + "/installation/repositories?per_page=1"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+	if err != nil {
+		return InstallationProbeResult{}, err
+	}
+	setGitHubHeaders(req, token.Value)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return InstallationProbeResult{}, ctx.Err()
+		}
+		return InstallationProbeResult{}, ErrProviderUnavailable
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return InstallationProbeResult{}, classifyGitHubResponse(resp)
+	}
+	var payload installationProbeResponse
+	decodeErr := json.NewDecoder(resp.Body).Decode(&payload)
+	if decodeErr != nil {
+		return InstallationProbeResult{}, ErrMalformedResponse
+	}
+	if payload.TotalCount == nil || payload.Repositories == nil {
+		return InstallationProbeResult{}, ErrMalformedResponse
+	}
+	return InstallationProbeResult{InstallationID: strings.TrimSpace(input.InstallationID), Suspended: false}, nil
 }

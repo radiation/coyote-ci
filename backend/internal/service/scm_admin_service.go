@@ -204,6 +204,9 @@ func (s *SCMAdminService) TestConnection(ctx context.Context, id string) (domain
 	trimmedID := strings.TrimSpace(id)
 	request, detail, err := s.resolveGitHubInstallationTokenRequest(ctx, trimmedID)
 	if err != nil {
+		if isContextCancellation(err) {
+			return domain.SCMConnectionDetail{}, err
+		}
 		if persisted, persistErr := s.persistConnectionHealthFailure(ctx, trimmedID, err); persistErr == nil {
 			return persisted, err
 		}
@@ -211,11 +214,15 @@ func (s *SCMAdminService) TestConnection(ctx context.Context, id string) (domain
 	}
 	probeResult, err := s.githubApps.ProbeInstallation(ctx, request)
 	if err != nil {
-		persisted, persistErr := s.persistConnectionHealthFailure(ctx, detail.Connection.ID, mapSCMGitHubProviderError(err))
-		if persistErr == nil {
-			return persisted, mapSCMGitHubProviderError(err)
+		mappedErr := mapSCMGitHubProviderError(err)
+		if isContextCancellation(mappedErr) {
+			return domain.SCMConnectionDetail{}, mappedErr
 		}
-		return domain.SCMConnectionDetail{}, mapSCMGitHubProviderError(err)
+		persisted, persistErr := s.persistConnectionHealthFailure(ctx, detail.Connection.ID, mappedErr)
+		if persistErr == nil {
+			return persisted, mappedErr
+		}
+		return domain.SCMConnectionDetail{}, mappedErr
 	}
 	if strings.TrimSpace(probeResult.InstallationID) != strings.TrimSpace(detail.GitHubAppInstallation.InstallationID) {
 		persisted, persistErr := s.persistConnectionHealthFailure(ctx, detail.Connection.ID, ErrSCMGitHubInstallationUnavailable)
@@ -371,4 +378,8 @@ func stringPtr(value string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func isContextCancellation(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

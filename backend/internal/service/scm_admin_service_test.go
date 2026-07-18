@@ -361,16 +361,75 @@ func TestSCMAdminService_TestConnectionPersistsHealthyAndUnhealthyStates(t *test
 		t.Fatalf("expected checked at %s, got %+v", now, updated.Connection.LastHealthCheckedAt)
 	}
 
-	githubApps.probeErr = platformgithubapp.ErrRateLimited
-	failed, err := svc.TestConnection(context.Background(), connection.Connection.ID)
-	if err != ErrSCMGitHubRateLimited {
-		t.Fatalf("expected rate limited error, got %v", err)
+	for _, tc := range []struct {
+		name       string
+		probeErr   error
+		wantErr    error
+		wantStatus domain.SCMConnectionHealthStatus
+	}{
+		{name: "auth", probeErr: platformgithubapp.ErrAuthentication, wantErr: ErrSCMGitHubAuthenticationFailed, wantStatus: domain.SCMConnectionHealthStatusUnhealthy},
+		{name: "installation unavailable", probeErr: platformgithubapp.ErrInstallationUnavailable, wantErr: ErrSCMGitHubInstallationUnavailable, wantStatus: domain.SCMConnectionHealthStatusRevoked},
+		{name: "rate limited", probeErr: platformgithubapp.ErrRateLimited, wantErr: ErrSCMGitHubRateLimited, wantStatus: domain.SCMConnectionHealthStatusDegraded},
+		{name: "provider unavailable", probeErr: platformgithubapp.ErrProviderUnavailable, wantErr: ErrSCMGitHubProviderUnavailable, wantStatus: domain.SCMConnectionHealthStatusDegraded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			githubApps.probeErr = tc.probeErr
+			failed, testErr := svc.TestConnection(context.Background(), connection.Connection.ID)
+			if testErr != tc.wantErr {
+				t.Fatalf("expected %v, got %v", tc.wantErr, testErr)
+			}
+			if failed.Connection.HealthStatus != tc.wantStatus {
+				t.Fatalf("expected status %q, got %q", tc.wantStatus, failed.Connection.HealthStatus)
+			}
+			if failed.Connection.HealthSummary == nil || *failed.Connection.HealthSummary != tc.wantErr.Error() {
+				t.Fatalf("expected summary %q, got %+v", tc.wantErr.Error(), failed.Connection.HealthSummary)
+			}
+		})
 	}
-	if failed.Connection.HealthStatus != domain.SCMConnectionHealthStatusDegraded {
-		t.Fatalf("expected degraded status, got %q", failed.Connection.HealthStatus)
-	}
-	if failed.Connection.HealthSummary == nil || *failed.Connection.HealthSummary != ErrSCMGitHubRateLimited.Error() {
-		t.Fatalf("expected degraded summary, got %+v", failed.Connection.HealthSummary)
+}
+
+func TestSCMAdminService_TestConnectionDoesNotPersistCanceledContexts(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		probeErr error
+	}{
+		{name: "canceled", probeErr: context.Canceled},
+		{name: "deadline", probeErr: context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			connectionRepo := repositorymemory.NewSCMConnectionRepository()
+			repositoryRepo := repositorymemory.NewSCMRepositoryRegistrationRepository()
+			svc := NewSCMAdminService(connectionRepo, repositoryRepo)
+			now := time.Date(2026, 7, 17, 21, 0, 0, 0, time.UTC)
+			svc.now = func() time.Time { return now }
+			privateKeyPEM, _ := testServiceRSAPrivateKeyPEM(t)
+			svc.secrets = &fakeSCMSecretResolver{value: privateKeyPEM}
+			githubApps := &fakeSCMGitHubAppClient{probeErr: tc.probeErr}
+			svc.githubApps = githubApps
+			registration, createRegistrationErr := svc.CreateGitHubAppRegistration(context.Background(), CreateGitHubAppRegistrationInput{AppID: "12345", PrivateKeySecretRef: "secret/github/private-key", WebhookSecretRef: "secret/github/webhook"})
+			if createRegistrationErr != nil {
+				t.Fatalf("create registration: %v", createRegistrationErr)
+			}
+			enabled := true
+			connection, createConnectionErr := svc.CreateGitHubAppInstallationConnection(context.Background(), CreateGitHubAppInstallationConnectionInput{AppRegistrationID: registration.ID, DisplayName: "octo", Enabled: &enabled, InstallationID: "999", AccountLogin: "octo", AccountType: "organization", TargetID: "42"})
+			if createConnectionErr != nil {
+				t.Fatalf("create connection: %v", createConnectionErr)
+			}
+			_, testErr := svc.TestConnection(context.Background(), connection.Connection.ID)
+			if testErr != tc.probeErr {
+				t.Fatalf("expected %v, got %v", tc.probeErr, testErr)
+			}
+			stored, getErr := connectionRepo.GetByID(context.Background(), connection.Connection.ID)
+			if getErr != nil {
+				t.Fatalf("get connection: %v", getErr)
+			}
+			if stored.Connection.HealthStatus != domain.SCMConnectionHealthStatusUnknown {
+				t.Fatalf("expected unknown health status, got %q", stored.Connection.HealthStatus)
+			}
+			if stored.Connection.HealthSummary != nil || stored.Connection.LastHealthCheckedAt != nil {
+				t.Fatalf("expected no persisted health metadata, got summary=%+v checkedAt=%+v", stored.Connection.HealthSummary, stored.Connection.LastHealthCheckedAt)
+			}
+		})
 	}
 }
 
