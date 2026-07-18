@@ -3658,6 +3658,62 @@ const docTemplate = `{
                 }
             }
         },
+        "/settings/scm/connections/{connectionID}/test": {
+            "post": {
+                "description": "Verifies GitHub App installation authentication for one SCM connection and updates bounded health metadata.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scm"
+                ],
+                "summary": "Test installation-backed SCM connection",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SCMConnectionEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/settings/scm/github-apps": {
             "get": {
                 "description": "Returns safe GitHub App registration metadata for operator rediscovery.",

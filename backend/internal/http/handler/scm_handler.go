@@ -25,6 +25,7 @@ type scmAdminService interface {
 	CreateGitHubAppRegistration(ctx context.Context, input service.CreateGitHubAppRegistrationInput) (domain.GitHubAppRegistration, error)
 	CreateGitHubAppInstallationConnection(ctx context.Context, input service.CreateGitHubAppInstallationConnectionInput) (domain.SCMConnectionDetail, error)
 	SetConnectionEnabled(ctx context.Context, id string, enabled *bool) (domain.SCMConnectionDetail, error)
+	TestConnection(ctx context.Context, id string) (domain.SCMConnectionDetail, error)
 	ListRegisteredRepositories(ctx context.Context) ([]domain.SCMRepositoryRegistration, error)
 	GetRegisteredRepository(ctx context.Context, id string) (domain.SCMRepositoryRegistration, error)
 	CreateRegisteredRepository(ctx context.Context, input service.CreateSCMRepositoryRegistrationInput) (domain.SCMRepositoryRegistration, error)
@@ -215,6 +216,31 @@ func (h *SCMHandler) PatchConnection(w http.ResponseWriter, r *http.Request) {
 	writeDataJSON(w, http.StatusOK, toSCMConnectionResponse(connection))
 }
 
+// TestConnection godoc
+// @Summary Test installation-backed SCM connection
+// @Description Verifies GitHub App installation authentication for one SCM connection and updates bounded health metadata.
+// @Tags scm
+// @Produce json
+// @Success 200 {object} api.SCMConnectionEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 403 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 502 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /settings/scm/connections/{connectionID}/test [post]
+func (h *SCMHandler) TestConnection(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeAdmin(w, r) {
+		return
+	}
+	connection, err := h.admin.TestConnection(r.Context(), strings.TrimSpace(chi.URLParam(r, "connectionID")))
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeDataJSON(w, http.StatusOK, toSCMConnectionResponse(connection))
+}
+
 func (h *SCMHandler) ListRegisteredRepositories(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeAdmin(w, r) {
 		return
@@ -300,6 +326,8 @@ func (h *SCMHandler) writeError(w http.ResponseWriter, err error) {
 		errors.Is(err, service.ErrSCMGitHubAccountTypeRequired) ||
 		errors.Is(err, service.ErrSCMGitHubTargetIDRequired) ||
 		errors.Is(err, service.ErrSCMConnectionEnabledRequired) ||
+		errors.Is(err, service.ErrSCMConnectionDisabled) ||
+		errors.Is(err, service.ErrSCMGitHubConnectionConfigurationInvalid) ||
 		errors.Is(err, service.ErrSCMRegisteredRepositoryConnectionIDRequired) ||
 		errors.Is(err, service.ErrSCMRegisteredRepositoryProviderRepositoryIDRequired) ||
 		errors.Is(err, service.ErrSCMRegisteredRepositoryOwnerRequired) ||
@@ -308,6 +336,26 @@ func (h *SCMHandler) writeError(w http.ResponseWriter, err error) {
 		errors.Is(err, service.ErrSCMRegisteredRepositoryCloneURLRequired) ||
 		errors.Is(err, service.ErrSCMRegisteredRepositoryWebURLRequired) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrSCMGitHubPrivateKeyResolveFailed) {
+		writeErrorJSON(w, http.StatusBadGateway, "secret_resolution_failed", err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrSCMGitHubAuthenticationFailed) {
+		writeErrorJSON(w, http.StatusBadGateway, "provider_auth_failed", err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrSCMGitHubInstallationUnavailable) {
+		writeErrorJSON(w, http.StatusBadGateway, "installation_unavailable", err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrSCMGitHubRateLimited) {
+		writeErrorJSON(w, http.StatusBadGateway, "rate_limited", err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrSCMGitHubProviderUnavailable) || errors.Is(err, service.ErrSCMGitHubProviderMalformedResponse) {
+		writeErrorJSON(w, http.StatusBadGateway, "provider_unavailable", err.Error())
 		return
 	}
 	writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")

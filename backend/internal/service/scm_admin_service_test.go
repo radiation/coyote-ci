@@ -2,10 +2,17 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	platformgithubapp "github.com/radiation/coyote-ci/backend/internal/platform/githubapp"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 )
@@ -272,4 +279,221 @@ func TestSCMAdminServiceValidationAndReadBranches(t *testing.T) {
 	if inferGitHubDeploymentKind("https://ghe.example/api/v3", "https://ghe.example") != domain.SCMDeploymentKindSelfHosted {
 		t.Fatal("expected non-public GitHub hosts to infer self-hosted deployment")
 	}
+}
+
+func TestSCMAdminService_GitHubInstallationTokenValidationAndSuccess(t *testing.T) {
+	connectionRepo := repositorymemory.NewSCMConnectionRepository()
+	repositoryRepo := repositorymemory.NewSCMRepositoryRegistrationRepository()
+	svc := NewSCMAdminService(connectionRepo, repositoryRepo)
+	now := time.Date(2026, 7, 17, 18, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	privateKeyPEM, _ := testServiceRSAPrivateKeyPEM(t)
+	resolver := &fakeSCMSecretResolver{value: privateKeyPEM}
+	githubApps := &fakeSCMGitHubAppClient{token: platformgithubapp.InstallationToken{Value: "ghs_token", ExpiresAt: now.Add(10 * time.Minute)}}
+	svc.secrets = resolver
+	svc.githubApps = githubApps
+
+	registration, err := svc.CreateGitHubAppRegistration(context.Background(), CreateGitHubAppRegistrationInput{AppID: "12345", PrivateKeySecretRef: "secret/github/private-key", WebhookSecretRef: "secret/github/webhook"})
+	if err != nil {
+		t.Fatalf("create registration: %v", err)
+	}
+	enabled := true
+	connection, err := svc.CreateGitHubAppInstallationConnection(context.Background(), CreateGitHubAppInstallationConnectionInput{AppRegistrationID: registration.ID, DisplayName: "octo", Enabled: &enabled, InstallationID: "999", AccountLogin: "octo", AccountType: "organization", TargetID: "42"})
+	if err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+	token, err := svc.GetGitHubAppInstallationToken(context.Background(), connection.Connection.ID)
+	if err != nil {
+		t.Fatalf("get installation token: %v", err)
+	}
+	if token != "ghs_token" {
+		t.Fatalf("expected token value, got %q", token)
+	}
+	if len(githubApps.tokenRequests) != 1 {
+		t.Fatalf("expected one token request, got %d", len(githubApps.tokenRequests))
+	}
+	if strings.Contains(githubApps.tokenRequests[0].PrivateKeyPEM, "ghs_") {
+		t.Fatal("unexpected token leaked into private key request")
+	}
+
+	disable := false
+	_, setEnabledErr := svc.SetConnectionEnabled(context.Background(), connection.Connection.ID, &disable)
+	if setEnabledErr != nil {
+		t.Fatalf("disable connection: %v", setEnabledErr)
+	}
+	_, err = svc.GetGitHubAppInstallationToken(context.Background(), connection.Connection.ID)
+	if err != ErrSCMConnectionDisabled {
+		t.Fatalf("expected disabled error, got %v", err)
+	}
+}
+
+func TestSCMAdminService_TestConnectionPersistsHealthyAndUnhealthyStates(t *testing.T) {
+	connectionRepo := repositorymemory.NewSCMConnectionRepository()
+	repositoryRepo := repositorymemory.NewSCMRepositoryRegistrationRepository()
+	svc := NewSCMAdminService(connectionRepo, repositoryRepo)
+	now := time.Date(2026, 7, 17, 19, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	privateKeyPEM, _ := testServiceRSAPrivateKeyPEM(t)
+	resolver := &fakeSCMSecretResolver{value: privateKeyPEM}
+	githubApps := &fakeSCMGitHubAppClient{probe: platformgithubapp.InstallationProbeResult{InstallationID: "999", AccountLogin: "octo"}}
+	svc.secrets = resolver
+	svc.githubApps = githubApps
+	registration, err := svc.CreateGitHubAppRegistration(context.Background(), CreateGitHubAppRegistrationInput{AppID: "12345", PrivateKeySecretRef: "secret/github/private-key", WebhookSecretRef: "secret/github/webhook"})
+	if err != nil {
+		t.Fatalf("create registration: %v", err)
+	}
+	enabled := true
+	connection, err := svc.CreateGitHubAppInstallationConnection(context.Background(), CreateGitHubAppInstallationConnectionInput{AppRegistrationID: registration.ID, DisplayName: "octo", Enabled: &enabled, InstallationID: "999", AccountLogin: "octo", AccountType: "organization", TargetID: "42"})
+	if err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+	updated, err := svc.TestConnection(context.Background(), connection.Connection.ID)
+	if err != nil {
+		t.Fatalf("test connection: %v", err)
+	}
+	if updated.Connection.HealthStatus != domain.SCMConnectionHealthStatusHealthy {
+		t.Fatalf("expected healthy status, got %q", updated.Connection.HealthStatus)
+	}
+	if updated.Connection.HealthSummary == nil || *updated.Connection.HealthSummary == "" {
+		t.Fatal("expected health summary")
+	}
+	if updated.Connection.LastHealthCheckedAt == nil || !updated.Connection.LastHealthCheckedAt.Equal(now) {
+		t.Fatalf("expected checked at %s, got %+v", now, updated.Connection.LastHealthCheckedAt)
+	}
+
+	githubApps.probeErr = platformgithubapp.ErrRateLimited
+	failed, err := svc.TestConnection(context.Background(), connection.Connection.ID)
+	if err != ErrSCMGitHubRateLimited {
+		t.Fatalf("expected rate limited error, got %v", err)
+	}
+	if failed.Connection.HealthStatus != domain.SCMConnectionHealthStatusDegraded {
+		t.Fatalf("expected degraded status, got %q", failed.Connection.HealthStatus)
+	}
+	if failed.Connection.HealthSummary == nil || *failed.Connection.HealthSummary != ErrSCMGitHubRateLimited.Error() {
+		t.Fatalf("expected degraded summary, got %+v", failed.Connection.HealthSummary)
+	}
+}
+
+func TestSCMAdminService_TestConnectionRejectsMismatchesAndSanitizesFailures(t *testing.T) {
+	connectionRepo := repositorymemory.NewSCMConnectionRepository()
+	repositoryRepo := repositorymemory.NewSCMRepositoryRegistrationRepository()
+	svc := NewSCMAdminService(connectionRepo, repositoryRepo)
+	now := time.Date(2026, 7, 17, 20, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	privateKeyPEM, _ := testServiceRSAPrivateKeyPEM(t)
+	svc.secrets = &fakeSCMSecretResolver{err: errors.New("missing BEGIN PRIVATE KEY ghs_secret")}
+	svc.githubApps = &fakeSCMGitHubAppClient{}
+	registration, err := svc.CreateGitHubAppRegistration(context.Background(), CreateGitHubAppRegistrationInput{AppID: "12345", PrivateKeySecretRef: "secret/github/private-key", WebhookSecretRef: "secret/github/webhook"})
+	if err != nil {
+		t.Fatalf("create registration: %v", err)
+	}
+	enabled := true
+	connection, err := svc.CreateGitHubAppInstallationConnection(context.Background(), CreateGitHubAppInstallationConnectionInput{AppRegistrationID: registration.ID, DisplayName: "octo", Enabled: &enabled, InstallationID: "999", AccountLogin: "octo", AccountType: "organization", TargetID: "42"})
+	if err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+	failed, err := svc.TestConnection(context.Background(), connection.Connection.ID)
+	if err != ErrSCMGitHubPrivateKeyResolveFailed {
+		t.Fatalf("expected secret resolution failure, got %v", err)
+	}
+	if strings.Contains(err.Error(), "BEGIN PRIVATE KEY") || strings.Contains(err.Error(), "ghs_secret") {
+		t.Fatalf("expected sanitized error, got %v", err)
+	}
+	if failed.Connection.HealthStatus != domain.SCMConnectionHealthStatusUnhealthy {
+		t.Fatalf("expected unhealthy status, got %q", failed.Connection.HealthStatus)
+	}
+
+	svc.secrets = &fakeSCMSecretResolver{value: privateKeyPEM}
+	badDetail := domain.SCMConnectionDetail{
+		Connection:            domain.SCMConnection{ID: "connection-bad", Provider: domain.SCMProviderGitHub, DisplayName: "bad", DeploymentKind: domain.SCMDeploymentKindSelfHosted, APIBaseURL: "https://other.example/api/v3", WebBaseURL: "https://other.example", Enabled: true, HealthStatus: domain.SCMConnectionHealthStatusUnknown, CreatedAt: now, UpdatedAt: now},
+		GitHubAppRegistration: &registration,
+		GitHubAppInstallation: &domain.GitHubAppInstallation{ConnectionID: "connection-bad", AppRegistrationID: registration.ID, InstallationID: "1000", AccountLogin: "octo-two", AccountType: "organization", AccountID: "84", CreatedAt: now, UpdatedAt: now},
+	}
+	svc.connections = &fakeSCMConnectionRepositoryForMismatch{detail: badDetail}
+	_, err = svc.GetGitHubAppInstallationToken(context.Background(), "connection-bad")
+	if err != ErrSCMGitHubConnectionConfigurationInvalid {
+		t.Fatalf("expected config invalid error, got %v", err)
+	}
+}
+
+type fakeSCMSecretResolver struct {
+	value string
+	err   error
+}
+
+func (f *fakeSCMSecretResolver) Resolve(_ context.Context, _ string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.value, nil
+}
+
+func testServiceRSAPrivateKeyPEM(t *testing.T) (string, *rsa.PrivateKey) {
+	t.Helper()
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate rsa key: %v", err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})), privateKey
+}
+
+type fakeSCMConnectionRepositoryForMismatch struct {
+	detail domain.SCMConnectionDetail
+}
+
+func (f *fakeSCMConnectionRepositoryForMismatch) CreateGitHubAppRegistration(context.Context, domain.GitHubAppRegistration) (domain.GitHubAppRegistration, error) {
+	return domain.GitHubAppRegistration{}, nil
+}
+
+func (f *fakeSCMConnectionRepositoryForMismatch) ListGitHubAppRegistrations(context.Context) ([]domain.GitHubAppRegistration, error) {
+	return nil, nil
+}
+
+func (f *fakeSCMConnectionRepositoryForMismatch) GetGitHubAppRegistrationByID(context.Context, string) (domain.GitHubAppRegistration, error) {
+	return domain.GitHubAppRegistration{}, nil
+}
+
+func (f *fakeSCMConnectionRepositoryForMismatch) CreateGitHubAppInstallationConnection(context.Context, domain.SCMConnectionDetail) (domain.SCMConnectionDetail, error) {
+	return domain.SCMConnectionDetail{}, nil
+}
+
+func (f *fakeSCMConnectionRepositoryForMismatch) List(context.Context) ([]domain.SCMConnectionDetail, error) {
+	return nil, nil
+}
+
+func (f *fakeSCMConnectionRepositoryForMismatch) GetByID(context.Context, string) (domain.SCMConnectionDetail, error) {
+	return f.detail, nil
+}
+
+func (f *fakeSCMConnectionRepositoryForMismatch) SetEnabled(context.Context, string, bool, time.Time) (domain.SCMConnectionDetail, error) {
+	return f.detail, nil
+}
+
+func (f *fakeSCMConnectionRepositoryForMismatch) UpdateHealth(context.Context, string, domain.SCMConnectionHealthStatus, *string, time.Time, time.Time) (domain.SCMConnectionDetail, error) {
+	return f.detail, nil
+}
+
+type fakeSCMGitHubAppClient struct {
+	token         platformgithubapp.InstallationToken
+	probe         platformgithubapp.InstallationProbeResult
+	tokenErr      error
+	probeErr      error
+	tokenRequests []platformgithubapp.InstallationTokenRequest
+	probeRequests []platformgithubapp.InstallationTokenRequest
+}
+
+func (f *fakeSCMGitHubAppClient) GetInstallationToken(_ context.Context, input platformgithubapp.InstallationTokenRequest) (platformgithubapp.InstallationToken, error) {
+	f.tokenRequests = append(f.tokenRequests, input)
+	if f.tokenErr != nil {
+		return platformgithubapp.InstallationToken{}, f.tokenErr
+	}
+	return f.token, nil
+}
+
+func (f *fakeSCMGitHubAppClient) ProbeInstallation(_ context.Context, input platformgithubapp.InstallationTokenRequest) (platformgithubapp.InstallationProbeResult, error) {
+	f.probeRequests = append(f.probeRequests, input)
+	if f.probeErr != nil {
+		return platformgithubapp.InstallationProbeResult{}, f.probeErr
+	}
+	return f.probe, nil
 }

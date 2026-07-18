@@ -146,6 +146,22 @@ func (r *SCMConnectionRepository) SetEnabled(_ context.Context, id string, enabl
 	return r.detailLocked(id), nil
 }
 
+func (r *SCMConnectionRepository) UpdateHealth(_ context.Context, id string, status domain.SCMConnectionHealthStatus, summary *string, checkedAt time.Time, updatedAt time.Time) (domain.SCMConnectionDetail, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	connection, ok := r.connections[id]
+	if !ok {
+		return domain.SCMConnectionDetail{}, repository.ErrSCMConnectionNotFound
+	}
+	connection.HealthStatus = status
+	connection.HealthSummary = summary
+	checkedAtUTC := checkedAt.UTC()
+	connection.LastHealthCheckedAt = &checkedAtUTC
+	connection.UpdatedAt = updatedAt.UTC()
+	r.connections[id] = connection
+	return r.detailLocked(id), nil
+}
+
 func (r *SCMConnectionRepository) detailLocked(connectionID string) domain.SCMConnectionDetail {
 	connection := r.connections[connectionID]
 	installation, ok := r.githubAppInstallations[connectionID]

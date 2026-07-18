@@ -233,6 +233,23 @@ func (r *SCMConnectionRepository) SetEnabled(ctx context.Context, id string, ena
 	return r.GetByID(ctx, returnedID)
 }
 
+func (r *SCMConnectionRepository) UpdateHealth(ctx context.Context, id string, status domain.SCMConnectionHealthStatus, summary *string, checkedAt time.Time, updatedAt time.Time) (domain.SCMConnectionDetail, error) {
+	const query = `
+		UPDATE scm_connections
+		SET health_status = $2, health_summary = $3, last_health_checked_at = $4, updated_at = $5
+		WHERE id = $1
+		RETURNING id
+	`
+	var returnedID string
+	if err := r.db.QueryRowContext(ctx, query, id, string(status), summary, checkedAt.UTC(), updatedAt.UTC()).Scan(&returnedID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.SCMConnectionDetail{}, repository.ErrSCMConnectionNotFound
+		}
+		return domain.SCMConnectionDetail{}, err
+	}
+	return r.GetByID(ctx, returnedID)
+}
+
 func getGitHubAppRegistrationForUpdate(ctx context.Context, tx *sql.Tx, registrationID string) (domain.GitHubAppRegistration, error) {
 	const query = `
 		SELECT id, app_id, display_name, api_base_url, web_base_url, private_key_secret_ref, webhook_secret_ref, created_at, updated_at
