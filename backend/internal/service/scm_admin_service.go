@@ -212,7 +212,7 @@ func (s *SCMAdminService) TestConnection(ctx context.Context, id string) (domain
 		}
 		return domain.SCMConnectionDetail{}, err
 	}
-	probeResult, err := s.githubApps.ProbeInstallation(ctx, request)
+	_, err = s.githubApps.ProbeInstallation(ctx, request)
 	if err != nil {
 		mappedErr := mapSCMGitHubProviderError(err)
 		if isContextCancellation(mappedErr) {
@@ -224,14 +224,8 @@ func (s *SCMAdminService) TestConnection(ctx context.Context, id string) (domain
 		}
 		return domain.SCMConnectionDetail{}, mappedErr
 	}
-	if strings.TrimSpace(probeResult.InstallationID) != strings.TrimSpace(detail.GitHubAppInstallation.InstallationID) {
-		persisted, persistErr := s.persistConnectionHealthFailure(ctx, detail.Connection.ID, ErrSCMGitHubInstallationUnavailable)
-		if persistErr == nil {
-			return persisted, ErrSCMGitHubInstallationUnavailable
-		}
-		return domain.SCMConnectionDetail{}, ErrSCMGitHubInstallationUnavailable
-	}
-	return s.connections.UpdateHealth(ctx, detail.Connection.ID, domain.SCMConnectionHealthStatusHealthy, stringPtr("github app installation authentication succeeded"), s.now().UTC(), s.now().UTC())
+	now := s.now().UTC()
+	return s.connections.UpdateHealth(ctx, detail.Connection.ID, domain.SCMConnectionHealthStatusHealthy, stringPtr("github app installation authentication succeeded"), now, now)
 }
 
 func (s *SCMAdminService) ListRegisteredRepositories(ctx context.Context) ([]domain.SCMRepositoryRegistration, error) {
@@ -337,7 +331,8 @@ func (s *SCMAdminService) resolveGitHubInstallationTokenRequest(ctx context.Cont
 
 func (s *SCMAdminService) persistConnectionHealthFailure(ctx context.Context, id string, err error) (domain.SCMConnectionDetail, error) {
 	status, summary := scmConnectionHealthFailure(err)
-	return s.connections.UpdateHealth(ctx, id, status, stringPtr(summary), s.now().UTC(), s.now().UTC())
+	now := s.now().UTC()
+	return s.connections.UpdateHealth(ctx, id, status, stringPtr(summary), now, now)
 }
 
 func scmConnectionHealthFailure(err error) (domain.SCMConnectionHealthStatus, string) {

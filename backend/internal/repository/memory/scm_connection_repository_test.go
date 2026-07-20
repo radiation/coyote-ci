@@ -105,6 +105,15 @@ func TestSCMConnectionRepository_ListAndGetGitHubAppRegistrations(t *testing.T) 
 	}
 }
 
+func TestSCMConnectionRepository_UpdateHealthMissingConnection(t *testing.T) {
+	repo := NewSCMConnectionRepository()
+	now := time.Now().UTC()
+	_, err := repo.UpdateHealth(context.Background(), "missing", domain.SCMConnectionHealthStatusHealthy, stringPointer("ok"), now, now)
+	if !errors.Is(err, repository.ErrSCMConnectionNotFound) {
+		t.Fatalf("expected missing connection error, got %v", err)
+	}
+}
+
 func TestSCMConnectionRepository_ReusesMatchingGitHubAppRegistrationAndScopesInstallationUniqueness(t *testing.T) {
 	repo := NewSCMConnectionRepository()
 	now := time.Now().UTC()

@@ -55,6 +55,9 @@ func TestJWTSigner_SignsRS256WithExpectedClaims(t *testing.T) {
 
 func TestJWTSigner_PrivateKeyValidation(t *testing.T) {
 	signer := NewJWTSigner()
+	if _, err := signer.Sign("", "not-used"); err != ErrAuthentication {
+		t.Fatalf("expected blank app id auth error, got %v", err)
+	}
 	if _, err := signer.Sign("12345", ""); err != ErrPrivateKeyMissing {
 		t.Fatalf("expected missing key error, got %v", err)
 	}
@@ -72,6 +75,36 @@ func TestJWTSigner_PrivateKeyValidation(t *testing.T) {
 	ecPEM := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: ecDER}))
 	if _, err := signer.Sign("12345", ecPEM); err != ErrPrivateKeyNotRSA {
 		t.Fatalf("expected non-rsa key error, got %v", err)
+	}
+}
+
+func TestJWTSigner_SupportsPKCS8AndRejectsInvalidSignatures(t *testing.T) {
+	pkcs1PEM, privateKey := testRSAPrivateKeyPEM(t)
+	parsedKey, parseErr := parseRSAPrivateKey(pkcs1PEM)
+	if parseErr != nil {
+		t.Fatalf("parse pkcs1 private key: %v", parseErr)
+	}
+	pkcs8DER, marshalErr := x509.MarshalPKCS8PrivateKey(parsedKey)
+	if marshalErr != nil {
+		t.Fatalf("marshal pkcs8 private key: %v", marshalErr)
+	}
+	pkcs8PEM := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8DER}))
+	signer := NewJWTSigner()
+	token, signErr := signer.Sign("12345", pkcs8PEM)
+	if signErr != nil {
+		t.Fatalf("sign pkcs8 jwt: %v", signErr)
+	}
+	if err := verifyJWTSignature(token, &privateKey.PublicKey); err != nil {
+		t.Fatalf("verify pkcs8 signature: %v", err)
+	}
+	if err := verifyJWTSignature("bad.token", &privateKey.PublicKey); err == nil {
+		t.Fatal("expected invalid token verification failure")
+	}
+	parts := strings.Split(token, ".")
+	tamperedClaims := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"tampered"}`))
+	tampered := parts[0] + "." + tamperedClaims + "." + parts[2]
+	if err := verifyJWTSignature(tampered, &privateKey.PublicKey); err == nil {
+		t.Fatal("expected tampered token verification failure")
 	}
 }
 

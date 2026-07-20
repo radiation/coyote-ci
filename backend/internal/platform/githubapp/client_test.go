@@ -3,8 +3,11 @@ package githubapp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -89,20 +92,21 @@ func TestClient_GetInstallationToken_ClassifiesResponses(t *testing.T) {
 	}
 }
 
-func TestClient_ProbeInstallation_SuspendedAndHealthy(t *testing.T) {
+func TestClient_ProbeInstallation_UsesDocumentedEndpointsAndPopulatesIdentity(t *testing.T) {
 	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
 	for _, tc := range []struct {
 		name       string
 		apiBaseURL string
-		wantPath   string
+		wantRepo   string
+		wantDetail string
 	}{
-		{name: "github.com", apiBaseURL: "https://api.github.com", wantPath: "/installation/repositories"},
-		{name: "ghes", apiBaseURL: "/api/v3", wantPath: "/api/v3/installation/repositories"},
+		{name: "github.com", apiBaseURL: "https://api.github.com", wantRepo: "/installation/repositories", wantDetail: "/app/installations/999"},
+		{name: "ghes", apiBaseURL: "/api/v3", wantRepo: "/api/v3/installation/repositories", wantDetail: "/api/v3/app/installations/999"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
-				case tc.wantPath:
+				case tc.wantRepo:
 					if got := r.URL.Query().Get("per_page"); got != "1" {
 						t.Fatalf("expected per_page=1, got %q", got)
 					}
@@ -110,6 +114,11 @@ func TestClient_ProbeInstallation_SuspendedAndHealthy(t *testing.T) {
 						t.Fatalf("expected installation token auth, got %q", got)
 					}
 					_ = json.NewEncoder(w).Encode(map[string]any{"total_count": 1, "repositories": []map[string]any{{"id": 1}}})
+				case tc.wantDetail:
+					if got := r.Header.Get("Authorization"); got == "" || got == "Bearer ghs_probe" {
+						t.Fatalf("expected app jwt auth, got %q", got)
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 999, "account": map[string]any{"login": "octo"}})
 				default:
 					http.NotFound(w, r)
 				}
@@ -125,8 +134,41 @@ func TestClient_ProbeInstallation_SuspendedAndHealthy(t *testing.T) {
 			if err != nil {
 				t.Fatalf("probe installation: %v", err)
 			}
-			if result.InstallationID != "999" {
+			if result.InstallationID != "999" || result.AccountLogin != "octo" || result.Suspended {
 				t.Fatalf("unexpected probe result: %+v", result)
+			}
+		})
+	}
+}
+
+func TestClient_ProbeInstallation_RejectsSuspendedAndMismatchedInstallation(t *testing.T) {
+	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
+	for _, tc := range []struct {
+		name            string
+		installationDoc map[string]any
+		wantErr         error
+	}{
+		{name: "suspended", installationDoc: map[string]any{"id": 999, "suspended_at": time.Now().UTC().Format(time.RFC3339), "account": map[string]any{"login": "octo"}}, wantErr: ErrInstallationUnavailable},
+		{name: "mismatched id", installationDoc: map[string]any{"id": 1000, "account": map[string]any{"login": "octo"}}, wantErr: ErrInstallationUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/installation/repositories":
+					_ = json.NewEncoder(w).Encode(map[string]any{"total_count": 1, "repositories": []map[string]any{{"id": 1}}})
+				case "/app/installations/999":
+					_ = json.NewEncoder(w).Encode(tc.installationDoc)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			client := NewClient(server.Client())
+			request := InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: server.URL, PrivateKeyPEM: privateKeyPEM}
+			client.cache[installationCacheKey(request)] = cachedInstallationToken{token: InstallationToken{Value: "ghs_probe", ExpiresAt: time.Now().Add(10 * time.Minute).UTC()}}
+			_, err := client.ProbeInstallation(context.Background(), request)
+			if err != tc.wantErr {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
 			}
 		})
 	}
@@ -153,6 +195,8 @@ func TestClient_ProbeInstallation_Cached401InvalidatesRefreshesAndRetriesOnce(t 
 			default:
 				t.Fatalf("unexpected auth header %q", r.Header.Get("Authorization"))
 			}
+		case "/app/installations/999":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 999, "account": map[string]any{"login": "octo"}})
 		default:
 			http.NotFound(w, r)
 		}
@@ -188,6 +232,8 @@ func TestClient_ProbeInstallation_Second401ReturnsFailureWithoutExtraRetry(t *te
 			probeCalls.Add(1)
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"message":"bad credentials"}`))
+		case "/app/installations/999":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 999, "account": map[string]any{"login": "octo"}})
 		default:
 			http.NotFound(w, r)
 		}
@@ -228,20 +274,33 @@ func TestClient_ProbeInstallation_MalformedAndFailureClassification(t *testing.T
 		statusCode int
 		headers    map[string]string
 		body       string
+		detailBody map[string]any
 		wantErr    error
 	}{
-		{name: "malformed success", statusCode: http.StatusOK, body: `{"repositories":[]}`, wantErr: ErrMalformedResponse},
+		{name: "malformed repositories", statusCode: http.StatusOK, body: `{"repositories":[]}`, wantErr: ErrMalformedResponse},
 		{name: "installation unavailable", statusCode: http.StatusNotFound, body: `{"message":"not found"}`, wantErr: ErrInstallationUnavailable},
 		{name: "rate limited", statusCode: http.StatusForbidden, headers: map[string]string{"X-RateLimit-Remaining": "0"}, body: `{"message":"API rate limit exceeded"}`, wantErr: ErrRateLimited},
 		{name: "provider unavailable", statusCode: http.StatusBadGateway, body: `{"message":"bad gateway"}`, wantErr: ErrProviderUnavailable},
+		{name: "malformed installation details", statusCode: http.StatusOK, body: `{"total_count":0,"repositories":[]}`, detailBody: map[string]any{"id": 999}, wantErr: ErrMalformedResponse},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				for key, value := range tc.headers {
-					w.Header().Set(key, value)
+				switch r.URL.Path {
+				case "/installation/repositories":
+					for key, value := range tc.headers {
+						w.Header().Set(key, value)
+					}
+					w.WriteHeader(tc.statusCode)
+					_, _ = w.Write([]byte(tc.body))
+				case "/app/installations/999":
+					if tc.detailBody == nil {
+						_ = json.NewEncoder(w).Encode(map[string]any{"id": 999, "account": map[string]any{"login": "octo"}})
+						return
+					}
+					_ = json.NewEncoder(w).Encode(tc.detailBody)
+				default:
+					http.NotFound(w, r)
 				}
-				w.WriteHeader(tc.statusCode)
-				_, _ = w.Write([]byte(tc.body))
 			}))
 			defer server.Close()
 			client := NewClient(server.Client())
@@ -252,6 +311,28 @@ func TestClient_ProbeInstallation_MalformedAndFailureClassification(t *testing.T
 				t.Fatalf("expected %v, got %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestClient_ProbeInstallation_BoundsLargeSuccessBodyReads(t *testing.T) {
+	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/installation/repositories":
+			_, _ = w.Write([]byte(`{"total_count":1,"repositories":[{"id":1,"name":"` + strings.Repeat("a", maxGitHubProbeResponseBytes) + `"}]}`))
+		case "/app/installations/999":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 999, "account": map[string]any{"login": "octo"}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := NewClient(server.Client())
+	request := InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: server.URL, PrivateKeyPEM: privateKeyPEM}
+	client.cache[installationCacheKey(request)] = cachedInstallationToken{token: InstallationToken{Value: "ghs_probe", ExpiresAt: time.Now().Add(10 * time.Minute).UTC()}}
+	_, err := client.ProbeInstallation(context.Background(), request)
+	if err != ErrMalformedResponse {
+		t.Fatalf("expected malformed response for oversized success body, got %v", err)
 	}
 }
 
@@ -380,9 +461,74 @@ func TestClient_TokenCacheKeyIsolation(t *testing.T) {
 	}
 }
 
+func TestClient_ResponseHelpers(t *testing.T) {
+	if got := readGitHubMessage(strings.NewReader(`{"message":"Bad Credentials"}`)); got != "bad credentials" {
+		t.Fatalf("expected lower-cased github message, got %q", got)
+	}
+	if got := readGitHubMessage(strings.NewReader(`{"other":"value"}`)); got != "" {
+		t.Fatalf("expected empty message for valid json without message field, got %q", got)
+	}
+	if got := readGitHubMessage(strings.NewReader("  Plain Failure  ")); got != "plain failure" {
+		t.Fatalf("expected lower-cased raw body, got %q", got)
+	}
+
+	var payload map[string]any
+	decodeErr := decodeGitHubJSON(strings.NewReader(`{"message":"abcdefghijklmnopqrstuvwxyz"}`), 8, &payload)
+	if decodeErr == nil {
+		t.Fatal("expected bounded decode failure")
+	}
+
+	if !isRateLimited(&http.Response{StatusCode: http.StatusTooManyRequests, Header: make(http.Header)}, "") {
+		t.Fatal("expected 429 to be treated as rate limited")
+	}
+	resp := &http.Response{StatusCode: http.StatusForbidden, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"message":"Installation suspended"}`))}
+	if got := classifyGitHubResponse(resp); got != ErrInstallationUnavailable {
+		t.Fatalf("expected suspended installation classification, got %v", got)
+	}
+	resp = &http.Response{StatusCode: http.StatusForbidden, Header: http.Header{"Retry-After": []string{"60"}}, Body: io.NopCloser(strings.NewReader(`{"message":"slow down"}`))}
+	if got := classifyGitHubResponse(resp); got != ErrRateLimited {
+		t.Fatalf("expected retry-after classification, got %v", got)
+	}
+	resp = &http.Response{StatusCode: http.StatusForbidden, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"message":"Bad credentials"}`))}
+	if got := classifyGitHubResponse(resp); got != ErrAuthentication {
+		t.Fatalf("expected auth classification, got %v", got)
+	}
+}
+
+func TestClient_GetInstallationToken_TransportErrorBranches(t *testing.T) {
+	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
+	request := InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: "https://api.github.com", PrivateKeyPEM: privateKeyPEM}
+
+	client := NewClient(nil)
+	client.httpClient = stubHTTPDoer(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial tcp: connection refused")
+	})
+	_, err := client.GetInstallationToken(context.Background(), request)
+	if err != ErrProviderUnavailable {
+		t.Fatalf("expected provider unavailable, got %v", err)
+	}
+
+	canceledClient := NewClient(nil)
+	canceledClient.httpClient = stubHTTPDoer(func(req *http.Request) (*http.Response, error) {
+		return nil, req.Context().Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = canceledClient.GetInstallationToken(ctx, request)
+	if err != context.Canceled {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+}
+
 func probeBaseURL(serverURL string, apiBaseURL string) string {
 	if apiBaseURL == "https://api.github.com" {
 		return serverURL
 	}
 	return serverURL + apiBaseURL
+}
+
+type stubHTTPDoer func(req *http.Request) (*http.Response, error)
+
+func (f stubHTTPDoer) Do(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

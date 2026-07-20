@@ -17,6 +17,9 @@ const defaultAPIVersion = "2022-11-28"
 
 var defaultTokenRefreshSkew = time.Minute
 
+const maxGitHubProbeResponseBytes = 64 << 10
+const maxGitHubTokenResponseBytes = 64 << 10
+
 type httpDoer interface {
 	Do(req *http.Request) (*http.Response, error)
 }
@@ -45,6 +48,14 @@ type installationProbeResponse struct {
 	Repositories []struct {
 		ID int64 `json:"id"`
 	} `json:"repositories"`
+}
+
+type installationDetailsResponse struct {
+	ID          json.Number `json:"id"`
+	SuspendedAt *string     `json:"suspended_at"`
+	Account     struct {
+		Login string `json:"login"`
+	} `json:"account"`
 }
 
 type Client struct {
@@ -169,7 +180,7 @@ func (c *Client) exchangeInstallationToken(ctx context.Context, input Installati
 		Token     string `json:"token"`
 		ExpiresAt string `json:"expires_at"`
 	}
-	decodeErr := json.NewDecoder(resp.Body).Decode(&payload)
+	decodeErr := decodeGitHubJSON(resp.Body, maxGitHubTokenResponseBytes, &payload)
 	if decodeErr != nil {
 		return InstallationToken{}, ErrMalformedResponse
 	}
@@ -267,6 +278,10 @@ func installationIDString(value int64) string {
 	return strconv.FormatInt(value, 10)
 }
 
+func decodeGitHubJSON(body io.Reader, maxBytes int64, target any) error {
+	return json.NewDecoder(io.LimitReader(body, maxBytes)).Decode(target)
+}
+
 func (c *Client) probeInstallationWithToken(ctx context.Context, input InstallationTokenRequest, token InstallationToken) (InstallationProbeResult, error) {
 	probeURL := strings.TrimRight(strings.TrimSpace(input.APIBaseURL), "/") + "/installation/repositories?per_page=1"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
@@ -286,12 +301,55 @@ func (c *Client) probeInstallationWithToken(ctx context.Context, input Installat
 		return InstallationProbeResult{}, classifyGitHubResponse(resp)
 	}
 	var payload installationProbeResponse
-	decodeErr := json.NewDecoder(resp.Body).Decode(&payload)
-	if decodeErr != nil {
+	if err := decodeGitHubJSON(resp.Body, maxGitHubProbeResponseBytes, &payload); err != nil {
 		return InstallationProbeResult{}, ErrMalformedResponse
 	}
 	if payload.TotalCount == nil || payload.Repositories == nil {
 		return InstallationProbeResult{}, ErrMalformedResponse
 	}
-	return InstallationProbeResult{InstallationID: strings.TrimSpace(input.InstallationID), Suspended: false}, nil
+	return c.fetchInstallationDetails(ctx, input)
+}
+
+func (c *Client) fetchInstallationDetails(ctx context.Context, input InstallationTokenRequest) (InstallationProbeResult, error) {
+	jwtToken, err := c.signer.Sign(input.AppID, input.PrivateKeyPEM)
+	if err != nil {
+		return InstallationProbeResult{}, err
+	}
+	probeURL := strings.TrimRight(strings.TrimSpace(input.APIBaseURL), "/") + "/app/installations/" + url.PathEscape(strings.TrimSpace(input.InstallationID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+	if err != nil {
+		return InstallationProbeResult{}, err
+	}
+	setGitHubHeaders(req, jwtToken)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return InstallationProbeResult{}, ctx.Err()
+		}
+		return InstallationProbeResult{}, ErrProviderUnavailable
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return InstallationProbeResult{}, classifyGitHubResponse(resp)
+	}
+	var payload installationDetailsResponse
+	if err := decodeGitHubJSON(resp.Body, maxGitHubProbeResponseBytes, &payload); err != nil {
+		return InstallationProbeResult{}, ErrMalformedResponse
+	}
+	installationID := strings.TrimSpace(payload.ID.String())
+	if installationID == "" {
+		return InstallationProbeResult{}, ErrMalformedResponse
+	}
+	if installationID != strings.TrimSpace(input.InstallationID) {
+		return InstallationProbeResult{}, ErrInstallationUnavailable
+	}
+	accountLogin := strings.TrimSpace(payload.Account.Login)
+	if accountLogin == "" {
+		return InstallationProbeResult{}, ErrMalformedResponse
+	}
+	suspended := payload.SuspendedAt != nil && strings.TrimSpace(*payload.SuspendedAt) != ""
+	if suspended {
+		return InstallationProbeResult{}, ErrInstallationUnavailable
+	}
+	return InstallationProbeResult{InstallationID: installationID, AccountLogin: accountLogin, Suspended: false}, nil
 }

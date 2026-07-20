@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -308,6 +309,35 @@ func TestSCMHandler_TestConnectionRoute(t *testing.T) {
 	}
 	if !bytes.Contains(res.Body.Bytes(), []byte(`"code":"provider_auth_failed"`)) {
 		t.Fatalf("expected provider_auth_failed code, got %s", res.Body.String())
+	}
+}
+
+func TestSCMHandler_TestConnectionRoute_ErrorMappings(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		err      error
+		wantCode int
+		wantBody string
+	}{
+		{name: "secret resolution failed", err: service.ErrSCMGitHubPrivateKeyResolveFailed, wantCode: http.StatusBadGateway, wantBody: `"code":"secret_resolution_failed"`},
+		{name: "installation unavailable", err: service.ErrSCMGitHubInstallationUnavailable, wantCode: http.StatusBadGateway, wantBody: `"code":"installation_unavailable"`},
+		{name: "rate limited", err: service.ErrSCMGitHubRateLimited, wantCode: http.StatusBadGateway, wantBody: `"code":"rate_limited"`},
+		{name: "provider unavailable", err: service.ErrSCMGitHubProviderUnavailable, wantCode: http.StatusBadGateway, wantBody: `"code":"provider_unavailable"`},
+		{name: "provider malformed", err: service.ErrSCMGitHubProviderMalformedResponse, wantCode: http.StatusBadGateway, wantBody: `"code":"provider_unavailable"`},
+		{name: "internal", err: errors.New("boom"), wantCode: http.StatusInternalServerError, wantBody: `"code":"internal_error"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewSCMHandler(&fakeSCMAdminServiceForHandler{testConnectionErr: tc.err})
+			req := addURLParam(httptest.NewRequest(http.MethodPost, "/settings/scm/connections/connection-1/test", nil), "connectionID", "connection-1")
+			res := httptest.NewRecorder()
+			h.TestConnection(res, req)
+			if res.Code != tc.wantCode {
+				t.Fatalf("expected status %d, got %d body=%s", tc.wantCode, res.Code, res.Body.String())
+			}
+			if !bytes.Contains(res.Body.Bytes(), []byte(tc.wantBody)) {
+				t.Fatalf("expected body to contain %s, got %s", tc.wantBody, res.Body.String())
+			}
+		})
 	}
 }
 

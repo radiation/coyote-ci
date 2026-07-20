@@ -475,6 +475,57 @@ func TestSCMAdminService_TestConnectionRejectsMismatchesAndSanitizesFailures(t *
 	}
 }
 
+func TestSCMAdminService_HelperMappingsAndResolutionBranches(t *testing.T) {
+	if status, summary := scmConnectionHealthFailure(ErrSCMGitHubProviderMalformedResponse); status != domain.SCMConnectionHealthStatusDegraded || summary != ErrSCMGitHubProviderMalformedResponse.Error() {
+		t.Fatalf("expected malformed response to degrade health, got status=%q summary=%q", status, summary)
+	}
+	if status, summary := scmConnectionHealthFailure(errors.New("unexpected")); status != domain.SCMConnectionHealthStatusUnhealthy || summary != ErrSCMGitHubProviderUnavailable.Error() {
+		t.Fatalf("expected default provider unavailable summary, got status=%q summary=%q", status, summary)
+	}
+	if mapped := mapSCMGitHubProviderError(platformgithubapp.ErrMalformedResponse); mapped != ErrSCMGitHubProviderMalformedResponse {
+		t.Fatalf("expected malformed provider mapping, got %v", mapped)
+	}
+	if mapped := mapSCMGitHubProviderError(platformgithubapp.ErrPrivateKeyNotRSA); mapped != ErrSCMGitHubPrivateKeyResolveFailed {
+		t.Fatalf("expected private key mapping, got %v", mapped)
+	}
+	if mapped := mapSCMGitHubProviderError(context.DeadlineExceeded); mapped != context.DeadlineExceeded {
+		t.Fatalf("expected deadline to pass through, got %v", mapped)
+	}
+	if got := stringPtr("   "); got != nil {
+		t.Fatalf("expected blank string pointer to be nil, got %v", *got)
+	}
+	if got := stringPtr("  ok  "); got == nil || *got != "ok" {
+		t.Fatalf("expected trimmed pointer, got %+v", got)
+	}
+	if !isContextCancellation(context.Canceled) || !isContextCancellation(context.DeadlineExceeded) || isContextCancellation(errors.New("boom")) {
+		t.Fatal("unexpected context cancellation classification")
+	}
+
+	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	validRegistration := domain.GitHubAppRegistration{ID: "registration-1", AppID: "12345", APIBaseURL: "https://api.github.com", WebBaseURL: "https://github.com", PrivateKeySecretRef: "secret/github/private-key", WebhookSecretRef: "secret/github/webhook", CreatedAt: now, UpdatedAt: now}
+	validInstallation := &domain.GitHubAppInstallation{ConnectionID: "connection-1", AppRegistrationID: "registration-1", InstallationID: "999", AccountLogin: "octo", AccountType: "organization", AccountID: "42", CreatedAt: now, UpdatedAt: now}
+	for _, tc := range []struct {
+		name     string
+		detail   domain.SCMConnectionDetail
+		resolver scmSecretResolver
+		wantErr  error
+	}{
+		{name: "non github provider", detail: domain.SCMConnectionDetail{Connection: domain.SCMConnection{ID: "connection-1", Provider: "", APIBaseURL: "https://api.github.com", WebBaseURL: "https://github.com", Enabled: true}, GitHubAppRegistration: &validRegistration, GitHubAppInstallation: validInstallation}, resolver: &fakeSCMSecretResolver{value: "pem"}, wantErr: ErrSCMGitHubConnectionConfigurationInvalid},
+		{name: "blank app id", detail: domain.SCMConnectionDetail{Connection: domain.SCMConnection{ID: "connection-1", Provider: domain.SCMProviderGitHub, APIBaseURL: "https://api.github.com", WebBaseURL: "https://github.com", Enabled: true}, GitHubAppRegistration: &domain.GitHubAppRegistration{ID: "registration-1", APIBaseURL: "https://api.github.com", WebBaseURL: "https://github.com", PrivateKeySecretRef: "secret/github/private-key"}, GitHubAppInstallation: validInstallation}, resolver: &fakeSCMSecretResolver{value: "pem"}, wantErr: ErrSCMGitHubConnectionConfigurationInvalid},
+		{name: "blank resolved secret", detail: domain.SCMConnectionDetail{Connection: domain.SCMConnection{ID: "connection-1", Provider: domain.SCMProviderGitHub, APIBaseURL: "https://api.github.com", WebBaseURL: "https://github.com", Enabled: true}, GitHubAppRegistration: &validRegistration, GitHubAppInstallation: validInstallation}, resolver: &fakeSCMSecretResolver{value: "   "}, wantErr: ErrSCMGitHubPrivateKeyResolveFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewSCMAdminService(repositorymemory.NewSCMConnectionRepository(), repositorymemory.NewSCMRepositoryRegistrationRepository())
+			svc.connections = &fakeSCMConnectionRepositoryForMismatch{detail: tc.detail}
+			svc.secrets = tc.resolver
+			_, _, err := svc.resolveGitHubInstallationTokenRequest(context.Background(), "connection-1")
+			if err != tc.wantErr {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 type fakeSCMSecretResolver struct {
 	value string
 	err   error
