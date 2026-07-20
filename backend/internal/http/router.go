@@ -210,6 +210,7 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 						r.Post("/github-app-installations", cfg.scmHandler.CreateGitHubAppInstallationConnection)
 						r.Get("/{connectionID}", cfg.scmHandler.GetConnection)
 						r.Patch("/{connectionID}", cfg.scmHandler.PatchConnection)
+						r.Post("/{connectionID}/test", cfg.scmHandler.TestConnection)
 					})
 					r.Route("/repositories", func(r chi.Router) {
 						r.Get("/", cfg.scmHandler.ListRegisteredRepositories)

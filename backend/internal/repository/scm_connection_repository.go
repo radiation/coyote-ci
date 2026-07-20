@@ -22,4 +22,5 @@ type SCMConnectionRepository interface {
 	List(ctx context.Context) ([]domain.SCMConnectionDetail, error)
 	GetByID(ctx context.Context, id string) (domain.SCMConnectionDetail, error)
 	SetEnabled(ctx context.Context, id string, enabled bool, updatedAt time.Time) (domain.SCMConnectionDetail, error)
+	UpdateHealth(ctx context.Context, id string, status domain.SCMConnectionHealthStatus, summary *string, checkedAt time.Time, updatedAt time.Time) (domain.SCMConnectionDetail, error)
 }

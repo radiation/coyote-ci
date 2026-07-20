@@ -50,6 +50,13 @@ func TestSCMConnectionRepository_CreateListGetAndSetEnabled(t *testing.T) {
 	if updated.Connection.Enabled {
 		t.Fatal("expected connection to be disabled")
 	}
+	healthy, healthErr := repo.UpdateHealth(context.Background(), "connection-1", domain.SCMConnectionHealthStatusHealthy, stringPointer("ok"), now.Add(2*time.Minute), now.Add(2*time.Minute))
+	if healthErr != nil {
+		t.Fatalf("update health failed: %v", healthErr)
+	}
+	if healthy.Connection.HealthStatus != domain.SCMConnectionHealthStatusHealthy || healthy.Connection.HealthSummary == nil || *healthy.Connection.HealthSummary != "ok" {
+		t.Fatalf("expected healthy metadata, got %+v", healthy.Connection)
+	}
 }
 
 func TestSCMConnectionRepository_ListAndGetGitHubAppRegistrations(t *testing.T) {
@@ -95,6 +102,15 @@ func TestSCMConnectionRepository_ListAndGetGitHubAppRegistrations(t *testing.T) 
 	_, missingErr := repo.GetGitHubAppRegistrationByID(context.Background(), "missing")
 	if !errors.Is(missingErr, repository.ErrSCMGitHubAppRegistrationNotFound) {
 		t.Fatalf("expected not found error, got %v", missingErr)
+	}
+}
+
+func TestSCMConnectionRepository_UpdateHealthMissingConnection(t *testing.T) {
+	repo := NewSCMConnectionRepository()
+	now := time.Now().UTC()
+	_, err := repo.UpdateHealth(context.Background(), "missing", domain.SCMConnectionHealthStatusHealthy, stringPointer("ok"), now, now)
+	if !errors.Is(err, repository.ErrSCMConnectionNotFound) {
+		t.Fatalf("expected missing connection error, got %v", err)
 	}
 }
 
@@ -160,4 +176,8 @@ func testGitHubConnectionDetail(now time.Time, connectionID string, registration
 		GitHubAppRegistration: &registration,
 		GitHubAppInstallation: &domain.GitHubAppInstallation{ConnectionID: connectionID, AppRegistrationID: registration.ID, InstallationID: installationID, AccountLogin: accountLogin, AccountType: "organization", AccountID: installationID + "-account", CreatedAt: now, UpdatedAt: now},
 	}
+}
+
+func stringPointer(value string) *string {
+	return &value
 }

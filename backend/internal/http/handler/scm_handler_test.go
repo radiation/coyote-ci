@@ -2,6 +2,8 @@ package handler
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -282,4 +284,111 @@ func TestSCMHandler_ErrorPaths(t *testing.T) {
 	if missingRepositoryRes.Code != http.StatusNotFound {
 		t.Fatalf("expected missing repository status %d, got %d body=%s", http.StatusNotFound, missingRepositoryRes.Code, missingRepositoryRes.Body.String())
 	}
+}
+
+func TestSCMHandler_TestConnectionRoute(t *testing.T) {
+	now := time.Now().UTC()
+	admin := &fakeSCMAdminServiceForHandler{testConnection: domain.SCMConnectionDetail{Connection: domain.SCMConnection{ID: "connection-1", Provider: domain.SCMProviderGitHub, DisplayName: "octo", DeploymentKind: domain.SCMDeploymentKindCloud, APIBaseURL: "https://api.github.com", WebBaseURL: "https://github.com", Enabled: true, HealthStatus: domain.SCMConnectionHealthStatusHealthy, CreatedAt: now, UpdatedAt: now}, GitHubAppRegistration: &domain.GitHubAppRegistration{ID: "registration-1", AppID: "12345", APIBaseURL: "https://api.github.com", WebBaseURL: "https://github.com", PrivateKeySecretRef: "secret/private", WebhookSecretRef: "secret/webhook", CreatedAt: now, UpdatedAt: now}, GitHubAppInstallation: &domain.GitHubAppInstallation{ConnectionID: "connection-1", AppRegistrationID: "registration-1", InstallationID: "999", AccountLogin: "octo", AccountType: "organization", AccountID: "42", CreatedAt: now, UpdatedAt: now}}}
+	h := NewSCMHandler(admin)
+	req := addURLParam(httptest.NewRequest(http.MethodPost, "/settings/scm/connections/connection-1/test", nil), "connectionID", "connection-1")
+	res := httptest.NewRecorder()
+	h.TestConnection(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected test connection status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	if bytes.Contains([]byte(body), []byte("secret/private")) || bytes.Contains([]byte(body), []byte("ghs_")) {
+		t.Fatalf("expected sanitized response, got %s", body)
+	}
+
+	admin.testConnectionErr = service.ErrSCMGitHubAuthenticationFailed
+	res = httptest.NewRecorder()
+	h.TestConnection(res, req)
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("expected auth failure status %d, got %d body=%s", http.StatusBadGateway, res.Code, res.Body.String())
+	}
+	if !bytes.Contains(res.Body.Bytes(), []byte(`"code":"provider_auth_failed"`)) {
+		t.Fatalf("expected provider_auth_failed code, got %s", res.Body.String())
+	}
+}
+
+func TestSCMHandler_TestConnectionRoute_ErrorMappings(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		err      error
+		wantCode int
+		wantBody string
+	}{
+		{name: "secret resolution failed", err: service.ErrSCMGitHubPrivateKeyResolveFailed, wantCode: http.StatusBadGateway, wantBody: `"code":"secret_resolution_failed"`},
+		{name: "installation unavailable", err: service.ErrSCMGitHubInstallationUnavailable, wantCode: http.StatusBadGateway, wantBody: `"code":"installation_unavailable"`},
+		{name: "rate limited", err: service.ErrSCMGitHubRateLimited, wantCode: http.StatusBadGateway, wantBody: `"code":"rate_limited"`},
+		{name: "provider unavailable", err: service.ErrSCMGitHubProviderUnavailable, wantCode: http.StatusBadGateway, wantBody: `"code":"provider_unavailable"`},
+		{name: "provider malformed", err: service.ErrSCMGitHubProviderMalformedResponse, wantCode: http.StatusBadGateway, wantBody: `"code":"provider_unavailable"`},
+		{name: "internal", err: errors.New("boom"), wantCode: http.StatusInternalServerError, wantBody: `"code":"internal_error"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewSCMHandler(&fakeSCMAdminServiceForHandler{testConnectionErr: tc.err})
+			req := addURLParam(httptest.NewRequest(http.MethodPost, "/settings/scm/connections/connection-1/test", nil), "connectionID", "connection-1")
+			res := httptest.NewRecorder()
+			h.TestConnection(res, req)
+			if res.Code != tc.wantCode {
+				t.Fatalf("expected status %d, got %d body=%s", tc.wantCode, res.Code, res.Body.String())
+			}
+			if !bytes.Contains(res.Body.Bytes(), []byte(tc.wantBody)) {
+				t.Fatalf("expected body to contain %s, got %s", tc.wantBody, res.Body.String())
+			}
+		})
+	}
+}
+
+type fakeSCMAdminServiceForHandler struct {
+	testConnection    domain.SCMConnectionDetail
+	testConnectionErr error
+}
+
+func (f *fakeSCMAdminServiceForHandler) ListConnections(context.Context) ([]domain.SCMConnectionDetail, error) {
+	return nil, nil
+}
+
+func (f *fakeSCMAdminServiceForHandler) GetConnection(context.Context, string) (domain.SCMConnectionDetail, error) {
+	return domain.SCMConnectionDetail{}, nil
+}
+
+func (f *fakeSCMAdminServiceForHandler) ListGitHubAppRegistrations(context.Context) ([]domain.GitHubAppRegistration, error) {
+	return nil, nil
+}
+
+func (f *fakeSCMAdminServiceForHandler) GetGitHubAppRegistration(context.Context, string) (domain.GitHubAppRegistration, error) {
+	return domain.GitHubAppRegistration{}, nil
+}
+
+func (f *fakeSCMAdminServiceForHandler) CreateGitHubAppRegistration(context.Context, service.CreateGitHubAppRegistrationInput) (domain.GitHubAppRegistration, error) {
+	return domain.GitHubAppRegistration{}, nil
+}
+
+func (f *fakeSCMAdminServiceForHandler) CreateGitHubAppInstallationConnection(context.Context, service.CreateGitHubAppInstallationConnectionInput) (domain.SCMConnectionDetail, error) {
+	return domain.SCMConnectionDetail{}, nil
+}
+
+func (f *fakeSCMAdminServiceForHandler) SetConnectionEnabled(context.Context, string, *bool) (domain.SCMConnectionDetail, error) {
+	return domain.SCMConnectionDetail{}, nil
+}
+
+func (f *fakeSCMAdminServiceForHandler) TestConnection(context.Context, string) (domain.SCMConnectionDetail, error) {
+	if f.testConnectionErr != nil {
+		return domain.SCMConnectionDetail{}, f.testConnectionErr
+	}
+	return f.testConnection, nil
+}
+
+func (f *fakeSCMAdminServiceForHandler) ListRegisteredRepositories(context.Context) ([]domain.SCMRepositoryRegistration, error) {
+	return nil, nil
+}
+
+func (f *fakeSCMAdminServiceForHandler) GetRegisteredRepository(context.Context, string) (domain.SCMRepositoryRegistration, error) {
+	return domain.SCMRepositoryRegistration{}, nil
+}
+
+func (f *fakeSCMAdminServiceForHandler) CreateRegisteredRepository(context.Context, service.CreateSCMRepositoryRegistrationInput) (domain.SCMRepositoryRegistration, error) {
+	return domain.SCMRepositoryRegistration{}, nil
 }

@@ -210,6 +210,14 @@ func TestSCMConnectionRepository_GetListAndSetEnabled(t *testing.T) {
 		t.Fatalf("expected updated connection id, got %q", updated.Connection.ID)
 	}
 
+	checkedAt := now.Add(2 * time.Minute)
+	summary := "healthy"
+	mock.ExpectQuery("UPDATE scm_connections").WithArgs("connection-1", string(domain.SCMConnectionHealthStatusHealthy), &summary, checkedAt, checkedAt).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("connection-1"))
+	mock.ExpectQuery(`SELECT .* FROM scm_connections c.*WHERE c.id = \$1`).WithArgs("connection-1").WillReturnRows(scmConnectionDetailTestRows(now))
+	if _, err := repo.UpdateHealth(context.Background(), "connection-1", domain.SCMConnectionHealthStatusHealthy, &summary, checkedAt, checkedAt); err != nil {
+		t.Fatalf("update health failed: %v", err)
+	}
+
 	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
 		t.Fatalf("unmet expectations: %v", expectationsErr)
 	}
