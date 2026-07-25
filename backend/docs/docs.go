@@ -3858,6 +3858,56 @@ const docTemplate = `{
                 }
             }
         },
+        "/settings/scm/repositories/{repositoryID}/refresh": {
+            "post": {
+                "description": "Refreshes repository metadata from the provider using the stored connection and provider repository ID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scm"
+                ],
+                "summary": "Refresh SCM repository metadata",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SCMRepositoryRegistrationEnvelope"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/users": {
             "get": {
                 "description": "Lists Coyote users.",
@@ -6606,6 +6656,61 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "web_base_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.SCMRepositoryRegistrationEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.SCMRepositoryRegistrationResponse"
+                }
+            }
+        },
+        "api.SCMRepositoryRegistrationResponse": {
+            "type": "object",
+            "properties": {
+                "archived": {
+                    "type": "boolean"
+                },
+                "clone_url": {
+                    "type": "string"
+                },
+                "connection_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "default_branch": {
+                    "type": "string"
+                },
+                "disabled": {
+                    "type": "boolean"
+                },
+                "full_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "metadata_refreshed_at": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "provider_repository_id": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "web_url": {
                     "type": "string"
                 }
             }

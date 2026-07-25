@@ -23,6 +23,8 @@ func TestSCMAdminService_CreateConnectionAndRepository(t *testing.T) {
 	svc := NewSCMAdminService(connectionRepo, repositoryRepo)
 	now := time.Now().UTC()
 	svc.now = func() time.Time { return now }
+	privateKeyPEM, _ := testServiceRSAPrivateKeyPEM(t)
+	svc.secrets = &fakeSCMSecretResolver{value: privateKeyPEM}
 	registration, registrationErr := svc.CreateGitHubAppRegistration(context.Background(), CreateGitHubAppRegistrationInput{
 		AppID:               "12345",
 		PrivateKeySecretRef: "secret/github/private-key",
@@ -46,22 +48,36 @@ func TestSCMAdminService_CreateConnectionAndRepository(t *testing.T) {
 		t.Fatalf("create connection failed: %v", createErr)
 	}
 
-	branch := "main"
-	repository, repoErr := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{
+	resolver := &fakeSCMGitHubRepositoryResolver{
+		byIDRepository: platformgithubapp.Repository{
+			ID:            "1001",
+			Owner:         "octo-renamed",
+			Name:          "widgets-renamed",
+			FullName:      "octo-renamed/widgets-renamed",
+			CloneURL:      "https://github.com/octo-renamed/widgets-renamed.git",
+			WebURL:        "https://github.com/octo-renamed/widgets-renamed",
+			DefaultBranch: stringPtr("main"),
+			Archived:      false,
+			Disabled:      true,
+		},
+	}
+	svc.githubRepos = resolver
+
+	repositoryRegistration, repoErr := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{
 		ConnectionID:         connection.Connection.ID,
 		ProviderRepositoryID: "1001",
-		Owner:                "octo",
-		Name:                 "widgets",
-		FullName:             "octo/widgets",
-		CloneURL:             "https://github.com/octo/widgets.git",
-		WebURL:               "https://github.com/octo/widgets",
-		DefaultBranch:        &branch,
 	})
 	if repoErr != nil {
 		t.Fatalf("create repository failed: %v", repoErr)
 	}
-	if repository.ConnectionID != connection.Connection.ID {
-		t.Fatalf("expected repository to attach to connection, got %+v", repository)
+	if repositoryRegistration.ConnectionID != connection.Connection.ID {
+		t.Fatalf("expected repository to attach to connection, got %+v", repositoryRegistration)
+	}
+	if repositoryRegistration.FullName != "octo-renamed/widgets-renamed" || !repositoryRegistration.Disabled {
+		t.Fatalf("expected authoritative metadata from provider, got %+v", repositoryRegistration)
+	}
+	if len(resolver.byIDRequests) != 1 || resolver.byIDRequests[0].RepositoryID != "1001" {
+		t.Fatalf("expected repository lookup by id, got %+v", resolver.byIDRequests)
 	}
 }
 
@@ -255,23 +271,15 @@ func TestSCMAdminServiceValidationAndReadBranches(t *testing.T) {
 	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{}); err != ErrSCMRegisteredRepositoryConnectionIDRequired {
 		t.Fatalf("expected missing connection id error, got %v", err)
 	}
-	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: "connection-1"}); err != ErrSCMRegisteredRepositoryProviderRepositoryIDRequired {
-		t.Fatalf("expected missing provider repository id error, got %v", err)
-	}
-	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: "connection-1", ProviderRepositoryID: "1001"}); err != ErrSCMRegisteredRepositoryOwnerRequired {
-		t.Fatalf("expected missing owner error, got %v", err)
-	}
-	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: "connection-1", ProviderRepositoryID: "1001", Owner: "octo"}); err != ErrSCMRegisteredRepositoryNameRequired {
-		t.Fatalf("expected missing name error, got %v", err)
-	}
-	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: "connection-1", ProviderRepositoryID: "1001", Owner: "octo", Name: "repo"}); err != ErrSCMRegisteredRepositoryFullNameRequired {
-		t.Fatalf("expected missing full name error, got %v", err)
-	}
-	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: "connection-1", ProviderRepositoryID: "1001", Owner: "octo", Name: "repo", FullName: "octo/repo"}); err != ErrSCMRegisteredRepositoryCloneURLRequired {
-		t.Fatalf("expected missing clone url error, got %v", err)
-	}
-	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: "connection-1", ProviderRepositoryID: "1001", Owner: "octo", Name: "repo", FullName: "octo/repo", CloneURL: "https://github.com/octo/repo.git"}); err != ErrSCMRegisteredRepositoryWebURLRequired {
-		t.Fatalf("expected missing web url error, got %v", err)
+	for _, input := range []CreateSCMRepositoryRegistrationInput{
+		{ConnectionID: "connection-1"},
+		{ConnectionID: "connection-1", Owner: "octo"},
+		{ConnectionID: "connection-1", Name: "repo"},
+		{ConnectionID: "connection-1", ProviderRepositoryID: "1001", Owner: "octo", Name: "repo"},
+	} {
+		if _, err := svc.CreateRegisteredRepository(context.Background(), input); err != ErrSCMRegisteredRepositorySelectorInvalid {
+			t.Fatalf("expected selector error for %+v, got %v", input, err)
+		}
 	}
 	if inferGitHubDeploymentKind("https://api.github.com", "https://github.com") != domain.SCMDeploymentKindCloud {
 		t.Fatal("expected public GitHub hosts to infer cloud deployment")
@@ -475,6 +483,187 @@ func TestSCMAdminService_TestConnectionRejectsMismatchesAndSanitizesFailures(t *
 	}
 }
 
+func TestSCMAdminService_CreateRegisteredRepositoryByOwnerAndNamePersistsAuthoritativeMetadata(t *testing.T) {
+	svc, connectionRepo, repositoryRepo, resolver := newSCMRepositoryRegistrationHarness(t)
+	connection := createSCMInstallationConnection(t, svc, "connection-1", "999")
+	resolver.byOwnerAndNameRepository = platformgithubapp.Repository{
+		ID:            "2002",
+		Owner:         "Acme-Org",
+		Name:          "Platform",
+		FullName:      "Acme-Org/Platform",
+		CloneURL:      "https://github.com/Acme-Org/Platform.git",
+		WebURL:        "https://github.com/Acme-Org/Platform",
+		DefaultBranch: stringPtr("trunk"),
+		Archived:      true,
+		Disabled:      false,
+	}
+
+	created, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{
+		ConnectionID: connection.Connection.ID,
+		Owner:        "acme-org",
+		Name:         "platform",
+	})
+	if err != nil {
+		t.Fatalf("create registered repository: %v", err)
+	}
+	if created.ProviderRepositoryID != "2002" || created.FullName != "Acme-Org/Platform" || created.Archived != true {
+		t.Fatalf("expected provider metadata, got %+v", created)
+	}
+	stored, getErr := repositoryRepo.GetByID(context.Background(), created.ID)
+	if getErr != nil {
+		t.Fatalf("get stored registration: %v", getErr)
+	}
+	if stored.Owner != "Acme-Org" || stored.Name != "Platform" {
+		t.Fatalf("expected canonical coordinates from provider response, got %+v", stored)
+	}
+	assertResolverUsedConnectionPath(t, resolver.byOwnerAndNameRequests[0].Request, connectionRepo, connection.Connection.ID)
+}
+
+func TestSCMAdminService_CreateRegisteredRepositoryRejectsProviderIDMismatch(t *testing.T) {
+	svc, _, _, resolver := newSCMRepositoryRegistrationHarness(t)
+	connection := createSCMInstallationConnection(t, svc, "connection-1", "999")
+	resolver.byIDRepository = platformgithubapp.Repository{ID: "9999", Owner: "octo", Name: "widgets", FullName: "octo/widgets", CloneURL: "https://github.com/octo/widgets.git", WebURL: "https://github.com/octo/widgets"}
+
+	_, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: connection.Connection.ID, ProviderRepositoryID: "1001"})
+	if err != ErrSCMGitHubProviderMalformedResponse {
+		t.Fatalf("expected provider mismatch to be malformed response, got %v", err)
+	}
+}
+
+func TestSCMAdminService_CreateRegisteredRepositoryConnectionValidationAndConflictBranches(t *testing.T) {
+	svc, connectionRepo, repositoryRepo, resolver := newSCMRepositoryRegistrationHarness(t)
+	first := createSCMInstallationConnection(t, svc, "connection-1", "999")
+	second := createSCMInstallationConnection(t, svc, "connection-2", "1000")
+	resolver.byIDRepository = platformgithubapp.Repository{ID: "1001", Owner: "octo", Name: "widgets", FullName: "octo/widgets", CloneURL: "https://github.com/octo/widgets.git", WebURL: "https://github.com/octo/widgets", DefaultBranch: stringPtr("main")}
+
+	created, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: first.Connection.ID, ProviderRepositoryID: "1001"})
+	if err != nil {
+		t.Fatalf("first registration failed: %v", err)
+	}
+	if _, duplicateErr := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: first.Connection.ID, ProviderRepositoryID: "1001"}); duplicateErr != repository.ErrSCMRepositoryRegistrationDuplicate {
+		t.Fatalf("expected duplicate conflict, got %v", duplicateErr)
+	}
+	other, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: second.Connection.ID, ProviderRepositoryID: "1001"})
+	if err != nil {
+		t.Fatalf("second connection registration failed: %v", err)
+	}
+	if created.ProviderRepositoryID != other.ProviderRepositoryID || created.ConnectionID == other.ConnectionID {
+		t.Fatalf("expected same provider id under different connections, got first=%+v second=%+v", created, other)
+	}
+	list, listErr := repositoryRepo.List(context.Background())
+	if listErr != nil || len(list) != 2 {
+		t.Fatalf("expected two stored registrations, got len=%d err=%v", len(list), listErr)
+	}
+
+	disable := false
+	_, setErr := svc.SetConnectionEnabled(context.Background(), first.Connection.ID, &disable)
+	if setErr != nil {
+		t.Fatalf("disable connection: %v", setErr)
+	}
+	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: first.Connection.ID, ProviderRepositoryID: "1002"}); err != ErrSCMConnectionDisabled {
+		t.Fatalf("expected disabled connection error, got %v", err)
+	}
+
+	privateKeyPEM, _ := testServiceRSAPrivateKeyPEM(t)
+	registration := domain.GitHubAppRegistration{ID: "registration-3", AppID: "12345", APIBaseURL: "https://api.github.com", WebBaseURL: "https://github.com", PrivateKeySecretRef: "secret/github/private-key", WebhookSecretRef: "secret/github/webhook", CreatedAt: svc.now(), UpdatedAt: svc.now()}
+	badDetail := domain.SCMConnectionDetail{
+		Connection:            domain.SCMConnection{ID: "connection-bad", Provider: domain.SCMProviderGitHub, DisplayName: "bad", DeploymentKind: domain.SCMDeploymentKindSelfHosted, APIBaseURL: "https://other.example/api/v3", WebBaseURL: "https://other.example", Enabled: true, HealthStatus: domain.SCMConnectionHealthStatusUnknown, CreatedAt: svc.now(), UpdatedAt: svc.now()},
+		GitHubAppRegistration: &registration,
+		GitHubAppInstallation: &domain.GitHubAppInstallation{ConnectionID: "connection-bad", AppRegistrationID: registration.ID, InstallationID: "1001", AccountLogin: "octo-bad", AccountType: "organization", AccountID: "84", CreatedAt: svc.now(), UpdatedAt: svc.now()},
+	}
+	svc.connections = &fakeSCMConnectionRepositoryForMismatch{detail: badDetail}
+	svc.secrets = &fakeSCMSecretResolver{value: privateKeyPEM}
+	if _, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: "connection-bad", ProviderRepositoryID: "2002"}); err != ErrSCMGitHubConnectionConfigurationInvalid {
+		t.Fatalf("expected incompatible connection error, got %v", err)
+	}
+
+	_ = connectionRepo
+}
+
+func TestSCMAdminService_CreateRegisteredRepositoryFailurePersistsNothing(t *testing.T) {
+	svc, _, repositoryRepo, resolver := newSCMRepositoryRegistrationHarness(t)
+	connection := createSCMInstallationConnection(t, svc, "connection-1", "999")
+	resolver.byIDErr = platformgithubapp.ErrRepositoryInaccessible
+
+	_, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: connection.Connection.ID, ProviderRepositoryID: "1001"})
+	if err != ErrSCMGitHubRepositoryNotAccessible {
+		t.Fatalf("expected repository inaccessible error, got %v", err)
+	}
+	list, listErr := repositoryRepo.List(context.Background())
+	if listErr != nil {
+		t.Fatalf("list registrations: %v", listErr)
+	}
+	if len(list) != 0 {
+		t.Fatalf("expected no repository persistence on failure, got %+v", list)
+	}
+}
+
+func TestSCMAdminService_RefreshRegisteredRepositoryUsesStoredConnectionAndProviderIDOnly(t *testing.T) {
+	svc, connectionRepo, repositoryRepo, resolver := newSCMRepositoryRegistrationHarness(t)
+	first := createSCMInstallationConnection(t, svc, "connection-1", "999")
+	_ = createSCMInstallationConnection(t, svc, "connection-2", "1000")
+	resolver.byIDRepository = platformgithubapp.Repository{ID: "1001", Owner: "octo", Name: "widgets", FullName: "octo/widgets", CloneURL: "https://github.com/octo/widgets.git", WebURL: "https://github.com/octo/widgets", DefaultBranch: stringPtr("main")}
+	created, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: first.Connection.ID, ProviderRepositoryID: "1001"})
+	if err != nil {
+		t.Fatalf("create registration: %v", err)
+	}
+	resolver.byIDRequests = nil
+	resolver.byOwnerAndNameRequests = nil
+	resolver.byIDRepository = platformgithubapp.Repository{ID: "1001", Owner: "acme", Name: "platform", FullName: "acme/platform", CloneURL: "https://github.com/acme/platform.git", WebURL: "https://github.com/acme/platform", DefaultBranch: stringPtr("trunk"), Archived: true, Disabled: true}
+
+	refreshed, err := svc.RefreshRegisteredRepository(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("refresh registration: %v", err)
+	}
+	if len(resolver.byOwnerAndNameRequests) != 0 {
+		t.Fatalf("expected refresh to avoid owner/name lookup, got %+v", resolver.byOwnerAndNameRequests)
+	}
+	if len(resolver.byIDRequests) != 1 || resolver.byIDRequests[0].RepositoryID != "1001" {
+		t.Fatalf("expected refresh by stored provider id, got %+v", resolver.byIDRequests)
+	}
+	assertResolverUsedConnectionPath(t, resolver.byIDRequests[0].Request, connectionRepo, first.Connection.ID)
+	if refreshed.ID != created.ID || refreshed.ConnectionID != created.ConnectionID || refreshed.ProviderRepositoryID != created.ProviderRepositoryID || !refreshed.CreatedAt.Equal(created.CreatedAt) {
+		t.Fatalf("expected immutable identity fields, got before=%+v after=%+v", created, refreshed)
+	}
+	if refreshed.FullName != "acme/platform" || refreshed.DefaultBranch == nil || *refreshed.DefaultBranch != "trunk" || !refreshed.Archived || !refreshed.Disabled {
+		t.Fatalf("expected refreshed mutable metadata, got %+v", refreshed)
+	}
+	stored, getErr := repositoryRepo.GetByID(context.Background(), created.ID)
+	if getErr != nil {
+		t.Fatalf("get refreshed registration: %v", getErr)
+	}
+	if stored.FullName != "acme/platform" || stored.ProviderRepositoryID != "1001" {
+		t.Fatalf("expected stored refreshed metadata with stable identity, got %+v", stored)
+	}
+}
+
+func TestSCMAdminService_RefreshRegisteredRepositoryFailureLeavesStoredStateUntouched(t *testing.T) {
+	svc, _, repositoryRepo, resolver := newSCMRepositoryRegistrationHarness(t)
+	connection := createSCMInstallationConnection(t, svc, "connection-1", "999")
+	resolver.byIDRepository = platformgithubapp.Repository{ID: "1001", Owner: "octo", Name: "widgets", FullName: "octo/widgets", CloneURL: "https://github.com/octo/widgets.git", WebURL: "https://github.com/octo/widgets", DefaultBranch: stringPtr("main")}
+	created, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: connection.Connection.ID, ProviderRepositoryID: "1001"})
+	if err != nil {
+		t.Fatalf("create registration: %v", err)
+	}
+	before, getErr := repositoryRepo.GetByID(context.Background(), created.ID)
+	if getErr != nil {
+		t.Fatalf("get created registration: %v", getErr)
+	}
+	resolver.byIDErr = platformgithubapp.ErrRepositoryInaccessible
+
+	_, err = svc.RefreshRegisteredRepository(context.Background(), created.ID)
+	if err != ErrSCMGitHubRepositoryNotAccessible {
+		t.Fatalf("expected repository inaccessible on refresh, got %v", err)
+	}
+	after, getErr := repositoryRepo.GetByID(context.Background(), created.ID)
+	if getErr != nil {
+		t.Fatalf("get registration after failed refresh: %v", getErr)
+	}
+	if after != before {
+		t.Fatalf("expected failed refresh to leave stored metadata unchanged, before=%+v after=%+v", before, after)
+	}
+}
+
 func TestSCMAdminService_HelperMappingsAndResolutionBranches(t *testing.T) {
 	if status, summary := scmConnectionHealthFailure(ErrSCMGitHubProviderMalformedResponse); status != domain.SCMConnectionHealthStatusDegraded || summary != ErrSCMGitHubProviderMalformedResponse.Error() {
 		t.Fatalf("expected malformed response to degrade health, got status=%q summary=%q", status, summary)
@@ -487,6 +676,9 @@ func TestSCMAdminService_HelperMappingsAndResolutionBranches(t *testing.T) {
 	}
 	if mapped := mapSCMGitHubProviderError(platformgithubapp.ErrPrivateKeyNotRSA); mapped != ErrSCMGitHubPrivateKeyResolveFailed {
 		t.Fatalf("expected private key mapping, got %v", mapped)
+	}
+	if mapped := mapSCMGitHubProviderError(platformgithubapp.ErrRepositoryInaccessible); mapped != ErrSCMGitHubRepositoryNotAccessible {
+		t.Fatalf("expected repository inaccessible mapping, got %v", mapped)
 	}
 	if mapped := mapSCMGitHubProviderError(context.DeadlineExceeded); mapped != context.DeadlineExceeded {
 		t.Fatalf("expected deadline to pass through, got %v", mapped)
@@ -523,6 +715,48 @@ func TestSCMAdminService_HelperMappingsAndResolutionBranches(t *testing.T) {
 				t.Fatalf("expected %v, got %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+func newSCMRepositoryRegistrationHarness(t *testing.T) (*SCMAdminService, repository.SCMConnectionRepository, repository.SCMRepositoryRegistrationRepository, *fakeSCMGitHubRepositoryResolver) {
+	t.Helper()
+	connectionRepo := repositorymemory.NewSCMConnectionRepository()
+	repositoryRepo := repositorymemory.NewSCMRepositoryRegistrationRepository()
+	svc := NewSCMAdminService(connectionRepo, repositoryRepo)
+	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	privateKeyPEM, _ := testServiceRSAPrivateKeyPEM(t)
+	svc.secrets = &fakeSCMSecretResolver{value: privateKeyPEM}
+	resolver := &fakeSCMGitHubRepositoryResolver{}
+	svc.githubRepos = resolver
+	return svc, connectionRepo, repositoryRepo, resolver
+}
+
+func createSCMInstallationConnection(t *testing.T, svc *SCMAdminService, connectionID string, installationID string) domain.SCMConnectionDetail {
+	t.Helper()
+	registration, err := svc.CreateGitHubAppRegistration(context.Background(), CreateGitHubAppRegistrationInput{AppID: "app-" + installationID, PrivateKeySecretRef: "secret/github/private-key", WebhookSecretRef: "secret/github/webhook"})
+	if err != nil {
+		t.Fatalf("create app registration: %v", err)
+	}
+	enabled := true
+	connection, err := svc.CreateGitHubAppInstallationConnection(context.Background(), CreateGitHubAppInstallationConnectionInput{AppRegistrationID: registration.ID, DisplayName: connectionID, Enabled: &enabled, InstallationID: installationID, AccountLogin: "octo-" + installationID, AccountType: "organization", TargetID: installationID})
+	if err != nil {
+		t.Fatalf("create installation connection: %v", err)
+	}
+	return connection
+}
+
+func assertResolverUsedConnectionPath(t *testing.T, request platformgithubapp.InstallationTokenRequest, connectionRepo repository.SCMConnectionRepository, connectionID string) {
+	t.Helper()
+	detail, err := connectionRepo.GetByID(context.Background(), connectionID)
+	if err != nil {
+		t.Fatalf("get connection detail: %v", err)
+	}
+	if detail.GitHubAppRegistration == nil || detail.GitHubAppInstallation == nil {
+		t.Fatalf("expected github installation detail, got %+v", detail)
+	}
+	if request.AppRegistrationID != detail.GitHubAppRegistration.ID || request.InstallationID != detail.GitHubAppInstallation.InstallationID || request.APIBaseURL != detail.Connection.APIBaseURL {
+		t.Fatalf("expected resolver request to use stored connection path, got %+v detail=%+v", request, detail)
 	}
 }
 
@@ -606,4 +840,40 @@ func (f *fakeSCMGitHubAppClient) ProbeInstallation(_ context.Context, input plat
 		return platformgithubapp.InstallationProbeResult{}, f.probeErr
 	}
 	return f.probe, nil
+}
+
+type fakeSCMGitHubRepositoryResolver struct {
+	byIDRepository           platformgithubapp.Repository
+	byIDErr                  error
+	byOwnerAndNameRepository platformgithubapp.Repository
+	byOwnerAndNameErr        error
+	byIDRequests             []fakeRepositoryByIDRequest
+	byOwnerAndNameRequests   []fakeRepositoryByOwnerAndNameRequest
+}
+
+type fakeRepositoryByIDRequest struct {
+	Request      platformgithubapp.InstallationTokenRequest
+	RepositoryID string
+}
+
+type fakeRepositoryByOwnerAndNameRequest struct {
+	Request platformgithubapp.InstallationTokenRequest
+	Owner   string
+	Name    string
+}
+
+func (f *fakeSCMGitHubRepositoryResolver) GetRepositoryByID(_ context.Context, input platformgithubapp.InstallationTokenRequest, repositoryID string) (platformgithubapp.Repository, error) {
+	f.byIDRequests = append(f.byIDRequests, fakeRepositoryByIDRequest{Request: input, RepositoryID: repositoryID})
+	if f.byIDErr != nil {
+		return platformgithubapp.Repository{}, f.byIDErr
+	}
+	return f.byIDRepository, nil
+}
+
+func (f *fakeSCMGitHubRepositoryResolver) GetRepositoryByOwnerAndName(_ context.Context, input platformgithubapp.InstallationTokenRequest, owner string, name string) (platformgithubapp.Repository, error) {
+	f.byOwnerAndNameRequests = append(f.byOwnerAndNameRequests, fakeRepositoryByOwnerAndNameRequest{Request: input, Owner: owner, Name: name})
+	if f.byOwnerAndNameErr != nil {
+		return platformgithubapp.Repository{}, f.byOwnerAndNameErr
+	}
+	return f.byOwnerAndNameRepository, nil
 }

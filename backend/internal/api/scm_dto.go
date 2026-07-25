@@ -88,16 +88,10 @@ type SCMConnectionListEnvelope struct {
 }
 
 type CreateSCMRepositoryRegistrationRequest struct {
-	ConnectionID         string  `json:"connection_id"`
-	ProviderRepositoryID string  `json:"provider_repository_id"`
-	Owner                string  `json:"owner"`
-	Name                 string  `json:"name"`
-	FullName             string  `json:"full_name"`
-	CloneURL             string  `json:"clone_url"`
-	WebURL               string  `json:"web_url"`
-	DefaultBranch        *string `json:"default_branch,omitempty"`
-	Archived             *bool   `json:"archived,omitempty"`
-	Disabled             *bool   `json:"disabled,omitempty"`
+	ConnectionID         string `json:"connection_id"`
+	ProviderRepositoryID string `json:"provider_repository_id"`
+	Owner                string `json:"owner"`
+	Name                 string `json:"name"`
 }
 
 type SCMRepositoryRegistrationResponse struct {

@@ -113,11 +113,7 @@ export interface BuildStep {
 }
 
 export type BuildStepStatus =
-  | "pending"
-  | "running"
-  | "success"
-  | "failed"
-  | "canceled";
+  "pending" | "running" | "success" | "failed" | "canceled";
 
 /** Envelope: { data: { builds: Build[] } } */
 export interface BuildListResponse {

@@ -2,10 +2,7 @@ import { createContext, useContext } from "react";
 import type { AuthConfigResponse, MeResponse, User } from "./types/identity";
 
 export type AuthStatus =
-  | "loading"
-  | "authenticated"
-  | "unauthenticated"
-  | "error";
+  "loading" | "authenticated" | "unauthenticated" | "error";
 
 export interface AuthContextValue {
   currentUser: User | null;

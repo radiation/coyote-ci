@@ -336,6 +336,121 @@ func TestClient_ProbeInstallation_BoundsLargeSuccessBodyReads(t *testing.T) {
 	}
 }
 
+func TestClient_GetRepositoryByID_UsesProviderPathAndParsesCanonicalMetadata(t *testing.T) {
+	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
+	for _, tc := range []struct {
+		name       string
+		apiBaseURL string
+		wantPath   string
+	}{
+		{name: "github.com", apiBaseURL: "https://api.github.com", wantPath: "/repositories/1001"},
+		{name: "ghes", apiBaseURL: "/api/v3", wantPath: "/api/v3/repositories/1001"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tc.wantPath {
+					t.Fatalf("expected path %q, got %q", tc.wantPath, r.URL.Path)
+				}
+				if got := r.Header.Get("Authorization"); got != "Bearer ghs_repo" {
+					t.Fatalf("expected installation token auth, got %q", got)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":             1001,
+					"name":           "widgets",
+					"full_name":      "octo/widgets",
+					"clone_url":      "https://github.com/octo/widgets.git",
+					"html_url":       "https://github.com/octo/widgets",
+					"default_branch": "main",
+					"archived":       true,
+					"disabled":       false,
+					"owner": map[string]any{
+						"login": "octo",
+					},
+				})
+			}))
+			defer server.Close()
+			client := NewClient(server.Client())
+			request := InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: probeBaseURL(server.URL, tc.apiBaseURL), PrivateKeyPEM: privateKeyPEM}
+			client.cache[installationCacheKey(request)] = cachedInstallationToken{token: InstallationToken{Value: "ghs_repo", ExpiresAt: time.Now().Add(10 * time.Minute).UTC()}}
+
+			repository, err := client.GetRepositoryByID(context.Background(), request, "1001")
+			if err != nil {
+				t.Fatalf("get repository by id: %v", err)
+			}
+			if repository.ID != "1001" || repository.Owner != "octo" || repository.Name != "widgets" || repository.FullName != "octo/widgets" {
+				t.Fatalf("unexpected repository identity: %+v", repository)
+			}
+			if repository.DefaultBranch == nil || *repository.DefaultBranch != "main" || !repository.Archived || repository.Disabled {
+				t.Fatalf("unexpected repository metadata: %+v", repository)
+			}
+		})
+	}
+}
+
+func TestClient_GetRepositoryByOwnerAndName_EscapesPathAndClassifiesFailures(t *testing.T) {
+	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
+	for _, tc := range []struct {
+		name       string
+		statusCode int
+		headers    map[string]string
+		body       string
+		wantErr    error
+	}{
+		{name: "forbidden inaccessible", statusCode: http.StatusForbidden, body: `{"message":"forbidden"}`, wantErr: ErrRepositoryInaccessible},
+		{name: "not found inaccessible", statusCode: http.StatusNotFound, body: `{"message":"not found"}`, wantErr: ErrRepositoryInaccessible},
+		{name: "rate limited", statusCode: http.StatusForbidden, headers: map[string]string{"X-RateLimit-Remaining": "0"}, body: `{"message":"API rate limit exceeded"}`, wantErr: ErrRateLimited},
+		{name: "server unavailable", statusCode: http.StatusBadGateway, body: `{"message":"bad gateway"}`, wantErr: ErrProviderUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.EscapedPath() != "/repos/acme%20org/widgets%2Fcore" {
+					t.Fatalf("expected escaped owner/name path, got path=%q escaped=%q", r.URL.Path, r.URL.EscapedPath())
+				}
+				for key, value := range tc.headers {
+					w.Header().Set(key, value)
+				}
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			client := NewClient(server.Client())
+			request := InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: server.URL, PrivateKeyPEM: privateKeyPEM}
+			client.cache[installationCacheKey(request)] = cachedInstallationToken{token: InstallationToken{Value: "ghs_repo", ExpiresAt: time.Now().Add(10 * time.Minute).UTC()}}
+
+			_, err := client.GetRepositoryByOwnerAndName(context.Background(), request, "acme org", "widgets/core")
+			if err != tc.wantErr {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestClient_GetRepositoryByID_MalformedResponseBranches(t *testing.T) {
+	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "missing owner", body: `{"id":1001,"name":"widgets","full_name":"octo/widgets","clone_url":"https://github.com/octo/widgets.git","html_url":"https://github.com/octo/widgets"}`},
+		{name: "bad id", body: `{"id":"not-a-number","name":"widgets","full_name":"octo/widgets","clone_url":"https://github.com/octo/widgets.git","html_url":"https://github.com/octo/widgets","owner":{"login":"octo"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			client := NewClient(server.Client())
+			request := InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: server.URL, PrivateKeyPEM: privateKeyPEM}
+			client.cache[installationCacheKey(request)] = cachedInstallationToken{token: InstallationToken{Value: "ghs_repo", ExpiresAt: time.Now().Add(10 * time.Minute).UTC()}}
+
+			_, err := client.GetRepositoryByID(context.Background(), request, "1001")
+			if err != ErrMalformedResponse {
+				t.Fatalf("expected malformed response, got %v", err)
+			}
+		})
+	}
+}
+
 func TestClient_TokenCacheBehavior(t *testing.T) {
 	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
 	var callCount atomic.Int32

@@ -216,6 +216,7 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 						r.Get("/", cfg.scmHandler.ListRegisteredRepositories)
 						r.Post("/", cfg.scmHandler.CreateRegisteredRepository)
 						r.Get("/{repositoryID}", cfg.scmHandler.GetRegisteredRepository)
+						r.Post("/{repositoryID}/refresh", cfg.scmHandler.RefreshRegisteredRepository)
 					})
 				})
 			}

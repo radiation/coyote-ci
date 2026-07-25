@@ -968,8 +968,7 @@ export function NotificationsPage() {
               value={createDraft.scopeType}
               onChange={(event) => {
                 const nextScope = event.target.value as
-                  | NotificationScopeType
-                  | "";
+                  NotificationScopeType | "";
                 setCreateDraft((current) => ({
                   ...current,
                   scopeType: nextScope,
