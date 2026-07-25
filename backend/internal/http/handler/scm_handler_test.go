@@ -374,6 +374,47 @@ func TestSCMHandler_RefreshRegisteredRepositoryRoute(t *testing.T) {
 	}
 }
 
+func TestSCMHandler_GetRegisteredRepositoryRoute(t *testing.T) {
+	now := time.Now().UTC()
+	admin := &fakeSCMAdminServiceForHandler{
+		getRegisteredRepository: domain.SCMRepositoryRegistration{
+			ID:                   "repository-1",
+			ConnectionID:         "connection-1",
+			ProviderRepositoryID: "1001",
+			Owner:                "octo",
+			Name:                 "widgets",
+			FullName:             "octo/widgets",
+			CloneURL:             "https://github.com/octo/widgets.git",
+			WebURL:               "https://github.com/octo/widgets",
+			DefaultBranch:        handlerTestStringPtr("main"),
+			MetadataRefreshedAt:  now,
+			CreatedAt:            now.Add(-time.Hour),
+			UpdatedAt:            now,
+		},
+	}
+	h := NewSCMHandler(admin)
+	req := addURLParam(httptest.NewRequest(http.MethodGet, "/settings/scm/repositories/repository-1", nil), "repositoryID", "repository-1")
+	res := httptest.NewRecorder()
+	h.GetRegisteredRepository(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected get repository status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+	if admin.getRegisteredRepositoryID != "repository-1" {
+		t.Fatalf("expected repository id to pass through, got %q", admin.getRegisteredRepositoryID)
+	}
+	body := decodeDataMap(t, res)
+	if body["full_name"] != "octo/widgets" || body["clone_url"] != "https://github.com/octo/widgets.git" {
+		t.Fatalf("expected repository response body, got %v", body)
+	}
+
+	admin.getRegisteredRepositoryErr = repository.ErrSCMRepositoryRegistrationNotFound
+	res = httptest.NewRecorder()
+	h.GetRegisteredRepository(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("expected missing repository status %d, got %d body=%s", http.StatusNotFound, res.Code, res.Body.String())
+	}
+}
+
 func TestSCMHandler_TestConnectionRoute(t *testing.T) {
 	now := time.Now().UTC()
 	admin := &fakeSCMAdminServiceForHandler{testConnection: domain.SCMConnectionDetail{Connection: domain.SCMConnection{ID: "connection-1", Provider: domain.SCMProviderGitHub, DisplayName: "octo", DeploymentKind: domain.SCMDeploymentKindCloud, APIBaseURL: "https://api.github.com", WebBaseURL: "https://github.com", Enabled: true, HealthStatus: domain.SCMConnectionHealthStatusHealthy, CreatedAt: now, UpdatedAt: now}, GitHubAppRegistration: &domain.GitHubAppRegistration{ID: "registration-1", AppID: "12345", APIBaseURL: "https://api.github.com", WebBaseURL: "https://github.com", PrivateKeySecretRef: "secret/private", WebhookSecretRef: "secret/webhook", CreatedAt: now, UpdatedAt: now}, GitHubAppInstallation: &domain.GitHubAppInstallation{ConnectionID: "connection-1", AppRegistrationID: "registration-1", InstallationID: "999", AccountLogin: "octo", AccountType: "organization", AccountID: "42", CreatedAt: now, UpdatedAt: now}}}
@@ -435,6 +476,9 @@ type fakeSCMAdminServiceForHandler struct {
 	createRegisteredRepository      domain.SCMRepositoryRegistration
 	createRegisteredRepositoryErr   error
 	createRegisteredRepositoryInput service.CreateSCMRepositoryRegistrationInput
+	getRegisteredRepository         domain.SCMRepositoryRegistration
+	getRegisteredRepositoryErr      error
+	getRegisteredRepositoryID       string
 	refreshRegisteredRepository     domain.SCMRepositoryRegistration
 	refreshRegisteredRepositoryErr  error
 	refreshRegisteredRepositoryID   string
@@ -479,16 +523,20 @@ func (f *fakeSCMAdminServiceForHandler) ListRegisteredRepositories(context.Conte
 	return nil, nil
 }
 
-func (f *fakeSCMAdminServiceForHandler) GetRegisteredRepository(context.Context, string) (domain.SCMRepositoryRegistration, error) {
-	return domain.SCMRepositoryRegistration{}, nil
-}
-
 func (f *fakeSCMAdminServiceForHandler) CreateRegisteredRepository(_ context.Context, input service.CreateSCMRepositoryRegistrationInput) (domain.SCMRepositoryRegistration, error) {
 	f.createRegisteredRepositoryInput = input
 	if f.createRegisteredRepositoryErr != nil {
 		return domain.SCMRepositoryRegistration{}, f.createRegisteredRepositoryErr
 	}
 	return f.createRegisteredRepository, nil
+}
+
+func (f *fakeSCMAdminServiceForHandler) GetRegisteredRepository(_ context.Context, id string) (domain.SCMRepositoryRegistration, error) {
+	f.getRegisteredRepositoryID = id
+	if f.getRegisteredRepositoryErr != nil {
+		return domain.SCMRepositoryRegistration{}, f.getRegisteredRepositoryErr
+	}
+	return f.getRegisteredRepository, nil
 }
 
 func (f *fakeSCMAdminServiceForHandler) RefreshRegisteredRepository(_ context.Context, id string) (domain.SCMRepositoryRegistration, error) {

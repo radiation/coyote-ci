@@ -664,6 +664,62 @@ func TestSCMAdminService_RefreshRegisteredRepositoryFailureLeavesStoredStateUnto
 	}
 }
 
+func TestSCMAdminService_ListAndGetRegisteredRepositories(t *testing.T) {
+	svc, _, _, resolver := newSCMRepositoryRegistrationHarness(t)
+	connection := createSCMInstallationConnection(t, svc, "connection-1", "999")
+	resolver.byIDRepository = platformgithubapp.Repository{ID: "1001", Owner: "octo", Name: "widgets", FullName: "octo/widgets", CloneURL: "https://github.com/octo/widgets.git", WebURL: "https://github.com/octo/widgets", DefaultBranch: stringPtr("main")}
+
+	created, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: connection.Connection.ID, ProviderRepositoryID: "1001"})
+	if err != nil {
+		t.Fatalf("create registration: %v", err)
+	}
+	listed, err := svc.ListRegisteredRepositories(context.Background())
+	if err != nil {
+		t.Fatalf("list registered repositories: %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != created.ID {
+		t.Fatalf("expected listed repository %q, got %+v", created.ID, listed)
+	}
+	fetched, err := svc.GetRegisteredRepository(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("get registered repository: %v", err)
+	}
+	if fetched.ID != created.ID || fetched.ProviderRepositoryID != "1001" {
+		t.Fatalf("unexpected fetched repository: %+v", fetched)
+	}
+	_, err = svc.GetRegisteredRepository(context.Background(), "missing")
+	if err != repository.ErrSCMRepositoryRegistrationNotFound {
+		t.Fatalf("expected missing registration error, got %v", err)
+	}
+}
+
+func TestSCMAdminService_RefreshRegisteredRepositoryRejectsProviderIDMismatch(t *testing.T) {
+	svc, _, repositoryRepo, resolver := newSCMRepositoryRegistrationHarness(t)
+	connection := createSCMInstallationConnection(t, svc, "connection-1", "999")
+	resolver.byIDRepository = platformgithubapp.Repository{ID: "1001", Owner: "octo", Name: "widgets", FullName: "octo/widgets", CloneURL: "https://github.com/octo/widgets.git", WebURL: "https://github.com/octo/widgets", DefaultBranch: stringPtr("main")}
+	created, err := svc.CreateRegisteredRepository(context.Background(), CreateSCMRepositoryRegistrationInput{ConnectionID: connection.Connection.ID, ProviderRepositoryID: "1001"})
+	if err != nil {
+		t.Fatalf("create registration: %v", err)
+	}
+	before, err := repositoryRepo.GetByID(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("get created registration: %v", err)
+	}
+	resolver.byIDRepository = platformgithubapp.Repository{ID: "9999", Owner: "octo", Name: "widgets", FullName: "octo/widgets", CloneURL: "https://github.com/octo/widgets.git", WebURL: "https://github.com/octo/widgets"}
+
+	_, err = svc.RefreshRegisteredRepository(context.Background(), created.ID)
+	if err != ErrSCMGitHubProviderMalformedResponse {
+		t.Fatalf("expected provider mismatch error, got %v", err)
+	}
+	after, err := repositoryRepo.GetByID(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("get repository after failed refresh: %v", err)
+	}
+	if after != before {
+		t.Fatalf("expected mismatched refresh to leave stored metadata unchanged, before=%+v after=%+v", before, after)
+	}
+}
+
 func TestSCMAdminService_HelperMappingsAndResolutionBranches(t *testing.T) {
 	if status, summary := scmConnectionHealthFailure(ErrSCMGitHubProviderMalformedResponse); status != domain.SCMConnectionHealthStatusDegraded || summary != ErrSCMGitHubProviderMalformedResponse.Error() {
 		t.Fatalf("expected malformed response to degrade health, got status=%q summary=%q", status, summary)
