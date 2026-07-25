@@ -155,8 +155,7 @@ export interface CreateSlackNotificationTargetRequest {
 }
 
 export type CreateNotificationTargetRequest =
-  | CreateEmailNotificationTargetRequest
-  | CreateSlackNotificationTargetRequest;
+  CreateEmailNotificationTargetRequest | CreateSlackNotificationTargetRequest;
 
 export interface UpdateNotificationTargetRequest {
   name?: string;

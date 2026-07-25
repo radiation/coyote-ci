@@ -1,10 +1,7 @@
 import type { BuildStatus, VersionTag } from "./build";
 
 export type ArtifactType =
-  | "docker_image"
-  | "npm_package"
-  | "generic"
-  | "unknown";
+  "docker_image" | "npm_package" | "generic" | "unknown";
 
 export interface ArtifactLineage {
   project_id: string;

@@ -29,6 +29,7 @@ type scmAdminService interface {
 	ListRegisteredRepositories(ctx context.Context) ([]domain.SCMRepositoryRegistration, error)
 	GetRegisteredRepository(ctx context.Context, id string) (domain.SCMRepositoryRegistration, error)
 	CreateRegisteredRepository(ctx context.Context, input service.CreateSCMRepositoryRegistrationInput) (domain.SCMRepositoryRegistration, error)
+	RefreshRegisteredRepository(ctx context.Context, id string) (domain.SCMRepositoryRegistration, error)
 }
 
 type SCMHandler struct {
@@ -266,25 +267,41 @@ func (h *SCMHandler) CreateRegisteredRepository(w http.ResponseWriter, r *http.R
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
-	archived := req.Archived != nil && *req.Archived
-	disabled := req.Disabled != nil && *req.Disabled
 	repositoryRegistration, err := h.admin.CreateRegisteredRepository(r.Context(), service.CreateSCMRepositoryRegistrationInput{
 		ConnectionID:         req.ConnectionID,
 		ProviderRepositoryID: req.ProviderRepositoryID,
 		Owner:                req.Owner,
 		Name:                 req.Name,
-		FullName:             req.FullName,
-		CloneURL:             req.CloneURL,
-		WebURL:               req.WebURL,
-		DefaultBranch:        req.DefaultBranch,
-		Archived:             archived,
-		Disabled:             disabled,
 	})
 	if err != nil {
 		h.writeError(w, err)
 		return
 	}
 	writeDataJSON(w, http.StatusCreated, toSCMRepositoryRegistrationResponse(repositoryRegistration))
+}
+
+// RefreshRegisteredRepository godoc
+// @Summary Refresh SCM repository metadata
+// @Description Refreshes repository metadata from the provider using the stored connection and provider repository ID.
+// @Tags scm
+// @Produce json
+// @Success 200 {object} api.SCMRepositoryRegistrationEnvelope
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 403 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 502 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /settings/scm/repositories/{repositoryID}/refresh [post]
+func (h *SCMHandler) RefreshRegisteredRepository(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeAdmin(w, r) {
+		return
+	}
+	repositoryRegistration, err := h.admin.RefreshRegisteredRepository(r.Context(), strings.TrimSpace(chi.URLParam(r, "repositoryID")))
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeDataJSON(w, http.StatusOK, toSCMRepositoryRegistrationResponse(repositoryRegistration))
 }
 
 func (h *SCMHandler) GetRegisteredRepository(w http.ResponseWriter, r *http.Request) {
@@ -329,13 +346,12 @@ func (h *SCMHandler) writeError(w http.ResponseWriter, err error) {
 		errors.Is(err, service.ErrSCMConnectionDisabled) ||
 		errors.Is(err, service.ErrSCMGitHubConnectionConfigurationInvalid) ||
 		errors.Is(err, service.ErrSCMRegisteredRepositoryConnectionIDRequired) ||
-		errors.Is(err, service.ErrSCMRegisteredRepositoryProviderRepositoryIDRequired) ||
-		errors.Is(err, service.ErrSCMRegisteredRepositoryOwnerRequired) ||
-		errors.Is(err, service.ErrSCMRegisteredRepositoryNameRequired) ||
-		errors.Is(err, service.ErrSCMRegisteredRepositoryFullNameRequired) ||
-		errors.Is(err, service.ErrSCMRegisteredRepositoryCloneURLRequired) ||
-		errors.Is(err, service.ErrSCMRegisteredRepositoryWebURLRequired) {
+		errors.Is(err, service.ErrSCMRegisteredRepositorySelectorInvalid) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrSCMGitHubRepositoryNotAccessible) {
+		writeErrorJSON(w, http.StatusNotFound, "not_found", err.Error())
 		return
 	}
 	if errors.Is(err, service.ErrSCMGitHubPrivateKeyResolveFailed) {

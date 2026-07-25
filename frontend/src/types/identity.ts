@@ -38,10 +38,7 @@ export interface APIToken {
 }
 
 export type APITokenScope =
-  | "build:read"
-  | "build:logs"
-  | "build:run"
-  | "artifact:read";
+  "build:read" | "build:logs" | "build:run" | "artifact:read";
 
 export interface APITokenListResponse {
   tokens: APIToken[];

@@ -19,6 +19,7 @@ var defaultTokenRefreshSkew = time.Minute
 
 const maxGitHubProbeResponseBytes = 64 << 10
 const maxGitHubTokenResponseBytes = 64 << 10
+const maxGitHubRepositoryResponseBytes = 128 << 10
 
 type httpDoer interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -43,6 +44,18 @@ type InstallationProbeResult struct {
 	Suspended      bool
 }
 
+type Repository struct {
+	ID            string
+	Owner         string
+	Name          string
+	FullName      string
+	CloneURL      string
+	WebURL        string
+	DefaultBranch *string
+	Archived      bool
+	Disabled      bool
+}
+
 type installationProbeResponse struct {
 	TotalCount   *int `json:"total_count"`
 	Repositories []struct {
@@ -56,6 +69,20 @@ type installationDetailsResponse struct {
 	Account     struct {
 		Login string `json:"login"`
 	} `json:"account"`
+}
+
+type repositoryResponse struct {
+	ID            json.Number `json:"id"`
+	Name          string      `json:"name"`
+	FullName      string      `json:"full_name"`
+	CloneURL      string      `json:"clone_url"`
+	HTMLURL       string      `json:"html_url"`
+	DefaultBranch string      `json:"default_branch"`
+	Archived      bool        `json:"archived"`
+	Disabled      bool        `json:"disabled"`
+	Owner         struct {
+		Login string `json:"login"`
+	} `json:"owner"`
 }
 
 type Client struct {
@@ -153,6 +180,46 @@ func (c *Client) ProbeInstallation(ctx context.Context, input InstallationTokenR
 	return InstallationProbeResult{}, err
 }
 
+func (c *Client) GetRepositoryByID(ctx context.Context, input InstallationTokenRequest, repositoryID string) (Repository, error) {
+	token, fromCache, err := c.getInstallationToken(ctx, input)
+	if err != nil {
+		return Repository{}, err
+	}
+	repository, err := c.getRepositoryByIDWithToken(ctx, input, token, repositoryID)
+	if err == nil {
+		return repository, nil
+	}
+	if err == ErrAuthentication && fromCache {
+		c.invalidateCachedToken(input, token)
+		refreshedToken, _, refreshErr := c.getInstallationToken(ctx, input)
+		if refreshErr != nil {
+			return Repository{}, refreshErr
+		}
+		return c.getRepositoryByIDWithToken(ctx, input, refreshedToken, repositoryID)
+	}
+	return Repository{}, err
+}
+
+func (c *Client) GetRepositoryByOwnerAndName(ctx context.Context, input InstallationTokenRequest, owner string, name string) (Repository, error) {
+	token, fromCache, err := c.getInstallationToken(ctx, input)
+	if err != nil {
+		return Repository{}, err
+	}
+	repository, err := c.getRepositoryByOwnerAndNameWithToken(ctx, input, token, owner, name)
+	if err == nil {
+		return repository, nil
+	}
+	if err == ErrAuthentication && fromCache {
+		c.invalidateCachedToken(input, token)
+		refreshedToken, _, refreshErr := c.getInstallationToken(ctx, input)
+		if refreshErr != nil {
+			return Repository{}, refreshErr
+		}
+		return c.getRepositoryByOwnerAndNameWithToken(ctx, input, refreshedToken, owner, name)
+	}
+	return Repository{}, err
+}
+
 func (c *Client) exchangeInstallationToken(ctx context.Context, input InstallationTokenRequest) (InstallationToken, error) {
 	jwtToken, err := c.signer.Sign(input.AppID, input.PrivateKeyPEM)
 	if err != nil {
@@ -240,6 +307,23 @@ func classifyGitHubResponse(resp *http.Response) error {
 	return ErrProviderUnavailable
 }
 
+func classifyGitHubRepositoryResponse(resp *http.Response) error {
+	message := readGitHubMessage(resp.Body)
+	if isRateLimited(resp, message) {
+		return ErrRateLimited
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return ErrAuthentication
+	}
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+		return ErrRepositoryInaccessible
+	}
+	if resp.StatusCode >= http.StatusInternalServerError {
+		return ErrProviderUnavailable
+	}
+	return ErrProviderUnavailable
+}
+
 func isRateLimited(resp *http.Response, message string) bool {
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return true
@@ -280,6 +364,67 @@ func installationIDString(value int64) string {
 
 func decodeGitHubJSON(body io.Reader, maxBytes int64, target any) error {
 	return json.NewDecoder(io.LimitReader(body, maxBytes)).Decode(target)
+}
+
+func (c *Client) getRepositoryByIDWithToken(ctx context.Context, input InstallationTokenRequest, token InstallationToken, repositoryID string) (Repository, error) {
+	repositoryURL := strings.TrimRight(strings.TrimSpace(input.APIBaseURL), "/") + "/repositories/" + url.PathEscape(strings.TrimSpace(repositoryID))
+	return c.getRepositoryWithToken(ctx, repositoryURL, token)
+}
+
+func (c *Client) getRepositoryByOwnerAndNameWithToken(ctx context.Context, input InstallationTokenRequest, token InstallationToken, owner string, name string) (Repository, error) {
+	repositoryURL := strings.TrimRight(strings.TrimSpace(input.APIBaseURL), "/") + "/repos/" + url.PathEscape(strings.TrimSpace(owner)) + "/" + url.PathEscape(strings.TrimSpace(name))
+	return c.getRepositoryWithToken(ctx, repositoryURL, token)
+}
+
+func (c *Client) getRepositoryWithToken(ctx context.Context, repositoryURL string, token InstallationToken) (Repository, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, repositoryURL, nil)
+	if err != nil {
+		return Repository{}, err
+	}
+	setGitHubHeaders(req, token.Value)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return Repository{}, ctx.Err()
+		}
+		return Repository{}, ErrProviderUnavailable
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return Repository{}, classifyGitHubRepositoryResponse(resp)
+	}
+	var payload repositoryResponse
+	if err := decodeGitHubJSON(resp.Body, maxGitHubRepositoryResponseBytes, &payload); err != nil {
+		return Repository{}, ErrMalformedResponse
+	}
+	return mapRepositoryResponse(payload)
+}
+
+func mapRepositoryResponse(payload repositoryResponse) (Repository, error) {
+	repositoryID := strings.TrimSpace(payload.ID.String())
+	owner := strings.TrimSpace(payload.Owner.Login)
+	name := strings.TrimSpace(payload.Name)
+	fullName := strings.TrimSpace(payload.FullName)
+	cloneURL := strings.TrimSpace(payload.CloneURL)
+	webURL := strings.TrimSpace(payload.HTMLURL)
+	if repositoryID == "" || owner == "" || name == "" || fullName == "" || cloneURL == "" || webURL == "" {
+		return Repository{}, ErrMalformedResponse
+	}
+	var defaultBranch *string
+	if trimmedBranch := strings.TrimSpace(payload.DefaultBranch); trimmedBranch != "" {
+		defaultBranch = &trimmedBranch
+	}
+	return Repository{
+		ID:            repositoryID,
+		Owner:         owner,
+		Name:          name,
+		FullName:      fullName,
+		CloneURL:      cloneURL,
+		WebURL:        webURL,
+		DefaultBranch: defaultBranch,
+		Archived:      payload.Archived,
+		Disabled:      payload.Disabled,
+	}, nil
 }
 
 func (c *Client) probeInstallationWithToken(ctx context.Context, input InstallationTokenRequest, token InstallationToken) (InstallationProbeResult, error) {

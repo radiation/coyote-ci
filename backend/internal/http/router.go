@@ -93,7 +93,6 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(limitRequestBody(maxRequestBodySize))
@@ -216,6 +215,7 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 						r.Get("/", cfg.scmHandler.ListRegisteredRepositories)
 						r.Post("/", cfg.scmHandler.CreateRegisteredRepository)
 						r.Get("/{repositoryID}", cfg.scmHandler.GetRegisteredRepository)
+						r.Post("/{repositoryID}/refresh", cfg.scmHandler.RefreshRegisteredRepository)
 					})
 				})
 			}

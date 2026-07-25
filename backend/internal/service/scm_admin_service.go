@@ -26,16 +26,12 @@ var ErrSCMGitHubTargetIDRequired = errors.New("github installation target_id is 
 var ErrSCMConnectionEnabledRequired = errors.New("enabled is required")
 var ErrSCMConnectionDisabled = errors.New("scm connection is disabled")
 var ErrSCMRegisteredRepositoryConnectionIDRequired = errors.New("connection_id is required")
-var ErrSCMRegisteredRepositoryProviderRepositoryIDRequired = errors.New("provider_repository_id is required")
-var ErrSCMRegisteredRepositoryOwnerRequired = errors.New("owner is required")
-var ErrSCMRegisteredRepositoryNameRequired = errors.New("name is required")
-var ErrSCMRegisteredRepositoryFullNameRequired = errors.New("full_name is required")
-var ErrSCMRegisteredRepositoryCloneURLRequired = errors.New("clone_url is required")
-var ErrSCMRegisteredRepositoryWebURLRequired = errors.New("web_url is required")
+var ErrSCMRegisteredRepositorySelectorInvalid = errors.New("exactly one repository selector is required: provider_repository_id or owner plus name")
 var ErrSCMGitHubConnectionConfigurationInvalid = errors.New("github app connection configuration is invalid")
 var ErrSCMGitHubPrivateKeyResolveFailed = errors.New("github app private key could not be resolved")
 var ErrSCMGitHubAuthenticationFailed = errors.New("github app authentication failed")
 var ErrSCMGitHubInstallationUnavailable = errors.New("github app installation is unavailable")
+var ErrSCMGitHubRepositoryNotAccessible = errors.New("github repository is not accessible through the selected connection")
 var ErrSCMGitHubRateLimited = errors.New("github app request was rate limited")
 var ErrSCMGitHubProviderUnavailable = errors.New("github app provider is unavailable")
 var ErrSCMGitHubProviderMalformedResponse = errors.New("github app provider response was malformed")
@@ -49,11 +45,17 @@ type scmGitHubAppClient interface {
 	ProbeInstallation(ctx context.Context, input platformgithubapp.InstallationTokenRequest) (platformgithubapp.InstallationProbeResult, error)
 }
 
+type scmGitHubRepositoryResolver interface {
+	GetRepositoryByID(ctx context.Context, input platformgithubapp.InstallationTokenRequest, repositoryID string) (platformgithubapp.Repository, error)
+	GetRepositoryByOwnerAndName(ctx context.Context, input platformgithubapp.InstallationTokenRequest, owner string, name string) (platformgithubapp.Repository, error)
+}
+
 type SCMAdminService struct {
 	connections  repository.SCMConnectionRepository
 	repositories repository.SCMRepositoryRegistrationRepository
 	secrets      scmSecretResolver
 	githubApps   scmGitHubAppClient
+	githubRepos  scmGitHubRepositoryResolver
 	now          func() time.Time
 }
 
@@ -81,21 +83,16 @@ type CreateSCMRepositoryRegistrationInput struct {
 	ProviderRepositoryID string
 	Owner                string
 	Name                 string
-	FullName             string
-	CloneURL             string
-	WebURL               string
-	DefaultBranch        *string
-	Archived             bool
-	Disabled             bool
-	MetadataRefreshedAt  *time.Time
 }
 
 func NewSCMAdminService(connections repository.SCMConnectionRepository, repositories repository.SCMRepositoryRegistrationRepository) *SCMAdminService {
+	githubClient := platformgithubapp.NewClient(nil)
 	return &SCMAdminService{
 		connections:  connections,
 		repositories: repositories,
 		secrets:      platformsecret.NewEnvResolver(),
-		githubApps:   platformgithubapp.NewClient(nil),
+		githubApps:   githubClient,
+		githubRepos:  githubClient,
 		now:          time.Now,
 	}
 }
@@ -240,54 +237,106 @@ func (s *SCMAdminService) CreateRegisteredRepository(ctx context.Context, input 
 	if strings.TrimSpace(input.ConnectionID) == "" {
 		return domain.SCMRepositoryRegistration{}, ErrSCMRegisteredRepositoryConnectionIDRequired
 	}
-	if strings.TrimSpace(input.ProviderRepositoryID) == "" {
-		return domain.SCMRepositoryRegistration{}, ErrSCMRegisteredRepositoryProviderRepositoryIDRequired
+	selector, err := normalizeRepositorySelector(input)
+	if err != nil {
+		return domain.SCMRepositoryRegistration{}, err
 	}
-	if strings.TrimSpace(input.Owner) == "" {
-		return domain.SCMRepositoryRegistration{}, ErrSCMRegisteredRepositoryOwnerRequired
+	request, _, err := s.resolveGitHubInstallationTokenRequest(ctx, strings.TrimSpace(input.ConnectionID))
+	if err != nil {
+		return domain.SCMRepositoryRegistration{}, err
 	}
-	if strings.TrimSpace(input.Name) == "" {
-		return domain.SCMRepositoryRegistration{}, ErrSCMRegisteredRepositoryNameRequired
-	}
-	if strings.TrimSpace(input.FullName) == "" {
-		return domain.SCMRepositoryRegistration{}, ErrSCMRegisteredRepositoryFullNameRequired
-	}
-	if strings.TrimSpace(input.CloneURL) == "" {
-		return domain.SCMRepositoryRegistration{}, ErrSCMRegisteredRepositoryCloneURLRequired
-	}
-	if strings.TrimSpace(input.WebURL) == "" {
-		return domain.SCMRepositoryRegistration{}, ErrSCMRegisteredRepositoryWebURLRequired
-	}
-	if _, err := s.connections.GetByID(ctx, strings.TrimSpace(input.ConnectionID)); err != nil {
+	resolvedRepository, err := s.resolveGitHubRepository(ctx, request, selector)
+	if err != nil {
 		return domain.SCMRepositoryRegistration{}, err
 	}
 	now := s.now().UTC()
-	metadataRefreshedAt := now
-	if input.MetadataRefreshedAt != nil {
-		metadataRefreshedAt = input.MetadataRefreshedAt.UTC()
-	}
-	registration := domain.SCMRepositoryRegistration{
-		ID:                   uuid.NewString(),
-		ConnectionID:         strings.TrimSpace(input.ConnectionID),
-		ProviderRepositoryID: strings.TrimSpace(input.ProviderRepositoryID),
-		Owner:                strings.TrimSpace(input.Owner),
-		Name:                 strings.TrimSpace(input.Name),
-		FullName:             strings.TrimSpace(input.FullName),
-		CloneURL:             strings.TrimSpace(input.CloneURL),
-		WebURL:               strings.TrimSpace(input.WebURL),
-		DefaultBranch:        input.DefaultBranch,
-		Archived:             input.Archived,
-		Disabled:             input.Disabled,
-		MetadataRefreshedAt:  metadataRefreshedAt,
-		CreatedAt:            now,
-		UpdatedAt:            now,
-	}
+	registration := mapGitHubRepositoryRegistration(uuid.NewString(), strings.TrimSpace(input.ConnectionID), resolvedRepository, now, now, now)
 	return s.repositories.Create(ctx, registration)
 }
 
-func (s *SCMAdminService) UpdateRegisteredRepository(ctx context.Context, registration domain.SCMRepositoryRegistration) (domain.SCMRepositoryRegistration, error) {
-	registration.UpdatedAt = s.now().UTC()
-	return s.repositories.Update(ctx, registration)
+func (s *SCMAdminService) RefreshRegisteredRepository(ctx context.Context, id string) (domain.SCMRepositoryRegistration, error) {
+	registration, err := s.repositories.GetByID(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return domain.SCMRepositoryRegistration{}, err
+	}
+	request, _, err := s.resolveGitHubInstallationTokenRequest(ctx, registration.ConnectionID)
+	if err != nil {
+		return domain.SCMRepositoryRegistration{}, err
+	}
+	resolvedRepository, err := s.githubRepos.GetRepositoryByID(ctx, request, registration.ProviderRepositoryID)
+	if err != nil {
+		return domain.SCMRepositoryRegistration{}, mapSCMGitHubProviderError(err)
+	}
+	if resolvedRepository.ID != registration.ProviderRepositoryID {
+		return domain.SCMRepositoryRegistration{}, ErrSCMGitHubProviderMalformedResponse
+	}
+	now := s.now().UTC()
+	updated := mapGitHubRepositoryRegistration(registration.ID, registration.ConnectionID, resolvedRepository, registration.CreatedAt, now, now)
+	return s.repositories.Update(ctx, updated)
+}
+
+type scmRepositorySelector struct {
+	providerRepositoryID string
+	owner                string
+	name                 string
+}
+
+func normalizeRepositorySelector(input CreateSCMRepositoryRegistrationInput) (scmRepositorySelector, error) {
+	selector := scmRepositorySelector{
+		providerRepositoryID: strings.TrimSpace(input.ProviderRepositoryID),
+		owner:                strings.TrimSpace(input.Owner),
+		name:                 strings.TrimSpace(input.Name),
+	}
+	hasProviderID := selector.providerRepositoryID != ""
+	hasOwner := selector.owner != ""
+	hasName := selector.name != ""
+	if hasProviderID {
+		if hasOwner || hasName {
+			return scmRepositorySelector{}, ErrSCMRegisteredRepositorySelectorInvalid
+		}
+		return selector, nil
+	}
+	if hasOwner && hasName {
+		return selector, nil
+	}
+	return scmRepositorySelector{}, ErrSCMRegisteredRepositorySelectorInvalid
+}
+
+func (s *SCMAdminService) resolveGitHubRepository(ctx context.Context, request platformgithubapp.InstallationTokenRequest, selector scmRepositorySelector) (platformgithubapp.Repository, error) {
+	if selector.providerRepositoryID != "" {
+		repository, err := s.githubRepos.GetRepositoryByID(ctx, request, selector.providerRepositoryID)
+		if err != nil {
+			return platformgithubapp.Repository{}, mapSCMGitHubProviderError(err)
+		}
+		if repository.ID != selector.providerRepositoryID {
+			return platformgithubapp.Repository{}, ErrSCMGitHubProviderMalformedResponse
+		}
+		return repository, nil
+	}
+	repository, err := s.githubRepos.GetRepositoryByOwnerAndName(ctx, request, selector.owner, selector.name)
+	if err != nil {
+		return platformgithubapp.Repository{}, mapSCMGitHubProviderError(err)
+	}
+	return repository, nil
+}
+
+func mapGitHubRepositoryRegistration(id string, connectionID string, repository platformgithubapp.Repository, createdAt time.Time, metadataRefreshedAt time.Time, updatedAt time.Time) domain.SCMRepositoryRegistration {
+	return domain.SCMRepositoryRegistration{
+		ID:                   strings.TrimSpace(id),
+		ConnectionID:         strings.TrimSpace(connectionID),
+		ProviderRepositoryID: strings.TrimSpace(repository.ID),
+		Owner:                strings.TrimSpace(repository.Owner),
+		Name:                 strings.TrimSpace(repository.Name),
+		FullName:             strings.TrimSpace(repository.FullName),
+		CloneURL:             strings.TrimSpace(repository.CloneURL),
+		WebURL:               strings.TrimSpace(repository.WebURL),
+		DefaultBranch:        repository.DefaultBranch,
+		Archived:             repository.Archived,
+		Disabled:             repository.Disabled,
+		MetadataRefreshedAt:  metadataRefreshedAt.UTC(),
+		CreatedAt:            createdAt.UTC(),
+		UpdatedAt:            updatedAt.UTC(),
+	}
 }
 
 func inferGitHubDeploymentKind(apiBaseURL string, webBaseURL string) domain.SCMDeploymentKind {
@@ -356,6 +405,8 @@ func mapSCMGitHubProviderError(err error) error {
 		return ErrSCMGitHubAuthenticationFailed
 	case errors.Is(err, platformgithubapp.ErrInstallationUnavailable):
 		return ErrSCMGitHubInstallationUnavailable
+	case errors.Is(err, platformgithubapp.ErrRepositoryInaccessible):
+		return ErrSCMGitHubRepositoryNotAccessible
 	case errors.Is(err, platformgithubapp.ErrRateLimited):
 		return ErrSCMGitHubRateLimited
 	case errors.Is(err, platformgithubapp.ErrMalformedResponse):

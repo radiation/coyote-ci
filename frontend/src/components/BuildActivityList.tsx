@@ -6,8 +6,7 @@ import { formatTime } from "../utils/time";
 type BuildActivityContextMode = "global" | "project" | "job";
 
 export type BuildActivityItem =
-  | { kind: "queue"; entry: QueueEntry }
-  | { kind: "build"; build: Build };
+  { kind: "queue"; entry: QueueEntry } | { kind: "build"; build: Build };
 
 type BuildActivityPanelProps = {
   title: string;

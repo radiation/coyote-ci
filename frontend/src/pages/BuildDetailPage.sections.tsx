@@ -676,8 +676,7 @@ export function ArtifactsPanel({
   artifactsLoading: boolean;
   artifactsError: unknown;
   onAssignVersion:
-    | ((artifactID: string, version: string) => Promise<void>)
-    | undefined;
+    ((artifactID: string, version: string) => Promise<void>) | undefined;
 }) {
   const artifactCount = (artifacts ?? []).length;
   const buildLevelCount = (artifacts ?? []).filter(
