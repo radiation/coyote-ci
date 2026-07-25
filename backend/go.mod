@@ -5,7 +5,7 @@ go 1.26
 toolchain go1.26.5
 
 require (
-	cloud.google.com/go/storage v1.63.1
+	cloud.google.com/go/storage v1.64.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/arch-go/arch-go/v2 v2.1.2
 	github.com/coreos/go-oidc/v3 v3.20.0
