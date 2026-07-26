@@ -20,7 +20,10 @@ var ErrJobNotFound = errors.New("job not found")
 var ErrJobIDRequired = errors.New("job id is required")
 var ErrJobNameRequired = errors.New("job name is required")
 var ErrJobProjectIDRequired = errors.New("job project_id is required")
-var ErrJobRepositoryURLRequired = errors.New("job repository_url is required")
+var ErrJobRepositorySourceRequired = errors.New("job repository_id or repository_url is required")
+var ErrJobRepositoryAssignmentConflict = errors.New("job repository_id cannot be combined with repository_url")
+var ErrJobRepositoryIDEmpty = errors.New("job repository_id cannot be empty")
+var ErrJobRegisteredRepositoryDisabled = errors.New("job registered repository is disabled")
 var ErrJobSourceTargetRequired = errors.New("job default_ref or default_commit_sha is required")
 var ErrJobPipelineDefinitionRequired = errors.New("job pipeline_yaml or pipeline_path is required")
 var ErrJobInvalidTriggerMode = errors.New("job trigger_mode must be one of branches, tags, branches_and_tags")
@@ -47,6 +50,7 @@ type JobService struct {
 	jobRepo                   repository.JobRepository
 	artifactTriggerDeliveries repository.ArtifactTriggerDeliveryRepository
 	projects                  repository.ProjectRepository
+	registeredRepositories    repository.SCMRepositoryRegistrationRepository
 	managedImageConfigs       repository.JobManagedImageConfigRepository
 	credentials               repository.SourceCredentialRepository
 	buildService              *buildsvc.BuildService
@@ -64,6 +68,11 @@ func (s *JobService) WithProjectRepository(projects repository.ProjectRepository
 func (s *JobService) WithManagedImageConfigRepository(configs repository.JobManagedImageConfigRepository, credentials repository.SourceCredentialRepository) *JobService {
 	s.managedImageConfigs = configs
 	s.credentials = credentials
+	return s
+}
+
+func (s *JobService) WithSCMRepositoryRegistrationRepository(repositories repository.SCMRepositoryRegistrationRepository) *JobService {
+	s.registeredRepositories = repositories
 	return s
 }
 
@@ -97,6 +106,7 @@ type CreateJobInput struct {
 	ProjectSlug      string
 	Name             string
 	Priority         *int
+	RepositoryID     string
 	RepositoryURL    string
 	DefaultRef       string
 	DefaultCommitSHA string
@@ -115,6 +125,8 @@ type CreateJobInput struct {
 type UpdateJobInput struct {
 	Name             *string
 	Priority         *int
+	RepositoryIDSet  bool
+	RepositoryID     *string
 	RepositoryURL    *string
 	DefaultRef       *string
 	DefaultCommitSHA *string
@@ -141,6 +153,13 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 	if err != nil {
 		return domain.Job{}, err
 	}
+
+	repositoryID, repositoryURL, err := s.resolveJobRepositorySource(ctx, normalized.RepositoryID, normalized.RepositoryURL)
+	if err != nil {
+		return domain.Job{}, err
+	}
+	normalized.RepositoryID = readStringPtr(repositoryID)
+	normalized.RepositoryURL = repositoryURL
 
 	if strings.TrimSpace(normalized.PipelineYAML) != "" {
 		if validateErr := validatePipelineYAML(normalized.PipelineYAML); validateErr != nil {
@@ -192,6 +211,7 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 		ProjectID:        projectID,
 		Name:             normalized.Name,
 		Priority:         normalizedPriority(normalized.Priority),
+		RepositoryID:     repositoryID,
 		RepositoryURL:    normalized.RepositoryURL,
 		DefaultRef:       normalized.DefaultRef,
 		DefaultCommitSHA: defaultCommitSHA,
@@ -265,6 +285,21 @@ func (s *JobService) ListJobs(ctx context.Context) ([]domain.Job, error) {
 
 func (s *JobService) GetJobsByIDs(ctx context.Context, ids []string) ([]domain.Job, error) {
 	return s.jobRepo.GetByIDs(ctx, ids)
+}
+
+func (s *JobService) GetRegisteredRepositoriesByIDs(ctx context.Context, ids []string) (map[string]domain.SCMRepositoryRegistration, error) {
+	if s.registeredRepositories == nil || len(ids) == 0 {
+		return map[string]domain.SCMRepositoryRegistration{}, nil
+	}
+	items, err := s.registeredRepositories.GetByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	indexed := make(map[string]domain.SCMRepositoryRegistration, len(items))
+	for _, item := range items {
+		indexed[item.ID] = item
+	}
+	return indexed, nil
 }
 
 func (s *JobService) ListJobsPaged(ctx context.Context, params repository.ListParams) ([]domain.Job, error) {
@@ -411,6 +446,11 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 		return domain.Job{}, err
 	}
 
+	repositoryID, repositoryURL, err := s.resolveUpdatedJobRepositorySource(ctx, job, input)
+	if err != nil {
+		return domain.Job{}, err
+	}
+
 	if input.Name != nil {
 		job.Name = strings.TrimSpace(*input.Name)
 	}
@@ -420,9 +460,8 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 		}
 		job.Priority = *input.Priority
 	}
-	if input.RepositoryURL != nil {
-		job.RepositoryURL = strings.TrimSpace(*input.RepositoryURL)
-	}
+	job.RepositoryID = repositoryID
+	job.RepositoryURL = repositoryURL
 	if input.DefaultRef != nil {
 		job.DefaultRef = strings.TrimSpace(*input.DefaultRef)
 	}
@@ -523,6 +562,83 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 	}
 
 	return updated, nil
+}
+
+func (s *JobService) resolveJobRepositorySource(ctx context.Context, repositoryID string, repositoryURL string) (*string, string, error) {
+	trimmedRepositoryID := strings.TrimSpace(repositoryID)
+	trimmedRepositoryURL := strings.TrimSpace(repositoryURL)
+	if trimmedRepositoryID != "" && trimmedRepositoryURL != "" {
+		return nil, "", ErrJobRepositoryAssignmentConflict
+	}
+	if trimmedRepositoryID != "" {
+		registration, err := s.resolveAssignableRegisteredRepository(ctx, trimmedRepositoryID)
+		if err != nil {
+			return nil, "", err
+		}
+		return trimmedStringPtr(registration.ID), registration.CloneURL, nil
+	}
+	if trimmedRepositoryURL == "" {
+		return nil, "", ErrJobRepositorySourceRequired
+	}
+	return nil, trimmedRepositoryURL, nil
+}
+
+func (s *JobService) resolveUpdatedJobRepositorySource(ctx context.Context, job domain.Job, input UpdateJobInput) (*string, string, error) {
+	if input.RepositoryIDSet {
+		if input.RepositoryID == nil {
+			if input.RepositoryURL == nil {
+				return nil, "", ErrJobRepositorySourceRequired
+			}
+			trimmedRepositoryURL := strings.TrimSpace(*input.RepositoryURL)
+			if trimmedRepositoryURL == "" {
+				return nil, "", ErrJobRepositorySourceRequired
+			}
+			return nil, trimmedRepositoryURL, nil
+		}
+		if input.RepositoryURL != nil {
+			return nil, "", ErrJobRepositoryAssignmentConflict
+		}
+		trimmedRepositoryID := strings.TrimSpace(*input.RepositoryID)
+		if trimmedRepositoryID == "" {
+			return nil, "", ErrJobRepositoryIDEmpty
+		}
+		registration, err := s.resolveAssignableRegisteredRepository(ctx, trimmedRepositoryID)
+		if err != nil {
+			return nil, "", err
+		}
+		return trimmedStringPtr(registration.ID), registration.CloneURL, nil
+	}
+
+	if input.RepositoryURL != nil {
+		if job.RepositoryID != nil {
+			return nil, "", ErrJobRepositoryAssignmentConflict
+		}
+		return nil, strings.TrimSpace(*input.RepositoryURL), nil
+	}
+
+	return job.RepositoryID, job.RepositoryURL, nil
+}
+
+func (s *JobService) resolveAssignableRegisteredRepository(ctx context.Context, repositoryID string) (domain.SCMRepositoryRegistration, error) {
+	if s.registeredRepositories == nil {
+		return domain.SCMRepositoryRegistration{}, repository.ErrSCMRepositoryRegistrationNotFound
+	}
+	registration, err := s.registeredRepositories.GetByID(ctx, strings.TrimSpace(repositoryID))
+	if err != nil {
+		return domain.SCMRepositoryRegistration{}, err
+	}
+	if registration.Disabled {
+		return domain.SCMRepositoryRegistration{}, ErrJobRegisteredRepositoryDisabled
+	}
+	return registration, nil
+}
+
+func trimmedStringPtr(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func (s *JobService) RunJobNow(ctx context.Context, id string, ref *string) (domain.Build, error) {

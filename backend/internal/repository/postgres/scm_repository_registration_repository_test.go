@@ -113,6 +113,37 @@ func TestSCMRepositoryRegistrationRepository_GetAndUpdateNotFoundAndUpdateDuplic
 	}
 }
 
+func TestSCMRepositoryRegistrationRepository_GetByIDs(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewSCMRepositoryRegistrationRepository(db)
+	now := time.Now().UTC()
+	rows := sqlmock.NewRows([]string{"id", "connection_id", "provider_repository_id", "owner_name", "repository_name", "full_name", "clone_url", "web_url", "default_branch", "archived", "disabled", "metadata_refreshed_at", "created_at", "updated_at"}).
+		AddRow("repo-2", "connection-1", "1002", "octo", "api", "octo/api", "https://github.com/octo/api.git", "https://github.com/octo/api", "main", false, false, now, now.Add(time.Minute), now.Add(time.Minute)).
+		AddRow("repo-1", "connection-1", "1001", "octo", "widgets", "octo/widgets", "https://github.com/octo/widgets.git", "https://github.com/octo/widgets", "main", false, false, now, now, now)
+	mock.ExpectQuery("SELECT id, connection_id, provider_repository_id, owner_name, repository_name, full_name, clone_url, web_url, default_branch, archived, disabled, metadata_refreshed_at, created_at, updated_at FROM scm_registered_repositories WHERE id IN").
+		WithArgs("repo-1", "repo-2", "missing").
+		WillReturnRows(rows)
+
+	items, getErr := repo.GetByIDs(context.Background(), []string{"repo-1", "repo-2", "repo-1", "", "missing"})
+	if getErr != nil {
+		t.Fatalf("get by ids failed: %v", getErr)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 repositories, got %d", len(items))
+	}
+	if items[0].ID != "repo-2" || items[1].ID != "repo-1" {
+		t.Fatalf("unexpected repositories: %+v", items)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationsErr)
+	}
+}
+
 func scmRepositoryRegistrationTestRows(now time.Time) *sqlmock.Rows {
 	return sqlmock.NewRows([]string{"id", "connection_id", "provider_repository_id", "owner_name", "repository_name", "full_name", "clone_url", "web_url", "default_branch", "archived", "disabled", "metadata_refreshed_at", "created_at", "updated_at"}).
 		AddRow("repo-1", "connection-1", "1001", "octo", "widgets", "octo/widgets", "https://github.com/octo/widgets.git", "https://github.com/octo/widgets", "main", false, false, now, now, now)

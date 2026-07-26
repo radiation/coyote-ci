@@ -27,6 +27,7 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"../../../db/migrations/00033_add_claimable_notification_delivery_ledger.sql",
 		"../../../db/migrations/00034_add_notification_recovery_scan_indexes.sql",
 		"../../../db/migrations/00039_add_scm_connection_foundation.sql",
+		"../../../db/migrations/00040_add_job_repository_id.sql",
 	}
 
 	var builder strings.Builder
@@ -93,6 +94,8 @@ func TestInitSchemaIncludesBuildLifecycleAndSteps(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS github_app_installations",
 		"CREATE TABLE IF NOT EXISTS scm_registered_repositories",
 		"scm_registered_repositories_connection_id_provider_repository_id_key",
+		"ADD COLUMN IF NOT EXISTS repository_id UUID REFERENCES scm_registered_repositories(id) ON DELETE RESTRICT",
+		"CREATE INDEX IF NOT EXISTS idx_jobs_repository_id ON jobs (repository_id)",
 		"CREATE TABLE IF NOT EXISTS notification_targets",
 		"origin TEXT",
 		"notification_targets_origin_semantics_check",

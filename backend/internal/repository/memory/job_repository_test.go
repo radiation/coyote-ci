@@ -18,6 +18,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 		ID:            "job-1",
 		ProjectID:     "project-1",
 		Name:          "backend-ci",
+		RepositoryID:  strPtr("repo-1"),
 		RepositoryURL: "https://github.com/example/backend.git",
 		DefaultRef:    "main",
 		PushEnabled:   true,
@@ -37,6 +38,9 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	}
 	if got.Name != "backend-ci" {
 		t.Fatalf("expected name backend-ci, got %q", got.Name)
+	}
+	if got.RepositoryID == nil || *got.RepositoryID != "repo-1" {
+		t.Fatalf("expected repository_id repo-1, got %#v", got.RepositoryID)
 	}
 
 	list, err := repo.List(context.Background())
@@ -217,6 +221,42 @@ func TestJobRepository_ListFiltersAndPaging(t *testing.T) {
 	}
 	if _, updateErr := repo.Update(ctx, domain.Job{ID: "missing"}); !errors.Is(updateErr, repository.ErrJobNotFound) {
 		t.Fatalf("expected ErrJobNotFound on missing update, got %v", updateErr)
+	}
+}
+
+func TestJobRepository_AllowsManyJobsPerRepositoryID(t *testing.T) {
+	repo := NewJobRepository()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	repositoryID := "repo-shared"
+	for _, jobID := range []string{"job-1", "job-2"} {
+		_, err := repo.Create(ctx, domain.Job{
+			ID:            jobID,
+			ProjectID:     "project-1",
+			Name:          jobID,
+			RepositoryID:  &repositoryID,
+			RepositoryURL: "https://github.com/example/backend.git",
+			DefaultRef:    "main",
+			PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+			Enabled:       true,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		})
+		if err != nil {
+			t.Fatalf("create shared repository job failed: %v", err)
+		}
+	}
+	jobs, err := repo.List(ctx)
+	if err != nil {
+		t.Fatalf("list jobs failed: %v", err)
+	}
+	if len(jobs) != 2 {
+		t.Fatalf("expected 2 jobs, got %d", len(jobs))
+	}
+	for _, job := range jobs {
+		if job.RepositoryID == nil || *job.RepositoryID != repositoryID {
+			t.Fatalf("expected shared repository_id %q, got %#v", repositoryID, job.RepositoryID)
+		}
 	}
 }
 

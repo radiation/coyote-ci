@@ -10,6 +10,7 @@ type CreateJobRequest struct {
 	ProjectSlug      string                              `json:"project_slug,omitempty"`
 	Name             string                              `json:"name"`
 	Priority         *int                                `json:"priority,omitempty"`
+	RepositoryID     string                              `json:"repository_id,omitempty"`
 	RepositoryURL    string                              `json:"repository_url"`
 	DefaultRef       string                              `json:"default_ref,omitempty"`
 	DefaultCommitSHA string                              `json:"default_commit_sha,omitempty"`
@@ -32,6 +33,7 @@ type RunJobRequest struct {
 type UpdateJobRequest struct {
 	Name             *string                             `json:"name,omitempty"`
 	Priority         *int                                `json:"priority,omitempty"`
+	RepositoryID     *string                             `json:"repository_id,omitempty"`
 	RepositoryURL    *string                             `json:"repository_url,omitempty"`
 	DefaultRef       *string                             `json:"default_ref,omitempty"`
 	DefaultCommitSHA *string                             `json:"default_commit_sha,omitempty"`
@@ -46,6 +48,7 @@ type UpdateJobRequest struct {
 	ManagedImage     *UpdateJobManagedImageConfigRequest `json:"managed_image,omitempty"`
 	Enabled          *bool                               `json:"enabled,omitempty"`
 
+	repositoryIDSet bool `json:"-" swaggerignore:"true"`
 	managedImageSet bool `json:"-" swaggerignore:"true"`
 }
 
@@ -53,6 +56,7 @@ func (r *UpdateJobRequest) UnmarshalJSON(data []byte) error {
 	type updateJobRequestAlias struct {
 		Name             *string                             `json:"name,omitempty"`
 		Priority         *int                                `json:"priority,omitempty"`
+		RepositoryID     *string                             `json:"repository_id,omitempty"`
 		RepositoryURL    *string                             `json:"repository_url,omitempty"`
 		DefaultRef       *string                             `json:"default_ref,omitempty"`
 		DefaultCommitSHA *string                             `json:"default_commit_sha,omitempty"`
@@ -75,6 +79,7 @@ func (r *UpdateJobRequest) UnmarshalJSON(data []byte) error {
 
 	r.Name = alias.Name
 	r.Priority = alias.Priority
+	r.RepositoryID = alias.RepositoryID
 	r.RepositoryURL = alias.RepositoryURL
 	r.DefaultRef = alias.DefaultRef
 	r.DefaultCommitSHA = alias.DefaultCommitSHA
@@ -88,11 +93,18 @@ func (r *UpdateJobRequest) UnmarshalJSON(data []byte) error {
 	r.PipelinePath = alias.PipelinePath
 	r.ManagedImage = alias.ManagedImage
 	r.Enabled = alias.Enabled
+	r.repositoryIDSet = false
 	r.managedImageSet = false
 
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
+	}
+	if repositoryIDRaw, ok := raw["repository_id"]; ok {
+		r.repositoryIDSet = true
+		if bytes.Equal(bytes.TrimSpace(repositoryIDRaw), []byte("null")) {
+			r.RepositoryID = nil
+		}
 	}
 	if managedImageRaw, ok := raw["managed_image"]; ok {
 		r.managedImageSet = true
@@ -103,6 +115,10 @@ func (r *UpdateJobRequest) UnmarshalJSON(data []byte) error {
 
 	return nil
 
+}
+
+func (r UpdateJobRequest) RepositoryIDPresent() bool {
+	return r.repositoryIDSet
 }
 
 func (r UpdateJobRequest) ManagedImagePresent() bool {
@@ -160,27 +176,41 @@ type JobArtifactTriggerResponse struct {
 	Path          string `json:"path"`
 }
 
+type JobRegisteredRepositorySummaryResponse struct {
+	ID            string  `json:"id"`
+	ConnectionID  string  `json:"connection_id"`
+	Owner         string  `json:"owner"`
+	Name          string  `json:"name"`
+	FullName      string  `json:"full_name"`
+	WebURL        string  `json:"web_url"`
+	DefaultBranch *string `json:"default_branch,omitempty"`
+	Archived      bool    `json:"archived"`
+	Disabled      bool    `json:"disabled"`
+}
+
 type JobResponse struct {
-	ID               string                         `json:"id"`
-	ProjectID        string                         `json:"project_id"`
-	Name             string                         `json:"name"`
-	Priority         int                            `json:"priority"`
-	RepositoryURL    string                         `json:"repository_url"`
-	DefaultRef       string                         `json:"default_ref"`
-	DefaultCommitSHA *string                        `json:"default_commit_sha,omitempty"`
-	PushEnabled      bool                           `json:"push_enabled"`
-	PushBranch       *string                        `json:"push_branch,omitempty"`
-	TriggerMode      string                         `json:"trigger_mode"`
-	BranchAllowlist  []string                       `json:"branch_allowlist,omitempty"`
-	TagAllowlist     []string                       `json:"tag_allowlist,omitempty"`
-	ArtifactTriggers []JobArtifactTriggerResponse   `json:"artifact_triggers,omitempty"`
-	PipelineYAML     string                         `json:"pipeline_yaml"`
-	PipelinePath     *string                        `json:"pipeline_path,omitempty"`
-	ManagedImage     *JobManagedImageConfigResponse `json:"managed_image,omitempty"`
-	LatestBuild      *JobBuildSummaryResponse       `json:"latest_build,omitempty"`
-	Enabled          bool                           `json:"enabled"`
-	CreatedAt        string                         `json:"created_at"`
-	UpdatedAt        string                         `json:"updated_at"`
+	ID               string                                  `json:"id"`
+	ProjectID        string                                  `json:"project_id"`
+	Name             string                                  `json:"name"`
+	Priority         int                                     `json:"priority"`
+	RepositoryID     *string                                 `json:"repository_id,omitempty"`
+	Repository       *JobRegisteredRepositorySummaryResponse `json:"repository,omitempty"`
+	RepositoryURL    string                                  `json:"repository_url"`
+	DefaultRef       string                                  `json:"default_ref"`
+	DefaultCommitSHA *string                                 `json:"default_commit_sha,omitempty"`
+	PushEnabled      bool                                    `json:"push_enabled"`
+	PushBranch       *string                                 `json:"push_branch,omitempty"`
+	TriggerMode      string                                  `json:"trigger_mode"`
+	BranchAllowlist  []string                                `json:"branch_allowlist,omitempty"`
+	TagAllowlist     []string                                `json:"tag_allowlist,omitempty"`
+	ArtifactTriggers []JobArtifactTriggerResponse            `json:"artifact_triggers,omitempty"`
+	PipelineYAML     string                                  `json:"pipeline_yaml"`
+	PipelinePath     *string                                 `json:"pipeline_path,omitempty"`
+	ManagedImage     *JobManagedImageConfigResponse          `json:"managed_image,omitempty"`
+	LatestBuild      *JobBuildSummaryResponse                `json:"latest_build,omitempty"`
+	Enabled          bool                                    `json:"enabled"`
+	CreatedAt        string                                  `json:"created_at"`
+	UpdatedAt        string                                  `json:"updated_at"`
 }
 
 type JobListResponse struct {

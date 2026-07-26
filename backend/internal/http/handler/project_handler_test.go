@@ -24,7 +24,8 @@ func TestProjectHandler_CreateListGetUpdateDeleteAndJobs(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	projectRepo := memory.NewProjectRepository(jobRepo)
 	buildRepo := memory.NewBuildRepository()
-	jobService := service.NewJobService(jobRepo, buildsvc.NewBuildService(buildRepo, nil, nil)).WithProjectRepository(projectRepo)
+	registeredRepo := memory.NewSCMRepositoryRegistrationRepository()
+	jobService := service.NewJobService(jobRepo, buildsvc.NewBuildService(buildRepo, nil, nil)).WithProjectRepository(projectRepo).WithSCMRepositoryRegistrationRepository(registeredRepo)
 	projectService := service.NewProjectService(projectRepo)
 	h := NewProjectHandler(projectService, jobService)
 
@@ -51,12 +52,30 @@ func TestProjectHandler_CreateListGetUpdateDeleteAndJobs(t *testing.T) {
 		t.Fatalf("expected get status %d, got %d", http.StatusOK, getRes.Code)
 	}
 
-	_, err := jobService.CreateJob(context.Background(), service.CreateJobInput{
-		ProjectID:     projectID,
-		Name:          "backend-ci",
-		RepositoryURL: "https://github.com/example/backend.git",
-		DefaultRef:    "main",
-		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+	registration, err := registeredRepo.Create(context.Background(), domain.SCMRepositoryRegistration{
+		ID:                   "repo-1",
+		ConnectionID:         "connection-1",
+		ProviderRepositoryID: "1001",
+		Owner:                "octo",
+		Name:                 "widgets",
+		FullName:             "octo/widgets",
+		CloneURL:             "https://github.com/octo/widgets.git",
+		WebURL:               "https://github.com/octo/widgets",
+		MetadataRefreshedAt:  time.Now().UTC(),
+		CreatedAt:            time.Now().UTC(),
+		UpdatedAt:            time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create registered repository failed: %v", err)
+	}
+
+	_, err = jobService.CreateJob(context.Background(), service.CreateJobInput{
+		ProjectID:    projectID,
+		Name:         "backend-ci",
+		RepositoryID: registration.ID,
+		DefaultRef:   "main",
+		PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:      boolPtr(false),
 	})
 	if err != nil {
 		t.Fatalf("create job failed: %v", err)
@@ -82,6 +101,17 @@ func TestProjectHandler_CreateListGetUpdateDeleteAndJobs(t *testing.T) {
 	}
 	if len(jobs) != 1 {
 		t.Fatalf("expected 1 project job, got %d", len(jobs))
+	}
+	job, ok := jobs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected job payload object, got %T", jobs[0])
+	}
+	if job["repository_id"] != registration.ID {
+		t.Fatalf("expected repository_id %q, got %v", registration.ID, job["repository_id"])
+	}
+	repositorySummary, ok := job["repository"].(map[string]any)
+	if !ok || repositorySummary["full_name"] != registration.FullName {
+		t.Fatalf("expected project jobs repository summary, got %v", job["repository"])
 	}
 
 	deleteReq := addURLParam(httptest.NewRequest(http.MethodDelete, "/projects/"+projectID, nil), "id", projectID)

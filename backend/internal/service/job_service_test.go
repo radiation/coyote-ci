@@ -260,6 +260,178 @@ func TestJobService_CreateJobDisabledSkipsInitialBuild(t *testing.T) {
 	}
 }
 
+func TestJobService_CreateAndUpdateWithRegisteredRepository(t *testing.T) {
+	ctx := context.Background()
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	registeredRepo := memory.NewSCMRepositoryRegistrationRepository()
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobService := NewJobService(jobRepo, buildService).WithSCMRepositoryRegistrationRepository(registeredRepo)
+
+	active, createErr := registeredRepo.Create(ctx, domain.SCMRepositoryRegistration{
+		ID:                   "repo-1",
+		ConnectionID:         "connection-1",
+		ProviderRepositoryID: "1001",
+		Owner:                "octo",
+		Name:                 "widgets",
+		FullName:             "octo/widgets",
+		CloneURL:             "https://github.com/octo/widgets.git",
+		WebURL:               "https://github.com/octo/widgets",
+		MetadataRefreshedAt:  time.Now().UTC(),
+		CreatedAt:            time.Now().UTC(),
+		UpdatedAt:            time.Now().UTC(),
+	})
+	if createErr != nil {
+		t.Fatalf("create registered repository failed: %v", createErr)
+	}
+	_, createErr = registeredRepo.Create(ctx, domain.SCMRepositoryRegistration{
+		ID:                   "repo-disabled",
+		ConnectionID:         "connection-1",
+		ProviderRepositoryID: "1002",
+		Owner:                "octo",
+		Name:                 "disabled",
+		FullName:             "octo/disabled",
+		CloneURL:             "https://github.com/octo/disabled.git",
+		WebURL:               "https://github.com/octo/disabled",
+		Disabled:             true,
+		MetadataRefreshedAt:  time.Now().UTC(),
+		CreatedAt:            time.Now().UTC(),
+		UpdatedAt:            time.Now().UTC(),
+	})
+	if createErr != nil {
+		t.Fatalf("create disabled registered repository failed: %v", createErr)
+	}
+
+	mappedJob, err := jobService.CreateJob(ctx, CreateJobInput{
+		ProjectID:    "project-1",
+		Name:         "backend-ci",
+		RepositoryID: active.ID,
+		DefaultRef:   "main",
+		PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:      boolPtr(false),
+	})
+	if err != nil {
+		t.Fatalf("create job with registered repository failed: %v", err)
+	}
+	if mappedJob.RepositoryID == nil || *mappedJob.RepositoryID != active.ID {
+		t.Fatalf("expected repository_id %q, got %#v", active.ID, mappedJob.RepositoryID)
+	}
+	if mappedJob.RepositoryURL != active.CloneURL {
+		t.Fatalf("expected repository_url %q, got %q", active.CloneURL, mappedJob.RepositoryURL)
+	}
+
+	blankRepositoryID := "  "
+	_, updateErr := jobService.UpdateJob(ctx, mappedJob.ID, UpdateJobInput{RepositoryIDSet: true, RepositoryID: &blankRepositoryID})
+	if !errors.Is(updateErr, ErrJobRepositoryIDEmpty) {
+		t.Fatalf("expected empty repository id error, got %v", updateErr)
+	}
+
+	manualURL := "https://github.com/example/manual.git"
+	_, updateErr = jobService.UpdateJob(ctx, mappedJob.ID, UpdateJobInput{RepositoryURL: &manualURL})
+	if !errors.Is(updateErr, ErrJobRepositoryAssignmentConflict) {
+		t.Fatalf("expected mapped job URL-only update conflict, got %v", updateErr)
+	}
+
+	_, updateErr = jobService.UpdateJob(ctx, mappedJob.ID, UpdateJobInput{RepositoryIDSet: true, RepositoryID: nil})
+	if !errors.Is(updateErr, ErrJobRepositorySourceRequired) {
+		t.Fatalf("expected clear without replacement URL error, got %v", updateErr)
+	}
+
+	blankURL := "  "
+	_, updateErr = jobService.UpdateJob(ctx, mappedJob.ID, UpdateJobInput{RepositoryIDSet: true, RepositoryID: nil, RepositoryURL: &blankURL})
+	if !errors.Is(updateErr, ErrJobRepositorySourceRequired) {
+		t.Fatalf("expected blank replacement URL error, got %v", updateErr)
+	}
+
+	updated, updateErr := jobService.UpdateJob(ctx, mappedJob.ID, UpdateJobInput{RepositoryIDSet: true, RepositoryID: nil, RepositoryURL: &manualURL})
+	if updateErr != nil {
+		t.Fatalf("clear repository assignment with replacement URL failed: %v", updateErr)
+	}
+	if updated.RepositoryID != nil {
+		t.Fatalf("expected repository_id cleared, got %#v", updated.RepositoryID)
+	}
+	if updated.RepositoryURL != manualURL {
+		t.Fatalf("expected replacement repository_url %q, got %q", manualURL, updated.RepositoryURL)
+	}
+
+	updated, updateErr = jobService.UpdateJob(ctx, mappedJob.ID, UpdateJobInput{})
+	if updateErr != nil {
+		t.Fatalf("omit repository fields update failed: %v", updateErr)
+	}
+	if updated.RepositoryID != nil || updated.RepositoryURL != manualURL {
+		t.Fatalf("expected omitted repository fields to preserve state, got id=%#v url=%q", updated.RepositoryID, updated.RepositoryURL)
+	}
+
+	unmappedJob, err := jobService.CreateJob(ctx, CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "manual-job",
+		RepositoryURL: "https://github.com/example/original.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       boolPtr(false),
+	})
+	if err != nil {
+		t.Fatalf("create unmapped job failed: %v", err)
+	}
+	replacementURL := "https://github.com/example/updated.git"
+	updated, updateErr = jobService.UpdateJob(ctx, unmappedJob.ID, UpdateJobInput{RepositoryURL: &replacementURL})
+	if updateErr != nil {
+		t.Fatalf("unmapped URL-only update failed: %v", updateErr)
+	}
+	if updated.RepositoryID != nil || updated.RepositoryURL != replacementURL {
+		t.Fatalf("expected unmapped URL update to persist replacement URL, got id=%#v url=%q", updated.RepositoryID, updated.RepositoryURL)
+	}
+
+	jobForSet, err := jobService.CreateJob(ctx, CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "set-job",
+		RepositoryURL: "https://github.com/example/before-set.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       boolPtr(false),
+	})
+	if err != nil {
+		t.Fatalf("create job for repository set failed: %v", err)
+	}
+	activeRepositoryID := active.ID
+	updated, updateErr = jobService.UpdateJob(ctx, jobForSet.ID, UpdateJobInput{RepositoryIDSet: true, RepositoryID: &activeRepositoryID})
+	if updateErr != nil {
+		t.Fatalf("set repository assignment failed: %v", updateErr)
+	}
+	if updated.RepositoryID == nil || *updated.RepositoryID != active.ID {
+		t.Fatalf("expected repository_id %q after set, got %#v", active.ID, updated.RepositoryID)
+	}
+	if updated.RepositoryURL != active.CloneURL {
+		t.Fatalf("expected derived repository_url %q after set, got %q", active.CloneURL, updated.RepositoryURL)
+	}
+
+	repositoryURL := "https://github.com/example/manual.git"
+	_, updateErr = jobService.UpdateJob(ctx, jobForSet.ID, UpdateJobInput{RepositoryIDSet: true, RepositoryID: &activeRepositoryID, RepositoryURL: &repositoryURL})
+	if !errors.Is(updateErr, ErrJobRepositoryAssignmentConflict) {
+		t.Fatalf("expected repository assignment conflict, got %v", updateErr)
+	}
+
+	preserved, updateErr := jobService.UpdateJob(ctx, jobForSet.ID, UpdateJobInput{Name: strPtr("set-job-preserved")})
+	if updateErr != nil {
+		t.Fatalf("preserve mapped repository fields update failed: %v", updateErr)
+	}
+	if preserved.RepositoryID == nil || *preserved.RepositoryID != active.ID || preserved.RepositoryURL != active.CloneURL {
+		t.Fatalf("expected omitted repository fields to preserve mapping, got id=%#v url=%q", preserved.RepositoryID, preserved.RepositoryURL)
+	}
+
+	_, createJobErr := jobService.CreateJob(ctx, CreateJobInput{
+		ProjectID:    "project-1",
+		Name:         "disabled-repo-job",
+		RepositoryID: "repo-disabled",
+		DefaultRef:   "main",
+		PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:      boolPtr(false),
+	})
+	if !errors.Is(createJobErr, ErrJobRegisteredRepositoryDisabled) {
+		t.Fatalf("expected disabled repository error, got %v", createJobErr)
+	}
+}
+
 func TestJobService_DispatchArtifactTriggers_QueuesOncePerArtifactAndConsumer(t *testing.T) {
 	ctx := context.Background()
 	jobRepo := memory.NewJobRepository()

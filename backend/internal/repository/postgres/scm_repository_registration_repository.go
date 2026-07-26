@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -64,6 +66,44 @@ func (r *SCMRepositoryRegistrationRepository) List(ctx context.Context) ([]domai
 	}
 	defer func() { _ = rows.Close() }()
 	items := make([]domain.SCMRepositoryRegistration, 0)
+	for rows.Next() {
+		item, scanErr := scanSCMRepositoryRegistration(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (r *SCMRepositoryRegistrationRepository) GetByIDs(ctx context.Context, ids []string) ([]domain.SCMRepositoryRegistration, error) {
+	ids = uniqueSCMRepositoryRegistrationIDs(ids)
+	if len(ids) == 0 {
+		return []domain.SCMRepositoryRegistration{}, nil
+	}
+
+	args := make([]any, 0, len(ids))
+	placeholders := make([]string, 0, len(ids))
+	for idx, id := range ids {
+		args = append(args, id)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", idx+1))
+	}
+
+	query := `
+		SELECT id, connection_id, provider_repository_id, owner_name, repository_name, full_name, clone_url, web_url, default_branch, archived, disabled, metadata_refreshed_at, created_at, updated_at
+		FROM scm_registered_repositories
+		WHERE id IN (` + strings.Join(placeholders, ", ") + `)
+		ORDER BY created_at DESC, id ASC
+	`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	items := make([]domain.SCMRepositoryRegistration, 0, len(ids))
 	for rows.Next() {
 		item, scanErr := scanSCMRepositoryRegistration(rows)
 		if scanErr != nil {
@@ -174,4 +214,21 @@ func isSCMRepositoryRegistrationUniqueViolation(err error, constraint string) bo
 		return false
 	}
 	return pgErr.Code == "23505" && pgErr.ConstraintName == constraint
+}
+
+func uniqueSCMRepositoryRegistrationIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	result := make([]string, 0, len(ids))
+	for _, id := range ids {
+		trimmedID := strings.TrimSpace(id)
+		if trimmedID == "" {
+			continue
+		}
+		if _, ok := seen[trimmedID]; ok {
+			continue
+		}
+		seen[trimmedID] = struct{}{}
+		result = append(result, trimmedID)
+	}
+	return result
 }

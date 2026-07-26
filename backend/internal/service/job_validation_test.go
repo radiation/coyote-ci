@@ -60,12 +60,14 @@ func TestValidateCreateJobRequiredFields_Errors(t *testing.T) {
 		want  error
 	}{
 		{name: "missing name", input: CreateJobInput{RepositoryURL: "https://example.com/repo.git", DefaultRef: "main", PipelineYAML: "version: 1"}, want: ErrJobNameRequired},
-		{name: "missing repo", input: CreateJobInput{Name: "backend", DefaultRef: "main", PipelineYAML: "version: 1"}, want: ErrJobRepositoryURLRequired},
+		{name: "missing repo", input: CreateJobInput{Name: "backend", DefaultRef: "main", PipelineYAML: "version: 1"}, want: ErrJobRepositorySourceRequired},
 		{name: "missing source target", input: CreateJobInput{Name: "backend", RepositoryURL: "https://example.com/repo.git", PipelineYAML: "version: 1"}, want: ErrJobSourceTargetRequired},
 		{name: "missing pipeline", input: CreateJobInput{Name: "backend", RepositoryURL: "https://example.com/repo.git", DefaultRef: "main"}, want: ErrJobPipelineDefinitionRequired},
+		{name: "conflicting repository source", input: CreateJobInput{Name: "backend", RepositoryID: "repo-1", RepositoryURL: "https://example.com/repo.git", DefaultRef: "main", PipelineYAML: "version: 1"}, want: ErrJobRepositoryAssignmentConflict},
 		{name: "invalid trigger", input: CreateJobInput{Name: "backend", RepositoryURL: "https://example.com/repo.git", DefaultRef: "main", PipelineYAML: "version: 1", TriggerMode: &invalidTrigger}, want: ErrJobInvalidTriggerMode},
 		{name: "invalid priority", input: CreateJobInput{Name: "backend", RepositoryURL: "https://example.com/repo.git", DefaultRef: "main", PipelineYAML: "version: 1", Priority: &invalidPriority}, want: ErrJobPriorityOutOfRange},
 		{name: "valid", input: CreateJobInput{Name: "backend", RepositoryURL: "https://example.com/repo.git", DefaultRef: "main", PipelineYAML: "version: 1", Priority: &validPriority}, want: nil},
+		{name: "valid registered repository", input: CreateJobInput{Name: "backend", RepositoryID: "repo-1", DefaultRef: "main", PipelineYAML: "version: 1", Priority: &validPriority}, want: nil},
 	}
 
 	for _, tc := range tests {

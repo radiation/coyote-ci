@@ -276,6 +276,166 @@ func TestJobHandler_CreateAndUpdateArtifactTriggers(t *testing.T) {
 	}
 }
 
+func TestJobHandler_RegisteredRepositoryAssignmentAndResponses(t *testing.T) {
+	ctx := context.Background()
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	registeredRepo := repositorymemory.NewSCMRepositoryRegistrationRepository()
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithSCMRepositoryRegistrationRepository(registeredRepo)
+	h := NewJobHandler(jobSvc)
+
+	registration, err := registeredRepo.Create(ctx, domain.SCMRepositoryRegistration{
+		ID:                   "repo-1",
+		ConnectionID:         "connection-1",
+		ProviderRepositoryID: "1001",
+		Owner:                "octo",
+		Name:                 "widgets",
+		FullName:             "octo/widgets",
+		CloneURL:             "https://github.com/octo/widgets.git",
+		WebURL:               "https://github.com/octo/widgets",
+		MetadataRefreshedAt:  time.Now().UTC(),
+		CreatedAt:            time.Now().UTC(),
+		UpdatedAt:            time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create registered repository failed: %v", err)
+	}
+
+	createBody := `{"project_id":"project-1","name":"backend-ci","repository_id":"repo-1","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":false}`
+	createReq := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(createBody))
+	createRes := httptest.NewRecorder()
+	h.CreateJob(createRes, createReq)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d body=%s", http.StatusCreated, createRes.Code, createRes.Body.String())
+	}
+	created := decodeDataMap(t, createRes)
+	if created["repository_id"] != registration.ID {
+		t.Fatalf("expected repository_id %q, got %v", registration.ID, created["repository_id"])
+	}
+	repositorySummary, ok := created["repository"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected repository summary object, got %T", created["repository"])
+	}
+	if repositorySummary["id"] != registration.ID || repositorySummary["full_name"] != registration.FullName {
+		t.Fatalf("unexpected repository summary: %v", repositorySummary)
+	}
+	if created["repository_url"] != registration.CloneURL {
+		t.Fatalf("expected repository_url from registration, got %v", created["repository_url"])
+	}
+	jobID, ok := created["id"].(string)
+	if !ok || jobID == "" {
+		t.Fatalf("expected created job id, got %v", created["id"])
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/jobs", nil)
+	listRes := httptest.NewRecorder()
+	h.ListJobs(listRes, listReq)
+	if listRes.Code != http.StatusOK {
+		t.Fatalf("expected list status %d, got %d", http.StatusOK, listRes.Code)
+	}
+	listData := decodeDataMap(t, listRes)
+	jobs, ok := listData["jobs"].([]any)
+	if !ok || len(jobs) != 1 {
+		t.Fatalf("expected one job in list, got %v", listData["jobs"])
+	}
+	listed, ok := jobs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected listed job object, got %T", jobs[0])
+	}
+	if listed["repository_id"] != registration.ID {
+		t.Fatalf("expected listed repository_id %q, got %v", registration.ID, listed["repository_id"])
+	}
+	if _, ok := listed["repository"].(map[string]any); !ok {
+		t.Fatalf("expected listed repository summary, got %v", listed["repository"])
+	}
+
+	rejectURLOnlyReq := addURLParam(httptest.NewRequest(http.MethodPut, "/jobs/"+jobID, bytes.NewBufferString(`{"repository_url":"https://github.com/example/manual.git"}`)), "jobID", jobID)
+	rejectURLOnlyRes := httptest.NewRecorder()
+	h.UpdateJob(rejectURLOnlyRes, rejectURLOnlyReq)
+	if rejectURLOnlyRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected mapped URL-only update status %d, got %d body=%s", http.StatusBadRequest, rejectURLOnlyRes.Code, rejectURLOnlyRes.Body.String())
+	}
+
+	clearReq := addURLParam(httptest.NewRequest(http.MethodPut, "/jobs/"+jobID, bytes.NewBufferString(`{"repository_id":null}`)), "jobID", jobID)
+	clearRes := httptest.NewRecorder()
+	h.UpdateJob(clearRes, clearReq)
+	if clearRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected clear-without-url status %d, got %d body=%s", http.StatusBadRequest, clearRes.Code, clearRes.Body.String())
+	}
+
+	clearReq = addURLParam(httptest.NewRequest(http.MethodPut, "/jobs/"+jobID, bytes.NewBufferString(`{"repository_id":null,"repository_url":"https://github.com/example/manual.git"}`)), "jobID", jobID)
+	clearRes = httptest.NewRecorder()
+	h.UpdateJob(clearRes, clearReq)
+	if clearRes.Code != http.StatusOK {
+		t.Fatalf("expected clear-with-replacement-url status %d, got %d body=%s", http.StatusOK, clearRes.Code, clearRes.Body.String())
+	}
+	cleared := decodeDataMap(t, clearRes)
+	if repositoryID, exists := cleared["repository_id"]; exists && repositoryID != nil {
+		t.Fatalf("expected cleared repository_id nil, got %v", repositoryID)
+	}
+	if repositoryValue, exists := cleared["repository"]; exists && repositoryValue != nil {
+		t.Fatalf("expected cleared repository summary nil, got %v", repositoryValue)
+	}
+	if cleared["repository_url"] != "https://github.com/example/manual.git" {
+		t.Fatalf("expected replacement repository_url after clear, got %v", cleared["repository_url"])
+	}
+
+	replaceReq := addURLParam(httptest.NewRequest(http.MethodPut, "/jobs/"+jobID, bytes.NewBufferString(`{"repository_id":"repo-1","repository_url":"https://github.com/example/other.git"}`)), "jobID", jobID)
+	replaceRes := httptest.NewRecorder()
+	h.UpdateJob(replaceRes, replaceReq)
+	if replaceRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected replace-with-url conflict status %d, got %d body=%s", http.StatusBadRequest, replaceRes.Code, replaceRes.Body.String())
+	}
+
+	restoreReq := addURLParam(httptest.NewRequest(http.MethodPut, "/jobs/"+jobID, bytes.NewBufferString(`{"repository_id":"repo-1"}`)), "jobID", jobID)
+	restoreRes := httptest.NewRecorder()
+	h.UpdateJob(restoreRes, restoreReq)
+	if restoreRes.Code != http.StatusOK {
+		t.Fatalf("expected restore mapping status %d, got %d body=%s", http.StatusOK, restoreRes.Code, restoreRes.Body.String())
+	}
+	restored := decodeDataMap(t, restoreRes)
+	if restored["repository_url"] != registration.CloneURL {
+		t.Fatalf("expected restored derived repository_url %q, got %v", registration.CloneURL, restored["repository_url"])
+	}
+
+	preserveReq := addURLParam(httptest.NewRequest(http.MethodPut, "/jobs/"+jobID, bytes.NewBufferString(`{"name":"backend-ci-preserved"}`)), "jobID", jobID)
+	preserveRes := httptest.NewRecorder()
+	h.UpdateJob(preserveRes, preserveReq)
+	if preserveRes.Code != http.StatusOK {
+		t.Fatalf("expected preserve repository fields status %d, got %d body=%s", http.StatusOK, preserveRes.Code, preserveRes.Body.String())
+	}
+	preserved := decodeDataMap(t, preserveRes)
+	if preserved["repository_id"] != registration.ID || preserved["repository_url"] != registration.CloneURL {
+		t.Fatalf("expected omitted repository fields to preserve mapping, got id=%v url=%v", preserved["repository_id"], preserved["repository_url"])
+	}
+
+	unmappedJob, err := jobSvc.CreateJob(ctx, service.CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "manual-job",
+		RepositoryURL: "https://github.com/example/original.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:       boolPtr(false),
+	})
+	if err != nil {
+		t.Fatalf("create unmapped job failed: %v", err)
+	}
+	unmappedUpdateReq := addURLParam(httptest.NewRequest(http.MethodPut, "/jobs/"+unmappedJob.ID, bytes.NewBufferString(`{"repository_url":"https://github.com/example/updated.git"}`)), "jobID", unmappedJob.ID)
+	unmappedUpdateRes := httptest.NewRecorder()
+	h.UpdateJob(unmappedUpdateRes, unmappedUpdateReq)
+	if unmappedUpdateRes.Code != http.StatusOK {
+		t.Fatalf("expected unmapped URL-only update status %d, got %d body=%s", http.StatusOK, unmappedUpdateRes.Code, unmappedUpdateRes.Body.String())
+	}
+	unmappedUpdated := decodeDataMap(t, unmappedUpdateRes)
+	if repositoryID, exists := unmappedUpdated["repository_id"]; exists && repositoryID != nil {
+		t.Fatalf("expected unmapped job repository_id nil, got %v", repositoryID)
+	}
+	if unmappedUpdated["repository_url"] != "https://github.com/example/updated.git" {
+		t.Fatalf("expected unmapped job URL update to persist, got %v", unmappedUpdated["repository_url"])
+	}
+}
+
 func serviceCredential(id string, name string) domain.SourceCredential {
 	return domain.SourceCredential{
 		ID:        id,

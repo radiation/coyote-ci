@@ -5495,6 +5495,9 @@ const docTemplate = `{
                 "push_enabled": {
                     "type": "boolean"
                 },
+                "repository_id": {
+                    "type": "string"
+                },
                 "repository_url": {
                     "type": "string"
                 },
@@ -6002,6 +6005,38 @@ const docTemplate = `{
                 }
             }
         },
+        "api.JobRegisteredRepositorySummaryResponse": {
+            "type": "object",
+            "properties": {
+                "archived": {
+                    "type": "boolean"
+                },
+                "connection_id": {
+                    "type": "string"
+                },
+                "default_branch": {
+                    "type": "string"
+                },
+                "disabled": {
+                    "type": "boolean"
+                },
+                "full_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "web_url": {
+                    "type": "string"
+                }
+            }
+        },
         "api.JobResponse": {
             "type": "object",
             "properties": {
@@ -6058,6 +6093,12 @@ const docTemplate = `{
                 },
                 "push_enabled": {
                     "type": "boolean"
+                },
+                "repository": {
+                    "$ref": "#/definitions/api.JobRegisteredRepositorySummaryResponse"
+                },
+                "repository_id": {
+                    "type": "string"
                 },
                 "repository_url": {
                     "type": "string"
@@ -6967,6 +7008,9 @@ const docTemplate = `{
                 },
                 "push_enabled": {
                     "type": "boolean"
+                },
+                "repository_id": {
+                    "type": "string"
                 },
                 "repository_url": {
                     "type": "string"
