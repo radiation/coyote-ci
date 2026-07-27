@@ -104,6 +104,15 @@ func (s *DeliveryIngressService) MarkUnsupported(ctx context.Context, delivery d
 	return s.updateDelivery(ctx, delivery, domain.WebhookDeliveryStatusUnsupported, reasonPtr)
 }
 
+func (s *DeliveryIngressService) MarkVerifiedNoMatch(ctx context.Context, delivery domain.WebhookDelivery, reason string, trigger WebhookTriggerInput) (domain.WebhookDelivery, error) {
+	delivery = applyDeliveryTriggerMetadata(delivery, trigger)
+	verified, err := s.updateDelivery(ctx, delivery, domain.WebhookDeliveryStatusVerified, nil)
+	if err != nil {
+		return domain.WebhookDelivery{}, err
+	}
+	return s.updateDelivery(ctx, verified, domain.WebhookDeliveryStatusIgnoredNoMatch, optionalDeliveryString(reason))
+}
+
 func (s *DeliveryIngressService) ProcessVerifiedEvent(ctx context.Context, delivery domain.WebhookDelivery, trigger WebhookTriggerInput) (DeliveryIngressResult, error) {
 	if s.deliveryRepo == nil {
 		return DeliveryIngressResult{}, ErrDeliveryRepoNotConfigured

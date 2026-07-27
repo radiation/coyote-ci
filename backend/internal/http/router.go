@@ -134,7 +134,7 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 		})
 
 		r.Route("/webhooks", func(r chi.Router) {
-			r.Post("/github", eventHandler.IngestGitHubWebhook)
+			r.Post("/github/apps/{registrationID}", eventHandler.IngestGitHubWebhook)
 		})
 
 		r.Group(func(r chi.Router) {

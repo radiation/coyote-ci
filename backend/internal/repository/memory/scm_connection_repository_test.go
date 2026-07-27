@@ -166,6 +166,51 @@ func TestSCMConnectionRepository_ReusesMatchingGitHubAppRegistrationAndScopesIns
 	}
 }
 
+func TestSCMConnectionRepository_GetGitHubAppInstallationConnectionScopesByRegistration(t *testing.T) {
+	repo := NewSCMConnectionRepository()
+	now := time.Now().UTC()
+	firstRegistration := testGitHubAppRegistration(now, "registration-1")
+	secondRegistration := testGitHubAppRegistration(now, "registration-2")
+	secondRegistration.AppID = "54321"
+	secondRegistration.APIBaseURL = "https://ghe.example/api/v3"
+	secondRegistration.WebBaseURL = "https://ghe.example"
+	for _, registration := range []domain.GitHubAppRegistration{firstRegistration, secondRegistration} {
+		if _, err := repo.CreateGitHubAppRegistration(context.Background(), registration); err != nil {
+			t.Fatalf("create registration %q: %v", registration.ID, err)
+		}
+	}
+
+	first := testGitHubConnectionDetail(now, "connection-1", firstRegistration, "999", "octo")
+	second := testGitHubConnectionDetail(now, "connection-2", secondRegistration, "999", "acme")
+	second.Connection.APIBaseURL = secondRegistration.APIBaseURL
+	second.Connection.WebBaseURL = secondRegistration.WebBaseURL
+	second.Connection.DeploymentKind = domain.SCMDeploymentKindSelfHosted
+	for _, detail := range []domain.SCMConnectionDetail{first, second} {
+		if _, err := repo.CreateGitHubAppInstallationConnection(context.Background(), detail); err != nil {
+			t.Fatalf("create connection %q: %v", detail.Connection.ID, err)
+		}
+	}
+
+	found, findErr := repo.GetGitHubAppInstallationConnection(context.Background(), "registration-1", "999")
+	if findErr != nil {
+		t.Fatalf("find connection: %v", findErr)
+	}
+	if found.Connection.ID != "connection-1" {
+		t.Fatalf("expected connection-1, got %q", found.Connection.ID)
+	}
+	other, otherErr := repo.GetGitHubAppInstallationConnection(context.Background(), "registration-2", "999")
+	if otherErr != nil {
+		t.Fatalf("find second connection: %v", otherErr)
+	}
+	if other.Connection.ID != "connection-2" {
+		t.Fatalf("expected connection-2, got %q", other.Connection.ID)
+	}
+	_, missingErr := repo.GetGitHubAppInstallationConnection(context.Background(), "missing-registration", "999")
+	if !errors.Is(missingErr, repository.ErrSCMConnectionNotFound) {
+		t.Fatalf("expected scoped lookup not found, got %v", missingErr)
+	}
+}
+
 func testGitHubAppRegistration(now time.Time, registrationID string) domain.GitHubAppRegistration {
 	return domain.GitHubAppRegistration{ID: registrationID, AppID: "12345", APIBaseURL: "https://api.github.com", WebBaseURL: "https://github.com", PrivateKeySecretRef: "secret/github/private-key", WebhookSecretRef: "secret/github/webhook", CreatedAt: now, UpdatedAt: now}
 }

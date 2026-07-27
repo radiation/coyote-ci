@@ -25,6 +25,7 @@ import (
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
 	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
+	platformsecret "github.com/radiation/coyote-ci/backend/internal/platform/secret"
 	platformslack "github.com/radiation/coyote-ci/backend/internal/platform/slack"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
@@ -266,7 +267,8 @@ func main() {
 		notificationHandler.SetPersonalSlackIdentityService(personalSlackIdentityService)
 		notificationHandler.SetAuthorization(authMode)
 	}
-	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, cfg.GitHubWebhookSecret)
+	githubWebhookResolver := webhooksvc.NewGitHubConnectionResolver(scmConnectionRepo, platformsecret.NewEnvResolver())
+	eventHandler := handler.NewEventHandler(jobService, webhookService, webhookMetrics, githubWebhookResolver)
 	readyHandler := handler.NewReadinessHandler(handler.ReadinessCheckFunc(func(ctx context.Context) error {
 		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()

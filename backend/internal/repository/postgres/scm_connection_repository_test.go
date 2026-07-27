@@ -223,6 +223,39 @@ func TestSCMConnectionRepository_GetListAndSetEnabled(t *testing.T) {
 	}
 }
 
+func TestSCMConnectionRepository_GetGitHubAppInstallationConnectionScopesByRegistration(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewSCMConnectionRepository(db)
+	now := time.Now().UTC()
+	mock.ExpectQuery(`FROM github_app_installations gi.*WHERE gi.app_registration_id = \$1 AND gi.installation_id = \$2`).
+		WithArgs("registration-1", "999").
+		WillReturnRows(scmConnectionDetailTestRows(now))
+	found, findErr := repo.GetGitHubAppInstallationConnection(context.Background(), "registration-1", "999")
+	if findErr != nil {
+		t.Fatalf("find connection: %v", findErr)
+	}
+	if found.Connection.ID != "connection-1" || found.GitHubAppInstallation == nil || found.GitHubAppInstallation.AppRegistrationID != "registration-1" {
+		t.Fatalf("unexpected connection detail: %+v", found)
+	}
+
+	mock.ExpectQuery(`FROM github_app_installations gi.*WHERE gi.app_registration_id = \$1 AND gi.installation_id = \$2`).
+		WithArgs("registration-2", "999").
+		WillReturnError(sql.ErrNoRows)
+	_, missingErr := repo.GetGitHubAppInstallationConnection(context.Background(), "registration-2", "999")
+	if missingErr != repository.ErrSCMConnectionNotFound {
+		t.Fatalf("expected scoped not found error, got %v", missingErr)
+	}
+
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationsErr)
+	}
+}
+
 func testPostgresGitHubConnectionDetail(now time.Time) domain.SCMConnectionDetail {
 	registration := testPostgresGitHubAppRegistration(now)
 	return domain.SCMConnectionDetail{

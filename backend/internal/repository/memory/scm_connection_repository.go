@@ -108,6 +108,17 @@ func (r *SCMConnectionRepository) CreateGitHubAppInstallationConnection(_ contex
 	return domain.SCMConnectionDetail{Connection: connection, GitHubAppRegistration: &registration, GitHubAppInstallation: &installation}, nil
 }
 
+func (r *SCMConnectionRepository) GetGitHubAppInstallationConnection(_ context.Context, registrationID string, installationID string) (domain.SCMConnectionDetail, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	connectionID, ok := r.installationIndex[installationIndexKey(registrationID, installationID)]
+	if !ok {
+		return domain.SCMConnectionDetail{}, repository.ErrSCMConnectionNotFound
+	}
+	return r.detailLocked(connectionID), nil
+}
+
 func (r *SCMConnectionRepository) List(_ context.Context) ([]domain.SCMConnectionDetail, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

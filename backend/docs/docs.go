@@ -4151,9 +4151,9 @@ const docTemplate = `{
                 }
             }
         },
-        "/webhooks/github": {
+        "/webhooks/github/apps/{registrationID}": {
             "post": {
-                "description": "Verifies a GitHub webhook signature and triggers builds for matching jobs on push events.",
+                "description": "Verifies a GitHub App registration-specific webhook signature, resolves the installation connection, and triggers builds for matching jobs on push events.",
                 "produces": [
                     "application/json"
                 ],
@@ -4161,6 +4161,15 @@ const docTemplate = `{
                     "webhooks"
                 ],
                 "summary": "Ingest GitHub webhook",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "GitHub App registration ID",
+                        "name": "registrationID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
