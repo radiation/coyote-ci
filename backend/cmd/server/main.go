@@ -209,6 +209,7 @@ func main() {
 	projectMembershipService := service.NewProjectMembershipService(projectRepo, projectMembershipRepo)
 	jobService := service.NewJobService(jobRepo, buildService).
 		WithProjectRepository(projectRepo).
+		WithSCMRepositoryRegistrationRepository(scmRepositoryRegistrationRepo).
 		WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo).
 		WithArtifactTriggerDeliveryRepository(artifactTriggerDeliveryRepo)
 	buildService.SetArtifactTriggerDispatcher(jobService)

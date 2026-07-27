@@ -845,6 +845,8 @@ definitions:
         type: string
       push_enabled:
         type: boolean
+      repository_id:
+        type: string
       repository_url:
         type: string
       tag_allowlist:
@@ -1175,6 +1177,27 @@ definitions:
       write_credential_id:
         type: string
     type: object
+  api.JobRegisteredRepositorySummaryResponse:
+    properties:
+      archived:
+        type: boolean
+      connection_id:
+        type: string
+      default_branch:
+        type: string
+      disabled:
+        type: boolean
+      full_name:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      owner:
+        type: string
+      web_url:
+        type: string
+    type: object
   api.JobResponse:
     properties:
       artifact_triggers:
@@ -1213,6 +1236,10 @@ definitions:
         type: string
       push_enabled:
         type: boolean
+      repository:
+        $ref: '#/definitions/api.JobRegisteredRepositorySummaryResponse'
+      repository_id:
+        type: string
       repository_url:
         type: string
       tag_allowlist:
@@ -1801,6 +1828,8 @@ definitions:
         type: string
       push_enabled:
         type: boolean
+      repository_id:
+        type: string
       repository_url:
         type: string
       tag_allowlist:

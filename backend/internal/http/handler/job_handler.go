@@ -67,6 +67,7 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		ProjectID:        projectID,
 		Name:             req.Name,
 		Priority:         req.Priority,
+		RepositoryID:     req.RepositoryID,
 		RepositoryURL:    req.RepositoryURL,
 		DefaultRef:       req.DefaultRef,
 		DefaultCommitSHA: req.DefaultCommitSHA,
@@ -86,7 +87,12 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeDataJSON(w, http.StatusCreated, toJobResponse(job))
+	response, err := jobResponseWithRegisteredRepository(r.Context(), h.jobService, job)
+	if err != nil {
+		h.writeJobServiceError(w, err)
+		return
+	}
+	writeDataJSON(w, http.StatusCreated, response)
 }
 
 // ListJobs godoc
@@ -120,9 +126,10 @@ func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	responses := make([]api.JobResponse, 0, len(jobs))
-	for _, job := range jobs {
-		responses = append(responses, toJobResponse(job))
+	responses, err := jobResponsesWithRegisteredRepositories(r.Context(), h.jobService, jobs)
+	if err != nil {
+		h.writeJobServiceError(w, err)
+		return
 	}
 
 	writeDataJSON(w, http.StatusOK, api.JobListResponse{Jobs: responses})
@@ -158,7 +165,12 @@ func (h *JobHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeDataJSON(w, http.StatusOK, toJobResponse(job))
+	response, err := jobResponseWithRegisteredRepository(r.Context(), h.jobService, job)
+	if err != nil {
+		h.writeJobServiceError(w, err)
+		return
+	}
+	writeDataJSON(w, http.StatusOK, response)
 }
 
 // ResolveJob godoc
@@ -212,7 +224,12 @@ func (h *JobHandler) ResolveJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeDataJSON(w, http.StatusOK, toJobResponse(job))
+	response, err := jobResponseWithRegisteredRepository(r.Context(), h.jobService, job)
+	if err != nil {
+		h.writeJobServiceError(w, err)
+		return
+	}
+	writeDataJSON(w, http.StatusOK, response)
 }
 
 // UpdateJob godoc
@@ -252,6 +269,8 @@ func (h *JobHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 	updated, err := h.jobService.UpdateJob(r.Context(), jobID, service.UpdateJobInput{
 		Name:             req.Name,
 		Priority:         req.Priority,
+		RepositoryIDSet:  req.RepositoryIDPresent(),
+		RepositoryID:     req.RepositoryID,
 		RepositoryURL:    req.RepositoryURL,
 		DefaultRef:       req.DefaultRef,
 		DefaultCommitSHA: req.DefaultCommitSHA,
@@ -272,7 +291,12 @@ func (h *JobHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeDataJSON(w, http.StatusOK, toJobResponse(updated))
+	response, err := jobResponseWithRegisteredRepository(r.Context(), h.jobService, updated)
+	if err != nil {
+		h.writeJobServiceError(w, err)
+		return
+	}
+	writeDataJSON(w, http.StatusOK, response)
 }
 
 // RunNow godoc
@@ -410,6 +434,14 @@ func (h *JobHandler) writeJobServiceError(w http.ResponseWriter, err error) {
 		writeErrorJSON(w, http.StatusConflict, "job_disabled", err.Error())
 		return
 	}
+	if errors.Is(err, repository.ErrSCMRepositoryRegistrationNotFound) {
+		writeErrorJSON(w, http.StatusNotFound, "not_found", err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrJobRegisteredRepositoryDisabled) {
+		writeErrorJSON(w, http.StatusConflict, "conflict", err.Error())
+		return
+	}
 	if errors.Is(err, service.ErrJobBuildServiceNotConfigured) {
 		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "build service not configured")
 		return
@@ -446,7 +478,9 @@ func isBadRequestError(err error) bool {
 		errors.Is(err, service.ErrJobManagedImageNameRequired) ||
 		errors.Is(err, service.ErrJobManagedImagePipelinePathRequired) ||
 		errors.Is(err, service.ErrJobManagedImageWriteCredentialIDRequired) ||
-		errors.Is(err, service.ErrJobRepositoryURLRequired) ||
+		errors.Is(err, service.ErrJobRepositorySourceRequired) ||
+		errors.Is(err, service.ErrJobRepositoryAssignmentConflict) ||
+		errors.Is(err, service.ErrJobRepositoryIDEmpty) ||
 		errors.Is(err, service.ErrJobSourceTargetRequired) ||
 		errors.Is(err, service.ErrJobInvalidTriggerMode) ||
 		errors.Is(err, service.ErrJobPipelineDefinitionRequired) ||
@@ -455,10 +489,50 @@ func isBadRequestError(err error) bool {
 		errors.Is(err, service.ErrPushEventCommitSHARequired)
 }
 
-func toJobResponse(job domain.Job) api.JobResponse {
+func jobResponsesWithRegisteredRepositories(ctx context.Context, jobService *service.JobService, jobs []domain.Job) ([]api.JobResponse, error) {
+	repositoriesByID, err := loadRegisteredRepositoriesForJobs(ctx, jobService, jobs)
+	if err != nil {
+		return nil, err
+	}
+	responses := make([]api.JobResponse, 0, len(jobs))
+	for _, job := range jobs {
+		responses = append(responses, toJobResponse(job, repositoriesByID))
+	}
+	return responses, nil
+}
+
+func jobResponseWithRegisteredRepository(ctx context.Context, jobService *service.JobService, job domain.Job) (api.JobResponse, error) {
+	repositoriesByID, err := loadRegisteredRepositoriesForJobs(ctx, jobService, []domain.Job{job})
+	if err != nil {
+		return api.JobResponse{}, err
+	}
+	return toJobResponse(job, repositoriesByID), nil
+}
+
+func loadRegisteredRepositoriesForJobs(ctx context.Context, jobService *service.JobService, jobs []domain.Job) (map[string]domain.SCMRepositoryRegistration, error) {
+	if jobService == nil || len(jobs) == 0 {
+		return map[string]domain.SCMRepositoryRegistration{}, nil
+	}
+	repositoryIDs := make([]string, 0, len(jobs))
+	for _, job := range jobs {
+		if job.RepositoryID != nil {
+			repositoryIDs = append(repositoryIDs, *job.RepositoryID)
+		}
+	}
+	return jobService.GetRegisteredRepositoriesByIDs(ctx, repositoryIDs)
+}
+
+func toJobResponse(job domain.Job, repositoriesByID map[string]domain.SCMRepositoryRegistration) api.JobResponse {
 	triggerMode := string(job.TriggerMode)
 	if strings.TrimSpace(triggerMode) == "" {
 		triggerMode = string(domain.JobTriggerModeBranches)
+	}
+
+	var repositorySummary *api.JobRegisteredRepositorySummaryResponse
+	if job.RepositoryID != nil && repositoriesByID != nil {
+		if repository, ok := repositoriesByID[*job.RepositoryID]; ok {
+			repositorySummary = toJobRegisteredRepositorySummaryResponse(repository)
+		}
 	}
 
 	var latestBuild *api.JobBuildSummaryResponse
@@ -481,6 +555,8 @@ func toJobResponse(job domain.Job) api.JobResponse {
 		ProjectID:        job.ProjectID,
 		Name:             job.Name,
 		Priority:         domain.NormalizePriority(job.Priority),
+		RepositoryID:     job.RepositoryID,
+		Repository:       repositorySummary,
 		RepositoryURL:    job.RepositoryURL,
 		DefaultRef:       job.DefaultRef,
 		DefaultCommitSHA: job.DefaultCommitSHA,
@@ -497,6 +573,20 @@ func toJobResponse(job domain.Job) api.JobResponse {
 		Enabled:          job.Enabled,
 		CreatedAt:        job.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:        job.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+func toJobRegisteredRepositorySummaryResponse(registration domain.SCMRepositoryRegistration) *api.JobRegisteredRepositorySummaryResponse {
+	return &api.JobRegisteredRepositorySummaryResponse{
+		ID:            registration.ID,
+		ConnectionID:  registration.ConnectionID,
+		Owner:         registration.Owner,
+		Name:          registration.Name,
+		FullName:      registration.FullName,
+		WebURL:        registration.WebURL,
+		DefaultBranch: registration.DefaultBranch,
+		Archived:      registration.Archived,
+		Disabled:      registration.Disabled,
 	}
 }
 

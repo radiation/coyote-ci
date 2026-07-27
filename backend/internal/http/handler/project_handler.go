@@ -214,9 +214,10 @@ func (h *ProjectHandler) ListProjectJobs(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	responses := make([]api.JobResponse, 0, len(jobs))
-	for _, job := range jobs {
-		responses = append(responses, toJobResponse(job))
+	responses, err := jobResponsesWithRegisteredRepositories(r.Context(), h.jobs, jobs)
+	if err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
 	}
 	writeDataJSON(w, http.StatusOK, api.JobListResponse{Jobs: responses})
 }

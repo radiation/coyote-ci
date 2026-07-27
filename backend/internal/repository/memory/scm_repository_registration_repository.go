@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -44,6 +45,36 @@ func (r *SCMRepositoryRegistrationRepository) List(_ context.Context) ([]domain.
 	items := make([]domain.SCMRepositoryRegistration, 0, len(r.repositories))
 	for _, item := range r.repositories {
 		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+	return items, nil
+}
+
+func (r *SCMRepositoryRegistrationRepository) GetByIDs(_ context.Context, ids []string) ([]domain.SCMRepositoryRegistration, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	seen := make(map[string]struct{}, len(ids))
+	items := make([]domain.SCMRepositoryRegistration, 0, len(ids))
+	for _, id := range ids {
+		trimmedID := strings.TrimSpace(id)
+		if trimmedID == "" {
+			continue
+		}
+		if _, ok := seen[trimmedID]; ok {
+			continue
+		}
+		seen[trimmedID] = struct{}{}
+		registration, ok := r.repositories[trimmedID]
+		if !ok {
+			continue
+		}
+		items = append(items, registration)
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].CreatedAt.Equal(items[j].CreatedAt) {

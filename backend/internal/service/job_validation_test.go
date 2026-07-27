@@ -60,12 +60,14 @@ func TestValidateCreateJobRequiredFields_Errors(t *testing.T) {
 		want  error
 	}{
 		{name: "missing name", input: CreateJobInput{RepositoryURL: "https://example.com/repo.git", DefaultRef: "main", PipelineYAML: "version: 1"}, want: ErrJobNameRequired},
-		{name: "missing repo", input: CreateJobInput{Name: "backend", DefaultRef: "main", PipelineYAML: "version: 1"}, want: ErrJobRepositoryURLRequired},
+		{name: "missing repo", input: CreateJobInput{Name: "backend", DefaultRef: "main", PipelineYAML: "version: 1"}, want: ErrJobRepositorySourceRequired},
 		{name: "missing source target", input: CreateJobInput{Name: "backend", RepositoryURL: "https://example.com/repo.git", PipelineYAML: "version: 1"}, want: ErrJobSourceTargetRequired},
 		{name: "missing pipeline", input: CreateJobInput{Name: "backend", RepositoryURL: "https://example.com/repo.git", DefaultRef: "main"}, want: ErrJobPipelineDefinitionRequired},
+		{name: "conflicting repository source", input: CreateJobInput{Name: "backend", RepositoryID: "repo-1", RepositoryURL: "https://example.com/repo.git", DefaultRef: "main", PipelineYAML: "version: 1"}, want: ErrJobRepositoryAssignmentConflict},
 		{name: "invalid trigger", input: CreateJobInput{Name: "backend", RepositoryURL: "https://example.com/repo.git", DefaultRef: "main", PipelineYAML: "version: 1", TriggerMode: &invalidTrigger}, want: ErrJobInvalidTriggerMode},
 		{name: "invalid priority", input: CreateJobInput{Name: "backend", RepositoryURL: "https://example.com/repo.git", DefaultRef: "main", PipelineYAML: "version: 1", Priority: &invalidPriority}, want: ErrJobPriorityOutOfRange},
 		{name: "valid", input: CreateJobInput{Name: "backend", RepositoryURL: "https://example.com/repo.git", DefaultRef: "main", PipelineYAML: "version: 1", Priority: &validPriority}, want: nil},
+		{name: "valid registered repository", input: CreateJobInput{Name: "backend", RepositoryID: "repo-1", DefaultRef: "main", PipelineYAML: "version: 1", Priority: &validPriority}, want: nil},
 	}
 
 	for _, tc := range tests {
@@ -75,6 +77,48 @@ func TestValidateCreateJobRequiredFields_Errors(t *testing.T) {
 				t.Fatalf("expected %v, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+func TestValidateJobRequiredFields(t *testing.T) {
+	validJob := domain.Job{
+		Name:          "backend",
+		Priority:      5,
+		RepositoryID:  stringPtr("repo-1"),
+		RepositoryURL: "https://github.com/octo/widgets.git",
+		DefaultRef:    "main",
+		TriggerMode:   domain.JobTriggerModeBranches,
+		PipelineYAML:  "version: 1",
+	}
+
+	tests := []struct {
+		name string
+		job  domain.Job
+		want error
+	}{
+		{name: "valid mapped job", job: validJob},
+		{name: "missing name", job: domain.Job{Priority: 5, RepositoryURL: validJob.RepositoryURL, DefaultRef: "main", PipelineYAML: "version: 1"}, want: ErrJobNameRequired},
+		{name: "missing repository source", job: domain.Job{Name: "backend", Priority: 5, DefaultRef: "main", PipelineYAML: "version: 1"}, want: ErrJobRepositorySourceRequired},
+		{name: "missing source target", job: domain.Job{Name: "backend", Priority: 5, RepositoryURL: validJob.RepositoryURL, PipelineYAML: "version: 1"}, want: ErrJobSourceTargetRequired},
+		{name: "missing pipeline", job: domain.Job{Name: "backend", Priority: 5, RepositoryURL: validJob.RepositoryURL, DefaultRef: "main"}, want: ErrJobPipelineDefinitionRequired},
+		{name: "invalid trigger mode", job: domain.Job{Name: "backend", Priority: 5, RepositoryURL: validJob.RepositoryURL, DefaultRef: "main", TriggerMode: "invalid", PipelineYAML: "version: 1"}, want: ErrJobInvalidTriggerMode},
+		{name: "invalid priority", job: domain.Job{Name: "backend", Priority: 11, RepositoryURL: validJob.RepositoryURL, DefaultRef: "main", PipelineYAML: "version: 1"}, want: ErrJobPriorityOutOfRange},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateJobRequiredFields(tc.job)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("expected %v, got %v", tc.want, err)
+			}
+		})
+	}
+
+	if got := optionalJobTriggerMode(""); got != string(domain.JobTriggerModeBranches) {
+		t.Fatalf("expected default trigger mode branches, got %q", got)
+	}
+	if got := optionalJobTriggerMode(" tags "); got != "tags" {
+		t.Fatalf("expected trimmed trigger mode tags, got %q", got)
 	}
 }
 

@@ -77,3 +77,34 @@ func TestSCMRepositoryRegistrationRepository_NotFoundAndUpdateConflict(t *testin
 		t.Fatalf("expected duplicate identity on update, got %v", err)
 	}
 }
+
+func TestSCMRepositoryRegistrationRepository_GetByIDs(t *testing.T) {
+	repo := NewSCMRepositoryRegistrationRepository()
+	emptyItems, emptyErr := repo.GetByIDs(context.Background(), []string{"", "  "})
+	if emptyErr != nil {
+		t.Fatalf("get empty ids failed: %v", emptyErr)
+	}
+	if len(emptyItems) != 0 {
+		t.Fatalf("expected no registrations for empty ids, got %+v", emptyItems)
+	}
+
+	now := time.Now().UTC()
+	for _, item := range []domain.SCMRepositoryRegistration{
+		{ID: "repo-1", ConnectionID: "connection-1", ProviderRepositoryID: "1001", Owner: "octo", Name: "widgets", FullName: "octo/widgets", CloneURL: "https://github.com/octo/widgets.git", WebURL: "https://github.com/octo/widgets", MetadataRefreshedAt: now, CreatedAt: now, UpdatedAt: now},
+		{ID: "repo-2", ConnectionID: "connection-1", ProviderRepositoryID: "1002", Owner: "octo", Name: "api", FullName: "octo/api", CloneURL: "https://github.com/octo/api.git", WebURL: "https://github.com/octo/api", MetadataRefreshedAt: now, CreatedAt: now.Add(time.Minute), UpdatedAt: now.Add(time.Minute)},
+	} {
+		if _, err := repo.Create(context.Background(), item); err != nil {
+			t.Fatalf("create repository failed: %v", err)
+		}
+	}
+	items, err := repo.GetByIDs(context.Background(), []string{"repo-1", "repo-2", "repo-1", "missing", ""})
+	if err != nil {
+		t.Fatalf("get by ids failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 repositories, got %d", len(items))
+	}
+	if items[0].ID != "repo-2" || items[1].ID != "repo-1" {
+		t.Fatalf("unexpected repository order: %+v", items)
+	}
+}

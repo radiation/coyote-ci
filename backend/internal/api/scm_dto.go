@@ -89,9 +89,9 @@ type SCMConnectionListEnvelope struct {
 
 type CreateSCMRepositoryRegistrationRequest struct {
 	ConnectionID         string `json:"connection_id"`
-	ProviderRepositoryID string `json:"provider_repository_id"`
-	Owner                string `json:"owner"`
-	Name                 string `json:"name"`
+	ProviderRepositoryID string `json:"provider_repository_id,omitempty"`
+	Owner                string `json:"owner,omitempty"`
+	Name                 string `json:"name,omitempty"`
 }
 
 type SCMRepositoryRegistrationResponse struct {

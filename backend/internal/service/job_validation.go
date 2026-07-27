@@ -15,6 +15,7 @@ func normalizeCreateJobInput(input CreateJobInput) (CreateJobInput, error) {
 	normalized.ProjectID = strings.TrimSpace(normalized.ProjectID)
 	normalized.ProjectSlug = strings.TrimSpace(normalized.ProjectSlug)
 	normalized.Name = strings.TrimSpace(normalized.Name)
+	normalized.RepositoryID = strings.TrimSpace(normalized.RepositoryID)
 	normalized.RepositoryURL = strings.TrimSpace(normalized.RepositoryURL)
 	normalized.DefaultRef = strings.TrimSpace(normalized.DefaultRef)
 	normalized.DefaultCommitSHA = strings.TrimSpace(normalized.DefaultCommitSHA)
@@ -44,8 +45,11 @@ func validateCreateJobRequiredFields(input CreateJobInput) error {
 	if input.Name == "" {
 		return ErrJobNameRequired
 	}
-	if input.RepositoryURL == "" {
-		return ErrJobRepositoryURLRequired
+	if input.RepositoryID != "" && input.RepositoryURL != "" {
+		return ErrJobRepositoryAssignmentConflict
+	}
+	if input.RepositoryID == "" && input.RepositoryURL == "" {
+		return ErrJobRepositorySourceRequired
 	}
 	if input.DefaultRef == "" && input.DefaultCommitSHA == "" {
 		return ErrJobSourceTargetRequired
@@ -118,18 +122,35 @@ func (s *JobService) resolveProjectID(ctx context.Context, projectID string, pro
 }
 
 func validateJobRequiredFields(job domain.Job) error {
-	return validateCreateJobRequiredFields(CreateJobInput{
-		ProjectID:        strings.TrimSpace(job.ProjectID),
-		Name:             strings.TrimSpace(job.Name),
-		Priority:         &job.Priority,
-		RepositoryURL:    strings.TrimSpace(job.RepositoryURL),
-		DefaultRef:       strings.TrimSpace(job.DefaultRef),
-		DefaultCommitSHA: strings.TrimSpace(readStringPtr(job.DefaultCommitSHA)),
-		TriggerMode:      optionalTrimmedStringPtr(string(job.TriggerMode)),
-		ArtifactTriggers: domain.NormalizeJobArtifactTriggers(job.ArtifactTriggers),
-		PipelineYAML:     strings.TrimSpace(job.PipelineYAML),
-		PipelinePath:     strings.TrimSpace(readStringPtr(job.PipelinePath)),
-	})
+	repositoryID := readStringPtr(job.RepositoryID)
+	repositoryURL := strings.TrimSpace(job.RepositoryURL)
+	if strings.TrimSpace(job.Name) == "" {
+		return ErrJobNameRequired
+	}
+	if repositoryID == "" && repositoryURL == "" {
+		return ErrJobRepositorySourceRequired
+	}
+	if strings.TrimSpace(job.DefaultRef) == "" && strings.TrimSpace(readStringPtr(job.DefaultCommitSHA)) == "" {
+		return ErrJobSourceTargetRequired
+	}
+	if strings.TrimSpace(job.PipelineYAML) == "" && strings.TrimSpace(readStringPtr(job.PipelinePath)) == "" {
+		return ErrJobPipelineDefinitionRequired
+	}
+	if !isValidTriggerMode(string(optionalJobTriggerMode(job.TriggerMode))) {
+		return ErrJobInvalidTriggerMode
+	}
+	if !domain.ValidPriority(job.Priority) {
+		return ErrJobPriorityOutOfRange
+	}
+	return validateRawArtifactTriggers(domain.NormalizeJobArtifactTriggers(job.ArtifactTriggers))
+}
+
+func optionalJobTriggerMode(mode domain.JobTriggerMode) string {
+	trimmed := strings.TrimSpace(string(mode))
+	if trimmed == "" {
+		return string(domain.JobTriggerModeBranches)
+	}
+	return trimmed
 }
 
 func validatePipelineDefinition(pipelineYAML string, pipelinePath *string) error {
