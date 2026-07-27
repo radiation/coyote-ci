@@ -436,6 +436,46 @@ func TestJobHandler_RegisteredRepositoryAssignmentAndResponses(t *testing.T) {
 	}
 }
 
+func TestJobHandler_RegisteredRepositoryResponseHelpers(t *testing.T) {
+	ctx := context.Background()
+	repositoryID := "repo-1"
+	job := domain.Job{ID: "job-1", RepositoryID: &repositoryID, RepositoryURL: "https://github.com/octo/widgets.git"}
+
+	responses, err := jobResponsesWithRegisteredRepositories(ctx, nil, []domain.Job{job})
+	if err != nil {
+		t.Fatalf("build responses without job service: %v", err)
+	}
+	if len(responses) != 1 || responses[0].Repository != nil {
+		t.Fatalf("expected response without repository summary, got %+v", responses)
+	}
+
+	response, err := jobResponseWithRegisteredRepository(ctx, nil, domain.Job{ID: "job-2"})
+	if err != nil {
+		t.Fatalf("build unmapped response without job service: %v", err)
+	}
+	if response.TriggerMode != string(domain.JobTriggerModeBranches) {
+		t.Fatalf("expected default trigger mode branches, got %q", response.TriggerMode)
+	}
+
+	h := NewJobHandler(service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil)))
+	for _, tc := range []struct {
+		name       string
+		err        error
+		statusCode int
+	}{
+		{name: "missing registered repository", err: repository.ErrSCMRepositoryRegistrationNotFound, statusCode: http.StatusNotFound},
+		{name: "disabled registered repository", err: service.ErrJobRegisteredRepositoryDisabled, statusCode: http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := httptest.NewRecorder()
+			h.writeJobServiceError(res, tc.err)
+			if res.Code != tc.statusCode {
+				t.Fatalf("expected status %d, got %d body=%s", tc.statusCode, res.Code, res.Body.String())
+			}
+		})
+	}
+}
+
 func serviceCredential(id string, name string) domain.SourceCredential {
 	return domain.SourceCredential{
 		ID:        id,

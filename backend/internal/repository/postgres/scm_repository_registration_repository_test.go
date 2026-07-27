@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -138,6 +139,33 @@ func TestSCMRepositoryRegistrationRepository_GetByIDs(t *testing.T) {
 	}
 	if items[0].ID != "repo-2" || items[1].ID != "repo-1" {
 		t.Fatalf("unexpected repositories: %+v", items)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationsErr)
+	}
+}
+
+func TestSCMRepositoryRegistrationRepository_GetByIDsEmptyAndQueryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewSCMRepositoryRegistrationRepository(db)
+	items, getErr := repo.GetByIDs(context.Background(), []string{"", "  "})
+	if getErr != nil {
+		t.Fatalf("get empty ids failed: %v", getErr)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected no registrations for empty ids, got %+v", items)
+	}
+
+	queryErr := errors.New("query failed")
+	mock.ExpectQuery("FROM scm_registered_repositories").WithArgs("repo-1").WillReturnError(queryErr)
+	_, getErr = repo.GetByIDs(context.Background(), []string{"repo-1"})
+	if !errors.Is(getErr, queryErr) {
+		t.Fatalf("expected query error, got %v", getErr)
 	}
 	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
 		t.Fatalf("unmet expectations: %v", expectationsErr)

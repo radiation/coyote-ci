@@ -80,6 +80,48 @@ func TestValidateCreateJobRequiredFields_Errors(t *testing.T) {
 	}
 }
 
+func TestValidateJobRequiredFields(t *testing.T) {
+	validJob := domain.Job{
+		Name:          "backend",
+		Priority:      5,
+		RepositoryID:  stringPtr("repo-1"),
+		RepositoryURL: "https://github.com/octo/widgets.git",
+		DefaultRef:    "main",
+		TriggerMode:   domain.JobTriggerModeBranches,
+		PipelineYAML:  "version: 1",
+	}
+
+	tests := []struct {
+		name string
+		job  domain.Job
+		want error
+	}{
+		{name: "valid mapped job", job: validJob},
+		{name: "missing name", job: domain.Job{Priority: 5, RepositoryURL: validJob.RepositoryURL, DefaultRef: "main", PipelineYAML: "version: 1"}, want: ErrJobNameRequired},
+		{name: "missing repository source", job: domain.Job{Name: "backend", Priority: 5, DefaultRef: "main", PipelineYAML: "version: 1"}, want: ErrJobRepositorySourceRequired},
+		{name: "missing source target", job: domain.Job{Name: "backend", Priority: 5, RepositoryURL: validJob.RepositoryURL, PipelineYAML: "version: 1"}, want: ErrJobSourceTargetRequired},
+		{name: "missing pipeline", job: domain.Job{Name: "backend", Priority: 5, RepositoryURL: validJob.RepositoryURL, DefaultRef: "main"}, want: ErrJobPipelineDefinitionRequired},
+		{name: "invalid trigger mode", job: domain.Job{Name: "backend", Priority: 5, RepositoryURL: validJob.RepositoryURL, DefaultRef: "main", TriggerMode: "invalid", PipelineYAML: "version: 1"}, want: ErrJobInvalidTriggerMode},
+		{name: "invalid priority", job: domain.Job{Name: "backend", Priority: 11, RepositoryURL: validJob.RepositoryURL, DefaultRef: "main", PipelineYAML: "version: 1"}, want: ErrJobPriorityOutOfRange},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateJobRequiredFields(tc.job)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("expected %v, got %v", tc.want, err)
+			}
+		})
+	}
+
+	if got := optionalJobTriggerMode(""); got != string(domain.JobTriggerModeBranches) {
+		t.Fatalf("expected default trigger mode branches, got %q", got)
+	}
+	if got := optionalJobTriggerMode(" tags "); got != "tags" {
+		t.Fatalf("expected trimmed trigger mode tags, got %q", got)
+	}
+}
+
 func TestNormalizeCreateJobInput_InvalidArtifactTriggersAreNotSilentlyDropped(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -11,7 +11,7 @@ type CreateJobRequest struct {
 	Name             string                              `json:"name"`
 	Priority         *int                                `json:"priority,omitempty"`
 	RepositoryID     string                              `json:"repository_id,omitempty"`
-	RepositoryURL    string                              `json:"repository_url"`
+	RepositoryURL    string                              `json:"repository_url,omitempty"`
 	DefaultRef       string                              `json:"default_ref,omitempty"`
 	DefaultCommitSHA string                              `json:"default_commit_sha,omitempty"`
 	PushEnabled      *bool                               `json:"push_enabled,omitempty"`

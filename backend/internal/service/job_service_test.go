@@ -123,6 +123,15 @@ func (r *erroringArtifactTriggerJobRepo) GetByIDs(_ context.Context, _ []string)
 	return nil, r.getByIDsErr
 }
 
+type erroringRegisteredRepositoryRepo struct {
+	repository.SCMRepositoryRegistrationRepository
+	getByIDsErr error
+}
+
+func (r *erroringRegisteredRepositoryRepo) GetByIDs(_ context.Context, _ []string) ([]domain.SCMRepositoryRegistration, error) {
+	return nil, r.getByIDsErr
+}
+
 func (f *fakeServiceManagedImageRefresher) RefreshManagedPipelineImage(_ context.Context, req buildsvc.ManagedImageRefreshInput) (buildsvc.ManagedImageRefreshResult, error) {
 	f.calls++
 	f.lastReq = req
@@ -429,6 +438,52 @@ func TestJobService_CreateAndUpdateWithRegisteredRepository(t *testing.T) {
 	})
 	if !errors.Is(createJobErr, ErrJobRegisteredRepositoryDisabled) {
 		t.Fatalf("expected disabled repository error, got %v", createJobErr)
+	}
+}
+
+func TestJobService_GetRegisteredRepositoriesByIDs(t *testing.T) {
+	ctx := context.Background()
+	jobService := NewJobService(memory.NewJobRepository(), buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil))
+
+	items, err := jobService.GetRegisteredRepositoriesByIDs(ctx, []string{"repo-1"})
+	if err != nil {
+		t.Fatalf("get registered repositories without repository store: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected no repositories without configured store, got %+v", items)
+	}
+
+	registeredRepo := memory.NewSCMRepositoryRegistrationRepository()
+	registered, createErr := registeredRepo.Create(ctx, domain.SCMRepositoryRegistration{
+		ID:                   "repo-1",
+		ConnectionID:         "connection-1",
+		ProviderRepositoryID: "1001",
+		Owner:                "octo",
+		Name:                 "widgets",
+		FullName:             "octo/widgets",
+		CloneURL:             "https://github.com/octo/widgets.git",
+		WebURL:               "https://github.com/octo/widgets",
+		MetadataRefreshedAt:  time.Now().UTC(),
+		CreatedAt:            time.Now().UTC(),
+		UpdatedAt:            time.Now().UTC(),
+	})
+	if createErr != nil {
+		t.Fatalf("create registered repository: %v", createErr)
+	}
+	jobService.WithSCMRepositoryRegistrationRepository(registeredRepo)
+	items, err = jobService.GetRegisteredRepositoriesByIDs(ctx, []string{registered.ID, "missing"})
+	if err != nil {
+		t.Fatalf("get registered repositories: %v", err)
+	}
+	if len(items) != 1 || items[registered.ID].FullName != registered.FullName {
+		t.Fatalf("expected indexed registered repository, got %+v", items)
+	}
+
+	lookupErr := errors.New("registered repository lookup failed")
+	jobService.WithSCMRepositoryRegistrationRepository(&erroringRegisteredRepositoryRepo{getByIDsErr: lookupErr})
+	_, err = jobService.GetRegisteredRepositoriesByIDs(ctx, []string{"repo-1"})
+	if !errors.Is(err, lookupErr) {
+		t.Fatalf("expected registered repository lookup error, got %v", err)
 	}
 }
 

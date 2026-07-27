@@ -20,6 +20,15 @@ import (
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
+type erroringProjectRegisteredRepositoryRepo struct {
+	repository.SCMRepositoryRegistrationRepository
+	getByIDsErr error
+}
+
+func (r *erroringProjectRegisteredRepositoryRepo) GetByIDs(_ context.Context, _ []string) ([]domain.SCMRepositoryRegistration, error) {
+	return nil, r.getByIDsErr
+}
+
 func TestProjectHandler_CreateListGetUpdateDeleteAndJobs(t *testing.T) {
 	jobRepo := memory.NewJobRepository()
 	projectRepo := memory.NewProjectRepository(jobRepo)
@@ -126,6 +135,63 @@ func TestProjectHandler_CreateListGetUpdateDeleteAndJobs(t *testing.T) {
 	h.UpdateProject(updateRes, updateReq)
 	if updateRes.Code != http.StatusOK {
 		t.Fatalf("expected update status %d, got %d", http.StatusOK, updateRes.Code)
+	}
+}
+
+func TestProjectHandler_ListProjectJobsReturnsInternalErrorWhenRepositoryEnrichmentFails(t *testing.T) {
+	ctx := context.Background()
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	registeredRepo := memory.NewSCMRepositoryRegistrationRepository()
+	lookupErr := errors.New("registered repository lookup failed")
+	jobService := service.NewJobService(jobRepo, buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)).WithProjectRepository(projectRepo).WithSCMRepositoryRegistrationRepository(&erroringProjectRegisteredRepositoryRepo{
+		SCMRepositoryRegistrationRepository: registeredRepo,
+		getByIDsErr:                         lookupErr,
+	})
+	h := NewProjectHandler(service.NewProjectService(projectRepo), jobService)
+
+	project, createProjectErr := projectRepo.Create(ctx, serviceProject("00000000-0000-0000-0000-000000000777", "Platform", "platform"))
+	if createProjectErr != nil {
+		t.Fatalf("create project: %v", createProjectErr)
+	}
+	now := time.Now().UTC()
+	registration, createRegistrationErr := registeredRepo.Create(ctx, domain.SCMRepositoryRegistration{
+		ID:                   "repo-1",
+		ConnectionID:         "connection-1",
+		ProviderRepositoryID: "1001",
+		Owner:                "octo",
+		Name:                 "widgets",
+		FullName:             "octo/widgets",
+		CloneURL:             "https://github.com/octo/widgets.git",
+		WebURL:               "https://github.com/octo/widgets",
+		MetadataRefreshedAt:  now,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	})
+	if createRegistrationErr != nil {
+		t.Fatalf("create registration: %v", createRegistrationErr)
+	}
+	_, createJobErr := jobRepo.Create(ctx, domain.Job{
+		ID:            "job-1",
+		ProjectID:     project.ID,
+		Name:          "backend-ci",
+		RepositoryID:  &registration.ID,
+		RepositoryURL: registration.CloneURL,
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1",
+		Enabled:       false,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	if createJobErr != nil {
+		t.Fatalf("create job: %v", createJobErr)
+	}
+
+	req := addURLParam(httptest.NewRequest(http.MethodGet, "/projects/"+project.Slug+"/jobs", nil), "id", project.Slug)
+	res := httptest.NewRecorder()
+	h.ListProjectJobs(res, req)
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusInternalServerError, res.Code, res.Body.String())
 	}
 }
 

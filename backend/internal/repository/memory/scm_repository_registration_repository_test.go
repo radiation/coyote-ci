@@ -80,6 +80,14 @@ func TestSCMRepositoryRegistrationRepository_NotFoundAndUpdateConflict(t *testin
 
 func TestSCMRepositoryRegistrationRepository_GetByIDs(t *testing.T) {
 	repo := NewSCMRepositoryRegistrationRepository()
+	emptyItems, emptyErr := repo.GetByIDs(context.Background(), []string{"", "  "})
+	if emptyErr != nil {
+		t.Fatalf("get empty ids failed: %v", emptyErr)
+	}
+	if len(emptyItems) != 0 {
+		t.Fatalf("expected no registrations for empty ids, got %+v", emptyItems)
+	}
+
 	now := time.Now().UTC()
 	for _, item := range []domain.SCMRepositoryRegistration{
 		{ID: "repo-1", ConnectionID: "connection-1", ProviderRepositoryID: "1001", Owner: "octo", Name: "widgets", FullName: "octo/widgets", CloneURL: "https://github.com/octo/widgets.git", WebURL: "https://github.com/octo/widgets", MetadataRefreshedAt: now, CreatedAt: now, UpdatedAt: now},
