@@ -32,6 +32,7 @@ func TestParsePushEvent(t *testing.T) {
 	body := []byte(`{
 		"ref":"refs/heads/main",
 		"after":"abc123",
+		"installation":{"id":1234567890123456789},
 		"repository":{
 			"name":"backend",
 			"html_url":"https://github.com/example/backend",
@@ -56,6 +57,9 @@ func TestParsePushEvent(t *testing.T) {
 	if event.CommitSHA != "abc123" {
 		t.Fatalf("unexpected commit sha: %s", event.CommitSHA)
 	}
+	if event.InstallationID != "1234567890123456789" {
+		t.Fatalf("expected precise installation id, got %q", event.InstallationID)
+	}
 }
 
 func TestParsePushEvent_TagRef(t *testing.T) {
@@ -65,6 +69,7 @@ func TestParsePushEvent_TagRef(t *testing.T) {
 	body := []byte(`{
 		"ref":"refs/tags/v1.2.3",
 		"after":"abc123",
+		"installation":{"id":123},
 		"repository":{
 			"name":"backend",
 			"html_url":"https://github.com/example/backend",
@@ -89,6 +94,7 @@ func TestParsePushEvent_UnknownRef(t *testing.T) {
 	body := []byte(`{
 		"ref":"custom/ref/path",
 		"after":"abc123",
+		"installation":{"id":123},
 		"repository":{
 			"name":"backend",
 			"html_url":"https://github.com/example/backend",
@@ -114,6 +120,7 @@ func TestParsePushEvent_DeletePushAllowedWithoutCommit(t *testing.T) {
 		"ref":"refs/heads/main",
 		"deleted":true,
 		"after":"",
+		"installation":{"id":123},
 		"repository":{
 			"name":"backend",
 			"html_url":"https://github.com/example/backend",
@@ -141,5 +148,53 @@ func TestParsePushEvent_UnsupportedEvent(t *testing.T) {
 	}
 	if err != ErrUnsupportedEvent {
 		t.Fatalf("expected ErrUnsupportedEvent, got %v", err)
+	}
+}
+
+func TestParsePushEvent_RejectsInvalidInstallationID(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "push")
+	missingInstallationBody := []byte(`{"ref":"refs/heads/main","after":"abc123","repository":{"name":"backend","html_url":"https://github.com/example/backend","owner":{"login":"example"}}}`)
+	if _, err := ParsePushEvent(headers, missingInstallationBody); err != ErrInvalidPayload {
+		t.Fatalf("expected missing installation to be invalid, got %v", err)
+	}
+	for _, installation := range []string{
+		`{}`,
+		`null`,
+		`{"id":0}`,
+		`{"id":-1}`,
+		`{"id":1.5}`,
+		`{"id":"123"}`,
+		`{"id":true}`,
+	} {
+		t.Run(installation, func(t *testing.T) {
+			body := []byte(`{"ref":"refs/heads/main","after":"abc123","installation":` + installation + `,"repository":{"name":"backend","html_url":"https://github.com/example/backend","owner":{"login":"example"}}}`)
+			_, err := ParsePushEvent(headers, body)
+			if err != ErrInvalidPayload {
+				t.Fatalf("expected invalid payload for installation=%s, got %v", installation, err)
+			}
+		})
+	}
+}
+
+func TestParseAppEnvelope(t *testing.T) {
+	envelope, parseErr := ParseAppEnvelope([]byte(`{"installation":{"id":1234567890123456789}}`))
+	if parseErr != nil {
+		t.Fatalf("parse envelope: %v", parseErr)
+	}
+	if envelope.InstallationID != "1234567890123456789" {
+		t.Fatalf("expected precise installation ID, got %q", envelope.InstallationID)
+	}
+
+	for _, body := range [][]byte{
+		[]byte(`{}`),
+		[]byte(`{"installation":{"id":0}}`),
+		[]byte(`{"installation":{"id":1.5}}`),
+		[]byte(`{"installation":{"id":"123"}}`),
+		[]byte(`{`),
+	} {
+		if _, err := ParseAppEnvelope(body); err != ErrInvalidPayload {
+			t.Fatalf("expected invalid payload for %s, got %v", body, err)
+		}
 	}
 }

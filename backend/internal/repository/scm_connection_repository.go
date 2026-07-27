@@ -19,6 +19,7 @@ type SCMConnectionRepository interface {
 	ListGitHubAppRegistrations(ctx context.Context) ([]domain.GitHubAppRegistration, error)
 	GetGitHubAppRegistrationByID(ctx context.Context, id string) (domain.GitHubAppRegistration, error)
 	CreateGitHubAppInstallationConnection(ctx context.Context, detail domain.SCMConnectionDetail) (domain.SCMConnectionDetail, error)
+	GetGitHubAppInstallationConnection(ctx context.Context, registrationID string, installationID string) (domain.SCMConnectionDetail, error)
 	List(ctx context.Context) ([]domain.SCMConnectionDetail, error)
 	GetByID(ctx context.Context, id string) (domain.SCMConnectionDetail, error)
 	SetEnabled(ctx context.Context, id string, enabled bool, updatedAt time.Time) (domain.SCMConnectionDetail, error)

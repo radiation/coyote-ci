@@ -89,7 +89,7 @@ func TestNewRouter_HealthAndNotFound(t *testing.T) {
 	jobSvc := service.NewJobService(jobRepo, buildSvc).WithArtifactTriggerDeliveryRepository(repositorymemory.NewArtifactTriggerDeliveryRepository())
 	h.SetJobService(jobSvc)
 	jh := handler.NewJobHandler(jobSvc)
-	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{})
 	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
 	tests := []struct {
@@ -129,7 +129,7 @@ func TestNewRouter_ArtifactRoutesPreferCatalogAndVersionTags(t *testing.T) {
 	buildHandler := handler.NewBuildHandler(buildSvc)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jobHandler := handler.NewJobHandler(jobSvc)
-	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{})
 	jobID := "job-1"
 	artifactRepo := &routeArtifactRepo{
 		records: []domain.ArtifactRecord{{
@@ -195,7 +195,7 @@ func TestNewRouter_ServerInfoAndWorkerRoutes(t *testing.T) {
 	buildHandler := handler.NewBuildHandler(buildSvc)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jobHandler := handler.NewJobHandler(jobSvc)
-	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{})
 	workerSvc := workersvc.NewVisibilityService(workerRepo, routerWorkerBuildBoundary{})
 	workerHandler := handler.NewWorkerHandler(workerSvc)
 
@@ -240,7 +240,7 @@ func TestNewRouter_SCMRoutes(t *testing.T) {
 	buildHandler := handler.NewBuildHandler(buildSvc)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jobHandler := handler.NewJobHandler(jobSvc)
-	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{})
 	scmHandler := handler.NewSCMHandler(service.NewSCMAdminService(repositorymemory.NewSCMConnectionRepository(), repositorymemory.NewSCMRepositoryRegistrationRepository()))
 
 	router := NewRouter(buildHandler, nil, jobHandler, nil, nil, nil, eventHandler, "", WithSCMHandler(scmHandler))
@@ -544,8 +544,8 @@ func TestNewRouter_HeaderModeHealthAndIngressBypassIdentityHeaders(t *testing.T)
 		t.Fatalf("expected push ingress status %d, got %d body=%s", http.StatusOK, pushRes.Code, pushRes.Body.String())
 	}
 
-	body := []byte(`{}`)
-	webhookReq := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewReader(body))
+	body := []byte(`{"installation":{"id":999}}`)
+	webhookReq := httptest.NewRequest(http.MethodPost, "/api/webhooks/github/apps/registration-1", bytes.NewReader(body))
 	webhookReq.Header.Set("X-GitHub-Event", "pull_request")
 	webhookReq.Header.Set("X-GitHub-Delivery", "delivery-router-test")
 	webhookReq.Header.Set("X-Hub-Signature-256", githubRouterTestSignature("github-secret", body))
@@ -553,6 +553,13 @@ func TestNewRouter_HeaderModeHealthAndIngressBypassIdentityHeaders(t *testing.T)
 	r.ServeHTTP(webhookRes, webhookReq)
 	if webhookRes.Code != http.StatusAccepted {
 		t.Fatalf("expected webhook ingress status %d, got %d body=%s", http.StatusAccepted, webhookRes.Code, webhookRes.Body.String())
+	}
+
+	legacyReq := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", bytes.NewReader(body))
+	legacyRes := httptest.NewRecorder()
+	r.ServeHTTP(legacyRes, legacyReq)
+	if legacyRes.Code != http.StatusNotFound {
+		t.Fatalf("expected removed global webhook route status %d, got %d body=%s", http.StatusNotFound, legacyRes.Code, legacyRes.Body.String())
 	}
 }
 
@@ -704,7 +711,7 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 	jobSvc := service.NewJobService(jobRepo, buildSvc).WithArtifactTriggerDeliveryRepository(repositorymemory.NewArtifactTriggerDeliveryRepository())
 	h.SetJobService(jobSvc)
 	jh := handler.NewJobHandler(jobSvc)
-	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{})
 	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"11111111-1111-1111-1111-111111111111"}`))
@@ -811,7 +818,7 @@ func TestNewRouter_QueueBuild_WithTemplate_PersistsTemplateSteps(t *testing.T) {
 	h := handler.NewBuildHandler(buildSvc)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
-	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{})
 	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"11111111-1111-1111-1111-111111111111"}`))
@@ -888,7 +895,7 @@ func newIdentityTestRouter(mode auth.Mode, pushEventSecret string, githubWebhook
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jobHandler := handler.NewJobHandler(jobSvc)
 	webhookSvc := webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc)
-	eventHandler := handler.NewEventHandler(jobSvc, webhookSvc, observability.NewNoopWebhookIngressMetrics(), githubWebhookSecret)
+	eventHandler := handler.NewEventHandler(jobSvc, webhookSvc, observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{secret: githubWebhookSecret})
 	userService := service.NewUserService(repositorymemory.NewUserRepository())
 	userHandler := handler.NewUserHandler(userService, mode)
 	authMiddleware := auth.Middleware(auth.MiddlewareConfig{Mode: mode}, userService)
@@ -911,6 +918,24 @@ func newIdentityTestRouter(mode auth.Mode, pushEventSecret string, githubWebhook
 	)
 }
 
+type routerTestGitHubWebhookResolver struct {
+	secret string
+}
+
+func (r routerTestGitHubWebhookResolver) ResolveRegistrationSecret(_ context.Context, registrationID string) (string, error) {
+	if registrationID != "registration-1" {
+		return "", webhooksvc.ErrGitHubWebhookRegistrationNotFound
+	}
+	return r.secret, nil
+}
+
+func (r routerTestGitHubWebhookResolver) ResolveConnection(_ context.Context, registrationID string, installationID string) (webhooksvc.GitHubWebhookConnectionResolution, error) {
+	if registrationID != "registration-1" || installationID != "999" {
+		return webhooksvc.GitHubWebhookConnectionResolution{}, nil
+	}
+	return webhooksvc.GitHubWebhookConnectionResolution{ConnectionID: "connection-1", Found: true, Enabled: true}, nil
+}
+
 func newOIDCTestRouter(t *testing.T) (http.Handler, *auth.CookieSessionManager) {
 	t.Helper()
 	buildRepo := repositorymemory.NewBuildRepository()
@@ -920,7 +945,7 @@ func newOIDCTestRouter(t *testing.T) (http.Handler, *auth.CookieSessionManager) 
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jobHandler := handler.NewJobHandler(jobSvc)
 	webhookSvc := webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc)
-	eventHandler := handler.NewEventHandler(jobSvc, webhookSvc, observability.NewNoopWebhookIngressMetrics(), "")
+	eventHandler := handler.NewEventHandler(jobSvc, webhookSvc, observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{})
 	userRepo := repositorymemory.NewUserRepository()
 	if _, err := userRepo.Create(context.Background(), domain.User{ID: "user-1", Email: "user@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("create user failed: %v", err)
@@ -960,7 +985,7 @@ func newProjectMembershipTestRouter(t *testing.T, mode auth.Mode) http.Handler {
 	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
 	jobHandler := handler.NewJobHandler(jobSvc)
 	projectHandler := handler.NewProjectHandler(service.NewProjectService(projectRepo), jobSvc)
-	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "github-secret")
+	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{secret: "github-secret"})
 	userRepo := repositorymemory.NewUserRepository()
 	userService := service.NewUserService(userRepo)
 	membershipRepo := repositorymemory.NewProjectMembershipRepository(projectRepo, userRepo)
@@ -1087,7 +1112,7 @@ func newRBACTestRouter(t *testing.T) rbacRouterFixture {
 	jobHandler.SetAuthorization(auth.ModeHeader, membershipService)
 	projectHandler := handler.NewProjectHandler(projectService, jobSvc)
 	projectHandler.SetAuthorization(auth.ModeHeader, membershipService)
-	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{})
 	authMiddleware := auth.Middleware(auth.MiddlewareConfig{Mode: auth.ModeHeader, APITokens: apiTokenService}, userService)
 
 	router := NewRouter(
@@ -1285,7 +1310,7 @@ func TestNewRouter_QueueBuild_UnknownTemplate_FallsBackToDefaultStep(t *testing.
 	h := handler.NewBuildHandler(buildSvc)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
-	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{})
 	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/builds/", bytes.NewBufferString(`{"project_id":"11111111-1111-1111-1111-111111111111"}`))
@@ -1357,7 +1382,7 @@ func TestNewRouter_JobRoutes(t *testing.T) {
 	h := handler.NewBuildHandler(buildSvc)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
-	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{})
 	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
 	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
@@ -1410,7 +1435,7 @@ func TestNewRouter_PushEventRoute(t *testing.T) {
 	h := handler.NewBuildHandler(buildSvc)
 	jobSvc := service.NewJobService(jobRepo, buildSvc)
 	jh := handler.NewJobHandler(jobSvc)
-	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{})
 	r := NewRouter(h, nil, jh, nil, nil, nil, eh, "")
 
 	createBody := `{"project_id":"project-1","name":"backend-ci","repository_url":"https://github.com/example/backend.git","default_ref":"main","push_enabled":true,"push_branch":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":true}`
@@ -1439,7 +1464,7 @@ func TestNewRouter_ProjectRoutes(t *testing.T) {
 	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
 	jh := handler.NewJobHandler(jobSvc)
 	ph := handler.NewProjectHandler(service.NewProjectService(projectRepo), jobSvc)
-	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{})
 	r := NewRouter(h, nil, jh, ph, nil, nil, eh, "")
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/projects/", bytes.NewBufferString(`{"name":"Platform","slug":"platform"}`))
@@ -1496,7 +1521,7 @@ func TestNewRouter_ProjectDuplicateSlugReturnsConflict(t *testing.T) {
 	h := handler.NewBuildHandler(buildSvc)
 	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
 	ph := handler.NewProjectHandler(service.NewProjectService(projectRepo), jobSvc)
-	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), "")
+	eh := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{})
 	r := NewRouter(h, nil, handler.NewJobHandler(jobSvc), ph, nil, nil, eh, "")
 
 	body := `{"name":"Platform","slug":"platform"}`
@@ -1523,7 +1548,7 @@ func TestNewRouter_ProjectDeleteDefaultReturnsConflict(t *testing.T) {
 	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
 	projectSvc := service.NewProjectService(projectRepo)
 	ph := handler.NewProjectHandler(projectSvc, jobSvc)
-	r := NewRouter(handler.NewBuildHandler(buildSvc), nil, handler.NewJobHandler(jobSvc), ph, nil, nil, handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), ""), "")
+	r := NewRouter(handler.NewBuildHandler(buildSvc), nil, handler.NewJobHandler(jobSvc), ph, nil, nil, handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{}), "")
 
 	_, err := projectRepo.Create(httptest.NewRequest(http.MethodGet, "/", nil).Context(), domain.Project{
 		ID:   "00000000-0000-0000-0000-000000000001",

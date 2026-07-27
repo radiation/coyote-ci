@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -21,6 +22,7 @@ type PushEvent struct {
 	RepositoryOwner string
 	RepositoryName  string
 	RepositoryURL   string
+	InstallationID  string
 	RawRef          string
 	Ref             string
 	RefType         string
@@ -29,6 +31,10 @@ type PushEvent struct {
 	CommitSHA       string
 	DeliveryID      string
 	Actor           string
+}
+
+type AppEnvelope struct {
+	InstallationID string
 }
 
 func VerifySignature(secret string, payload []byte, signatureHeader string) bool {
@@ -48,6 +54,11 @@ func ParsePushEvent(headers http.Header, body []byte) (PushEvent, error) {
 	eventType := strings.ToLower(strings.TrimSpace(headers.Get("X-GitHub-Event")))
 	if eventType != "push" {
 		return PushEvent{}, ErrUnsupportedEvent
+	}
+
+	envelope, envelopeErr := ParseAppEnvelope(body)
+	if envelopeErr != nil {
+		return PushEvent{}, envelopeErr
 	}
 
 	var payload struct {
@@ -88,7 +99,6 @@ func ParsePushEvent(headers http.Header, body []byte) (PushEvent, error) {
 	if repositoryURL == "" {
 		repositoryURL = strings.TrimSpace(payload.Repository.URL)
 	}
-
 	normalizedRef := domain.NormalizeWebhookRef(payload.Ref, payload.Deleted)
 
 	commitSHA := strings.TrimSpace(payload.After)
@@ -105,6 +115,7 @@ func ParsePushEvent(headers http.Header, body []byte) (PushEvent, error) {
 		RepositoryOwner: repositoryOwner,
 		RepositoryName:  repositoryName,
 		RepositoryURL:   repositoryURL,
+		InstallationID:  envelope.InstallationID,
 		RawRef:          normalizedRef.RawRef,
 		Ref:             normalizedRef.RefName,
 		RefType:         string(normalizedRef.RefType),
@@ -114,4 +125,32 @@ func ParsePushEvent(headers http.Header, body []byte) (PushEvent, error) {
 		DeliveryID:      strings.TrimSpace(headers.Get("X-GitHub-Delivery")),
 		Actor:           strings.TrimSpace(payload.Sender.Login),
 	}, nil
+}
+
+func ParseAppEnvelope(body []byte) (AppEnvelope, error) {
+	var payload struct {
+		Installation struct {
+			ID json.RawMessage `json:"id"`
+		} `json:"installation"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return AppEnvelope{}, ErrInvalidPayload
+	}
+	installationID, err := parseInstallationID(payload.Installation.ID)
+	if err != nil {
+		return AppEnvelope{}, ErrInvalidPayload
+	}
+	return AppEnvelope{InstallationID: installationID}, nil
+}
+
+func parseInstallationID(raw json.RawMessage) (string, error) {
+	value := strings.TrimSpace(string(raw))
+	if value == "" || strings.HasPrefix(value, `"`) {
+		return "", ErrInvalidPayload
+	}
+	installationID, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || installationID <= 0 {
+		return "", ErrInvalidPayload
+	}
+	return strconv.FormatInt(installationID, 10), nil
 }

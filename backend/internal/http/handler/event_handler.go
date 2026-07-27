@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/observability"
 	"github.com/radiation/coyote-ci/backend/internal/service"
@@ -17,17 +19,17 @@ import (
 )
 
 type EventHandler struct {
-	jobService          *service.JobService
-	webhookService      *webhooksvc.DeliveryIngressService
-	metrics             observability.WebhookIngressMetrics
-	githubWebhookSecret string
+	jobService     *service.JobService
+	webhookService *webhooksvc.DeliveryIngressService
+	metrics        observability.WebhookIngressMetrics
+	githubResolver webhooksvc.GitHubWebhookConnectionResolver
 }
 
-func NewEventHandler(jobService *service.JobService, webhookService *webhooksvc.DeliveryIngressService, metrics observability.WebhookIngressMetrics, githubWebhookSecret string) *EventHandler {
+func NewEventHandler(jobService *service.JobService, webhookService *webhooksvc.DeliveryIngressService, metrics observability.WebhookIngressMetrics, githubResolver webhooksvc.GitHubWebhookConnectionResolver) *EventHandler {
 	if metrics == nil {
 		metrics = observability.NewNoopWebhookIngressMetrics()
 	}
-	return &EventHandler{jobService: jobService, webhookService: webhookService, metrics: metrics, githubWebhookSecret: githubWebhookSecret}
+	return &EventHandler{jobService: jobService, webhookService: webhookService, metrics: metrics, githubResolver: githubResolver}
 }
 
 // IngestPushEvent godoc
@@ -84,7 +86,7 @@ func (h *EventHandler) IngestPushEvent(w http.ResponseWriter, r *http.Request) {
 
 // IngestGitHubWebhook godoc
 // @Summary Ingest GitHub webhook
-// @Description Verifies a GitHub webhook signature and triggers builds for matching jobs on push events.
+// @Description Verifies a GitHub App registration-specific webhook signature, resolves the installation connection, and triggers builds for matching jobs on push events.
 // @Tags webhooks
 // @Produce json
 // @Success 200 {object} api.PushEventEnvelope
@@ -93,7 +95,8 @@ func (h *EventHandler) IngestPushEvent(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} api.ErrorResponse
 // @Failure 503 {object} api.ErrorResponse
 // @Failure 500 {object} api.ErrorResponse
-// @Router /webhooks/github [post]
+// @Param registrationID path string true "GitHub App registration ID"
+// @Router /webhooks/github/apps/{registrationID} [post]
 func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	startedAt := time.Now()
 	provider := "github"
@@ -114,6 +117,22 @@ func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Reques
 		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "webhook service not configured")
 		return
 	}
+	registrationID := strings.TrimSpace(chi.URLParam(r, "registrationID"))
+	if registrationID == "" {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+		writeErrorJSON(w, http.StatusNotFound, "not_found", "github app registration not found")
+		return
+	}
+	if eventType == "" || deliveryID == "" {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "missing required github webhook headers")
+		return
+	}
+	if h.githubResolver == nil {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "webhook identity resolver not configured")
+		return
+	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1024*1024))
 	if err != nil {
@@ -121,12 +140,58 @@ func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Reques
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
+	secret, secretErr := h.githubResolver.ResolveRegistrationSecret(ctx, registrationID)
+	if secretErr != nil {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+		if errors.Is(secretErr, webhooksvc.ErrGitHubWebhookRegistrationNotFound) {
+			writeErrorJSON(w, http.StatusNotFound, "not_found", "github app registration not found")
+			return
+		}
+		log.Printf("ERROR github webhook registration configuration unavailable registration_id=%s err=%v", registrationID, secretErr)
+		writeErrorJSON(w, http.StatusServiceUnavailable, "misconfigured", "github webhook configuration is unavailable")
+		return
+	}
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+		log.Printf("ERROR github webhook registration configuration unavailable registration_id=%s empty webhook secret", registrationID)
+		writeErrorJSON(w, http.StatusServiceUnavailable, "misconfigured", "github webhook configuration is unavailable")
+		return
+	}
+	if !githubwebhook.VerifySignature(secret, body, r.Header.Get("X-Hub-Signature-256")) {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeInvalidSignature)
+		outcome = observability.WebhookOutcomeInvalidSignature
+		log.Printf("WARN webhook signature validation failed %s", webhooksvc.WebhookLogFields(ctx))
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "invalid signature")
+		return
+	}
 
+	envelope, envelopeErr := githubwebhook.ParseAppEnvelope(body)
+	if envelopeErr != nil {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+		log.Printf("WARN webhook identity parse failed %s err=%v", webhooksvc.WebhookLogFields(ctx), envelopeErr)
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid github webhook payload")
+		return
+	}
+	connection, connectionErr := h.githubResolver.ResolveConnection(ctx, registrationID, envelope.InstallationID)
+	if connectionErr != nil {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+		log.Printf("ERROR github webhook connection resolution failed registration_id=%s installation_id=%s err=%v", registrationID, envelope.InstallationID, connectionErr)
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+	trigger := webhooksvc.WebhookTriggerInput{ConnectionID: connection.ConnectionID, SCMProvider: provider, EventType: eventType, DeliveryID: deliveryID, InstallationID: envelope.InstallationID}
+	if !connection.Found || !connection.Enabled {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeNoMatchingJob)
+		outcome = observability.WebhookOutcomeNoMatchingJob
+		writeDataJSON(w, http.StatusOK, api.PushEventResponse{MatchedJobs: 0, CreatedBuilds: 0, Builds: []api.PushEventMatchedJob{}})
+		return
+	}
 	delivery, duplicate, deliveryErr := h.webhookService.RegisterReceived(ctx, provider, deliveryID, eventType)
 	if deliveryErr != nil {
 		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
 		log.Printf("WARN webhook register failed %s err=%v", webhooksvc.WebhookLogFields(ctx), deliveryErr)
-		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", deliveryErr.Error())
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		return
 	}
 	if duplicate {
@@ -136,37 +201,23 @@ func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Reques
 		writeDataJSON(w, http.StatusOK, api.PushEventResponse{MatchedJobs: 0, CreatedBuilds: 0, Builds: []api.PushEventMatchedJob{}, Duplicate: true})
 		return
 	}
-
-	if h.githubWebhookSecret == "" {
-		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
-		_, _ = h.webhookService.MarkFailed(ctx, delivery, "github webhook secret not configured")
-		log.Printf("ERROR webhook secret missing %s", webhooksvc.WebhookLogFields(ctx))
-		writeErrorJSON(w, http.StatusServiceUnavailable, "misconfigured", "github webhook secret is not configured")
-		return
-	}
-
-	if !githubwebhook.VerifySignature(h.githubWebhookSecret, body, r.Header.Get("X-Hub-Signature-256")) {
-		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeInvalidSignature)
-		outcome = observability.WebhookOutcomeInvalidSignature
-		log.Printf("WARN webhook signature validation failed %s", webhooksvc.WebhookLogFields(ctx))
-		_, _ = h.webhookService.MarkFailed(ctx, delivery, "signature validation failed")
-		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "invalid signature")
-		return
-	}
-
-	pushEvent, parseErr := githubwebhook.ParsePushEvent(r.Header, body)
-	if parseErr != nil {
-		if errors.Is(parseErr, githubwebhook.ErrUnsupportedEvent) {
-			h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeUnsupportedEvent)
-			outcome = observability.WebhookOutcomeUnsupportedEvent
-			log.Printf("INFO webhook unsupported event %s", webhooksvc.WebhookLogFields(ctx))
-			_, _ = h.webhookService.MarkUnsupported(ctx, delivery, "unsupported event", webhooksvc.WebhookTriggerInput{SCMProvider: provider, EventType: eventType})
-			writeDataJSON(w, http.StatusAccepted, api.PushEventResponse{MatchedJobs: 0, CreatedBuilds: 0, Builds: []api.PushEventMatchedJob{}})
+	if eventType != "push" {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeUnsupportedEvent)
+		outcome = observability.WebhookOutcomeUnsupportedEvent
+		log.Printf("INFO webhook unsupported event %s", webhooksvc.WebhookLogFields(ctx))
+		if _, markErr := h.webhookService.MarkUnsupported(ctx, delivery, "unsupported event", trigger); markErr != nil {
+			h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+			writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
 			return
 		}
+		writeDataJSON(w, http.StatusAccepted, api.PushEventResponse{MatchedJobs: 0, CreatedBuilds: 0, Builds: []api.PushEventMatchedJob{}})
+		return
+	}
+	pushEvent, parseErr := githubwebhook.ParsePushEvent(r.Header, body)
+	if parseErr != nil {
 		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
-		_, _ = h.webhookService.MarkFailed(ctx, delivery, "invalid github webhook payload")
 		log.Printf("WARN webhook payload parse failed %s err=%v", webhooksvc.WebhookLogFields(ctx), parseErr)
+		_, _ = h.webhookService.MarkFailed(ctx, delivery, "invalid github webhook payload")
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid github webhook payload")
 		return
 	}
@@ -178,8 +229,8 @@ func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Reques
 		DeliveryID:    deliveryID,
 		EventType:     eventType,
 	})
-
-	ingressResult, triggerErr := h.webhookService.ProcessVerifiedEvent(ctx, delivery, webhooksvc.WebhookTriggerInput{
+	trigger = webhooksvc.WebhookTriggerInput{
+		ConnectionID:    connection.ConnectionID,
 		SCMProvider:     provider,
 		EventType:       pushEvent.EventType,
 		RepositoryOwner: pushEvent.RepositoryOwner,
@@ -193,7 +244,10 @@ func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Reques
 		CommitSHA:       pushEvent.CommitSHA,
 		DeliveryID:      pushEvent.DeliveryID,
 		Actor:           pushEvent.Actor,
-	})
+		InstallationID:  pushEvent.InstallationID,
+	}
+
+	ingressResult, triggerErr := h.webhookService.ProcessVerifiedEvent(ctx, delivery, trigger)
 	if triggerErr != nil {
 		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
 		log.Printf("ERROR webhook delivery failed %s err=%v", webhooksvc.WebhookLogFields(ctx), triggerErr)

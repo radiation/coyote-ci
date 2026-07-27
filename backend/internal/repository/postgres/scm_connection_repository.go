@@ -171,6 +171,24 @@ func (r *SCMConnectionRepository) CreateGitHubAppInstallationConnection(ctx cont
 	return domain.SCMConnectionDetail{Connection: detail.Connection, GitHubAppRegistration: &registration, GitHubAppInstallation: &installation}, nil
 }
 
+func (r *SCMConnectionRepository) GetGitHubAppInstallationConnection(ctx context.Context, registrationID string, installationID string) (domain.SCMConnectionDetail, error) {
+	const query = `
+		SELECT ` + scmConnectionColumns + `
+		FROM github_app_installations gi
+		JOIN scm_connections c ON c.id = gi.connection_id
+		JOIN github_app_registrations ga ON ga.id = gi.app_registration_id
+		WHERE gi.app_registration_id = $1 AND gi.installation_id = $2
+	`
+	item, err := scanSCMConnectionDetail(r.db.QueryRowContext(ctx, query, registrationID, installationID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.SCMConnectionDetail{}, repository.ErrSCMConnectionNotFound
+		}
+		return domain.SCMConnectionDetail{}, err
+	}
+	return item, nil
+}
+
 func (r *SCMConnectionRepository) List(ctx context.Context) ([]domain.SCMConnectionDetail, error) {
 	const query = `
 		SELECT ` + scmConnectionColumns + `

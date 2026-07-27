@@ -113,6 +113,24 @@ func TestDeliveryIngressService_ProcessVerifiedEvent_TriggerFailureMarksFailed(t
 	}
 }
 
+func TestDeliveryIngressService_MarkUnsupportedRecordsTriggerMetadata(t *testing.T) {
+	ctx := context.Background()
+	deliveryRepo := memoryrepo.NewWebhookDeliveryRepository()
+	service := NewDeliveryIngressService(deliveryRepo, &recordingWebhookTriggerer{})
+	delivery := seedReceivedDelivery(t, ctx, deliveryRepo)
+
+	updated, markErr := service.MarkUnsupported(ctx, delivery, "unsupported event", sampleWebhookTrigger())
+	if markErr != nil {
+		t.Fatalf("mark unsupported: %v", markErr)
+	}
+	if updated.Status != domain.WebhookDeliveryStatusUnsupported {
+		t.Fatalf("expected unsupported status, got %q", updated.Status)
+	}
+	if readOptionalDeliveryString(updated.Reason) != "unsupported event" || readOptionalDeliveryString(updated.EventType) != "push" {
+		t.Fatalf("expected unsupported metadata, got %+v", updated)
+	}
+}
+
 func seedReceivedDelivery(t *testing.T, ctx context.Context, repo *memoryrepo.WebhookDeliveryRepository) domain.WebhookDelivery {
 	t.Helper()
 	delivery, createErr := repo.Create(ctx, domain.WebhookDelivery{

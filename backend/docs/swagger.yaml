@@ -4730,10 +4730,17 @@ paths:
       summary: Update user
       tags:
       - users
-  /webhooks/github:
+  /webhooks/github/apps/{registrationID}:
     post:
-      description: Verifies a GitHub webhook signature and triggers builds for matching
-        jobs on push events.
+      description: Verifies a GitHub App registration-specific webhook signature,
+        resolves the installation connection, and triggers builds for matching jobs
+        on push events.
+      parameters:
+      - description: GitHub App registration ID
+        in: path
+        name: registrationID
+        required: true
+        type: string
       produces:
       - application/json
       responses:

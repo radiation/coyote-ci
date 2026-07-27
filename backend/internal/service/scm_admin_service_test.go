@@ -857,6 +857,10 @@ func (f *fakeSCMConnectionRepositoryForMismatch) CreateGitHubAppInstallationConn
 	return domain.SCMConnectionDetail{}, nil
 }
 
+func (f *fakeSCMConnectionRepositoryForMismatch) GetGitHubAppInstallationConnection(context.Context, string, string) (domain.SCMConnectionDetail, error) {
+	return domain.SCMConnectionDetail{}, repository.ErrSCMConnectionNotFound
+}
+
 func (f *fakeSCMConnectionRepositoryForMismatch) List(context.Context) ([]domain.SCMConnectionDetail, error) {
 	return nil, nil
 }
