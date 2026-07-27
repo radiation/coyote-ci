@@ -302,6 +302,13 @@ func TestJobHandler_RegisteredRepositoryAssignmentAndResponses(t *testing.T) {
 		t.Fatalf("create registered repository failed: %v", err)
 	}
 
+	missingRepositoryReq := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(`{"project_id":"project-1","name":"missing-repository","repository_id":"missing","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":false}`))
+	missingRepositoryRes := httptest.NewRecorder()
+	h.CreateJob(missingRepositoryRes, missingRepositoryReq)
+	if missingRepositoryRes.Code != http.StatusNotFound {
+		t.Fatalf("expected missing repository status %d, got %d body=%s", http.StatusNotFound, missingRepositoryRes.Code, missingRepositoryRes.Body.String())
+	}
+
 	createBody := `{"project_id":"project-1","name":"backend-ci","repository_id":"repo-1","default_ref":"main","pipeline_yaml":"version: 1\nsteps:\n  - name: test\n    run: go test ./...\n","enabled":false}`
 	createReq := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewBufferString(createBody))
 	createRes := httptest.NewRecorder()
@@ -457,6 +464,13 @@ func TestJobHandler_RegisteredRepositoryResponseHelpers(t *testing.T) {
 		t.Fatalf("expected default trigger mode branches, got %q", response.TriggerMode)
 	}
 
+	lookupErr := errors.New("registered repository lookup failed")
+	jobService := service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil)).WithSCMRepositoryRegistrationRepository(&erroringJobRegisteredRepositoryRepo{getByIDsErr: lookupErr})
+	_, err = jobResponseWithRegisteredRepository(ctx, jobService, job)
+	if !errors.Is(err, lookupErr) {
+		t.Fatalf("expected registered repository lookup error, got %v", err)
+	}
+
 	h := NewJobHandler(service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil)))
 	for _, tc := range []struct {
 		name       string
@@ -474,6 +488,15 @@ func TestJobHandler_RegisteredRepositoryResponseHelpers(t *testing.T) {
 			}
 		})
 	}
+}
+
+type erroringJobRegisteredRepositoryRepo struct {
+	repository.SCMRepositoryRegistrationRepository
+	getByIDsErr error
+}
+
+func (r *erroringJobRegisteredRepositoryRepo) GetByIDs(_ context.Context, _ []string) ([]domain.SCMRepositoryRegistration, error) {
+	return nil, r.getByIDsErr
 }
 
 func serviceCredential(id string, name string) domain.SourceCredential {

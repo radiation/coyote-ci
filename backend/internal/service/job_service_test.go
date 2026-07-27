@@ -439,6 +439,31 @@ func TestJobService_CreateAndUpdateWithRegisteredRepository(t *testing.T) {
 	if !errors.Is(createJobErr, ErrJobRegisteredRepositoryDisabled) {
 		t.Fatalf("expected disabled repository error, got %v", createJobErr)
 	}
+
+	_, createJobErr = jobService.CreateJob(ctx, CreateJobInput{
+		ProjectID:    "project-1",
+		Name:         "missing-repo-job",
+		RepositoryID: "missing",
+		DefaultRef:   "main",
+		PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:      boolPtr(false),
+	})
+	if !errors.Is(createJobErr, repository.ErrSCMRepositoryRegistrationNotFound) {
+		t.Fatalf("expected missing repository error, got %v", createJobErr)
+	}
+
+	withoutRepositoryStore := NewJobService(memory.NewJobRepository(), buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil))
+	_, createJobErr = withoutRepositoryStore.CreateJob(ctx, CreateJobInput{
+		ProjectID:    "project-1",
+		Name:         "unconfigured-repo-store-job",
+		RepositoryID: active.ID,
+		DefaultRef:   "main",
+		PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:      boolPtr(false),
+	})
+	if !errors.Is(createJobErr, repository.ErrSCMRepositoryRegistrationNotFound) {
+		t.Fatalf("expected missing repository store error, got %v", createJobErr)
+	}
 }
 
 func TestJobService_GetRegisteredRepositoriesByIDs(t *testing.T) {
