@@ -176,3 +176,25 @@ func TestParsePushEvent_RejectsInvalidInstallationID(t *testing.T) {
 		})
 	}
 }
+
+func TestParseAppEnvelope(t *testing.T) {
+	envelope, parseErr := ParseAppEnvelope([]byte(`{"installation":{"id":1234567890123456789}}`))
+	if parseErr != nil {
+		t.Fatalf("parse envelope: %v", parseErr)
+	}
+	if envelope.InstallationID != "1234567890123456789" {
+		t.Fatalf("expected precise installation ID, got %q", envelope.InstallationID)
+	}
+
+	for _, body := range [][]byte{
+		[]byte(`{}`),
+		[]byte(`{"installation":{"id":0}}`),
+		[]byte(`{"installation":{"id":1.5}}`),
+		[]byte(`{"installation":{"id":"123"}}`),
+		[]byte(`{`),
+	} {
+		if _, err := ParseAppEnvelope(body); err != ErrInvalidPayload {
+			t.Fatalf("expected invalid payload for %s, got %v", body, err)
+		}
+	}
+}

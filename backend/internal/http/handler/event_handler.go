@@ -151,6 +151,13 @@ func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Reques
 		writeErrorJSON(w, http.StatusServiceUnavailable, "misconfigured", "github webhook configuration is unavailable")
 		return
 	}
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+		log.Printf("ERROR github webhook registration configuration unavailable registration_id=%s empty webhook secret", registrationID)
+		writeErrorJSON(w, http.StatusServiceUnavailable, "misconfigured", "github webhook configuration is unavailable")
+		return
+	}
 	if !githubwebhook.VerifySignature(secret, body, r.Header.Get("X-Hub-Signature-256")) {
 		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeInvalidSignature)
 		outcome = observability.WebhookOutcomeInvalidSignature
@@ -238,21 +245,6 @@ func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Reques
 		DeliveryID:      pushEvent.DeliveryID,
 		Actor:           pushEvent.Actor,
 		InstallationID:  pushEvent.InstallationID,
-	}
-	if !connection.Found || !connection.Enabled {
-		reason := "github app installation connection is unavailable"
-		if connection.Found {
-			reason = "github app installation connection is disabled"
-		}
-		if _, noMatchErr := h.webhookService.MarkVerifiedNoMatch(ctx, delivery, reason, trigger); noMatchErr != nil {
-			h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
-			writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
-			return
-		}
-		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeNoMatchingJob)
-		outcome = observability.WebhookOutcomeNoMatchingJob
-		writeDataJSON(w, http.StatusOK, api.PushEventResponse{MatchedJobs: 0, CreatedBuilds: 0, Builds: []api.PushEventMatchedJob{}})
-		return
 	}
 
 	ingressResult, triggerErr := h.webhookService.ProcessVerifiedEvent(ctx, delivery, trigger)

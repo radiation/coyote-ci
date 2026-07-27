@@ -88,6 +88,43 @@ func TestGitHubConnectionResolver_HidesSecretResolutionFailure(t *testing.T) {
 	}
 }
 
+func TestGitHubConnectionResolver_ResolveConnectionRejectsIncompatibleDetails(t *testing.T) {
+	now := time.Now().UTC()
+	registration := testWebhookGitHubRegistration(now, "registration-a", "secret-a")
+	detail := testWebhookGitHubConnection(now, "connection-a", registration, "999")
+	detail.GitHubAppInstallation.InstallationID = "different"
+	resolver := NewGitHubConnectionResolver(&fakeWebhookConnectionRepository{registration: registration, detail: detail}, fakeWebhookSecretResolver{})
+
+	_, resolveErr := resolver.ResolveConnection(context.Background(), " registration-a ", " 999 ")
+	if !errors.Is(resolveErr, ErrGitHubWebhookConnectionIncompatible) {
+		t.Fatalf("expected incompatible connection error, got %v", resolveErr)
+	}
+}
+
+func TestGitHubConnectionResolver_ResolveConnectionPropagatesRepositoryFailures(t *testing.T) {
+	repositoryErr := errors.New("database unavailable")
+	resolver := NewGitHubConnectionResolver(&fakeWebhookConnectionRepository{connectionErr: repositoryErr}, fakeWebhookSecretResolver{})
+
+	_, resolveErr := resolver.ResolveConnection(context.Background(), "registration-a", "999")
+	if !errors.Is(resolveErr, repositoryErr) {
+		t.Fatalf("expected repository error %v, got %v", repositoryErr, resolveErr)
+	}
+}
+
+func TestGitHubConnectionResolver_RequiresRegistrationAndSecretConfiguration(t *testing.T) {
+	if _, err := (*GitHubConnectionResolver)(nil).ResolveRegistrationSecret(context.Background(), "registration-a"); !errors.Is(err, ErrGitHubWebhookRegistrationNotFound) {
+		t.Fatalf("expected nil resolver registration error, got %v", err)
+	}
+	if _, err := (*GitHubConnectionResolver)(nil).ResolveConnection(context.Background(), "registration-a", "999"); !errors.Is(err, ErrGitHubWebhookConnectionIncompatible) {
+		t.Fatalf("expected nil resolver connection error, got %v", err)
+	}
+
+	resolver := NewGitHubConnectionResolver(&fakeWebhookConnectionRepository{registration: domain.GitHubAppRegistration{ID: "registration-a"}}, fakeWebhookSecretResolver{})
+	if _, err := resolver.ResolveRegistrationSecret(context.Background(), "registration-a"); !errors.Is(err, ErrGitHubWebhookSecretUnavailable) {
+		t.Fatalf("expected missing secret reference error, got %v", err)
+	}
+}
+
 type fakeWebhookSecretResolver struct {
 	values map[string]string
 	err    error
@@ -101,7 +138,9 @@ func (r fakeWebhookSecretResolver) Resolve(_ context.Context, ref string) (strin
 }
 
 type fakeWebhookConnectionRepository struct {
-	registration domain.GitHubAppRegistration
+	registration  domain.GitHubAppRegistration
+	detail        domain.SCMConnectionDetail
+	connectionErr error
 }
 
 func (r *fakeWebhookConnectionRepository) GetGitHubAppRegistrationByID(_ context.Context, id string) (domain.GitHubAppRegistration, error) {
@@ -111,7 +150,13 @@ func (r *fakeWebhookConnectionRepository) GetGitHubAppRegistrationByID(_ context
 	return r.registration, nil
 }
 
-func (r *fakeWebhookConnectionRepository) GetGitHubAppInstallationConnection(context.Context, string, string) (domain.SCMConnectionDetail, error) {
+func (r *fakeWebhookConnectionRepository) GetGitHubAppInstallationConnection(_ context.Context, _ string, _ string) (domain.SCMConnectionDetail, error) {
+	if r.connectionErr != nil {
+		return domain.SCMConnectionDetail{}, r.connectionErr
+	}
+	if r.detail.Connection.ID != "" {
+		return r.detail, nil
+	}
 	return domain.SCMConnectionDetail{}, repository.ErrSCMConnectionNotFound
 }
 

@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -429,6 +430,7 @@ func TestEventHandler_IngestGitHubWebhook_RegistrationFailuresDoNotClaimDelivery
 	}{
 		{name: "unknown registration", resolver: testGitHubWebhookResolver{registrationErr: webhooksvc.ErrGitHubWebhookRegistrationNotFound}, wantStatus: http.StatusNotFound},
 		{name: "secret unavailable", resolver: testGitHubWebhookResolver{registrationErr: webhooksvc.ErrGitHubWebhookSecretUnavailable}, wantStatus: http.StatusServiceUnavailable},
+		{name: "empty secret", resolver: testGitHubWebhookResolver{}, wantStatus: http.StatusServiceUnavailable},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
@@ -512,6 +514,82 @@ func TestEventHandler_IngestGitHubWebhook_PropagatesConnectionID(t *testing.T) {
 	}
 	if triggerer.input.ConnectionID != "connection-1" || triggerer.input.InstallationID != "999" {
 		t.Fatalf("expected propagated connection identity, got %+v", triggerer.input)
+	}
+}
+
+func TestEventHandler_IngestGitHubWebhook_RejectsInvalidIngressStates(t *testing.T) {
+	validBody := validTestGitHubPushBody()
+	for _, testCase := range []struct {
+		name       string
+		handler    *EventHandler
+		body       []byte
+		eventType  string
+		deliveryID string
+		withRoute  bool
+		wantStatus int
+	}{
+		{
+			name:       "missing registration route parameter",
+			handler:    newTestGitHubEventHandler(service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil)), webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))), observability.NewNoopWebhookIngressMetrics(), "secret"),
+			body:       validBody,
+			eventType:  "push",
+			deliveryID: "delivery-missing-route",
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:       "missing event headers",
+			handler:    newTestGitHubEventHandler(service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil)), webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))), observability.NewNoopWebhookIngressMetrics(), "secret"),
+			body:       validBody,
+			withRoute:  true,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "identity resolver missing",
+			handler:    NewEventHandler(nil, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), &recordingHandlerWebhookTriggerer{}), observability.NewNoopWebhookIngressMetrics(), nil),
+			body:       validBody,
+			eventType:  "push",
+			deliveryID: "delivery-missing-resolver",
+			withRoute:  true,
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name:       "connection resolution failure",
+			handler:    NewEventHandler(nil, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), &recordingHandlerWebhookTriggerer{}), observability.NewNoopWebhookIngressMetrics(), testGitHubWebhookResolver{secret: "secret", connectionErr: errors.New("database unavailable")}),
+			body:       validBody,
+			eventType:  "push",
+			deliveryID: "delivery-connection-failure",
+			withRoute:  true,
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name:       "push payload invalid after identity validation",
+			handler:    newTestGitHubEventHandler(service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil)), webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))), observability.NewNoopWebhookIngressMetrics(), "secret"),
+			body:       []byte(`{"installation":{"id":999}}`),
+			eventType:  "push",
+			deliveryID: "delivery-invalid-push",
+			withRoute:  true,
+			wantStatus: http.StatusBadRequest,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github/apps/registration-1", bytes.NewReader(testCase.body))
+			if testCase.eventType != "" {
+				req.Header.Set("X-GitHub-Event", testCase.eventType)
+			}
+			if testCase.deliveryID != "" {
+				req.Header.Set("X-GitHub-Delivery", testCase.deliveryID)
+			}
+			req.Header.Set("X-Hub-Signature-256", githubTestSignature("secret", testCase.body))
+			res := httptest.NewRecorder()
+			if testCase.withRoute {
+				ingestTestGitHubWebhook(testCase.handler, res, req)
+			} else {
+				testCase.handler.IngestGitHubWebhook(res, req)
+			}
+			if res.Code != testCase.wantStatus {
+				t.Fatalf("expected status %d, got %d body=%s", testCase.wantStatus, res.Code, res.Body.String())
+			}
+		})
 	}
 }
 
