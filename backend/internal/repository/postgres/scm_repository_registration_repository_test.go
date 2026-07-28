@@ -181,8 +181,8 @@ func TestSCMRepositoryRegistrationRepository_GetByConnectionIDAndProviderReposit
 
 	repo := NewSCMRepositoryRegistrationRepository(db)
 	now := time.Now().UTC()
-	mock.ExpectQuery(`WHERE connection_id = \$1 AND provider_repository_id = \$2`).WithArgs("connection-a", "1001").WillReturnRows(scmRepositoryRegistrationTestRows(now))
-	resolved, resolveErr := repo.GetByConnectionIDAndProviderRepositoryID(context.Background(), " connection-a ", " 1001 ")
+	mock.ExpectQuery(`WHERE connection_id = \$1 AND provider_repository_id = \$2`).WithArgs("connection-1", "1001").WillReturnRows(scmRepositoryRegistrationTestRows(now))
+	resolved, resolveErr := repo.GetByConnectionIDAndProviderRepositoryID(context.Background(), " connection-1 ", " 1001 ")
 	if resolveErr != nil || resolved.ID != "repo-1" || resolved.ConnectionID != "connection-1" {
 		t.Fatalf("unexpected resolved registration %+v err=%v", resolved, resolveErr)
 	}

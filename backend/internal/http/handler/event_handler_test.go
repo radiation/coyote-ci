@@ -630,7 +630,7 @@ func githubTestSignature(secret string, body []byte) string {
 func newTestGitHubEventHandler(jobSvc *service.JobService, deliverySvc *webhooksvc.DeliveryIngressService, metrics observability.WebhookIngressMetrics, secret string) *EventHandler {
 	registeredRepo := repositorymemory.NewSCMRepositoryRegistrationRepository()
 	now := time.Now().UTC()
-	_, _ = registeredRepo.Create(context.Background(), domain.SCMRepositoryRegistration{
+	if _, err := registeredRepo.Create(context.Background(), domain.SCMRepositoryRegistration{
 		ID:                   "repo-1",
 		ConnectionID:         "connection-1",
 		ProviderRepositoryID: "1001",
@@ -642,7 +642,9 @@ func newTestGitHubEventHandler(jobSvc *service.JobService, deliverySvc *webhooks
 		MetadataRefreshedAt:  now,
 		CreatedAt:            now,
 		UpdatedAt:            now,
-	})
+	}); err != nil {
+		panic(err)
+	}
 	jobSvc.WithSCMRepositoryRegistrationRepository(registeredRepo)
 	return NewEventHandler(jobSvc, deliverySvc, metrics, testGitHubWebhookResolver{secret: secret, resolution: webhooksvc.GitHubWebhookConnectionResolution{ConnectionID: "connection-1", Found: true, Enabled: true}})
 }
