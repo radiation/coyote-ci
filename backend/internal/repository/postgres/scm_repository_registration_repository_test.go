@@ -172,6 +172,30 @@ func TestSCMRepositoryRegistrationRepository_GetByIDsEmptyAndQueryError(t *testi
 	}
 }
 
+func TestSCMRepositoryRegistrationRepository_GetByConnectionIDAndProviderRepositoryID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewSCMRepositoryRegistrationRepository(db)
+	now := time.Now().UTC()
+	mock.ExpectQuery(`WHERE connection_id = \$1 AND provider_repository_id = \$2`).WithArgs("connection-a", "1001").WillReturnRows(scmRepositoryRegistrationTestRows(now))
+	resolved, resolveErr := repo.GetByConnectionIDAndProviderRepositoryID(context.Background(), " connection-a ", " 1001 ")
+	if resolveErr != nil || resolved.ID != "repo-1" || resolved.ConnectionID != "connection-1" {
+		t.Fatalf("unexpected resolved registration %+v err=%v", resolved, resolveErr)
+	}
+
+	mock.ExpectQuery(`WHERE connection_id = \$1 AND provider_repository_id = \$2`).WithArgs("connection-b", "1001").WillReturnError(sql.ErrNoRows)
+	if _, err := repo.GetByConnectionIDAndProviderRepositoryID(context.Background(), "connection-b", "1001"); !errors.Is(err, repository.ErrSCMRepositoryRegistrationNotFound) {
+		t.Fatalf("expected unknown pair error, got %v", err)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationsErr)
+	}
+}
+
 func scmRepositoryRegistrationTestRows(now time.Time) *sqlmock.Rows {
 	return sqlmock.NewRows([]string{"id", "connection_id", "provider_repository_id", "owner_name", "repository_name", "full_name", "clone_url", "web_url", "default_branch", "archived", "disabled", "metadata_refreshed_at", "created_at", "updated_at"}).
 		AddRow("repo-1", "connection-1", "1001", "octo", "widgets", "octo/widgets", "https://github.com/octo/widgets.git", "https://github.com/octo/widgets", "main", false, false, now, now, now)

@@ -34,6 +34,7 @@ func TestParsePushEvent(t *testing.T) {
 		"after":"abc123",
 		"installation":{"id":1234567890123456789},
 		"repository":{
+			"id":987654321098765432,
 			"name":"backend",
 			"html_url":"https://github.com/example/backend",
 			"owner":{"login":"example"}
@@ -60,6 +61,9 @@ func TestParsePushEvent(t *testing.T) {
 	if event.InstallationID != "1234567890123456789" {
 		t.Fatalf("expected precise installation id, got %q", event.InstallationID)
 	}
+	if event.ProviderRepositoryID != "987654321098765432" {
+		t.Fatalf("expected precise provider repository ID, got %q", event.ProviderRepositoryID)
+	}
 }
 
 func TestParsePushEvent_TagRef(t *testing.T) {
@@ -71,6 +75,7 @@ func TestParsePushEvent_TagRef(t *testing.T) {
 		"after":"abc123",
 		"installation":{"id":123},
 		"repository":{
+			"id":456,
 			"name":"backend",
 			"html_url":"https://github.com/example/backend",
 			"owner":{"login":"example"}
@@ -96,6 +101,7 @@ func TestParsePushEvent_UnknownRef(t *testing.T) {
 		"after":"abc123",
 		"installation":{"id":123},
 		"repository":{
+			"id":456,
 			"name":"backend",
 			"html_url":"https://github.com/example/backend",
 			"owner":{"login":"example"}
@@ -122,6 +128,7 @@ func TestParsePushEvent_DeletePushAllowedWithoutCommit(t *testing.T) {
 		"after":"",
 		"installation":{"id":123},
 		"repository":{
+			"id":456,
 			"name":"backend",
 			"html_url":"https://github.com/example/backend",
 			"owner":{"login":"example"}
@@ -172,6 +179,26 @@ func TestParsePushEvent_RejectsInvalidInstallationID(t *testing.T) {
 			_, err := ParsePushEvent(headers, body)
 			if err != ErrInvalidPayload {
 				t.Fatalf("expected invalid payload for installation=%s, got %v", installation, err)
+			}
+		})
+	}
+}
+
+func TestParsePushEvent_RejectsInvalidProviderRepositoryID(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "push")
+	for _, repository := range []string{
+		`{}`,
+		`{"id":0}`,
+		`{"id":-1}`,
+		`{"id":1.5}`,
+		`{"id":"123"}`,
+		`{"id":true}`,
+	} {
+		t.Run(repository, func(t *testing.T) {
+			body := []byte(`{"ref":"refs/heads/main","after":"abc123","installation":{"id":123},"repository":` + repository + `}`)
+			if _, err := ParsePushEvent(headers, body); err != ErrInvalidPayload {
+				t.Fatalf("expected invalid payload for repository=%s, got %v", repository, err)
 			}
 		})
 	}

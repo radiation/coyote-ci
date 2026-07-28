@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
 type PushEventInput struct {
@@ -37,13 +39,15 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input webhooksvc.W
 
 	scmProvider := strings.ToLower(strings.TrimSpace(input.SCMProvider))
 	eventType := strings.ToLower(strings.TrimSpace(input.EventType))
+	connectionID := strings.TrimSpace(input.ConnectionID)
+	providerRepositoryID := strings.TrimSpace(input.ProviderRepositoryID)
 	repoURL := strings.TrimSpace(input.RepositoryURL)
 	repositoryOwner := strings.TrimSpace(input.RepositoryOwner)
 	repositoryName := strings.TrimSpace(input.RepositoryName)
 	if repoURL == "" && scmProvider == "github" && repositoryOwner != "" && repositoryName != "" {
 		repoURL = "https://github.com/" + repositoryOwner + "/" + repositoryName + ".git"
 	}
-	if repoURL == "" {
+	if connectionID == "" && repoURL == "" {
 		return webhooksvc.WebhookTriggerResult{}, ErrPushEventRepositoryURLRequired
 	}
 
@@ -54,7 +58,31 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input webhooksvc.W
 
 	commitSHA := strings.TrimSpace(input.CommitSHA)
 
-	jobs, err := s.jobRepo.ListPushEnabledByRepository(ctx, repoURL)
+	var (
+		jobs []domain.Job
+		err  error
+	)
+	if connectionID != "" {
+		if providerRepositoryID == "" {
+			return webhooksvc.WebhookTriggerResult{}, ErrWebhookProviderRepositoryIDRequired
+		}
+		if s.registeredRepositories == nil {
+			return webhooksvc.WebhookTriggerResult{}, ErrJobRegisteredRepositoryStoreNotConfigured
+		}
+		registeredRepository, lookupErr := s.registeredRepositories.GetByConnectionIDAndProviderRepositoryID(ctx, connectionID, providerRepositoryID)
+		if lookupErr != nil {
+			if errors.Is(lookupErr, repository.ErrSCMRepositoryRegistrationNotFound) {
+				return webhookNoMatchResult(scmProvider, eventType, repoURL, normalizedRef, commitSHA), nil
+			}
+			return webhooksvc.WebhookTriggerResult{}, lookupErr
+		}
+		if registeredRepository.Disabled {
+			return webhookNoMatchResult(scmProvider, eventType, repoURL, normalizedRef, commitSHA), nil
+		}
+		jobs, err = s.jobRepo.ListPushEnabledByRepositoryID(ctx, registeredRepository.ID)
+	} else {
+		jobs, err = s.jobRepo.ListPushEnabledByRepository(ctx, repoURL)
+	}
 	if err != nil {
 		return webhooksvc.WebhookTriggerResult{}, err
 	}
@@ -79,7 +107,7 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input webhooksvc.W
 	}
 
 	for _, job := range jobs {
-		if !matchesSCMRepositoryIdentity(job.RepositoryURL, scmProvider, repositoryOwner, repositoryName) {
+		if connectionID == "" && !matchesSCMRepositoryIdentity(job.RepositoryURL, scmProvider, repositoryOwner, repositoryName) {
 			continue
 		}
 
@@ -154,6 +182,21 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input webhooksvc.W
 	}
 
 	return result, nil
+}
+
+func webhookNoMatchResult(scmProvider string, eventType string, repoURL string, normalizedRef domain.WebhookRef, commitSHA string) webhooksvc.WebhookTriggerResult {
+	return webhooksvc.WebhookTriggerResult{
+		SCMProvider:   scmProvider,
+		EventType:     eventType,
+		RepositoryURL: repoURL,
+		RawRef:        normalizedRef.RawRef,
+		Ref:           normalizedRef.RefName,
+		RefType:       string(normalizedRef.RefType),
+		RefName:       normalizedRef.RefName,
+		Deleted:       normalizedRef.Deleted,
+		CommitSHA:     commitSHA,
+		Builds:        make([]webhooksvc.WebhookMatchedBuild, 0),
+	}
 }
 
 func (s *JobService) TriggerPushEvent(ctx context.Context, input PushEventInput) (PushEventResult, error) {

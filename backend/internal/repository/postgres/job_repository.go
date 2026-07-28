@@ -313,6 +313,44 @@ func (r *JobRepository) ListPushEnabledByRepository(ctx context.Context, reposit
 	return jobs, nil
 }
 
+func (r *JobRepository) ListPushEnabledByRepositoryID(ctx context.Context, repositoryID string) (jobs []domain.Job, err error) {
+	repositoryID = strings.TrimSpace(repositoryID)
+	if repositoryID == "" {
+		return []domain.Job{}, nil
+	}
+
+	const query = `
+		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		FROM jobs
+		WHERE repository_id = $1
+		  AND enabled = TRUE
+		  AND push_enabled = TRUE
+		ORDER BY created_at DESC
+	`
+	rows, err := r.db.QueryContext(ctx, query, repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	jobs = make([]domain.Job, 0)
+	for rows.Next() {
+		job, scanErr := scanJob(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return jobs, nil
+}
+
 func normalizeRepositoryURLForMatch(value string) string {
 	trimmed := strings.TrimSpace(strings.ToLower(value))
 	if trimmed == "" {

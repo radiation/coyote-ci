@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -90,14 +91,14 @@ func TestEventHandler_IngestGitHubWebhook_IdempotentDuplicateNoSecondBuild(t *te
 	h := newTestGitHubEventHandler(jobSvc, webhookSvc, metrics, "secret")
 
 	_, err := jobSvc.CreateJob(context.Background(), service.CreateJobInput{
-		ProjectID:     "project-1",
-		Name:          "backend-ci",
-		RepositoryURL: "https://github.com/example/backend.git",
-		DefaultRef:    "main",
-		PushEnabled:   boolPtr(true),
-		PushBranch:    strPtr("main"),
-		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
-		Enabled:       boolPtr(true),
+		ProjectID:    "project-1",
+		Name:         "backend-ci",
+		RepositoryID: "repo-1",
+		DefaultRef:   "main",
+		PushEnabled:  boolPtr(true),
+		PushBranch:   strPtr("main"),
+		PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:      boolPtr(true),
 	})
 	if err != nil {
 		t.Fatalf("create job failed: %v", err)
@@ -108,6 +109,7 @@ func TestEventHandler_IngestGitHubWebhook_IdempotentDuplicateNoSecondBuild(t *te
 		"after":"abc123",
 		"installation":{"id":999},
 		"repository":{
+			"id":1001,
 			"name":"backend",
 			"html_url":"https://github.com/example/backend",
 			"owner":{"login":"example"}
@@ -264,6 +266,7 @@ func TestEventHandler_IngestGitHubWebhook_NoMatchRecorded(t *testing.T) {
 		"after":"abc123",
 		"installation":{"id":999},
 		"repository":{
+			"id":1001,
 			"name":"backend",
 			"html_url":"https://github.com/example/backend",
 			"owner":{"login":"example"}
@@ -309,6 +312,7 @@ func TestEventHandler_IngestGitHubWebhook_DeletePushIgnored(t *testing.T) {
 		"after":"",
 		"installation":{"id":999},
 		"repository":{
+			"id":1001,
 			"name":"backend",
 			"html_url":"https://github.com/example/backend",
 			"owner":{"login":"example"}
@@ -350,6 +354,7 @@ func TestEventHandler_IngestGitHubWebhook_FailedProcessingRecorded(t *testing.T)
 		"after":"abc123",
 		"installation":{"id":999},
 		"repository":{
+			"id":1001,
 			"name":"backend",
 			"html_url":"https://github.com/example/backend",
 			"owner":{"login":"example"}
@@ -469,6 +474,29 @@ func TestEventHandler_IngestGitHubWebhook_InvalidIdentityDoesNotClaimDelivery(t 
 	}
 	if _, err := deliveryRepo.GetByProviderDeliveryID(context.Background(), "github", "delivery-invalid-installation"); err == nil {
 		t.Fatal("malformed identity must not claim a delivery")
+	}
+}
+
+func TestEventHandler_IngestGitHubWebhook_InvalidProviderRepositoryIDRecordsFailedDelivery(t *testing.T) {
+	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
+	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
+	h := newTestGitHubEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(deliveryRepo, jobSvc), observability.NewNoopWebhookIngressMetrics(), "secret")
+	body := []byte(`{"ref":"refs/heads/main","after":"abc123","installation":{"id":999},"repository":{"name":"backend","html_url":"https://github.com/example/backend","owner":{"login":"example"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github/apps/registration-1", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "push")
+	req.Header.Set("X-GitHub-Delivery", "delivery-invalid-repository-id")
+	req.Header.Set("X-Hub-Signature-256", githubTestSignature("secret", body))
+	res := httptest.NewRecorder()
+	ingestTestGitHubWebhook(h, res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusBadRequest, res.Code, res.Body.String())
+	}
+	delivery, err := deliveryRepo.GetByProviderDeliveryID(context.Background(), "github", "delivery-invalid-repository-id")
+	if err != nil {
+		t.Fatalf("expected attributed delivery record, got %v", err)
+	}
+	if delivery.Status != domain.WebhookDeliveryStatusFailed {
+		t.Fatalf("expected failed delivery status, got %q", delivery.Status)
 	}
 }
 
@@ -600,6 +628,22 @@ func githubTestSignature(secret string, body []byte) string {
 }
 
 func newTestGitHubEventHandler(jobSvc *service.JobService, deliverySvc *webhooksvc.DeliveryIngressService, metrics observability.WebhookIngressMetrics, secret string) *EventHandler {
+	registeredRepo := repositorymemory.NewSCMRepositoryRegistrationRepository()
+	now := time.Now().UTC()
+	_, _ = registeredRepo.Create(context.Background(), domain.SCMRepositoryRegistration{
+		ID:                   "repo-1",
+		ConnectionID:         "connection-1",
+		ProviderRepositoryID: "1001",
+		Owner:                "example",
+		Name:                 "backend",
+		FullName:             "example/backend",
+		CloneURL:             "https://github.com/example/backend.git",
+		WebURL:               "https://github.com/example/backend",
+		MetadataRefreshedAt:  now,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	})
+	jobSvc.WithSCMRepositoryRegistrationRepository(registeredRepo)
 	return NewEventHandler(jobSvc, deliverySvc, metrics, testGitHubWebhookResolver{secret: secret, resolution: webhooksvc.GitHubWebhookConnectionResolution{ConnectionID: "connection-1", Found: true, Enabled: true}})
 }
 
@@ -637,7 +681,7 @@ func (r testGitHubWebhookResolver) ResolveConnection(_ context.Context, registra
 }
 
 func validTestGitHubPushBody() []byte {
-	return []byte(`{"ref":"refs/heads/main","after":"abc123","installation":{"id":999},"repository":{"name":"backend","html_url":"https://github.com/example/backend","owner":{"login":"example"}},"sender":{"login":"octocat"}}`)
+	return []byte(`{"ref":"refs/heads/main","after":"abc123","installation":{"id":999},"repository":{"id":1001,"name":"backend","html_url":"https://github.com/example/backend","owner":{"login":"example"}},"sender":{"login":"octocat"}}`)
 }
 
 type recordingHandlerWebhookTriggerer struct {

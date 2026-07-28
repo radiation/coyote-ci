@@ -95,6 +95,16 @@ func (r *SCMRepositoryRegistrationRepository) GetByID(_ context.Context, id stri
 	return registration, nil
 }
 
+func (r *SCMRepositoryRegistrationRepository) GetByConnectionIDAndProviderRepositoryID(_ context.Context, connectionID string, providerRepositoryID string) (domain.SCMRepositoryRegistration, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	registrationID, ok := r.identityLookup[scmRegisteredRepositoryIdentityKey(strings.TrimSpace(connectionID), strings.TrimSpace(providerRepositoryID))]
+	if !ok {
+		return domain.SCMRepositoryRegistration{}, repository.ErrSCMRepositoryRegistrationNotFound
+	}
+	return r.repositories[registrationID], nil
+}
+
 func (r *SCMRepositoryRegistrationRepository) Update(_ context.Context, registration domain.SCMRepositoryRegistration) (domain.SCMRepositoryRegistration, error) {
 	registration = registration.Normalize()
 	if err := registration.Validate(); err != nil {

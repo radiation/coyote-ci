@@ -260,6 +260,33 @@ func TestJobRepository_AllowsManyJobsPerRepositoryID(t *testing.T) {
 	}
 }
 
+func TestJobRepository_ListPushEnabledByRepositoryID(t *testing.T) {
+	repo := NewJobRepository()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	repositoryID := "repo-1"
+	otherRepositoryID := "repo-2"
+	jobs := []domain.Job{
+		{ID: "job-enabled-a", RepositoryID: &repositoryID, RepositoryURL: "https://github.com/same/repository.git", PushEnabled: true, Enabled: true, CreatedAt: now},
+		{ID: "job-enabled-b", RepositoryID: &repositoryID, RepositoryURL: "https://github.com/same/repository.git", PushEnabled: true, Enabled: true, CreatedAt: now.Add(time.Second)},
+		{ID: "job-other-repository", RepositoryID: &otherRepositoryID, RepositoryURL: "https://github.com/same/repository.git", PushEnabled: true, Enabled: true, CreatedAt: now.Add(2 * time.Second)},
+		{ID: "job-unmapped", RepositoryURL: "https://github.com/same/repository.git", PushEnabled: true, Enabled: true, CreatedAt: now.Add(3 * time.Second)},
+		{ID: "job-disabled", RepositoryID: &repositoryID, RepositoryURL: "https://github.com/same/repository.git", PushEnabled: true, Enabled: false, CreatedAt: now.Add(4 * time.Second)},
+		{ID: "job-push-disabled", RepositoryID: &repositoryID, RepositoryURL: "https://github.com/same/repository.git", PushEnabled: false, Enabled: true, CreatedAt: now.Add(5 * time.Second)},
+	}
+	for _, job := range jobs {
+		if _, err := repo.Create(ctx, job); err != nil {
+			t.Fatalf("create job %s: %v", job.ID, err)
+		}
+	}
+
+	matched, matchErr := repo.ListPushEnabledByRepositoryID(ctx, repositoryID)
+	if matchErr != nil {
+		t.Fatalf("list mapped push jobs: %v", matchErr)
+	}
+	assertJobIDs(t, matched, []string{"job-enabled-b", "job-enabled-a"})
+}
+
 func assertJobIDs(t *testing.T, jobs []domain.Job, want []string) {
 	t.Helper()
 	if len(jobs) != len(want) {

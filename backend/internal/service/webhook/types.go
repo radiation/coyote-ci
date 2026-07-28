@@ -8,21 +8,22 @@ type WebhookMatchedBuild struct {
 }
 
 type WebhookTriggerInput struct {
-	ConnectionID    string
-	SCMProvider     string
-	EventType       string
-	RepositoryOwner string
-	RepositoryName  string
-	RepositoryURL   string
-	RawRef          string
-	Ref             string
-	RefType         string
-	RefName         string
-	Deleted         bool
-	CommitSHA       string
-	DeliveryID      string
-	Actor           string
-	InstallationID  string
+	ConnectionID         string
+	SCMProvider          string
+	EventType            string
+	RepositoryOwner      string
+	RepositoryName       string
+	ProviderRepositoryID string
+	RepositoryURL        string
+	RawRef               string
+	Ref                  string
+	RefType              string
+	RefName              string
+	Deleted              bool
+	CommitSHA            string
+	DeliveryID           string
+	Actor                string
+	InstallationID       string
 }
 
 type WebhookTriggerResult struct {

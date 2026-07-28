@@ -125,7 +125,31 @@ func (r *erroringArtifactTriggerJobRepo) GetByIDs(_ context.Context, _ []string)
 
 type erroringRegisteredRepositoryRepo struct {
 	repository.SCMRepositoryRegistrationRepository
-	getByIDsErr error
+	getByIDsErr                     error
+	getByConnectionAndProviderIDErr error
+}
+
+func (r *erroringRegisteredRepositoryRepo) GetByConnectionIDAndProviderRepositoryID(_ context.Context, _ string, _ string) (domain.SCMRepositoryRegistration, error) {
+	return domain.SCMRepositoryRegistration{}, r.getByConnectionAndProviderIDErr
+}
+
+type erroringWebhookRoutingJobRepo struct {
+	*memory.JobRepository
+	listPushEnabledByRepositoryIDErr error
+}
+
+func (r *erroringWebhookRoutingJobRepo) ListPushEnabledByRepositoryID(_ context.Context, _ string) ([]domain.Job, error) {
+	return nil, r.listPushEnabledByRepositoryIDErr
+}
+
+type urlLookupDetectingJobRepo struct {
+	*memory.JobRepository
+	legacyLookupCalls int
+}
+
+func (r *urlLookupDetectingJobRepo) ListPushEnabledByRepository(_ context.Context, _ string) ([]domain.Job, error) {
+	r.legacyLookupCalls++
+	return nil, errors.New("legacy repository URL lookup must not be used")
 }
 
 func (r *erroringRegisteredRepositoryRepo) GetByIDs(_ context.Context, _ []string) ([]domain.SCMRepositoryRegistration, error) {
@@ -2309,6 +2333,146 @@ func TestJobService_TriggerWebhookEvent_DeletePushIgnored(t *testing.T) {
 	}
 }
 
+func TestJobService_TriggerWebhookEvent_UsesRegisteredRepositoryIdentity(t *testing.T) {
+	ctx := context.Background()
+	jobRepo := &urlLookupDetectingJobRepo{JobRepository: memory.NewJobRepository()}
+	registeredRepo := memory.NewSCMRepositoryRegistrationRepository()
+	buildService := buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)
+	jobService := NewJobService(jobRepo, buildService).WithSCMRepositoryRegistrationRepository(registeredRepo)
+	now := time.Now().UTC()
+	for _, registration := range []domain.SCMRepositoryRegistration{
+		{ID: "repo-a", ConnectionID: "connection-a", ProviderRepositoryID: "1001", Owner: "same", Name: "repository", FullName: "same/repository", CloneURL: "https://github.com/same/repository.git", WebURL: "https://github.com/same/repository", MetadataRefreshedAt: now, CreatedAt: now, UpdatedAt: now},
+		{ID: "repo-b", ConnectionID: "connection-b", ProviderRepositoryID: "1001", Owner: "same", Name: "repository", FullName: "same/repository", CloneURL: "https://github.com/same/repository.git", WebURL: "https://github.com/same/repository", MetadataRefreshedAt: now, CreatedAt: now, UpdatedAt: now},
+	} {
+		if _, err := registeredRepo.Create(ctx, registration); err != nil {
+			t.Fatalf("create registration %s: %v", registration.ID, err)
+		}
+	}
+	for _, job := range []domain.Job{
+		{ID: "job-a-1", ProjectID: "project-1", Name: "a-1", RepositoryID: strPtr("repo-a"), RepositoryURL: "https://github.com/old/name.git", PushEnabled: true, Enabled: true, PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: echo a1\n", CreatedAt: now, UpdatedAt: now},
+		{ID: "job-a-2", ProjectID: "project-1", Name: "a-2", RepositoryID: strPtr("repo-a"), RepositoryURL: "https://github.com/old/name.git", PushEnabled: true, Enabled: true, PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: echo a2\n", CreatedAt: now.Add(time.Second), UpdatedAt: now.Add(time.Second)},
+		{ID: "job-b", ProjectID: "project-1", Name: "b", RepositoryID: strPtr("repo-b"), RepositoryURL: "https://github.com/old/name.git", PushEnabled: true, Enabled: true, PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: echo b\n", CreatedAt: now.Add(2 * time.Second), UpdatedAt: now.Add(2 * time.Second)},
+		{ID: "job-unmapped", ProjectID: "project-1", Name: "unmapped", RepositoryURL: "https://github.com/old/name.git", PushEnabled: true, Enabled: true, PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: echo unmapped\n", CreatedAt: now.Add(3 * time.Second), UpdatedAt: now.Add(3 * time.Second)},
+	} {
+		if _, err := jobRepo.Create(ctx, job); err != nil {
+			t.Fatalf("create job %s: %v", job.ID, err)
+		}
+	}
+
+	input := webhooksvc.WebhookTriggerInput{ConnectionID: "connection-a", SCMProvider: "github", EventType: "push", ProviderRepositoryID: "1001", RepositoryOwner: "renamed", RepositoryName: "transferred", RepositoryURL: "https://github.com/renamed/transferred.git", RawRef: "refs/heads/main", CommitSHA: "abc123"}
+	result, triggerErr := jobService.TriggerWebhookEvent(ctx, input)
+	if triggerErr != nil {
+		t.Fatalf("trigger connection-a webhook: %v", triggerErr)
+	}
+	if result.MatchedJobs != 2 || len(result.Builds) != 2 || result.Builds[0].Job.ID != "job-a-2" || result.Builds[1].Job.ID != "job-a-1" {
+		t.Fatalf("expected only connection-a mapped jobs, got %+v", result.Builds)
+	}
+
+	input.ConnectionID = "connection-b"
+	result, triggerErr = jobService.TriggerWebhookEvent(ctx, input)
+	if triggerErr != nil {
+		t.Fatalf("trigger connection-b webhook: %v", triggerErr)
+	}
+	if result.MatchedJobs != 1 || len(result.Builds) != 1 || result.Builds[0].Job.ID != "job-b" {
+		t.Fatalf("expected only connection-b mapped job, got %+v", result.Builds)
+	}
+	if jobRepo.legacyLookupCalls != 0 {
+		t.Fatalf("expected no URL-based lookup for connection-aware webhooks, got %d calls", jobRepo.legacyLookupCalls)
+	}
+}
+
+func TestJobService_TriggerWebhookEvent_RegisteredRepositoryNoOpsAndFilters(t *testing.T) {
+	ctx := context.Background()
+	jobRepo := memory.NewJobRepository()
+	registeredRepo := memory.NewSCMRepositoryRegistrationRepository()
+	buildService := buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)
+	jobService := NewJobService(jobRepo, buildService).WithSCMRepositoryRegistrationRepository(registeredRepo)
+	now := time.Now().UTC()
+	for _, registration := range []domain.SCMRepositoryRegistration{
+		{ID: "repo-disabled", ConnectionID: "connection-a", ProviderRepositoryID: "1001", Owner: "owner", Name: "disabled", FullName: "owner/disabled", CloneURL: "https://github.com/owner/disabled.git", WebURL: "https://github.com/owner/disabled", Disabled: true, MetadataRefreshedAt: now, CreatedAt: now, UpdatedAt: now},
+		{ID: "repo-archived", ConnectionID: "connection-a", ProviderRepositoryID: "1002", Owner: "owner", Name: "archived", FullName: "owner/archived", CloneURL: "https://github.com/owner/archived.git", WebURL: "https://github.com/owner/archived", Archived: true, MetadataRefreshedAt: now, CreatedAt: now, UpdatedAt: now},
+		{ID: "repo-tags", ConnectionID: "connection-a", ProviderRepositoryID: "1003", Owner: "owner", Name: "tags", FullName: "owner/tags", CloneURL: "https://github.com/owner/tags.git", WebURL: "https://github.com/owner/tags", MetadataRefreshedAt: now, CreatedAt: now, UpdatedAt: now},
+	} {
+		if _, err := registeredRepo.Create(ctx, registration); err != nil {
+			t.Fatalf("create registration %s: %v", registration.ID, err)
+		}
+	}
+	for _, job := range []domain.Job{
+		{ID: "job-disabled-repository", ProjectID: "project-1", Name: "disabled", RepositoryID: strPtr("repo-disabled"), PushEnabled: true, Enabled: true, PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: echo disabled\n", CreatedAt: now, UpdatedAt: now},
+		{ID: "job-archived-repository", ProjectID: "project-1", Name: "archived", RepositoryID: strPtr("repo-archived"), RepositoryURL: "https://github.com/owner/archived.git", PushEnabled: true, Enabled: true, TriggerMode: domain.JobTriggerModeBranches, BranchAllowlist: []string{"main"}, PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: echo archived\n", CreatedAt: now, UpdatedAt: now},
+		{ID: "job-tags-repository", ProjectID: "project-1", Name: "tags", RepositoryID: strPtr("repo-tags"), RepositoryURL: "https://github.com/owner/tags.git", PushEnabled: true, Enabled: true, TriggerMode: domain.JobTriggerModeTags, TagAllowlist: []string{"v*"}, PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: echo tags\n", CreatedAt: now, UpdatedAt: now},
+	} {
+		if _, err := jobRepo.Create(ctx, job); err != nil {
+			t.Fatalf("create job %s: %v", job.ID, err)
+		}
+	}
+
+	for _, testCase := range []struct {
+		name        string
+		providerID  string
+		ref         string
+		deleted     bool
+		wantMatches int
+	}{
+		{name: "unknown repository", providerID: "missing", ref: "refs/heads/main"},
+		{name: "disabled repository", providerID: "1001", ref: "refs/heads/main"},
+		{name: "archived repository routes", providerID: "1002", ref: "refs/heads/main", wantMatches: 1},
+		{name: "branch filter remains active", providerID: "1002", ref: "refs/heads/release"},
+		{name: "deleted ref remains ignored", providerID: "1002", ref: "refs/heads/main", deleted: true},
+		{name: "tag filter routes matching tag", providerID: "1003", ref: "refs/tags/v1.2.3", wantMatches: 1},
+		{name: "tag filter rejects nonmatching tag", providerID: "1003", ref: "refs/tags/release"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			result, triggerErr := jobService.TriggerWebhookEvent(ctx, webhooksvc.WebhookTriggerInput{ConnectionID: "connection-a", SCMProvider: "github", EventType: "push", ProviderRepositoryID: testCase.providerID, RawRef: testCase.ref, Deleted: testCase.deleted, CommitSHA: "abc123"})
+			if triggerErr != nil {
+				t.Fatalf("trigger webhook: %v", triggerErr)
+			}
+			if result.MatchedJobs != testCase.wantMatches {
+				t.Fatalf("expected %d matches, got %+v", testCase.wantMatches, result)
+			}
+		})
+	}
+}
+
+func TestJobService_TriggerWebhookEvent_RepositoryAwareInputAndPersistenceFailures(t *testing.T) {
+	ctx := context.Background()
+	buildService := buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)
+	input := webhooksvc.WebhookTriggerInput{ConnectionID: "connection-a", SCMProvider: "github", EventType: "push", ProviderRepositoryID: "1001", RawRef: "refs/heads/main", CommitSHA: "abc123"}
+
+	t.Run("provider repository id is required", func(t *testing.T) {
+		jobService := NewJobService(memory.NewJobRepository(), buildService).WithSCMRepositoryRegistrationRepository(memory.NewSCMRepositoryRegistrationRepository())
+		inputWithoutRepositoryID := input
+		inputWithoutRepositoryID.ProviderRepositoryID = ""
+		_, triggerErr := jobService.TriggerWebhookEvent(ctx, inputWithoutRepositoryID)
+		if !errors.Is(triggerErr, ErrWebhookProviderRepositoryIDRequired) {
+			t.Fatalf("expected ErrWebhookProviderRepositoryIDRequired, got %v", triggerErr)
+		}
+	})
+
+	t.Run("registered repository lookup failure propagates", func(t *testing.T) {
+		lookupErr := errors.New("registered repository lookup failed")
+		jobService := NewJobService(memory.NewJobRepository(), buildService).WithSCMRepositoryRegistrationRepository(&erroringRegisteredRepositoryRepo{SCMRepositoryRegistrationRepository: memory.NewSCMRepositoryRegistrationRepository(), getByConnectionAndProviderIDErr: lookupErr})
+		_, triggerErr := jobService.TriggerWebhookEvent(ctx, input)
+		if !errors.Is(triggerErr, lookupErr) {
+			t.Fatalf("expected lookup error, got %v", triggerErr)
+		}
+	})
+
+	t.Run("mapped job lookup failure propagates", func(t *testing.T) {
+		registeredRepo := memory.NewSCMRepositoryRegistrationRepository()
+		now := time.Now().UTC()
+		if _, err := registeredRepo.Create(ctx, domain.SCMRepositoryRegistration{ID: "repo-1", ConnectionID: "connection-a", ProviderRepositoryID: "1001", Owner: "owner", Name: "repository", FullName: "owner/repository", CloneURL: "https://github.com/owner/repository.git", WebURL: "https://github.com/owner/repository", MetadataRefreshedAt: now, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatalf("create registration: %v", err)
+		}
+		jobLookupErr := errors.New("mapped job lookup failed")
+		jobService := NewJobService(&erroringWebhookRoutingJobRepo{JobRepository: memory.NewJobRepository(), listPushEnabledByRepositoryIDErr: jobLookupErr}, buildService).WithSCMRepositoryRegistrationRepository(registeredRepo)
+		_, triggerErr := jobService.TriggerWebhookEvent(ctx, input)
+		if !errors.Is(triggerErr, jobLookupErr) {
+			t.Fatalf("expected mapped job lookup error, got %v", triggerErr)
+		}
+	})
+}
+
 func strPtr(v string) *string {
 	return &v
 }
@@ -2384,6 +2548,10 @@ func (r *failingCreateJobRepository) ListByProjectID(_ context.Context, _ string
 }
 
 func (r *failingCreateJobRepository) ListPushEnabledByRepository(_ context.Context, _ string) ([]domain.Job, error) {
+	return []domain.Job{}, nil
+}
+
+func (r *failingCreateJobRepository) ListPushEnabledByRepositoryID(_ context.Context, _ string) ([]domain.Job, error) {
 	return []domain.Job{}, nil
 }
 

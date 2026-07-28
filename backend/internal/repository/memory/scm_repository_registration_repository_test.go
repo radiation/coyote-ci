@@ -108,3 +108,31 @@ func TestSCMRepositoryRegistrationRepository_GetByIDs(t *testing.T) {
 		t.Fatalf("unexpected repository order: %+v", items)
 	}
 }
+
+func TestSCMRepositoryRegistrationRepository_GetByConnectionIDAndProviderRepositoryID(t *testing.T) {
+	repo := NewSCMRepositoryRegistrationRepository()
+	now := time.Now().UTC()
+	left := domain.SCMRepositoryRegistration{ID: "repo-left", ConnectionID: "connection-a", ProviderRepositoryID: "1001", Owner: "same", Name: "repository", FullName: "same/repository", CloneURL: "https://github.com/same/repository.git", WebURL: "https://github.com/same/repository", MetadataRefreshedAt: now, CreatedAt: now, UpdatedAt: now}
+	right := left
+	right.ID = "repo-right"
+	right.ConnectionID = "connection-b"
+	right.Disabled = true
+	right.Archived = true
+	for _, registration := range []domain.SCMRepositoryRegistration{left, right} {
+		if _, err := repo.Create(context.Background(), registration); err != nil {
+			t.Fatalf("create registration %s: %v", registration.ID, err)
+		}
+	}
+
+	resolved, resolveErr := repo.GetByConnectionIDAndProviderRepositoryID(context.Background(), " connection-a ", " 1001 ")
+	if resolveErr != nil || resolved.ID != "repo-left" {
+		t.Fatalf("expected connection-a registration, got %+v err=%v", resolved, resolveErr)
+	}
+	resolved, resolveErr = repo.GetByConnectionIDAndProviderRepositoryID(context.Background(), "connection-b", "1001")
+	if resolveErr != nil || resolved.ID != "repo-right" || !resolved.Disabled || !resolved.Archived {
+		t.Fatalf("expected connection-b metadata, got %+v err=%v", resolved, resolveErr)
+	}
+	if _, err := repo.GetByConnectionIDAndProviderRepositoryID(context.Background(), "connection-c", "1001"); !errors.Is(err, repository.ErrSCMRepositoryRegistrationNotFound) {
+		t.Fatalf("expected unknown pair error, got %v", err)
+	}
+}
