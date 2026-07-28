@@ -192,6 +192,30 @@ func (r *JobRepository) ListPushEnabledByRepository(_ context.Context, repositor
 	return out, nil
 }
 
+func (r *JobRepository) ListPushEnabledByRepositoryID(_ context.Context, repositoryID string) ([]domain.Job, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	repositoryID = strings.TrimSpace(repositoryID)
+	if repositoryID == "" {
+		return []domain.Job{}, nil
+	}
+
+	out := make([]domain.Job, 0)
+	for _, job := range r.jobs {
+		if !job.Enabled || !job.PushEnabled || job.RepositoryID == nil || strings.TrimSpace(*job.RepositoryID) != repositoryID {
+			continue
+		}
+		out = append(out, job)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
 func normalizeRepositoryURLForMatch(value string) string {
 	trimmed := strings.TrimSpace(strings.ToLower(value))
 	if trimmed == "" {

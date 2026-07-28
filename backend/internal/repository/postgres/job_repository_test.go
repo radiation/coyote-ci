@@ -226,3 +226,29 @@ func TestJobRepository_FindByProjectIDAndNameDefaultsLimitToOne(t *testing.T) {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
+
+func TestJobRepository_ListPushEnabledByRepositoryID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewJobRepository(db)
+	now := time.Now().UTC()
+	rows := sqlmock.NewRows([]string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}).
+		AddRow("job-2", "project-1", "second", 5, "repo-1", "https://github.com/same/repository.git", "main", nil, true, nil, "branches", `[]`, `[]`, `[]`, "version: 1", nil, true, now.Add(time.Second), now.Add(time.Second)).
+		AddRow("job-1", "project-1", "first", 5, "repo-1", "https://github.com/same/repository.git", "main", nil, true, nil, "branches", `[]`, `[]`, `[]`, "version: 1", nil, true, now, now)
+	mock.ExpectQuery(`WHERE repository_id = \$1`).WithArgs("repo-1").WillReturnRows(rows)
+
+	matched, matchErr := repo.ListPushEnabledByRepositoryID(context.Background(), " repo-1 ")
+	if matchErr != nil {
+		t.Fatalf("list mapped push jobs: %v", matchErr)
+	}
+	if len(matched) != 2 || matched[0].ID != "job-2" || matched[1].ID != "job-1" {
+		t.Fatalf("expected mapped jobs only, got %+v", matched)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationsErr)
+	}
+}

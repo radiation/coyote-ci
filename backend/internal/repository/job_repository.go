@@ -18,6 +18,7 @@ type JobRepository interface {
 	ListPaged(ctx context.Context, params ListParams) ([]domain.Job, error)
 	ListByProjectID(ctx context.Context, projectID string) ([]domain.Job, error)
 	ListPushEnabledByRepository(ctx context.Context, repositoryURL string) ([]domain.Job, error)
+	ListPushEnabledByRepositoryID(ctx context.Context, repositoryID string) ([]domain.Job, error)
 	GetByID(ctx context.Context, id string) (domain.Job, error)
 	Update(ctx context.Context, job domain.Job) (domain.Job, error)
 }

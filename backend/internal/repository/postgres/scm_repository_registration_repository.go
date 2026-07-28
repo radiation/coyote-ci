@@ -133,6 +133,22 @@ func (r *SCMRepositoryRegistrationRepository) GetByID(ctx context.Context, id st
 	return item, nil
 }
 
+func (r *SCMRepositoryRegistrationRepository) GetByConnectionIDAndProviderRepositoryID(ctx context.Context, connectionID string, providerRepositoryID string) (domain.SCMRepositoryRegistration, error) {
+	const query = `
+		SELECT id, connection_id, provider_repository_id, owner_name, repository_name, full_name, clone_url, web_url, default_branch, archived, disabled, metadata_refreshed_at, created_at, updated_at
+		FROM scm_registered_repositories
+		WHERE connection_id = $1 AND provider_repository_id = $2
+	`
+	item, err := scanSCMRepositoryRegistration(r.db.QueryRowContext(ctx, query, strings.TrimSpace(connectionID), strings.TrimSpace(providerRepositoryID)))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.SCMRepositoryRegistration{}, repository.ErrSCMRepositoryRegistrationNotFound
+		}
+		return domain.SCMRepositoryRegistration{}, err
+	}
+	return item, nil
+}
+
 func (r *SCMRepositoryRegistrationRepository) Update(ctx context.Context, registration domain.SCMRepositoryRegistration) (domain.SCMRepositoryRegistration, error) {
 	const query = `
 		UPDATE scm_registered_repositories

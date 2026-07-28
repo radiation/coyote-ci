@@ -13,6 +13,7 @@ var ErrSCMRepositoryRegistrationDuplicate = errors.New("scm registered repositor
 type SCMRepositoryRegistrationRepository interface {
 	Create(ctx context.Context, registration domain.SCMRepositoryRegistration) (domain.SCMRepositoryRegistration, error)
 	GetByIDs(ctx context.Context, ids []string) ([]domain.SCMRepositoryRegistration, error)
+	GetByConnectionIDAndProviderRepositoryID(ctx context.Context, connectionID string, providerRepositoryID string) (domain.SCMRepositoryRegistration, error)
 	List(ctx context.Context) ([]domain.SCMRepositoryRegistration, error)
 	GetByID(ctx context.Context, id string) (domain.SCMRepositoryRegistration, error)
 	Update(ctx context.Context, registration domain.SCMRepositoryRegistration) (domain.SCMRepositoryRegistration, error)

@@ -18,19 +18,20 @@ var ErrUnsupportedEvent = errors.New("unsupported github webhook event")
 var ErrInvalidPayload = errors.New("invalid github push payload")
 
 type PushEvent struct {
-	EventType       string
-	RepositoryOwner string
-	RepositoryName  string
-	RepositoryURL   string
-	InstallationID  string
-	RawRef          string
-	Ref             string
-	RefType         string
-	RefName         string
-	Deleted         bool
-	CommitSHA       string
-	DeliveryID      string
-	Actor           string
+	EventType            string
+	RepositoryOwner      string
+	RepositoryName       string
+	ProviderRepositoryID string
+	RepositoryURL        string
+	InstallationID       string
+	RawRef               string
+	Ref                  string
+	RefType              string
+	RefName              string
+	Deleted              bool
+	CommitSHA            string
+	DeliveryID           string
+	Actor                string
 }
 
 type AppEnvelope struct {
@@ -69,10 +70,11 @@ func ParsePushEvent(headers http.Header, body []byte) (PushEvent, error) {
 			ID string `json:"id"`
 		} `json:"head_commit"`
 		Repository struct {
-			Name     string `json:"name"`
-			HTMLURL  string `json:"html_url"`
-			CloneURL string `json:"clone_url"`
-			URL      string `json:"url"`
+			ID       json.RawMessage `json:"id"`
+			Name     string          `json:"name"`
+			HTMLURL  string          `json:"html_url"`
+			CloneURL string          `json:"clone_url"`
+			URL      string          `json:"url"`
 			Owner    struct {
 				Login string `json:"login"`
 				Name  string `json:"name"`
@@ -84,6 +86,10 @@ func ParsePushEvent(headers http.Header, body []byte) (PushEvent, error) {
 	}
 
 	if err := json.Unmarshal(body, &payload); err != nil {
+		return PushEvent{}, ErrInvalidPayload
+	}
+	providerRepositoryID, providerRepositoryIDErr := parseProviderRepositoryID(payload.Repository.ID)
+	if providerRepositoryIDErr != nil {
 		return PushEvent{}, ErrInvalidPayload
 	}
 
@@ -111,20 +117,25 @@ func ParsePushEvent(headers http.Header, body []byte) (PushEvent, error) {
 	}
 
 	return PushEvent{
-		EventType:       eventType,
-		RepositoryOwner: repositoryOwner,
-		RepositoryName:  repositoryName,
-		RepositoryURL:   repositoryURL,
-		InstallationID:  envelope.InstallationID,
-		RawRef:          normalizedRef.RawRef,
-		Ref:             normalizedRef.RefName,
-		RefType:         string(normalizedRef.RefType),
-		RefName:         normalizedRef.RefName,
-		Deleted:         normalizedRef.Deleted,
-		CommitSHA:       commitSHA,
-		DeliveryID:      strings.TrimSpace(headers.Get("X-GitHub-Delivery")),
-		Actor:           strings.TrimSpace(payload.Sender.Login),
+		EventType:            eventType,
+		RepositoryOwner:      repositoryOwner,
+		RepositoryName:       repositoryName,
+		ProviderRepositoryID: providerRepositoryID,
+		RepositoryURL:        repositoryURL,
+		InstallationID:       envelope.InstallationID,
+		RawRef:               normalizedRef.RawRef,
+		Ref:                  normalizedRef.RefName,
+		RefType:              string(normalizedRef.RefType),
+		RefName:              normalizedRef.RefName,
+		Deleted:              normalizedRef.Deleted,
+		CommitSHA:            commitSHA,
+		DeliveryID:           strings.TrimSpace(headers.Get("X-GitHub-Delivery")),
+		Actor:                strings.TrimSpace(payload.Sender.Login),
 	}, nil
+}
+
+func parseProviderRepositoryID(raw json.RawMessage) (string, error) {
+	return parsePositiveIntegerID(raw)
 }
 
 func ParseAppEnvelope(body []byte) (AppEnvelope, error) {
@@ -144,6 +155,10 @@ func ParseAppEnvelope(body []byte) (AppEnvelope, error) {
 }
 
 func parseInstallationID(raw json.RawMessage) (string, error) {
+	return parsePositiveIntegerID(raw)
+}
+
+func parsePositiveIntegerID(raw json.RawMessage) (string, error) {
 	value := strings.TrimSpace(string(raw))
 	if value == "" || strings.HasPrefix(value, `"`) {
 		return "", ErrInvalidPayload
