@@ -92,6 +92,7 @@ type SCMStatusDeliveryRepository interface {
 	RecordExhaustedFailure(ctx context.Context, input SCMStatusDeliveryRecordFailureInput) (SCMStatusDeliveryUpdateResult, error)
 	MarkSuperseded(ctx context.Context, input SCMStatusDeliveryMarkSupersededInput) (SCMStatusDeliveryUpdateResult, error)
 	GetByKey(ctx context.Context, provider string, repositoryOwner string, repositoryName string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error)
+	GetByRepositoryIdentity(ctx context.Context, connectionID string, providerRepositoryID string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error)
 }
 
 func SCMStatusDeliveryClaimOutcomeFromExisting(delivery domain.SCMStatusDelivery, now time.Time) SCMStatusDeliveryClaimOutcome {

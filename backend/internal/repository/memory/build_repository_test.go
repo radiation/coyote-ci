@@ -63,6 +63,20 @@ func TestBuildRepository_Create(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_RejectsMalformedRepositoryIdentitySnapshots(t *testing.T) {
+	whitespace := "  "
+	connectionID := "connection-1"
+	providerRepositoryID := "provider-repository-1"
+	invalidBuild := domain.Build{ID: "build-invalid", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC(), RegisteredRepositoryID: &whitespace, SCMConnectionID: &connectionID, ProviderRepositoryID: &providerRepositoryID}
+	repo := NewBuildRepository()
+	if _, err := repo.Create(context.Background(), invalidBuild); err == nil {
+		t.Fatal("expected malformed snapshot to be rejected")
+	}
+	if _, err := repo.CreateQueuedBuild(context.Background(), invalidBuild, nil); err == nil {
+		t.Fatal("expected queued malformed snapshot to be rejected")
+	}
+}
+
 func TestBuildRepository_AssignsSequentialBuildNumbersPerJob(t *testing.T) {
 	repo := NewBuildRepository()
 	now := time.Now().UTC()

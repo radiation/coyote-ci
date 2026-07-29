@@ -672,16 +672,22 @@ func (s *JobService) createBuildForJobWithTrigger(ctx context.Context, job domai
 		return domain.Build{}, ErrJobBuildServiceNotConfigured
 	}
 
+	identity, identityErr := s.buildRepositoryIdentity(ctx, job)
+	if identityErr != nil {
+		return domain.Build{}, identityErr
+	}
+
 	var build domain.Build
 	var err error
 	if strings.TrimSpace(job.PipelineYAML) != "" {
 		build, err = s.buildService.CreateBuildFromPipeline(ctx, buildsvc.CreatePipelineBuildInput{
-			ProjectID:    job.ProjectID,
-			JobID:        &job.ID,
-			Priority:     job.Priority,
-			PipelineYAML: job.PipelineYAML,
-			PipelinePath: readStringPtr(job.PipelinePath),
-			Trigger:      trigger,
+			ProjectID:          job.ProjectID,
+			JobID:              &job.ID,
+			Priority:           job.Priority,
+			PipelineYAML:       job.PipelineYAML,
+			PipelinePath:       readStringPtr(job.PipelinePath),
+			Trigger:            trigger,
+			RepositoryIdentity: identity,
 			Source: &buildsvc.CreateBuildSourceInput{
 				RepositoryURL: job.RepositoryURL,
 				Ref:           job.DefaultRef,
@@ -690,22 +696,24 @@ func (s *JobService) createBuildForJobWithTrigger(ctx context.Context, job domai
 		})
 	} else if job.PipelinePath != nil && strings.TrimSpace(*job.PipelinePath) != "" {
 		build, err = s.buildService.CreateBuildFromRepo(ctx, buildsvc.CreateRepoBuildInput{
-			ProjectID:    job.ProjectID,
-			JobID:        &job.ID,
-			Priority:     job.Priority,
-			RepoURL:      job.RepositoryURL,
-			Ref:          job.DefaultRef,
-			CommitSHA:    readStringPtr(job.DefaultCommitSHA),
-			PipelinePath: strings.TrimSpace(*job.PipelinePath),
-			Trigger:      trigger,
+			ProjectID:          job.ProjectID,
+			JobID:              &job.ID,
+			Priority:           job.Priority,
+			RepoURL:            job.RepositoryURL,
+			Ref:                job.DefaultRef,
+			CommitSHA:          readStringPtr(job.DefaultCommitSHA),
+			PipelinePath:       strings.TrimSpace(*job.PipelinePath),
+			Trigger:            trigger,
+			RepositoryIdentity: identity,
 		})
 	} else {
 		build, err = s.buildService.CreateBuildFromPipeline(ctx, buildsvc.CreatePipelineBuildInput{
-			ProjectID:    job.ProjectID,
-			JobID:        &job.ID,
-			Priority:     job.Priority,
-			PipelineYAML: job.PipelineYAML,
-			Trigger:      trigger,
+			ProjectID:          job.ProjectID,
+			JobID:              &job.ID,
+			Priority:           job.Priority,
+			PipelineYAML:       job.PipelineYAML,
+			Trigger:            trigger,
+			RepositoryIdentity: identity,
 			Source: &buildsvc.CreateBuildSourceInput{
 				RepositoryURL: job.RepositoryURL,
 				Ref:           job.DefaultRef,
@@ -718,6 +726,28 @@ func (s *JobService) createBuildForJobWithTrigger(ctx context.Context, job domai
 	}
 
 	return build, nil
+}
+
+func (s *JobService) buildRepositoryIdentity(ctx context.Context, job domain.Job) (*domain.RepositoryIdentitySnapshot, error) {
+	if job.RepositoryID == nil || strings.TrimSpace(*job.RepositoryID) == "" {
+		return nil, nil
+	}
+	if s.registeredRepositories == nil {
+		return nil, ErrJobRegisteredRepositoryStoreNotConfigured
+	}
+	registration, err := s.registeredRepositories.GetByID(ctx, strings.TrimSpace(*job.RepositoryID))
+	if err != nil {
+		return nil, err
+	}
+	identity := &domain.RepositoryIdentitySnapshot{
+		RegisteredRepositoryID: registration.ID,
+		SCMConnectionID:        registration.ConnectionID,
+		ProviderRepositoryID:   registration.ProviderRepositoryID,
+	}
+	if err := identity.Validate(); err != nil {
+		return nil, err
+	}
+	return identity, nil
 }
 
 func (s *JobService) DispatchArtifactTriggers(ctx context.Context, build domain.Build, artifact domain.BuildArtifact) error {

@@ -39,7 +39,7 @@ func (r *SCMStatusDeliveryRepository) AcquireForDelivery(ctx context.Context, in
 		return repository.SCMStatusDeliveryClaimResult{}, err
 	}
 
-	key := scmStatusDeliveryStreamKey(delivery.Provider, delivery.RepositoryOwner, delivery.RepositoryName, delivery.CommitSHA, delivery.Context)
+	key := scmStatusDeliveryKey(delivery)
 	if existingID, exists := r.index[key]; exists {
 		existing := r.deliveries[existingID]
 		claimed, outcome, persist, reassertAfter, claimErr := reconcileSCMStatusDeliveryForClaim(existing, delivery, now, claimOwner, claimDuration, input.MaxAttempts)
@@ -218,7 +218,26 @@ func (r *SCMStatusDeliveryRepository) GetByKey(ctx context.Context, provider str
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	key := scmStatusDeliveryStreamKey(strings.ToLower(strings.TrimSpace(provider)), strings.TrimSpace(repositoryOwner), strings.TrimSpace(repositoryName), strings.TrimSpace(commitSHA), strings.TrimSpace(contextName))
+	key := scmStatusDeliveryLegacyStreamKey(strings.ToLower(strings.TrimSpace(provider)), strings.TrimSpace(repositoryOwner), strings.TrimSpace(repositoryName), strings.TrimSpace(commitSHA), strings.TrimSpace(contextName))
+	id, ok := r.index[key]
+	if !ok {
+		return domain.SCMStatusDelivery{}, repository.ErrSCMStatusDeliveryNotFound
+	}
+	delivery, ok := r.deliveries[id]
+	if !ok {
+		return domain.SCMStatusDelivery{}, repository.ErrSCMStatusDeliveryNotFound
+	}
+	return delivery, nil
+}
+
+func (r *SCMStatusDeliveryRepository) GetByRepositoryIdentity(ctx context.Context, connectionID string, providerRepositoryID string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.SCMStatusDelivery{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	key := scmStatusDeliveryRepositoryStreamKey(connectionID, providerRepositoryID, commitSHA, contextName)
 	id, ok := r.index[key]
 	if !ok {
 		return domain.SCMStatusDelivery{}, repository.ErrSCMStatusDeliveryNotFound
@@ -266,10 +285,11 @@ func (r *SCMStatusDeliveryRepository) recordFailure(ctx context.Context, input r
 }
 
 func normalizeSCMClaimInput(input repository.SCMStatusDeliveryClaimInput) (domain.SCMStatusDelivery, time.Time, string, time.Duration, error) {
-	delivery := input.Delivery.Normalize()
+	delivery := input.Delivery
 	if err := delivery.ValidateIdentity(); err != nil {
 		return domain.SCMStatusDelivery{}, time.Time{}, "", 0, err
 	}
+	delivery = delivery.Normalize()
 	now := input.Now.UTC()
 	if now.IsZero() {
 		return domain.SCMStatusDelivery{}, time.Time{}, "", 0, errors.New("scm status delivery claim time is required")
@@ -401,7 +421,23 @@ func scmStatusDeliveryClaimMatches(delivery domain.SCMStatusDelivery, claimOwner
 	return delivery.ClaimedAt.UTC().Equal(claimedAt.UTC())
 }
 
+func scmStatusDeliveryKey(delivery domain.SCMStatusDelivery) string {
+	delivery = delivery.Normalize()
+	if delivery.SCMConnectionID != nil && delivery.ProviderRepositoryID != nil {
+		return scmStatusDeliveryRepositoryStreamKey(*delivery.SCMConnectionID, *delivery.ProviderRepositoryID, delivery.CommitSHA, delivery.Context)
+	}
+	return scmStatusDeliveryLegacyStreamKey(delivery.Provider, delivery.RepositoryOwner, delivery.RepositoryName, delivery.CommitSHA, delivery.Context)
+}
+
 func scmStatusDeliveryStreamKey(provider string, repositoryOwner string, repositoryName string, commitSHA string, contextName string) string {
+	return scmStatusDeliveryLegacyStreamKey(provider, repositoryOwner, repositoryName, commitSHA, contextName)
+}
+
+func scmStatusDeliveryRepositoryStreamKey(connectionID string, providerRepositoryID string, commitSHA string, contextName string) string {
+	return "repository|" + strings.TrimSpace(connectionID) + "|" + strings.TrimSpace(providerRepositoryID) + "|" + strings.TrimSpace(commitSHA) + "|" + strings.TrimSpace(contextName)
+}
+
+func scmStatusDeliveryLegacyStreamKey(provider string, repositoryOwner string, repositoryName string, commitSHA string, contextName string) string {
 	return strings.ToLower(strings.TrimSpace(provider)) + "|" + strings.TrimSpace(repositoryOwner) + "|" + strings.TrimSpace(repositoryName) + "|" + strings.TrimSpace(commitSHA) + "|" + strings.TrimSpace(contextName)
 }
 

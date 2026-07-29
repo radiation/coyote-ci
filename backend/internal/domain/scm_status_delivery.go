@@ -35,19 +35,22 @@ const (
 )
 
 type SCMStatusDelivery struct {
-	ID              string
-	BuildID         string
-	BuildAttempt    int
-	BuildCreatedAt  time.Time
-	Provider        string
-	RepositoryOwner string
-	RepositoryName  string
-	CommitSHA       string
-	Context         string
-	DesiredState    SCMCommitStatusState
-	LastSentState   *SCMCommitStatusState
-	Description     string
-	DetailsURL      *string
+	ID                     string
+	BuildID                string
+	BuildAttempt           int
+	BuildCreatedAt         time.Time
+	Provider               string
+	RepositoryOwner        string
+	RepositoryName         string
+	RegisteredRepositoryID *string
+	SCMConnectionID        *string
+	ProviderRepositoryID   *string
+	CommitSHA              string
+	Context                string
+	DesiredState           SCMCommitStatusState
+	LastSentState          *SCMCommitStatusState
+	Description            string
+	DetailsURL             *string
 
 	Status          SCMStatusDeliveryStatus
 	Attempts        int
@@ -74,6 +77,9 @@ func (d SCMStatusDelivery) Normalize() SCMStatusDelivery {
 	d.Provider = strings.ToLower(strings.TrimSpace(d.Provider))
 	d.RepositoryOwner = strings.TrimSpace(d.RepositoryOwner)
 	d.RepositoryName = strings.TrimSpace(d.RepositoryName)
+	d.RegisteredRepositoryID = trimSCMOptionalString(d.RegisteredRepositoryID)
+	d.SCMConnectionID = trimSCMOptionalString(d.SCMConnectionID)
+	d.ProviderRepositoryID = trimSCMOptionalString(d.ProviderRepositoryID)
 	d.CommitSHA = strings.TrimSpace(d.CommitSHA)
 	d.Context = strings.TrimSpace(d.Context)
 	d.Description = strings.TrimSpace(d.Description)
@@ -127,6 +133,9 @@ func (d SCMStatusDelivery) ValidateIdentity() error {
 	if d.RepositoryOwner == "" || d.RepositoryName == "" {
 		return fmt.Errorf("scm status delivery repository owner and name are required")
 	}
+	if err := ValidateRepositoryIdentitySnapshot(d.RegisteredRepositoryID, d.SCMConnectionID, d.ProviderRepositoryID); err != nil {
+		return fmt.Errorf("scm status delivery %w", err)
+	}
 	if d.CommitSHA == "" {
 		return fmt.Errorf("scm status delivery commit sha is required")
 	}
@@ -149,6 +158,9 @@ func (s SCMCommitStatusState) IsTerminal() bool {
 }
 
 func (d SCMStatusDelivery) Validate() error {
+	if err := d.ValidateIdentity(); err != nil {
+		return err
+	}
 	d = d.Normalize()
 	if err := d.ValidateIdentity(); err != nil {
 		return err

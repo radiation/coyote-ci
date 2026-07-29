@@ -15,12 +15,13 @@ import (
 )
 
 type CreateBuildInput struct {
-	ProjectID string
-	JobID     *string
-	Priority  int
-	Steps     []CreateBuildStepInput
-	Source    *CreateBuildSourceInput
-	Trigger   *CreateBuildTriggerInput
+	ProjectID          string
+	JobID              *string
+	Priority           int
+	Steps              []CreateBuildStepInput
+	Source             *CreateBuildSourceInput
+	Trigger            *CreateBuildTriggerInput
+	RepositoryIdentity *domain.RepositoryIdentitySnapshot
 }
 
 type CreateBuildSourceInput struct {
@@ -72,6 +73,9 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 		Trigger:          toDomainBuildTrigger(input.Trigger),
 		ImageSourceKind:  domain.ImageSourceKindExternal,
 	}
+	if identityErr := applyBuildRepositoryIdentity(&build, input.RepositoryIdentity); identityErr != nil {
+		return domain.Build{}, identityErr
+	}
 	build = domain.NormalizeBuildMetadata(build)
 
 	if len(input.Steps) > 0 {
@@ -120,13 +124,14 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 
 // CreatePipelineBuildInput is the service-level input for creating a build from pipeline YAML.
 type CreatePipelineBuildInput struct {
-	ProjectID    string
-	JobID        *string
-	Priority     int
-	PipelineYAML string
-	PipelinePath string
-	Source       *CreateBuildSourceInput
-	Trigger      *CreateBuildTriggerInput
+	ProjectID          string
+	JobID              *string
+	Priority           int
+	PipelineYAML       string
+	PipelinePath       string
+	Source             *CreateBuildSourceInput
+	Trigger            *CreateBuildTriggerInput
+	RepositoryIdentity *domain.RepositoryIdentitySnapshot
 }
 
 // CreateBuildFromPipeline parses, validates, and resolves pipeline YAML, then creates
@@ -195,6 +200,9 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		RequestedImageRef:  buildOptionalStringPtr(strings.TrimSpace(resolved.Image)),
 		ImageSourceKind:    domain.ImageSourceKindExternal,
 	}
+	if identityErr := applyBuildRepositoryIdentity(&build, input.RepositoryIdentity); identityErr != nil {
+		return domain.Build{}, identityErr
+	}
 	build = domain.NormalizeBuildMetadata(build)
 
 	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
@@ -207,4 +215,20 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 	}
 	s.notifySCMBuildStatus(ctx, queuedBuild)
 	return queuedBuild, nil
+}
+
+func applyBuildRepositoryIdentity(build *domain.Build, snapshot *domain.RepositoryIdentitySnapshot) error {
+	if snapshot == nil {
+		return nil
+	}
+	if err := snapshot.Validate(); err != nil {
+		return err
+	}
+	registeredRepositoryID := strings.TrimSpace(snapshot.RegisteredRepositoryID)
+	scmConnectionID := strings.TrimSpace(snapshot.SCMConnectionID)
+	providerRepositoryID := strings.TrimSpace(snapshot.ProviderRepositoryID)
+	build.RegisteredRepositoryID = &registeredRepositoryID
+	build.SCMConnectionID = &scmConnectionID
+	build.ProviderRepositoryID = &providerRepositoryID
+	return build.ValidateRepositoryIdentitySnapshot()
 }

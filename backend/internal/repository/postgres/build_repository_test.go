@@ -103,6 +103,29 @@ func TestBuildRepository_Create(t *testing.T) {
 	}
 }
 
+func TestBuildRepository_RejectsMalformedRepositoryIdentitySnapshotsBeforeQuery(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sql mock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	whitespace := "  "
+	connectionID := "connection-1"
+	providerRepositoryID := "provider-repository-1"
+	invalidBuild := domain.Build{ID: "build-invalid", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC(), RegisteredRepositoryID: &whitespace, SCMConnectionID: &connectionID, ProviderRepositoryID: &providerRepositoryID}
+	repo := NewBuildRepository(db)
+	if _, createErr := repo.Create(context.Background(), invalidBuild); createErr == nil {
+		t.Fatal("expected malformed snapshot to be rejected")
+	}
+	if _, queueErr := repo.CreateQueuedBuild(context.Background(), invalidBuild, nil); queueErr == nil {
+		t.Fatal("expected queued malformed snapshot to be rejected")
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("expected no database query for malformed snapshots: %v", expectationsErr)
+	}
+}
+
 func TestBuildRepository_Create_ExplicitJobBuildNumber(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

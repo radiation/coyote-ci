@@ -12,7 +12,7 @@ import (
 
 func TestSCMStatusRecoveryDrain_RunIteration_ReclaimsAndConverges(t *testing.T) {
 	jobID := "job-1"
-	build := domain.Build{
+	build := scmMappedBuild(domain.Build{
 		ID:            "build-1",
 		ProjectID:     "project-1",
 		JobID:         &jobID,
@@ -21,7 +21,7 @@ func TestSCMStatusRecoveryDrain_RunIteration_ReclaimsAndConverges(t *testing.T) 
 		Status:        domain.BuildStatusQueued,
 		CommitSHA:     strPtr("deadbeef"),
 		RepoURL:       strPtr("https://github.com/octo/repo.git"),
-	}
+	})
 	buildRepo := &multiBuildRepository{builds: map[string]domain.Build{"build-1": build}, byJob: map[string][]domain.Build{jobID: {build}}}
 	deliveryRepo := memoryrepo.NewSCMStatusDeliveryRepository()
 	publisher := &recordingSCMPublisher{err: timeoutPublisherError{}}
@@ -40,7 +40,7 @@ func TestSCMStatusRecoveryDrain_RunIteration_ReclaimsAndConverges(t *testing.T) 
 		t.Fatal("expected initial retryable failure")
 	}
 
-	delivery, getErr := deliveryRepo.GetByKey(context.Background(), "github", "octo", "repo", "deadbeef", "coyote/payments/job-1")
+	delivery, getErr := deliveryRepo.GetByRepositoryIdentity(context.Background(), "scm-connection-1", "provider-repository-1", "deadbeef", "coyote/payments/job-1")
 	if getErr != nil {
 		t.Fatalf("get delivery failed: %v", getErr)
 	}
@@ -65,7 +65,7 @@ func TestSCMStatusRecoveryDrain_RunIteration_ReclaimsAndConverges(t *testing.T) 
 		t.Fatalf("unexpected recovery iteration result: %+v", result)
 	}
 
-	recovered, recoveredErr := deliveryRepo.GetByKey(context.Background(), "github", "octo", "repo", "deadbeef", "coyote/payments/job-1")
+	recovered, recoveredErr := deliveryRepo.GetByRepositoryIdentity(context.Background(), "scm-connection-1", "provider-repository-1", "deadbeef", "coyote/payments/job-1")
 	if recoveredErr != nil {
 		t.Fatalf("get recovered delivery failed: %v", recoveredErr)
 	}
@@ -76,7 +76,7 @@ func TestSCMStatusRecoveryDrain_RunIteration_ReclaimsAndConverges(t *testing.T) 
 
 func TestSCMStatusRecoveryDrain_RunIteration_ReassertsAfterInterruptedReplacement(t *testing.T) {
 	jobID := "job-1"
-	build := domain.Build{
+	build := scmMappedBuild(domain.Build{
 		ID:            "build-2",
 		ProjectID:     "project-1",
 		JobID:         &jobID,
@@ -85,7 +85,7 @@ func TestSCMStatusRecoveryDrain_RunIteration_ReassertsAfterInterruptedReplacemen
 		Status:        domain.BuildStatusSuccess,
 		CommitSHA:     strPtr("deadbeef"),
 		RepoURL:       strPtr("https://github.com/octo/repo.git"),
-	}
+	})
 	buildRepo := &multiBuildRepository{builds: map[string]domain.Build{"build-2": build}, byJob: map[string][]domain.Build{jobID: {build}}}
 	deliveryRepo := memoryrepo.NewSCMStatusDeliveryRepository()
 	publisher := newBlockingSCMPublisher(nil, nil)
@@ -130,8 +130,8 @@ func TestSCMStatusRecoveryDrain_RunIteration_ReassertsAfterInterruptedReplacemen
 	}
 	publisher.forceRemote(SCMCommitStatusPublishRequest{
 		Provider:        "github",
-		RepositoryOwner: "octo",
-		RepositoryName:  "repo",
+		RepositoryOwner: "repository-snapshot",
+		RepositoryName:  "repository-snapshot",
 		CommitSHA:       "deadbeef",
 		Context:         "coyote/payments/job-1",
 		State:           domain.SCMCommitStatusStatePending,
@@ -154,11 +154,11 @@ func TestSCMStatusRecoveryDrain_RunIteration_ReassertsAfterInterruptedReplacemen
 		t.Fatalf("unexpected recovery iteration result: %+v", result)
 	}
 
-	finalRemote, ok := publisher.remoteState("github", "octo", "repo", "deadbeef", "coyote/payments/job-1")
+	finalRemote, ok := publisher.remoteState("github", "repository-snapshot", "repository-snapshot", "deadbeef", "coyote/payments/job-1")
 	if !ok || finalRemote.State != domain.SCMCommitStatusStateSuccess {
 		t.Fatalf("expected authoritative success state after recovery, got ok=%v req=%+v", ok, finalRemote)
 	}
-	recovered, recoveredErr := deliveryRepo.GetByKey(context.Background(), "github", "octo", "repo", "deadbeef", "coyote/payments/job-1")
+	recovered, recoveredErr := deliveryRepo.GetByRepositoryIdentity(context.Background(), "scm-connection-1", "provider-repository-1", "deadbeef", "coyote/payments/job-1")
 	if recoveredErr != nil {
 		t.Fatalf("get recovered delivery failed: %v", recoveredErr)
 	}

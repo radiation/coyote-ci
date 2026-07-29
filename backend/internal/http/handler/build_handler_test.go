@@ -69,6 +69,10 @@ func (r *failingSCMStatusDeliveryRepo) GetByKey(context.Context, string, string,
 	return domain.SCMStatusDelivery{}, r.err
 }
 
+func (r *failingSCMStatusDeliveryRepo) GetByRepositoryIdentity(context.Context, string, string, string, string) (domain.SCMStatusDelivery, error) {
+	return domain.SCMStatusDelivery{}, r.err
+}
+
 const createBuildTestProjectID = "11111111-1111-1111-1111-111111111111"
 
 type trackingProjectRepo struct {

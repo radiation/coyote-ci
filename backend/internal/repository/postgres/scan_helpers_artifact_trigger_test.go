@@ -82,6 +82,7 @@ func TestScanBuild_MapsArtifactTriggerFields(t *testing.T) {
 
 	rows := sqlmock.NewRows(buildMockColumns).AddRow(
 		"build-1", int64(42), "project-1", "job-1", 0, "success", now, queuedAt, startedAt, finishedAt, 2, 0, "rerun-1", int64(1), "done",
+		nil, nil, nil,
 		"version: 1", "pipeline", "repo", ".coyote/pipeline.yml", "https://github.com/example/repo.git", "main", "abc123",
 		"Author", "author@example.com", "Committer", "committer@example.com",
 		"artifact", "github", "release", "example", "repo", "https://github.com/example/repo", "refs/tags/v1.0.0", "v1.0.0", "tag", "v1.0.0", deleted, "def456", "delivery-1", "octocat",

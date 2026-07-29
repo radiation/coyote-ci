@@ -22,7 +22,7 @@ func NewSCMStatusDeliveryRepository(db *sql.DB) *SCMStatusDeliveryRepository {
 	return &SCMStatusDeliveryRepository{db: db}
 }
 
-const scmStatusDeliveryColumns = `id, build_id, build_attempt_number, build_created_at, provider, repository_owner, repository_name, commit_sha, context_name, desired_state, last_sent_state, description, details_url, status, attempts, max_attempts, last_attempt_at, next_attempt_at, claimed_at, claim_expires_at, claimed_by, failure_category, failure_reason, last_error, sent_at, superseded_at, created_at, updated_at`
+const scmStatusDeliveryColumns = `id, build_id, build_attempt_number, build_created_at, provider, repository_owner, repository_name, registered_repository_id, scm_connection_id, provider_repository_id, commit_sha, context_name, desired_state, last_sent_state, description, details_url, status, attempts, max_attempts, last_attempt_at, next_attempt_at, claimed_at, claim_expires_at, claimed_by, failure_category, failure_reason, last_error, sent_at, superseded_at, created_at, updated_at`
 
 const scmStatusDeliveryInsertClaimQuery = `
 	INSERT INTO scm_status_deliveries (
@@ -33,6 +33,9 @@ const scmStatusDeliveryInsertClaimQuery = `
 		provider,
 		repository_owner,
 		repository_name,
+		registered_repository_id,
+		scm_connection_id,
+		provider_repository_id,
 		commit_sha,
 		context_name,
 		desired_state,
@@ -56,11 +59,11 @@ const scmStatusDeliveryInsertClaimQuery = `
 		updated_at
 	)
 	VALUES (
-		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12,
-		$13, $14, $15, $16, NULL, $17, $18, $19, NULL, NULL, NULL, NULL, NULL,
-		$20, $21
+		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULL, $14, $15,
+		$16, $17, $18, $19, NULL, $20, $21, $22, NULL, NULL, NULL, NULL, NULL,
+		$23, $24
 	)
-	ON CONFLICT (provider, repository_owner, repository_name, commit_sha, context_name) DO NOTHING
+	ON CONFLICT DO NOTHING
 	RETURNING ` + scmStatusDeliveryColumns + `
 `
 
@@ -68,6 +71,13 @@ const scmStatusDeliverySelectForClaimQuery = `
 	SELECT ` + scmStatusDeliveryColumns + `
 	FROM scm_status_deliveries
 	WHERE provider = $1 AND repository_owner = $2 AND repository_name = $3 AND commit_sha = $4 AND context_name = $5
+	FOR UPDATE
+`
+
+const scmStatusDeliverySelectForRepositoryIdentityClaimQuery = `
+	SELECT ` + scmStatusDeliveryColumns + `
+	FROM scm_status_deliveries
+	WHERE scm_connection_id = $1 AND provider_repository_id = $2 AND commit_sha = $3 AND context_name = $4
 	FOR UPDATE
 `
 
@@ -90,24 +100,27 @@ const scmStatusDeliveryReplaceClaimQuery = `
 	SET build_id = $2,
 		build_attempt_number = $3,
 		build_created_at = $4,
-		desired_state = $5,
-		description = $6,
-		details_url = $7,
+		registered_repository_id = $5,
+		scm_connection_id = $6,
+		provider_repository_id = $7,
+		desired_state = $8,
+		description = $9,
+		details_url = $10,
 		status = 'sending',
 		attempts = 1,
-		max_attempts = $8,
-		last_attempt_at = $9,
+		max_attempts = $11,
+		last_attempt_at = $12,
 		next_attempt_at = NULL,
-		claimed_at = $9,
-		claim_expires_at = $10,
-		claimed_by = $11,
+		claimed_at = $12,
+		claim_expires_at = $13,
+		claimed_by = $14,
 		failure_category = NULL,
 		failure_reason = NULL,
 		last_error = NULL,
 		sent_at = NULL,
 		superseded_at = NULL,
-		last_sent_state = $12,
-		updated_at = $9
+		last_sent_state = $15,
+		updated_at = $12
 	WHERE id = $1
 	RETURNING ` + scmStatusDeliveryColumns + `
 `
@@ -122,6 +135,12 @@ const scmStatusDeliverySelectByKeyQuery = `
 	SELECT ` + scmStatusDeliveryColumns + `
 	FROM scm_status_deliveries
 	WHERE provider = $1 AND repository_owner = $2 AND repository_name = $3 AND commit_sha = $4 AND context_name = $5
+`
+
+const scmStatusDeliverySelectByRepositoryIdentityQuery = `
+	SELECT ` + scmStatusDeliveryColumns + `
+	FROM scm_status_deliveries
+	WHERE scm_connection_id = $1 AND provider_repository_id = $2 AND commit_sha = $3 AND context_name = $4
 `
 
 const scmStatusDeliveryListRecoverableQuery = `
@@ -240,6 +259,9 @@ func (r *SCMStatusDeliveryRepository) AcquireForDelivery(ctx context.Context, in
 		delivery.Provider,
 		delivery.RepositoryOwner,
 		delivery.RepositoryName,
+		delivery.RegisteredRepositoryID,
+		delivery.SCMConnectionID,
+		delivery.ProviderRepositoryID,
 		delivery.CommitSHA,
 		delivery.Context,
 		string(delivery.DesiredState),
@@ -265,15 +287,13 @@ func (r *SCMStatusDeliveryRepository) AcquireForDelivery(ctx context.Context, in
 		return repository.SCMStatusDeliveryClaimResult{}, err
 	}
 
-	existing, err := scanSCMStatusDelivery(tx.QueryRowContext(
-		ctx,
-		scmStatusDeliverySelectForClaimQuery,
-		delivery.Provider,
-		delivery.RepositoryOwner,
-		delivery.RepositoryName,
-		delivery.CommitSHA,
-		delivery.Context,
-	))
+	selectQuery := scmStatusDeliverySelectForClaimQuery
+	selectArgs := []any{delivery.Provider, delivery.RepositoryOwner, delivery.RepositoryName, delivery.CommitSHA, delivery.Context}
+	if delivery.SCMConnectionID != nil && delivery.ProviderRepositoryID != nil {
+		selectQuery = scmStatusDeliverySelectForRepositoryIdentityClaimQuery
+		selectArgs = []any{*delivery.SCMConnectionID, *delivery.ProviderRepositoryID, delivery.CommitSHA, delivery.Context}
+	}
+	existing, err := scanSCMStatusDelivery(tx.QueryRowContext(ctx, selectQuery, selectArgs...))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return repository.SCMStatusDeliveryClaimResult{}, fmt.Errorf("scm status delivery acquire conflict did not resolve to an existing row")
@@ -294,6 +314,9 @@ func (r *SCMStatusDeliveryRepository) AcquireForDelivery(ctx context.Context, in
 			delivery.BuildID,
 			delivery.BuildAttempt,
 			delivery.BuildCreatedAt,
+			delivery.RegisteredRepositoryID,
+			delivery.SCMConnectionID,
+			delivery.ProviderRepositoryID,
 			string(delivery.DesiredState),
 			delivery.Description,
 			nullableOptionalStringLocal(delivery.DetailsURL),
@@ -323,6 +346,9 @@ func (r *SCMStatusDeliveryRepository) AcquireForDelivery(ctx context.Context, in
 			delivery.BuildID,
 			delivery.BuildAttempt,
 			delivery.BuildCreatedAt,
+			delivery.RegisteredRepositoryID,
+			delivery.SCMConnectionID,
+			delivery.ProviderRepositoryID,
 			string(delivery.DesiredState),
 			delivery.Description,
 			nullableOptionalStringLocal(delivery.DetailsURL),
@@ -464,6 +490,17 @@ func (r *SCMStatusDeliveryRepository) GetByKey(ctx context.Context, provider str
 	return delivery, nil
 }
 
+func (r *SCMStatusDeliveryRepository) GetByRepositoryIdentity(ctx context.Context, connectionID string, providerRepositoryID string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error) {
+	delivery, err := scanSCMStatusDelivery(r.db.QueryRowContext(ctx, scmStatusDeliverySelectByRepositoryIdentityQuery, strings.TrimSpace(connectionID), strings.TrimSpace(providerRepositoryID), strings.TrimSpace(commitSHA), strings.TrimSpace(contextName)))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.SCMStatusDelivery{}, repository.ErrSCMStatusDeliveryNotFound
+		}
+		return domain.SCMStatusDelivery{}, err
+	}
+	return delivery, nil
+}
+
 func (r *SCMStatusDeliveryRepository) recordFailure(ctx context.Context, input repository.SCMStatusDeliveryRecordFailureInput, status domain.SCMStatusDeliveryStatus) (repository.SCMStatusDeliveryUpdateResult, error) {
 	updated, err := scanSCMStatusDelivery(r.db.QueryRowContext(
 		ctx,
@@ -499,10 +536,11 @@ func (r *SCMStatusDeliveryRepository) resolveSCMStatusDeliveryUpdateConflict(ctx
 }
 
 func normalizePostgresSCMStatusDeliveryClaimInput(input repository.SCMStatusDeliveryClaimInput) (domain.SCMStatusDelivery, time.Time, string, time.Duration, error) {
-	delivery := input.Delivery.Normalize()
+	delivery := input.Delivery
 	if err := delivery.ValidateIdentity(); err != nil {
 		return domain.SCMStatusDelivery{}, time.Time{}, "", 0, err
 	}
+	delivery = delivery.Normalize()
 	now := input.Now.UTC()
 	if now.IsZero() {
 		return domain.SCMStatusDelivery{}, time.Time{}, "", 0, errors.New("scm status delivery claim time is required")
@@ -524,6 +562,9 @@ func scanSCMStatusDelivery(scanner rowScanner) (domain.SCMStatusDelivery, error)
 	var delivery domain.SCMStatusDelivery
 	var buildCreatedAt time.Time
 	var provider string
+	var registeredRepositoryID sql.NullString
+	var scmConnectionID sql.NullString
+	var providerRepositoryID sql.NullString
 	var desiredState string
 	var lastSentState sql.NullString
 	var detailsURL sql.NullString
@@ -547,6 +588,9 @@ func scanSCMStatusDelivery(scanner rowScanner) (domain.SCMStatusDelivery, error)
 		&provider,
 		&delivery.RepositoryOwner,
 		&delivery.RepositoryName,
+		&registeredRepositoryID,
+		&scmConnectionID,
+		&providerRepositoryID,
 		&delivery.CommitSHA,
 		&delivery.Context,
 		&desiredState,
@@ -574,6 +618,18 @@ func scanSCMStatusDelivery(scanner rowScanner) (domain.SCMStatusDelivery, error)
 	}
 
 	delivery.Provider = provider
+	if registeredRepositoryID.Valid {
+		value := registeredRepositoryID.String
+		delivery.RegisteredRepositoryID = &value
+	}
+	if scmConnectionID.Valid {
+		value := scmConnectionID.String
+		delivery.SCMConnectionID = &value
+	}
+	if providerRepositoryID.Valid {
+		value := providerRepositoryID.String
+		delivery.ProviderRepositoryID = &value
+	}
 	delivery.BuildCreatedAt = buildCreatedAt.UTC()
 	delivery.DesiredState = domain.SCMCommitStatusState(desiredState)
 	delivery.Status = domain.SCMStatusDeliveryStatus(status)
