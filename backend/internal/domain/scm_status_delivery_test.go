@@ -153,6 +153,36 @@ func TestSCMStatusDeliveryHelpers(t *testing.T) {
 	}
 }
 
+func TestRepositoryIdentitySnapshotValidation(t *testing.T) {
+	value := func(input string) *string { return &input }
+	cases := []struct {
+		name      string
+		identity  [3]*string
+		wantError bool
+	}{
+		{name: "all absent", identity: [3]*string{nil, nil, nil}},
+		{name: "all present", identity: [3]*string{value("repository-1"), value("connection-1"), value("provider-repository-1")}},
+		{name: "only registration present", identity: [3]*string{value("repository-1"), nil, nil}, wantError: true},
+		{name: "only connection present", identity: [3]*string{nil, value("connection-1"), nil}, wantError: true},
+		{name: "only provider repository present", identity: [3]*string{nil, nil, value("provider-repository-1")}, wantError: true},
+		{name: "registration whitespace", identity: [3]*string{value("  "), value("connection-1"), value("provider-repository-1")}, wantError: true},
+		{name: "connection whitespace", identity: [3]*string{value("repository-1"), value("  "), value("provider-repository-1")}, wantError: true},
+		{name: "provider repository whitespace", identity: [3]*string{value("repository-1"), value("connection-1"), value("  ")}, wantError: true},
+		{name: "all whitespace", identity: [3]*string{value("  "), value("  "), value("  ")}, wantError: true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			build := Build{RegisteredRepositoryID: test.identity[0], SCMConnectionID: test.identity[1], ProviderRepositoryID: test.identity[2]}
+			delivery := SCMStatusDelivery{BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: time.Now().UTC(), Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", RegisteredRepositoryID: test.identity[0], SCMConnectionID: test.identity[1], ProviderRepositoryID: test.identity[2], CommitSHA: "deadbeef", Context: "ctx", DesiredState: SCMCommitStatusStatePending, Status: SCMStatusDeliveryStatusPending}
+			for _, err := range []error{build.ValidateRepositoryIdentitySnapshot(), delivery.ValidateIdentity(), delivery.Validate()} {
+				if (err != nil) != test.wantError {
+					t.Fatalf("expected error=%v, got %v", test.wantError, err)
+				}
+			}
+		})
+	}
+}
+
 func scmFailureCategoryPtr(value SCMStatusDeliveryFailureCategory) *SCMStatusDeliveryFailureCategory {
 	return &value
 }

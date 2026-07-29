@@ -48,6 +48,16 @@ type multiBuildRepository struct {
 	err    error
 }
 
+func scmMappedBuild(build domain.Build) domain.Build {
+	registeredRepositoryID := "registered-repository-1"
+	connectionID := "scm-connection-1"
+	providerRepositoryID := "provider-repository-1"
+	build.RegisteredRepositoryID = &registeredRepositoryID
+	build.SCMConnectionID = &connectionID
+	build.ProviderRepositoryID = &providerRepositoryID
+	return build
+}
+
 func (r *multiBuildRepository) GetByID(_ context.Context, id string) (domain.Build, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -85,7 +95,7 @@ func (r *multiBuildRepository) setJobBuilds(jobID string, builds []domain.Build)
 func TestSCMStatusReporter_NotifyBuildStatus_PendingAndSuccess(t *testing.T) {
 	jobID := "job-1"
 	createdAt := time.Date(2026, 7, 16, 16, 55, 0, 0, time.UTC)
-	build := domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 1, CreatedAt: createdAt, Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")}
+	build := scmMappedBuild(domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 1, CreatedAt: createdAt, Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")})
 	buildRepo := &multiBuildRepository{builds: map[string]domain.Build{"build-1": build}, byJob: map[string][]domain.Build{jobID: {build}}}
 	deliveryRepo := memoryrepo.NewSCMStatusDeliveryRepository()
 	publisher := &recordingSCMPublisher{}
@@ -120,7 +130,7 @@ func TestSCMStatusReporter_NotifyBuildStatus_PendingAndSuccess(t *testing.T) {
 	if publisher.reqs[1].State != domain.SCMCommitStatusStateSuccess {
 		t.Fatalf("expected success state, got %q", publisher.reqs[1].State)
 	}
-	delivery, getErr := deliveryRepo.GetByKey(context.Background(), "github", "octo", "repo", "deadbeef", "coyote/payments/job-1")
+	delivery, getErr := deliveryRepo.GetByRepositoryIdentity(context.Background(), "scm-connection-1", "provider-repository-1", "deadbeef", "coyote/payments/job-1")
 	if getErr != nil {
 		t.Fatalf("get delivery failed: %v", getErr)
 	}
@@ -131,8 +141,8 @@ func TestSCMStatusReporter_NotifyBuildStatus_PendingAndSuccess(t *testing.T) {
 
 func TestSCMStatusReporter_NotifyBuildStatus_SupersedesOlderAttempt(t *testing.T) {
 	jobID := "job-1"
-	older := domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 1, CreatedAt: time.Date(2026, 7, 16, 17, 0, 0, 0, time.UTC), Status: domain.BuildStatusFailed, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")}
-	newer := domain.Build{ID: "build-2", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 2, CreatedAt: time.Date(2026, 7, 16, 17, 5, 0, 0, time.UTC), Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")}
+	older := scmMappedBuild(domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 1, CreatedAt: time.Date(2026, 7, 16, 17, 0, 0, 0, time.UTC), Status: domain.BuildStatusFailed, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")})
+	newer := scmMappedBuild(domain.Build{ID: "build-2", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 2, CreatedAt: time.Date(2026, 7, 16, 17, 5, 0, 0, time.UTC), Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")})
 	buildRepo := &multiBuildRepository{builds: map[string]domain.Build{"build-1": older, "build-2": newer}, byJob: map[string][]domain.Build{jobID: {newer, older}}}
 	deliveryRepo := memoryrepo.NewSCMStatusDeliveryRepository()
 	publisher := &recordingSCMPublisher{}
@@ -148,7 +158,7 @@ func TestSCMStatusReporter_NotifyBuildStatus_SupersedesOlderAttempt(t *testing.T
 	if len(publisher.reqs) != 0 {
 		t.Fatalf("expected no publish request for superseded attempt, got %d", len(publisher.reqs))
 	}
-	delivery, getErr := deliveryRepo.GetByKey(context.Background(), "github", "octo", "repo", "deadbeef", "coyote/payments/job-1")
+	delivery, getErr := deliveryRepo.GetByRepositoryIdentity(context.Background(), "scm-connection-1", "provider-repository-1", "deadbeef", "coyote/payments/job-1")
 	if getErr != nil {
 		t.Fatalf("get delivery failed: %v", getErr)
 	}
@@ -160,7 +170,7 @@ func TestSCMStatusReporter_NotifyBuildStatus_SupersedesOlderAttempt(t *testing.T
 func TestSCMStatusReporter_NotifyBuildStatus_RetryableFailure(t *testing.T) {
 	jobID := "job-1"
 	createdAt := time.Date(2026, 7, 16, 17, 55, 0, 0, time.UTC)
-	build := domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 1, CreatedAt: createdAt, Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")}
+	build := scmMappedBuild(domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 1, CreatedAt: createdAt, Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")})
 	buildRepo := &multiBuildRepository{builds: map[string]domain.Build{"build-1": build}, byJob: map[string][]domain.Build{jobID: {build}}}
 	deliveryRepo := memoryrepo.NewSCMStatusDeliveryRepository()
 	publisher := &recordingSCMPublisher{err: timeoutPublisherError{}}
@@ -174,7 +184,7 @@ func TestSCMStatusReporter_NotifyBuildStatus_RetryableFailure(t *testing.T) {
 	if notifyErr := reporter.NotifyBuildStatus(context.Background(), build); notifyErr == nil {
 		t.Fatal("expected retryable publish error")
 	}
-	delivery, getErr := deliveryRepo.GetByKey(context.Background(), "github", "octo", "repo", "deadbeef", "coyote/payments/job-1")
+	delivery, getErr := deliveryRepo.GetByRepositoryIdentity(context.Background(), "scm-connection-1", "provider-repository-1", "deadbeef", "coyote/payments/job-1")
 	if getErr != nil {
 		t.Fatalf("get delivery failed: %v", getErr)
 	}
@@ -192,7 +202,7 @@ func TestSCMStatusReporter_NotifyBuildStatus_RetryableFailure(t *testing.T) {
 func TestSCMStatusReporter_NotifyBuildStatus_TerminalReplacesSameBuildPending(t *testing.T) {
 	jobID := "job-1"
 	createdAt := time.Date(2026, 7, 16, 18, 10, 0, 0, time.UTC)
-	build := domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 1, CreatedAt: createdAt, Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")}
+	build := scmMappedBuild(domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 1, CreatedAt: createdAt, Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")})
 	buildRepo := &multiBuildRepository{builds: map[string]domain.Build{"build-1": build}, byJob: map[string][]domain.Build{jobID: {build}}}
 	deliveryRepo := memoryrepo.NewSCMStatusDeliveryRepository()
 	publisher := &recordingSCMPublisher{}
@@ -214,7 +224,7 @@ func TestSCMStatusReporter_NotifyBuildStatus_TerminalReplacesSameBuildPending(t 
 	if len(publisher.reqs) != 2 || publisher.reqs[0].State != domain.SCMCommitStatusStatePending || publisher.reqs[1].State != domain.SCMCommitStatusStateSuccess {
 		t.Fatalf("expected pending then success publishes, got %+v", publisher.reqs)
 	}
-	delivery, getErr := deliveryRepo.GetByKey(context.Background(), "github", "octo", "repo", "deadbeef", "coyote/payments/job-1")
+	delivery, getErr := deliveryRepo.GetByRepositoryIdentity(context.Background(), "scm-connection-1", "provider-repository-1", "deadbeef", "coyote/payments/job-1")
 	if getErr != nil {
 		t.Fatalf("get delivery failed: %v", getErr)
 	}
@@ -225,8 +235,8 @@ func TestSCMStatusReporter_NotifyBuildStatus_TerminalReplacesSameBuildPending(t 
 
 func TestSCMStatusReporter_NotifyBuildStatus_NewerAttemptDurablyFencesOlderAttempt(t *testing.T) {
 	jobID := "job-1"
-	older := domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 1, CreatedAt: time.Date(2026, 7, 16, 18, 0, 0, 0, time.UTC), Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")}
-	newer := domain.Build{ID: "build-2", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 2, CreatedAt: time.Date(2026, 7, 16, 18, 5, 0, 0, time.UTC), Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")}
+	older := scmMappedBuild(domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 1, CreatedAt: time.Date(2026, 7, 16, 18, 0, 0, 0, time.UTC), Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")})
+	newer := scmMappedBuild(domain.Build{ID: "build-2", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 2, CreatedAt: time.Date(2026, 7, 16, 18, 5, 0, 0, time.UTC), Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")})
 	buildRepo := &multiBuildRepository{builds: map[string]domain.Build{"build-1": older, "build-2": newer}, byJob: map[string][]domain.Build{jobID: {newer, older}}}
 	deliveryRepo := memoryrepo.NewSCMStatusDeliveryRepository()
 	publisher := &recordingSCMPublisher{}
@@ -245,7 +255,7 @@ func TestSCMStatusReporter_NotifyBuildStatus_NewerAttemptDurablyFencesOlderAttem
 	if len(publisher.reqs) != 1 || publisher.reqs[0].State != domain.SCMCommitStatusStatePending {
 		t.Fatalf("expected only newer attempt to publish, got %+v", publisher.reqs)
 	}
-	delivery, getErr := deliveryRepo.GetByKey(context.Background(), "github", "octo", "repo", "deadbeef", "coyote/payments/job-1")
+	delivery, getErr := deliveryRepo.GetByRepositoryIdentity(context.Background(), "scm-connection-1", "provider-repository-1", "deadbeef", "coyote/payments/job-1")
 	if getErr != nil {
 		t.Fatalf("get delivery failed: %v", getErr)
 	}
@@ -256,8 +266,8 @@ func TestSCMStatusReporter_NotifyBuildStatus_NewerAttemptDurablyFencesOlderAttem
 
 func TestSCMStatusReporter_NotifyBuildStatus_ReassertsAuthoritativeStateAfterStaleSendLosesClaim(t *testing.T) {
 	jobID := "job-1"
-	older := domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 1, CreatedAt: time.Date(2026, 7, 16, 18, 0, 0, 0, time.UTC), Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")}
-	newer := domain.Build{ID: "build-2", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 2, CreatedAt: time.Date(2026, 7, 16, 18, 5, 0, 0, time.UTC), Status: domain.BuildStatusSuccess, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")}
+	older := scmMappedBuild(domain.Build{ID: "build-1", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 1, CreatedAt: time.Date(2026, 7, 16, 18, 0, 0, 0, time.UTC), Status: domain.BuildStatusQueued, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")})
+	newer := scmMappedBuild(domain.Build{ID: "build-2", ProjectID: "project-1", JobID: &jobID, AttemptNumber: 2, CreatedAt: time.Date(2026, 7, 16, 18, 5, 0, 0, time.UTC), Status: domain.BuildStatusSuccess, CommitSHA: strPtr("deadbeef"), RepoURL: strPtr("https://github.com/octo/repo.git")})
 	buildRepo := &multiBuildRepository{builds: map[string]domain.Build{"build-1": older, "build-2": newer}, byJob: map[string][]domain.Build{jobID: {older}}}
 	deliveryRepo := memoryrepo.NewSCMStatusDeliveryRepository()
 	olderStarted := make(chan struct{})
@@ -296,14 +306,14 @@ func TestSCMStatusReporter_NotifyBuildStatus_ReassertsAuthoritativeStateAfterSta
 		t.Fatalf("notify older build failed: %v", olderErr)
 	}
 
-	finalRemote, ok := publisher.remoteState("github", "octo", "repo", "deadbeef", "coyote/payments/job-1")
+	finalRemote, ok := publisher.remoteState("github", "repository-snapshot", "repository-snapshot", "deadbeef", "coyote/payments/job-1")
 	if !ok {
 		t.Fatal("expected remote state to be recorded")
 	}
 	if finalRemote.State != domain.SCMCommitStatusStateSuccess {
 		t.Fatalf("expected authoritative success state to win remotely, got %+v", finalRemote)
 	}
-	delivery, getErr := deliveryRepo.GetByKey(context.Background(), "github", "octo", "repo", "deadbeef", "coyote/payments/job-1")
+	delivery, getErr := deliveryRepo.GetByRepositoryIdentity(context.Background(), "scm-connection-1", "provider-repository-1", "deadbeef", "coyote/payments/job-1")
 	if getErr != nil {
 		t.Fatalf("get delivery failed: %v", getErr)
 	}

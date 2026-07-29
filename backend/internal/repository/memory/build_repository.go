@@ -44,6 +44,9 @@ func (r *BuildRepository) Create(_ context.Context, build domain.Build) (domain.
 	build.Priority = domain.NormalizePriority(build.Priority)
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 	build = domain.NormalizeBuildMetadata(build)
+	if err := build.ValidateRepositoryIdentitySnapshot(); err != nil {
+		return domain.Build{}, err
+	}
 
 	r.builds[build.ID] = build
 	return build, nil
@@ -116,6 +119,9 @@ func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Buil
 	build.Priority = domain.NormalizePriority(build.Priority)
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 	build = domain.NormalizeBuildMetadata(build)
+	if err := build.ValidateRepositoryIdentitySnapshot(); err != nil {
+		return domain.Build{}, err
+	}
 
 	now := time.Now().UTC()
 	build.Status = domain.BuildStatusQueued

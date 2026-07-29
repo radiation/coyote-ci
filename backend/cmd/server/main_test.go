@@ -46,14 +46,6 @@ func (r *stubProjectRepository) Delete(context.Context, string) error {
 }
 
 func TestConfigureSCMStatusRuntime(t *testing.T) {
-	disabled, disabledErr := configureSCMStatusRuntime(config.Config{}, memoryrepo.NewBuildRepository(), &stubProjectRepository{}, memoryrepo.NewSCMStatusDeliveryRepository())
-	if disabledErr != nil {
-		t.Fatalf("disabled runtime should not error: %v", disabledErr)
-	}
-	if disabled.reporter != nil || disabled.reporterImpl != nil || disabled.recoveryDrain != nil {
-		t.Fatalf("expected disabled runtime to keep nil dependencies, got %+v", disabled)
-	}
-
 	originalHostname := osServerHostname
 	t.Cleanup(func() {
 		osServerHostname = originalHostname
@@ -61,11 +53,10 @@ func TestConfigureSCMStatusRuntime(t *testing.T) {
 	osServerHostname = func() (string, error) { return "server-test", nil }
 
 	enabled, enabledErr := configureSCMStatusRuntime(config.Config{
-		GitHubStatusToken:          " token ",
 		PublicURL:                  "https://ci.example.com",
 		SCMStatusRecoveryInterval:  time.Second,
 		SCMStatusRecoveryBatchSize: 5,
-	}, memoryrepo.NewBuildRepository(), &stubProjectRepository{project: domain.Project{ID: "project-1", Slug: "payments"}}, memoryrepo.NewSCMStatusDeliveryRepository())
+	}, memoryrepo.NewBuildRepository(), &stubProjectRepository{project: domain.Project{ID: "project-1", Slug: "payments"}}, memoryrepo.NewSCMStatusDeliveryRepository(), memoryrepo.NewSCMConnectionRepository(), memoryrepo.NewSCMRepositoryRegistrationRepository())
 	if enabledErr != nil {
 		t.Fatalf("enabled runtime should not error: %v", enabledErr)
 	}
@@ -85,10 +76,9 @@ func TestConfigureSCMStatusRuntime(t *testing.T) {
 	}
 
 	_, invalidErr := configureSCMStatusRuntime(config.Config{
-		GitHubStatusToken:          "token",
 		SCMStatusRecoveryInterval:  0,
 		SCMStatusRecoveryBatchSize: 0,
-	}, memoryrepo.NewBuildRepository(), &stubProjectRepository{project: domain.Project{ID: "project-1", Slug: "payments"}}, memoryrepo.NewSCMStatusDeliveryRepository())
+	}, memoryrepo.NewBuildRepository(), &stubProjectRepository{project: domain.Project{ID: "project-1", Slug: "payments"}}, memoryrepo.NewSCMStatusDeliveryRepository(), memoryrepo.NewSCMConnectionRepository(), memoryrepo.NewSCMRepositoryRegistrationRepository())
 	if invalidErr == nil {
 		t.Fatal("expected invalid recovery configuration to error")
 	}
@@ -98,7 +88,6 @@ func TestConfigureSCMStatusRuntime(t *testing.T) {
 
 	t.Run("reporter dependency errors bubble up", func(t *testing.T) {
 		cfg := config.Config{
-			GitHubStatusToken:          "token",
 			SCMStatusRecoveryInterval:  time.Second,
 			SCMStatusRecoveryBatchSize: 1,
 		}
@@ -114,7 +103,7 @@ func TestConfigureSCMStatusRuntime(t *testing.T) {
 		}
 		for _, test := range cases {
 			t.Run(test.name, func(t *testing.T) {
-				if _, err := configureSCMStatusRuntime(cfg, test.buildRepo, test.projectRepo, test.deliveryRepo); err == nil {
+				if _, err := configureSCMStatusRuntime(cfg, test.buildRepo, test.projectRepo, test.deliveryRepo, memoryrepo.NewSCMConnectionRepository(), memoryrepo.NewSCMRepositoryRegistrationRepository()); err == nil {
 					t.Fatal("expected configureSCMStatusRuntime to return dependency error")
 				}
 			})

@@ -45,6 +45,14 @@ func (c *GitHubCommitStatusClient) PublishCommitStatus(ctx context.Context, req 
 	if strings.TrimSpace(c.token) == "" {
 		return &GitHubCommitStatusError{statusCode: http.StatusUnauthorized, reason: "github_status_token_missing", message: "github status token is not configured"}
 	}
+	return c.PublishCommitStatusWithToken(ctx, req, c.token)
+}
+
+func (c *GitHubCommitStatusClient) PublishCommitStatusWithToken(ctx context.Context, req SCMCommitStatusPublishRequest, token string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return &GitHubCommitStatusError{statusCode: http.StatusUnauthorized, reason: "github_status_token_missing", message: "github status token is not configured"}
+	}
 	if inputErr := validateGitHubCommitStatusRequest(req); inputErr != nil {
 		return inputErr
 	}
@@ -69,7 +77,7 @@ func (c *GitHubCommitStatusClient) PublishCommitStatus(ctx context.Context, req 
 		return err
 	}
 	httpReq.Header.Set("Accept", "application/vnd.github+json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 

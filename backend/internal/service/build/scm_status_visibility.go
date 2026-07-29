@@ -31,6 +31,9 @@ type BuildSCMStatusView struct {
 
 func (s *BuildService) GetBuildSCMStatus(ctx context.Context, build domain.Build, project *domain.Project) (*BuildSCMStatusView, error) {
 	provider, owner, repo, linked := scmStatusRepositoryIdentity(build)
+	if build.RegisteredRepositoryID != nil && build.SCMConnectionID != nil && build.ProviderRepositoryID != nil {
+		provider, owner, repo, linked = "github", "", "", true
+	}
 	if !linked {
 		return nil, nil
 	}
@@ -58,7 +61,13 @@ func (s *BuildService) GetBuildSCMStatus(ctx context.Context, build domain.Build
 		return view, nil
 	}
 
-	delivery, err := s.scmStatusDeliveryRepo.GetByKey(ctx, provider, owner, repo, *view.CommitSHA, *view.Context)
+	var delivery domain.SCMStatusDelivery
+	var err error
+	if build.SCMConnectionID != nil && build.ProviderRepositoryID != nil {
+		delivery, err = s.scmStatusDeliveryRepo.GetByRepositoryIdentity(ctx, *build.SCMConnectionID, *build.ProviderRepositoryID, *view.CommitSHA, *view.Context)
+	} else {
+		delivery, err = s.scmStatusDeliveryRepo.GetByKey(ctx, provider, owner, repo, *view.CommitSHA, *view.Context)
+	}
 	if err != nil {
 		if errors.Is(err, repository.ErrSCMStatusDeliveryNotFound) {
 			return view, nil

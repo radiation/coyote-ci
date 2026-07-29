@@ -17,14 +17,15 @@ import (
 
 // CreateRepoBuildInput is the service-level input for creating a build from a repository checkout.
 type CreateRepoBuildInput struct {
-	ProjectID    string
-	JobID        *string
-	Priority     int
-	RepoURL      string
-	Ref          string
-	CommitSHA    string
-	PipelinePath string
-	Trigger      *CreateBuildTriggerInput
+	ProjectID          string
+	JobID              *string
+	Priority           int
+	RepoURL            string
+	Ref                string
+	CommitSHA          string
+	PipelinePath       string
+	Trigger            *CreateBuildTriggerInput
+	RepositoryIdentity *domain.RepositoryIdentitySnapshot
 }
 
 const pipelineFilePath = ".coyote/pipeline.yml"
@@ -134,6 +135,9 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		Trigger:            toDomainBuildTrigger(input.Trigger),
 		RequestedImageRef:  buildOptionalStringPtr(strings.TrimSpace(resolved.Image)),
 		ImageSourceKind:    domain.ImageSourceKindExternal,
+	}
+	if identityErr := applyBuildRepositoryIdentity(&build, input.RepositoryIdentity); identityErr != nil {
+		return domain.Build{}, identityErr
 	}
 	build = domain.NormalizeBuildMetadata(build)
 

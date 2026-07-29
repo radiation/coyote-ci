@@ -16,14 +16,17 @@ import (
 )
 
 type SCMCommitStatusPublishRequest struct {
-	Provider        string
-	RepositoryOwner string
-	RepositoryName  string
-	CommitSHA       string
-	Context         string
-	State           domain.SCMCommitStatusState
-	Description     string
-	DetailsURL      *string
+	Provider               string
+	RepositoryOwner        string
+	RepositoryName         string
+	RegisteredRepositoryID *string
+	SCMConnectionID        *string
+	ProviderRepositoryID   *string
+	CommitSHA              string
+	Context                string
+	State                  domain.SCMCommitStatusState
+	Description            string
+	DetailsURL             *string
 }
 
 type SCMCommitStatusPublisher interface {
@@ -48,6 +51,7 @@ type scmStatusDeliveryRepository interface {
 	RecordExhaustedFailure(ctx context.Context, input repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error)
 	MarkSuperseded(ctx context.Context, input repository.SCMStatusDeliveryMarkSupersededInput) (repository.SCMStatusDeliveryUpdateResult, error)
 	GetByKey(ctx context.Context, provider string, repositoryOwner string, repositoryName string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error)
+	GetByRepositoryIdentity(ctx context.Context, connectionID string, providerRepositoryID string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error)
 }
 
 type SCMStatusReporterConfig struct {
@@ -168,8 +172,7 @@ func (r *SCMStatusReporter) acquireDelivery(ctx context.Context, build domain.Bu
 }
 
 func (r *SCMStatusReporter) planDelivery(ctx context.Context, build domain.Build) (domain.SCMStatusDelivery, bool, error) {
-	provider, owner, repo, ok := scmStatusRepositoryIdentity(build)
-	if !ok || provider != "github" {
+	if build.ValidateRepositoryIdentitySnapshot() != nil || build.RegisteredRepositoryID == nil || build.SCMConnectionID == nil || build.ProviderRepositoryID == nil {
 		return domain.SCMStatusDelivery{}, false, nil
 	}
 	commitSHA := scmStatusCommitSHA(build)
@@ -185,17 +188,20 @@ func (r *SCMStatusReporter) planDelivery(ctx context.Context, build domain.Build
 		return domain.SCMStatusDelivery{}, false, nil
 	}
 	delivery := domain.SCMStatusDelivery{
-		BuildID:         strings.TrimSpace(build.ID),
-		BuildAttempt:    build.AttemptNumber,
-		BuildCreatedAt:  scmStatusBuildCreatedAt(build, r.now().UTC()),
-		Provider:        provider,
-		RepositoryOwner: owner,
-		RepositoryName:  repo,
-		CommitSHA:       commitSHA,
-		Context:         contextName,
-		DesiredState:    state,
-		Description:     truncateSCMStatusText(description, maxSCMStatusDescriptionLength),
-		DetailsURL:      scmStatusDetailsURL(r.publicBaseURL, build.ID),
+		BuildID:                strings.TrimSpace(build.ID),
+		BuildAttempt:           build.AttemptNumber,
+		BuildCreatedAt:         scmStatusBuildCreatedAt(build, r.now().UTC()),
+		Provider:               "github",
+		RepositoryOwner:        "repository-snapshot",
+		RepositoryName:         "repository-snapshot",
+		RegisteredRepositoryID: cloneStringPtr(build.RegisteredRepositoryID),
+		SCMConnectionID:        cloneStringPtr(build.SCMConnectionID),
+		ProviderRepositoryID:   cloneStringPtr(build.ProviderRepositoryID),
+		CommitSHA:              commitSHA,
+		Context:                contextName,
+		DesiredState:           state,
+		Description:            truncateSCMStatusText(description, maxSCMStatusDescriptionLength),
+		DetailsURL:             scmStatusDetailsURL(r.publicBaseURL, build.ID),
 	}
 	return delivery.Normalize(), true, nil
 }
@@ -254,14 +260,17 @@ func (r *SCMStatusReporter) executeClaimedDelivery(ctx context.Context, delivery
 		return scmStatusExecutionOutcomeSuperseded, nil
 	}
 	publishErr := r.publisher.PublishCommitStatus(ctx, SCMCommitStatusPublishRequest{
-		Provider:        delivery.Provider,
-		RepositoryOwner: delivery.RepositoryOwner,
-		RepositoryName:  delivery.RepositoryName,
-		CommitSHA:       delivery.CommitSHA,
-		Context:         delivery.Context,
-		State:           delivery.DesiredState,
-		Description:     delivery.Description,
-		DetailsURL:      delivery.DetailsURL,
+		Provider:               delivery.Provider,
+		RepositoryOwner:        delivery.RepositoryOwner,
+		RepositoryName:         delivery.RepositoryName,
+		RegisteredRepositoryID: cloneStringPtr(delivery.RegisteredRepositoryID),
+		SCMConnectionID:        cloneStringPtr(delivery.SCMConnectionID),
+		ProviderRepositoryID:   cloneStringPtr(delivery.ProviderRepositoryID),
+		CommitSHA:              delivery.CommitSHA,
+		Context:                delivery.Context,
+		State:                  delivery.DesiredState,
+		Description:            delivery.Description,
+		DetailsURL:             delivery.DetailsURL,
 	})
 	if publishErr != nil {
 		if errors.Is(publishErr, context.Canceled) || errors.Is(publishErr, context.DeadlineExceeded) {
@@ -419,7 +428,7 @@ func (r *SCMStatusReporter) markDeliveryFailed(ctx context.Context, delivery dom
 }
 
 func (r *SCMStatusReporter) reassertAuthoritativeDelivery(ctx context.Context, staleDelivery domain.SCMStatusDelivery) error {
-	authoritative, err := r.deliveryRepo.GetByKey(ctx, staleDelivery.Provider, staleDelivery.RepositoryOwner, staleDelivery.RepositoryName, staleDelivery.CommitSHA, staleDelivery.Context)
+	authoritative, err := r.getAuthoritativeDelivery(ctx, staleDelivery)
 	if err != nil {
 		if errors.Is(err, repository.ErrSCMStatusDeliveryNotFound) {
 			return nil
@@ -435,6 +444,13 @@ func (r *SCMStatusReporter) reassertAuthoritativeDelivery(ctx context.Context, s
 	}
 	log.Printf("scm status authoritative state reasserted after lost claim: build_id=%s provider=%s state=%s", authoritative.BuildID, authoritative.Provider, authoritative.DesiredState)
 	return nil
+}
+
+func (r *SCMStatusReporter) getAuthoritativeDelivery(ctx context.Context, delivery domain.SCMStatusDelivery) (domain.SCMStatusDelivery, error) {
+	if delivery.SCMConnectionID != nil && delivery.ProviderRepositoryID != nil {
+		return r.deliveryRepo.GetByRepositoryIdentity(ctx, *delivery.SCMConnectionID, *delivery.ProviderRepositoryID, delivery.CommitSHA, delivery.Context)
+	}
+	return r.deliveryRepo.GetByKey(ctx, delivery.Provider, delivery.RepositoryOwner, delivery.RepositoryName, delivery.CommitSHA, delivery.Context)
 }
 
 func (r *SCMStatusReporter) isSuperseded(ctx context.Context, build domain.Build, delivery domain.SCMStatusDelivery) (bool, error) {

@@ -14,13 +14,14 @@ import (
 )
 
 type helperSCMDeliveryRepo struct {
-	acquireForDelivery     func(context.Context, repository.SCMStatusDeliveryClaimInput) (repository.SCMStatusDeliveryClaimResult, error)
-	markSent               func(context.Context, repository.SCMStatusDeliveryMarkSentInput) (repository.SCMStatusDeliveryUpdateResult, error)
-	recordRetryableFailure func(context.Context, repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error)
-	recordPermanentFailure func(context.Context, repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error)
-	recordExhaustedFailure func(context.Context, repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error)
-	markSuperseded         func(context.Context, repository.SCMStatusDeliveryMarkSupersededInput) (repository.SCMStatusDeliveryUpdateResult, error)
-	getByKey               func(context.Context, string, string, string, string, string) (domain.SCMStatusDelivery, error)
+	acquireForDelivery      func(context.Context, repository.SCMStatusDeliveryClaimInput) (repository.SCMStatusDeliveryClaimResult, error)
+	markSent                func(context.Context, repository.SCMStatusDeliveryMarkSentInput) (repository.SCMStatusDeliveryUpdateResult, error)
+	recordRetryableFailure  func(context.Context, repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error)
+	recordPermanentFailure  func(context.Context, repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error)
+	recordExhaustedFailure  func(context.Context, repository.SCMStatusDeliveryRecordFailureInput) (repository.SCMStatusDeliveryUpdateResult, error)
+	markSuperseded          func(context.Context, repository.SCMStatusDeliveryMarkSupersededInput) (repository.SCMStatusDeliveryUpdateResult, error)
+	getByKey                func(context.Context, string, string, string, string, string) (domain.SCMStatusDelivery, error)
+	getByRepositoryIdentity func(context.Context, string, string, string, string) (domain.SCMStatusDelivery, error)
 }
 
 func (r *helperSCMDeliveryRepo) AcquireForDelivery(ctx context.Context, input repository.SCMStatusDeliveryClaimInput) (repository.SCMStatusDeliveryClaimResult, error) {
@@ -65,6 +66,13 @@ func (r *helperSCMDeliveryRepo) MarkSuperseded(ctx context.Context, input reposi
 func (r *helperSCMDeliveryRepo) GetByKey(ctx context.Context, provider string, repositoryOwner string, repositoryName string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error) {
 	if r.getByKey != nil {
 		return r.getByKey(ctx, provider, repositoryOwner, repositoryName, commitSHA, contextName)
+	}
+	return domain.SCMStatusDelivery{}, repository.ErrSCMStatusDeliveryNotFound
+}
+
+func (r *helperSCMDeliveryRepo) GetByRepositoryIdentity(ctx context.Context, connectionID string, providerRepositoryID string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error) {
+	if r.getByRepositoryIdentity != nil {
+		return r.getByRepositoryIdentity(ctx, connectionID, providerRepositoryID, commitSHA, contextName)
 	}
 	return domain.SCMStatusDelivery{}, repository.ErrSCMStatusDeliveryNotFound
 }
@@ -422,11 +430,11 @@ func TestBuildService_GetBuildSCMStatus(t *testing.T) {
 	}
 
 	t.Run("older attempt resolves shared stream as superseded while current owner remains authoritative", func(t *testing.T) {
-		older := baseBuild
+		older := scmMappedBuild(baseBuild)
 		older.ID = "build-1"
 		older.AttemptNumber = 1
 		older.Status = domain.BuildStatusQueued
-		newer := baseBuild
+		newer := scmMappedBuild(baseBuild)
 		newer.ID = "build-2"
 		newer.AttemptNumber = 2
 		newer.CreatedAt = now.Add(time.Minute)
@@ -718,7 +726,7 @@ func TestSCMStatusReporter_ControlFlowBranches(t *testing.T) {
 	baseNow := time.Date(2026, 7, 17, 9, 0, 0, 0, time.UTC)
 	jobID := "job-1"
 	projectID := "project-1"
-	build := domain.Build{
+	build := scmMappedBuild(domain.Build{
 		ID:            "build-1",
 		ProjectID:     projectID,
 		JobID:         &jobID,
@@ -727,7 +735,7 @@ func TestSCMStatusReporter_ControlFlowBranches(t *testing.T) {
 		Status:        domain.BuildStatusQueued,
 		CommitSHA:     strPtr("deadbeef"),
 		RepoURL:       strPtr("https://github.com/octo/repo.git"),
-	}
+	})
 
 	t.Run("constructor validates each dependency", func(t *testing.T) {
 		projectRepo := &fakeSCMProjectRepository{project: domain.Project{ID: projectID, Slug: "payments"}}

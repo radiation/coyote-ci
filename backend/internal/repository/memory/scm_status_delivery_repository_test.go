@@ -60,6 +60,17 @@ func TestSCMStatusDeliveryRepository_ClaimAndStateUpdates(t *testing.T) {
 	}
 }
 
+func TestSCMStatusDeliveryRepository_RejectsWhitespaceIdentitySnapshotBeforeNormalization(t *testing.T) {
+	whitespace := "  "
+	connectionID := "connection-1"
+	providerRepositoryID := "repository-1"
+	delivery := domain.SCMStatusDelivery{BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: time.Now().UTC(), Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", RegisteredRepositoryID: &whitespace, SCMConnectionID: &connectionID, ProviderRepositoryID: &providerRepositoryID, CommitSHA: "deadbeef", Context: "coyote/build", DesiredState: domain.SCMCommitStatusStatePending}
+	repo := NewSCMStatusDeliveryRepository()
+	if _, err := repo.AcquireForDelivery(context.Background(), repository.SCMStatusDeliveryClaimInput{Delivery: delivery, ClaimOwner: "worker-1", Now: time.Now().UTC(), ClaimDuration: time.Minute, MaxAttempts: 1}); err == nil {
+		t.Fatal("expected whitespace identity snapshot to be rejected")
+	}
+}
+
 func TestSCMStatusDeliveryRepository_RetryAndSupersede(t *testing.T) {
 	repo := NewSCMStatusDeliveryRepository()
 	now := time.Date(2026, 7, 16, 15, 0, 0, 0, time.UTC)

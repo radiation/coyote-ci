@@ -25,6 +25,7 @@ import (
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
 	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
+	platformgithubapp "github.com/radiation/coyote-ci/backend/internal/platform/githubapp"
 	platformsecret "github.com/radiation/coyote-ci/backend/internal/platform/secret"
 	platformslack "github.com/radiation/coyote-ci/backend/internal/platform/slack"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -156,15 +157,13 @@ func main() {
 	}
 	var scmStatusReporter buildsvc.BuildSCMStatusReporter
 	var scmStatusRecoveryDrain *buildsvc.SCMStatusRecoveryDrain
-	scmStatusDeps, err := configureSCMStatusRuntime(cfg, buildRepo, projectRepo, scmStatusDeliveryRepo)
+	scmStatusDeps, err := configureSCMStatusRuntime(cfg, buildRepo, projectRepo, scmStatusDeliveryRepo, scmConnectionRepo, scmRepositoryRegistrationRepo)
 	if err != nil {
 		log.Fatalf("failed to configure scm status reporting: %v", err)
 	}
 	if scmStatusDeps.reporterImpl != nil {
 		scmStatusRecoveryDrain = scmStatusDeps.recoveryDrain
 		scmStatusReporter = scmStatusDeps.reporter
-	} else {
-		log.Printf("github commit status reporting disabled: GITHUB_STATUS_TOKEN is not configured")
 	}
 	managedImageRefresher := managedimagesvc.NewService(
 		source.NewGitFetcher(),
@@ -397,16 +396,21 @@ func main() {
 	wg.Wait()
 }
 
-func configureSCMStatusRuntime(cfg config.Config, buildRepo repository.BuildRepository, projectRepo repository.ProjectRepository, deliveryRepo repository.SCMStatusDeliveryRepository) (scmStatusRuntime, error) {
-	if strings.TrimSpace(cfg.GitHubStatusToken) == "" {
-		return scmStatusRuntime{}, nil
+func configureSCMStatusRuntime(cfg config.Config, buildRepo repository.BuildRepository, projectRepo repository.ProjectRepository, deliveryRepo repository.SCMStatusDeliveryRepository, connectionRepo repository.SCMConnectionRepository, registrationRepo repository.SCMRepositoryRegistrationRepository) (scmStatusRuntime, error) {
+	publisher, err := buildsvc.NewGitHubAppCommitStatusPublisher(buildsvc.GitHubAppCommitStatusPublisherConfig{
+		Connections:   connectionRepo,
+		Registrations: registrationRepo,
+		Secrets:       platformsecret.NewEnvResolver(),
+		GitHubApps:    platformgithubapp.NewClient(nil),
+	})
+	if err != nil {
+		return scmStatusRuntime{}, err
 	}
-
 	reporterImpl, err := buildsvc.NewSCMStatusReporter(buildsvc.SCMStatusReporterConfig{
 		BuildRepo:     buildRepo,
 		ProjectRepo:   projectRepo,
 		DeliveryRepo:  deliveryRepo,
-		Publisher:     buildsvc.NewGitHubCommitStatusClient("", nil, cfg.GitHubStatusToken),
+		Publisher:     publisher,
 		PublicBaseURL: cfg.PublicURL,
 		ClaimOwner:    defaultServerNotificationClaimOwner(),
 	})

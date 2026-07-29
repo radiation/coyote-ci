@@ -363,6 +363,9 @@ Prefer:
 - focused integration tests around repositories and service-layer behavior
 - deterministic tests over timing-sensitive tests
 - small mocks/fakes instead of elaborate harnesses
+- at least 80% coverage for newly added or materially changed executable code, measured with repository patch/diff coverage tooling where available
+
+Treat the coverage expectation as patch coverage, not whole-repository coverage. Exclude generated code, fixtures, and non-executable declarations where tooling supports it. Add direct tests for security, identity, persistence, retry, and failure behavior; do not add low-value tests solely to raise a percentage. Run the repository's supported coverage command when available and report the exact command and result.
 
 When possible, test:
 - services independently from HTTP

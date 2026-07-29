@@ -80,6 +80,7 @@ func (s *BuildService) CancelBuild(ctx context.Context, id string) (domain.Build
 		if cancelErr != nil {
 			return domain.Build{}, mapRepoErr(cancelErr)
 		}
+		s.notifySCMBuildStatus(ctx, canceled)
 		s.notifyTerminalBuild(ctx, canceled)
 		if !cancelBuildIncludesExecutionJobs(s.buildRepo) {
 			s.cancelExecutionJobsForBuild(ctx, id, reason, now)
