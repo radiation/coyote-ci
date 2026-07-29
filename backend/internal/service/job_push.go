@@ -59,8 +59,9 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input webhooksvc.W
 	commitSHA := strings.TrimSpace(input.CommitSHA)
 
 	var (
-		jobs []domain.Job
-		err  error
+		jobs               []domain.Job
+		repositoryIdentity *domain.RepositoryIdentitySnapshot
+		err                error
 	)
 	if connectionID != "" {
 		if providerRepositoryID == "" {
@@ -78,6 +79,14 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input webhooksvc.W
 		}
 		if registeredRepository.Disabled {
 			return webhookNoMatchResult(scmProvider, eventType, repoURL, normalizedRef, commitSHA), nil
+		}
+		repositoryIdentity = &domain.RepositoryIdentitySnapshot{
+			RegisteredRepositoryID: registeredRepository.ID,
+			SCMConnectionID:        registeredRepository.ConnectionID,
+			ProviderRepositoryID:   registeredRepository.ProviderRepositoryID,
+		}
+		if identityErr := repositoryIdentity.Validate(); identityErr != nil {
+			return webhooksvc.WebhookTriggerResult{}, identityErr
 		}
 		jobs, err = s.jobRepo.ListPushEnabledByRepositoryID(ctx, registeredRepository.ID)
 	} else {
@@ -147,13 +156,14 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input webhooksvc.W
 		}
 		if job.PipelinePath != nil && strings.TrimSpace(*job.PipelinePath) != "" {
 			build, buildErr = s.buildService.CreateBuildFromRepo(ctx, buildsvc.CreateRepoBuildInput{
-				ProjectID:    job.ProjectID,
-				JobID:        &job.ID,
-				RepoURL:      job.RepositoryURL,
-				Ref:          normalizedRef.RefName,
-				CommitSHA:    commitSHA,
-				PipelinePath: strings.TrimSpace(*job.PipelinePath),
-				Trigger:      triggerInput,
+				ProjectID:          job.ProjectID,
+				JobID:              &job.ID,
+				RepoURL:            job.RepositoryURL,
+				Ref:                normalizedRef.RefName,
+				CommitSHA:          commitSHA,
+				PipelinePath:       strings.TrimSpace(*job.PipelinePath),
+				Trigger:            triggerInput,
+				RepositoryIdentity: repositoryIdentity,
 			})
 		} else {
 			build, buildErr = s.buildService.CreateBuildFromPipeline(ctx, buildsvc.CreatePipelineBuildInput{
@@ -165,7 +175,8 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input webhooksvc.W
 					Ref:           normalizedRef.RefName,
 					CommitSHA:     commitSHA,
 				},
-				Trigger: triggerInput,
+				Trigger:            triggerInput,
+				RepositoryIdentity: repositoryIdentity,
 			})
 		}
 		if buildErr != nil {

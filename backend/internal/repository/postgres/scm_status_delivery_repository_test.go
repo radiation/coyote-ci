@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"testing"
 	"time"
 
@@ -21,6 +23,46 @@ func TestNormalizePostgresSCMStatusDeliveryClaimInputRejectsWhitespaceIdentitySn
 		t.Fatal("expected whitespace identity snapshot to be rejected")
 	}
 }
+
+func TestSCMStatusDeliveryRepository_UsesRepositoryIdentityForConflictAndLookup(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sql mock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewSCMStatusDeliveryRepository(db)
+	now := time.Now().UTC()
+	registrationID := "registration-1"
+	connectionID := "connection-1"
+	providerRepositoryID := "repository-1"
+	row := scmStatusDeliveryTestColumns()
+	stored := []driver.Value{"delivery-1", "build-1", 1, now, "github", "octo", "repo", registrationID, connectionID, providerRepositoryID, "deadbeef", "coyote/build", "pending", "pending", "pending", nil, "sent", 1, 2, now, nil, nil, nil, nil, nil, nil, nil, now, nil, now, now}
+	delivery := domain.SCMStatusDelivery{BuildID: "build-1", BuildAttempt: 1, BuildCreatedAt: now, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", RegisteredRepositoryID: &registrationID, SCMConnectionID: &connectionID, ProviderRepositoryID: &providerRepositoryID, CommitSHA: "deadbeef", Context: "coyote/build", DesiredState: domain.SCMCommitStatusStatePending, Description: "pending"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("INSERT INTO scm_status_deliveries").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("WHERE scm_connection_id").WithArgs(connectionID, providerRepositoryID, "deadbeef", "coyote/build").WillReturnRows(sqlmock.NewRows(row).AddRow(stored...))
+	result, claimErr := repo.AcquireForDelivery(context.Background(), repository.SCMStatusDeliveryClaimInput{Delivery: delivery, ClaimOwner: "worker", Now: now, ClaimDuration: time.Minute, MaxAttempts: 2})
+	if claimErr != nil || result.Outcome != repository.SCMStatusDeliveryClaimOutcomeAlreadySent {
+		t.Fatalf("expected identity conflict to resolve existing delivery, result=%+v err=%v", result, claimErr)
+	}
+
+	mock.ExpectQuery("WHERE scm_connection_id").WithArgs(connectionID, providerRepositoryID, "deadbeef", "coyote/build").WillReturnRows(sqlmock.NewRows(row).AddRow(stored...))
+	fetched, fetchErr := repo.GetByRepositoryIdentity(context.Background(), " "+connectionID+" ", " "+providerRepositoryID+" ", " deadbeef ", " coyote/build ")
+	if fetchErr != nil || fetched.SCMConnectionID == nil || *fetched.SCMConnectionID != connectionID {
+		t.Fatalf("expected identity lookup delivery, got %+v err=%v", fetched, fetchErr)
+	}
+
+	mock.ExpectQuery("WHERE scm_connection_id").WithArgs(connectionID, providerRepositoryID, "missing", "coyote/build").WillReturnError(sql.ErrNoRows)
+	if _, missingErr := repo.GetByRepositoryIdentity(context.Background(), connectionID, providerRepositoryID, "missing", "coyote/build"); !errors.Is(missingErr, repository.ErrSCMStatusDeliveryNotFound) {
+		t.Fatalf("expected missing identity delivery error, got %v", missingErr)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet sql expectations: %v", expectationsErr)
+	}
+}
+
 func TestSCMStatusDeliveryRepository_AcquireForDelivery_CreateAndMarkSent(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

@@ -71,6 +71,30 @@ func TestSCMStatusDeliveryRepository_RejectsWhitespaceIdentitySnapshotBeforeNorm
 	}
 }
 
+func TestSCMStatusDeliveryRepository_SeparatesRepositoryIdentityStreams(t *testing.T) {
+	repo := NewSCMStatusDeliveryRepository()
+	now := time.Now().UTC()
+	newDelivery := func(connectionID string) domain.SCMStatusDelivery {
+		registrationID := "registration-" + connectionID
+		providerRepositoryID := "repository-1"
+		return domain.SCMStatusDelivery{BuildID: "build-" + connectionID, BuildAttempt: 1, BuildCreatedAt: now, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", RegisteredRepositoryID: &registrationID, SCMConnectionID: &connectionID, ProviderRepositoryID: &providerRepositoryID, CommitSHA: "deadbeef", Context: "coyote/build", DesiredState: domain.SCMCommitStatusStatePending, Description: "pending"}
+	}
+
+	for _, connectionID := range []string{"connection-a", "connection-b"} {
+		claimed, err := repo.AcquireForDelivery(context.Background(), repository.SCMStatusDeliveryClaimInput{Delivery: newDelivery(connectionID), ClaimOwner: "worker", Now: now, ClaimDuration: time.Minute, MaxAttempts: 2})
+		if err != nil || claimed.Outcome != repository.SCMStatusDeliveryClaimOutcomeCreatedClaimed {
+			t.Fatalf("expected independent stream for %s, result=%+v err=%v", connectionID, claimed, err)
+		}
+		fetched, fetchErr := repo.GetByRepositoryIdentity(context.Background(), connectionID, "repository-1", "deadbeef", "coyote/build")
+		if fetchErr != nil || fetched.BuildID != "build-"+connectionID {
+			t.Fatalf("expected identity lookup for %s, delivery=%+v err=%v", connectionID, fetched, fetchErr)
+		}
+	}
+	if _, err := repo.GetByRepositoryIdentity(context.Background(), "connection-missing", "repository-1", "deadbeef", "coyote/build"); !errors.Is(err, repository.ErrSCMStatusDeliveryNotFound) {
+		t.Fatalf("expected missing identity stream error, got %v", err)
+	}
+}
+
 func TestSCMStatusDeliveryRepository_RetryAndSupersede(t *testing.T) {
 	repo := NewSCMStatusDeliveryRepository()
 	now := time.Date(2026, 7, 16, 15, 0, 0, 0, time.UTC)

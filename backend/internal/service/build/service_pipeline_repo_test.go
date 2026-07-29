@@ -95,6 +95,25 @@ steps:
 		}
 	})
 
+	t.Run("snapshots repository identity", func(t *testing.T) {
+		repo := &fakeBuildRepository{}
+		svc := NewBuildService(repo, nil, nil)
+		identity := &domain.RepositoryIdentitySnapshot{RegisteredRepositoryID: "repository-1", SCMConnectionID: "connection-1", ProviderRepositoryID: "provider-repository-1"}
+
+		build, err := svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{ProjectID: "proj-1", PipelineYAML: validYAML, RepositoryIdentity: identity})
+		if err != nil {
+			t.Fatalf("create pipeline build: %v", err)
+		}
+		if build.RegisteredRepositoryID == nil || *build.RegisteredRepositoryID != identity.RegisteredRepositoryID || build.SCMConnectionID == nil || *build.SCMConnectionID != identity.SCMConnectionID || build.ProviderRepositoryID == nil || *build.ProviderRepositoryID != identity.ProviderRepositoryID {
+			t.Fatalf("expected repository identity snapshot, got %+v", build)
+		}
+
+		_, err = svc.CreateBuildFromPipeline(context.Background(), CreatePipelineBuildInput{ProjectID: "proj-1", PipelineYAML: validYAML, RepositoryIdentity: &domain.RepositoryIdentitySnapshot{RegisteredRepositoryID: "repository-1"}})
+		if err == nil {
+			t.Fatal("expected incomplete repository identity to be rejected")
+		}
+	})
+
 	t.Run("missing project_id", func(t *testing.T) {
 		repo := &fakeBuildRepository{}
 		svc := NewBuildService(repo, nil, nil)

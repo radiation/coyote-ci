@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 
@@ -85,12 +86,16 @@ func (p *GitHubAppCommitStatusPublisher) PublishCommitStatus(ctx context.Context
 	}
 	token, err := p.githubApps.GetInstallationToken(ctx, platformgithubapp.InstallationTokenRequest{AppRegistrationID: app.ID, AppID: app.AppID, InstallationID: installation.InstallationID, APIBaseURL: app.APIBaseURL, PrivateKeyPEM: privateKey})
 	if err != nil {
-		return err
+		return classifyGitHubAppTokenError(err)
 	}
 	req.Provider = "github"
 	req.RepositoryOwner = registration.Owner
 	req.RepositoryName = registration.Name
-	return p.httpClient.PublishCommitStatusWithToken(ctx, req, token.Value)
+	client := p.httpClient
+	if strings.TrimSpace(app.APIBaseURL) != "" && strings.TrimRight(strings.TrimSpace(app.APIBaseURL), "/") != client.baseURL {
+		client = NewGitHubCommitStatusClient(app.APIBaseURL, client.httpClient, "")
+	}
+	return client.PublishCommitStatusWithToken(ctx, req, token.Value)
 }
 
 func scmStatusRequestIdentity(req SCMCommitStatusPublishRequest) (string, string, string, error) {
@@ -112,6 +117,45 @@ func scmStatusIdentityError(reason string, err error) *GitHubCommitStatusError {
 		message = err.Error()
 	}
 	return &GitHubCommitStatusError{statusCode: http.StatusUnprocessableEntity, reason: reason, message: message}
+}
+
+func classifyGitHubAppTokenError(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return err
+	}
+
+	statusErr := &GitHubCommitStatusError{statusCode: http.StatusBadGateway, retryable: true, reason: "github_status_token_exchange_failed", message: err.Error(), cause: err}
+	switch {
+	case errors.Is(err, platformgithubapp.ErrAuthentication):
+		statusErr.statusCode = http.StatusUnauthorized
+		statusErr.retryable = false
+		statusErr.reason = "github_status_app_authentication_failed"
+	case errors.Is(err, platformgithubapp.ErrInstallationUnavailable):
+		statusErr.statusCode = http.StatusForbidden
+		statusErr.retryable = false
+		statusErr.reason = "github_status_installation_unavailable"
+	case errors.Is(err, platformgithubapp.ErrPrivateKeyMissing), errors.Is(err, platformgithubapp.ErrPrivateKeyMalformed), errors.Is(err, platformgithubapp.ErrPrivateKeyNotRSA):
+		statusErr.statusCode = http.StatusUnprocessableEntity
+		statusErr.retryable = false
+		statusErr.reason = "github_status_private_key_invalid"
+	case errors.Is(err, platformgithubapp.ErrRepositoryInaccessible):
+		statusErr.statusCode = http.StatusForbidden
+		statusErr.retryable = false
+		statusErr.reason = "github_status_repository_inaccessible"
+	case errors.Is(err, platformgithubapp.ErrRateLimited):
+		statusErr.statusCode = http.StatusTooManyRequests
+		statusErr.reason = "github_status_rate_limited"
+	case errors.Is(err, platformgithubapp.ErrProviderUnavailable):
+		statusErr.statusCode = http.StatusServiceUnavailable
+		statusErr.reason = "github_status_provider_unavailable"
+	case errors.Is(err, platformgithubapp.ErrMalformedResponse):
+		statusErr.reason = "github_status_provider_malformed_response"
+	}
+	return statusErr
 }
 
 var _ SCMCommitStatusPublisher = (*GitHubAppCommitStatusPublisher)(nil)

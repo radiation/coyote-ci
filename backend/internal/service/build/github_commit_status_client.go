@@ -28,6 +28,7 @@ type GitHubCommitStatusError struct {
 	retryable  bool
 	reason     string
 	message    string
+	cause      error
 }
 
 func NewGitHubCommitStatusClient(baseURL string, httpClient *http.Client, token string) *GitHubCommitStatusClient {
@@ -181,6 +182,13 @@ func (e *GitHubCommitStatusError) Reason() string {
 		return ""
 	}
 	return e.reason
+}
+
+func (e *GitHubCommitStatusError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
 }
 
 var _ SCMCommitStatusPublisher = (*GitHubCommitStatusClient)(nil)

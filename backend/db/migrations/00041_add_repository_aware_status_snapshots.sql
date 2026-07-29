@@ -7,7 +7,7 @@ ALTER TABLE builds
     ADD CONSTRAINT builds_repository_identity_snapshot_check CHECK (
         (registered_repository_id IS NULL AND scm_connection_id IS NULL AND provider_repository_id IS NULL)
         OR
-        (registered_repository_id IS NOT NULL AND scm_connection_id IS NOT NULL AND provider_repository_id IS NOT NULL AND provider_repository_id <> '')
+         (registered_repository_id IS NOT NULL AND scm_connection_id IS NOT NULL AND provider_repository_id IS NOT NULL AND btrim(provider_repository_id) <> '')
     );
 
 ALTER TABLE scm_status_deliveries

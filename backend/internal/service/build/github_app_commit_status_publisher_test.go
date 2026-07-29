@@ -84,6 +84,7 @@ func TestGitHubAppCommitStatusPublisher_PublishesUsingSnapshottedConnectionAndCu
 	registrationRepo.registration.Name = "renamed-repository"
 	connectionRepo.detail.Connection.APIBaseURL = server.URL
 	connectionRepo.detail.GitHubAppRegistration.APIBaseURL = server.URL
+	publisher.httpClient = NewGitHubCommitStatusClient("https://default.example", server.Client(), "")
 
 	if err := publisher.PublishCommitStatus(context.Background(), publisherRequest("registration-1", "connection-1", "repository-1")); err != nil {
 		t.Fatalf("publish status: %v", err)
@@ -97,6 +98,24 @@ func TestGitHubAppCommitStatusPublisher_PublishesUsingSnapshottedConnectionAndCu
 	request := githubApps.requests[0]
 	if request.AppRegistrationID != "app-registration-1" || request.AppID != "app-1" || request.InstallationID != "installation-1" || request.APIBaseURL != server.URL || request.PrivateKeyPEM != "private-key-1" {
 		t.Fatalf("token exchange did not use the snapshotted connection credentials: %+v", request)
+	}
+}
+
+func TestNewGitHubAppCommitStatusPublisherValidationAndDefaults(t *testing.T) {
+	if _, err := NewGitHubAppCommitStatusPublisher(GitHubAppCommitStatusPublisherConfig{}); err == nil {
+		t.Fatal("expected missing dependencies to be rejected")
+	}
+
+	_, registrations, connections, secrets, githubApps := newPublisherHarness("https://api.example.test")
+	publisher, err := NewGitHubAppCommitStatusPublisher(GitHubAppCommitStatusPublisherConfig{Connections: connections, Registrations: registrations, Secrets: secrets, GitHubApps: githubApps})
+	if err != nil {
+		t.Fatalf("create publisher: %v", err)
+	}
+	if publisher.httpClient == nil || publisher.httpClient.baseURL != defaultGitHubCommitStatusAPIBaseURL {
+		t.Fatalf("expected default status client, got %+v", publisher.httpClient)
+	}
+	if err := scmStatusIdentityError("identity", nil); err.Reason() != "identity" || err.message != "" {
+		t.Fatalf("unexpected identity error: %+v", err)
 	}
 }
 
@@ -148,17 +167,24 @@ func TestGitHubAppCommitStatusPublisher_RejectsInvalidIdentityBeforeProviderCall
 	}
 }
 
-func TestGitHubAppCommitStatusPublisher_AllowsDisabledOrArchivedRegistrationAndPreservesTokenErrors(t *testing.T) {
+func TestGitHubAppCommitStatusPublisher_AllowsDisabledOrArchivedRegistrationAndClassifiesTokenErrors(t *testing.T) {
 	for _, test := range []struct {
-		name           string
-		registration   func(*domain.SCMRepositoryRegistration)
-		githubAppsErr  error
-		wantHTTPCalls  int
-		wantTokenError bool
+		name          string
+		registration  func(*domain.SCMRepositoryRegistration)
+		githubAppsErr error
+		wantHTTPCalls int
+		wantReason    string
+		wantRetryable bool
 	}{
 		{name: "disabled registration", registration: func(r *domain.SCMRepositoryRegistration) { r.Disabled = true }, wantHTTPCalls: 1},
 		{name: "archived registration", registration: func(r *domain.SCMRepositoryRegistration) { r.Archived = true }, wantHTTPCalls: 1},
-		{name: "token exchange failure", githubAppsErr: platformgithubapp.ErrProviderUnavailable, wantTokenError: true},
+		{name: "authentication", githubAppsErr: platformgithubapp.ErrAuthentication, wantReason: "github_status_app_authentication_failed"},
+		{name: "installation unavailable", githubAppsErr: platformgithubapp.ErrInstallationUnavailable, wantReason: "github_status_installation_unavailable"},
+		{name: "invalid private key", githubAppsErr: platformgithubapp.ErrPrivateKeyMalformed, wantReason: "github_status_private_key_invalid"},
+		{name: "repository inaccessible", githubAppsErr: platformgithubapp.ErrRepositoryInaccessible, wantReason: "github_status_repository_inaccessible"},
+		{name: "rate limited", githubAppsErr: platformgithubapp.ErrRateLimited, wantReason: "github_status_rate_limited", wantRetryable: true},
+		{name: "provider unavailable", githubAppsErr: platformgithubapp.ErrProviderUnavailable, wantReason: "github_status_provider_unavailable", wantRetryable: true},
+		{name: "malformed response", githubAppsErr: platformgithubapp.ErrMalformedResponse, wantReason: "github_status_provider_malformed_response", wantRetryable: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			httpCalls := 0
@@ -176,9 +202,17 @@ func TestGitHubAppCommitStatusPublisher_AllowsDisabledOrArchivedRegistrationAndP
 			githubApps.err = test.githubAppsErr
 
 			err := publisher.PublishCommitStatus(context.Background(), publisherRequest("registration-1", "connection-1", "repository-1"))
-			if test.wantTokenError {
+			if test.githubAppsErr != nil {
+				var statusErr *GitHubCommitStatusError
+				if !errors.As(err, &statusErr) || statusErr.Reason() != test.wantReason || statusErr.Retryable() != test.wantRetryable {
+					t.Fatalf("expected reason=%q retryable=%v, got %v", test.wantReason, test.wantRetryable, err)
+				}
 				if !errors.Is(err, test.githubAppsErr) {
-					t.Fatalf("expected token exchange error %v, got %v", test.githubAppsErr, err)
+					t.Fatalf("expected classified error to preserve %v, got %v", test.githubAppsErr, err)
+				}
+				decision := classifySCMStatusDeliveryFailure(err)
+				if decision.reason != test.wantReason || decision.retryable != test.wantRetryable {
+					t.Fatalf("expected delivery decision reason=%q retryable=%v, got %+v", test.wantReason, test.wantRetryable, decision)
 				}
 			} else if err != nil {
 				t.Fatalf("publish status: %v", err)
@@ -223,6 +257,19 @@ func TestGitHubAppCommitStatusPublisher_SeparatesCredentialsForMatchingMetadataA
 	}
 	if len(githubApps.requests) != 2 || githubApps.requests[0].InstallationID == githubApps.requests[1].InstallationID {
 		t.Fatalf("expected distinct installation credentials for matching repository metadata: %+v", githubApps.requests)
+	}
+}
+
+func TestClassifyGitHubAppTokenErrorPreservesContextAndTimeoutErrors(t *testing.T) {
+	for _, tokenErr := range []error{context.Canceled, context.DeadlineExceeded, scmTimeoutNetError{}} {
+		classified := classifyGitHubAppTokenError(tokenErr)
+		if classified != tokenErr {
+			t.Fatalf("expected %v to remain unwrapped, got %v", tokenErr, classified)
+		}
+		decision := classifySCMStatusDeliveryFailure(classified)
+		if !decision.retryable || (decision.reason != "context_canceled" && decision.reason != "network_timeout") {
+			t.Fatalf("expected existing retry classifier decision, got %+v", decision)
+		}
 	}
 }
 

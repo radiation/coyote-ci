@@ -2337,7 +2337,8 @@ func TestJobService_TriggerWebhookEvent_UsesRegisteredRepositoryIdentity(t *test
 	ctx := context.Background()
 	jobRepo := &urlLookupDetectingJobRepo{JobRepository: memory.NewJobRepository()}
 	registeredRepo := memory.NewSCMRepositoryRegistrationRepository()
-	buildService := buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)
+	buildRepo := memory.NewBuildRepository()
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
 	jobService := NewJobService(jobRepo, buildService).WithSCMRepositoryRegistrationRepository(registeredRepo)
 	now := time.Now().UTC()
 	for _, registration := range []domain.SCMRepositoryRegistration{
@@ -2367,6 +2368,11 @@ func TestJobService_TriggerWebhookEvent_UsesRegisteredRepositoryIdentity(t *test
 	if result.MatchedJobs != 2 || len(result.Builds) != 2 || result.Builds[0].Job.ID != "job-a-2" || result.Builds[1].Job.ID != "job-a-1" {
 		t.Fatalf("expected only connection-a mapped jobs, got %+v", result.Builds)
 	}
+	for _, triggered := range result.Builds {
+		if triggered.Build.RegisteredRepositoryID == nil || *triggered.Build.RegisteredRepositoryID != "repo-a" || triggered.Build.SCMConnectionID == nil || *triggered.Build.SCMConnectionID != "connection-a" || triggered.Build.ProviderRepositoryID == nil || *triggered.Build.ProviderRepositoryID != "1001" {
+			t.Fatalf("expected build identity snapshot for %s, got %+v", triggered.Job.ID, triggered.Build)
+		}
+	}
 
 	input.ConnectionID = "connection-b"
 	result, triggerErr = jobService.TriggerWebhookEvent(ctx, input)
@@ -2378,6 +2384,20 @@ func TestJobService_TriggerWebhookEvent_UsesRegisteredRepositoryIdentity(t *test
 	}
 	if jobRepo.legacyLookupCalls != 0 {
 		t.Fatalf("expected no URL-based lookup for connection-aware webhooks, got %d calls", jobRepo.legacyLookupCalls)
+	}
+}
+
+func TestJobServiceBuildRepositoryIdentityValidation(t *testing.T) {
+	jobService := NewJobService(memory.NewJobRepository(), buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil))
+	identity, err := jobService.buildRepositoryIdentity(context.Background(), domain.Job{})
+	if err != nil || identity != nil {
+		t.Fatalf("expected unmapped job to have no identity, identity=%+v err=%v", identity, err)
+	}
+
+	repositoryID := "repository-1"
+	_, err = jobService.buildRepositoryIdentity(context.Background(), domain.Job{RepositoryID: &repositoryID})
+	if !errors.Is(err, ErrJobRegisteredRepositoryStoreNotConfigured) {
+		t.Fatalf("expected missing registration repository error, got %v", err)
 	}
 }
 

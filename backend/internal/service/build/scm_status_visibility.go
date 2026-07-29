@@ -31,8 +31,9 @@ type BuildSCMStatusView struct {
 
 func (s *BuildService) GetBuildSCMStatus(ctx context.Context, build domain.Build, project *domain.Project) (*BuildSCMStatusView, error) {
 	provider, owner, repo, linked := scmStatusRepositoryIdentity(build)
-	if build.RegisteredRepositoryID != nil && build.SCMConnectionID != nil && build.ProviderRepositoryID != nil {
-		provider, owner, repo, linked = "github", "", "", true
+	if build.ValidateRepositoryIdentitySnapshot() == nil && build.RegisteredRepositoryID != nil && build.SCMConnectionID != nil && build.ProviderRepositoryID != nil {
+		provider = "github"
+		linked = true
 	}
 	if !linked {
 		return nil, nil
