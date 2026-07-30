@@ -743,6 +743,21 @@ func TestClient_TokenCacheKeyIsolation(t *testing.T) {
 	}
 }
 
+func TestInstallationCacheKey_NormalizesRepositoryRestrictionOrder(t *testing.T) {
+	base := InstallationTokenRequest{AppRegistrationID: "registration-1", InstallationID: "999", APIBaseURL: "https://api.github.com"}
+	first := base
+	first.RepositoryIDs = []string{" 200 ", "100", "200"}
+	second := base
+	second.RepositoryIDs = []string{"100", "200"}
+
+	if firstKey, secondKey := installationCacheKey(first), installationCacheKey(second); firstKey != secondKey {
+		t.Fatalf("expected equivalent repository restriction keys, got %q and %q", firstKey, secondKey)
+	}
+	if got := normalizedRepositoryIDs(first.RepositoryIDs); len(got) != 2 || got[0] != "100" || got[1] != "200" {
+		t.Fatalf("expected sorted unique repository IDs, got %#v", got)
+	}
+}
+
 func TestClient_GetFreshInstallationToken_BypassesOnlyExactScopedCacheEntry(t *testing.T) {
 	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
 	var callCount atomic.Int32

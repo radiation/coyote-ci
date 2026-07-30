@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -356,6 +357,7 @@ func normalizedRepositoryIDs(values []string) []string {
 		seen[trimmed] = struct{}{}
 		result = append(result, trimmed)
 	}
+	sort.Strings(result)
 	return result
 }
 

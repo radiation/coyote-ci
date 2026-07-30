@@ -70,6 +70,16 @@ func TestGitWorkspaceSourceResolver_CloneAndCheckout(t *testing.T) {
 			t.Fatalf("expected main sha %q, got %q", mainSHA, resolved)
 		}
 	})
+
+	t.Run("authenticated clone", func(t *testing.T) {
+		if cloneErr := resolver.CloneIntoWorkspaceWithHTTPSCredential(context.Background(), workspacePath, remoteDir, HTTPSCredential{Username: "x-access-token", Password: "test-token"}); cloneErr != nil {
+			t.Fatalf("authenticated clone failed: %v", cloneErr)
+		}
+		resolved, checkoutErr := resolver.CheckoutWorkspaceSource(context.Background(), workspacePath, WorkspaceSourceSpec{RepositoryURL: remoteDir, Ref: "feature/source-phase"})
+		if checkoutErr != nil || resolved != featureSHA {
+			t.Fatalf("authenticated checkout resolved=%q err=%v", resolved, checkoutErr)
+		}
+	})
 }
 
 func TestGitWorkspaceSourceResolver_CloneIntoWorkspace_PreservesWorkspaceDirectoryInode(t *testing.T) {

@@ -76,6 +76,20 @@ func TestGitFetcher_Fetch(t *testing.T) {
 		}
 	})
 
+	t.Run("fetch with HTTPS credential", func(t *testing.T) {
+		localPath, commitSHA, fetchErr := fetcher.FetchWithHTTPSCredential(context.Background(), remoteDir, "main", HTTPSCredential{Username: "x-access-token", Password: "test-token"})
+		if fetchErr != nil {
+			localPath, commitSHA, fetchErr = fetcher.FetchWithHTTPSCredential(context.Background(), remoteDir, "master", HTTPSCredential{Username: "x-access-token", Password: "test-token"})
+		}
+		if fetchErr != nil {
+			t.Fatalf("authenticated fetch failed: %v", fetchErr)
+		}
+		defer func() { _ = os.RemoveAll(localPath) }()
+		if commitSHA != expectedSHA {
+			t.Fatalf("expected SHA %q, got %q", expectedSHA, commitSHA)
+		}
+	})
+
 	t.Run("fetch by remote feature branch", func(t *testing.T) {
 		localPath, commitSHA, err := fetcher.Fetch(context.Background(), remoteDir, "feature/repo-cloning")
 		if err != nil {

@@ -8,6 +8,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	platformgithubapp "github.com/radiation/coyote-ci/backend/internal/platform/githubapp"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
+	"github.com/radiation/coyote-ci/backend/internal/service/execution"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 )
 
@@ -61,6 +62,31 @@ type checkoutAuthenticatedFetcherFake struct {
 	firstErr    error
 	localPath   string
 	commitSHA   string
+}
+
+type checkoutAuthenticatedWorkspaceResolverFake struct {
+	cloneCalls         int
+	authenticatedCalls int
+	credentials        []source.HTTPSCredential
+	firstErr           error
+}
+
+func (f *checkoutAuthenticatedWorkspaceResolverFake) CloneIntoWorkspace(context.Context, string, string) error {
+	f.cloneCalls++
+	return nil
+}
+
+func (f *checkoutAuthenticatedWorkspaceResolverFake) CloneIntoWorkspaceWithHTTPSCredential(_ context.Context, _ string, _ string, credential source.HTTPSCredential) error {
+	f.authenticatedCalls++
+	f.credentials = append(f.credentials, credential)
+	if f.authenticatedCalls == 1 && f.firstErr != nil {
+		return f.firstErr
+	}
+	return nil
+}
+
+func (f *checkoutAuthenticatedWorkspaceResolverFake) CheckoutWorkspaceSource(context.Context, string, source.WorkspaceSourceSpec) (string, error) {
+	return "commit", nil
 }
 
 func (f *checkoutAuthenticatedFetcherFake) Fetch(context.Context, string, string) (string, string, error) {
@@ -185,6 +211,57 @@ func TestRepositoryAwareCheckoutResolver_RejectsProviderMismatchAndInaccessibleR
 	}
 }
 
+func TestNewRepositoryAwareCheckoutResolver_RequiresAllDependencies(t *testing.T) {
+	if _, err := NewRepositoryAwareCheckoutResolver(RepositoryAwareCheckoutResolverConfig{}); err == nil {
+		t.Fatal("expected missing dependency error")
+	}
+}
+
+func TestRepositoryAwareCheckoutResolver_ClassifiesConfigurationAndTokenFailures(t *testing.T) {
+	snapshot := domain.RepositoryIdentitySnapshot{RegisteredRepositoryID: "repository-a", SCMConnectionID: "connection-a", ProviderRepositoryID: "100"}
+	registration := &checkoutRegistrationFake{value: domain.SCMRepositoryRegistration{ID: "repository-a", ConnectionID: "connection-a", ProviderRepositoryID: "100"}}
+	github := &checkoutGitHubFake{repository: platformgithubapp.Repository{ID: "100", CloneURL: "https://github.com/acme/repository.git"}}
+
+	invalidDetail := checkoutDetail(true)
+	invalidDetail.GitHubAppRegistration = nil
+	resolver, _ := NewRepositoryAwareCheckoutResolver(RepositoryAwareCheckoutResolverConfig{Connections: &checkoutConnectionFake{value: invalidDetail}, Registrations: registration, Secrets: &checkoutSecretFake{value: "private-key"}, GitHub: github})
+	if _, err := resolver.Resolve(context.Background(), snapshot); !errors.Is(err, ErrRepositoryCheckoutConnectionInvalid) {
+		t.Fatalf("expected invalid connection, got %v", err)
+	}
+
+	resolver, _ = NewRepositoryAwareCheckoutResolver(RepositoryAwareCheckoutResolverConfig{Connections: &checkoutConnectionFake{value: checkoutDetail(true)}, Registrations: registration, Secrets: &checkoutSecretFake{}, GitHub: github})
+	if _, err := resolver.Resolve(context.Background(), snapshot); !errors.Is(err, ErrRepositoryCheckoutPrivateKeyUnavailable) {
+		t.Fatalf("expected unavailable key, got %v", err)
+	}
+
+	github.tokenErr = platformgithubapp.ErrInstallationUnavailable
+	resolver, _ = NewRepositoryAwareCheckoutResolver(RepositoryAwareCheckoutResolverConfig{Connections: &checkoutConnectionFake{value: checkoutDetail(true)}, Registrations: registration, Secrets: &checkoutSecretFake{value: "private-key"}, GitHub: github})
+	if _, err := resolver.Resolve(context.Background(), snapshot); !errors.Is(err, ErrRepositoryCheckoutRepositoryUnavailable) {
+		t.Fatalf("expected unavailable repository for token failure, got %v", err)
+	}
+}
+
+func TestClassifyRepositoryCheckoutProviderError(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		input   error
+		wantErr error
+	}{
+		{name: "repository inaccessible", input: platformgithubapp.ErrRepositoryInaccessible, wantErr: ErrRepositoryCheckoutRepositoryUnavailable},
+		{name: "installation unavailable", input: platformgithubapp.ErrInstallationUnavailable, wantErr: ErrRepositoryCheckoutRepositoryUnavailable},
+		{name: "missing key", input: platformgithubapp.ErrPrivateKeyMissing, wantErr: ErrRepositoryCheckoutPrivateKeyUnavailable},
+		{name: "malformed key", input: platformgithubapp.ErrPrivateKeyMalformed, wantErr: ErrRepositoryCheckoutPrivateKeyUnavailable},
+		{name: "non rsa key", input: platformgithubapp.ErrPrivateKeyNotRSA, wantErr: ErrRepositoryCheckoutPrivateKeyUnavailable},
+		{name: "unclassified", input: platformgithubapp.ErrRateLimited, wantErr: platformgithubapp.ErrRateLimited},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := classifyRepositoryCheckoutProviderError(testCase.input); !errors.Is(got, testCase.wantErr) {
+				t.Fatalf("expected %v, got %v", testCase.wantErr, got)
+			}
+		})
+	}
+}
+
 func TestRepositoryAwareCheckoutResolver_RetriesExactlyOnceWithFreshCredentialAfterAuthenticationFailure(t *testing.T) {
 	registrations := &checkoutRegistrationFake{value: domain.SCMRepositoryRegistration{ID: "repository-a", ConnectionID: "connection-a", ProviderRepositoryID: "100"}}
 	connections := &checkoutConnectionFake{value: checkoutDetail(true)}
@@ -258,6 +335,24 @@ func TestRepositoryAwareCheckoutResolver_SecondAuthenticationFailureStopsAfterTw
 	}
 }
 
+func TestRepositoryAwareCheckoutResolver_ReturnsRefreshFailureAndRejectsNilOperation(t *testing.T) {
+	checkout := RepositoryAwareCheckout{
+		Credential: source.HTTPSCredential{Username: "x-access-token", Password: "secret-token"},
+		refreshCredential: func(context.Context) (source.HTTPSCredential, error) {
+			return source.HTTPSCredential{}, platformgithubapp.ErrInstallationUnavailable
+		},
+	}
+	if err := checkout.RunWithCredentialRetry(context.Background(), nil); err == nil {
+		t.Fatal("expected nil operation error")
+	}
+	err := checkout.RunWithCredentialRetry(context.Background(), func(source.HTTPSCredential) error {
+		return errors.New("remote: bad credentials")
+	})
+	if !errors.Is(err, platformgithubapp.ErrInstallationUnavailable) {
+		t.Fatalf("expected refresh failure, got %v", err)
+	}
+}
+
 func TestRepositoryAwareCheckoutResolver_MappedPipelineFetchUsesAuthenticationRefresh(t *testing.T) {
 	registrations := &checkoutRegistrationFake{value: domain.SCMRepositoryRegistration{ID: "repository-a", ConnectionID: "connection-a", ProviderRepositoryID: "100"}}
 	connections := &checkoutConnectionFake{value: checkoutDetail(true)}
@@ -288,5 +383,45 @@ func TestRepositoryAwareCheckoutResolver_UnmappedPipelineFetchDoesNotResolveOrRe
 	localPath, commitSHA, fetchErr := service.fetchRepositoryForBuildCreation(context.Background(), CreateRepoBuildInput{RepoURL: "https://example.test/repository.git"}, "main")
 	if fetchErr != nil || localPath != "/tmp/repository" || commitSHA != "abc123" || fetcher.calls != 1 {
 		t.Fatalf("expected legacy fetch without checkout resolution, path=%q sha=%q calls=%d err=%v", localPath, commitSHA, fetcher.calls, fetchErr)
+	}
+}
+
+func TestRepositoryAwareCheckoutResolver_MappedWorkspaceCloneUsesAuthenticatedRetry(t *testing.T) {
+	registrations := &checkoutRegistrationFake{value: domain.SCMRepositoryRegistration{ID: "repository-a", ConnectionID: "connection-a", ProviderRepositoryID: "100"}}
+	github := &checkoutGitHubFake{repository: platformgithubapp.Repository{ID: "100", CloneURL: "https://github.com/acme/repository.git"}}
+	resolver, err := NewRepositoryAwareCheckoutResolver(RepositoryAwareCheckoutResolverConfig{Connections: &checkoutConnectionFake{value: checkoutDetail(true)}, Registrations: registrations, Secrets: &checkoutSecretFake{value: "private-key"}, GitHub: github})
+	if err != nil {
+		t.Fatalf("new resolver: %v", err)
+	}
+	workspace := &checkoutAuthenticatedWorkspaceResolverFake{firstErr: errors.New("fatal: Authentication failed")}
+	service := NewBuildService(nil, nil, nil)
+	service.SetSourceResolver(workspace)
+	service.SetRepositoryAwareCheckoutResolver(resolver)
+	err = service.cloneBuildSourceIntoWorkspace(context.Background(), "/tmp/build", execution.ResolvedBuildSourceSpec{RepositoryURL: "https://stale.example/repository.git", Ref: "main", HasSource: true, RepositoryIdentity: &domain.RepositoryIdentitySnapshot{RegisteredRepositoryID: "repository-a", SCMConnectionID: "connection-a", ProviderRepositoryID: "100"}})
+	if err != nil {
+		t.Fatalf("authenticated clone: %v", err)
+	}
+	if workspace.cloneCalls != 0 || workspace.authenticatedCalls != 2 || github.freshTokenCalls != 1 || len(workspace.credentials) != 2 || workspace.credentials[1].Password != "fresh-secret-token" {
+		t.Fatalf("expected authenticated retry, legacy=%d authenticated=%d refreshes=%d credentials=%#v", workspace.cloneCalls, workspace.authenticatedCalls, github.freshTokenCalls, workspace.credentials)
+	}
+}
+
+func TestRepositoryAwareCheckoutResolver_WorkspaceCloneRejectsMissingCheckoutOrAuthenticationSupport(t *testing.T) {
+	service := NewBuildService(nil, nil, nil)
+	legacyResolver := &fakeWorkspaceSourceResolver{}
+	service.SetSourceResolver(legacyResolver)
+	identity := &domain.RepositoryIdentitySnapshot{RegisteredRepositoryID: "repository-a", SCMConnectionID: "connection-a", ProviderRepositoryID: "100"}
+	spec := execution.ResolvedBuildSourceSpec{RepositoryURL: "https://example.test/repository.git", RepositoryIdentity: identity}
+	if err := service.cloneBuildSourceIntoWorkspace(context.Background(), "/tmp/build", spec); !errors.Is(err, ErrRepositoryCheckoutConnectionInvalid) {
+		t.Fatalf("expected missing checkout resolver error, got %v", err)
+	}
+
+	resolver, resolverErr := NewRepositoryAwareCheckoutResolver(RepositoryAwareCheckoutResolverConfig{Connections: &checkoutConnectionFake{value: checkoutDetail(true)}, Registrations: &checkoutRegistrationFake{value: domain.SCMRepositoryRegistration{ID: "repository-a", ConnectionID: "connection-a", ProviderRepositoryID: "100"}}, Secrets: &checkoutSecretFake{value: "private-key"}, GitHub: &checkoutGitHubFake{repository: platformgithubapp.Repository{ID: "100", CloneURL: "https://github.com/acme/repository.git"}}})
+	if resolverErr != nil {
+		t.Fatalf("new resolver: %v", resolverErr)
+	}
+	service.SetRepositoryAwareCheckoutResolver(resolver)
+	if err := service.cloneBuildSourceIntoWorkspace(context.Background(), "/tmp/build", spec); !errors.Is(err, ErrRepositoryCheckoutConnectionInvalid) {
+		t.Fatalf("expected missing authenticated resolver error, got %v", err)
 	}
 }
