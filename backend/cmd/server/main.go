@@ -17,6 +17,7 @@ import (
 	docs "github.com/radiation/coyote-ci/backend/docs"
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/auth"
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 	apphttp "github.com/radiation/coyote-ci/backend/internal/http"
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
@@ -48,6 +49,20 @@ type scmStatusRuntime struct {
 	reporter      buildsvc.BuildSCMStatusReporter
 	reporterImpl  *buildsvc.SCMStatusReporter
 	recoveryDrain *buildsvc.SCMStatusRecoveryDrain
+}
+
+type checkoutResolverConnectionRepository interface {
+	GetByID(context.Context, string) (domain.SCMConnectionDetail, error)
+}
+
+type checkoutResolverRegistrationRepository interface {
+	GetByID(context.Context, string) (domain.SCMRepositoryRegistration, error)
+}
+
+func newRepositoryAwareCheckoutResolver(connections checkoutResolverConnectionRepository, registrations checkoutResolverRegistrationRepository) (*buildsvc.RepositoryAwareCheckoutResolver, error) {
+	return buildsvc.NewRepositoryAwareCheckoutResolver(buildsvc.RepositoryAwareCheckoutResolverConfig{
+		Connections: connections, Registrations: registrations, Secrets: platformsecret.NewEnvResolver(), GitHub: platformgithubapp.NewClient(nil),
+	})
 }
 
 // @title Coyote CI API
@@ -187,6 +202,10 @@ func main() {
 	}
 	logSink := logs.NewPostgresSink(db)
 	versionTagService := versiontagsvc.NewService(versionTagRepo).WithArtifactLabels(artifactLabelRepo)
+	checkoutResolver, checkoutResolverErr := newRepositoryAwareCheckoutResolver(scmConnectionRepo, scmRepositoryRegistrationRepo)
+	if checkoutResolverErr != nil {
+		log.Fatalf("failed to configure repository-aware checkout: %v", checkoutResolverErr)
+	}
 	artifactService := artifactsvc.NewService(artifactRepo)
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, nil, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:      executionJobRepo,
@@ -195,6 +214,7 @@ func main() {
 		SCMStatusReporter:     scmStatusReporter,
 		SCMStatusDeliveryRepo: scmStatusDeliveryRepo,
 		RepoFetcher:           source.NewGitFetcher(),
+		RepositoryCheckout:    checkoutResolver,
 		ManagedImageRefresher: managedImageRefresher,
 		VersionTagger:         versionTagService,
 		ArtifactRepo:          artifactRepo,

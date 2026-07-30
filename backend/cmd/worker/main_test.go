@@ -213,6 +213,13 @@ func TestDefaultWorkerID_FallsBackWhenHostnameFails(t *testing.T) {
 	}
 }
 
+func TestNewRepositoryAwareCheckoutResolver(t *testing.T) {
+	resolver, err := newRepositoryAwareCheckoutResolver(repositorymemory.NewSCMConnectionRepository(), repositorymemory.NewSCMRepositoryRegistrationRepository())
+	if err != nil || resolver == nil {
+		t.Fatalf("expected configured checkout resolver, resolver=%v err=%v", resolver, err)
+	}
+}
+
 func TestStartWorkerStatusServer_EmptyAddrIsNoop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -21,6 +21,12 @@ type RepoFetcher interface {
 	Fetch(ctx context.Context, repoURL string, ref string) (localPath string, commitSHA string, err error)
 }
 
+// AuthenticatedRepoFetcher is an optional extension for authenticated HTTPS repository fetches.
+type AuthenticatedRepoFetcher interface {
+	RepoFetcher
+	FetchWithHTTPSCredential(ctx context.Context, repoURL string, ref string, credential HTTPSCredential) (localPath string, commitSHA string, err error)
+}
+
 // GitFetcher implements RepoFetcher using the git CLI.
 type GitFetcher struct{}
 
@@ -29,6 +35,14 @@ func NewGitFetcher() *GitFetcher {
 }
 
 func (g *GitFetcher) Fetch(ctx context.Context, repoURL string, ref string) (string, string, error) {
+	return g.fetch(ctx, repoURL, ref, nil)
+}
+
+func (g *GitFetcher) FetchWithHTTPSCredential(ctx context.Context, repoURL string, ref string, credential HTTPSCredential) (string, string, error) {
+	return g.fetch(ctx, repoURL, ref, &credential)
+}
+
+func (g *GitFetcher) fetch(ctx context.Context, repoURL string, ref string, credential *HTTPSCredential) (string, string, error) {
 	repoURL = strings.TrimSpace(repoURL)
 	if repoURL == "" {
 		return "", "", errors.New("repo URL is required")
@@ -57,7 +71,11 @@ func (g *GitFetcher) Fetch(ctx context.Context, repoURL string, ref string) (str
 		}
 	}()
 
-	err = gitClone(ctx, repoURL, tmpDir)
+	if credential != nil {
+		err = gitCloneWithHTTPSCredential(ctx, repoURL, tmpDir, *credential)
+	} else {
+		err = gitClone(ctx, repoURL, tmpDir)
+	}
 	if err != nil {
 		return "", "", fmt.Errorf("cloning repo %s: %w", repoURL, err)
 	}
@@ -79,6 +97,87 @@ func (g *GitFetcher) Fetch(ctx context.Context, repoURL string, ref string) (str
 
 	cleanup = false
 	return tmpDir, strings.TrimSpace(commitSHA), nil
+}
+
+func gitCloneWithHTTPSCredential(ctx context.Context, repoURL string, dst string, credential HTTPSCredential) error {
+	username := strings.TrimSpace(credential.Username)
+	password := strings.TrimSpace(credential.Password)
+	if username == "" || password == "" {
+		return errors.New("https git credential is required")
+	}
+	askPassPath, err := createGitTokenAskPassScript()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(askPassPath) }()
+
+	cmd := exec.CommandContext(ctx, "git", "clone", "--", repoURL, dst)
+	cmd.Env = append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_ASKPASS="+askPassPath,
+		"COYOTE_GIT_ASKPASS_USERNAME="+username,
+		"COYOTE_GIT_ASKPASS_TOKEN="+password,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, redactGitSecret(string(out), password))
+	}
+	return nil
+}
+
+func createGitTokenAskPassScript() (string, error) {
+	file, err := os.CreateTemp("", "coyote-git-askpass-*")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	script := "#!/bin/sh\ncase \"$1\" in\n  *Username*|*username*) printenv COYOTE_GIT_ASKPASS_USERNAME ;;\n  *) printenv COYOTE_GIT_ASKPASS_TOKEN ;;\nesac\n"
+	if _, writeErr := file.WriteString(script); writeErr != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return "", writeErr
+	}
+	if closeErr := file.Close(); closeErr != nil {
+		_ = os.Remove(path)
+		return "", closeErr
+	}
+	if chmodErr := os.Chmod(path, 0o700); chmodErr != nil {
+		_ = os.Remove(path)
+		return "", chmodErr
+	}
+	return path, nil
+}
+
+func redactGitSecret(value string, secret string) string {
+	return strings.ReplaceAll(value, strings.TrimSpace(secret), "[REDACTED]")
+}
+
+// IsAuthenticationFailure permits a credential refresh only for explicit,
+// sanitized Git authentication rejections. Ambiguous failures remain terminal.
+func IsAuthenticationFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, indicator := range []string{
+		"repository not found", "http 404", "404 not found", "permission denied",
+		"access denied", "repository access", "invalid ref", "invalid commit",
+		"malformed url", "no such host", "network is unreachable", "timeout",
+		"rate limit", "service unavailable",
+	} {
+		if strings.Contains(message, indicator) {
+			return false
+		}
+	}
+	for _, indicator := range []string{
+		"authentication failed", "bad credentials", "invalid credentials",
+		"credential rejected", "http 401", "401 unauthorized",
+	} {
+		if strings.Contains(message, indicator) {
+			return true
+		}
+	}
+	return false
 }
 
 func gitClone(ctx context.Context, repoURL string, dst string) error {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ type InstallationTokenRequest struct {
 	InstallationID    string
 	APIBaseURL        string
 	PrivateKeyPEM     string
+	RepositoryIDs     []string
 }
 
 type InstallationToken struct {
@@ -91,13 +93,20 @@ type Client struct {
 	now         func() time.Time
 	refreshSkew time.Duration
 
-	mu    sync.Mutex
-	cache map[string]cachedInstallationToken
-	wait  map[string]chan struct{}
+	mu          sync.Mutex
+	cache       map[string]cachedInstallationToken
+	wait        map[string]chan struct{}
+	refreshWait map[string]*inFlightTokenRefresh
 }
 
 type cachedInstallationToken struct {
 	token InstallationToken
+}
+
+type inFlightTokenRefresh struct {
+	done  chan struct{}
+	token InstallationToken
+	err   error
 }
 
 func NewClient(httpClient *http.Client) *Client {
@@ -111,6 +120,7 @@ func NewClient(httpClient *http.Client) *Client {
 		refreshSkew: defaultTokenRefreshSkew,
 		cache:       map[string]cachedInstallationToken{},
 		wait:        map[string]chan struct{}{},
+		refreshWait: map[string]*inFlightTokenRefresh{},
 	}
 }
 
@@ -119,11 +129,68 @@ func (c *Client) GetInstallationToken(ctx context.Context, input InstallationTok
 	return token, err
 }
 
+// GetFreshInstallationToken exchanges a new token for exactly the supplied app,
+// installation, and repository scope. Concurrent refreshes for that scope share
+// one exchange; unrelated cached scopes remain untouched.
+func (c *Client) GetFreshInstallationToken(ctx context.Context, input InstallationTokenRequest) (InstallationToken, error) {
+	key := installationCacheKey(input)
+	for {
+		c.mu.Lock()
+		if refresh, ok := c.refreshWait[key]; ok {
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return InstallationToken{}, ctx.Err()
+			case <-refresh.done:
+				return refresh.token, refresh.err
+			}
+		}
+		if waitCh, ok := c.wait[key]; ok {
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return InstallationToken{}, ctx.Err()
+			case <-waitCh:
+				continue
+			}
+		}
+		refresh := &inFlightTokenRefresh{done: make(chan struct{})}
+		c.refreshWait[key] = refresh
+		c.mu.Unlock()
+
+		token, err := c.exchangeInstallationToken(ctx, input)
+
+		c.mu.Lock()
+		if err == nil {
+			c.cache[key] = cachedInstallationToken{token: token}
+		}
+		refresh.token = token
+		refresh.err = err
+		delete(c.refreshWait, key)
+		close(refresh.done)
+		c.mu.Unlock()
+
+		if err != nil {
+			return InstallationToken{}, err
+		}
+		return token, nil
+	}
+}
+
 func (c *Client) getInstallationToken(ctx context.Context, input InstallationTokenRequest) (InstallationToken, bool, error) {
 	key := installationCacheKey(input)
 	for {
 		now := c.now().UTC()
 		c.mu.Lock()
+		if refresh, ok := c.refreshWait[key]; ok {
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return InstallationToken{}, false, ctx.Err()
+			case <-refresh.done:
+				continue
+			}
+		}
 		if entry, ok := c.cache[key]; ok && entry.token.Value != "" && now.Before(entry.token.ExpiresAt.Add(-c.refreshSkew)) {
 			token := entry.token
 			c.mu.Unlock()
@@ -226,7 +293,18 @@ func (c *Client) exchangeInstallationToken(ctx context.Context, input Installati
 		return InstallationToken{}, err
 	}
 	exchangeURL := strings.TrimRight(strings.TrimSpace(input.APIBaseURL), "/") + "/app/installations/" + url.PathEscape(strings.TrimSpace(input.InstallationID)) + "/access_tokens"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, exchangeURL, bytes.NewBufferString("{}"))
+	repositoryIDs, err := numericRepositoryIDs(input.RepositoryIDs)
+	if err != nil {
+		return InstallationToken{}, ErrMalformedResponse
+	}
+	body := struct {
+		RepositoryIDs []int64 `json:"repository_ids,omitempty"`
+	}{RepositoryIDs: repositoryIDs}
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return InstallationToken{}, ErrMalformedResponse
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, exchangeURL, bytes.NewReader(bodyJSON))
 	if err != nil {
 		return InstallationToken{}, err
 	}
@@ -262,7 +340,38 @@ func (c *Client) exchangeInstallationToken(ctx context.Context, input Installati
 }
 
 func installationCacheKey(input InstallationTokenRequest) string {
-	return strings.TrimSpace(input.AppRegistrationID) + "|" + strings.TrimSpace(input.InstallationID) + "|" + strings.TrimRight(strings.TrimSpace(input.APIBaseURL), "/")
+	return strings.TrimSpace(input.AppRegistrationID) + "|" + strings.TrimSpace(input.InstallationID) + "|" + strings.TrimRight(strings.TrimSpace(input.APIBaseURL), "/") + "|" + strings.Join(normalizedRepositoryIDs(input.RepositoryIDs), ",")
+}
+
+func normalizedRepositoryIDs(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func numericRepositoryIDs(values []string) ([]int64, error) {
+	normalized := normalizedRepositoryIDs(values)
+	result := make([]int64, 0, len(normalized))
+	for _, value := range normalized {
+		repositoryID, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || repositoryID <= 0 {
+			return nil, ErrMalformedResponse
+		}
+		result = append(result, repositoryID)
+	}
+	return result, nil
 }
 
 func (c *Client) invalidateCachedToken(input InstallationTokenRequest, failedToken InstallationToken) {

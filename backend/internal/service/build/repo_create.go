@@ -13,6 +13,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
+	"github.com/radiation/coyote-ci/backend/internal/source"
 )
 
 // CreateRepoBuildInput is the service-level input for creating a build from a repository checkout.
@@ -56,7 +57,7 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		fetchTarget = strings.TrimSpace(input.Ref)
 	}
 
-	localPath, commitSHA, err := s.repoFetcher.Fetch(ctx, input.RepoURL, fetchTarget)
+	localPath, commitSHA, err := s.fetchRepositoryForBuildCreation(ctx, input, fetchTarget)
 	if err != nil {
 		return domain.Build{}, fmt.Errorf("fetching repo: %w", err)
 	}
@@ -186,4 +187,29 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		}
 	}
 	return queuedBuild, nil
+}
+
+func (s *BuildService) fetchRepositoryForBuildCreation(ctx context.Context, input CreateRepoBuildInput, ref string) (string, string, error) {
+	if input.RepositoryIdentity == nil {
+		return s.repoFetcher.Fetch(ctx, input.RepoURL, ref)
+	}
+	if s.repositoryCheckout == nil {
+		return "", "", ErrRepositoryCheckoutConnectionInvalid
+	}
+	checkout, err := s.repositoryCheckout.Resolve(ctx, *input.RepositoryIdentity)
+	if err != nil {
+		return "", "", err
+	}
+	authenticatedFetcher, ok := s.repoFetcher.(source.AuthenticatedRepoFetcher)
+	if !ok {
+		return "", "", ErrRepositoryCheckoutConnectionInvalid
+	}
+	var localPath string
+	var commitSHA string
+	err = checkout.RunWithCredentialRetry(ctx, func(credential source.HTTPSCredential) error {
+		var fetchErr error
+		localPath, commitSHA, fetchErr = authenticatedFetcher.FetchWithHTTPSCredential(ctx, checkout.RepositoryURL, ref, credential)
+		return fetchErr
+	})
+	return localPath, commitSHA, err
 }

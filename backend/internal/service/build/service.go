@@ -61,6 +61,7 @@ type BuildService struct {
 	repoFetcher            source.RepoFetcher
 	managedImageRefresher  ManagedImageRefresher
 	sourceResolver         source.WorkspaceSourceResolver
+	repositoryCheckout     *RepositoryAwareCheckoutResolver
 	executionWorkspaceRoot string
 
 	artifactRepo              repository.ArtifactRepository
@@ -104,6 +105,7 @@ type BuildServiceConfig struct {
 	RepoFetcher               source.RepoFetcher
 	ManagedImageRefresher     ManagedImageRefresher
 	SourceResolver            source.WorkspaceSourceResolver
+	RepositoryCheckout        *RepositoryAwareCheckoutResolver
 	ArtifactRepo              repository.ArtifactRepository
 	ArtifactLabelRepo         repository.ArtifactLabelRepository
 	ArtifactResolver          *artifact.StoreResolver
@@ -129,6 +131,7 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 	if cfg.SourceResolver != nil {
 		svc.sourceResolver = cfg.SourceResolver
 	}
+	svc.repositoryCheckout = cfg.RepositoryCheckout
 	svc.defaultExecutionImage = strings.TrimSpace(cfg.DefaultImage)
 	svc.executionWorkspaceRoot = buildNormalizeWorkspaceRoot(cfg.ExecutionWorkspace)
 	svc.versionTagger = cfg.VersionTagger
@@ -180,6 +183,10 @@ func (s *BuildService) SetRepoFetcher(fetcher source.RepoFetcher) {
 
 func (s *BuildService) SetSourceResolver(resolver source.WorkspaceSourceResolver) {
 	s.sourceResolver = resolver
+}
+
+func (s *BuildService) SetRepositoryAwareCheckoutResolver(resolver *RepositoryAwareCheckoutResolver) {
+	s.repositoryCheckout = resolver
 }
 
 func (s *BuildService) SetExecutionWorkspaceRoot(root string) {

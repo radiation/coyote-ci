@@ -70,6 +70,16 @@ func TestGitWorkspaceSourceResolver_CloneAndCheckout(t *testing.T) {
 			t.Fatalf("expected main sha %q, got %q", mainSHA, resolved)
 		}
 	})
+
+	t.Run("authenticated clone", func(t *testing.T) {
+		if cloneErr := resolver.CloneIntoWorkspaceWithHTTPSCredential(context.Background(), workspacePath, remoteDir, HTTPSCredential{Username: "x-access-token", Password: "test-token"}); cloneErr != nil {
+			t.Fatalf("authenticated clone failed: %v", cloneErr)
+		}
+		resolved, checkoutErr := resolver.CheckoutWorkspaceSource(context.Background(), workspacePath, WorkspaceSourceSpec{RepositoryURL: remoteDir, Ref: "feature/source-phase"})
+		if checkoutErr != nil || resolved != featureSHA {
+			t.Fatalf("authenticated checkout resolved=%q err=%v", resolved, checkoutErr)
+		}
+	})
 }
 
 func TestGitWorkspaceSourceResolver_CloneIntoWorkspace_PreservesWorkspaceDirectoryInode(t *testing.T) {
@@ -135,5 +145,16 @@ func TestGitWorkspaceSourceResolver_Failures(t *testing.T) {
 
 	if err := resolver.CloneIntoWorkspace(context.Background(), workspacePath, "/no/such/repo"); !errors.Is(err, ErrCloneFailed) {
 		t.Fatalf("expected ErrCloneFailed, got %v", err)
+	}
+
+	if err := resolver.CloneIntoWorkspaceWithHTTPSCredential(context.Background(), workspacePath, "https://github.com/acme/repository.git", HTTPSCredential{}); !errors.Is(err, ErrCloneFailed) {
+		t.Fatalf("expected authenticated clone credential failure, got %v", err)
+	}
+
+	if _, _, err := normalizeCloneInputs("relative", "https://github.com/acme/repository.git"); !errors.Is(err, ErrWorkspacePathRequired) {
+		t.Fatalf("expected relative workspace rejection, got %v", err)
+	}
+	if _, _, err := normalizeCloneInputs(workspacePath, "-invalid"); !errors.Is(err, ErrRepositoryURLRequired) {
+		t.Fatalf("expected option URL rejection, got %v", err)
 	}
 }
