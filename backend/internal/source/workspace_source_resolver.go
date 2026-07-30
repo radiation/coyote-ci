@@ -24,10 +24,22 @@ type WorkspaceSourceSpec struct {
 	CommitSHA     string
 }
 
+// HTTPSCredential is used only for the lifetime of an authenticated Git operation.
+type HTTPSCredential struct {
+	Username string
+	Password string
+}
+
 // WorkspaceSourceResolver materializes source into an existing host workspace.
 type WorkspaceSourceResolver interface {
 	CloneIntoWorkspace(ctx context.Context, workspacePath string, repositoryURL string) error
 	CheckoutWorkspaceSource(ctx context.Context, workspacePath string, spec WorkspaceSourceSpec) (string, error)
+}
+
+// AuthenticatedWorkspaceSourceResolver is an optional extension for HTTPS Git authentication.
+type AuthenticatedWorkspaceSourceResolver interface {
+	WorkspaceSourceResolver
+	CloneIntoWorkspaceWithHTTPSCredential(ctx context.Context, workspacePath string, repositoryURL string, credential HTTPSCredential) error
 }
 
 // GitWorkspaceSourceResolver uses git CLI to populate and pin workspace source.
@@ -38,18 +50,31 @@ func NewGitWorkspaceSourceResolver() *GitWorkspaceSourceResolver {
 }
 
 func (r *GitWorkspaceSourceResolver) CloneIntoWorkspace(ctx context.Context, workspacePath string, repositoryURL string) error {
+	return r.cloneIntoWorkspace(ctx, workspacePath, repositoryURL, nil)
+}
+
+func (r *GitWorkspaceSourceResolver) CloneIntoWorkspaceWithHTTPSCredential(ctx context.Context, workspacePath string, repositoryURL string, credential HTTPSCredential) error {
+	return r.cloneIntoWorkspace(ctx, workspacePath, repositoryURL, &credential)
+}
+
+func (r *GitWorkspaceSourceResolver) cloneIntoWorkspace(ctx context.Context, workspacePath string, repositoryURL string, credential *HTTPSCredential) error {
 	cleanWorkspacePath, repoURL, err := normalizeCloneInputs(workspacePath, repositoryURL)
 	if err != nil {
 		return err
 	}
 
-	if err := ensureWorkspaceDirectory(cleanWorkspacePath); err != nil {
-		return fmt.Errorf("%w: preparing workspace path: %v", ErrCloneFailed, err)
+	if prepareErr := ensureWorkspaceDirectory(cleanWorkspacePath); prepareErr != nil {
+		return fmt.Errorf("%w: preparing workspace path: %v", ErrCloneFailed, prepareErr)
 	}
-	if err := clearWorkspaceDirectoryContents(cleanWorkspacePath); err != nil {
-		return fmt.Errorf("%w: resetting workspace contents: %v", ErrCloneFailed, err)
+	if resetErr := clearWorkspaceDirectoryContents(cleanWorkspacePath); resetErr != nil {
+		return fmt.Errorf("%w: resetting workspace contents: %v", ErrCloneFailed, resetErr)
 	}
-	if err := gitClone(ctx, repoURL, cleanWorkspacePath); err != nil {
+	if credential != nil {
+		err = gitCloneWithHTTPSCredential(ctx, repoURL, cleanWorkspacePath, *credential)
+	} else {
+		err = gitClone(ctx, repoURL, cleanWorkspacePath)
+	}
+	if err != nil {
 		return fmt.Errorf("%w: %v", ErrCloneFailed, err)
 	}
 

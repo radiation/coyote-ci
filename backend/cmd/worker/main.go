@@ -21,6 +21,8 @@ import (
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
 	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
+	platformgithubapp "github.com/radiation/coyote-ci/backend/internal/platform/githubapp"
+	platformsecret "github.com/radiation/coyote-ci/backend/internal/platform/secret"
 	platformslack "github.com/radiation/coyote-ci/backend/internal/platform/slack"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
@@ -73,6 +75,8 @@ func main() {
 	jobManagedImageConfigRepo := repositorypostgres.NewJobManagedImageConfigRepository(db)
 	projectRepo := repositorypostgres.NewProjectRepository(db)
 	sourceCredentialRepo := repositorypostgres.NewSourceCredentialRepository(db)
+	scmConnectionRepo := repositorypostgres.NewSCMConnectionRepository(db)
+	scmRepositoryRegistrationRepo := repositorypostgres.NewSCMRepositoryRegistrationRepository(db)
 	userRepo := repositorypostgres.NewUserRepository(db)
 	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
 	artifactLabelRepo := repositorypostgres.NewArtifactLabelRepository(db)
@@ -109,12 +113,19 @@ func main() {
 	stepRunner := resolveStepRunner(cfg)
 	logSink := logs.NewPostgresSink(db)
 	versionTagService := newWorkerVersionTagService(versionTagRepo, artifactLabelRepo)
+	checkoutResolver, checkoutResolverErr := buildsvc.NewRepositoryAwareCheckoutResolver(buildsvc.RepositoryAwareCheckoutResolverConfig{
+		Connections: scmConnectionRepo, Registrations: scmRepositoryRegistrationRepo, Secrets: platformsecret.NewEnvResolver(), GitHub: platformgithubapp.NewClient(nil),
+	})
+	if checkoutResolverErr != nil {
+		log.Fatalf("failed to configure repository-aware checkout: %v", checkoutResolverErr)
+	}
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, stepRunner, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:    executionJobRepo,
 		ExecutionOutputRepo: executionJobOutputRepo,
 		BuildNotifier:       buildNotificationService,
 		DefaultImage:        cfg.ExecutionDefaultImage,
 		ExecutionWorkspace:  cfg.ExecutionWorkspaceRoot,
+		RepositoryCheckout:  checkoutResolver,
 		CacheStore:          cacheStore,
 		CacheEntryRepo:      cacheEntryRepo,
 		VersionTagger:       versionTagService,

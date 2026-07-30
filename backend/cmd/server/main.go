@@ -187,6 +187,12 @@ func main() {
 	}
 	logSink := logs.NewPostgresSink(db)
 	versionTagService := versiontagsvc.NewService(versionTagRepo).WithArtifactLabels(artifactLabelRepo)
+	checkoutResolver, checkoutResolverErr := buildsvc.NewRepositoryAwareCheckoutResolver(buildsvc.RepositoryAwareCheckoutResolverConfig{
+		Connections: scmConnectionRepo, Registrations: scmRepositoryRegistrationRepo, Secrets: platformsecret.NewEnvResolver(), GitHub: platformgithubapp.NewClient(nil),
+	})
+	if checkoutResolverErr != nil {
+		log.Fatalf("failed to configure repository-aware checkout: %v", checkoutResolverErr)
+	}
 	artifactService := artifactsvc.NewService(artifactRepo)
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, nil, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:      executionJobRepo,
@@ -195,6 +201,7 @@ func main() {
 		SCMStatusReporter:     scmStatusReporter,
 		SCMStatusDeliveryRepo: scmStatusDeliveryRepo,
 		RepoFetcher:           source.NewGitFetcher(),
+		RepositoryCheckout:    checkoutResolver,
 		ManagedImageRefresher: managedImageRefresher,
 		VersionTagger:         versionTagService,
 		ArtifactRepo:          artifactRepo,

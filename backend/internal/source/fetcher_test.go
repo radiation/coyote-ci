@@ -2,9 +2,11 @@ package source
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -99,6 +101,62 @@ func TestGitFetcher_Fetch(t *testing.T) {
 			t.Fatal("expected error for invalid repo")
 		}
 	})
+}
+
+func TestIsAuthenticationFailure_OnlyAcceptsExplicitCredentialRejection(t *testing.T) {
+	for _, testCase := range []struct {
+		message string
+		want    bool
+	}{
+		{message: "fatal: Authentication failed", want: true},
+		{message: "remote: bad credentials", want: true},
+		{message: "HTTP 401 unauthorized", want: true},
+		{message: "repository not found", want: false},
+		{message: "HTTP 404", want: false},
+		{message: "permission denied", want: false},
+		{message: "network timeout", want: false},
+		{message: "rate limit exceeded", want: false},
+		{message: "invalid ref", want: false},
+		{message: "generic clone failure", want: false},
+	} {
+		t.Run(testCase.message, func(t *testing.T) {
+			if got := IsAuthenticationFailure(errors.New(testCase.message)); got != testCase.want {
+				t.Fatalf("expected %t, got %t", testCase.want, got)
+			}
+		})
+	}
+}
+
+func TestGitCloneWithHTTPSCredential_CleansUniqueAskpassAndRedactsToken(t *testing.T) {
+	binDir := t.TempDir()
+	markerPath := filepath.Join(t.TempDir(), "askpass-paths")
+	gitPath := filepath.Join(binDir, "git")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$GIT_ASKPASS\" >> \"$ASKPASS_MARKER\"\nprintf 'fatal: Authentication failed for %s\\n' \"$COYOTE_GIT_ASKPASS_TOKEN\" >&2\nexit 1\n"
+	if writeErr := os.WriteFile(gitPath, []byte(script), 0o700); writeErr != nil {
+		t.Fatalf("write fake git: %v", writeErr)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ASKPASS_MARKER", markerPath)
+
+	for _, token := range []string{"old-secret-token", "new-secret-token"} {
+		err := gitCloneWithHTTPSCredential(context.Background(), "https://github.com/acme/repository.git", t.TempDir(), HTTPSCredential{Username: "x-access-token", Password: token})
+		if err == nil || strings.Contains(err.Error(), token) || !IsAuthenticationFailure(err) {
+			t.Fatalf("expected sanitized authentication failure for %q, err=%v", token, err)
+		}
+	}
+	pathsData, readErr := os.ReadFile(markerPath)
+	if readErr != nil {
+		t.Fatalf("read captured askpass paths: %v", readErr)
+	}
+	paths := strings.Fields(string(pathsData))
+	if len(paths) != 2 || paths[0] == paths[1] {
+		t.Fatalf("expected unique askpass paths per attempt, got %q", paths)
+	}
+	for _, path := range paths {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("expected askpass path %q to be removed, err=%v", path, statErr)
+		}
+	}
 }
 
 func mustRun(t *testing.T, dir string, name string, args ...string) {

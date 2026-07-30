@@ -40,6 +40,9 @@ func buildSourceSpecFromBuild(build domain.Build) execution.ResolvedBuildSourceS
 			Ref:           buildReadOptionalString(build.Source.Ref),
 			CommitSHA:     buildReadOptionalString(build.Source.CommitSHA),
 		}
+		if build.RegisteredRepositoryID != nil && build.SCMConnectionID != nil && build.ProviderRepositoryID != nil {
+			result.RepositoryIdentity = &domain.RepositoryIdentitySnapshot{RegisteredRepositoryID: buildReadOptionalString(build.RegisteredRepositoryID), SCMConnectionID: buildReadOptionalString(build.SCMConnectionID), ProviderRepositoryID: buildReadOptionalString(build.ProviderRepositoryID)}
+		}
 		result.HasSource = result.RepositoryURL != ""
 		return result
 	}
@@ -48,6 +51,9 @@ func buildSourceSpecFromBuild(build domain.Build) execution.ResolvedBuildSourceS
 		RepositoryURL: buildReadOptionalString(build.RepoURL),
 		Ref:           buildReadOptionalString(build.Ref),
 		CommitSHA:     buildReadOptionalString(build.CommitSHA),
+	}
+	if build.RegisteredRepositoryID != nil && build.SCMConnectionID != nil && build.ProviderRepositoryID != nil {
+		result.RepositoryIdentity = &domain.RepositoryIdentitySnapshot{RegisteredRepositoryID: buildReadOptionalString(build.RegisteredRepositoryID), SCMConnectionID: buildReadOptionalString(build.SCMConnectionID), ProviderRepositoryID: buildReadOptionalString(build.ProviderRepositoryID)}
 	}
 	result.HasSource = result.RepositoryURL != ""
 	return result
@@ -134,7 +140,7 @@ func (s *BuildService) resolveBuildSourceInWorkspace(ctx context.Context, buildI
 	}
 
 	workspacePath := filepath.Join(workspaceRoot, strings.TrimSpace(buildID))
-	if err := s.sourceResolver.CloneIntoWorkspace(ctx, workspacePath, sourceSpec.RepositoryURL); err != nil {
+	if err := s.cloneBuildSourceIntoWorkspace(ctx, workspacePath, sourceSpec); err != nil {
 		return "", err
 	}
 
@@ -170,6 +176,26 @@ func (s *BuildService) resolveBuildSourceInWorkspace(ctx context.Context, buildI
 	s.notifySCMBuildStatus(ctx, build)
 
 	return trimmedResolvedCommit, nil
+}
+
+func (s *BuildService) cloneBuildSourceIntoWorkspace(ctx context.Context, workspacePath string, sourceSpec execution.ResolvedBuildSourceSpec) error {
+	if sourceSpec.RepositoryIdentity == nil {
+		return s.sourceResolver.CloneIntoWorkspace(ctx, workspacePath, sourceSpec.RepositoryURL)
+	}
+	if s.repositoryCheckout == nil {
+		return ErrRepositoryCheckoutConnectionInvalid
+	}
+	checkout, err := s.repositoryCheckout.Resolve(ctx, *sourceSpec.RepositoryIdentity)
+	if err != nil {
+		return err
+	}
+	authenticatedResolver, ok := s.sourceResolver.(source.AuthenticatedWorkspaceSourceResolver)
+	if !ok {
+		return ErrRepositoryCheckoutConnectionInvalid
+	}
+	return checkout.RunWithCredentialRetry(ctx, func(credential source.HTTPSCredential) error {
+		return authenticatedResolver.CloneIntoWorkspaceWithHTTPSCredential(ctx, workspacePath, checkout.RepositoryURL, credential)
+	})
 }
 
 func (s *BuildService) currentWorkspaceRoot() string {
