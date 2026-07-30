@@ -171,6 +171,26 @@ func TestGitCloneWithHTTPSCredential_RejectsMissingCredentials(t *testing.T) {
 	}
 }
 
+func TestCreateGitTokenAskPassScript_IsExecutableAndRoutesCredentialPrompts(t *testing.T) {
+	path, err := createGitTokenAskPassScript()
+	if err != nil {
+		t.Fatalf("create askpass script: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+
+	info, statErr := os.Stat(path)
+	if statErr != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("expected executable 0700 askpass script, info=%v err=%v", info, statErr)
+	}
+	content, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read askpass script: %v", readErr)
+	}
+	if !strings.Contains(string(content), "COYOTE_GIT_ASKPASS_USERNAME") || !strings.Contains(string(content), "COYOTE_GIT_ASKPASS_TOKEN") {
+		t.Fatalf("expected askpass script to route username and token prompts, got %q", content)
+	}
+}
+
 func TestGitCloneWithHTTPSCredential_CleansUniqueAskpassAndRedactsToken(t *testing.T) {
 	binDir := t.TempDir()
 	markerPath := filepath.Join(t.TempDir(), "askpass-paths")

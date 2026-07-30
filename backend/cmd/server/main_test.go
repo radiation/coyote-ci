@@ -135,3 +135,10 @@ func TestDefaultServerNotificationClaimOwner(t *testing.T) {
 		t.Fatalf("expected error fallback owner prefix, got %q", errorOwner)
 	}
 }
+
+func TestNewRepositoryAwareCheckoutResolver(t *testing.T) {
+	resolver, err := newRepositoryAwareCheckoutResolver(memoryrepo.NewSCMConnectionRepository(), memoryrepo.NewSCMRepositoryRegistrationRepository())
+	if err != nil || resolver == nil {
+		t.Fatalf("expected configured checkout resolver, resolver=%v err=%v", resolver, err)
+	}
+}

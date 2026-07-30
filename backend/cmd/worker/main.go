@@ -15,6 +15,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/observability"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
@@ -45,6 +46,20 @@ type workerIterationService interface {
 
 type workerStatusProvider interface {
 	RecoveryStats() workersvc.WorkerLeaseRecoveryStats
+}
+
+type checkoutResolverConnectionRepository interface {
+	GetByID(context.Context, string) (domain.SCMConnectionDetail, error)
+}
+
+type checkoutResolverRegistrationRepository interface {
+	GetByID(context.Context, string) (domain.SCMRepositoryRegistration, error)
+}
+
+func newRepositoryAwareCheckoutResolver(connections checkoutResolverConnectionRepository, registrations checkoutResolverRegistrationRepository) (*buildsvc.RepositoryAwareCheckoutResolver, error) {
+	return buildsvc.NewRepositoryAwareCheckoutResolver(buildsvc.RepositoryAwareCheckoutResolverConfig{
+		Connections: connections, Registrations: registrations, Secrets: platformsecret.NewEnvResolver(), GitHub: platformgithubapp.NewClient(nil),
+	})
 }
 
 func main() {
@@ -113,9 +128,7 @@ func main() {
 	stepRunner := resolveStepRunner(cfg)
 	logSink := logs.NewPostgresSink(db)
 	versionTagService := newWorkerVersionTagService(versionTagRepo, artifactLabelRepo)
-	checkoutResolver, checkoutResolverErr := buildsvc.NewRepositoryAwareCheckoutResolver(buildsvc.RepositoryAwareCheckoutResolverConfig{
-		Connections: scmConnectionRepo, Registrations: scmRepositoryRegistrationRepo, Secrets: platformsecret.NewEnvResolver(), GitHub: platformgithubapp.NewClient(nil),
-	})
+	checkoutResolver, checkoutResolverErr := newRepositoryAwareCheckoutResolver(scmConnectionRepo, scmRepositoryRegistrationRepo)
 	if checkoutResolverErr != nil {
 		log.Fatalf("failed to configure repository-aware checkout: %v", checkoutResolverErr)
 	}
