@@ -146,4 +146,15 @@ func TestGitWorkspaceSourceResolver_Failures(t *testing.T) {
 	if err := resolver.CloneIntoWorkspace(context.Background(), workspacePath, "/no/such/repo"); !errors.Is(err, ErrCloneFailed) {
 		t.Fatalf("expected ErrCloneFailed, got %v", err)
 	}
+
+	if err := resolver.CloneIntoWorkspaceWithHTTPSCredential(context.Background(), workspacePath, "https://github.com/acme/repository.git", HTTPSCredential{}); !errors.Is(err, ErrCloneFailed) {
+		t.Fatalf("expected authenticated clone credential failure, got %v", err)
+	}
+
+	if _, _, err := normalizeCloneInputs("relative", "https://github.com/acme/repository.git"); !errors.Is(err, ErrWorkspacePathRequired) {
+		t.Fatalf("expected relative workspace rejection, got %v", err)
+	}
+	if _, _, err := normalizeCloneInputs(workspacePath, "-invalid"); !errors.Is(err, ErrRepositoryURLRequired) {
+		t.Fatalf("expected option URL rejection, got %v", err)
+	}
 }

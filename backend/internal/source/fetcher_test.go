@@ -141,6 +141,36 @@ func TestIsAuthenticationFailure_OnlyAcceptsExplicitCredentialRejection(t *testi
 	}
 }
 
+func TestGitFetcher_AuthenticatedInputValidation(t *testing.T) {
+	fetcher := NewGitFetcher()
+	for _, testCase := range []struct {
+		name       string
+		repository string
+		ref        string
+		credential HTTPSCredential
+	}{
+		{name: "missing username", repository: "https://github.com/acme/repository.git", ref: "main", credential: HTTPSCredential{Password: "token"}},
+		{name: "missing password", repository: "https://github.com/acme/repository.git", ref: "main", credential: HTTPSCredential{Username: "x-access-token"}},
+		{name: "empty URL", repository: " ", ref: "main", credential: HTTPSCredential{Username: "x-access-token", Password: "token"}},
+		{name: "option URL", repository: "-bad", ref: "main", credential: HTTPSCredential{Username: "x-access-token", Password: "token"}},
+		{name: "empty ref", repository: "https://github.com/acme/repository.git", ref: " ", credential: HTTPSCredential{Username: "x-access-token", Password: "token"}},
+		{name: "invalid ref", repository: "https://github.com/acme/repository.git", ref: "bad\\ref", credential: HTTPSCredential{Username: "x-access-token", Password: "token"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, _, err := fetcher.FetchWithHTTPSCredential(context.Background(), testCase.repository, testCase.ref, testCase.credential)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestGitCloneWithHTTPSCredential_RejectsMissingCredentials(t *testing.T) {
+	if err := gitCloneWithHTTPSCredential(context.Background(), "https://github.com/acme/repository.git", t.TempDir(), HTTPSCredential{}); err == nil {
+		t.Fatal("expected missing credential error")
+	}
+}
+
 func TestGitCloneWithHTTPSCredential_CleansUniqueAskpassAndRedactsToken(t *testing.T) {
 	binDir := t.TempDir()
 	markerPath := filepath.Join(t.TempDir(), "askpass-paths")

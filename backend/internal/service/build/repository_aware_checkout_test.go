@@ -386,6 +386,41 @@ func TestRepositoryAwareCheckoutResolver_UnmappedPipelineFetchDoesNotResolveOrRe
 	}
 }
 
+func TestRepositoryAwareCheckoutResolver_MappedPipelineFetchRejectsMissingCheckoutOrAuthenticatedFetcher(t *testing.T) {
+	identity := &domain.RepositoryIdentitySnapshot{RegisteredRepositoryID: "repository-a", SCMConnectionID: "connection-a", ProviderRepositoryID: "100"}
+	service := NewBuildService(nil, nil, nil)
+	service.SetRepoFetcher(&fakeRepoFetcher{})
+	if _, _, err := service.fetchRepositoryForBuildCreation(context.Background(), CreateRepoBuildInput{RepositoryIdentity: identity}, "main"); !errors.Is(err, ErrRepositoryCheckoutConnectionInvalid) {
+		t.Fatalf("expected missing checkout resolver error, got %v", err)
+	}
+
+	resolver, resolverErr := NewRepositoryAwareCheckoutResolver(RepositoryAwareCheckoutResolverConfig{Connections: &checkoutConnectionFake{value: checkoutDetail(true)}, Registrations: &checkoutRegistrationFake{value: domain.SCMRepositoryRegistration{ID: "repository-a", ConnectionID: "connection-a", ProviderRepositoryID: "100"}}, Secrets: &checkoutSecretFake{value: "private-key"}, GitHub: &checkoutGitHubFake{repository: platformgithubapp.Repository{ID: "100", CloneURL: "https://github.com/acme/repository.git"}}})
+	if resolverErr != nil {
+		t.Fatalf("new resolver: %v", resolverErr)
+	}
+	service.SetRepositoryAwareCheckoutResolver(resolver)
+	if _, _, err := service.fetchRepositoryForBuildCreation(context.Background(), CreateRepoBuildInput{RepositoryIdentity: identity}, "main"); !errors.Is(err, ErrRepositoryCheckoutConnectionInvalid) {
+		t.Fatalf("expected missing authenticated fetcher error, got %v", err)
+	}
+}
+
+func TestRepositoryAwareCheckoutResolver_MappedPipelineFetchReturnsTerminalFailure(t *testing.T) {
+	registrations := &checkoutRegistrationFake{value: domain.SCMRepositoryRegistration{ID: "repository-a", ConnectionID: "connection-a", ProviderRepositoryID: "100"}}
+	github := &checkoutGitHubFake{repository: platformgithubapp.Repository{ID: "100", CloneURL: "https://github.com/acme/repository.git"}}
+	resolver, err := NewRepositoryAwareCheckoutResolver(RepositoryAwareCheckoutResolverConfig{Connections: &checkoutConnectionFake{value: checkoutDetail(true)}, Registrations: registrations, Secrets: &checkoutSecretFake{value: "private-key"}, GitHub: github})
+	if err != nil {
+		t.Fatalf("new resolver: %v", err)
+	}
+	fetcher := &checkoutAuthenticatedFetcherFake{firstErr: errors.New("repository not found")}
+	service := NewBuildService(nil, nil, nil)
+	service.SetRepoFetcher(fetcher)
+	service.SetRepositoryAwareCheckoutResolver(resolver)
+	_, _, fetchErr := service.fetchRepositoryForBuildCreation(context.Background(), CreateRepoBuildInput{RepositoryIdentity: &domain.RepositoryIdentitySnapshot{RegisteredRepositoryID: "repository-a", SCMConnectionID: "connection-a", ProviderRepositoryID: "100"}}, "main")
+	if fetchErr == nil || fetcher.calls != 1 || github.freshTokenCalls != 0 {
+		t.Fatalf("expected one terminal fetch failure without refresh, err=%v calls=%d refreshes=%d", fetchErr, fetcher.calls, github.freshTokenCalls)
+	}
+}
+
 func TestRepositoryAwareCheckoutResolver_MappedWorkspaceCloneUsesAuthenticatedRetry(t *testing.T) {
 	registrations := &checkoutRegistrationFake{value: domain.SCMRepositoryRegistration{ID: "repository-a", ConnectionID: "connection-a", ProviderRepositoryID: "100"}}
 	github := &checkoutGitHubFake{repository: platformgithubapp.Repository{ID: "100", CloneURL: "https://github.com/acme/repository.git"}}

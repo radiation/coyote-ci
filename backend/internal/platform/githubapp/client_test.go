@@ -758,6 +758,90 @@ func TestInstallationCacheKey_NormalizesRepositoryRestrictionOrder(t *testing.T)
 	}
 }
 
+func TestClient_GetInstallationToken_RejectsMalformedRepositoryRestriction(t *testing.T) {
+	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
+	for _, repositoryIDs := range [][]string{{"not-a-number"}, {"0"}, {"-1"}} {
+		client := NewClient(nil)
+		_, err := client.GetInstallationToken(context.Background(), InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: "https://api.github.com", PrivateKeyPEM: privateKeyPEM, RepositoryIDs: repositoryIDs})
+		if err != ErrMalformedResponse {
+			t.Fatalf("expected malformed restriction %q to fail, got %v", repositoryIDs, err)
+		}
+	}
+}
+
+func TestClient_GetFreshInstallationToken_WaitsForNormalExchange(t *testing.T) {
+	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"token": installationIDString(int64(calls.Load())), "expires_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)})
+	}))
+	defer server.Close()
+	client := NewClient(server.Client())
+	request := InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: server.URL, PrivateKeyPEM: privateKeyPEM, RepositoryIDs: []string{"1001"}}
+	normalResult := make(chan error, 1)
+	go func() { _, err := client.GetInstallationToken(context.Background(), request); normalResult <- err }()
+	<-started
+	freshResult := make(chan InstallationToken, 1)
+	freshErr := make(chan error, 1)
+	go func() {
+		token, err := client.GetFreshInstallationToken(context.Background(), request)
+		freshResult <- token
+		freshErr <- err
+	}()
+	close(release)
+	if err := <-normalResult; err != nil {
+		t.Fatalf("normal exchange: %v", err)
+	}
+	if err := <-freshErr; err != nil {
+		t.Fatalf("forced refresh: %v", err)
+	}
+	if token := <-freshResult; token.Value != "2" || calls.Load() != 2 {
+		t.Fatalf("expected forced exchange after normal exchange, token=%+v calls=%d", token, calls.Load())
+	}
+}
+
+func TestClient_GetInstallationToken_WaitsForFreshExchange(t *testing.T) {
+	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"token": "fresh-token", "expires_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)})
+	}))
+	defer server.Close()
+	client := NewClient(server.Client())
+	request := InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: server.URL, PrivateKeyPEM: privateKeyPEM, RepositoryIDs: []string{"1001"}}
+	freshErr := make(chan error, 1)
+	go func() { _, err := client.GetFreshInstallationToken(context.Background(), request); freshErr <- err }()
+	<-started
+	normalResult := make(chan InstallationToken, 1)
+	normalErr := make(chan error, 1)
+	go func() {
+		token, err := client.GetInstallationToken(context.Background(), request)
+		normalResult <- token
+		normalErr <- err
+	}()
+	close(release)
+	if err := <-freshErr; err != nil {
+		t.Fatalf("fresh exchange: %v", err)
+	}
+	if err := <-normalErr; err != nil {
+		t.Fatalf("normal cache lookup: %v", err)
+	}
+	if token := <-normalResult; token.Value != "fresh-token" {
+		t.Fatalf("expected fresh cached token, got %+v", token)
+	}
+}
+
 func TestClient_GetFreshInstallationToken_BypassesOnlyExactScopedCacheEntry(t *testing.T) {
 	privateKeyPEM, _ := testRSAPrivateKeyPEM(t)
 	var callCount atomic.Int32

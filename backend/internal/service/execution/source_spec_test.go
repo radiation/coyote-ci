@@ -38,3 +38,17 @@ func TestSourceSpecFromBuild_OmitsPartialRepositoryIdentity(t *testing.T) {
 		t.Fatalf("expected source without incomplete identity, got %+v", spec)
 	}
 }
+
+func TestSourceSpecFromBuild_PreservesIdentityWithoutSourceSpec(t *testing.T) {
+	repositoryURL := "https://github.com/acme/repository.git"
+	ref := "main"
+	registeredRepositoryID := "repository-a"
+	connectionID := "connection-a"
+	providerRepositoryID := "100"
+	build := domain.Build{RepoURL: &repositoryURL, Ref: &ref, RegisteredRepositoryID: &registeredRepositoryID, SCMConnectionID: &connectionID, ProviderRepositoryID: &providerRepositoryID}
+
+	spec := sourceSpecFromBuild(build)
+	if !spec.HasSource || spec.RepositoryIdentity == nil || spec.RepositoryIdentity.ProviderRepositoryID != "100" {
+		t.Fatalf("expected legacy source fields and complete identity, got %+v", spec)
+	}
+}
