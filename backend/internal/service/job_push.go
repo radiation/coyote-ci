@@ -88,7 +88,11 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input webhooksvc.W
 		if identityErr := repositoryIdentity.Validate(); identityErr != nil {
 			return webhooksvc.WebhookTriggerResult{}, identityErr
 		}
-		jobs, err = s.jobRepo.ListPushEnabledByRepositoryID(ctx, registeredRepository.ID)
+		if eventType == "pull_request" {
+			jobs, err = s.jobRepo.ListPullRequestEnabledByRepositoryID(ctx, registeredRepository.ID)
+		} else {
+			jobs, err = s.jobRepo.ListPushEnabledByRepositoryID(ctx, registeredRepository.ID)
+		}
 	} else {
 		jobs, err = s.jobRepo.ListPushEnabledByRepository(ctx, repoURL)
 	}
@@ -110,7 +114,7 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input webhooksvc.W
 	}
 	webhookFields := webhooksvc.WebhookLogFields(ctx)
 	var firstNoMatchReason *string
-	if !webhooksvc.WebhookFilterShouldTriggerBuild(normalizedRef, webhooksvc.WebhookFilterConfig{}).Matched {
+	if eventType != "pull_request" && !webhooksvc.WebhookFilterShouldTriggerBuild(normalizedRef, webhooksvc.WebhookFilterConfig{}).Matched {
 		defaultReason := string(webhooksvc.WebhookFilterShouldTriggerBuild(normalizedRef, webhooksvc.WebhookFilterConfig{}).Reason)
 		firstNoMatchReason = &defaultReason
 	}
@@ -120,13 +124,15 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input webhooksvc.W
 			continue
 		}
 
-		decision := webhooksvc.WebhookFilterShouldTriggerBuild(normalizedRef, toWebhookJobTriggerConfig(job))
-		if !decision.Matched {
-			if firstNoMatchReason == nil {
-				reason := string(decision.Reason)
-				firstNoMatchReason = &reason
+		if eventType != "pull_request" {
+			decision := webhooksvc.WebhookFilterShouldTriggerBuild(normalizedRef, toWebhookJobTriggerConfig(job))
+			if !decision.Matched {
+				if firstNoMatchReason == nil {
+					reason := string(decision.Reason)
+					firstNoMatchReason = &reason
+				}
+				continue
 			}
-			continue
 		}
 		if commitSHA == "" {
 			return webhooksvc.WebhookTriggerResult{}, ErrPushEventCommitSHARequired

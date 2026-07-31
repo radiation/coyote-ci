@@ -95,6 +95,10 @@ func (f fakeVisibilityJobRepository) ListPushEnabledByRepositoryID(context.Conte
 	panic("unexpected call")
 }
 
+func (f fakeVisibilityJobRepository) ListPullRequestEnabledByRepositoryID(context.Context, string) ([]domain.Job, error) {
+	panic("unexpected call")
+}
+
 func (f fakeVisibilityJobRepository) GetByID(_ context.Context, id string) (domain.Job, error) {
 	job, ok := f.jobs[id]
 	if !ok {

@@ -201,7 +201,7 @@ func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Reques
 		writeDataJSON(w, http.StatusOK, api.PushEventResponse{MatchedJobs: 0, CreatedBuilds: 0, Builds: []api.PushEventMatchedJob{}, Duplicate: true})
 		return
 	}
-	if eventType != "push" {
+	if eventType != "push" && eventType != "pull_request" {
 		h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeUnsupportedEvent)
 		outcome = observability.WebhookOutcomeUnsupportedEvent
 		log.Printf("INFO webhook unsupported event %s", webhooksvc.WebhookLogFields(ctx))
@@ -211,6 +211,49 @@ func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		writeDataJSON(w, http.StatusAccepted, api.PushEventResponse{MatchedJobs: 0, CreatedBuilds: 0, Builds: []api.PushEventMatchedJob{}})
+		return
+	}
+	if eventType == "pull_request" {
+		pullRequestEvent, parseErr := githubwebhook.ParsePullRequestEvent(r.Header, body)
+		if parseErr != nil {
+			h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+			_, _ = h.webhookService.MarkFailed(ctx, delivery, "invalid github webhook payload")
+			writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid github webhook payload")
+			return
+		}
+		if !pullRequestEvent.SupportedAction || !pullRequestEvent.SameRepository {
+			h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeUnsupportedEvent)
+			outcome = observability.WebhookOutcomeUnsupportedEvent
+			reason := "unsupported pull request action"
+			if pullRequestEvent.SupportedAction {
+				reason = "pull request head repository is unsupported"
+			}
+			if _, markErr := h.webhookService.MarkUnsupported(ctx, delivery, reason, trigger); markErr != nil {
+				writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+				return
+			}
+			writeDataJSON(w, http.StatusAccepted, api.PushEventResponse{MatchedJobs: 0, CreatedBuilds: 0, Builds: []api.PushEventMatchedJob{}})
+			return
+		}
+		trigger = webhooksvc.WebhookTriggerInput{ConnectionID: connection.ConnectionID, SCMProvider: provider, EventType: pullRequestEvent.EventType, RepositoryOwner: pullRequestEvent.RepositoryOwner, RepositoryName: pullRequestEvent.RepositoryName, ProviderRepositoryID: pullRequestEvent.ProviderRepositoryID, RepositoryURL: pullRequestEvent.RepositoryURL, RawRef: pullRequestEvent.RawRef, Ref: pullRequestEvent.Ref, RefType: pullRequestEvent.RefType, RefName: pullRequestEvent.RefName, CommitSHA: pullRequestEvent.CommitSHA, DeliveryID: pullRequestEvent.DeliveryID, Actor: pullRequestEvent.Actor, InstallationID: pullRequestEvent.InstallationID}
+		ingressResult, triggerErr := h.webhookService.ProcessVerifiedEvent(ctx, delivery, trigger)
+		if triggerErr != nil {
+			h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)
+			writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+			return
+		}
+		builds := make([]api.PushEventMatchedJob, 0, len(ingressResult.Trigger.Builds))
+		for _, item := range ingressResult.Trigger.Builds {
+			builds = append(builds, api.PushEventMatchedJob{JobID: item.Job.ID, JobName: item.Job.Name, BuildID: item.Build.ID, BuildStatus: string(item.Build.Status)})
+		}
+		if ingressResult.Trigger.MatchedJobs == 0 {
+			h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeNoMatchingJob)
+			outcome = observability.WebhookOutcomeNoMatchingJob
+		} else {
+			h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeBuildQueued)
+			outcome = observability.WebhookOutcomeBuildQueued
+		}
+		writeDataJSON(w, http.StatusOK, api.PushEventResponse{RepositoryURL: ingressResult.Trigger.RepositoryURL, Ref: ingressResult.Trigger.Ref, CommitSHA: ingressResult.Trigger.CommitSHA, MatchedJobs: ingressResult.Trigger.MatchedJobs, CreatedBuilds: len(builds), Builds: builds})
 		return
 	}
 	pushEvent, parseErr := githubwebhook.ParsePushEvent(r.Header, body)

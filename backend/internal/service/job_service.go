@@ -104,45 +104,47 @@ type ManagedImageConfigPatch struct {
 }
 
 type CreateJobInput struct {
-	ProjectID        string
-	ProjectSlug      string
-	Name             string
-	Priority         *int
-	RepositoryID     string
-	RepositoryURL    string
-	DefaultRef       string
-	DefaultCommitSHA string
-	PushEnabled      *bool
-	PushBranch       *string
-	TriggerMode      *string
-	BranchAllowlist  []string
-	TagAllowlist     []string
-	ArtifactTriggers []domain.JobArtifactTrigger
-	PipelineYAML     string
-	PipelinePath     string
-	ManagedImage     *ManagedImageConfigInput
-	Enabled          *bool
+	ProjectID          string
+	ProjectSlug        string
+	Name               string
+	Priority           *int
+	RepositoryID       string
+	RepositoryURL      string
+	DefaultRef         string
+	DefaultCommitSHA   string
+	PushEnabled        *bool
+	PullRequestEnabled *bool
+	PushBranch         *string
+	TriggerMode        *string
+	BranchAllowlist    []string
+	TagAllowlist       []string
+	ArtifactTriggers   []domain.JobArtifactTrigger
+	PipelineYAML       string
+	PipelinePath       string
+	ManagedImage       *ManagedImageConfigInput
+	Enabled            *bool
 }
 
 type UpdateJobInput struct {
-	Name             *string
-	Priority         *int
-	RepositoryIDSet  bool
-	RepositoryID     *string
-	RepositoryURL    *string
-	DefaultRef       *string
-	DefaultCommitSHA *string
-	PushEnabled      *bool
-	PushBranch       *string
-	TriggerMode      *string
-	BranchAllowlist  *[]string
-	TagAllowlist     *[]string
-	ArtifactTriggers *[]domain.JobArtifactTrigger
-	PipelineYAML     *string
-	PipelinePath     *string
-	ManagedImageSet  bool
-	ManagedImage     *ManagedImageConfigPatch
-	Enabled          *bool
+	Name               *string
+	Priority           *int
+	RepositoryIDSet    bool
+	RepositoryID       *string
+	RepositoryURL      *string
+	DefaultRef         *string
+	DefaultCommitSHA   *string
+	PushEnabled        *bool
+	PullRequestEnabled *bool
+	PushBranch         *string
+	TriggerMode        *string
+	BranchAllowlist    *[]string
+	TagAllowlist       *[]string
+	ArtifactTriggers   *[]domain.JobArtifactTrigger
+	PipelineYAML       *string
+	PipelinePath       *string
+	ManagedImageSet    bool
+	ManagedImage       *ManagedImageConfigPatch
+	Enabled            *bool
 }
 
 func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domain.Job, error) {
@@ -192,6 +194,10 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 	if normalized.PushEnabled != nil {
 		pushEnabled = *normalized.PushEnabled
 	}
+	pullRequestEnabled := false
+	if normalized.PullRequestEnabled != nil {
+		pullRequestEnabled = *normalized.PullRequestEnabled
+	}
 	var pushBranch *string
 	if pushEnabled && normalized.PushBranch != nil {
 		branch := normalizePushRef(*normalized.PushBranch)
@@ -209,25 +215,26 @@ func (s *JobService) CreateJob(ctx context.Context, input CreateJobInput) (domai
 
 	now := time.Now().UTC()
 	job := domain.Job{
-		ID:               uuid.NewString(),
-		ProjectID:        projectID,
-		Name:             normalized.Name,
-		Priority:         normalizedPriority(normalized.Priority),
-		RepositoryID:     repositoryID,
-		RepositoryURL:    normalized.RepositoryURL,
-		DefaultRef:       normalized.DefaultRef,
-		DefaultCommitSHA: defaultCommitSHA,
-		PushEnabled:      pushEnabled,
-		PushBranch:       pushBranch,
-		TriggerMode:      triggerMode,
-		BranchAllowlist:  branchAllowlist,
-		TagAllowlist:     tagAllowlist,
-		ArtifactTriggers: domain.NormalizeJobArtifactTriggers(normalized.ArtifactTriggers),
-		PipelineYAML:     normalized.PipelineYAML,
-		PipelinePath:     pipelinePath,
-		Enabled:          enabled,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ID:                 uuid.NewString(),
+		ProjectID:          projectID,
+		Name:               normalized.Name,
+		Priority:           normalizedPriority(normalized.Priority),
+		RepositoryID:       repositoryID,
+		RepositoryURL:      normalized.RepositoryURL,
+		DefaultRef:         normalized.DefaultRef,
+		DefaultCommitSHA:   defaultCommitSHA,
+		PushEnabled:        pushEnabled,
+		PullRequestEnabled: pullRequestEnabled,
+		PushBranch:         pushBranch,
+		TriggerMode:        triggerMode,
+		BranchAllowlist:    branchAllowlist,
+		TagAllowlist:       tagAllowlist,
+		ArtifactTriggers:   domain.NormalizeJobArtifactTriggers(normalized.ArtifactTriggers),
+		PipelineYAML:       normalized.PipelineYAML,
+		PipelinePath:       pipelinePath,
+		Enabled:            enabled,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}
 	for _, trigger := range job.ArtifactTriggers {
 		if trigger.ProducerJobID == job.ID {
@@ -477,6 +484,9 @@ func (s *JobService) UpdateJob(ctx context.Context, id string, input UpdateJobIn
 	}
 	if input.PushEnabled != nil {
 		job.PushEnabled = *input.PushEnabled
+	}
+	if input.PullRequestEnabled != nil {
+		job.PullRequestEnabled = *input.PullRequestEnabled
 	}
 	if input.PushBranch != nil {
 		branch := normalizePushRef(*input.PushBranch)

@@ -21,7 +21,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 
 	repo := NewJobRepository(db)
 	now := time.Now().UTC()
-	row := []string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}
+	row := []string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "pull_request_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}
 	pushBranch := "main"
 	pipelinePath := ".coyote/pipeline.yml"
 	branchAllowlistJSON := ` ["main"] `
@@ -30,17 +30,18 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	artifactProducerJobID := "job-upstream"
 
 	job := domain.Job{
-		ID:              "job-1",
-		ProjectID:       "project-1",
-		Name:            "backend-ci",
-		Priority:        5,
-		RepositoryID:    stringPtr("repo-1"),
-		RepositoryURL:   "https://github.com/example/backend.git",
-		DefaultRef:      "main",
-		PushEnabled:     true,
-		PushBranch:      &pushBranch,
-		TriggerMode:     domain.JobTriggerModeBranches,
-		BranchAllowlist: []string{"main"},
+		ID:                 "job-1",
+		ProjectID:          "project-1",
+		Name:               "backend-ci",
+		Priority:           5,
+		RepositoryID:       stringPtr("repo-1"),
+		RepositoryURL:      "https://github.com/example/backend.git",
+		DefaultRef:         "main",
+		PushEnabled:        true,
+		PullRequestEnabled: true,
+		PushBranch:         &pushBranch,
+		TriggerMode:        domain.JobTriggerModeBranches,
+		BranchAllowlist:    []string{"main"},
 		ArtifactTriggers: []domain.JobArtifactTrigger{{
 			ProducerJobID: artifactProducerJobID,
 			Path:          artifactTriggerPath,
@@ -54,7 +55,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	artifactTriggersJSON := `[{"ProducerJobID":"` + artifactProducerJobID + `","Path":"` + artifactTriggerPath + `"}]`
 
 	mock.ExpectQuery("INSERT INTO jobs").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
+		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PullRequestEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
 	))
 	created, err := repo.Create(context.Background(), job)
 	if err != nil {
@@ -65,7 +66,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	}
 
 	mock.ExpectQuery("SELECT id, project_id, name, priority, repository_id, repository_url").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
+		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PullRequestEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
 	))
 	got, err := repo.GetByID(context.Background(), job.ID)
 	if err != nil {
@@ -82,7 +83,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	}
 
 	mock.ExpectQuery("SELECT id, project_id, name, priority, repository_id, repository_url").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
+		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PullRequestEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
 	))
 	listed, err := repo.List(context.Background())
 	if err != nil {
@@ -95,7 +96,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	job.Enabled = false
 	job.UpdatedAt = now.Add(time.Second)
 	mock.ExpectQuery("UPDATE jobs").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
+		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PullRequestEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
 	))
 	updated, err := repo.Update(context.Background(), job)
 	if err != nil {
@@ -112,7 +113,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	}
 
 	mock.ExpectQuery("FROM jobs").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		"job-2", "project-1", "backend-main", 5, "repo-1", "https://github.com/example/backend.git", "main", nil, true, "main", "branches", `["main"]`, `[]`, `[]`, "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n", ".coyote/pipeline.yml", true, now, now,
+		"job-2", "project-1", "backend-main", 5, "repo-1", "https://github.com/example/backend.git", "main", nil, true, false, "main", "branches", `["main"]`, `[]`, `[]`, "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n", ".coyote/pipeline.yml", true, now, now,
 	))
 	matched, err := repo.ListPushEnabledByRepository(context.Background(), "https://github.com/example/backend")
 	if err != nil {

@@ -2575,6 +2575,10 @@ func (r *failingCreateJobRepository) ListPushEnabledByRepositoryID(_ context.Con
 	return []domain.Job{}, nil
 }
 
+func (r *failingCreateJobRepository) ListPullRequestEnabledByRepositoryID(_ context.Context, _ string) ([]domain.Job, error) {
+	return []domain.Job{}, nil
+}
+
 func (r *failingCreateJobRepository) GetByID(_ context.Context, _ string) (domain.Job, error) {
 	return domain.Job{}, repository.ErrJobNotFound
 }

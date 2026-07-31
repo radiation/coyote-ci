@@ -5494,6 +5494,9 @@
                 "project_slug": {
                     "type": "string"
                 },
+                "pull_request_enabled": {
+                    "type": "boolean"
+                },
                 "push_branch": {
                     "type": "string"
                 },
@@ -6092,6 +6095,9 @@
                 },
                 "project_id": {
                     "type": "string"
+                },
+                "pull_request_enabled": {
+                    "type": "boolean"
                 },
                 "push_branch": {
                     "type": "string"
@@ -7007,6 +7013,9 @@
                 },
                 "priority": {
                     "type": "integer"
+                },
+                "pull_request_enabled": {
+                    "type": "boolean"
                 },
                 "push_branch": {
                     "type": "string"

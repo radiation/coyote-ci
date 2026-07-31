@@ -27,6 +27,7 @@ export function JobCreatePage() {
   const [repositoryURL, setRepositoryURL] = useState("");
   const [defaultRef, setDefaultRef] = useState("main");
   const [pushEnabled, setPushEnabled] = useState(false);
+  const [pullRequestEnabled, setPullRequestEnabled] = useState(false);
   const [pushBranch, setPushBranch] = useState("main");
   const [pipelineMode, setPipelineMode] = useState<PipelineMode>("inline");
   const [pipelineYAML, setPipelineYAML] = useState(DEFAULT_PIPELINE_YAML);
@@ -144,6 +145,7 @@ export function JobCreatePage() {
         repository_url: trimmedRepositoryURL,
         default_ref: trimmedDefaultRef,
         push_enabled: pushEnabled,
+        pull_request_enabled: pullRequestEnabled,
         push_branch: pushEnabled ? trimmedPushBranch : "",
         pipeline_yaml: trimmedYAML,
         managed_image: managedImagePayload,
@@ -162,6 +164,7 @@ export function JobCreatePage() {
         repository_url: trimmedRepositoryURL,
         default_ref: trimmedDefaultRef,
         push_enabled: pushEnabled,
+        pull_request_enabled: pullRequestEnabled,
         push_branch: pushEnabled ? trimmedPushBranch : "",
         pipeline_path: trimmedPath,
         managed_image: managedImagePayload,
@@ -264,6 +267,17 @@ export function JobCreatePage() {
             />
           </>
         )}
+
+        <label className="checkbox-label" htmlFor="job-pull-request-enabled">
+          <input
+            id="job-pull-request-enabled"
+            type="checkbox"
+            checked={pullRequestEnabled}
+            onChange={(event) => setPullRequestEnabled(event.target.checked)}
+            disabled={createMutation.isPending}
+          />
+          Enable pull request trigger
+        </label>
 
         <fieldset disabled={createMutation.isPending}>
           <legend>Pipeline Source</legend>
