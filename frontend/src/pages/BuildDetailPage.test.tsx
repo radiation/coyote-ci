@@ -228,6 +228,7 @@ describe("BuildDetailPage", () => {
       repository_url: "https://github.com/example/platform",
       default_ref: "refs/heads/main",
       push_enabled: true,
+      pull_request_enabled: false,
       push_branch: null,
       pipeline_yaml: "steps: []",
       pipeline_path: "scenarios/success-basic/coyote.yml",
