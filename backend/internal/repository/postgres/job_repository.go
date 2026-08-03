@@ -22,9 +22,9 @@ func NewJobRepository(db *sql.DB) *JobRepository {
 
 func (r *JobRepository) Create(ctx context.Context, job domain.Job) (domain.Job, error) {
 	const query = `
-		INSERT INTO jobs (id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15, $16, $17, $18, $19)
-		RETURNING id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		INSERT INTO jobs (id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, pull_request_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18, $19, $20)
+		RETURNING id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, pull_request_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 	`
 
 	branchAllowlistJSON, err := json.Marshal(job.BranchAllowlist)
@@ -50,6 +50,7 @@ func (r *JobRepository) Create(ctx context.Context, job domain.Job) (domain.Job,
 		nilIfBlank(job.DefaultRef),
 		job.DefaultCommitSHA,
 		job.PushEnabled,
+		job.PullRequestEnabled,
 		job.PushBranch,
 		nilIfBlank(string(job.TriggerMode)),
 		string(branchAllowlistJSON),
@@ -85,7 +86,7 @@ func (r *JobRepository) Delete(ctx context.Context, id string) error {
 
 func (r *JobRepository) List(ctx context.Context) (jobs []domain.Job, err error) {
 	const query = `
-		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, pull_request_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		ORDER BY created_at DESC
 	`
@@ -130,7 +131,7 @@ func (r *JobRepository) GetByIDs(ctx context.Context, ids []string) (jobs []doma
 	}
 
 	query := `
-		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, pull_request_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		WHERE id IN (` + strings.Join(placeholders, ", ") + `)
 		ORDER BY created_at DESC, id ASC
@@ -165,7 +166,7 @@ func (r *JobRepository) GetByIDs(ctx context.Context, ids []string) (jobs []doma
 func (r *JobRepository) ListPaged(ctx context.Context, params repository.ListParams) (jobs []domain.Job, err error) {
 	limit, offset := clampPageParams(params)
 	const query = `
-		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, pull_request_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2
@@ -199,7 +200,7 @@ func (r *JobRepository) ListPaged(ctx context.Context, params repository.ListPar
 
 func (r *JobRepository) ListByProjectID(ctx context.Context, projectID string) (jobs []domain.Job, err error) {
 	const query = `
-		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, pull_request_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		WHERE project_id = $1
 		ORDER BY created_at DESC
@@ -237,7 +238,7 @@ func (r *JobRepository) FindByProjectIDAndName(ctx context.Context, projectID st
 	}
 
 	const query = `
-		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, pull_request_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		WHERE project_id = $1 AND name = $2
 		ORDER BY created_at DESC, id ASC
@@ -279,7 +280,7 @@ func (r *JobRepository) ListPushEnabledByRepository(ctx context.Context, reposit
 	// Normalize the stored repository_url in SQL the same way normalizeRepositoryURLForMatch does
 	// in Go: lowercase, trim whitespace, strip trailing '/', strip trailing '.git'.
 	const query = `
-		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, pull_request_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		WHERE enabled = TRUE
 		  AND push_enabled = TRUE
@@ -320,11 +321,49 @@ func (r *JobRepository) ListPushEnabledByRepositoryID(ctx context.Context, repos
 	}
 
 	const query = `
-		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, pull_request_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		WHERE repository_id = $1
 		  AND enabled = TRUE
 		  AND push_enabled = TRUE
+		ORDER BY created_at DESC
+	`
+	rows, err := r.db.QueryContext(ctx, query, repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	jobs = make([]domain.Job, 0)
+	for rows.Next() {
+		job, scanErr := scanJob(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return jobs, nil
+}
+
+func (r *JobRepository) ListPullRequestEnabledByRepositoryID(ctx context.Context, repositoryID string) (jobs []domain.Job, err error) {
+	repositoryID = strings.TrimSpace(repositoryID)
+	if repositoryID == "" {
+		return []domain.Job{}, nil
+	}
+
+	const query = `
+		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, pull_request_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		FROM jobs
+		WHERE repository_id = $1
+		  AND enabled = TRUE
+		  AND pull_request_enabled = TRUE
 		ORDER BY created_at DESC
 	`
 	rows, err := r.db.QueryContext(ctx, query, repositoryID)
@@ -363,7 +402,7 @@ func normalizeRepositoryURLForMatch(value string) string {
 
 func (r *JobRepository) GetByID(ctx context.Context, id string) (domain.Job, error) {
 	const query = `
-		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		SELECT id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, pull_request_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 		FROM jobs
 		WHERE id = $1
 	`
@@ -390,17 +429,18 @@ func (r *JobRepository) Update(ctx context.Context, job domain.Job) (domain.Job,
 			default_ref = $7,
 			default_commit_sha = $8,
 			push_enabled = $9,
-			push_branch = $10,
-			trigger_mode = $11,
-			branch_allowlist = $12::jsonb,
-			tag_allowlist = $13::jsonb,
-			artifact_triggers = $14::jsonb,
-			pipeline_yaml = $15,
-			pipeline_path = $16,
-			enabled = $17,
-			updated_at = $18
+			pull_request_enabled = $10,
+			push_branch = $11,
+			trigger_mode = $12,
+			branch_allowlist = $13::jsonb,
+			tag_allowlist = $14::jsonb,
+			artifact_triggers = $15::jsonb,
+			pipeline_yaml = $16,
+			pipeline_path = $17,
+			enabled = $18,
+			updated_at = $19
 		WHERE id = $1
-		RETURNING id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
+		RETURNING id, project_id, name, priority, repository_id, repository_url, default_ref, default_commit_sha, push_enabled, pull_request_enabled, push_branch, trigger_mode, branch_allowlist, tag_allowlist, artifact_triggers, pipeline_yaml, pipeline_path, enabled, created_at, updated_at
 	`
 
 	branchAllowlistJSON, err := json.Marshal(job.BranchAllowlist)
@@ -426,6 +466,7 @@ func (r *JobRepository) Update(ctx context.Context, job domain.Job) (domain.Job,
 		nilIfBlank(job.DefaultRef),
 		job.DefaultCommitSHA,
 		job.PushEnabled,
+		job.PullRequestEnabled,
 		job.PushBranch,
 		nilIfBlank(string(job.TriggerMode)),
 		string(branchAllowlistJSON),
@@ -484,6 +525,7 @@ func scanJob(scanner rowScanner) (domain.Job, error) {
 		&defaultRef,
 		&defaultCommitSHA,
 		&job.PushEnabled,
+		&job.PullRequestEnabled,
 		&job.PushBranch,
 		&triggerMode,
 		&branchAllowlistRaw,

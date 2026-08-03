@@ -21,6 +21,7 @@ type Job struct {
 	DefaultRef         string
 	DefaultCommitSHA   *string
 	PushEnabled        bool
+	PullRequestEnabled bool
 	PushBranch         *string
 	TriggerMode        JobTriggerMode
 	BranchAllowlist    []string

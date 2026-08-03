@@ -544,7 +544,7 @@ func TestNewRouter_HeaderModeHealthAndIngressBypassIdentityHeaders(t *testing.T)
 		t.Fatalf("expected push ingress status %d, got %d body=%s", http.StatusOK, pushRes.Code, pushRes.Body.String())
 	}
 
-	body := []byte(`{"installation":{"id":999}}`)
+	body := []byte(`{"action":"closed","installation":{"id":999},"repository":{"id":1001,"name":"backend","owner":{"login":"example"}},"pull_request":{"head":{"ref":"feature","sha":"head-sha","repo":{"id":1001}}}}`)
 	webhookReq := httptest.NewRequest(http.MethodPost, "/api/webhooks/github/apps/registration-1", bytes.NewReader(body))
 	webhookReq.Header.Set("X-GitHub-Event", "pull_request")
 	webhookReq.Header.Set("X-GitHub-Delivery", "delivery-router-test")

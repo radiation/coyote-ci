@@ -5498,6 +5498,9 @@ const docTemplate = `{
                 "project_slug": {
                     "type": "string"
                 },
+                "pull_request_enabled": {
+                    "type": "boolean"
+                },
                 "push_branch": {
                     "type": "string"
                 },
@@ -6096,6 +6099,9 @@ const docTemplate = `{
                 },
                 "project_id": {
                     "type": "string"
+                },
+                "pull_request_enabled": {
+                    "type": "boolean"
                 },
                 "push_branch": {
                     "type": "string"
@@ -7011,6 +7017,9 @@ const docTemplate = `{
                 },
                 "priority": {
                     "type": "integer"
+                },
+                "pull_request_enabled": {
+                    "type": "boolean"
                 },
                 "push_branch": {
                     "type": "string"

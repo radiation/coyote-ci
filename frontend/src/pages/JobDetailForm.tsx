@@ -21,6 +21,9 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
   const [repositoryURL, setRepositoryURL] = useState(job.repository_url);
   const [defaultRef, setDefaultRef] = useState(job.default_ref);
   const [pushEnabled, setPushEnabled] = useState(job.push_enabled);
+  const [pullRequestEnabled, setPullRequestEnabled] = useState(
+    job.pull_request_enabled,
+  );
   const [pushBranch, setPushBranch] = useState(job.push_branch ?? "");
   const [pipelineMode, setPipelineMode] = useState<PipelineMode>(
     job.pipeline_path ? "repo" : "inline",
@@ -69,6 +72,7 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
         repository_url: repositoryURL.trim(),
         default_ref: defaultRef.trim(),
         push_enabled: pushEnabled,
+        pull_request_enabled: pullRequestEnabled,
         push_branch: pushEnabled ? pushBranch.trim() : "",
         enabled,
         managed_image: managedImagePayload,
@@ -221,6 +225,17 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
           disabled={isSubmitting}
           placeholder="main"
         />
+
+        <label className="checkbox-label" htmlFor="job-pull-request-enabled">
+          <input
+            id="job-pull-request-enabled"
+            type="checkbox"
+            checked={pullRequestEnabled}
+            onChange={(event) => setPullRequestEnabled(event.target.checked)}
+            disabled={isSubmitting}
+          />
+          Enable pull request trigger
+        </label>
 
         <fieldset disabled={isSubmitting}>
           <legend>Pipeline Source</legend>

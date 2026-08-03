@@ -31,6 +31,7 @@ export interface Job {
   repository_url: string;
   default_ref: string;
   push_enabled: boolean;
+  pull_request_enabled: boolean;
   push_branch?: string | null;
   pipeline_yaml: string;
   pipeline_path?: string | null;
@@ -72,6 +73,7 @@ export interface CreateJobRequest {
   repository_url: string;
   default_ref: string;
   push_enabled?: boolean;
+  pull_request_enabled?: boolean;
   push_branch?: string;
   pipeline_yaml?: string;
   pipeline_path?: string;
@@ -85,6 +87,7 @@ export interface UpdateJobRequest {
   repository_url?: string;
   default_ref?: string;
   push_enabled?: boolean;
+  pull_request_enabled?: boolean;
   push_branch?: string;
   pipeline_yaml?: string;
   pipeline_path?: string;

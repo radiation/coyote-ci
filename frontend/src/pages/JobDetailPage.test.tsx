@@ -159,6 +159,7 @@ describe("JobDetailPage", () => {
       repository_url: "https://github.com/example/backend.git",
       default_ref: "main",
       push_enabled: true,
+      pull_request_enabled: false,
       push_branch: "main",
       pipeline_yaml:
         "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
@@ -186,6 +187,7 @@ describe("JobDetailPage", () => {
       repository_url: "https://github.com/example/backend.git",
       default_ref: "main",
       push_enabled: true,
+      pull_request_enabled: true,
       push_branch: "main",
       pipeline_yaml:
         "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
@@ -280,6 +282,7 @@ describe("JobDetailPage", () => {
     fireEvent.change(screen.getByLabelText("Managed Image Name"), {
       target: { value: "go-1-24" },
     });
+    fireEvent.click(screen.getByLabelText("Enable pull request trigger"));
     fireEvent.click(screen.getByRole("button", { name: "Save Job" }));
 
     await waitFor(() => {
@@ -289,6 +292,7 @@ describe("JobDetailPage", () => {
         repository_url: "https://github.com/example/backend.git",
         default_ref: "main",
         push_enabled: true,
+        pull_request_enabled: true,
         push_branch: "main",
         pipeline_yaml:
           "version: 1\nsteps:\n  - name: test\n    run: go test ./...",
@@ -350,6 +354,7 @@ describe("JobDetailPage", () => {
       repository_url: "https://github.com/example/backend.git",
       default_ref: "main",
       push_enabled: false,
+      pull_request_enabled: false,
       push_branch: null,
       pipeline_yaml: "version: 1\n",
       pipeline_path: null,
@@ -390,6 +395,7 @@ describe("JobDetailPage", () => {
       repository_url: "https://github.com/example/backend.git",
       default_ref: "main",
       push_enabled: true,
+      pull_request_enabled: false,
       push_branch: "",
       pipeline_yaml: "",
       pipeline_path: ".coyote/repo-pipeline.yml",
@@ -441,6 +447,7 @@ describe("JobDetailPage", () => {
           repository_url: "https://github.com/example/backend.git",
           default_ref: "main",
           push_enabled: true,
+          pull_request_enabled: false,
           push_branch: "main",
           pipeline_yaml: "steps:\n  - run: echo hi",
           pipeline_path: null,
@@ -469,6 +476,7 @@ describe("JobDetailPage", () => {
       repository_url: "https://github.com/example/backend.git",
       default_ref: "main",
       push_enabled: true,
+      pull_request_enabled: false,
       push_branch: "main",
       pipeline_yaml: "",
       pipeline_path: ".coyote/repo-pipeline.yml",
@@ -499,6 +507,7 @@ describe("JobDetailPage", () => {
         repository_url: "https://github.com/example/backend.git",
         default_ref: "main",
         push_enabled: false,
+        pull_request_enabled: false,
         push_branch: "",
         pipeline_yaml: "",
         pipeline_path: ".coyote/repo-pipeline.yml",
@@ -517,6 +526,7 @@ describe("JobDetailPage", () => {
       repository_url: "https://github.com/example/backend.git",
       default_ref: "main",
       push_enabled: true,
+      pull_request_enabled: false,
       push_branch: "main",
       pipeline_yaml: "",
       pipeline_path: ".coyote/repo-pipeline.yml",
@@ -623,6 +633,7 @@ describe("JobDetailPage", () => {
         repository_url: "https://github.com/example/backend.git",
         default_ref: "main",
         push_enabled: true,
+        pull_request_enabled: false,
         push_branch: "main",
         pipeline_yaml: "",
         pipeline_path: ".coyote/pipeline.yml",
@@ -707,6 +718,7 @@ describe("JobDetailPage", () => {
         repository_url: "https://github.com/example/backend.git",
         default_ref: "main",
         push_enabled: true,
+        pull_request_enabled: false,
         push_branch: "main",
         pipeline_yaml:
           "version: 1\nsteps:\n  - name: test\n    run: go test ./...",

@@ -2387,6 +2387,57 @@ func TestJobService_TriggerWebhookEvent_UsesRegisteredRepositoryIdentity(t *test
 	}
 }
 
+func TestJobService_TriggerWebhookEvent_PullRequestSelectionAndSnapshot(t *testing.T) {
+	ctx := context.Background()
+	jobRepo := memory.NewJobRepository()
+	registeredRepo := memory.NewSCMRepositoryRegistrationRepository()
+	buildService := buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil)
+	jobService := NewJobService(jobRepo, buildService).WithSCMRepositoryRegistrationRepository(registeredRepo)
+	now := time.Now().UTC()
+	for _, registration := range []domain.SCMRepositoryRegistration{
+		{ID: "repo-a", ConnectionID: "connection-a", ProviderRepositoryID: "1001", Owner: "same", Name: "repository", FullName: "same/repository", CloneURL: "https://github.com/same/repository.git", WebURL: "https://github.com/same/repository", MetadataRefreshedAt: now, CreatedAt: now, UpdatedAt: now},
+		{ID: "repo-b", ConnectionID: "connection-b", ProviderRepositoryID: "1001", Owner: "same", Name: "repository", FullName: "same/repository", CloneURL: "https://github.com/same/repository.git", WebURL: "https://github.com/same/repository", MetadataRefreshedAt: now, CreatedAt: now, UpdatedAt: now},
+	} {
+		if _, err := registeredRepo.Create(ctx, registration); err != nil {
+			t.Fatalf("create registration %s: %v", registration.ID, err)
+		}
+	}
+	for _, job := range []domain.Job{
+		{ID: "pr-enabled", ProjectID: "project-1", Name: "pr enabled", RepositoryID: strPtr("repo-a"), RepositoryURL: "https://github.com/same/repository.git", PullRequestEnabled: true, Enabled: true, TriggerMode: domain.JobTriggerModeBranches, BranchAllowlist: []string{"main"}, PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: echo pr\n", CreatedAt: now, UpdatedAt: now},
+		{ID: "pr-disabled", ProjectID: "project-1", Name: "pr disabled", RepositoryID: strPtr("repo-a"), RepositoryURL: "https://github.com/same/repository.git", PullRequestEnabled: false, Enabled: true, PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: echo disabled\n", CreatedAt: now, UpdatedAt: now},
+		{ID: "push-only", ProjectID: "project-1", Name: "push only", RepositoryID: strPtr("repo-a"), RepositoryURL: "https://github.com/same/repository.git", PushEnabled: true, Enabled: true, PipelineYAML: "version: 1\nsteps:\n  - name: test\n    run: echo push\n", CreatedAt: now, UpdatedAt: now},
+	} {
+		if _, err := jobRepo.Create(ctx, job); err != nil {
+			t.Fatalf("create job %s: %v", job.ID, err)
+		}
+	}
+
+	input := webhooksvc.WebhookTriggerInput{ConnectionID: "connection-a", SCMProvider: "github", EventType: "pull_request", ProviderRepositoryID: "1001", RepositoryOwner: "same", RepositoryName: "repository", RepositoryURL: "https://github.com/same/repository.git", RawRef: "refs/heads/feature/pr-42", CommitSHA: "head-sha"}
+	result, triggerErr := jobService.TriggerWebhookEvent(ctx, input)
+	if triggerErr != nil {
+		t.Fatalf("trigger pull request webhook: %v", triggerErr)
+	}
+	if result.MatchedJobs != 1 || len(result.Builds) != 1 || result.Builds[0].Job.ID != "pr-enabled" {
+		t.Fatalf("expected only the pull-request-enabled mapped job, got %+v", result.Builds)
+	}
+	build := result.Builds[0].Build
+	if build.CommitSHA == nil || *build.CommitSHA != "head-sha" || build.SourceSHA == nil || *build.SourceSHA != "head-sha" {
+		t.Fatalf("expected pull request head SHA to be persisted, got %+v", build)
+	}
+	if build.RegisteredRepositoryID == nil || *build.RegisteredRepositoryID != "repo-a" || build.SCMConnectionID == nil || *build.SCMConnectionID != "connection-a" || build.ProviderRepositoryID == nil || *build.ProviderRepositoryID != "1001" {
+		t.Fatalf("expected connection-a repository identity snapshot, got %+v", build)
+	}
+
+	input.ConnectionID = "connection-b"
+	result, triggerErr = jobService.TriggerWebhookEvent(ctx, input)
+	if triggerErr != nil {
+		t.Fatalf("trigger isolated pull request webhook: %v", triggerErr)
+	}
+	if result.MatchedJobs != 0 || len(result.Builds) != 0 {
+		t.Fatalf("expected same provider repository ID on another connection not to match, got %+v", result.Builds)
+	}
+}
+
 func TestJobServiceBuildRepositoryIdentityValidation(t *testing.T) {
 	jobService := NewJobService(memory.NewJobRepository(), buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil))
 	identity, err := jobService.buildRepositoryIdentity(context.Background(), domain.Job{})
@@ -2572,6 +2623,10 @@ func (r *failingCreateJobRepository) ListPushEnabledByRepository(_ context.Conte
 }
 
 func (r *failingCreateJobRepository) ListPushEnabledByRepositoryID(_ context.Context, _ string) ([]domain.Job, error) {
+	return []domain.Job{}, nil
+}
+
+func (r *failingCreateJobRepository) ListPullRequestEnabledByRepositoryID(_ context.Context, _ string) ([]domain.Job, error) {
 	return []domain.Job{}, nil
 }
 

@@ -349,6 +349,7 @@ describe("QueuePage", () => {
         repository_url: "https://github.com/example/backend.git",
         default_ref: "main",
         push_enabled: true,
+        pull_request_enabled: false,
         push_branch: "main",
         pipeline_yaml: "version: 1",
         managed_image: null,

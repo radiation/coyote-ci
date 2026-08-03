@@ -21,7 +21,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 
 	repo := NewJobRepository(db)
 	now := time.Now().UTC()
-	row := []string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}
+	row := []string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "pull_request_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}
 	pushBranch := "main"
 	pipelinePath := ".coyote/pipeline.yml"
 	branchAllowlistJSON := ` ["main"] `
@@ -30,17 +30,18 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	artifactProducerJobID := "job-upstream"
 
 	job := domain.Job{
-		ID:              "job-1",
-		ProjectID:       "project-1",
-		Name:            "backend-ci",
-		Priority:        5,
-		RepositoryID:    stringPtr("repo-1"),
-		RepositoryURL:   "https://github.com/example/backend.git",
-		DefaultRef:      "main",
-		PushEnabled:     true,
-		PushBranch:      &pushBranch,
-		TriggerMode:     domain.JobTriggerModeBranches,
-		BranchAllowlist: []string{"main"},
+		ID:                 "job-1",
+		ProjectID:          "project-1",
+		Name:               "backend-ci",
+		Priority:           5,
+		RepositoryID:       stringPtr("repo-1"),
+		RepositoryURL:      "https://github.com/example/backend.git",
+		DefaultRef:         "main",
+		PushEnabled:        true,
+		PullRequestEnabled: true,
+		PushBranch:         &pushBranch,
+		TriggerMode:        domain.JobTriggerModeBranches,
+		BranchAllowlist:    []string{"main"},
 		ArtifactTriggers: []domain.JobArtifactTrigger{{
 			ProducerJobID: artifactProducerJobID,
 			Path:          artifactTriggerPath,
@@ -54,7 +55,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	artifactTriggersJSON := `[{"ProducerJobID":"` + artifactProducerJobID + `","Path":"` + artifactTriggerPath + `"}]`
 
 	mock.ExpectQuery("INSERT INTO jobs").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
+		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PullRequestEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
 	))
 	created, err := repo.Create(context.Background(), job)
 	if err != nil {
@@ -65,7 +66,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	}
 
 	mock.ExpectQuery("SELECT id, project_id, name, priority, repository_id, repository_url").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
+		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PullRequestEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
 	))
 	got, err := repo.GetByID(context.Background(), job.ID)
 	if err != nil {
@@ -82,7 +83,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	}
 
 	mock.ExpectQuery("SELECT id, project_id, name, priority, repository_id, repository_url").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
+		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PullRequestEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
 	))
 	listed, err := repo.List(context.Background())
 	if err != nil {
@@ -95,7 +96,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	job.Enabled = false
 	job.UpdatedAt = now.Add(time.Second)
 	mock.ExpectQuery("UPDATE jobs").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
+		job.ID, job.ProjectID, job.Name, job.Priority, *job.RepositoryID, job.RepositoryURL, job.DefaultRef, nil, job.PushEnabled, job.PullRequestEnabled, job.PushBranch, job.TriggerMode, branchAllowlistJSON, tagAllowlistJSON, artifactTriggersJSON, job.PipelineYAML, job.PipelinePath, job.Enabled, job.CreatedAt, job.UpdatedAt,
 	))
 	updated, err := repo.Update(context.Background(), job)
 	if err != nil {
@@ -112,7 +113,7 @@ func TestJobRepository_CreateGetListUpdate(t *testing.T) {
 	}
 
 	mock.ExpectQuery("FROM jobs").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		"job-2", "project-1", "backend-main", 5, "repo-1", "https://github.com/example/backend.git", "main", nil, true, "main", "branches", `["main"]`, `[]`, `[]`, "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n", ".coyote/pipeline.yml", true, now, now,
+		"job-2", "project-1", "backend-main", 5, "repo-1", "https://github.com/example/backend.git", "main", nil, true, false, "main", "branches", `["main"]`, `[]`, `[]`, "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n", ".coyote/pipeline.yml", true, now, now,
 	))
 	matched, err := repo.ListPushEnabledByRepository(context.Background(), "https://github.com/example/backend")
 	if err != nil {
@@ -135,9 +136,9 @@ func TestJobRepository_GetByIDs(t *testing.T) {
 
 	repo := NewJobRepository(db)
 	now := time.Now().UTC()
-	rows := sqlmock.NewRows([]string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}).
-		AddRow("job-1", "project-1", "backend-ci", 5, "repo-1", "https://github.com/example/backend.git", "main", nil, false, nil, nil, `[]`, `[]`, `[]`, "version: 1", nil, true, now, now).
-		AddRow("job-2", "project-1", "frontend-ci", 5, nil, "https://github.com/example/frontend.git", "main", nil, false, nil, nil, `[]`, `[]`, `[]`, "version: 1", nil, true, now.Add(-time.Second), now.Add(-time.Second))
+	rows := sqlmock.NewRows([]string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "pull_request_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}).
+		AddRow("job-1", "project-1", "backend-ci", 5, "repo-1", "https://github.com/example/backend.git", "main", nil, false, false, nil, nil, `[]`, `[]`, `[]`, "version: 1", nil, true, now, now).
+		AddRow("job-2", "project-1", "frontend-ci", 5, nil, "https://github.com/example/frontend.git", "main", nil, false, false, nil, nil, `[]`, `[]`, `[]`, "version: 1", nil, true, now.Add(-time.Second), now.Add(-time.Second))
 
 	mock.ExpectQuery("SELECT id, project_id, name, priority, repository_id, repository_url").
 		WithArgs("job-1", "job-2").
@@ -171,9 +172,9 @@ func TestJobRepository_FindByProjectIDAndName(t *testing.T) {
 
 	repo := NewJobRepository(db)
 	now := time.Now().UTC()
-	rows := sqlmock.NewRows([]string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}).
-		AddRow("job-2", "project-1", "duplicate", 5, "repo-2", "https://github.com/example/backend.git", "main", nil, false, nil, nil, `[]`, `[]`, `[]`, "version: 1", nil, true, now, now).
-		AddRow("job-1", "project-1", "duplicate", 5, "repo-1", "https://github.com/example/backend.git", "main", nil, false, nil, nil, `[]`, `[]`, `[]`, "version: 1", nil, true, now.Add(-time.Second), now.Add(-time.Second))
+	rows := sqlmock.NewRows([]string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "pull_request_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}).
+		AddRow("job-2", "project-1", "duplicate", 5, "repo-2", "https://github.com/example/backend.git", "main", nil, false, false, nil, nil, `[]`, `[]`, `[]`, "version: 1", nil, true, now, now).
+		AddRow("job-1", "project-1", "duplicate", 5, "repo-1", "https://github.com/example/backend.git", "main", nil, false, false, nil, nil, `[]`, `[]`, `[]`, "version: 1", nil, true, now.Add(-time.Second), now.Add(-time.Second))
 
 	mock.ExpectQuery("SELECT id, project_id, name, priority, repository_id, repository_url").
 		WithArgs("project-1", "duplicate", 2).
@@ -208,7 +209,7 @@ func TestJobRepository_FindByProjectIDAndNameDefaultsLimitToOne(t *testing.T) {
 	repo := NewJobRepository(db)
 	mock.ExpectQuery("SELECT id, project_id, name, priority, repository_id, repository_url").
 		WithArgs("project-1", "missing", 1).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "pull_request_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}))
 	mock.ExpectClose()
 
 	jobs, err := repo.FindByProjectIDAndName(context.Background(), "project-1", "missing", 0)
@@ -236,9 +237,9 @@ func TestJobRepository_ListPushEnabledByRepositoryID(t *testing.T) {
 
 	repo := NewJobRepository(db)
 	now := time.Now().UTC()
-	rows := sqlmock.NewRows([]string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}).
-		AddRow("job-2", "project-1", "second", 5, "repo-1", "https://github.com/same/repository.git", "main", nil, true, nil, "branches", `[]`, `[]`, `[]`, "version: 1", nil, true, now.Add(time.Second), now.Add(time.Second)).
-		AddRow("job-1", "project-1", "first", 5, "repo-1", "https://github.com/same/repository.git", "main", nil, true, nil, "branches", `[]`, `[]`, `[]`, "version: 1", nil, true, now, now)
+	rows := sqlmock.NewRows([]string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "pull_request_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}).
+		AddRow("job-2", "project-1", "second", 5, "repo-1", "https://github.com/same/repository.git", "main", nil, true, false, nil, "branches", `[]`, `[]`, `[]`, "version: 1", nil, true, now.Add(time.Second), now.Add(time.Second)).
+		AddRow("job-1", "project-1", "first", 5, "repo-1", "https://github.com/same/repository.git", "main", nil, true, false, nil, "branches", `[]`, `[]`, `[]`, "version: 1", nil, true, now, now)
 	mock.ExpectQuery(`WHERE repository_id = \$1`).WithArgs("repo-1").WillReturnRows(rows)
 
 	matched, matchErr := repo.ListPushEnabledByRepositoryID(context.Background(), " repo-1 ")
@@ -247,6 +248,60 @@ func TestJobRepository_ListPushEnabledByRepositoryID(t *testing.T) {
 	}
 	if len(matched) != 2 || matched[0].ID != "job-2" || matched[1].ID != "job-1" {
 		t.Fatalf("expected mapped jobs only, got %+v", matched)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationsErr)
+	}
+}
+
+func TestJobRepository_ListPullRequestEnabledByRepositoryID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewJobRepository(db)
+	now := time.Now().UTC()
+	rows := sqlmock.NewRows([]string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "pull_request_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}).
+		AddRow("job-2", "project-1", "second", 5, "repo-1", "https://github.com/same/repository.git", "main", nil, false, true, nil, "branches", `[]`, `[]`, `[]`, "version: 1", nil, true, now.Add(time.Second), now.Add(time.Second)).
+		AddRow("job-1", "project-1", "first", 5, "repo-1", "https://github.com/same/repository.git", "main", nil, false, true, nil, "branches", `[]`, `[]`, `[]`, "version: 1", nil, true, now, now)
+	mock.ExpectQuery(`pull_request_enabled = TRUE`).WithArgs("repo-1").WillReturnRows(rows)
+
+	matched, matchErr := repo.ListPullRequestEnabledByRepositoryID(context.Background(), " repo-1 ")
+	if matchErr != nil {
+		t.Fatalf("list mapped pull-request jobs: %v", matchErr)
+	}
+	if len(matched) != 2 || matched[0].ID != "job-2" || matched[1].ID != "job-1" {
+		t.Fatalf("expected mapped pull-request jobs only, got %+v", matched)
+	}
+
+	blankMatches, blankErr := repo.ListPullRequestEnabledByRepositoryID(context.Background(), " ")
+	if blankErr != nil {
+		t.Fatalf("list blank mapped pull-request jobs: %v", blankErr)
+	}
+	if len(blankMatches) != 0 {
+		t.Fatalf("expected no blank-repository matches, got %d", len(blankMatches))
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationsErr)
+	}
+}
+
+func TestJobRepository_ListPullRequestEnabledByRepositoryID_QueryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewJobRepository(db)
+	queryErr := errors.New("database unavailable")
+	mock.ExpectQuery(`pull_request_enabled = TRUE`).WithArgs("repo-1").WillReturnError(queryErr)
+
+	_, listErr := repo.ListPullRequestEnabledByRepositoryID(context.Background(), "repo-1")
+	if !errors.Is(listErr, queryErr) {
+		t.Fatalf("expected query error, got %v", listErr)
 	}
 	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
 		t.Fatalf("unmet expectations: %v", expectationsErr)

@@ -77,6 +77,7 @@ describe("JobCreatePage", () => {
       repository_url: "https://github.com/example/backend.git",
       default_ref: "main",
       push_enabled: false,
+      pull_request_enabled: false,
       push_branch: null,
       pipeline_yaml:
         "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
@@ -112,6 +113,7 @@ describe("JobCreatePage", () => {
     fireEvent.click(
       screen.getByLabelText("Enable managed build image automation"),
     );
+    fireEvent.click(screen.getByLabelText("Enable pull request trigger"));
     await screen.findByText("github-bot (https_token)");
     fireEvent.change(screen.getByLabelText("Write Credential"), {
       target: { value: "cred-1" },
@@ -128,6 +130,7 @@ describe("JobCreatePage", () => {
         repository_url: "https://github.com/example/backend.git",
         default_ref: "main",
         push_enabled: false,
+        pull_request_enabled: true,
         push_branch: "",
         pipeline_yaml:
           "version: 1\nsteps:\n  - name: test\n    run: go test ./...",

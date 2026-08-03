@@ -166,13 +166,134 @@ func TestEventHandler_IngestGitHubWebhook_IdempotentDuplicateNoSecondBuild(t *te
 	}
 }
 
+func TestEventHandler_IngestGitHubWebhook_PullRequestQueuesEnabledJobAndDeduplicates(t *testing.T) {
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	jobSvc := service.NewJobService(jobRepo, buildSvc)
+	webhookSvc := webhooksvc.NewDeliveryIngressService(deliveryRepo, jobSvc)
+	h := newTestGitHubEventHandler(jobSvc, webhookSvc, observability.NewNoopWebhookIngressMetrics(), "secret")
+
+	_, err := jobSvc.CreateJob(context.Background(), service.CreateJobInput{
+		ProjectID:          "project-1",
+		Name:               "pull-request-ci",
+		RepositoryID:       "repo-1",
+		DefaultRef:         "main",
+		PullRequestEnabled: boolPtr(true),
+		PushBranch:         strPtr("main"),
+		PipelineYAML:       "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+		Enabled:            boolPtr(true),
+	})
+	if err != nil {
+		t.Fatalf("create pull-request job failed: %v", err)
+	}
+
+	body := []byte(`{"action":"synchronize","installation":{"id":999},"repository":{"id":1001,"name":"backend","html_url":"https://github.com/example/backend","owner":{"login":"example"}},"pull_request":{"head":{"ref":"feature/pr-42","sha":"head-sha","repo":{"id":1001}}},"sender":{"login":"octocat"}}`)
+	signature := githubTestSignature("secret", body)
+	for attempt := range 2 {
+		req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github/apps/registration-1", bytes.NewReader(body))
+		req.Header.Set("X-GitHub-Event", "pull_request")
+		req.Header.Set("X-GitHub-Delivery", "delivery-pr-1")
+		req.Header.Set("X-Hub-Signature-256", signature)
+		res := httptest.NewRecorder()
+		ingestTestGitHubWebhook(h, res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("expected status %d on attempt %d, got %d body=%s", http.StatusOK, attempt+1, res.Code, res.Body.String())
+		}
+		data := decodeDataMap(t, res)
+		if attempt == 0 {
+			if data["matched_jobs"] != float64(1) || data["created_builds"] != float64(1) || data["commit_sha"] != "head-sha" || data["ref"] != "feature/pr-42" {
+				t.Fatalf("expected queued pull-request build response, got %v", data)
+			}
+		} else if duplicate, _ := data["duplicate"].(bool); !duplicate {
+			t.Fatalf("expected duplicate pull-request delivery response, got %v", data)
+		}
+	}
+
+	builds, listErr := buildRepo.List(context.Background())
+	if listErr != nil {
+		t.Fatalf("list builds failed: %v", listErr)
+	}
+	if len(builds) != 2 {
+		t.Fatalf("expected one initial build plus one queued pull-request build, got %d", len(builds))
+	}
+	build := builds[0]
+	if build.CommitSHA == nil || *build.CommitSHA != "head-sha" || build.SourceSHA == nil || *build.SourceSHA != "head-sha" {
+		t.Fatalf("expected persisted pull-request head SHA, got %+v", build)
+	}
+	if build.RegisteredRepositoryID == nil || *build.RegisteredRepositoryID != "repo-1" || build.SCMConnectionID == nil || *build.SCMConnectionID != "connection-1" || build.ProviderRepositoryID == nil || *build.ProviderRepositoryID != "1001" {
+		t.Fatalf("expected persisted repository identity snapshot, got %+v", build)
+	}
+}
+
+func TestEventHandler_IngestGitHubWebhook_PullRequestNoMatchRecorded(t *testing.T) {
+	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
+	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
+	h := newTestGitHubEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(deliveryRepo, jobSvc), observability.NewNoopWebhookIngressMetrics(), "secret")
+	body := []byte(`{"action":"opened","installation":{"id":999},"repository":{"id":1001,"name":"backend","owner":{"login":"example"}},"pull_request":{"head":{"ref":"feature","sha":"head-sha","repo":{"id":1001}}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github/apps/registration-1", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-GitHub-Delivery", "delivery-pr-no-match")
+	req.Header.Set("X-Hub-Signature-256", githubTestSignature("secret", body))
+
+	res := httptest.NewRecorder()
+	ingestTestGitHubWebhook(h, res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+	delivery, err := deliveryRepo.GetByProviderDeliveryID(context.Background(), "github", "delivery-pr-no-match")
+	if err != nil {
+		t.Fatalf("expected ledger record, got %v", err)
+	}
+	if delivery.Status != domain.WebhookDeliveryStatusIgnoredNoMatch {
+		t.Fatalf("expected ignored_no_match status, got %q", delivery.Status)
+	}
+}
+
+func TestEventHandler_IngestGitHubWebhook_PullRequestForkAndMalformedDeliveryOutcomes(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		body       []byte
+		deliveryID string
+		wantStatus int
+		wantState  domain.WebhookDeliveryStatus
+	}{
+		{name: "fork", body: []byte(`{"action":"opened","installation":{"id":999},"repository":{"id":1001,"name":"backend","owner":{"login":"example"}},"pull_request":{"head":{"ref":"feature","sha":"head-sha","repo":{"id":2002}}}}`), deliveryID: "delivery-pr-fork", wantStatus: http.StatusAccepted, wantState: domain.WebhookDeliveryStatusUnsupported},
+		{name: "malformed", body: []byte(`{"action":"opened","installation":{"id":999},"repository":{"id":1001,"name":"backend","owner":{"login":"example"}},"pull_request":{"head":{"ref":"","sha":"head-sha","repo":{"id":1001}}}}`), deliveryID: "delivery-pr-malformed", wantStatus: http.StatusBadRequest, wantState: domain.WebhookDeliveryStatusFailed},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
+			jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
+			h := newTestGitHubEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(deliveryRepo, jobSvc), observability.NewNoopWebhookIngressMetrics(), "secret")
+			req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github/apps/registration-1", bytes.NewReader(testCase.body))
+			req.Header.Set("X-GitHub-Event", "pull_request")
+			req.Header.Set("X-GitHub-Delivery", testCase.deliveryID)
+			req.Header.Set("X-Hub-Signature-256", githubTestSignature("secret", testCase.body))
+
+			res := httptest.NewRecorder()
+			ingestTestGitHubWebhook(h, res, req)
+			if res.Code != testCase.wantStatus {
+				t.Fatalf("expected status %d, got %d body=%s", testCase.wantStatus, res.Code, res.Body.String())
+			}
+			delivery, err := deliveryRepo.GetByProviderDeliveryID(context.Background(), "github", testCase.deliveryID)
+			if err != nil {
+				t.Fatalf("expected ledger record, got %v", err)
+			}
+			if delivery.Status != testCase.wantState {
+				t.Fatalf("expected delivery status %q, got %q", testCase.wantState, delivery.Status)
+			}
+		})
+	}
+}
+
 func TestEventHandler_IngestGitHubWebhook_UnsupportedEventRecorded(t *testing.T) {
 	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
 	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
 	webhookSvc := webhooksvc.NewDeliveryIngressService(deliveryRepo, jobSvc)
 	h := newTestGitHubEventHandler(jobSvc, webhookSvc, observability.NewNoopWebhookIngressMetrics(), "secret")
 
-	body := []byte(`{"installation":{"id":999}}`)
+	body := []byte(`{"action":"closed","installation":{"id":999},"repository":{"id":1001,"name":"backend","owner":{"login":"example"}},"pull_request":{"head":{"ref":"feature","sha":"head-sha","repo":{"id":1001}}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github/apps/registration-1", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "pull_request")
 	req.Header.Set("X-GitHub-Delivery", "delivery-unsupported")
@@ -205,7 +326,7 @@ func TestEventHandler_IngestGitHubWebhook_UnsupportedEventRequiresConnectionIden
 		{name: "fractional installation", body: []byte(`{"installation":{"id":1.5}}`), wantStatus: http.StatusBadRequest},
 		{name: "unknown installation", body: []byte(`{"installation":{"id":999}}`), wantStatus: http.StatusOK},
 		{name: "disabled connection", body: []byte(`{"installation":{"id":999}}`), resolution: webhooksvc.GitHubWebhookConnectionResolution{ConnectionID: "connection-1", Found: true}, wantStatus: http.StatusOK},
-		{name: "enabled connection", body: []byte(`{"installation":{"id":999}}`), resolution: webhooksvc.GitHubWebhookConnectionResolution{ConnectionID: "connection-1", Found: true, Enabled: true}, wantStatus: http.StatusAccepted, wantDelivery: true},
+		{name: "enabled connection", body: []byte(`{"action":"closed","installation":{"id":999},"repository":{"id":1001,"name":"backend","owner":{"login":"example"}},"pull_request":{"head":{"ref":"feature","sha":"head-sha","repo":{"id":1001}}}}`), resolution: webhooksvc.GitHubWebhookConnectionResolution{ConnectionID: "connection-1", Found: true, Enabled: true}, wantStatus: http.StatusAccepted, wantDelivery: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
@@ -235,7 +356,7 @@ func TestEventHandler_IngestGitHubWebhook_UnsupportedDuplicateReturnsOK(t *testi
 	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
 	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
 	h := newTestGitHubEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(deliveryRepo, jobSvc), observability.NewNoopWebhookIngressMetrics(), "secret")
-	body := []byte(`{"installation":{"id":999}}`)
+	body := []byte(`{"action":"closed","installation":{"id":999},"repository":{"id":1001,"name":"backend","owner":{"login":"example"}},"pull_request":{"head":{"ref":"feature","sha":"head-sha","repo":{"id":1001}}}}`)
 	for attempt := range 2 {
 		req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github/apps/registration-1", bytes.NewReader(body))
 		req.Header.Set("X-GitHub-Event", "pull_request")
