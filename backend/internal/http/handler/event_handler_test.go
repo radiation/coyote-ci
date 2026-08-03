@@ -227,6 +227,66 @@ func TestEventHandler_IngestGitHubWebhook_PullRequestQueuesEnabledJobAndDeduplic
 	}
 }
 
+func TestEventHandler_IngestGitHubWebhook_PullRequestNoMatchRecorded(t *testing.T) {
+	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
+	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
+	h := newTestGitHubEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(deliveryRepo, jobSvc), observability.NewNoopWebhookIngressMetrics(), "secret")
+	body := []byte(`{"action":"opened","installation":{"id":999},"repository":{"id":1001,"name":"backend","owner":{"login":"example"}},"pull_request":{"head":{"ref":"feature","sha":"head-sha","repo":{"id":1001}}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github/apps/registration-1", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-GitHub-Delivery", "delivery-pr-no-match")
+	req.Header.Set("X-Hub-Signature-256", githubTestSignature("secret", body))
+
+	res := httptest.NewRecorder()
+	ingestTestGitHubWebhook(h, res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+	delivery, err := deliveryRepo.GetByProviderDeliveryID(context.Background(), "github", "delivery-pr-no-match")
+	if err != nil {
+		t.Fatalf("expected ledger record, got %v", err)
+	}
+	if delivery.Status != domain.WebhookDeliveryStatusIgnoredNoMatch {
+		t.Fatalf("expected ignored_no_match status, got %q", delivery.Status)
+	}
+}
+
+func TestEventHandler_IngestGitHubWebhook_PullRequestForkAndMalformedDeliveryOutcomes(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		body       []byte
+		deliveryID string
+		wantStatus int
+		wantState  domain.WebhookDeliveryStatus
+	}{
+		{name: "fork", body: []byte(`{"action":"opened","installation":{"id":999},"repository":{"id":1001,"name":"backend","owner":{"login":"example"}},"pull_request":{"head":{"ref":"feature","sha":"head-sha","repo":{"id":2002}}}}`), deliveryID: "delivery-pr-fork", wantStatus: http.StatusAccepted, wantState: domain.WebhookDeliveryStatusUnsupported},
+		{name: "malformed", body: []byte(`{"action":"opened","installation":{"id":999},"repository":{"id":1001,"name":"backend","owner":{"login":"example"}},"pull_request":{"head":{"ref":"","sha":"head-sha","repo":{"id":1001}}}}`), deliveryID: "delivery-pr-malformed", wantStatus: http.StatusBadRequest, wantState: domain.WebhookDeliveryStatusFailed},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
+			jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
+			h := newTestGitHubEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(deliveryRepo, jobSvc), observability.NewNoopWebhookIngressMetrics(), "secret")
+			req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github/apps/registration-1", bytes.NewReader(testCase.body))
+			req.Header.Set("X-GitHub-Event", "pull_request")
+			req.Header.Set("X-GitHub-Delivery", testCase.deliveryID)
+			req.Header.Set("X-Hub-Signature-256", githubTestSignature("secret", testCase.body))
+
+			res := httptest.NewRecorder()
+			ingestTestGitHubWebhook(h, res, req)
+			if res.Code != testCase.wantStatus {
+				t.Fatalf("expected status %d, got %d body=%s", testCase.wantStatus, res.Code, res.Body.String())
+			}
+			delivery, err := deliveryRepo.GetByProviderDeliveryID(context.Background(), "github", testCase.deliveryID)
+			if err != nil {
+				t.Fatalf("expected ledger record, got %v", err)
+			}
+			if delivery.Status != testCase.wantState {
+				t.Fatalf("expected delivery status %q, got %q", testCase.wantState, delivery.Status)
+			}
+		})
+	}
+}
+
 func TestEventHandler_IngestGitHubWebhook_UnsupportedEventRecorded(t *testing.T) {
 	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
 	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))

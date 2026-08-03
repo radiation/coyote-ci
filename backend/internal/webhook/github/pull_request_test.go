@@ -41,6 +41,20 @@ func TestParsePullRequestEvent_RejectsMalformedSupportedPayloads(t *testing.T) {
 	}
 }
 
+func TestParsePullRequestEvent_RejectsWrongEventAndInvalidHeadRepositoryID(t *testing.T) {
+	headers := make(http.Header)
+	headers.Set("X-GitHub-Event", "push")
+	if _, err := ParsePullRequestEvent(headers, []byte(`{}`)); !errors.Is(err, ErrUnsupportedEvent) {
+		t.Fatalf("expected unsupported event, got %v", err)
+	}
+
+	headers.Set("X-GitHub-Event", "pull_request")
+	body := []byte(`{"action":"opened","installation":{"id":999},"repository":{"id":1001,"name":"backend","owner":{"login":"example"}},"pull_request":{"head":{"ref":"feature","sha":"head","repo":{"id":1.5}}}}`)
+	if _, err := ParsePullRequestEvent(headers, body); !errors.Is(err, ErrInvalidPayload) {
+		t.Fatalf("expected invalid head repository ID, got %v", err)
+	}
+}
+
 func TestParsePullRequestEvent_UnsupportedForkAndMissingHeadAreNoOps(t *testing.T) {
 	headers := make(http.Header)
 	headers.Set("X-GitHub-Event", "pull_request")

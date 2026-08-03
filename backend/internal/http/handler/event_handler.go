@@ -235,7 +235,23 @@ func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Reques
 			writeDataJSON(w, http.StatusAccepted, api.PushEventResponse{MatchedJobs: 0, CreatedBuilds: 0, Builds: []api.PushEventMatchedJob{}})
 			return
 		}
-		trigger = webhooksvc.WebhookTriggerInput{ConnectionID: connection.ConnectionID, SCMProvider: provider, EventType: pullRequestEvent.EventType, RepositoryOwner: pullRequestEvent.RepositoryOwner, RepositoryName: pullRequestEvent.RepositoryName, ProviderRepositoryID: pullRequestEvent.ProviderRepositoryID, RepositoryURL: pullRequestEvent.RepositoryURL, RawRef: pullRequestEvent.RawRef, Ref: pullRequestEvent.Ref, RefType: pullRequestEvent.RefType, RefName: pullRequestEvent.RefName, CommitSHA: pullRequestEvent.CommitSHA, DeliveryID: pullRequestEvent.DeliveryID, Actor: pullRequestEvent.Actor, InstallationID: pullRequestEvent.InstallationID}
+		trigger = webhooksvc.WebhookTriggerInput{
+			ConnectionID:         connection.ConnectionID,
+			SCMProvider:          provider,
+			EventType:            pullRequestEvent.EventType,
+			RepositoryOwner:      pullRequestEvent.RepositoryOwner,
+			RepositoryName:       pullRequestEvent.RepositoryName,
+			ProviderRepositoryID: pullRequestEvent.ProviderRepositoryID,
+			RepositoryURL:        pullRequestEvent.RepositoryURL,
+			RawRef:               pullRequestEvent.RawRef,
+			Ref:                  pullRequestEvent.Ref,
+			RefType:              pullRequestEvent.RefType,
+			RefName:              pullRequestEvent.RefName,
+			CommitSHA:            pullRequestEvent.CommitSHA,
+			DeliveryID:           pullRequestEvent.DeliveryID,
+			Actor:                pullRequestEvent.Actor,
+			InstallationID:       pullRequestEvent.InstallationID,
+		}
 		ingressResult, triggerErr := h.webhookService.ProcessVerifiedEvent(ctx, delivery, trigger)
 		if triggerErr != nil {
 			h.metrics.IncOutcome(provider, eventType, observability.WebhookOutcomeFailedProcessing)

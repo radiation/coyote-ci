@@ -63,7 +63,18 @@ func ParsePullRequestEvent(headers http.Header, body []byte) (PullRequestEvent, 
 	if err != nil || strings.TrimSpace(payload.Action) == "" || strings.TrimSpace(payload.Repository.Owner.Login) == "" || strings.TrimSpace(payload.Repository.Name) == "" {
 		return PullRequestEvent{}, ErrInvalidPayload
 	}
-	event := PullRequestEvent{EventType: "pull_request", Action: strings.ToLower(strings.TrimSpace(payload.Action)), RepositoryOwner: strings.TrimSpace(payload.Repository.Owner.Login), RepositoryName: strings.TrimSpace(payload.Repository.Name), ProviderRepositoryID: repositoryID, RepositoryURL: strings.TrimSpace(payload.Repository.HTMLURL), InstallationID: envelope.InstallationID, DeliveryID: strings.TrimSpace(headers.Get("X-GitHub-Delivery")), Actor: strings.TrimSpace(payload.Sender.Login)}
+	action := strings.ToLower(strings.TrimSpace(payload.Action))
+	event := PullRequestEvent{
+		EventType:            "pull_request",
+		Action:               action,
+		RepositoryOwner:      strings.TrimSpace(payload.Repository.Owner.Login),
+		RepositoryName:       strings.TrimSpace(payload.Repository.Name),
+		ProviderRepositoryID: repositoryID,
+		RepositoryURL:        strings.TrimSpace(payload.Repository.HTMLURL),
+		InstallationID:       envelope.InstallationID,
+		DeliveryID:           strings.TrimSpace(headers.Get("X-GitHub-Delivery")),
+		Actor:                strings.TrimSpace(payload.Sender.Login),
+	}
 	event.SupportedAction = event.Action == "opened" || event.Action == "reopened" || event.Action == "synchronize"
 	if payload.PullRequest.Head.Repo == nil {
 		return event, nil

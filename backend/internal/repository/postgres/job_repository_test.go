@@ -253,3 +253,57 @@ func TestJobRepository_ListPushEnabledByRepositoryID(t *testing.T) {
 		t.Fatalf("unmet expectations: %v", expectationsErr)
 	}
 }
+
+func TestJobRepository_ListPullRequestEnabledByRepositoryID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewJobRepository(db)
+	now := time.Now().UTC()
+	rows := sqlmock.NewRows([]string{"id", "project_id", "name", "priority", "repository_id", "repository_url", "default_ref", "default_commit_sha", "push_enabled", "pull_request_enabled", "push_branch", "trigger_mode", "branch_allowlist", "tag_allowlist", "artifact_triggers", "pipeline_yaml", "pipeline_path", "enabled", "created_at", "updated_at"}).
+		AddRow("job-2", "project-1", "second", 5, "repo-1", "https://github.com/same/repository.git", "main", nil, false, true, nil, "branches", `[]`, `[]`, `[]`, "version: 1", nil, true, now.Add(time.Second), now.Add(time.Second)).
+		AddRow("job-1", "project-1", "first", 5, "repo-1", "https://github.com/same/repository.git", "main", nil, false, true, nil, "branches", `[]`, `[]`, `[]`, "version: 1", nil, true, now, now)
+	mock.ExpectQuery(`pull_request_enabled = TRUE`).WithArgs("repo-1").WillReturnRows(rows)
+
+	matched, matchErr := repo.ListPullRequestEnabledByRepositoryID(context.Background(), " repo-1 ")
+	if matchErr != nil {
+		t.Fatalf("list mapped pull-request jobs: %v", matchErr)
+	}
+	if len(matched) != 2 || matched[0].ID != "job-2" || matched[1].ID != "job-1" {
+		t.Fatalf("expected mapped pull-request jobs only, got %+v", matched)
+	}
+
+	blankMatches, blankErr := repo.ListPullRequestEnabledByRepositoryID(context.Background(), " ")
+	if blankErr != nil {
+		t.Fatalf("list blank mapped pull-request jobs: %v", blankErr)
+	}
+	if len(blankMatches) != 0 {
+		t.Fatalf("expected no blank-repository matches, got %d", len(blankMatches))
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationsErr)
+	}
+}
+
+func TestJobRepository_ListPullRequestEnabledByRepositoryID_QueryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := NewJobRepository(db)
+	queryErr := errors.New("database unavailable")
+	mock.ExpectQuery(`pull_request_enabled = TRUE`).WithArgs("repo-1").WillReturnError(queryErr)
+
+	_, listErr := repo.ListPullRequestEnabledByRepositoryID(context.Background(), "repo-1")
+	if !errors.Is(listErr, queryErr) {
+		t.Fatalf("expected query error, got %v", listErr)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationsErr)
+	}
+}

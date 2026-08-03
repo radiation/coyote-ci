@@ -287,6 +287,41 @@ func TestJobRepository_ListPushEnabledByRepositoryID(t *testing.T) {
 	assertJobIDs(t, matched, []string{"job-enabled-b", "job-enabled-a"})
 }
 
+func TestJobRepository_ListPullRequestEnabledByRepositoryID(t *testing.T) {
+	repo := NewJobRepository()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	repositoryID := "repo-1"
+	otherRepositoryID := "repo-2"
+	jobs := []domain.Job{
+		{ID: "job-enabled-a", RepositoryID: &repositoryID, PullRequestEnabled: true, Enabled: true, CreatedAt: now},
+		{ID: "job-enabled-b", RepositoryID: &repositoryID, PullRequestEnabled: true, Enabled: true, CreatedAt: now.Add(time.Second)},
+		{ID: "job-other-repository", RepositoryID: &otherRepositoryID, PullRequestEnabled: true, Enabled: true, CreatedAt: now.Add(2 * time.Second)},
+		{ID: "job-unmapped", PullRequestEnabled: true, Enabled: true, CreatedAt: now.Add(3 * time.Second)},
+		{ID: "job-disabled", RepositoryID: &repositoryID, PullRequestEnabled: true, Enabled: false, CreatedAt: now.Add(4 * time.Second)},
+		{ID: "job-pr-disabled", RepositoryID: &repositoryID, PullRequestEnabled: false, Enabled: true, CreatedAt: now.Add(5 * time.Second)},
+	}
+	for _, job := range jobs {
+		if _, err := repo.Create(ctx, job); err != nil {
+			t.Fatalf("create job %s: %v", job.ID, err)
+		}
+	}
+
+	matched, matchErr := repo.ListPullRequestEnabledByRepositoryID(ctx, " repo-1 ")
+	if matchErr != nil {
+		t.Fatalf("list mapped pull-request jobs: %v", matchErr)
+	}
+	assertJobIDs(t, matched, []string{"job-enabled-b", "job-enabled-a"})
+
+	blankMatches, blankErr := repo.ListPullRequestEnabledByRepositoryID(ctx, " ")
+	if blankErr != nil {
+		t.Fatalf("list blank mapped pull-request jobs: %v", blankErr)
+	}
+	if len(blankMatches) != 0 {
+		t.Fatalf("expected no blank-repository matches, got %d", len(blankMatches))
+	}
+}
+
 func assertJobIDs(t *testing.T, jobs []domain.Job, want []string) {
 	t.Helper()
 	if len(jobs) != len(want) {
