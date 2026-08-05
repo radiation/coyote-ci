@@ -189,7 +189,7 @@ func TestEventHandler_IngestGitHubWebhook_PullRequestQueuesEnabledJobAndDeduplic
 		t.Fatalf("create pull-request job failed: %v", err)
 	}
 
-	body := []byte(`{"action":"synchronize","installation":{"id":999},"repository":{"id":1001,"name":"backend","html_url":"https://github.com/example/backend","owner":{"login":"example"}},"pull_request":{"head":{"ref":"feature/pr-42","sha":"head-sha","repo":{"id":1001}}},"sender":{"login":"octocat"}}`)
+	body := []byte(`{"action":"synchronize","installation":{"id":999},"repository":{"id":1001,"name":"backend","html_url":"https://github.com/example/backend","owner":{"login":"example"}},"pull_request":{"number":42,"html_url":"https://github.example.com/example/backend/pull/42","base":{"ref":"main","sha":"base-sha"},"head":{"ref":"feature/pr-42","sha":"head-sha","repo":{"id":1001}}},"sender":{"login":"octocat"}}`)
 	signature := githubTestSignature("secret", body)
 	for attempt := range 2 {
 		req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github/apps/registration-1", bytes.NewReader(body))
@@ -222,6 +222,9 @@ func TestEventHandler_IngestGitHubWebhook_PullRequestQueuesEnabledJobAndDeduplic
 	if build.CommitSHA == nil || *build.CommitSHA != "head-sha" || build.SourceSHA == nil || *build.SourceSHA != "head-sha" {
 		t.Fatalf("expected persisted pull-request head SHA, got %+v", build)
 	}
+	if build.Trigger.CommitSHA == nil || *build.Trigger.CommitSHA != "head-sha" || build.Trigger.PullRequest == nil || build.Trigger.PullRequest.Number != 42 || build.Trigger.PullRequest.BaseSHA != "base-sha" || build.Trigger.PullRequest.HeadSHA != "head-sha" || build.Trigger.PullRequest.SourceMode != domain.PullRequestSourceModeHead {
+		t.Fatalf("expected persisted pull-request snapshot and head trigger SHA, got %+v", build.Trigger)
+	}
 	if build.RegisteredRepositoryID == nil || *build.RegisteredRepositoryID != "repo-1" || build.SCMConnectionID == nil || *build.SCMConnectionID != "connection-1" || build.ProviderRepositoryID == nil || *build.ProviderRepositoryID != "1001" {
 		t.Fatalf("expected persisted repository identity snapshot, got %+v", build)
 	}
@@ -231,7 +234,7 @@ func TestEventHandler_IngestGitHubWebhook_PullRequestNoMatchRecorded(t *testing.
 	deliveryRepo := repositorymemory.NewWebhookDeliveryRepository()
 	jobSvc := service.NewJobService(repositorymemory.NewJobRepository(), buildsvc.NewBuildService(repositorymemory.NewBuildRepository(), nil, nil))
 	h := newTestGitHubEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(deliveryRepo, jobSvc), observability.NewNoopWebhookIngressMetrics(), "secret")
-	body := []byte(`{"action":"opened","installation":{"id":999},"repository":{"id":1001,"name":"backend","owner":{"login":"example"}},"pull_request":{"head":{"ref":"feature","sha":"head-sha","repo":{"id":1001}}}}`)
+	body := []byte(`{"action":"opened","installation":{"id":999},"repository":{"id":1001,"name":"backend","owner":{"login":"example"}},"pull_request":{"number":42,"html_url":"https://github.example.com/example/backend/pull/42","base":{"ref":"main","sha":"base-sha"},"head":{"ref":"feature","sha":"head-sha","repo":{"id":1001}}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github/apps/registration-1", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "pull_request")
 	req.Header.Set("X-GitHub-Delivery", "delivery-pr-no-match")

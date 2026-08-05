@@ -3,7 +3,10 @@ package github
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
+
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
 
 type PullRequestEvent struct {
@@ -21,6 +24,7 @@ type PullRequestEvent struct {
 	RefType              string
 	RefName              string
 	CommitSHA            string
+	PullRequest          *domain.PullRequestSnapshot
 	DeliveryID           string
 	Actor                string
 }
@@ -44,6 +48,12 @@ func ParsePullRequestEvent(headers http.Header, body []byte) (PullRequestEvent, 
 			} `json:"owner"`
 		} `json:"repository"`
 		PullRequest struct {
+			Number  json.RawMessage `json:"number"`
+			HTMLURL string          `json:"html_url"`
+			Base    struct {
+				Ref string `json:"ref"`
+				SHA string `json:"sha"`
+			} `json:"base"`
 			Head struct {
 				Ref  string `json:"ref"`
 				SHA  string `json:"sha"`
@@ -92,8 +102,24 @@ func ParsePullRequestEvent(headers http.Header, body []byte) (PullRequestEvent, 
 	event.RawRef = "refs/heads/" + event.Ref
 	event.RefType = "branch"
 	event.CommitSHA = strings.TrimSpace(payload.PullRequest.Head.SHA)
-	if event.Ref == "" || event.CommitSHA == "" {
+	prNumberText, numberErr := parsePositiveIntegerID(payload.PullRequest.Number)
+	prNumber, parseNumberErr := strconv.ParseInt(prNumberText, 10, 64)
+	if numberErr != nil || parseNumberErr != nil || event.Ref == "" || event.CommitSHA == "" {
 		return PullRequestEvent{}, ErrInvalidPayload
 	}
+	snapshot := domain.NormalizeBuildTrigger(domain.BuildTrigger{PullRequest: &domain.PullRequestSnapshot{
+		Number:     prNumber,
+		Action:     action,
+		URL:        payload.PullRequest.HTMLURL,
+		BaseRef:    payload.PullRequest.Base.Ref,
+		BaseSHA:    payload.PullRequest.Base.SHA,
+		HeadRef:    event.Ref,
+		HeadSHA:    event.CommitSHA,
+		SourceMode: domain.PullRequestSourceModeHead,
+	}}).PullRequest
+	if snapshot == nil || domain.ValidatePullRequestSnapshot(*snapshot) != nil {
+		return PullRequestEvent{}, ErrInvalidPayload
+	}
+	event.PullRequest = snapshot
 	return event, nil
 }

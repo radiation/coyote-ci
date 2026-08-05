@@ -77,6 +77,9 @@ func (s *BuildService) CreateBuild(ctx context.Context, input CreateBuildInput) 
 		return domain.Build{}, identityErr
 	}
 	build = domain.NormalizeBuildMetadata(build)
+	if triggerErr := build.Trigger.Validate(); triggerErr != nil {
+		return domain.Build{}, triggerErr
+	}
 
 	if len(input.Steps) > 0 {
 		steps := make([]domain.BuildStep, 0, len(input.Steps))
@@ -204,6 +207,9 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		return domain.Build{}, identityErr
 	}
 	build = domain.NormalizeBuildMetadata(build)
+	if triggerErr := build.Trigger.Validate(); triggerErr != nil {
+		return domain.Build{}, triggerErr
+	}
 
 	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
 	if err != nil {

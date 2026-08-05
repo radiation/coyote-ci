@@ -47,6 +47,17 @@ type BuildSourceResponse struct {
 	SourceCommitSHA *string `json:"source_commit_sha,omitempty"`
 }
 
+type PullRequestResponse struct {
+	Number     int64  `json:"number"`
+	Action     string `json:"action"`
+	URL        string `json:"url"`
+	BaseRef    string `json:"base_ref"`
+	BaseSHA    string `json:"base_sha"`
+	HeadRef    string `json:"head_ref"`
+	HeadSHA    string `json:"head_sha"`
+	SourceMode string `json:"source_mode"`
+}
+
 type ImageExecutionResponse struct {
 	RequestedRef          *string              `json:"requested_ref,omitempty"`
 	ResolvedRef           *string              `json:"resolved_ref,omitempty"`
@@ -157,6 +168,7 @@ type BuildResponse struct {
 	TriggerCommitSHA              *string                    `json:"trigger_commit_sha,omitempty"`
 	DeliveryID                    *string                    `json:"delivery_id,omitempty"`
 	Actor                         *string                    `json:"actor,omitempty"`
+	PullRequest                   *PullRequestResponse       `json:"pull_request,omitempty"`
 	TriggerProducerProjectID      *string                    `json:"trigger_producer_project_id,omitempty"`
 	TriggerProducerJobID          *string                    `json:"trigger_producer_job_id,omitempty"`
 	TriggerProducerBuildID        *string                    `json:"trigger_producer_build_id,omitempty"`

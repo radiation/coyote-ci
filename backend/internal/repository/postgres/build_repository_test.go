@@ -73,10 +73,22 @@ func TestBuildRepository_Create(t *testing.T) {
 				row[buildColumnPosition(columns, "attempt_number")] = 1
 				row[buildColumnPosition(columns, "trigger_kind")] = "manual"
 				row[buildColumnPosition(columns, "image_source_kind")] = "external"
+				row[buildColumnPosition(columns, "pull_request_number")] = int64(42)
+				row[buildColumnPosition(columns, "pull_request_action")] = "opened"
+				row[buildColumnPosition(columns, "pull_request_url")] = "https://github.example.com/acme/repo/pull/42"
+				row[buildColumnPosition(columns, "pull_request_base_ref")] = "main"
+				row[buildColumnPosition(columns, "pull_request_base_sha")] = "base-sha"
+				row[buildColumnPosition(columns, "pull_request_head_ref")] = "feature/pr-42"
+				row[buildColumnPosition(columns, "pull_request_head_sha")] = "head-sha"
+				row[buildColumnPosition(columns, "pull_request_source_mode")] = "head"
 				exec.WillReturnRows(sqlmock.NewRows(columns).AddRow(row...))
 			}
 
-			build := domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC()}
+			provider := "github"
+			eventType := "pull_request"
+			headRef := "feature/pr-42"
+			headSHA := "head-sha"
+			build := domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusPending, CreatedAt: time.Now().UTC(), Trigger: domain.BuildTrigger{Kind: domain.BuildTriggerKindWebhook, SCMProvider: &provider, EventType: &eventType, Ref: &headRef, RefName: &headRef, CommitSHA: &headSHA, PullRequest: &domain.PullRequestSnapshot{Number: 42, Action: "opened", URL: "https://github.example.com/acme/repo/pull/42", BaseRef: "main", BaseSHA: "base-sha", HeadRef: headRef, HeadSHA: headSHA, SourceMode: domain.PullRequestSourceModeHead}}}
 			got, err := repo.Create(context.Background(), build)
 			if tc.expectErr {
 				if err == nil {
@@ -94,7 +106,10 @@ func TestBuildRepository_Create(t *testing.T) {
 				t.Fatalf("expected build number 1, got %d", got.BuildNumber)
 			}
 			if got.TriggerType != domain.BuildTriggerTypeManual {
-				t.Fatalf("expected manual trigger type, got %q", got.TriggerType)
+				t.Fatalf("expected manual trigger type from returned row, got %q", got.TriggerType)
+			}
+			if got.Trigger.PullRequest == nil || got.Trigger.PullRequest.HeadSHA != "head-sha" {
+				t.Fatalf("expected pull-request snapshot after create, got %+v", got.Trigger.PullRequest)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatalf("unmet sql expectations: %v", err)
@@ -253,6 +268,14 @@ func TestBuildRepository_GetByID(t *testing.T) {
 				row[buildColumnPosition(columns, "source_committer_email")] = "grace@example.com"
 				row[buildColumnPosition(columns, "trigger_kind")] = "webhook"
 				row[buildColumnPosition(columns, "trigger_actor")] = "octocat"
+				row[buildColumnPosition(columns, "pull_request_number")] = int64(42)
+				row[buildColumnPosition(columns, "pull_request_action")] = "synchronize"
+				row[buildColumnPosition(columns, "pull_request_url")] = "https://github.example.com/acme/repo/pull/42"
+				row[buildColumnPosition(columns, "pull_request_base_ref")] = "main"
+				row[buildColumnPosition(columns, "pull_request_base_sha")] = "base-sha"
+				row[buildColumnPosition(columns, "pull_request_head_ref")] = "feature/pr-42"
+				row[buildColumnPosition(columns, "pull_request_head_sha")] = "abc123"
+				row[buildColumnPosition(columns, "pull_request_source_mode")] = "head"
 				row[buildColumnPosition(columns, "image_source_kind")] = "external"
 				exp.WillReturnRows(sqlmock.NewRows(columns).AddRow(row...))
 			}
@@ -285,6 +308,9 @@ func TestBuildRepository_GetByID(t *testing.T) {
 			}
 			if got.TriggeredBy == nil || *got.TriggeredBy != "octocat" {
 				t.Fatalf("expected triggered_by octocat, got %v", got.TriggeredBy)
+			}
+			if got.Trigger.PullRequest == nil || got.Trigger.PullRequest.Number != 42 || got.Trigger.PullRequest.HeadSHA != "abc123" || got.Trigger.PullRequest.SourceMode != domain.PullRequestSourceModeHead {
+				t.Fatalf("expected pull-request snapshot round trip, got %+v", got.Trigger.PullRequest)
 			}
 			if got.SourceAuthorEmail == nil || *got.SourceAuthorEmail != "ada@example.com" {
 				t.Fatalf("expected source_author_email ada@example.com, got %v", got.SourceAuthorEmail)

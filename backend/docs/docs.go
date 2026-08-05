@@ -5003,6 +5003,9 @@ const docTemplate = `{
                 "project_slug": {
                     "type": "string"
                 },
+                "pull_request": {
+                    "$ref": "#/definitions/api.PullRequestResponse"
+                },
                 "queued_at": {
                     "type": "string"
                 },
@@ -6354,6 +6357,35 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.PullRequestResponse": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "base_ref": {
+                    "type": "string"
+                },
+                "base_sha": {
+                    "type": "string"
+                },
+                "head_ref": {
+                    "type": "string"
+                },
+                "head_sha": {
+                    "type": "string"
+                },
+                "number": {
+                    "type": "integer"
+                },
+                "source_mode": {
+                    "type": "string"
+                },
+                "url": {
                     "type": "string"
                 }
             }
