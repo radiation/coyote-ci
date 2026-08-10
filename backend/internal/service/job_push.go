@@ -157,6 +157,7 @@ func (s *JobService) TriggerWebhookEvent(ctx context.Context, input webhooksvc.W
 			RefName:         normalizedRef.RefName,
 			Deleted:         boolPtrValue(normalizedRef.Deleted),
 			CommitSHA:       commitSHA,
+			PullRequest:     input.PullRequest,
 			DeliveryID:      strings.TrimSpace(input.DeliveryID),
 			Actor:           strings.TrimSpace(input.Actor),
 		}

@@ -29,6 +29,7 @@ func TestBuildService_RetryJob_CreatesNewAttemptAndPreservesHistory(t *testing.T
 		RepoURL:       stringPtr("https://github.com/acme/repo.git"),
 		Ref:           stringPtr("main"),
 		CommitSHA:     stringPtr("abc123"),
+		Trigger:       domain.BuildTrigger{PullRequest: testPullRequestSnapshot()},
 	}
 	steps := []domain.BuildStep{{
 		ID:             "step-1",
@@ -97,6 +98,7 @@ func TestBuildService_RetryJob_CreatesNewAttemptAndPreservesHistory(t *testing.T
 	if retryResult.Build.AttemptNumber != 2 {
 		t.Fatalf("expected build attempt number 2, got %d", retryResult.Build.AttemptNumber)
 	}
+	assertIndependentPullRequestSnapshot(t, sourceBuild, retryResult.Build)
 
 	createdJob := retryResult.Job
 	if createdJob.AttemptNumber != 2 {
@@ -177,6 +179,7 @@ func TestBuildService_RerunBuildFromStep_CreatesLinkedBuildAttemptAndPreservesSp
 		RepoURL:       stringPtr("https://github.com/acme/repo.git"),
 		Ref:           stringPtr("main"),
 		CommitSHA:     stringPtr("abc123"),
+		Trigger:       domain.BuildTrigger{PullRequest: testPullRequestSnapshot()},
 	}
 	sourceSteps := []domain.BuildStep{
 		{ID: "step-0", BuildID: sourceBuild.ID, StepIndex: 0, Name: "setup", Command: "sh", Args: []string{"-c", "echo setup"}, Env: map[string]string{}, WorkingDir: ".", TimeoutSeconds: 60, Status: domain.BuildStepStatusSuccess},
@@ -218,6 +221,7 @@ func TestBuildService_RerunBuildFromStep_CreatesLinkedBuildAttemptAndPreservesSp
 	if newBuild.AttemptNumber != 2 {
 		t.Fatalf("expected build attempt 2, got %d", newBuild.AttemptNumber)
 	}
+	assertIndependentPullRequestSnapshot(t, sourceBuild, newBuild)
 
 	newJobs, err := execRepo.GetJobsByBuildID(context.Background(), newBuild.ID)
 	if err != nil {
@@ -312,6 +316,7 @@ func TestBuildService_RerunBuild_CreatesNewQueuedBuildForTerminalBuilds(t *testi
 			if newBuild.Trigger.Kind != domain.BuildTriggerKindWebhook || newBuild.Trigger.Ref == nil || *newBuild.Trigger.Ref != "refs/heads/main" {
 				t.Fatalf("expected trigger metadata to be preserved, got %+v", newBuild.Trigger)
 			}
+			assertIndependentPullRequestSnapshot(t, sourceBuild, newBuild)
 
 			newSteps, err := buildRepo.GetStepsByBuildID(context.Background(), newBuild.ID)
 			if err != nil {
@@ -801,6 +806,7 @@ func seedRerunnableBuild(t *testing.T, buildRepo *memoryrepo.BuildRepository, st
 			Ref:           stringPtr("refs/heads/main"),
 			CommitSHA:     stringPtr("abc123"),
 			Actor:         stringPtr("octocat"),
+			PullRequest:   testPullRequestSnapshot(),
 		},
 		RequestedImageRef: stringPtr("golang:1.24"),
 		ImageSourceKind:   domain.ImageSourceKindExternal,
@@ -831,4 +837,31 @@ func timePtr(value time.Time) *time.Time {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func testPullRequestSnapshot() *domain.PullRequestSnapshot {
+	return &domain.PullRequestSnapshot{
+		Number:     42,
+		Action:     "synchronize",
+		URL:        "https://github.example.com/acme/repo/pull/42",
+		BaseRef:    "main",
+		BaseSHA:    "base-sha",
+		HeadRef:    "feature/pr-42",
+		HeadSHA:    "head-sha",
+		SourceMode: domain.PullRequestSourceModeHead,
+	}
+}
+
+func assertIndependentPullRequestSnapshot(t *testing.T, source domain.Build, attempt domain.Build) {
+	t.Helper()
+	if source.Trigger.PullRequest == nil || attempt.Trigger.PullRequest == nil {
+		t.Fatalf("expected source and attempt pull-request snapshots, got source=%+v attempt=%+v", source.Trigger.PullRequest, attempt.Trigger.PullRequest)
+	}
+	if source.Trigger.PullRequest == attempt.Trigger.PullRequest || attempt.Trigger.PullRequest.Number != source.Trigger.PullRequest.Number || attempt.Trigger.PullRequest.HeadSHA != source.Trigger.PullRequest.HeadSHA {
+		t.Fatalf("expected equivalent independent snapshots, got source=%+v attempt=%+v", source.Trigger.PullRequest, attempt.Trigger.PullRequest)
+	}
+	attempt.Trigger.PullRequest.HeadSHA = "mutated-head-sha"
+	if source.Trigger.PullRequest.HeadSHA != "head-sha" {
+		t.Fatalf("expected source snapshot to remain immutable, got %+v", source.Trigger.PullRequest)
+	}
 }

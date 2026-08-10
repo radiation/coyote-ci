@@ -88,6 +88,7 @@ func TestScanBuild_MapsArtifactTriggerFields(t *testing.T) {
 		"artifact", "github", "release", "example", "repo", "https://github.com/example/repo", "refs/tags/v1.0.0", "v1.0.0", "tag", "v1.0.0", deleted, "def456", "delivery-1", "octocat",
 		"project-upstream", "job-upstream", "build-upstream", "artifact-1", "dist/app.tgz", "app.tgz", int64(77), "sha256:abc",
 		"golang:1.24", "registry.example.com/build@sha256:123", "managed", "managed-image-1", "managed-version-1",
+		int64(42), "synchronize", "https://github.example.com/acme/repo/pull/42", "main", "base-sha", "feature/pr-42", "head-sha", "head",
 	)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 
@@ -114,6 +115,9 @@ func TestScanBuild_MapsArtifactTriggerFields(t *testing.T) {
 	if build.Source == nil || build.Source.RepositoryURL != "https://github.com/example/repo.git" {
 		t.Fatalf("expected normalized source spec, got %#v", build.Source)
 	}
+	if build.Trigger.PullRequest == nil || build.Trigger.PullRequest.Number != 42 || build.Trigger.PullRequest.HeadSHA != "head-sha" {
+		t.Fatalf("expected full build snapshot scan, got %+v", build.Trigger.PullRequest)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
@@ -128,6 +132,7 @@ func TestScanBuildList_DefaultsExternalImageSourceAndMapsArtifactTriggerFields(t
 		"artifact", sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullBool{}, sql.NullString{}, sql.NullString{}, sql.NullString{},
 		"project-upstream", "job-upstream", "build-upstream", "artifact-2", "dist/lib.tgz", "lib.tgz", sql.NullInt64{Int64: 88, Valid: true}, "sha256:def",
 		sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{},
+		int64(42), "opened", "https://github.example.com/acme/repo/pull/42", "main", "base-sha", "feature/pr-42", "head-sha", "head",
 	}})
 	if err != nil {
 		t.Fatalf("scanBuildList failed: %v", err)
@@ -143,5 +148,8 @@ func TestScanBuildList_DefaultsExternalImageSourceAndMapsArtifactTriggerFields(t
 	}
 	if build.Source == nil || build.Source.Ref == nil || *build.Source.Ref != "main" {
 		t.Fatalf("expected normalized source ref, got %#v", build.Source)
+	}
+	if build.Trigger.PullRequest == nil || build.Trigger.PullRequest.Number != 42 || build.Trigger.PullRequest.Action != "opened" {
+		t.Fatalf("expected list build snapshot scan, got %+v", build.Trigger.PullRequest)
 	}
 }

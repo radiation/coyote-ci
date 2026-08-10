@@ -64,6 +64,7 @@ func toBuildResponse(build domain.Build, project ...*domain.Project) api.BuildRe
 		TriggerCommitSHA:              triggerCommitSHA,
 		DeliveryID:                    trigger.DeliveryID,
 		Actor:                         trigger.Actor,
+		PullRequest:                   toPullRequestResponse(trigger.PullRequest),
 		TriggerProducerProjectID:      trigger.ProducerProjectID,
 		TriggerProducerJobID:          trigger.ProducerJobID,
 		TriggerProducerBuildID:        trigger.ProducerBuildID,
@@ -74,6 +75,22 @@ func toBuildResponse(build domain.Build, project ...*domain.Project) api.BuildRe
 		TriggerArtifactChecksumSHA256: trigger.ArtifactChecksumSHA256,
 		Source:                        toBuildSourceResponse(build),
 		Image:                         toImageExecutionResponse(build.RequestedImageRef, build.ResolvedImageRef, build.ImageSourceKind, build.ManagedImageID, build.ManagedImageVersionID),
+	}
+}
+
+func toPullRequestResponse(snapshot *domain.PullRequestSnapshot) *api.PullRequestResponse {
+	if snapshot == nil {
+		return nil
+	}
+	return &api.PullRequestResponse{
+		Number:     snapshot.Number,
+		Action:     snapshot.Action,
+		URL:        snapshot.URL,
+		BaseRef:    snapshot.BaseRef,
+		BaseSHA:    snapshot.BaseSHA,
+		HeadRef:    snapshot.HeadRef,
+		HeadSHA:    snapshot.HeadSHA,
+		SourceMode: string(snapshot.SourceMode),
 	}
 }
 

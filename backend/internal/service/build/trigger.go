@@ -25,6 +25,7 @@ type CreateBuildTriggerInput struct {
 	ArtifactName           string
 	ArtifactSizeBytes      *int64
 	ArtifactChecksumSHA256 string
+	PullRequest            *domain.PullRequestSnapshot
 }
 
 func toDomainBuildTrigger(input *CreateBuildTriggerInput) domain.BuildTrigger {
@@ -55,7 +56,16 @@ func toDomainBuildTrigger(input *CreateBuildTriggerInput) domain.BuildTrigger {
 		ArtifactName:           buildOptionalStringPtr(input.ArtifactName),
 		ArtifactSizeBytes:      input.ArtifactSizeBytes,
 		ArtifactChecksumSHA256: buildOptionalStringPtr(input.ArtifactChecksumSHA256),
+		PullRequest:            clonePullRequestSnapshot(input.PullRequest),
 	}
 
 	return domain.NormalizeBuildTrigger(trigger)
+}
+
+func clonePullRequestSnapshot(snapshot *domain.PullRequestSnapshot) *domain.PullRequestSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	copySnapshot := *snapshot
+	return &copySnapshot
 }

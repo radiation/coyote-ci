@@ -13,10 +13,10 @@ type rowScanner interface {
 }
 
 // buildColumns is the canonical column list for build SELECT/RETURNING clauses (full detail).
-const buildColumns = `id, build_number, project_id, job_id, priority, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, registered_repository_id, scm_connection_id, provider_repository_id, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, source_author_name, source_author_email, source_committer_name, source_committer_email, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, trigger_producer_project_id, trigger_producer_job_id, trigger_producer_build_id, trigger_artifact_id, trigger_artifact_path, trigger_artifact_name, trigger_artifact_size_bytes, trigger_artifact_checksum_sha256, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
+const buildColumns = `id, build_number, project_id, job_id, priority, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, registered_repository_id, scm_connection_id, provider_repository_id, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, source_author_name, source_author_email, source_committer_name, source_committer_email, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, trigger_producer_project_id, trigger_producer_job_id, trigger_producer_build_id, trigger_artifact_id, trigger_artifact_path, trigger_artifact_name, trigger_artifact_size_bytes, trigger_artifact_checksum_sha256, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id, pull_request_number, pull_request_action, pull_request_url, pull_request_base_ref, pull_request_base_sha, pull_request_head_ref, pull_request_head_sha, pull_request_source_mode`
 
 // buildListColumns is a minimal column list used for list queries (omits large pipeline YAML).
-const buildListColumns = `id, build_number, project_id, job_id, priority, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, source_author_name, source_author_email, source_committer_name, source_committer_email, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, trigger_producer_project_id, trigger_producer_job_id, trigger_producer_build_id, trigger_artifact_id, trigger_artifact_path, trigger_artifact_name, trigger_artifact_size_bytes, trigger_artifact_checksum_sha256, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id`
+const buildListColumns = `id, build_number, project_id, job_id, priority, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, source_author_name, source_author_email, source_committer_name, source_committer_email, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, trigger_producer_project_id, trigger_producer_job_id, trigger_producer_build_id, trigger_artifact_id, trigger_artifact_path, trigger_artifact_name, trigger_artifact_size_bytes, trigger_artifact_checksum_sha256, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id, pull_request_number, pull_request_action, pull_request_url, pull_request_base_ref, pull_request_base_sha, pull_request_head_ref, pull_request_head_sha, pull_request_source_mode`
 
 var queueEntryColumns = qualifyColumns("b", buildListColumns) + `, p.name, p.slug, j.name, running_job.claimed_by, running_job.claim_expires_at`
 
@@ -94,6 +94,14 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 		&nf.imageSourceKind,
 		&nf.managedImageID,
 		&nf.managedImageVersionID,
+		&nf.pullRequestNumber,
+		&nf.pullRequestAction,
+		&nf.pullRequestURL,
+		&nf.pullRequestBaseRef,
+		&nf.pullRequestBaseSHA,
+		&nf.pullRequestHeadRef,
+		&nf.pullRequestHeadSHA,
+		&nf.pullRequestSourceMode,
 	)
 	if err != nil {
 		return domain.Build{}, err
@@ -164,6 +172,14 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 		&nf.imageSourceKind,
 		&nf.managedImageID,
 		&nf.managedImageVersionID,
+		&nf.pullRequestNumber,
+		&nf.pullRequestAction,
+		&nf.pullRequestURL,
+		&nf.pullRequestBaseRef,
+		&nf.pullRequestBaseSHA,
+		&nf.pullRequestHeadRef,
+		&nf.pullRequestHeadSHA,
+		&nf.pullRequestSourceMode,
 	)
 	if err != nil {
 		return domain.Build{}, err
@@ -226,6 +242,14 @@ type buildNullFields struct {
 	imageSourceKind               sql.NullString
 	managedImageID                sql.NullString
 	managedImageVersionID         sql.NullString
+	pullRequestNumber             sql.NullInt64
+	pullRequestAction             sql.NullString
+	pullRequestURL                sql.NullString
+	pullRequestBaseRef            sql.NullString
+	pullRequestBaseSHA            sql.NullString
+	pullRequestHeadRef            sql.NullString
+	pullRequestHeadSHA            sql.NullString
+	pullRequestSourceMode         sql.NullString
 }
 
 func (nf *buildNullFields) applyTo(build *domain.Build) {
@@ -427,6 +451,18 @@ func (nf *buildNullFields) applyTo(build *domain.Build) {
 		v := nf.managedImageVersionID.String
 		build.ManagedImageVersionID = &v
 	}
+	if nf.pullRequestNumber.Valid {
+		build.Trigger.PullRequest = &domain.PullRequestSnapshot{
+			Number:     nf.pullRequestNumber.Int64,
+			Action:     nf.pullRequestAction.String,
+			URL:        nf.pullRequestURL.String,
+			BaseRef:    nf.pullRequestBaseRef.String,
+			BaseSHA:    nf.pullRequestBaseSHA.String,
+			HeadRef:    nf.pullRequestHeadRef.String,
+			HeadSHA:    nf.pullRequestHeadSHA.String,
+			SourceMode: domain.PullRequestSourceMode(nf.pullRequestSourceMode.String),
+		}
+	}
 	build.Source = domain.NewSourceSpec(readOptionalString(build.RepoURL), readOptionalString(build.Ref), readOptionalString(build.CommitSHA))
 	*build = domain.NormalizeBuildMetadata(*build)
 }
@@ -493,6 +529,14 @@ func scanQueueEntry(scanner rowScanner) (domain.QueueEntry, error) {
 		&nf.imageSourceKind,
 		&nf.managedImageID,
 		&nf.managedImageVersionID,
+		&nf.pullRequestNumber,
+		&nf.pullRequestAction,
+		&nf.pullRequestURL,
+		&nf.pullRequestBaseRef,
+		&nf.pullRequestBaseSHA,
+		&nf.pullRequestHeadRef,
+		&nf.pullRequestHeadSHA,
+		&nf.pullRequestSourceMode,
 		&projectName,
 		&projectSlug,
 		&jobName,

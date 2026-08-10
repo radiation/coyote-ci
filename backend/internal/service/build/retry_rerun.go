@@ -281,6 +281,7 @@ func cloneBuildTrigger(source domain.BuildTrigger) domain.BuildTrigger {
 		CommitSHA:       cloneStringPtr(normalized.CommitSHA),
 		DeliveryID:      cloneStringPtr(normalized.DeliveryID),
 		Actor:           cloneStringPtr(normalized.Actor),
+		PullRequest:     clonePullRequestSnapshot(normalized.PullRequest),
 	}
 }
 

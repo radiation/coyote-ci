@@ -248,6 +248,7 @@ func (h *EventHandler) IngestGitHubWebhook(w http.ResponseWriter, r *http.Reques
 			RefType:              pullRequestEvent.RefType,
 			RefName:              pullRequestEvent.RefName,
 			CommitSHA:            pullRequestEvent.CommitSHA,
+			PullRequest:          pullRequestEvent.PullRequest,
 			DeliveryID:           pullRequestEvent.DeliveryID,
 			Actor:                pullRequestEvent.Actor,
 			InstallationID:       pullRequestEvent.InstallationID,

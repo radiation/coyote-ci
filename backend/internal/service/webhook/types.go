@@ -21,6 +21,7 @@ type WebhookTriggerInput struct {
 	RefName              string
 	Deleted              bool
 	CommitSHA            string
+	PullRequest          *domain.PullRequestSnapshot
 	DeliveryID           string
 	Actor                string
 	InstallationID       string
