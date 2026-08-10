@@ -104,8 +104,8 @@ func TestBuildRepository_Create(t *testing.T) {
 			if got.BuildNumber != 1 {
 				t.Fatalf("expected build number 1, got %d", got.BuildNumber)
 			}
-			if got.TriggerType != domain.BuildTriggerTypeManual {
-				t.Fatalf("expected manual trigger type from returned row, got %q", got.TriggerType)
+			if got.TriggerType != domain.BuildTriggerTypeWebhook {
+				t.Fatalf("expected webhook trigger type from returned row, got %q", got.TriggerType)
 			}
 			if got.Trigger.PullRequest == nil || got.Trigger.PullRequest.HeadSHA != "head-sha" {
 				t.Fatalf("expected pull-request snapshot after create, got %+v", got.Trigger.PullRequest)
