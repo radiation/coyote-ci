@@ -94,7 +94,9 @@ func TestBuildTriggerValidatePullRequestContract(t *testing.T) {
 		{name: "wrong provider", mutate: func(trigger *BuildTrigger) { provider := "gitlab"; trigger.SCMProvider = &provider }},
 		{name: "wrong event", mutate: func(trigger *BuildTrigger) { event := "push"; trigger.EventType = &event }},
 		{name: "commit SHA mismatch", mutate: func(trigger *BuildTrigger) { sha := "other-sha"; trigger.CommitSHA = &sha }},
+		{name: "missing ref", mutate: func(trigger *BuildTrigger) { trigger.Ref = nil }},
 		{name: "ref mismatch", mutate: func(trigger *BuildTrigger) { ref := "other-ref"; trigger.Ref = &ref }},
+		{name: "missing ref name", mutate: func(trigger *BuildTrigger) { trigger.RefName = nil }},
 		{name: "ref name mismatch", mutate: func(trigger *BuildTrigger) { refName := "other-ref"; trigger.RefName = &refName }},
 	}
 	for _, test := range tests {

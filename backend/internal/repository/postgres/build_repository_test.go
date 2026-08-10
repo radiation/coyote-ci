@@ -71,8 +71,7 @@ func TestBuildRepository_Create(t *testing.T) {
 				row[buildColumnPosition(columns, "created_at")] = now
 				row[buildColumnPosition(columns, "current_step_index")] = 0
 				row[buildColumnPosition(columns, "attempt_number")] = 1
-				row[buildColumnPosition(columns, "trigger_kind")] = "manual"
-				row[buildColumnPosition(columns, "image_source_kind")] = "external"
+				row[buildColumnPosition(columns, "trigger_kind")] = "webhook"
 				row[buildColumnPosition(columns, "pull_request_number")] = int64(42)
 				row[buildColumnPosition(columns, "pull_request_action")] = "opened"
 				row[buildColumnPosition(columns, "pull_request_url")] = "https://github.example.com/acme/repo/pull/42"

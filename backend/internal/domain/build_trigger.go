@@ -118,16 +118,17 @@ func (t BuildTrigger) Validate() error {
 	if t.CommitSHA == nil || *t.CommitSHA != t.PullRequest.HeadSHA {
 		return fmt.Errorf("pull request trigger commit SHA must match the head SHA")
 	}
-	if t.Ref != nil && *t.Ref != t.PullRequest.HeadRef {
+	if t.Ref == nil || *t.Ref != t.PullRequest.HeadRef {
 		return fmt.Errorf("pull request trigger ref must match the head ref")
 	}
-	if t.RefName != nil && *t.RefName != t.PullRequest.HeadRef {
+	if t.RefName == nil || *t.RefName != t.PullRequest.HeadRef {
 		return fmt.Errorf("pull request trigger ref name must match the head ref")
 	}
 	return nil
 }
 
 func ValidatePullRequestSnapshot(snapshot PullRequestSnapshot) error {
+	snapshot = normalizePullRequestSnapshot(snapshot)
 	if snapshot.Number <= 0 {
 		return fmt.Errorf("pull request number must be positive")
 	}
