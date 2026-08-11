@@ -33,6 +33,7 @@ type buildStatusView struct {
 	WebURL       string                      `json:"web_url"`
 	Error        *string                     `json:"error_message,omitempty"`
 	Pipeline     *string                     `json:"pipeline_name,omitempty"`
+	PullRequest  *api.PullRequestResponse    `json:"pull_request,omitempty"`
 	SCMStatus    *api.BuildSCMStatusResponse `json:"scm_status,omitempty"`
 	CurrentSteps []buildCurrentStepView      `json:"current_steps"`
 }

@@ -72,6 +72,7 @@ func makeBuildStatusPayload(serverURL string, build api.BuildResponse, steps []a
 			WebURL:       webURL,
 			Error:        build.ErrorMessage,
 			Pipeline:     build.PipelineName,
+			PullRequest:  build.PullRequest,
 			SCMStatus:    build.SCMStatus,
 			CurrentSteps: currentSteps,
 		},
@@ -101,6 +102,30 @@ func writeBuildStatusHuman(w io.Writer, payload buildStatusPayload) error {
 	}
 	if build.SHA != nil {
 		if _, err := fmt.Fprintf(w, "Commit:  %s\n", shortSHA(*build.SHA)); err != nil {
+			return err
+		}
+	}
+	if build.PullRequest != nil {
+		pr := build.PullRequest
+		if _, err := fmt.Fprintln(w, "Pull request"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  Number:        #%d\n", pr.Number); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  Action:        %s\n", pr.Action); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  Tested source: %s\n", pr.SourceMode); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  Base:          %s (%s)\n", pr.BaseRef, shortSHA(pr.BaseSHA)); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  Head:          %s (%s)\n", pr.HeadRef, shortSHA(pr.HeadSHA)); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  URL:           %s\n", pr.URL); err != nil {
 			return err
 		}
 	}

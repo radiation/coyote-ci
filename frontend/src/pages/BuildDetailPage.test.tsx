@@ -670,6 +670,42 @@ describe("BuildDetailPage", () => {
     );
   });
 
+  it("renders immutable pull request provenance", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({
+        pull_request: {
+          number: 42,
+          action: "synchronize",
+          url: "https://github.com/example/platform/pull/42",
+          base_ref: "main",
+          base_sha: "base1234567890",
+          head_ref: "feature/pr-42",
+          head_sha: "head9876543210",
+          source_mode: "head",
+        },
+      }),
+    );
+
+    renderPage();
+
+    const provenanceSection = (
+      await screen.findByRole("heading", { name: "Provenance" })
+    ).closest("section") as HTMLElement;
+    const pullRequestGroup = within(provenanceSection)
+      .getByRole("heading", { name: "Pull request" })
+      .closest("section") as HTMLElement;
+
+    expect(
+      within(pullRequestGroup).getByRole("link", { name: "#42" }),
+    ).toHaveAttribute("href", "https://github.com/example/platform/pull/42");
+    expect(within(pullRequestGroup).getByText("synchronize")).toBeTruthy();
+    expect(within(pullRequestGroup).getByText("head")).toBeTruthy();
+    expect(within(pullRequestGroup).getByText("main · base123")).toBeTruthy();
+    expect(
+      within(pullRequestGroup).getByText("feature/pr-42 · head987"),
+    ).toBeTruthy();
+  });
+
   it("renders plain text provenance values when repository metadata is missing", async () => {
     mockedGetBuild.mockResolvedValueOnce(
       makeBuild({

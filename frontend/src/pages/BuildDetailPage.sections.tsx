@@ -823,8 +823,35 @@ export function ProvenancePanel({
     Boolean(item),
   );
 
+  const pullRequest = build.pull_request;
+  const pullRequestItems = pullRequest
+    ? [
+        metadataItem(
+          "Pull request",
+          isSafeExternalURL(pullRequest.url) ? (
+            <a href={pullRequest.url}>#{pullRequest.number}</a>
+          ) : (
+            `#${pullRequest.number}`
+          ),
+        ),
+        metadataItem("Action", pullRequest.action),
+        metadataItem("Tested source", pullRequest.source_mode),
+        metadataItem(
+          "Base",
+          `${pullRequest.base_ref} · ${shortSHA(pullRequest.base_sha)}`,
+        ),
+        metadataItem(
+          "Head",
+          `${pullRequest.head_ref} · ${shortSHA(pullRequest.head_sha)}`,
+        ),
+      ]
+    : [];
+
   const provenanceGroups = [
     sourceItems.length > 0 ? { title: "Source", items: sourceItems } : null,
+    pullRequestItems.length > 0
+      ? { title: "Pull request", items: pullRequestItems }
+      : null,
     runtimeImageItems.length > 0
       ? { title: "Runtime image", items: runtimeImageItems }
       : null,
