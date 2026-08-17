@@ -1,18 +1,9 @@
 services:
-  cloudsql-proxy:
-    image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.21.1
-    container_name: coyote-ci-cloudsql-proxy
-    command:
-      - "--address=0.0.0.0"
-      - "--port=5432"
-      - "coyote-ci:us-east1:coyote-ci-postgres"
-    restart: unless-stopped
-
   migrate:
     image: golang:${GO_VERSION}
     container_name: coyote-ci-migrate
-    depends_on:
-      - cloudsql-proxy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       DATABASE_URL: ${DATABASE_URL}
       GOOSE_MIGRATION_DIR: /migrations
@@ -30,6 +21,8 @@ services:
       args:
         GO_VERSION: ${GO_VERSION}
     container_name: coyote-ci-server
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -55,6 +48,7 @@ services:
       ARTIFACT_STORAGE_PROVIDER: ${ARTIFACT_STORAGE_PROVIDER}
       ARTIFACT_GCS_BUCKET: ${ARTIFACT_GCS_BUCKET}
       ARTIFACT_GCS_PREFIX: ${ARTIFACT_GCS_PREFIX}
+      ARTIFACT_GCS_PROJECT: ${ARTIFACT_GCS_PROJECT}
     ports:
       - "8080:8080"
     volumes:
@@ -66,6 +60,8 @@ services:
       dockerfile: Dockerfile
       args:
         GO_VERSION: ${GO_VERSION}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -76,6 +72,7 @@ services:
       ARTIFACT_STORAGE_PROVIDER: ${ARTIFACT_STORAGE_PROVIDER}
       ARTIFACT_GCS_BUCKET: ${ARTIFACT_GCS_BUCKET}
       ARTIFACT_GCS_PREFIX: ${ARTIFACT_GCS_PREFIX}
+      ARTIFACT_GCS_PROJECT: ${ARTIFACT_GCS_PROJECT}
       COYOTE_PUBLIC_URL: ${COYOTE_PUBLIC_URL:-}
 
       WORKER_EXECUTION_WORKSPACE_ROOT: /tmp/coyote-builds
@@ -97,7 +94,4 @@ services:
       - "3000:3000"
 
 volumes:
-  go_mod_cache:
-  go_build_cache:
-  frontend_node_modules:
   artifact_data:

@@ -37,6 +37,17 @@ export interface BuildSource {
   source_commit_sha?: string | null;
 }
 
+export interface PullRequest {
+  number: number;
+  action: string;
+  url: string;
+  base_ref: string;
+  base_sha: string;
+  head_ref: string;
+  head_sha: string;
+  source_mode: string;
+}
+
 /** Matches the backend api.BuildResponse JSON shape. */
 export interface Build {
   id: string;
@@ -81,6 +92,7 @@ export interface Build {
   trigger_commit_sha?: string | null;
   delivery_id?: string | null;
   actor?: string | null;
+  pull_request?: PullRequest | null;
   source?: BuildSource | null;
   image?: ImageExecution;
 }
