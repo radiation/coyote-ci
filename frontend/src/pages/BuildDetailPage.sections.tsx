@@ -827,7 +827,7 @@ export function ProvenancePanel({
   const pullRequestItems = pullRequest
     ? [
         metadataItem(
-          "Pull request",
+          "Number",
           isSafeExternalURL(pullRequest.url) ? (
             <a href={pullRequest.url}>#{pullRequest.number}</a>
           ) : (
