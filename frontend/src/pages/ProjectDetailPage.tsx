@@ -1,21 +1,194 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
+import { Link, Navigate, useParams } from "react-router-dom";
 import {
   deleteProjectMember,
   formatAPIErrorMessage,
   getProject,
+  getPublicProject,
+  isAPIErrorStatus,
+  listPublicBuilds,
   listJobsByProject,
   listProjectMembers,
   listUsers,
   updateProjectMember,
   upsertProjectMember,
 } from "../api";
+import { useAuth } from "../auth-context";
 import { BuildActivityRail } from "../components/ScopedBuildActivityPanels";
 import type { ProjectMemberRole } from "../types/identity";
+import { StatusBadge } from "../components/StatusBadge";
 import { formatTime } from "../utils/time";
+import type { PublicBuild } from "../types/public";
+import {
+  FAST_POLL_INTERVAL,
+  isActiveBuild,
+  SLOW_POLL_INTERVAL,
+} from "../utils/build";
 
 export function ProjectDetailPage() {
+  const { authStatus } = useAuth();
+
+  return authStatus === "unauthenticated" ? (
+    <PublicProjectDetailPage />
+  ) : (
+    <AuthenticatedProjectRoute />
+  );
+}
+
+function AuthenticatedProjectRoute() {
+  const { id: projectIDOrSlug } = useParams<{ id: string }>();
+  const {
+    data: authenticatedProject,
+    isLoading: authenticatedProjectLoading,
+    error: authenticatedProjectError,
+  } = useQuery({
+    queryKey: ["project", projectIDOrSlug],
+    queryFn: () => getProject(projectIDOrSlug!),
+    enabled: Boolean(projectIDOrSlug),
+    retry: false,
+  });
+  const {
+    data: publicProject,
+    isLoading: publicProjectLoading,
+    error: publicProjectError,
+  } = useQuery({
+    queryKey: ["publicProject", projectIDOrSlug],
+    queryFn: () => getPublicProject(projectIDOrSlug!),
+    enabled: isAPIErrorStatus(authenticatedProjectError, 404),
+    retry: false,
+  });
+
+  if (authenticatedProjectLoading) return <p>Loading project…</p>;
+  if (authenticatedProject) return <AuthenticatedProjectDetailPage />;
+  if (
+    authenticatedProjectError &&
+    !isAPIErrorStatus(authenticatedProjectError, 404)
+  ) {
+    return (
+      <p className="error-text">
+        Failed to load project: {String(authenticatedProjectError)}
+      </p>
+    );
+  }
+  if (publicProjectLoading) return <p>Loading project…</p>;
+  if (publicProject) {
+    return <Navigate to={`/projects/${publicProject.id}`} replace />;
+  }
+  if (publicProjectError && !isAPIErrorStatus(publicProjectError, 404)) {
+    return (
+      <p className="error-text">
+        Failed to resolve public project: {String(publicProjectError)}
+      </p>
+    );
+  }
+
+  return <AuthenticatedProjectDetailPage />;
+}
+
+function PublicProjectDetailPage() {
+  const { id: slug } = useParams<{ id: string }>();
+  const {
+    data: project,
+    isLoading: projectLoading,
+    error: projectError,
+  } = useQuery({
+    queryKey: ["publicProject", slug],
+    queryFn: () => getPublicProject(slug!),
+    enabled: Boolean(slug),
+  });
+  const {
+    data: builds,
+    isLoading: buildsLoading,
+    error: buildsError,
+  } = useQuery({
+    queryKey: ["publicBuilds", slug],
+    queryFn: () => listPublicBuilds(slug!),
+    enabled: Boolean(slug && project),
+    refetchInterval: (query) => {
+      const nextBuilds = query.state.data as PublicBuild[] | undefined;
+      return nextBuilds?.some((build) => isActiveBuild(build.status))
+        ? FAST_POLL_INTERVAL
+        : SLOW_POLL_INTERVAL;
+    },
+  });
+
+  if (projectLoading) return <p>Loading project…</p>;
+  if (projectError && isAPIErrorStatus(projectError, 404)) {
+    return <p className="error-text">Project not found.</p>;
+  }
+  if (projectError) {
+    return (
+      <p className="error-text">
+        Failed to load project: {String(projectError)}
+      </p>
+    );
+  }
+  if (!project) return <p className="error-text">Project not found.</p>;
+
+  return (
+    <>
+      <Link to="/projects">← Back to projects</Link>
+      <div className="page-header-row">
+        <div className="page-header-copy">
+          <h2>{project.name}</h2>
+          <p className="subtle-text">
+            {project.description || "No description."}
+          </p>
+        </div>
+      </div>
+      <section className="detail-panel" aria-label="Public build history">
+        <h3>Build History</h3>
+        {buildsLoading && <p>Loading builds…</p>}
+        {buildsError && isAPIErrorStatus(buildsError, 404) && (
+          <p className="error-text">Project not found.</p>
+        )}
+        {buildsError && !isAPIErrorStatus(buildsError, 404) && (
+          <p className="error-text">
+            Failed to load builds: {String(buildsError)}
+          </p>
+        )}
+        {!buildsLoading && !buildsError && builds?.length === 0 && (
+          <p className="empty">No builds yet.</p>
+        )}
+        {builds && builds.length > 0 && (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Build</th>
+                <th>Job</th>
+                <th>Status</th>
+                <th>Attempt</th>
+                <th>Created</th>
+                <th>Completed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {builds.map((build) => (
+                <tr key={build.id}>
+                  <td>
+                    <Link to={`/projects/${project.slug}/builds/${build.id}`}>
+                      #{build.number}
+                    </Link>
+                  </td>
+                  <td>{build.job_name || "—"}</td>
+                  <td>
+                    <StatusBadge status={build.status} />
+                  </td>
+                  <td>{build.attempt}</td>
+                  <td>{formatTime(build.created_at)}</td>
+                  <td>{formatTime(build.completed_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </>
+  );
+}
+
+function AuthenticatedProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
   const [memberUserID, setMemberUserID] = useState("");

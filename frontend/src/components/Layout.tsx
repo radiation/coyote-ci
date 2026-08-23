@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { Navigate, NavLink, Outlet, useLocation } from "react-router-dom";
 import { AppShell, type AppShellNavigationItem } from "./AppShell";
 import { useAuth } from "../auth-context";
 import { useTheme } from "../theme-context";
@@ -14,7 +14,19 @@ const primaryNavigation: AppShellNavigationItem[] = [
   { to: "/artifacts", label: "Artifacts" },
 ];
 
+const publicNavigation: AppShellNavigationItem[] = [
+  { to: "/projects", label: "Projects" },
+];
+
+function isPublicRoute(pathname: string): boolean {
+  return (
+    pathname === "/projects" ||
+    /^\/projects\/[^/]+(?:\/builds\/[^/]+)?$/.test(pathname)
+  );
+}
+
 export function Layout() {
+  const location = useLocation();
   const { theme, toggleTheme } = useTheme();
   const {
     currentUser,
@@ -27,6 +39,7 @@ export function Layout() {
     logout,
     refreshCurrentUser,
   } = useAuth();
+  const isAnonymous = authStatus === "unauthenticated";
   const showNavigation = authStatus === "authenticated";
   const showUsersLink = authMode === "disabled" || isGlobalAdmin;
   const showTokensLink = authMode !== "disabled";
@@ -70,6 +83,15 @@ export function Layout() {
                 )}
               </div>
             )}
+            {isAnonymous && loginAvailable && (
+              <button
+                type="button"
+                className="header-secondary-button"
+                onClick={login}
+              >
+                Sign in
+              </button>
+            )}
             <button
               type="button"
               className="theme-toggle"
@@ -92,24 +114,6 @@ export function Layout() {
             />
           </div>
         )}
-        {authStatus === "unauthenticated" && (
-          <div className="auth-panel-shell">
-            <AuthStatePanel
-              title={
-                authMode === "header"
-                  ? "External authentication required"
-                  : "Sign in to Coyote CI"
-              }
-              message={
-                authMode === "header"
-                  ? "Coyote CI is configured for trusted proxy authentication. Sign in through the configured gateway or proxy, then retry."
-                  : "Use your configured identity provider to continue."
-              }
-              actionLabel={loginAvailable ? "Sign in" : undefined}
-              onAction={loginAvailable ? login : undefined}
-            />
-          </div>
-        )}
         {authStatus === "error" && (
           <div className="auth-panel-shell">
             <AuthStatePanel
@@ -122,9 +126,15 @@ export function Layout() {
             />
           </div>
         )}
-        {authStatus === "authenticated" && (
+        {isAnonymous && !isPublicRoute(location.pathname) && (
+          <Navigate to="/projects" replace />
+        )}
+        {(authStatus === "authenticated" ||
+          (isAnonymous && isPublicRoute(location.pathname))) && (
           <AppShell
-            primaryNavigation={showNavigation ? primaryNavigation : []}
+            primaryNavigation={
+              showNavigation ? primaryNavigation : publicNavigation
+            }
             settingsNavigation={showNavigation ? settingsNavigation : []}
           >
             <Suspense fallback={<RouteLoadingPanel />}>

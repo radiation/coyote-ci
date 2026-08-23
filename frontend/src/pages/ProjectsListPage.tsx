@@ -1,10 +1,73 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { createProject, deleteProject, listProjects } from "../api";
+import {
+  createProject,
+  deleteProject,
+  listProjects,
+  listPublicProjects,
+} from "../api";
+import { useAuth } from "../auth-context";
 import { formatTime } from "../utils/time";
 
 export function ProjectsListPage() {
+  const { authStatus } = useAuth();
+
+  return authStatus === "unauthenticated" ? (
+    <PublicProjectsListPage />
+  ) : (
+    <AuthenticatedProjectsListPage />
+  );
+}
+
+function PublicProjectsListPage() {
+  const {
+    data: projects,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ["publicProjects"],
+    queryFn: listPublicProjects,
+  });
+
+  return (
+    <>
+      <h2>Public Projects</h2>
+      <p className="subtle-text">Browse projects that are shared publicly.</p>
+      {isLoading && <p>Loading projects…</p>}
+      {error && (
+        <p className="error-text">Failed to load projects: {String(error)}</p>
+      )}
+      {!isLoading && !error && projects?.length === 0 && (
+        <p className="empty">No public projects are available.</p>
+      )}
+      {projects && projects.length > 0 && (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Slug</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            {projects.map((project) => (
+              <tr key={project.id}>
+                <td>
+                  <Link to={`/projects/${project.slug}`}>{project.name}</Link>
+                </td>
+                <td>{project.slug}</td>
+                <td>{project.description || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+}
+
+function AuthenticatedProjectsListPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [name, setName] = useState("");

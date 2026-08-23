@@ -3,13 +3,16 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ProjectDetailPage } from "./ProjectDetailPage";
+import { AuthContext } from "../auth-context";
 import {
   APIError,
   deleteProjectMember,
   getProject,
+  getPublicProject,
   listBuilds,
   listJobsByProject,
   listProjectMembers,
+  listPublicBuilds,
   listQueue,
   listUsers,
   updateProjectMember,
@@ -22,9 +25,11 @@ vi.mock("../api", async () => {
     ...actual,
     deleteProjectMember: vi.fn(),
     getProject: vi.fn(),
+    getPublicProject: vi.fn(),
     listBuilds: vi.fn(),
     listJobsByProject: vi.fn(),
     listProjectMembers: vi.fn(),
+    listPublicBuilds: vi.fn(),
     listQueue: vi.fn(),
     listUsers: vi.fn(),
     updateProjectMember: vi.fn(),
@@ -32,7 +37,12 @@ vi.mock("../api", async () => {
   };
 });
 
-function renderPage() {
+const mockedGetPublicProject = vi.mocked(getPublicProject);
+
+function renderPage(
+  authStatus: "authenticated" | "unauthenticated" = "authenticated",
+  initialEntry = "/projects/project-1",
+) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -42,11 +52,25 @@ function renderPage() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/projects/project-1"]}>
-        <Routes>
-          <Route path="/projects/:id" element={<ProjectDetailPage />} />
-        </Routes>
-      </MemoryRouter>
+      <AuthContext.Provider
+        value={{
+          currentUser: null,
+          authMode: null,
+          authStatus,
+          error: null,
+          isGlobalAdmin: false,
+          loginAvailable: false,
+          login: vi.fn(),
+          logout: vi.fn(),
+          refreshCurrentUser: vi.fn(),
+        }}
+      >
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route path="/projects/:id" element={<ProjectDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      </AuthContext.Provider>
     </QueryClientProvider>,
   );
 }
@@ -56,6 +80,7 @@ describe("ProjectDetailPage", () => {
   const mockedListBuilds = vi.mocked(listBuilds);
   const mockedListJobsByProject = vi.mocked(listJobsByProject);
   const mockedListProjectMembers = vi.mocked(listProjectMembers);
+  const mockedListPublicBuilds = vi.mocked(listPublicBuilds);
   const mockedListQueue = vi.mocked(listQueue);
   const mockedListUsers = vi.mocked(listUsers);
   const mockedUpsertProjectMember = vi.mocked(upsertProjectMember);
@@ -63,7 +88,7 @@ describe("ProjectDetailPage", () => {
   const mockedDeleteProjectMember = vi.mocked(deleteProjectMember);
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockedGetProject.mockResolvedValue({
       id: "project-1",
       name: "Platform",
@@ -155,6 +180,7 @@ describe("ProjectDetailPage", () => {
       updated_at: "2026-05-01T00:00:00Z",
     });
     mockedDeleteProjectMember.mockResolvedValue();
+    mockedListPublicBuilds.mockResolvedValue([]);
   });
 
   it("renders project details, members, and jobs", async () => {
@@ -209,6 +235,110 @@ describe("ProjectDetailPage", () => {
         screen.getByRole("link", { name: "release-history" }),
       ).toHaveAttribute("href", "/jobs/job-recent-1");
     });
+    expect(mockedGetProject).toHaveBeenCalledWith("project-1");
+    expect(mockedGetPublicProject).not.toHaveBeenCalled();
+  });
+
+  it("uses public project and build endpoints for anonymous visitors", async () => {
+    mockedGetPublicProject.mockResolvedValueOnce({
+      id: "project-1",
+      name: "Platform",
+      slug: "platform",
+      description: "Core platform pipelines",
+    });
+    mockedListPublicBuilds.mockResolvedValueOnce([
+      {
+        id: "build-1",
+        number: 42,
+        status: "success",
+        job_name: "release",
+        attempt: 1,
+        created_at: "2026-05-01T00:00:00Z",
+        completed_at: "2026-05-01T00:01:00Z",
+      },
+    ]);
+
+    renderPage("unauthenticated");
+
+    await waitFor(() => {
+      expect(screen.getByText("Build History")).toBeTruthy();
+      expect(screen.getByRole("link", { name: "#42" })).toHaveAttribute(
+        "href",
+        "/projects/platform/builds/build-1",
+      );
+    });
+    expect(mockedGetPublicProject).toHaveBeenCalledWith("project-1");
+    expect(mockedListPublicBuilds).toHaveBeenCalledWith("project-1");
+    expect(mockedGetProject).not.toHaveBeenCalled();
+    expect(mockedListJobsByProject).not.toHaveBeenCalled();
+    expect(mockedListProjectMembers).not.toHaveBeenCalled();
+    expect(screen.queryByText("Project Members")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Create Job" })).toBeNull();
+  });
+
+  it("falls back to a public project slug only after the ID lookup returns 404", async () => {
+    mockedGetProject.mockRejectedValueOnce(new APIError(404, "not found"));
+    mockedGetPublicProject.mockResolvedValueOnce({
+      id: "project-1",
+      name: "Platform",
+      slug: "platform",
+      description: "Core platform pipelines",
+    });
+
+    renderPage("authenticated", "/projects/platform");
+
+    await waitFor(() => {
+      expect(mockedGetProject).toHaveBeenCalledWith("project-1");
+      expect(screen.getByText("Project Summary")).toBeTruthy();
+    });
+    expect(mockedGetProject).toHaveBeenCalledWith("platform");
+    expect(mockedGetPublicProject).toHaveBeenCalledWith("platform");
+  });
+
+  it("shows resolver failures instead of calling the ID API with a public slug", async () => {
+    mockedGetProject.mockRejectedValueOnce(new APIError(404, "not found"));
+    mockedGetPublicProject.mockRejectedValueOnce(new Error("unavailable"));
+
+    renderPage("authenticated", "/projects/platform");
+
+    expect(
+      await screen.findByText(
+        "Failed to resolve public project: Error: unavailable",
+      ),
+    ).toBeTruthy();
+    expect(mockedGetProject).toHaveBeenCalledWith("platform");
+  });
+
+  it("shows public project and build history fallbacks", async () => {
+    mockedGetPublicProject.mockRejectedValueOnce(
+      new APIError(404, "not found"),
+    );
+    renderPage("unauthenticated");
+    expect(await screen.findByText("Project not found.")).toBeTruthy();
+
+    mockedGetPublicProject.mockResolvedValueOnce({
+      id: "project-1",
+      name: "Platform",
+      slug: "platform",
+      description: "",
+    });
+    mockedListPublicBuilds.mockRejectedValueOnce(new Error("unavailable"));
+    renderPage("unauthenticated");
+    expect(
+      await screen.findByText("Failed to load builds: Error: unavailable"),
+    ).toBeTruthy();
+  });
+
+  it("uses the public project description fallback", async () => {
+    mockedGetPublicProject.mockResolvedValueOnce({
+      id: "project-1",
+      name: "Platform",
+      slug: "platform",
+      description: "",
+    });
+    renderPage("unauthenticated");
+
+    expect(await screen.findByText("No description.")).toBeTruthy();
   });
 
   it("shows the project loading state", () => {
@@ -244,7 +374,7 @@ describe("ProjectDetailPage", () => {
   });
 
   it("shows empty project activity and detail fallbacks", async () => {
-    mockedGetProject.mockResolvedValueOnce({
+    mockedGetProject.mockResolvedValue({
       id: "project-1",
       name: "Platform",
       slug: "platform",

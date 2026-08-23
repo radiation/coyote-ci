@@ -31,6 +31,12 @@ vi.mock("../pages/BuildDetailPage", () => ({
   },
 }));
 
+vi.mock("../pages/PublicBuildDetailPage", () => ({
+  PublicBuildDetailPage() {
+    return <h2>Public Build Detail Mock</h2>;
+  },
+}));
+
 vi.mock("../pages/WorkersPage", () => ({
   WorkersPage() {
     return <h2>Workers Mock</h2>;
@@ -122,6 +128,7 @@ describe("router lazy route loaders", () => {
     ["/artifacts/logical", "Artifact Logical Browser Mock"],
     ["/artifacts/artifact-1", "Artifact Detail Mock"],
     ["/projects/project-1", "Project Detail Mock"],
+    ["/projects/platform/builds/build-1", "Public Build Detail Mock"],
     ["/jobs", "Jobs Mock"],
     ["/jobs/new", "Job Create Mock"],
     ["/jobs/job-1", "Job Detail Mock"],

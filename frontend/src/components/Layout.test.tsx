@@ -50,6 +50,7 @@ function renderLayout(navigate = vi.fn()) {
             <Routes>
               <Route element={<Layout />}>
                 <Route path="/artifacts" element={<div>Artifacts page</div>} />
+                <Route path="/projects" element={<div>Projects page</div>} />
               </Route>
             </Routes>
           </MemoryRouter>
@@ -140,7 +141,7 @@ describe("Layout", () => {
     });
   });
 
-  it("shows sign-in UI when /me returns 401", async () => {
+  it("allows anonymous visitors through the public shell and shows sign-in", async () => {
     mockedGetAuthConfig.mockResolvedValue({
       auth_mode: "oidc",
       login_url: "/auth/login",
@@ -152,8 +153,13 @@ describe("Layout", () => {
     const { navigate } = renderLayout();
 
     await waitFor(() => {
-      expect(screen.getByText("Sign in to Coyote CI")).toBeTruthy();
+      expect(screen.getByRole("link", { name: "Projects" })).toBeTruthy();
     });
+
+    expect(screen.queryByRole("link", { name: "Artifacts" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Queue" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Workers" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Users" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(navigate).toHaveBeenCalledWith("/auth/login");
@@ -170,7 +176,7 @@ describe("Layout", () => {
     expect(screen.getByText("Checking your Coyote CI session.")).toBeTruthy();
   });
 
-  it("shows proxy guidance without sign-in button for header-mode 401", async () => {
+  it("keeps the public shell available without sign-in for header-mode 401", async () => {
     mockedGetAuthConfig.mockResolvedValue({
       auth_mode: "header",
       login_url: null,
@@ -182,8 +188,7 @@ describe("Layout", () => {
     renderLayout();
 
     await waitFor(() => {
-      expect(screen.getByText("External authentication required")).toBeTruthy();
-      expect(screen.getByText(/trusted proxy authentication/i)).toBeTruthy();
+      expect(screen.getByRole("link", { name: "Projects" })).toBeTruthy();
     });
 
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();

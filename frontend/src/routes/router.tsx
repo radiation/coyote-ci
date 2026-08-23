@@ -28,6 +28,10 @@ const BuildDetailPage = lazyPage(
   () => import("../pages/BuildDetailPage"),
   "BuildDetailPage",
 );
+const PublicBuildDetailPage = lazyPage(
+  () => import("../pages/PublicBuildDetailPage"),
+  "PublicBuildDetailPage",
+);
 const QueuePage = lazyPage(() => import("../pages/QueuePage"), "QueuePage");
 const WorkersPage = lazyPage(
   () => import("../pages/WorkersPage"),
@@ -102,6 +106,10 @@ export const appRoutes: RouteObject[] = [
       { path: "/artifacts/:id", element: <ArtifactDetailPage /> },
       { path: "/projects", element: <ProjectsListPage /> },
       { path: "/projects/:id", element: <ProjectDetailPage /> },
+      {
+        path: "/projects/:slug/builds/:buildID",
+        element: <PublicBuildDetailPage />,
+      },
       { path: "/jobs", element: <JobsListPage /> },
       { path: "/jobs/new", element: <JobCreatePage /> },
       { path: "/jobs/:id", element: <JobDetailPage /> },
