@@ -81,42 +81,40 @@ func TestUserService_DuplicateEmailConflict(t *testing.T) {
 	}
 }
 
-func TestUserService_ResolveOIDCUserProvisioningAndBootstrap(t *testing.T) {
-	service := NewUserService(memory.NewUserRepository())
-	displayName := "Admin User"
+func TestUserService_ResolveOIDCUserRequiresPreauthorizedUser(t *testing.T) {
+	userRepo := memory.NewUserRepository()
+	service := NewUserService(userRepo)
 
-	user, err := service.ResolveOIDCUser(context.Background(), "ADMIN@example.com", &displayName, map[string]struct{}{"admin@example.com": {}})
-	if err != nil {
-		t.Fatalf("resolve oidc user failed: %v", err)
+	_, err := service.ResolveOIDCUser(context.Background(), "unknown@example.com", nil)
+	if !errors.Is(err, ErrUserNotPreauthorized) {
+		t.Fatalf("expected ErrUserNotPreauthorized, got %v", err)
 	}
-	if user.Email != "admin@example.com" {
-		t.Fatalf("expected normalized email, got %q", user.Email)
+	users, listErr := service.ListUsers(context.Background())
+	if listErr != nil {
+		t.Fatalf("list users failed: %v", listErr)
 	}
-	if user.DisplayName == nil || *user.DisplayName != displayName {
-		t.Fatalf("expected display name %q, got %v", displayName, user.DisplayName)
-	}
-	if user.GlobalRole != domain.GlobalRoleAdmin {
-		t.Fatalf("expected bootstrap admin, got %q", user.GlobalRole)
+	if len(users) != 0 {
+		t.Fatalf("expected no provisioned users, got %+v", users)
 	}
 }
 
 func TestUserService_ResolveOIDCUserUpdatesDisplayNameWithoutDemoting(t *testing.T) {
 	service := NewUserService(memory.NewUserRepository())
-	created, err := service.CreateUser(context.Background(), CreateUserInput{Email: "admin@example.com", GlobalRole: "admin"})
+	created, err := service.CreateUser(context.Background(), CreateUserInput{Email: "user@example.com", GlobalRole: "user"})
 	if err != nil {
-		t.Fatalf("create admin failed: %v", err)
+		t.Fatalf("create user failed: %v", err)
 	}
-	displayName := "Updated Admin"
+	displayName := "Updated User"
 
-	resolved, err := service.ResolveOIDCUser(context.Background(), "admin@example.com", &displayName, nil)
+	resolved, err := service.ResolveOIDCUser(context.Background(), "USER@example.com", &displayName)
 	if err != nil {
 		t.Fatalf("resolve oidc user failed: %v", err)
 	}
 	if resolved.ID != created.ID {
 		t.Fatalf("expected existing user %q, got %q", created.ID, resolved.ID)
 	}
-	if resolved.GlobalRole != domain.GlobalRoleAdmin {
-		t.Fatalf("expected existing admin not to be demoted, got %q", resolved.GlobalRole)
+	if resolved.GlobalRole != domain.GlobalRoleUser {
+		t.Fatalf("expected existing global role to be unchanged, got %q", resolved.GlobalRole)
 	}
 	if resolved.DisplayName == nil || *resolved.DisplayName != displayName {
 		t.Fatalf("expected updated display name, got %v", resolved.DisplayName)
@@ -126,9 +124,48 @@ func TestUserService_ResolveOIDCUserUpdatesDisplayNameWithoutDemoting(t *testing
 func TestUserService_ResolveOIDCUserRequiresEmail(t *testing.T) {
 	service := NewUserService(memory.NewUserRepository())
 
-	_, err := service.ResolveOIDCUser(context.Background(), " ", nil, nil)
+	_, err := service.ResolveOIDCUser(context.Background(), " ", nil)
 	if !errors.Is(err, ErrUserEmailRequired) {
 		t.Fatalf("expected ErrUserEmailRequired, got %v", err)
+	}
+}
+
+func TestUserService_BootstrapAdmins(t *testing.T) {
+	ctx := context.Background()
+	userRepo := memory.NewUserRepository()
+	service := NewUserService(userRepo)
+	normalUser, err := service.CreateUser(ctx, CreateUserInput{Email: "member@example.com"})
+	if err != nil {
+		t.Fatalf("create normal user failed: %v", err)
+	}
+	existingAdmin, err := service.CreateUser(ctx, CreateUserInput{Email: "admin@example.com", GlobalRole: "admin"})
+	if err != nil {
+		t.Fatalf("create existing admin failed: %v", err)
+	}
+
+	bootstrapAdmins := map[string]struct{}{
+		"NEW-ADMIN@example.com": {},
+		"member@example.com":    {},
+		"admin@example.com":     {},
+	}
+	if bootstrapErr := service.BootstrapAdmins(ctx, bootstrapAdmins); bootstrapErr != nil {
+		t.Fatalf("bootstrap admins failed: %v", bootstrapErr)
+	}
+	if bootstrapErr := service.BootstrapAdmins(ctx, bootstrapAdmins); bootstrapErr != nil {
+		t.Fatalf("repeated bootstrap admins failed: %v", bootstrapErr)
+	}
+
+	newAdmin, getErr := userRepo.GetByEmail(ctx, "new-admin@example.com")
+	if getErr != nil || newAdmin.GlobalRole != domain.GlobalRoleAdmin {
+		t.Fatalf("expected newly provisioned admin, user=%+v err=%v", newAdmin, getErr)
+	}
+	promotedUser, getErr := userRepo.GetByEmail(ctx, normalUser.Email)
+	if getErr != nil || promotedUser.GlobalRole != domain.GlobalRoleAdmin {
+		t.Fatalf("expected normal user promotion, user=%+v err=%v", promotedUser, getErr)
+	}
+	unchangedAdmin, getErr := userRepo.GetByEmail(ctx, existingAdmin.Email)
+	if getErr != nil || unchangedAdmin.ID != existingAdmin.ID || unchangedAdmin.GlobalRole != domain.GlobalRoleAdmin {
+		t.Fatalf("expected existing admin unchanged, user=%+v err=%v", unchangedAdmin, getErr)
 	}
 }
 

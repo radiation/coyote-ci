@@ -15,13 +15,11 @@ type AuthHandler struct {
 	authenticator      auth.OIDCAuthenticator
 	sessions           auth.SessionManager
 	users              *service.UserService
-	bootstrapAdmins    map[string]struct{}
 	postLoginRedirect  string
 	postLogoutRedirect string
 }
 
 type AuthHandlerConfig struct {
-	BootstrapAdminEmails  map[string]struct{}
 	PostLoginRedirectURL  string
 	PostLogoutRedirectURL string
 }
@@ -35,15 +33,10 @@ func NewAuthHandler(authenticator auth.OIDCAuthenticator, sessions auth.SessionM
 	if postLogoutRedirect == "" {
 		postLogoutRedirect = "/"
 	}
-	bootstrapAdmins := cfg.BootstrapAdminEmails
-	if bootstrapAdmins == nil {
-		bootstrapAdmins = map[string]struct{}{}
-	}
 	return &AuthHandler{
 		authenticator:      authenticator,
 		sessions:           sessions,
 		users:              users,
-		bootstrapAdmins:    bootstrapAdmins,
 		postLoginRedirect:  postLoginRedirect,
 		postLogoutRedirect: postLogoutRedirect,
 	}
@@ -99,7 +92,7 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		writeErrorJSON(w, status, "unauthorized", message)
 		return
 	}
-	user, resolveErr := h.users.ResolveOIDCUser(r.Context(), identity.Email, identity.DisplayName, h.bootstrapAdmins)
+	user, resolveErr := h.users.ResolveOIDCUser(r.Context(), identity.Email, identity.DisplayName)
 	if resolveErr != nil {
 		status := http.StatusInternalServerError
 		code := "internal_error"
@@ -108,6 +101,10 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusUnauthorized
 			code = "unauthorized"
 			message = "email claim is required"
+		} else if errors.Is(resolveErr, service.ErrUserNotPreauthorized) {
+			status = http.StatusForbidden
+			code = "invite_only"
+			message = "sign-in is invite-only"
 		}
 		writeErrorJSON(w, status, code, message)
 		return

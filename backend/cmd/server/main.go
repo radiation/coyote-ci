@@ -261,6 +261,9 @@ func main() {
 	projectHandler := handler.NewProjectHandler(projectService, jobService)
 	authMode := auth.ParseMode(cfg.AuthMode)
 	bootstrapAdmins := auth.ParseBootstrapAdminEmails(cfg.BootstrapAdminEmails)
+	if bootstrapErr := userService.BootstrapAdmins(context.Background(), bootstrapAdmins); bootstrapErr != nil {
+		log.Fatalf("failed to provision bootstrap admins: %v", bootstrapErr)
+	}
 	buildHandler.SetAuthorization(authMode, projectMembershipService)
 	artifactHandler.SetAuthorization(authMode, projectMembershipService)
 	jobHandler.SetAuthorization(authMode, projectMembershipService)
@@ -341,17 +344,15 @@ func main() {
 			log.Fatalf("failed to configure OIDC: %v", oidcErr)
 		}
 		authHandler = handler.NewAuthHandler(oidcAuthenticator, sessionManager, userService, handler.AuthHandlerConfig{
-			BootstrapAdminEmails:  bootstrapAdmins,
 			PostLoginRedirectURL:  cfg.AuthPostLoginRedirectURL,
 			PostLogoutRedirectURL: cfg.AuthPostLogoutRedirectURL,
 		})
 	}
 
 	authMiddleware := auth.Middleware(auth.MiddlewareConfig{
-		Mode:                 authMode,
-		BootstrapAdminEmails: bootstrapAdmins,
-		Sessions:             sessionManager,
-		APITokens:            apiTokenService,
+		Mode:      authMode,
+		Sessions:  sessionManager,
+		APITokens: apiTokenService,
 	}, userService)
 	router := apphttp.NewRouter(
 		buildHandler,

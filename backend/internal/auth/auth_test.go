@@ -58,29 +58,19 @@ func TestMiddleware_HeaderModeLoadsExistingUser(t *testing.T) {
 	}
 }
 
-func TestMiddleware_HeaderModeAutoProvisionsUserAndBootstrapAdmin(t *testing.T) {
+func TestMiddleware_HeaderModeRejectsUnknownUser(t *testing.T) {
 	userService := service.NewUserService(memory.NewUserRepository())
-	middleware := Middleware(MiddlewareConfig{
-		Mode:                 ModeHeader,
-		BootstrapAdminEmails: ParseBootstrapAdminEmails("admin@example.com"),
-	}, userService)
-
-	var got domain.User
-	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got, _ = CurrentUser(r.Context())
+	middleware := Middleware(MiddlewareConfig{Mode: ModeHeader}, userService)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-Coyote-User-Email", "ADMIN@example.com")
-	req.Header.Set("X-Coyote-User-Name", "Admin")
+	req.Header.Set("X-Coyote-User-Email", "unknown@example.com")
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 
-	if res.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, res.Code)
-	}
-	if got.Email != "admin@example.com" || got.GlobalRole != domain.GlobalRoleAdmin {
-		t.Fatalf("expected bootstrap admin user, got %+v", got)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, res.Code)
 	}
 }
 
