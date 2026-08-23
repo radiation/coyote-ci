@@ -91,6 +91,7 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		Name:        req.Name,
 		Slug:        req.Slug,
 		Description: req.Description,
+		IsPublic:    req.IsPublic,
 	})
 	if err != nil {
 		h.writeProjectError(w, err)
@@ -155,6 +156,7 @@ func (h *ProjectHandler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 		Name:        req.Name,
 		Slug:        req.Slug,
 		Description: service.OptionalStringPatch{Set: req.Description.Set, Value: req.Description.Value},
+		IsPublic:    req.IsPublic,
 	})
 	if err != nil {
 		h.writeProjectError(w, err)
@@ -285,6 +287,7 @@ func toProjectResponse(project domain.Project) api.ProjectResponse {
 		Name:        project.Name,
 		Slug:        project.Slug,
 		Description: project.Description,
+		IsPublic:    project.IsPublic,
 		CreatedAt:   project.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:   project.UpdatedAt.Format(time.RFC3339),
 	}

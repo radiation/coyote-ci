@@ -3123,6 +3123,135 @@ const docTemplate = `{
                 }
             }
         },
+        "/public/projects": {
+            "get": {
+                "description": "Lists projects explicitly marked public.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "public"
+                ],
+                "summary": "List public projects",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.PublicProjectListEnvelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/public/projects/{slug}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "public"
+                ],
+                "summary": "Get a public project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.PublicProjectEnvelope"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/public/projects/{slug}/builds": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "public"
+                ],
+                "summary": "List builds for a public project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.PublicBuildListEnvelope"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/public/projects/{slug}/builds/{buildID}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "public"
+                ],
+                "summary": "Get a public project build",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Build ID",
+                        "name": "buildID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.PublicBuildEnvelope"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/queue": {
             "get": {
                 "description": "Returns queued and running builds with project and job context.",
@@ -5564,6 +5693,9 @@ const docTemplate = `{
                 "description": {
                     "type": "string"
                 },
+                "is_public": {
+                    "type": "boolean"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -6350,6 +6482,9 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "is_public": {
+                    "type": "boolean"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -6357,6 +6492,132 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.PublicBuildEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.PublicBuildResponse"
+                }
+            }
+        },
+        "api.PublicBuildListEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.PublicBuildListResponse"
+                }
+            }
+        },
+        "api.PublicBuildListResponse": {
+            "type": "object",
+            "properties": {
+                "builds": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.PublicBuildResponse"
+                    }
+                }
+            }
+        },
+        "api.PublicBuildResponse": {
+            "type": "object",
+            "properties": {
+                "attempt": {
+                    "type": "integer"
+                },
+                "completed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "job_name": {
+                    "type": "string"
+                },
+                "number": {
+                    "type": "integer"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.PublicBuildStepResponse"
+                    }
+                }
+            }
+        },
+        "api.PublicBuildStepResponse": {
+            "type": "object",
+            "properties": {
+                "completed_at": {
+                    "type": "string"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.PublicProjectEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.PublicProjectResponse"
+                }
+            }
+        },
+        "api.PublicProjectListEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.PublicProjectListResponse"
+                }
+            }
+        },
+        "api.PublicProjectListResponse": {
+            "type": "object",
+            "properties": {
+                "projects": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.PublicProjectResponse"
+                    }
+                }
+            }
+        },
+        "api.PublicProjectResponse": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
                     "type": "string"
                 }
             }
@@ -7081,6 +7342,9 @@ const docTemplate = `{
             "properties": {
                 "description": {
                     "$ref": "#/definitions/api.StringPatch"
+                },
+                "is_public": {
+                    "type": "boolean"
                 },
                 "name": {
                     "type": "string"

@@ -26,6 +26,7 @@ type routerConfig struct {
 	projectMembershipHandler *handler.ProjectMembershipHandler
 	workerHandler            *handler.WorkerHandler
 	scmHandler               *handler.SCMHandler
+	publicHandler            *handler.PublicHandler
 }
 
 type RouterOption func(*routerConfig)
@@ -84,6 +85,12 @@ func WithSCMHandler(scmHandler *handler.SCMHandler) RouterOption {
 	}
 }
 
+func WithPublicHandler(publicHandler *handler.PublicHandler) RouterOption {
+	return func(cfg *routerConfig) {
+		cfg.publicHandler = publicHandler
+	}
+}
+
 func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.ArtifactHandler, jobHandler *handler.JobHandler, projectHandler *handler.ProjectHandler, versionTagHandler *handler.VersionTagHandler, credentialHandler *handler.SourceCredentialHandler, eventHandler *handler.EventHandler, pushEventSecret string, options ...RouterOption) nethttp.Handler {
 	cfg := routerConfig{}
 	for _, option := range options {
@@ -124,6 +131,14 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 			if cfg.notificationHandler.HasSampleSender() {
 				r.Post("/dev/notifications/sample-build", cfg.notificationHandler.SendSampleBuildFailure)
 			}
+		}
+		if cfg.publicHandler != nil {
+			r.Route("/public", func(r chi.Router) {
+				r.Get("/projects", cfg.publicHandler.ListProjects)
+				r.Get("/projects/{slug}", cfg.publicHandler.GetProject)
+				r.Get("/projects/{slug}/builds", cfg.publicHandler.ListProjectBuilds)
+				r.Get("/projects/{slug}/builds/{buildID}", cfg.publicHandler.GetProjectBuild)
+			})
 		}
 
 		r.Route("/events", func(r chi.Router) {

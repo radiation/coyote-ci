@@ -20,11 +20,11 @@ func TestProjectRepository_GetByIDs(t *testing.T) {
 
 	repo := NewProjectRepository(db)
 	now := time.Now().UTC()
-	rows := sqlmock.NewRows([]string{"id", "name", "slug", "description", "created_at", "updated_at"}).
-		AddRow("11111111-1111-1111-1111-111111111111", "Platform", "platform", nil, now, now).
-		AddRow("22222222-2222-2222-2222-222222222222", "Backend", "backend", "Backend services", now.Add(time.Second), now.Add(time.Second))
+	rows := sqlmock.NewRows([]string{"id", "name", "slug", "description", "is_public", "created_at", "updated_at"}).
+		AddRow("11111111-1111-1111-1111-111111111111", "Platform", "platform", nil, false, now, now).
+		AddRow("22222222-2222-2222-2222-222222222222", "Backend", "backend", "Backend services", true, now.Add(time.Second), now.Add(time.Second))
 
-	mock.ExpectQuery("SELECT id, name, slug, description, created_at, updated_at FROM projects").
+	mock.ExpectQuery("SELECT id, name, slug, description, is_public, created_at, updated_at FROM projects").
 		WithArgs("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222").
 		WillReturnRows(rows)
 	mock.ExpectClose()
@@ -38,6 +38,9 @@ func TestProjectRepository_GetByIDs(t *testing.T) {
 	}
 	if projects[0].ID != "11111111-1111-1111-1111-111111111111" || projects[1].ID != "22222222-2222-2222-2222-222222222222" {
 		t.Fatalf("unexpected project ids: %+v", projects)
+	}
+	if projects[0].IsPublic || !projects[1].IsPublic {
+		t.Fatalf("unexpected project visibility: %+v", projects)
 	}
 	if closeErr := db.Close(); closeErr != nil {
 		t.Fatalf("failed to close sqlmock db: %v", closeErr)
@@ -56,10 +59,10 @@ func TestProjectRepository_GetByIDsSkipsInvalidUUIDs(t *testing.T) {
 
 	repo := NewProjectRepository(db)
 	now := time.Now().UTC()
-	rows := sqlmock.NewRows([]string{"id", "name", "slug", "description", "created_at", "updated_at"}).
-		AddRow("11111111-1111-1111-1111-111111111111", "Platform", "platform", nil, now, now)
+	rows := sqlmock.NewRows([]string{"id", "name", "slug", "description", "is_public", "created_at", "updated_at"}).
+		AddRow("11111111-1111-1111-1111-111111111111", "Platform", "platform", nil, false, now, now)
 
-	mock.ExpectQuery("SELECT id, name, slug, description, created_at, updated_at FROM projects").
+	mock.ExpectQuery("SELECT id, name, slug, description, is_public, created_at, updated_at FROM projects").
 		WithArgs("11111111-1111-1111-1111-111111111111").
 		WillReturnRows(rows)
 	mock.ExpectClose()

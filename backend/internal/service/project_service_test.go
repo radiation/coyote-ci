@@ -27,6 +27,9 @@ func TestProjectService_CreateListGetUpdateDelete(t *testing.T) {
 	if created.Slug != "platform" {
 		t.Fatalf("expected slug platform, got %q", created.Slug)
 	}
+	if created.IsPublic {
+		t.Fatal("expected newly created project to be private by default")
+	}
 
 	listed, err := service.ListProjects(context.Background())
 	if err != nil {
@@ -48,6 +51,7 @@ func TestProjectService_CreateListGetUpdateDelete(t *testing.T) {
 		Name:        strPtr("Platform CI"),
 		Slug:        strPtr("platform-ci"),
 		Description: OptionalStringPatch{Set: true, Value: strPtr("Updated description")},
+		IsPublic:    boolPtr(true),
 	})
 	if err != nil {
 		t.Fatalf("update project failed: %v", err)
@@ -57,6 +61,9 @@ func TestProjectService_CreateListGetUpdateDelete(t *testing.T) {
 	}
 	if updated.Slug != "platform-ci" {
 		t.Fatalf("expected updated slug, got %q", updated.Slug)
+	}
+	if !updated.IsPublic {
+		t.Fatal("expected updated project to be public")
 	}
 
 	deleteErr := service.DeleteProject(context.Background(), created.ID)

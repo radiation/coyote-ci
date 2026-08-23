@@ -9,6 +9,7 @@ type Project struct {
 	Name        string
 	Slug        string
 	Description *string
+	IsPublic    bool
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

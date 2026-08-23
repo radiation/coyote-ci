@@ -4,12 +4,14 @@ type CreateProjectRequest struct {
 	Name        string  `json:"name"`
 	Slug        string  `json:"slug"`
 	Description *string `json:"description,omitempty"`
+	IsPublic    bool    `json:"is_public"`
 }
 
 type UpdateProjectRequest struct {
 	Name        *string     `json:"name,omitempty"`
 	Slug        *string     `json:"slug,omitempty"`
 	Description StringPatch `json:"description,omitempty"`
+	IsPublic    *bool       `json:"is_public,omitempty"`
 }
 
 type ProjectResponse struct {
@@ -17,6 +19,7 @@ type ProjectResponse struct {
 	Name        string  `json:"name"`
 	Slug        string  `json:"slug"`
 	Description *string `json:"description,omitempty"`
+	IsPublic    bool    `json:"is_public"`
 	CreatedAt   string  `json:"created_at"`
 	UpdatedAt   string  `json:"updated_at"`
 }
