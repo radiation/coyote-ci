@@ -69,6 +69,8 @@ func (h *PublicHandler) GetProject(w http.ResponseWriter, r *http.Request) {
 // @Tags public
 // @Produce json
 // @Param slug path string true "Project slug"
+// @Param limit query int false "Max results (default 50, max 200)"
+// @Param offset query int false "Number of results to skip"
 // @Success 200 {object} api.PublicBuildListEnvelope
 // @Failure 404 {object} api.ErrorResponse
 // @Router /public/projects/{slug}/builds [get]
@@ -77,7 +79,11 @@ func (h *PublicHandler) ListProjectBuilds(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	builds, err := h.builds.ListBuildsPaged(r.Context(), repository.ListParams{ProjectID: project.ID})
+	builds, err := h.builds.ListBuildsPaged(r.Context(), repository.ListParams{
+		Limit:     parseQueryInt(r, "limit", 0),
+		Offset:    parseQueryInt(r, "offset", 0),
+		ProjectID: project.ID,
+	})
 	if err != nil {
 		h.writePublicError(w, err)
 		return

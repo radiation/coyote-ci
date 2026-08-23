@@ -141,6 +141,89 @@ func TestPublicHandler_OnlyExposesPublicProjectBuildsAndRedactedDTOs(t *testing.
 	}
 }
 
+func TestPublicHandler_PublicReadEdgeCases(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	jobRepo := memory.NewJobRepository()
+	projectRepo := memory.NewProjectRepository(jobRepo)
+	buildRepo := memory.NewBuildRepository()
+	projectService := service.NewProjectService(projectRepo)
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	h := NewPublicHandler(projectService, buildService, nil)
+	publicProject := createPublicHandlerProject(t, ctx, projectRepo, "project-public", "Public", "public", true, now)
+	createPublicHandlerBuild(t, ctx, buildRepo, domain.Build{
+		ID:          "public-build",
+		ProjectID:   publicProject.ID,
+		BuildNumber: 1,
+		Status:      domain.BuildStatusSuccess,
+		CreatedAt:   now,
+	}, nil)
+	createPublicHandlerBuild(t, ctx, buildRepo, domain.Build{
+		ID:          "newer-public-build",
+		ProjectID:   publicProject.ID,
+		BuildNumber: 2,
+		Status:      domain.BuildStatusSuccess,
+		CreatedAt:   now.Add(time.Second),
+	}, nil)
+
+	for _, testCase := range []struct {
+		name string
+		call func(http.ResponseWriter, *http.Request)
+		req  *http.Request
+	}{
+		{name: "unknown project", call: h.GetProject, req: publicRequest("/api/public/projects/missing", "slug", "missing")},
+		{name: "empty build id", call: h.GetProjectBuild, req: publicRequest("/api/public/projects/public/builds/", "slug", publicProject.Slug, "buildID", " ")},
+		{name: "missing build", call: h.GetProjectBuild, req: publicRequest("/api/public/projects/public/builds/missing", "slug", publicProject.Slug, "buildID", "missing")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			testCase.call(response, testCase.req)
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("expected status %d, got %d body=%s", http.StatusNotFound, response.Code, response.Body.String())
+			}
+		})
+	}
+
+	buildListResponse := httptest.NewRecorder()
+	h.ListProjectBuilds(buildListResponse, publicRequest("/api/public/projects/public/builds?limit=1", "slug", publicProject.Slug))
+	if buildListResponse.Code != http.StatusOK {
+		t.Fatalf("expected public build list status %d, got %d body=%s", http.StatusOK, buildListResponse.Code, buildListResponse.Body.String())
+	}
+	buildListData := decodePublicData(t, buildListResponse)
+	builds, ok := buildListData["builds"].([]any)
+	if !ok || len(builds) != 1 {
+		t.Fatalf("expected one public build, got %v", buildListData["builds"])
+	}
+	build, ok := builds[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected public build object, got %T", builds[0])
+	}
+	if _, exists := build["job_name"]; exists {
+		t.Fatalf("expected build without job to omit job_name, got %v", build)
+	}
+	if _, exists := build["started_at"]; exists {
+		t.Fatalf("expected build without start time to omit started_at, got %v", build)
+	}
+	if _, exists := build["completed_at"]; exists {
+		t.Fatalf("expected build without completion time to omit completed_at, got %v", build)
+	}
+
+	paginatedResponse := httptest.NewRecorder()
+	h.ListProjectBuilds(paginatedResponse, publicRequest("/api/public/projects/public/builds?limit=1&offset=1", "slug", publicProject.Slug))
+	if paginatedResponse.Code != http.StatusOK {
+		t.Fatalf("expected paginated public build list status %d, got %d body=%s", http.StatusOK, paginatedResponse.Code, paginatedResponse.Body.String())
+	}
+	paginatedData := decodePublicData(t, paginatedResponse)
+	paginatedBuilds, ok := paginatedData["builds"].([]any)
+	if !ok || len(paginatedBuilds) != 1 {
+		t.Fatalf("expected one paginated public build, got %v", paginatedData["builds"])
+	}
+	paginatedBuild, ok := paginatedBuilds[0].(map[string]any)
+	if !ok || paginatedBuild["id"] != "public-build" {
+		t.Fatalf("expected offset build public-build, got %v", paginatedBuilds)
+	}
+}
+
 func createPublicHandlerProject(t *testing.T, ctx context.Context, repo *memory.ProjectRepository, id string, name string, slug string, isPublic bool, now time.Time) domain.Project {
 	t.Helper()
 	project, createErr := repo.Create(ctx, domain.Project{ID: id, Name: name, Slug: slug, IsPublic: isPublic, CreatedAt: now, UpdatedAt: now})

@@ -130,7 +130,7 @@ func (r *ProjectRepository) GetBySlug(ctx context.Context, slug string) (domain.
 
 func (r *ProjectRepository) List(ctx context.Context) (projects []domain.Project, err error) {
 	const query = `
-		SELECT id, name, slug, description, created_at, updated_at
+		SELECT id, name, slug, description, is_public, created_at, updated_at
 		FROM projects
 		ORDER BY created_at ASC, id ASC
 	`
