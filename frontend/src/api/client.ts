@@ -97,6 +97,12 @@ export {
   listAPITokens,
   revokeAPIToken,
 } from "./personalTokenClient";
+export {
+  getPublicBuild,
+  getPublicProject,
+  listPublicBuilds,
+  listPublicProjects,
+} from "./publicClient";
 
 export function isAPIErrorStatus(error: unknown, status: number): boolean {
   return error instanceof APIError && error.status === status;
