@@ -34,15 +34,14 @@ const (
 )
 
 type UserResolver interface {
-	ResolveHeaderUser(ctx context.Context, email string, displayName *string, bootstrapAdmins map[string]struct{}) (domain.User, error)
+	ResolveHeaderUser(ctx context.Context, email string, displayName *string) (domain.User, error)
 	GetUser(ctx context.Context, id string) (domain.User, error)
 }
 
 type MiddlewareConfig struct {
-	Mode                 Mode
-	BootstrapAdminEmails map[string]struct{}
-	Sessions             SessionManager
-	APITokens            APITokenAuthenticator
+	Mode      Mode
+	Sessions  SessionManager
+	APITokens APITokenAuthenticator
 }
 
 type APITokenAuthenticator interface {
@@ -77,11 +76,6 @@ func Middleware(cfg MiddlewareConfig, resolver UserResolver) func(http.Handler) 
 	if mode == "" {
 		mode = ModeDisabled
 	}
-	bootstrapAdmins := cfg.BootstrapAdminEmails
-	if bootstrapAdmins == nil {
-		bootstrapAdmins = map[string]struct{}{}
-	}
-
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if mode == ModeDisabled {
@@ -145,7 +139,7 @@ func Middleware(cfg MiddlewareConfig, resolver UserResolver) func(http.Handler) 
 				displayName = &name
 			}
 
-			user, err := resolver.ResolveHeaderUser(r.Context(), email, displayName, bootstrapAdmins)
+			user, err := resolver.ResolveHeaderUser(r.Context(), email, displayName)
 			if err != nil {
 				writeUnauthorized(w, "unable to resolve user")
 				return

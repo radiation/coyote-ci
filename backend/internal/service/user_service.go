@@ -14,6 +14,7 @@ import (
 
 var ErrUserEmailRequired = errors.New("email is required")
 var ErrUserGlobalRoleInvalid = errors.New("global_role must be one of admin, user")
+var ErrUserNotPreauthorized = errors.New("user is not preauthorized")
 
 type UserService struct {
 	users repository.UserRepository
@@ -109,64 +110,74 @@ func (s *UserService) DeleteUser(ctx context.Context, id string) error {
 	return s.users.Delete(ctx, trimmed)
 }
 
-func (s *UserService) ResolveHeaderUser(ctx context.Context, email string, displayName *string, bootstrapAdmins map[string]struct{}) (domain.User, error) {
-	return s.resolveExternalUser(ctx, email, displayName, bootstrapAdmins, false)
+func (s *UserService) ResolveHeaderUser(ctx context.Context, email string, displayName *string) (domain.User, error) {
+	return s.resolveExternalUser(ctx, email, displayName, false)
 }
 
-func (s *UserService) ResolveOIDCUser(ctx context.Context, email string, displayName *string, bootstrapAdmins map[string]struct{}) (domain.User, error) {
-	return s.resolveExternalUser(ctx, email, displayName, bootstrapAdmins, true)
+func (s *UserService) ResolveOIDCUser(ctx context.Context, email string, displayName *string) (domain.User, error) {
+	return s.resolveExternalUser(ctx, email, displayName, true)
 }
 
-func (s *UserService) resolveExternalUser(ctx context.Context, email string, displayName *string, bootstrapAdmins map[string]struct{}, updateDisplayName bool) (domain.User, error) {
+func (s *UserService) BootstrapAdmins(ctx context.Context, emails map[string]struct{}) error {
+	for email := range emails {
+		normalizedEmail := NormalizeEmail(email)
+		if normalizedEmail == "" {
+			continue
+		}
+
+		user, err := s.users.GetByEmail(ctx, normalizedEmail)
+		if errors.Is(err, repository.ErrUserNotFound) {
+			_, createErr := s.CreateUser(ctx, CreateUserInput{
+				Email:      normalizedEmail,
+				GlobalRole: string(domain.GlobalRoleAdmin),
+			})
+			if createErr == nil {
+				continue
+			}
+			if !errors.Is(createErr, repository.ErrUserEmailConflict) {
+				return createErr
+			}
+			user, err = s.users.GetByEmail(ctx, normalizedEmail)
+		}
+		if err != nil {
+			return err
+		}
+		if user.GlobalRole == domain.GlobalRoleAdmin {
+			continue
+		}
+
+		user.GlobalRole = domain.GlobalRoleAdmin
+		user.UpdatedAt = s.now().UTC()
+		if _, updateErr := s.users.Update(ctx, user); updateErr != nil {
+			return updateErr
+		}
+	}
+	return nil
+}
+
+func (s *UserService) resolveExternalUser(ctx context.Context, email string, displayName *string, updateDisplayName bool) (domain.User, error) {
 	normalizedEmail := NormalizeEmail(email)
 	if normalizedEmail == "" {
 		return domain.User{}, ErrUserEmailRequired
 	}
-	if bootstrapAdmins == nil {
-		bootstrapAdmins = map[string]struct{}{}
-	}
 
 	user, err := s.users.GetByEmail(ctx, normalizedEmail)
-	if err == nil {
-		needsUpdate := false
-		if _, ok := bootstrapAdmins[normalizedEmail]; ok && user.GlobalRole != domain.GlobalRoleAdmin {
-			user.GlobalRole = domain.GlobalRoleAdmin
-			needsUpdate = true
-		}
-		if updateDisplayName && displayName != nil {
-			normalizedName := normalizeStringPtr(displayName)
-			if normalizedName != nil && (user.DisplayName == nil || *user.DisplayName != *normalizedName) {
-				user.DisplayName = normalizedName
-				needsUpdate = true
-			}
-		}
-		if needsUpdate {
-			user.UpdatedAt = s.now().UTC()
-			return s.users.Update(ctx, user)
-		}
-		return user, nil
+	if errors.Is(err, repository.ErrUserNotFound) {
+		return domain.User{}, ErrUserNotPreauthorized
 	}
-	if !errors.Is(err, repository.ErrUserNotFound) {
+	if err != nil {
 		return domain.User{}, err
 	}
 
-	role := domain.GlobalRoleUser
-	if _, ok := bootstrapAdmins[normalizedEmail]; ok {
-		role = domain.GlobalRoleAdmin
+	if updateDisplayName && displayName != nil {
+		normalizedName := normalizeStringPtr(displayName)
+		if normalizedName != nil && (user.DisplayName == nil || *user.DisplayName != *normalizedName) {
+			user.DisplayName = normalizedName
+			user.UpdatedAt = s.now().UTC()
+			return s.users.Update(ctx, user)
+		}
 	}
-	now := s.now().UTC()
-	user, err = s.users.Create(ctx, domain.User{
-		ID:          uuid.NewString(),
-		Email:       normalizedEmail,
-		DisplayName: normalizeStringPtr(displayName),
-		GlobalRole:  role,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	})
-	if errors.Is(err, repository.ErrUserEmailConflict) {
-		return s.users.GetByEmail(ctx, normalizedEmail)
-	}
-	return user, err
+	return user, nil
 }
 
 func NormalizeEmail(value string) string {

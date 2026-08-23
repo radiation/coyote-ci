@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/auth"
-	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 )
@@ -38,14 +37,16 @@ func (f *fakeOIDCAuthenticator) Exchange(_ context.Context, _ string, nonce stri
 	return auth.OIDCIdentity{Email: f.email, DisplayName: f.displayName}, nil
 }
 
-func TestAuthHandler_CallbackProvisionsUserAndSession(t *testing.T) {
+func TestAuthHandler_CallbackCreatesSessionForPreauthorizedUser(t *testing.T) {
 	userService := service.NewUserService(memory.NewUserRepository())
 	sessions := newTestSessionManager(t)
 	displayName := "Admin User"
 	fakeOIDC := &fakeOIDCAuthenticator{email: "ADMIN@example.com", displayName: &displayName}
-	h := NewAuthHandler(fakeOIDC, sessions, userService, AuthHandlerConfig{
-		BootstrapAdminEmails: map[string]struct{}{"admin@example.com": {}},
-	})
+	created, createErr := userService.CreateUser(context.Background(), service.CreateUserInput{Email: "admin@example.com", GlobalRole: "admin"})
+	if createErr != nil {
+		t.Fatalf("preauthorize user failed: %v", createErr)
+	}
+	h := NewAuthHandler(fakeOIDC, sessions, userService, AuthHandlerConfig{})
 
 	loginRes := httptest.NewRecorder()
 	h.Login(loginRes, httptest.NewRequest(http.MethodGet, "/auth/login", nil))
@@ -71,10 +72,10 @@ func TestAuthHandler_CallbackProvisionsUserAndSession(t *testing.T) {
 		t.Fatalf("list users failed: %v", err)
 	}
 	if len(users) != 1 {
-		t.Fatalf("expected one provisioned user, got %d", len(users))
+		t.Fatalf("expected one preauthorized user, got %d", len(users))
 	}
-	if users[0].Email != "admin@example.com" || users[0].GlobalRole != domain.GlobalRoleAdmin {
-		t.Fatalf("expected bootstrap admin, got %+v", users[0])
+	if users[0].ID != created.ID || users[0].DisplayName == nil || *users[0].DisplayName != displayName {
+		t.Fatalf("expected preauthorized user display name update, got %+v", users[0])
 	}
 
 	sessionReq := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -85,13 +86,52 @@ func TestAuthHandler_CallbackProvisionsUserAndSession(t *testing.T) {
 	if sessionErr != nil {
 		t.Fatalf("expected session cookie, got %v", sessionErr)
 	}
-	if userID != users[0].ID {
-		t.Fatalf("expected session user %q, got %q", users[0].ID, userID)
+	if userID != created.ID {
+		t.Fatalf("expected session user %q, got %q", created.ID, userID)
+	}
+}
+
+func TestAuthHandler_CallbackRejectsUnknownUserWithoutSession(t *testing.T) {
+	userService := service.NewUserService(memory.NewUserRepository())
+	sessions := newTestSessionManager(t)
+	fakeOIDC := &fakeOIDCAuthenticator{email: "unknown@example.com"}
+	h := NewAuthHandler(fakeOIDC, sessions, userService, AuthHandlerConfig{})
+
+	loginRes := httptest.NewRecorder()
+	h.Login(loginRes, httptest.NewRequest(http.MethodGet, "/auth/login", nil))
+	callbackReq := httptest.NewRequest(http.MethodGet, "/auth/callback?state="+fakeOIDC.lastState+"&code=code", nil)
+	for _, cookie := range loginRes.Result().Cookies() {
+		callbackReq.AddCookie(cookie)
+	}
+	callbackRes := httptest.NewRecorder()
+	h.Callback(callbackRes, callbackReq)
+
+	if callbackRes.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusForbidden, callbackRes.Code, callbackRes.Body.String())
+	}
+	if !strings.Contains(callbackRes.Body.String(), "invite-only") {
+		t.Fatalf("expected invite-only response, got %q", callbackRes.Body.String())
+	}
+	users, listErr := userService.ListUsers(context.Background())
+	if listErr != nil {
+		t.Fatalf("list users failed: %v", listErr)
+	}
+	if len(users) != 0 {
+		t.Fatalf("expected no unknown-user provisioning, got %+v", users)
+	}
+	for _, cookie := range callbackRes.Result().Cookies() {
+		if cookie.Name == "coyote_session" && cookie.MaxAge > 0 {
+			t.Fatalf("unexpected session cookie for unknown user: %#v", cookie)
+		}
 	}
 }
 
 func TestAuthHandler_CallbackRedirectsConfiguredFrontend(t *testing.T) {
 	userService := service.NewUserService(memory.NewUserRepository())
+	_, createErr := userService.CreateUser(context.Background(), service.CreateUserInput{Email: "user@example.com"})
+	if createErr != nil {
+		t.Fatalf("preauthorize user failed: %v", createErr)
+	}
 	sessions := newTestSessionManager(t)
 	fakeOIDC := &fakeOIDCAuthenticator{email: "user@example.com"}
 	h := NewAuthHandler(fakeOIDC, sessions, userService, AuthHandlerConfig{

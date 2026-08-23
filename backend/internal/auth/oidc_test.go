@@ -1,6 +1,9 @@
 package auth
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestIdentityFromOIDCClaims(t *testing.T) {
 	verified := true
@@ -30,10 +33,9 @@ func TestIdentityFromOIDCClaims(t *testing.T) {
 			expectName:  stringPointer("Verified User"),
 		},
 		{
-			name:        "accepts missing email_verified claim",
-			claims:      oidcClaims{Email: "user@example.com", PreferredUsername: "coyote-user"},
-			expectEmail: "user@example.com",
-			expectName:  stringPointer("coyote-user"),
+			name:      "rejects missing email_verified claim",
+			claims:    oidcClaims{Email: "user@example.com", PreferredUsername: "coyote-user"},
+			expectErr: ErrOIDCEmailNotVerified,
 		},
 	}
 
@@ -57,6 +59,13 @@ func TestIdentityFromOIDCClaims(t *testing.T) {
 				t.Fatalf("expected display name %v, got %v", tc.expectName, identity.DisplayName)
 			}
 		})
+	}
+}
+
+func TestOIDCClaimsRejectMalformedEmailVerified(t *testing.T) {
+	var claims oidcClaims
+	if err := json.Unmarshal([]byte(`{"email":"user@example.com","email_verified":"true"}`), &claims); err == nil {
+		t.Fatal("expected malformed email_verified claim to fail decoding")
 	}
 }
 

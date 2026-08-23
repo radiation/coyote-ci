@@ -329,7 +329,7 @@ func TestNewRouter_HeaderModeMeRouteResolvesUser(t *testing.T) {
 	r := newIdentityTestRouter(auth.ModeHeader, "push-secret", "github-secret")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	req.Header.Set("X-Coyote-User-Email", "ADMIN@Example.COM")
+	req.Header.Set("X-Coyote-User-Email", "USER@Example.COM")
 	req.Header.Set("X-Coyote-User-Name", "Admin User")
 	res := httptest.NewRecorder()
 	r.ServeHTTP(res, req)
@@ -354,7 +354,7 @@ func TestNewRouter_HeaderModeMeRouteResolvesUser(t *testing.T) {
 	if body.Data.AuthMode != string(auth.ModeHeader) {
 		t.Fatalf("expected auth mode %q, got %q", auth.ModeHeader, body.Data.AuthMode)
 	}
-	if body.Data.User.Email != "admin@example.com" {
+	if body.Data.User.Email != "user@example.com" {
 		t.Fatalf("expected normalized email, got %q", body.Data.User.Email)
 	}
 	if body.Data.User.DisplayName == nil || *body.Data.User.DisplayName != "Admin User" {
@@ -896,7 +896,17 @@ func newIdentityTestRouter(mode auth.Mode, pushEventSecret string, githubWebhook
 	jobHandler := handler.NewJobHandler(jobSvc)
 	webhookSvc := webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc)
 	eventHandler := handler.NewEventHandler(jobSvc, webhookSvc, observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{secret: githubWebhookSecret})
-	userService := service.NewUserService(repositorymemory.NewUserRepository())
+	userRepo := repositorymemory.NewUserRepository()
+	userService := service.NewUserService(userRepo)
+	adminDisplayName := "Admin User"
+	for _, input := range []service.CreateUserInput{
+		{Email: "admin@example.com", GlobalRole: string(domain.GlobalRoleAdmin)},
+		{Email: "user@example.com", DisplayName: &adminDisplayName, GlobalRole: string(domain.GlobalRoleUser)},
+	} {
+		if _, createErr := userService.CreateUser(context.Background(), input); createErr != nil {
+			panic(createErr)
+		}
+	}
 	userHandler := handler.NewUserHandler(userService, mode)
 	authMiddleware := auth.Middleware(auth.MiddlewareConfig{Mode: mode}, userService)
 	routerOptions := []RouterOption{

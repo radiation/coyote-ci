@@ -122,7 +122,7 @@ func identityFromOIDCClaims(claims oidcClaims) (OIDCIdentity, error) {
 	if email == "" {
 		return OIDCIdentity{}, ErrOIDCEmailRequired
 	}
-	if claims.EmailVerified != nil && !*claims.EmailVerified {
+	if claims.EmailVerified == nil || !*claims.EmailVerified {
 		return OIDCIdentity{}, ErrOIDCEmailNotVerified
 	}
 
