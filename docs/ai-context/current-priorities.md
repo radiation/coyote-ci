@@ -35,6 +35,7 @@ Near-term priorities include:
 - the current CLI slice adds a thin `coyote` binary under `backend/cmd/coyote` plus `backend/internal/cli` and `backend/internal/apiclient`; it now covers version reporting, named server contexts, token storage, auth status, server info, build inspection, artifact download, and read-only project/job discovery via `project list/show` and `job list/show`, and JSON output remains the stable automation interface for those inspection commands
 - API tokens now persist sorted scopes and backend authorization requires both the owning user's permission and the token's required scope for build metadata, log reads, artifact reads, and build-run style actions; valid tokens may still call `/api/me` without a resource scope
 - project and job discovery for API-token callers now also requires `build:read`; project selectors accept id or slug, and job name selectors require a project-scoped lookup to resolve ambiguity server-side
+- anonymous backend browsing is available only through `/api/public/projects` and project-scoped public build endpoints for projects explicitly marked `is_public`; responses are redacted and the authenticated API/RBAC surface remains unchanged. Anonymous frontend shell, browsing pages, and mutation/log/artifact control handling remain deferred.
 
 ## Next likely notification follow-ups
 

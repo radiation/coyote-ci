@@ -24,9 +24,9 @@ func NewProjectRepository(db *sql.DB) *ProjectRepository {
 
 func (r *ProjectRepository) Create(ctx context.Context, project domain.Project) (domain.Project, error) {
 	const query = `
-		INSERT INTO projects (id, name, slug, description, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, name, slug, description, created_at, updated_at
+		INSERT INTO projects (id, name, slug, description, is_public, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, name, slug, description, is_public, created_at, updated_at
 	`
 
 	created, err := scanProject(r.db.QueryRowContext(ctx, query,
@@ -34,6 +34,7 @@ func (r *ProjectRepository) Create(ctx context.Context, project domain.Project) 
 		project.Name,
 		project.Slug,
 		project.Description,
+		project.IsPublic,
 		project.CreatedAt,
 		project.UpdatedAt,
 	))
@@ -49,7 +50,7 @@ func (r *ProjectRepository) Create(ctx context.Context, project domain.Project) 
 
 func (r *ProjectRepository) GetByID(ctx context.Context, id string) (domain.Project, error) {
 	const query = `
-		SELECT id, name, slug, description, created_at, updated_at
+		SELECT id, name, slug, description, is_public, created_at, updated_at
 		FROM projects
 		WHERE id = $1
 	`
@@ -78,7 +79,7 @@ func (r *ProjectRepository) GetByIDs(ctx context.Context, ids []string) (project
 	}
 
 	query := `
-		SELECT id, name, slug, description, created_at, updated_at
+		SELECT id, name, slug, description, is_public, created_at, updated_at
 		FROM projects
 		WHERE id IN (` + strings.Join(placeholders, ", ") + `)
 		ORDER BY created_at ASC, id ASC
@@ -112,7 +113,7 @@ func (r *ProjectRepository) GetByIDs(ctx context.Context, ids []string) (project
 
 func (r *ProjectRepository) GetBySlug(ctx context.Context, slug string) (domain.Project, error) {
 	const query = `
-		SELECT id, name, slug, description, created_at, updated_at
+		SELECT id, name, slug, description, is_public, created_at, updated_at
 		FROM projects
 		WHERE slug = $1
 	`
@@ -129,7 +130,7 @@ func (r *ProjectRepository) GetBySlug(ctx context.Context, slug string) (domain.
 
 func (r *ProjectRepository) List(ctx context.Context) (projects []domain.Project, err error) {
 	const query = `
-		SELECT id, name, slug, description, created_at, updated_at
+		SELECT id, name, slug, description, is_public, created_at, updated_at
 		FROM projects
 		ORDER BY created_at ASC, id ASC
 	`
@@ -166,9 +167,10 @@ func (r *ProjectRepository) Update(ctx context.Context, project domain.Project) 
 		SET name = $2,
 			slug = $3,
 			description = $4,
-			updated_at = $5
+			is_public = $5,
+			updated_at = $6
 		WHERE id = $1
-		RETURNING id, name, slug, description, created_at, updated_at
+		RETURNING id, name, slug, description, is_public, created_at, updated_at
 	`
 
 	updated, err := scanProject(r.db.QueryRowContext(ctx, query,
@@ -176,6 +178,7 @@ func (r *ProjectRepository) Update(ctx context.Context, project domain.Project) 
 		project.Name,
 		project.Slug,
 		project.Description,
+		project.IsPublic,
 		project.UpdatedAt,
 	))
 	if err != nil {
@@ -221,6 +224,7 @@ func scanProject(scanner rowScanner) (domain.Project, error) {
 		&project.Name,
 		&project.Slug,
 		&description,
+		&project.IsPublic,
 		&project.CreatedAt,
 		&project.UpdatedAt,
 	)

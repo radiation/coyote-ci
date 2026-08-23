@@ -406,6 +406,59 @@ func TestNewRouter_AuthConfigRouteIsPublic(t *testing.T) {
 	}
 }
 
+func TestNewRouter_PublicRoutesBypassAuthenticationWithoutWeakeningProjectRoutes(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	buildRepo := repositorymemory.NewBuildRepository()
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
+	projectSvc := service.NewProjectService(projectRepo)
+	jobSvc := service.NewJobService(jobRepo, buildSvc).WithProjectRepository(projectRepo)
+	buildHandler := handler.NewBuildHandler(buildSvc)
+	jobHandler := handler.NewJobHandler(jobSvc)
+	projectHandler := handler.NewProjectHandler(projectSvc, jobSvc)
+	eventHandler := handler.NewEventHandler(jobSvc, webhooksvc.NewDeliveryIngressService(repositorymemory.NewWebhookDeliveryRepository(), jobSvc), observability.NewNoopWebhookIngressMetrics(), routerTestGitHubWebhookResolver{})
+	publicHandler := handler.NewPublicHandler(projectSvc, buildSvc, jobSvc)
+	project, createErr := projectRepo.Create(ctx, domain.Project{ID: "project-public", Name: "Public", Slug: "public", IsPublic: true, CreatedAt: now, UpdatedAt: now})
+	if createErr != nil {
+		t.Fatalf("create public project: %v", createErr)
+	}
+
+	rejectingAuth := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		})
+	}
+	r := NewRouter(
+		buildHandler,
+		nil,
+		jobHandler,
+		projectHandler,
+		nil,
+		nil,
+		eventHandler,
+		"",
+		WithAuthMiddleware(rejectingAuth),
+		WithPublicHandler(publicHandler),
+	)
+
+	publicRes := httptest.NewRecorder()
+	r.ServeHTTP(publicRes, httptest.NewRequest(http.MethodGet, "/api/public/projects", nil))
+	if publicRes.Code != http.StatusOK {
+		t.Fatalf("expected anonymous public route status %d, got %d body=%s", http.StatusOK, publicRes.Code, publicRes.Body.String())
+	}
+	if !strings.Contains(publicRes.Body.String(), project.Slug) {
+		t.Fatalf("expected public response to include project slug, got %s", publicRes.Body.String())
+	}
+
+	protectedRes := httptest.NewRecorder()
+	r.ServeHTTP(protectedRes, httptest.NewRequest(http.MethodGet, "/api/projects/"+project.ID, nil))
+	if protectedRes.Code != http.StatusUnauthorized {
+		t.Fatalf("expected authenticated project route status %d, got %d body=%s", http.StatusUnauthorized, protectedRes.Code, protectedRes.Body.String())
+	}
+}
+
 func TestNewRouter_AuthRoutesAreRegisteredWhenHandlerIsInjected(t *testing.T) {
 	sessions, err := auth.NewCookieSessionManager(auth.CookieSessionConfig{Secret: "test-session-secret"})
 	if err != nil {

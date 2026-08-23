@@ -259,6 +259,7 @@ func main() {
 	artifactHandler.SetJobService(jobService)
 	jobHandler := handler.NewJobHandler(jobService)
 	projectHandler := handler.NewProjectHandler(projectService, jobService)
+	publicHandler := handler.NewPublicHandler(projectService, buildService, jobService)
 	authMode := auth.ParseMode(cfg.AuthMode)
 	bootstrapAdmins := auth.ParseBootstrapAdminEmails(cfg.BootstrapAdminEmails)
 	if bootstrapErr := bootstrapAdminsAtStartup(context.Background(), userService, bootstrapAdmins); bootstrapErr != nil {
@@ -372,6 +373,7 @@ func main() {
 		apphttp.WithAPITokenHandler(apiTokenHandler),
 		apphttp.WithProjectMembershipHandler(projectMembershipHandler),
 		apphttp.WithWorkerHandler(workerHandler),
+		apphttp.WithPublicHandler(publicHandler),
 	)
 	mux := nethttp.NewServeMux()
 	mux.Handle("/debug/vars", expvar.Handler())

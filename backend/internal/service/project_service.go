@@ -34,12 +34,14 @@ type CreateProjectInput struct {
 	Name        string
 	Slug        string
 	Description *string
+	IsPublic    bool
 }
 
 type UpdateProjectInput struct {
 	Name        *string
 	Slug        *string
 	Description OptionalStringPatch
+	IsPublic    *bool
 }
 
 func (s *ProjectService) CreateProject(ctx context.Context, input CreateProjectInput) (domain.Project, error) {
@@ -61,6 +63,7 @@ func (s *ProjectService) CreateProject(ctx context.Context, input CreateProjectI
 		Name:        name,
 		Slug:        slug,
 		Description: normalizeStringPtr(input.Description),
+		IsPublic:    input.IsPublic,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	})
@@ -120,6 +123,9 @@ func (s *ProjectService) UpdateProject(ctx context.Context, id string, input Upd
 	}
 	if input.Description.Set {
 		current.Description = normalizeStringPtr(input.Description.Value)
+	}
+	if input.IsPublic != nil {
+		current.IsPublic = *input.IsPublic
 	}
 
 	current.UpdatedAt = s.now().UTC()
