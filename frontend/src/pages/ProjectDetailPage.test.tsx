@@ -43,11 +43,6 @@ function renderPage(
   authStatus: "authenticated" | "unauthenticated" = "authenticated",
   initialEntry = "/projects/project-1",
 ) {
-  if (authStatus === "authenticated") {
-    mockedGetPublicProject.mockRejectedValueOnce(
-      new APIError(404, "not found"),
-    );
-  }
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -240,6 +235,8 @@ describe("ProjectDetailPage", () => {
         screen.getByRole("link", { name: "release-history" }),
       ).toHaveAttribute("href", "/jobs/job-recent-1");
     });
+    expect(mockedGetProject).toHaveBeenCalledWith("project-1");
+    expect(mockedGetPublicProject).not.toHaveBeenCalled();
   });
 
   it("uses public project and build endpoints for anonymous visitors", async () => {
@@ -279,7 +276,8 @@ describe("ProjectDetailPage", () => {
     expect(screen.queryByRole("link", { name: "Create Job" })).toBeNull();
   });
 
-  it("redirects authenticated public project URLs before calling the ID API", async () => {
+  it("falls back to a public project slug only after the ID lookup returns 404", async () => {
+    mockedGetProject.mockRejectedValueOnce(new APIError(404, "not found"));
     mockedGetPublicProject.mockResolvedValueOnce({
       id: "project-1",
       name: "Platform",
@@ -293,8 +291,54 @@ describe("ProjectDetailPage", () => {
       expect(mockedGetProject).toHaveBeenCalledWith("project-1");
       expect(screen.getByText("Project Summary")).toBeTruthy();
     });
+    expect(mockedGetProject).toHaveBeenCalledWith("platform");
     expect(mockedGetPublicProject).toHaveBeenCalledWith("platform");
-    expect(mockedGetProject).not.toHaveBeenCalledWith("platform");
+  });
+
+  it("shows resolver failures instead of calling the ID API with a public slug", async () => {
+    mockedGetProject.mockRejectedValueOnce(new APIError(404, "not found"));
+    mockedGetPublicProject.mockRejectedValueOnce(new Error("unavailable"));
+
+    renderPage("authenticated", "/projects/platform");
+
+    expect(
+      await screen.findByText(
+        "Failed to resolve public project: Error: unavailable",
+      ),
+    ).toBeTruthy();
+    expect(mockedGetProject).toHaveBeenCalledWith("platform");
+  });
+
+  it("shows public project and build history fallbacks", async () => {
+    mockedGetPublicProject.mockRejectedValueOnce(
+      new APIError(404, "not found"),
+    );
+    renderPage("unauthenticated");
+    expect(await screen.findByText("Project not found.")).toBeTruthy();
+
+    mockedGetPublicProject.mockResolvedValueOnce({
+      id: "project-1",
+      name: "Platform",
+      slug: "platform",
+      description: "",
+    });
+    mockedListPublicBuilds.mockRejectedValueOnce(new Error("unavailable"));
+    renderPage("unauthenticated");
+    expect(
+      await screen.findByText("Failed to load builds: Error: unavailable"),
+    ).toBeTruthy();
+  });
+
+  it("uses the public project description fallback", async () => {
+    mockedGetPublicProject.mockResolvedValueOnce({
+      id: "project-1",
+      name: "Platform",
+      slug: "platform",
+      description: "",
+    });
+    renderPage("unauthenticated");
+
+    expect(await screen.findByText("No description.")).toBeTruthy();
   });
 
   it("shows the project loading state", () => {
@@ -330,7 +374,7 @@ describe("ProjectDetailPage", () => {
   });
 
   it("shows empty project activity and detail fallbacks", async () => {
-    mockedGetProject.mockResolvedValueOnce({
+    mockedGetProject.mockResolvedValue({
       id: "project-1",
       name: "Platform",
       slug: "platform",

@@ -19,6 +19,12 @@ import { BuildActivityRail } from "../components/ScopedBuildActivityPanels";
 import type { ProjectMemberRole } from "../types/identity";
 import { StatusBadge } from "../components/StatusBadge";
 import { formatTime } from "../utils/time";
+import type { PublicBuild } from "../types/public";
+import {
+  FAST_POLL_INTERVAL,
+  isActiveBuild,
+  SLOW_POLL_INTERVAL,
+} from "../utils/build";
 
 export function ProjectDetailPage() {
   const { authStatus } = useAuth();
@@ -33,24 +39,46 @@ export function ProjectDetailPage() {
 function AuthenticatedProjectRoute() {
   const { id: projectIDOrSlug } = useParams<{ id: string }>();
   const {
-    data: publicProject,
-    isLoading,
-    error,
+    data: authenticatedProject,
+    isLoading: authenticatedProjectLoading,
+    error: authenticatedProjectError,
   } = useQuery({
-    queryKey: ["publicProject", projectIDOrSlug],
-    queryFn: () => getPublicProject(projectIDOrSlug!),
+    queryKey: ["project", projectIDOrSlug],
+    queryFn: () => getProject(projectIDOrSlug!),
     enabled: Boolean(projectIDOrSlug),
     retry: false,
   });
+  const {
+    data: publicProject,
+    isLoading: publicProjectLoading,
+    error: publicProjectError,
+  } = useQuery({
+    queryKey: ["publicProject", projectIDOrSlug],
+    queryFn: () => getPublicProject(projectIDOrSlug!),
+    enabled: isAPIErrorStatus(authenticatedProjectError, 404),
+    retry: false,
+  });
 
-  if (isLoading) return <p>Loading project…</p>;
+  if (authenticatedProjectLoading) return <p>Loading project…</p>;
+  if (authenticatedProject) return <AuthenticatedProjectDetailPage />;
+  if (
+    authenticatedProjectError &&
+    !isAPIErrorStatus(authenticatedProjectError, 404)
+  ) {
+    return (
+      <p className="error-text">
+        Failed to load project: {String(authenticatedProjectError)}
+      </p>
+    );
+  }
+  if (publicProjectLoading) return <p>Loading project…</p>;
   if (publicProject) {
     return <Navigate to={`/projects/${publicProject.id}`} replace />;
   }
-  if (error && !isAPIErrorStatus(error, 404)) {
+  if (publicProjectError && !isAPIErrorStatus(publicProjectError, 404)) {
     return (
       <p className="error-text">
-        Failed to resolve public project: {String(error)}
+        Failed to resolve public project: {String(publicProjectError)}
       </p>
     );
   }
@@ -77,6 +105,12 @@ function PublicProjectDetailPage() {
     queryKey: ["publicBuilds", slug],
     queryFn: () => listPublicBuilds(slug!),
     enabled: Boolean(slug && project),
+    refetchInterval: (query) => {
+      const nextBuilds = query.state.data as PublicBuild[] | undefined;
+      return nextBuilds?.some((build) => isActiveBuild(build.status))
+        ? FAST_POLL_INTERVAL
+        : SLOW_POLL_INTERVAL;
+    },
   });
 
   if (projectLoading) return <p>Loading project…</p>;

@@ -3,6 +3,12 @@ import { Link, Navigate, useParams } from "react-router-dom";
 import { getPublicBuild, getPublicProject, isAPIErrorStatus } from "../api";
 import { useAuth } from "../auth-context";
 import { StatusBadge } from "../components/StatusBadge";
+import type { PublicBuild } from "../types/public";
+import {
+  FAST_POLL_INTERVAL,
+  isActiveBuild,
+  SLOW_POLL_INTERVAL,
+} from "../utils/build";
 import { formatTime } from "../utils/time";
 
 export function PublicBuildDetailPage() {
@@ -51,6 +57,12 @@ function AnonymousPublicBuildDetailPage() {
     queryKey: ["publicBuild", slug, buildID],
     queryFn: () => getPublicBuild(slug!, buildID!),
     enabled: Boolean(slug && buildID),
+    refetchInterval: (query) => {
+      const nextBuild = query.state.data as PublicBuild | undefined;
+      return isActiveBuild(nextBuild?.status)
+        ? FAST_POLL_INTERVAL
+        : SLOW_POLL_INTERVAL;
+    },
   });
 
   if (isLoading) return <p>Loading build…</p>;

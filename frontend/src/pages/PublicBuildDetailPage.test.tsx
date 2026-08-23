@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { PublicBuildDetailPage } from "./PublicBuildDetailPage";
 import { AuthContext } from "../auth-context";
 import { getPublicBuild, getPublicProject } from "../api";
+import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL } from "../utils/build";
 
 vi.mock("../api", () => ({
   getPublicBuild: vi.fn(),
@@ -20,7 +21,7 @@ function renderPage(
     defaultOptions: { queries: { retry: false } },
   });
 
-  return render(
+  const result = render(
     <QueryClientProvider client={queryClient}>
       <AuthContext.Provider
         value={{
@@ -50,6 +51,8 @@ function renderPage(
       </AuthContext.Provider>
     </QueryClientProvider>,
   );
+
+  return result;
 }
 
 describe("PublicBuildDetailPage", () => {
@@ -85,6 +88,10 @@ describe("PublicBuildDetailPage", () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("loads the public build and renders redacted step timing only", async () => {
     renderPage();
 
@@ -98,6 +105,45 @@ describe("PublicBuildDetailPage", () => {
     expect(screen.queryByRole("button", { name: /Cancel|Rerun/ })).toBeNull();
   });
 
+  it("polls active public builds quickly and terminal builds slowly", async () => {
+    vi.useFakeTimers();
+    mockedGetPublicBuild
+      .mockResolvedValueOnce({
+        id: "build-1",
+        number: 42,
+        status: "running",
+        attempt: 2,
+        created_at: "2026-05-01T00:00:00Z",
+      })
+      .mockResolvedValueOnce({
+        id: "build-1",
+        number: 42,
+        status: "success",
+        attempt: 2,
+        created_at: "2026-05-01T00:00:00Z",
+      });
+
+    renderPage();
+    expect(mockedGetPublicBuild).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FAST_POLL_INTERVAL);
+    });
+    expect(mockedGetPublicBuild).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FAST_POLL_INTERVAL);
+    });
+    expect(mockedGetPublicBuild).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(
+        SLOW_POLL_INTERVAL - FAST_POLL_INTERVAL,
+      );
+    });
+    expect(mockedGetPublicBuild).toHaveBeenCalledTimes(3);
+  });
+
   it("renders not found for a public 404", async () => {
     mockedGetPublicBuild.mockRejectedValueOnce({ status: 404 });
     renderPage();
@@ -105,11 +151,50 @@ describe("PublicBuildDetailPage", () => {
     expect(await screen.findByText("Build not found.")).toBeTruthy();
   });
 
+  it("renders public build fallback states", async () => {
+    mockedGetPublicBuild.mockRejectedValueOnce(new Error("unavailable"));
+    renderPage();
+    expect(
+      await screen.findByText("Failed to load build: Error: unavailable"),
+    ).toBeTruthy();
+
+    mockedGetPublicBuild.mockResolvedValueOnce({
+      id: "build-1",
+      number: 42,
+      status: "success",
+      attempt: 1,
+      created_at: "2026-05-01T00:00:00Z",
+      steps: [],
+    });
+    renderPage();
+    expect(
+      await screen.findByText("No step information is available."),
+    ).toBeTruthy();
+  });
+
   it("redirects authenticated viewers to the normal build route", async () => {
     renderPage("authenticated");
 
     expect(await screen.findByText("Authenticated build page")).toBeTruthy();
     expect(mockedGetPublicProject).toHaveBeenCalledWith("platform");
+    expect(mockedGetPublicBuild).not.toHaveBeenCalled();
+  });
+
+  it("shows authenticated public-build resolver failures", async () => {
+    mockedGetPublicProject.mockRejectedValueOnce(new Error("unavailable"));
+    renderPage("authenticated");
+
+    expect(
+      await screen.findByText("Failed to load build: Error: unavailable"),
+    ).toBeTruthy();
+    expect(mockedGetPublicBuild).not.toHaveBeenCalled();
+  });
+
+  it("renders not found when the authenticated public-project resolver returns 404", async () => {
+    mockedGetPublicProject.mockRejectedValueOnce({ status: 404 });
+    renderPage("authenticated");
+
+    expect(await screen.findByText("Build not found.")).toBeTruthy();
     expect(mockedGetPublicBuild).not.toHaveBeenCalled();
   });
 });

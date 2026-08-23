@@ -148,4 +148,19 @@ describe("ProjectsListPage", () => {
     expect(screen.queryByRole("button", { name: "Create Project" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
+
+  it("shows public empty and error states", async () => {
+    renderPage("unauthenticated");
+
+    expect(
+      await screen.findByText("No public projects are available."),
+    ).toBeTruthy();
+
+    mockedListPublicProjects.mockRejectedValueOnce(new Error("unavailable"));
+    renderPage("unauthenticated");
+
+    expect(
+      await screen.findByText("Failed to load projects: Error: unavailable"),
+    ).toBeTruthy();
+  });
 });
