@@ -11,6 +11,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
+	"github.com/radiation/coyote-ci/backend/internal/service"
 )
 
 type stubProjectRepository struct {
@@ -140,5 +141,20 @@ func TestNewRepositoryAwareCheckoutResolver(t *testing.T) {
 	resolver, err := newRepositoryAwareCheckoutResolver(memoryrepo.NewSCMConnectionRepository(), memoryrepo.NewSCMRepositoryRegistrationRepository())
 	if err != nil || resolver == nil {
 		t.Fatalf("expected configured checkout resolver, resolver=%v err=%v", resolver, err)
+	}
+}
+
+func TestBootstrapAdminsAtStartup(t *testing.T) {
+	userService := service.NewUserService(memoryrepo.NewUserRepository())
+	if err := bootstrapAdminsAtStartup(context.Background(), userService, map[string]struct{}{"ADMIN@example.com": {}}); err != nil {
+		t.Fatalf("bootstrap startup provisioning failed: %v", err)
+	}
+
+	user, err := userService.ResolveOIDCUser(context.Background(), "admin@example.com", nil)
+	if err != nil {
+		t.Fatalf("resolve bootstrapped admin failed: %v", err)
+	}
+	if user.GlobalRole != domain.GlobalRoleAdmin {
+		t.Fatalf("expected bootstrapped admin role, got %q", user.GlobalRole)
 	}
 }

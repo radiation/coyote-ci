@@ -261,7 +261,7 @@ func main() {
 	projectHandler := handler.NewProjectHandler(projectService, jobService)
 	authMode := auth.ParseMode(cfg.AuthMode)
 	bootstrapAdmins := auth.ParseBootstrapAdminEmails(cfg.BootstrapAdminEmails)
-	if bootstrapErr := userService.BootstrapAdmins(context.Background(), bootstrapAdmins); bootstrapErr != nil {
+	if bootstrapErr := bootstrapAdminsAtStartup(context.Background(), userService, bootstrapAdmins); bootstrapErr != nil {
 		log.Fatalf("failed to provision bootstrap admins: %v", bootstrapErr)
 	}
 	buildHandler.SetAuthorization(authMode, projectMembershipService)
@@ -415,6 +415,10 @@ func main() {
 		log.Fatalf("server failed: %v", err)
 	}
 	wg.Wait()
+}
+
+func bootstrapAdminsAtStartup(ctx context.Context, users *service.UserService, emails map[string]struct{}) error {
+	return users.BootstrapAdmins(ctx, emails)
 }
 
 func configureSCMStatusRuntime(cfg config.Config, buildRepo repository.BuildRepository, projectRepo repository.ProjectRepository, deliveryRepo repository.SCMStatusDeliveryRepository, connectionRepo repository.SCMConnectionRepository, registrationRepo repository.SCMRepositoryRegistrationRepository) (scmStatusRuntime, error) {

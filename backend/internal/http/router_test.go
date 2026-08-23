@@ -899,11 +899,11 @@ func newIdentityTestRouter(mode auth.Mode, pushEventSecret string, githubWebhook
 	userRepo := repositorymemory.NewUserRepository()
 	userService := service.NewUserService(userRepo)
 	adminDisplayName := "Admin User"
-	for _, user := range []domain.User{
-		{Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin},
-		{Email: "user@example.com", DisplayName: &adminDisplayName, GlobalRole: domain.GlobalRoleUser},
+	for _, input := range []service.CreateUserInput{
+		{Email: "admin@example.com", GlobalRole: string(domain.GlobalRoleAdmin)},
+		{Email: "user@example.com", DisplayName: &adminDisplayName, GlobalRole: string(domain.GlobalRoleUser)},
 	} {
-		if _, createErr := userRepo.Create(context.Background(), user); createErr != nil {
+		if _, createErr := userService.CreateUser(context.Background(), input); createErr != nil {
 			panic(createErr)
 		}
 	}

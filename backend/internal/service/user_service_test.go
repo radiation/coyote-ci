@@ -11,6 +11,34 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
 )
 
+type bootstrapUserRepository struct {
+	repository.UserRepository
+	getByEmail func(context.Context, string) (domain.User, error)
+	create     func(context.Context, domain.User) (domain.User, error)
+	update     func(context.Context, domain.User) (domain.User, error)
+}
+
+func (r bootstrapUserRepository) GetByEmail(ctx context.Context, email string) (domain.User, error) {
+	if r.getByEmail != nil {
+		return r.getByEmail(ctx, email)
+	}
+	return r.UserRepository.GetByEmail(ctx, email)
+}
+
+func (r bootstrapUserRepository) Create(ctx context.Context, user domain.User) (domain.User, error) {
+	if r.create != nil {
+		return r.create(ctx, user)
+	}
+	return r.UserRepository.Create(ctx, user)
+}
+
+func (r bootstrapUserRepository) Update(ctx context.Context, user domain.User) (domain.User, error) {
+	if r.update != nil {
+		return r.update(ctx, user)
+	}
+	return r.UserRepository.Update(ctx, user)
+}
+
 func TestUserService_CreateListGetUpdateDelete(t *testing.T) {
 	userRepo := memory.NewUserRepository()
 	service := NewUserService(userRepo)
@@ -166,6 +194,93 @@ func TestUserService_BootstrapAdmins(t *testing.T) {
 	unchangedAdmin, getErr := userRepo.GetByEmail(ctx, existingAdmin.Email)
 	if getErr != nil || unchangedAdmin.ID != existingAdmin.ID || unchangedAdmin.GlobalRole != domain.GlobalRoleAdmin {
 		t.Fatalf("expected existing admin unchanged, user=%+v err=%v", unchangedAdmin, getErr)
+	}
+}
+
+func TestUserService_BootstrapAdminsRepositoryErrors(t *testing.T) {
+	ctx := context.Background()
+	base := memory.NewUserRepository()
+	tests := []struct {
+		name string
+		repo repository.UserRepository
+		want error
+	}{
+		{
+			name: "lookup failure",
+			repo: bootstrapUserRepository{
+				UserRepository: base,
+				getByEmail: func(context.Context, string) (domain.User, error) {
+					return domain.User{}, errors.New("lookup failed")
+				},
+			},
+			want: errors.New("lookup failed"),
+		},
+		{
+			name: "create failure",
+			repo: bootstrapUserRepository{
+				UserRepository: base,
+				getByEmail: func(context.Context, string) (domain.User, error) {
+					return domain.User{}, repository.ErrUserNotFound
+				},
+				create: func(context.Context, domain.User) (domain.User, error) {
+					return domain.User{}, errors.New("create failed")
+				},
+			},
+			want: errors.New("create failed"),
+		},
+		{
+			name: "update failure",
+			repo: bootstrapUserRepository{
+				UserRepository: base,
+				getByEmail: func(context.Context, string) (domain.User, error) {
+					return domain.User{ID: "user-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleUser}, nil
+				},
+				update: func(context.Context, domain.User) (domain.User, error) {
+					return domain.User{}, errors.New("update failed")
+				},
+			},
+			want: errors.New("update failed"),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := NewUserService(test.repo).BootstrapAdmins(ctx, map[string]struct{}{"admin@example.com": {}})
+			if err == nil || err.Error() != test.want.Error() {
+				t.Fatalf("expected %v, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestUserService_BootstrapAdminsSkipsBlankEmailsAndRecoversCreateConflict(t *testing.T) {
+	ctx := context.Background()
+	lookupCalls := 0
+	repo := bootstrapUserRepository{
+		UserRepository: memory.NewUserRepository(),
+		getByEmail: func(_ context.Context, email string) (domain.User, error) {
+			lookupCalls++
+			if lookupCalls == 1 {
+				if email != "admin@example.com" {
+					t.Fatalf("expected normalized email, got %q", email)
+				}
+				return domain.User{}, repository.ErrUserNotFound
+			}
+			return domain.User{ID: "admin-1", Email: email, GlobalRole: domain.GlobalRoleAdmin}, nil
+		},
+		create: func(context.Context, domain.User) (domain.User, error) {
+			return domain.User{}, repository.ErrUserEmailConflict
+		},
+	}
+
+	if err := NewUserService(repo).BootstrapAdmins(ctx, map[string]struct{}{
+		" ":                 {},
+		"ADMIN@example.com": {},
+	}); err != nil {
+		t.Fatalf("bootstrap conflict recovery failed: %v", err)
+	}
+	if lookupCalls != 2 {
+		t.Fatalf("expected two lookups after skipping blank email, got %d", lookupCalls)
 	}
 }
 
