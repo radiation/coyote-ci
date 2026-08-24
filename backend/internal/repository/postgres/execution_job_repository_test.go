@@ -25,7 +25,7 @@ func TestExecutionJobRepository_CreateAndLookup(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO build_jobs").WillReturnRows(
 		sqlmock.NewRows(executionJobMockColumns).
-			AddRow("job-1", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "queued", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, timeout, ".coyote/pipeline.yml", ".", "https://github.com/acme/repo.git", "abc123", "main", nil, nil, 1, "digest", `{"version":1}`, nil, nil, nil, now, nil, nil, nil, nil, `[]`),
+			AddRow("job-1", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "queued", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, timeout, ".coyote/pipeline.yml", ".", "https://github.com/acme/repo.git", "abc123", "main", nil, nil, 1, "digest", `{"version":1}`, nil, nil, nil, now, nil, nil, nil, nil, nil, `[]`),
 	)
 	mock.ExpectCommit()
 
@@ -59,7 +59,7 @@ func TestExecutionJobRepository_CreateAndLookup(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE step_id = \$1`).WithArgs("step-1").WillReturnRows(
 		sqlmock.NewRows(executionJobMockColumns).
-			AddRow("job-1", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "queued", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, timeout, ".coyote/pipeline.yml", ".", "https://github.com/acme/repo.git", "abc123", "main", nil, nil, 1, "digest", `{"version":1}`, nil, nil, nil, now, nil, nil, nil, nil, `[]`),
+			AddRow("job-1", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "queued", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, timeout, ".coyote/pipeline.yml", ".", "https://github.com/acme/repo.git", "abc123", "main", nil, nil, 1, "digest", `{"version":1}`, nil, nil, nil, now, nil, nil, nil, nil, nil, `[]`),
 	)
 
 	job, err := repo.GetJobByStepID(context.Background(), "step-1")
@@ -88,7 +88,7 @@ func TestExecutionJobRepository_RenewAndComplete(t *testing.T) {
 
 	mock.ExpectQuery(`UPDATE build_jobs\s+SET claim_expires_at`).WithArgs("job-1", "claim-1", lease).WillReturnRows(
 		sqlmock.NewRows(executionJobMockColumns).
-			AddRow("job-1", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "running", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, nil, nil, nil, "https://github.com/acme/repo.git", "abc123", nil, nil, nil, 1, nil, `{}`, "claim-1", "worker-1", lease, now, now, nil, nil, nil, `[]`),
+			AddRow("job-1", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "running", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, nil, nil, nil, "https://github.com/acme/repo.git", "abc123", nil, nil, nil, 1, nil, `{}`, "claim-1", "worker-1", lease, now, now, nil, nil, nil, nil, `[]`),
 	)
 
 	_, outcome, err := repo.RenewJobLease(context.Background(), "job-1", "claim-1", lease)
@@ -99,9 +99,9 @@ func TestExecutionJobRepository_RenewAndComplete(t *testing.T) {
 		t.Fatalf("expected completed outcome, got %q", outcome)
 	}
 
-	mock.ExpectQuery(`UPDATE build_jobs\s+SET status = \$3`).WithArgs("job-1", "claim-1", "success", finished, nil, 0, `[]`).WillReturnRows(
+	mock.ExpectQuery(`UPDATE build_jobs\s+SET status = \$3`).WithArgs("job-1", "claim-1", "success", finished, nil, nil, 0, `[]`).WillReturnRows(
 		sqlmock.NewRows(executionJobMockColumns).
-			AddRow("job-1", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "success", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, nil, nil, nil, "https://github.com/acme/repo.git", "abc123", nil, nil, nil, 1, nil, `{}`, nil, nil, nil, now, now, finished, nil, 0, `[]`),
+			AddRow("job-1", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "success", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, nil, nil, nil, "https://github.com/acme/repo.git", "abc123", nil, nil, nil, 1, nil, `{}`, nil, nil, nil, now, now, finished, nil, nil, 0, `[]`),
 	)
 
 	_, outcome, err = repo.CompleteJobSuccess(context.Background(), "job-1", "claim-1", finished, 0, nil)
@@ -129,7 +129,7 @@ func TestExecutionJobRepository_ClaimNextRunnableJob(t *testing.T) {
 
 	mock.ExpectQuery(`WITH candidate AS \(\s*SELECT bj\.id\s*FROM build_jobs AS bj`).WithArgs(now, "worker-1", "claim-1", lease).WillReturnRows(
 		sqlmock.NewRows(executionJobMockColumns).
-			AddRow("job-1", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "running", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, 30, ".coyote/pipeline.yml", ".", "https://github.com/acme/repo.git", "abc123", "main", nil, nil, 1, "digest", `{"version":1}`, "claim-1", "worker-1", lease, now, now, nil, nil, nil, `[]`),
+			AddRow("job-1", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "running", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, 30, ".coyote/pipeline.yml", ".", "https://github.com/acme/repo.git", "abc123", "main", nil, nil, 1, "digest", `{"version":1}`, "claim-1", "worker-1", lease, now, now, nil, nil, nil, nil, `[]`),
 	)
 
 	job, claimed, err := repo.ClaimNextRunnableJob(context.Background(), repository.StepClaim{
@@ -166,7 +166,7 @@ func TestExecutionJobRepository_ClaimNextRunnableJob_UsesBuildPriorityOrdering(t
 	mock.ExpectQuery(`ORDER BY\s+b\.priority DESC,\s+COALESCE\(b\.queued_at, b\.created_at\) ASC,\s+bj\.created_at ASC,\s+bj\.step_index ASC,\s+bj\.attempt_number ASC,\s+bj\.id ASC`).
 		WithArgs(now, "worker-1", "claim-1", lease).
 		WillReturnRows(sqlmock.NewRows(executionJobMockColumns).
-			AddRow("job-priority", "build-priority", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "running", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, 30, ".coyote/pipeline.yml", ".", "https://github.com/acme/repo.git", "abc123", "main", nil, nil, 1, "digest", `{"version":1}`, "claim-1", "worker-1", lease, now, now, nil, nil, nil, `[]`))
+			AddRow("job-priority", "build-priority", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "running", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, 30, ".coyote/pipeline.yml", ".", "https://github.com/acme/repo.git", "abc123", "main", nil, nil, 1, "digest", `{"version":1}`, "claim-1", "worker-1", lease, now, now, nil, nil, nil, nil, `[]`))
 
 	job, claimed, err := repo.ClaimNextRunnableJob(context.Background(), repository.StepClaim{
 		WorkerID:       "worker-1",
@@ -232,11 +232,11 @@ func TestExecutionJobRepository_CompleteJobSuccess_CanceledJobIsDuplicateTermina
 	finished := now.Add(2 * time.Minute)
 
 	mock.ExpectQuery(`UPDATE build_jobs\s+SET status = \$3`).
-		WithArgs("job-1", "claim-1", "success", finished, nil, 0, `[]`).
+		WithArgs("job-1", "claim-1", "success", finished, nil, nil, 0, `[]`).
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1`).WithArgs("job-1").WillReturnRows(
 		sqlmock.NewRows(executionJobMockColumns).
-			AddRow("job-1", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "canceled", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, nil, nil, nil, "https://github.com/acme/repo.git", "abc123", nil, nil, nil, 1, nil, `{}`, nil, nil, nil, now, now, finished, "operator canceled", nil, `[]`),
+			AddRow("job-1", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "canceled", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, nil, nil, nil, "https://github.com/acme/repo.git", "abc123", nil, nil, nil, 1, nil, `{}`, nil, nil, nil, now, now, finished, "operator canceled", nil, nil, `[]`),
 	)
 
 	job, outcome, err := repo.CompleteJobSuccess(context.Background(), "job-1", "claim-1", finished, 0, nil)

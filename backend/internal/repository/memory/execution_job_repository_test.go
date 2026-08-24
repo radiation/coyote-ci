@@ -94,6 +94,52 @@ func TestExecutionJobRepository_ClaimRenewAndComplete(t *testing.T) {
 	}
 }
 
+func TestExecutionJobRepository_CompleteJobFailureRejectsStaleClaim(t *testing.T) {
+	repo := NewExecutionJobRepository()
+	now := time.Now().UTC()
+	_, createErr := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{{
+		ID:               "job-stale",
+		BuildID:          "build-stale",
+		StepID:           "step-stale",
+		Name:             "test",
+		StepIndex:        0,
+		Status:           domain.ExecutionJobStatusQueued,
+		ResolvedSpecJSON: "{}",
+		CreatedAt:        now,
+	}})
+	if createErr != nil {
+		t.Fatalf("create job failed: %v", createErr)
+	}
+
+	claim := repository.StepClaim{WorkerID: "worker-1", ClaimToken: "claim-active", ClaimedAt: now, LeaseExpiresAt: now.Add(time.Minute)}
+	if _, claimed, claimErr := repo.ClaimJobByStepID(context.Background(), "step-stale", claim); claimErr != nil || !claimed {
+		t.Fatalf("claim job: claimed=%v err=%v", claimed, claimErr)
+	}
+
+	exitCode := -1
+	job, outcome, completeErr := repo.CompleteJobFailure(context.Background(), "job-stale", "claim-stale", now.Add(time.Minute), "step timed out", domain.ExecutionFailureKindTimeout, &exitCode, nil)
+	if completeErr != nil {
+		t.Fatalf("complete stale claim: %v", completeErr)
+	}
+	if outcome != repository.StepCompletionStaleClaim {
+		t.Fatalf("expected stale claim outcome, got %q", outcome)
+	}
+	if job.Status != domain.ExecutionJobStatusRunning || job.FailureKind != nil {
+		t.Fatalf("expected running job without failure kind, got status=%q failure_kind=%v", job.Status, job.FailureKind)
+	}
+
+	completed, activeOutcome, activeCompleteErr := repo.CompleteJobFailure(context.Background(), "job-stale", "claim-active", now.Add(time.Minute), "step timed out", domain.ExecutionFailureKindTimeout, &exitCode, nil)
+	if activeCompleteErr != nil {
+		t.Fatalf("complete active claim: %v", activeCompleteErr)
+	}
+	if activeOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed outcome, got %q", activeOutcome)
+	}
+	if completed.FailureKind == nil || *completed.FailureKind != domain.ExecutionFailureKindTimeout {
+		t.Fatalf("expected timeout failure kind, got %v", completed.FailureKind)
+	}
+}
+
 func TestExecutionJobRepository_ClaimNextRunnableJob_PrioritizesBuildPriorityThenQueuedTime(t *testing.T) {
 	buildRepo := NewBuildRepository()
 	repo := NewExecutionJobRepository()
@@ -377,13 +423,16 @@ func TestExecutionJobRepository_ImmutabilityForSpecFields(t *testing.T) {
 	if _, _, claimErr := repo.ClaimJobByStepID(context.Background(), "step-immut", claim); claimErr != nil {
 		t.Fatalf("claim failed: %v", claimErr)
 	}
-	if _, _, completeErr := repo.CompleteJobFailure(context.Background(), "job-immut", "c", now.Add(time.Minute), "boom", nil, nil); completeErr != nil {
+	if _, _, completeErr := repo.CompleteJobFailure(context.Background(), "job-immut", "c", now.Add(time.Minute), "boom", domain.ExecutionFailureKindExecution, nil, nil); completeErr != nil {
 		t.Fatalf("complete failure failed: %v", completeErr)
 	}
 
 	job, err := repo.GetJobByID(context.Background(), "job-immut")
 	if err != nil {
 		t.Fatalf("get by id failed: %v", err)
+	}
+	if job.FailureKind == nil || *job.FailureKind != domain.ExecutionFailureKindExecution {
+		t.Fatalf("expected execution failure kind, got %#v", job.FailureKind)
 	}
 	if job.Image != "alpine:3.20" {
 		t.Fatalf("expected immutable image, got %q", job.Image)
@@ -783,7 +832,7 @@ func TestClaimNextRunnableJob_GroupFailureBlocksDownstream(t *testing.T) {
 		t.Fatalf("expected completed group a outcome, got %q", outcome)
 	}
 
-	if _, outcome, completeErr := repo.CompleteJobFailure(context.Background(), jobB.ID, "tok-b", now.Add(2*time.Minute), "intentional group failure", nil, nil); completeErr != nil {
+	if _, outcome, completeErr := repo.CompleteJobFailure(context.Background(), jobB.ID, "tok-b", now.Add(2*time.Minute), "intentional group failure", domain.ExecutionFailureKindExecution, nil, nil); completeErr != nil {
 		t.Fatalf("complete group b failure: %v", completeErr)
 	} else if outcome != repository.StepCompletionCompleted {
 		t.Fatalf("expected completed group b failure outcome, got %q", outcome)

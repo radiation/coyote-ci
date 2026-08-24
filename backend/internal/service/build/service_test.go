@@ -171,7 +171,7 @@ func (r *fakeExecutionJobCancelRepository) CompleteJobSuccess(_ context.Context,
 	return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, nil
 }
 
-func (r *fakeExecutionJobCancelRepository) CompleteJobFailure(_ context.Context, _ string, _ string, _ time.Time, _ string, _ *int, _ []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+func (r *fakeExecutionJobCancelRepository) CompleteJobFailure(_ context.Context, _ string, _ string, _ time.Time, _ string, _ domain.ExecutionFailureKind, _ *int, _ []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
 	return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, nil
 }
 

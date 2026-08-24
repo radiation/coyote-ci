@@ -20,7 +20,7 @@ const buildListColumns = `id, build_number, project_id, job_id, priority, status
 
 var queueEntryColumns = qualifyColumns("b", buildListColumns) + `, p.name, p.slug, j.name, running_job.claimed_by, running_job.claim_expires_at`
 
-const executionJobColumns = `id, build_id, step_id, node_id, group_name, depends_on_node_ids, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir, command_json, env_json, timeout_seconds, pipeline_file_path, context_dir, source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest, spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at, created_at, started_at, finished_at, error_message, exit_code, output_refs_json`
+const executionJobColumns = `id, build_id, step_id, node_id, group_name, depends_on_node_ids, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir, command_json, env_json, timeout_seconds, pipeline_file_path, context_dir, source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest, spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at, created_at, started_at, finished_at, error_message, failure_kind, exit_code, output_refs_json`
 
 var executionJobColumnsQualifiedWithJ = qualifyColumns("j", executionJobColumns)
 
@@ -785,6 +785,7 @@ func scanExecutionJob(scanner rowScanner) (domain.ExecutionJob, error) {
 	var startedAt sql.NullTime
 	var finishedAt sql.NullTime
 	var errorMessage sql.NullString
+	var failureKind sql.NullString
 	var exitCode sql.NullInt64
 	var outputRefsRaw []byte
 
@@ -824,6 +825,7 @@ func scanExecutionJob(scanner rowScanner) (domain.ExecutionJob, error) {
 		&startedAt,
 		&finishedAt,
 		&errorMessage,
+		&failureKind,
 		&exitCode,
 		&outputRefsRaw,
 	)
@@ -922,6 +924,10 @@ func scanExecutionJob(scanner rowScanner) (domain.ExecutionJob, error) {
 	if errorMessage.Valid {
 		v := errorMessage.String
 		job.ErrorMessage = &v
+	}
+	if failureKind.Valid {
+		v := domain.ExecutionFailureKind(failureKind.String)
+		job.FailureKind = &v
 	}
 	if exitCode.Valid {
 		v := int(exitCode.Int64)

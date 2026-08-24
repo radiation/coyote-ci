@@ -19,5 +19,5 @@ type ExecutionJobRepository interface {
 	ClaimJobByStepID(ctx context.Context, stepID string, claim StepClaim) (domain.ExecutionJob, bool, error)
 	RenewJobLease(ctx context.Context, jobID string, claimToken string, leaseExpiresAt time.Time) (domain.ExecutionJob, StepCompletionOutcome, error)
 	CompleteJobSuccess(ctx context.Context, jobID string, claimToken string, finishedAt time.Time, exitCode int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, StepCompletionOutcome, error)
-	CompleteJobFailure(ctx context.Context, jobID string, claimToken string, finishedAt time.Time, errorMessage string, exitCode *int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, StepCompletionOutcome, error)
+	CompleteJobFailure(ctx context.Context, jobID string, claimToken string, finishedAt time.Time, errorMessage string, failureKind domain.ExecutionFailureKind, exitCode *int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, StepCompletionOutcome, error)
 }

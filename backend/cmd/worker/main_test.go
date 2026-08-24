@@ -21,6 +21,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	dockerrunner "github.com/radiation/coyote-ci/backend/internal/runner/docker"
 	"github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
+	executionsvc "github.com/radiation/coyote-ci/backend/internal/service/execution"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 )
@@ -138,7 +139,7 @@ func TestRunWorkerIteration_ClaimFailure(t *testing.T) {
 func TestRunWorkerLoop_StopsOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := runWorkerLoop(ctx, &fakeWorkerIterationService{}, time.Millisecond); !errors.Is(err, context.Canceled) {
+	if err := runWorkerLoop(ctx, executionsvc.ControllerFunc(func(context.Context) error { return nil }), time.Millisecond); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context canceled, got %v", err)
 	}
 }
@@ -150,7 +151,8 @@ func TestRunWorkerLoop_ProcessesTickerUntilCanceled(t *testing.T) {
 		claimErr:  errors.New("claim failed"),
 	}
 	output := captureWorkerLogOutput(t, func() {
-		if err := runWorkerLoop(ctx, worker, time.Millisecond); !errors.Is(err, context.Canceled) {
+		controller := workersvc.NewSynchronousController(worker)
+		if err := runWorkerLoop(ctx, controller, time.Millisecond); !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context canceled, got %v", err)
 		}
 	})
