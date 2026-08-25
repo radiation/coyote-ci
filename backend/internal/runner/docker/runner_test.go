@@ -212,6 +212,41 @@ func TestRunner_ValidationBranchesAvoidDockerExecution(t *testing.T) {
 	}
 }
 
+func TestRunner_RunStepTimeoutSetsTypedResult(t *testing.T) {
+	dockerBinDir := t.TempDir()
+	dockerPath := filepath.Join(dockerBinDir, "docker")
+	script := "#!/bin/sh\nif [ \"$1\" = \"run\" ]; then\n  while :; do :; done\nfi\nexit 0\n"
+	if writeErr := os.WriteFile(dockerPath, []byte(script), 0o755); writeErr != nil {
+		t.Fatalf("write fake docker executable: %v", writeErr)
+	}
+	t.Setenv("PATH", dockerBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workspacePath := t.TempDir()
+	r := New(Options{
+		Workspace:    &fakeWorkspace{preparePath: workspacePath},
+		DefaultImage: "alpine:3.20",
+		Executor:     &fakeExecutor{},
+	})
+	if prepareErr := r.PrepareBuild(context.Background(), runner.PrepareBuildRequest{BuildID: "build-timeout"}); prepareErr != nil {
+		t.Fatalf("prepare build: %v", prepareErr)
+	}
+
+	result, runErr := r.RunStep(context.Background(), runner.RunStepRequest{
+		BuildID:        "build-timeout",
+		Command:        "sh",
+		TimeoutSeconds: 1,
+	})
+	if runErr != nil {
+		t.Fatalf("run timed-out step: %v", runErr)
+	}
+	if result.Status != runner.RunStepStatusFailed || result.ExitCode != -1 {
+		t.Fatalf("expected failed timeout result, got status=%q exit_code=%d", result.Status, result.ExitCode)
+	}
+	if !result.TimedOut {
+		t.Fatal("expected typed timeout result")
+	}
+}
+
 func TestRunner_PrepareBuild_IdempotentWorkspace(t *testing.T) {
 	workspace := &fakeWorkspace{preparePath: "/tmp/ws/build-3"}
 	exec := &fakeExecutor{}

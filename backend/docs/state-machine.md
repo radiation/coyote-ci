@@ -10,6 +10,7 @@ This document is the source of truth for build and step lifecycle rules in Coyot
 - running: At least one step has been claimed or is executing.
 - success: Build completed successfully.
 - failed: Build completed with at least one failed step.
+- canceled: Build was canceled by an operator before reaching a terminal result.
 
 ## Step States
 
@@ -17,6 +18,7 @@ This document is the source of truth for build and step lifecycle rules in Coyot
 - running: Step is actively claimed/executing under a lease.
 - success: Step completed successfully.
 - failed: Step completed unsuccessfully.
+- canceled: Step was canceled as part of build cancellation.
 
 ## Allowed Transitions
 
@@ -28,12 +30,18 @@ This document is the source of truth for build and step lifecycle rules in Coyot
 - preparing -> failed
 - running -> success
 - running -> failed
+- queued -> canceled
+- preparing -> canceled
+- running -> canceled
 
 ### Step
 
 - pending -> running
 - running -> success
 - running -> failed
+
+Cancellation is an explicit bulk operation for pending or running steps rather
+than a normal step-completion transition.
 
 ## Triggering Events
 
@@ -57,6 +65,9 @@ This document is the source of truth for build and step lifecycle rules in Coyot
   - Worker reports successful completion for the active claim token.
 - Step running -> failed:
   - Worker reports failed completion for the active claim token.
+- Build/step pending or running -> canceled:
+  - An operator cancels the build; Postgres terminalizes the build, its
+    cancelable steps, and its queued/running execution jobs atomically.
 
 ## Guard Conditions
 
@@ -69,8 +80,8 @@ This document is the source of truth for build and step lifecycle rules in Coyot
 
 ## Terminal State Behavior
 
-- Build terminal states: success, failed.
-- Step terminal states: success, failed.
+- Build terminal states: success, failed, canceled.
+- Step terminal states: success, failed, canceled.
 - Terminal records are immutable with respect to lifecycle status transitions.
 - Duplicate completions against terminal steps are treated as no-op outcomes and do not mutate the step/build lifecycle.
 
@@ -83,6 +94,10 @@ This document is the source of truth for build and step lifecycle rules in Coyot
 - Build success is only valid when all required steps are successful.
 - Worker result handling must reject stale completions and stale lease renewals.
 - Source checkout/prep happens once per build before step execution; step runners do not perform source preparation.
+- Execution jobs use terminal `status = failed` for both ordinary execution
+  failures and timeouts. `failure_kind = execution` identifies ordinary
+  execution failures; `failure_kind = timeout` identifies timeouts. Successful
+  and canceled execution jobs have no failure kind.
 
 ## Pipeline Group Semantics
 

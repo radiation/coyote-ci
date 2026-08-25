@@ -18,6 +18,13 @@ const (
 	ExecutionJobStatusCanceled ExecutionJobStatus = "canceled"
 )
 
+type ExecutionFailureKind string
+
+const (
+	ExecutionFailureKindExecution ExecutionFailureKind = "execution"
+	ExecutionFailureKindTimeout   ExecutionFailureKind = "timeout"
+)
+
 // SourceSnapshotRef is the durable source identity for a queued execution job.
 //
 // Rerun model:
@@ -95,6 +102,7 @@ type ExecutionJob struct {
 	StartedAt        *time.Time
 	FinishedAt       *time.Time
 	ErrorMessage     *string
+	FailureKind      *ExecutionFailureKind
 	ExitCode         *int
 	OutputRefs       []ArtifactRef
 }

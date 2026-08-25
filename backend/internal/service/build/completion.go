@@ -81,7 +81,8 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 			if stepError != nil {
 				message = *stepError
 			}
-			_, _, jobErr = s.executionJobRepo.CompleteJobFailure(ctx, request.JobID, claimToken, result.FinishedAt, message, &exitCode, nil)
+			failureKind := executionFailureKind(result)
+			_, _, jobErr = s.executionJobRepo.CompleteJobFailure(ctx, request.JobID, claimToken, result.FinishedAt, message, failureKind, &exitCode, nil)
 		}
 		if jobErr != nil {
 			report.SideEffectErr = jobErr
@@ -110,4 +111,11 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 	}
 
 	return report, nil
+}
+
+func executionFailureKind(result runner.RunStepResult) domain.ExecutionFailureKind {
+	if result.TimedOut {
+		return domain.ExecutionFailureKindTimeout
+	}
+	return domain.ExecutionFailureKindExecution
 }

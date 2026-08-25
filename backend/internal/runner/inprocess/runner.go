@@ -225,6 +225,7 @@ func (r *Runner) RunStepStream(ctx context.Context, request runner.RunStepReques
 		return runner.RunStepResult{
 			Status:     runner.RunStepStatusFailed,
 			ExitCode:   -1,
+			TimedOut:   true,
 			Stdout:     stdoutStr,
 			Stderr:     stderrStr,
 			StartedAt:  startedAt,

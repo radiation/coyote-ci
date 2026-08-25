@@ -68,6 +68,7 @@ const (
 type RunStepResult struct {
 	Status     RunStepStatus
 	ExitCode   int
+	TimedOut   bool
 	Stdout     string
 	Stderr     string
 	StartedAt  time.Time

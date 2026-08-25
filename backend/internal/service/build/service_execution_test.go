@@ -966,7 +966,7 @@ func TestBuildService_RunStep_WritesTimeoutFailureMarkerAndReason(t *testing.T) 
 		build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: startedAt.Add(-2 * time.Second)},
 		steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
 	}
-	r := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: -1, Stderr: "step execution timed out after 10m0s", StartedAt: startedAt, FinishedAt: finishedAt}}
+	r := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: -1, TimedOut: true, Stderr: "step execution timed out after 10m0s", StartedAt: startedAt, FinishedAt: finishedAt}}
 	logStore := logs.NewMemorySink()
 
 	svc := NewBuildService(repo, r, logStore)
@@ -1000,6 +1000,62 @@ func TestBuildService_RunStep_WritesTimeoutFailureMarkerAndReason(t *testing.T) 
 		"<== Step 1/1: test failed in 600.0s (timed out)",
 		"Failure reason: step execution timed out after 10m0s",
 	)
+}
+
+func TestBuildService_HandleStepResult_PersistsTypedTimeoutFailure(t *testing.T) {
+	startedAt := time.Now().UTC()
+	finishedAt := startedAt.Add(time.Minute)
+	claimToken := "claim-timeout"
+	buildRepo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-timeout", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: startedAt},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	execRepo := memoryrepo.NewExecutionJobRepository()
+	_, createErr := execRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{{
+		ID:               "execution-timeout",
+		BuildID:          "build-timeout",
+		StepID:           "step-timeout",
+		Name:             "test",
+		StepIndex:        0,
+		Status:           domain.ExecutionJobStatusQueued,
+		ResolvedSpecJSON: "{}",
+		CreatedAt:        startedAt,
+	}})
+	if createErr != nil {
+		t.Fatalf("create execution job: %v", createErr)
+	}
+	claim := repository.StepClaim{WorkerID: "worker-1", ClaimToken: claimToken, ClaimedAt: startedAt, LeaseExpiresAt: finishedAt}
+	if _, claimed, claimErr := execRepo.ClaimJobByStepID(context.Background(), "step-timeout", claim); claimErr != nil || !claimed {
+		t.Fatalf("claim execution job: claimed=%v err=%v", claimed, claimErr)
+	}
+
+	svc := NewBuildService(buildRepo, nil, &fakeLogSink{})
+	svc.SetExecutionJobRepository(execRepo)
+	report, handleErr := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-timeout", JobID: "execution-timeout", StepIndex: 0, StepName: "test", ClaimToken: claimToken}, steprunner.RunStepResult{
+		Status:     steprunner.RunStepStatusFailed,
+		ExitCode:   -1,
+		TimedOut:   true,
+		Stderr:     "step execution timed out after 1m0s",
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+	})
+	if handleErr != nil {
+		t.Fatalf("handle timeout result: %v", handleErr)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed outcome, got %q", report.CompletionOutcome)
+	}
+
+	job, getErr := execRepo.GetJobByID(context.Background(), "execution-timeout")
+	if getErr != nil {
+		t.Fatalf("get execution job: %v", getErr)
+	}
+	if job.Status != domain.ExecutionJobStatusFailed {
+		t.Fatalf("expected failed job status, got %q", job.Status)
+	}
+	if job.FailureKind == nil || *job.FailureKind != domain.ExecutionFailureKindTimeout {
+		t.Fatalf("expected timeout failure kind, got %v", job.FailureKind)
+	}
 }
 
 func TestBuildService_RunStep_PrepareFailureEmitsCanonicalContainerStartupFailure(t *testing.T) {

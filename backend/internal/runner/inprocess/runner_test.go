@@ -73,6 +73,9 @@ func TestRunner_RunStep_Timeout(t *testing.T) {
 	if res.ExitCode != -1 {
 		t.Fatalf("expected timeout exit code -1, got %d", res.ExitCode)
 	}
+	if !res.TimedOut {
+		t.Fatal("expected typed timeout result")
+	}
 	if !strings.Contains(res.Stderr, "step execution timed out after") {
 		t.Fatalf("expected timeout reason in stderr, got %q", res.Stderr)
 	}
@@ -95,6 +98,9 @@ func TestRunner_RunStep_ContextDeadlineExceeded(t *testing.T) {
 	}
 	if res.ExitCode != -1 {
 		t.Fatalf("expected timeout exit code -1, got %d", res.ExitCode)
+	}
+	if !res.TimedOut {
+		t.Fatal("expected typed timeout result")
 	}
 	if !strings.Contains(res.Stderr, "step execution timed out") {
 		t.Fatalf("expected timeout reason in stderr, got %q", res.Stderr)

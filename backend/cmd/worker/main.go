@@ -32,6 +32,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	executionsvc "github.com/radiation/coyote-ci/backend/internal/service/execution"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 	"github.com/radiation/coyote-ci/backend/internal/source"
@@ -162,7 +163,8 @@ func main() {
 	startWorkerStatusServer(ctx, cfg.WorkerStatusAddr, workerService)
 
 	log.Printf("starting worker loop")
-	if err := runWorkerLoop(ctx, workerService, defaultPollInterval); err != nil && !errors.Is(err, context.Canceled) {
+	controller := workersvc.NewSynchronousController(workerService)
+	if err := runWorkerLoop(ctx, controller, defaultPollInterval); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatalf("worker loop failed: %v", err)
 	}
 	log.Printf("worker stopped")
@@ -270,7 +272,7 @@ func defaultWorkerID() string {
 	return fmt.Sprintf("%s-%d", hostname, os.Getpid())
 }
 
-func runWorkerLoop(ctx context.Context, worker workerIterationService, pollInterval time.Duration) error {
+func runWorkerLoop(ctx context.Context, controller executionsvc.Controller, pollInterval time.Duration) error {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
@@ -279,7 +281,7 @@ func runWorkerLoop(ctx context.Context, worker workerIterationService, pollInter
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if err := runWorkerIteration(ctx, worker); err != nil {
+			if err := controller.Reconcile(ctx); err != nil {
 				log.Printf("worker polling/claiming error: %v", err)
 			}
 		}
@@ -287,23 +289,7 @@ func runWorkerLoop(ctx context.Context, worker workerIterationService, pollInter
 }
 
 func runWorkerIteration(ctx context.Context, worker workerIterationService) error {
-	log.Printf("polling for runnable work")
-
-	step, found, err := worker.ClaimRunnableStep(ctx)
-	if err != nil {
-		return err
-	}
-	if !found {
-		log.Printf("no runnable work found")
-		return nil
-	}
-
-	if _, err := worker.ExecuteRunnableStep(ctx, step); err != nil {
-		return err
-	}
-	log.Printf("worker iteration completed for claimed work: build_id=%s step=%s", step.BuildID, step.StepName)
-
-	return nil
+	return workersvc.NewSynchronousController(worker).Reconcile(ctx)
 }
 
 func newWorkerVersionTagService(versionTagRepo repository.VersionTagRepository, artifactLabelRepo repository.ArtifactLabelRepository) *versiontagsvc.Service {

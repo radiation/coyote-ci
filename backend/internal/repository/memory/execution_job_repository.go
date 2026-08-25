@@ -325,20 +325,20 @@ func (r *ExecutionJobRepository) CompleteJobSuccess(_ context.Context, jobID str
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	job, outcome, err := r.completeJobLocked(jobID, claimToken, finishedAt, domain.ExecutionJobStatusSuccess, nil, &exitCode, outputRefs)
+	job, outcome, err := r.completeJobLocked(jobID, claimToken, finishedAt, domain.ExecutionJobStatusSuccess, nil, nil, &exitCode, outputRefs)
 	return job, outcome, err
 }
 
-func (r *ExecutionJobRepository) CompleteJobFailure(_ context.Context, jobID string, claimToken string, finishedAt time.Time, errorMessage string, exitCode *int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+func (r *ExecutionJobRepository) CompleteJobFailure(_ context.Context, jobID string, claimToken string, finishedAt time.Time, errorMessage string, failureKind domain.ExecutionFailureKind, exitCode *int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	msg := errorMessage
-	job, outcome, err := r.completeJobLocked(jobID, claimToken, finishedAt, domain.ExecutionJobStatusFailed, &msg, exitCode, outputRefs)
+	job, outcome, err := r.completeJobLocked(jobID, claimToken, finishedAt, domain.ExecutionJobStatusFailed, &msg, &failureKind, exitCode, outputRefs)
 	return job, outcome, err
 }
 
-func (r *ExecutionJobRepository) completeJobLocked(jobID string, claimToken string, finishedAt time.Time, status domain.ExecutionJobStatus, errorMessage *string, exitCode *int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+func (r *ExecutionJobRepository) completeJobLocked(jobID string, claimToken string, finishedAt time.Time, status domain.ExecutionJobStatus, errorMessage *string, failureKind *domain.ExecutionFailureKind, exitCode *int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
 	job, ok := r.jobsByID[jobID]
 	if !ok {
 		return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, repository.ErrExecutionJobNotFound
@@ -356,6 +356,7 @@ func (r *ExecutionJobRepository) completeJobLocked(jobID string, claimToken stri
 	job.Status = status
 	job.FinishedAt = &finishedAt
 	job.ErrorMessage = errorMessage
+	job.FailureKind = failureKind
 	job.ExitCode = exitCode
 	job.OutputRefs = cloneArtifactRefs(outputRefs)
 	job.ClaimToken = nil
@@ -376,6 +377,7 @@ func (r *ExecutionJobRepository) CancelJobsForBuild(_ context.Context, buildID s
 			continue
 		}
 		job.Status = domain.ExecutionJobStatusCanceled
+		job.FailureKind = nil
 		job.ClaimToken = nil
 		job.ClaimedBy = nil
 		job.ClaimExpiresAt = nil
@@ -411,6 +413,10 @@ func cloneExecutionJob(job domain.ExecutionJob) domain.ExecutionJob {
 			env[k] = v
 		}
 		job.Environment = env
+	}
+	if job.FailureKind != nil {
+		value := *job.FailureKind
+		job.FailureKind = &value
 	}
 	job.OutputRefs = cloneArtifactRefs(job.OutputRefs)
 	return job

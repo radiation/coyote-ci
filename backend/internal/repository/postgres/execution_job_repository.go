@@ -41,14 +41,14 @@ func (r *ExecutionJobRepository) CreateJobsForBuild(ctx context.Context, jobs []
 			command_json, env_json, timeout_seconds, pipeline_file_path, context_dir,
 			source_repo_url, source_commit_sha, source_ref_name, source_archive_uri, source_archive_digest,
 			spec_version, spec_digest, resolved_spec_json, claim_token, claimed_by, claim_expires_at,
-			created_at, started_at, finished_at, error_message, exit_code, output_refs_json
+			created_at, started_at, finished_at, error_message, failure_kind, exit_code, output_refs_json
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15,
 			$16::jsonb, $17::jsonb, $18, $19, $20,
 			$21, $22, $23, $24, $25,
 			$26, $27, $28::jsonb, $29, $30, $31,
-			$32, $33, $34, $35, $36, $37::jsonb
+			$32, $33, $34, $35, $36, $37, $38::jsonb
 		)
 		RETURNING ` + executionJobColumns + `
 	`
@@ -113,6 +113,7 @@ func (r *ExecutionJobRepository) CreateJobsForBuild(ctx context.Context, jobs []
 			job.StartedAt,
 			job.FinishedAt,
 			job.ErrorMessage,
+			job.FailureKind,
 			job.ExitCode,
 			string(outputRefsJSON),
 		))
@@ -310,18 +311,18 @@ func (r *ExecutionJobRepository) RenewJobLease(ctx context.Context, jobID string
 }
 
 func (r *ExecutionJobRepository) CompleteJobSuccess(ctx context.Context, jobID string, claimToken string, finishedAt time.Time, exitCode int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
-	return r.completeJob(ctx, jobID, claimToken, domain.ExecutionJobStatusSuccess, nil, &exitCode, finishedAt, outputRefs)
+	return r.completeJob(ctx, jobID, claimToken, domain.ExecutionJobStatusSuccess, nil, nil, &exitCode, finishedAt, outputRefs)
 }
 
-func (r *ExecutionJobRepository) CompleteJobFailure(ctx context.Context, jobID string, claimToken string, finishedAt time.Time, errorMessage string, exitCode *int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+func (r *ExecutionJobRepository) CompleteJobFailure(ctx context.Context, jobID string, claimToken string, finishedAt time.Time, errorMessage string, failureKind domain.ExecutionFailureKind, exitCode *int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
 	msg := strings.TrimSpace(errorMessage)
 	if msg == "" {
 		msg = "step execution failed"
 	}
-	return r.completeJob(ctx, jobID, claimToken, domain.ExecutionJobStatusFailed, &msg, exitCode, finishedAt, outputRefs)
+	return r.completeJob(ctx, jobID, claimToken, domain.ExecutionJobStatusFailed, &msg, &failureKind, exitCode, finishedAt, outputRefs)
 }
 
-func (r *ExecutionJobRepository) completeJob(ctx context.Context, jobID string, claimToken string, status domain.ExecutionJobStatus, errorMessage *string, exitCode *int, finishedAt time.Time, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+func (r *ExecutionJobRepository) completeJob(ctx context.Context, jobID string, claimToken string, status domain.ExecutionJobStatus, errorMessage *string, failureKind *domain.ExecutionFailureKind, exitCode *int, finishedAt time.Time, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
 	outputRefsJSON, err := json.Marshal(normalizeOutputRefs(outputRefs))
 	if err != nil {
 		return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, err
@@ -332,8 +333,9 @@ func (r *ExecutionJobRepository) completeJob(ctx context.Context, jobID string, 
 		SET status = $3,
 			finished_at = $4,
 			error_message = $5,
-			exit_code = $6,
-			output_refs_json = $7::jsonb,
+			failure_kind = $6,
+			exit_code = $7,
+			output_refs_json = $8::jsonb,
 			claim_token = NULL,
 			claimed_by = NULL,
 			claim_expires_at = NULL
@@ -343,7 +345,7 @@ func (r *ExecutionJobRepository) completeJob(ctx context.Context, jobID string, 
 		RETURNING ` + executionJobColumns + `
 	`
 
-	job, scanErr := scanExecutionJob(r.db.QueryRowContext(ctx, query, jobID, claimToken, string(status), finishedAt, errorMessage, exitCode, string(outputRefsJSON)))
+	job, scanErr := scanExecutionJob(r.db.QueryRowContext(ctx, query, jobID, claimToken, string(status), finishedAt, errorMessage, failureKind, exitCode, string(outputRefsJSON)))
 	if scanErr == nil {
 		return job, repository.StepCompletionCompleted, nil
 	}
@@ -377,6 +379,7 @@ func (r *ExecutionJobRepository) CancelJobsForBuild(ctx context.Context, buildID
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE build_jobs
 		SET status = 'canceled',
+			failure_kind = NULL,
 			claim_token = NULL,
 			claimed_by = NULL,
 			claim_expires_at = NULL,
