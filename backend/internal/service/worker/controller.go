@@ -36,8 +36,9 @@ func (c *SynchronousController) Reconcile(ctx context.Context) error {
 		return nil
 	}
 
-	if _, err := c.service.ExecuteRunnableStep(ctx, step); err != nil {
-		return err
+	_, executeErr := c.service.ExecuteRunnableStep(ctx, step)
+	if executeErr != nil {
+		return executeErr
 	}
 	log.Printf("worker iteration completed for claimed work: build_id=%s step=%s", step.BuildID, step.StepName)
 

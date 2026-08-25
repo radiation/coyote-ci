@@ -117,6 +117,42 @@ func TestExecutionJobRepository_RenewAndComplete(t *testing.T) {
 	}
 }
 
+func TestExecutionJobRepository_CompleteJobFailurePersistsFailureKind(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+
+	repo := NewExecutionJobRepository(db)
+	now := time.Now().UTC()
+	finished := now.Add(time.Minute)
+	exitCode := -1
+
+	mock.ExpectQuery(`UPDATE build_jobs\s+SET status = \$3`).
+		WithArgs("job-timeout", "claim-timeout", "failed", finished, "step timed out", domain.ExecutionFailureKindTimeout, &exitCode, `[]`).
+		WillReturnRows(sqlmock.NewRows(executionJobMockColumns).
+			AddRow("job-timeout", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, "failed", nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, nil, nil, nil, "https://github.com/acme/repo.git", "abc123", nil, nil, nil, 1, nil, `{}`, nil, nil, nil, now, now, finished, "step timed out", "timeout", -1, `[]`))
+	mock.ExpectClose()
+
+	job, outcome, completeErr := repo.CompleteJobFailure(context.Background(), "job-timeout", "claim-timeout", finished, "step timed out", domain.ExecutionFailureKindTimeout, &exitCode, nil)
+	if completeErr != nil {
+		t.Fatalf("complete failed job: %v", completeErr)
+	}
+	if outcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed outcome, got %q", outcome)
+	}
+	if job.FailureKind == nil || *job.FailureKind != domain.ExecutionFailureKindTimeout {
+		t.Fatalf("expected timeout failure kind, got %v", job.FailureKind)
+	}
+	if closeErr := db.Close(); closeErr != nil {
+		t.Fatalf("close sql mock database: %v", closeErr)
+	}
+
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet sql expectations: %v", expectationsErr)
+	}
+}
+
 func TestExecutionJobRepository_ClaimNextRunnableJob(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

@@ -37,6 +37,17 @@ func TestSynchronousController_ReconcileExecutesClaimedStep(t *testing.T) {
 	}
 }
 
+func TestSynchronousController_ReconcileDoesNothingWhenNoStepIsClaimed(t *testing.T) {
+	service := &controllerTestService{found: false}
+
+	if err := NewSynchronousController(service).Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if service.executeCalls != 0 {
+		t.Fatalf("expected no execution, got %d", service.executeCalls)
+	}
+}
+
 func TestSynchronousController_ReconcileReturnsClaimAndExecutionErrors(t *testing.T) {
 	claimErr := errors.New("claim failed")
 	if err := NewSynchronousController(&controllerTestService{claimErr: claimErr}).Reconcile(context.Background()); !errors.Is(err, claimErr) {
