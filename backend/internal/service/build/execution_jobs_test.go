@@ -88,6 +88,39 @@ artifacts:
 	}
 }
 
+func TestBuildService_CreateBuild_ManualStepsUsePersistedFallbackNodesForWorkspaceLineage(t *testing.T) {
+	buildRepo := memoryrepo.NewBuildRepository()
+	execRepo := memoryrepo.NewExecutionJobRepository()
+	svc := NewBuildService(buildRepo, nil, &fakeLogSink{})
+	svc.SetExecutionJobRepository(execRepo)
+
+	build, err := svc.CreateBuild(context.Background(), CreateBuildInput{
+		ProjectID: "project-1",
+		Steps: []CreateBuildStepInput{
+			{Name: "setup", Command: "sh", Args: []string{"-c", "true"}},
+			{Name: "test", Command: "sh", Args: []string{"-c", "true"}},
+			{Name: "package", Command: "sh", Args: []string{"-c", "true"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create manual build: %v", err)
+	}
+
+	jobs, err := execRepo.GetJobsByBuildID(context.Background(), build.ID)
+	if err != nil {
+		t.Fatalf("get durable jobs: %v", err)
+	}
+	if len(jobs) != 3 {
+		t.Fatalf("expected three durable jobs, got %d", len(jobs))
+	}
+	if jobs[0].NodeID != domain.FallbackNodeID(0) || jobs[1].NodeID != domain.FallbackNodeID(1) || jobs[2].NodeID != domain.FallbackNodeID(2) {
+		t.Fatalf("expected persisted fallback nodes, got %q %q %q", jobs[0].NodeID, jobs[1].NodeID, jobs[2].NodeID)
+	}
+	assertWorkspaceInput(t, jobs[0], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModeSource})
+	assertWorkspaceInput(t, jobs[1], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModePredecessor, ProducerNodeID: jobs[0].NodeID})
+	assertWorkspaceInput(t, jobs[2], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModePredecessor, ProducerNodeID: jobs[1].NodeID})
+}
+
 func TestBuildService_QueueBuildWithTemplate_PersistsDurableJobs(t *testing.T) {
 	buildRepo := &fakeBuildRepository{build: defaultBuild("build-template")}
 	execRepo := memoryrepo.NewExecutionJobRepository()

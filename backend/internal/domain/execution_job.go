@@ -49,17 +49,38 @@ type ArtifactRef struct {
 	SourceStep *int
 }
 
+// WorkspaceInputMode identifies the logical workspace baseline required by an execution job.
+// It intentionally does not describe how a backend materializes that baseline.
+type WorkspaceInputMode string
+
+const (
+	WorkspaceInputModeSource      WorkspaceInputMode = "source"
+	WorkspaceInputModePredecessor WorkspaceInputMode = "predecessor"
+	WorkspaceInputModeFanIn       WorkspaceInputMode = "fan_in"
+)
+
+// WorkspaceInputPlan describes a job's provider-neutral workspace lineage input.
+// ProducerNodeID applies to a single predecessor. CommonAncestorNodeID applies to
+// fan-in; an empty common ancestor means the immutable source snapshot is the baseline.
+type WorkspaceInputPlan struct {
+	Mode                       WorkspaceInputMode `json:"mode"`
+	ProducerNodeID             string             `json:"producer_node_id,omitempty"`
+	CommonAncestorNodeID       string             `json:"common_ancestor_node_id,omitempty"`
+	IsolatedWritableDescendant bool               `json:"isolated_writable_descendant,omitempty"`
+}
+
 // ExecutionJobSpec captures the immutable worker-facing runtime contract.
 type ExecutionJobSpec struct {
-	Version          int               `json:"version"`
-	Image            string            `json:"image"`
-	WorkingDir       string            `json:"working_dir"`
-	Command          []string          `json:"command"`
-	Environment      map[string]string `json:"environment"`
-	TimeoutSeconds   int               `json:"timeout_seconds"`
-	PipelineFilePath string            `json:"pipeline_file_path,omitempty"`
-	ContextDir       string            `json:"context_dir,omitempty"`
-	Source           SourceSnapshotRef `json:"source"`
+	Version          int                `json:"version"`
+	Image            string             `json:"image"`
+	WorkingDir       string             `json:"working_dir"`
+	Command          []string           `json:"command"`
+	Environment      map[string]string  `json:"environment"`
+	TimeoutSeconds   int                `json:"timeout_seconds"`
+	PipelineFilePath string             `json:"pipeline_file_path,omitempty"`
+	ContextDir       string             `json:"context_dir,omitempty"`
+	Source           SourceSnapshotRef  `json:"source"`
+	WorkspaceInput   WorkspaceInputPlan `json:"workspace_input"`
 }
 
 func (s ExecutionJobSpec) ToJSON() (string, error) {

@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -70,7 +71,7 @@ func TestBuildService_RetryJob_CreatesNewAttemptAndPreservesHistory(t *testing.T
 			RefName:       stringPtr("main"),
 		},
 		SpecVersion:      1,
-		ResolvedSpecJSON: `{"version":1}`,
+		ResolvedSpecJSON: `{"version":1,"workspace_input":{"mode":"source"}}`,
 		CreatedAt:        now,
 		FinishedAt:       timePtr(now.Add(time.Minute)),
 		ErrorMessage:     stringPtr("failed"),
@@ -113,6 +114,7 @@ func TestBuildService_RetryJob_CreatesNewAttemptAndPreservesHistory(t *testing.T
 	if createdJob.Source.CommitSHA != failedJob.Source.CommitSHA || createdJob.ResolvedSpecJSON != failedJob.ResolvedSpecJSON {
 		t.Fatal("expected retry attempt to preserve source identity and resolved spec")
 	}
+	assertRetryWorkspacePlan(t, createdJob, domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModeSource})
 
 	storedOld, err := execRepo.GetJobByID(context.Background(), failedJob.ID)
 	if err != nil {
@@ -193,7 +195,7 @@ func TestBuildService_RerunBuildFromStep_CreatesLinkedBuildAttemptAndPreservesSp
 
 	timeout := 120
 	jobs := []domain.ExecutionJob{
-		{ID: "job-1a", BuildID: sourceBuild.ID, StepID: "step-1", Name: "test", StepIndex: 1, AttemptNumber: 1, Status: domain.ExecutionJobStatusFailed, Image: "golang:1.24", WorkingDir: "backend", Command: []string{"sh", "-c", "go test ./..."}, Environment: map[string]string{"A": "1"}, TimeoutSeconds: &timeout, Source: domain.SourceSnapshotRef{RepositoryURL: "https://github.com/acme/repo.git", CommitSHA: "abc123", RefName: stringPtr("main")}, SpecVersion: 1, ResolvedSpecJSON: `{"step":"test","attempt":1}`, CreatedAt: now.Add(time.Minute), FinishedAt: timePtr(now.Add(2 * time.Minute)), ErrorMessage: stringPtr("failed"), ExitCode: intPtr(1)},
+		{ID: "job-1a", BuildID: sourceBuild.ID, StepID: "step-1", Name: "test", StepIndex: 1, AttemptNumber: 1, Status: domain.ExecutionJobStatusFailed, Image: "golang:1.24", WorkingDir: "backend", Command: []string{"sh", "-c", "go test ./..."}, Environment: map[string]string{"A": "1"}, TimeoutSeconds: &timeout, Source: domain.SourceSnapshotRef{RepositoryURL: "https://github.com/acme/repo.git", CommitSHA: "abc123", RefName: stringPtr("main")}, SpecVersion: 1, ResolvedSpecJSON: `{"step":"test","attempt":1,"workspace_input":{"mode":"predecessor","producer_node_id":"node-setup"}}`, CreatedAt: now.Add(time.Minute), FinishedAt: timePtr(now.Add(2 * time.Minute)), ErrorMessage: stringPtr("failed"), ExitCode: intPtr(1)},
 		{ID: "job-2a", BuildID: sourceBuild.ID, StepID: "step-2", Name: "package", StepIndex: 2, AttemptNumber: 1, Status: domain.ExecutionJobStatusQueued, Image: "golang:1.24", WorkingDir: "backend", Command: []string{"sh", "-c", "go build ./..."}, Environment: map[string]string{}, TimeoutSeconds: &timeout, Source: domain.SourceSnapshotRef{RepositoryURL: "https://github.com/acme/repo.git", CommitSHA: "abc123", RefName: stringPtr("main")}, SpecVersion: 1, ResolvedSpecJSON: `{"step":"package","attempt":1}`, CreatedAt: now.Add(3 * time.Minute)},
 	}
 	for i := range jobs {
@@ -236,8 +238,23 @@ func TestBuildService_RerunBuildFromStep_CreatesLinkedBuildAttemptAndPreservesSp
 	if newJobs[1].AttemptNumber != 2 || newJobs[1].RetryOfJobID == nil || *newJobs[1].RetryOfJobID != "job-2a" {
 		t.Fatalf("expected second rerun job to link to job-2a with attempt 2, got %+v", newJobs[1])
 	}
-	if newJobs[0].Source.CommitSHA != "abc123" || newJobs[0].ResolvedSpecJSON != `{"step":"test","attempt":1}` {
+	if newJobs[0].Source.CommitSHA != "abc123" || newJobs[0].ResolvedSpecJSON != `{"step":"test","attempt":1,"workspace_input":{"mode":"predecessor","producer_node_id":"node-setup"}}` {
 		t.Fatal("expected rerun job to preserve source identity and resolved spec")
+	}
+	if newJobs[0].BuildID == sourceBuild.ID {
+		t.Fatal("expected rerun workspace lineage to be scoped to a new build attempt")
+	}
+	assertRetryWorkspacePlan(t, newJobs[0], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModePredecessor, ProducerNodeID: "node-setup"})
+}
+
+func assertRetryWorkspacePlan(t *testing.T, job domain.ExecutionJob, want domain.WorkspaceInputPlan) {
+	t.Helper()
+	var spec domain.ExecutionJobSpec
+	if err := json.Unmarshal([]byte(job.ResolvedSpecJSON), &spec); err != nil {
+		t.Fatalf("unmarshal retry resolved spec: %v", err)
+	}
+	if spec.WorkspaceInput != want {
+		t.Fatalf("retry workspace plan: got %#v, want %#v", spec.WorkspaceInput, want)
 	}
 }
 
