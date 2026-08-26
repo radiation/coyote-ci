@@ -85,9 +85,44 @@ steps:
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
+	if jobs[0].NodeID != domain.FallbackNodeID(0) || jobs[1].NodeID != domain.FallbackNodeID(1) || jobs[2].NodeID != domain.FallbackNodeID(2) {
+		t.Fatalf("expected planned fallback nodes, got %q %q %q", jobs[0].NodeID, jobs[1].NodeID, jobs[2].NodeID)
+	}
 	assertWorkspaceInput(t, jobs[0], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModeSource})
 	assertWorkspaceInput(t, jobs[1], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModePredecessor, ProducerNodeID: steps[0].NodeID})
 	assertWorkspaceInput(t, jobs[2], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModePredecessor, ProducerNodeID: steps[1].NodeID})
+}
+
+func TestBuildExecutionPlanner_PlanWorkspaceInputs_SequentialWhenNodeIDsMissing(t *testing.T) {
+	steps := []domain.BuildStep{
+		{ID: "step-0", StepIndex: 0, Name: "step-0", Command: "sh", Args: []string{"-c", "true"}, Env: map[string]string{}, WorkingDir: "."},
+		{ID: "step-1", StepIndex: 1, Name: "step-1", Command: "sh", Args: []string{"-c", "true"}, Env: map[string]string{}, WorkingDir: "."},
+	}
+	jobs, err := NewBuildExecutionPlanner().Plan(domain.Build{ID: "build-1"}, steps, "alpine:3")
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	assertWorkspaceInput(t, jobs[0], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModeSource})
+	assertWorkspaceInput(t, jobs[1], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModePredecessor, ProducerNodeID: domain.FallbackNodeID(0)})
+}
+
+func TestBuildExecutionPlanner_PlanWorkspaceInputs_UsesFallbackNodesForManualSequentialSteps(t *testing.T) {
+	steps := []domain.BuildStep{
+		plannerStep("step-setup", "", nil),
+		plannerStep("step-test", "", nil),
+		plannerStep("step-package", "", nil),
+	}
+	for index := range steps {
+		steps[index].StepIndex = index
+	}
+
+	jobs, err := NewBuildExecutionPlanner().Plan(domain.Build{ID: "build-1"}, steps, "golang:1.24")
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	assertWorkspaceInput(t, jobs[0], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModeSource})
+	assertWorkspaceInput(t, jobs[1], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModePredecessor, ProducerNodeID: domain.FallbackNodeID(0)})
+	assertWorkspaceInput(t, jobs[2], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModePredecessor, ProducerNodeID: domain.FallbackNodeID(1)})
 }
 
 func TestNearestCommonAncestor_UsesGraphDepthInsteadOfStepIndex(t *testing.T) {

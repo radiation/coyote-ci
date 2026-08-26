@@ -78,7 +78,7 @@ func (p *BuildExecutionPlanner) Plan(build domain.Build, steps []domain.BuildSte
 			ID:               jobID,
 			BuildID:          build.ID,
 			StepID:           step.ID,
-			NodeID:           step.NodeID,
+			NodeID:           effectiveWorkspaceNodeID(step),
 			GroupName:        groupName,
 			DependsOnNodeIDs: append([]string(nil), step.DependsOnNodes...),
 			Name:             step.Name,
@@ -107,32 +107,33 @@ func (p *BuildExecutionPlanner) Plan(build domain.Build, steps []domain.BuildSte
 
 func planWorkspaceInputs(steps []domain.BuildStep) []domain.WorkspaceInputPlan {
 	plans := make([]domain.WorkspaceInputPlan, len(steps))
-	stepIndexByNodeID := make(map[string]int, len(steps))
+	effectiveNodeIDs := make([]string, len(steps))
+	knownNodeIDs := make(map[string]struct{}, len(steps))
 	dependenciesByNodeID := make(map[string][]string, len(steps))
 	dependentCountByNodeID := make(map[string]int, len(steps))
 
 	for index, step := range steps {
-		nodeID := strings.TrimSpace(step.NodeID)
-		if nodeID == "" {
-			continue
-		}
-		stepIndexByNodeID[nodeID] = index
+		nodeID := effectiveWorkspaceNodeID(step)
+		effectiveNodeIDs[index] = nodeID
+		knownNodeIDs[nodeID] = struct{}{}
 	}
 
-	for _, step := range steps {
-		nodeID := strings.TrimSpace(step.NodeID)
-		if nodeID == "" {
-			continue
+	for index, step := range steps {
+		nodeID := effectiveNodeIDs[index]
+		dependencies := uniqueKnownDependencies(step.DependsOnNodes, knownNodeIDs)
+		if strings.TrimSpace(step.NodeID) == "" && len(dependencies) == 0 {
+			if predecessorNodeID, found := precedingWorkspaceNodeID(index, steps, effectiveNodeIDs); found {
+				dependencies = []string{predecessorNodeID}
+			}
 		}
-		dependencies := uniqueKnownDependencies(step.DependsOnNodes, stepIndexByNodeID)
 		dependenciesByNodeID[nodeID] = dependencies
 		for _, dependencyNodeID := range dependencies {
 			dependentCountByNodeID[dependencyNodeID]++
 		}
 	}
 
-	for index, step := range steps {
-		nodeID := strings.TrimSpace(step.NodeID)
+	for index := range steps {
+		nodeID := effectiveNodeIDs[index]
 		dependencies := dependenciesByNodeID[nodeID]
 		switch len(dependencies) {
 		case 0:
@@ -155,7 +156,31 @@ func planWorkspaceInputs(steps []domain.BuildStep) []domain.WorkspaceInputPlan {
 	return plans
 }
 
-func uniqueKnownDependencies(dependencies []string, knownNodeIDs map[string]int) []string {
+func effectiveWorkspaceNodeID(step domain.BuildStep) string {
+	nodeID := strings.TrimSpace(step.NodeID)
+	if nodeID != "" {
+		return nodeID
+	}
+	return domain.FallbackNodeID(step.StepIndex)
+}
+
+func precedingWorkspaceNodeID(index int, steps []domain.BuildStep, effectiveNodeIDs []string) (string, bool) {
+	predecessorIndex := -1
+	for candidateIndex, candidate := range steps {
+		if candidate.StepIndex >= steps[index].StepIndex || candidate.StepIndex < 0 {
+			continue
+		}
+		if predecessorIndex == -1 || candidate.StepIndex > steps[predecessorIndex].StepIndex {
+			predecessorIndex = candidateIndex
+		}
+	}
+	if predecessorIndex == -1 {
+		return "", false
+	}
+	return effectiveNodeIDs[predecessorIndex], true
+}
+
+func uniqueKnownDependencies(dependencies []string, knownNodeIDs map[string]struct{}) []string {
 	seen := make(map[string]struct{}, len(dependencies))
 	result := make([]string, 0, len(dependencies))
 	for _, dependency := range dependencies {
