@@ -2,6 +2,7 @@ package source
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -184,5 +185,32 @@ func TestHostWorkspaceMaterializer_CommitAndRelease(t *testing.T) {
 	}
 	if _, statErr := os.Stat(workspace.Path); !os.IsNotExist(statErr) {
 		t.Fatalf("expected released workspace to be removed, stat err=%v", statErr)
+	}
+}
+
+func TestHostWorkspaceMaterializer_MaterializeRejectsUnknownInput(t *testing.T) {
+	materializer := NewHostWorkspaceMaterializer(t.TempDir())
+	_, err := materializer.Materialize(context.Background(), MaterializeWorkspaceRequest{
+		BuildID: "build-1",
+		Input:   domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputMode("unknown")},
+	})
+	if !errors.Is(err, ErrWorkspaceInputUnsupported) {
+		t.Fatalf("expected unsupported input error, got %v", err)
+	}
+}
+
+func TestHostWorkspaceMaterializer_CommitRequiresMaterializedWorkspace(t *testing.T) {
+	materializer := NewHostWorkspaceMaterializer(t.TempDir())
+	err := materializer.Commit(context.Background(), MaterializedWorkspace{}, "claim-1")
+	if err == nil {
+		t.Fatal("expected incomplete materialized workspace to be rejected")
+	}
+}
+
+func TestHostWorkspaceMaterializer_WorkspaceRoot(t *testing.T) {
+	root := t.TempDir()
+	materializer := NewHostWorkspaceMaterializer(root)
+	if got := materializer.WorkspaceRoot(); got == "" {
+		t.Fatal("expected workspace root")
 	}
 }

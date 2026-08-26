@@ -103,7 +103,19 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	logManager.EmitExecutionStart(ctx)
 	materializedWorkspace, materializeErr := s.materializeExecutionWorkspace(ctx, executionContext)
 	if materializeErr != nil {
-		return runner.RunStepResult{}, StepCompletionReport{}, mapExecutionErr(materializeErr)
+		now := time.Now().UTC()
+		result := runner.RunStepResult{
+			Status:     runner.RunStepStatusFailed,
+			ExitCode:   -1,
+			Stderr:     materializeErr.Error(),
+			StartedAt:  now,
+			FinishedAt: now,
+		}
+		report, completionErr := completionManager.CompleteEarlyExit(ctx, executionContext, result, logManager)
+		if completionErr != nil {
+			return result, report, errors.Join(materializeErr, completionErr)
+		}
+		return result, report, materializeErr
 	}
 
 	workspacePreparer := NewWorkspacePreparer(s)
@@ -247,7 +259,14 @@ func (s *BuildService) cleanupExecutionIfTerminal(ctx context.Context, buildID s
 	if s.workspaceMaterializer == nil {
 		return cleanupErr
 	}
-	releaseErr := s.workspaceMaterializer.Release(ctx, source.MaterializedWorkspace{BuildID: buildID})
+	workspaces := s.materializedWorkspacesForRelease(buildID)
+	var releaseErr error
+	for _, materializedWorkspace := range workspaces {
+		releaseErr = errors.Join(releaseErr, s.workspaceMaterializer.Release(ctx, materializedWorkspace))
+	}
+	if releaseErr == nil {
+		s.forgetMaterializedWorkspaces(buildID)
+	}
 	return errors.Join(cleanupErr, releaseErr)
 }
 
@@ -255,10 +274,15 @@ func (s *BuildService) materializeExecutionWorkspace(ctx context.Context, execut
 	if s.workspaceMaterializer == nil {
 		return source.MaterializedWorkspace{}, nil
 	}
-	return s.workspaceMaterializer.Materialize(ctx, source.MaterializeWorkspaceRequest{
+	materializedWorkspace, err := s.workspaceMaterializer.Materialize(ctx, source.MaterializeWorkspaceRequest{
 		BuildID: executionContext.Build.ID,
 		Input:   executionContext.WorkspaceInput,
 	})
+	if err != nil {
+		return source.MaterializedWorkspace{}, err
+	}
+	s.rememberMaterializedWorkspace(executionContext.Build.ID, materializedWorkspace)
+	return materializedWorkspace, nil
 }
 
 func (s *BuildService) commitExecutionWorkspace(ctx context.Context, workspace source.MaterializedWorkspace, claimToken string) error {
@@ -266,6 +290,27 @@ func (s *BuildService) commitExecutionWorkspace(ctx context.Context, workspace s
 		return nil
 	}
 	return s.workspaceMaterializer.Commit(ctx, workspace, claimToken)
+}
+
+func (s *BuildService) rememberMaterializedWorkspace(buildID string, workspace source.MaterializedWorkspace) {
+	s.materializedWorkspaceMu.Lock()
+	defer s.materializedWorkspaceMu.Unlock()
+	if s.materializedWorkspaces == nil {
+		s.materializedWorkspaces = make(map[string][]source.MaterializedWorkspace)
+	}
+	s.materializedWorkspaces[buildID] = append(s.materializedWorkspaces[buildID], workspace)
+}
+
+func (s *BuildService) materializedWorkspacesForRelease(buildID string) []source.MaterializedWorkspace {
+	s.materializedWorkspaceMu.Lock()
+	defer s.materializedWorkspaceMu.Unlock()
+	return append([]source.MaterializedWorkspace(nil), s.materializedWorkspaces[buildID]...)
+}
+
+func (s *BuildService) forgetMaterializedWorkspaces(buildID string) {
+	s.materializedWorkspaceMu.Lock()
+	defer s.materializedWorkspaceMu.Unlock()
+	delete(s.materializedWorkspaces, buildID)
 }
 
 func joinSideEffectErrors(existing error, additional error) error {

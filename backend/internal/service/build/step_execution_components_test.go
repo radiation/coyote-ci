@@ -127,6 +127,39 @@ func TestStepExecutionContextBuilder_FailsWhenAuthoritativeJobIDLookupFails(t *t
 	}
 }
 
+func TestStepExecutionContextBuilder_InvalidPersistedWorkspaceInputDefaultsToSource(t *testing.T) {
+	claimToken := "claim-token"
+	buildRepo := &fakeBuildRepository{
+		build: defaultBuild("build-1"),
+		steps: []domain.BuildStep{{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "verify", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	execRepo := memoryrepo.NewExecutionJobRepository()
+	_, createErr := execRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{{
+		ID:               "job-1",
+		BuildID:          "build-1",
+		StepID:           "step-1",
+		StepIndex:        0,
+		Name:             "verify",
+		Status:           domain.ExecutionJobStatusRunning,
+		ClaimToken:       &claimToken,
+		ResolvedSpecJSON: "not-json",
+		CreatedAt:        time.Now().UTC(),
+	}})
+	if createErr != nil {
+		t.Fatalf("seed execution job: %v", createErr)
+	}
+
+	svc := NewBuildService(buildRepo, &fakeRunner{}, &fakeLogSink{})
+	svc.SetExecutionJobRepository(execRepo)
+	executionContext, buildErr := NewStepExecutionContextBuilder(svc).Build(context.Background(), runner.RunStepRequest{BuildID: "build-1", JobID: "job-1", ClaimToken: claimToken})
+	if buildErr != nil {
+		t.Fatalf("build execution context: %v", buildErr)
+	}
+	if executionContext.WorkspaceInput.Mode != domain.WorkspaceInputModeSource {
+		t.Fatalf("expected source workspace fallback, got %#v", executionContext.WorkspaceInput)
+	}
+}
+
 func TestWorkspacePreparer_ReturnsEarlyFailureResultOnPrepareError(t *testing.T) {
 	runnerWithPrepareFailure := &fakeBuildScopedRunner{prepareErr: errors.New("docker create failed")}
 	svc := NewBuildService(&fakeBuildRepository{}, runnerWithPrepareFailure, &fakeLogSink{})

@@ -28,22 +28,29 @@ import (
 )
 
 type recordingExecutionWorkspaceMaterializer struct {
-	events  []string
-	onEvent func(string)
+	events             []string
+	materializeErr     error
+	commitErr          error
+	releasedWorkspaces []source.MaterializedWorkspace
+	onEvent            func(string)
 }
 
 func (m *recordingExecutionWorkspaceMaterializer) Materialize(_ context.Context, request source.MaterializeWorkspaceRequest) (source.MaterializedWorkspace, error) {
 	m.record("materialize")
-	return source.MaterializedWorkspace{BuildID: request.BuildID, Path: "/workspace/build"}, nil
+	if m.materializeErr != nil {
+		return source.MaterializedWorkspace{}, m.materializeErr
+	}
+	return source.MaterializedWorkspace{BuildID: request.BuildID, Path: "/workspace/build", Input: request.Input}, nil
 }
 
 func (m *recordingExecutionWorkspaceMaterializer) Commit(_ context.Context, _ source.MaterializedWorkspace, _ string) error {
 	m.record("commit")
-	return nil
+	return m.commitErr
 }
 
-func (m *recordingExecutionWorkspaceMaterializer) Release(_ context.Context, _ source.MaterializedWorkspace) error {
+func (m *recordingExecutionWorkspaceMaterializer) Release(_ context.Context, workspace source.MaterializedWorkspace) error {
 	m.record("release")
+	m.releasedWorkspaces = append(m.releasedWorkspaces, workspace)
 	return nil
 }
 
@@ -148,6 +155,47 @@ func TestBuildService_RunStep_FailedExecutionDoesNotCommitWorkspace(t *testing.T
 	}
 	if len(materializer.events) != 2 || materializer.events[0] != "materialize" || materializer.events[1] != "release" {
 		t.Fatalf("expected terminal failed execution to materialize then release, got %#v", materializer.events)
+	}
+}
+
+func TestBuildService_RunStep_ReturnsMaterializationFailureBeforeRunnerExecution(t *testing.T) {
+	claimToken := "claim-active"
+	runner := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0}}
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	svc := NewBuildService(repo, runner, &fakeLogSink{})
+	svc.workspaceMaterializer = &recordingExecutionWorkspaceMaterializer{materializeErr: errors.New("workspace unavailable")}
+
+	_, _, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "test", ClaimToken: claimToken, Command: "echo"})
+	if err == nil || err.Error() != "workspace unavailable" {
+		t.Fatalf("expected materialization failure, got %v", err)
+	}
+	if runner.called {
+		t.Fatal("expected runner not to execute after materialization failure")
+	}
+}
+
+func TestBuildService_RunStep_CommitFailureCompletesStepAsFailed(t *testing.T) {
+	claimToken := "claim-active"
+	repo := &fakeBuildRepository{
+		build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning},
+		steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	materializer := &recordingExecutionWorkspaceMaterializer{commitErr: errors.New("workspace commit failed")}
+	svc := NewBuildService(repo, &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0}}, &fakeLogSink{})
+	svc.workspaceMaterializer = materializer
+
+	result, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "test", ClaimToken: claimToken, Command: "echo"})
+	if err == nil || err.Error() != "workspace commit failed" {
+		t.Fatalf("expected commit failure, got %v", err)
+	}
+	if result.Status != steprunner.RunStepStatusFailed || report.Step.Status != domain.BuildStepStatusFailed {
+		t.Fatalf("expected commit failure to complete step as failed, result=%q step=%q", result.Status, report.Step.Status)
+	}
+	if len(materializer.events) < 2 || materializer.events[1] != "commit" {
+		t.Fatalf("expected workspace commit attempt, got %#v", materializer.events)
 	}
 }
 
@@ -343,6 +391,13 @@ func TestBuildService_RunStep_ReleasesMaterializedWorkspaceOnTerminalBuild(t *te
 	}
 	if len(materializer.events) != 3 || materializer.events[2] != "release" {
 		t.Fatalf("expected materialize, commit, release lifecycle, got %#v", materializer.events)
+	}
+	if len(materializer.releasedWorkspaces) != 1 {
+		t.Fatalf("expected one released workspace, got %#v", materializer.releasedWorkspaces)
+	}
+	releasedWorkspace := materializer.releasedWorkspaces[0]
+	if releasedWorkspace.BuildID != "build-terminal" || releasedWorkspace.Path != "/workspace/build" || releasedWorkspace.Input.Mode != domain.WorkspaceInputModeSource {
+		t.Fatalf("expected materialized workspace handle to be released, got %#v", releasedWorkspace)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
@@ -53,17 +54,19 @@ const (
 
 // BuildService coordinates build lifecycle state transitions and delegates step execution to a runner.
 type BuildService struct {
-	buildRepo              repository.BuildRepository
-	executionJobRepo       repository.ExecutionJobRepository
-	executionPlanner       *BuildExecutionPlanner
-	runner                 runner.Runner
-	logSink                logs.LogSink
-	repoFetcher            source.RepoFetcher
-	managedImageRefresher  ManagedImageRefresher
-	sourceResolver         source.WorkspaceSourceResolver
-	workspaceMaterializer  source.ExecutionWorkspaceMaterializer
-	repositoryCheckout     *RepositoryAwareCheckoutResolver
-	executionWorkspaceRoot string
+	buildRepo               repository.BuildRepository
+	executionJobRepo        repository.ExecutionJobRepository
+	executionPlanner        *BuildExecutionPlanner
+	runner                  runner.Runner
+	logSink                 logs.LogSink
+	repoFetcher             source.RepoFetcher
+	managedImageRefresher   ManagedImageRefresher
+	sourceResolver          source.WorkspaceSourceResolver
+	workspaceMaterializer   source.ExecutionWorkspaceMaterializer
+	repositoryCheckout      *RepositoryAwareCheckoutResolver
+	executionWorkspaceRoot  string
+	materializedWorkspaces  map[string][]source.MaterializedWorkspace
+	materializedWorkspaceMu sync.Mutex
 
 	artifactRepo              repository.ArtifactRepository
 	executionOutputRepo       repository.ExecutionJobOutputRepository
@@ -162,11 +165,12 @@ func NewBuildService(buildRepo repository.BuildRepository, stepRunner runner.Run
 	}
 
 	return &BuildService{
-		buildRepo:        buildRepo,
-		executionPlanner: NewBuildExecutionPlanner(),
-		runner:           stepRunner,
-		logSink:          logSink,
-		sourceResolver:   source.NewGitWorkspaceSourceResolver(),
+		buildRepo:              buildRepo,
+		executionPlanner:       NewBuildExecutionPlanner(),
+		runner:                 stepRunner,
+		logSink:                logSink,
+		sourceResolver:         source.NewGitWorkspaceSourceResolver(),
+		materializedWorkspaces: make(map[string][]source.MaterializedWorkspace),
 	}
 }
 

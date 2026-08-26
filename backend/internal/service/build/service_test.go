@@ -70,6 +70,19 @@ func TestGeneratedArtifactVersionConflictHelper(t *testing.T) {
 	}
 }
 
+func TestBuildService_SetExecutionWorkspaceRootClearsMaterializer(t *testing.T) {
+	svc := NewBuildService(&fakeBuildRepository{}, &fakeRunner{}, &fakeLogSink{})
+	svc.SetExecutionWorkspaceRoot(t.TempDir())
+	if svc.workspaceMaterializer == nil {
+		t.Fatal("expected workspace materializer for configured root")
+	}
+
+	svc.SetExecutionWorkspaceRoot("")
+	if svc.workspaceMaterializer != nil {
+		t.Fatal("expected workspace materializer to clear with empty root")
+	}
+}
+
 func TestMatchingArtifactDeclaration_BuildOnlyAndNoMatchBranches(t *testing.T) {
 	buildDeclarations := []domain.ArtifactDeclaration{{
 		Path:    "dist/*.tgz",
