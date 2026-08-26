@@ -14,6 +14,14 @@ import (
 
 func TestStepExecutionContextBuilder_BindsPersistedJobAsAuthoritativePlan(t *testing.T) {
 	claimToken := "claim-token"
+	workspaceInput := domain.WorkspaceInputPlan{
+		Mode:           domain.WorkspaceInputModePredecessor,
+		ProducerNodeID: "generate",
+	}
+	specJSON, specErr := (domain.ExecutionJobSpec{WorkspaceInput: workspaceInput}).ToJSON()
+	if specErr != nil {
+		t.Fatalf("marshal execution job spec: %v", specErr)
+	}
 	buildRepo := &fakeBuildRepository{
 		build: defaultBuild("build-1"),
 		steps: []domain.BuildStep{{
@@ -30,19 +38,20 @@ func TestStepExecutionContextBuilder_BindsPersistedJobAsAuthoritativePlan(t *tes
 	timeout := 90
 	now := time.Now().UTC()
 	_, err := execRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{{
-		ID:             "job-1",
-		BuildID:        "build-1",
-		StepID:         "step-1",
-		Name:           "lint",
-		StepIndex:      0,
-		Status:         domain.ExecutionJobStatusRunning,
-		Image:          "golang:1.24",
-		WorkingDir:     "backend",
-		Command:        []string{"sh", "-c", "go test ./..."},
-		Environment:    map[string]string{"GOFLAGS": "-mod=readonly"},
-		TimeoutSeconds: &timeout,
-		CreatedAt:      now,
-		ClaimToken:     &claimToken,
+		ID:               "job-1",
+		BuildID:          "build-1",
+		StepID:           "step-1",
+		Name:             "lint",
+		StepIndex:        0,
+		Status:           domain.ExecutionJobStatusRunning,
+		Image:            "golang:1.24",
+		WorkingDir:       "backend",
+		Command:          []string{"sh", "-c", "go test ./..."},
+		Environment:      map[string]string{"GOFLAGS": "-mod=readonly"},
+		TimeoutSeconds:   &timeout,
+		CreatedAt:        now,
+		ClaimToken:       &claimToken,
+		ResolvedSpecJSON: specJSON,
 		Source: domain.SourceSnapshotRef{
 			RepositoryURL: "https://github.com/acme/repo.git",
 			CommitSHA:     "abc123",
@@ -83,6 +92,9 @@ func TestStepExecutionContextBuilder_BindsPersistedJobAsAuthoritativePlan(t *tes
 	if executionContext.BuildSource.CommitSHA != "abc123" {
 		t.Fatalf("expected source commit from persisted job, got %q", executionContext.BuildSource.CommitSHA)
 	}
+	if executionContext.WorkspaceInput != workspaceInput {
+		t.Fatalf("expected workspace input from persisted job, got %#v", executionContext.WorkspaceInput)
+	}
 	if executionContext.StepNumber != 1 || executionContext.TotalSteps != 1 {
 		t.Fatalf("expected normalized step numbering 1/1, got %d/%d", executionContext.StepNumber, executionContext.TotalSteps)
 	}
@@ -112,6 +124,39 @@ func TestStepExecutionContextBuilder_FailsWhenAuthoritativeJobIDLookupFails(t *t
 	})
 	if !errors.Is(err, ErrExecutionJobNotFound) {
 		t.Fatalf("expected ErrExecutionJobNotFound, got %v", err)
+	}
+}
+
+func TestStepExecutionContextBuilder_InvalidPersistedWorkspaceInputDefaultsToSource(t *testing.T) {
+	claimToken := "claim-token"
+	buildRepo := &fakeBuildRepository{
+		build: defaultBuild("build-1"),
+		steps: []domain.BuildStep{{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "verify", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+	}
+	execRepo := memoryrepo.NewExecutionJobRepository()
+	_, createErr := execRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{{
+		ID:               "job-1",
+		BuildID:          "build-1",
+		StepID:           "step-1",
+		StepIndex:        0,
+		Name:             "verify",
+		Status:           domain.ExecutionJobStatusRunning,
+		ClaimToken:       &claimToken,
+		ResolvedSpecJSON: "not-json",
+		CreatedAt:        time.Now().UTC(),
+	}})
+	if createErr != nil {
+		t.Fatalf("seed execution job: %v", createErr)
+	}
+
+	svc := NewBuildService(buildRepo, &fakeRunner{}, &fakeLogSink{})
+	svc.SetExecutionJobRepository(execRepo)
+	executionContext, buildErr := NewStepExecutionContextBuilder(svc).Build(context.Background(), runner.RunStepRequest{BuildID: "build-1", JobID: "job-1", ClaimToken: claimToken})
+	if buildErr != nil {
+		t.Fatalf("build execution context: %v", buildErr)
+	}
+	if executionContext.WorkspaceInput.Mode != domain.WorkspaceInputModeSource {
+		t.Fatalf("expected source workspace fallback, got %#v", executionContext.WorkspaceInput)
 	}
 }
 

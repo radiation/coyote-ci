@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
@@ -53,16 +54,19 @@ const (
 
 // BuildService coordinates build lifecycle state transitions and delegates step execution to a runner.
 type BuildService struct {
-	buildRepo              repository.BuildRepository
-	executionJobRepo       repository.ExecutionJobRepository
-	executionPlanner       *BuildExecutionPlanner
-	runner                 runner.Runner
-	logSink                logs.LogSink
-	repoFetcher            source.RepoFetcher
-	managedImageRefresher  ManagedImageRefresher
-	sourceResolver         source.WorkspaceSourceResolver
-	repositoryCheckout     *RepositoryAwareCheckoutResolver
-	executionWorkspaceRoot string
+	buildRepo               repository.BuildRepository
+	executionJobRepo        repository.ExecutionJobRepository
+	executionPlanner        *BuildExecutionPlanner
+	runner                  runner.Runner
+	logSink                 logs.LogSink
+	repoFetcher             source.RepoFetcher
+	managedImageRefresher   ManagedImageRefresher
+	sourceResolver          source.WorkspaceSourceResolver
+	workspaceMaterializer   source.ExecutionWorkspaceMaterializer
+	repositoryCheckout      *RepositoryAwareCheckoutResolver
+	executionWorkspaceRoot  string
+	materializedWorkspaces  map[string][]source.MaterializedWorkspace
+	materializedWorkspaceMu sync.Mutex
 
 	artifactRepo              repository.ArtifactRepository
 	executionOutputRepo       repository.ExecutionJobOutputRepository
@@ -134,6 +138,9 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 	svc.repositoryCheckout = cfg.RepositoryCheckout
 	svc.defaultExecutionImage = strings.TrimSpace(cfg.DefaultImage)
 	svc.executionWorkspaceRoot = buildNormalizeWorkspaceRoot(cfg.ExecutionWorkspace)
+	if svc.executionWorkspaceRoot != "" {
+		svc.workspaceMaterializer = source.NewHostWorkspaceMaterializer(svc.executionWorkspaceRoot)
+	}
 	svc.versionTagger = cfg.VersionTagger
 	svc.buildNotifier = cfg.BuildNotifier
 	svc.scmStatusReporter = cfg.SCMStatusReporter
@@ -158,11 +165,12 @@ func NewBuildService(buildRepo repository.BuildRepository, stepRunner runner.Run
 	}
 
 	return &BuildService{
-		buildRepo:        buildRepo,
-		executionPlanner: NewBuildExecutionPlanner(),
-		runner:           stepRunner,
-		logSink:          logSink,
-		sourceResolver:   source.NewGitWorkspaceSourceResolver(),
+		buildRepo:              buildRepo,
+		executionPlanner:       NewBuildExecutionPlanner(),
+		runner:                 stepRunner,
+		logSink:                logSink,
+		sourceResolver:         source.NewGitWorkspaceSourceResolver(),
+		materializedWorkspaces: make(map[string][]source.MaterializedWorkspace),
 	}
 }
 
@@ -191,6 +199,11 @@ func (s *BuildService) SetRepositoryAwareCheckoutResolver(resolver *RepositoryAw
 
 func (s *BuildService) SetExecutionWorkspaceRoot(root string) {
 	s.executionWorkspaceRoot = buildNormalizeWorkspaceRoot(root)
+	if s.executionWorkspaceRoot != "" {
+		s.workspaceMaterializer = source.NewHostWorkspaceMaterializer(s.executionWorkspaceRoot)
+	} else {
+		s.workspaceMaterializer = nil
+	}
 	if s.stepCacheManager != nil {
 		s.stepCacheManager = NewStepCacheManager(s.stepCacheManager.Store(), s.stepCacheManager.EntryRepo(), s.executionWorkspaceRoot)
 	}
