@@ -33,9 +33,10 @@ func (p *BuildExecutionPlanner) Plan(build domain.Build, steps []domain.BuildSte
 	pipelinePath := optionalValue(build.PipelinePath)
 	sourceRef := plannerSourceRef(build.Source)
 	triggerEnv := plannerTriggerEnv(build.Trigger)
+	workspacePlans := planWorkspaceInputs(steps)
 
 	jobs := make([]domain.ExecutionJob, 0, len(steps))
-	for _, step := range steps {
+	for stepIndex, step := range steps {
 		// Step-level image overrides pipeline-level/default image.
 		stepImage := strings.TrimSpace(step.Image)
 		if stepImage == "" {
@@ -57,6 +58,7 @@ func (p *BuildExecutionPlanner) Plan(build domain.Build, steps []domain.BuildSte
 				CommitSHA:     plannerSourceCommitSHA(build.Source, build.CommitSHA),
 				RefName:       sourceRef,
 			},
+			WorkspaceInput: workspacePlans[stepIndex],
 		}
 
 		specJSON, err := spec.ToJSON()
@@ -101,6 +103,135 @@ func (p *BuildExecutionPlanner) Plan(build domain.Build, steps []domain.BuildSte
 	}
 
 	return jobs, nil
+}
+
+func planWorkspaceInputs(steps []domain.BuildStep) []domain.WorkspaceInputPlan {
+	plans := make([]domain.WorkspaceInputPlan, len(steps))
+	stepIndexByNodeID := make(map[string]int, len(steps))
+	dependenciesByNodeID := make(map[string][]string, len(steps))
+	dependentCountByNodeID := make(map[string]int, len(steps))
+
+	for index, step := range steps {
+		nodeID := strings.TrimSpace(step.NodeID)
+		if nodeID == "" {
+			continue
+		}
+		stepIndexByNodeID[nodeID] = index
+	}
+
+	for _, step := range steps {
+		nodeID := strings.TrimSpace(step.NodeID)
+		if nodeID == "" {
+			continue
+		}
+		dependencies := uniqueKnownDependencies(step.DependsOnNodes, stepIndexByNodeID)
+		dependenciesByNodeID[nodeID] = dependencies
+		for _, dependencyNodeID := range dependencies {
+			dependentCountByNodeID[dependencyNodeID]++
+		}
+	}
+
+	for index, step := range steps {
+		nodeID := strings.TrimSpace(step.NodeID)
+		dependencies := dependenciesByNodeID[nodeID]
+		switch len(dependencies) {
+		case 0:
+			plans[index] = domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModeSource}
+		case 1:
+			producerNodeID := dependencies[0]
+			plans[index] = domain.WorkspaceInputPlan{
+				Mode:                       domain.WorkspaceInputModePredecessor,
+				ProducerNodeID:             producerNodeID,
+				IsolatedWritableDescendant: dependentCountByNodeID[producerNodeID] > 1,
+			}
+		default:
+			plans[index] = domain.WorkspaceInputPlan{
+				Mode:                 domain.WorkspaceInputModeFanIn,
+				CommonAncestorNodeID: nearestCommonAncestor(dependencies, dependenciesByNodeID),
+			}
+		}
+	}
+
+	return plans
+}
+
+func uniqueKnownDependencies(dependencies []string, knownNodeIDs map[string]int) []string {
+	seen := make(map[string]struct{}, len(dependencies))
+	result := make([]string, 0, len(dependencies))
+	for _, dependency := range dependencies {
+		nodeID := strings.TrimSpace(dependency)
+		if nodeID == "" {
+			continue
+		}
+		if _, known := knownNodeIDs[nodeID]; !known {
+			continue
+		}
+		if _, duplicate := seen[nodeID]; duplicate {
+			continue
+		}
+		seen[nodeID] = struct{}{}
+		result = append(result, nodeID)
+	}
+	return result
+}
+
+func nearestCommonAncestor(dependencies []string, dependenciesByNodeID map[string][]string) string {
+	if len(dependencies) == 0 {
+		return ""
+	}
+
+	common := ancestorNodeIDs(dependencies[0], dependenciesByNodeID)
+	for _, dependency := range dependencies[1:] {
+		ancestors := ancestorNodeIDs(dependency, dependenciesByNodeID)
+		for candidate := range common {
+			if _, found := ancestors[candidate]; !found {
+				delete(common, candidate)
+			}
+		}
+	}
+
+	nearest := ""
+	nearestDepth := -1
+	depthByNodeID := make(map[string]int, len(common))
+	for candidate := range common {
+		candidateDepth := nodeDepth(candidate, dependenciesByNodeID, depthByNodeID)
+		if candidateDepth > nearestDepth || (candidateDepth == nearestDepth && candidate < nearest) {
+			nearest = candidate
+			nearestDepth = candidateDepth
+		}
+	}
+	return nearest
+}
+
+func nodeDepth(nodeID string, dependenciesByNodeID map[string][]string, depthByNodeID map[string]int) int {
+	if depth, found := depthByNodeID[nodeID]; found {
+		return depth
+	}
+
+	depth := 0
+	for _, dependencyNodeID := range dependenciesByNodeID[nodeID] {
+		candidateDepth := nodeDepth(dependencyNodeID, dependenciesByNodeID, depthByNodeID) + 1
+		if candidateDepth > depth {
+			depth = candidateDepth
+		}
+	}
+	depthByNodeID[nodeID] = depth
+	return depth
+}
+
+func ancestorNodeIDs(nodeID string, dependenciesByNodeID map[string][]string) map[string]struct{} {
+	ancestors := map[string]struct{}{}
+	stack := []string{nodeID}
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, visited := ancestors[current]; visited {
+			continue
+		}
+		ancestors[current] = struct{}{}
+		stack = append(stack, dependenciesByNodeID[current]...)
+	}
+	return ancestors
 }
 
 func plannerSourceRepositoryURL(spec *domain.SourceSpec, fallback *string) string {

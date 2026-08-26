@@ -106,6 +106,16 @@ than a normal step-completion transition.
 - A group is a barrier: downstream top-level items do not become runnable until all steps in the current group succeed.
 - If any step in a group fails, downstream groups remain blocked and the build fails.
 
+## Workspace Lineage Semantics
+
+- A root execution job starts from the build's immutable source snapshot.
+- A job with one predecessor may continue that predecessor's logical workspace lineage after the predecessor succeeds.
+- Parallel siblings are isolated writable descendants of the same predecessor baseline. They must not share one writable filesystem.
+- A fan-in job never merges mutable predecessor filesystems. It starts from the nearest common ancestor baseline when one exists, otherwise the immutable source snapshot; future explicit upstream outputs provide branch-specific data.
+- Workspace lineage is a logical execution input, not a filesystem implementation. A fresh execution container or pod does not require reconstructing every workspace from source, and a logical workspace revision does not require a physical snapshot after every step.
+- Retries and reruns never reuse failed mutable state. Each build attempt has independent logical workspace lineage, though a future runtime may reuse a valid successful predecessor baseline when immutable inputs match.
+- Caches remain performance-only and are not part of workspace correctness semantics.
+
 ## Step/Build Relationship
 
 - Workers operate on steps, not directly on final build outcomes.
