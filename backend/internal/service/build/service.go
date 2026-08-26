@@ -61,6 +61,7 @@ type BuildService struct {
 	repoFetcher            source.RepoFetcher
 	managedImageRefresher  ManagedImageRefresher
 	sourceResolver         source.WorkspaceSourceResolver
+	workspaceMaterializer  source.ExecutionWorkspaceMaterializer
 	repositoryCheckout     *RepositoryAwareCheckoutResolver
 	executionWorkspaceRoot string
 
@@ -134,6 +135,9 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 	svc.repositoryCheckout = cfg.RepositoryCheckout
 	svc.defaultExecutionImage = strings.TrimSpace(cfg.DefaultImage)
 	svc.executionWorkspaceRoot = buildNormalizeWorkspaceRoot(cfg.ExecutionWorkspace)
+	if svc.executionWorkspaceRoot != "" {
+		svc.workspaceMaterializer = source.NewHostWorkspaceMaterializer(svc.executionWorkspaceRoot)
+	}
 	svc.versionTagger = cfg.VersionTagger
 	svc.buildNotifier = cfg.BuildNotifier
 	svc.scmStatusReporter = cfg.SCMStatusReporter
@@ -191,6 +195,11 @@ func (s *BuildService) SetRepositoryAwareCheckoutResolver(resolver *RepositoryAw
 
 func (s *BuildService) SetExecutionWorkspaceRoot(root string) {
 	s.executionWorkspaceRoot = buildNormalizeWorkspaceRoot(root)
+	if s.executionWorkspaceRoot != "" {
+		s.workspaceMaterializer = source.NewHostWorkspaceMaterializer(s.executionWorkspaceRoot)
+	} else {
+		s.workspaceMaterializer = nil
+	}
 	if s.stepCacheManager != nil {
 		s.stepCacheManager = NewStepCacheManager(s.stepCacheManager.Store(), s.stepCacheManager.EntryRepo(), s.executionWorkspaceRoot)
 	}

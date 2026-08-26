@@ -15,6 +15,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
+	"github.com/radiation/coyote-ci/backend/internal/source"
 	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
@@ -100,6 +101,10 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	stepRunner := NewStepRunner(s.runner)
 
 	logManager.EmitExecutionStart(ctx)
+	materializedWorkspace, materializeErr := s.materializeExecutionWorkspace(ctx, executionContext)
+	if materializeErr != nil {
+		return runner.RunStepResult{}, StepCompletionReport{}, mapExecutionErr(materializeErr)
+	}
 
 	workspacePreparer := NewWorkspacePreparer(s)
 	earlyResult, earlyErr, prepareErr := workspacePreparer.Prepare(ctx, executionContext, logManager)
@@ -134,6 +139,19 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 			logManager.EmitSystemLine(ctx, "Cache: save failed")
 			logManager.EmitSystemLine(ctx, formatFailureReasonLine(saveErr.Error()))
 			cacheSideEffectErr = joinSideEffectErrors(cacheSideEffectErr, saveErr)
+		}
+	}
+	if runOutcome.Result.Status == runner.RunStepStatusSuccess {
+		if commitErr := s.commitExecutionWorkspace(ctx, materializedWorkspace, executionContext.ExecutionRequest.ClaimToken); commitErr != nil {
+			now := time.Now().UTC()
+			runOutcome.Result = runner.RunStepResult{
+				Status:     runner.RunStepStatusFailed,
+				ExitCode:   -1,
+				Stderr:     commitErr.Error(),
+				StartedAt:  runOutcome.Result.StartedAt,
+				FinishedAt: now,
+			}
+			runOutcome.ExecutionErr = commitErr
 		}
 	}
 	logManager.EmitExecutionEnd(ctx, runOutcome.Result)
@@ -214,11 +232,6 @@ func (s *BuildService) resolveExecutionImage(build domain.Build) string {
 }
 
 func (s *BuildService) cleanupExecutionIfTerminal(ctx context.Context, buildID string) error {
-	buildScopedRunner, ok := s.runner.(runner.BuildScopedRunner)
-	if !ok {
-		return nil
-	}
-
 	build, err := s.buildRepo.GetByID(ctx, buildID)
 	if err != nil {
 		return fmt.Errorf("fetching build for cleanup check: %w", err)
@@ -227,7 +240,32 @@ func (s *BuildService) cleanupExecutionIfTerminal(ctx context.Context, buildID s
 		return nil
 	}
 
-	return buildScopedRunner.CleanupBuild(ctx, buildID)
+	var cleanupErr error
+	if buildScopedRunner, ok := s.runner.(runner.BuildScopedRunner); ok {
+		cleanupErr = buildScopedRunner.CleanupBuild(ctx, buildID)
+	}
+	if s.workspaceMaterializer == nil {
+		return cleanupErr
+	}
+	releaseErr := s.workspaceMaterializer.Release(ctx, source.MaterializedWorkspace{BuildID: buildID})
+	return errors.Join(cleanupErr, releaseErr)
+}
+
+func (s *BuildService) materializeExecutionWorkspace(ctx context.Context, executionContext StepExecutionContext) (source.MaterializedWorkspace, error) {
+	if s.workspaceMaterializer == nil {
+		return source.MaterializedWorkspace{}, nil
+	}
+	return s.workspaceMaterializer.Materialize(ctx, source.MaterializeWorkspaceRequest{
+		BuildID: executionContext.Build.ID,
+		Input:   executionContext.WorkspaceInput,
+	})
+}
+
+func (s *BuildService) commitExecutionWorkspace(ctx context.Context, workspace source.MaterializedWorkspace, claimToken string) error {
+	if s.workspaceMaterializer == nil {
+		return nil
+	}
+	return s.workspaceMaterializer.Commit(ctx, workspace, claimToken)
 }
 
 func joinSideEffectErrors(existing error, additional error) error {

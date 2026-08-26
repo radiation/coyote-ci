@@ -113,6 +113,8 @@ than a normal step-completion transition.
 - Parallel siblings are isolated writable descendants of the same predecessor baseline. They must not share one writable filesystem.
 - A fan-in job never merges mutable predecessor filesystems. It starts from the nearest common ancestor baseline when one exists, otherwise the immutable source snapshot; future explicit upstream outputs provide branch-specific data.
 - Workspace lineage is a logical execution input, not a filesystem implementation. A fresh execution container or pod does not require reconstructing every workspace from source, and a logical workspace revision does not require a physical snapshot after every step.
+- Materialization provides the physical writable filesystem for one execution. A successful workspace commit advances logical lineage; the current local implementation commits without copying and may reuse one build directory through a linear segment.
+- The current host-backed implementation also retains the legacy shared build-directory behavior for planned fan-out and fan-in inputs so existing Docker/local pipelines continue to run. This is compatibility behavior only: it does not provide writable sibling isolation or portable fan-in restoration. Future strict or portable materializers must reject unsupported plans using the workspace capability errors until those semantics are implemented.
 - Retries and reruns never reuse failed mutable state. Each build attempt has independent logical workspace lineage, though a future runtime may reuse a valid successful predecessor baseline when immutable inputs match.
 - Caches remain performance-only and are not part of workspace correctness semantics.
 

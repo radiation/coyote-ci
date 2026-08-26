@@ -99,17 +99,18 @@ func TestMatchingArtifactDeclaration_BuildOnlyAndNoMatchBranches(t *testing.T) {
 }
 
 type fakeBuildRepository struct {
-	build         domain.Build
-	steps         []domain.BuildStep
-	createErr     error
-	getErr        error
-	getCalls      int
-	stepsErr      error
-	updateErr     error
-	updateCalls   int
-	updatedID     string
-	updatedStatus domain.BuildStatus
-	updatedCommit string
+	build          domain.Build
+	steps          []domain.BuildStep
+	createErr      error
+	getErr         error
+	getCalls       int
+	stepsErr       error
+	updateErr      error
+	updateCalls    int
+	updatedID      string
+	updatedStatus  domain.BuildStatus
+	onCompleteStep func()
+	updatedCommit  string
 }
 
 type fakeAtomicCancelBuildRepository struct {
@@ -538,6 +539,9 @@ func (r *fakeBuildRepository) CompleteStepIfRunning(_ context.Context, _ string,
 }
 
 func (r *fakeBuildRepository) CompleteStep(_ context.Context, request repository.CompleteStepRequest) (repository.CompleteStepResult, error) {
+	if r.onCompleteStep != nil {
+		r.onCompleteStep()
+	}
 	buildID := request.BuildID
 	stepIndex := request.StepIndex
 	update := request.Update

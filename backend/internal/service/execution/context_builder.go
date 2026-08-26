@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -23,6 +24,7 @@ type StepExecutionContext struct {
 	PersistedJob   *domain.ExecutionJob
 	ExecutionImage string
 	BuildSource    ResolvedBuildSourceSpec
+	WorkspaceInput domain.WorkspaceInputPlan
 
 	ExecutionRequest runner.RunStepRequest
 	StepWorkingDir   string
@@ -89,9 +91,11 @@ func (b *StepExecutionContextBuilder) Build(ctx context.Context, request runner.
 		executionImage = b.deps.ResolveExecutionImage(build)
 	}
 	buildSource := sourceSpecFromBuild(build)
+	workspaceInput := domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModeSource}
 	if persistedJob != nil {
 		executionImage = persistedJob.Image
 		buildSource = sourceSpecFromJob(*persistedJob)
+		workspaceInput = workspaceInputFromJob(*persistedJob)
 	}
 
 	// Ensure the execution request carries the resolved image for the runner.
@@ -110,6 +114,7 @@ func (b *StepExecutionContextBuilder) Build(ctx context.Context, request runner.
 		PersistedJob:     persistedJob,
 		ExecutionImage:   executionImage,
 		BuildSource:      buildSource,
+		WorkspaceInput:   workspaceInput,
 		ExecutionRequest: boundRequest,
 		StepWorkingDir:   workspace.New(boundRequest.BuildID, "").ContainerWorkingDir(boundRequest.WorkingDir),
 		StepCommand:      runner.RenderStepCommand(boundRequest.Command, boundRequest.Args),
@@ -197,4 +202,12 @@ func sourceSpecFromJob(job domain.ExecutionJob) ResolvedBuildSourceSpec {
 		Ref:           optionalStringValue(job.Source.RefName),
 		CommitSHA:     strings.TrimSpace(job.Source.CommitSHA),
 	}
+}
+
+func workspaceInputFromJob(job domain.ExecutionJob) domain.WorkspaceInputPlan {
+	var spec domain.ExecutionJobSpec
+	if err := json.Unmarshal([]byte(job.ResolvedSpecJSON), &spec); err != nil || spec.WorkspaceInput.Mode == "" {
+		return domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModeSource}
+	}
+	return spec.WorkspaceInput
 }
