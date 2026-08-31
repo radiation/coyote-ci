@@ -45,7 +45,7 @@ func (r WorkspaceRevision) ValidateForCreate() error {
 	if strings.TrimSpace(r.ID) == "" || strings.TrimSpace(r.ProducingExecutionJobID) == "" || strings.TrimSpace(r.BuildID) == "" || strings.TrimSpace(r.NodeID) == "" || r.AttemptNumber < 1 || r.CreatedAt.IsZero() {
 		return ErrInvalidWorkspaceRevision
 	}
-	if r.Status != WorkspaceRevisionStatusPublishing || r.ContentDigest != nil || r.StorageKey != nil || r.PublishedAt != nil || r.DeletedAt != nil {
+	if r.Status != WorkspaceRevisionStatusPublishing || r.ContentDigest != nil || r.StorageKey != nil || r.SizeBytes != nil || r.PublishedAt != nil || r.DeletedAt != nil {
 		return ErrInvalidWorkspaceRevision
 	}
 	return nil

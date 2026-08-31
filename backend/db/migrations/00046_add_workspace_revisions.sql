@@ -17,7 +17,25 @@ CREATE TABLE IF NOT EXISTS workspace_revisions (
     UNIQUE (producing_execution_job_id),
     CHECK (status IN ('publishing', 'published', 'deleted')),
     CHECK (attempt_number >= 1),
-    CHECK (size_bytes IS NULL OR size_bytes >= 0)
+    CHECK (size_bytes IS NULL OR size_bytes >= 0),
+    CONSTRAINT workspace_revisions_state_check CHECK (
+        (status = 'publishing'
+            AND content_digest IS NULL
+            AND storage_key IS NULL
+            AND size_bytes IS NULL
+            AND published_at IS NULL
+            AND deleted_at IS NULL)
+        OR (status = 'published'
+            AND content_digest IS NOT NULL
+            AND storage_key IS NOT NULL
+            AND published_at IS NOT NULL
+            AND deleted_at IS NULL)
+        OR (status = 'deleted'
+            AND content_digest IS NOT NULL
+            AND storage_key IS NOT NULL
+            AND published_at IS NOT NULL
+            AND deleted_at IS NOT NULL)
+    )
 );
 
 CREATE INDEX IF NOT EXISTS idx_workspace_revisions_published_build_node
