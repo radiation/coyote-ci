@@ -265,6 +265,92 @@ func TestWorkspaceRevisionRepositoryMarkDeletedPropagatesLookupError(t *testing.
 	}
 }
 
+func TestWorkspaceRevisionRepositoryMapsNotFoundResults(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sql mock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("SELECT id, producing_execution_job_id.*producing_execution_job_id = \\$1").WithArgs("missing-job").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT wr.id, wr.producing_execution_job_id.*status = 'published'").WithArgs("build-1", "compile").WillReturnError(sql.ErrNoRows)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT id, producing_execution_job_id.*FOR UPDATE").WithArgs("missing-revision").WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
+
+	repo := NewWorkspaceRevisionRepository(db)
+	if _, err := repo.GetByProducingExecutionJob(context.Background(), "missing-job"); !errors.Is(err, repository.ErrWorkspaceRevisionNotFound) {
+		t.Fatalf("expected missing producer lookup, got %v", err)
+	}
+	if _, err := repo.GetPublishedByBuildNode(context.Background(), "build-1", "compile"); !errors.Is(err, repository.ErrWorkspaceRevisionNotFound) {
+		t.Fatalf("expected missing published lookup, got %v", err)
+	}
+	if _, err := repo.MarkPublishedIfClaimed(context.Background(), "missing-revision", "claim", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1"}, time.Now().UTC()); !errors.Is(err, repository.ErrWorkspaceRevisionNotFound) {
+		t.Fatalf("expected missing revision publication, got %v", err)
+	}
+	if expectationErr := mock.ExpectationsWereMet(); expectationErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationErr)
+	}
+}
+
+func TestWorkspaceRevisionRepositoryPropagatesDatabaseErrors(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sql mock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	now := time.Now().UTC()
+	wantErr := errors.New("database unavailable")
+	mock.ExpectQuery("SELECT build_id, node_id, attempt_number FROM build_jobs WHERE id = \\$1").WithArgs("job-1").WillReturnError(wantErr)
+	mock.ExpectQuery("SELECT id, producing_execution_job_id.*producing_execution_job_id = \\$1").WithArgs("job-1").WillReturnError(wantErr)
+	mock.ExpectQuery("SELECT wr.id, wr.producing_execution_job_id.*status = 'published'").WithArgs("build-1", "compile").WillReturnError(wantErr)
+	mock.ExpectQuery("UPDATE workspace_revisions.*status = 'deleted'").WithArgs("revision-1", now).WillReturnError(wantErr)
+
+	repo := NewWorkspaceRevisionRepository(db)
+	revision := domain.WorkspaceRevision{ID: "revision-1", ProducingExecutionJobID: "job-1", BuildID: "build-1", NodeID: "compile", AttemptNumber: 1, Status: domain.WorkspaceRevisionStatusPublishing, CreatedAt: now}
+	if _, err := repo.CreatePublishing(context.Background(), revision); !errors.Is(err, wantErr) {
+		t.Fatalf("expected create database error, got %v", err)
+	}
+	if _, err := repo.GetByProducingExecutionJob(context.Background(), "job-1"); !errors.Is(err, wantErr) {
+		t.Fatalf("expected producer lookup database error, got %v", err)
+	}
+	if _, err := repo.GetPublishedByBuildNode(context.Background(), "build-1", "compile"); !errors.Is(err, wantErr) {
+		t.Fatalf("expected published lookup database error, got %v", err)
+	}
+	if _, err := repo.MarkDeleted(context.Background(), "revision-1", now); !errors.Is(err, wantErr) {
+		t.Fatalf("expected deletion database error, got %v", err)
+	}
+	if expectationErr := mock.ExpectationsWereMet(); expectationErr != nil {
+		t.Fatalf("unmet expectations: %v", expectationErr)
+	}
+}
+
+func TestWorkspaceRevisionComparisonHelpers(t *testing.T) {
+	parent := "parent-1"
+	size := int64(10)
+	left := domain.WorkspaceRevision{ID: "revision-1", ProducingExecutionJobID: "job-1", BuildID: "build-1", NodeID: "compile", AttemptNumber: 1, ParentRevisionID: &parent, Status: domain.WorkspaceRevisionStatusPublishing}
+	right := left
+	if !sameWorkspaceRevisionCreate(left, right) {
+		t.Fatal("expected equivalent revisions")
+	}
+	right.ParentRevisionID = nil
+	if sameWorkspaceRevisionCreate(left, right) {
+		t.Fatal("expected distinct parent revision")
+	}
+	published := domain.WorkspaceRevision{ContentDigest: stringValue("sha256:one"), StorageKey: stringValue("revisions/1"), SizeBytes: &size}
+	if !sameWorkspaceRevisionPublication(published, domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1", SizeBytes: &size}) {
+		t.Fatal("expected equivalent publication")
+	}
+	if sameWorkspaceRevisionPublication(published, domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1"}) {
+		t.Fatal("expected distinct optional size")
+	}
+}
+
+func stringValue(value string) *string {
+	return &value
+}
+
 func workspaceRevisionMockRows(row []driver.Value) *sqlmock.Rows {
 	return sqlmock.NewRows([]string{"id", "producing_execution_job_id", "build_id", "node_id", "attempt_number", "parent_revision_id", "status", "content_digest", "storage_key", "size_bytes", "created_at", "published_at", "deleted_at"}).AddRow(row...)
 }

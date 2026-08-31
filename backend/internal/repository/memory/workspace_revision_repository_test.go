@@ -118,6 +118,55 @@ func TestWorkspaceRevisionRepositoryRejectsExpiredClaimAndMismatchedJobMetadata(
 	}
 }
 
+func TestWorkspaceRevisionRepositoryHandlesMissingRevisionsAndCopiesPointers(t *testing.T) {
+	now := time.Now().UTC()
+	executionJobs := NewExecutionJobRepository()
+	createExecutionJob(t, executionJobs, "job-1", "build-1", "compile", 1, now)
+	repo := NewWorkspaceRevisionRepository(executionJobs)
+	if _, err := repo.GetByProducingExecutionJob(context.Background(), "missing"); !errors.Is(err, repository.ErrWorkspaceRevisionNotFound) {
+		t.Fatalf("expected missing revision, got %v", err)
+	}
+	if _, err := repo.MarkDeleted(context.Background(), "missing", now); !errors.Is(err, repository.ErrWorkspaceRevisionNotFound) {
+		t.Fatalf("expected missing deletion, got %v", err)
+	}
+	if _, err := repo.MarkPublishedIfClaimed(context.Background(), "missing", "claim", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1"}, now); !errors.Is(err, repository.ErrWorkspaceRevisionNotFound) {
+		t.Fatalf("expected missing publication, got %v", err)
+	}
+
+	parent := "parent-1"
+	revision := testWorkspaceRevision("revision-1", "job-1", "build-1", "compile", 1, now)
+	revision.ParentRevisionID = &parent
+	created, createErr := repo.CreatePublishing(context.Background(), revision)
+	if createErr != nil {
+		t.Fatalf("create revision: %v", createErr)
+	}
+	parent = "changed"
+	if created.ParentRevisionID == nil || *created.ParentRevisionID != "parent-1" {
+		t.Fatalf("expected copied parent id, got %#v", created.ParentRevisionID)
+	}
+	if _, err := repo.MarkDeleted(context.Background(), revision.ID, now); !errors.Is(err, repository.ErrWorkspaceRevisionConflict) {
+		t.Fatalf("expected publishing deletion conflict, got %v", err)
+	}
+	claimExecutionJob(t, executionJobs, "step-job-1", "claim-1", now)
+	size := int64(10)
+	published, publishErr := repo.MarkPublishedIfClaimed(context.Background(), revision.ID, "claim-1", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1", SizeBytes: &size}, now)
+	if publishErr != nil {
+		t.Fatalf("publish revision: %v", publishErr)
+	}
+	size = 20
+	if published.SizeBytes == nil || *published.SizeBytes != 10 {
+		t.Fatalf("expected copied size, got %#v", published.SizeBytes)
+	}
+}
+
+func TestWorkspaceRevisionRepositoryRejectsMissingExecutionJobDependency(t *testing.T) {
+	now := time.Now().UTC()
+	revision := testWorkspaceRevision("revision-1", "job-1", "build-1", "compile", 1, now)
+	if _, err := NewWorkspaceRevisionRepository(nil).CreatePublishing(context.Background(), revision); !errors.Is(err, repository.ErrWorkspaceRevisionConflict) {
+		t.Fatalf("expected missing execution repository conflict, got %v", err)
+	}
+}
+
 func createExecutionJob(t *testing.T, repo *ExecutionJobRepository, jobID string, buildID string, nodeID string, attempt int, now time.Time) {
 	t.Helper()
 	_, err := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{{ID: jobID, BuildID: buildID, StepID: "step-" + jobID, NodeID: nodeID, Name: nodeID, StepIndex: 0, AttemptNumber: attempt, Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now}})
