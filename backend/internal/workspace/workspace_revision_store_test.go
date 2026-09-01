@@ -287,6 +287,16 @@ func TestFilesystemWorkspaceRevisionStoreValidationAndCancellation(t *testing.T)
 	if err := store.Delete(canceled, publication); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled delete: %v", err)
 	}
+	if restoreErr := store.Restore(context.Background(), publication, " "); restoreErr == nil {
+		t.Fatal("expected blank destination restore failure")
+	}
+	destinationFile := filepath.Join(t.TempDir(), "destination-file")
+	if writeErr := os.WriteFile(destinationFile, []byte("file"), 0o644); writeErr != nil {
+		t.Fatalf("write destination file: %v", writeErr)
+	}
+	if restoreErr := store.Restore(context.Background(), publication, destinationFile); !errors.Is(restoreErr, ErrWorkspaceRevisionDestination) {
+		t.Fatalf("file destination restore: %v", restoreErr)
+	}
 }
 
 func TestWorkspaceRevisionStorePathAndStreamHelpers(t *testing.T) {
@@ -394,6 +404,121 @@ func TestFilesystemWorkspaceRevisionStoreRestoreRejectsArchiveDirectory(t *testi
 	if err := store.Restore(context.Background(), publication, filepath.Join(t.TempDir(), "restore")); err == nil {
 		t.Fatal("expected archive directory restore failure")
 	}
+}
+
+func TestWorkspaceRevisionStoreHelperFailures(t *testing.T) {
+	if _, _, digestErr := workspaceRevisionDigestAndSize(context.Background(), filepath.Join(t.TempDir(), "missing")); digestErr == nil {
+		t.Fatal("expected missing archive digest failure")
+	}
+	archivePath := filepath.Join(t.TempDir(), "archive")
+	if writeErr := os.WriteFile(archivePath, []byte("content"), 0o644); writeErr != nil {
+		t.Fatalf("write archive: %v", writeErr)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, digestErr := workspaceRevisionDigestAndSize(canceled, archivePath); !errors.Is(digestErr, context.Canceled) {
+		t.Fatalf("cancelled archive digest: %v", digestErr)
+	}
+	if syncErr := syncWorkspaceRevisionDirectory(filepath.Join(t.TempDir(), "missing")); syncErr == nil {
+		t.Fatal("expected missing directory sync failure")
+	}
+
+	archive, createErr := os.CreateTemp(t.TempDir(), "archive-*.tar.gz")
+	if createErr != nil {
+		t.Fatalf("create archive: %v", createErr)
+	}
+	if closeErr := archive.Close(); closeErr != nil {
+		t.Fatalf("close archive: %v", closeErr)
+	}
+	sourceRoot := t.TempDir()
+	if writeErr := os.WriteFile(filepath.Join(sourceRoot, "file.txt"), []byte("content"), 0o644); writeErr != nil {
+		t.Fatalf("write source: %v", writeErr)
+	}
+	closedFile, openErr := os.OpenFile(archive.Name(), os.O_WRONLY, 0)
+	if openErr != nil {
+		t.Fatalf("open archive: %v", openErr)
+	}
+	if closeErr := closedFile.Close(); closeErr != nil {
+		t.Fatalf("close output: %v", closeErr)
+	}
+	if writeErr := writeWorkspaceRevisionArchive(context.Background(), closedFile, sourceRoot); writeErr == nil {
+		t.Fatal("expected closed archive output failure")
+	}
+
+	duplicateTar := tarBytes(t, []tar.Header{
+		{Name: "file.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 0},
+		{Name: "file.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 0},
+	})
+	if extractErr := extractWorkspaceRevisionArchive(context.Background(), tar.NewReader(strings.NewReader(duplicateTar)), t.TempDir()); extractErr == nil {
+		t.Fatal("expected duplicate archive entry failure")
+	}
+	if extractErr := extractWorkspaceRevisionArchive(context.Background(), tar.NewReader(strings.NewReader("not a tar archive")), t.TempDir()); extractErr == nil {
+		t.Fatal("expected malformed tar extraction failure")
+	}
+	if modeErr := applyWorkspaceRevisionDirectoryModes(map[string]os.FileMode{filepath.Join(t.TempDir(), "missing"): 0o755}); modeErr == nil {
+		t.Fatal("expected missing directory mode failure")
+	}
+}
+
+func TestFilesystemWorkspaceRevisionStoreFilesystemFailures(t *testing.T) {
+	sourceRoot := t.TempDir()
+	if writeErr := os.WriteFile(filepath.Join(sourceRoot, "file.txt"), []byte("content"), 0o644); writeErr != nil {
+		t.Fatalf("write source: %v", writeErr)
+	}
+	storageRootFile := filepath.Join(t.TempDir(), "storage-root-file")
+	if writeErr := os.WriteFile(storageRootFile, []byte("not a directory"), 0o644); writeErr != nil {
+		t.Fatalf("write storage root file: %v", writeErr)
+	}
+	if _, publishErr := NewFilesystemWorkspaceRevisionStore(storageRootFile).Publish(context.Background(), "revision", sourceRoot); publishErr == nil {
+		t.Fatal("expected storage root publish failure")
+	}
+
+	store := NewFilesystemWorkspaceRevisionStore(t.TempDir())
+	publication, publishErr := store.Publish(context.Background(), "revision", sourceRoot)
+	if publishErr != nil {
+		t.Fatalf("publish: %v", publishErr)
+	}
+	destinationParentFile := filepath.Join(t.TempDir(), "destination-parent-file")
+	if writeErr := os.WriteFile(destinationParentFile, []byte("not a directory"), 0o644); writeErr != nil {
+		t.Fatalf("write destination parent file: %v", writeErr)
+	}
+	if restoreErr := store.Restore(context.Background(), publication, filepath.Join(destinationParentFile, "restore")); restoreErr == nil {
+		t.Fatal("expected destination parent restore failure")
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if restoreErr := store.Restore(canceled, publication, filepath.Join(t.TempDir(), "restore")); !errors.Is(restoreErr, context.Canceled) {
+		t.Fatalf("cancelled restore: %v", restoreErr)
+	}
+
+	archivePath := filepath.Join(store.root, "workspace-revisions", "revision.tar.gz")
+	if removeErr := os.Remove(archivePath); removeErr != nil {
+		t.Fatalf("remove archive: %v", removeErr)
+	}
+	if mkdirErr := os.Mkdir(archivePath, 0o755); mkdirErr != nil {
+		t.Fatalf("create archive directory: %v", mkdirErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(archivePath, "child"), []byte("content"), 0o644); writeErr != nil {
+		t.Fatalf("write archive directory child: %v", writeErr)
+	}
+	if deleteErr := store.Delete(context.Background(), publication); deleteErr == nil {
+		t.Fatal("expected nonempty archive directory delete failure")
+	}
+}
+
+func tarBytes(t *testing.T, headers []tar.Header) string {
+	t.Helper()
+	buffer := new(strings.Builder)
+	writer := tar.NewWriter(buffer)
+	for _, header := range headers {
+		if writeErr := writer.WriteHeader(&header); writeErr != nil {
+			t.Fatalf("write tar header: %v", writeErr)
+		}
+	}
+	if closeErr := writer.Close(); closeErr != nil {
+		t.Fatalf("close tar writer: %v", closeErr)
+	}
+	return buffer.String()
 }
 
 type shortWorkspaceRevisionWriter struct{}
