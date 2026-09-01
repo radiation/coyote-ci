@@ -324,6 +324,78 @@ func TestWorkspaceRevisionStorePathAndStreamHelpers(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRevisionArchiveHelpersRejectInvalidRootsAndEntries(t *testing.T) {
+	archive, err := os.CreateTemp(t.TempDir(), "archive-*.tar.gz")
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	defer func() { _ = archive.Close() }()
+	missingRoot := filepath.Join(t.TempDir(), "missing")
+	if err := writeWorkspaceRevisionArchive(context.Background(), archive, missingRoot); err == nil {
+		t.Fatal("expected missing root archive failure")
+	}
+	sourceFile := filepath.Join(t.TempDir(), "source-file")
+	if err := os.WriteFile(sourceFile, []byte("content"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+	if err := writeWorkspaceRevisionArchive(context.Background(), archive, sourceFile); !errors.Is(err, ErrUnsupportedWorkspaceRevisionEntry) {
+		t.Fatalf("file root archive: %v", err)
+	}
+	sourceLink := filepath.Join(t.TempDir(), "source-link")
+	if err := os.Symlink(sourceFile, sourceLink); err != nil {
+		t.Fatalf("make source link: %v", err)
+	}
+	if err := writeWorkspaceRevisionArchive(context.Background(), archive, sourceLink); !errors.Is(err, ErrUnsupportedWorkspaceRevisionEntry) {
+		t.Fatalf("symlink root archive: %v", err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := writeWorkspaceRevisionArchive(canceled, archive, t.TempDir()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled archive: %v", err)
+	}
+
+	for _, testCase := range []struct {
+		name   string
+		header tar.Header
+		want   error
+	}{
+		{name: "regular root", header: tar.Header{Name: ".", Typeflag: tar.TypeReg}, want: ErrUnsafeWorkspaceRevisionPath},
+		{name: "empty name", header: tar.Header{Name: "", Typeflag: tar.TypeReg}, want: ErrUnsafeWorkspaceRevisionPath},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			buffer := new(strings.Builder)
+			writer := tar.NewWriter(buffer)
+			if err := writer.WriteHeader(&testCase.header); err != nil {
+				t.Fatalf("write header: %v", err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatalf("close tar: %v", err)
+			}
+			if err := extractWorkspaceRevisionArchive(context.Background(), tar.NewReader(strings.NewReader(buffer.String())), t.TempDir()); !errors.Is(err, testCase.want) {
+				t.Fatalf("extract: %v", err)
+			}
+		})
+	}
+	canceledRestore, cancelRestore := context.WithCancel(context.Background())
+	cancelRestore()
+	if err := extractWorkspaceRevisionArchive(canceledRestore, tar.NewReader(strings.NewReader("")), t.TempDir()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled extract: %v", err)
+	}
+}
+
+func TestFilesystemWorkspaceRevisionStoreRestoreRejectsArchiveDirectory(t *testing.T) {
+	storeRoot := t.TempDir()
+	store := NewFilesystemWorkspaceRevisionStore(storeRoot)
+	archivePath := filepath.Join(storeRoot, "workspace-revisions", "directory.tar.gz")
+	if err := os.MkdirAll(archivePath, 0o755); err != nil {
+		t.Fatalf("mkdir archive directory: %v", err)
+	}
+	publication := publicationForWorkspaceRevision("workspace-revisions/directory.tar.gz", "sha256:bad", 1)
+	if err := store.Restore(context.Background(), publication, filepath.Join(t.TempDir(), "restore")); err == nil {
+		t.Fatal("expected archive directory restore failure")
+	}
+}
+
 type shortWorkspaceRevisionWriter struct{}
 
 func (shortWorkspaceRevisionWriter) Write(contents []byte) (int, error) {
