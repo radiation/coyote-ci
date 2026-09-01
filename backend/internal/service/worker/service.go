@@ -40,6 +40,8 @@ type WorkerRunnableStep struct {
 	StepName       string
 	WorkerID       string
 	ClaimToken     string
+	NodeID         string
+	AttemptNumber  int
 	Image          string
 	Command        string
 	Args           []string

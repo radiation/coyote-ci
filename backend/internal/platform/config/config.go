@@ -29,6 +29,8 @@ type Config struct {
 	ExecutionBackend              string
 	ExecutionDefaultImage         string
 	ExecutionWorkspaceRoot        string
+	WorkerKubernetesNamespace     string
+	WorkerKubernetesKubeconfig    string
 	WorkspaceRevisionStorageRoot  string
 	WorkerCacheStorageProvider    string
 	WorkerCacheStorageRoot        string
@@ -95,6 +97,8 @@ func Load() Config {
 		ExecutionBackend:              getEnv("WORKER_EXECUTION_BACKEND", "docker"),
 		ExecutionDefaultImage:         getEnv("WORKER_EXECUTION_DEFAULT_IMAGE", "alpine:3.20"),
 		ExecutionWorkspaceRoot:        getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
+		WorkerKubernetesNamespace:     getEnv("WORKER_KUBERNETES_NAMESPACE", "default"),
+		WorkerKubernetesKubeconfig:    getEnv("WORKER_KUBERNETES_KUBECONFIG", getEnv("KUBECONFIG", "")),
 		WorkspaceRevisionStorageRoot:  getEnv("COYOTE_WORKSPACE_REVISION_STORAGE_ROOT", ""),
 		WorkerCacheStorageProvider:    getEnv("WORKER_CACHE_STORAGE_PROVIDER", ""),
 		WorkerCacheStorageRoot:        getEnv("WORKER_CACHE_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-cache")),

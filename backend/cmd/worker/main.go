@@ -16,6 +16,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	kubernetesexec "github.com/radiation/coyote-ci/backend/internal/kubernetes"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/observability"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
@@ -166,11 +167,26 @@ func main() {
 	startWorkerStatusServer(ctx, cfg.WorkerStatusAddr, workerService)
 
 	log.Printf("starting worker loop")
-	controller := workersvc.NewSynchronousController(workerService)
+	controller, controllerErr := resolveExecutionController(cfg, workerService, logSink)
+	if controllerErr != nil {
+		log.Fatalf("failed to configure execution controller: %v", controllerErr)
+	}
 	if err := runWorkerLoop(ctx, controller, defaultPollInterval); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatalf("worker loop failed: %v", err)
 	}
 	log.Printf("worker stopped")
+}
+
+func resolveExecutionController(cfg config.Config, workerService *workersvc.ExecutionWorkerService, logSink logs.LogSink) (executionsvc.Controller, error) {
+	if strings.ToLower(strings.TrimSpace(cfg.ExecutionBackend)) != "kubernetes" {
+		return workersvc.NewSynchronousController(workerService), nil
+	}
+	client, err := kubernetesexec.NewClient(cfg.WorkerKubernetesKubeconfig)
+	if err != nil {
+		return nil, err
+	}
+	return kubernetesexec.NewController(client, workerService, logSink, cfg.WorkerKubernetesNamespace).
+		WithWorkspacePublicationEnabled(strings.TrimSpace(cfg.WorkspaceRevisionStorageRoot) != ""), nil
 }
 
 func workspaceRevisionStoreFromConfig(cfg config.Config) workspacepkg.WorkspaceRevisionStore {
