@@ -196,13 +196,15 @@ func (m *HostWorkspaceMaterializer) restorePredecessorWorkspace(ctx context.Cont
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	m.root = canonicalizeExistingPath(m.root)
 	workspacePath := filepath.Join(m.root, buildID)
-	if m.isWorkspacePrepared(workspacePath) {
+	workspaceExists := m.isWorkspacePrepared(workspacePath)
+	m.mu.Unlock()
+	if workspaceExists {
 		return MaterializedWorkspace{}, fmt.Errorf("%w for build %s", ErrWorkspaceLineageUnavailable, buildID)
 	}
+
 	publication := domain.WorkspaceRevisionPublication{
 		ContentDigest: *revision.ContentDigest,
 		StorageKey:    *revision.StorageKey,
