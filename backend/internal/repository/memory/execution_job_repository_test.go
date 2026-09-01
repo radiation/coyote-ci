@@ -140,6 +140,40 @@ func TestExecutionJobRepository_CompleteJobFailureRejectsStaleClaim(t *testing.T
 	}
 }
 
+func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_ValidAndStaleClaims(t *testing.T) {
+	now := time.Now().UTC()
+	buildRepo := NewBuildRepository()
+	if _, createBuildErr := buildRepo.CreateQueuedBuild(context.Background(), domain.Build{ID: "build-atomic", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}, []domain.BuildStep{{ID: "step-atomic", BuildID: "build-atomic", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: stringPtr("claim-active")}}); createBuildErr != nil {
+		t.Fatalf("create build: %v", createBuildErr)
+	}
+	if _, startBuildErr := buildRepo.UpdateStatus(context.Background(), "build-atomic", domain.BuildStatusRunning, nil); startBuildErr != nil {
+		t.Fatalf("start build: %v", startBuildErr)
+	}
+	repo := NewExecutionJobRepository()
+	repo.SetBuildRepository(buildRepo)
+	claimToken := "claim-active"
+	claimExpiresAt := now.Add(time.Minute)
+	if _, createJobErr := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{{ID: "job-atomic", BuildID: "build-atomic", StepID: "step-atomic", NodeID: "test", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusRunning, ClaimToken: &claimToken, ClaimExpiresAt: &claimExpiresAt, ResolvedSpecJSON: "{}", CreatedAt: now}}); createJobErr != nil {
+		t.Fatalf("create job: %v", createJobErr)
+	}
+	exitCode := 0
+	request := repository.CompleteSuccessfulStepAndJobRequest{JobID: "job-atomic", ClaimToken: claimToken, FinishedAt: now.Add(time.Minute), ExitCode: exitCode, StepRequest: repository.CompleteStepRequest{BuildID: "build-atomic", StepIndex: 0, ClaimToken: claimToken, RequireClaim: true, Update: repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now}}}
+
+	_, _, staleOutcome, staleErr := repo.CompleteSuccessfulStepAndJob(context.Background(), repository.CompleteSuccessfulStepAndJobRequest{JobID: request.JobID, ClaimToken: "claim-stale", FinishedAt: request.FinishedAt, ExitCode: request.ExitCode, StepRequest: request.StepRequest})
+	if staleErr != nil || staleOutcome != repository.StepCompletionStaleClaim {
+		t.Fatalf("expected stale-claim rejection, outcome=%q err=%v", staleOutcome, staleErr)
+	}
+	steps, getStepsErr := buildRepo.GetStepsByBuildID(context.Background(), "build-atomic")
+	if getStepsErr != nil || len(steps) != 1 || steps[0].Status != domain.BuildStepStatusRunning {
+		t.Fatalf("expected stale completion to leave step running, steps=%#v err=%v", steps, getStepsErr)
+	}
+
+	result, job, outcome, completeErr := repo.CompleteSuccessfulStepAndJob(context.Background(), request)
+	if completeErr != nil || outcome != repository.StepCompletionCompleted || result.Step.Status != domain.BuildStepStatusSuccess || job.Status != domain.ExecutionJobStatusSuccess {
+		t.Fatalf("expected atomic success semantics, result=%#v job=%#v outcome=%q err=%v", result, job, outcome, completeErr)
+	}
+}
+
 func TestExecutionJobRepository_ClaimNextRunnableJob_PrioritizesBuildPriorityThenQueuedTime(t *testing.T) {
 	buildRepo := NewBuildRepository()
 	repo := NewExecutionJobRepository()

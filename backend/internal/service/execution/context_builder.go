@@ -19,12 +19,13 @@ var ErrExecutionJobNotFound = errors.New("execution job not found")
 
 // StepExecutionContext is the canonical execution plan for one step execution.
 type StepExecutionContext struct {
-	Build          domain.Build
-	Step           *domain.BuildStep
-	PersistedJob   *domain.ExecutionJob
-	ExecutionImage string
-	BuildSource    ResolvedBuildSourceSpec
-	WorkspaceInput domain.WorkspaceInputPlan
+	Build                      domain.Build
+	Step                       *domain.BuildStep
+	PersistedJob               *domain.ExecutionJob
+	ExecutionImage             string
+	BuildSource                ResolvedBuildSourceSpec
+	WorkspaceInput             domain.WorkspaceInputPlan
+	WorkspacePublicationFailed bool
 
 	ExecutionRequest runner.RunStepRequest
 	StepWorkingDir   string

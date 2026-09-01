@@ -36,6 +36,7 @@ import (
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 	"github.com/radiation/coyote-ci/backend/internal/source"
+	workspacepkg "github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 const defaultPollInterval = 10 * time.Second
@@ -82,6 +83,7 @@ func main() {
 
 	buildRepo := repositorypostgres.NewBuildRepository(db)
 	executionJobRepo := repositorypostgres.NewExecutionJobRepository(db)
+	workspaceRevisionRepo := repositorypostgres.NewWorkspaceRevisionRepository(db)
 	executionJobOutputRepo := repositorypostgres.NewExecutionJobOutputRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
 	artifactTriggerDeliveryRepo := repositorypostgres.NewArtifactTriggerDeliveryRepository(db)
@@ -127,6 +129,10 @@ func main() {
 		log.Fatalf("failed to resolve cache store: %v", err)
 	}
 	stepRunner := resolveStepRunner(cfg)
+	var workspaceRevisionStore workspacepkg.WorkspaceRevisionStore
+	if strings.TrimSpace(cfg.WorkspaceRevisionStorageRoot) != "" {
+		workspaceRevisionStore = workspacepkg.NewFilesystemWorkspaceRevisionStore(cfg.WorkspaceRevisionStorageRoot)
+	}
 	logSink := logs.NewPostgresSink(db)
 	versionTagService := newWorkerVersionTagService(versionTagRepo, artifactLabelRepo)
 	checkoutResolver, checkoutResolverErr := newRepositoryAwareCheckoutResolver(scmConnectionRepo, scmRepositoryRegistrationRepo)
@@ -134,19 +140,21 @@ func main() {
 		log.Fatalf("failed to configure repository-aware checkout: %v", checkoutResolverErr)
 	}
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, stepRunner, logSink, buildsvc.BuildServiceConfig{
-		ExecutionJobRepo:    executionJobRepo,
-		ExecutionOutputRepo: executionJobOutputRepo,
-		BuildNotifier:       buildNotificationService,
-		DefaultImage:        cfg.ExecutionDefaultImage,
-		ExecutionWorkspace:  cfg.ExecutionWorkspaceRoot,
-		RepositoryCheckout:  checkoutResolver,
-		CacheStore:          cacheStore,
-		CacheEntryRepo:      cacheEntryRepo,
-		VersionTagger:       versionTagService,
-		ArtifactRepo:        artifactRepo,
-		ArtifactLabelRepo:   artifactLabelRepo,
-		ArtifactResolver:    artifactResolver,
-		ArtifactWorkspace:   cfg.ExecutionWorkspaceRoot,
+		ExecutionJobRepo:       executionJobRepo,
+		ExecutionOutputRepo:    executionJobOutputRepo,
+		BuildNotifier:          buildNotificationService,
+		DefaultImage:           cfg.ExecutionDefaultImage,
+		ExecutionWorkspace:     cfg.ExecutionWorkspaceRoot,
+		WorkspaceRevisionRepo:  workspaceRevisionRepo,
+		WorkspaceRevisionStore: workspaceRevisionStore,
+		RepositoryCheckout:     checkoutResolver,
+		CacheStore:             cacheStore,
+		CacheEntryRepo:         cacheEntryRepo,
+		VersionTagger:          versionTagService,
+		ArtifactRepo:           artifactRepo,
+		ArtifactLabelRepo:      artifactLabelRepo,
+		ArtifactResolver:       artifactResolver,
+		ArtifactWorkspace:      cfg.ExecutionWorkspaceRoot,
 	})
 	jobService := service.NewJobService(jobRepo, buildService).
 		WithProjectRepository(projectRepo).

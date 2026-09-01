@@ -15,6 +15,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/service/execution"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	"github.com/radiation/coyote-ci/backend/internal/source"
+	workspacepkg "github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 var ErrBuildNotFound = errors.New("build not found")
@@ -63,6 +64,8 @@ type BuildService struct {
 	managedImageRefresher   ManagedImageRefresher
 	sourceResolver          source.WorkspaceSourceResolver
 	workspaceMaterializer   source.ExecutionWorkspaceMaterializer
+	workspaceRevisionRepo   repository.WorkspaceRevisionRepository
+	workspaceRevisionStore  workspacepkg.WorkspaceRevisionStore
 	repositoryCheckout      *RepositoryAwareCheckoutResolver
 	executionWorkspaceRoot  string
 	materializedWorkspaces  map[string][]source.MaterializedWorkspace
@@ -115,6 +118,8 @@ type BuildServiceConfig struct {
 	ArtifactResolver          *artifact.StoreResolver
 	ArtifactWorkspace         string
 	ExecutionWorkspace        string
+	WorkspaceRevisionRepo     repository.WorkspaceRevisionRepository
+	WorkspaceRevisionStore    workspacepkg.WorkspaceRevisionStore
 	DefaultImage              string
 	CacheStore                cachepkg.Store
 	CacheEntryRepo            repository.CacheEntryRepository
@@ -129,6 +134,8 @@ type BuildServiceConfig struct {
 func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner runner.Runner, logSink logs.LogSink, cfg BuildServiceConfig) *BuildService {
 	svc := NewBuildService(buildRepo, stepRunner, logSink)
 	svc.executionJobRepo = cfg.ExecutionJobRepo
+	svc.workspaceRevisionRepo = cfg.WorkspaceRevisionRepo
+	svc.workspaceRevisionStore = cfg.WorkspaceRevisionStore
 	svc.executionOutputRepo = cfg.ExecutionOutputRepo
 	svc.repoFetcher = cfg.RepoFetcher
 	svc.managedImageRefresher = cfg.ManagedImageRefresher
@@ -242,6 +249,11 @@ func (s *BuildService) SetExecutionJobRepository(repo repository.ExecutionJobRep
 	if aware, ok := repo.(buildRepoAware); ok {
 		aware.SetBuildRepository(s.buildRepo)
 	}
+}
+
+func (s *BuildService) SetWorkspaceRevisionPublication(repo repository.WorkspaceRevisionRepository, store workspacepkg.WorkspaceRevisionStore) {
+	s.workspaceRevisionRepo = repo
+	s.workspaceRevisionStore = store
 }
 
 func (s *BuildService) SetExecutionJobOutputRepository(repo repository.ExecutionJobOutputRepository) {

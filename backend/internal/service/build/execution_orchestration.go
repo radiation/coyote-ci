@@ -101,6 +101,9 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	stepRunner := NewStepRunner(s.runner)
 
 	logManager.EmitExecutionStart(ctx)
+	if recovered, result, report, recoveryErr := s.recoverPublishedWorkspaceRevision(ctx, executionContext, completionManager, logManager); recovered {
+		return result, report, recoveryErr
+	}
 	materializedWorkspace, materializeErr := s.materializeExecutionWorkspace(ctx, executionContext)
 	if materializeErr != nil {
 		now := time.Now().UTC()
@@ -154,6 +157,17 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		}
 	}
 	if runOutcome.Result.Status == runner.RunStepStatusSuccess {
+		if publishErr := s.publishWorkspaceRevision(ctx, executionContext, materializedWorkspace); publishErr != nil {
+			now := time.Now().UTC()
+			executionContext.WorkspacePublicationFailed = true
+			runOutcome.Result = runner.RunStepResult{
+				Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "workspace revision: " + publishErr.Error(),
+				StartedAt: runOutcome.Result.StartedAt, FinishedAt: now,
+			}
+			runOutcome.ExecutionErr = publishErr
+		}
+	}
+	if runOutcome.Result.Status == runner.RunStepStatusSuccess {
 		if commitErr := s.commitExecutionWorkspace(ctx, materializedWorkspace, executionContext.ExecutionRequest.ClaimToken); commitErr != nil {
 			now := time.Now().UTC()
 			runOutcome.Result = runner.RunStepResult{
@@ -182,6 +196,61 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	}
 
 	return runOutcome.Result, report, nil
+}
+
+var workspaceRevisionNamespace = uuid.MustParse("80c528d8-d286-5fdd-98ce-5d5239616c2a")
+
+func workspaceRevisionIDForExecutionJob(jobID string) string {
+	return uuid.NewSHA1(workspaceRevisionNamespace, []byte(jobID)).String()
+}
+
+func (s *BuildService) workspaceRevisionPublicationEnabled() bool {
+	return s.workspaceRevisionRepo != nil && s.workspaceRevisionStore != nil
+}
+
+func (s *BuildService) publishWorkspaceRevision(ctx context.Context, executionContext StepExecutionContext, materializedWorkspace source.MaterializedWorkspace) error {
+	if !s.workspaceRevisionPublicationEnabled() || executionContext.PersistedJob == nil {
+		return nil
+	}
+	job := *executionContext.PersistedJob
+	revisionID := workspaceRevisionIDForExecutionJob(job.ID)
+	_, createErr := s.workspaceRevisionRepo.CreatePublishing(ctx, domain.WorkspaceRevision{
+		ID: revisionID, ProducingExecutionJobID: job.ID, BuildID: job.BuildID, NodeID: job.NodeID,
+		AttemptNumber: job.AttemptNumber, Status: domain.WorkspaceRevisionStatusPublishing, CreatedAt: time.Now().UTC(),
+	})
+	if createErr != nil {
+		return fmt.Errorf("creating workspace revision: %w", createErr)
+	}
+	publication, publishErr := s.workspaceRevisionStore.Publish(ctx, revisionID, materializedWorkspace.Path)
+	if publishErr != nil {
+		return fmt.Errorf("publishing workspace revision: %w", publishErr)
+	}
+	if _, markErr := s.workspaceRevisionRepo.MarkPublishedIfClaimed(ctx, revisionID, executionContext.ExecutionRequest.ClaimToken, publication, time.Now().UTC()); markErr != nil {
+		return fmt.Errorf("marking workspace revision published: %w", markErr)
+	}
+	return nil
+}
+
+func (s *BuildService) recoverPublishedWorkspaceRevision(ctx context.Context, executionContext StepExecutionContext, completionManager *StepCompletionManager, logManager *ExecutionLogManager) (bool, runner.RunStepResult, StepCompletionReport, error) {
+	if !s.workspaceRevisionPublicationEnabled() || executionContext.PersistedJob == nil {
+		return false, runner.RunStepResult{}, StepCompletionReport{}, nil
+	}
+	job := *executionContext.PersistedJob
+	revision, revisionErr := s.workspaceRevisionRepo.GetByProducingExecutionJob(ctx, job.ID)
+	if errors.Is(revisionErr, repository.ErrWorkspaceRevisionNotFound) {
+		return false, runner.RunStepResult{}, StepCompletionReport{}, nil
+	}
+	if revisionErr != nil {
+		return true, runner.RunStepResult{}, StepCompletionReport{}, fmt.Errorf("looking up workspace revision recovery state: %w", revisionErr)
+	}
+	if revision.ID != workspaceRevisionIDForExecutionJob(job.ID) || revision.Status != domain.WorkspaceRevisionStatusPublished {
+		return false, runner.RunStepResult{}, StepCompletionReport{}, nil
+	}
+	now := time.Now().UTC()
+	result := runner.RunStepResult{Status: runner.RunStepStatusSuccess, ExitCode: 0, StartedAt: now, FinishedAt: now}
+	logManager.EmitSystemLine(ctx, "Recovered published workspace revision; finalizing execution")
+	report, completionErr := completionManager.CompleteExecution(ctx, executionContext, result, logManager)
+	return true, result, report, completionErr
 }
 
 func (s *BuildService) enrichExecutionContextForRunner(executionContext StepExecutionContext) StepExecutionContext {

@@ -25,7 +25,76 @@ import (
 	inprocessrunner "github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	"github.com/radiation/coyote-ci/backend/internal/source"
+	workspacepkg "github.com/radiation/coyote-ci/backend/internal/workspace"
 )
+
+type recordingWorkspaceRevisionStore struct {
+	events    []string
+	err       error
+	onPublish func()
+}
+
+func (s *recordingWorkspaceRevisionStore) Publish(_ context.Context, revisionID string, _ string) (domain.WorkspaceRevisionPublication, error) {
+	s.events = append(s.events, "publish")
+	if s.onPublish != nil {
+		s.onPublish()
+	}
+	if s.err != nil {
+		return domain.WorkspaceRevisionPublication{}, s.err
+	}
+	size := int64(1)
+	return domain.WorkspaceRevisionPublication{ContentDigest: "sha256:test", StorageKey: "workspace-revisions/" + revisionID + ".tar.gz", SizeBytes: &size}, nil
+}
+
+func (s *recordingWorkspaceRevisionStore) Restore(context.Context, domain.WorkspaceRevisionPublication, string) error {
+	return nil
+}
+
+func (s *recordingWorkspaceRevisionStore) Delete(context.Context, domain.WorkspaceRevisionPublication) error {
+	return nil
+}
+
+var _ workspacepkg.WorkspaceRevisionStore = (*recordingWorkspaceRevisionStore)(nil)
+
+type failingWorkspaceRevisionRepository struct {
+	repository.WorkspaceRevisionRepository
+	createErr error
+	markErr   error
+}
+
+func (r failingWorkspaceRevisionRepository) CreatePublishing(ctx context.Context, revision domain.WorkspaceRevision) (domain.WorkspaceRevision, error) {
+	if r.createErr != nil {
+		return domain.WorkspaceRevision{}, r.createErr
+	}
+	return r.WorkspaceRevisionRepository.CreatePublishing(ctx, revision)
+}
+
+func (r failingWorkspaceRevisionRepository) MarkPublishedIfClaimed(ctx context.Context, revisionID string, claimToken string, publication domain.WorkspaceRevisionPublication, publishedAt time.Time) (domain.WorkspaceRevision, error) {
+	if r.markErr != nil {
+		return domain.WorkspaceRevision{}, r.markErr
+	}
+	return r.WorkspaceRevisionRepository.MarkPublishedIfClaimed(ctx, revisionID, claimToken, publication, publishedAt)
+}
+
+type recordingAtomicExecutionJobRepository struct {
+	repository.ExecutionJobRepository
+	atomicCalls int
+}
+
+func (r *recordingAtomicExecutionJobRepository) CompleteSuccessfulStepAndJob(ctx context.Context, request repository.CompleteSuccessfulStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+	r.atomicCalls++
+	atomicRepo, ok := r.ExecutionJobRepository.(interface {
+		CompleteSuccessfulStepAndJob(context.Context, repository.CompleteSuccessfulStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error)
+	})
+	if !ok {
+		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, errors.New("atomic completion capability is unavailable")
+	}
+	return atomicRepo.CompleteSuccessfulStepAndJob(ctx, request)
+}
+
+func executionTestTimePointer(value time.Time) *time.Time {
+	return &value
+}
 
 type recordingExecutionWorkspaceMaterializer struct {
 	events             []string
@@ -136,6 +205,190 @@ func TestBuildService_RunStep_CommitsWorkspaceBeforeCompletion(t *testing.T) {
 	}
 	if len(events) != 4 || events[0] != "materialize" || events[1] != "commit" || events[2] != "complete" || events[3] != "release" {
 		t.Fatalf("expected materialize, commit, complete, release ordering, got %#v", events)
+	}
+}
+
+func TestBuildService_RunStep_PublishesWorkspaceBeforeAtomicSuccess(t *testing.T) {
+	claimToken := "claim-active"
+	events := make([]string, 0)
+	buildRepo := &fakeBuildRepository{
+		build:          domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
+		steps:          []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
+		onCompleteStep: func() { events = append(events, "complete") },
+	}
+	jobRepo := memoryrepo.NewExecutionJobRepository()
+	job := domain.ExecutionJob{ID: "job-1", BuildID: "build-1", StepID: "step-1", NodeID: "test", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusRunning, ClaimToken: &claimToken, ClaimExpiresAt: executionTestTimePointer(time.Now().Add(time.Minute)), CreatedAt: time.Now().UTC()}
+	if _, err := jobRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{job}); err != nil {
+		t.Fatalf("seed execution job: %v", err)
+	}
+	revisionRepo := memoryrepo.NewWorkspaceRevisionRepository(jobRepo)
+	store := &recordingWorkspaceRevisionStore{onPublish: func() { events = append(events, "publish") }}
+	materializer := &recordingExecutionWorkspaceMaterializer{onEvent: func(event string) { events = append(events, event) }}
+	svc := NewBuildService(buildRepo, &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0}}, &fakeLogSink{})
+	svc.workspaceMaterializer = materializer
+	svc.SetExecutionJobRepository(jobRepo)
+	svc.SetWorkspaceRevisionPublication(revisionRepo, store)
+
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", JobID: job.ID, StepID: job.StepID, StepIndex: 0, StepName: "test", ClaimToken: claimToken, Command: "echo"})
+	if err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected completed outcome, got %q", report.CompletionOutcome)
+	}
+	if len(events) < 4 || events[0] != "materialize" || events[1] != "publish" || events[2] != "commit" || events[3] != "complete" {
+		t.Fatalf("expected materialize, publish, commit, complete ordering, got %#v", events)
+	}
+	if len(store.events) != 1 || store.events[0] != "publish" {
+		t.Fatalf("expected revision publication, got %#v", store.events)
+	}
+	revision, revisionErr := revisionRepo.GetByProducingExecutionJob(context.Background(), job.ID)
+	if revisionErr != nil || revision.Status != domain.WorkspaceRevisionStatusPublished {
+		t.Fatalf("expected published revision, revision=%#v err=%v", revision, revisionErr)
+	}
+	completedJob, jobErr := jobRepo.GetJobByID(context.Background(), job.ID)
+	if jobErr != nil || completedJob.Status != domain.ExecutionJobStatusSuccess {
+		t.Fatalf("expected successful execution job, job=%#v err=%v", completedJob, jobErr)
+	}
+}
+
+func TestBuildService_RunStep_WorkspacePublicationFailurePreventsSuccess(t *testing.T) {
+	claimToken := "claim-active"
+	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning}, steps: []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}}}
+	memoryJobRepo := memoryrepo.NewExecutionJobRepository()
+	job := domain.ExecutionJob{ID: "job-1", BuildID: "build-1", StepID: "step-1", NodeID: "test", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusRunning, ClaimToken: &claimToken, ClaimExpiresAt: executionTestTimePointer(time.Now().Add(time.Minute)), CreatedAt: time.Now().UTC()}
+	if _, err := memoryJobRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{job}); err != nil {
+		t.Fatalf("seed execution job: %v", err)
+	}
+	jobRepo := &recordingAtomicExecutionJobRepository{ExecutionJobRepository: memoryJobRepo}
+	svc := NewBuildService(buildRepo, &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0}}, &fakeLogSink{})
+	svc.workspaceMaterializer = &recordingExecutionWorkspaceMaterializer{}
+	svc.SetExecutionJobRepository(jobRepo)
+	svc.SetWorkspaceRevisionPublication(memoryrepo.NewWorkspaceRevisionRepository(jobRepo), &recordingWorkspaceRevisionStore{err: errors.New("store unavailable")})
+
+	_, _, runErr := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", JobID: job.ID, StepID: job.StepID, StepIndex: 0, StepName: "test", ClaimToken: claimToken, Command: "echo"})
+	if runErr == nil || !strings.Contains(runErr.Error(), "store unavailable") {
+		t.Fatalf("expected publication failure, got %v", runErr)
+	}
+	if buildRepo.steps[0].Status != domain.BuildStepStatusFailed {
+		t.Fatalf("expected failed step, got %q", buildRepo.steps[0].Status)
+	}
+	if jobRepo.atomicCalls != 0 {
+		t.Fatalf("expected no atomic success finalization, got %d calls", jobRepo.atomicCalls)
+	}
+	failedJob, jobErr := memoryJobRepo.GetJobByID(context.Background(), job.ID)
+	if jobErr != nil || failedJob.Status != domain.ExecutionJobStatusFailed || failedJob.FailureKind == nil || *failedJob.FailureKind != domain.ExecutionFailureKindWorkspace {
+		t.Fatalf("expected workspace-classified failed job, job=%#v err=%v", failedJob, jobErr)
+	}
+}
+
+func TestBuildService_RunStep_RepositoryPublicationFailuresPreventAtomicSuccess(t *testing.T) {
+	tests := []struct {
+		name      string
+		createErr error
+		markErr   error
+	}{
+		{name: "create publishing", createErr: errors.New("create revision failed")},
+		{name: "mark published", markErr: errors.New("mark revision failed")},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			claimToken := "claim-active"
+			buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning}, steps: []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}}}
+			memoryJobRepo := memoryrepo.NewExecutionJobRepository()
+			job := domain.ExecutionJob{ID: "job-1", BuildID: "build-1", StepID: "step-1", NodeID: "test", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusRunning, ClaimToken: &claimToken, ClaimExpiresAt: executionTestTimePointer(time.Now().Add(time.Minute)), CreatedAt: time.Now().UTC()}
+			if _, createJobErr := memoryJobRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{job}); createJobErr != nil {
+				t.Fatalf("seed execution job: %v", createJobErr)
+			}
+			jobRepo := &recordingAtomicExecutionJobRepository{ExecutionJobRepository: memoryJobRepo}
+			revisionRepo := failingWorkspaceRevisionRepository{WorkspaceRevisionRepository: memoryrepo.NewWorkspaceRevisionRepository(jobRepo), createErr: testCase.createErr, markErr: testCase.markErr}
+			svc := NewBuildService(buildRepo, &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0}}, &fakeLogSink{})
+			svc.workspaceMaterializer = &recordingExecutionWorkspaceMaterializer{}
+			svc.SetExecutionJobRepository(jobRepo)
+			svc.SetWorkspaceRevisionPublication(revisionRepo, &recordingWorkspaceRevisionStore{})
+
+			_, _, runErr := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: job.BuildID, JobID: job.ID, StepID: job.StepID, StepIndex: 0, StepName: "test", ClaimToken: claimToken, Command: "echo"})
+			if runErr == nil || !strings.Contains(runErr.Error(), "revision failed") {
+				t.Fatalf("expected publication failure, got %v", runErr)
+			}
+			if jobRepo.atomicCalls != 0 {
+				t.Fatalf("expected no atomic success finalization, got %d calls", jobRepo.atomicCalls)
+			}
+			failedJob, getJobErr := memoryJobRepo.GetJobByID(context.Background(), job.ID)
+			if getJobErr != nil || failedJob.Status != domain.ExecutionJobStatusFailed {
+				t.Fatalf("expected failed execution job, job=%#v err=%v", failedJob, getJobErr)
+			}
+		})
+	}
+}
+
+func TestBuildService_RunStep_WithoutRevisionStoreLeavesPublicationUnused(t *testing.T) {
+	claimToken := "claim-active"
+	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning}, steps: []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}}}
+	memoryJobRepo := memoryrepo.NewExecutionJobRepository()
+	job := domain.ExecutionJob{ID: "job-1", BuildID: "build-1", StepID: "step-1", NodeID: "test", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusRunning, ClaimToken: &claimToken, ClaimExpiresAt: executionTestTimePointer(time.Now().Add(time.Minute)), CreatedAt: time.Now().UTC()}
+	if _, createJobErr := memoryJobRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{job}); createJobErr != nil {
+		t.Fatalf("seed execution job: %v", createJobErr)
+	}
+	jobRepo := &recordingAtomicExecutionJobRepository{ExecutionJobRepository: memoryJobRepo}
+	revisionRepo := failingWorkspaceRevisionRepository{WorkspaceRevisionRepository: memoryrepo.NewWorkspaceRevisionRepository(jobRepo), createErr: errors.New("revision repository should not be called")}
+	svc := NewBuildService(buildRepo, &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0}}, &fakeLogSink{})
+	svc.workspaceMaterializer = &recordingExecutionWorkspaceMaterializer{}
+	svc.SetExecutionJobRepository(jobRepo)
+	svc.SetWorkspaceRevisionPublication(revisionRepo, nil)
+
+	_, report, runErr := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: job.BuildID, JobID: job.ID, StepID: job.StepID, StepIndex: 0, StepName: "test", ClaimToken: claimToken, Command: "echo"})
+	if runErr != nil || report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected legacy completion, report=%#v err=%v", report, runErr)
+	}
+	if jobRepo.atomicCalls != 0 {
+		t.Fatalf("expected legacy completion path, got %d atomic calls", jobRepo.atomicCalls)
+	}
+}
+
+func TestBuildService_RunStep_RecoversPublishedWorkspaceRevisionWithoutRerunningCommand(t *testing.T) {
+	initialClaim := "claim-initial"
+	reclaimedClaim := "claim-reclaimed"
+	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning}, steps: []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &reclaimedClaim}}}
+	jobRepo := memoryrepo.NewExecutionJobRepository()
+	job := domain.ExecutionJob{ID: "job-1", BuildID: "build-1", StepID: "step-1", NodeID: "test", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusRunning, ClaimToken: &initialClaim, ClaimExpiresAt: executionTestTimePointer(time.Now().Add(time.Minute)), CreatedAt: time.Now().UTC()}
+	if _, err := jobRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{job}); err != nil {
+		t.Fatalf("seed execution job: %v", err)
+	}
+	revisionRepo := memoryrepo.NewWorkspaceRevisionRepository(jobRepo)
+	revisionID := workspaceRevisionIDForExecutionJob(job.ID)
+	if _, err := revisionRepo.CreatePublishing(context.Background(), domain.WorkspaceRevision{ID: revisionID, ProducingExecutionJobID: job.ID, BuildID: job.BuildID, NodeID: job.NodeID, AttemptNumber: job.AttemptNumber, Status: domain.WorkspaceRevisionStatusPublishing, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("create publishing revision: %v", err)
+	}
+	size := int64(1)
+	publication := domain.WorkspaceRevisionPublication{ContentDigest: "sha256:test", StorageKey: "workspace-revisions/" + revisionID + ".tar.gz", SizeBytes: &size}
+	if _, err := revisionRepo.MarkPublishedIfClaimed(context.Background(), revisionID, initialClaim, publication, time.Now().UTC()); err != nil {
+		t.Fatalf("mark published revision: %v", err)
+	}
+	claim := repository.StepClaim{WorkerID: "worker-2", ClaimToken: reclaimedClaim, ClaimedAt: time.Now().UTC(), LeaseExpiresAt: time.Now().Add(time.Minute)}
+	if _, claimed, err := jobRepo.ClaimJobByStepID(context.Background(), job.StepID, claim); err != nil || !claimed {
+		t.Fatalf("reclaim execution job: claimed=%t err=%v", claimed, err)
+	}
+
+	runner := &fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0}}
+	svc := NewBuildService(buildRepo, runner, &fakeLogSink{})
+	svc.SetExecutionJobRepository(jobRepo)
+	svc.SetWorkspaceRevisionPublication(revisionRepo, &recordingWorkspaceRevisionStore{})
+	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", JobID: job.ID, StepID: job.StepID, StepIndex: 0, StepName: "test", ClaimToken: reclaimedClaim, Command: "echo"})
+	if err != nil {
+		t.Fatalf("recover completion: %v", err)
+	}
+	if runner.called {
+		t.Fatal("expected recovery to skip command execution")
+	}
+	if report.CompletionOutcome != repository.StepCompletionCompleted {
+		t.Fatalf("expected recovered completion, got %q", report.CompletionOutcome)
+	}
+	completedJob, jobErr := jobRepo.GetJobByID(context.Background(), job.ID)
+	if jobErr != nil || completedJob.Status != domain.ExecutionJobStatusSuccess {
+		t.Fatalf("expected recovered job success, job=%#v err=%v", completedJob, jobErr)
 	}
 }
 
