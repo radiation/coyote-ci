@@ -110,7 +110,7 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 		result := runner.RunStepResult{
 			Status:     runner.RunStepStatusFailed,
 			ExitCode:   -1,
-			Stderr:     materializeErr.Error(),
+			Stderr:     "workspace revision: " + materializeErr.Error(),
 			StartedAt:  now,
 			FinishedAt: now,
 		}
@@ -342,8 +342,13 @@ func (s *BuildService) materializeExecutionWorkspace(ctx context.Context, execut
 	if s.workspaceMaterializer == nil {
 		return source.MaterializedWorkspace{}, nil
 	}
+	nodeID := ""
+	if executionContext.PersistedJob != nil {
+		nodeID = executionContext.PersistedJob.NodeID
+	}
 	materializedWorkspace, err := s.workspaceMaterializer.Materialize(ctx, source.MaterializeWorkspaceRequest{
 		BuildID: executionContext.Build.ID,
+		NodeID:  nodeID,
 		Input:   executionContext.WorkspaceInput,
 	})
 	if err != nil {

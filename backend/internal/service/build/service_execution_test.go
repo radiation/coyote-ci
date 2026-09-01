@@ -432,9 +432,12 @@ func TestBuildService_RunStep_ReturnsMaterializationFailureBeforeRunnerExecution
 	svc := NewBuildService(repo, runner, &fakeLogSink{})
 	svc.workspaceMaterializer = &recordingExecutionWorkspaceMaterializer{materializeErr: errors.New("workspace unavailable")}
 
-	_, _, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "test", ClaimToken: claimToken, Command: "echo"})
+	result, _, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: "build-1", StepIndex: 0, StepName: "test", ClaimToken: claimToken, Command: "echo"})
 	if err == nil || err.Error() != "workspace unavailable" {
 		t.Fatalf("expected materialization failure, got %v", err)
+	}
+	if !strings.HasPrefix(result.Stderr, "workspace revision: ") {
+		t.Fatalf("expected workspace-classified failure output, got %q", result.Stderr)
 	}
 	if runner.called {
 		t.Fatal("expected runner not to execute after materialization failure")
