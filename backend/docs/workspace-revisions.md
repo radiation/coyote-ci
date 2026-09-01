@@ -26,3 +26,23 @@ are normalized for stable publication of unchanged source trees. No Coyote-owned
 transient/cache directory is currently evidenced in the workspace layout, so this
 store applies no exclusions. `.coyote/trigger-artifacts` remains included because
 it is supplied workspace content.
+
+## Runtime Restore
+
+Docker workers continue to reuse an available build-scoped local workspace. When
+that directory is absent for a linear predecessor input and
+`COYOTE_WORKSPACE_REVISION_STORAGE_ROOT` is configured, the worker resolves the
+published predecessor revision and restores it into the conventional build
+workspace before cache restoration and command execution. Missing or corrupt
+revisions stop the step with a `workspace` failure; commands do not run.
+
+Portable local reuse records the last successfully committed node for the
+current worker process. For ordinary linear predecessor inputs, a present
+directory with unknown or mismatched lineage is rejected rather than overwritten
+or silently treated as the requested predecessor revision.
+
+Portable restoration for fan-out and fan-in remains unsupported because the
+current host layout assigns one writable directory per build. Existing local
+fan-out and fan-in compatibility behavior is preserved when that directory is
+already available. A future portable implementation requires execution-scoped
+workspace identities to isolate fan-out descendants safely.

@@ -10,6 +10,8 @@ import (
 	"sync"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
+	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 const defaultWorkspaceDirName = "coyote-builds"
@@ -17,6 +19,7 @@ const defaultWorkspaceDirName = "coyote-builds"
 var ErrWorkspaceFanOutUnsupported = errors.New("workspace fan-out materialization is not supported")
 var ErrWorkspaceFanInUnsupported = errors.New("workspace fan-in materialization is not supported")
 var ErrWorkspaceInputUnsupported = errors.New("workspace input plan is not supported")
+var ErrWorkspaceLineageUnavailable = errors.New("local workspace lineage is unavailable")
 
 // WorkspacePrepareRequest contains source metadata used to prepare a build workspace.
 type WorkspacePrepareRequest struct {
@@ -36,6 +39,7 @@ type WorkspaceMaterializer interface {
 // by one execution. It intentionally contains no storage-provider details.
 type MaterializeWorkspaceRequest struct {
 	BuildID string
+	NodeID  string
 	Input   domain.WorkspaceInputPlan
 }
 
@@ -44,6 +48,7 @@ type MaterializeWorkspaceRequest struct {
 // exposing that storage detail to runners.
 type MaterializedWorkspace struct {
 	BuildID string
+	NodeID  string
 	Path    string
 	Input   domain.WorkspaceInputPlan
 }
@@ -58,7 +63,10 @@ type ExecutionWorkspaceMaterializer interface {
 
 // HostWorkspaceMaterializer prepares build workspaces on the host filesystem.
 type HostWorkspaceMaterializer struct {
-	root string
+	root            string
+	revisionRepo    repository.WorkspaceRevisionRepository
+	revisionStore   workspace.WorkspaceRevisionStore
+	lastNodeByBuild map[string]string
 
 	mu sync.Mutex
 }
@@ -66,6 +74,10 @@ type HostWorkspaceMaterializer struct {
 var _ ExecutionWorkspaceMaterializer = (*HostWorkspaceMaterializer)(nil)
 
 func NewHostWorkspaceMaterializer(root string) *HostWorkspaceMaterializer {
+	return NewHostWorkspaceMaterializerWithRevisionStore(root, nil, nil)
+}
+
+func NewHostWorkspaceMaterializerWithRevisionStore(root string, revisionRepo repository.WorkspaceRevisionRepository, revisionStore workspace.WorkspaceRevisionStore) *HostWorkspaceMaterializer {
 	trimmedRoot := strings.TrimSpace(root)
 	if trimmedRoot == "" {
 		trimmedRoot = filepath.Join(os.TempDir(), defaultWorkspaceDirName)
@@ -73,7 +85,10 @@ func NewHostWorkspaceMaterializer(root string) *HostWorkspaceMaterializer {
 	trimmedRoot = normalizeWorkspaceRootPath(trimmedRoot)
 
 	return &HostWorkspaceMaterializer{
-		root: trimmedRoot,
+		root:            trimmedRoot,
+		revisionRepo:    revisionRepo,
+		revisionStore:   revisionStore,
+		lastNodeByBuild: make(map[string]string),
 	}
 }
 
@@ -104,27 +119,100 @@ func (m *HostWorkspaceMaterializer) PrepareWorkspace(ctx context.Context, reques
 	return canonicalizeExistingPath(workspacePath), nil
 }
 
-// Materialize returns the existing build-scoped directory for every supported
-// lineage plan. This preserves the legacy local runner behavior while physical
-// fan-out isolation and fan-in restoration are not implemented. Implementations
-// intended for portable execution must reject unsupported plans rather than
-// sharing this directory.
 func (m *HostWorkspaceMaterializer) Materialize(ctx context.Context, request MaterializeWorkspaceRequest) (MaterializedWorkspace, error) {
 	input := normalizeWorkspaceInput(request.Input)
 	if input.Mode != domain.WorkspaceInputModeSource && input.Mode != domain.WorkspaceInputModePredecessor && input.Mode != domain.WorkspaceInputModeFanIn {
 		return MaterializedWorkspace{}, ErrWorkspaceInputUnsupported
 	}
 
-	workspacePath, err := m.PrepareWorkspace(ctx, WorkspacePrepareRequest{BuildID: request.BuildID})
+	buildID := strings.TrimSpace(request.BuildID)
+	nodeID := strings.TrimSpace(request.NodeID)
+	if buildID == "" {
+		return MaterializedWorkspace{}, errors.New("build id is required")
+	}
+
+	workspaceExists, matchesInput := m.localWorkspaceState(buildID, input)
+	if input.Mode == domain.WorkspaceInputModeSource || (workspaceExists && (m.revisionRepo == nil || m.revisionStore == nil || localWorkspaceCompatible(input, matchesInput))) {
+		return m.materializePreparedWorkspace(ctx, buildID, nodeID, input)
+	}
+	if m.revisionRepo == nil || m.revisionStore == nil {
+		return m.materializePreparedWorkspace(ctx, buildID, nodeID, input)
+	}
+	if input.Mode == domain.WorkspaceInputModeFanIn {
+		return MaterializedWorkspace{}, ErrWorkspaceFanInUnsupported
+	}
+	if input.IsolatedWritableDescendant {
+		return MaterializedWorkspace{}, ErrWorkspaceFanOutUnsupported
+	}
+	if workspaceExists {
+		return MaterializedWorkspace{}, fmt.Errorf("%w for build %s", ErrWorkspaceLineageUnavailable, buildID)
+	}
+
+	return m.restorePredecessorWorkspace(ctx, buildID, nodeID, input)
+}
+
+func localWorkspaceCompatible(input domain.WorkspaceInputPlan, matchesInput bool) bool {
+	return input.Mode == domain.WorkspaceInputModeFanIn || input.IsolatedWritableDescendant || matchesInput
+}
+
+func (m *HostWorkspaceMaterializer) localWorkspaceState(buildID string, input domain.WorkspaceInputPlan) (bool, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.root = canonicalizeExistingPath(m.root)
+	workspaceExists := m.isWorkspacePrepared(filepath.Join(m.root, buildID))
+	if !workspaceExists || input.Mode != domain.WorkspaceInputModePredecessor {
+		return workspaceExists, false
+	}
+	return true, m.lastNodeByBuild[buildID] == strings.TrimSpace(input.ProducerNodeID)
+}
+
+func (m *HostWorkspaceMaterializer) materializePreparedWorkspace(ctx context.Context, buildID string, nodeID string, input domain.WorkspaceInputPlan) (MaterializedWorkspace, error) {
+	workspacePath, err := m.PrepareWorkspace(ctx, WorkspacePrepareRequest{BuildID: buildID})
 	if err != nil {
 		return MaterializedWorkspace{}, err
 	}
 
 	return MaterializedWorkspace{
-		BuildID: strings.TrimSpace(request.BuildID),
+		BuildID: buildID,
+		NodeID:  nodeID,
 		Path:    workspacePath,
 		Input:   input,
 	}, nil
+}
+
+func (m *HostWorkspaceMaterializer) restorePredecessorWorkspace(ctx context.Context, buildID string, nodeID string, input domain.WorkspaceInputPlan) (MaterializedWorkspace, error) {
+	producerNodeID := strings.TrimSpace(input.ProducerNodeID)
+	if producerNodeID == "" {
+		return MaterializedWorkspace{}, fmt.Errorf("restoring predecessor workspace: producer node id is required")
+	}
+
+	revision, err := m.revisionRepo.GetPublishedByBuildNode(ctx, buildID, producerNodeID)
+	if err != nil {
+		return MaterializedWorkspace{}, fmt.Errorf("resolving published predecessor workspace: %w", err)
+	}
+	if revision.ContentDigest == nil || revision.StorageKey == nil {
+		return MaterializedWorkspace{}, fmt.Errorf("restoring predecessor workspace: published revision is incomplete")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.root = canonicalizeExistingPath(m.root)
+	workspacePath := filepath.Join(m.root, buildID)
+	if m.isWorkspacePrepared(workspacePath) {
+		return MaterializedWorkspace{}, fmt.Errorf("%w for build %s", ErrWorkspaceLineageUnavailable, buildID)
+	}
+	publication := domain.WorkspaceRevisionPublication{
+		ContentDigest: *revision.ContentDigest,
+		StorageKey:    *revision.StorageKey,
+		SizeBytes:     revision.SizeBytes,
+	}
+	if err := m.revisionStore.Restore(ctx, publication, workspacePath); err != nil {
+		return MaterializedWorkspace{}, fmt.Errorf("restoring published predecessor workspace: %w", err)
+	}
+
+	return MaterializedWorkspace{BuildID: buildID, NodeID: nodeID, Path: canonicalizeExistingPath(workspacePath), Input: input}, nil
 }
 
 // Commit advances only the logical revision in the local implementation. The
@@ -132,6 +220,11 @@ func (m *HostWorkspaceMaterializer) Materialize(ctx context.Context, request Mat
 func (m *HostWorkspaceMaterializer) Commit(_ context.Context, workspace MaterializedWorkspace, _ string) error {
 	if strings.TrimSpace(workspace.BuildID) == "" || strings.TrimSpace(workspace.Path) == "" {
 		return errors.New("materialized workspace is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if nodeID := strings.TrimSpace(workspace.NodeID); nodeID != "" {
+		m.lastNodeByBuild[workspace.BuildID] = nodeID
 	}
 	return nil
 }
@@ -174,6 +267,7 @@ func (m *HostWorkspaceMaterializer) CleanupWorkspace(_ context.Context, buildID 
 	if err := os.RemoveAll(workspacePath); err != nil {
 		return fmt.Errorf("removing workspace: %w", err)
 	}
+	delete(m.lastNodeByBuild, trimmedBuildID)
 	return nil
 }
 

@@ -128,8 +128,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to resolve cache store: %v", err)
 	}
-	stepRunner := resolveStepRunner(cfg)
 	workspaceRevisionStore := workspaceRevisionStoreFromConfig(cfg)
+	stepRunner := resolveStepRunnerWithWorkspaceRevisions(cfg, workspaceRevisionRepo, workspaceRevisionStore)
 	logSink := logs.NewPostgresSink(db)
 	versionTagService := newWorkerVersionTagService(versionTagRepo, artifactLabelRepo)
 	checkoutResolver, checkoutResolverErr := newRepositoryAwareCheckoutResolver(scmConnectionRepo, scmRepositoryRegistrationRepo)
@@ -261,9 +261,13 @@ func buildWorkerNotificationService(cfg config.Config, buildRepo repository.Buil
 }
 
 func resolveStepRunner(cfg config.Config) runner.Runner {
+	return resolveStepRunnerWithWorkspaceRevisions(cfg, nil, nil)
+}
+
+func resolveStepRunnerWithWorkspaceRevisions(cfg config.Config, workspaceRevisionRepo repository.WorkspaceRevisionRepository, workspaceRevisionStore workspacepkg.WorkspaceRevisionStore) runner.Runner {
 	switch strings.ToLower(strings.TrimSpace(cfg.ExecutionBackend)) {
 	case "", "docker":
-		workspace := source.NewHostWorkspaceMaterializer(cfg.ExecutionWorkspaceRoot)
+		workspace := source.NewHostWorkspaceMaterializerWithRevisionStore(cfg.ExecutionWorkspaceRoot, workspaceRevisionRepo, workspaceRevisionStore)
 		return dockerrunner.New(dockerrunner.Options{
 			Workspace:         workspace,
 			DefaultImage:      cfg.ExecutionDefaultImage,
