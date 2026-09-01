@@ -129,33 +129,28 @@ func main() {
 		log.Fatalf("failed to resolve cache store: %v", err)
 	}
 	stepRunner := resolveStepRunner(cfg)
-	var workspaceRevisionStore workspacepkg.WorkspaceRevisionStore
-	if strings.TrimSpace(cfg.WorkspaceRevisionStorageRoot) != "" {
-		workspaceRevisionStore = workspacepkg.NewFilesystemWorkspaceRevisionStore(cfg.WorkspaceRevisionStorageRoot)
-	}
+	workspaceRevisionStore := workspaceRevisionStoreFromConfig(cfg)
 	logSink := logs.NewPostgresSink(db)
 	versionTagService := newWorkerVersionTagService(versionTagRepo, artifactLabelRepo)
 	checkoutResolver, checkoutResolverErr := newRepositoryAwareCheckoutResolver(scmConnectionRepo, scmRepositoryRegistrationRepo)
 	if checkoutResolverErr != nil {
 		log.Fatalf("failed to configure repository-aware checkout: %v", checkoutResolverErr)
 	}
-	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, stepRunner, logSink, buildsvc.BuildServiceConfig{
-		ExecutionJobRepo:       executionJobRepo,
-		ExecutionOutputRepo:    executionJobOutputRepo,
-		BuildNotifier:          buildNotificationService,
-		DefaultImage:           cfg.ExecutionDefaultImage,
-		ExecutionWorkspace:     cfg.ExecutionWorkspaceRoot,
-		WorkspaceRevisionRepo:  workspaceRevisionRepo,
-		WorkspaceRevisionStore: workspaceRevisionStore,
-		RepositoryCheckout:     checkoutResolver,
-		CacheStore:             cacheStore,
-		CacheEntryRepo:         cacheEntryRepo,
-		VersionTagger:          versionTagService,
-		ArtifactRepo:           artifactRepo,
-		ArtifactLabelRepo:      artifactLabelRepo,
-		ArtifactResolver:       artifactResolver,
-		ArtifactWorkspace:      cfg.ExecutionWorkspaceRoot,
-	})
+	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, stepRunner, logSink, newWorkerBuildServiceConfig(cfg, buildsvc.BuildServiceConfig{
+		ExecutionJobRepo:    executionJobRepo,
+		ExecutionOutputRepo: executionJobOutputRepo,
+		BuildNotifier:       buildNotificationService,
+		DefaultImage:        cfg.ExecutionDefaultImage,
+		ExecutionWorkspace:  cfg.ExecutionWorkspaceRoot,
+		RepositoryCheckout:  checkoutResolver,
+		CacheStore:          cacheStore,
+		CacheEntryRepo:      cacheEntryRepo,
+		VersionTagger:       versionTagService,
+		ArtifactRepo:        artifactRepo,
+		ArtifactLabelRepo:   artifactLabelRepo,
+		ArtifactResolver:    artifactResolver,
+		ArtifactWorkspace:   cfg.ExecutionWorkspaceRoot,
+	}, workspaceRevisionRepo, workspaceRevisionStore))
 	jobService := service.NewJobService(jobRepo, buildService).
 		WithProjectRepository(projectRepo).
 		WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo).
@@ -176,6 +171,19 @@ func main() {
 		log.Fatalf("worker loop failed: %v", err)
 	}
 	log.Printf("worker stopped")
+}
+
+func workspaceRevisionStoreFromConfig(cfg config.Config) workspacepkg.WorkspaceRevisionStore {
+	if strings.TrimSpace(cfg.WorkspaceRevisionStorageRoot) == "" {
+		return nil
+	}
+	return workspacepkg.NewFilesystemWorkspaceRevisionStore(cfg.WorkspaceRevisionStorageRoot)
+}
+
+func newWorkerBuildServiceConfig(cfg config.Config, serviceConfig buildsvc.BuildServiceConfig, workspaceRevisionRepo repository.WorkspaceRevisionRepository, workspaceRevisionStore workspacepkg.WorkspaceRevisionStore) buildsvc.BuildServiceConfig {
+	serviceConfig.WorkspaceRevisionRepo = workspaceRevisionRepo
+	serviceConfig.WorkspaceRevisionStore = workspaceRevisionStore
+	return serviceConfig
 }
 
 var errConfigureEmailSender = errors.New("configure email sender")

@@ -159,7 +159,6 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	if runOutcome.Result.Status == runner.RunStepStatusSuccess {
 		if publishErr := s.publishWorkspaceRevision(ctx, executionContext, materializedWorkspace); publishErr != nil {
 			now := time.Now().UTC()
-			executionContext.WorkspacePublicationFailed = true
 			runOutcome.Result = runner.RunStepResult{
 				Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "workspace revision: " + publishErr.Error(),
 				StartedAt: runOutcome.Result.StartedAt, FinishedAt: now,

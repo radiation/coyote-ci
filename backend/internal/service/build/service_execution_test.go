@@ -78,11 +78,20 @@ func (r failingWorkspaceRevisionRepository) MarkPublishedIfClaimed(ctx context.C
 
 type recordingAtomicExecutionJobRepository struct {
 	repository.ExecutionJobRepository
+	buildRepo   repository.BuildRepository
 	atomicCalls int
 }
 
 func (r *recordingAtomicExecutionJobRepository) CompleteSuccessfulStepAndJob(ctx context.Context, request repository.CompleteSuccessfulStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error) {
 	r.atomicCalls++
+	if r.buildRepo != nil {
+		stepResult, stepErr := r.buildRepo.CompleteStep(ctx, request.StepRequest)
+		if stepErr != nil || stepResult.Outcome != repository.StepCompletionCompleted {
+			return stepResult, domain.ExecutionJob{}, stepResult.Outcome, stepErr
+		}
+		job, outcome, jobErr := r.CompleteJobSuccess(ctx, request.JobID, request.ClaimToken, request.FinishedAt, request.ExitCode, nil)
+		return stepResult, job, outcome, jobErr
+	}
 	atomicRepo, ok := r.ExecutionJobRepository.(interface {
 		CompleteSuccessfulStepAndJob(context.Context, repository.CompleteSuccessfulStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error)
 	})
@@ -216,11 +225,12 @@ func TestBuildService_RunStep_PublishesWorkspaceBeforeAtomicSuccess(t *testing.T
 		steps:          []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
 		onCompleteStep: func() { events = append(events, "complete") },
 	}
-	jobRepo := memoryrepo.NewExecutionJobRepository()
+	memoryJobRepo := memoryrepo.NewExecutionJobRepository()
 	job := domain.ExecutionJob{ID: "job-1", BuildID: "build-1", StepID: "step-1", NodeID: "test", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusRunning, ClaimToken: &claimToken, ClaimExpiresAt: executionTestTimePointer(time.Now().Add(time.Minute)), CreatedAt: time.Now().UTC()}
-	if _, err := jobRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{job}); err != nil {
+	if _, err := memoryJobRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{job}); err != nil {
 		t.Fatalf("seed execution job: %v", err)
 	}
+	jobRepo := &recordingAtomicExecutionJobRepository{ExecutionJobRepository: memoryJobRepo, buildRepo: buildRepo}
 	revisionRepo := memoryrepo.NewWorkspaceRevisionRepository(jobRepo)
 	store := &recordingWorkspaceRevisionStore{onPublish: func() { events = append(events, "publish") }}
 	materializer := &recordingExecutionWorkspaceMaterializer{onEvent: func(event string) { events = append(events, event) }}
@@ -352,11 +362,12 @@ func TestBuildService_RunStep_RecoversPublishedWorkspaceRevisionWithoutRerunning
 	initialClaim := "claim-initial"
 	reclaimedClaim := "claim-reclaimed"
 	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning}, steps: []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &reclaimedClaim}}}
-	jobRepo := memoryrepo.NewExecutionJobRepository()
+	memoryJobRepo := memoryrepo.NewExecutionJobRepository()
 	job := domain.ExecutionJob{ID: "job-1", BuildID: "build-1", StepID: "step-1", NodeID: "test", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusRunning, ClaimToken: &initialClaim, ClaimExpiresAt: executionTestTimePointer(time.Now().Add(time.Minute)), CreatedAt: time.Now().UTC()}
-	if _, err := jobRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{job}); err != nil {
+	if _, err := memoryJobRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{job}); err != nil {
 		t.Fatalf("seed execution job: %v", err)
 	}
+	jobRepo := &recordingAtomicExecutionJobRepository{ExecutionJobRepository: memoryJobRepo, buildRepo: buildRepo}
 	revisionRepo := memoryrepo.NewWorkspaceRevisionRepository(jobRepo)
 	revisionID := workspaceRevisionIDForExecutionJob(job.ID)
 	if _, err := revisionRepo.CreatePublishing(context.Background(), domain.WorkspaceRevision{ID: revisionID, ProducingExecutionJobID: job.ID, BuildID: job.BuildID, NodeID: job.NodeID, AttemptNumber: job.AttemptNumber, Status: domain.WorkspaceRevisionStatusPublishing, CreatedAt: time.Now().UTC()}); err != nil {

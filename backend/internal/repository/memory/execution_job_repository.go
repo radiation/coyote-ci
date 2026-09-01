@@ -329,31 +329,33 @@ func (r *ExecutionJobRepository) CompleteJobSuccess(_ context.Context, jobID str
 	return job, outcome, err
 }
 
-func (r *ExecutionJobRepository) CompleteSuccessfulStepAndJob(ctx context.Context, request repository.CompleteSuccessfulStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+func (r *ExecutionJobRepository) CompleteSuccessfulStepAndJob(_ context.Context, request repository.CompleteSuccessfulStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	job, ok := r.jobsByID[request.JobID]
 	if !ok {
-		r.mu.Unlock()
 		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, repository.ErrExecutionJobNotFound
 	}
 	if domain.IsTerminalExecutionJobStatus(job.Status) {
-		r.mu.Unlock()
 		return repository.CompleteStepResult{}, cloneExecutionJob(job), repository.StepCompletionDuplicateTerminal, nil
 	}
 	if job.Status != domain.ExecutionJobStatusRunning || job.ClaimToken == nil || *job.ClaimToken != request.ClaimToken || job.ClaimExpiresAt == nil || !job.ClaimExpiresAt.After(time.Now().UTC()) {
-		r.mu.Unlock()
 		return repository.CompleteStepResult{}, cloneExecutionJob(job), repository.StepCompletionStaleClaim, nil
 	}
-	builds := r.builds
-	r.mu.Unlock()
-	if builds == nil {
+	builds, ok := r.builds.(*BuildRepository)
+	if !ok || builds == nil {
 		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, repository.ErrBuildNotFound
 	}
-	stepResult, stepErr := builds.CompleteStep(ctx, request.StepRequest)
+
+	builds.mu.Lock()
+	defer builds.mu.Unlock()
+
+	stepResult, stepErr := builds.completeStepLocked(request.StepRequest)
 	if stepErr != nil || stepResult.Outcome != repository.StepCompletionCompleted {
 		return stepResult, domain.ExecutionJob{}, stepResult.Outcome, stepErr
 	}
-	jobResult, outcome, jobErr := r.CompleteJobSuccess(ctx, request.JobID, request.ClaimToken, request.FinishedAt, request.ExitCode, nil)
+	jobResult, outcome, jobErr := r.completeJobLocked(request.JobID, request.ClaimToken, request.FinishedAt, domain.ExecutionJobStatusSuccess, nil, nil, &request.ExitCode, nil)
 	return stepResult, jobResult, outcome, jobErr
 }
 

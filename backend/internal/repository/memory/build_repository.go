@@ -806,7 +806,10 @@ func (r *BuildRepository) CompleteStepIfRunning(_ context.Context, buildID strin
 func (r *BuildRepository) CompleteStep(_ context.Context, request repository.CompleteStepRequest) (repository.CompleteStepResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.completeStepLocked(request)
+}
 
+func (r *BuildRepository) completeStepLocked(request repository.CompleteStepRequest) (repository.CompleteStepResult, error) {
 	build, ok := r.builds[request.BuildID]
 	if !ok {
 		return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, repository.ErrBuildNotFound
