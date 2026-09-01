@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -128,6 +129,50 @@ func TestGitWorkspaceSourceResolver_CloneIntoWorkspace_PreservesWorkspaceDirecto
 	}
 	if _, err := os.Stat(filepath.Join(workspacePath, "stale.txt")); !os.IsNotExist(err) {
 		t.Fatalf("expected stale workspace content to be removed, got err=%v", err)
+	}
+}
+
+func TestGitWorkspaceSourceResolver_CloneIntoWorkspaceSerializesConcurrentClones(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+
+	remoteDir := t.TempDir()
+	mustRun(t, remoteDir, "git", "init", "--bare")
+	seedDir := t.TempDir()
+	mustRun(t, seedDir, "git", "clone", remoteDir, ".")
+	mustRun(t, seedDir, "git", "config", "user.email", "test@test.com")
+	mustRun(t, seedDir, "git", "config", "user.name", "Test")
+	if writeErr := os.WriteFile(filepath.Join(seedDir, "README.md"), []byte("seed"), 0o644); writeErr != nil {
+		t.Fatalf("write seed: %v", writeErr)
+	}
+	mustRun(t, seedDir, "git", "add", "README.md")
+	mustRun(t, seedDir, "git", "commit", "-m", "seed")
+	mustRun(t, seedDir, "git", "push", "origin", "HEAD")
+
+	resolver := NewGitWorkspaceSourceResolver()
+	workspacePath := filepath.Join(t.TempDir(), "build-concurrent")
+	start := make(chan struct{})
+	errors := make(chan error, 2)
+	var workers sync.WaitGroup
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			errors <- resolver.CloneIntoWorkspace(context.Background(), workspacePath, remoteDir)
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(errors)
+	for cloneErr := range errors {
+		if cloneErr != nil {
+			t.Fatalf("concurrent clone: %v", cloneErr)
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(workspacePath, ".git", "description")); statErr != nil {
+		t.Fatalf("expected cloned git metadata: %v", statErr)
 	}
 }
 

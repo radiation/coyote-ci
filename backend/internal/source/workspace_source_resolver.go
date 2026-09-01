@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 var ErrWorkspacePathRequired = errors.New("workspace path is required")
@@ -43,7 +44,9 @@ type AuthenticatedWorkspaceSourceResolver interface {
 }
 
 // GitWorkspaceSourceResolver uses git CLI to populate and pin workspace source.
-type GitWorkspaceSourceResolver struct{}
+type GitWorkspaceSourceResolver struct {
+	mu sync.Mutex
+}
 
 func NewGitWorkspaceSourceResolver() *GitWorkspaceSourceResolver {
 	return &GitWorkspaceSourceResolver{}
@@ -62,6 +65,8 @@ func (r *GitWorkspaceSourceResolver) cloneIntoWorkspace(ctx context.Context, wor
 	if err != nil {
 		return err
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	if prepareErr := ensureWorkspaceDirectory(cleanWorkspacePath); prepareErr != nil {
 		return fmt.Errorf("%w: preparing workspace path: %v", ErrCloneFailed, prepareErr)
