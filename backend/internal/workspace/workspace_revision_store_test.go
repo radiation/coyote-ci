@@ -7,9 +7,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -29,6 +31,9 @@ func TestFilesystemWorkspaceRevisionStorePublishRestoreAndDelete(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(sourceRoot, "README.md"), []byte("workspace"), 0o644); err != nil {
 		t.Fatalf("write readme: %v", err)
+	}
+	if err := os.Chmod(sourceRoot, 0o751); err != nil {
+		t.Fatalf("set source root mode: %v", err)
 	}
 
 	publication, err := store.Publish(context.Background(), "revision-1", sourceRoot)
@@ -61,6 +66,9 @@ func TestFilesystemWorkspaceRevisionStorePublishRestoreAndDelete(t *testing.T) {
 	}
 	if info, statErr := os.Stat(filepath.Join(restoreRoot, "bin", "run.sh")); statErr != nil || info.Mode()&0o111 == 0 {
 		t.Fatalf("restored mode = %v, %v", info.Mode(), statErr)
+	}
+	if info, statErr := os.Stat(restoreRoot); statErr != nil || info.Mode().Perm() != 0o751 {
+		t.Fatalf("restored root mode = %v, %v", info.Mode(), statErr)
 	}
 	if deleteErr := store.Delete(context.Background(), publication); deleteErr != nil {
 		t.Fatalf("delete: %v", deleteErr)
@@ -138,14 +146,14 @@ func TestFilesystemWorkspaceRevisionStoreRestoreDefersReadOnlyDirectoryMode(t *t
 	}
 	restoreRoot := filepath.Join(t.TempDir(), "restore")
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(restoreRoot, "read-only"), 0o755) })
-	if err := store.Restore(context.Background(), publication, restoreRoot); err != nil {
-		t.Fatalf("restore: %v", err)
+	if restoreErr := store.Restore(context.Background(), publication, restoreRoot); restoreErr != nil {
+		t.Fatalf("restore: %v", restoreErr)
 	}
-	if restored, err := os.ReadFile(filepath.Join(restoreRoot, "read-only", "child.txt")); err != nil || string(restored) != "content" {
-		t.Fatalf("read restored child = %q, %v", restored, err)
+	if restored, readErr := os.ReadFile(filepath.Join(restoreRoot, "read-only", "child.txt")); readErr != nil || string(restored) != "content" {
+		t.Fatalf("read restored child = %q, %v", restored, readErr)
 	}
-	if info, err := os.Stat(filepath.Join(restoreRoot, "read-only")); err != nil || info.Mode().Perm() != 0o555 {
-		t.Fatalf("restored directory mode = %v, %v", info.Mode(), err)
+	if info, statErr := os.Stat(filepath.Join(restoreRoot, "read-only")); statErr != nil || info.Mode().Perm() != 0o555 {
+		t.Fatalf("restored directory mode = %v, %v", info.Mode(), statErr)
 	}
 }
 
@@ -196,19 +204,19 @@ func TestFilesystemWorkspaceRevisionStoreRestoreRejectsDestinationAndCancellatio
 		t.Fatalf("publish: %v", err)
 	}
 	destination := filepath.Join(t.TempDir(), "restore")
-	if err := os.Mkdir(destination, 0o755); err != nil {
-		t.Fatalf("mkdir destination: %v", err)
+	if mkdirErr := os.Mkdir(destination, 0o755); mkdirErr != nil {
+		t.Fatalf("mkdir destination: %v", mkdirErr)
 	}
-	if err := store.Restore(context.Background(), publication, destination); !errors.Is(err, ErrWorkspaceRevisionDestination) {
-		t.Fatalf("restore existing destination: %v", err)
+	if restoreErr := store.Restore(context.Background(), publication, destination); !errors.Is(restoreErr, ErrWorkspaceRevisionDestination) {
+		t.Fatalf("restore existing destination: %v", restoreErr)
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := store.Publish(canceled, "revision-2", sourceRoot); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled publish: %v", err)
+	if _, publishErr := store.Publish(canceled, "revision-2", sourceRoot); !errors.Is(publishErr, context.Canceled) {
+		t.Fatalf("cancelled publish: %v", publishErr)
 	}
-	if err := store.Restore(context.Background(), publicationForWorkspaceRevision("workspace-revisions/../escape.tar.gz", "sha256:bad", 1), filepath.Join(t.TempDir(), "unsafe")); !errors.Is(err, ErrInvalidWorkspaceRevisionObject) {
-		t.Fatalf("unsafe storage key: %v", err)
+	if restoreErr := store.Restore(context.Background(), publicationForWorkspaceRevision("workspace-revisions/../escape.tar.gz", "sha256:bad", 1), filepath.Join(t.TempDir(), "unsafe")); !errors.Is(restoreErr, ErrInvalidWorkspaceRevisionObject) {
+		t.Fatalf("unsafe storage key: %v", restoreErr)
 	}
 }
 
@@ -241,6 +249,91 @@ func TestFilesystemWorkspaceRevisionStoreRestoreRejectsMalformedArchives(t *test
 			}
 		})
 	}
+}
+
+func TestFilesystemWorkspaceRevisionStoreValidationAndCancellation(t *testing.T) {
+	store := NewFilesystemWorkspaceRevisionStore(t.TempDir())
+	sourceRoot := t.TempDir()
+	sourceFile := filepath.Join(t.TempDir(), "source-file")
+	if err := os.WriteFile(sourceFile, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+	for _, testCase := range []struct {
+		name       string
+		revisionID string
+		sourceRoot string
+	}{
+		{name: "blank revision", revisionID: " ", sourceRoot: sourceRoot},
+		{name: "path revision", revisionID: "nested/revision", sourceRoot: sourceRoot},
+		{name: "blank source", revisionID: "revision", sourceRoot: " "},
+		{name: "missing source", revisionID: "revision", sourceRoot: filepath.Join(t.TempDir(), "missing")},
+		{name: "file source", revisionID: "revision", sourceRoot: sourceFile},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := store.Publish(context.Background(), testCase.revisionID, testCase.sourceRoot); err == nil {
+				t.Fatal("expected publish validation failure")
+			}
+		})
+	}
+	if err := store.Restore(context.Background(), domain.WorkspaceRevisionPublication{}, filepath.Join(t.TempDir(), "restore")); !errors.Is(err, ErrInvalidWorkspaceRevisionObject) {
+		t.Fatalf("invalid publication restore: %v", err)
+	}
+	if err := store.Delete(context.Background(), domain.WorkspaceRevisionPublication{}); !errors.Is(err, ErrInvalidWorkspaceRevisionObject) {
+		t.Fatalf("invalid publication delete: %v", err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	publication := publicationForWorkspaceRevision("workspace-revisions/revision.tar.gz", "sha256:one", 1)
+	if err := store.Delete(canceled, publication); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled delete: %v", err)
+	}
+}
+
+func TestWorkspaceRevisionStorePathAndStreamHelpers(t *testing.T) {
+	store := NewFilesystemWorkspaceRevisionStore(t.TempDir())
+	for _, storageKey := range []string{"", "other/revision.tar.gz", "workspace-revisions/revision", "workspace-revisions/../revision.tar.gz", `workspace-revisions\\revision.tar.gz`} {
+		if _, _, err := store.pathForStorageKey(storageKey); !errors.Is(err, ErrInvalidWorkspaceRevisionObject) {
+			t.Fatalf("storage key %q: %v", storageKey, err)
+		}
+	}
+	if _, _, err := NewFilesystemWorkspaceRevisionStore(" ").pathForStorageKey("workspace-revisions/revision.tar.gz"); !errors.Is(err, ErrInvalidWorkspaceRevisionObject) {
+		t.Fatalf("blank root: %v", err)
+	}
+	for _, archivePath := range []string{"", "..", "../outside", "/outside", `C:\\outside`, `nested\\file`} {
+		if _, err := safeWorkspaceRevisionArchivePath(archivePath); !errors.Is(err, ErrUnsafeWorkspaceRevisionPath) {
+			t.Fatalf("archive path %q: %v", archivePath, err)
+		}
+	}
+	if archivePath, err := safeWorkspaceRevisionArchivePath("."); err != nil || archivePath != "." {
+		t.Fatalf("root archive path = %q, %v", archivePath, err)
+	}
+	if archivePath, err := safeWorkspaceRevisionArchivePath("nested/../file.txt"); err != nil || archivePath != "file.txt" {
+		t.Fatalf("normalized archive path = %q, %v", archivePath, err)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := copyWorkspaceRevision(canceled, io.Discard, strings.NewReader("content")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled copy: %v", err)
+	}
+	if _, err := copyWorkspaceRevision(context.Background(), shortWorkspaceRevisionWriter{}, strings.NewReader("content")); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("short write: %v", err)
+	}
+	if _, err := (&workspaceRevisionCountingReader{reader: strings.NewReader("content"), writer: failingWorkspaceRevisionWriter{}}).Read(make([]byte, len("content"))); err == nil {
+		t.Fatal("expected counting reader write failure")
+	}
+}
+
+type shortWorkspaceRevisionWriter struct{}
+
+func (shortWorkspaceRevisionWriter) Write(contents []byte) (int, error) {
+	return len(contents) - 1, nil
+}
+
+type failingWorkspaceRevisionWriter struct{}
+
+func (failingWorkspaceRevisionWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
 }
 
 func gzipBytes(t *testing.T, contents []byte) []byte {

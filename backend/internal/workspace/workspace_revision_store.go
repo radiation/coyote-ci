@@ -222,6 +222,23 @@ func (s *FilesystemWorkspaceRevisionStore) pathForStorageKey(storageKey string) 
 func writeWorkspaceRevisionArchive(ctx context.Context, destination *os.File, sourceRoot string) error {
 	gzipWriter := gzip.NewWriter(destination)
 	tarWriter := tar.NewWriter(gzipWriter)
+	sourceInfo, statErr := os.Lstat(sourceRoot)
+	if statErr != nil {
+		_ = tarWriter.Close()
+		_ = gzipWriter.Close()
+		return statErr
+	}
+	if sourceInfo.Mode()&os.ModeSymlink != 0 || !sourceInfo.IsDir() {
+		_ = tarWriter.Close()
+		_ = gzipWriter.Close()
+		return fmt.Errorf("%w: source root", ErrUnsupportedWorkspaceRevisionEntry)
+	}
+	rootHeader := &tar.Header{Name: ".", Typeflag: tar.TypeDir, Mode: int64(sourceInfo.Mode().Perm()), ModTime: unixEpoch}
+	if headerErr := tarWriter.WriteHeader(rootHeader); headerErr != nil {
+		_ = tarWriter.Close()
+		_ = gzipWriter.Close()
+		return headerErr
+	}
 	walkErr := filepath.WalkDir(sourceRoot, func(entryPath string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -302,11 +319,23 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 		if err != nil {
 			return err
 		}
-		target, pathErr := workspaceRevisionRestorePath(destinationRoot, header.Name)
-		if pathErr != nil {
-			return pathErr
-		}
 		mode := os.FileMode(header.Mode) & 0o777
+		if header.Name == "." || header.Name == "./" {
+			if header.Typeflag != tar.TypeDir {
+				return ErrUnsafeWorkspaceRevisionPath
+			}
+			directoryModes[destinationRoot] = mode
+			continue
+		}
+		archiveEntryPath := filepath.FromSlash(header.Name)
+		if strings.Contains(header.Name, "\\") || looksLikeWindowsDrivePath(header.Name) || filepath.IsAbs(archiveEntryPath) || !filepath.IsLocal(archiveEntryPath) || archiveEntryPath == "." {
+			return ErrUnsafeWorkspaceRevisionPath
+		}
+		target := filepath.Join(destinationRoot, archiveEntryPath)
+		relativePath, relErr := filepath.Rel(filepath.Clean(destinationRoot), target)
+		if relErr != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+			return ErrUnsafeWorkspaceRevisionPath
+		}
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0o755); err != nil {
@@ -356,23 +385,10 @@ func safeWorkspaceRevisionArchivePath(value string) (string, error) {
 		return "", ErrUnsafeWorkspaceRevisionPath
 	}
 	cleaned := path.Clean(value)
-	if value == "" || path.IsAbs(value) || cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+	if value == "" || path.IsAbs(value) || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
 		return "", ErrUnsafeWorkspaceRevisionPath
 	}
 	return cleaned, nil
-}
-
-func workspaceRevisionRestorePath(destinationRoot string, archiveName string) (string, error) {
-	cleaned, err := safeWorkspaceRevisionArchivePath(archiveName)
-	if err != nil {
-		return "", err
-	}
-	target := filepath.Join(destinationRoot, filepath.FromSlash(cleaned))
-	relativePath, relErr := filepath.Rel(filepath.Clean(destinationRoot), target)
-	if relErr != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
-		return "", ErrUnsafeWorkspaceRevisionPath
-	}
-	return target, nil
 }
 
 func publicationForWorkspaceRevision(storageKey string, digest string, size int64) domain.WorkspaceRevisionPublication {
