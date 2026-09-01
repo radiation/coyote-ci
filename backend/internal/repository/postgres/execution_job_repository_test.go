@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -289,6 +290,265 @@ func TestExecutionJobRepository_CompleteJobSuccess_CanceledJobIsDuplicateTermina
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
+}
+
+func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_CommitsStepAndJobSuccess(t *testing.T) {
+	db, mock, setupErr := sqlmock.New()
+	if setupErr != nil {
+		t.Fatalf("failed to create sql mock: %v", setupErr)
+	}
+
+	repo := NewExecutionJobRepository(db)
+	now := time.Now().UTC()
+	claimExpiresAt := now.Add(time.Minute)
+	finishedAt := now.Add(2 * time.Minute)
+	claimToken := "claim-1"
+	exitCode := 0
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, claimExpiresAt, "running", claimToken))
+	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(atomicCompletionStepRows(now, "success", &exitCode))
+	mock.ExpectQuery(`UPDATE build_jobs\s+SET status = 'success'`).WithArgs("job-1", finishedAt, exitCode).WillReturnRows(atomicCompletionJobRows(now, time.Time{}, "success", ""))
+	mock.ExpectExec("UPDATE builds").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SELECT\\s+COUNT\\(\\*\\)::int AS total_count").WithArgs("build-1").WillReturnRows(sqlmock.NewRows([]string{"total_count", "success_count", "failed_count", "pending_count", "running_count"}).AddRow(2, 1, 0, 1, 0))
+	mock.ExpectQuery("SELECT EXISTS").WithArgs("build-1").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectCommit()
+
+	result, job, outcome, completeErr := repo.CompleteSuccessfulStepAndJob(context.Background(), atomicCompletionRequest(claimToken, finishedAt, exitCode))
+	if completeErr != nil {
+		t.Fatalf("complete successful step and job: %v", completeErr)
+	}
+	if outcome != repository.StepCompletionCompleted || result.Step.Status != domain.BuildStepStatusSuccess || job.Status != domain.ExecutionJobStatusSuccess {
+		t.Fatalf("expected committed step/job success, result=%#v job=%#v outcome=%q", result, job, outcome)
+	}
+
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet sql expectations: %v", expectationsErr)
+	}
+}
+
+func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_RollsBackMutationFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(sqlmock.Sqlmock, time.Time, time.Time)
+	}{
+		{
+			name: "step mutation failure",
+			configure: func(mock sqlmock.Sqlmock, now time.Time, claimExpiresAt time.Time) {
+				mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, claimExpiresAt, "running", "claim-1"))
+				mock.ExpectQuery("UPDATE build_steps").WillReturnError(errors.New("step update failed"))
+			},
+		},
+		{
+			name: "execution job mutation failure",
+			configure: func(mock sqlmock.Sqlmock, now time.Time, claimExpiresAt time.Time) {
+				exitCode := 0
+				mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, claimExpiresAt, "running", "claim-1"))
+				mock.ExpectQuery("UPDATE build_steps").WillReturnRows(atomicCompletionStepRows(now, "success", &exitCode))
+				mock.ExpectQuery(`UPDATE build_jobs\s+SET status = 'success'`).WillReturnError(errors.New("job update failed"))
+			},
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			db, mock, setupErr := sqlmock.New()
+			if setupErr != nil {
+				t.Fatalf("failed to create sql mock: %v", setupErr)
+			}
+			now := time.Now().UTC()
+			claimExpiresAt := now.Add(time.Minute)
+			mock.ExpectBegin()
+			testCase.configure(mock, now, claimExpiresAt)
+			mock.ExpectRollback()
+
+			_, _, _, completeErr := NewExecutionJobRepository(db).CompleteSuccessfulStepAndJob(context.Background(), atomicCompletionRequest("claim-1", now.Add(2*time.Minute), 0))
+			if completeErr == nil {
+				t.Fatal("expected completion error")
+			}
+			if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+				t.Fatalf("unmet sql expectations: %v", expectationsErr)
+			}
+		})
+	}
+}
+
+func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_RejectsInvalidClaims(t *testing.T) {
+	now := time.Now().UTC()
+	tests := []struct {
+		name           string
+		rows           *sqlmock.Rows
+		expectNotFound bool
+	}{
+		{name: "missing job", rows: nil, expectNotFound: true},
+		{name: "wrong token", rows: atomicCompletionJobRows(now, now.Add(time.Minute), "running", "other-claim")},
+		{name: "expired claim", rows: atomicCompletionJobRows(now, now.Add(-time.Minute), "running", "claim-1")},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			db, mock, setupErr := sqlmock.New()
+			if setupErr != nil {
+				t.Fatalf("failed to create sql mock: %v", setupErr)
+			}
+			mock.ExpectBegin()
+			expectation := mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1")
+			if testCase.expectNotFound {
+				expectation.WillReturnError(sql.ErrNoRows)
+				mock.ExpectRollback()
+			} else {
+				expectation.WillReturnRows(testCase.rows)
+				mock.ExpectCommit()
+			}
+
+			_, _, outcome, completeErr := NewExecutionJobRepository(db).CompleteSuccessfulStepAndJob(context.Background(), atomicCompletionRequest("claim-1", now.Add(2*time.Minute), 0))
+			if testCase.expectNotFound {
+				if !errors.Is(completeErr, repository.ErrExecutionJobNotFound) {
+					t.Fatalf("expected execution job not found, got %v", completeErr)
+				}
+			} else if completeErr != nil || outcome != repository.StepCompletionStaleClaim {
+				t.Fatalf("expected stale-claim rejection, outcome=%q err=%v", outcome, completeErr)
+			}
+			if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+				t.Fatalf("unmet sql expectations: %v", expectationsErr)
+			}
+		})
+	}
+}
+
+func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_DuplicateTerminalAndCommitFailure(t *testing.T) {
+	t.Run("duplicate terminal", func(t *testing.T) {
+		db, mock, setupErr := sqlmock.New()
+		if setupErr != nil {
+			t.Fatalf("failed to create sql mock: %v", setupErr)
+		}
+		now := time.Now().UTC()
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, time.Time{}, "success", ""))
+		mock.ExpectCommit()
+
+		_, job, outcome, completeErr := NewExecutionJobRepository(db).CompleteSuccessfulStepAndJob(context.Background(), atomicCompletionRequest("claim-1", now, 0))
+		if completeErr != nil || outcome != repository.StepCompletionDuplicateTerminal || job.Status != domain.ExecutionJobStatusSuccess {
+			t.Fatalf("expected duplicate terminal success, job=%#v outcome=%q err=%v", job, outcome, completeErr)
+		}
+		if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+			t.Fatalf("unmet sql expectations: %v", expectationsErr)
+		}
+	})
+
+	t.Run("commit failure", func(t *testing.T) {
+		db, mock, setupErr := sqlmock.New()
+		if setupErr != nil {
+			t.Fatalf("failed to create sql mock: %v", setupErr)
+		}
+		now := time.Now().UTC()
+		claimExpiresAt := now.Add(time.Minute)
+		exitCode := 0
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, claimExpiresAt, "running", "claim-1"))
+		mock.ExpectQuery("UPDATE build_steps").WillReturnRows(atomicCompletionStepRows(now, "success", &exitCode))
+		mock.ExpectQuery(`UPDATE build_jobs\s+SET status = 'success'`).WillReturnRows(atomicCompletionJobRows(now, time.Time{}, "success", ""))
+		mock.ExpectExec("UPDATE builds").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectQuery("SELECT\\s+COUNT\\(\\*\\)::int AS total_count").WithArgs("build-1").WillReturnRows(sqlmock.NewRows([]string{"total_count", "success_count", "failed_count", "pending_count", "running_count"}).AddRow(2, 1, 0, 1, 0))
+		mock.ExpectQuery("SELECT EXISTS").WithArgs("build-1").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
+
+		_, _, _, completeErr := NewExecutionJobRepository(db).CompleteSuccessfulStepAndJob(context.Background(), atomicCompletionRequest("claim-1", now.Add(2*time.Minute), exitCode))
+		if completeErr == nil || completeErr.Error() != "commit failed" {
+			t.Fatalf("expected commit failure, got %v", completeErr)
+		}
+		if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+			t.Fatalf("unmet sql expectations: %v", expectationsErr)
+		}
+	})
+}
+
+func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_ReturnsPreMutationTransactionErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(sqlmock.Sqlmock)
+	}{
+		{
+			name: "begin failure",
+			configure: func(mock sqlmock.Sqlmock) {
+				mock.ExpectBegin().WillReturnError(errors.New("begin failed"))
+			},
+		},
+		{
+			name: "authoritative job lookup failure",
+			configure: func(mock sqlmock.Sqlmock) {
+				mock.ExpectBegin()
+				mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnError(errors.New("job lookup failed"))
+				mock.ExpectRollback()
+			},
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			db, mock, setupErr := sqlmock.New()
+			if setupErr != nil {
+				t.Fatalf("failed to create sql mock: %v", setupErr)
+			}
+			testCase.configure(mock)
+
+			_, _, _, completeErr := NewExecutionJobRepository(db).CompleteSuccessfulStepAndJob(context.Background(), atomicCompletionRequest("claim-1", time.Now().UTC(), 0))
+			if completeErr == nil {
+				t.Fatal("expected transaction error")
+			}
+			if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+				t.Fatalf("unmet sql expectations: %v", expectationsErr)
+			}
+		})
+	}
+}
+
+func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_StepConflictDoesNotFinalizeJob(t *testing.T) {
+	db, mock, setupErr := sqlmock.New()
+	if setupErr != nil {
+		t.Fatalf("failed to create sql mock: %v", setupErr)
+	}
+	now := time.Now().UTC()
+	claimExpiresAt := now.Add(time.Minute)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, claimExpiresAt, "running", "claim-1"))
+	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT id, build_id, step_index").WithArgs("build-1", 0).WillReturnRows(atomicCompletionStepRows(now, "running", nil))
+	mock.ExpectCommit()
+
+	result, job, outcome, completeErr := NewExecutionJobRepository(db).CompleteSuccessfulStepAndJob(context.Background(), atomicCompletionRequest("claim-1", now.Add(time.Minute), 0))
+	if completeErr != nil || outcome != repository.StepCompletionStaleClaim || result.Step.Status != domain.BuildStepStatusRunning || job.Status != domain.ExecutionJobStatusRunning {
+		t.Fatalf("expected stale step conflict without job finalization, result=%#v job=%#v outcome=%q err=%v", result, job, outcome, completeErr)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet sql expectations: %v", expectationsErr)
+	}
+}
+
+func atomicCompletionRequest(claimToken string, finishedAt time.Time, exitCode int) repository.CompleteSuccessfulStepAndJobRequest {
+	return repository.CompleteSuccessfulStepAndJobRequest{
+		JobID: "job-1", ClaimToken: claimToken, FinishedAt: finishedAt, ExitCode: exitCode,
+		StepRequest: repository.CompleteStepRequest{BuildID: "build-1", StepIndex: 0, ClaimToken: claimToken, RequireClaim: true, Update: repository.StepUpdate{Status: domain.BuildStepStatusSuccess, StartedAt: &finishedAt, FinishedAt: &finishedAt, ExitCode: &exitCode}},
+	}
+}
+
+func atomicCompletionJobRows(now time.Time, claimExpiresAt time.Time, status string, claimToken string) *sqlmock.Rows {
+	var claimTokenValue any
+	var claimedBy any
+	var leaseExpiresAt any
+	if claimToken != "" {
+		claimTokenValue = claimToken
+		claimedBy = "worker-1"
+		leaseExpiresAt = claimExpiresAt
+	}
+	return sqlmock.NewRows(executionJobMockColumns).AddRow("job-1", "build-1", "step-1", nil, nil, "[]", "test", 0, 1, nil, nil, status, nil, "golang:1.24", ".", `["sh","-c","go test ./..."]`, `{"A":"1"}`, nil, nil, nil, "https://github.com/acme/repo.git", "abc123", nil, nil, nil, 1, nil, `{}`, claimTokenValue, claimedBy, leaseExpiresAt, now, now, nil, nil, nil, nil, `[]`)
+}
+
+func atomicCompletionStepRows(now time.Time, status string, exitCode *int) *sqlmock.Rows {
+	return sqlmock.NewRows(stepMockColumns).AddRow("step-1", "build-1", 0, nil, nil, "[]", "test", "", "sh", `["-c","go test ./..."]`, `{}`, ".", 0, status, nil, nil, nil, nil, now, now, exitCode, nil, nil, nil, "[]", nil, nil, nil, "external", nil, nil)
 }
 
 func stringPtr(value string) *string {

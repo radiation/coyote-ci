@@ -21,3 +21,13 @@ type ExecutionJobRepository interface {
 	CompleteJobSuccess(ctx context.Context, jobID string, claimToken string, finishedAt time.Time, exitCode int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, StepCompletionOutcome, error)
 	CompleteJobFailure(ctx context.Context, jobID string, claimToken string, finishedAt time.Time, errorMessage string, failureKind domain.ExecutionFailureKind, exitCode *int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, StepCompletionOutcome, error)
 }
+
+// CompleteSuccessfulStepAndJobRequest atomically exposes successful step and
+// execution-job state after trusted runtime work has completed.
+type CompleteSuccessfulStepAndJobRequest struct {
+	JobID       string
+	ClaimToken  string
+	FinishedAt  time.Time
+	ExitCode    int
+	StepRequest CompleteStepRequest
+}

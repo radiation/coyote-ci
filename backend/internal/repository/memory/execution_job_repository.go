@@ -329,6 +329,36 @@ func (r *ExecutionJobRepository) CompleteJobSuccess(_ context.Context, jobID str
 	return job, outcome, err
 }
 
+func (r *ExecutionJobRepository) CompleteSuccessfulStepAndJob(_ context.Context, request repository.CompleteSuccessfulStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	job, ok := r.jobsByID[request.JobID]
+	if !ok {
+		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, repository.ErrExecutionJobNotFound
+	}
+	if domain.IsTerminalExecutionJobStatus(job.Status) {
+		return repository.CompleteStepResult{}, cloneExecutionJob(job), repository.StepCompletionDuplicateTerminal, nil
+	}
+	if job.Status != domain.ExecutionJobStatusRunning || job.ClaimToken == nil || *job.ClaimToken != request.ClaimToken || job.ClaimExpiresAt == nil || !job.ClaimExpiresAt.After(time.Now().UTC()) {
+		return repository.CompleteStepResult{}, cloneExecutionJob(job), repository.StepCompletionStaleClaim, nil
+	}
+	builds, ok := r.builds.(*BuildRepository)
+	if !ok || builds == nil {
+		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, repository.ErrBuildNotFound
+	}
+
+	builds.mu.Lock()
+	defer builds.mu.Unlock()
+
+	stepResult, stepErr := builds.completeStepLocked(request.StepRequest)
+	if stepErr != nil || stepResult.Outcome != repository.StepCompletionCompleted {
+		return stepResult, domain.ExecutionJob{}, stepResult.Outcome, stepErr
+	}
+	jobResult, outcome, jobErr := r.completeJobLocked(request.JobID, request.ClaimToken, request.FinishedAt, domain.ExecutionJobStatusSuccess, nil, nil, &request.ExitCode, nil)
+	return stepResult, jobResult, outcome, jobErr
+}
+
 func (r *ExecutionJobRepository) CompleteJobFailure(_ context.Context, jobID string, claimToken string, finishedAt time.Time, errorMessage string, failureKind domain.ExecutionFailureKind, exitCode *int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

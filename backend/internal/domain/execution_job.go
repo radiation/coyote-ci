@@ -23,6 +23,7 @@ type ExecutionFailureKind string
 const (
 	ExecutionFailureKindExecution ExecutionFailureKind = "execution"
 	ExecutionFailureKindTimeout   ExecutionFailureKind = "timeout"
+	ExecutionFailureKindWorkspace ExecutionFailureKind = "workspace"
 )
 
 // SourceSnapshotRef is the durable source identity for a queued execution job.

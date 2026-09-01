@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 
@@ -54,6 +55,41 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 	claimToken := strings.TrimSpace(request.ClaimToken)
 	if claimToken == "" {
 		return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, nil
+	}
+	if stepStatus == domain.BuildStepStatusSuccess && s.workspaceRevisionPublicationEnabled() && strings.TrimSpace(request.JobID) != "" {
+		atomicRepo, ok := s.executionJobRepo.(interface {
+			CompleteSuccessfulStepAndJob(context.Context, repository.CompleteSuccessfulStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error)
+		})
+		if !ok {
+			return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, errors.New("execution job repository does not support atomic successful completion")
+		}
+		completed, _, outcome, completeErr := atomicRepo.CompleteSuccessfulStepAndJob(ctx, repository.CompleteSuccessfulStepAndJobRequest{
+			JobID: request.JobID, ClaimToken: claimToken, FinishedAt: result.FinishedAt, ExitCode: result.ExitCode,
+			StepRequest: repository.CompleteStepRequest{BuildID: request.BuildID, StepIndex: request.StepIndex, ClaimToken: claimToken, RequireClaim: true, Update: completionUpdate},
+		})
+		if completeErr != nil {
+			return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, mapRepoErr(completeErr)
+		}
+		report := StepCompletionReport{Step: completed.Step, CompletionOutcome: outcome}
+		if s.buildNotifier != nil {
+			build, buildErr := s.buildRepo.GetByID(ctx, request.BuildID)
+			if buildErr != nil {
+				log.Printf("WARNING: build notification skipped: build_id=%s reason=build_lookup_failed err=%v", request.BuildID, buildErr)
+			} else {
+				s.notifyTerminalBuild(ctx, build)
+			}
+		}
+		if skipLegacyLogWrite {
+			return report, nil
+		}
+		if writeErr := writeExecutionOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stdout); writeErr != nil {
+			report.SideEffectErr = writeErr
+			return report, nil
+		}
+		if writeErr := writeExecutionOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stderr); writeErr != nil {
+			report.SideEffectErr = writeErr
+		}
+		return report, nil
 	}
 
 	completionResult, err := s.buildRepo.CompleteStep(ctx, repository.CompleteStepRequest{
@@ -114,6 +150,9 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 }
 
 func executionFailureKind(result runner.RunStepResult) domain.ExecutionFailureKind {
+	if strings.HasPrefix(result.Stderr, "workspace revision: ") {
+		return domain.ExecutionFailureKindWorkspace
+	}
 	if result.TimedOut {
 		return domain.ExecutionFailureKindTimeout
 	}

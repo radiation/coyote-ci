@@ -21,9 +21,11 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	dockerrunner "github.com/radiation/coyote-ci/backend/internal/runner/docker"
 	"github.com/radiation/coyote-ci/backend/internal/runner/inprocess"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	executionsvc "github.com/radiation/coyote-ci/backend/internal/service/execution"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
+	workspacepkg "github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 func captureWorkerLogOutput(t *testing.T, fn func()) string {
@@ -183,6 +185,30 @@ func TestResolveStepRunner(t *testing.T) {
 	})
 	if !strings.Contains(fallbackOutput, "unknown execution backend \"weird\"; falling back to inprocess") {
 		t.Fatalf("expected fallback log, got %q", fallbackOutput)
+	}
+}
+
+func TestWorkspaceRevisionStoreFromConfig(t *testing.T) {
+	if store := workspaceRevisionStoreFromConfig(config.Config{}); store != nil {
+		t.Fatalf("expected no revision store when storage root is unset, got %T", store)
+	}
+	if store := workspaceRevisionStoreFromConfig(config.Config{WorkspaceRevisionStorageRoot: " /tmp/coyote-revisions "}); store == nil {
+		t.Fatal("expected revision store when storage root is configured")
+	} else if _, ok := store.(*workspacepkg.FilesystemWorkspaceRevisionStore); !ok {
+		t.Fatalf("expected filesystem revision store, got %T", store)
+	}
+}
+
+func TestNewWorkerBuildServiceConfig_WiresWorkspaceRevisionDependencies(t *testing.T) {
+	revisionRepo := repositorymemory.NewWorkspaceRevisionRepository(nil)
+	revisionStore := workspaceRevisionStoreFromConfig(config.Config{WorkspaceRevisionStorageRoot: "/tmp/coyote-revisions"})
+	serviceConfig := newWorkerBuildServiceConfig(config.Config{}, buildsvc.BuildServiceConfig{DefaultImage: "alpine:3.20"}, revisionRepo, revisionStore)
+
+	if serviceConfig.DefaultImage != "alpine:3.20" {
+		t.Fatalf("expected existing service config to be preserved, got %#v", serviceConfig)
+	}
+	if serviceConfig.WorkspaceRevisionRepo != revisionRepo || serviceConfig.WorkspaceRevisionStore != revisionStore {
+		t.Fatalf("expected workspace revision dependencies to be wired, got %#v", serviceConfig)
 	}
 }
 
