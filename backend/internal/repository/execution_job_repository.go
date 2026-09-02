@@ -31,3 +31,15 @@ type CompleteSuccessfulStepAndJobRequest struct {
 	ExitCode    int
 	StepRequest CompleteStepRequest
 }
+
+// CompleteFailedStepAndJobRequest atomically exposes failed step and
+// execution-job state after runtime work has completed.
+type CompleteFailedStepAndJobRequest struct {
+	JobID        string
+	ClaimToken   string
+	FinishedAt   time.Time
+	ErrorMessage string
+	FailureKind  domain.ExecutionFailureKind
+	ExitCode     *int
+	StepRequest  CompleteStepRequest
+}

@@ -23,20 +23,21 @@ type StepOutputCallback func(chunk StepOutputChunk) error
 
 // RunStepRequest describes the command a runner should execute for a build step.
 type RunStepRequest struct {
-	BuildID        string
-	JobID          string
-	StepID         string
-	StepIndex      int
-	StepName       string
-	WorkerID       string
-	ClaimToken     string
-	Image          string
-	Command        string
-	Args           []string
-	Env            map[string]string
-	WorkingDir     string
-	TimeoutSeconds int
-	CacheMounts    []CacheMount
+	BuildID                          string
+	JobID                            string
+	StepID                           string
+	StepIndex                        int
+	StepName                         string
+	WorkerID                         string
+	ClaimToken                       string
+	RequireAtomicExecutionCompletion bool
+	Image                            string
+	Command                          string
+	Args                             []string
+	Env                              map[string]string
+	WorkingDir                       string
+	TimeoutSeconds                   int
+	CacheMounts                      []CacheMount
 }
 
 // CacheMount maps a host directory to a container-absolute cache path.

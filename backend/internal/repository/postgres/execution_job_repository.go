@@ -382,6 +382,74 @@ func (r *ExecutionJobRepository) CompleteSuccessfulStepAndJob(ctx context.Contex
 	return repository.CompleteStepResult{Step: step, Outcome: repository.StepCompletionCompleted}, updatedJob, repository.StepCompletionCompleted, nil
 }
 
+func (r *ExecutionJobRepository) CompleteFailedStepAndJob(ctx context.Context, request repository.CompleteFailedStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, err
+	}
+	rollback := true
+	defer func() {
+		if rollback {
+			_ = tx.Rollback()
+		}
+	}()
+
+	job, jobErr := scanExecutionJob(tx.QueryRowContext(ctx, `SELECT `+executionJobColumns+` FROM build_jobs WHERE id = $1 FOR UPDATE`, request.JobID))
+	if jobErr != nil {
+		if errors.Is(jobErr, sql.ErrNoRows) {
+			return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, repository.ErrExecutionJobNotFound
+		}
+		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, jobErr
+	}
+	if domain.IsTerminalExecutionJobStatus(job.Status) {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, commitErr
+		}
+		rollback = false
+		return repository.CompleteStepResult{}, job, repository.StepCompletionDuplicateTerminal, nil
+	}
+	if job.Status != domain.ExecutionJobStatusRunning || job.ClaimToken == nil || *job.ClaimToken != request.ClaimToken || job.ClaimExpiresAt == nil || !job.ClaimExpiresAt.After(time.Now().UTC()) {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, commitErr
+		}
+		rollback = false
+		return repository.CompleteStepResult{}, job, repository.StepCompletionStaleClaim, nil
+	}
+
+	step, updated, stepErr := applyStepCompletionUpdateTx(ctx, tx, request.StepRequest.BuildID, request.StepRequest.StepIndex, &request.ClaimToken, request.StepRequest.Update)
+	if stepErr != nil {
+		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, stepErr
+	}
+	if !updated {
+		existing, outcome, committed, resolveErr := resolveAndCommitConflictTx(ctx, tx, request.StepRequest.BuildID, request.StepRequest.StepIndex, true, true)
+		if resolveErr != nil {
+			return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, resolveErr
+		}
+		if committed {
+			rollback = false
+		}
+		return repository.CompleteStepResult{Step: existing, Outcome: outcome}, job, outcome, nil
+	}
+
+	updatedJob, updateErr := scanExecutionJob(tx.QueryRowContext(ctx, `
+		UPDATE build_jobs
+		SET status = 'failed', finished_at = $2, error_message = $3, failure_kind = $4,
+			exit_code = $5, output_refs_json = '[]'::jsonb, claim_token = NULL, claimed_by = NULL, claim_expires_at = NULL
+		WHERE id = $1
+		RETURNING `+executionJobColumns, request.JobID, request.FinishedAt, request.ErrorMessage, request.FailureKind, request.ExitCode))
+	if updateErr != nil {
+		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, updateErr
+	}
+	if advanceErr := advanceBuildAfterStepCompletionTx(ctx, tx, request.StepRequest.BuildID, request.StepRequest.StepIndex, domain.BuildStepStatusFailed, nil); advanceErr != nil {
+		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, advanceErr
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, commitErr
+	}
+	rollback = false
+	return repository.CompleteStepResult{Step: step, Outcome: repository.StepCompletionCompleted}, updatedJob, repository.StepCompletionCompleted, nil
+}
+
 func (r *ExecutionJobRepository) CompleteJobFailure(ctx context.Context, jobID string, claimToken string, finishedAt time.Time, errorMessage string, failureKind domain.ExecutionFailureKind, exitCode *int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
 	msg := strings.TrimSpace(errorMessage)
 	if msg == "" {

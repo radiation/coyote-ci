@@ -171,6 +171,8 @@ func (w *ExecutionWorkerService) claimRunnableStepFromJobs(ctx context.Context) 
 		StepName:       job.Name,
 		WorkerID:       claim.WorkerID,
 		ClaimToken:     claim.ClaimToken,
+		NodeID:         job.NodeID,
+		AttemptNumber:  job.AttemptNumber,
 		Image:          job.Image,
 		Command:        workerCommandFromJob(job),
 		Args:           workerArgsFromJob(job),

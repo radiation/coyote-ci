@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	nethttp "net/http"
 	"net/http/httptest"
@@ -14,7 +15,11 @@ import (
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	kubernetesexec "github.com/radiation/coyote-ci/backend/internal/kubernetes"
 	"github.com/radiation/coyote-ci/backend/internal/observability"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
@@ -27,6 +32,25 @@ import (
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 	workspacepkg "github.com/radiation/coyote-ci/backend/internal/workspace"
 )
+
+type kubernetesfakeClient struct{}
+
+func (kubernetesfakeClient) GetJob(context.Context, string, string) (*batchv1.Job, error) {
+	return nil, nil
+}
+func (kubernetesfakeClient) CreateJob(context.Context, string, *batchv1.Job) (*batchv1.Job, error) {
+	return nil, nil
+}
+func (kubernetesfakeClient) DeleteJob(context.Context, string, string) error { return nil }
+func (kubernetesfakeClient) ListJobs(context.Context, string, string) ([]batchv1.Job, error) {
+	return nil, nil
+}
+func (kubernetesfakeClient) ListPods(context.Context, string, string) ([]corev1.Pod, error) {
+	return nil, nil
+}
+func (kubernetesfakeClient) GetPodLogs(context.Context, string, string) (io.ReadCloser, error) {
+	return nil, nil
+}
 
 func captureWorkerLogOutput(t *testing.T, fn func()) string {
 	t.Helper()
@@ -185,6 +209,34 @@ func TestResolveStepRunner(t *testing.T) {
 	})
 	if !strings.Contains(fallbackOutput, "unknown execution backend \"weird\"; falling back to inprocess") {
 		t.Fatalf("expected fallback log, got %q", fallbackOutput)
+	}
+}
+
+func TestResolveExecutionController(t *testing.T) {
+	service := workersvc.NewExecutionWorkerService(nil)
+	nonKubernetes, err := resolveExecutionController(config.Config{ExecutionBackend: "docker"}, service, nil)
+	if err != nil {
+		t.Fatalf("resolve non-kubernetes controller: %v", err)
+	}
+	if _, ok := nonKubernetes.(*workersvc.SynchronousController); !ok {
+		t.Fatalf("expected synchronous controller, got %T", nonKubernetes)
+	}
+
+	original := newKubernetesClient
+	defer func() { newKubernetesClient = original }()
+	newKubernetesClient = func(string) (kubernetesexec.Client, error) { return kubernetesfakeClient{}, nil }
+	kubernetesController, err := resolveExecutionController(config.Config{ExecutionBackend: " Kubernetes ", WorkerKubernetesNamespace: "ci"}, service, nil)
+	if err != nil {
+		t.Fatalf("resolve kubernetes controller: %v", err)
+	}
+	if _, ok := kubernetesController.(*kubernetesexec.Controller); !ok {
+		t.Fatalf("expected kubernetes controller, got %T", kubernetesController)
+	}
+
+	wantErr := errors.New("kubeconfig unavailable")
+	newKubernetesClient = func(string) (kubernetesexec.Client, error) { return nil, wantErr }
+	if _, resolveErr := resolveExecutionController(config.Config{ExecutionBackend: "kubernetes"}, service, nil); !errors.Is(resolveErr, wantErr) {
+		t.Fatalf("expected client error %v, got %v", wantErr, resolveErr)
 	}
 }
 

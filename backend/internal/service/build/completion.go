@@ -56,7 +56,7 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 	if claimToken == "" {
 		return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, nil
 	}
-	if stepStatus == domain.BuildStepStatusSuccess && s.workspaceRevisionPublicationEnabled() && strings.TrimSpace(request.JobID) != "" {
+	if stepStatus == domain.BuildStepStatusSuccess && strings.TrimSpace(request.JobID) != "" && (request.RequireAtomicExecutionCompletion || s.workspaceRevisionPublicationEnabled()) {
 		atomicRepo, ok := s.executionJobRepo.(interface {
 			CompleteSuccessfulStepAndJob(context.Context, repository.CompleteSuccessfulStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error)
 		})
@@ -65,6 +65,46 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 		}
 		completed, _, outcome, completeErr := atomicRepo.CompleteSuccessfulStepAndJob(ctx, repository.CompleteSuccessfulStepAndJobRequest{
 			JobID: request.JobID, ClaimToken: claimToken, FinishedAt: result.FinishedAt, ExitCode: result.ExitCode,
+			StepRequest: repository.CompleteStepRequest{BuildID: request.BuildID, StepIndex: request.StepIndex, ClaimToken: claimToken, RequireClaim: true, Update: completionUpdate},
+		})
+		if completeErr != nil {
+			return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, mapRepoErr(completeErr)
+		}
+		report := StepCompletionReport{Step: completed.Step, CompletionOutcome: outcome}
+		if s.buildNotifier != nil {
+			build, buildErr := s.buildRepo.GetByID(ctx, request.BuildID)
+			if buildErr != nil {
+				log.Printf("WARNING: build notification skipped: build_id=%s reason=build_lookup_failed err=%v", request.BuildID, buildErr)
+			} else {
+				s.notifyTerminalBuild(ctx, build)
+			}
+		}
+		if skipLegacyLogWrite {
+			return report, nil
+		}
+		if writeErr := writeExecutionOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stdout); writeErr != nil {
+			report.SideEffectErr = writeErr
+			return report, nil
+		}
+		if writeErr := writeExecutionOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stderr); writeErr != nil {
+			report.SideEffectErr = writeErr
+		}
+		return report, nil
+	}
+
+	if stepStatus == domain.BuildStepStatusFailed && strings.TrimSpace(request.JobID) != "" && request.RequireAtomicExecutionCompletion {
+		atomicRepo, ok := s.executionJobRepo.(interface {
+			CompleteFailedStepAndJob(context.Context, repository.CompleteFailedStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error)
+		})
+		if !ok {
+			return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, errors.New("execution job repository does not support atomic failed completion")
+		}
+		message := "step execution failed"
+		if stepError != nil {
+			message = *stepError
+		}
+		completed, _, outcome, completeErr := atomicRepo.CompleteFailedStepAndJob(ctx, repository.CompleteFailedStepAndJobRequest{
+			JobID: request.JobID, ClaimToken: claimToken, FinishedAt: result.FinishedAt, ErrorMessage: message, FailureKind: executionFailureKind(result), ExitCode: &exitCode,
 			StepRequest: repository.CompleteStepRequest{BuildID: request.BuildID, StepIndex: request.StepIndex, ClaimToken: claimToken, RequireClaim: true, Update: completionUpdate},
 		})
 		if completeErr != nil {
