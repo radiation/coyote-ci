@@ -78,8 +78,9 @@ func (r failingWorkspaceRevisionRepository) MarkPublishedIfClaimed(ctx context.C
 
 type recordingAtomicExecutionJobRepository struct {
 	repository.ExecutionJobRepository
-	buildRepo   repository.BuildRepository
-	atomicCalls int
+	buildRepo         repository.BuildRepository
+	atomicCalls       int
+	failedAtomicCalls int
 }
 
 func (r *recordingAtomicExecutionJobRepository) CompleteSuccessfulStepAndJob(ctx context.Context, request repository.CompleteSuccessfulStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error) {
@@ -99,6 +100,16 @@ func (r *recordingAtomicExecutionJobRepository) CompleteSuccessfulStepAndJob(ctx
 		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, errors.New("atomic completion capability is unavailable")
 	}
 	return atomicRepo.CompleteSuccessfulStepAndJob(ctx, request)
+}
+
+func (r *recordingAtomicExecutionJobRepository) CompleteFailedStepAndJob(ctx context.Context, request repository.CompleteFailedStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+	r.failedAtomicCalls++
+	stepResult, stepErr := r.buildRepo.CompleteStep(ctx, request.StepRequest)
+	if stepErr != nil || stepResult.Outcome != repository.StepCompletionCompleted {
+		return stepResult, domain.ExecutionJob{}, stepResult.Outcome, stepErr
+	}
+	job, outcome, jobErr := r.CompleteJobFailure(ctx, request.JobID, request.ClaimToken, request.FinishedAt, request.ErrorMessage, request.FailureKind, request.ExitCode, nil)
+	return stepResult, job, outcome, jobErr
 }
 
 func executionTestTimePointer(value time.Time) *time.Time {
@@ -186,6 +197,50 @@ func TestBuildService_RunStep_DelegatesToRunner(t *testing.T) {
 	}
 	if !foundOutput {
 		t.Fatalf("expected output line 'ok' in logs, got %#v", logSink.lines)
+	}
+}
+
+func TestBuildService_HandleStepResult_RequiresAtomicExecutionCompletion(t *testing.T) {
+	tests := []struct {
+		name       string
+		result     steprunner.RunStepResult
+		wantStatus domain.ExecutionJobStatus
+	}{
+		{name: "success", result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0}, wantStatus: domain.ExecutionJobStatusSuccess},
+		{name: "failure", result: steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: 1, Stderr: "command failed"}, wantStatus: domain.ExecutionJobStatusFailed},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			claimToken := "claim-active"
+			now := time.Now().UTC()
+			buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-atomic", Status: domain.BuildStatusRunning}, steps: []domain.BuildStep{{ID: "step-atomic", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}}}
+			memoryJobRepo := memoryrepo.NewExecutionJobRepository()
+			if _, createErr := memoryJobRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{{ID: "job-atomic", BuildID: "build-atomic", StepID: "step-atomic", Status: domain.ExecutionJobStatusRunning, ClaimToken: &claimToken, ClaimExpiresAt: executionTestTimePointer(now.Add(time.Minute)), CreatedAt: now}}); createErr != nil {
+				t.Fatalf("seed execution job: %v", createErr)
+			}
+			jobRepo := &recordingAtomicExecutionJobRepository{ExecutionJobRepository: memoryJobRepo, buildRepo: buildRepo}
+			svc := NewBuildService(buildRepo, &fakeRunner{}, &fakeLogSink{})
+			svc.SetExecutionJobRepository(jobRepo)
+			result := testCase.result
+			result.StartedAt = now
+			result.FinishedAt = now.Add(time.Second)
+
+			report, completeErr := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-atomic", JobID: "job-atomic", StepIndex: 0, StepName: "test", ClaimToken: claimToken, RequireAtomicExecutionCompletion: true}, result)
+			if completeErr != nil || report.CompletionOutcome != repository.StepCompletionCompleted {
+				t.Fatalf("complete report=%#v err=%v", report, completeErr)
+			}
+			if testCase.wantStatus == domain.ExecutionJobStatusSuccess && jobRepo.atomicCalls != 1 {
+				t.Fatalf("success atomic calls=%d, want 1", jobRepo.atomicCalls)
+			}
+			if testCase.wantStatus == domain.ExecutionJobStatusFailed && jobRepo.failedAtomicCalls != 1 {
+				t.Fatalf("failure atomic calls=%d, want 1", jobRepo.failedAtomicCalls)
+			}
+			job, getJobErr := memoryJobRepo.GetJobByID(context.Background(), "job-atomic")
+			if getJobErr != nil || job.Status != testCase.wantStatus {
+				t.Fatalf("execution job=%#v err=%v", job, getJobErr)
+			}
+		})
 	}
 }
 

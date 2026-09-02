@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -72,6 +73,27 @@ func TestValidateKubernetesRunnableStep(t *testing.T) {
 			}
 			if test.want != "" && (err == nil || !strings.Contains(err.Error(), test.want)) {
 				t.Fatalf("expected %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestIsKubernetesExecutionCapabilityError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "typed", err: &KubernetesExecutionCapabilityError{Feature: "cache restore or save"}, want: true},
+		{name: "wrapped typed", err: fmt.Errorf("validation: %w", &KubernetesExecutionCapabilityError{Feature: "artifact collection"}), want: true},
+		{name: "unavailable boundary", err: errKubernetesExecutionCapabilityUnavailable, want: true},
+		{name: "operational error", err: errors.New("database unavailable")},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := IsKubernetesExecutionCapabilityError(testCase.err); got != testCase.want {
+				t.Fatalf("IsKubernetesExecutionCapabilityError(%v) = %t, want %t", testCase.err, got, testCase.want)
 			}
 		})
 	}
