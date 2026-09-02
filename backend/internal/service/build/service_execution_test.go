@@ -244,6 +244,37 @@ func TestBuildService_HandleStepResult_RequiresAtomicExecutionCompletion(t *test
 	}
 }
 
+func TestBuildService_HandleStepResult_RequiresAtomicRepositoryCapabilities(t *testing.T) {
+	claimToken := "claim-active"
+	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-atomic", Status: domain.BuildStatusRunning}, steps: []domain.BuildStep{{ID: "step-atomic", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}}}
+	svc := NewBuildService(buildRepo, &fakeRunner{}, &fakeLogSink{})
+	svc.SetExecutionJobRepository(&readQueueExecutionJobRepo{})
+
+	tests := []struct {
+		name   string
+		result steprunner.RunStepResult
+		want   string
+	}{
+		{name: "success", result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess, ExitCode: 0}, want: "atomic successful completion"},
+		{name: "failure", result: steprunner.RunStepResult{Status: steprunner.RunStepStatusFailed, ExitCode: 1}, want: "atomic failed completion"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			result := testCase.result
+			result.StartedAt = now
+			result.FinishedAt = now.Add(time.Second)
+			report, completeErr := svc.HandleStepResult(context.Background(), steprunner.RunStepRequest{BuildID: "build-atomic", JobID: "job-atomic", StepIndex: 0, StepName: "test", ClaimToken: claimToken, RequireAtomicExecutionCompletion: true}, result)
+			if completeErr == nil || !strings.Contains(completeErr.Error(), testCase.want) {
+				t.Fatalf("completion error = %v, want %q", completeErr, testCase.want)
+			}
+			if report.CompletionOutcome != repository.StepCompletionInvalidTransition {
+				t.Fatalf("completion outcome = %q", report.CompletionOutcome)
+			}
+		})
+	}
+}
+
 func TestBuildService_RunStep_CommitsWorkspaceBeforeCompletion(t *testing.T) {
 	claimToken := "claim-active"
 	events := make([]string, 0)

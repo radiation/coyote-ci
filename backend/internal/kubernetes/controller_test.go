@@ -411,6 +411,96 @@ func TestControllerTreatsAlreadyExistsAsIdempotent(t *testing.T) {
 	}
 }
 
+func TestControllerReturnsOperationalErrorsWithoutCompletion(t *testing.T) {
+	tests := []struct {
+		name    string
+		service *fakeExecutionService
+		client  *fakeClient
+		active  bool
+		wantErr string
+	}{
+		{name: "claim", service: &fakeExecutionService{claimErr: errors.New("claim unavailable")}, client: newFakeClient(), wantErr: "claim unavailable"},
+		{name: "cancellation sweep", service: &fakeExecutionService{}, client: &fakeClient{jobs: map[string]*batchv1.Job{}, listJobsErr: errors.New("list unavailable")}, wantErr: "list unavailable"},
+		{name: "durable execution lookup", service: &fakeExecutionService{getErr: errors.New("execution job unavailable")}, client: newFakeClient(), active: true, wantErr: "execution job unavailable"},
+		{name: "lease renewal", service: &fakeExecutionService{renewErr: errors.New("renew unavailable")}, client: newFakeClient(), active: true, wantErr: "renew unavailable"},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			step := testStep()
+			testCase.service.step = step
+			testCase.service.found = true
+			controller := NewController(testCase.client, testCase.service, nil, "default")
+			if testCase.active {
+				controller.active = &step
+			}
+			err := controller.Reconcile(context.Background())
+			if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+				t.Fatalf("reconcile error = %v, want %q", err, testCase.wantErr)
+			}
+			if testCase.service.completeCalls != 0 {
+				t.Fatal("operational error must not complete execution")
+			}
+		})
+	}
+}
+
+func TestControllerDefersCompletionOnTerminalPodOrLogReadFailure(t *testing.T) {
+	tests := []struct {
+		name    string
+		client  *fakeClient
+		wantErr bool
+	}{
+		{name: "pod list", client: &fakeClient{jobs: map[string]*batchv1.Job{}, listPodsErr: errors.New("pod list unavailable")}},
+		{name: "log stream", client: &fakeClient{jobs: map[string]*batchv1.Job{}, pods: []corev1.Pod{terminatedBuildPod(0, "Completed", "")}, getLogsErr: errors.New("log stream unavailable")}, wantErr: true},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			step := testStep()
+			testCase.client.jobs[jobName(step.JobID)] = completedJob(step, 0, "Completed", "")
+			service := &fakeExecutionService{step: step, found: true}
+			controller := NewController(testCase.client, service, &recordingLogSink{}, "default")
+			err := controller.Reconcile(context.Background())
+			if testCase.wantErr && (err == nil || !strings.Contains(err.Error(), "unavailable")) {
+				t.Fatalf("reconcile error = %v", err)
+			}
+			if !testCase.wantErr && err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if service.completeCalls != 0 {
+				t.Fatal("terminal observation failure must defer completion")
+			}
+		})
+	}
+}
+
+func TestControllerHandlesStaleCompletionAndDeletionFailure(t *testing.T) {
+	step := testStep()
+	service := &fakeExecutionService{step: step, found: true, completeOutcome: repository.StepCompletionStaleClaim}
+	client := newFakeClient()
+	client.jobs[jobName(step.JobID)] = completedJob(step, 0, "Completed", "")
+	client.pods = []corev1.Pod{terminatedBuildPod(0, "Completed", "")}
+	controller := NewController(client, service, nil, "default")
+
+	if err := controller.Reconcile(context.Background()); err != nil {
+		t.Fatalf("stale completion reconcile: %v", err)
+	}
+	if controller.active != nil {
+		t.Fatal("stale completion must release active claim")
+	}
+
+	service = &fakeExecutionService{step: step, found: true, durableStatus: domain.ExecutionJobStatusCanceled}
+	client = newFakeClient()
+	client.jobs[jobName(step.JobID)] = buildJob("default", step)
+	client.deleteErr = errors.New("delete unavailable")
+	controller = NewController(client, service, nil, "default")
+	controller.active = &step
+	if err := controller.Reconcile(context.Background()); err == nil || !strings.Contains(err.Error(), "delete unavailable") {
+		t.Fatalf("delete reconcile error = %v", err)
+	}
+}
+
 func TestClientsetDelegatesKubernetesOperations(t *testing.T) {
 	client := &clientset{client: kubernetesfake.NewClientset()}
 	job := buildJob("default", testStep())
@@ -445,17 +535,24 @@ type fakeExecutionService struct {
 	found            bool
 	claimUsed        bool
 	validateErr      error
+	claimErr         error
+	getErr           error
 	stale            bool
 	renewCalls       int
+	renewErr         error
 	completeCalls    int
 	result           runner.RunStepResult
 	durableStatus    domain.ExecutionJobStatus
 	durableStatuses  map[string]domain.ExecutionJobStatus
 	statusAfterRenew domain.ExecutionJobStatus
 	completeErr      error
+	completeOutcome  repository.StepCompletionOutcome
 }
 
 func (s *fakeExecutionService) ClaimRunnableStep(context.Context) (workersvc.WorkerRunnableStep, bool, error) {
+	if s.claimErr != nil {
+		return workersvc.WorkerRunnableStep{}, false, s.claimErr
+	}
 	if s.claimUsed {
 		return workersvc.WorkerRunnableStep{}, false, nil
 	}
@@ -467,9 +564,12 @@ func (s *fakeExecutionService) ValidateKubernetesRunnableStep(context.Context, w
 }
 func (s *fakeExecutionService) RenewRunnableStepLease(context.Context, workersvc.WorkerRunnableStep) (bool, error) {
 	s.renewCalls++
-	return !s.stale, nil
+	return !s.stale, s.renewErr
 }
 func (s *fakeExecutionService) GetExecutionJob(_ context.Context, jobID string) (domain.ExecutionJob, error) {
+	if s.getErr != nil {
+		return domain.ExecutionJob{}, s.getErr
+	}
 	if s.renewCalls > 0 && s.statusAfterRenew != "" {
 		return domain.ExecutionJob{Status: s.statusAfterRenew}, nil
 	}
@@ -485,6 +585,9 @@ func (s *fakeExecutionService) GetExecutionJob(_ context.Context, jobID string) 
 func (s *fakeExecutionService) CompleteKubernetesRunnableStep(_ context.Context, _ workersvc.WorkerRunnableStep, result runner.RunStepResult) (repository.StepCompletionOutcome, error) {
 	s.completeCalls++
 	s.result = result
+	if s.completeOutcome != "" {
+		return s.completeOutcome, s.completeErr
+	}
 	return repository.StepCompletionCompleted, s.completeErr
 }
 
@@ -493,6 +596,11 @@ type fakeClient struct {
 	pods        []corev1.Pod
 	logs        string
 	getErr      error
+	createErr   error
+	deleteErr   error
+	listJobsErr error
+	listPodsErr error
+	getLogsErr  error
 	createRace  bool
 	createCalls int
 	deleteCalls int
@@ -512,6 +620,9 @@ func (c *fakeClient) GetJob(_ context.Context, _ string, name string) (*batchv1.
 }
 func (c *fakeClient) CreateJob(_ context.Context, _ string, job *batchv1.Job) (*batchv1.Job, error) {
 	c.createCalls++
+	if c.createErr != nil {
+		return nil, c.createErr
+	}
 	if c.createRace {
 		c.createRace = false
 		c.jobs[job.Name] = job
@@ -525,11 +636,17 @@ func (c *fakeClient) CreateJob(_ context.Context, _ string, job *batchv1.Job) (*
 }
 func (c *fakeClient) DeleteJob(_ context.Context, _ string, name string) error {
 	c.deleteCalls++
+	if c.deleteErr != nil {
+		return c.deleteErr
+	}
 	delete(c.jobs, name)
 	return nil
 }
 func (c *fakeClient) ListJobs(context.Context, string, string) ([]batchv1.Job, error) {
 	c.listCalls++
+	if c.listJobsErr != nil {
+		return nil, c.listJobsErr
+	}
 	jobs := make([]batchv1.Job, 0, len(c.jobs))
 	for _, job := range c.jobs {
 		jobs = append(jobs, *job)
@@ -537,9 +654,12 @@ func (c *fakeClient) ListJobs(context.Context, string, string) ([]batchv1.Job, e
 	return jobs, nil
 }
 func (c *fakeClient) ListPods(context.Context, string, string) ([]corev1.Pod, error) {
-	return c.pods, nil
+	return c.pods, c.listPodsErr
 }
 func (c *fakeClient) GetPodLogs(context.Context, string, string) (io.ReadCloser, error) {
+	if c.getLogsErr != nil {
+		return nil, c.getLogsErr
+	}
 	return io.NopCloser(strings.NewReader(c.logs)), nil
 }
 
