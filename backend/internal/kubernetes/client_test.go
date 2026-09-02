@@ -2,6 +2,8 @@ package kubernetes
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -38,5 +40,21 @@ func TestClientsetDelegatesKubernetesResources(t *testing.T) {
 func TestBackgroundDeletion(t *testing.T) {
 	if got := backgroundDeletion(); got == nil || *got != metav1.DeletePropagationBackground {
 		t.Fatalf("propagation=%v", got)
+	}
+}
+
+func TestNewClientUsesKubeconfigOutsideCluster(t *testing.T) {
+	kubeconfig := filepath.Join(t.TempDir(), "config")
+	config := "apiVersion: v1\nclusters:\n- cluster:\n    server: https://127.0.0.1:6443\n  name: test\ncontexts:\n- context:\n    cluster: test\n    user: test\n  name: test\ncurrent-context: test\nusers:\n- name: test\n  user:\n    token: test-token\n"
+	if writeErr := os.WriteFile(kubeconfig, []byte(config), 0o600); writeErr != nil {
+		t.Fatalf("write kubeconfig: %v", writeErr)
+	}
+
+	client, err := NewClient(kubeconfig)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if _, ok := client.(*clientset); !ok {
+		t.Fatalf("client type = %T, want *clientset", client)
 	}
 }

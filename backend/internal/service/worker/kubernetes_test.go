@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
@@ -99,6 +100,14 @@ func TestIsKubernetesExecutionCapabilityError(t *testing.T) {
 	}
 }
 
+func TestValidateKubernetesRunnableStepRequiresKubernetesBoundary(t *testing.T) {
+	service := NewExecutionWorkerService(&fakeExecutionWorkerBoundary{})
+	err := service.ValidateKubernetesRunnableStep(context.Background(), WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"})
+	if !errors.Is(err, errKubernetesExecutionCapabilityUnavailable) {
+		t.Fatalf("validate error = %v", err)
+	}
+}
+
 func TestKubernetesExecutionAdapter(t *testing.T) {
 	boundary := &kubernetesBoundary{fakeExecutionWorkerBoundary: &fakeExecutionWorkerBoundary{}, job: domain.ExecutionJob{ID: "job-1"}}
 	service := NewExecutionWorkerService(boundary)
@@ -122,5 +131,20 @@ func TestKubernetesExecutionAdapterReturnsCompletionSideEffectError(t *testing.T
 
 	if _, err := service.CompleteKubernetesRunnableStep(context.Background(), step, runner.RunStepResult{}); !errors.Is(err, wantErr) {
 		t.Fatalf("expected side effect error %v, got %v", wantErr, err)
+	}
+}
+
+func TestKubernetesExecutionAdapterRequiresKubernetesBoundary(t *testing.T) {
+	service := NewExecutionWorkerService(nil)
+	step := WorkerRunnableStep{BuildID: "build-1", JobID: "job-1"}
+
+	if _, getErr := service.GetExecutionJob(context.Background(), step.JobID); !errors.Is(getErr, errKubernetesExecutionCapabilityUnavailable) {
+		t.Fatalf("get execution job error = %v", getErr)
+	}
+	if _, completeErr := service.CompleteKubernetesRunnableStep(context.Background(), step, runner.RunStepResult{}); !errors.Is(completeErr, errKubernetesExecutionCapabilityUnavailable) {
+		t.Fatalf("complete execution job error = %v", completeErr)
+	}
+	if service.KubernetesLeaseDuration() != 45*time.Second {
+		t.Fatalf("lease duration = %s, want 45s", service.KubernetesLeaseDuration())
 	}
 }
