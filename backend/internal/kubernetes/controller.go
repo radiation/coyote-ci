@@ -216,7 +216,7 @@ func (c *Controller) collectTerminalLogs(ctx context.Context, step workersvc.Wor
 	for {
 		count, readErr := stream.Read(buffer)
 		if count > 0 {
-			if writeErr := c.logSink.WriteStepLog(ctx, step.BuildID, step.StepName, string(buffer[:count])); writeErr != nil {
+			if writeErr := c.writeTerminalLogChunk(ctx, step, string(buffer[:count])); writeErr != nil {
 				return errors.Join(writeErr, stream.Close())
 			}
 		}
@@ -232,6 +232,17 @@ func (c *Controller) collectTerminalLogs(ctx context.Context, step workersvc.Wor
 	}
 	c.terminalLogsPersisted[step.JobID] = true
 	return nil
+}
+
+func (c *Controller) writeTerminalLogChunk(ctx context.Context, step workersvc.WorkerRunnableStep, text string) error {
+	if appender, ok := c.logSink.(logs.StepLogChunkAppender); ok {
+		_, err := appender.AppendStepLogChunk(ctx, logs.StepLogChunk{
+			BuildID: step.BuildID, StepID: step.StepID, StepIndex: step.StepIndex, StepName: step.StepName,
+			Stream: logs.StepLogStreamStdout, ChunkText: text, CreatedAt: c.now(),
+		})
+		return err
+	}
+	return c.logSink.WriteStepLog(ctx, step.BuildID, step.StepName, text)
 }
 
 func (c *Controller) complete(ctx context.Context, step workersvc.WorkerRunnableStep, result runner.RunStepResult) error {

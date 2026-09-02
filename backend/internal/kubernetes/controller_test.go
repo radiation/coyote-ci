@@ -157,6 +157,28 @@ func TestControllerCompletesTerminalOutcomesAndLogs(t *testing.T) {
 	}
 }
 
+func TestControllerPersistsTerminalLogsAsStepChunks(t *testing.T) {
+	step := testStep()
+	service := &fakeExecutionService{step: step, found: true}
+	client := newFakeClient()
+	client.jobs[jobName(step.JobID)] = completedJob(step, 0, "Completed", "")
+	client.pods = []corev1.Pod{terminatedBuildPod(0, "Completed", "")}
+	client.logs = "terminal output\n"
+	sink := &recordingLogSink{}
+	controller := NewController(client, service, sink, "default")
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("reconcile: %v", reconcileErr)
+	}
+	if len(sink.chunks) != 1 {
+		t.Fatalf("chunks=%#v", sink.chunks)
+	}
+	chunk := sink.chunks[0]
+	if chunk.BuildID != step.BuildID || chunk.StepID != step.StepID || chunk.StepIndex != step.StepIndex || chunk.StepName != step.StepName || chunk.Stream != logs.StepLogStreamStdout || chunk.ChunkText != client.logs {
+		t.Fatalf("chunk=%#v", chunk)
+	}
+}
+
 func TestControllerCancellationDeletesJobWithoutCompletion(t *testing.T) {
 	step := testStep()
 	service := &fakeExecutionService{step: step, found: true, durableStatus: domain.ExecutionJobStatusCanceled}
@@ -312,12 +334,12 @@ func TestControllerStreamsTerminalLogsInBoundedChunks(t *testing.T) {
 	if err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if sink.text != client.logs || len(sink.writes) != 3 {
-		t.Fatalf("writes=%d output length=%d", len(sink.writes), len(sink.text))
+	if sink.text != client.logs || len(sink.chunks) != 3 {
+		t.Fatalf("chunks=%d output length=%d", len(sink.chunks), len(sink.text))
 	}
-	for _, write := range sink.writes {
-		if len(write) > terminalLogChunkSize {
-			t.Fatalf("write size=%d exceeds chunk size=%d", len(write), terminalLogChunkSize)
+	for _, chunk := range sink.chunks {
+		if len(chunk.ChunkText) > terminalLogChunkSize {
+			t.Fatalf("chunk size=%d exceeds chunk size=%d", len(chunk.ChunkText), terminalLogChunkSize)
 		}
 	}
 }
@@ -665,7 +687,7 @@ func (c *fakeClient) GetPodLogs(context.Context, string, string) (io.ReadCloser,
 
 type recordingLogSink struct {
 	text   string
-	writes []string
+	chunks []logs.StepLogChunk
 	err    error
 }
 
@@ -674,8 +696,16 @@ func (s *recordingLogSink) WriteStepLog(_ context.Context, _, _, line string) er
 		return s.err
 	}
 	s.text += line
-	s.writes = append(s.writes, line)
 	return nil
+}
+
+func (s *recordingLogSink) AppendStepLogChunk(_ context.Context, chunk logs.StepLogChunk) (logs.StepLogChunk, error) {
+	if s.err != nil {
+		return logs.StepLogChunk{}, s.err
+	}
+	s.text += chunk.ChunkText
+	s.chunks = append(s.chunks, chunk)
+	return chunk, nil
 }
 
 func testStep() workersvc.WorkerRunnableStep {
