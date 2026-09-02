@@ -687,7 +687,6 @@ func (c *fakeClient) GetPodLogs(context.Context, string, string) (io.ReadCloser,
 
 type recordingLogSink struct {
 	text   string
-	writes []string
 	chunks []logs.StepLogChunk
 	err    error
 }
@@ -697,7 +696,6 @@ func (s *recordingLogSink) WriteStepLog(_ context.Context, _, _, line string) er
 		return s.err
 	}
 	s.text += line
-	s.writes = append(s.writes, line)
 	return nil
 }
 

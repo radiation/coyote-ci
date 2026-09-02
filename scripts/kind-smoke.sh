@@ -69,7 +69,10 @@ job_json=$(kubectl --context "kind-$cluster_name" -n "$namespace" get job "$job_
 [[ "$(jq -r '.metadata.labels["coyote-ci.io/execution-job-id"] // empty' <<<"$job_json")" != "" ]]
 [[ "$(jq -r '.metadata.labels["coyote-ci.io/build-id"]' <<<"$job_json")" == "$build_id" ]]
 [[ "$(jq -r '.spec.template.spec.automountServiceAccountToken' <<<"$job_json")" == "false" ]]
-! jq -e '[.metadata.labels, .metadata.annotations, .spec.template.metadata.labels, .spec.template.metadata.annotations] | tostring | test("claim"; "i")' <<<"$job_json" >/dev/null
+if jq -e '[.metadata.labels, .metadata.annotations, .spec.template.metadata.labels, .spec.template.metadata.annotations] | tostring | test("claim"; "i")' <<<"$job_json" >/dev/null; then
+  echo "Kubernetes Job or Pod template contains claim metadata" >&2
+  exit 1
+fi
 
 kubectl --context "kind-$cluster_name" -n "$namespace" wait --for=condition=complete "job/$job_name" --timeout="${timeout_seconds}s"
 pod_name=$(kubectl --context "kind-$cluster_name" -n "$namespace" get pods -l "job-name=$job_name" -o jsonpath='{.items[0].metadata.name}')
