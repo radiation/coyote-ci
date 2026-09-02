@@ -327,6 +327,38 @@ func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_CommitsStepAndJobSu
 	}
 }
 
+func TestExecutionJobRepository_CompleteFailedStepAndJob_CommitsStepAndJobFailure(t *testing.T) {
+	db, mock, setupErr := sqlmock.New()
+	if setupErr != nil {
+		t.Fatalf("failed to create sql mock: %v", setupErr)
+	}
+	repo := NewExecutionJobRepository(db)
+
+	now := time.Now().UTC()
+	claimExpiresAt := now.Add(time.Minute)
+	finishedAt := now.Add(2 * time.Minute)
+	claimToken := "claim-1"
+	exitCode := 1
+	request := repository.CompleteFailedStepAndJobRequest{JobID: "job-1", ClaimToken: claimToken, FinishedAt: finishedAt, ErrorMessage: "step timed out", FailureKind: domain.ExecutionFailureKindTimeout, ExitCode: &exitCode, StepRequest: repository.CompleteStepRequest{BuildID: "build-1", StepIndex: 0, ClaimToken: claimToken, RequireClaim: true, Update: repository.StepUpdate{Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &finishedAt}}}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, claimExpiresAt, "running", claimToken))
+	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(atomicCompletionStepRows(now, "failed", &exitCode))
+	mock.ExpectQuery(`UPDATE build_jobs\s+SET status = 'failed'`).WithArgs("job-1", finishedAt, "step timed out", domain.ExecutionFailureKindTimeout, &exitCode).WillReturnRows(atomicCompletionJobRows(now, time.Time{}, "failed", ""))
+	mock.ExpectQuery("SELECT\\s+COUNT\\(\\*\\)::int AS total_count").WithArgs("build-1").WillReturnRows(sqlmock.NewRows([]string{"total_count", "success_count", "failed_count", "pending_count", "running_count"}).AddRow(2, 0, 1, 1, 0))
+	mock.ExpectQuery("SELECT EXISTS").WithArgs("build-1").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec("UPDATE builds").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	result, job, outcome, completeErr := repo.CompleteFailedStepAndJob(context.Background(), request)
+	if completeErr != nil || outcome != repository.StepCompletionCompleted || result.Step.Status != domain.BuildStepStatusFailed || job.Status != domain.ExecutionJobStatusFailed {
+		t.Fatalf("expected committed step/job failure, result=%#v job=%#v outcome=%q err=%v", result, job, outcome, completeErr)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet sql expectations: %v", expectationsErr)
+	}
+}
+
 func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_RollsBackMutationFailures(t *testing.T) {
 	tests := []struct {
 		name      string

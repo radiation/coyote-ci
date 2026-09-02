@@ -202,6 +202,27 @@ func TestControllerSweepDeletesCanceledJobAfterRestart(t *testing.T) {
 	}
 }
 
+func TestControllerSweepDeletesCanceledJobWhileBusy(t *testing.T) {
+	activeStep := testStep()
+	canceledStep := activeStep
+	canceledStep.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{step: activeStep, found: true, durableStatuses: map[string]domain.ExecutionJobStatus{activeStep.JobID: domain.ExecutionJobStatusRunning, canceledStep.JobID: domain.ExecutionJobStatusCanceled}}
+	client := newFakeClient()
+	client.jobs[jobName(activeStep.JobID)] = buildJob("default", activeStep)
+	client.jobs[jobName(canceledStep.JobID)] = buildJob("default", canceledStep)
+	controller := NewController(client, service, nil, "default")
+
+	if err := controller.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if client.jobs[jobName(canceledStep.JobID)] != nil {
+		t.Fatal("expected canceled orphan Job to be deleted while active work is present")
+	}
+	if client.jobs[jobName(activeStep.JobID)] == nil {
+		t.Fatal("active Job must not be deleted by the orphan cleanup sweep")
+	}
+}
+
 func TestControllerIgnoresNonTrueTerminalCondition(t *testing.T) {
 	step := testStep()
 	service := &fakeExecutionService{step: step, found: true}
@@ -278,6 +299,29 @@ func TestControllerDefersCompletionWhenTerminalLogPersistenceFails(t *testing.T)
 	}
 }
 
+func TestControllerStreamsTerminalLogsInBoundedChunks(t *testing.T) {
+	step := testStep()
+	service := &fakeExecutionService{step: step, found: true}
+	client := newFakeClient()
+	client.jobs[jobName(step.JobID)] = completedJob(step, 0, "Completed", "")
+	client.pods = []corev1.Pod{terminatedBuildPod(0, "Completed", "")}
+	client.logs = strings.Repeat("x", terminalLogChunkSize*2+1)
+	sink := &recordingLogSink{}
+	controller := NewController(client, service, sink, "default")
+
+	if err := controller.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if sink.text != client.logs || len(sink.writes) != 3 {
+		t.Fatalf("writes=%d output length=%d", len(sink.writes), len(sink.text))
+	}
+	for _, write := range sink.writes {
+		if len(write) > terminalLogChunkSize {
+			t.Fatalf("write size=%d exceeds chunk size=%d", len(write), terminalLogChunkSize)
+		}
+	}
+}
+
 func TestControllerUnsupportedShapeCompletesWithoutCreatingJob(t *testing.T) {
 	step := testStep()
 	service := &fakeExecutionService{step: step, found: true, validateErr: &workersvc.KubernetesExecutionCapabilityError{Feature: "cache restore or save"}}
@@ -289,6 +333,22 @@ func TestControllerUnsupportedShapeCompletesWithoutCreatingJob(t *testing.T) {
 	}
 	if client.createCalls != 0 || service.completeCalls != 1 || !strings.Contains(service.result.Stderr, "cache restore") {
 		t.Fatalf("creates=%d completion=%d result=%#v", client.createCalls, service.completeCalls, service.result)
+	}
+}
+
+func TestControllerRetriesTransientValidationErrorWithoutCompletion(t *testing.T) {
+	step := testStep()
+	validationErr := errors.New("temporary database outage")
+	service := &fakeExecutionService{step: step, found: true, validateErr: validationErr}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default")
+
+	err := controller.Reconcile(context.Background())
+	if !errors.Is(err, validationErr) {
+		t.Fatalf("reconcile error = %v, want validation error", err)
+	}
+	if client.createCalls != 0 || service.completeCalls != 0 {
+		t.Fatalf("creates=%d completion=%d", client.createCalls, service.completeCalls)
 	}
 }
 
@@ -436,6 +496,7 @@ type fakeClient struct {
 	createRace  bool
 	createCalls int
 	deleteCalls int
+	listCalls   int
 }
 
 func newFakeClient() *fakeClient { return &fakeClient{jobs: map[string]*batchv1.Job{}} }
@@ -468,6 +529,7 @@ func (c *fakeClient) DeleteJob(_ context.Context, _ string, name string) error {
 	return nil
 }
 func (c *fakeClient) ListJobs(context.Context, string, string) ([]batchv1.Job, error) {
+	c.listCalls++
 	jobs := make([]batchv1.Job, 0, len(c.jobs))
 	for _, job := range c.jobs {
 		jobs = append(jobs, *job)
@@ -482,8 +544,9 @@ func (c *fakeClient) GetPodLogs(context.Context, string, string) (io.ReadCloser,
 }
 
 type recordingLogSink struct {
-	text string
-	err  error
+	text   string
+	writes []string
+	err    error
 }
 
 func (s *recordingLogSink) WriteStepLog(_ context.Context, _, _, line string) error {
@@ -491,6 +554,7 @@ func (s *recordingLogSink) WriteStepLog(_ context.Context, _, _, line string) er
 		return s.err
 	}
 	s.text += line
+	s.writes = append(s.writes, line)
 	return nil
 }
 

@@ -24,7 +24,11 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
-const managedByLabel = "app.kubernetes.io/managed-by"
+const (
+	managedByLabel              = "app.kubernetes.io/managed-by"
+	terminalLogChunkSize        = 32 * 1024
+	cancellationCleanupInterval = 30 * time.Second
+)
 
 type Client interface {
 	GetJob(context.Context, string, string) (*batchv1.Job, error)
@@ -51,6 +55,7 @@ type Controller struct {
 	workspacePublicationEnabled bool
 	active                      *workersvc.WorkerRunnableStep
 	terminalLogsPersisted       map[string]bool
+	lastCancellationCleanupAt   time.Time
 	now                         func() time.Time
 }
 
@@ -67,6 +72,9 @@ func (c *Controller) WithWorkspacePublicationEnabled(enabled bool) *Controller {
 
 func (c *Controller) Reconcile(ctx context.Context) error {
 	if c.active != nil {
+		if cleanupErr := c.cleanupCanceledJobsIfDue(ctx); cleanupErr != nil {
+			return cleanupErr
+		}
 		return c.reconcileActive(ctx, *c.active)
 	}
 	step, found, err := c.service.ClaimRunnableStep(ctx)
@@ -74,15 +82,21 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 		return err
 	}
 	if !found {
-		return c.cleanupCanceledJobs(ctx)
+		return c.cleanupCanceledJobsIfDue(ctx)
 	}
 	if c.workspacePublicationEnabled {
 		return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "kubernetes execution backend does not yet support durable workspace publication", StartedAt: c.now(), FinishedAt: c.now()})
 	}
-	if capabilityErr := c.service.ValidateKubernetesRunnableStep(ctx, step); capabilityErr != nil {
-		return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: capabilityErr.Error(), StartedAt: c.now(), FinishedAt: c.now()})
+	if validationErr := c.service.ValidateKubernetesRunnableStep(ctx, step); validationErr != nil {
+		if !workersvc.IsKubernetesExecutionCapabilityError(validationErr) {
+			return validationErr
+		}
+		return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: validationErr.Error(), StartedAt: c.now(), FinishedAt: c.now()})
 	}
 	c.active = &step
+	if cleanupErr := c.cleanupCanceledJobsIfDue(ctx); cleanupErr != nil {
+		return cleanupErr
+	}
 	return c.reconcileActive(ctx, step)
 }
 
@@ -198,19 +212,23 @@ func (c *Controller) collectTerminalLogs(ctx context.Context, step workersvc.Wor
 	if err != nil {
 		return err
 	}
-	contents, readErr := io.ReadAll(stream)
-	closeErr := stream.Close()
-	if readErr != nil {
-		return errors.Join(readErr, closeErr)
+	buffer := make([]byte, terminalLogChunkSize)
+	for {
+		count, readErr := stream.Read(buffer)
+		if count > 0 {
+			if writeErr := c.logSink.WriteStepLog(ctx, step.BuildID, step.StepName, string(buffer[:count])); writeErr != nil {
+				return errors.Join(writeErr, stream.Close())
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return errors.Join(readErr, stream.Close())
+		}
 	}
-	if closeErr != nil {
+	if closeErr := stream.Close(); closeErr != nil {
 		return closeErr
-	}
-	if len(contents) == 0 {
-		return nil
-	}
-	if err := c.logSink.WriteStepLog(ctx, step.BuildID, step.StepName, string(contents)); err != nil {
-		return err
 	}
 	c.terminalLogsPersisted[step.JobID] = true
 	return nil
@@ -247,6 +265,9 @@ func (c *Controller) cleanupCanceledJobs(ctx context.Context) error {
 		if executionJobID == "" || job.Name != jobName(executionJobID) {
 			continue
 		}
+		if c.active != nil && executionJobID == c.active.JobID {
+			continue
+		}
 		durable, getErr := c.service.GetExecutionJob(ctx, executionJobID)
 		if getErr != nil {
 			return getErr
@@ -257,6 +278,17 @@ func (c *Controller) cleanupCanceledJobs(ctx context.Context) error {
 			}
 		}
 	}
+	return nil
+}
+
+func (c *Controller) cleanupCanceledJobsIfDue(ctx context.Context) error {
+	if !c.lastCancellationCleanupAt.IsZero() && c.now().Sub(c.lastCancellationCleanupAt) < cancellationCleanupInterval {
+		return nil
+	}
+	if err := c.cleanupCanceledJobs(ctx); err != nil {
+		return err
+	}
+	c.lastCancellationCleanupAt = c.now()
 	return nil
 }
 

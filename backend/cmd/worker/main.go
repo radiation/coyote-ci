@@ -177,11 +177,13 @@ func main() {
 	log.Printf("worker stopped")
 }
 
+var newKubernetesClient = kubernetesexec.NewClient
+
 func resolveExecutionController(cfg config.Config, workerService *workersvc.ExecutionWorkerService, logSink logs.LogSink) (executionsvc.Controller, error) {
 	if strings.ToLower(strings.TrimSpace(cfg.ExecutionBackend)) != "kubernetes" {
 		return workersvc.NewSynchronousController(workerService), nil
 	}
-	client, err := kubernetesexec.NewClient(cfg.WorkerKubernetesKubeconfig)
+	client, err := newKubernetesClient(cfg.WorkerKubernetesKubeconfig)
 	if err != nil {
 		return nil, err
 	}

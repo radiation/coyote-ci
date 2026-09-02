@@ -32,6 +32,11 @@ func (e *KubernetesExecutionCapabilityError) Error() string {
 	return "kubernetes execution backend does not yet support " + e.Feature
 }
 
+func IsKubernetesExecutionCapabilityError(err error) bool {
+	var capabilityErr *KubernetesExecutionCapabilityError
+	return errors.Is(err, errKubernetesExecutionCapabilityUnavailable) || errors.As(err, &capabilityErr)
+}
+
 func (w *ExecutionWorkerService) ValidateKubernetesRunnableStep(ctx context.Context, step WorkerRunnableStep) error {
 	if strings.TrimSpace(step.JobID) == "" {
 		return &KubernetesExecutionCapabilityError{Feature: "legacy execution jobs"}
@@ -65,6 +70,9 @@ func (w *ExecutionWorkerService) ValidateKubernetesRunnableStep(ctx context.Cont
 	}
 	if steps[0].Cache != nil {
 		return &KubernetesExecutionCapabilityError{Feature: "cache restore or save"}
+	}
+	if len(steps[0].ArtifactPaths) > 0 {
+		return &KubernetesExecutionCapabilityError{Feature: "artifact collection"}
 	}
 
 	build, err := w.builds.GetBuild(ctx, step.BuildID)
@@ -103,8 +111,11 @@ func (w *ExecutionWorkerService) CompleteKubernetesRunnableStep(ctx context.Cont
 	}
 	report, err := boundary.HandleStepResult(ctx, runner.RunStepRequest{
 		BuildID: step.BuildID, JobID: step.JobID, StepID: step.StepID, StepIndex: step.StepIndex,
-		StepName: step.StepName, WorkerID: step.WorkerID, ClaimToken: step.ClaimToken,
+		StepName: step.StepName, WorkerID: step.WorkerID, ClaimToken: step.ClaimToken, RequireAtomicExecutionCompletion: true,
 	}, result)
+	if err == nil && report.SideEffectErr != nil {
+		err = report.SideEffectErr
+	}
 	return report.CompletionOutcome, err
 }
 

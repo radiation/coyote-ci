@@ -176,6 +176,34 @@ func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_ValidAndStaleClaims
 	}
 }
 
+func TestExecutionJobRepository_CompleteFailedStepAndJob(t *testing.T) {
+	now := time.Now().UTC()
+	claimToken := "claim-active"
+	exitCode := 1
+	buildRepo := NewBuildRepository()
+	if _, createBuildErr := buildRepo.CreateQueuedBuild(context.Background(), domain.Build{ID: "build-atomic-failure", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}, []domain.BuildStep{{ID: "step-atomic-failure", BuildID: "build-atomic-failure", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}}); createBuildErr != nil {
+		t.Fatalf("create build: %v", createBuildErr)
+	}
+	if _, startBuildErr := buildRepo.UpdateStatus(context.Background(), "build-atomic-failure", domain.BuildStatusRunning, nil); startBuildErr != nil {
+		t.Fatalf("start build: %v", startBuildErr)
+	}
+	repo := NewExecutionJobRepository()
+	repo.SetBuildRepository(buildRepo)
+	claimExpiresAt := now.Add(time.Minute)
+	if _, createJobErr := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{{ID: "job-atomic-failure", BuildID: "build-atomic-failure", StepID: "step-atomic-failure", NodeID: "test", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusRunning, ClaimToken: &claimToken, ClaimExpiresAt: &claimExpiresAt, ResolvedSpecJSON: "{}", CreatedAt: now}}); createJobErr != nil {
+		t.Fatalf("create job: %v", createJobErr)
+	}
+
+	request := repository.CompleteFailedStepAndJobRequest{JobID: "job-atomic-failure", ClaimToken: claimToken, FinishedAt: now.Add(time.Minute), ErrorMessage: "step timed out", FailureKind: domain.ExecutionFailureKindTimeout, ExitCode: &exitCode, StepRequest: repository.CompleteStepRequest{BuildID: "build-atomic-failure", StepIndex: 0, ClaimToken: claimToken, RequireClaim: true, Update: repository.StepUpdate{Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now}}}
+	result, job, outcome, completeErr := repo.CompleteFailedStepAndJob(context.Background(), request)
+	if completeErr != nil || outcome != repository.StepCompletionCompleted || result.Step.Status != domain.BuildStepStatusFailed || job.Status != domain.ExecutionJobStatusFailed {
+		t.Fatalf("expected atomic failure semantics, result=%#v job=%#v outcome=%q err=%v", result, job, outcome, completeErr)
+	}
+	if job.FailureKind == nil || *job.FailureKind != domain.ExecutionFailureKindTimeout {
+		t.Fatalf("expected timeout failure kind, got %v", job.FailureKind)
+	}
+}
+
 func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_BlocksJobReadsUntilStepAndJobSucceed(t *testing.T) {
 	now := time.Now().UTC()
 	claimToken := "claim-active"
