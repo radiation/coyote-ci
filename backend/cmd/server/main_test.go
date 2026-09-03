@@ -18,6 +18,41 @@ type stubProjectRepository struct {
 	project domain.Project
 }
 
+func TestNewWorkspaceHelperHandlerIsControlledByHelperConfiguration(t *testing.T) {
+	workspaceHelperHandler, handlerErr := newWorkspaceHelperHandler(config.Config{ExecutionBackend: "docker"}, nil)
+	if handlerErr != nil {
+		t.Fatalf("new handler: %v", handlerErr)
+	}
+	if workspaceHelperHandler != nil {
+		t.Fatal("expected no workspace helper handler when helper configuration is disabled")
+	}
+
+	workspaceHelperHandler, handlerErr = newWorkspaceHelperHandlerWithVerifier(config.Config{
+		ExecutionBackend:                 "docker",
+		WorkspaceHelperCapabilityEnabled: true,
+		WorkspaceHelperKubeconfig:        "/server/kubeconfig",
+		WorkspaceHelperServiceAccount:    "workspace-helper",
+		WorkspaceHelperCapabilitySecret:  strings.Repeat("a", 32),
+	}, memoryrepo.NewExecutionJobRepository(), func(kubeconfig string, serviceAccount string) (service.WorkloadIdentityVerifier, error) {
+		if kubeconfig != "/server/kubeconfig" || serviceAccount != "workspace-helper" {
+			t.Fatalf("verifier config kubeconfig=%q serviceAccount=%q", kubeconfig, serviceAccount)
+		}
+		return &workspaceHelperIdentityVerifier{}, nil
+	})
+	if handlerErr != nil {
+		t.Fatalf("new enabled handler: %v", handlerErr)
+	}
+	if workspaceHelperHandler == nil {
+		t.Fatal("expected helper handler with Docker server execution backend")
+	}
+}
+
+type workspaceHelperIdentityVerifier struct{}
+
+func (*workspaceHelperIdentityVerifier) VerifyWorkspaceHelper(context.Context, string, string, string, domain.WorkspaceHelperRole) (service.VerifiedWorkloadIdentity, error) {
+	return service.VerifiedWorkloadIdentity{}, nil
+}
+
 func (r *stubProjectRepository) Create(context.Context, domain.Project) (domain.Project, error) {
 	return domain.Project{}, errors.New("not implemented")
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	apphttp "github.com/radiation/coyote-ci/backend/internal/http"
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
+	kubernetesexec "github.com/radiation/coyote-ci/backend/internal/kubernetes"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/observability"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
@@ -250,6 +251,10 @@ func main() {
 	workerVisibilityService.SetProjectRepository(projectRepo)
 	workerVisibilityService.SetJobRepository(jobRepo)
 	workerHandler := handler.NewWorkerHandler(workerVisibilityService)
+	workspaceHelperHandler, workspaceHelperErr := newWorkspaceHelperHandler(cfg, executionJobRepo)
+	if workspaceHelperErr != nil {
+		log.Fatalf("failed to configure workspace helper capability exchange: %v", workspaceHelperErr)
+	}
 	buildHandler.SetVersionTagService(versionTagService)
 	buildHandler.SetProjectService(projectService)
 	buildHandler.SetJobService(jobService)
@@ -373,6 +378,7 @@ func main() {
 		apphttp.WithAPITokenHandler(apiTokenHandler),
 		apphttp.WithProjectMembershipHandler(projectMembershipHandler),
 		apphttp.WithWorkerHandler(workerHandler),
+		apphttp.WithWorkspaceHelperHandler(workspaceHelperHandler),
 		apphttp.WithPublicHandler(publicHandler),
 	)
 	mux := nethttp.NewServeMux()
@@ -417,6 +423,27 @@ func main() {
 		log.Fatalf("server failed: %v", err)
 	}
 	wg.Wait()
+}
+
+func newWorkspaceHelperHandler(cfg config.Config, executionJobs repository.ExecutionJobRepository) (*handler.WorkspaceHelperHandler, error) {
+	return newWorkspaceHelperHandlerWithVerifier(cfg, executionJobs, func(kubeconfig string, serviceAccount string) (service.WorkloadIdentityVerifier, error) {
+		return kubernetesexec.NewWorkloadIdentityVerifier(kubeconfig, serviceAccount)
+	})
+}
+
+func newWorkspaceHelperHandlerWithVerifier(cfg config.Config, executionJobs repository.ExecutionJobRepository, newVerifier func(string, string) (service.WorkloadIdentityVerifier, error)) (*handler.WorkspaceHelperHandler, error) {
+	if !cfg.WorkspaceHelperCapabilityEnabled {
+		return nil, nil
+	}
+	verifier, err := newVerifier(cfg.WorkspaceHelperKubeconfig, cfg.WorkspaceHelperServiceAccount)
+	if err != nil {
+		return nil, err
+	}
+	capabilities, err := service.NewWorkspaceHelperCapabilityService(executionJobs, verifier, cfg.WorkspaceHelperCapabilitySecret)
+	if err != nil {
+		return nil, err
+	}
+	return handler.NewWorkspaceHelperHandler(capabilities), nil
 }
 
 func bootstrapAdminsAtStartup(ctx context.Context, users *service.UserService, emails map[string]struct{}) error {

@@ -25,6 +25,7 @@ type routerConfig struct {
 	apiTokenHandler          *handler.APITokenHandler
 	projectMembershipHandler *handler.ProjectMembershipHandler
 	workerHandler            *handler.WorkerHandler
+	workspaceHelperHandler   *handler.WorkspaceHelperHandler
 	scmHandler               *handler.SCMHandler
 	publicHandler            *handler.PublicHandler
 }
@@ -76,6 +77,12 @@ func WithProjectMembershipHandler(projectMembershipHandler *handler.ProjectMembe
 func WithWorkerHandler(workerHandler *handler.WorkerHandler) RouterOption {
 	return func(cfg *routerConfig) {
 		cfg.workerHandler = workerHandler
+	}
+}
+
+func WithWorkspaceHelperHandler(workspaceHelperHandler *handler.WorkspaceHelperHandler) RouterOption {
+	return func(cfg *routerConfig) {
+		cfg.workspaceHelperHandler = workspaceHelperHandler
 	}
 }
 
@@ -139,6 +146,9 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 				r.Get("/projects/{slug}/builds", cfg.publicHandler.ListProjectBuilds)
 				r.Get("/projects/{slug}/builds/{buildID}", cfg.publicHandler.GetProjectBuild)
 			})
+		}
+		if cfg.workspaceHelperHandler != nil {
+			r.Post("/internal/workspace-helper/capabilities", cfg.workspaceHelperHandler.ExchangeCapability)
 		}
 
 		r.Route("/events", func(r chi.Router) {

@@ -357,6 +357,10 @@ func TestLoad(t *testing.T) {
 		"WORKER_KUBERNETES_NAMESPACE",
 		"WORKER_KUBERNETES_KUBECONFIG",
 		"KUBECONFIG",
+		"COYOTE_WORKSPACE_HELPER_ENABLED",
+		"COYOTE_WORKSPACE_HELPER_KUBECONFIG",
+		"COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT",
+		"COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET",
 		"OIDC_ISSUER_URL",
 		"OIDC_CLIENT_ID",
 		"OIDC_CLIENT_SECRET",
@@ -393,10 +397,33 @@ func TestLoad(t *testing.T) {
 			}
 
 			got := Load()
-			if got != tc.expected {
-				t.Fatalf("expected %+v, got %+v", tc.expected, got)
+			expected := tc.expected
+			expected.WorkspaceHelperServiceAccount = "coyote-workspace-helper"
+			if got != expected {
+				t.Fatalf("expected %+v, got %+v", expected, got)
 			}
 		})
+	}
+}
+
+func TestLoadWorkspaceHelperCapabilityConfig(t *testing.T) {
+	t.Setenv("COYOTE_WORKSPACE_HELPER_ENABLED", "true")
+	t.Setenv("COYOTE_WORKSPACE_HELPER_KUBECONFIG", "/server/kubeconfig")
+	t.Setenv("COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT", "workspace-helper")
+	t.Setenv("COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET", "workspace-helper-signing-secret")
+
+	cfg := Load()
+	if !cfg.WorkspaceHelperCapabilityEnabled {
+		t.Fatal("expected workspace helper capability exchange to be enabled")
+	}
+	if cfg.WorkspaceHelperKubeconfig != "/server/kubeconfig" {
+		t.Fatalf("kubeconfig=%q", cfg.WorkspaceHelperKubeconfig)
+	}
+	if cfg.WorkspaceHelperServiceAccount != "workspace-helper" {
+		t.Fatalf("service account=%q", cfg.WorkspaceHelperServiceAccount)
+	}
+	if cfg.WorkspaceHelperCapabilitySecret != "workspace-helper-signing-secret" {
+		t.Fatalf("capability secret was not loaded")
 	}
 }
 
