@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -87,6 +89,64 @@ func TestWorkspaceHelperHandlerHandlesUnavailableAndOperationalFailures(t *testi
 	}
 }
 
+func TestWorkspaceHelperHandlerPreparePreservesAuthoritativePublication(t *testing.T) {
+	size := int64(len("corrupt bytes"))
+	publication := domain.WorkspaceRevisionPublication{ContentDigest: "sha256:" + strings.Repeat("a", 64), StorageKey: "workspace-revisions/revision.tar.gz", SizeBytes: &size}
+	prepare := &workspacePrepareOpenerStub{payload: service.WorkspacePreparePayload{Archive: io.NopCloser(bytes.NewBufferString("corrupt bytes")), Publication: publication}}
+	handler := NewWorkspaceHelperHandler(nil)
+	handler.SetPrepareService(prepare)
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/prepare", strings.NewReader(`{"execution_job_id":"job-1","pod_uid":"pod-1"}`))
+	request.Header.Set("Authorization", "Bearer capability")
+	response := httptest.NewRecorder()
+
+	handler.PrepareWorkspace(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Digest") != publication.ContentDigest || response.Body.String() != "corrupt bytes" {
+		t.Fatalf("status=%d digest=%q body=%q", response.Code, response.Header().Get("Content-Digest"), response.Body.String())
+	}
+}
+
+func TestWorkspaceHelperHandlerPrepareRejectsAuthoritativeSizeMismatch(t *testing.T) {
+	size := int64(99)
+	prepare := &workspacePrepareOpenerStub{payload: service.WorkspacePreparePayload{Archive: io.NopCloser(bytes.NewBufferString("short")), Publication: domain.WorkspaceRevisionPublication{ContentDigest: "sha256:" + strings.Repeat("a", 64), StorageKey: "workspace-revisions/revision.tar.gz", SizeBytes: &size}}}
+	handler := NewWorkspaceHelperHandler(nil)
+	handler.SetPrepareService(prepare)
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/prepare", strings.NewReader(`{"execution_job_id":"job-1","pod_uid":"pod-1"}`))
+	request.Header.Set("Authorization", "Bearer capability")
+	response := httptest.NewRecorder()
+
+	handler.PrepareWorkspace(response, request)
+	if response.Code != http.StatusInternalServerError || response.Header().Get("Content-Digest") != "" {
+		t.Fatalf("status=%d digest=%q", response.Code, response.Header().Get("Content-Digest"))
+	}
+}
+
+func TestWorkspaceHelperHandlerPrepareRejectsInvalidRequests(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		handler *WorkspaceHelperHandler
+		body    string
+		token   string
+		want    int
+	}{
+		{name: "unavailable", handler: NewWorkspaceHelperHandler(nil), body: `{}`, want: http.StatusServiceUnavailable},
+		{name: "missing capability", handler: workspacePrepareHandlerForTest(service.WorkspacePreparePayload{}), body: `{}`, want: http.StatusUnauthorized},
+		{name: "invalid body", handler: workspacePrepareHandlerForTest(service.WorkspacePreparePayload{}), body: `{`, token: "capability", want: http.StatusBadRequest},
+		{name: "invalid payload", handler: workspacePrepareHandlerForTest(service.WorkspacePreparePayload{}), body: `{}`, token: "capability", want: http.StatusInternalServerError},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/prepare", strings.NewReader(testCase.body))
+			if testCase.token != "" {
+				request.Header.Set("Authorization", "Bearer "+testCase.token)
+			}
+			response := httptest.NewRecorder()
+			testCase.handler.PrepareWorkspace(response, request)
+			if response.Code != testCase.want {
+				t.Fatalf("status=%d, want %d", response.Code, testCase.want)
+			}
+		})
+	}
+}
+
 type workspaceHelperExchangerStub struct {
 	token          string
 	capability     domain.WorkspaceHelperCapability
@@ -100,3 +160,20 @@ func (s *workspaceHelperExchangerStub) Exchange(_ context.Context, projectedToke
 }
 
 var _ workspaceHelperCapabilityExchanger = (*workspaceHelperExchangerStub)(nil)
+
+type workspacePrepareOpenerStub struct {
+	payload service.WorkspacePreparePayload
+	err     error
+}
+
+func (s *workspacePrepareOpenerStub) Open(context.Context, string, string, string) (service.WorkspacePreparePayload, error) {
+	return s.payload, s.err
+}
+
+var _ workspacePrepareOpener = (*workspacePrepareOpenerStub)(nil)
+
+func workspacePrepareHandlerForTest(payload service.WorkspacePreparePayload) *WorkspaceHelperHandler {
+	handler := NewWorkspaceHelperHandler(nil)
+	handler.SetPrepareService(&workspacePrepareOpenerStub{payload: payload})
+	return handler
+}

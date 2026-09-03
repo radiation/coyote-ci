@@ -41,6 +41,7 @@ import (
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 	"github.com/radiation/coyote-ci/backend/internal/versioninfo"
+	workspacepkg "github.com/radiation/coyote-ci/backend/internal/workspace"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
@@ -115,6 +116,7 @@ func main() {
 
 	buildRepo := repositorypostgres.NewBuildRepository(db)
 	executionJobRepo := repositorypostgres.NewExecutionJobRepository(db)
+	workspaceRevisionRepo := repositorypostgres.NewWorkspaceRevisionRepository(db)
 	executionJobOutputRepo := repositorypostgres.NewExecutionJobOutputRepository(db)
 	jobRepo := repositorypostgres.NewJobRepository(db)
 	projectRepo := repositorypostgres.NewProjectRepository(db)
@@ -254,6 +256,29 @@ func main() {
 	workspaceHelperHandler, workspaceHelperErr := newWorkspaceHelperHandler(cfg, executionJobRepo)
 	if workspaceHelperErr != nil {
 		log.Fatalf("failed to configure workspace helper capability exchange: %v", workspaceHelperErr)
+	}
+	if workspaceHelperHandler != nil {
+		workspaceRevisionStore := workspaceRevisionStoreFromConfig(cfg)
+		archiveReader, archiveReaderOK := workspaceRevisionStore.(workspacepkg.WorkspaceRevisionArchiveReader)
+		if workspaceRevisionStore == nil || !archiveReaderOK {
+			log.Fatal("workspace helper prepare requires workspace revision storage")
+		}
+		sourceArchives, sourceArchiveErr := service.NewServerSourceArchivePreparer(source.NewGitWorkspaceSourceResolver(), checkoutResolver)
+		if sourceArchiveErr != nil {
+			log.Fatalf("failed to configure workspace source archiver: %v", sourceArchiveErr)
+		}
+		prepareService, prepareErr := service.NewWorkspacePrepareService(service.WorkspacePrepareServiceConfig{
+			CapabilityAuthorizer: workspaceHelperHandler.PrepareCapabilityAuthorizer(),
+			ExecutionJobs:        executionJobRepo,
+			Builds:               buildRepo,
+			WorkspaceRevisions:   workspaceRevisionRepo,
+			RevisionArchives:     archiveReader,
+			SourceArchives:       sourceArchives,
+		})
+		if prepareErr != nil {
+			log.Fatalf("failed to configure workspace prepare service: %v", prepareErr)
+		}
+		workspaceHelperHandler.SetPrepareService(prepareService)
 	}
 	buildHandler.SetVersionTagService(versionTagService)
 	buildHandler.SetProjectService(projectService)
@@ -429,6 +454,13 @@ func newWorkspaceHelperHandler(cfg config.Config, executionJobs repository.Execu
 	return newWorkspaceHelperHandlerWithVerifier(cfg, executionJobs, func(kubeconfig string, serviceAccount string) (service.WorkloadIdentityVerifier, error) {
 		return kubernetesexec.NewWorkloadIdentityVerifier(kubeconfig, serviceAccount)
 	})
+}
+
+func workspaceRevisionStoreFromConfig(cfg config.Config) workspacepkg.WorkspaceRevisionStore {
+	if strings.TrimSpace(cfg.WorkspaceRevisionStorageRoot) == "" {
+		return nil
+	}
+	return workspacepkg.NewFilesystemWorkspaceRevisionStore(cfg.WorkspaceRevisionStorageRoot)
 }
 
 func newWorkspaceHelperHandlerWithVerifier(cfg config.Config, executionJobs repository.ExecutionJobRepository, newVerifier func(string, string) (service.WorkloadIdentityVerifier, error)) (*handler.WorkspaceHelperHandler, error) {

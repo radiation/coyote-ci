@@ -34,10 +34,15 @@ type workspacePrepareRevisionRepository interface {
 	GetPublishedByBuildNode(ctx context.Context, buildID string, nodeID string) (domain.WorkspaceRevision, error)
 }
 
+type WorkspacePreparePayload struct {
+	Archive     io.ReadCloser
+	Publication domain.WorkspaceRevisionPublication
+}
+
 // WorkspaceSourceArchivePreparer materializes the immutable source baseline as
 // an archive. It deliberately has no credential-returning API.
 type WorkspaceSourceArchivePreparer interface {
-	OpenSourceArchive(ctx context.Context, build domain.Build, job domain.ExecutionJob, spec domain.ExecutionJobSpec) (io.ReadCloser, error)
+	OpenSourceArchive(ctx context.Context, build domain.Build, job domain.ExecutionJob, spec domain.ExecutionJobSpec) (WorkspacePreparePayload, error)
 }
 
 type WorkspacePrepareServiceConfig struct {
@@ -65,18 +70,18 @@ func NewWorkspacePrepareService(config WorkspacePrepareServiceConfig) (*Workspac
 	return &WorkspacePrepareService{capabilities: config.CapabilityAuthorizer, executionJobs: config.ExecutionJobs, builds: config.Builds, revisions: config.WorkspaceRevisions, archives: config.RevisionArchives, sources: config.SourceArchives}, nil
 }
 
-// Open authorizes one prepare helper and streams its immutable workspace input.
-func (s *WorkspacePrepareService) Open(ctx context.Context, capabilityToken string, executionJobID string, podUID string) (io.ReadCloser, error) {
+// Open authorizes one prepare helper and returns its immutable workspace input.
+func (s *WorkspacePrepareService) Open(ctx context.Context, capabilityToken string, executionJobID string, podUID string) (WorkspacePreparePayload, error) {
 	if _, err := s.capabilities.Authorize(ctx, capabilityToken, executionJobID, podUID, domain.WorkspaceHelperRolePrepare); err != nil {
-		return nil, err
+		return WorkspacePreparePayload{}, err
 	}
 	job, err := s.executionJobs.GetJobByID(ctx, strings.TrimSpace(executionJobID))
 	if err != nil {
-		return nil, err
+		return WorkspacePreparePayload{}, err
 	}
 	var spec domain.ExecutionJobSpec
 	if decodeErr := json.Unmarshal([]byte(job.ResolvedSpecJSON), &spec); decodeErr != nil {
-		return nil, fmt.Errorf("%w: resolved execution job spec", ErrWorkspacePrepareInvalidInput)
+		return WorkspacePreparePayload{}, fmt.Errorf("%w: resolved execution job spec", ErrWorkspacePrepareInvalidInput)
 	}
 	switch spec.WorkspaceInput.Mode {
 	case domain.WorkspaceInputModePredecessor:
@@ -84,32 +89,36 @@ func (s *WorkspacePrepareService) Open(ctx context.Context, capabilityToken stri
 	case domain.WorkspaceInputModeSource:
 		build, buildErr := s.builds.GetByID(ctx, job.BuildID)
 		if buildErr != nil {
-			return nil, buildErr
+			return WorkspacePreparePayload{}, buildErr
 		}
 		return s.sources.OpenSourceArchive(ctx, build, job, spec)
 	case domain.WorkspaceInputModeFanIn:
-		return nil, ErrWorkspacePrepareFanInUnsupported
+		return WorkspacePreparePayload{}, ErrWorkspacePrepareFanInUnsupported
 	default:
-		return nil, fmt.Errorf("%w: workspace input mode", ErrWorkspacePrepareInvalidInput)
+		return WorkspacePreparePayload{}, fmt.Errorf("%w: workspace input mode", ErrWorkspacePrepareInvalidInput)
 	}
 }
 
-func (s *WorkspacePrepareService) openPredecessor(ctx context.Context, job domain.ExecutionJob, input domain.WorkspaceInputPlan) (io.ReadCloser, error) {
+func (s *WorkspacePrepareService) openPredecessor(ctx context.Context, job domain.ExecutionJob, input domain.WorkspaceInputPlan) (WorkspacePreparePayload, error) {
 	if strings.TrimSpace(job.BuildID) == "" || strings.TrimSpace(input.ProducerNodeID) == "" {
-		return nil, fmt.Errorf("%w: predecessor build and producer node are required", ErrWorkspacePrepareInvalidInput)
+		return WorkspacePreparePayload{}, fmt.Errorf("%w: predecessor build and producer node are required", ErrWorkspacePrepareInvalidInput)
 	}
 	revision, err := s.revisions.GetPublishedByBuildNode(ctx, job.BuildID, input.ProducerNodeID)
 	if err != nil {
-		return nil, err
+		return WorkspacePreparePayload{}, err
 	}
 	if revision.Status != domain.WorkspaceRevisionStatusPublished || revision.ContentDigest == nil || revision.StorageKey == nil || revision.SizeBytes == nil {
-		return nil, ErrWorkspacePrepareRevisionIncomplete
+		return WorkspacePreparePayload{}, ErrWorkspacePrepareRevisionIncomplete
 	}
 	publication := domain.WorkspaceRevisionPublication{ContentDigest: *revision.ContentDigest, StorageKey: *revision.StorageKey, SizeBytes: revision.SizeBytes}
 	if publicationErr := publication.Validate(); publicationErr != nil {
-		return nil, ErrWorkspacePrepareRevisionIncomplete
+		return WorkspacePreparePayload{}, ErrWorkspacePrepareRevisionIncomplete
 	}
-	return s.archives.Open(ctx, publication)
+	archive, openErr := s.archives.Open(ctx, publication)
+	if openErr != nil {
+		return WorkspacePreparePayload{}, openErr
+	}
+	return WorkspacePreparePayload{Archive: archive, Publication: publication}, nil
 }
 
 var _ WorkspacePrepareCapabilityAuthorizer = (*WorkspaceHelperCapabilityService)(nil)

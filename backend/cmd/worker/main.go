@@ -66,6 +66,12 @@ func newRepositoryAwareCheckoutResolver(connections checkoutResolverConnectionRe
 }
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "workspace" && os.Args[2] == "prepare" {
+		if prepareErr := runWorkspacePrepare(context.Background()); prepareErr != nil {
+			log.Fatalf("workspace prepare failed: %v", prepareErr)
+		}
+		return
+	}
 	cfg := config.Load()
 	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
 	logEmailNotificationConfig(cfg)

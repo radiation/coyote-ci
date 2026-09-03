@@ -149,6 +149,7 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 		}
 		if cfg.workspaceHelperHandler != nil {
 			r.Post("/internal/workspace-helper/capabilities", cfg.workspaceHelperHandler.ExchangeCapability)
+			r.Post("/internal/workspace-helper/prepare", cfg.workspaceHelperHandler.PrepareWorkspace)
 		}
 
 		r.Route("/events", func(r chi.Router) {

@@ -44,6 +44,96 @@ type WorkspaceRevisionArchiveReader interface {
 	Open(ctx context.Context, publication domain.WorkspaceRevisionPublication) (io.ReadCloser, error)
 }
 
+// ArchiveDirectory creates a verified tar.gz archive from a trusted directory.
+func ArchiveDirectory(ctx context.Context, sourceRoot string) (io.ReadCloser, domain.WorkspaceRevisionPublication, error) {
+	archive, err := os.CreateTemp("", "coyote-workspace-*.tar.gz")
+	if err != nil {
+		return nil, domain.WorkspaceRevisionPublication{}, err
+	}
+	archivePath := archive.Name()
+	if writeErr := writeWorkspaceRevisionArchive(ctx, archive, sourceRoot); writeErr != nil {
+		_ = archive.Close()
+		_ = os.Remove(archivePath)
+		return nil, domain.WorkspaceRevisionPublication{}, writeErr
+	}
+	if closeErr := archive.Close(); closeErr != nil {
+		_ = os.Remove(archivePath)
+		return nil, domain.WorkspaceRevisionPublication{}, closeErr
+	}
+	digest, size, digestErr := workspaceRevisionDigestAndSize(ctx, archivePath)
+	if digestErr != nil {
+		_ = os.Remove(archivePath)
+		return nil, domain.WorkspaceRevisionPublication{}, digestErr
+	}
+	reader, openErr := os.Open(archivePath)
+	if openErr != nil {
+		_ = os.Remove(archivePath)
+		return nil, domain.WorkspaceRevisionPublication{}, openErr
+	}
+	return &removingReadCloser{ReadCloser: reader, path: archivePath}, publicationForWorkspaceRevision("transport/source.tar.gz", digest, size), nil
+}
+
+// RestoreArchive verifies and safely extracts an archive into an absent destination.
+func RestoreArchive(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, destinationRoot string) error {
+	if archive == nil || publication.Validate() != nil {
+		return ErrInvalidWorkspaceRevisionObject
+	}
+	if strings.TrimSpace(destinationRoot) == "" {
+		return fmt.Errorf("destination root is required")
+	}
+	if _, statErr := os.Stat(destinationRoot); statErr == nil {
+		return ErrWorkspaceRevisionDestination
+	} else if !os.IsNotExist(statErr) {
+		return statErr
+	}
+	if mkdirErr := os.MkdirAll(filepath.Dir(destinationRoot), 0o755); mkdirErr != nil {
+		return mkdirErr
+	}
+	staging, stagingErr := os.MkdirTemp(filepath.Dir(destinationRoot), ".workspace-restore-*")
+	if stagingErr != nil {
+		return stagingErr
+	}
+	defer func() { _ = os.RemoveAll(staging) }()
+	hasher := sha256.New()
+	countingReader := &workspaceRevisionCountingReader{reader: archive, writer: hasher}
+	gzipReader, gzipErr := gzip.NewReader(countingReader)
+	if gzipErr != nil {
+		return gzipErr
+	}
+	if extractErr := extractWorkspaceRevisionArchive(ctx, tar.NewReader(gzipReader), staging); extractErr != nil {
+		_ = gzipReader.Close()
+		return extractErr
+	}
+	if _, copyErr := copyWorkspaceRevision(ctx, io.Discard, gzipReader); copyErr != nil {
+		_ = gzipReader.Close()
+		return copyErr
+	}
+	if closeErr := gzipReader.Close(); closeErr != nil {
+		return closeErr
+	}
+	if "sha256:"+hex.EncodeToString(hasher.Sum(nil)) != publication.ContentDigest {
+		return ErrWorkspaceRevisionDigestMismatch
+	}
+	if publication.SizeBytes == nil || countingReader.size != *publication.SizeBytes {
+		return ErrWorkspaceRevisionDigestMismatch
+	}
+	return os.Rename(staging, destinationRoot)
+}
+
+type removingReadCloser struct {
+	io.ReadCloser
+	path string
+}
+
+func (r *removingReadCloser) Close() error {
+	closeErr := r.ReadCloser.Close()
+	removeErr := os.Remove(r.path)
+	if closeErr != nil {
+		return closeErr
+	}
+	return removeErr
+}
+
 // FilesystemWorkspaceRevisionStore stores tar.gz revision objects below a
 // configured root. ContentDigest is SHA-256 over the stored tar.gz bytes.
 type FilesystemWorkspaceRevisionStore struct {
@@ -137,43 +227,7 @@ func (s *FilesystemWorkspaceRevisionStore) Restore(ctx context.Context, publicat
 		return openErr
 	}
 	defer func() { _ = archive.Close() }()
-
-	if mkdirErr := os.MkdirAll(filepath.Dir(destinationRoot), 0o755); mkdirErr != nil {
-		return mkdirErr
-	}
-	staging, stagingErr := os.MkdirTemp(filepath.Dir(destinationRoot), ".workspace-restore-*")
-	if stagingErr != nil {
-		return stagingErr
-	}
-	defer func() { _ = os.RemoveAll(staging) }()
-
-	hasher := sha256.New()
-	countingReader := &workspaceRevisionCountingReader{reader: archive, writer: hasher}
-	gzipReader, gzipErr := gzip.NewReader(countingReader)
-	if gzipErr != nil {
-		return gzipErr
-	}
-	if extractErr := extractWorkspaceRevisionArchive(ctx, tar.NewReader(gzipReader), staging); extractErr != nil {
-		_ = gzipReader.Close()
-		return extractErr
-	}
-	if _, copyErr := copyWorkspaceRevision(ctx, io.Discard, gzipReader); copyErr != nil {
-		_ = gzipReader.Close()
-		return copyErr
-	}
-	if closeErr := gzipReader.Close(); closeErr != nil {
-		return closeErr
-	}
-	digest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
-	if digest != publication.ContentDigest {
-		return ErrWorkspaceRevisionDigestMismatch
-	}
-	if _, statErr := os.Stat(destinationRoot); statErr == nil {
-		return ErrWorkspaceRevisionDestination
-	} else if !os.IsNotExist(statErr) {
-		return statErr
-	}
-	return os.Rename(staging, destinationRoot)
+	return RestoreArchive(ctx, archive, publication, destinationRoot)
 }
 
 func (s *FilesystemWorkspaceRevisionStore) Open(ctx context.Context, publication domain.WorkspaceRevisionPublication) (io.ReadCloser, error) {
@@ -448,11 +502,13 @@ func syncWorkspaceRevisionDirectory(directory string) error {
 type workspaceRevisionCountingReader struct {
 	reader io.Reader
 	writer io.Writer
+	size   int64
 }
 
 func (r *workspaceRevisionCountingReader) Read(buffer []byte) (int, error) {
 	read, err := r.reader.Read(buffer)
 	if read > 0 {
+		r.size += int64(read)
 		if _, writeErr := r.writer.Write(buffer[:read]); writeErr != nil {
 			return read, writeErr
 		}

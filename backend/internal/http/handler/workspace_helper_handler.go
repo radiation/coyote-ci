@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -18,12 +21,31 @@ type workspaceHelperCapabilityExchanger interface {
 	Exchange(context.Context, string, domain.WorkspaceHelperCapability) (string, domain.WorkspaceHelperCapability, error)
 }
 
+type workspacePrepareOpener interface {
+	Open(context.Context, string, string, string) (service.WorkspacePreparePayload, error)
+}
+
 type WorkspaceHelperHandler struct {
 	capabilities workspaceHelperCapabilityExchanger
+	prepare      workspacePrepareOpener
 }
 
 func NewWorkspaceHelperHandler(capabilities workspaceHelperCapabilityExchanger) *WorkspaceHelperHandler {
 	return &WorkspaceHelperHandler{capabilities: capabilities}
+}
+
+func (h *WorkspaceHelperHandler) SetPrepareService(prepare workspacePrepareOpener) {
+	if h != nil {
+		h.prepare = prepare
+	}
+}
+
+func (h *WorkspaceHelperHandler) PrepareCapabilityAuthorizer() service.WorkspacePrepareCapabilityAuthorizer {
+	if h == nil {
+		return nil
+	}
+	authorizer, _ := h.capabilities.(service.WorkspacePrepareCapabilityAuthorizer)
+	return authorizer
 }
 
 func (h *WorkspaceHelperHandler) ExchangeCapability(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +77,65 @@ func (h *WorkspaceHelperHandler) ExchangeCapability(w http.ResponseWriter, r *ht
 	}
 	log.Printf("INFO workspace helper capability issued execution_job_id=%s pod_uid=%s role=%s", issued.ExecutionJobID, issued.PodUID, issued.Role)
 	writeDataJSON(w, http.StatusCreated, api.WorkspaceHelperCapabilityExchangeResponse{Capability: token, ExpiresAt: issued.ExpiresAt.UTC().Format(time.RFC3339)})
+}
+
+func (h *WorkspaceHelperHandler) PrepareWorkspace(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.prepare == nil {
+		writeErrorJSON(w, http.StatusServiceUnavailable, "unavailable", "workspace prepare is not configured")
+		return
+	}
+	capability, ok := bearerToken(r)
+	if !ok || capability == "" {
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "workspace helper capability is required")
+		return
+	}
+	var request api.WorkspaceHelperPrepareRequest
+	if decodeErr := json.NewDecoder(r.Body).Decode(&request); decodeErr != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+	prepared, openErr := h.prepare.Open(r.Context(), capability, strings.TrimSpace(request.ExecutionJobID), strings.TrimSpace(request.PodUID))
+	if openErr != nil {
+		if errors.Is(openErr, service.ErrWorkspaceHelperUnauthorized) {
+			writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "workspace helper authorization failed")
+			return
+		}
+		log.Printf("ERROR workspace prepare failed execution_job_id=%s pod_uid=%s err=%v", strings.TrimSpace(request.ExecutionJobID), strings.TrimSpace(request.PodUID), openErr)
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "workspace prepare failed")
+		return
+	}
+	if prepared.Archive == nil || prepared.Publication.Validate() != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "workspace prepare failed")
+		return
+	}
+	defer func() { _ = prepared.Archive.Close() }()
+	temporary, createErr := os.CreateTemp("", "coyote-workspace-prepare-*")
+	if createErr != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "workspace prepare failed")
+		return
+	}
+	temporaryPath := temporary.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+	size, copyErr := io.Copy(temporary, prepared.Archive)
+	if closeErr := temporary.Close(); copyErr != nil || closeErr != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "workspace prepare failed")
+		return
+	}
+	if prepared.Publication.SizeBytes == nil || size != *prepared.Publication.SizeBytes {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "workspace prepare failed")
+		return
+	}
+	payload, openErr := os.Open(temporaryPath)
+	if openErr != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "workspace prepare failed")
+		return
+	}
+	defer func() { _ = payload.Close() }()
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Digest", prepared.Publication.ContentDigest)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", *prepared.Publication.SizeBytes))
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, payload)
 }
 
 func bearerToken(r *http.Request) (string, bool) {

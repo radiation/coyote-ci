@@ -16,14 +16,17 @@ func TestWorkspacePrepareServiceOpenPredecessorStreamsPublishedRevision(t *testi
 	harness.revisions.revision = domain.WorkspaceRevision{Status: domain.WorkspaceRevisionStatusPublished, ContentDigest: workspacePrepareStringPointer("sha256:abc"), StorageKey: workspacePrepareStringPointer("workspace-revisions/revision-1.tar.gz"), SizeBytes: &size}
 	harness.archives.contents = []byte("archive")
 
-	archive, err := harness.service.Open(context.Background(), "capability", "job-2", "pod-1")
+	prepared, err := harness.service.Open(context.Background(), "capability", "job-2", "pod-1")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	contents, readErr := io.ReadAll(archive)
-	closeErr := archive.Close()
+	contents, readErr := io.ReadAll(prepared.Archive)
+	closeErr := prepared.Archive.Close()
 	if readErr != nil || closeErr != nil || string(contents) != "archive" {
 		t.Fatalf("stream = %q, %v, %v", contents, readErr, closeErr)
+	}
+	if prepared.Publication.ContentDigest != "sha256:abc" || prepared.Publication.SizeBytes == nil || *prepared.Publication.SizeBytes != size {
+		t.Fatalf("publication = %#v", prepared.Publication)
 	}
 	if harness.revisions.buildID != "build-1" || harness.revisions.nodeID != "compile" || harness.sources.calls != 0 {
 		t.Fatalf("unexpected dependencies: revision=%q/%q source calls=%d", harness.revisions.buildID, harness.revisions.nodeID, harness.sources.calls)
@@ -55,12 +58,12 @@ func TestWorkspacePrepareServiceOpenRejectsIncompletePredecessorRevision(t *test
 func TestWorkspacePrepareServiceOpenSourceUsesSourceArchivePreparer(t *testing.T) {
 	harness := newWorkspacePrepareServiceForTest(t, domain.ExecutionJob{ID: "job-1", BuildID: "build-1", ResolvedSpecJSON: `{"version":1,"workspace_input":{"mode":"source"}}`})
 	harness.sources.contents = []byte("source")
-	archive, err := harness.service.Open(context.Background(), "capability", "job-1", "pod-1")
+	prepared, err := harness.service.Open(context.Background(), "capability", "job-1", "pod-1")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer func() { _ = archive.Close() }()
-	contents, readErr := io.ReadAll(archive)
+	defer func() { _ = prepared.Archive.Close() }()
+	contents, readErr := io.ReadAll(prepared.Archive)
 	if readErr != nil || string(contents) != "source" || harness.builds.calls != 1 || harness.sources.calls != 1 {
 		t.Fatalf("source stream = %q, %v; build/source calls = %d/%d", contents, readErr, harness.builds.calls, harness.sources.calls)
 	}
@@ -163,8 +166,9 @@ type workspacePrepareSourceFake struct {
 	calls    int
 }
 
-func (f *workspacePrepareSourceFake) OpenSourceArchive(context.Context, domain.Build, domain.ExecutionJob, domain.ExecutionJobSpec) (io.ReadCloser, error) {
+func (f *workspacePrepareSourceFake) OpenSourceArchive(context.Context, domain.Build, domain.ExecutionJob, domain.ExecutionJobSpec) (WorkspacePreparePayload, error) {
 	f.calls++
-	return io.NopCloser(bytes.NewReader(f.contents)), nil
+	size := int64(len(f.contents))
+	return WorkspacePreparePayload{Archive: io.NopCloser(bytes.NewReader(f.contents)), Publication: domain.WorkspaceRevisionPublication{ContentDigest: "sha256:source", StorageKey: "workspace-revisions/source.tar.gz", SizeBytes: &size}}, nil
 }
 func workspacePrepareStringPointer(value string) *string { return &value }
