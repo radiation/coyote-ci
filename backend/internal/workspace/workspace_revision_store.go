@@ -38,6 +38,12 @@ type WorkspaceRevisionStore interface {
 	Delete(ctx context.Context, publication domain.WorkspaceRevisionPublication) error
 }
 
+// WorkspaceRevisionArchiveReader is an optional read capability for stores
+// whose immutable revision objects can be streamed to another trusted service.
+type WorkspaceRevisionArchiveReader interface {
+	Open(ctx context.Context, publication domain.WorkspaceRevisionPublication) (io.ReadCloser, error)
+}
+
 // FilesystemWorkspaceRevisionStore stores tar.gz revision objects below a
 // configured root. ContentDigest is SHA-256 over the stored tar.gz bytes.
 type FilesystemWorkspaceRevisionStore struct {
@@ -168,6 +174,24 @@ func (s *FilesystemWorkspaceRevisionStore) Restore(ctx context.Context, publicat
 		return statErr
 	}
 	return os.Rename(staging, destinationRoot)
+}
+
+func (s *FilesystemWorkspaceRevisionStore) Open(ctx context.Context, publication domain.WorkspaceRevisionPublication) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	archivePath, err := s.pathForPublication(publication)
+	if err != nil {
+		return nil, err
+	}
+	archive, openErr := os.Open(archivePath)
+	if openErr != nil {
+		if os.IsNotExist(openErr) {
+			return nil, ErrWorkspaceRevisionNotFound
+		}
+		return nil, openErr
+	}
+	return archive, nil
 }
 
 func (s *FilesystemWorkspaceRevisionStore) Delete(ctx context.Context, publication domain.WorkspaceRevisionPublication) error {

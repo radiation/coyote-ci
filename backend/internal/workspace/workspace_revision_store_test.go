@@ -52,6 +52,15 @@ func TestFilesystemWorkspaceRevisionStorePublishRestoreAndDelete(t *testing.T) {
 	if publication.ContentDigest != "sha256:"+hex.EncodeToString(wantDigest[:]) || *publication.SizeBytes != int64(len(archiveBytes)) {
 		t.Fatalf("publication does not describe archive: %+v", publication)
 	}
+	archive, openErr := store.Open(context.Background(), publication)
+	if openErr != nil {
+		t.Fatalf("open archive: %v", openErr)
+	}
+	streamedBytes, readErr := io.ReadAll(archive)
+	closeErr := archive.Close()
+	if readErr != nil || closeErr != nil || string(streamedBytes) != string(archiveBytes) {
+		t.Fatalf("stream archive = %d bytes, %v, %v; want stored bytes", len(streamedBytes), readErr, closeErr)
+	}
 
 	repeated, repeatErr := store.Publish(context.Background(), "revision-1", sourceRoot)
 	if repeatErr != nil || repeated.ContentDigest != publication.ContentDigest || repeated.StorageKey != publication.StorageKey || repeated.SizeBytes == nil || *repeated.SizeBytes != *publication.SizeBytes {
@@ -75,6 +84,9 @@ func TestFilesystemWorkspaceRevisionStorePublishRestoreAndDelete(t *testing.T) {
 	}
 	if deleteErr := store.Delete(context.Background(), publication); deleteErr != nil {
 		t.Fatalf("idempotent delete: %v", deleteErr)
+	}
+	if _, openErr := store.Open(context.Background(), publication); !errors.Is(openErr, ErrWorkspaceRevisionNotFound) {
+		t.Fatalf("open deleted object: %v", openErr)
 	}
 	if restoreErr := store.Restore(context.Background(), publication, filepath.Join(t.TempDir(), "missing")); !errors.Is(restoreErr, ErrWorkspaceRevisionNotFound) {
 		t.Fatalf("restore deleted object: %v", restoreErr)
