@@ -56,6 +56,44 @@ func TestControllerCreatesDeterministicSecureJob(t *testing.T) {
 	}
 }
 
+func TestControllerCreatesWorkspaceHelperLifecycle(t *testing.T) {
+	step := testStep()
+	helper := WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper"}
+	job := buildJob("ci", step, helper)
+	pod := job.Spec.Template.Spec
+	if pod.ServiceAccountName != helper.ServiceAccountName || len(pod.InitContainers) != 1 || len(pod.Containers) != 2 {
+		t.Fatalf("pod composition=%#v", pod)
+	}
+	if pod.InitContainers[0].Name != "workspace-prepare" || strings.Join(pod.InitContainers[0].Command, " ") != "/app/worker workspace prepare" {
+		t.Fatalf("prepare=%#v", pod.InitContainers[0])
+	}
+	publish := pod.Containers[1]
+	if publish.Name != "workspace-publish" || strings.Join(publish.Command, " ") != "/app/worker workspace publish-after-build" {
+		t.Fatalf("publish=%#v", publish)
+	}
+	build := pod.Containers[0]
+	if len(build.VolumeMounts) != 1 || build.VolumeMounts[0].Name != "workspace" {
+		t.Fatalf("build mounts=%#v", build.VolumeMounts)
+	}
+	if !hasMount(pod.InitContainers[0], "workspace-prepare-token") || hasMount(pod.InitContainers[0], "workspace-publish-token") || hasMount(pod.InitContainers[0], "workspace-kubernetes-api") {
+		t.Fatalf("prepare mounts=%#v", pod.InitContainers[0].VolumeMounts)
+	}
+	if !hasMount(publish, "workspace-publish-token") || !hasMount(publish, "workspace-kubernetes-api") || hasMount(publish, "workspace-prepare-token") {
+		t.Fatalf("publish mounts=%#v", publish.VolumeMounts)
+	}
+	for _, volume := range pod.Volumes {
+		if volume.Name == "workspace" || volume.Projected == nil || len(volume.Projected.Sources) == 0 {
+			continue
+		}
+		if volume.Name == "workspace-prepare-token" && volume.Projected.Sources[0].ServiceAccountToken.Audience != workspaceHelperPrepareAudience {
+			t.Fatalf("prepare audience=%q", volume.Projected.Sources[0].ServiceAccountToken.Audience)
+		}
+		if volume.Name == "workspace-publish-token" && volume.Projected.Sources[0].ServiceAccountToken.Audience != workspaceHelperPublishAudience {
+			t.Fatalf("publish audience=%q", volume.Projected.Sources[0].ServiceAccountToken.Audience)
+		}
+	}
+}
+
 func TestControllerRenewsPendingJobLease(t *testing.T) {
 	step := testStep()
 	service := &fakeExecutionService{step: step, found: true}
@@ -281,6 +319,25 @@ func TestControllerUsesJobDeadlineExceededForTimeout(t *testing.T) {
 	}
 }
 
+func TestPodResultClassifiesWorkspaceHelperFailures(t *testing.T) {
+	now := time.Now().UTC()
+	for _, testCase := range []struct {
+		name string
+		pod  corev1.Pod
+		want string
+	}{
+		{name: "prepare", pod: corev1.Pod{Status: corev1.PodStatus{InitContainerStatuses: []corev1.ContainerStatus{{Name: "workspace-prepare", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}}}}}, want: "workspace revision prepare"},
+		{name: "publish", pod: corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "workspace-publish", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}}, {Name: "build", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}}}}}}, want: "workspace revision publish"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			result := podResult(testCase.pod, now)
+			if result.Status != runner.RunStepStatusFailed || !strings.Contains(result.Stderr, testCase.want) {
+				t.Fatalf("result=%#v", result)
+			}
+		})
+	}
+}
+
 func TestControllerDoesNotDuplicateLogsWhenCompletionRetries(t *testing.T) {
 	step := testStep()
 	service := &fakeExecutionService{step: step, found: true, completeErr: errors.New("temporary completion failure")}
@@ -374,7 +431,7 @@ func TestControllerRetriesTransientValidationErrorWithoutCompletion(t *testing.T
 	}
 }
 
-func TestControllerRejectsDurableWorkspacePublication(t *testing.T) {
+func TestControllerRejectsIncompleteWorkspaceHelperConfiguration(t *testing.T) {
 	step := testStep()
 	service := &fakeExecutionService{step: step, found: true}
 	client := newFakeClient()
@@ -383,7 +440,7 @@ func TestControllerRejectsDurableWorkspacePublication(t *testing.T) {
 	if err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if client.createCalls != 0 || service.completeCalls != 1 || !strings.Contains(service.result.Stderr, "durable workspace publication") {
+	if client.createCalls != 0 || service.completeCalls != 1 || !strings.Contains(service.result.Stderr, "configuration is incomplete") {
 		t.Fatalf("creates=%d completion=%d result=%#v", client.createCalls, service.completeCalls, service.result)
 	}
 }
@@ -723,6 +780,15 @@ func completedJob(step workersvc.WorkerRunnableStep, exitCode int32, reason, mes
 func terminatedBuildPod(exitCode int32, reason, message string) corev1.Pod {
 	now := metav1.NewTime(time.Now())
 	return corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "build-pod", CreationTimestamp: now}, Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "build", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: exitCode, Reason: reason, Message: message, StartedAt: now, FinishedAt: now}}}}}}
+}
+
+func hasMount(container corev1.Container, name string) bool {
+	for _, mount := range container.VolumeMounts {
+		if mount.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 var _ logs.LogSink = (*recordingLogSink)(nil)

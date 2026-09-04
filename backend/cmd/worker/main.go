@@ -78,6 +78,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) == 3 && os.Args[1] == "workspace" && os.Args[2] == "publish-after-build" {
+		if publishErr := runWorkspacePublishAfterBuild(context.Background()); publishErr != nil {
+			log.Fatalf("workspace publish after build failed: %v", publishErr)
+		}
+		return
+	}
 	cfg := config.Load()
 	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
 	logEmailNotificationConfig(cfg)
@@ -195,12 +201,35 @@ func resolveExecutionController(cfg config.Config, workerService *workersvc.Exec
 	if strings.ToLower(strings.TrimSpace(cfg.ExecutionBackend)) != "kubernetes" {
 		return workersvc.NewSynchronousController(workerService), nil
 	}
+	helperConfig, helpersEnabled, helperErr := kubernetesWorkspaceHelperConfig(cfg)
+	if helperErr != nil {
+		return nil, helperErr
+	}
 	client, err := newKubernetesClient(cfg.WorkerKubernetesKubeconfig)
 	if err != nil {
 		return nil, err
 	}
-	return kubernetesexec.NewController(client, workerService, logSink, cfg.WorkerKubernetesNamespace).
-		WithWorkspacePublicationEnabled(strings.TrimSpace(cfg.WorkspaceRevisionStorageRoot) != ""), nil
+	controller := kubernetesexec.NewController(client, workerService, logSink, cfg.WorkerKubernetesNamespace)
+	workerService.SetKubernetesWorkspaceLifecycleEnabled(helpersEnabled)
+	if helpersEnabled {
+		controller.WithWorkspaceHelper(helperConfig)
+	}
+	return controller, nil
+}
+
+func kubernetesWorkspaceHelperConfig(cfg config.Config) (kubernetesexec.WorkspaceHelperConfig, bool, error) {
+	helper := kubernetesexec.WorkspaceHelperConfig{
+		Image:              strings.TrimSpace(cfg.WorkerKubernetesHelperImage),
+		InternalAPIURL:     strings.TrimSpace(cfg.WorkerKubernetesInternalAPIURL),
+		ServiceAccountName: strings.TrimSpace(cfg.WorkspaceHelperServiceAccount),
+	}
+	if helper.Image == "" && helper.InternalAPIURL == "" {
+		return kubernetesexec.WorkspaceHelperConfig{}, false, nil
+	}
+	if helper.Image == "" || helper.InternalAPIURL == "" || helper.ServiceAccountName == "" {
+		return kubernetesexec.WorkspaceHelperConfig{}, false, errors.New("kubernetes workspace helper configuration requires helper image, internal API URL, and service account")
+	}
+	return helper, true, nil
 }
 
 func workspaceRevisionStoreFromConfig(cfg config.Config) workspacepkg.WorkspaceRevisionStore {

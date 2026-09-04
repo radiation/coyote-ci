@@ -45,16 +45,21 @@ func TestValidateKubernetesRunnableStep(t *testing.T) {
 		build    domain.Build
 		steps    []domain.BuildStep
 		stepsErr error
+		helper   bool
 		want     string
 	}{
 		{name: "valid source input", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: validJob, build: validBuild, steps: validSteps},
 		{name: "legacy job", step: WorkerRunnableStep{}, want: "legacy execution jobs"},
 		{name: "job lookup error", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, jobErr: errors.New("lookup failed"), want: "lookup failed"},
 		{name: "invalid workspace plan", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: domain.ExecutionJob{ResolvedSpecJSON: "{"}, want: "valid workspace input plan"},
-		{name: "predecessor workspace", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: domain.ExecutionJob{ResolvedSpecJSON: `{"workspace_input":{"mode":"predecessor"}}`}, want: "predecessor, fan-out, or fan-in"},
-		{name: "repository checkout", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: domain.ExecutionJob{ResolvedSpecJSON: validSpec, Source: domain.SourceSnapshotRef{RepositoryURL: "https://example.test/repo.git"}}, want: "repository checkout"},
+		{name: "predecessor workspace without helper", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: domain.ExecutionJob{ResolvedSpecJSON: `{"workspace_input":{"mode":"predecessor"}}`}, want: "without trusted workspace helpers"},
+		{name: "predecessor workspace with helper", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: domain.ExecutionJob{ResolvedSpecJSON: `{"workspace_input":{"mode":"predecessor"}}`}, build: validBuild, steps: validSteps, helper: true},
+		{name: "source checkout without helper", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: domain.ExecutionJob{ResolvedSpecJSON: validSpec, Source: domain.SourceSnapshotRef{RepositoryURL: "https://example.test/repo.git"}}, want: "repository checkout without trusted workspace helpers"},
+		{name: "source checkout with helper", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: domain.ExecutionJob{ResolvedSpecJSON: validSpec, Source: domain.SourceSnapshotRef{RepositoryURL: "https://example.test/repo.git"}}, build: validBuild, steps: validSteps, helper: true},
 		{name: "step lookup error", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: validJob, stepsErr: errors.New("steps failed"), want: "steps failed"},
-		{name: "multiple steps", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: validJob, steps: []domain.BuildStep{{}, {}}, want: "multi-step pipelines"},
+		{name: "multiple steps without helper", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: validJob, build: validBuild, steps: []domain.BuildStep{{}, {}}, want: "multi-step pipelines without trusted workspace helpers"},
+		{name: "multiple steps with helper", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: validJob, build: validBuild, steps: []domain.BuildStep{{}, {}}, helper: true},
+		{name: "fan in", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: domain.ExecutionJob{ResolvedSpecJSON: `{"workspace_input":{"mode":"fan_in"}}`}, want: "fan-in workspaces"},
 		{name: "cache", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: validJob, steps: []domain.BuildStep{{Cache: &domain.StepCacheConfig{}}}, want: "cache restore or save"},
 		{name: "step artifacts", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: validJob, steps: []domain.BuildStep{{ArtifactPaths: []string{"dist"}}}, want: "artifact collection"},
 		{name: "artifacts", step: WorkerRunnableStep{JobID: "job-1", BuildID: "build-1"}, job: validJob, build: domain.Build{PipelineConfigYAML: stringPointer("version: 1\nsteps:\n  - name: test\n    run: echo ok\nartifacts:\n  paths: [dist]\n")}, steps: validSteps, want: "artifact collection"},
@@ -68,6 +73,7 @@ func TestValidateKubernetesRunnableStep(t *testing.T) {
 			}
 			boundary := &kubernetesBoundary{fakeExecutionWorkerBoundary: &fakeExecutionWorkerBoundary{listBuildsResp: []domain.Build{build}, stepsByBuildID: map[string][]domain.BuildStep{"build-1": test.steps}, getStepsErr: test.stepsErr}, job: test.job, jobErr: test.jobErr}
 			service := NewExecutionWorkerService(boundary)
+			service.SetKubernetesWorkspaceLifecycleEnabled(test.helper)
 			err := service.ValidateKubernetesRunnableStep(context.Background(), test.step)
 			if test.want == "" && err != nil {
 				t.Fatalf("validate: %v", err)

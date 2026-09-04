@@ -31,6 +31,8 @@ type Config struct {
 	ExecutionWorkspaceRoot               string
 	WorkerKubernetesNamespace            string
 	WorkerKubernetesKubeconfig           string
+	WorkerKubernetesHelperImage          string
+	WorkerKubernetesInternalAPIURL       string
 	WorkspaceHelperCapabilityEnabled     bool
 	WorkspaceHelperKubeconfig            string
 	WorkspaceHelperServiceAccount        string
@@ -106,6 +108,8 @@ func Load() Config {
 		ExecutionWorkspaceRoot:               getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
 		WorkerKubernetesNamespace:            getEnv("WORKER_KUBERNETES_NAMESPACE", "default"),
 		WorkerKubernetesKubeconfig:           getEnv("WORKER_KUBERNETES_KUBECONFIG", getEnv("KUBECONFIG", "")),
+		WorkerKubernetesHelperImage:          getEnv("WORKER_KUBERNETES_HELPER_IMAGE", ""),
+		WorkerKubernetesInternalAPIURL:       getEnv("WORKER_KUBERNETES_INTERNAL_API_URL", ""),
 		WorkspaceHelperCapabilityEnabled:     getEnvBool("COYOTE_WORKSPACE_HELPER_ENABLED", false),
 		WorkspaceHelperKubeconfig:            getEnv("COYOTE_WORKSPACE_HELPER_KUBECONFIG", ""),
 		WorkspaceHelperServiceAccount:        getEnv("COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT", "coyote-workspace-helper"),
