@@ -14,7 +14,7 @@ import (
 func TestWorkspaceHelperCapabilityServiceExchangeAndAuthorize(t *testing.T) {
 	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
 	jobs := &workspaceHelperExecutionJobs{job: activeWorkspaceHelperJob(now)}
-	identities := &workspaceHelperIdentityVerifier{identity: VerifiedWorkloadIdentity{ExecutionJobID: "job-1", PodUID: "pod-1"}}
+	identities := &workspaceHelperIdentityVerifier{identity: verifiedWorkspaceHelperIdentity("pod-1", "claim")}
 	service, err := NewWorkspaceHelperCapabilityService(jobs, identities, strings.Repeat("a", 32))
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -69,11 +69,12 @@ func TestWorkspaceHelperCapabilityServiceExchangeRejectsIdentityAndExecutionStat
 		wantErr     error
 	}{
 		{name: "identity failure", identityErr: errors.New("invalid identity"), job: activeWorkspaceHelperJob(now), wantErr: ErrWorkspaceHelperUnauthorized},
-		{name: "pod mismatch", identity: VerifiedWorkloadIdentity{ExecutionJobID: "job-1", PodUID: "pod-2"}, job: activeWorkspaceHelperJob(now), wantErr: ErrWorkspaceHelperUnauthorized},
-		{name: "canceled", identity: VerifiedWorkloadIdentity{ExecutionJobID: "job-1", PodUID: "pod-1"}, job: domain.ExecutionJob{ID: "job-1", Status: domain.ExecutionJobStatusCanceled}, wantErr: ErrWorkspaceHelperUnauthorized},
-		{name: "expired claim", identity: VerifiedWorkloadIdentity{ExecutionJobID: "job-1", PodUID: "pod-1"}, job: activeWorkspaceHelperJob(now.Add(-time.Hour)), wantErr: ErrWorkspaceHelperUnauthorized},
-		{name: "missing execution", identity: VerifiedWorkloadIdentity{ExecutionJobID: "job-1", PodUID: "pod-1"}, jobErr: repository.ErrExecutionJobNotFound, wantErr: ErrWorkspaceHelperUnauthorized},
-		{name: "execution lookup failure", identity: VerifiedWorkloadIdentity{ExecutionJobID: "job-1", PodUID: "pod-1"}, jobErr: executionLookupErr, wantErr: executionLookupErr},
+		{name: "pod mismatch", identity: verifiedWorkspaceHelperIdentity("pod-2", "claim"), job: activeWorkspaceHelperJob(now), wantErr: ErrWorkspaceHelperUnauthorized},
+		{name: "stale claim", identity: verifiedWorkspaceHelperIdentity("pod-1", "stale-claim"), job: activeWorkspaceHelperJob(now), wantErr: ErrWorkspaceHelperUnauthorized},
+		{name: "canceled", identity: verifiedWorkspaceHelperIdentity("pod-1", "claim"), job: domain.ExecutionJob{ID: "job-1", Status: domain.ExecutionJobStatusCanceled}, wantErr: ErrWorkspaceHelperUnauthorized},
+		{name: "expired claim", identity: verifiedWorkspaceHelperIdentity("pod-1", "claim"), job: activeWorkspaceHelperJob(now.Add(-time.Hour)), wantErr: ErrWorkspaceHelperUnauthorized},
+		{name: "missing execution", identity: verifiedWorkspaceHelperIdentity("pod-1", "claim"), jobErr: repository.ErrExecutionJobNotFound, wantErr: ErrWorkspaceHelperUnauthorized},
+		{name: "execution lookup failure", identity: verifiedWorkspaceHelperIdentity("pod-1", "claim"), jobErr: executionLookupErr, wantErr: executionLookupErr},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			service, err := NewWorkspaceHelperCapabilityService(&workspaceHelperExecutionJobs{job: testCase.job, err: testCase.jobErr}, &workspaceHelperIdentityVerifier{identity: testCase.identity, err: testCase.identityErr}, strings.Repeat("a", 32))
@@ -154,7 +155,7 @@ func TestWorkspaceHelperCapabilityServiceRejectsMalformedRequestsAndTokens(t *te
 func TestWorkspaceHelperCapabilityServiceAuthorizeRevalidatesExecution(t *testing.T) {
 	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
 	jobs := &workspaceHelperExecutionJobs{job: activeWorkspaceHelperJob(now)}
-	service, err := NewWorkspaceHelperCapabilityService(jobs, &workspaceHelperIdentityVerifier{identity: VerifiedWorkloadIdentity{ExecutionJobID: "job-1", PodUID: "pod-1"}}, strings.Repeat("a", 32))
+	service, err := NewWorkspaceHelperCapabilityService(jobs, &workspaceHelperIdentityVerifier{identity: verifiedWorkspaceHelperIdentity("pod-1", "claim")}, strings.Repeat("a", 32))
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -188,6 +189,10 @@ func activeWorkspaceHelperJob(now time.Time) domain.ExecutionJob {
 	claimToken := "claim"
 	claimExpiresAt := now.Add(time.Minute)
 	return domain.ExecutionJob{ID: "job-1", Status: domain.ExecutionJobStatusRunning, ClaimToken: &claimToken, ClaimExpiresAt: &claimExpiresAt}
+}
+
+func verifiedWorkspaceHelperIdentity(podUID string, claimToken string) VerifiedWorkloadIdentity {
+	return VerifiedWorkloadIdentity{ExecutionJobID: "job-1", PodUID: podUID, ClaimDigest: domain.ExecutionJobClaimDigest(claimToken)}
 }
 
 type workspaceHelperIdentityVerifier struct {

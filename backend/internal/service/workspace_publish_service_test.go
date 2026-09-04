@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,6 +63,24 @@ func TestWorkspacePublishServiceRejectsOversizedArchiveWithoutStoreOrTemporaryFi
 	entries, readErr := os.ReadDir(temporaryDirectory)
 	if readErr != nil || len(entries) != 0 {
 		t.Fatalf("temporary entries=%v err=%v", entries, readErr)
+	}
+}
+
+func TestWorkspacePublishServiceRejectsCompressedArchiveThatExceedsWorkspaceLimit(t *testing.T) {
+	harness := newWorkspacePublishServiceHarness(t)
+	service, serviceErr := NewWorkspacePublishService(WorkspacePublishServiceConfig{CapabilityAuthorizer: harness.capabilities, ExecutionJobs: harness.jobs, WorkspaceRevisions: harness.revisions, RevisionStore: harness.store, MaxUncompressedBytes: 1024})
+	if serviceErr != nil {
+		t.Fatalf("new bounded service: %v", serviceErr)
+	}
+	archive := workspacePublishArchiveForTest(t, strings.Repeat("x", 64*1024))
+	if int64(len(archive)) >= 1024 {
+		t.Fatalf("expected compressed archive below extraction limit, got %d bytes", len(archive))
+	}
+	if _, publishErr := service.Publish(context.Background(), "publish-capability", harness.job.ID, "pod-1", bytes.NewReader(archive)); !errors.Is(publishErr, ErrWorkspacePublishArchiveTooLarge) {
+		t.Fatalf("publish: %v", publishErr)
+	}
+	if harness.store.calls != 0 {
+		t.Fatalf("store calls=%d, want 0", harness.store.calls)
 	}
 }
 
@@ -139,6 +158,39 @@ func TestWorkspacePublishServiceIsIdempotentAndRejectsClaimRace(t *testing.T) {
 	if _, raceErr := raceHarness.service.Publish(context.Background(), "publish-capability", raceHarness.job.ID, "pod-1", bytes.NewReader(workspacePublishArchiveForTest(t, "output"))); !errors.Is(raceErr, repository.ErrWorkspaceRevisionStaleClaim) {
 		t.Fatalf("claim race: %v", raceErr)
 	}
+
+	reclaimedHarness := newWorkspacePublishServiceHarness(t)
+	reclaimedHarness.capabilities.afterAuthorize = func() {
+		replacementClaim := "claim-2"
+		reclaimedHarness.job.ClaimToken = &replacementClaim
+	}
+	if _, reclaimErr := reclaimedHarness.service.Publish(context.Background(), "publish-capability", reclaimedHarness.job.ID, "pod-1", bytes.NewReader(workspacePublishArchiveForTest(t, "output"))); !errors.Is(reclaimErr, repository.ErrWorkspaceRevisionStaleClaim) {
+		t.Fatalf("reclaimed claim: %v", reclaimErr)
+	}
+	if reclaimedHarness.revisions.createCalls != 0 || reclaimedHarness.store.calls != 0 {
+		t.Fatalf("create calls=%d store calls=%d, want 0", reclaimedHarness.revisions.createCalls, reclaimedHarness.store.calls)
+	}
+}
+
+func TestWorkspacePublishServiceUsesClaimScopedObjectKeys(t *testing.T) {
+	harness := newWorkspacePublishServiceHarness(t)
+	harness.revisions.markErr = repository.ErrWorkspaceRevisionStaleClaim
+	archive := workspacePublishArchiveForTest(t, "first")
+	if _, publishErr := harness.service.Publish(context.Background(), "publish-capability", harness.job.ID, "pod-1", bytes.NewReader(archive)); !errors.Is(publishErr, repository.ErrWorkspaceRevisionStaleClaim) {
+		t.Fatalf("stale publish: %v", publishErr)
+	}
+
+	replacementClaim := "claim-2"
+	harness.job.ClaimToken = &replacementClaim
+	harness.capabilities.capability.ClaimDigest = domain.ExecutionJobClaimDigest(replacementClaim)
+	harness.revisions.markErr = nil
+	harness.revisions.acceptedClaimToken = replacementClaim
+	if _, publishErr := harness.service.Publish(context.Background(), "publish-capability", harness.job.ID, "pod-1", bytes.NewReader(workspacePublishArchiveForTest(t, "second"))); publishErr != nil {
+		t.Fatalf("replacement publish: %v", publishErr)
+	}
+	if len(harness.store.objectIDs) != 2 || harness.store.objectIDs[0] == harness.store.objectIDs[1] {
+		t.Fatalf("object ids=%v, want distinct claim-scoped keys", harness.store.objectIDs)
+	}
 }
 
 type workspacePublishServiceHarness struct {
@@ -155,9 +207,9 @@ func newWorkspacePublishServiceHarness(t *testing.T) *workspacePublishServiceHar
 	t.Helper()
 	claim := "claim-1"
 	expiresAt := time.Now().Add(time.Hour)
-	harness := &workspacePublishServiceHarness{capabilities: &workspacePublishCapabilityFake{}, job: domain.ExecutionJob{ID: "execution-1", BuildID: "build-1", NodeID: "compile", AttemptNumber: 2, Status: domain.ExecutionJobStatusRunning, ClaimToken: &claim, ClaimExpiresAt: &expiresAt}, store: &workspacePublishStoreFake{}}
+	harness := &workspacePublishServiceHarness{capabilities: &workspacePublishCapabilityFake{capability: domain.WorkspaceHelperCapability{ClaimDigest: domain.ExecutionJobClaimDigest(claim)}}, job: domain.ExecutionJob{ID: "execution-1", BuildID: "build-1", NodeID: "compile", AttemptNumber: 2, Status: domain.ExecutionJobStatusRunning, ClaimToken: &claim, ClaimExpiresAt: &expiresAt}, store: &workspacePublishStoreFake{}}
 	jobs := &workspacePublishJobFake{harness: harness}
-	revisions := &workspacePublishRevisionFake{}
+	revisions := &workspacePublishRevisionFake{acceptedClaimToken: claim}
 	service, serviceErr := NewWorkspacePublishService(WorkspacePublishServiceConfig{CapabilityAuthorizer: harness.capabilities, ExecutionJobs: jobs, WorkspaceRevisions: revisions, RevisionStore: harness.store})
 	if serviceErr != nil {
 		t.Fatalf("new publish service: %v", serviceErr)
@@ -188,13 +240,18 @@ func workspacePublishArchiveForTest(t *testing.T, contents string) []byte {
 }
 
 type workspacePublishCapabilityFake struct {
-	role domain.WorkspaceHelperRole
-	err  error
+	role           domain.WorkspaceHelperRole
+	err            error
+	capability     domain.WorkspaceHelperCapability
+	afterAuthorize func()
 }
 
 func (f *workspacePublishCapabilityFake) Authorize(_ context.Context, _ string, _ string, _ string, role domain.WorkspaceHelperRole) (domain.WorkspaceHelperCapability, error) {
 	f.role = role
-	return domain.WorkspaceHelperCapability{}, f.err
+	if f.afterAuthorize != nil {
+		f.afterAuthorize()
+	}
+	return f.capability, f.err
 }
 
 type workspacePublishJobFake struct {
@@ -210,10 +267,12 @@ type workspacePublishStoreFake struct {
 	calls        int
 	err          error
 	afterPublish func()
+	objectIDs    []string
 }
 
 func (f *workspacePublishStoreFake) Publish(_ context.Context, revisionID string, sourceRoot string) (domain.WorkspaceRevisionPublication, error) {
 	f.calls++
+	f.objectIDs = append(f.objectIDs, revisionID)
 	if f.err != nil {
 		return domain.WorkspaceRevisionPublication{}, f.err
 	}
@@ -237,12 +296,15 @@ func (f *workspacePublishStoreFake) Delete(context.Context, domain.WorkspaceRevi
 var _ workspacepkg.WorkspaceRevisionStore = (*workspacePublishStoreFake)(nil)
 
 type workspacePublishRevisionFake struct {
-	revision  domain.WorkspaceRevision
-	createErr error
-	markErr   error
+	revision           domain.WorkspaceRevision
+	createCalls        int
+	createErr          error
+	markErr            error
+	acceptedClaimToken string
 }
 
 func (f *workspacePublishRevisionFake) CreatePublishing(_ context.Context, revision domain.WorkspaceRevision) (domain.WorkspaceRevision, error) {
+	f.createCalls++
 	if f.createErr != nil {
 		return domain.WorkspaceRevision{}, f.createErr
 	}
@@ -284,7 +346,7 @@ func (f *workspacePublishRevisionFake) MarkPublishedIfClaimed(_ context.Context,
 	if f.revision.Status == domain.WorkspaceRevisionStatusPublished {
 		return f.revision, nil
 	}
-	if claimToken != "claim-1" {
+	if claimToken != f.acceptedClaimToken {
 		return domain.WorkspaceRevision{}, repository.ErrWorkspaceRevisionStaleClaim
 	}
 	f.revision.ID = revisionID

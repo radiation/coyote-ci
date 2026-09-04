@@ -15,6 +15,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 func TestWorkspaceHelperHandlerExchangeCapability(t *testing.T) {
@@ -209,6 +210,7 @@ func TestWorkspaceHelperHandlerPublishMapsOutcomes(t *testing.T) {
 		{name: "unauthorized", publisher: &workspacePublisherStub{err: service.ErrWorkspaceHelperUnauthorized}, token: "capability", want: http.StatusUnauthorized},
 		{name: "invalid archive", publisher: &workspacePublisherStub{err: service.ErrWorkspacePublishInvalidArchive}, token: "capability", want: http.StatusBadRequest},
 		{name: "conflict", publisher: &workspacePublisherStub{err: repository.ErrWorkspaceRevisionConflict}, token: "capability", want: http.StatusConflict},
+		{name: "workspace object conflict", publisher: &workspacePublisherStub{err: workspace.ErrWorkspaceRevisionConflict}, token: "capability", want: http.StatusConflict},
 		{name: "internal failure", publisher: &workspacePublisherStub{err: errors.New("publish failed")}, token: "capability", want: http.StatusInternalServerError},
 		{name: "invalid publication", publisher: &workspacePublisherStub{}, token: "capability", want: http.StatusInternalServerError},
 		{name: "published", publisher: &workspacePublisherStub{published: domain.WorkspaceRevision{ID: "revision-1", ContentDigest: &digest, SizeBytes: &size}}, token: "capability", want: http.StatusOK},

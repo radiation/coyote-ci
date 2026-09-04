@@ -27,6 +27,7 @@ var (
 type VerifiedWorkloadIdentity struct {
 	ExecutionJobID string
 	PodUID         string
+	ClaimDigest    string
 }
 
 // WorkloadIdentityVerifier verifies a platform workload identity and binds it
@@ -65,8 +66,11 @@ func (s *WorkspaceHelperCapabilityService) Exchange(ctx context.Context, project
 	if activeExecutionErr != nil {
 		return "", domain.WorkspaceHelperCapability{}, activeExecutionErr
 	}
+	if identity.ClaimDigest != domain.ExecutionJobClaimDigest(*job.ClaimToken) {
+		return "", domain.WorkspaceHelperCapability{}, ErrWorkspaceHelperUnauthorized
+	}
 	capability := requested
-	capability.ClaimDigest = workspaceHelperClaimDigest(*job.ClaimToken)
+	capability.ClaimDigest = domain.ExecutionJobClaimDigest(*job.ClaimToken)
 	capability.ExpiresAt = s.now().UTC().Add(workspaceHelperCapabilityLifetime)
 	token, err := s.sign(capability)
 	if err != nil {
@@ -87,7 +91,7 @@ func (s *WorkspaceHelperCapabilityService) Authorize(ctx context.Context, token 
 	if activeExecutionErr != nil {
 		return domain.WorkspaceHelperCapability{}, activeExecutionErr
 	}
-	if !hmac.Equal([]byte(capability.ClaimDigest), []byte(workspaceHelperClaimDigest(*job.ClaimToken))) {
+	if !hmac.Equal([]byte(capability.ClaimDigest), []byte(domain.ExecutionJobClaimDigest(*job.ClaimToken))) {
 		return domain.WorkspaceHelperCapability{}, ErrWorkspaceHelperUnauthorized
 	}
 	return capability, nil
@@ -165,9 +169,4 @@ func validateWorkspaceHelperCapability(capability domain.WorkspaceHelperCapabili
 		return fmt.Errorf("%w: execution job id, pod uid, helper role, and claim digest are required", ErrWorkspaceHelperCapabilityMalformed)
 	}
 	return nil
-}
-
-func workspaceHelperClaimDigest(claimToken string) string {
-	digest := sha256.Sum256([]byte(claimToken))
-	return base64.RawURLEncoding.EncodeToString(digest[:])
 }

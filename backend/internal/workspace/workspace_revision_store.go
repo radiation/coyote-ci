@@ -25,6 +25,8 @@ var (
 	ErrWorkspaceRevisionNotFound         = errors.New("workspace revision object not found")
 	ErrInvalidWorkspaceRevisionObject    = errors.New("invalid workspace revision object")
 	ErrWorkspaceRevisionDigestMismatch   = errors.New("workspace revision digest mismatch")
+	ErrWorkspaceRevisionTooLarge         = errors.New("workspace revision exceeds extraction size limit")
+	ErrWorkspaceRevisionTooManyEntries   = errors.New("workspace revision exceeds archive entry limit")
 	ErrUnsupportedWorkspaceRevisionEntry = errors.New("unsupported workspace revision entry")
 	ErrUnsafeWorkspaceRevisionPath       = errors.New("unsafe workspace revision archive path")
 	ErrWorkspaceRevisionDestination      = errors.New("workspace revision destination already exists")
@@ -75,6 +77,16 @@ func ArchiveDirectory(ctx context.Context, sourceRoot string) (io.ReadCloser, do
 
 // RestoreArchive verifies and safely extracts an archive into an absent destination.
 func RestoreArchive(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, destinationRoot string) error {
+	return RestoreArchiveWithLimits(ctx, archive, publication, destinationRoot, WorkspaceRevisionRestoreLimits{})
+}
+
+type WorkspaceRevisionRestoreLimits struct {
+	MaxUncompressedBytes int64
+	MaxEntries           int
+}
+
+// RestoreArchiveWithLimits verifies and safely extracts an archive with bounded output.
+func RestoreArchiveWithLimits(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, destinationRoot string, limits WorkspaceRevisionRestoreLimits) error {
 	if archive == nil || publication.Validate() != nil {
 		return ErrInvalidWorkspaceRevisionObject
 	}
@@ -100,7 +112,7 @@ func RestoreArchive(ctx context.Context, archive io.Reader, publication domain.W
 	if gzipErr != nil {
 		return gzipErr
 	}
-	if extractErr := extractWorkspaceRevisionArchive(ctx, tar.NewReader(gzipReader), staging); extractErr != nil {
+	if extractErr := extractWorkspaceRevisionArchive(ctx, tar.NewReader(gzipReader), staging, limits); extractErr != nil {
 		_ = gzipReader.Close()
 		return extractErr
 	}
@@ -384,8 +396,10 @@ func writeWorkspaceRevisionArchive(ctx context.Context, destination *os.File, so
 
 var unixEpoch = time.Unix(0, 0).UTC()
 
-func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, destinationRoot string) error {
+func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, destinationRoot string, limits WorkspaceRevisionRestoreLimits) error {
 	directoryModes := make(map[string]os.FileMode)
+	var entries int
+	var uncompressedBytes int64
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -396,6 +410,10 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 		}
 		if err != nil {
 			return err
+		}
+		entries++
+		if limits.MaxEntries > 0 && entries > limits.MaxEntries {
+			return ErrWorkspaceRevisionTooManyEntries
 		}
 		mode := os.FileMode(header.Mode) & 0o777
 		if header.Name == "." || header.Name == "./" {
@@ -421,6 +439,10 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 			}
 			directoryModes[target] = mode
 		case tar.TypeReg:
+			if limits.MaxUncompressedBytes > 0 && (header.Size > limits.MaxUncompressedBytes || uncompressedBytes > limits.MaxUncompressedBytes-header.Size) {
+				return ErrWorkspaceRevisionTooLarge
+			}
+			uncompressedBytes += header.Size
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}

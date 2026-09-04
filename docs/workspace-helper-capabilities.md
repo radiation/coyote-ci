@@ -6,7 +6,7 @@ The capability is an HMAC-signed, stateless server token. It is not an execution
 
 The server enables this exchange only when `COYOTE_WORKSPACE_HELPER_ENABLED=true`, and then requires `COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET` (at least 32 bytes). `COYOTE_WORKSPACE_HELPER_KUBECONFIG` is the optional server-side Kubernetes identity-verification configuration; in-cluster configuration remains supported. This is independent of `WORKER_EXECUTION_BACKEND` because server and worker processes may be deployed separately.
 
-When workspace helper support is enabled, the server also requires `WORKSPACE_REVISION_STORAGE_ROOT`. This is intentional for the current single prepare capability: source and predecessor inputs share one trusted endpoint, and predecessor preparation requires the authoritative revision archive store. Separating source-only prepare availability from predecessor storage is deferred until there is a concrete deployment need.
+When workspace helper support is enabled, the server also requires `COYOTE_WORKSPACE_REVISION_STORAGE_ROOT`. This is intentional for the current single prepare capability: source and predecessor inputs share one trusted endpoint, and predecessor preparation requires the authoritative revision archive store. Separating source-only prepare availability from predecessor storage is deferred until there is a concrete deployment need.
 
 Current Kubernetes workload identity verification assumes the Coyote server can verify identities against the relevant Kubernetes cluster. Multi-cluster identity routing is a future concern and is not part of this slice.
 

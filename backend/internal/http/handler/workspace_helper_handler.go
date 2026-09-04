@@ -16,6 +16,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 type workspaceHelperCapabilityExchanger interface {
@@ -176,7 +177,7 @@ func (h *WorkspaceHelperHandler) PublishWorkspace(w http.ResponseWriter, r *http
 			writeErrorJSON(w, http.StatusRequestEntityTooLarge, "archive_too_large", "workspace archive exceeds the configured size limit")
 			return
 		}
-		if errors.Is(publishErr, repository.ErrWorkspaceRevisionConflict) {
+		if errors.Is(publishErr, repository.ErrWorkspaceRevisionConflict) || errors.Is(publishErr, workspace.ErrWorkspaceRevisionConflict) {
 			writeErrorJSON(w, http.StatusConflict, "conflict", "workspace publication conflicts with an existing revision")
 			return
 		}

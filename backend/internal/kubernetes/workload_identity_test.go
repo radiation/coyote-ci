@@ -17,7 +17,7 @@ import (
 )
 
 func TestWorkloadIdentityVerifierBindsReviewedTokenToPodAndExecution(t *testing.T) {
-	client := &fakeWorkloadIdentityClient{review: validTokenReview(), pod: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "helper-pod", Namespace: "ci", UID: types.UID("pod-1"), Labels: map[string]string{"coyote-ci.io/execution-job-id": "job-1"}}}}
+	client := &fakeWorkloadIdentityClient{review: validTokenReview(), pod: validHelperPod()}
 	verifier, err := NewWorkloadIdentityVerifierWithClient(client, "coyote-workspace-helper")
 	if err != nil {
 		t.Fatalf("new verifier: %v", err)
@@ -41,16 +41,17 @@ func TestWorkloadIdentityVerifierRejectsUntrustedBindings(t *testing.T) {
 		}},
 		{name: "wrong pod uid", mutate: func(c *fakeWorkloadIdentityClient) { c.pod.UID = types.UID("other") }},
 		{name: "wrong execution label", mutate: func(c *fakeWorkloadIdentityClient) { c.pod.Labels["coyote-ci.io/execution-job-id"] = "job-2" }},
+		{name: "missing claim digest", mutate: func(c *fakeWorkloadIdentityClient) { delete(c.pod.Annotations, executionClaimDigestAnnotation) }},
 		{name: "token review error", mutate: func(c *fakeWorkloadIdentityClient) { c.reviewErr = errors.New("denied") }},
 		{name: "unauthenticated review", mutate: func(c *fakeWorkloadIdentityClient) { c.review.Status.Authenticated = false }},
-		{name: "missing namespace", mutate: func(c *fakeWorkloadIdentityClient) {
-			delete(c.review.Status.User.Extra, "authentication.kubernetes.io/pod-namespace")
+		{name: "malformed service account username", mutate: func(c *fakeWorkloadIdentityClient) {
+			c.review.Status.User.Username = "system:serviceaccount:coyote-workspace-helper"
 		}},
 		{name: "wrong service account", mutate: func(c *fakeWorkloadIdentityClient) { c.review.Status.User.Username = "system:serviceaccount:ci:other" }},
 		{name: "pod lookup error", mutate: func(c *fakeWorkloadIdentityClient) { c.podErr = errors.New("missing pod") }},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			client := &fakeWorkloadIdentityClient{review: validTokenReview(), pod: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "helper-pod", Namespace: "ci", UID: types.UID("pod-1"), Labels: map[string]string{"coyote-ci.io/execution-job-id": "job-1"}}}}
+			client := &fakeWorkloadIdentityClient{review: validTokenReview(), pod: validHelperPod()}
 			testCase.mutate(client)
 			verifier, err := NewWorkloadIdentityVerifierWithClient(client, "coyote-workspace-helper")
 			if err != nil {
@@ -64,7 +65,7 @@ func TestWorkloadIdentityVerifierRejectsUntrustedBindings(t *testing.T) {
 }
 
 func TestWorkloadIdentityVerifierUsesPublishAudienceAndRejectsInvalidInputs(t *testing.T) {
-	client := &fakeWorkloadIdentityClient{review: validTokenReview(), pod: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "helper-pod", Namespace: "ci", UID: types.UID("pod-1"), Labels: map[string]string{"coyote-ci.io/execution-job-id": "job-1"}}}}
+	client := &fakeWorkloadIdentityClient{review: validTokenReview(), pod: validHelperPod()}
 	client.review.Status.Audiences = []string{workspaceHelperPublishAudience}
 	verifier, newErr := NewWorkloadIdentityVerifierWithClient(client, " coyote-workspace-helper ")
 	if newErr != nil {
@@ -121,7 +122,11 @@ func TestNewWorkloadIdentityVerifierLoadsKubeconfig(t *testing.T) {
 }
 
 func validTokenReview() *authenticationv1.TokenReview {
-	return &authenticationv1.TokenReview{Status: authenticationv1.TokenReviewStatus{Authenticated: true, Audiences: []string{workspaceHelperPrepareAudience}, User: authenticationv1.UserInfo{Username: "system:serviceaccount:ci:coyote-workspace-helper", Extra: map[string]authenticationv1.ExtraValue{"authentication.kubernetes.io/pod-namespace": {"ci"}, "authentication.kubernetes.io/pod-name": {"helper-pod"}, "authentication.kubernetes.io/pod-uid": {"pod-1"}}}}}
+	return &authenticationv1.TokenReview{Status: authenticationv1.TokenReviewStatus{Authenticated: true, Audiences: []string{workspaceHelperPrepareAudience}, User: authenticationv1.UserInfo{Username: "system:serviceaccount:ci:coyote-workspace-helper", Extra: map[string]authenticationv1.ExtraValue{"authentication.kubernetes.io/pod-name": {"helper-pod"}, "authentication.kubernetes.io/pod-uid": {"pod-1"}}}}}
+}
+
+func validHelperPod() *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "helper-pod", Namespace: "ci", UID: types.UID("pod-1"), Labels: map[string]string{"coyote-ci.io/execution-job-id": "job-1"}, Annotations: map[string]string{executionClaimDigestAnnotation: domain.ExecutionJobClaimDigest("claim")}}}
 }
 
 type fakeWorkloadIdentityClient struct {

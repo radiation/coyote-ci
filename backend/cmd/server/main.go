@@ -474,6 +474,8 @@ func configureWorkspaceHelperServices(cfg config.Config, workspaceHelperHandler 
 		WorkspaceRevisions:   revisions,
 		RevisionStore:        workspaceRevisionStore,
 		MaxUploadBytes:       int64(cfg.WorkspaceHelperMaxUploadSizeMB) * 1024 * 1024,
+		MaxUncompressedBytes: int64(cfg.WorkspaceHelperMaxUncompressedSizeMB) * 1024 * 1024,
+		MaxArchiveEntries:    cfg.WorkspaceHelperMaxArchiveEntries,
 	})
 	if publishErr != nil {
 		return publishErr

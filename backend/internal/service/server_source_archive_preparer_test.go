@@ -107,16 +107,7 @@ func TestServerSourceArchivePreparerRejectsAuthenticatedSourceWithoutCheckout(t 
 
 func TestServerSourceArchivePreparerUsesAuthenticatedCheckout(t *testing.T) {
 	resolver := &authenticatedServerSourceResolverFake{}
-	checkoutResolver, resolverErr := buildsvc.NewRepositoryAwareCheckoutResolver(buildsvc.RepositoryAwareCheckoutResolverConfig{
-		Connections:   &serverSourceConnectionFake{detail: serverSourceCheckoutDetail()},
-		Registrations: &serverSourceRegistrationFake{registration: domain.SCMRepositoryRegistration{ID: "registered", ConnectionID: "connection", ProviderRepositoryID: "provider"}},
-		Secrets:       &serverSourceSecretFake{value: "private-key"},
-		GitHub:        &serverSourceGitHubFake{repository: platformgithubapp.Repository{ID: "provider", CloneURL: "https://github.com/acme/repository.git"}},
-	})
-	if resolverErr != nil {
-		t.Fatalf("new checkout resolver: %v", resolverErr)
-	}
-	preparer, newErr := NewServerSourceArchivePreparer(resolver, checkoutResolver)
+	preparer, newErr := NewServerSourceArchivePreparer(resolver, newServerSourceArchiveCheckoutResolver(t))
 	if newErr != nil {
 		t.Fatalf("new preparer: %v", newErr)
 	}
@@ -128,20 +119,61 @@ func TestServerSourceArchivePreparerUsesAuthenticatedCheckout(t *testing.T) {
 		t.Fatalf("prepare authenticated archive: %v", prepareErr)
 	}
 	defer func() { _ = payload.Archive.Close() }()
-	if resolver.repositoryURL != "https://github.com/acme/repository.git" || resolver.credential.Password != "installation-token" || payload.Publication.Validate() != nil {
+	if resolver.repositoryURL != "https://github.com/acme/repository.git" || resolver.credential.Password != "installation-token" || resolver.unauthenticatedCloneCalls != 0 || payload.Publication.Validate() != nil {
 		t.Fatalf("resolver=%#v publication=%#v", resolver, payload.Publication)
 	}
 }
 
+func TestServerSourceArchivePreparerAuthenticatedCheckoutRetriesAndPropagatesCloneFailures(t *testing.T) {
+	registeredRepositoryID := "registered"
+	connectionID := "connection"
+	providerRepositoryID := "provider"
+	build := domain.Build{RegisteredRepositoryID: &registeredRepositoryID, SCMConnectionID: &connectionID, ProviderRepositoryID: &providerRepositoryID}
+	job := domain.ExecutionJob{Source: domain.SourceSnapshotRef{RepositoryURL: "https://stale.example/repository.git", CommitSHA: "commit-1"}}
+	for _, testCase := range []struct {
+		name      string
+		cloneErrs []error
+		wantErr   error
+		wantCalls int
+		wantToken string
+	}{
+		{name: "retries authentication failure", cloneErrs: []error{errors.New("fatal: Authentication failed for https://github.com/acme/repository.git")}, wantCalls: 2, wantToken: "fresh-installation-token"},
+		{name: "propagates clone failure", cloneErrs: []error{errors.New("clone failed")}, wantErr: errors.New("clone failed"), wantCalls: 1, wantToken: "installation-token"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			resolver := &authenticatedServerSourceResolverFake{credentialCloneErrs: testCase.cloneErrs}
+			preparer, newErr := NewServerSourceArchivePreparer(resolver, newServerSourceArchiveCheckoutResolver(t))
+			if newErr != nil {
+				t.Fatalf("new preparer: %v", newErr)
+			}
+			payload, prepareErr := preparer.OpenSourceArchive(context.Background(), build, job, domain.ExecutionJobSpec{})
+			if testCase.wantErr != nil {
+				if prepareErr == nil || prepareErr.Error() != testCase.wantErr.Error() {
+					t.Fatalf("prepare archive: %v", prepareErr)
+				}
+			} else if prepareErr != nil {
+				t.Fatalf("prepare archive: %v", prepareErr)
+			} else {
+				defer func() { _ = payload.Archive.Close() }()
+			}
+			if len(resolver.credentials) != testCase.wantCalls || resolver.credentials[len(resolver.credentials)-1].Password != testCase.wantToken || resolver.repositoryURL != "https://github.com/acme/repository.git" || resolver.unauthenticatedCloneCalls != 0 {
+				t.Fatalf("resolver=%#v", resolver)
+			}
+		})
+	}
+}
+
 type serverSourceResolverFake struct {
-	repositoryURL  string
-	spec           source.WorkspaceSourceSpec
-	cloneErr       error
-	checkoutErr    error
-	resolvedCommit string
+	repositoryURL             string
+	spec                      source.WorkspaceSourceSpec
+	cloneErr                  error
+	checkoutErr               error
+	resolvedCommit            string
+	unauthenticatedCloneCalls int
 }
 
 func (f *serverSourceResolverFake) CloneIntoWorkspace(_ context.Context, workspacePath string, repositoryURL string) error {
+	f.unauthenticatedCloneCalls++
 	f.repositoryURL = repositoryURL
 	if f.cloneErr != nil {
 		return f.cloneErr
@@ -167,12 +199,24 @@ var _ source.WorkspaceSourceResolver = (*serverSourceResolverFake)(nil)
 
 type authenticatedServerSourceResolverFake struct {
 	serverSourceResolverFake
-	credential source.HTTPSCredential
+	credential          source.HTTPSCredential
+	credentials         []source.HTTPSCredential
+	credentialCloneErrs []error
 }
 
 func (f *authenticatedServerSourceResolverFake) CloneIntoWorkspaceWithHTTPSCredential(ctx context.Context, workspacePath string, repositoryURL string, credential source.HTTPSCredential) error {
 	f.credential = credential
-	return f.CloneIntoWorkspace(ctx, workspacePath, repositoryURL)
+	f.credentials = append(f.credentials, credential)
+	f.repositoryURL = repositoryURL
+	if len(f.credentialCloneErrs) > 0 {
+		cloneErr := f.credentialCloneErrs[0]
+		f.credentialCloneErrs = f.credentialCloneErrs[1:]
+		return cloneErr
+	}
+	if mkdirErr := os.MkdirAll(workspacePath, 0o755); mkdirErr != nil {
+		return mkdirErr
+	}
+	return os.WriteFile(filepath.Join(workspacePath, "source.txt"), []byte("source"), 0o644)
 }
 
 var _ source.AuthenticatedWorkspaceSourceResolver = (*authenticatedServerSourceResolverFake)(nil)
@@ -217,4 +261,18 @@ func serverSourceCheckoutDetail() domain.SCMConnectionDetail {
 		GitHubAppRegistration: &domain.GitHubAppRegistration{ID: "app", AppID: "123", APIBaseURL: "https://api.github.com", PrivateKeySecretRef: "PRIVATE_KEY"},
 		GitHubAppInstallation: &domain.GitHubAppInstallation{ConnectionID: "connection", AppRegistrationID: "app", InstallationID: "456"},
 	}
+}
+
+func newServerSourceArchiveCheckoutResolver(t *testing.T) *buildsvc.RepositoryAwareCheckoutResolver {
+	t.Helper()
+	checkoutResolver, resolverErr := buildsvc.NewRepositoryAwareCheckoutResolver(buildsvc.RepositoryAwareCheckoutResolverConfig{
+		Connections:   &serverSourceConnectionFake{detail: serverSourceCheckoutDetail()},
+		Registrations: &serverSourceRegistrationFake{registration: domain.SCMRepositoryRegistration{ID: "registered", ConnectionID: "connection", ProviderRepositoryID: "provider"}},
+		Secrets:       &serverSourceSecretFake{value: "private-key"},
+		GitHub:        &serverSourceGitHubFake{repository: platformgithubapp.Repository{ID: "provider", CloneURL: "https://github.com/acme/repository.git"}},
+	})
+	if resolverErr != nil {
+		t.Fatalf("new checkout resolver: %v", resolverErr)
+	}
+	return checkoutResolver
 }

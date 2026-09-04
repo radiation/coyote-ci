@@ -67,7 +67,7 @@ func exchangeWorkspaceCapability(ctx context.Context, apiURL string, projectedTo
 		return "", doErr
 	}
 	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusCreated {
 		return "", fmt.Errorf("workspace capability exchange returned HTTP %d", response.StatusCode)
 	}
 	var responsePayload struct {

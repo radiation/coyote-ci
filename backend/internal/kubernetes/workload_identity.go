@@ -19,6 +19,7 @@ import (
 
 const workspaceHelperPrepareAudience = "coyote-ci-workspace-helper-prepare"
 const workspaceHelperPublishAudience = "coyote-ci-workspace-helper-publish"
+const executionClaimDigestAnnotation = "coyote-ci.io/execution-claim-digest"
 
 var ErrWorkloadIdentityUnauthorized = errors.New("kubernetes workload identity is unauthorized")
 
@@ -60,17 +61,21 @@ func (v *WorkloadIdentityVerifier) VerifyWorkspaceHelper(ctx context.Context, to
 	if err != nil || review == nil || !review.Status.Authenticated || !containsString(review.Status.Audiences, audience) {
 		return service.VerifiedWorkloadIdentity{}, ErrWorkloadIdentityUnauthorized
 	}
-	namespace := tokenExtra(review.Status.User.Extra, "authentication.kubernetes.io/pod-namespace")
+	namespace, serviceAccountOK := serviceAccountNamespace(review.Status.User.Username, v.expectedServiceAccount)
 	podName := tokenExtra(review.Status.User.Extra, "authentication.kubernetes.io/pod-name")
 	tokenPodUID := tokenExtra(review.Status.User.Extra, "authentication.kubernetes.io/pod-uid")
-	if namespace == "" || podName == "" || tokenPodUID != strings.TrimSpace(podUID) || review.Status.User.Username != "system:serviceaccount:"+namespace+":"+v.expectedServiceAccount {
+	if !serviceAccountOK || podName == "" || tokenPodUID != strings.TrimSpace(podUID) {
 		return service.VerifiedWorkloadIdentity{}, ErrWorkloadIdentityUnauthorized
 	}
 	pod, err := v.client.GetPod(ctx, namespace, podName)
 	if err != nil || pod == nil || string(pod.UID) != tokenPodUID || pod.Labels["coyote-ci.io/execution-job-id"] != strings.TrimSpace(executionJobID) {
 		return service.VerifiedWorkloadIdentity{}, ErrWorkloadIdentityUnauthorized
 	}
-	return service.VerifiedWorkloadIdentity{ExecutionJobID: strings.TrimSpace(executionJobID), PodUID: tokenPodUID}, nil
+	claimDigest := strings.TrimSpace(pod.Annotations[executionClaimDigestAnnotation])
+	if claimDigest == "" {
+		return service.VerifiedWorkloadIdentity{}, ErrWorkloadIdentityUnauthorized
+	}
+	return service.VerifiedWorkloadIdentity{ExecutionJobID: strings.TrimSpace(executionJobID), PodUID: tokenPodUID, ClaimDigest: claimDigest}, nil
 }
 
 func workspaceHelperAudience(role domain.WorkspaceHelperRole) (string, error) {
@@ -90,6 +95,14 @@ func tokenExtra(extra map[string]authenticationv1.ExtraValue, key string) string
 		return ""
 	}
 	return strings.TrimSpace(values[0])
+}
+
+func serviceAccountNamespace(username string, expectedServiceAccount string) (string, bool) {
+	parts := strings.Split(strings.TrimSpace(username), ":")
+	if len(parts) != 4 || parts[0] != "system" || parts[1] != "serviceaccount" || strings.TrimSpace(parts[2]) == "" || parts[3] != expectedServiceAccount {
+		return "", false
+	}
+	return parts[2], true
 }
 
 func containsString(values []string, target string) bool {
