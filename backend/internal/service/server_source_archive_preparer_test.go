@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	platformgithubapp "github.com/radiation/coyote-ci/backend/internal/platform/githubapp"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 )
@@ -104,6 +105,34 @@ func TestServerSourceArchivePreparerRejectsAuthenticatedSourceWithoutCheckout(t 
 	}
 }
 
+func TestServerSourceArchivePreparerUsesAuthenticatedCheckout(t *testing.T) {
+	resolver := &authenticatedServerSourceResolverFake{}
+	checkoutResolver, resolverErr := buildsvc.NewRepositoryAwareCheckoutResolver(buildsvc.RepositoryAwareCheckoutResolverConfig{
+		Connections:   &serverSourceConnectionFake{detail: serverSourceCheckoutDetail()},
+		Registrations: &serverSourceRegistrationFake{registration: domain.SCMRepositoryRegistration{ID: "registered", ConnectionID: "connection", ProviderRepositoryID: "provider"}},
+		Secrets:       &serverSourceSecretFake{value: "private-key"},
+		GitHub:        &serverSourceGitHubFake{repository: platformgithubapp.Repository{ID: "provider", CloneURL: "https://github.com/acme/repository.git"}},
+	})
+	if resolverErr != nil {
+		t.Fatalf("new checkout resolver: %v", resolverErr)
+	}
+	preparer, newErr := NewServerSourceArchivePreparer(resolver, checkoutResolver)
+	if newErr != nil {
+		t.Fatalf("new preparer: %v", newErr)
+	}
+	registeredRepositoryID := "registered"
+	connectionID := "connection"
+	providerRepositoryID := "provider"
+	payload, prepareErr := preparer.OpenSourceArchive(context.Background(), domain.Build{RegisteredRepositoryID: &registeredRepositoryID, SCMConnectionID: &connectionID, ProviderRepositoryID: &providerRepositoryID}, domain.ExecutionJob{Source: domain.SourceSnapshotRef{RepositoryURL: "https://stale.example/repository.git", CommitSHA: "commit-1"}}, domain.ExecutionJobSpec{})
+	if prepareErr != nil {
+		t.Fatalf("prepare authenticated archive: %v", prepareErr)
+	}
+	defer func() { _ = payload.Archive.Close() }()
+	if resolver.repositoryURL != "https://github.com/acme/repository.git" || resolver.credential.Password != "installation-token" || payload.Publication.Validate() != nil {
+		t.Fatalf("resolver=%#v publication=%#v", resolver, payload.Publication)
+	}
+}
+
 type serverSourceResolverFake struct {
 	repositoryURL  string
 	spec           source.WorkspaceSourceSpec
@@ -135,3 +164,57 @@ func (f *serverSourceResolverFake) CheckoutWorkspaceSource(_ context.Context, _ 
 }
 
 var _ source.WorkspaceSourceResolver = (*serverSourceResolverFake)(nil)
+
+type authenticatedServerSourceResolverFake struct {
+	serverSourceResolverFake
+	credential source.HTTPSCredential
+}
+
+func (f *authenticatedServerSourceResolverFake) CloneIntoWorkspaceWithHTTPSCredential(ctx context.Context, workspacePath string, repositoryURL string, credential source.HTTPSCredential) error {
+	f.credential = credential
+	return f.CloneIntoWorkspace(ctx, workspacePath, repositoryURL)
+}
+
+var _ source.AuthenticatedWorkspaceSourceResolver = (*authenticatedServerSourceResolverFake)(nil)
+
+type serverSourceConnectionFake struct{ detail domain.SCMConnectionDetail }
+
+func (f *serverSourceConnectionFake) GetByID(context.Context, string) (domain.SCMConnectionDetail, error) {
+	return f.detail, nil
+}
+
+type serverSourceRegistrationFake struct {
+	registration domain.SCMRepositoryRegistration
+}
+
+func (f *serverSourceRegistrationFake) GetByID(context.Context, string) (domain.SCMRepositoryRegistration, error) {
+	return f.registration, nil
+}
+
+type serverSourceSecretFake struct{ value string }
+
+func (f *serverSourceSecretFake) Resolve(context.Context, string) (string, error) {
+	return f.value, nil
+}
+
+type serverSourceGitHubFake struct{ repository platformgithubapp.Repository }
+
+func (f *serverSourceGitHubFake) GetInstallationToken(context.Context, platformgithubapp.InstallationTokenRequest) (platformgithubapp.InstallationToken, error) {
+	return platformgithubapp.InstallationToken{Value: "installation-token"}, nil
+}
+
+func (f *serverSourceGitHubFake) GetFreshInstallationToken(context.Context, platformgithubapp.InstallationTokenRequest) (platformgithubapp.InstallationToken, error) {
+	return platformgithubapp.InstallationToken{Value: "fresh-installation-token"}, nil
+}
+
+func (f *serverSourceGitHubFake) GetRepositoryByID(context.Context, platformgithubapp.InstallationTokenRequest, string) (platformgithubapp.Repository, error) {
+	return f.repository, nil
+}
+
+func serverSourceCheckoutDetail() domain.SCMConnectionDetail {
+	return domain.SCMConnectionDetail{
+		Connection:            domain.SCMConnection{ID: "connection", Provider: domain.SCMProviderGitHub, APIBaseURL: "https://api.github.com", Enabled: true},
+		GitHubAppRegistration: &domain.GitHubAppRegistration{ID: "app", AppID: "123", APIBaseURL: "https://api.github.com", PrivateKeySecretRef: "PRIVATE_KEY"},
+		GitHubAppInstallation: &domain.GitHubAppInstallation{ConnectionID: "connection", AppRegistrationID: "app", InstallationID: "456"},
+	}
+}

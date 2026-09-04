@@ -72,6 +72,26 @@ func TestWorkspaceHelperCompositionFailuresAndRevisionStoreSelection(t *testing.
 	}
 }
 
+func TestConfigureWorkspaceHelperServices(t *testing.T) {
+	executionJobs := memoryrepo.NewExecutionJobRepository()
+	revisions := memoryrepo.NewWorkspaceRevisionRepository(executionJobs)
+	workspaceHelperHandler, handlerErr := newWorkspaceHelperHandlerWithVerifier(config.Config{WorkspaceHelperCapabilityEnabled: true, WorkspaceHelperCapabilitySecret: strings.Repeat("a", 32)}, executionJobs, func(string, string) (service.WorkloadIdentityVerifier, error) {
+		return &workspaceHelperIdentityVerifier{}, nil
+	})
+	if handlerErr != nil {
+		t.Fatalf("new handler: %v", handlerErr)
+	}
+	if configureErr := configureWorkspaceHelperServices(config.Config{}, nil, executionJobs, memoryrepo.NewBuildRepository(), revisions, nil); configureErr != nil {
+		t.Fatalf("disabled helper services: %v", configureErr)
+	}
+	if configureErr := configureWorkspaceHelperServices(config.Config{}, workspaceHelperHandler, executionJobs, memoryrepo.NewBuildRepository(), revisions, nil); configureErr == nil {
+		t.Fatal("expected missing workspace storage error")
+	}
+	if configureErr := configureWorkspaceHelperServices(config.Config{WorkspaceRevisionStorageRoot: t.TempDir(), WorkspaceHelperMaxUploadSizeMB: 1}, workspaceHelperHandler, executionJobs, memoryrepo.NewBuildRepository(), revisions, nil); configureErr != nil {
+		t.Fatalf("configure helper services: %v", configureErr)
+	}
+}
+
 type workspaceHelperIdentityVerifier struct{}
 
 func (*workspaceHelperIdentityVerifier) VerifyWorkspaceHelper(context.Context, string, string, string, domain.WorkspaceHelperRole) (service.VerifiedWorkloadIdentity, error) {

@@ -257,39 +257,8 @@ func main() {
 	if workspaceHelperErr != nil {
 		log.Fatalf("failed to configure workspace helper capability exchange: %v", workspaceHelperErr)
 	}
-	if workspaceHelperHandler != nil {
-		workspaceRevisionStore := workspaceRevisionStoreFromConfig(cfg)
-		archiveReader, archiveReaderOK := workspaceRevisionStore.(workspacepkg.WorkspaceRevisionArchiveReader)
-		if workspaceRevisionStore == nil || !archiveReaderOK {
-			log.Fatal("workspace helper prepare requires workspace revision storage")
-		}
-		sourceArchives, sourceArchiveErr := service.NewServerSourceArchivePreparer(source.NewGitWorkspaceSourceResolver(), checkoutResolver)
-		if sourceArchiveErr != nil {
-			log.Fatalf("failed to configure workspace source archiver: %v", sourceArchiveErr)
-		}
-		prepareService, prepareErr := service.NewWorkspacePrepareService(service.WorkspacePrepareServiceConfig{
-			CapabilityAuthorizer: workspaceHelperHandler.PrepareCapabilityAuthorizer(),
-			ExecutionJobs:        executionJobRepo,
-			Builds:               buildRepo,
-			WorkspaceRevisions:   workspaceRevisionRepo,
-			RevisionArchives:     archiveReader,
-			SourceArchives:       sourceArchives,
-		})
-		if prepareErr != nil {
-			log.Fatalf("failed to configure workspace prepare service: %v", prepareErr)
-		}
-		workspaceHelperHandler.SetPrepareService(prepareService)
-		publishService, publishErr := service.NewWorkspacePublishService(service.WorkspacePublishServiceConfig{
-			CapabilityAuthorizer: workspaceHelperHandler.PrepareCapabilityAuthorizer(),
-			ExecutionJobs:        executionJobRepo,
-			WorkspaceRevisions:   workspaceRevisionRepo,
-			RevisionStore:        workspaceRevisionStore,
-			MaxUploadBytes:       int64(cfg.WorkspaceHelperMaxUploadSizeMB) * 1024 * 1024,
-		})
-		if publishErr != nil {
-			log.Fatalf("failed to configure workspace publish service: %v", publishErr)
-		}
-		workspaceHelperHandler.SetPublishService(publishService)
+	if workspaceHelperErr := configureWorkspaceHelperServices(cfg, workspaceHelperHandler, executionJobRepo, buildRepo, workspaceRevisionRepo, checkoutResolver); workspaceHelperErr != nil {
+		log.Fatalf("failed to configure workspace helper services: %v", workspaceHelperErr)
 	}
 	buildHandler.SetVersionTagService(versionTagService)
 	buildHandler.SetProjectService(projectService)
@@ -472,6 +441,45 @@ func workspaceRevisionStoreFromConfig(cfg config.Config) workspacepkg.WorkspaceR
 		return nil
 	}
 	return workspacepkg.NewFilesystemWorkspaceRevisionStore(cfg.WorkspaceRevisionStorageRoot)
+}
+
+func configureWorkspaceHelperServices(cfg config.Config, workspaceHelperHandler *handler.WorkspaceHelperHandler, executionJobs repository.ExecutionJobRepository, builds repository.BuildRepository, revisions repository.WorkspaceRevisionRepository, checkoutResolver *buildsvc.RepositoryAwareCheckoutResolver) error {
+	if workspaceHelperHandler == nil {
+		return nil
+	}
+	workspaceRevisionStore := workspaceRevisionStoreFromConfig(cfg)
+	archiveReader, archiveReaderOK := workspaceRevisionStore.(workspacepkg.WorkspaceRevisionArchiveReader)
+	if workspaceRevisionStore == nil || !archiveReaderOK {
+		return errors.New("workspace helper prepare requires workspace revision storage")
+	}
+	sourceArchives, sourceArchiveErr := service.NewServerSourceArchivePreparer(source.NewGitWorkspaceSourceResolver(), checkoutResolver)
+	if sourceArchiveErr != nil {
+		return sourceArchiveErr
+	}
+	prepareService, prepareErr := service.NewWorkspacePrepareService(service.WorkspacePrepareServiceConfig{
+		CapabilityAuthorizer: workspaceHelperHandler.PrepareCapabilityAuthorizer(),
+		ExecutionJobs:        executionJobs,
+		Builds:               builds,
+		WorkspaceRevisions:   revisions,
+		RevisionArchives:     archiveReader,
+		SourceArchives:       sourceArchives,
+	})
+	if prepareErr != nil {
+		return prepareErr
+	}
+	workspaceHelperHandler.SetPrepareService(prepareService)
+	publishService, publishErr := service.NewWorkspacePublishService(service.WorkspacePublishServiceConfig{
+		CapabilityAuthorizer: workspaceHelperHandler.PrepareCapabilityAuthorizer(),
+		ExecutionJobs:        executionJobs,
+		WorkspaceRevisions:   revisions,
+		RevisionStore:        workspaceRevisionStore,
+		MaxUploadBytes:       int64(cfg.WorkspaceHelperMaxUploadSizeMB) * 1024 * 1024,
+	})
+	if publishErr != nil {
+		return publishErr
+	}
+	workspaceHelperHandler.SetPublishService(publishService)
+	return nil
 }
 
 func newWorkspaceHelperHandlerWithVerifier(cfg config.Config, executionJobs repository.ExecutionJobRepository, newVerifier func(string, string) (service.WorkloadIdentityVerifier, error)) (*handler.WorkspaceHelperHandler, error) {
