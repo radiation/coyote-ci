@@ -197,10 +197,8 @@ func (s *BuildService) RunStep(ctx context.Context, request runner.RunStepReques
 	return runOutcome.Result, report, nil
 }
 
-var workspaceRevisionNamespace = uuid.MustParse("80c528d8-d286-5fdd-98ce-5d5239616c2a")
-
 func workspaceRevisionIDForExecutionJob(jobID string) string {
-	return uuid.NewSHA1(workspaceRevisionNamespace, []byte(jobID)).String()
+	return domain.WorkspaceRevisionIDForExecutionJob(jobID)
 }
 
 func (s *BuildService) workspaceRevisionPublicationEnabled() bool {

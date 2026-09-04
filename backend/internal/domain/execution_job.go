@@ -138,3 +138,8 @@ func BuildSpecDigest(specJSON string) *string {
 	value := hex.EncodeToString(digest[:])
 	return &value
 }
+
+func ExecutionJobClaimDigest(claimToken string) string {
+	digest := sha256.Sum256([]byte(claimToken))
+	return hex.EncodeToString(digest[:])
+}

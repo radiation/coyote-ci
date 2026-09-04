@@ -25,6 +25,8 @@ var (
 	ErrWorkspaceRevisionNotFound         = errors.New("workspace revision object not found")
 	ErrInvalidWorkspaceRevisionObject    = errors.New("invalid workspace revision object")
 	ErrWorkspaceRevisionDigestMismatch   = errors.New("workspace revision digest mismatch")
+	ErrWorkspaceRevisionTooLarge         = errors.New("workspace revision exceeds extraction size limit")
+	ErrWorkspaceRevisionTooManyEntries   = errors.New("workspace revision exceeds archive entry limit")
 	ErrUnsupportedWorkspaceRevisionEntry = errors.New("unsupported workspace revision entry")
 	ErrUnsafeWorkspaceRevisionPath       = errors.New("unsafe workspace revision archive path")
 	ErrWorkspaceRevisionDestination      = errors.New("workspace revision destination already exists")
@@ -36,6 +38,112 @@ type WorkspaceRevisionStore interface {
 	Publish(ctx context.Context, revisionID string, sourceRoot string) (domain.WorkspaceRevisionPublication, error)
 	Restore(ctx context.Context, publication domain.WorkspaceRevisionPublication, destinationRoot string) error
 	Delete(ctx context.Context, publication domain.WorkspaceRevisionPublication) error
+}
+
+// WorkspaceRevisionArchiveReader is an optional read capability for stores
+// whose immutable revision objects can be streamed to another trusted service.
+type WorkspaceRevisionArchiveReader interface {
+	Open(ctx context.Context, publication domain.WorkspaceRevisionPublication) (io.ReadCloser, error)
+}
+
+// ArchiveDirectory creates a verified tar.gz archive from a trusted directory.
+func ArchiveDirectory(ctx context.Context, sourceRoot string) (io.ReadCloser, domain.WorkspaceRevisionPublication, error) {
+	archive, err := os.CreateTemp("", "coyote-workspace-*.tar.gz")
+	if err != nil {
+		return nil, domain.WorkspaceRevisionPublication{}, err
+	}
+	archivePath := archive.Name()
+	if writeErr := writeWorkspaceRevisionArchive(ctx, archive, sourceRoot); writeErr != nil {
+		_ = archive.Close()
+		_ = os.Remove(archivePath)
+		return nil, domain.WorkspaceRevisionPublication{}, writeErr
+	}
+	if closeErr := archive.Close(); closeErr != nil {
+		_ = os.Remove(archivePath)
+		return nil, domain.WorkspaceRevisionPublication{}, closeErr
+	}
+	digest, size, digestErr := workspaceRevisionDigestAndSize(ctx, archivePath)
+	if digestErr != nil {
+		_ = os.Remove(archivePath)
+		return nil, domain.WorkspaceRevisionPublication{}, digestErr
+	}
+	reader, openErr := os.Open(archivePath)
+	if openErr != nil {
+		_ = os.Remove(archivePath)
+		return nil, domain.WorkspaceRevisionPublication{}, openErr
+	}
+	return &removingReadCloser{ReadCloser: reader, path: archivePath}, publicationForWorkspaceRevision("transport/source.tar.gz", digest, size), nil
+}
+
+// RestoreArchive verifies and safely extracts an archive into an absent destination.
+func RestoreArchive(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, destinationRoot string) error {
+	return RestoreArchiveWithLimits(ctx, archive, publication, destinationRoot, WorkspaceRevisionRestoreLimits{})
+}
+
+type WorkspaceRevisionRestoreLimits struct {
+	MaxUncompressedBytes int64
+	MaxEntries           int
+}
+
+// RestoreArchiveWithLimits verifies and safely extracts an archive with bounded output.
+func RestoreArchiveWithLimits(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, destinationRoot string, limits WorkspaceRevisionRestoreLimits) error {
+	if archive == nil || publication.Validate() != nil {
+		return ErrInvalidWorkspaceRevisionObject
+	}
+	if strings.TrimSpace(destinationRoot) == "" {
+		return fmt.Errorf("destination root is required")
+	}
+	if _, statErr := os.Stat(destinationRoot); statErr == nil {
+		return ErrWorkspaceRevisionDestination
+	} else if !os.IsNotExist(statErr) {
+		return statErr
+	}
+	if mkdirErr := os.MkdirAll(filepath.Dir(destinationRoot), 0o755); mkdirErr != nil {
+		return mkdirErr
+	}
+	staging, stagingErr := os.MkdirTemp(filepath.Dir(destinationRoot), ".workspace-restore-*")
+	if stagingErr != nil {
+		return stagingErr
+	}
+	defer func() { _ = os.RemoveAll(staging) }()
+	hasher := sha256.New()
+	countingReader := &workspaceRevisionCountingReader{reader: archive, writer: hasher}
+	gzipReader, gzipErr := gzip.NewReader(countingReader)
+	if gzipErr != nil {
+		return gzipErr
+	}
+	if extractErr := extractWorkspaceRevisionArchive(ctx, tar.NewReader(gzipReader), staging, limits); extractErr != nil {
+		_ = gzipReader.Close()
+		return extractErr
+	}
+	if _, copyErr := copyWorkspaceRevision(ctx, io.Discard, gzipReader); copyErr != nil {
+		_ = gzipReader.Close()
+		return copyErr
+	}
+	if closeErr := gzipReader.Close(); closeErr != nil {
+		return closeErr
+	}
+	if "sha256:"+hex.EncodeToString(hasher.Sum(nil)) != publication.ContentDigest {
+		return ErrWorkspaceRevisionDigestMismatch
+	}
+	if publication.SizeBytes == nil || countingReader.size != *publication.SizeBytes {
+		return ErrWorkspaceRevisionDigestMismatch
+	}
+	return os.Rename(staging, destinationRoot)
+}
+
+type removingReadCloser struct {
+	io.ReadCloser
+	path string
+}
+
+func (r *removingReadCloser) Close() error {
+	closeErr := r.ReadCloser.Close()
+	removeErr := os.Remove(r.path)
+	if closeErr != nil {
+		return closeErr
+	}
+	return removeErr
 }
 
 // FilesystemWorkspaceRevisionStore stores tar.gz revision objects below a
@@ -131,43 +239,25 @@ func (s *FilesystemWorkspaceRevisionStore) Restore(ctx context.Context, publicat
 		return openErr
 	}
 	defer func() { _ = archive.Close() }()
+	return RestoreArchive(ctx, archive, publication, destinationRoot)
+}
 
-	if mkdirErr := os.MkdirAll(filepath.Dir(destinationRoot), 0o755); mkdirErr != nil {
-		return mkdirErr
+func (s *FilesystemWorkspaceRevisionStore) Open(ctx context.Context, publication domain.WorkspaceRevisionPublication) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	staging, stagingErr := os.MkdirTemp(filepath.Dir(destinationRoot), ".workspace-restore-*")
-	if stagingErr != nil {
-		return stagingErr
+	archivePath, err := s.pathForPublication(publication)
+	if err != nil {
+		return nil, err
 	}
-	defer func() { _ = os.RemoveAll(staging) }()
-
-	hasher := sha256.New()
-	countingReader := &workspaceRevisionCountingReader{reader: archive, writer: hasher}
-	gzipReader, gzipErr := gzip.NewReader(countingReader)
-	if gzipErr != nil {
-		return gzipErr
+	archive, openErr := os.Open(archivePath)
+	if openErr != nil {
+		if os.IsNotExist(openErr) {
+			return nil, ErrWorkspaceRevisionNotFound
+		}
+		return nil, openErr
 	}
-	if extractErr := extractWorkspaceRevisionArchive(ctx, tar.NewReader(gzipReader), staging); extractErr != nil {
-		_ = gzipReader.Close()
-		return extractErr
-	}
-	if _, copyErr := copyWorkspaceRevision(ctx, io.Discard, gzipReader); copyErr != nil {
-		_ = gzipReader.Close()
-		return copyErr
-	}
-	if closeErr := gzipReader.Close(); closeErr != nil {
-		return closeErr
-	}
-	digest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
-	if digest != publication.ContentDigest {
-		return ErrWorkspaceRevisionDigestMismatch
-	}
-	if _, statErr := os.Stat(destinationRoot); statErr == nil {
-		return ErrWorkspaceRevisionDestination
-	} else if !os.IsNotExist(statErr) {
-		return statErr
-	}
-	return os.Rename(staging, destinationRoot)
+	return archive, nil
 }
 
 func (s *FilesystemWorkspaceRevisionStore) Delete(ctx context.Context, publication domain.WorkspaceRevisionPublication) error {
@@ -306,8 +396,10 @@ func writeWorkspaceRevisionArchive(ctx context.Context, destination *os.File, so
 
 var unixEpoch = time.Unix(0, 0).UTC()
 
-func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, destinationRoot string) error {
+func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, destinationRoot string, limits WorkspaceRevisionRestoreLimits) error {
 	directoryModes := make(map[string]os.FileMode)
+	var entries int
+	var uncompressedBytes int64
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -318,6 +410,10 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 		}
 		if err != nil {
 			return err
+		}
+		entries++
+		if limits.MaxEntries > 0 && entries > limits.MaxEntries {
+			return ErrWorkspaceRevisionTooManyEntries
 		}
 		mode := os.FileMode(header.Mode) & 0o777
 		if header.Name == "." || header.Name == "./" {
@@ -343,6 +439,10 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 			}
 			directoryModes[target] = mode
 		case tar.TypeReg:
+			if limits.MaxUncompressedBytes > 0 && (header.Size > limits.MaxUncompressedBytes || uncompressedBytes > limits.MaxUncompressedBytes-header.Size) {
+				return ErrWorkspaceRevisionTooLarge
+			}
+			uncompressedBytes += header.Size
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
@@ -424,11 +524,13 @@ func syncWorkspaceRevisionDirectory(directory string) error {
 type workspaceRevisionCountingReader struct {
 	reader io.Reader
 	writer io.Writer
+	size   int64
 }
 
 func (r *workspaceRevisionCountingReader) Read(buffer []byte) (int, error) {
 	read, err := r.reader.Read(buffer)
 	if read > 0 {
+		r.size += int64(read)
 		if _, writeErr := r.writer.Write(buffer[:read]); writeErr != nil {
 			return read, writeErr
 		}

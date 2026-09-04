@@ -1,0 +1,145 @@
+package kubernetes
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	authenticationv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	kubernetesfake "k8s.io/client-go/kubernetes/fake"
+
+	"github.com/radiation/coyote-ci/backend/internal/domain"
+)
+
+func TestWorkloadIdentityVerifierBindsReviewedTokenToPodAndExecution(t *testing.T) {
+	client := &fakeWorkloadIdentityClient{review: validTokenReview(), pod: validHelperPod()}
+	verifier, err := NewWorkloadIdentityVerifierWithClient(client, "coyote-workspace-helper")
+	if err != nil {
+		t.Fatalf("new verifier: %v", err)
+	}
+	identity, verifyErr := verifier.VerifyWorkspaceHelper(context.Background(), "projected-token", "job-1", "pod-1", domain.WorkspaceHelperRolePrepare)
+	if verifyErr != nil || identity.ExecutionJobID != "job-1" || identity.PodUID != "pod-1" {
+		t.Fatalf("identity=%#v err=%v", identity, verifyErr)
+	}
+	if len(client.review.Spec.Audiences) != 1 || client.review.Spec.Audiences[0] != workspaceHelperPrepareAudience {
+		t.Fatalf("audiences=%v", client.review.Spec.Audiences)
+	}
+}
+
+func TestWorkloadIdentityVerifierRejectsUntrustedBindings(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*fakeWorkloadIdentityClient)
+	}{
+		{name: "wrong audience", mutate: func(c *fakeWorkloadIdentityClient) {
+			c.review.Status.Audiences = []string{workspaceHelperPublishAudience}
+		}},
+		{name: "wrong pod uid", mutate: func(c *fakeWorkloadIdentityClient) { c.pod.UID = types.UID("other") }},
+		{name: "wrong execution label", mutate: func(c *fakeWorkloadIdentityClient) { c.pod.Labels["coyote-ci.io/execution-job-id"] = "job-2" }},
+		{name: "missing claim digest", mutate: func(c *fakeWorkloadIdentityClient) { delete(c.pod.Annotations, executionClaimDigestAnnotation) }},
+		{name: "token review error", mutate: func(c *fakeWorkloadIdentityClient) { c.reviewErr = errors.New("denied") }},
+		{name: "unauthenticated review", mutate: func(c *fakeWorkloadIdentityClient) { c.review.Status.Authenticated = false }},
+		{name: "malformed service account username", mutate: func(c *fakeWorkloadIdentityClient) {
+			c.review.Status.User.Username = "system:serviceaccount:coyote-workspace-helper"
+		}},
+		{name: "wrong service account", mutate: func(c *fakeWorkloadIdentityClient) { c.review.Status.User.Username = "system:serviceaccount:ci:other" }},
+		{name: "pod lookup error", mutate: func(c *fakeWorkloadIdentityClient) { c.podErr = errors.New("missing pod") }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			client := &fakeWorkloadIdentityClient{review: validTokenReview(), pod: validHelperPod()}
+			testCase.mutate(client)
+			verifier, err := NewWorkloadIdentityVerifierWithClient(client, "coyote-workspace-helper")
+			if err != nil {
+				t.Fatalf("new verifier: %v", err)
+			}
+			if _, verifyErr := verifier.VerifyWorkspaceHelper(context.Background(), "projected-token", "job-1", "pod-1", domain.WorkspaceHelperRolePrepare); !errors.Is(verifyErr, ErrWorkloadIdentityUnauthorized) {
+				t.Fatalf("verify error=%v", verifyErr)
+			}
+		})
+	}
+}
+
+func TestWorkloadIdentityVerifierUsesPublishAudienceAndRejectsInvalidInputs(t *testing.T) {
+	client := &fakeWorkloadIdentityClient{review: validTokenReview(), pod: validHelperPod()}
+	client.review.Status.Audiences = []string{workspaceHelperPublishAudience}
+	verifier, newErr := NewWorkloadIdentityVerifierWithClient(client, " coyote-workspace-helper ")
+	if newErr != nil {
+		t.Fatalf("new verifier: %v", newErr)
+	}
+	if _, verifyErr := verifier.VerifyWorkspaceHelper(context.Background(), "projected-token", "job-1", "pod-1", domain.WorkspaceHelperRolePublish); verifyErr != nil {
+		t.Fatalf("verify publish identity: %v", verifyErr)
+	}
+	if len(client.review.Spec.Audiences) != 1 || client.review.Spec.Audiences[0] != workspaceHelperPublishAudience {
+		t.Fatalf("audiences=%v", client.review.Spec.Audiences)
+	}
+	for _, testCase := range []struct {
+		name  string
+		token string
+		role  domain.WorkspaceHelperRole
+	}{
+		{name: "blank token", token: " ", role: domain.WorkspaceHelperRolePrepare},
+		{name: "unsupported role", token: "projected-token", role: "other"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, verifyErr := verifier.VerifyWorkspaceHelper(context.Background(), testCase.token, "job-1", "pod-1", testCase.role); !errors.Is(verifyErr, ErrWorkloadIdentityUnauthorized) {
+				t.Fatalf("verify error=%v", verifyErr)
+			}
+		})
+	}
+	if _, newErr := NewWorkloadIdentityVerifierWithClient(nil, "service-account"); newErr == nil {
+		t.Fatal("expected missing client error")
+	}
+}
+
+func TestWorkloadIdentityClientsetDelegatesToKubernetesClient(t *testing.T) {
+	client := kubernetesfake.NewClientset(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "helper-pod", Namespace: "ci"}})
+	adapter := &workloadIdentityClientset{client: client}
+	review, reviewErr := adapter.CreateTokenReview(context.Background(), &authenticationv1.TokenReview{})
+	if reviewErr == nil {
+		t.Fatalf("expected fake client TokenReview schema error, review=%#v", review)
+	}
+	pod, podErr := adapter.GetPod(context.Background(), "ci", "helper-pod")
+	if podErr != nil || pod.Name != "helper-pod" {
+		t.Fatalf("get pod=%#v err=%v", pod, podErr)
+	}
+}
+
+func TestNewWorkloadIdentityVerifierLoadsKubeconfig(t *testing.T) {
+	kubeconfigPath := filepath.Join(t.TempDir(), "config")
+	kubeconfig := "apiVersion: v1\nclusters:\n- cluster:\n    server: https://127.0.0.1:1\n  name: test\ncontexts:\n- context:\n    cluster: test\n    user: test\n  name: test\ncurrent-context: test\nusers:\n- name: test\n  user:\n    token: test-token\n"
+	if writeErr := os.WriteFile(kubeconfigPath, []byte(kubeconfig), 0o600); writeErr != nil {
+		t.Fatalf("write kubeconfig: %v", writeErr)
+	}
+	verifier, newErr := NewWorkloadIdentityVerifier(kubeconfigPath, "workspace-helper")
+	if newErr != nil || verifier == nil || verifier.expectedServiceAccount != "workspace-helper" {
+		t.Fatalf("verifier=%#v err=%v", verifier, newErr)
+	}
+}
+
+func validTokenReview() *authenticationv1.TokenReview {
+	return &authenticationv1.TokenReview{Status: authenticationv1.TokenReviewStatus{Authenticated: true, Audiences: []string{workspaceHelperPrepareAudience}, User: authenticationv1.UserInfo{Username: "system:serviceaccount:ci:coyote-workspace-helper", Extra: map[string]authenticationv1.ExtraValue{"authentication.kubernetes.io/pod-name": {"helper-pod"}, "authentication.kubernetes.io/pod-uid": {"pod-1"}}}}}
+}
+
+func validHelperPod() *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "helper-pod", Namespace: "ci", UID: types.UID("pod-1"), Labels: map[string]string{"coyote-ci.io/execution-job-id": "job-1"}, Annotations: map[string]string{executionClaimDigestAnnotation: domain.ExecutionJobClaimDigest("claim")}}}
+}
+
+type fakeWorkloadIdentityClient struct {
+	review    *authenticationv1.TokenReview
+	pod       *corev1.Pod
+	reviewErr error
+	podErr    error
+}
+
+func (c *fakeWorkloadIdentityClient) CreateTokenReview(_ context.Context, review *authenticationv1.TokenReview) (*authenticationv1.TokenReview, error) {
+	c.review.Spec = review.Spec
+	return c.review, c.reviewErr
+}
+func (c *fakeWorkloadIdentityClient) GetPod(context.Context, string, string) (*corev1.Pod, error) {
+	return c.pod, c.podErr
+}

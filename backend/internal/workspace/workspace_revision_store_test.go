@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -52,6 +53,15 @@ func TestFilesystemWorkspaceRevisionStorePublishRestoreAndDelete(t *testing.T) {
 	if publication.ContentDigest != "sha256:"+hex.EncodeToString(wantDigest[:]) || *publication.SizeBytes != int64(len(archiveBytes)) {
 		t.Fatalf("publication does not describe archive: %+v", publication)
 	}
+	archive, openErr := store.Open(context.Background(), publication)
+	if openErr != nil {
+		t.Fatalf("open archive: %v", openErr)
+	}
+	streamedBytes, readErr := io.ReadAll(archive)
+	closeErr := archive.Close()
+	if readErr != nil || closeErr != nil || string(streamedBytes) != string(archiveBytes) {
+		t.Fatalf("stream archive = %d bytes, %v, %v; want stored bytes", len(streamedBytes), readErr, closeErr)
+	}
 
 	repeated, repeatErr := store.Publish(context.Background(), "revision-1", sourceRoot)
 	if repeatErr != nil || repeated.ContentDigest != publication.ContentDigest || repeated.StorageKey != publication.StorageKey || repeated.SizeBytes == nil || *repeated.SizeBytes != *publication.SizeBytes {
@@ -76,8 +86,124 @@ func TestFilesystemWorkspaceRevisionStorePublishRestoreAndDelete(t *testing.T) {
 	if deleteErr := store.Delete(context.Background(), publication); deleteErr != nil {
 		t.Fatalf("idempotent delete: %v", deleteErr)
 	}
+	if _, openErr := store.Open(context.Background(), publication); !errors.Is(openErr, ErrWorkspaceRevisionNotFound) {
+		t.Fatalf("open deleted object: %v", openErr)
+	}
 	if restoreErr := store.Restore(context.Background(), publication, filepath.Join(t.TempDir(), "missing")); !errors.Is(restoreErr, ErrWorkspaceRevisionNotFound) {
 		t.Fatalf("restore deleted object: %v", restoreErr)
+	}
+}
+
+func TestArchiveDirectoryCreatesRestorableTransportArchive(t *testing.T) {
+	sourceRoot := t.TempDir()
+	if writeErr := os.WriteFile(filepath.Join(sourceRoot, "source.txt"), []byte("workspace"), 0o644); writeErr != nil {
+		t.Fatalf("write source: %v", writeErr)
+	}
+	archive, publication, archiveErr := ArchiveDirectory(context.Background(), sourceRoot)
+	if archiveErr != nil {
+		t.Fatalf("archive directory: %v", archiveErr)
+	}
+	defer func() { _ = archive.Close() }()
+	if publication.StorageKey != "transport/source.tar.gz" || publication.Validate() != nil {
+		t.Fatalf("publication=%#v", publication)
+	}
+	destinationRoot := filepath.Join(t.TempDir(), "restore")
+	if restoreErr := RestoreArchive(context.Background(), archive, publication, destinationRoot); restoreErr != nil {
+		t.Fatalf("restore archive: %v", restoreErr)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(destinationRoot, "source.txt"))
+	if readErr != nil || string(contents) != "workspace" {
+		t.Fatalf("restored contents=%q err=%v", contents, readErr)
+	}
+}
+
+func TestRestoreArchiveWithLimitsRejectsCompressedExpansionAndExcessEntries(t *testing.T) {
+	sourceRoot := t.TempDir()
+	if writeErr := os.WriteFile(filepath.Join(sourceRoot, "compressible.txt"), []byte(strings.Repeat("x", 64*1024)), 0o644); writeErr != nil {
+		t.Fatalf("write compressible source: %v", writeErr)
+	}
+	archive, publication, archiveErr := ArchiveDirectory(context.Background(), sourceRoot)
+	if archiveErr != nil {
+		t.Fatalf("archive directory: %v", archiveErr)
+	}
+	archiveBytes, readErr := io.ReadAll(archive)
+	closeErr := archive.Close()
+	if readErr != nil || closeErr != nil || int64(len(archiveBytes)) >= 1024 {
+		t.Fatalf("archive bytes=%d read=%v close=%v", len(archiveBytes), readErr, closeErr)
+	}
+	if restoreErr := RestoreArchiveWithLimits(context.Background(), bytes.NewReader(archiveBytes), publication, filepath.Join(t.TempDir(), "restore"), WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: 1024, MaxEntries: 10}); !errors.Is(restoreErr, ErrWorkspaceRevisionTooLarge) {
+		t.Fatalf("compressed expansion restore: %v", restoreErr)
+	}
+
+	if writeErr := os.WriteFile(filepath.Join(sourceRoot, "second.txt"), []byte("second"), 0o644); writeErr != nil {
+		t.Fatalf("write second source: %v", writeErr)
+	}
+	archive, publication, archiveErr = ArchiveDirectory(context.Background(), sourceRoot)
+	if archiveErr != nil {
+		t.Fatalf("archive directory: %v", archiveErr)
+	}
+	archiveBytes, readErr = io.ReadAll(archive)
+	closeErr = archive.Close()
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("read archive=%v close=%v", readErr, closeErr)
+	}
+	if restoreErr := RestoreArchiveWithLimits(context.Background(), bytes.NewReader(archiveBytes), publication, filepath.Join(t.TempDir(), "restore"), WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: 128 * 1024, MaxEntries: 1}); !errors.Is(restoreErr, ErrWorkspaceRevisionTooManyEntries) {
+		t.Fatalf("entry limit restore: %v", restoreErr)
+	}
+}
+
+func TestArchiveDirectoryRejectsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, archiveErr := ArchiveDirectory(ctx, t.TempDir()); !errors.Is(archiveErr, context.Canceled) {
+		t.Fatalf("archive directory: %v", archiveErr)
+	}
+}
+
+func TestArchiveDirectoryRejectsMissingAndNonDirectoryRoots(t *testing.T) {
+	fileRoot := filepath.Join(t.TempDir(), "source-file")
+	if writeErr := os.WriteFile(fileRoot, []byte("content"), 0o600); writeErr != nil {
+		t.Fatalf("write source file: %v", writeErr)
+	}
+	for _, sourceRoot := range []string{filepath.Join(t.TempDir(), "missing"), fileRoot} {
+		if _, _, archiveErr := ArchiveDirectory(context.Background(), sourceRoot); archiveErr == nil {
+			t.Fatalf("expected archive failure for %q", sourceRoot)
+		}
+	}
+}
+
+func TestRestoreArchiveRejectsInvalidInputBeforeCreatingDestination(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "restore")
+	if restoreErr := RestoreArchive(context.Background(), nil, domain.WorkspaceRevisionPublication{}, destination); !errors.Is(restoreErr, ErrInvalidWorkspaceRevisionObject) {
+		t.Fatalf("restore invalid input: %v", restoreErr)
+	}
+	if restoreErr := RestoreArchive(context.Background(), strings.NewReader("archive"), domain.WorkspaceRevisionPublication{}, destination); !errors.Is(restoreErr, ErrInvalidWorkspaceRevisionObject) {
+		t.Fatalf("restore invalid publication: %v", restoreErr)
+	}
+	if _, statErr := os.Stat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("invalid restore created destination: %v", statErr)
+	}
+}
+
+func TestRestoreArchiveRejectsExistingAndBlankDestinations(t *testing.T) {
+	sourceRoot := t.TempDir()
+	if writeErr := os.WriteFile(filepath.Join(sourceRoot, "source.txt"), []byte("workspace"), 0o644); writeErr != nil {
+		t.Fatalf("write source: %v", writeErr)
+	}
+	archive, publication, archiveErr := ArchiveDirectory(context.Background(), sourceRoot)
+	if archiveErr != nil {
+		t.Fatalf("archive directory: %v", archiveErr)
+	}
+	defer func() { _ = archive.Close() }()
+	if restoreErr := RestoreArchive(context.Background(), archive, publication, " "); restoreErr == nil {
+		t.Fatal("expected blank destination error")
+	}
+	existingDestination := filepath.Join(t.TempDir(), "restore")
+	if mkdirErr := os.Mkdir(existingDestination, 0o755); mkdirErr != nil {
+		t.Fatalf("create destination: %v", mkdirErr)
+	}
+	if restoreErr := RestoreArchive(context.Background(), archive, publication, existingDestination); !errors.Is(restoreErr, ErrWorkspaceRevisionDestination) {
+		t.Fatalf("existing destination restore: %v", restoreErr)
 	}
 }
 
@@ -381,14 +507,14 @@ func TestWorkspaceRevisionArchiveHelpersRejectInvalidRootsAndEntries(t *testing.
 			if err := writer.Close(); err != nil {
 				t.Fatalf("close tar: %v", err)
 			}
-			if err := extractWorkspaceRevisionArchive(context.Background(), tar.NewReader(strings.NewReader(buffer.String())), t.TempDir()); !errors.Is(err, testCase.want) {
+			if err := extractWorkspaceRevisionArchive(context.Background(), tar.NewReader(strings.NewReader(buffer.String())), t.TempDir(), WorkspaceRevisionRestoreLimits{}); !errors.Is(err, testCase.want) {
 				t.Fatalf("extract: %v", err)
 			}
 		})
 	}
 	canceledRestore, cancelRestore := context.WithCancel(context.Background())
 	cancelRestore()
-	if err := extractWorkspaceRevisionArchive(canceledRestore, tar.NewReader(strings.NewReader("")), t.TempDir()); !errors.Is(err, context.Canceled) {
+	if err := extractWorkspaceRevisionArchive(canceledRestore, tar.NewReader(strings.NewReader("")), t.TempDir(), WorkspaceRevisionRestoreLimits{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled extract: %v", err)
 	}
 }
@@ -449,10 +575,10 @@ func TestWorkspaceRevisionStoreHelperFailures(t *testing.T) {
 		{Name: "file.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 0},
 		{Name: "file.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 0},
 	})
-	if extractErr := extractWorkspaceRevisionArchive(context.Background(), tar.NewReader(strings.NewReader(duplicateTar)), t.TempDir()); extractErr == nil {
+	if extractErr := extractWorkspaceRevisionArchive(context.Background(), tar.NewReader(strings.NewReader(duplicateTar)), t.TempDir(), WorkspaceRevisionRestoreLimits{}); extractErr == nil {
 		t.Fatal("expected duplicate archive entry failure")
 	}
-	if extractErr := extractWorkspaceRevisionArchive(context.Background(), tar.NewReader(strings.NewReader("not a tar archive")), t.TempDir()); extractErr == nil {
+	if extractErr := extractWorkspaceRevisionArchive(context.Background(), tar.NewReader(strings.NewReader("not a tar archive")), t.TempDir(), WorkspaceRevisionRestoreLimits{}); extractErr == nil {
 		t.Fatal("expected malformed tar extraction failure")
 	}
 	if modeErr := applyWorkspaceRevisionDirectoryModes(map[string]os.FileMode{filepath.Join(t.TempDir(), "missing"): 0o755}); modeErr == nil {

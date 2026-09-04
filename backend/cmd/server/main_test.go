@@ -12,10 +12,90 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	workspacepkg "github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 type stubProjectRepository struct {
 	project domain.Project
+}
+
+func TestNewWorkspaceHelperHandlerIsControlledByHelperConfiguration(t *testing.T) {
+	workspaceHelperHandler, handlerErr := newWorkspaceHelperHandler(config.Config{ExecutionBackend: "docker"}, nil)
+	if handlerErr != nil {
+		t.Fatalf("new handler: %v", handlerErr)
+	}
+	if workspaceHelperHandler != nil {
+		t.Fatal("expected no workspace helper handler when helper configuration is disabled")
+	}
+
+	workspaceHelperHandler, handlerErr = newWorkspaceHelperHandlerWithVerifier(config.Config{
+		ExecutionBackend:                 "docker",
+		WorkspaceHelperCapabilityEnabled: true,
+		WorkspaceHelperKubeconfig:        "/server/kubeconfig",
+		WorkspaceHelperServiceAccount:    "workspace-helper",
+		WorkspaceHelperCapabilitySecret:  strings.Repeat("a", 32),
+	}, memoryrepo.NewExecutionJobRepository(), func(kubeconfig string, serviceAccount string) (service.WorkloadIdentityVerifier, error) {
+		if kubeconfig != "/server/kubeconfig" || serviceAccount != "workspace-helper" {
+			t.Fatalf("verifier config kubeconfig=%q serviceAccount=%q", kubeconfig, serviceAccount)
+		}
+		return &workspaceHelperIdentityVerifier{}, nil
+	})
+	if handlerErr != nil {
+		t.Fatalf("new enabled handler: %v", handlerErr)
+	}
+	if workspaceHelperHandler == nil {
+		t.Fatal("expected helper handler with Docker server execution backend")
+	}
+}
+
+func TestWorkspaceHelperCompositionFailuresAndRevisionStoreSelection(t *testing.T) {
+	verifierErr := errors.New("verifier unavailable")
+	_, handlerErr := newWorkspaceHelperHandlerWithVerifier(config.Config{WorkspaceHelperCapabilityEnabled: true}, memoryrepo.NewExecutionJobRepository(), func(string, string) (service.WorkloadIdentityVerifier, error) {
+		return nil, verifierErr
+	})
+	if !errors.Is(handlerErr, verifierErr) {
+		t.Fatalf("verifier error=%v", handlerErr)
+	}
+	_, handlerErr = newWorkspaceHelperHandlerWithVerifier(config.Config{WorkspaceHelperCapabilityEnabled: true, WorkspaceHelperCapabilitySecret: "short"}, memoryrepo.NewExecutionJobRepository(), func(string, string) (service.WorkloadIdentityVerifier, error) {
+		return &workspaceHelperIdentityVerifier{}, nil
+	})
+	if handlerErr == nil {
+		t.Fatal("expected invalid capability secret error")
+	}
+	if store := workspaceRevisionStoreFromConfig(config.Config{}); store != nil {
+		t.Fatalf("store=%T, want nil", store)
+	}
+	if store := workspaceRevisionStoreFromConfig(config.Config{WorkspaceRevisionStorageRoot: t.TempDir()}); store == nil {
+		t.Fatal("expected filesystem workspace revision store")
+	} else if _, ok := store.(*workspacepkg.FilesystemWorkspaceRevisionStore); !ok {
+		t.Fatalf("store=%T", store)
+	}
+}
+
+func TestConfigureWorkspaceHelperServices(t *testing.T) {
+	executionJobs := memoryrepo.NewExecutionJobRepository()
+	revisions := memoryrepo.NewWorkspaceRevisionRepository(executionJobs)
+	workspaceHelperHandler, handlerErr := newWorkspaceHelperHandlerWithVerifier(config.Config{WorkspaceHelperCapabilityEnabled: true, WorkspaceHelperCapabilitySecret: strings.Repeat("a", 32)}, executionJobs, func(string, string) (service.WorkloadIdentityVerifier, error) {
+		return &workspaceHelperIdentityVerifier{}, nil
+	})
+	if handlerErr != nil {
+		t.Fatalf("new handler: %v", handlerErr)
+	}
+	if configureErr := configureWorkspaceHelperServices(config.Config{}, nil, executionJobs, memoryrepo.NewBuildRepository(), revisions, nil); configureErr != nil {
+		t.Fatalf("disabled helper services: %v", configureErr)
+	}
+	if configureErr := configureWorkspaceHelperServices(config.Config{}, workspaceHelperHandler, executionJobs, memoryrepo.NewBuildRepository(), revisions, nil); configureErr == nil {
+		t.Fatal("expected missing workspace storage error")
+	}
+	if configureErr := configureWorkspaceHelperServices(config.Config{WorkspaceRevisionStorageRoot: t.TempDir(), WorkspaceHelperMaxUploadSizeMB: 1}, workspaceHelperHandler, executionJobs, memoryrepo.NewBuildRepository(), revisions, nil); configureErr != nil {
+		t.Fatalf("configure helper services: %v", configureErr)
+	}
+}
+
+type workspaceHelperIdentityVerifier struct{}
+
+func (*workspaceHelperIdentityVerifier) VerifyWorkspaceHelper(context.Context, string, string, string, domain.WorkspaceHelperRole) (service.VerifiedWorkloadIdentity, error) {
+	return service.VerifiedWorkloadIdentity{}, nil
 }
 
 func (r *stubProjectRepository) Create(context.Context, domain.Project) (domain.Project, error) {

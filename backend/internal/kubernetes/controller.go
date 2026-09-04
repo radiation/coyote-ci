@@ -312,7 +312,7 @@ func buildJob(namespace string, step workersvc.WorkerRunnableStep) *batchv1.Job 
 		job.Spec.ActiveDeadlineSeconds = &deadline
 	}
 	job.Spec.Template = corev1.PodTemplateSpec{
-		ObjectMeta: metav1.ObjectMeta{Labels: executionLabels(step)},
+		ObjectMeta: metav1.ObjectMeta{Labels: executionLabels(step), Annotations: executionAnnotations(step)},
 		Spec: corev1.PodSpec{
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
@@ -340,6 +340,13 @@ func executionLabels(step workersvc.WorkerRunnableStep) map[string]string {
 		labels["coyote-ci.io/attempt"] = fmt.Sprintf("%d", step.AttemptNumber)
 	}
 	return labels
+}
+
+func executionAnnotations(step workersvc.WorkerRunnableStep) map[string]string {
+	if strings.TrimSpace(step.ClaimToken) == "" {
+		return nil
+	}
+	return map[string]string{executionClaimDigestAnnotation: domain.ExecutionJobClaimDigest(step.ClaimToken)}
 }
 
 func belongsToExecution(job *batchv1.Job, executionJobID string) bool {

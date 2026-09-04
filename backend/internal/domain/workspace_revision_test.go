@@ -71,3 +71,12 @@ func TestWorkspaceRevisionValidationRejectsIncompleteAndPublishedFields(t *testi
 		t.Fatal("expected negative size to be rejected")
 	}
 }
+
+func TestWorkspaceHelperRoleValid(t *testing.T) {
+	if !WorkspaceHelperRolePrepare.Valid() || !WorkspaceHelperRolePublish.Valid() {
+		t.Fatal("expected supported helper roles to be valid")
+	}
+	if WorkspaceHelperRole("other").Valid() {
+		t.Fatal("unsupported helper role is valid")
+	}
+}
