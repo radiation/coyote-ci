@@ -12,6 +12,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	workspacepkg "github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 type stubProjectRepository struct {
@@ -44,6 +45,30 @@ func TestNewWorkspaceHelperHandlerIsControlledByHelperConfiguration(t *testing.T
 	}
 	if workspaceHelperHandler == nil {
 		t.Fatal("expected helper handler with Docker server execution backend")
+	}
+}
+
+func TestWorkspaceHelperCompositionFailuresAndRevisionStoreSelection(t *testing.T) {
+	verifierErr := errors.New("verifier unavailable")
+	_, handlerErr := newWorkspaceHelperHandlerWithVerifier(config.Config{WorkspaceHelperCapabilityEnabled: true}, memoryrepo.NewExecutionJobRepository(), func(string, string) (service.WorkloadIdentityVerifier, error) {
+		return nil, verifierErr
+	})
+	if !errors.Is(handlerErr, verifierErr) {
+		t.Fatalf("verifier error=%v", handlerErr)
+	}
+	_, handlerErr = newWorkspaceHelperHandlerWithVerifier(config.Config{WorkspaceHelperCapabilityEnabled: true, WorkspaceHelperCapabilitySecret: "short"}, memoryrepo.NewExecutionJobRepository(), func(string, string) (service.WorkloadIdentityVerifier, error) {
+		return &workspaceHelperIdentityVerifier{}, nil
+	})
+	if handlerErr == nil {
+		t.Fatal("expected invalid capability secret error")
+	}
+	if store := workspaceRevisionStoreFromConfig(config.Config{}); store != nil {
+		t.Fatalf("store=%T, want nil", store)
+	}
+	if store := workspaceRevisionStoreFromConfig(config.Config{WorkspaceRevisionStorageRoot: t.TempDir()}); store == nil {
+		t.Fatal("expected filesystem workspace revision store")
+	} else if _, ok := store.(*workspacepkg.FilesystemWorkspaceRevisionStore); !ok {
+		t.Fatalf("store=%T", store)
 	}
 }
 

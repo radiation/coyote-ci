@@ -56,8 +56,8 @@ func TestRunWorkspacePublishExchangesCapabilityAndUploadsArchive(t *testing.T) {
 
 func TestRunWorkspacePublishRejectsMismatchedPublicationMetadata(t *testing.T) {
 	for _, response := range []string{
-		`{"data":{"revision_id":"revision-1","content_digest":"sha256:mismatch","size_bytes":1}}`,
-		`{"data":{"revision_id":"revision-1","content_digest":"%s","size_bytes":0}}`,
+		`{"data":{"revision_id":"` + domain.WorkspaceRevisionIDForExecutionJob("execution-job") + `","content_digest":"sha256:mismatch","size_bytes":1}}`,
+		`{"data":{"revision_id":"` + domain.WorkspaceRevisionIDForExecutionJob("execution-job") + `","content_digest":"%s","size_bytes":0}}`,
 	} {
 		t.Run(response, func(t *testing.T) {
 			workspacePath := t.TempDir()
@@ -121,5 +121,58 @@ func TestRunWorkspacePublishRejectsMissingWorkspaceAndServerFailure(t *testing.T
 	t.Setenv(workspaceHelperWorkspacePath, workspacePath)
 	if publishErr := runWorkspacePublish(context.Background()); publishErr == nil {
 		t.Fatal("expected server rejection")
+	}
+}
+
+func TestRunWorkspacePublishRejectsLocalAndServerFailures(t *testing.T) {
+	for _, testCase := range []struct {
+		name          string
+		workspacePath string
+		tokenPath     string
+		capability    int
+		publish       string
+	}{
+		{name: "unreadable token", workspacePath: t.TempDir(), tokenPath: filepath.Join(t.TempDir(), "missing-token")},
+		{name: "capability rejection", workspacePath: t.TempDir(), tokenPath: filepath.Join(t.TempDir(), "token"), capability: http.StatusUnauthorized},
+		{name: "invalid workspace", workspacePath: filepath.Join(t.TempDir(), "workspace-file"), tokenPath: filepath.Join(t.TempDir(), "token")},
+		{name: "malformed publication", workspacePath: t.TempDir(), tokenPath: filepath.Join(t.TempDir(), "token"), publish: "{"},
+		{name: "invalid publication", workspacePath: t.TempDir(), tokenPath: filepath.Join(t.TempDir(), "token"), publish: `{"data":{"revision_id":"","content_digest":"","size_bytes":-1}}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if testCase.name == "invalid workspace" {
+				if writeErr := os.WriteFile(testCase.workspacePath, []byte("not a directory"), 0o600); writeErr != nil {
+					t.Fatalf("write workspace file: %v", writeErr)
+				}
+			} else if writeErr := os.WriteFile(filepath.Join(testCase.workspacePath, "output.txt"), []byte("output"), 0o644); writeErr != nil {
+				t.Fatalf("write workspace: %v", writeErr)
+			}
+			if testCase.tokenPath != "" && testCase.name != "unreadable token" {
+				if writeErr := os.WriteFile(testCase.tokenPath, []byte("projected-token"), 0o600); writeErr != nil {
+					t.Fatalf("write token: %v", writeErr)
+				}
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/internal/workspace-helper/capabilities" {
+					if testCase.capability != 0 {
+						w.WriteHeader(testCase.capability)
+						return
+					}
+					_, _ = w.Write([]byte(`{"data":{"capability":"publish-capability"}}`))
+					return
+				}
+				if testCase.publish != "" {
+					_, _ = w.Write([]byte(testCase.publish))
+				}
+			}))
+			defer server.Close()
+			t.Setenv(workspaceHelperAPIURL, server.URL)
+			t.Setenv(workspaceHelperTokenPath, testCase.tokenPath)
+			t.Setenv(workspaceHelperExecutionJobID, "execution-job")
+			t.Setenv(workspaceHelperPodUID, "pod")
+			t.Setenv(workspaceHelperWorkspacePath, testCase.workspacePath)
+			if publishErr := runWorkspacePublish(context.Background()); publishErr == nil {
+				t.Fatal("expected publish failure")
+			}
+		})
 	}
 }

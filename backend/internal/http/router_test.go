@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -116,6 +117,35 @@ func TestNewRouter_HealthAndNotFound(t *testing.T) {
 			}
 			if tc.body != "" && rr.Body.String() != tc.body {
 				t.Fatalf("expected body %q, got %q", tc.body, rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestLimitRequestBodyExemptsWorkspaceHelperPublish(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := limitRequestBody(2)(next)
+	for _, testCase := range []struct {
+		name string
+		path string
+		want int
+	}{
+		{name: "generic post limited", path: "/api/builds", want: http.StatusRequestEntityTooLarge},
+		{name: "workspace publish exempt", path: "/api/internal/workspace-helper/publish", want: http.StatusOK},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, testCase.path, bytes.NewBufferString("archive"))
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != testCase.want {
+				t.Fatalf("status=%d, want %d", response.Code, testCase.want)
 			}
 		})
 	}

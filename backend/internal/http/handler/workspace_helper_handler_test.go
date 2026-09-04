@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 )
 
@@ -147,6 +148,40 @@ func TestWorkspaceHelperHandlerPrepareRejectsInvalidRequests(t *testing.T) {
 	}
 }
 
+func TestWorkspaceHelperHandlerPrepareMapsOpenErrors(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "unauthorized", err: service.ErrWorkspaceHelperUnauthorized, want: http.StatusUnauthorized},
+		{name: "internal", err: errors.New("open failed"), want: http.StatusInternalServerError},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			handler := NewWorkspaceHelperHandler(nil)
+			handler.SetPrepareService(&workspacePrepareOpenerStub{err: testCase.err})
+			request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/prepare", strings.NewReader(`{"execution_job_id":"job-1","pod_uid":"pod-1"}`))
+			request.Header.Set("Authorization", "Bearer capability")
+			response := httptest.NewRecorder()
+			handler.PrepareWorkspace(response, request)
+			if response.Code != testCase.want {
+				t.Fatalf("status=%d, want %d", response.Code, testCase.want)
+			}
+		})
+	}
+}
+
+func TestWorkspaceHelperHandlerExposesPrepareCapabilityAuthorizer(t *testing.T) {
+	var nilHandler *WorkspaceHelperHandler
+	if nilHandler.PrepareCapabilityAuthorizer() != nil {
+		t.Fatal("nil handler returned an authorizer")
+	}
+	handler := NewWorkspaceHelperHandler(&workspaceHelperExchangerStub{})
+	if handler.PrepareCapabilityAuthorizer() == nil {
+		t.Fatal("expected prepare capability authorizer")
+	}
+}
+
 func TestWorkspaceHelperHandlerPublishRejectsOversizedArchive(t *testing.T) {
 	handler := NewWorkspaceHelperHandler(nil)
 	handler.SetPublishService(&workspacePublisherStub{err: service.ErrWorkspacePublishArchiveTooLarge})
@@ -157,6 +192,40 @@ func TestWorkspaceHelperHandlerPublishRejectsOversizedArchive(t *testing.T) {
 	handler.PublishWorkspace(response, request)
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status=%d", response.Code)
+	}
+}
+
+func TestWorkspaceHelperHandlerPublishMapsOutcomes(t *testing.T) {
+	size := int64(7)
+	digest := "sha256:digest"
+	for _, testCase := range []struct {
+		name      string
+		publisher workspacePublisher
+		token     string
+		want      int
+	}{
+		{name: "unavailable", want: http.StatusServiceUnavailable},
+		{name: "missing capability", publisher: &workspacePublisherStub{}, want: http.StatusUnauthorized},
+		{name: "unauthorized", publisher: &workspacePublisherStub{err: service.ErrWorkspaceHelperUnauthorized}, token: "capability", want: http.StatusUnauthorized},
+		{name: "invalid archive", publisher: &workspacePublisherStub{err: service.ErrWorkspacePublishInvalidArchive}, token: "capability", want: http.StatusBadRequest},
+		{name: "conflict", publisher: &workspacePublisherStub{err: repository.ErrWorkspaceRevisionConflict}, token: "capability", want: http.StatusConflict},
+		{name: "internal failure", publisher: &workspacePublisherStub{err: errors.New("publish failed")}, token: "capability", want: http.StatusInternalServerError},
+		{name: "invalid publication", publisher: &workspacePublisherStub{}, token: "capability", want: http.StatusInternalServerError},
+		{name: "published", publisher: &workspacePublisherStub{published: domain.WorkspaceRevision{ID: "revision-1", ContentDigest: &digest, SizeBytes: &size}}, token: "capability", want: http.StatusOK},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			handler := NewWorkspaceHelperHandler(nil)
+			handler.SetPublishService(testCase.publisher)
+			request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/publish", strings.NewReader("archive"))
+			if testCase.token != "" {
+				request.Header.Set("Authorization", "Bearer "+testCase.token)
+			}
+			response := httptest.NewRecorder()
+			handler.PublishWorkspace(response, request)
+			if response.Code != testCase.want {
+				t.Fatalf("status=%d, want %d", response.Code, testCase.want)
+			}
+		})
 	}
 }
 
@@ -172,6 +241,10 @@ func (s *workspaceHelperExchangerStub) Exchange(_ context.Context, projectedToke
 	return s.token, s.capability, s.err
 }
 
+func (*workspaceHelperExchangerStub) Authorize(context.Context, string, string, string, domain.WorkspaceHelperRole) (domain.WorkspaceHelperCapability, error) {
+	return domain.WorkspaceHelperCapability{}, nil
+}
+
 var _ workspaceHelperCapabilityExchanger = (*workspaceHelperExchangerStub)(nil)
 
 type workspacePrepareOpenerStub struct {
@@ -185,10 +258,13 @@ func (s *workspacePrepareOpenerStub) Open(context.Context, string, string, strin
 
 var _ workspacePrepareOpener = (*workspacePrepareOpenerStub)(nil)
 
-type workspacePublisherStub struct{ err error }
+type workspacePublisherStub struct {
+	err       error
+	published domain.WorkspaceRevision
+}
 
 func (s *workspacePublisherStub) Publish(context.Context, string, string, string, io.Reader) (domain.WorkspaceRevision, error) {
-	return domain.WorkspaceRevision{}, s.err
+	return s.published, s.err
 }
 
 var _ workspacePublisher = (*workspacePublisherStub)(nil)

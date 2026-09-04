@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	"github.com/radiation/coyote-ci/backend/internal/source"
 )
 
@@ -66,6 +67,40 @@ func TestServerSourceArchivePreparerRejectsSourcePreparationFailures(t *testing.
 				t.Fatalf("prepare archive: %v", prepareErr)
 			}
 		})
+	}
+}
+
+func TestServerSourceArchivePreparerSourceHelpersPreferExplicitValues(t *testing.T) {
+	explicitRef := " explicit-ref "
+	fallbackRef := " fallback-ref "
+	if got := optionalSourceRef(domain.SourceSnapshotRef{RefName: &explicitRef}, domain.SourceSnapshotRef{RefName: &fallbackRef}); got != "explicit-ref" {
+		t.Fatalf("explicit ref=%q", got)
+	}
+	if got := optionalSourceRef(domain.SourceSnapshotRef{}, domain.SourceSnapshotRef{RefName: &fallbackRef}); got != "fallback-ref" {
+		t.Fatalf("fallback ref=%q", got)
+	}
+	if got := optionalSourceRef(domain.SourceSnapshotRef{}, domain.SourceSnapshotRef{}); got != "" {
+		t.Fatalf("empty ref=%q", got)
+	}
+	if got := optionalSourceCommit(domain.SourceSnapshotRef{CommitSHA: " explicit-commit "}, domain.SourceSnapshotRef{CommitSHA: "fallback-commit"}); got != "explicit-commit" {
+		t.Fatalf("explicit commit=%q", got)
+	}
+	if got := optionalSourceCommit(domain.SourceSnapshotRef{}, domain.SourceSnapshotRef{CommitSHA: " fallback-commit "}); got != "fallback-commit" {
+		t.Fatalf("fallback commit=%q", got)
+	}
+}
+
+func TestServerSourceArchivePreparerRejectsAuthenticatedSourceWithoutCheckout(t *testing.T) {
+	registeredRepositoryID := "registered"
+	connectionID := "connection"
+	providerRepositoryID := "provider"
+	preparer, newErr := NewServerSourceArchivePreparer(&serverSourceResolverFake{}, nil)
+	if newErr != nil {
+		t.Fatalf("new preparer: %v", newErr)
+	}
+	_, prepareErr := preparer.OpenSourceArchive(context.Background(), domain.Build{RegisteredRepositoryID: &registeredRepositoryID, SCMConnectionID: &connectionID, ProviderRepositoryID: &providerRepositoryID}, domain.ExecutionJob{Source: domain.SourceSnapshotRef{RepositoryURL: "https://example.test/repo.git"}}, domain.ExecutionJobSpec{})
+	if !errors.Is(prepareErr, buildsvc.ErrRepositoryCheckoutConnectionInvalid) {
+		t.Fatalf("prepare archive: %v", prepareErr)
 	}
 }
 

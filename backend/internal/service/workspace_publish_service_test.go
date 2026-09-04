@@ -80,12 +80,46 @@ func TestWorkspacePublishServicePublishesArchiveWithinConfiguredLimit(t *testing
 	}
 }
 
+func TestNewWorkspacePublishServiceUsesDefaultUploadLimit(t *testing.T) {
+	harness := newWorkspacePublishServiceHarness(t)
+	service, serviceErr := NewWorkspacePublishService(WorkspacePublishServiceConfig{CapabilityAuthorizer: harness.capabilities, ExecutionJobs: harness.jobs, WorkspaceRevisions: harness.revisions, RevisionStore: harness.store})
+	if serviceErr != nil || service.maxUploadBytes != defaultWorkspacePublishMaxUploadBytes {
+		t.Fatalf("service=%#v err=%v", service, serviceErr)
+	}
+}
+
 func TestCopyWorkspacePublishArchiveStopsOnCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, copyErr := copyWorkspacePublishArchive(ctx, io.Discard, bytes.NewBufferString("archive"), 1024); !errors.Is(copyErr, context.Canceled) {
 		t.Fatalf("copy archive: %v", copyErr)
 	}
+}
+
+func TestCopyWorkspacePublishArchiveRejectsShortWrite(t *testing.T) {
+	shortWriter := workspacePublishShortWriter{}
+	if _, copyErr := copyWorkspacePublishArchive(context.Background(), shortWriter, bytes.NewBufferString("archive"), 1024); !errors.Is(copyErr, io.ErrShortWrite) {
+		t.Fatalf("copy archive: %v", copyErr)
+	}
+}
+
+func TestCopyWorkspacePublishArchivePropagatesWriteError(t *testing.T) {
+	wantErr := errors.New("write failed")
+	if _, copyErr := copyWorkspacePublishArchive(context.Background(), workspacePublishErrorWriter{err: wantErr}, bytes.NewBufferString("archive"), 1024); !errors.Is(copyErr, wantErr) {
+		t.Fatalf("copy archive: %v", copyErr)
+	}
+}
+
+type workspacePublishShortWriter struct{}
+
+func (workspacePublishShortWriter) Write(payload []byte) (int, error) {
+	return len(payload) - 1, nil
+}
+
+type workspacePublishErrorWriter struct{ err error }
+
+func (w workspacePublishErrorWriter) Write([]byte) (int, error) {
+	return 0, w.err
 }
 
 func TestWorkspacePublishServiceIsIdempotentAndRejectsClaimRace(t *testing.T) {
@@ -110,9 +144,11 @@ func TestWorkspacePublishServiceIsIdempotentAndRejectsClaimRace(t *testing.T) {
 type workspacePublishServiceHarness struct {
 	service      *WorkspacePublishService
 	capabilities *workspacePublishCapabilityFake
+	jobs         *workspacePublishJobFake
 	job          domain.ExecutionJob
 	store        *workspacePublishStoreFake
 	revisions    *workspacePublishRevisionFake
+	archive      io.Reader
 }
 
 func newWorkspacePublishServiceHarness(t *testing.T) *workspacePublishServiceHarness {
@@ -127,6 +163,8 @@ func newWorkspacePublishServiceHarness(t *testing.T) *workspacePublishServiceHar
 		t.Fatalf("new publish service: %v", serviceErr)
 	}
 	harness.service = service
+	harness.jobs = jobs
+	harness.archive = bytes.NewReader(workspacePublishArchiveForTest(t, "output"))
 	harness.revisions = revisions
 	return harness
 }
@@ -149,19 +187,23 @@ func workspacePublishArchiveForTest(t *testing.T, contents string) []byte {
 	return payload
 }
 
-type workspacePublishCapabilityFake struct{ role domain.WorkspaceHelperRole }
+type workspacePublishCapabilityFake struct {
+	role domain.WorkspaceHelperRole
+	err  error
+}
 
 func (f *workspacePublishCapabilityFake) Authorize(_ context.Context, _ string, _ string, _ string, role domain.WorkspaceHelperRole) (domain.WorkspaceHelperCapability, error) {
 	f.role = role
-	return domain.WorkspaceHelperCapability{}, nil
+	return domain.WorkspaceHelperCapability{}, f.err
 }
 
 type workspacePublishJobFake struct {
 	harness *workspacePublishServiceHarness
+	err     error
 }
 
 func (f *workspacePublishJobFake) GetJobByID(context.Context, string) (domain.ExecutionJob, error) {
-	return f.harness.job, nil
+	return f.harness.job, f.err
 }
 
 type workspacePublishStoreFake struct {
@@ -195,15 +237,44 @@ func (f *workspacePublishStoreFake) Delete(context.Context, domain.WorkspaceRevi
 var _ workspacepkg.WorkspaceRevisionStore = (*workspacePublishStoreFake)(nil)
 
 type workspacePublishRevisionFake struct {
-	revision domain.WorkspaceRevision
-	markErr  error
+	revision  domain.WorkspaceRevision
+	createErr error
+	markErr   error
 }
 
 func (f *workspacePublishRevisionFake) CreatePublishing(_ context.Context, revision domain.WorkspaceRevision) (domain.WorkspaceRevision, error) {
+	if f.createErr != nil {
+		return domain.WorkspaceRevision{}, f.createErr
+	}
 	if f.revision.ID == "" {
 		f.revision = revision
 	}
 	return f.revision, nil
+}
+
+func TestWorkspacePublishServiceRejectsDependencyFailuresBeforeStore(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*workspacePublishServiceHarness)
+	}{
+		{name: "authorization", mutate: func(h *workspacePublishServiceHarness) { h.capabilities.err = errors.New("denied") }},
+		{name: "job lookup", mutate: func(h *workspacePublishServiceHarness) { h.jobs.err = errors.New("job lookup failed") }},
+		{name: "mismatched job", mutate: func(h *workspacePublishServiceHarness) { h.job.ID = "other-job" }},
+		{name: "stale job", mutate: func(h *workspacePublishServiceHarness) { h.job.ClaimToken = nil }},
+		{name: "create revision", mutate: func(h *workspacePublishServiceHarness) { h.revisions.createErr = errors.New("create failed") }},
+		{name: "missing archive", mutate: func(h *workspacePublishServiceHarness) { h.archive = nil }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			harness := newWorkspacePublishServiceHarness(t)
+			testCase.mutate(harness)
+			if _, publishErr := harness.service.Publish(context.Background(), "publish-capability", "execution-1", "pod-1", harness.archive); publishErr == nil {
+				t.Fatal("expected publish failure")
+			}
+			if harness.store.calls != 0 {
+				t.Fatalf("store calls=%d, want 0", harness.store.calls)
+			}
+		})
+	}
 }
 
 func (f *workspacePublishRevisionFake) MarkPublishedIfClaimed(_ context.Context, revisionID string, claimToken string, publication domain.WorkspaceRevisionPublication, publishedAt time.Time) (domain.WorkspaceRevision, error) {

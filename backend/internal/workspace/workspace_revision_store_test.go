@@ -93,6 +93,62 @@ func TestFilesystemWorkspaceRevisionStorePublishRestoreAndDelete(t *testing.T) {
 	}
 }
 
+func TestArchiveDirectoryCreatesRestorableTransportArchive(t *testing.T) {
+	sourceRoot := t.TempDir()
+	if writeErr := os.WriteFile(filepath.Join(sourceRoot, "source.txt"), []byte("workspace"), 0o644); writeErr != nil {
+		t.Fatalf("write source: %v", writeErr)
+	}
+	archive, publication, archiveErr := ArchiveDirectory(context.Background(), sourceRoot)
+	if archiveErr != nil {
+		t.Fatalf("archive directory: %v", archiveErr)
+	}
+	defer func() { _ = archive.Close() }()
+	if publication.StorageKey != "transport/source.tar.gz" || publication.Validate() != nil {
+		t.Fatalf("publication=%#v", publication)
+	}
+	destinationRoot := filepath.Join(t.TempDir(), "restore")
+	if restoreErr := RestoreArchive(context.Background(), archive, publication, destinationRoot); restoreErr != nil {
+		t.Fatalf("restore archive: %v", restoreErr)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(destinationRoot, "source.txt"))
+	if readErr != nil || string(contents) != "workspace" {
+		t.Fatalf("restored contents=%q err=%v", contents, readErr)
+	}
+}
+
+func TestArchiveDirectoryRejectsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, archiveErr := ArchiveDirectory(ctx, t.TempDir()); !errors.Is(archiveErr, context.Canceled) {
+		t.Fatalf("archive directory: %v", archiveErr)
+	}
+}
+
+func TestArchiveDirectoryRejectsMissingAndNonDirectoryRoots(t *testing.T) {
+	fileRoot := filepath.Join(t.TempDir(), "source-file")
+	if writeErr := os.WriteFile(fileRoot, []byte("content"), 0o600); writeErr != nil {
+		t.Fatalf("write source file: %v", writeErr)
+	}
+	for _, sourceRoot := range []string{filepath.Join(t.TempDir(), "missing"), fileRoot} {
+		if _, _, archiveErr := ArchiveDirectory(context.Background(), sourceRoot); archiveErr == nil {
+			t.Fatalf("expected archive failure for %q", sourceRoot)
+		}
+	}
+}
+
+func TestRestoreArchiveRejectsInvalidInputBeforeCreatingDestination(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "restore")
+	if restoreErr := RestoreArchive(context.Background(), nil, domain.WorkspaceRevisionPublication{}, destination); !errors.Is(restoreErr, ErrInvalidWorkspaceRevisionObject) {
+		t.Fatalf("restore invalid input: %v", restoreErr)
+	}
+	if restoreErr := RestoreArchive(context.Background(), strings.NewReader("archive"), domain.WorkspaceRevisionPublication{}, destination); !errors.Is(restoreErr, ErrInvalidWorkspaceRevisionObject) {
+		t.Fatalf("restore invalid publication: %v", restoreErr)
+	}
+	if _, statErr := os.Stat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("invalid restore created destination: %v", statErr)
+	}
+}
+
 func TestFilesystemWorkspaceRevisionStoreRejectsConflictsAndUnsupportedEntries(t *testing.T) {
 	store := NewFilesystemWorkspaceRevisionStore(t.TempDir())
 	sourceRoot := filepath.Join(t.TempDir(), "source")

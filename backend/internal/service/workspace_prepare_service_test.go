@@ -87,6 +87,27 @@ func TestWorkspacePrepareServiceOpenRejectsUnsupportedOrInvalidPlans(t *testing.
 	}
 }
 
+func TestWorkspacePrepareServiceOpenPropagatesDependencyFailures(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		job    domain.ExecutionJob
+		mutate func(workspacePrepareServiceTestHarness)
+	}{
+		{name: "job lookup", mutate: func(h workspacePrepareServiceTestHarness) { h.executionJobs.err = errors.New("job lookup failed") }},
+		{name: "build lookup", job: domain.ExecutionJob{ID: "job-1", BuildID: "build-1", ResolvedSpecJSON: `{"workspace_input":{"mode":"source"}}`}, mutate: func(h workspacePrepareServiceTestHarness) { h.builds.err = errors.New("build lookup failed") }},
+		{name: "source archive", job: domain.ExecutionJob{ID: "job-1", BuildID: "build-1", ResolvedSpecJSON: `{"workspace_input":{"mode":"source"}}`}, mutate: func(h workspacePrepareServiceTestHarness) { h.sources.err = errors.New("source archive failed") }},
+		{name: "revision lookup", job: domain.ExecutionJob{ID: "job-1", BuildID: "build-1", ResolvedSpecJSON: `{"workspace_input":{"mode":"predecessor","producer_node_id":"compile"}}`}, mutate: func(h workspacePrepareServiceTestHarness) { h.revisions.err = errors.New("revision lookup failed") }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			harness := newWorkspacePrepareServiceForTest(t, testCase.job)
+			testCase.mutate(harness)
+			if _, openErr := harness.service.Open(context.Background(), "capability", "job-1", "pod-1"); openErr == nil {
+				t.Fatal("expected open failure")
+			}
+		})
+	}
+}
+
 func TestNewWorkspacePrepareServiceRequiresDependencies(t *testing.T) {
 	if _, err := NewWorkspacePrepareService(WorkspacePrepareServiceConfig{}); err == nil {
 		t.Fatal("expected missing dependency error")
@@ -127,28 +148,33 @@ func (f *workspacePrepareCapabilityFake) Authorize(context.Context, string, stri
 type workspacePrepareJobFake struct {
 	job   domain.ExecutionJob
 	calls int
+	err   error
 }
 
 func (f *workspacePrepareJobFake) GetJobByID(context.Context, string) (domain.ExecutionJob, error) {
 	f.calls++
-	return f.job, nil
+	return f.job, f.err
 }
 
-type workspacePrepareBuildFake struct{ calls int }
+type workspacePrepareBuildFake struct {
+	calls int
+	err   error
+}
 
 func (f *workspacePrepareBuildFake) GetByID(context.Context, string) (domain.Build, error) {
 	f.calls++
-	return domain.Build{}, nil
+	return domain.Build{}, f.err
 }
 
 type workspacePrepareRevisionFake struct {
 	revision        domain.WorkspaceRevision
 	buildID, nodeID string
+	err             error
 }
 
 func (f *workspacePrepareRevisionFake) GetPublishedByBuildNode(_ context.Context, buildID string, nodeID string) (domain.WorkspaceRevision, error) {
 	f.buildID, f.nodeID = buildID, nodeID
-	return f.revision, nil
+	return f.revision, f.err
 }
 
 type workspacePrepareArchiveFake struct {
@@ -164,10 +190,14 @@ func (f *workspacePrepareArchiveFake) Open(context.Context, domain.WorkspaceRevi
 type workspacePrepareSourceFake struct {
 	contents []byte
 	calls    int
+	err      error
 }
 
 func (f *workspacePrepareSourceFake) OpenSourceArchive(context.Context, domain.Build, domain.ExecutionJob, domain.ExecutionJobSpec) (WorkspacePreparePayload, error) {
 	f.calls++
+	if f.err != nil {
+		return WorkspacePreparePayload{}, f.err
+	}
 	size := int64(len(f.contents))
 	return WorkspacePreparePayload{Archive: io.NopCloser(bytes.NewReader(f.contents)), Publication: domain.WorkspaceRevisionPublication{ContentDigest: "sha256:source", StorageKey: "workspace-revisions/source.tar.gz", SizeBytes: &size}}, nil
 }

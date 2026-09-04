@@ -99,6 +99,33 @@ func TestRunWorkspacePrepareRejectsMissingConfiguration(t *testing.T) {
 	}
 }
 
+func TestRunWorkspacePrepareRejectsUnreadableAndEmptyTokens(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		tokenPath string
+		token     string
+	}{
+		{name: "unreadable", tokenPath: filepath.Join(t.TempDir(), "missing-token")},
+		{name: "empty", tokenPath: filepath.Join(t.TempDir(), "token"), token: " \n"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if testCase.token != "" {
+				if writeErr := os.WriteFile(testCase.tokenPath, []byte(testCase.token), 0o600); writeErr != nil {
+					t.Fatalf("write token: %v", writeErr)
+				}
+			}
+			t.Setenv(workspaceHelperAPIURL, "http://example.test")
+			t.Setenv(workspaceHelperTokenPath, testCase.tokenPath)
+			t.Setenv(workspaceHelperExecutionJobID, "job")
+			t.Setenv(workspaceHelperPodUID, "pod")
+			t.Setenv(workspaceHelperDestination, filepath.Join(t.TempDir(), "workspace"))
+			if prepareErr := runWorkspacePrepare(context.Background()); prepareErr == nil {
+				t.Fatal("expected token error")
+			}
+		})
+	}
+}
+
 func TestExchangeWorkspacePrepareCapabilityRejectsFailedResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -131,6 +158,16 @@ func TestDownloadAndRestoreWorkspaceRejectsMissingIntegrityMetadata(t *testing.T
 	defer server.Close()
 	if restoreErr := downloadAndRestoreWorkspace(context.Background(), server.URL, "capability", "job", "pod", filepath.Join(t.TempDir(), "workspace")); restoreErr == nil {
 		t.Fatal("expected missing metadata error")
+	}
+}
+
+func TestDownloadAndRestoreWorkspaceRejectsHTTPFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	if restoreErr := downloadAndRestoreWorkspace(context.Background(), server.URL, "capability", "job", "pod", filepath.Join(t.TempDir(), "workspace")); restoreErr == nil {
+		t.Fatal("expected HTTP failure")
 	}
 }
 
