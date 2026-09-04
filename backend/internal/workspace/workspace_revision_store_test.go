@@ -149,6 +149,28 @@ func TestRestoreArchiveRejectsInvalidInputBeforeCreatingDestination(t *testing.T
 	}
 }
 
+func TestRestoreArchiveRejectsExistingAndBlankDestinations(t *testing.T) {
+	sourceRoot := t.TempDir()
+	if writeErr := os.WriteFile(filepath.Join(sourceRoot, "source.txt"), []byte("workspace"), 0o644); writeErr != nil {
+		t.Fatalf("write source: %v", writeErr)
+	}
+	archive, publication, archiveErr := ArchiveDirectory(context.Background(), sourceRoot)
+	if archiveErr != nil {
+		t.Fatalf("archive directory: %v", archiveErr)
+	}
+	defer func() { _ = archive.Close() }()
+	if restoreErr := RestoreArchive(context.Background(), archive, publication, " "); restoreErr == nil {
+		t.Fatal("expected blank destination error")
+	}
+	existingDestination := filepath.Join(t.TempDir(), "restore")
+	if mkdirErr := os.Mkdir(existingDestination, 0o755); mkdirErr != nil {
+		t.Fatalf("create destination: %v", mkdirErr)
+	}
+	if restoreErr := RestoreArchive(context.Background(), archive, publication, existingDestination); !errors.Is(restoreErr, ErrWorkspaceRevisionDestination) {
+		t.Fatalf("existing destination restore: %v", restoreErr)
+	}
+}
+
 func TestFilesystemWorkspaceRevisionStoreRejectsConflictsAndUnsupportedEntries(t *testing.T) {
 	store := NewFilesystemWorkspaceRevisionStore(t.TempDir())
 	sourceRoot := filepath.Join(t.TempDir(), "source")

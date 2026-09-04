@@ -112,6 +112,43 @@ func TestWorkspaceHelperCapabilityServiceRejectsMalformedRequestsAndTokens(t *te
 	if _, authorizeErr := service.Authorize(context.Background(), "not-a-capability", "job-1", "pod-1", domain.WorkspaceHelperRolePrepare); !errors.Is(authorizeErr, ErrWorkspaceHelperUnauthorized) {
 		t.Fatalf("authorize error=%v", authorizeErr)
 	}
+	for _, testCase := range []struct {
+		name  string
+		token string
+	}{
+		{name: "empty signature", token: "payload."},
+		{name: "invalid signature encoding", token: "payload.***"},
+		{name: "invalid payload encoding", token: "***.mJz43bU3-7h8SL32_Sro-jyjwcxPFRxJSfo7EISy1AQ"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, verifyErr := service.verify(testCase.token); !errors.Is(verifyErr, ErrWorkspaceHelperCapabilityMalformed) {
+				t.Fatalf("verify error=%v", verifyErr)
+			}
+		})
+	}
+	for _, testCase := range []struct {
+		name string
+		job  string
+		pod  string
+		role domain.WorkspaceHelperRole
+	}{
+		{name: "blank job", job: " ", pod: "pod-1", role: domain.WorkspaceHelperRolePrepare},
+		{name: "blank pod", job: "job-1", pod: " ", role: domain.WorkspaceHelperRolePrepare},
+		{name: "invalid role", job: "job-1", pod: "pod-1", role: "invalid"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, authorizeErr := service.Authorize(context.Background(), "token", testCase.job, testCase.pod, testCase.role); !errors.Is(authorizeErr, ErrWorkspaceHelperUnauthorized) {
+				t.Fatalf("authorize error=%v", authorizeErr)
+			}
+		})
+	}
+	malformedToken, signErr := service.sign(domain.WorkspaceHelperCapability{ExecutionJobID: "job-1", PodUID: "pod-1", Role: domain.WorkspaceHelperRolePrepare, ExpiresAt: time.Now().Add(time.Minute)})
+	if signErr != nil {
+		t.Fatalf("sign malformed capability: %v", signErr)
+	}
+	if _, verifyErr := service.verify(malformedToken); !errors.Is(verifyErr, ErrWorkspaceHelperCapabilityMalformed) {
+		t.Fatalf("verify signed malformed capability: %v", verifyErr)
+	}
 }
 
 func TestWorkspaceHelperCapabilityServiceAuthorizeRevalidatesExecution(t *testing.T) {
