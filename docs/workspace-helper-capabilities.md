@@ -17,3 +17,11 @@ Current Kubernetes workload identity verification assumes the Coyote server can 
 The endpoint returns a gzip archive with its SHA-256 `Content-Digest` and byte length. The helper verifies both values and safely extracts into a staging directory before atomically promoting the requested local workspace destination. Unsafe archive entries, corrupt streams, integrity failures, and existing destinations fail without promoting a workspace.
 
 Kubernetes controller Pod/Job wiring and workspace publication remain deferred. Fan-in workspace inputs are also intentionally unsupported by this transport.
+
+## Publish Transport
+
+`coyote-worker workspace publish` exchanges its projected identity for a separate `publish` capability, creates the same canonical archive used by workspace revisions, and uploads only archive bytes with its execution-job ID and Pod UID. The server derives the revision ID, build, node, and attempt from the authoritative execution job. It validates the upload by safely restoring it into server staging, writes the canonical archive through the immutable revision store, then calls `MarkPublishedIfClaimed`.
+
+`COYOTE_WORKSPACE_HELPER_MAX_UPLOAD_SIZE_MB` bounds a publication archive to 1024 MiB by default. The general 1 MiB API request limit is bypassed only for this internal upload endpoint so the service can enforce that dedicated bound.
+
+The helper does not receive database, revision-store, or SCM credentials and does not finalize the execution. A helper that becomes stale during upload may write inert immutable bytes, but cannot make revision metadata authoritative because final publication is claim-checked. Controller/Pod invocation and execution-success interpretation remain deferred.

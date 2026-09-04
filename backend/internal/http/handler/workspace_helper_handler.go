@@ -14,6 +14,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 )
 
@@ -25,9 +26,14 @@ type workspacePrepareOpener interface {
 	Open(context.Context, string, string, string) (service.WorkspacePreparePayload, error)
 }
 
+type workspacePublisher interface {
+	Publish(context.Context, string, string, string, io.Reader) (domain.WorkspaceRevision, error)
+}
+
 type WorkspaceHelperHandler struct {
 	capabilities workspaceHelperCapabilityExchanger
 	prepare      workspacePrepareOpener
+	publish      workspacePublisher
 }
 
 func NewWorkspaceHelperHandler(capabilities workspaceHelperCapabilityExchanger) *WorkspaceHelperHandler {
@@ -37,6 +43,12 @@ func NewWorkspaceHelperHandler(capabilities workspaceHelperCapabilityExchanger) 
 func (h *WorkspaceHelperHandler) SetPrepareService(prepare workspacePrepareOpener) {
 	if h != nil {
 		h.prepare = prepare
+	}
+}
+
+func (h *WorkspaceHelperHandler) SetPublishService(publish workspacePublisher) {
+	if h != nil {
+		h.publish = publish
 	}
 }
 
@@ -136,6 +148,47 @@ func (h *WorkspaceHelperHandler) PrepareWorkspace(w http.ResponseWriter, r *http
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", *prepared.Publication.SizeBytes))
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, payload)
+}
+
+func (h *WorkspaceHelperHandler) PublishWorkspace(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.publish == nil {
+		writeErrorJSON(w, http.StatusServiceUnavailable, "unavailable", "workspace publish is not configured")
+		return
+	}
+	capability, ok := bearerToken(r)
+	if !ok || capability == "" {
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "workspace helper capability is required")
+		return
+	}
+	executionJobID := strings.TrimSpace(r.Header.Get("Coyote-Execution-Job-ID"))
+	podUID := strings.TrimSpace(r.Header.Get("Coyote-Pod-UID"))
+	published, publishErr := h.publish.Publish(r.Context(), capability, executionJobID, podUID, r.Body)
+	if publishErr != nil {
+		if errors.Is(publishErr, service.ErrWorkspaceHelperUnauthorized) || errors.Is(publishErr, repository.ErrWorkspaceRevisionStaleClaim) {
+			writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "workspace helper authorization failed")
+			return
+		}
+		if errors.Is(publishErr, service.ErrWorkspacePublishInvalidArchive) {
+			writeErrorJSON(w, http.StatusBadRequest, "invalid_archive", "workspace archive is invalid")
+			return
+		}
+		if errors.Is(publishErr, service.ErrWorkspacePublishArchiveTooLarge) {
+			writeErrorJSON(w, http.StatusRequestEntityTooLarge, "archive_too_large", "workspace archive exceeds the configured size limit")
+			return
+		}
+		if errors.Is(publishErr, repository.ErrWorkspaceRevisionConflict) {
+			writeErrorJSON(w, http.StatusConflict, "conflict", "workspace publication conflicts with an existing revision")
+			return
+		}
+		log.Printf("ERROR workspace publish failed execution_job_id=%s pod_uid=%s err=%v", executionJobID, podUID, publishErr)
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "workspace publication failed")
+		return
+	}
+	if published.ContentDigest == nil || published.SizeBytes == nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "workspace publication failed")
+		return
+	}
+	writeDataJSON(w, http.StatusOK, api.WorkspaceHelperPublishResponse{RevisionID: published.ID, ContentDigest: *published.ContentDigest, SizeBytes: *published.SizeBytes})
 }
 
 func bearerToken(r *http.Request) (string, bool) {

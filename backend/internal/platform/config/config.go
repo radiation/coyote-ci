@@ -35,6 +35,7 @@ type Config struct {
 	WorkspaceHelperKubeconfig        string
 	WorkspaceHelperServiceAccount    string
 	WorkspaceHelperCapabilitySecret  string
+	WorkspaceHelperMaxUploadSizeMB   int
 	WorkspaceRevisionStorageRoot     string
 	WorkerCacheStorageProvider       string
 	WorkerCacheStorageRoot           string
@@ -107,6 +108,7 @@ func Load() Config {
 		WorkspaceHelperKubeconfig:        getEnv("COYOTE_WORKSPACE_HELPER_KUBECONFIG", ""),
 		WorkspaceHelperServiceAccount:    getEnv("COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT", "coyote-workspace-helper"),
 		WorkspaceHelperCapabilitySecret:  getEnv("COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET", ""),
+		WorkspaceHelperMaxUploadSizeMB:   getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_UPLOAD_SIZE_MB", 1024),
 		WorkspaceRevisionStorageRoot:     getEnv("COYOTE_WORKSPACE_REVISION_STORAGE_ROOT", ""),
 		WorkerCacheStorageProvider:       getEnv("WORKER_CACHE_STORAGE_PROVIDER", ""),
 		WorkerCacheStorageRoot:           getEnv("WORKER_CACHE_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-cache")),

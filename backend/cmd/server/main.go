@@ -279,6 +279,17 @@ func main() {
 			log.Fatalf("failed to configure workspace prepare service: %v", prepareErr)
 		}
 		workspaceHelperHandler.SetPrepareService(prepareService)
+		publishService, publishErr := service.NewWorkspacePublishService(service.WorkspacePublishServiceConfig{
+			CapabilityAuthorizer: workspaceHelperHandler.PrepareCapabilityAuthorizer(),
+			ExecutionJobs:        executionJobRepo,
+			WorkspaceRevisions:   workspaceRevisionRepo,
+			RevisionStore:        workspaceRevisionStore,
+			MaxUploadBytes:       int64(cfg.WorkspaceHelperMaxUploadSizeMB) * 1024 * 1024,
+		})
+		if publishErr != nil {
+			log.Fatalf("failed to configure workspace publish service: %v", publishErr)
+		}
+		workspaceHelperHandler.SetPublishService(publishService)
 	}
 	buildHandler.SetVersionTagService(versionTagService)
 	buildHandler.SetProjectService(projectService)

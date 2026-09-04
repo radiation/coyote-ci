@@ -48,7 +48,11 @@ func runWorkspacePrepare(ctx context.Context) error {
 }
 
 func exchangeWorkspacePrepareCapability(ctx context.Context, apiURL string, projectedToken string, executionJobID string, podUID string) (string, error) {
-	body, marshalErr := json.Marshal(api.WorkspaceHelperCapabilityExchangeRequest{ExecutionJobID: executionJobID, PodUID: podUID, Role: string(domain.WorkspaceHelperRolePrepare)})
+	return exchangeWorkspaceCapability(ctx, apiURL, projectedToken, executionJobID, podUID, domain.WorkspaceHelperRolePrepare)
+}
+
+func exchangeWorkspaceCapability(ctx context.Context, apiURL string, projectedToken string, executionJobID string, podUID string, role domain.WorkspaceHelperRole) (string, error) {
+	body, marshalErr := json.Marshal(api.WorkspaceHelperCapabilityExchangeRequest{ExecutionJobID: executionJobID, PodUID: podUID, Role: string(role)})
 	if marshalErr != nil {
 		return "", marshalErr
 	}

@@ -72,6 +72,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) == 3 && os.Args[1] == "workspace" && os.Args[2] == "publish" {
+		if publishErr := runWorkspacePublish(context.Background()); publishErr != nil {
+			log.Fatalf("workspace publish failed: %v", publishErr)
+		}
+		return
+	}
 	cfg := config.Load()
 	log.Printf("database config: %s", dbopen.ConfigMode(cfg))
 	logEmailNotificationConfig(cfg)

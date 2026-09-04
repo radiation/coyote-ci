@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type WorkspaceRevisionStatus string
@@ -15,6 +17,12 @@ const (
 )
 
 var ErrInvalidWorkspaceRevision = errors.New("invalid workspace revision")
+
+var workspaceRevisionNamespace = uuid.MustParse("80c528d8-d286-5fdd-98ce-5d5239616c2a")
+
+func WorkspaceRevisionIDForExecutionJob(executionJobID string) string {
+	return uuid.NewSHA1(workspaceRevisionNamespace, []byte(executionJobID)).String()
+}
 
 // WorkspaceRevision records the durable publication state for one execution
 // job's logical workspace result. It does not describe the writable workspace

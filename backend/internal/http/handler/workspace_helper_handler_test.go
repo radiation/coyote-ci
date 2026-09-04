@@ -147,6 +147,19 @@ func TestWorkspaceHelperHandlerPrepareRejectsInvalidRequests(t *testing.T) {
 	}
 }
 
+func TestWorkspaceHelperHandlerPublishRejectsOversizedArchive(t *testing.T) {
+	handler := NewWorkspaceHelperHandler(nil)
+	handler.SetPublishService(&workspacePublisherStub{err: service.ErrWorkspacePublishArchiveTooLarge})
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/publish", strings.NewReader("archive"))
+	request.Header.Set("Authorization", "Bearer capability")
+	response := httptest.NewRecorder()
+
+	handler.PublishWorkspace(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d", response.Code)
+	}
+}
+
 type workspaceHelperExchangerStub struct {
 	token          string
 	capability     domain.WorkspaceHelperCapability
@@ -171,6 +184,14 @@ func (s *workspacePrepareOpenerStub) Open(context.Context, string, string, strin
 }
 
 var _ workspacePrepareOpener = (*workspacePrepareOpenerStub)(nil)
+
+type workspacePublisherStub struct{ err error }
+
+func (s *workspacePublisherStub) Publish(context.Context, string, string, string, io.Reader) (domain.WorkspaceRevision, error) {
+	return domain.WorkspaceRevision{}, s.err
+}
+
+var _ workspacePublisher = (*workspacePublisherStub)(nil)
 
 func workspacePrepareHandlerForTest(payload service.WorkspacePreparePayload) *WorkspaceHelperHandler {
 	handler := NewWorkspaceHelperHandler(nil)
