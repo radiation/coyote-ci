@@ -20,9 +20,9 @@ require (
 	golang.org/x/tools v0.49.0
 	google.golang.org/api v0.296.0
 	gopkg.in/yaml.v3 v3.0.1
-	k8s.io/api v0.35.0
+	k8s.io/api v0.37.0
 	k8s.io/apimachinery v0.37.0
-	k8s.io/client-go v0.35.0
+	k8s.io/client-go v0.37.0
 )
 
 require (
