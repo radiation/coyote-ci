@@ -238,6 +238,47 @@ func TestResolveExecutionController(t *testing.T) {
 	if _, resolveErr := resolveExecutionController(config.Config{ExecutionBackend: "kubernetes"}, service, nil); !errors.Is(resolveErr, wantErr) {
 		t.Fatalf("expected client error %v, got %v", wantErr, resolveErr)
 	}
+	newKubernetesClient = func(string) (kubernetesexec.Client, error) {
+		t.Fatal("partial helper configuration must fail before creating a Kubernetes client")
+		return nil, nil
+	}
+	if _, resolveErr := resolveExecutionController(config.Config{ExecutionBackend: "kubernetes", WorkerKubernetesHelperImage: "coyote-worker:test", WorkspaceHelperServiceAccount: "coyote-workspace-helper"}, service, nil); resolveErr == nil || !strings.Contains(resolveErr.Error(), "workspace helper configuration") {
+		t.Fatalf("expected helper configuration error, got %v", resolveErr)
+	}
+}
+
+func TestKubernetesWorkspaceHelperConfig(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		config  config.Config
+		enabled bool
+		wantErr bool
+	}{
+		{name: "no helper with default service account", config: config.Config{WorkspaceHelperServiceAccount: "coyote-workspace-helper"}, enabled: false},
+		{name: "kind helper without worker revision root", config: config.Config{WorkerKubernetesHelperImage: "coyote-ci-worker:kind", WorkerKubernetesInternalAPIURL: "http://host.docker.internal:8080", WorkspaceHelperServiceAccount: "coyote-workspace-helper"}, enabled: true},
+		{name: "partial helper", config: config.Config{WorkerKubernetesHelperImage: "coyote-ci-worker:kind", WorkspaceHelperServiceAccount: "coyote-workspace-helper"}, wantErr: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			helper, enabled, helperErr := kubernetesWorkspaceHelperConfig(testCase.config)
+			if (helperErr != nil) != testCase.wantErr || enabled != testCase.enabled {
+				t.Fatalf("helper=%#v enabled=%t error=%v", helper, enabled, helperErr)
+			}
+		})
+	}
+}
+
+func TestRunWorkspaceHelperCommandDispatch(t *testing.T) {
+	if handled, commandErr := runWorkspaceHelperCommand(context.Background(), []string{"worker"}); handled || commandErr != nil {
+		t.Fatalf("non-command handled=%t error=%v", handled, commandErr)
+	}
+	if handled, commandErr := runWorkspaceHelperCommand(context.Background(), []string{"workspace", "unknown"}); handled || commandErr != nil {
+		t.Fatalf("unknown command handled=%t error=%v", handled, commandErr)
+	}
+	for _, command := range []string{"prepare", "publish", "publish-after-build"} {
+		if handled, commandErr := runWorkspaceHelperCommand(context.Background(), []string{"workspace", command}); !handled || commandErr == nil {
+			t.Fatalf("command=%q handled=%t error=%v", command, handled, commandErr)
+		}
+	}
 }
 
 func TestWorkspaceRevisionStoreFromConfig(t *testing.T) {

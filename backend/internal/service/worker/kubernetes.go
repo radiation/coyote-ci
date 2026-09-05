@@ -54,25 +54,31 @@ func (w *ExecutionWorkerService) ValidateKubernetesRunnableStep(ctx context.Cont
 	if decodeErr := json.Unmarshal([]byte(job.ResolvedSpecJSON), &spec); decodeErr != nil || spec.WorkspaceInput.Mode == "" {
 		return &KubernetesExecutionCapabilityError{Feature: "an execution job without a valid workspace input plan"}
 	}
-	if spec.WorkspaceInput.Mode != domain.WorkspaceInputModeSource {
-		return &KubernetesExecutionCapabilityError{Feature: "predecessor, fan-out, or fan-in workspaces"}
-	}
-	if strings.TrimSpace(job.Source.RepositoryURL) != "" {
-		return &KubernetesExecutionCapabilityError{Feature: "repository checkout"}
+	if !w.kubernetesWorkspaceLifecycleEnabled {
+		if spec.WorkspaceInput.Mode != domain.WorkspaceInputModeSource {
+			return &KubernetesExecutionCapabilityError{Feature: "predecessor, fan-out, or fan-in workspaces without trusted workspace helpers"}
+		}
+		if strings.TrimSpace(job.Source.RepositoryURL) != "" {
+			return &KubernetesExecutionCapabilityError{Feature: "repository checkout without trusted workspace helpers"}
+		}
+	} else if spec.WorkspaceInput.Mode == domain.WorkspaceInputModeFanIn {
+		return &KubernetesExecutionCapabilityError{Feature: "fan-in workspaces"}
 	}
 
 	steps, err := w.builds.GetBuildSteps(ctx, step.BuildID)
 	if err != nil {
 		return err
 	}
-	if len(steps) != 1 {
-		return &KubernetesExecutionCapabilityError{Feature: "multi-step pipelines"}
+	for _, buildStep := range steps {
+		if buildStep.Cache != nil {
+			return &KubernetesExecutionCapabilityError{Feature: "cache restore or save"}
+		}
+		if len(buildStep.ArtifactPaths) > 0 {
+			return &KubernetesExecutionCapabilityError{Feature: "artifact collection"}
+		}
 	}
-	if steps[0].Cache != nil {
-		return &KubernetesExecutionCapabilityError{Feature: "cache restore or save"}
-	}
-	if len(steps[0].ArtifactPaths) > 0 {
-		return &KubernetesExecutionCapabilityError{Feature: "artifact collection"}
+	if !w.kubernetesWorkspaceLifecycleEnabled && len(steps) != 1 {
+		return &KubernetesExecutionCapabilityError{Feature: "multi-step pipelines without trusted workspace helpers"}
 	}
 
 	build, err := w.builds.GetBuild(ctx, step.BuildID)
@@ -89,6 +95,10 @@ func (w *ExecutionWorkerService) ValidateKubernetesRunnableStep(ctx context.Cont
 		}
 	}
 	return nil
+}
+
+func (w *ExecutionWorkerService) SetKubernetesWorkspaceLifecycleEnabled(enabled bool) {
+	w.kubernetesWorkspaceLifecycleEnabled = enabled
 }
 
 func (w *ExecutionWorkerService) RenewRunnableStepLease(ctx context.Context, step WorkerRunnableStep) (bool, error) {

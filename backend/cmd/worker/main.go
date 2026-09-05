@@ -66,15 +66,9 @@ func newRepositoryAwareCheckoutResolver(connections checkoutResolverConnectionRe
 }
 
 func main() {
-	if len(os.Args) == 3 && os.Args[1] == "workspace" && os.Args[2] == "prepare" {
-		if prepareErr := runWorkspacePrepare(context.Background()); prepareErr != nil {
-			log.Fatalf("workspace prepare failed: %v", prepareErr)
-		}
-		return
-	}
-	if len(os.Args) == 3 && os.Args[1] == "workspace" && os.Args[2] == "publish" {
-		if publishErr := runWorkspacePublish(context.Background()); publishErr != nil {
-			log.Fatalf("workspace publish failed: %v", publishErr)
+	if handled, commandErr := runWorkspaceHelperCommand(context.Background(), os.Args[1:]); handled {
+		if commandErr != nil {
+			log.Fatalf("workspace helper command failed: %v", commandErr)
 		}
 		return
 	}
@@ -189,18 +183,57 @@ func main() {
 	log.Printf("worker stopped")
 }
 
+func runWorkspaceHelperCommand(ctx context.Context, args []string) (bool, error) {
+	if len(args) != 2 || args[0] != "workspace" {
+		return false, nil
+	}
+	switch args[1] {
+	case "prepare":
+		return true, runWorkspacePrepare(ctx)
+	case "publish":
+		return true, runWorkspacePublish(ctx)
+	case "publish-after-build":
+		return true, runWorkspacePublishAfterBuild(ctx)
+	default:
+		return false, nil
+	}
+}
+
 var newKubernetesClient = kubernetesexec.NewClient
 
 func resolveExecutionController(cfg config.Config, workerService *workersvc.ExecutionWorkerService, logSink logs.LogSink) (executionsvc.Controller, error) {
 	if strings.ToLower(strings.TrimSpace(cfg.ExecutionBackend)) != "kubernetes" {
 		return workersvc.NewSynchronousController(workerService), nil
 	}
+	helperConfig, helpersEnabled, helperErr := kubernetesWorkspaceHelperConfig(cfg)
+	if helperErr != nil {
+		return nil, helperErr
+	}
 	client, err := newKubernetesClient(cfg.WorkerKubernetesKubeconfig)
 	if err != nil {
 		return nil, err
 	}
-	return kubernetesexec.NewController(client, workerService, logSink, cfg.WorkerKubernetesNamespace).
-		WithWorkspacePublicationEnabled(strings.TrimSpace(cfg.WorkspaceRevisionStorageRoot) != ""), nil
+	controller := kubernetesexec.NewController(client, workerService, logSink, cfg.WorkerKubernetesNamespace)
+	workerService.SetKubernetesWorkspaceLifecycleEnabled(helpersEnabled)
+	if helpersEnabled {
+		controller.WithWorkspaceHelper(helperConfig)
+	}
+	return controller, nil
+}
+
+func kubernetesWorkspaceHelperConfig(cfg config.Config) (kubernetesexec.WorkspaceHelperConfig, bool, error) {
+	helper := kubernetesexec.WorkspaceHelperConfig{
+		Image:              strings.TrimSpace(cfg.WorkerKubernetesHelperImage),
+		InternalAPIURL:     strings.TrimSpace(cfg.WorkerKubernetesInternalAPIURL),
+		ServiceAccountName: strings.TrimSpace(cfg.WorkspaceHelperServiceAccount),
+	}
+	if helper.Image == "" && helper.InternalAPIURL == "" {
+		return kubernetesexec.WorkspaceHelperConfig{}, false, nil
+	}
+	if helper.Image == "" || helper.InternalAPIURL == "" || helper.ServiceAccountName == "" {
+		return kubernetesexec.WorkspaceHelperConfig{}, false, errors.New("kubernetes workspace helper configuration requires helper image, internal API URL, and service account")
+	}
+	return helper, true, nil
 }
 
 func workspaceRevisionStoreFromConfig(cfg config.Config) workspacepkg.WorkspaceRevisionStore {

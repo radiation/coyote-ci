@@ -67,19 +67,20 @@ type WorkerLeaseRecoveryStats struct {
 }
 
 type ExecutionWorkerService struct {
-	builds                 workerExecutionBoundary
-	workerRepo             repository.WorkerRepository
-	workerID               string
-	leaseDuration          time.Duration
-	heartbeatWriteInterval time.Duration
-	clock                  func() time.Time
-	lastHeartbeatWriteAt   int64
-	claimsWon              int64
-	reclaimsWon            int64
-	renewalsWon            int64
-	renewalsStale          int64
-	staleComplete          int64
-	reclaimMisses          int64
+	builds                              workerExecutionBoundary
+	workerRepo                          repository.WorkerRepository
+	workerID                            string
+	leaseDuration                       time.Duration
+	kubernetesWorkspaceLifecycleEnabled bool
+	heartbeatWriteInterval              time.Duration
+	clock                               func() time.Time
+	lastHeartbeatWriteAt                int64
+	claimsWon                           int64
+	reclaimsWon                         int64
+	renewalsWon                         int64
+	renewalsStale                       int64
+	staleComplete                       int64
+	reclaimMisses                       int64
 }
 
 func NewExecutionWorkerService(builds workerExecutionBoundary) *ExecutionWorkerService {

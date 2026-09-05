@@ -8,13 +8,39 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	workspacepkg "github.com/radiation/coyote-ci/backend/internal/workspace"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 const workspaceHelperWorkspacePath = "COYOTE_WORKSPACE_PATH"
+
+const (
+	workspaceHelperPodName   = "COYOTE_WORKSPACE_HELPER_POD_NAME"
+	workspaceHelperNamespace = "COYOTE_WORKSPACE_HELPER_NAMESPACE"
+)
+
+type workspacePublishPodClient interface {
+	Get(context.Context, string, metav1.GetOptions) (*corev1.Pod, error)
+}
+
+var newWorkspacePublishPodClient = func() (workspacePublishPodClient, error) {
+	config, configErr := rest.InClusterConfig()
+	if configErr != nil {
+		return nil, configErr
+	}
+	client, clientErr := kubernetes.NewForConfig(config)
+	if clientErr != nil {
+		return nil, clientErr
+	}
+	return client.CoreV1().Pods(strings.TrimSpace(os.Getenv(workspaceHelperNamespace))), nil
+}
 
 func runWorkspacePublish(ctx context.Context) error {
 	apiURL := strings.TrimRight(strings.TrimSpace(os.Getenv(workspaceHelperAPIURL)), "/")
@@ -70,4 +96,73 @@ func runWorkspacePublish(ctx context.Context) error {
 		return errors.New("workspace publish response does not match local archive")
 	}
 	return nil
+}
+
+func runWorkspacePublishAfterBuild(ctx context.Context) error {
+	podName := strings.TrimSpace(os.Getenv(workspaceHelperPodName))
+	namespace := strings.TrimSpace(os.Getenv(workspaceHelperNamespace))
+	podUID := strings.TrimSpace(os.Getenv(workspaceHelperPodUID))
+	if podName == "" || namespace == "" || podUID == "" {
+		return errors.New("workspace publish after build requires pod name, namespace, and pod UID")
+	}
+	client, clientErr := newWorkspacePublishPodClient()
+	if clientErr != nil {
+		return fmt.Errorf("create Kubernetes Pod client: %w", clientErr)
+	}
+	buildSucceeded, waitErr := waitForSuccessfulBuild(ctx, client, podName, podUID)
+	if waitErr != nil {
+		return waitErr
+	}
+	if !buildSucceeded {
+		return nil
+	}
+	return runWorkspacePublish(ctx)
+}
+
+func waitForSuccessfulBuild(ctx context.Context, client workspacePublishPodClient, podName string, podUID string) (bool, error) {
+	if client == nil {
+		return false, errors.New("workspace publish requires a Kubernetes Pod client")
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		pod, getErr := client.Get(ctx, strings.TrimSpace(podName), metav1.GetOptions{})
+		if getErr != nil {
+			return false, fmt.Errorf("get workspace Pod status: %w", getErr)
+		}
+		terminal, succeeded, statusErr := buildContainerStatus(pod, podUID)
+		if statusErr != nil {
+			return false, statusErr
+		}
+		if terminal {
+			return succeeded, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func buildContainerStatus(pod *corev1.Pod, expectedUID string) (bool, bool, error) {
+	if pod == nil || string(pod.UID) != strings.TrimSpace(expectedUID) {
+		return false, false, errors.New("workspace publish Pod UID does not match helper identity")
+	}
+	buildDeclared := false
+	for _, container := range pod.Spec.Containers {
+		if container.Name == "build" {
+			buildDeclared = true
+			break
+		}
+	}
+	if !buildDeclared {
+		return false, false, errors.New("workspace publish Pod has no build container")
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == "build" && status.State.Terminated != nil {
+			return true, status.State.Terminated.ExitCode == 0, nil
+		}
+	}
+	return false, false, nil
 }

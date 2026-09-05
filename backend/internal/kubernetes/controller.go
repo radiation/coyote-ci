@@ -28,7 +28,15 @@ const (
 	managedByLabel              = "app.kubernetes.io/managed-by"
 	terminalLogChunkSize        = 32 * 1024
 	cancellationCleanupInterval = 30 * time.Second
+	workspaceHelperTokenPath    = "/var/run/secrets/coyote/workspace/token"
+	workspaceKubernetesTokenDir = "/var/run/secrets/kubernetes.io/serviceaccount"
 )
+
+type WorkspaceHelperConfig struct {
+	Image              string
+	InternalAPIURL     string
+	ServiceAccountName string
+}
 
 type Client interface {
 	GetJob(context.Context, string, string) (*batchv1.Job, error)
@@ -53,6 +61,7 @@ type Controller struct {
 	logSink                     logs.LogSink
 	namespace                   string
 	workspacePublicationEnabled bool
+	workspaceHelper             WorkspaceHelperConfig
 	active                      *workersvc.WorkerRunnableStep
 	terminalLogsPersisted       map[string]bool
 	lastCancellationCleanupAt   time.Time
@@ -70,6 +79,12 @@ func (c *Controller) WithWorkspacePublicationEnabled(enabled bool) *Controller {
 	return c
 }
 
+func (c *Controller) WithWorkspaceHelper(config WorkspaceHelperConfig) *Controller {
+	c.workspaceHelper = config
+	c.workspacePublicationEnabled = true
+	return c
+}
+
 func (c *Controller) Reconcile(ctx context.Context) error {
 	if c.active != nil {
 		if cleanupErr := c.cleanupCanceledJobsIfDue(ctx); cleanupErr != nil {
@@ -84,8 +99,8 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 	if !found {
 		return c.cleanupCanceledJobsIfDue(ctx)
 	}
-	if c.workspacePublicationEnabled {
-		return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "kubernetes execution backend does not yet support durable workspace publication", StartedAt: c.now(), FinishedAt: c.now()})
+	if c.workspacePublicationEnabled && (strings.TrimSpace(c.workspaceHelper.Image) == "" || strings.TrimSpace(c.workspaceHelper.InternalAPIURL) == "" || strings.TrimSpace(c.workspaceHelper.ServiceAccountName) == "") {
+		return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "kubernetes workspace helper configuration is incomplete", StartedAt: c.now(), FinishedAt: c.now()})
 	}
 	if validationErr := c.service.ValidateKubernetesRunnableStep(ctx, step); validationErr != nil {
 		if !workersvc.IsKubernetesExecutionCapabilityError(validationErr) {
@@ -156,7 +171,7 @@ func (c *Controller) ensureJob(ctx context.Context, step workersvc.WorkerRunnabl
 	if !apierrors.IsNotFound(err) {
 		return nil, err
 	}
-	created, createErr := c.client.CreateJob(ctx, c.namespace, buildJob(c.namespace, step))
+	created, createErr := c.client.CreateJob(ctx, c.namespace, buildJob(c.namespace, step, c.workspaceHelper))
 	if createErr == nil {
 		return created, nil
 	}
@@ -303,7 +318,7 @@ func (c *Controller) cleanupCanceledJobsIfDue(ctx context.Context) error {
 	return nil
 }
 
-func buildJob(namespace string, step workersvc.WorkerRunnableStep) *batchv1.Job {
+func buildJob(namespace string, step workersvc.WorkerRunnableStep, helpers ...WorkspaceHelperConfig) *batchv1.Job {
 	backoffLimit := int32(0)
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName(step.JobID), Namespace: namespace, Labels: executionLabels(step)}}
 	job.Spec.BackoffLimit = &backoffLimit
@@ -311,20 +326,53 @@ func buildJob(namespace string, step workersvc.WorkerRunnableStep) *batchv1.Job 
 		deadline := int64(step.TimeoutSeconds)
 		job.Spec.ActiveDeadlineSeconds = &deadline
 	}
+	helper := WorkspaceHelperConfig{}
+	if len(helpers) > 0 {
+		helper = helpers[0]
+	}
+	podSpec := corev1.PodSpec{
+		RestartPolicy:                corev1.RestartPolicyNever,
+		AutomountServiceAccountToken: boolPtr(false),
+		Volumes:                      []corev1.Volume{{Name: "workspace", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
+		Containers: []corev1.Container{{
+			Name: "build", Image: step.Image, Command: []string{step.Command}, Args: append([]string(nil), step.Args...),
+			Env: environment(step.Env), WorkingDir: workspace.ResolveVisibleWorkingDir(workspace.DefaultContainerRoot, step.WorkingDir),
+			VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}},
+		}},
+	}
+	if strings.TrimSpace(helper.Image) != "" {
+		podSpec.ServiceAccountName = helper.ServiceAccountName
+		podSpec.Volumes = append(podSpec.Volumes, helperCapabilityVolume("workspace-prepare-token", workspaceHelperPrepareAudience), helperCapabilityVolume("workspace-publish-token", workspaceHelperPublishAudience), kubernetesAPIIdentityVolume())
+		podSpec.InitContainers = []corev1.Container{workspacePrepareContainer(helper, step)}
+		podSpec.Containers = append(podSpec.Containers, workspacePublishContainer(helper, step))
+	}
 	job.Spec.Template = corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: executionLabels(step), Annotations: executionAnnotations(step)},
-		Spec: corev1.PodSpec{
-			RestartPolicy:                corev1.RestartPolicyNever,
-			AutomountServiceAccountToken: boolPtr(false),
-			Volumes:                      []corev1.Volume{{Name: "workspace", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
-			Containers: []corev1.Container{{
-				Name: "build", Image: step.Image, Command: []string{step.Command}, Args: append([]string(nil), step.Args...),
-				Env: environment(step.Env), WorkingDir: workspace.ResolveVisibleWorkingDir(workspace.DefaultContainerRoot, step.WorkingDir),
-				VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}},
-			}},
-		},
+		Spec:       podSpec,
 	}
 	return job
+}
+
+func helperCapabilityVolume(name, audience string) corev1.Volume {
+	return corev1.Volume{Name: name, VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{Audience: audience, Path: "token"}}}}}}
+}
+
+func kubernetesAPIIdentityVolume() corev1.Volume {
+	return corev1.Volume{Name: "workspace-kubernetes-api", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{Audience: "https://kubernetes.default.svc", Path: "token"}}, {ConfigMap: &corev1.ConfigMapProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "kube-root-ca.crt"}, Items: []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &corev1.DownwardAPIProjection{Items: []corev1.DownwardAPIVolumeFile{{Path: "namespace", FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}}}}}}}}
+}
+
+func workspaceHelperEnvironment(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep) []corev1.EnvVar {
+	return []corev1.EnvVar{{Name: "COYOTE_INTERNAL_API_URL", Value: config.InternalAPIURL}, {Name: "COYOTE_WORKSPACE_HELPER_EXECUTION_JOB_ID", Value: step.JobID}, {Name: "COYOTE_WORKSPACE_HELPER_TOKEN_PATH", Value: workspaceHelperTokenPath}, {Name: "COYOTE_WORKSPACE_HELPER_POD_UID", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"}}}}
+}
+
+func workspacePrepareContainer(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep) corev1.Container {
+	env := append(workspaceHelperEnvironment(config, step), corev1.EnvVar{Name: "COYOTE_WORKSPACE_DESTINATION", Value: workspace.DefaultContainerRoot})
+	return corev1.Container{Name: "workspace-prepare", Image: config.Image, Command: []string{"/app/worker", "workspace", "prepare"}, Env: env, VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "workspace-prepare-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}}}
+}
+
+func workspacePublishContainer(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep) corev1.Container {
+	env := append(workspaceHelperEnvironment(config, step), corev1.EnvVar{Name: "COYOTE_WORKSPACE_PATH", Value: workspace.DefaultContainerRoot}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}})
+	return corev1.Container{Name: "workspace-publish", Image: config.Image, Command: []string{"/app/worker", "workspace", "publish-after-build"}, Env: env, VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "workspace-publish-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}, {Name: "workspace-kubernetes-api", MountPath: workspaceKubernetesTokenDir, ReadOnly: true}}}
 }
 
 func jobName(executionJobID string) string {
@@ -394,7 +442,18 @@ func podResult(pod corev1.Pod, now time.Time) runner.RunStepResult {
 	if result.StartedAt.IsZero() {
 		result.StartedAt = now
 	}
+	for _, status := range pod.Status.InitContainerStatuses {
+		if status.Name == "workspace-prepare" && status.State.Terminated != nil && status.State.Terminated.ExitCode != 0 {
+			result.Stderr = "workspace revision prepare: " + strings.TrimSpace(strings.Join([]string{status.State.Terminated.Reason, status.State.Terminated.Message}, ": "))
+			return result
+		}
+	}
 	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == "workspace-publish" && status.State.Terminated != nil && status.State.Terminated.ExitCode != 0 {
+			result.ExitCode = int(status.State.Terminated.ExitCode)
+			result.Stderr = "workspace revision publish: " + strings.TrimSpace(strings.Join([]string{status.State.Terminated.Reason, status.State.Terminated.Message}, ": "))
+			return result
+		}
 		if status.Name != "build" || status.State.Terminated == nil {
 			continue
 		}

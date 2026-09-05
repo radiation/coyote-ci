@@ -9,6 +9,12 @@ metadata:
   name: coyote-kubernetes-worker
   namespace: coyote-ci
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coyote-workspace-helper
+  namespace: coyote-ci
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -26,6 +32,16 @@ rules:
     verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coyote-workspace-helper
+  namespace: coyote-ci
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: coyote-kubernetes-worker
@@ -38,6 +54,20 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: coyote-kubernetes-worker
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coyote-workspace-helper
+  namespace: coyote-ci
+subjects:
+  - kind: ServiceAccount
+    name: coyote-workspace-helper
+    namespace: coyote-ci
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coyote-workspace-helper
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -67,5 +97,9 @@ spec:
               value: kubernetes
             - name: WORKER_KUBERNETES_NAMESPACE
               value: coyote-ci
+            - name: WORKER_KUBERNETES_HELPER_IMAGE
+              value: coyote-ci-worker:kind
+            - name: WORKER_KUBERNETES_INTERNAL_API_URL
+              value: http://host.docker.internal:8080
             - name: EMAIL_NOTIFICATIONS_ENABLED
               value: "false"
