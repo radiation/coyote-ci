@@ -123,6 +123,8 @@ func waitForSuccessfulBuild(ctx context.Context, client workspacePublishPodClien
 	if client == nil {
 		return false, errors.New("workspace publish requires a Kubernetes Pod client")
 	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	for {
 		pod, getErr := client.Get(ctx, strings.TrimSpace(podName), metav1.GetOptions{})
 		if getErr != nil {
@@ -138,7 +140,7 @@ func waitForSuccessfulBuild(ctx context.Context, client workspacePublishPodClien
 		select {
 		case <-ctx.Done():
 			return false, ctx.Err()
-		case <-time.After(time.Second):
+		case <-ticker.C:
 		}
 	}
 }

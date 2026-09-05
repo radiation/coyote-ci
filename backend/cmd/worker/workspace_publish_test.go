@@ -133,18 +133,18 @@ func TestBuildContainerStatusRejectsUntrustedOrIncompletePods(t *testing.T) {
 	for _, testCase := range []struct {
 		name string
 		pod  *corev1.Pod
-		want error
+		want string
 	}{
-		{name: "UID mismatch", pod: workspacePublishTestPod(0), want: errors.New("mismatch")},
-		{name: "missing build", pod: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: "pod-uid"}}, want: errors.New("missing")},
+		{name: "UID mismatch", pod: workspacePublishTestPod(0), want: "workspace publish Pod UID does not match helper identity"},
+		{name: "missing build", pod: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: "pod-uid"}}, want: "workspace publish Pod has no build container"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			_, _, statusErr := buildContainerStatus(testCase.pod, "different-uid")
 			if testCase.name == "missing build" {
 				_, _, statusErr = buildContainerStatus(testCase.pod, "pod-uid")
 			}
-			if statusErr == nil {
-				t.Fatal("expected trusted status error")
+			if statusErr == nil || statusErr.Error() != testCase.want {
+				t.Fatalf("status error=%v, want %q", statusErr, testCase.want)
 			}
 		})
 	}
