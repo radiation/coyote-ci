@@ -94,6 +94,22 @@ func TestControllerCreatesWorkspaceHelperLifecycle(t *testing.T) {
 	}
 }
 
+func TestBuildJobWithoutWorkspaceHelpersHasOnlyBuildContainer(t *testing.T) {
+	job := buildJob("ci", testStep())
+	pod := job.Spec.Template.Spec
+	if pod.ServiceAccountName != "" || len(pod.InitContainers) != 0 || len(pod.Containers) != 1 || pod.Containers[0].Name != "build" {
+		t.Fatalf("pod=%#v", pod)
+	}
+}
+
+func TestControllerWithWorkspaceHelperEnablesLifecycle(t *testing.T) {
+	controller := NewController(newFakeClient(), &fakeExecutionService{}, nil, "ci")
+	helper := WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper"}
+	if got := controller.WithWorkspaceHelper(helper); got != controller || !controller.workspacePublicationEnabled || controller.workspaceHelper != helper {
+		t.Fatalf("controller=%#v", controller)
+	}
+}
+
 func TestControllerRenewsPendingJobLease(t *testing.T) {
 	step := testStep()
 	service := &fakeExecutionService{step: step, found: true}

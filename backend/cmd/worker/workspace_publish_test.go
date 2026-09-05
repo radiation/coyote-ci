@@ -113,6 +113,22 @@ func TestRunWorkspacePublishAfterBuildPublishesOnlyAfterTrustedSuccess(t *testin
 	}
 }
 
+func TestRunWorkspacePublishAfterBuildRejectsInvalidSetup(t *testing.T) {
+	if publishErr := runWorkspacePublishAfterBuild(context.Background()); publishErr == nil {
+		t.Fatal("expected missing Pod identity error")
+	}
+	t.Setenv(workspaceHelperPodName, "pod")
+	t.Setenv(workspaceHelperNamespace, "ci")
+	t.Setenv(workspaceHelperPodUID, "pod-uid")
+	originalClient := newWorkspacePublishPodClient
+	defer func() { newWorkspacePublishPodClient = originalClient }()
+	clientErr := errors.New("client unavailable")
+	newWorkspacePublishPodClient = func() (workspacePublishPodClient, error) { return nil, clientErr }
+	if publishErr := runWorkspacePublishAfterBuild(context.Background()); !errors.Is(publishErr, clientErr) {
+		t.Fatalf("publish error=%v", publishErr)
+	}
+}
+
 func TestBuildContainerStatusRejectsUntrustedOrIncompletePods(t *testing.T) {
 	for _, testCase := range []struct {
 		name string
@@ -134,6 +150,20 @@ func TestBuildContainerStatusRejectsUntrustedOrIncompletePods(t *testing.T) {
 	}
 }
 
+func TestBuildContainerStatusReportsPendingAndTerminatedStates(t *testing.T) {
+	if terminal, succeeded, statusErr := buildContainerStatus(workspacePublishTestPod(0), "pod-uid"); statusErr != nil || !terminal || !succeeded {
+		t.Fatalf("success terminal=%t succeeded=%t error=%v", terminal, succeeded, statusErr)
+	}
+	pending := workspacePublishTestPod(0)
+	pending.Status.ContainerStatuses = nil
+	if terminal, succeeded, statusErr := buildContainerStatus(pending, "pod-uid"); statusErr != nil || terminal || succeeded {
+		t.Fatalf("pending terminal=%t succeeded=%t error=%v", terminal, succeeded, statusErr)
+	}
+	if _, _, statusErr := buildContainerStatus(nil, "pod-uid"); statusErr == nil {
+		t.Fatal("expected nil Pod error")
+	}
+}
+
 func TestWaitForSuccessfulBuildFailsSafely(t *testing.T) {
 	lookupErr := errors.New("Kubernetes unavailable")
 	if _, waitErr := waitForSuccessfulBuild(context.Background(), fakeWorkspacePublishPodClient{err: lookupErr}, "pod", "pod-uid"); !errors.Is(waitErr, lookupErr) {
@@ -145,6 +175,9 @@ func TestWaitForSuccessfulBuildFailsSafely(t *testing.T) {
 	cancel()
 	if _, waitErr := waitForSuccessfulBuild(canceled, fakeWorkspacePublishPodClient{pod: pending}, "pod", "pod-uid"); !errors.Is(waitErr, context.Canceled) {
 		t.Fatalf("pending wait error=%v", waitErr)
+	}
+	if _, waitErr := waitForSuccessfulBuild(context.Background(), nil, "pod", "pod-uid"); waitErr == nil {
+		t.Fatal("expected nil client error")
 	}
 }
 

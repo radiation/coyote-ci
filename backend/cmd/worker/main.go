@@ -66,21 +66,9 @@ func newRepositoryAwareCheckoutResolver(connections checkoutResolverConnectionRe
 }
 
 func main() {
-	if len(os.Args) == 3 && os.Args[1] == "workspace" && os.Args[2] == "prepare" {
-		if prepareErr := runWorkspacePrepare(context.Background()); prepareErr != nil {
-			log.Fatalf("workspace prepare failed: %v", prepareErr)
-		}
-		return
-	}
-	if len(os.Args) == 3 && os.Args[1] == "workspace" && os.Args[2] == "publish" {
-		if publishErr := runWorkspacePublish(context.Background()); publishErr != nil {
-			log.Fatalf("workspace publish failed: %v", publishErr)
-		}
-		return
-	}
-	if len(os.Args) == 3 && os.Args[1] == "workspace" && os.Args[2] == "publish-after-build" {
-		if publishErr := runWorkspacePublishAfterBuild(context.Background()); publishErr != nil {
-			log.Fatalf("workspace publish after build failed: %v", publishErr)
+	if handled, commandErr := runWorkspaceHelperCommand(context.Background(), os.Args[1:]); handled {
+		if commandErr != nil {
+			log.Fatalf("workspace helper command failed: %v", commandErr)
 		}
 		return
 	}
@@ -193,6 +181,22 @@ func main() {
 		log.Fatalf("worker loop failed: %v", err)
 	}
 	log.Printf("worker stopped")
+}
+
+func runWorkspaceHelperCommand(ctx context.Context, args []string) (bool, error) {
+	if len(args) != 2 || args[0] != "workspace" {
+		return false, nil
+	}
+	switch args[1] {
+	case "prepare":
+		return true, runWorkspacePrepare(ctx)
+	case "publish":
+		return true, runWorkspacePublish(ctx)
+	case "publish-after-build":
+		return true, runWorkspacePublishAfterBuild(ctx)
+	default:
+		return false, nil
+	}
 }
 
 var newKubernetesClient = kubernetesexec.NewClient

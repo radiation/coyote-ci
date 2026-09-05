@@ -114,6 +114,14 @@ func TestValidateKubernetesRunnableStepRequiresKubernetesBoundary(t *testing.T) 
 	}
 }
 
+func TestSetKubernetesWorkspaceLifecycleEnabled(t *testing.T) {
+	service := NewExecutionWorkerService(nil)
+	service.SetKubernetesWorkspaceLifecycleEnabled(true)
+	if !service.kubernetesWorkspaceLifecycleEnabled {
+		t.Fatal("expected workspace lifecycle to be enabled")
+	}
+}
+
 func TestKubernetesExecutionAdapter(t *testing.T) {
 	boundary := &kubernetesBoundary{fakeExecutionWorkerBoundary: &fakeExecutionWorkerBoundary{}, job: domain.ExecutionJob{ID: "job-1"}}
 	service := NewExecutionWorkerService(boundary)

@@ -267,6 +267,20 @@ func TestKubernetesWorkspaceHelperConfig(t *testing.T) {
 	}
 }
 
+func TestRunWorkspaceHelperCommandDispatch(t *testing.T) {
+	if handled, commandErr := runWorkspaceHelperCommand(context.Background(), []string{"worker"}); handled || commandErr != nil {
+		t.Fatalf("non-command handled=%t error=%v", handled, commandErr)
+	}
+	if handled, commandErr := runWorkspaceHelperCommand(context.Background(), []string{"workspace", "unknown"}); handled || commandErr != nil {
+		t.Fatalf("unknown command handled=%t error=%v", handled, commandErr)
+	}
+	for _, command := range []string{"prepare", "publish", "publish-after-build"} {
+		if handled, commandErr := runWorkspaceHelperCommand(context.Background(), []string{"workspace", command}); !handled || commandErr == nil {
+			t.Fatalf("command=%q handled=%t error=%v", command, handled, commandErr)
+		}
+	}
+}
+
 func TestWorkspaceRevisionStoreFromConfig(t *testing.T) {
 	if store := workspaceRevisionStoreFromConfig(config.Config{}); store != nil {
 		t.Fatalf("expected no revision store when storage root is unset, got %T", store)
