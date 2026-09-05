@@ -33,6 +33,7 @@ type Config struct {
 	WorkerKubernetesKubeconfig           string
 	WorkerKubernetesHelperImage          string
 	WorkerKubernetesInternalAPIURL       string
+	WorkerKubernetesTestStepNodes        string
 	WorkspaceHelperCapabilityEnabled     bool
 	WorkspaceHelperKubeconfig            string
 	WorkspaceHelperServiceAccount        string
@@ -110,6 +111,7 @@ func Load() Config {
 		WorkerKubernetesKubeconfig:           getEnv("WORKER_KUBERNETES_KUBECONFIG", getEnv("KUBECONFIG", "")),
 		WorkerKubernetesHelperImage:          getEnv("WORKER_KUBERNETES_HELPER_IMAGE", ""),
 		WorkerKubernetesInternalAPIURL:       getEnv("WORKER_KUBERNETES_INTERNAL_API_URL", ""),
+		WorkerKubernetesTestStepNodes:        getEnv("WORKER_KUBERNETES_TEST_STEP_NODES", ""),
 		WorkspaceHelperCapabilityEnabled:     getEnvBool("COYOTE_WORKSPACE_HELPER_ENABLED", false),
 		WorkspaceHelperKubeconfig:            getEnv("COYOTE_WORKSPACE_HELPER_KUBECONFIG", ""),
 		WorkspaceHelperServiceAccount:        getEnv("COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT", "coyote-workspace-helper"),

@@ -38,7 +38,14 @@ func (p *ServerSourceArchivePreparer) OpenSourceArchive(ctx context.Context, bui
 		repositoryURL = strings.TrimSpace(job.Source.RepositoryURL)
 	}
 	if repositoryURL == "" {
-		return WorkspacePreparePayload{}, source.ErrRepositoryURLRequired
+		if mkdirErr := os.MkdirAll(workspacePath, 0o755); mkdirErr != nil {
+			return WorkspacePreparePayload{}, mkdirErr
+		}
+		archive, publication, archiveErr := workspace.ArchiveDirectory(ctx, workspacePath)
+		if archiveErr != nil {
+			return WorkspacePreparePayload{}, archiveErr
+		}
+		return WorkspacePreparePayload{Archive: archive, Publication: publication}, nil
 	}
 	if build.RegisteredRepositoryID != nil && build.SCMConnectionID != nil && build.ProviderRepositoryID != nil {
 		if p.checkout == nil {

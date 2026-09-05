@@ -91,6 +91,9 @@ func TestControllerCreatesWorkspaceHelperLifecycle(t *testing.T) {
 		if volume.Name == "workspace-publish-token" && volume.Projected.Sources[0].ServiceAccountToken.Audience != workspaceHelperPublishAudience {
 			t.Fatalf("publish audience=%q", volume.Projected.Sources[0].ServiceAccountToken.Audience)
 		}
+		if volume.Name == "workspace-kubernetes-api" && volume.Projected.Sources[0].ServiceAccountToken.Audience != "" {
+			t.Fatalf("kubernetes API audience=%q", volume.Projected.Sources[0].ServiceAccountToken.Audience)
+		}
 	}
 }
 
@@ -99,6 +102,20 @@ func TestBuildJobWithoutWorkspaceHelpersHasOnlyBuildContainer(t *testing.T) {
 	pod := job.Spec.Template.Spec
 	if pod.ServiceAccountName != "" || len(pod.InitContainers) != 0 || len(pod.Containers) != 1 || pod.Containers[0].Name != "build" {
 		t.Fatalf("pod=%#v", pod)
+	}
+}
+
+func TestBuildJobPinsConfiguredStepNode(t *testing.T) {
+	step := testStep()
+	step.StepIndex = 1
+	job := buildJobWithNodeName("ci", step, WorkspaceHelperConfig{}, "coyote-ci-worker2")
+	if job.Spec.Template.Spec.NodeName != "coyote-ci-worker2" {
+		t.Fatalf("node name=%q", job.Spec.Template.Spec.NodeName)
+	}
+
+	controller := NewController(newFakeClient(), &fakeExecutionService{}, nil, "ci").WithTestStepNodeNames([]string{" coyote-ci-worker ", "coyote-ci-worker2", ""})
+	if controller.testStepNodeName(0) != "coyote-ci-worker" || controller.testStepNodeName(1) != "coyote-ci-worker2" || controller.testStepNodeName(2) != "" {
+		t.Fatalf("test node names=%v", controller.testStepNodeNames)
 	}
 }
 
@@ -206,6 +223,9 @@ func TestControllerCompletesTerminalOutcomesAndLogs(t *testing.T) {
 			}
 			if sink.text != "terminal output\n" {
 				t.Fatalf("logs=%q", sink.text)
+			}
+			if client.logContainer != "build" {
+				t.Fatalf("log container=%q", client.logContainer)
 			}
 		})
 	}
@@ -351,6 +371,25 @@ func TestPodResultClassifiesWorkspaceHelperFailures(t *testing.T) {
 				t.Fatalf("result=%#v", result)
 			}
 		})
+	}
+}
+
+func TestControllerCompletesWorkspacePrepareFailureWithoutBuildLogs(t *testing.T) {
+	step := testStep()
+	service := &fakeExecutionService{step: step, found: true}
+	client := newFakeClient()
+	client.jobs[jobName(step.JobID)] = completedJob(step, 0, "Completed", "")
+	client.pods = []corev1.Pod{{Status: corev1.PodStatus{InitContainerStatuses: []corev1.ContainerStatus{{Name: "workspace-prepare", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}}}}}}
+	controller := NewController(client, service, &recordingLogSink{}, "default")
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("reconcile: %v", reconcileErr)
+	}
+	if service.completeCalls != 1 || !strings.Contains(service.result.Stderr, "workspace revision prepare") {
+		t.Fatalf("completion=%d result=%#v", service.completeCalls, service.result)
+	}
+	if client.logContainer != "" {
+		t.Fatalf("unexpected build log request for helper failure: %q", client.logContainer)
 	}
 }
 
@@ -614,7 +653,7 @@ func TestClientsetDelegatesKubernetesOperations(t *testing.T) {
 	if listErr != nil || len(pods) != 1 {
 		t.Fatalf("pods=%v err=%v", pods, listErr)
 	}
-	if _, logErr := client.GetPodLogs(context.Background(), "default", "pod"); logErr == nil {
+	if _, logErr := client.GetPodLogs(context.Background(), "default", "pod", "build"); logErr == nil {
 		t.Log("fake client supplied a pod log stream")
 	}
 	if deleteErr := client.DeleteJob(context.Background(), "default", created.Name); deleteErr != nil {
@@ -687,19 +726,20 @@ func (s *fakeExecutionService) CompleteKubernetesRunnableStep(_ context.Context,
 }
 
 type fakeClient struct {
-	jobs        map[string]*batchv1.Job
-	pods        []corev1.Pod
-	logs        string
-	getErr      error
-	createErr   error
-	deleteErr   error
-	listJobsErr error
-	listPodsErr error
-	getLogsErr  error
-	createRace  bool
-	createCalls int
-	deleteCalls int
-	listCalls   int
+	jobs         map[string]*batchv1.Job
+	pods         []corev1.Pod
+	logs         string
+	logContainer string
+	getErr       error
+	createErr    error
+	deleteErr    error
+	listJobsErr  error
+	listPodsErr  error
+	getLogsErr   error
+	createRace   bool
+	createCalls  int
+	deleteCalls  int
+	listCalls    int
 }
 
 func newFakeClient() *fakeClient { return &fakeClient{jobs: map[string]*batchv1.Job{}} }
@@ -751,7 +791,8 @@ func (c *fakeClient) ListJobs(context.Context, string, string) ([]batchv1.Job, e
 func (c *fakeClient) ListPods(context.Context, string, string) ([]corev1.Pod, error) {
 	return c.pods, c.listPodsErr
 }
-func (c *fakeClient) GetPodLogs(context.Context, string, string) (io.ReadCloser, error) {
+func (c *fakeClient) GetPodLogs(_ context.Context, _ string, _ string, container string) (io.ReadCloser, error) {
+	c.logContainer = container
 	if c.getLogsErr != nil {
 		return nil, c.getLogsErr
 	}

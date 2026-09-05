@@ -33,7 +33,7 @@ func TestServerSourceArchivePreparerCreatesVerifiedArchive(t *testing.T) {
 	}
 }
 
-func TestServerSourceArchivePreparerRejectsMissingResolverOrRepository(t *testing.T) {
+func TestServerSourceArchivePreparerHandlesMissingResolverOrRepository(t *testing.T) {
 	if _, newErr := NewServerSourceArchivePreparer(nil, nil); newErr == nil {
 		t.Fatal("expected missing resolver error")
 	}
@@ -41,8 +41,13 @@ func TestServerSourceArchivePreparerRejectsMissingResolverOrRepository(t *testin
 	if newErr != nil {
 		t.Fatalf("new preparer: %v", newErr)
 	}
-	if _, prepareErr := preparer.OpenSourceArchive(context.Background(), domain.Build{}, domain.ExecutionJob{}, domain.ExecutionJobSpec{}); !errors.Is(prepareErr, source.ErrRepositoryURLRequired) {
-		t.Fatalf("prepare archive: %v", prepareErr)
+	payload, prepareErr := preparer.OpenSourceArchive(context.Background(), domain.Build{}, domain.ExecutionJob{}, domain.ExecutionJobSpec{})
+	if prepareErr != nil {
+		t.Fatalf("prepare empty archive: %v", prepareErr)
+	}
+	defer func() { _ = payload.Archive.Close() }()
+	if payload.Publication.Validate() != nil {
+		t.Fatalf("publication=%#v", payload.Publication)
 	}
 }
 

@@ -214,11 +214,20 @@ func resolveExecutionController(cfg config.Config, workerService *workersvc.Exec
 		return nil, err
 	}
 	controller := kubernetesexec.NewController(client, workerService, logSink, cfg.WorkerKubernetesNamespace)
+	controller.WithTestStepNodeNames(kubernetesTestStepNodes(cfg.WorkerKubernetesTestStepNodes))
 	workerService.SetKubernetesWorkspaceLifecycleEnabled(helpersEnabled)
 	if helpersEnabled {
 		controller.WithWorkspaceHelper(helperConfig)
 	}
 	return controller, nil
+}
+
+func kubernetesTestStepNodes(value string) []string {
+	values := strings.Split(strings.TrimSpace(value), ",")
+	for index, nodeName := range values {
+		values[index] = strings.TrimSpace(nodeName)
+	}
+	return values
 }
 
 func kubernetesWorkspaceHelperConfig(cfg config.Config) (kubernetesexec.WorkspaceHelperConfig, bool, error) {

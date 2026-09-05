@@ -48,7 +48,7 @@ func (kubernetesfakeClient) ListJobs(context.Context, string, string) ([]batchv1
 func (kubernetesfakeClient) ListPods(context.Context, string, string) ([]corev1.Pod, error) {
 	return nil, nil
 }
-func (kubernetesfakeClient) GetPodLogs(context.Context, string, string) (io.ReadCloser, error) {
+func (kubernetesfakeClient) GetPodLogs(context.Context, string, string, string) (io.ReadCloser, error) {
 	return nil, nil
 }
 
@@ -264,6 +264,13 @@ func TestKubernetesWorkspaceHelperConfig(t *testing.T) {
 				t.Fatalf("helper=%#v enabled=%t error=%v", helper, enabled, helperErr)
 			}
 		})
+	}
+}
+
+func TestKubernetesTestStepNodes(t *testing.T) {
+	nodes := kubernetesTestStepNodes(" coyote-ci-worker , coyote-ci-worker2 ")
+	if len(nodes) != 2 || nodes[0] != "coyote-ci-worker" || nodes[1] != "coyote-ci-worker2" {
+		t.Fatalf("nodes=%#v", nodes)
 	}
 }
 

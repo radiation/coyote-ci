@@ -185,7 +185,7 @@ func TestRestoreArchiveRejectsInvalidInputBeforeCreatingDestination(t *testing.T
 	}
 }
 
-func TestRestoreArchiveRejectsExistingAndBlankDestinations(t *testing.T) {
+func TestRestoreArchiveAcceptsEmptyAndRejectsNonEmptyOrBlankDestinations(t *testing.T) {
 	sourceRoot := t.TempDir()
 	if writeErr := os.WriteFile(filepath.Join(sourceRoot, "source.txt"), []byte("workspace"), 0o644); writeErr != nil {
 		t.Fatalf("write source: %v", writeErr)
@@ -202,8 +202,64 @@ func TestRestoreArchiveRejectsExistingAndBlankDestinations(t *testing.T) {
 	if mkdirErr := os.Mkdir(existingDestination, 0o755); mkdirErr != nil {
 		t.Fatalf("create destination: %v", mkdirErr)
 	}
-	if restoreErr := RestoreArchive(context.Background(), archive, publication, existingDestination); !errors.Is(restoreErr, ErrWorkspaceRevisionDestination) {
-		t.Fatalf("existing destination restore: %v", restoreErr)
+	if restoreErr := RestoreArchive(context.Background(), archive, publication, existingDestination); restoreErr != nil {
+		t.Fatalf("empty destination restore: %v", restoreErr)
+	}
+	if contents, readErr := os.ReadFile(filepath.Join(existingDestination, "source.txt")); readErr != nil || string(contents) != "workspace" {
+		t.Fatalf("empty destination contents=%q err=%v", contents, readErr)
+	}
+	if info, statErr := os.Stat(existingDestination); statErr != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("empty destination mode=%v err=%v", info.Mode(), statErr)
+	}
+	populatedDestination := filepath.Join(t.TempDir(), "populated")
+	if mkdirErr := os.Mkdir(populatedDestination, 0o755); mkdirErr != nil {
+		t.Fatalf("create populated destination: %v", mkdirErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(populatedDestination, "existing.txt"), []byte("existing"), 0o644); writeErr != nil {
+		t.Fatalf("write populated destination: %v", writeErr)
+	}
+	archive, publication, archiveErr = ArchiveDirectory(context.Background(), sourceRoot)
+	if archiveErr != nil {
+		t.Fatalf("archive directory: %v", archiveErr)
+	}
+	defer func() { _ = archive.Close() }()
+	if restoreErr := RestoreArchive(context.Background(), archive, publication, populatedDestination); !errors.Is(restoreErr, ErrWorkspaceRevisionDestination) {
+		t.Fatalf("populated destination restore: %v", restoreErr)
+	}
+}
+
+func TestRestoreArchiveRollsBackExistingDestinationWhenPromotionFails(t *testing.T) {
+	sourceRoot := t.TempDir()
+	if writeErr := os.WriteFile(filepath.Join(sourceRoot, "first.txt"), []byte("first"), 0o644); writeErr != nil {
+		t.Fatalf("write first source: %v", writeErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(sourceRoot, "second.txt"), []byte("second"), 0o644); writeErr != nil {
+		t.Fatalf("write second source: %v", writeErr)
+	}
+	archive, publication, archiveErr := ArchiveDirectory(context.Background(), sourceRoot)
+	if archiveErr != nil {
+		t.Fatalf("archive directory: %v", archiveErr)
+	}
+	defer func() { _ = archive.Close() }()
+	destinationRoot := filepath.Join(t.TempDir(), "restore")
+	if mkdirErr := os.Mkdir(destinationRoot, 0o755); mkdirErr != nil {
+		t.Fatalf("create destination: %v", mkdirErr)
+	}
+	originalRename := workspaceRevisionRename
+	workspaceRevisionRename = func(oldPath string, newPath string) error {
+		if filepath.Base(newPath) == "second.txt" {
+			return errors.New("rename failure")
+		}
+		return originalRename(oldPath, newPath)
+	}
+	t.Cleanup(func() { workspaceRevisionRename = originalRename })
+
+	if restoreErr := RestoreArchive(context.Background(), archive, publication, destinationRoot); restoreErr == nil {
+		t.Fatal("expected promotion failure")
+	}
+	entries, readErr := os.ReadDir(destinationRoot)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("destination entries=%v err=%v", entries, readErr)
 	}
 }
 
