@@ -46,8 +46,8 @@ func (c *clientset) ListPods(ctx context.Context, namespace, selector string) ([
 	pods, err := c.client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	return pods.Items, err
 }
-func (c *clientset) GetPodLogs(ctx context.Context, namespace, name string) (io.ReadCloser, error) {
-	return c.client.CoreV1().Pods(namespace).GetLogs(name, &corev1.PodLogOptions{}).Stream(ctx)
+func (c *clientset) GetPodLogs(ctx context.Context, namespace, name, container string) (io.ReadCloser, error) {
+	return c.client.CoreV1().Pods(namespace).GetLogs(name, &corev1.PodLogOptions{Container: container}).Stream(ctx)
 }
 func backgroundDeletion() *metav1.DeletionPropagation {
 	value := metav1.DeletePropagationBackground

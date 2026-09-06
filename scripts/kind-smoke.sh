@@ -23,6 +23,15 @@ fi
 
 kubectl --context "kind-$cluster_name" -n "$namespace" rollout status deployment/coyote-kubernetes-worker --timeout=180s
 
+deadline=$(( $(date +%s) + timeout_seconds ))
+while (( $(date +%s) < deadline )); do
+  if curl -fsS "$api_url/api/readyz" >/dev/null; then
+    break
+  fi
+  sleep 2
+done
+curl -fsS "$api_url/api/readyz" >/dev/null || { echo "Coyote API is not ready" >&2; exit 1; }
+
 project_result=$(curl -sS -w '\n%{http_code}' -X POST "$api_url/api/projects" \
   -H 'Content-Type: application/json' \
   --data '{"name":"kind smoke","slug":"kind-smoke"}')
@@ -69,10 +78,11 @@ job_json=$(kubectl --context "kind-$cluster_name" -n "$namespace" get job "$job_
 [[ "$(jq -r '.metadata.labels["coyote-ci.io/execution-job-id"] // empty' <<<"$job_json")" != "" ]]
 [[ "$(jq -r '.metadata.labels["coyote-ci.io/build-id"]' <<<"$job_json")" == "$build_id" ]]
 [[ "$(jq -r '.spec.template.spec.automountServiceAccountToken' <<<"$job_json")" == "false" ]]
-if jq -e '[.metadata.labels, .metadata.annotations, .spec.template.metadata.labels, .spec.template.metadata.annotations] | tostring | test("claim"; "i")' <<<"$job_json" >/dev/null; then
-  echo "Kubernetes Job or Pod template contains claim metadata" >&2
+if jq -e '[.metadata.labels, .spec.template.metadata.labels] | tostring | test("claim"; "i")' <<<"$job_json" >/dev/null; then
+  echo "Kubernetes Job or Pod template labels contain claim metadata" >&2
   exit 1
 fi
+jq -e '(.spec.template.metadata.annotations["coyote-ci.io/execution-claim-digest"] // "") | test("^[0-9a-f]{64}$")' <<<"$job_json" >/dev/null
 
 kubectl --context "kind-$cluster_name" -n "$namespace" wait --for=condition=complete "job/$job_name" --timeout="${timeout_seconds}s"
 pod_name=$(kubectl --context "kind-$cluster_name" -n "$namespace" get pods -l "job-name=$job_name" -o jsonpath='{.items[0].metadata.name}')

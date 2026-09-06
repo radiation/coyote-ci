@@ -44,7 +44,7 @@ type Client interface {
 	DeleteJob(context.Context, string, string) error
 	ListJobs(context.Context, string, string) ([]batchv1.Job, error)
 	ListPods(context.Context, string, string) ([]corev1.Pod, error)
-	GetPodLogs(context.Context, string, string) (io.ReadCloser, error)
+	GetPodLogs(context.Context, string, string, string) (io.ReadCloser, error)
 }
 
 type executionService interface {
@@ -62,6 +62,7 @@ type Controller struct {
 	namespace                   string
 	workspacePublicationEnabled bool
 	workspaceHelper             WorkspaceHelperConfig
+	testStepNodeNames           []string
 	active                      *workersvc.WorkerRunnableStep
 	terminalLogsPersisted       map[string]bool
 	lastCancellationCleanupAt   time.Time
@@ -82,6 +83,17 @@ func (c *Controller) WithWorkspacePublicationEnabled(enabled bool) *Controller {
 func (c *Controller) WithWorkspaceHelper(config WorkspaceHelperConfig) *Controller {
 	c.workspaceHelper = config
 	c.workspacePublicationEnabled = true
+	return c
+}
+
+// WithTestStepNodeNames pins sequential steps to Kubernetes nodes for local integration testing.
+func (c *Controller) WithTestStepNodeNames(names []string) *Controller {
+	c.testStepNodeNames = c.testStepNodeNames[:0]
+	for _, name := range names {
+		if trimmed := strings.TrimSpace(name); trimmed != "" {
+			c.testStepNodeNames = append(c.testStepNodeNames, trimmed)
+		}
+	}
 	return c
 }
 
@@ -171,7 +183,7 @@ func (c *Controller) ensureJob(ctx context.Context, step workersvc.WorkerRunnabl
 	if !apierrors.IsNotFound(err) {
 		return nil, err
 	}
-	created, createErr := c.client.CreateJob(ctx, c.namespace, buildJob(c.namespace, step, c.workspaceHelper))
+	created, createErr := c.client.CreateJob(ctx, c.namespace, buildJobWithNodeName(c.namespace, step, c.workspaceHelper, c.testStepNodeName(step.StepIndex)))
 	if createErr == nil {
 		return created, nil
 	}
@@ -223,7 +235,10 @@ func (c *Controller) collectTerminalLogs(ctx context.Context, step workersvc.Wor
 		return err
 	}
 	pod := newestPod(pods)
-	stream, err := c.client.GetPodLogs(ctx, c.namespace, pod.Name)
+	if !buildContainerTerminated(pod) {
+		return nil
+	}
+	stream, err := c.client.GetPodLogs(ctx, c.namespace, pod.Name, "build")
 	if err != nil {
 		return err
 	}
@@ -319,6 +334,10 @@ func (c *Controller) cleanupCanceledJobsIfDue(ctx context.Context) error {
 }
 
 func buildJob(namespace string, step workersvc.WorkerRunnableStep, helpers ...WorkspaceHelperConfig) *batchv1.Job {
+	return buildJobWithNodeName(namespace, step, WorkspaceHelperConfig{}, "", helpers...)
+}
+
+func buildJobWithNodeName(namespace string, step workersvc.WorkerRunnableStep, helper WorkspaceHelperConfig, nodeName string, helpers ...WorkspaceHelperConfig) *batchv1.Job {
 	backoffLimit := int32(0)
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName(step.JobID), Namespace: namespace, Labels: executionLabels(step)}}
 	job.Spec.BackoffLimit = &backoffLimit
@@ -326,7 +345,6 @@ func buildJob(namespace string, step workersvc.WorkerRunnableStep, helpers ...Wo
 		deadline := int64(step.TimeoutSeconds)
 		job.Spec.ActiveDeadlineSeconds = &deadline
 	}
-	helper := WorkspaceHelperConfig{}
 	if len(helpers) > 0 {
 		helper = helpers[0]
 	}
@@ -340,6 +358,7 @@ func buildJob(namespace string, step workersvc.WorkerRunnableStep, helpers ...Wo
 			VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}},
 		}},
 	}
+	podSpec.NodeName = strings.TrimSpace(nodeName)
 	if strings.TrimSpace(helper.Image) != "" {
 		podSpec.ServiceAccountName = helper.ServiceAccountName
 		podSpec.Volumes = append(podSpec.Volumes, helperCapabilityVolume("workspace-prepare-token", workspaceHelperPrepareAudience), helperCapabilityVolume("workspace-publish-token", workspaceHelperPublishAudience), kubernetesAPIIdentityVolume())
@@ -353,12 +372,19 @@ func buildJob(namespace string, step workersvc.WorkerRunnableStep, helpers ...Wo
 	return job
 }
 
+func (c *Controller) testStepNodeName(stepIndex int) string {
+	if stepIndex < 0 || stepIndex >= len(c.testStepNodeNames) {
+		return ""
+	}
+	return c.testStepNodeNames[stepIndex]
+}
+
 func helperCapabilityVolume(name, audience string) corev1.Volume {
 	return corev1.Volume{Name: name, VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{Audience: audience, Path: "token"}}}}}}
 }
 
 func kubernetesAPIIdentityVolume() corev1.Volume {
-	return corev1.Volume{Name: "workspace-kubernetes-api", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{Audience: "https://kubernetes.default.svc", Path: "token"}}, {ConfigMap: &corev1.ConfigMapProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "kube-root-ca.crt"}, Items: []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &corev1.DownwardAPIProjection{Items: []corev1.DownwardAPIVolumeFile{{Path: "namespace", FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}}}}}}}}
+	return corev1.Volume{Name: "workspace-kubernetes-api", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{Path: "token"}}, {ConfigMap: &corev1.ConfigMapProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "kube-root-ca.crt"}, Items: []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &corev1.DownwardAPIProjection{Items: []corev1.DownwardAPIVolumeFile{{Path: "namespace", FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}}}}}}}}
 }
 
 func workspaceHelperEnvironment(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep) []corev1.EnvVar {
@@ -471,4 +497,13 @@ func podResult(pod corev1.Pod, now time.Time) runner.RunStepResult {
 		}
 	}
 	return result
+}
+
+func buildContainerTerminated(pod corev1.Pod) bool {
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == "build" && status.State.Terminated != nil {
+			return true
+		}
+	}
+	return false
 }

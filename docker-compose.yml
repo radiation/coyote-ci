@@ -86,6 +86,11 @@ services:
       DB_NAME: coyote_ci
       DB_SSLMODE: disable
       ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
+      COYOTE_WORKSPACE_HELPER_ENABLED: ${COYOTE_WORKSPACE_HELPER_ENABLED:-false}
+      COYOTE_WORKSPACE_HELPER_KUBECONFIG: /kind/kubeconfig
+      COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT: coyote-workspace-helper
+      COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET: kind-workspace-helper-capability
+      COYOTE_WORKSPACE_REVISION_STORAGE_ROOT: /var/lib/coyote-workspace-revisions
     ports:
       - "8080:8080"
     volumes:
@@ -93,6 +98,8 @@ services:
       - go_mod_cache:/go/pkg/mod
       - go_build_cache:/root/.cache/go-build
       - artifact_data:/var/lib/coyote-artifacts
+      - workspace_revision_data:/var/lib/coyote-workspace-revisions
+      - /tmp/coyote-kind-kubeconfig:/kind/kubeconfig:ro
 
   worker:
     build:
@@ -161,3 +168,4 @@ volumes:
   go_build_cache:
   frontend_node_modules:
   artifact_data:
+  workspace_revision_data:

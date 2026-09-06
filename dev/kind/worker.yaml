@@ -101,5 +101,7 @@ spec:
               value: coyote-ci-worker:kind
             - name: WORKER_KUBERNETES_INTERNAL_API_URL
               value: http://host.docker.internal:8080
+            - name: WORKER_KUBERNETES_TEST_STEP_NODES
+              value: coyote-ci-worker,coyote-ci-worker2
             - name: EMAIL_NOTIFICATIONS_ENABLED
               value: "false"

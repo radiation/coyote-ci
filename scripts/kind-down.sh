@@ -11,3 +11,4 @@ else
 fi
 
 docker compose -f "$repo_root/docker-compose.yml" stop db migrate server
+rm -f /tmp/coyote-kind-kubeconfig

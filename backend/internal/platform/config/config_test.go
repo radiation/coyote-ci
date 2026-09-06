@@ -364,6 +364,7 @@ func TestLoad(t *testing.T) {
 	managedEnvKeys := []string{
 		"WORKER_KUBERNETES_NAMESPACE",
 		"WORKER_KUBERNETES_KUBECONFIG",
+		"WORKER_KUBERNETES_TEST_STEP_NODES",
 		"KUBECONFIG",
 		"COYOTE_WORKSPACE_HELPER_ENABLED",
 		"COYOTE_WORKSPACE_HELPER_KUBECONFIG",
@@ -372,6 +373,7 @@ func TestLoad(t *testing.T) {
 		"COYOTE_WORKSPACE_HELPER_MAX_UPLOAD_SIZE_MB",
 		"COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB",
 		"COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES",
+		"COYOTE_WORKSPACE_REVISION_STORAGE_ROOT",
 		"OIDC_ISSUER_URL",
 		"OIDC_CLIENT_ID",
 		"OIDC_CLIENT_SECRET",
@@ -442,6 +444,14 @@ func TestLoadWorkspaceHelperCapabilityConfig(t *testing.T) {
 	}
 	if cfg.WorkspaceHelperMaxUncompressedSizeMB != 2048 || cfg.WorkspaceHelperMaxArchiveEntries != 20000 {
 		t.Fatalf("workspace limits=%d MiB/%d entries", cfg.WorkspaceHelperMaxUncompressedSizeMB, cfg.WorkspaceHelperMaxArchiveEntries)
+	}
+}
+
+func TestLoadWorkspaceRevisionStorageRoot(t *testing.T) {
+	t.Setenv("COYOTE_WORKSPACE_REVISION_STORAGE_ROOT", "/var/lib/coyote-workspace-revisions")
+
+	if cfg := Load(); cfg.WorkspaceRevisionStorageRoot != "/var/lib/coyote-workspace-revisions" {
+		t.Fatalf("workspace revision storage root=%q", cfg.WorkspaceRevisionStorageRoot)
 	}
 }
 

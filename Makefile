@@ -1,4 +1,4 @@
-.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix kind-up kind-load kind-smoke kind-down
+.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix kind-up kind-load kind-smoke kind-workspace-smoke kind-down
 
 CLI_VERSION ?= dev
 CLI_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -65,6 +65,9 @@ kind-load:
 
 kind-smoke:
 	bash ./scripts/kind-smoke.sh
+
+kind-workspace-smoke:
+	bash ./scripts/kind-workspace-smoke.sh
 
 kind-down:
 	bash ./scripts/kind-down.sh

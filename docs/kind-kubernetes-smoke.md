@@ -8,6 +8,7 @@ Prerequisites: Docker Desktop, `kind`, `kubectl`, `jq`, and `curl`.
 make kind-up
 make kind-load
 make kind-smoke
+make kind-workspace-smoke
 make kind-down
 ```
 
@@ -17,6 +18,6 @@ The `coyote-ci` kind cluster has one control-plane and two worker nodes. `kind-u
 
 `kind-down` deletes the cluster and stops the Compose database, migration, and server services started for the harness. It preserves the normal Compose volume for subsequent local development.
 
-The smoke request uses the only currently supported shape: checkout-free, single-step, source workspace input, no cache, no artifacts, and no workspace revision storage. It submits an inline Alpine pipeline via the normal Coyote API, then checks the deterministic Coyote Job, Pod completion, persisted Coyote build/step state, persisted terminal logs, Coyote labels, no claim metadata, and `automountServiceAccountToken: false`. It also verifies the controller identity has only the declared namespace-scoped permissions and cannot read secrets.
+`kind-smoke` keeps the checkout-free, single-step baseline. `kind-workspace-smoke` submits a normal two-step pipeline through the Coyote API: `generate` publishes its workspace revision on one kind worker node, and `consume` restores that revision on the other node before checking its generated file. The local-only worker configuration pins the first two step indices to the two kind worker nodes; public pipeline syntax does not expose Kubernetes node selection. It verifies the deterministic Coyote Jobs, helper lifecycle, independent `emptyDir` workspaces, distinct Pod nodes, persisted build/step state, persisted terminal logs, Coyote labels, no claim tokens in metadata, and `automountServiceAccountToken: false`. It also verifies the controller identity has only the declared namespace-scoped permissions and cannot read secrets.
 
 Cancellation and restart/reclaim are intentionally deferred to a dedicated, non-brittle follow-up smoke slice. This harness does not add Helm, cloud Kubernetes deployment, workspace restore/publication helpers, cache, artifacts, or multi-step execution.

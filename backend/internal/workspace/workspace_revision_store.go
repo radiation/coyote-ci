@@ -32,6 +32,8 @@ var (
 	ErrWorkspaceRevisionDestination      = errors.New("workspace revision destination already exists")
 )
 
+var workspaceRevisionRename = os.Rename
+
 // WorkspaceRevisionStore holds immutable workspace bytes independently from
 // the repository that makes their publication authoritative.
 type WorkspaceRevisionStore interface {
@@ -75,7 +77,7 @@ func ArchiveDirectory(ctx context.Context, sourceRoot string) (io.ReadCloser, do
 	return &removingReadCloser{ReadCloser: reader, path: archivePath}, publicationForWorkspaceRevision("transport/source.tar.gz", digest, size), nil
 }
 
-// RestoreArchive verifies and safely extracts an archive into an absent destination.
+// RestoreArchive verifies and safely extracts an archive into an absent or empty destination.
 func RestoreArchive(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, destinationRoot string) error {
 	return RestoreArchiveWithLimits(ctx, archive, publication, destinationRoot, WorkspaceRevisionRestoreLimits{})
 }
@@ -93,15 +95,30 @@ func RestoreArchiveWithLimits(ctx context.Context, archive io.Reader, publicatio
 	if strings.TrimSpace(destinationRoot) == "" {
 		return fmt.Errorf("destination root is required")
 	}
-	if _, statErr := os.Stat(destinationRoot); statErr == nil {
-		return ErrWorkspaceRevisionDestination
+	destinationExists := false
+	if destinationInfo, statErr := os.Stat(destinationRoot); statErr == nil {
+		if !destinationInfo.IsDir() {
+			return ErrWorkspaceRevisionDestination
+		}
+		entries, readErr := os.ReadDir(destinationRoot)
+		if readErr != nil {
+			return readErr
+		}
+		if len(entries) != 0 {
+			return ErrWorkspaceRevisionDestination
+		}
+		destinationExists = true
 	} else if !os.IsNotExist(statErr) {
 		return statErr
 	}
 	if mkdirErr := os.MkdirAll(filepath.Dir(destinationRoot), 0o755); mkdirErr != nil {
 		return mkdirErr
 	}
-	staging, stagingErr := os.MkdirTemp(filepath.Dir(destinationRoot), ".workspace-restore-*")
+	stagingParent := filepath.Dir(destinationRoot)
+	if destinationExists {
+		stagingParent = destinationRoot
+	}
+	staging, stagingErr := os.MkdirTemp(stagingParent, ".workspace-restore-*")
 	if stagingErr != nil {
 		return stagingErr
 	}
@@ -129,7 +146,26 @@ func RestoreArchiveWithLimits(ctx context.Context, archive io.Reader, publicatio
 	if publication.SizeBytes == nil || countingReader.size != *publication.SizeBytes {
 		return ErrWorkspaceRevisionDigestMismatch
 	}
-	return os.Rename(staging, destinationRoot)
+	if destinationExists {
+		entries, readErr := os.ReadDir(staging)
+		if readErr != nil {
+			return readErr
+		}
+		promoted := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			destinationPath := filepath.Join(destinationRoot, entry.Name())
+			if renameErr := workspaceRevisionRename(filepath.Join(staging, entry.Name()), destinationPath); renameErr != nil {
+				var cleanupErr error
+				for _, promotedPath := range promoted {
+					cleanupErr = errors.Join(cleanupErr, os.RemoveAll(promotedPath))
+				}
+				return errors.Join(renameErr, cleanupErr)
+			}
+			promoted = append(promoted, destinationPath)
+		}
+		return nil
+	}
+	return workspaceRevisionRename(staging, destinationRoot)
 }
 
 type removingReadCloser struct {
