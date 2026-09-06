@@ -39,7 +39,7 @@ func TestStepExecutionContextBuilder_BindsPersistedJobAsExecutionPlan(t *testing
 		Name:           "verify",
 		StepIndex:      0,
 		Status:         domain.ExecutionJobStatusRunning,
-		Image:          "golang:1.26",
+		Image:          "golang:1.27.1",
 		WorkingDir:     "backend",
 		Command:        []string{"sh", "-c", "go test ./..."},
 		Environment:    map[string]string{"GOFLAGS": "-mod=readonly"},
@@ -88,7 +88,7 @@ func TestStepExecutionContextBuilder_BindsPersistedJobAsExecutionPlan(t *testing
 	if executionContext.ExecutionRequest.TimeoutSeconds != timeoutSeconds {
 		t.Fatalf("expected timeout %d, got %d", timeoutSeconds, executionContext.ExecutionRequest.TimeoutSeconds)
 	}
-	if executionContext.ExecutionImage != "golang:1.26" || executionContext.ExecutionRequest.Image != "golang:1.26" {
+	if executionContext.ExecutionImage != "golang:1.27.1" || executionContext.ExecutionRequest.Image != "golang:1.27.1" {
 		t.Fatalf("expected persisted image, got context=%q request=%q", executionContext.ExecutionImage, executionContext.ExecutionRequest.Image)
 	}
 	if executionContext.BuildSource.Ref != "main" || executionContext.BuildSource.CommitSHA != "abc123" || !executionContext.BuildSource.HasSource {

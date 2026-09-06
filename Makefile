@@ -1,4 +1,4 @@
-.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix kind-up kind-load kind-smoke kind-workspace-smoke kind-down
+.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix kind-up kind-load kind-smoke kind-workspace-smoke kind-reliability-smoke kind-down
 
 CLI_VERSION ?= dev
 CLI_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -69,6 +69,9 @@ kind-smoke:
 kind-workspace-smoke:
 	bash ./scripts/kind-workspace-smoke.sh
 
+kind-reliability-smoke:
+	bash ./scripts/kind-reliability-smoke.sh
+
 kind-down:
 	bash ./scripts/kind-down.sh
 
@@ -90,13 +93,10 @@ check-go-version:
 	@echo "Checking Go version consistency (source of truth: backend/go.mod)..."
 	@set -e; \
 	go_version=$$(grep '^GO_VERSION=' .env | cut -d= -f2); \
-	go_major_minor=$$(echo $$go_version | awk -F. '{print $$1"."$$2}'); \
 	mod_go=$$(awk '/^go / {print $$2; exit}' backend/go.mod); \
-	mod_toolchain=$$(awk '/^toolchain / {print $$2; exit}' backend/go.mod); \
 	pipeline_image=$$(awk '/^  image: golang:/ {sub("  image: golang:", "", $$0); print $$0; exit}' .coyote/pipeline.yml); \
 	if [ -z "$$go_version" ]; then echo "ERROR: GO_VERSION is missing in .env" >&2; exit 1; fi; \
-	if [ "$$mod_go" != "$$go_major_minor" ]; then echo "ERROR: backend/go.mod go version ($$mod_go) does not match .env major.minor ($$go_major_minor)" >&2; exit 1; fi; \
-	if [ "$$mod_toolchain" != "go$$go_version" ]; then echo "ERROR: backend/go.mod toolchain ($$mod_toolchain) does not match .env GO_VERSION ($$go_version)" >&2; exit 1; fi; \
+	if [ "$$mod_go" != "$$go_version" ]; then echo "ERROR: backend/go.mod go version ($$mod_go) does not match .env GO_VERSION ($$go_version)" >&2; exit 1; fi; \
 	if [ "$$pipeline_image" != "$$go_version" ]; then echo "ERROR: .coyote/pipeline.yml golang image ($$pipeline_image) does not match .env GO_VERSION ($$go_version)" >&2; exit 1; fi; \
 	dockerfile_default=$$(grep '^ARG GO_VERSION=' backend/Dockerfile | head -1 | cut -d= -f2); \
 	if [ -z "$$dockerfile_default" ]; then echo "ERROR: backend/Dockerfile must have ARG GO_VERSION=<version>" >&2; exit 1; fi; \

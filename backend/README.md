@@ -30,7 +30,7 @@ See [docs/state-machine.md](docs/state-machine.md) for build/step lifecycle deta
 
 ## Prerequisites
 
-- Go 1.26+
+- Go 1.27+
 - Docker & Docker Compose
 - PostgreSQL 17 (provided via Compose)
 
@@ -174,7 +174,7 @@ Preset shorthand:
 ```yaml
 version: 1
 pipeline:
-  image: golang:1.26.3
+  image: golang:1.27.1
   cache:
     preset: golang
     scope: job

@@ -12,7 +12,7 @@ const testImmutableGolangRef = "golang@sha256:1e598ea5752ae26c093b746fd73c5095af
 
 func TestDeterministicPublisherPublish_ResolvesTaggedImageToImmutableDigest(t *testing.T) {
 	repoRoot := t.TempDir()
-	mustWrite(t, filepath.Join(repoRoot, ".coyote", "pipeline.yml"), []byte("version: 1\npipeline:\n  image: golang:1.26.3\n"))
+	mustWrite(t, filepath.Join(repoRoot, ".coyote", "pipeline.yml"), []byte("version: 1\npipeline:\n  image: golang:1.27.1\n"))
 
 	var calls [][]string
 	type contextKey string
@@ -25,9 +25,9 @@ func TestDeterministicPublisherPublish_ResolvesTaggedImageToImmutableDigest(t *t
 			}
 			calls = append(calls, append([]string(nil), args...))
 			switch {
-			case len(args) == 2 && args[0] == "pull" && args[1] == "golang:1.26.3":
+			case len(args) == 2 && args[0] == "pull" && args[1] == "golang:1.27.1":
 				return []byte("pulled"), nil
-			case len(args) == 5 && args[0] == "image" && args[1] == "inspect" && args[4] == "golang:1.26.3":
+			case len(args) == 5 && args[0] == "image" && args[1] == "inspect" && args[4] == "golang:1.27.1":
 				return []byte(testImmutableGolangRef + "\n"), nil
 			default:
 				return nil, errors.New("unexpected docker invocation")

@@ -57,8 +57,8 @@ func TestBuildServiceResolveExecutionImageFallbacks(t *testing.T) {
 		t.Fatalf("expected default image for invalid yaml, got %q", got)
 	}
 
-	pipelineYAML := "version: 1\npipeline:\n  image: golang:1.26\nsteps:\n  - name: test\n    run: go test ./...\n"
-	if got := svc.resolveExecutionImage(domain.Build{PipelineConfigYAML: stringPtr(pipelineYAML)}); got != "golang:1.26" {
+	pipelineYAML := "version: 1\npipeline:\n  image: golang:1.27.1\nsteps:\n  - name: test\n    run: go test ./...\n"
+	if got := svc.resolveExecutionImage(domain.Build{PipelineConfigYAML: stringPtr(pipelineYAML)}); got != "golang:1.27.1" {
 		t.Fatalf("expected pipeline image, got %q", got)
 	}
 }

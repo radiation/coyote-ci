@@ -22,7 +22,7 @@ func TestBuildService_CreateBuildFromPipeline_PersistsDurableJobs(t *testing.T) 
 version: 1
 pipeline:
   name: backend-ci
-  image: golang:1.26
+  image: golang:1.27.1
 steps:
   - name: lint
     run: go vet ./...
@@ -57,8 +57,8 @@ artifacts:
 	}
 
 	job := jobs[0]
-	if job.Image != "golang:1.26" {
-		t.Fatalf("expected persisted pipeline image golang:1.26, got %q", job.Image)
+	if job.Image != "golang:1.27.1" {
+		t.Fatalf("expected persisted pipeline image golang:1.27.1, got %q", job.Image)
 	}
 	if len(job.Command) != 3 || job.Command[2] != "go vet ./..." {
 		t.Fatalf("expected frozen command from resolved pipeline step, got %#v", job.Command)

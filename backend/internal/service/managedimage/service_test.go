@@ -113,7 +113,7 @@ func TestRefreshManagedPipelineImage_FingerprintChangeCreatesVersionAndWritesBac
 	if err := os.MkdirAll(filepath.Dir(pipelinePath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(pipelinePath, []byte("version: 1\npipeline:\n  image: golang:1.26.3\n"), 0o644); err != nil {
+	if err := os.WriteFile(pipelinePath, []byte("version: 1\npipeline:\n  image: golang:1.27.1\n"), 0o644); err != nil {
 		t.Fatalf("write pipeline: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Join(repoRoot, "backend"), 0o755); err != nil {
@@ -229,7 +229,7 @@ func TestRefreshManagedPipelineImage_RejectsMutableTagFromPublisher(t *testing.T
 	if err := os.MkdirAll(filepath.Dir(pipelinePath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(pipelinePath, []byte("version: 1\npipeline:\n  image: golang:1.26.3\n"), 0o644); err != nil {
+	if err := os.WriteFile(pipelinePath, []byte("version: 1\npipeline:\n  image: golang:1.27.1\n"), 0o644); err != nil {
 		t.Fatalf("write pipeline: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Join(repoRoot, "backend"), 0o755); err != nil {
@@ -272,7 +272,7 @@ func TestRefreshManagedPipelineImage_RepoURLVariantLookup(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(pipelinePath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(pipelinePath, []byte("version: 1\npipeline:\n  image: golang:1.26.3\n"), 0o644); err != nil {
+	if err := os.WriteFile(pipelinePath, []byte("version: 1\npipeline:\n  image: golang:1.27.1\n"), 0o644); err != nil {
 		t.Fatalf("write pipeline: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Join(repoRoot, "backend"), 0o755); err != nil {

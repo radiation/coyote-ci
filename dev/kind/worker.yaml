@@ -103,5 +103,7 @@ spec:
               value: http://host.docker.internal:8080
             - name: WORKER_KUBERNETES_TEST_STEP_NODES
               value: coyote-ci-worker,coyote-ci-worker2
+            - name: WORKER_STEP_LEASE_SECONDS
+              value: "30"
             - name: EMAIL_NOTIFICATIONS_ENABLED
               value: "false"

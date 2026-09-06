@@ -184,7 +184,7 @@ func TestRunner_PrepareBuild_WorkspaceFailurePropagatesError(t *testing.T) {
 func TestRunner_ValidationBranchesAvoidDockerExecution(t *testing.T) {
 	r := New(Options{Workspace: &fakeWorkspace{preparePath: "/tmp/ws/build-1"}, DefaultImage: " alpine:3.20 ", Executor: &fakeExecutor{}})
 
-	if got := r.ResolveStepImage(" golang:1.26 "); got != "golang:1.26" {
+	if got := r.ResolveStepImage(" golang:1.27.1 "); got != "golang:1.27.1" {
 		t.Fatalf("expected step image to win, got %q", got)
 	}
 	if got := r.ResolveStepImage(" "); got != "alpine:3.20" {

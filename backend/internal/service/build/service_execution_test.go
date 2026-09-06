@@ -1442,7 +1442,7 @@ func TestBuildService_RunStep_WritesStructuredStepAndBuildMarkers(t *testing.T) 
 	logStore := logs.NewMemorySink()
 
 	svc := NewBuildService(repo, r, logStore)
-	svc.SetDefaultExecutionImage("golang:1.26")
+	svc.SetDefaultExecutionImage("golang:1.27.1")
 
 	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{
 		BuildID:    "build-1",
@@ -1471,11 +1471,11 @@ func TestBuildService_RunStep_WritesStructuredStepAndBuildMarkers(t *testing.T) 
 
 	assertMessagesContain(t, messages,
 		"Starting build",
-		"Pipeline image: golang:1.26",
+		"Pipeline image: golang:1.27.1",
 		"Workspace: /workspace",
 		"Steps: 1",
 		"==> Step 1/1: step-1",
-		"Image: golang:1.26",
+		"Image: golang:1.27.1",
 		"Working directory: /workspace",
 		"Command:",
 		"echo \"hello\"",
@@ -1498,7 +1498,7 @@ func TestBuildService_RunStep_WritesFailureMarkerWithExitCode(t *testing.T) {
 	logStore := logs.NewMemorySink()
 
 	svc := NewBuildService(repo, r, logStore)
-	svc.SetDefaultExecutionImage("golang:1.26")
+	svc.SetDefaultExecutionImage("golang:1.27.1")
 
 	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{
 		BuildID:    "build-1",
@@ -1925,7 +1925,7 @@ func TestBuildService_RunStep_EmitsTerminalSummaryInStepChunkFlow(t *testing.T) 
 	logStore := logs.NewMemorySink()
 
 	svc := NewBuildService(repo, r, logStore)
-	svc.SetDefaultExecutionImage("golang:1.26")
+	svc.SetDefaultExecutionImage("golang:1.27.1")
 
 	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{
 		BuildID:    "build-1",

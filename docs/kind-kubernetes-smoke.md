@@ -9,6 +9,7 @@ make kind-up
 make kind-load
 make kind-smoke
 make kind-workspace-smoke
+make kind-reliability-smoke
 make kind-down
 ```
 
@@ -20,4 +21,6 @@ The `coyote-ci` kind cluster has one control-plane and two worker nodes. `kind-u
 
 `kind-smoke` keeps the checkout-free, single-step baseline. `kind-workspace-smoke` submits a normal two-step pipeline through the Coyote API: `generate` publishes its workspace revision on one kind worker node, and `consume` restores that revision on the other node before checking its generated file. The local-only worker configuration pins the first two step indices to the two kind worker nodes; public pipeline syntax does not expose Kubernetes node selection. It verifies the deterministic Coyote Jobs, helper lifecycle, independent `emptyDir` workspaces, distinct Pod nodes, persisted build/step state, persisted terminal logs, Coyote labels, no claim tokens in metadata, and `automountServiceAccountToken: false`. It also verifies the controller identity has only the declared namespace-scoped permissions and cannot read secrets.
 
-Cancellation and restart/reclaim are intentionally deferred to a dedicated, non-brittle follow-up smoke slice. This harness does not add Helm, cloud Kubernetes deployment, workspace restore/publication helpers, cache, artifacts, or multi-step execution.
+`kind-reliability-smoke` validates DB-first cancellation and controller restart/lease reclaim. It cancels a running Coyote-submitted Job through the API and verifies durable canceled build/step state, Job/Pod cleanup, and no terminal overwrite after another reconciliation window. It also scales the controller deployment to zero while a build Job continues, reads the harness-only 30-second lease from the deployed worker, waits for it to expire, restarts the controller, and verifies it adopts the same deterministic Job without rerunning the build before persisting success and terminal logs.
+
+This harness does not add Helm, cloud Kubernetes deployment, cache, artifacts, or production controller concurrency changes.

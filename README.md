@@ -7,7 +7,7 @@
 [![Lint](https://github.com/radiation/coyote-ci/actions/workflows/lint.yml/badge.svg)](https://github.com/radiation/coyote-ci/actions/workflows/lint.yml)
 [![Actionlint](https://github.com/radiation/coyote-ci/actions/workflows/actionlint.yml/badge.svg)](https://github.com/radiation/coyote-ci/actions/workflows/actionlint.yml)
 [![codecov](https://codecov.io/gh/radiation/coyote-ci/branch/main/graph/badge.svg)](https://codecov.io/gh/radiation/coyote-ci)
-[![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8.svg)](backend/go.mod)
+[![Go 1.27](https://img.shields.io/badge/go-1.27-00ADD8.svg)](backend/go.mod)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-yellow)](LICENSE)
 
 Coyote CI is a greenfield CI/orchestration system focused on a small, correct, and understandable core.
@@ -125,7 +125,7 @@ Deployment guidance for GCS is in [deploy/docs/gcp-gcs-artifacts.md](deploy/docs
 ## Prerequisites
 
 - Docker + Docker Compose
-- Go 1.26+ (see `backend/go.mod` for exact toolchain version)
+- Go 1.27+ (see `backend/go.mod` for exact toolchain version)
 - Node.js 22+ (frontend)
 
 ## Go version policy
