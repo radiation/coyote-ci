@@ -1,8 +1,6 @@
 module github.com/radiation/coyote-ci/backend
 
-go 1.26.0
-
-toolchain go1.26.6
+go 1.26.6
 
 require (
 	cloud.google.com/go/storage v1.66.0
