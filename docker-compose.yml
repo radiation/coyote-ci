@@ -86,7 +86,7 @@ services:
       DB_NAME: coyote_ci
       DB_SSLMODE: disable
       ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
-      COYOTE_WORKSPACE_HELPER_ENABLED: "true"
+      COYOTE_WORKSPACE_HELPER_ENABLED: ${COYOTE_WORKSPACE_HELPER_ENABLED:-false}
       COYOTE_WORKSPACE_HELPER_KUBECONFIG: /kind/kubeconfig
       COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT: coyote-workspace-helper
       COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET: kind-workspace-helper-capability

@@ -24,6 +24,6 @@ kind export kubeconfig --name "$cluster_name" --kubeconfig "$kubeconfig_path"
 sed -i.bak -e 's#https://127\.0\.0\.1:#https://host.docker.internal:#' -e 's#https://0\.0\.0\.0:#https://host.docker.internal:#' -e 's#^    certificate-authority-data:.*#    insecure-skip-tls-verify: true#' "$kubeconfig_path"
 rm -f "$kubeconfig_path.bak"
 
-AUTH_MODE=disabled docker compose -f "$repo_root/docker-compose.yml" up -d db migrate server
+AUTH_MODE=disabled COYOTE_WORKSPACE_HELPER_ENABLED=true docker compose -f "$repo_root/docker-compose.yml" up -d db migrate server
 kubectl --context "kind-$cluster_name" apply -f "$repo_root/dev/kind/worker.yaml"
 echo "kind environment is ready; run make kind-load, then make kind-smoke"
