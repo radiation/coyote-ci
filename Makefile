@@ -93,11 +93,13 @@ check-go-version:
 	@echo "Checking Go version consistency (source of truth: backend/go.mod)..."
 	@set -e; \
 	go_version=$$(grep '^GO_VERSION=' .env | cut -d= -f2); \
+	go_major_minor=$$(echo $$go_version | awk -F. '{print $$1"."$$2}'); \
 	mod_go=$$(awk '/^go / {print $$2; exit}' backend/go.mod); \
+	mod_major_minor=$$(echo $$mod_go | awk -F. '{print $$1"."$$2}'); \
 	mod_toolchain=$$(awk '/^toolchain / {print $$2; exit}' backend/go.mod); \
 	pipeline_image=$$(awk '/^  image: golang:/ {sub("  image: golang:", "", $$0); print $$0; exit}' .coyote/pipeline.yml); \
 	if [ -z "$$go_version" ]; then echo "ERROR: GO_VERSION is missing in .env" >&2; exit 1; fi; \
-	if [ "$$mod_go" != "$$go_version" ]; then echo "ERROR: backend/go.mod go version ($$mod_go) does not match .env GO_VERSION ($$go_version)" >&2; exit 1; fi; \
+ 	if [ -n "$$mod_toolchain" ] && [ "$$mod_toolchain" != "go$$go_version" ]; then echo "ERROR: backend/go.mod toolchain ($$mod_toolchain) does not match .env GO_VERSION ($$go_version)" >&2; exit 1; fi; \
 	if [ "$$mod_toolchain" != "go$$go_version" ]; then echo "ERROR: backend/go.mod toolchain ($$mod_toolchain) does not match .env GO_VERSION ($$go_version)" >&2; exit 1; fi; \
 	if [ "$$pipeline_image" != "$$go_version" ]; then echo "ERROR: .coyote/pipeline.yml golang image ($$pipeline_image) does not match .env GO_VERSION ($$go_version)" >&2; exit 1; fi; \
 	dockerfile_default=$$(grep '^ARG GO_VERSION=' backend/Dockerfile | head -1 | cut -d= -f2); \
