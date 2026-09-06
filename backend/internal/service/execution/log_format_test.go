@@ -9,14 +9,14 @@ import (
 )
 
 func TestFormatBuildStartLines(t *testing.T) {
-	lines := formatBuildStartLines("golang:1.26", "/workspace", 3)
+	lines := formatBuildStartLines("golang:1.27.1", "/workspace", 3)
 	if len(lines) != 4 {
 		t.Fatalf("expected 4 header lines, got %d", len(lines))
 	}
 	if lines[0] != "Starting build" {
 		t.Fatalf("unexpected first line: %q", lines[0])
 	}
-	if lines[1] != "Pipeline image: golang:1.26" {
+	if lines[1] != "Pipeline image: golang:1.27.1" {
 		t.Fatalf("unexpected image line: %q", lines[1])
 	}
 	if lines[2] != "Workspace: /workspace" {
@@ -28,11 +28,11 @@ func TestFormatBuildStartLines(t *testing.T) {
 }
 
 func TestFormatStepStartAndEndLines(t *testing.T) {
-	start := formatStepStartLines(1, 3, "setup", "golang:1.26", "/workspace", "echo \"hello\"")
+	start := formatStepStartLines(1, 3, "setup", "golang:1.27.1", "/workspace", "echo \"hello\"")
 	if start[0] != "==> Step 1/3: setup" {
 		t.Fatalf("unexpected step start marker: %q", start[0])
 	}
-	if start[1] != "Image: golang:1.26" {
+	if start[1] != "Image: golang:1.27.1" {
 		t.Fatalf("unexpected image line: %q", start[1])
 	}
 	if start[2] != "Working directory: /workspace" {

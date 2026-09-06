@@ -6,7 +6,7 @@ func TestResolveKey_DeterministicAndDistinctByScope(t *testing.T) {
 	input := KeyInput{
 		Scope:          "job",
 		JobIdentity:    "job-1",
-		Image:          "golang:1.26",
+		Image:          "golang:1.27.1",
 		Platform:       "linux/amd64",
 		Paths:          []string{"/root/.cache/go-build", "/go/pkg/mod"},
 		KeyFilesDigest: "abc",
@@ -19,7 +19,7 @@ func TestResolveKey_DeterministicAndDistinctByScope(t *testing.T) {
 	k2, err := ResolveKey(KeyInput{
 		Scope:          "job",
 		JobIdentity:    "job-1",
-		Image:          "golang:1.26",
+		Image:          "golang:1.27.1",
 		Platform:       "linux/amd64",
 		Paths:          []string{"/go/pkg/mod", "/root/.cache/go-build"},
 		KeyFilesDigest: "abc",
@@ -34,7 +34,7 @@ func TestResolveKey_DeterministicAndDistinctByScope(t *testing.T) {
 	kBuild, err := ResolveKey(KeyInput{
 		Scope:          "build",
 		BuildID:        "build-1",
-		Image:          "golang:1.26",
+		Image:          "golang:1.27.1",
 		Platform:       "linux/amd64",
 		Paths:          []string{"/go/pkg/mod", "/root/.cache/go-build"},
 		KeyFilesDigest: "abc",
@@ -49,7 +49,7 @@ func TestResolveKey_DeterministicAndDistinctByScope(t *testing.T) {
 	kOtherJob, err := ResolveKey(KeyInput{
 		Scope:          "job",
 		JobIdentity:    "job-2",
-		Image:          "golang:1.26",
+		Image:          "golang:1.27.1",
 		Platform:       "linux/amd64",
 		Paths:          []string{"/go/pkg/mod", "/root/.cache/go-build"},
 		KeyFilesDigest: "abc",

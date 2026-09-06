@@ -125,7 +125,7 @@ Deployment guidance for GCS is in [deploy/docs/gcp-gcs-artifacts.md](deploy/docs
 ## Prerequisites
 
 - Docker + Docker Compose
-- Go 1.26+ (see `backend/go.mod` for exact toolchain version)
+- Go 1.27+ (see `backend/go.mod` for exact toolchain version)
 - Node.js 22+ (frontend)
 
 ## Go version policy

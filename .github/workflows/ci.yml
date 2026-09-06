@@ -79,7 +79,7 @@ jobs:
         working-directory: backend
         shell: bash
         run: |
-          # Avoid packages without test files here; Go 1.26 coverage can fail on
+          # Avoid packages without test files here; Go 1.27 coverage can fail on
           # those packages in this repo even though plain `go test ./...` passes.
           mapfile -t packages < <(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... | sed '/^$/d')
           if [ "${#packages[@]}" -eq 0 ]; then
