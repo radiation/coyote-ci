@@ -61,35 +61,6 @@ services:
       - workspace_revision_data:/var/lib/coyote-workspaces
       - ${COYOTE_WORKSPACE_HELPER_KUBECONFIG_HOST_PATH:-/opt/coyote-ci/gke-verifier-kubeconfig}:/etc/coyote/gke-verifier-kubeconfig:ro
 
-  worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      args:
-        GO_VERSION: ${GO_VERSION}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    environment:
-      ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
-      DATABASE_URL: ${DATABASE_URL}
-
-      ARTIFACT_STORAGE_PROVIDER: ${ARTIFACT_STORAGE_PROVIDER}
-      ARTIFACT_GCS_BUCKET: ${ARTIFACT_GCS_BUCKET}
-      ARTIFACT_GCS_PREFIX: ${ARTIFACT_GCS_PREFIX}
-      ARTIFACT_GCS_PROJECT: ${ARTIFACT_GCS_PROJECT}
-      COYOTE_PUBLIC_URL: ${COYOTE_PUBLIC_URL:-}
-
-      WORKER_EXECUTION_WORKSPACE_ROOT: /tmp/coyote-builds
-      WORKER_MOUNT_DOCKER_SOCKET: "true"
-    entrypoint: ["/app/worker"]
-    volumes:
-      - artifact_data:/var/lib/coyote-artifacts
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /tmp/coyote-builds:/tmp/coyote-builds
-
   frontend:
     build:
       context: ./frontend
