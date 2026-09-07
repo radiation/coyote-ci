@@ -13,6 +13,7 @@ import (
 type Config struct {
 	AppPort           string
 	DatabaseURLValue  string
+	DatabaseURLFile   string
 	DBHost            string
 	DBPort            string
 	DBUser            string
@@ -91,6 +92,7 @@ func Load() Config {
 	return Config{
 		AppPort:           getEnv("APP_PORT", "8080"),
 		DatabaseURLValue:  getEnv("DATABASE_URL", ""),
+		DatabaseURLFile:   getEnv("DATABASE_URL_FILE", ""),
 		DBHost:            getEnv("DB_HOST", "localhost"),
 		DBPort:            getEnv("DB_PORT", "5432"),
 		DBUser:            getEnv("DB_USER", "coyote"),
@@ -165,9 +167,20 @@ func Load() Config {
 	}
 }
 
-func (c Config) DatabaseURL() string {
+func (c Config) DatabaseURL() (string, error) {
+	if databaseURLFile := strings.TrimSpace(c.DatabaseURLFile); databaseURLFile != "" {
+		contents, err := os.ReadFile(databaseURLFile)
+		if err != nil {
+			return "", fmt.Errorf("read DATABASE_URL_FILE %q: %w", databaseURLFile, err)
+		}
+		if databaseURL := strings.TrimSpace(string(contents)); databaseURL != "" {
+			return databaseURL, nil
+		}
+		return "", fmt.Errorf("DATABASE_URL_FILE %q is empty", databaseURLFile)
+	}
+
 	if databaseURL := strings.TrimSpace(c.DatabaseURLValue); databaseURL != "" {
-		return databaseURL
+		return databaseURL, nil
 	}
 
 	return fmt.Sprintf(
@@ -178,11 +191,21 @@ func (c Config) DatabaseURL() string {
 		c.DBPort,
 		c.DBName,
 		c.DBSSLMode,
-	)
+	), nil
 }
 
 func (c Config) UsesDatabaseURL() bool {
-	return strings.TrimSpace(c.DatabaseURLValue) != ""
+	return strings.TrimSpace(c.DatabaseURLFile) != "" || strings.TrimSpace(c.DatabaseURLValue) != ""
+}
+
+func (c Config) DatabaseConfigMode() string {
+	if strings.TrimSpace(c.DatabaseURLFile) != "" {
+		return "DATABASE_URL_FILE"
+	}
+	if strings.TrimSpace(c.DatabaseURLValue) != "" {
+		return "DATABASE_URL"
+	}
+	return "discrete DB_* settings"
 }
 
 func getEnv(key, fallback string) string {

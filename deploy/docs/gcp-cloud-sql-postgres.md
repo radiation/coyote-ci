@@ -12,7 +12,7 @@ Coyote runtime requirements stay the same across providers:
 
 Set these environment variables for both backend and worker:
 
-- `DATABASE_URL` (recommended)
+- `DATABASE_URL` (recommended for direct environment injection) or `DATABASE_URL_FILE` (recommended for mounted secret files)
 - `GITHUB_WEBHOOK_SECRET`
 
 Example:
@@ -26,9 +26,15 @@ DB_CONN_MAX_IDLE_TIME=5m
 GITHUB_WEBHOOK_SECRET='replace-me'
 ```
 
+`DATABASE_URL_FILE` reads a file containing the URL, trims surrounding whitespace, and takes precedence over `DATABASE_URL`. For example, a GKE Secret Manager CSI mount can use:
+
+```bash
+DATABASE_URL_FILE=/var/run/secrets/coyote/database-url
+```
+
 Notes:
 
-- Use `DATABASE_URL` for external Postgres. Split `DB_*` fields are still supported, but `DATABASE_URL` is clearer for managed deployments.
+- Use `DATABASE_URL` or `DATABASE_URL_FILE` for external Postgres. Split `DB_*` fields are still supported, but an explicit URL source is clearer for managed deployments.
 - Tune pool values to your Cloud SQL instance size and expected concurrency.
 
 ## Recommended connection approach: Cloud SQL Auth Proxy

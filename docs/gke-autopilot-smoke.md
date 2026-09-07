@@ -15,12 +15,7 @@ The build publishes `linux/amd64` and `linux/arm64`; do not add an Arm node sele
 
 `kubectl` must target the existing GKE cluster. The Coyote server must be externally reachable by Pods, and must be configured with `COYOTE_WORKSPACE_HELPER_ENABLED=true`, a GKE-capable `COYOTE_WORKSPACE_HELPER_KUBECONFIG`, `COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT=coyote-workspace-helper`, and its existing non-secret workspace-helper capability secret. Its filesystem workspace revision store remains server-side for this smoke; execution Pods never mount it.
 
-Create the controller database secret once, without committing it:
-
-```sh
-kubectl -n coyote-ci create secret generic coyote-gke-worker \
-  --from-literal=DATABASE_URL="$DATABASE_URL"
-```
+The worker Kubernetes ServiceAccount `coyote-kubernetes-worker` is externally bootstrapped with its Workload Identity annotation and Cloud SQL Client IAM access. The namespace must also contain the externally bootstrapped Secret Manager secret `coyote-database-url` and `SecretProviderClass/coyote-database-secrets`. The worker Deployment mounts that provider class read-only at `/var/run/secrets/coyote`, reads `DATABASE_URL_FILE=/var/run/secrets/coyote/database-url`, and connects to Cloud SQL only through its loopback Cloud SQL Auth Proxy sidecar at `127.0.0.1:5432` for `bryanchoate:us-central1:bryanchoate-postgres`.
 
 Set the externally reachable server URL. It must not be `localhost`, `host.docker.internal`, or a kind-only service address:
 
@@ -36,7 +31,7 @@ make gke-deploy
 make gke-smoke
 ```
 
-`gke-deploy` applies [the GKE worker manifest](../deploy/kubernetes/gke/worker.yaml), writes only the non-secret helper URL ConfigMap, waits for the controller rollout, and prints its image. `gke-smoke` submits a checkout-free one-step Alpine pipeline through Coyote. It waits through initial Autopilot Pending/capacity provisioning, then verifies the deterministic `coyote-exec-<execution-id>` Job, assigned node, terminal build Pod, durable build/step success, and persisted `GKE_AUTOPILOT_SMOKE_OK` log.
+`gke-deploy` verifies the externally bootstrapped worker ServiceAccount, its expected Workload Identity annotation, and `SecretProviderClass/coyote-database-secrets`; it then applies [the GKE worker manifest](../deploy/kubernetes/gke/worker.yaml), writes only the non-secret helper URL ConfigMap, waits for the controller rollout, and prints its image. `gke-smoke` verifies the mounted database URL path and Cloud SQL proxy sidecar without printing secret contents, then submits a checkout-free one-step Alpine pipeline through Coyote. It waits through initial Autopilot Pending/capacity provisioning, then verifies the deterministic `coyote-exec-<execution-id>` Job, assigned node, terminal build Pod, durable build/step success, and persisted `GKE_AUTOPILOT_SMOKE_OK` log.
 
 The controller Role is namespace-scoped to Jobs and Pods. The helper Role is namespace-scoped to reading its own Pod status. Build containers retain `automountServiceAccountToken: false` and receive only `/workspace` plus pipeline-configured environment; they are not bound to a Google service account and receive no database, helper, Kubernetes API, or workspace-store credentials.
 

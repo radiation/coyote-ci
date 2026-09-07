@@ -77,7 +77,10 @@ func main() {
 	logEmailNotificationConfig(cfg)
 	logNotificationLinkConfig(cfg.PublicURL)
 
-	dbURL, dbPoolCfg := dbopen.FromConfig(cfg)
+	dbURL, dbPoolCfg, databaseConfigErr := dbopen.FromConfig(cfg)
+	if databaseConfigErr != nil {
+		log.Fatalf("failed to resolve database configuration: %v", databaseConfigErr)
+	}
 	db, err := platformdb.Open(dbURL, dbPoolCfg)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
