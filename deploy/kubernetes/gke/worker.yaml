@@ -1,9 +1,4 @@
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: coyote-ci
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: coyote-kubernetes-worker

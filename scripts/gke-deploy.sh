@@ -11,6 +11,11 @@ require_command() {
 
 require_command kubectl
 
+if [[ "$namespace" != "coyote-ci" ]]; then
+  echo "GKE_NAMESPACE must be coyote-ci because the GKE worker manifest is namespace-specific" >&2
+  exit 1
+fi
+
 if [[ -z "$api_url" || "$api_url" == *"localhost"* || "$api_url" == *"host.docker.internal"* ]]; then
   echo "COYOTE_INTERNAL_API_URL must be a GKE-reachable Coyote server URL" >&2
   exit 1

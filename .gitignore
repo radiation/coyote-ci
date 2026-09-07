@@ -43,3 +43,6 @@ frontend/node_modules/
 
 # Local scratch/build temp directories (any depth)
 **/tmp/
+
+# Misc
+*.diff

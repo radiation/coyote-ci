@@ -5,7 +5,7 @@ This is the smallest cloud deployment path for the Kubernetes execution controll
 Build and push the bootstrap image as a portable OCI image index before deployment:
 
 ```sh
-bash scripts/gke-image-build.sh
+make gke-image-build
 docker buildx imagetools inspect us-central1-docker.pkg.dev/bryanchoate/coyote-ci/coyote-worker:gke-smoke
 ```
 
