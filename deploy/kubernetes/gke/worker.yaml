@@ -1,0 +1,115 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: coyote-ci
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coyote-kubernetes-worker
+  namespace: coyote-ci
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coyote-workspace-helper
+  namespace: coyote-ci
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coyote-kubernetes-worker
+  namespace: coyote-ci
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coyote-workspace-helper
+  namespace: coyote-ci
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coyote-kubernetes-worker
+  namespace: coyote-ci
+subjects:
+  - kind: ServiceAccount
+    name: coyote-kubernetes-worker
+    namespace: coyote-ci
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coyote-kubernetes-worker
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coyote-workspace-helper
+  namespace: coyote-ci
+subjects:
+  - kind: ServiceAccount
+    name: coyote-workspace-helper
+    namespace: coyote-ci
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coyote-workspace-helper
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coyote-kubernetes-worker
+  namespace: coyote-ci
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: coyote-kubernetes-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: coyote-kubernetes-worker
+    spec:
+      serviceAccountName: coyote-kubernetes-worker
+      containers:
+        - name: worker
+          image: us-central1-docker.pkg.dev/bryanchoate/coyote-ci/coyote-worker:gke-smoke
+          imagePullPolicy: IfNotPresent
+          command: ["/app/worker"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: coyote-gke-worker
+                  key: DATABASE_URL
+            - name: WORKER_EXECUTION_BACKEND
+              value: kubernetes
+            - name: WORKER_KUBERNETES_NAMESPACE
+              value: coyote-ci
+            - name: WORKER_KUBERNETES_HELPER_IMAGE
+              value: us-central1-docker.pkg.dev/bryanchoate/coyote-ci/coyote-worker:gke-smoke
+            - name: WORKER_KUBERNETES_INTERNAL_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: coyote-gke-worker
+                  key: WORKER_KUBERNETES_INTERNAL_API_URL
+            - name: COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT
+              value: coyote-workspace-helper
+            - name: WORKER_STEP_LEASE_SECONDS
+              value: "45"
+            - name: EMAIL_NOTIFICATIONS_ENABLED
+              value: "false"

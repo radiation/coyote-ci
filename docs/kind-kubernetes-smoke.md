@@ -13,7 +13,7 @@ make kind-reliability-smoke
 make kind-down
 ```
 
-The `coyote-ci` kind cluster has one control-plane and two worker nodes. `kind-up` starts the existing Compose Postgres/server dependencies and applies the namespace-scoped worker service account, Role, RoleBinding, and deployment. The worker runs in kind with in-cluster Kubernetes configuration; it reaches the Compose Postgres instance through Docker Desktop's `host.docker.internal` bridge. No kubeconfig or workspace-revision storage is mounted into the worker.
+The `coyote-ci` kind cluster has one control-plane and two worker nodes. `kind-up` starts the existing Compose Postgres/server dependencies and applies the namespace-scoped worker service account, Role, RoleBinding, and deployment. The worker runs in kind with in-cluster Kubernetes configuration; it reaches the Compose Postgres instance through Docker Desktop's `host.docker.internal` bridge. The server receives a generated kubeconfig from the harness-owned `/tmp/coyote-ci-kind/kubeconfig` path; no kubeconfig or workspace-revision storage is mounted into the worker.
 
 `kind-load` performs a normal local ARM64 Docker build and loads `coyote-ci-worker:kind` into kind. The worker image pull policy is `Never`, so no registry is required.
 
