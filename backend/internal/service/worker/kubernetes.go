@@ -79,7 +79,7 @@ func (w *ExecutionWorkerService) ValidateKubernetesRunnableStep(ctx context.Cont
 				return &KubernetesExecutionCapabilityError{Feature: "an unsupported cache preset"}
 			}
 		}
-		if len(buildStep.ArtifactPaths) > 0 {
+		if len(buildStep.ArtifactPaths) > 0 && !w.kubernetesArtifactLifecycleEnabled {
 			return &KubernetesExecutionCapabilityError{Feature: "artifact collection"}
 		}
 	}
@@ -96,7 +96,7 @@ func (w *ExecutionWorkerService) ValidateKubernetesRunnableStep(ctx context.Cont
 		if loadErr != nil {
 			return fmt.Errorf("loading pipeline for kubernetes capability validation: %w", loadErr)
 		}
-		if len(resolved.Artifacts.Paths) > 0 {
+		if len(resolved.Artifacts.Paths) > 0 && !w.kubernetesArtifactLifecycleEnabled {
 			return &KubernetesExecutionCapabilityError{Feature: "artifact collection"}
 		}
 	}
@@ -109,6 +109,10 @@ func (w *ExecutionWorkerService) SetKubernetesWorkspaceLifecycleEnabled(enabled 
 
 func (w *ExecutionWorkerService) SetKubernetesCacheLifecycleEnabled(enabled bool) {
 	w.kubernetesCacheLifecycleEnabled = enabled
+}
+
+func (w *ExecutionWorkerService) SetKubernetesArtifactLifecycleEnabled(enabled bool) {
+	w.kubernetesArtifactLifecycleEnabled = enabled
 }
 
 func (w *ExecutionWorkerService) RenewRunnableStepLease(ctx context.Context, step WorkerRunnableStep) (bool, error) {

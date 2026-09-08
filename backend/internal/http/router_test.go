@@ -242,6 +242,7 @@ func TestNewRouter_ServerInfoAndWorkerRoutes(t *testing.T) {
 		"",
 		WithServerInfoHandler(handler.NewServerInfoHandler()),
 		WithWorkerHandler(workerHandler),
+		WithWorkspaceHelperHandler(handler.NewWorkspaceHelperHandler(nil)),
 	)
 
 	infoReq := httptest.NewRequest(http.MethodGet, "/api/info", nil)
@@ -262,6 +263,15 @@ func TestNewRouter_ServerInfoAndWorkerRoutes(t *testing.T) {
 	}
 	if !strings.Contains(workersRes.Body.String(), `"workers":[]`) {
 		t.Fatalf("expected empty workers list, got %s", workersRes.Body.String())
+	}
+
+	for _, path := range []string{"/api/internal/workspace-helper/artifacts/plan", "/api/internal/workspace-helper/artifacts/upload"} {
+		request := httptest.NewRequest(http.MethodPost, path, nil)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("path=%s status=%d, want %d", path, response.Code, http.StatusServiceUnavailable)
+		}
 	}
 }
 

@@ -74,6 +74,7 @@ type ExecutionWorkerService struct {
 	leaseDuration                       time.Duration
 	kubernetesWorkspaceLifecycleEnabled bool
 	kubernetesCacheLifecycleEnabled     bool
+	kubernetesArtifactLifecycleEnabled  bool
 	heartbeatWriteInterval              time.Duration
 	clock                               func() time.Time
 	lastHeartbeatWriteAt                int64

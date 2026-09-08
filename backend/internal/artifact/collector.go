@@ -40,6 +40,15 @@ type CollectRequest struct {
 	SkipLogicalPaths map[string]struct{}
 }
 
+// CollectReaderRequest describes one already-authorized artifact stream.
+// The caller is responsible for resolving the source within its workspace.
+type CollectReaderRequest struct {
+	BuildID     string
+	StepID      string
+	LogicalPath string
+	Source      io.Reader
+}
+
 type CollectResult struct {
 	Artifacts []CollectedArtifact
 	Warnings  []string
@@ -224,13 +233,30 @@ func (c *Collector) collectSingle(ctx context.Context, ws workspace.Workspace, s
 	if !openedInfo.Mode().IsRegular() {
 		return CollectedArtifact{}, fmt.Errorf("artifact %q must be a regular file", logicalPath)
 	}
+	return c.CollectReader(ctx, CollectReaderRequest{BuildID: ws.BuildID, StepID: stepID, LogicalPath: logicalPath, Source: file})
+}
+
+// CollectReader streams one regular artifact into the configured store while
+// deriving the same storage key and SHA-256 metadata as workspace collection.
+func (c *Collector) CollectReader(ctx context.Context, request CollectReaderRequest) (CollectedArtifact, error) {
+	if c.store == nil {
+		return CollectedArtifact{}, fmt.Errorf("artifact store is required")
+	}
+	buildID := strings.TrimSpace(request.BuildID)
+	logicalPath := strings.TrimSpace(request.LogicalPath)
+	if buildID == "" || request.Source == nil {
+		return CollectedArtifact{}, fmt.Errorf("artifact build id and source are required")
+	}
+	if err := workspace.New(buildID, "").ValidateArtifactPath(logicalPath); err != nil {
+		return CollectedArtifact{}, fmt.Errorf("invalid artifact path %q: %w", logicalPath, err)
+	}
 
 	hasher := sha256.New()
-	tee := io.TeeReader(file, hasher)
+	tee := io.TeeReader(request.Source, hasher)
 	generatedID := uuid.NewString()
 	// ResolveStorageKey is applied before Save so persisted metadata key and
 	// blob-store write key are identical for later retrieval.
-	storageKey := resolveStorageKey(c.store, buildStorageKey(ws.BuildID, stepID, generatedID, logicalPath))
+	storageKey := resolveStorageKey(c.store, buildStorageKey(buildID, request.StepID, generatedID, logicalPath))
 	storagePath := storageKey
 	if reporter, ok := c.store.(interface{ RootPath() string }); ok {
 		root := strings.TrimSpace(reporter.RootPath())
@@ -238,7 +264,7 @@ func (c *Collector) collectSingle(ctx context.Context, ws workspace.Workspace, s
 			storagePath = filepath.Join(root, filepath.FromSlash(storageKey))
 		}
 	}
-	log.Printf("artifact persist start: build_id=%s step_id=%s logical_path=%s source_path=%s resolved_source_path=%s storage_key=%s storage_path=%s size_bytes=%d", ws.BuildID, stepID, logicalPath, absPath, resolvedPath, storageKey, storagePath, openedInfo.Size())
+	log.Printf("artifact persist start: build_id=%s step_id=%s logical_path=%s storage_key=%s storage_path=%s", buildID, request.StepID, logicalPath, storageKey, storagePath)
 	size, err := c.store.Save(ctx, storageKey, tee)
 	if err != nil {
 		return CollectedArtifact{}, fmt.Errorf("saving artifact to store: %w", err)
@@ -254,7 +280,7 @@ func (c *Collector) collectSingle(ctx context.Context, ws workspace.Workspace, s
 
 	return CollectedArtifact{
 		GeneratedID:    generatedID,
-		StepID:         stepID,
+		StepID:         request.StepID,
 		LogicalPath:    logicalPath,
 		StorageKey:     storageKey,
 		SizeBytes:      size,

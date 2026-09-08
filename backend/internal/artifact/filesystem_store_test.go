@@ -46,6 +46,22 @@ func TestFilesystemStore_RejectsInvalidKey(t *testing.T) {
 	}
 }
 
+func TestFilesystemStoreRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outsideRoot := t.TempDir()
+	if symlinkErr := os.Symlink(outsideRoot, filepath.Join(root, "linked")); symlinkErr != nil {
+		t.Skipf("symlinks are unavailable: %v", symlinkErr)
+	}
+
+	_, saveErr := NewFilesystemStore(root).Save(context.Background(), "linked/escape.txt", strings.NewReader("escape"))
+	if saveErr == nil {
+		t.Fatal("expected symlink escape to be rejected")
+	}
+	if _, statErr := os.Stat(filepath.Join(outsideRoot, "escape.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("artifact escaped storage root: %v", statErr)
+	}
+}
+
 func TestFilesystemStore_Save_WritesUnderConfiguredRoot(t *testing.T) {
 	root := t.TempDir()
 	store := NewFilesystemStore(root)
@@ -102,7 +118,7 @@ func TestFilesystemStore_OpenAndResolvePathValidation(t *testing.T) {
 		t.Fatalf("expected blank root open error, got %v", err)
 	}
 	store := NewFilesystemStore(t.TempDir())
-	for _, key := range []string{"", " ", "/absolute", "..", "../escape", `builds\escape`} {
+	for _, key := range []string{"", " ", ".", "/absolute", "..", "../escape", `builds\escape`} {
 		if _, err := store.Open(ctx, key); !errors.Is(err, ErrInvalidStorageKey) {
 			t.Fatalf("expected invalid storage key for %q, got %v", key, err)
 		}

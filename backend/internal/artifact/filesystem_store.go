@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
-	"path/filepath"
+	"path"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 var ErrInvalidStorageKey = errors.New("invalid storage key")
@@ -30,20 +33,31 @@ func (s *FilesystemStore) ResolveStorageKey(key string) string {
 }
 
 func (s *FilesystemStore) Save(_ context.Context, key string, src io.Reader) (int64, error) {
-	fullPath, err := s.resolvePath(key)
+	storageKey, err := validateStorageKey(key)
 	if err != nil {
 		return 0, err
 	}
-
-	if mkdirErr := os.MkdirAll(filepath.Dir(fullPath), 0o755); mkdirErr != nil {
+	rootPath, rootErr := s.storageRoot()
+	if rootErr != nil {
+		return 0, rootErr
+	}
+	if mkdirErr := os.MkdirAll(rootPath, 0o755); mkdirErr != nil {
+		return 0, fmt.Errorf("creating artifact storage root: %w", mkdirErr)
+	}
+	root, openErr := os.OpenRoot(rootPath)
+	if openErr != nil {
+		return 0, fmt.Errorf("opening artifact storage root: %w", openErr)
+	}
+	defer func() { _ = root.Close() }()
+	if mkdirErr := root.MkdirAll(path.Dir(storageKey), 0o755); mkdirErr != nil {
 		return 0, fmt.Errorf("creating artifact directory: %w", mkdirErr)
 	}
-
-	tmpFile, err := os.CreateTemp(filepath.Dir(fullPath), ".artifact-*")
-	if err != nil {
-		return 0, fmt.Errorf("creating artifact temp file: %w", err)
+	temporaryKey := path.Join(path.Dir(storageKey), ".artifact-"+uuid.NewString())
+	tmpFile, createErr := root.OpenFile(temporaryKey, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if createErr != nil {
+		return 0, fmt.Errorf("creating artifact temp file: %w", createErr)
 	}
-
+	defer func() { _ = root.Remove(temporaryKey) }()
 	wrote := int64(0)
 	defer func() {
 		_ = tmpFile.Close()
@@ -51,22 +65,18 @@ func (s *FilesystemStore) Save(_ context.Context, key string, src io.Reader) (in
 
 	wrote, err = io.Copy(tmpFile, src)
 	if err != nil {
-		_ = os.Remove(tmpFile.Name())
 		return 0, fmt.Errorf("writing artifact content: %w", err)
 	}
 
 	if err := tmpFile.Sync(); err != nil {
-		_ = os.Remove(tmpFile.Name())
 		return 0, fmt.Errorf("syncing artifact content: %w", err)
 	}
 
 	if err := tmpFile.Close(); err != nil {
-		_ = os.Remove(tmpFile.Name())
 		return 0, fmt.Errorf("closing artifact temp file: %w", err)
 	}
 
-	if err := os.Rename(tmpFile.Name(), fullPath); err != nil {
-		_ = os.Remove(tmpFile.Name())
+	if err := root.Rename(temporaryKey, storageKey); err != nil {
 		return 0, fmt.Errorf("moving artifact into place: %w", err)
 	}
 
@@ -74,26 +84,36 @@ func (s *FilesystemStore) Save(_ context.Context, key string, src io.Reader) (in
 }
 
 func (s *FilesystemStore) Open(_ context.Context, key string) (io.ReadCloser, error) {
-	fullPath, err := s.resolvePath(key)
+	storageKey, err := validateStorageKey(key)
 	if err != nil {
 		return nil, err
 	}
-
-	file, err := os.Open(fullPath)
-	if err != nil {
-		return nil, err
+	root, rootErr := s.openRoot()
+	if rootErr != nil {
+		return nil, rootErr
 	}
-
-	return file, nil
+	file, openErr := root.Open(storageKey)
+	if openErr != nil {
+		_ = root.Close()
+		return nil, openErr
+	}
+	return &rootFile{File: file, root: root}, nil
 }
 
 func (s *FilesystemStore) Exists(_ context.Context, key string) (bool, error) {
-	fullPath, err := s.resolvePath(key)
+	storageKey, err := validateStorageKey(key)
 	if err != nil {
 		return false, err
 	}
-
-	_, statErr := os.Stat(fullPath)
+	root, rootErr := s.openRoot()
+	if rootErr != nil {
+		if os.IsNotExist(rootErr) {
+			return false, nil
+		}
+		return false, rootErr
+	}
+	defer func() { _ = root.Close() }()
+	_, statErr := root.Stat(storageKey)
 	if statErr == nil {
 		return true, nil
 	}
@@ -104,32 +124,47 @@ func (s *FilesystemStore) Exists(_ context.Context, key string) (bool, error) {
 	return false, statErr
 }
 
-func (s *FilesystemStore) resolvePath(key string) (string, error) {
-	if strings.TrimSpace(s.root) == "" {
+type rootFile struct {
+	*os.File
+	root *os.Root
+}
+
+func (f *rootFile) Close() error {
+	fileErr := f.File.Close()
+	rootErr := f.root.Close()
+	if fileErr != nil {
+		return fileErr
+	}
+	return rootErr
+}
+
+func (s *FilesystemStore) storageRoot() (string, error) {
+	root := strings.TrimSpace(s.root)
+	if root == "" {
 		return "", errors.New("artifact storage root is required")
 	}
+	return root, nil
+}
 
+func (s *FilesystemStore) openRoot() (*os.Root, error) {
+	rootPath, err := s.storageRoot()
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening artifact storage root: %w", err)
+	}
+	return root, nil
+}
+
+func validateStorageKey(key string) (string, error) {
 	trimmedKey := strings.TrimSpace(key)
-	if trimmedKey == "" {
+	if trimmedKey == "" || trimmedKey == "." || !fs.ValidPath(trimmedKey) {
 		return "", ErrInvalidStorageKey
 	}
 	if strings.Contains(trimmedKey, "\\") {
 		return "", ErrInvalidStorageKey
 	}
-	if strings.HasPrefix(trimmedKey, "/") {
-		return "", ErrInvalidStorageKey
-	}
-
-	cleaned := filepath.Clean(trimmedKey)
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
-		return "", ErrInvalidStorageKey
-	}
-
-	fullPath := filepath.Join(s.root, cleaned)
-	rootPath := filepath.Clean(s.root)
-	if rel, err := filepath.Rel(rootPath, fullPath); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", ErrInvalidStorageKey
-	}
-
-	return fullPath, nil
+	return trimmedKey, nil
 }

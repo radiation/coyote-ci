@@ -3,6 +3,7 @@ set -euo pipefail
 
 namespace="${GKE_NAMESPACE:-coyote-ci}"
 api_url="${API_URL:-${COYOTE_INTERNAL_API_URL:-}}"
+smoke_api_token="${COYOTE_SMOKE_API_TOKEN:-}"
 marker="GKE_AUTOPILOT_SMOKE_OK"
 timeout_seconds="${GKE_SMOKE_TIMEOUT_SECONDS:-600}"
 build_id=""
@@ -11,6 +12,35 @@ pod_name=""
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || { echo "$1 is required" >&2; exit 1; }
+}
+
+coyote_api_curl() {
+  if [[ -n "$smoke_api_token" ]]; then
+    curl -sS -H "Authorization: Bearer $smoke_api_token" "$@"
+    return
+  fi
+  curl -sS "$@"
+}
+
+require_smoke_api_authentication() {
+  local result response_status response_body
+  if [[ -z "$smoke_api_token" ]]; then
+    result=$(curl -sS -w '\n%{http_code}' "$api_url/api/info")
+    response_status="${result##*$'\n'}"
+    if [[ "$response_status" != "200" ]]; then
+      echo "COYOTE_SMOKE_API_TOKEN is required when the Coyote server requires authentication (anonymous /api/info returned HTTP $response_status)" >&2
+      exit 1
+    fi
+    return
+  fi
+  result=$(coyote_api_curl -w '\n%{http_code}' "$api_url/api/me")
+  response_status="${result##*$'\n'}"
+  response_body="${result%$'\n'*}"
+  if [[ "$response_status" != "200" ]]; then
+    echo "COYOTE_SMOKE_API_TOKEN was rejected by /api/me (HTTP $response_status)" >&2
+    printf '%s\n' "$response_body" >&2
+    exit 1
+  fi
 }
 
 print_diagnostics() {
@@ -25,9 +55,9 @@ print_diagnostics() {
     kubectl -n "$namespace" describe pod "$pod_name"
   fi
   if [[ -n "$build_id" ]]; then
-    curl -sS "$api_url/api/builds/$build_id" | jq .
-    curl -sS "$api_url/api/builds/$build_id/steps" | jq .
-    curl -sS "$api_url/api/builds/$build_id/steps/0/logs" | jq .
+    coyote_api_curl "$api_url/api/builds/$build_id" | jq .
+    coyote_api_curl "$api_url/api/builds/$build_id/steps" | jq .
+    coyote_api_curl "$api_url/api/builds/$build_id/steps/0/logs" | jq .
   fi
 }
 trap print_diagnostics ERR
@@ -53,13 +83,15 @@ worker_pod_json=$(kubectl -n "$namespace" get pod "$worker_pod" -o json)
 jq -e '.spec.containers[] | select(.name == "worker") | [.env[]? | select(.name == "DATABASE_URL_FILE") | .value] | index("/var/run/secrets/coyote/database-url") != null' <<<"$worker_pod_json" >/dev/null
 jq -e '.spec.containers[] | select(.name == "worker") | [.env[]? | select(.name == "DATABASE_URL")] | length == 0' <<<"$worker_pod_json" >/dev/null
 jq -e '.spec.containers[] | select(.name == "worker") | [.env[]? | select(.name == "COYOTE_KUBERNETES_CACHE_HELPER_ENABLED" and .value == "true")] | length == 1' <<<"$worker_pod_json" >/dev/null
+jq -e '.spec.containers[] | select(.name == "worker") | [.env[]? | select(.name == "COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED" and .value == "true")] | length == 1' <<<"$worker_pod_json" >/dev/null
 jq -e '.spec.volumes[] | select(.name == "database-url") | .csi.driver == "secrets-store-gke.csi.k8s.io" and .csi.volumeAttributes.secretProviderClass == "coyote-database-secrets"' <<<"$worker_pod_json" >/dev/null
 jq -e '.spec.containers[] | select(.name == "worker") | .volumeMounts[] | select(.name == "database-url" and .mountPath == "/var/run/secrets/coyote" and .readOnly == true)' <<<"$worker_pod_json" >/dev/null
 jq -e '.spec.containers[] | select(.name == "cloud-sql-proxy") | .ports[] | select(.name == "postgres" and .containerPort == 5432)' <<<"$worker_pod_json" >/dev/null
 jq -e '.status.containerStatuses[] | select(.name == "cloud-sql-proxy") | .ready == true and .state.running != null' <<<"$worker_pod_json" >/dev/null
-curl -fsS "$api_url/api/readyz" >/dev/null
+coyote_api_curl -f "$api_url/api/readyz" >/dev/null
+require_smoke_api_authentication
 
-project_result=$(curl -sS -w '\n%{http_code}' -X POST "$api_url/api/projects" -H 'Content-Type: application/json' --data '{"name":"gke autopilot smoke","slug":"gke-autopilot-smoke"}')
+project_result=$(coyote_api_curl -w '\n%{http_code}' -X POST "$api_url/api/projects" -H 'Content-Type: application/json' --data '{"name":"gke autopilot smoke","slug":"gke-autopilot-smoke"}')
 project_status="${project_result##*$'\n'}"
 project_body="${project_result%$'\n'*}"
 if [[ "$project_status" != "201" && "$project_status" != "409" ]]; then
@@ -80,7 +112,7 @@ steps:
       policy: pull-push
 YAML
 )
-build_response=$(jq -n --arg project_id gke-autopilot-smoke --arg pipeline_yaml "$pipeline_yaml" '{project_id: $project_id, pipeline_yaml: $pipeline_yaml}' | curl -sS -X POST "$api_url/api/builds/pipeline" -H 'Content-Type: application/json' --data @-)
+build_response=$(jq -n --arg project_id gke-autopilot-smoke --arg pipeline_yaml "$pipeline_yaml" '{project_id: $project_id, pipeline_yaml: $pipeline_yaml}' | coyote_api_curl -X POST "$api_url/api/builds/pipeline" -H 'Content-Type: application/json' --data @-)
 build_id=$(jq -r '.data.id // empty' <<<"$build_response")
 [[ -n "$build_id" ]] || { echo "$build_response" | jq . >&2; exit 1; }
 
@@ -100,8 +132,11 @@ node_name=$(jq -r '.spec.nodeName // empty' <<<"$pod_json")
 [[ "$(jq -r '.spec.automountServiceAccountToken' <<<"$pod_json")" == "false" ]]
 [[ "$(jq -r '.status.containerStatuses[] | select(.name == "build") | .state.terminated.exitCode' <<<"$pod_json")" == "0" ]]
 jq -e '.spec.containers[] | select(.name == "build") | [.volumeMounts[].name] | index("workspace") != null and index("workspace-prepare-token") == null and index("workspace-publish-token") == null and index("workspace-kubernetes-api") == null' <<<"$pod_json" >/dev/null
+jq -e '.spec.containers[] | select(.name == "build") | [.volumeMounts[].name] | index("artifact-collect-token") == null' <<<"$pod_json" >/dev/null
 jq -e '.spec.initContainers[] | select(.name == "workspace-prepare") | .volumeMounts[] | select(.name == "workspace-prepare-token")' <<<"$pod_json" >/dev/null
 jq -e '.spec.containers[] | select(.name == "workspace-publish") | .volumeMounts[] | select(.name == "workspace-publish-token")' <<<"$pod_json" >/dev/null
+jq -e '.spec.containers[] | select(.name == "artifact-collect") | [.volumeMounts[].name] | index("workspace") != null and index("artifact-collect-token") != null and index("workspace-kubernetes-api") != null and index("workspace-prepare-token") == null and index("workspace-publish-token") == null and index("cache-restore-token") == null and index("cache-save-token") == null' <<<"$pod_json" >/dev/null
+jq -e '.spec.volumes[] | select(.name == "artifact-collect-token") | .projected.sources[0].serviceAccountToken.audience == "coyote-ci-workspace-helper-artifact-collect"' <<<"$pod_json" >/dev/null
 jq -e '.spec.volumes[] | select(.name == "cache" and .emptyDir != null)' <<<"$pod_json" >/dev/null
 jq -e '.spec.initContainers[] | select(.name == "cache-restore") | [.volumeMounts[].name] | index("cache") != null and index("cache-restore-token") != null and index("cache-save-token") == null and index("workspace-kubernetes-api") == null' <<<"$pod_json" >/dev/null
 jq -e '.spec.containers[] | select(.name == "cache-save") | [.volumeMounts[].name] | index("cache") != null and index("cache-save-token") != null and index("cache-restore-token") == null and index("workspace-kubernetes-api") != null' <<<"$pod_json" >/dev/null
@@ -109,8 +144,8 @@ jq -e '.spec.containers[] | select(.name == "build") | [.volumeMounts[].name] | 
 
 deadline=$(( $(date +%s) + timeout_seconds ))
 while (( $(date +%s) < deadline )); do
-  build_response=$(curl -sS "$api_url/api/builds/$build_id")
-  steps_response=$(curl -sS "$api_url/api/builds/$build_id/steps")
+  build_response=$(coyote_api_curl "$api_url/api/builds/$build_id")
+  steps_response=$(coyote_api_curl "$api_url/api/builds/$build_id/steps")
   if [[ "$(jq -r '.data.status // empty' <<<"$build_response")" == "success" ]] && [[ "$(jq -r '.data.steps[0].status // empty' <<<"$steps_response")" == "success" ]]; then
     break
   fi
@@ -118,7 +153,7 @@ while (( $(date +%s) < deadline )); do
 done
 [[ "$(jq -r '.data.status // empty' <<<"$build_response")" == "success" ]]
 [[ "$(jq -r '.data.steps[0].status // empty' <<<"$steps_response")" == "success" ]]
-logs=$(curl -sS "$api_url/api/builds/$build_id/steps/0/logs")
+logs=$(coyote_api_curl "$api_url/api/builds/$build_id/steps/0/logs")
 jq -e --arg marker "$marker" '[.data.chunks[].chunk_text] | join("") | contains($marker)' <<<"$logs" >/dev/null
 
 for permission in 'get jobs.batch' 'list jobs.batch' 'watch jobs.batch' 'create jobs.batch' 'delete jobs.batch' 'get pods' 'list pods' 'watch pods' 'get pods/log'; do
