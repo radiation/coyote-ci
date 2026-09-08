@@ -62,8 +62,6 @@ func (w *ExecutionWorkerService) ValidateKubernetesRunnableStep(ctx context.Cont
 		if strings.TrimSpace(job.Source.RepositoryURL) != "" {
 			return &KubernetesExecutionCapabilityError{Feature: "repository checkout without trusted workspace helpers"}
 		}
-	} else if spec.WorkspaceInput.Mode == domain.WorkspaceInputModeFanIn {
-		return &KubernetesExecutionCapabilityError{Feature: "fan-in workspaces"}
 	}
 
 	steps, err := w.builds.GetBuildSteps(ctx, step.BuildID)

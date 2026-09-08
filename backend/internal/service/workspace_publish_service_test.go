@@ -31,6 +31,20 @@ func TestWorkspacePublishServicePublishesCanonicalArchiveWithServerDerivedIdenti
 	}
 }
 
+func TestWorkspacePublishServicePublishesFanInJoinRevision(t *testing.T) {
+	harness := newWorkspacePublishServiceHarness(t)
+	harness.job.ResolvedSpecJSON = `{"workspace_input":{"mode":"fan_in","common_ancestor_node_id":"root"}}`
+	archive := workspacePublishArchiveForTest(t, "join output")
+
+	published, publishErr := harness.service.Publish(context.Background(), "publish-capability", harness.job.ID, "pod-1", bytes.NewReader(archive))
+	if publishErr != nil {
+		t.Fatalf("publish fan-in join: %v", publishErr)
+	}
+	if published.ID != domain.WorkspaceRevisionIDForExecutionJob(harness.job.ID) || published.NodeID != harness.job.NodeID || harness.store.calls != 1 {
+		t.Fatalf("published join revision=%#v store calls=%d", published, harness.store.calls)
+	}
+}
+
 func TestWorkspacePublishServiceRejectsInvalidArchiveAndStoreFailure(t *testing.T) {
 	harness := newWorkspacePublishServiceHarness(t)
 	if _, publishErr := harness.service.Publish(context.Background(), "publish-capability", harness.job.ID, "pod-1", bytes.NewBufferString("not a gzip archive")); !errors.Is(publishErr, ErrWorkspacePublishInvalidArchive) {
