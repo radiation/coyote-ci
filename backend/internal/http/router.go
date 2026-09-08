@@ -153,6 +153,8 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 			r.Post("/internal/workspace-helper/publish", cfg.workspaceHelperHandler.PublishWorkspace)
 			r.Post("/internal/workspace-helper/cache/restore", cfg.workspaceHelperHandler.RestoreCache)
 			r.Post("/internal/workspace-helper/cache/save", cfg.workspaceHelperHandler.SaveCache)
+			r.Post("/internal/workspace-helper/artifacts/plan", cfg.workspaceHelperHandler.PlanArtifacts)
+			r.Post("/internal/workspace-helper/artifacts/upload", cfg.workspaceHelperHandler.UploadArtifact)
 		}
 
 		r.Route("/events", func(r chi.Router) {

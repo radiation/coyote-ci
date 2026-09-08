@@ -262,7 +262,7 @@ func main() {
 	if workspaceHelperErr != nil {
 		log.Fatalf("failed to configure workspace helper capability exchange: %v", workspaceHelperErr)
 	}
-	if workspaceHelperErr := configureWorkspaceHelperServices(cfg, workspaceHelperHandler, executionJobRepo, buildRepo, workspaceRevisionRepo, checkoutResolver, cacheEntryRepo); workspaceHelperErr != nil {
+	if workspaceHelperErr := configureWorkspaceHelperServices(cfg, workspaceHelperHandler, executionJobRepo, buildRepo, workspaceRevisionRepo, checkoutResolver, artifactRepo, artifactResolver, cacheEntryRepo); workspaceHelperErr != nil {
 		log.Fatalf("failed to configure workspace helper services: %v", workspaceHelperErr)
 	}
 	buildHandler.SetVersionTagService(versionTagService)
@@ -452,7 +452,20 @@ func workspaceRevisionStoreFromConfig(cfg config.Config) workspacepkg.WorkspaceR
 	return workspacepkg.NewFilesystemWorkspaceRevisionStore(cfg.WorkspaceRevisionStorageRoot)
 }
 
-func configureWorkspaceHelperServices(cfg config.Config, workspaceHelperHandler *handler.WorkspaceHelperHandler, executionJobs repository.ExecutionJobRepository, builds repository.BuildRepository, revisions repository.WorkspaceRevisionRepository, checkoutResolver *buildsvc.RepositoryAwareCheckoutResolver, cacheEntries ...repository.CacheEntryRepository) error {
+func configureWorkspaceHelperServices(cfg config.Config, workspaceHelperHandler *handler.WorkspaceHelperHandler, executionJobs repository.ExecutionJobRepository, builds repository.BuildRepository, revisions repository.WorkspaceRevisionRepository, checkoutResolver *buildsvc.RepositoryAwareCheckoutResolver, dependencies ...any) error {
+	var artifactRepo repository.ArtifactRepository
+	var artifactResolver *artifact.StoreResolver
+	var cacheEntries []repository.CacheEntryRepository
+	for _, dependency := range dependencies {
+		switch value := dependency.(type) {
+		case repository.ArtifactRepository:
+			artifactRepo = value
+		case *artifact.StoreResolver:
+			artifactResolver = value
+		case repository.CacheEntryRepository:
+			cacheEntries = append(cacheEntries, value)
+		}
+	}
 	if workspaceHelperHandler == nil {
 		if cfg.KubernetesCacheHelperEnabled {
 			return errors.New("kubernetes cache helper requires workspace helper capabilities")
@@ -493,6 +506,16 @@ func configureWorkspaceHelperServices(cfg config.Config, workspaceHelperHandler 
 		return publishErr
 	}
 	workspaceHelperHandler.SetPublishService(publishService)
+	if cfg.KubernetesArtifactHelperEnabled {
+		if artifactRepo == nil || artifactResolver == nil || artifactResolver.Default() == nil {
+			return errors.New("kubernetes artifact helper requires artifact repository and store")
+		}
+		artifactService, artifactServiceErr := service.NewWorkspaceHelperArtifactService(service.WorkspaceHelperArtifactServiceConfig{CapabilityAuthorizer: workspaceHelperHandler.PrepareCapabilityAuthorizer(), ExecutionJobs: executionJobs, Builds: builds, Artifacts: artifactRepo, Collector: artifact.NewCollector(artifactResolver.Default()), Provider: artifactResolver.DefaultProvider()})
+		if artifactServiceErr != nil {
+			return artifactServiceErr
+		}
+		workspaceHelperHandler.SetArtifactService(artifactService)
+	}
 	if cfg.KubernetesCacheHelperEnabled {
 		if len(cacheEntries) != 1 || cacheEntries[0] == nil {
 			return errors.New("kubernetes cache helper requires cache entry repository")

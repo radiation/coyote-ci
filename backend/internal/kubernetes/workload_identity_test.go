@@ -103,6 +103,7 @@ func TestWorkloadIdentityVerifierUsesCacheHelperAudiences(t *testing.T) {
 	}{
 		{role: domain.WorkspaceHelperRoleCacheRestore, audience: workspaceHelperCacheRestoreAudience},
 		{role: domain.WorkspaceHelperRoleCacheSave, audience: workspaceHelperCacheSaveAudience},
+		{role: domain.WorkspaceHelperRoleArtifactCollect, audience: workspaceHelperArtifactCollectAudience},
 	} {
 		t.Run(string(testCase.role), func(t *testing.T) {
 			client := &fakeWorkloadIdentityClient{review: validTokenReview(), pod: validHelperPod()}

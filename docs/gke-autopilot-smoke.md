@@ -36,6 +36,7 @@ Set these values in the VM `.env.prod` file. Do not commit the capability secret
 
 ```sh
 COYOTE_WORKSPACE_HELPER_ENABLED=true
+COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED=true
 COYOTE_WORKSPACE_HELPER_KUBECONFIG_HOST_PATH=/opt/coyote-ci/gke-verifier-kubeconfig
 COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT=coyote-workspace-helper
 COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET=<at-least-32-byte-secret>
@@ -55,10 +56,13 @@ Set the externally reachable server URL. It must not be `localhost`, `host.docke
 ```sh
 export COYOTE_INTERNAL_API_URL=https://coyote.example.com
 export API_URL="$COYOTE_INTERNAL_API_URL"
+export COYOTE_SMOKE_API_TOKEN=<coyote_pat_with_build:read_build:logs_build:run_scopes>
 export GKE_WORKER_GSA_EMAIL=coyote-gke-worker@your-project.iam.gserviceaccount.com
 ```
 
 `GKE_WORKER_GSA_EMAIL` is required by `gke-deploy` to verify the externally provisioned Workload Identity annotation. It intentionally has no repository default because the bound Google service account is deployment-specific.
+
+`COYOTE_SMOKE_API_TOKEN` is a Coyote personal access token for a user authorized to create the smoke project and run builds. `gke-smoke` sends it only as `Authorization: Bearer <token>` to normal Coyote `/api/*` requests. It does not send this token to internal workspace, cache, or artifact helper endpoints; those retain workload-identity and capability authentication. The token needs `build:read`, `build:logs`, and `build:run` scopes. When server authentication is disabled, the smoke remains compatible without this variable.
 
 ## Deploy And Verify
 

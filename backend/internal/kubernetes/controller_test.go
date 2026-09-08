@@ -97,6 +97,28 @@ func TestControllerCreatesWorkspaceHelperLifecycle(t *testing.T) {
 	}
 }
 
+func TestBuildJobWithArtifactHelperUsesIsolatedCredentials(t *testing.T) {
+	step := testStep()
+	helper := WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper", ArtifactCollectEnabled: true}
+	pod := buildJob("ci", step, helper).Spec.Template.Spec
+	if len(pod.Containers) != 3 || pod.Containers[2].Name != "artifact-collect" || strings.Join(pod.Containers[2].Command, " ") != "/app/worker artifact collect-after-build" {
+		t.Fatalf("containers=%#v", pod.Containers)
+	}
+	build := pod.Containers[0]
+	helperContainer := pod.Containers[2]
+	if hasMount(build, "artifact-collect-token") || hasMount(build, "workspace-kubernetes-api") {
+		t.Fatalf("build must not receive artifact or Kubernetes credentials: %#v", build.VolumeMounts)
+	}
+	if !hasMount(helperContainer, "workspace") || !hasMount(helperContainer, "artifact-collect-token") || !hasMount(helperContainer, "workspace-kubernetes-api") || hasMount(helperContainer, "workspace-prepare-token") || hasMount(helperContainer, "workspace-publish-token") || hasMount(helperContainer, "cache-restore-token") || hasMount(helperContainer, "cache-save-token") {
+		t.Fatalf("artifact helper mounts=%#v", helperContainer.VolumeMounts)
+	}
+	for _, volume := range pod.Volumes {
+		if volume.Name == "artifact-collect-token" && (volume.Projected == nil || len(volume.Projected.Sources) != 1 || volume.Projected.Sources[0].ServiceAccountToken == nil || volume.Projected.Sources[0].ServiceAccountToken.Audience != workspaceHelperArtifactCollectAudience) {
+			t.Fatalf("artifact helper token volume=%#v", volume)
+		}
+	}
+}
+
 func TestBuildJobWithCacheHelpersUsesOrderedLifecycleAndIsolatedCredentials(t *testing.T) {
 	step := testStep()
 	step.Cache = &domain.StepCacheConfig{Preset: "go", Policy: domain.CachePolicyPullPush}

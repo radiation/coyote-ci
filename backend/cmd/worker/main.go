@@ -208,6 +208,8 @@ func runWorkspaceHelperCommand(ctx context.Context, args []string) (bool, error)
 		return true, runCacheRestore(ctx)
 	case "cache save-after-build":
 		return true, runCacheSaveAfterBuild(ctx)
+	case "artifact collect-after-build":
+		return true, runArtifactCollectAfterBuild(ctx)
 	default:
 		return false, nil
 	}
@@ -231,8 +233,10 @@ func resolveExecutionController(cfg config.Config, workerService *workersvc.Exec
 	controller.WithTestStepNodeNames(kubernetesTestStepNodes(cfg.WorkerKubernetesTestStepNodes))
 	workerService.SetKubernetesWorkspaceLifecycleEnabled(helpersEnabled)
 	workerService.SetKubernetesCacheLifecycleEnabled(helpersEnabled && cfg.KubernetesCacheHelperEnabled)
+	workerService.SetKubernetesArtifactLifecycleEnabled(helpersEnabled && cfg.KubernetesArtifactHelperEnabled)
 	if helpersEnabled {
 		helperConfig.CacheEnabled = cfg.KubernetesCacheHelperEnabled
+		helperConfig.ArtifactCollectEnabled = cfg.KubernetesArtifactHelperEnabled
 		controller.WithWorkspaceHelper(helperConfig)
 	}
 	return controller, nil
@@ -248,9 +252,10 @@ func kubernetesTestStepNodes(value string) []string {
 
 func kubernetesWorkspaceHelperConfig(cfg config.Config) (kubernetesexec.WorkspaceHelperConfig, bool, error) {
 	helper := kubernetesexec.WorkspaceHelperConfig{
-		Image:              strings.TrimSpace(cfg.WorkerKubernetesHelperImage),
-		InternalAPIURL:     strings.TrimSpace(cfg.WorkerKubernetesInternalAPIURL),
-		ServiceAccountName: strings.TrimSpace(cfg.WorkspaceHelperServiceAccount),
+		Image:                  strings.TrimSpace(cfg.WorkerKubernetesHelperImage),
+		InternalAPIURL:         strings.TrimSpace(cfg.WorkerKubernetesInternalAPIURL),
+		ServiceAccountName:     strings.TrimSpace(cfg.WorkspaceHelperServiceAccount),
+		ArtifactCollectEnabled: cfg.KubernetesArtifactHelperEnabled,
 	}
 	if helper.Image == "" && helper.InternalAPIURL == "" {
 		return kubernetesexec.WorkspaceHelperConfig{}, false, nil

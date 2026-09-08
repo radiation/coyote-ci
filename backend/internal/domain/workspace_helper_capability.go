@@ -5,14 +5,15 @@ import "time"
 type WorkspaceHelperRole string
 
 const (
-	WorkspaceHelperRolePrepare      WorkspaceHelperRole = "prepare"
-	WorkspaceHelperRolePublish      WorkspaceHelperRole = "publish"
-	WorkspaceHelperRoleCacheRestore WorkspaceHelperRole = "cache-restore"
-	WorkspaceHelperRoleCacheSave    WorkspaceHelperRole = "cache-save"
+	WorkspaceHelperRolePrepare         WorkspaceHelperRole = "prepare"
+	WorkspaceHelperRolePublish         WorkspaceHelperRole = "publish"
+	WorkspaceHelperRoleCacheRestore    WorkspaceHelperRole = "cache-restore"
+	WorkspaceHelperRoleCacheSave       WorkspaceHelperRole = "cache-save"
+	WorkspaceHelperRoleArtifactCollect WorkspaceHelperRole = "artifact-collect"
 )
 
 func (r WorkspaceHelperRole) Valid() bool {
-	return r == WorkspaceHelperRolePrepare || r == WorkspaceHelperRolePublish || r == WorkspaceHelperRoleCacheRestore || r == WorkspaceHelperRoleCacheSave
+	return r == WorkspaceHelperRolePrepare || r == WorkspaceHelperRolePublish || r == WorkspaceHelperRoleCacheRestore || r == WorkspaceHelperRoleCacheSave || r == WorkspaceHelperRoleArtifactCollect
 }
 
 // WorkspaceHelperCapability is the provider-neutral, execution-scoped authority

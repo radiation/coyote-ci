@@ -21,6 +21,7 @@ const workspaceHelperPrepareAudience = "coyote-ci-workspace-helper-prepare"
 const workspaceHelperPublishAudience = "coyote-ci-workspace-helper-publish"
 const workspaceHelperCacheRestoreAudience = "coyote-ci-workspace-helper-cache-restore"
 const workspaceHelperCacheSaveAudience = "coyote-ci-workspace-helper-cache-save"
+const workspaceHelperArtifactCollectAudience = "coyote-ci-workspace-helper-artifact-collect"
 const executionClaimDigestAnnotation = "coyote-ci.io/execution-claim-digest"
 
 var ErrWorkloadIdentityUnauthorized = errors.New("kubernetes workload identity is unauthorized")
@@ -90,6 +91,8 @@ func workspaceHelperAudience(role domain.WorkspaceHelperRole) (string, error) {
 		return workspaceHelperCacheRestoreAudience, nil
 	case domain.WorkspaceHelperRoleCacheSave:
 		return workspaceHelperCacheSaveAudience, nil
+	case domain.WorkspaceHelperRoleArtifactCollect:
+		return workspaceHelperArtifactCollectAudience, nil
 	default:
 		return "", fmt.Errorf("%w: unsupported helper role", ErrWorkloadIdentityUnauthorized)
 	}

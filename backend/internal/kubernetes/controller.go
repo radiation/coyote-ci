@@ -37,10 +37,11 @@ const (
 )
 
 type WorkspaceHelperConfig struct {
-	Image              string
-	InternalAPIURL     string
-	ServiceAccountName string
-	CacheEnabled       bool
+	Image                  string
+	InternalAPIURL         string
+	ServiceAccountName     string
+	CacheEnabled           bool
+	ArtifactCollectEnabled bool
 }
 
 type Client interface {
@@ -369,6 +370,10 @@ func buildJobWithNodeName(namespace string, step workersvc.WorkerRunnableStep, h
 		podSpec.Volumes = append(podSpec.Volumes, helperCapabilityVolume("workspace-prepare-token", workspaceHelperPrepareAudience), helperCapabilityVolume("workspace-publish-token", workspaceHelperPublishAudience), kubernetesAPIIdentityVolume())
 		podSpec.InitContainers = []corev1.Container{workspacePrepareContainer(helper, step)}
 		podSpec.Containers = append(podSpec.Containers, workspacePublishContainer(helper, step))
+		if helper.ArtifactCollectEnabled {
+			podSpec.Volumes = append(podSpec.Volumes, helperCapabilityVolume("artifact-collect-token", workspaceHelperArtifactCollectAudience))
+			podSpec.Containers = append(podSpec.Containers, artifactCollectContainer(helper, step))
+		}
 		if step.Cache != nil && helper.CacheEnabled {
 			preset, presetErr := cachepkg.ResolvePreset(step.Cache.Preset, step.WorkingDir)
 			if presetErr != nil {
@@ -435,6 +440,11 @@ func workspacePrepareContainer(config WorkspaceHelperConfig, step workersvc.Work
 func workspacePublishContainer(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep) corev1.Container {
 	env := append(workspaceHelperEnvironment(config, step), corev1.EnvVar{Name: "COYOTE_WORKSPACE_PATH", Value: workspace.DefaultContainerRoot}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}})
 	return corev1.Container{Name: "workspace-publish", Image: config.Image, Command: []string{"/app/worker", "workspace", "publish-after-build"}, Env: env, VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "workspace-publish-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}, {Name: "workspace-kubernetes-api", MountPath: workspaceKubernetesTokenDir, ReadOnly: true}}}
+}
+
+func artifactCollectContainer(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep) corev1.Container {
+	env := append(workspaceHelperEnvironment(config, step), corev1.EnvVar{Name: "COYOTE_WORKSPACE_PATH", Value: workspace.DefaultContainerRoot}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}})
+	return corev1.Container{Name: "artifact-collect", Image: config.Image, Command: []string{"/app/worker", "artifact", "collect-after-build"}, Env: env, VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "artifact-collect-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}, {Name: "workspace-kubernetes-api", MountPath: workspaceKubernetesTokenDir, ReadOnly: true}}}
 }
 
 func jobName(executionJobID string) string {

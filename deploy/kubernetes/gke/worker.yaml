@@ -97,6 +97,8 @@ spec:
               value: coyote-workspace-helper
             - name: COYOTE_KUBERNETES_CACHE_HELPER_ENABLED
               value: "true"
+            - name: COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED
+              value: "true"
             - name: WORKER_STEP_LEASE_SECONDS
               value: "45"
             - name: EMAIL_NOTIFICATIONS_ENABLED
