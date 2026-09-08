@@ -112,6 +112,21 @@ func TestConfigureWorkspaceHelperServices(t *testing.T) {
 	if configureErr := configureWorkspaceHelperServices(config.Config{WorkspaceRevisionStorageRoot: t.TempDir(), WorkspaceHelperMaxUploadSizeMB: 1}, workspaceHelperHandler, executionJobs, memoryrepo.NewBuildRepository(), revisions, nil); configureErr != nil {
 		t.Fatalf("configure helper services: %v", configureErr)
 	}
+	if configureErr := configureWorkspaceHelperServices(config.Config{KubernetesCacheHelperEnabled: true}, nil, executionJobs, memoryrepo.NewBuildRepository(), revisions, nil); configureErr == nil {
+		t.Fatal("expected cache helper capability requirement")
+	}
+	cacheConfig := config.Config{
+		KubernetesCacheHelperEnabled: true,
+		WorkspaceRevisionStorageRoot: t.TempDir(),
+		WorkerCacheStorageProvider:   "filesystem",
+		WorkerCacheStorageRoot:       t.TempDir(),
+	}
+	if configureErr := configureWorkspaceHelperServices(cacheConfig, workspaceHelperHandler, executionJobs, memoryrepo.NewBuildRepository(), revisions, nil); configureErr == nil {
+		t.Fatal("expected cache entry repository requirement")
+	}
+	if configureErr := configureWorkspaceHelperServices(cacheConfig, workspaceHelperHandler, executionJobs, memoryrepo.NewBuildRepository(), revisions, nil, memoryrepo.NewCacheEntryRepository()); configureErr != nil {
+		t.Fatalf("configure cache helper services: %v", configureErr)
+	}
 }
 
 type workspaceHelperIdentityVerifier struct{}

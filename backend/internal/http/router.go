@@ -338,7 +338,7 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 func limitRequestBody(maxBytes int64) func(nethttp.Handler) nethttp.Handler {
 	return func(next nethttp.Handler) nethttp.Handler {
 		return nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
-			if r.URL.Path == "/api/internal/workspace-helper/publish" {
+			if r.URL.Path == "/api/internal/workspace-helper/publish" || r.URL.Path == "/api/internal/workspace-helper/cache/restore" || r.URL.Path == "/api/internal/workspace-helper/cache/save" {
 				next.ServeHTTP(w, r)
 				return
 			}

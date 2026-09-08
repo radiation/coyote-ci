@@ -37,10 +37,11 @@ type workspaceCacheHelper interface {
 }
 
 type WorkspaceHelperHandler struct {
-	capabilities workspaceHelperCapabilityExchanger
-	prepare      workspacePrepareOpener
-	publish      workspacePublisher
-	cache        workspaceCacheHelper
+	capabilities        workspaceHelperCapabilityExchanger
+	prepare             workspacePrepareOpener
+	publish             workspacePublisher
+	cache               workspaceCacheHelper
+	cacheMaxUploadBytes int64
 }
 
 func NewWorkspaceHelperHandler(capabilities workspaceHelperCapabilityExchanger) *WorkspaceHelperHandler {
@@ -62,6 +63,12 @@ func (h *WorkspaceHelperHandler) SetPublishService(publish workspacePublisher) {
 func (h *WorkspaceHelperHandler) SetCacheService(cache workspaceCacheHelper) {
 	if h != nil {
 		h.cache = cache
+	}
+}
+
+func (h *WorkspaceHelperHandler) SetCacheMaxUploadBytes(maxBytes int64) {
+	if h != nil {
+		h.cacheMaxUploadBytes = maxBytes
 	}
 }
 
@@ -246,14 +253,42 @@ func (h *WorkspaceHelperHandler) SaveCache(w http.ResponseWriter, r *http.Reques
 		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "workspace helper capability is required")
 		return
 	}
+	if h.cacheMaxUploadBytes > 0 && r.ContentLength > h.cacheMaxUploadBytes {
+		writeErrorJSON(w, http.StatusRequestEntityTooLarge, "archive_too_large", "cache archive exceeds the configured size limit")
+		return
+	}
+	body := r.Body
+	var limitedBody *cacheUploadLimitReader
+	if h.cacheMaxUploadBytes > 0 {
+		limitedBody = &cacheUploadLimitReader{ReadCloser: http.MaxBytesReader(w, r.Body, h.cacheMaxUploadBytes)}
+		body = limitedBody
+	}
 	size := r.ContentLength
 	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: strings.TrimSpace(r.Header.Get("Content-Digest")), SizeBytes: &size}
-	saveErr := h.cache.Save(r.Context(), capability, strings.TrimSpace(r.Header.Get("Coyote-Execution-Job-ID")), strings.TrimSpace(r.Header.Get("Coyote-Pod-UID")), strings.TrimSpace(r.Header.Get("Coyote-Cache-Preset")), strings.TrimSpace(r.Header.Get("Coyote-Cache-Key")), r.Body, publication)
+	saveErr := h.cache.Save(r.Context(), capability, strings.TrimSpace(r.Header.Get("Coyote-Execution-Job-ID")), strings.TrimSpace(r.Header.Get("Coyote-Pod-UID")), strings.TrimSpace(r.Header.Get("Coyote-Cache-Preset")), strings.TrimSpace(r.Header.Get("Coyote-Cache-Key")), body, publication)
 	if saveErr != nil {
+		if limitedBody != nil && limitedBody.exceeded {
+			writeErrorJSON(w, http.StatusRequestEntityTooLarge, "archive_too_large", "cache archive exceeds the configured size limit")
+			return
+		}
 		handleWorkspaceCacheError(w, saveErr)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type cacheUploadLimitReader struct {
+	io.ReadCloser
+	exceeded bool
+}
+
+func (r *cacheUploadLimitReader) Read(buffer []byte) (int, error) {
+	read, err := r.ReadCloser.Read(buffer)
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		r.exceeded = true
+	}
+	return read, err
 }
 
 func handleWorkspaceCacheError(w http.ResponseWriter, err error) {

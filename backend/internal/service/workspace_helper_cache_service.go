@@ -36,22 +36,34 @@ type WorkspaceHelperCacheServiceConfig struct {
 	Builds               workspaceHelperCacheBuildRepository
 	Entries              repository.CacheEntryRepository
 	Store                cachepkg.Store
+	MaxUncompressedBytes int64
+	MaxArchiveEntries    int
 }
 
 type WorkspaceHelperCacheService struct {
-	capabilities  WorkspacePrepareCapabilityAuthorizer
-	executionJobs workspacePrepareExecutionJobRepository
-	builds        workspaceHelperCacheBuildRepository
-	entries       repository.CacheEntryRepository
-	store         cachepkg.Store
-	now           func() time.Time
+	capabilities         WorkspacePrepareCapabilityAuthorizer
+	executionJobs        workspacePrepareExecutionJobRepository
+	builds               workspaceHelperCacheBuildRepository
+	entries              repository.CacheEntryRepository
+	store                cachepkg.Store
+	maxUncompressedBytes int64
+	maxArchiveEntries    int
+	now                  func() time.Time
 }
 
 func NewWorkspaceHelperCacheService(config WorkspaceHelperCacheServiceConfig) (*WorkspaceHelperCacheService, error) {
 	if config.CapabilityAuthorizer == nil || config.ExecutionJobs == nil || config.Builds == nil || config.Entries == nil || config.Store == nil {
 		return nil, errors.New("workspace helper cache service requires capability, build, cache entry, and store dependencies")
 	}
-	return &WorkspaceHelperCacheService{capabilities: config.CapabilityAuthorizer, executionJobs: config.ExecutionJobs, builds: config.Builds, entries: config.Entries, store: config.Store, now: func() time.Time { return time.Now().UTC() }}, nil
+	maxUncompressedBytes := config.MaxUncompressedBytes
+	if maxUncompressedBytes <= 0 {
+		maxUncompressedBytes = defaultWorkspacePublishMaxUncompressedBytes
+	}
+	maxArchiveEntries := config.MaxArchiveEntries
+	if maxArchiveEntries <= 0 {
+		maxArchiveEntries = defaultWorkspacePublishMaxArchiveEntries
+	}
+	return &WorkspaceHelperCacheService{capabilities: config.CapabilityAuthorizer, executionJobs: config.ExecutionJobs, builds: config.Builds, entries: config.Entries, store: config.Store, maxUncompressedBytes: maxUncompressedBytes, maxArchiveEntries: maxArchiveEntries, now: func() time.Time { return time.Now().UTC() }}, nil
 }
 
 func (s *WorkspaceHelperCacheService) Restore(ctx context.Context, capabilityToken string, executionJobID string, podUID string, preset string, cacheKey string) (WorkspaceHelperCachePayload, bool, error) {
@@ -96,7 +108,8 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 	}
 	defer func() { _ = os.RemoveAll(directory) }()
 	payloadRoot := filepath.Join(directory, "payload")
-	if restoreErr := workspace.RestoreArchive(ctx, archive, publication, payloadRoot); restoreErr != nil {
+	limits := workspace.WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: s.maxUncompressedBytes, MaxEntries: s.maxArchiveEntries}
+	if restoreErr := workspace.RestoreArchiveWithLimits(ctx, archive, publication, payloadRoot, limits); restoreErr != nil {
 		return fmt.Errorf("%w: cache archive: %v", ErrWorkspaceHelperCacheInvalidInput, restoreErr)
 	}
 	objectKey := cacheObjectKey(cacheJobID(build), preset, cacheKey)

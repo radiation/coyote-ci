@@ -40,6 +40,7 @@ type Config struct {
 	WorkspaceHelperServiceAccount        string
 	WorkspaceHelperCapabilitySecret      string
 	WorkspaceHelperMaxUploadSizeMB       int
+	WorkspaceHelperCacheMaxUploadSizeMB  int
 	WorkspaceHelperMaxUncompressedSizeMB int
 	WorkspaceHelperMaxArchiveEntries     int
 	WorkspaceRevisionStorageRoot         string
@@ -120,6 +121,7 @@ func Load() Config {
 		WorkspaceHelperServiceAccount:        getEnv("COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT", "coyote-workspace-helper"),
 		WorkspaceHelperCapabilitySecret:      getEnv("COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET", ""),
 		WorkspaceHelperMaxUploadSizeMB:       getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_UPLOAD_SIZE_MB", 1024),
+		WorkspaceHelperCacheMaxUploadSizeMB:  getEnvInt("COYOTE_WORKSPACE_HELPER_CACHE_MAX_UPLOAD_SIZE_MB", 10240),
 		WorkspaceHelperMaxUncompressedSizeMB: getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", 1024),
 		WorkspaceHelperMaxArchiveEntries:     getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES", 10000),
 		WorkspaceRevisionStorageRoot:         getEnv("COYOTE_WORKSPACE_REVISION_STORAGE_ROOT", ""),

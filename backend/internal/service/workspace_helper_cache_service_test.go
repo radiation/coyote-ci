@@ -37,8 +37,8 @@ func TestWorkspaceHelperCacheServiceRestoreHitMarksAccessed(t *testing.T) {
 	}
 	defer func() { _ = payload.Archive.Close() }()
 	destination := t.TempDir()
-	if err := workspace.RestoreArchive(context.Background(), payload.Archive, payload.Publication, destination); err != nil {
-		t.Fatalf("restore returned archive: %v", err)
+	if archiveRestoreErr := workspace.RestoreArchive(context.Background(), payload.Archive, payload.Publication, destination); archiveRestoreErr != nil {
+		t.Fatalf("restore returned archive: %v", archiveRestoreErr)
 	}
 	contents, readErr := os.ReadFile(filepath.Join(destination, "cached.txt"))
 	if readErr != nil || string(contents) != "cache hit" {
@@ -76,6 +76,22 @@ func TestWorkspaceHelperCacheServiceSaveUpsertsReadyEntry(t *testing.T) {
 	result, restoreErr := harness.store.Restore(context.Background(), objectKey, restored)
 	if restoreErr != nil || !result.Hit {
 		t.Fatalf("stored payload result=%#v err=%v", result, restoreErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceSaveRejectsArchiveExceedingRestoreLimits(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	harness.service.maxUncompressedBytes = 1
+	archive := cacheArchive(t, "paths/000/module", "module data")
+	defer func() { _ = archive.archive.Close() }()
+
+	err := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archive.archive, archive.publication)
+	if !errors.Is(err, ErrWorkspaceHelperCacheInvalidInput) {
+		t.Fatalf("save error=%v, want invalid cache input", err)
+	}
+	if _, found, findErr := harness.entries.FindReadyByKey(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey); findErr != nil || found {
+		t.Fatalf("cache entry found=%t err=%v", found, findErr)
 	}
 }
 

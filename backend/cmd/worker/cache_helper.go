@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,22 +23,29 @@ const (
 	cacheHelperPreset     = "COYOTE_CACHE_PRESET"
 	cacheHelperPolicy     = "COYOTE_CACHE_POLICY"
 	cacheHelperWorkingDir = "COYOTE_CACHE_WORKING_DIR"
+	cacheHelperStateRoot  = "COYOTE_CACHE_STATE_ROOT"
 )
 
 func runCacheRestore(ctx context.Context) error {
-	apiURL, tokenPath, executionJobID, podUID, root, preset, policy, err := cacheHelperConfig()
+	apiURL, tokenPath, executionJobID, podUID, root, preset, stateRoot, policy, err := cacheHelperConfig()
 	if err != nil {
 		return err
 	}
 	if ensureErr := ensureCacheMountPaths(root, preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir))); ensureErr != nil {
 		return ensureErr
 	}
-	if policy == domain.CachePolicyOff || policy == domain.CachePolicyPush {
+	if policy == domain.CachePolicyOff {
 		return nil
 	}
 	key, keyErr := cacheKeyForHelper(root, preset)
 	if keyErr != nil {
 		return reportCacheSideEffectError("restore", keyErr)
+	}
+	if saveErr := savePreparedCacheKey(stateRoot, key); saveErr != nil {
+		return saveErr
+	}
+	if policy == domain.CachePolicyPush {
+		return nil
 	}
 	projectedToken, readErr := os.ReadFile(tokenPath)
 	if readErr != nil {
@@ -70,7 +78,19 @@ func runCacheRestore(ctx context.Context) error {
 	}
 	size := response.ContentLength
 	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: strings.TrimSpace(response.Header.Get("Content-Digest")), SizeBytes: &size}
-	return reportCacheSideEffectError("restore", workspacepkg.RestoreArchive(ctx, response.Body, publication, root))
+	return reportCacheSideEffectError("restore", restoreCacheArchive(ctx, response.Body, publication, root, preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir))))
+}
+
+func restoreCacheArchive(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, root string, preset string, workingDir string) error {
+	if removeErr := os.RemoveAll(root); removeErr != nil {
+		return removeErr
+	}
+	restoreErr := workspacepkg.RestoreArchive(ctx, archive, publication, root)
+	mountErr := ensureCacheMountPaths(root, preset, workingDir)
+	if restoreErr != nil {
+		return restoreErr
+	}
+	return mountErr
 }
 
 func runCacheSaveAfterBuild(ctx context.Context) error {
@@ -92,11 +112,11 @@ func runCacheSaveAfterBuild(ctx context.Context) error {
 }
 
 func runCacheSave(ctx context.Context) error {
-	apiURL, tokenPath, executionJobID, podUID, root, preset, policy, err := cacheHelperConfig()
+	apiURL, tokenPath, executionJobID, podUID, root, preset, stateRoot, policy, err := cacheHelperConfig()
 	if err != nil || policy == domain.CachePolicyOff || policy == domain.CachePolicyPull {
 		return err
 	}
-	key, keyErr := cacheKeyForHelper(root, preset)
+	key, keyErr := loadPreparedCacheKey(stateRoot)
 	if keyErr != nil {
 		return reportCacheSideEffectError("save", keyErr)
 	}
@@ -117,6 +137,7 @@ func runCacheSave(ctx context.Context) error {
 	if requestErr != nil {
 		return reportCacheSideEffectError("save", requestErr)
 	}
+	request.ContentLength = *publication.SizeBytes
 	request.Header.Set("Authorization", "Bearer "+capability)
 	request.Header.Set("Content-Type", "application/gzip")
 	request.Header.Set("Content-Digest", publication.ContentDigest)
@@ -143,18 +164,41 @@ func reportCacheSideEffectError(operation string, err error) error {
 	return nil
 }
 
-func cacheHelperConfig() (string, string, string, string, string, string, domain.CachePolicy, error) {
+func cacheHelperConfig() (string, string, string, string, string, string, string, domain.CachePolicy, error) {
 	apiURL := strings.TrimRight(strings.TrimSpace(os.Getenv(workspaceHelperAPIURL)), "/")
 	tokenPath := strings.TrimSpace(os.Getenv(workspaceHelperTokenPath))
 	executionJobID := strings.TrimSpace(os.Getenv(workspaceHelperExecutionJobID))
 	podUID := strings.TrimSpace(os.Getenv(workspaceHelperPodUID))
 	root := strings.TrimSpace(os.Getenv(cacheHelperRoot))
 	preset := strings.TrimSpace(os.Getenv(cacheHelperPreset))
+	stateRoot := strings.TrimSpace(os.Getenv(cacheHelperStateRoot))
 	policy := domain.NormalizeCachePolicy(domain.CachePolicy(os.Getenv(cacheHelperPolicy)))
-	if apiURL == "" || tokenPath == "" || executionJobID == "" || podUID == "" || root == "" || preset == "" {
-		return "", "", "", "", "", "", policy, errors.New("cache helper requires internal API URL, token path, execution job ID, pod UID, root, and preset")
+	if apiURL == "" || tokenPath == "" || executionJobID == "" || podUID == "" || root == "" || preset == "" || stateRoot == "" {
+		return "", "", "", "", "", "", "", policy, errors.New("cache helper requires internal API URL, token path, execution job ID, pod UID, root, preset, and state root")
 	}
-	return apiURL, tokenPath, executionJobID, podUID, root, preset, policy, nil
+	return apiURL, tokenPath, executionJobID, podUID, root, preset, stateRoot, policy, nil
+}
+
+func savePreparedCacheKey(stateRoot string, key string) error {
+	if mkdirErr := os.MkdirAll(stateRoot, 0o755); mkdirErr != nil {
+		return fmt.Errorf("create cache helper state directory: %w", mkdirErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(stateRoot, "prepared-key"), []byte(key), 0o600); writeErr != nil {
+		return fmt.Errorf("write prepared cache key: %w", writeErr)
+	}
+	return nil
+}
+
+func loadPreparedCacheKey(stateRoot string) (string, error) {
+	contents, readErr := os.ReadFile(filepath.Join(stateRoot, "prepared-key"))
+	if readErr != nil {
+		return "", fmt.Errorf("read prepared cache key: %w", readErr)
+	}
+	key := strings.TrimSpace(string(contents))
+	if key == "" {
+		return "", errors.New("prepared cache key is empty")
+	}
+	return key, nil
 }
 
 func cacheKeyForHelper(root string, preset string) (string, error) {

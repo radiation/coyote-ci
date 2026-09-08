@@ -231,6 +231,112 @@ func TestWorkspaceHelperHandlerPublishMapsOutcomes(t *testing.T) {
 	}
 }
 
+func TestWorkspaceHelperHandlerRestoreCacheOutcomes(t *testing.T) {
+	size := int64(len("cache archive"))
+	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: "sha256:" + strings.Repeat("a", 64), SizeBytes: &size}
+	for _, testCase := range []struct {
+		name  string
+		cache workspaceCacheHelper
+		token string
+		want  int
+	}{
+		{name: "unavailable", want: http.StatusServiceUnavailable},
+		{name: "missing capability", cache: &workspaceCacheHelperStub{}, want: http.StatusUnauthorized},
+		{name: "invalid body", cache: &workspaceCacheHelperStub{}, token: "capability", want: http.StatusBadRequest},
+		{name: "unauthorized", cache: &workspaceCacheHelperStub{restoreErr: service.ErrWorkspaceHelperUnauthorized}, token: "capability", want: http.StatusUnauthorized},
+		{name: "invalid request", cache: &workspaceCacheHelperStub{restoreErr: service.ErrWorkspaceHelperCacheInvalidInput}, token: "capability", want: http.StatusBadRequest},
+		{name: "internal", cache: &workspaceCacheHelperStub{restoreErr: errors.New("restore failed")}, token: "capability", want: http.StatusInternalServerError},
+		{name: "miss", cache: &workspaceCacheHelperStub{}, token: "capability", want: http.StatusNoContent},
+		{name: "hit", cache: &workspaceCacheHelperStub{payload: service.WorkspaceHelperCachePayload{Archive: io.NopCloser(strings.NewReader("cache archive")), Publication: publication}, found: true}, token: "capability", want: http.StatusOK},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			handler := NewWorkspaceHelperHandler(nil)
+			handler.SetCacheService(testCase.cache)
+			body := `{"execution_job_id":"job-1","pod_uid":"pod-1","preset":"go","cache_key":"go:key"}`
+			if testCase.name == "invalid body" {
+				body = "{"
+			}
+			request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/cache/restore", strings.NewReader(body))
+			if testCase.token != "" {
+				request.Header.Set("Authorization", "Bearer "+testCase.token)
+			}
+			response := httptest.NewRecorder()
+			handler.RestoreCache(response, request)
+			if response.Code != testCase.want {
+				t.Fatalf("status=%d, want %d", response.Code, testCase.want)
+			}
+			if testCase.name == "hit" && (response.Header().Get("Content-Digest") != publication.ContentDigest || response.Body.String() != "cache archive") {
+				t.Fatalf("headers=%v body=%q", response.Header(), response.Body.String())
+			}
+		})
+	}
+}
+
+func TestWorkspaceHelperHandlerSaveCacheOutcomes(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		cache workspaceCacheHelper
+		token string
+		want  int
+	}{
+		{name: "unavailable", want: http.StatusServiceUnavailable},
+		{name: "missing capability", cache: &workspaceCacheHelperStub{}, want: http.StatusUnauthorized},
+		{name: "unauthorized", cache: &workspaceCacheHelperStub{saveErr: service.ErrWorkspaceHelperUnauthorized}, token: "capability", want: http.StatusUnauthorized},
+		{name: "invalid request", cache: &workspaceCacheHelperStub{saveErr: service.ErrWorkspaceHelperCacheInvalidInput}, token: "capability", want: http.StatusBadRequest},
+		{name: "internal", cache: &workspaceCacheHelperStub{saveErr: errors.New("save failed")}, token: "capability", want: http.StatusInternalServerError},
+		{name: "saved", cache: &workspaceCacheHelperStub{}, token: "capability", want: http.StatusNoContent},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			handler := NewWorkspaceHelperHandler(nil)
+			handler.SetCacheService(testCase.cache)
+			request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/cache/save", strings.NewReader("cache archive"))
+			request.Header.Set("Content-Digest", "sha256:"+strings.Repeat("a", 64))
+			request.Header.Set("Coyote-Execution-Job-ID", "job-1")
+			request.Header.Set("Coyote-Pod-UID", "pod-1")
+			request.Header.Set("Coyote-Cache-Preset", "go")
+			request.Header.Set("Coyote-Cache-Key", "go:key")
+			if testCase.token != "" {
+				request.Header.Set("Authorization", "Bearer "+testCase.token)
+			}
+			response := httptest.NewRecorder()
+			handler.SaveCache(response, request)
+			if response.Code != testCase.want {
+				t.Fatalf("status=%d, want %d", response.Code, testCase.want)
+			}
+		})
+	}
+}
+
+func TestWorkspaceHelperHandlerSaveCacheRejectsOversizedUpload(t *testing.T) {
+	cache := &workspaceCacheHelperStub{}
+	handler := NewWorkspaceHelperHandler(nil)
+	handler.SetCacheService(cache)
+	handler.SetCacheMaxUploadBytes(2)
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/cache/save", strings.NewReader("archive"))
+	request.Header.Set("Authorization", "Bearer capability")
+	response := httptest.NewRecorder()
+
+	handler.SaveCache(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d, want %d", response.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestWorkspaceHelperHandlerSaveCacheLimitsUnknownLengthUpload(t *testing.T) {
+	cache := &workspaceCacheHelperStub{readSaveBody: true}
+	handler := NewWorkspaceHelperHandler(nil)
+	handler.SetCacheService(cache)
+	handler.SetCacheMaxUploadBytes(2)
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/cache/save", io.NopCloser(strings.NewReader("archive")))
+	request.Header.Set("Authorization", "Bearer capability")
+	response := httptest.NewRecorder()
+
+	handler.SaveCache(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d, want %d", response.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
 type workspaceHelperExchangerStub struct {
 	token          string
 	capability     domain.WorkspaceHelperCapability
@@ -270,6 +376,29 @@ func (s *workspacePublisherStub) Publish(context.Context, string, string, string
 }
 
 var _ workspacePublisher = (*workspacePublisherStub)(nil)
+
+type workspaceCacheHelperStub struct {
+	payload      service.WorkspaceHelperCachePayload
+	found        bool
+	restoreErr   error
+	saveErr      error
+	readSaveBody bool
+}
+
+func (s *workspaceCacheHelperStub) Restore(context.Context, string, string, string, string, string) (service.WorkspaceHelperCachePayload, bool, error) {
+	return s.payload, s.found, s.restoreErr
+}
+
+func (s *workspaceCacheHelperStub) Save(_ context.Context, _ string, _ string, _ string, _ string, _ string, archive io.Reader, _ domain.WorkspaceRevisionPublication) error {
+	if s.readSaveBody {
+		if _, readErr := io.ReadAll(archive); readErr != nil {
+			return readErr
+		}
+	}
+	return s.saveErr
+}
+
+var _ workspaceCacheHelper = (*workspaceCacheHelperStub)(nil)
 
 func workspacePrepareHandlerForTest(payload service.WorkspacePreparePayload) *WorkspaceHelperHandler {
 	handler := NewWorkspaceHelperHandler(nil)
