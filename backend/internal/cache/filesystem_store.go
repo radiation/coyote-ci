@@ -91,12 +91,10 @@ func (s *FilesystemStore) Save(_ context.Context, key string, sourceRoot string)
 		return SaveResult{}, statErr
 	}
 
-	// lgtm [go/path-injection] archivePath is constrained under s.root by resolvePathForKey.
 	if mkdirErr := os.MkdirAll(filepath.Dir(archivePath), 0o755); mkdirErr != nil {
 		return SaveResult{}, mkdirErr
 	}
 
-	// lgtm [go/path-injection] archivePath is constrained under s.root by resolvePathForKey.
 	tmpPath, err := os.CreateTemp(filepath.Dir(archivePath), ".cache-archive-*.tar.gz")
 	if err != nil {
 		return SaveResult{}, err
@@ -233,7 +231,8 @@ func (s *FilesystemStore) resolvePathForKey(key string) (string, error) {
 		return "", ErrInvalidCacheKey
 	}
 
-	full := filepath.Join(s.root, cleaned) + ".tar.gz"
+	keyHash := sha256.Sum256([]byte(cleaned))
+	full := filepath.Join(s.root, hex.EncodeToString(keyHash[:])+".tar.gz")
 	root := filepath.Clean(s.root)
 	rel, err := filepath.Rel(root, full)
 	if err != nil {

@@ -85,6 +85,28 @@ func TestFilesystemStore_SaveRejectsSymlinkContent(t *testing.T) {
 	}
 }
 
+func TestFilesystemStore_SaveDoesNotFollowCacheKeyParentSymlink(t *testing.T) {
+	root := t.TempDir()
+	external := t.TempDir()
+	if symlinkErr := os.Symlink(external, filepath.Join(root, "attacker")); symlinkErr != nil {
+		t.Fatalf("create cache key symlink: %v", symlinkErr)
+	}
+	source := t.TempDir()
+	writeCacheTestFile(t, filepath.Join(source, "paths", "000", "cache.txt"), "cached")
+
+	store := NewFilesystemStore(root)
+	if _, saveErr := store.Save(context.Background(), "attacker/key", source); saveErr != nil {
+		t.Fatalf("save cache: %v", saveErr)
+	}
+	entries, readErr := os.ReadDir(external)
+	if readErr != nil {
+		t.Fatalf("read external directory: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("cache save wrote through symlink: %#v", entries)
+	}
+}
+
 func TestFilesystemStore_SaveRejectsFIFOContent(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mkfifo is not supported on windows")
@@ -130,7 +152,10 @@ func TestFilesystemStore_ValidationAndExtractionEdges(t *testing.T) {
 		t.Fatalf("expected invalid cache key from save, got %v", err)
 	}
 
-	archiveDir := filepath.Join(store.root, "dir-cache.tar.gz")
+	archiveDir, resolveErr := store.resolvePathForKey("dir-cache")
+	if resolveErr != nil {
+		t.Fatalf("resolve archive directory path: %v", resolveErr)
+	}
 	if mkdirErr := os.MkdirAll(archiveDir, 0o755); mkdirErr != nil {
 		t.Fatalf("mkdir archive dir: %v", mkdirErr)
 	}
@@ -138,7 +163,10 @@ func TestFilesystemStore_ValidationAndExtractionEdges(t *testing.T) {
 		t.Fatalf("expected archive directory error, got %v", err)
 	}
 
-	unsupportedPath := filepath.Join(store.root, "unsupported.tar.gz")
+	unsupportedPath, resolveErr := store.resolvePathForKey("unsupported")
+	if resolveErr != nil {
+		t.Fatalf("resolve unsupported archive path: %v", resolveErr)
+	}
 	writeUnsupportedTarArchive(t, unsupportedPath)
 	if _, err := store.Restore(ctx, "unsupported", t.TempDir()); err == nil || !strings.Contains(err.Error(), "unsupported tar entry type") {
 		t.Fatalf("expected unsupported tar entry error, got %v", err)
