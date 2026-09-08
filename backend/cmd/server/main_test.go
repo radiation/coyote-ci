@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -127,6 +128,18 @@ func TestConfigureWorkspaceHelperServices(t *testing.T) {
 	if configureErr := configureWorkspaceHelperServices(cacheConfig, workspaceHelperHandler, executionJobs, memoryrepo.NewBuildRepository(), revisions, nil, memoryrepo.NewCacheEntryRepository()); configureErr != nil {
 		t.Fatalf("configure cache helper services: %v", configureErr)
 	}
+	artifactConfig := config.Config{KubernetesArtifactHelperEnabled: true, WorkspaceRevisionStorageRoot: t.TempDir(), WorkspaceHelperMaxUploadSizeMB: 1}
+	if configureErr := configureWorkspaceHelperServices(artifactConfig, workspaceHelperHandler, executionJobs, memoryrepo.NewBuildRepository(), revisions, nil); configureErr == nil {
+		t.Fatal("expected artifact repository and store requirement")
+	}
+	artifactResolver := artifact.NewStoreResolver(domain.StorageProviderFilesystem, map[domain.StorageProvider]artifact.Store{domain.StorageProviderFilesystem: artifact.NewFilesystemStore(t.TempDir())})
+	if configureErr := configureWorkspaceHelperServices(artifactConfig, workspaceHelperHandler, executionJobs, memoryrepo.NewBuildRepository(), revisions, nil, artifactRepositoryStub{}, artifactResolver); configureErr != nil {
+		t.Fatalf("configure artifact helper services: %v", configureErr)
+	}
+}
+
+type artifactRepositoryStub struct {
+	repository.ArtifactRepository
 }
 
 type workspaceHelperIdentityVerifier struct{}

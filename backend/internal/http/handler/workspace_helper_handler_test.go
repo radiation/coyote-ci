@@ -337,6 +337,102 @@ func TestWorkspaceHelperHandlerSaveCacheLimitsUnknownLengthUpload(t *testing.T) 
 	}
 }
 
+func TestWorkspaceHelperHandlerUploadArtifactRejectsOversizedUpload(t *testing.T) {
+	handler := NewWorkspaceHelperHandler(nil)
+	handler.SetArtifactService(&workspaceArtifactHelperStub{})
+	handler.SetArtifactMaxUploadBytes(2)
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/artifacts/upload", strings.NewReader("artifact"))
+	request.Header.Set("Authorization", "Bearer capability")
+	response := httptest.NewRecorder()
+
+	handler.UploadArtifact(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d, want %d", response.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestWorkspaceHelperHandlerUploadArtifactLimitsUnknownLengthUpload(t *testing.T) {
+	handler := NewWorkspaceHelperHandler(nil)
+	handler.SetArtifactService(&workspaceArtifactHelperStub{readUploadBody: true})
+	handler.SetArtifactMaxUploadBytes(2)
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/artifacts/upload", io.NopCloser(strings.NewReader("artifact")))
+	request.Header.Set("Authorization", "Bearer capability")
+	response := httptest.NewRecorder()
+
+	handler.UploadArtifact(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d, want %d", response.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestWorkspaceHelperHandlerPlanArtifactsOutcomes(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		artifacts workspaceArtifactHelper
+		body      string
+		token     string
+		want      int
+	}{
+		{name: "unavailable", want: http.StatusServiceUnavailable},
+		{name: "missing capability", artifacts: &workspaceArtifactHelperStub{}, want: http.StatusUnauthorized},
+		{name: "invalid request", artifacts: &workspaceArtifactHelperStub{}, body: "{", token: "capability", want: http.StatusBadRequest},
+		{name: "unauthorized", artifacts: &workspaceArtifactHelperStub{planErr: service.ErrWorkspaceHelperUnauthorized}, token: "capability", want: http.StatusUnauthorized},
+		{name: "invalid artifact request", artifacts: &workspaceArtifactHelperStub{planErr: service.ErrWorkspaceHelperArtifactInvalidInput}, token: "capability", want: http.StatusBadRequest},
+		{name: "internal", artifacts: &workspaceArtifactHelperStub{planErr: errors.New("plan failed")}, token: "capability", want: http.StatusInternalServerError},
+		{name: "planned", artifacts: &workspaceArtifactHelperStub{plan: service.WorkspaceHelperArtifactPlan{Collect: true}}, token: "capability", want: http.StatusOK},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			handler := NewWorkspaceHelperHandler(nil)
+			handler.SetArtifactService(testCase.artifacts)
+			body := testCase.body
+			if body == "" {
+				body = `{"execution_job_id":"job-1","pod_uid":"pod-1","build_succeeded":true}`
+			}
+			request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/artifacts/plan", strings.NewReader(body))
+			if testCase.token != "" {
+				request.Header.Set("Authorization", "Bearer "+testCase.token)
+			}
+			response := httptest.NewRecorder()
+
+			handler.PlanArtifacts(response, request)
+			if response.Code != testCase.want {
+				t.Fatalf("status=%d, want %d", response.Code, testCase.want)
+			}
+		})
+	}
+}
+
+func TestWorkspaceHelperHandlerUploadArtifactOutcomes(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		artifacts workspaceArtifactHelper
+		token     string
+		want      int
+	}{
+		{name: "unavailable", want: http.StatusServiceUnavailable},
+		{name: "missing capability", artifacts: &workspaceArtifactHelperStub{}, want: http.StatusUnauthorized},
+		{name: "unauthorized", artifacts: &workspaceArtifactHelperStub{uploadErr: service.ErrWorkspaceHelperUnauthorized}, token: "capability", want: http.StatusUnauthorized},
+		{name: "invalid artifact request", artifacts: &workspaceArtifactHelperStub{uploadErr: service.ErrWorkspaceHelperArtifactInvalidInput}, token: "capability", want: http.StatusBadRequest},
+		{name: "internal", artifacts: &workspaceArtifactHelperStub{uploadErr: errors.New("upload failed")}, token: "capability", want: http.StatusInternalServerError},
+		{name: "uploaded", artifacts: &workspaceArtifactHelperStub{}, token: "capability", want: http.StatusNoContent},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			handler := NewWorkspaceHelperHandler(nil)
+			handler.SetArtifactService(testCase.artifacts)
+			request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/artifacts/upload", strings.NewReader("artifact"))
+			if testCase.token != "" {
+				request.Header.Set("Authorization", "Bearer "+testCase.token)
+			}
+			response := httptest.NewRecorder()
+
+			handler.UploadArtifact(response, request)
+			if response.Code != testCase.want {
+				t.Fatalf("status=%d, want %d", response.Code, testCase.want)
+			}
+		})
+	}
+}
+
 type workspaceHelperExchangerStub struct {
 	token          string
 	capability     domain.WorkspaceHelperCapability
@@ -399,6 +495,27 @@ func (s *workspaceCacheHelperStub) Save(_ context.Context, _ string, _ string, _
 }
 
 var _ workspaceCacheHelper = (*workspaceCacheHelperStub)(nil)
+
+type workspaceArtifactHelperStub struct {
+	readUploadBody bool
+	plan           service.WorkspaceHelperArtifactPlan
+	planErr        error
+	uploadErr      error
+}
+
+func (s *workspaceArtifactHelperStub) Plan(context.Context, string, string, string, bool) (service.WorkspaceHelperArtifactPlan, error) {
+	return s.plan, s.planErr
+}
+
+func (s *workspaceArtifactHelperStub) Upload(_ context.Context, _ string, _ string, _ string, _ string, _ string, _ bool, source io.Reader) error {
+	if s.readUploadBody {
+		_, readErr := io.ReadAll(source)
+		return readErr
+	}
+	return s.uploadErr
+}
+
+var _ workspaceArtifactHelper = (*workspaceArtifactHelperStub)(nil)
 
 func workspacePrepareHandlerForTest(payload service.WorkspacePreparePayload) *WorkspaceHelperHandler {
 	handler := NewWorkspaceHelperHandler(nil)

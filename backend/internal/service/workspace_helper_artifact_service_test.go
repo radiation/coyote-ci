@@ -72,6 +72,16 @@ func TestWorkspaceHelperArtifactServicePersistsBuildWideScopesAndConvergesRetrie
 	}
 }
 
+func TestWorkspaceHelperArtifactServiceConvergesMetadataConflictAfterCollection(t *testing.T) {
+	harness := newWorkspaceHelperArtifactHarness(t)
+	harness.artifacts.createErr = repository.ErrArtifactConflict
+
+	uploadErr := harness.service.Upload(context.Background(), "token", harness.job.ID, "pod-uid", "step-1", "first/output.txt", true, strings.NewReader("first"))
+	if uploadErr != nil {
+		t.Fatalf("upload should converge after a metadata conflict: %v", uploadErr)
+	}
+}
+
 func TestWorkspaceHelperArtifactServiceRejectsUnauthorizedScope(t *testing.T) {
 	harness := newWorkspaceHelperArtifactHarness(t)
 	if err := harness.service.Upload(context.Background(), "token", harness.job.ID, "pod-uid", "other-step", "first/output.txt", true, strings.NewReader("bad")); err == nil {
@@ -110,9 +120,13 @@ func newWorkspaceHelperArtifactHarness(t *testing.T) *workspaceHelperArtifactHar
 
 type workspaceHelperArtifactRepositoryFake struct {
 	artifacts []domain.BuildArtifact
+	createErr error
 }
 
 func (r *workspaceHelperArtifactRepositoryFake) Create(_ context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
+	if r.createErr != nil {
+		return domain.BuildArtifact{}, r.createErr
+	}
 	for _, existing := range r.artifacts {
 		if existing.BuildID != artifact.BuildID || existing.LogicalPath != artifact.LogicalPath {
 			continue

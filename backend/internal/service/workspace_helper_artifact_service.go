@@ -98,6 +98,9 @@ func (s *WorkspaceHelperArtifactService) Upload(ctx context.Context, capabilityT
 		persistedStepID = &value
 	}
 	_, createErr := s.artifacts.Create(ctx, domain.BuildArtifact{ID: collected.GeneratedID, BuildID: job.BuildID, StepID: persistedStepID, LogicalPath: collected.LogicalPath, ArtifactType: domain.InferArtifactType(collected.LogicalPath, collected.ContentType), StorageKey: collected.StorageKey, StorageProvider: s.provider, SizeBytes: collected.SizeBytes, ContentType: collected.ContentType, ChecksumSHA256: collected.ChecksumSHA256, CreatedAt: time.Now().UTC()})
+	if errors.Is(createErr, repository.ErrArtifactConflict) {
+		return nil
+	}
 	return createErr
 }
 

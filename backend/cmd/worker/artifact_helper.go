@@ -116,30 +116,32 @@ func uploadArtifactScope(ctx context.Context, apiURL, capability, executionJobID
 		if !matched {
 			return nil
 		}
-		file, openErr := os.Open(path)
-		if openErr != nil {
-			return openErr
-		}
-		defer func() { _ = file.Close() }()
-		upload, newRequestErr := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/internal/workspace-helper/artifacts/upload", file)
-		if newRequestErr != nil {
-			return newRequestErr
-		}
-		upload.Header.Set("Authorization", "Bearer "+capability)
-		upload.Header.Set("Coyote-Execution-Job-ID", executionJobID)
-		upload.Header.Set("Coyote-Pod-UID", podUID)
-		upload.Header.Set("Coyote-Step-ID", stepID)
-		upload.Header.Set("Coyote-Artifact-Path", logicalPath)
-		upload.Header.Set("Coyote-Build-Succeeded", fmt.Sprintf("%t", buildSucceeded))
-		uploadResponse, uploadDoErr := http.DefaultClient.Do(upload)
-		if uploadDoErr != nil {
-			return uploadDoErr
-		}
-		_, _ = io.Copy(io.Discard, uploadResponse.Body)
-		_ = uploadResponse.Body.Close()
-		if uploadResponse.StatusCode != http.StatusNoContent {
-			return fmt.Errorf("artifact upload returned HTTP %d", uploadResponse.StatusCode)
-		}
-		return nil
+		return func() error {
+			file, openErr := os.Open(path)
+			if openErr != nil {
+				return openErr
+			}
+			defer func() { _ = file.Close() }()
+			upload, newRequestErr := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/internal/workspace-helper/artifacts/upload", file)
+			if newRequestErr != nil {
+				return newRequestErr
+			}
+			upload.Header.Set("Authorization", "Bearer "+capability)
+			upload.Header.Set("Coyote-Execution-Job-ID", executionJobID)
+			upload.Header.Set("Coyote-Pod-UID", podUID)
+			upload.Header.Set("Coyote-Step-ID", stepID)
+			upload.Header.Set("Coyote-Artifact-Path", logicalPath)
+			upload.Header.Set("Coyote-Build-Succeeded", fmt.Sprintf("%t", buildSucceeded))
+			uploadResponse, uploadDoErr := http.DefaultClient.Do(upload)
+			if uploadDoErr != nil {
+				return uploadDoErr
+			}
+			_, _ = io.Copy(io.Discard, uploadResponse.Body)
+			_ = uploadResponse.Body.Close()
+			if uploadResponse.StatusCode != http.StatusNoContent {
+				return fmt.Errorf("artifact upload returned HTTP %d", uploadResponse.StatusCode)
+			}
+			return nil
+		}()
 	})
 }

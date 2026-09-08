@@ -56,7 +56,7 @@ Set the externally reachable server URL. It must not be `localhost`, `host.docke
 ```sh
 export COYOTE_INTERNAL_API_URL=https://coyote.example.com
 export API_URL="$COYOTE_INTERNAL_API_URL"
-export COYOTE_SMOKE_API_TOKEN=<coyote_pat_with_build:read_build:logs_build:run_scopes>
+export COYOTE_SMOKE_API_TOKEN=<coyote_pat_with_build:read_build:logs_build:run>
 export GKE_WORKER_GSA_EMAIL=coyote-gke-worker@your-project.iam.gserviceaccount.com
 ```
 

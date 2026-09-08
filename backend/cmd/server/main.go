@@ -515,6 +515,7 @@ func configureWorkspaceHelperServices(cfg config.Config, workspaceHelperHandler 
 			return artifactServiceErr
 		}
 		workspaceHelperHandler.SetArtifactService(artifactService)
+		workspaceHelperHandler.SetArtifactMaxUploadBytes(int64(cfg.WorkspaceHelperMaxUploadSizeMB) * 1024 * 1024)
 	}
 	if cfg.KubernetesCacheHelperEnabled {
 		if len(cacheEntries) != 1 || cacheEntries[0] == nil {

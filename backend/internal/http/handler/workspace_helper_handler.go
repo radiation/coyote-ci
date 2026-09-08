@@ -42,12 +42,13 @@ type workspaceArtifactHelper interface {
 }
 
 type WorkspaceHelperHandler struct {
-	capabilities        workspaceHelperCapabilityExchanger
-	prepare             workspacePrepareOpener
-	publish             workspacePublisher
-	cache               workspaceCacheHelper
-	artifacts           workspaceArtifactHelper
-	cacheMaxUploadBytes int64
+	capabilities           workspaceHelperCapabilityExchanger
+	prepare                workspacePrepareOpener
+	publish                workspacePublisher
+	cache                  workspaceCacheHelper
+	artifacts              workspaceArtifactHelper
+	cacheMaxUploadBytes    int64
+	artifactMaxUploadBytes int64
 }
 
 func (h *WorkspaceHelperHandler) SetArtifactService(artifacts workspaceArtifactHelper) {
@@ -81,6 +82,12 @@ func (h *WorkspaceHelperHandler) SetCacheService(cache workspaceCacheHelper) {
 func (h *WorkspaceHelperHandler) SetCacheMaxUploadBytes(maxBytes int64) {
 	if h != nil {
 		h.cacheMaxUploadBytes = maxBytes
+	}
+}
+
+func (h *WorkspaceHelperHandler) SetArtifactMaxUploadBytes(maxBytes int64) {
+	if h != nil {
+		h.artifactMaxUploadBytes = maxBytes
 	}
 }
 
@@ -270,9 +277,9 @@ func (h *WorkspaceHelperHandler) SaveCache(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	body := r.Body
-	var limitedBody *cacheUploadLimitReader
+	var limitedBody *uploadLimitReader
 	if h.cacheMaxUploadBytes > 0 {
-		limitedBody = &cacheUploadLimitReader{ReadCloser: http.MaxBytesReader(w, r.Body, h.cacheMaxUploadBytes)}
+		limitedBody = &uploadLimitReader{ReadCloser: http.MaxBytesReader(w, r.Body, h.cacheMaxUploadBytes)}
 		body = limitedBody
 	}
 	size := r.ContentLength
@@ -326,9 +333,23 @@ func (h *WorkspaceHelperHandler) UploadArtifact(w http.ResponseWriter, r *http.R
 		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "workspace helper capability is required")
 		return
 	}
+	if h.artifactMaxUploadBytes > 0 && r.ContentLength > h.artifactMaxUploadBytes {
+		writeErrorJSON(w, http.StatusRequestEntityTooLarge, "artifact_too_large", "artifact upload exceeds the configured size limit")
+		return
+	}
+	body := r.Body
+	var limitedBody *uploadLimitReader
+	if h.artifactMaxUploadBytes > 0 {
+		limitedBody = &uploadLimitReader{ReadCloser: http.MaxBytesReader(w, r.Body, h.artifactMaxUploadBytes)}
+		body = limitedBody
+	}
 	buildSucceeded := strings.EqualFold(strings.TrimSpace(r.Header.Get("Coyote-Build-Succeeded")), "true")
-	uploadErr := h.artifacts.Upload(r.Context(), capability, strings.TrimSpace(r.Header.Get("Coyote-Execution-Job-ID")), strings.TrimSpace(r.Header.Get("Coyote-Pod-UID")), strings.TrimSpace(r.Header.Get("Coyote-Step-ID")), strings.TrimSpace(r.Header.Get("Coyote-Artifact-Path")), buildSucceeded, r.Body)
+	uploadErr := h.artifacts.Upload(r.Context(), capability, strings.TrimSpace(r.Header.Get("Coyote-Execution-Job-ID")), strings.TrimSpace(r.Header.Get("Coyote-Pod-UID")), strings.TrimSpace(r.Header.Get("Coyote-Step-ID")), strings.TrimSpace(r.Header.Get("Coyote-Artifact-Path")), buildSucceeded, body)
 	if uploadErr != nil {
+		if limitedBody != nil && limitedBody.exceeded {
+			writeErrorJSON(w, http.StatusRequestEntityTooLarge, "artifact_too_large", "artifact upload exceeds the configured size limit")
+			return
+		}
 		handleWorkspaceArtifactError(w, uploadErr)
 		return
 	}
@@ -348,12 +369,12 @@ func handleWorkspaceArtifactError(w http.ResponseWriter, err error) {
 	writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "workspace artifact operation failed")
 }
 
-type cacheUploadLimitReader struct {
+type uploadLimitReader struct {
 	io.ReadCloser
 	exceeded bool
 }
 
-func (r *cacheUploadLimitReader) Read(buffer []byte) (int, error) {
+func (r *uploadLimitReader) Read(buffer []byte) (int, error) {
 	read, err := r.ReadCloser.Read(buffer)
 	var maxBytesErr *http.MaxBytesError
 	if errors.As(err, &maxBytesErr) {
