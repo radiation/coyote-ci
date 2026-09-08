@@ -1,6 +1,7 @@
 package dbopen
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,15 @@ func TestConfigMode_UsesDatabaseURL(t *testing.T) {
 	got := ConfigMode(cfg)
 	if got != "using DATABASE_URL" {
 		t.Fatalf("expected using DATABASE_URL, got %q", got)
+	}
+}
+
+func TestConfigMode_UsesDatabaseURLFile(t *testing.T) {
+	cfg := config.Config{DatabaseURLFile: "/var/run/secrets/coyote/database-url"}
+
+	got := ConfigMode(cfg)
+	if got != "using DATABASE_URL_FILE" {
+		t.Fatalf("expected using DATABASE_URL_FILE, got %q", got)
 	}
 }
 
@@ -40,7 +50,10 @@ func TestFromConfig_UsesDatabaseURLAndPoolSettings(t *testing.T) {
 		DBConnMaxIdleTime: 11 * time.Minute,
 	}
 
-	gotURL, gotPool := FromConfig(cfg)
+	gotURL, gotPool, fromConfigErr := FromConfig(cfg)
+	if fromConfigErr != nil {
+		t.Fatalf("from config: %v", fromConfigErr)
+	}
 	if gotURL != cfg.DatabaseURLValue {
 		t.Fatalf("expected DATABASE_URL precedence, got %q", gotURL)
 	}
@@ -55,5 +68,12 @@ func TestFromConfig_UsesDatabaseURLAndPoolSettings(t *testing.T) {
 	}
 	if gotPool.ConnMaxIdleTime != 11*time.Minute {
 		t.Fatalf("expected ConnMaxIdleTime=11m, got %s", gotPool.ConnMaxIdleTime)
+	}
+}
+
+func TestFromConfig_PropagatesDatabaseURLFileError(t *testing.T) {
+	_, _, fromConfigErr := FromConfig(config.Config{DatabaseURLFile: "/does/not/exist"})
+	if fromConfigErr == nil || !strings.Contains(fromConfigErr.Error(), "read DATABASE_URL_FILE") {
+		t.Fatalf("from config error=%v", fromConfigErr)
 	}
 }

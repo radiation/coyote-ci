@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -527,7 +528,10 @@ func TestConfig_DatabaseURL(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := tc.cfg.DatabaseURL()
+			got, databaseURLErr := tc.cfg.DatabaseURL()
+			if databaseURLErr != nil {
+				t.Fatalf("database url: %v", databaseURLErr)
+			}
 			if got != tc.expected {
 				t.Fatalf("expected %q, got %q", tc.expected, got)
 			}
@@ -549,6 +553,26 @@ func TestConfig_UsesDatabaseURL(t *testing.T) {
 	}
 }
 
+func TestConfig_DatabaseConfigMode(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{name: "file", cfg: Config{DatabaseURLFile: "/var/run/secrets/coyote/database-url"}, want: "DATABASE_URL_FILE"},
+		{name: "environment", cfg: Config{DatabaseURLValue: "postgres://example/coyote"}, want: "DATABASE_URL"},
+		{name: "split fields", cfg: Config{}, want: "discrete DB_* settings"},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := testCase.cfg.DatabaseConfigMode(); got != testCase.want {
+				t.Fatalf("database config mode=%q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestLoad_DatabaseURLPrecedenceOverSplitFields(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://external-user:external-pass@external-host:5432/external-db?sslmode=require")
 	t.Setenv("DB_HOST", "local-host")
@@ -559,12 +583,85 @@ func TestLoad_DatabaseURLPrecedenceOverSplitFields(t *testing.T) {
 	t.Setenv("DB_SSLMODE", "disable")
 
 	cfg := Load()
-	got := cfg.DatabaseURL()
+	got, databaseURLErr := cfg.DatabaseURL()
+	if databaseURLErr != nil {
+		t.Fatalf("database url: %v", databaseURLErr)
+	}
 	expected := "postgres://external-user:external-pass@external-host:5432/external-db?sslmode=require"
 	if got != expected {
 		t.Fatalf("expected DATABASE_URL to take precedence, got %q", got)
 	}
 	if !cfg.UsesDatabaseURL() {
 		t.Fatalf("expected UsesDatabaseURL to return true when DATABASE_URL is set")
+	}
+}
+
+func TestLoad_DatabaseURLFilePrecedence(t *testing.T) {
+	urlFile := filepath.Join(t.TempDir(), "database-url")
+	if writeErr := os.WriteFile(urlFile, []byte("postgres://file-user:file-pass@127.0.0.1:5432/coyote_ci?sslmode=disable\n"), 0o600); writeErr != nil {
+		t.Fatalf("write database URL file: %v", writeErr)
+	}
+	t.Setenv("DATABASE_URL_FILE", urlFile)
+	t.Setenv("DATABASE_URL", "postgres://environment/ignored")
+
+	cfg := Load()
+	if cfg.DatabaseURLFile != urlFile {
+		t.Fatalf("DATABASE_URL_FILE=%q, want %q", cfg.DatabaseURLFile, urlFile)
+	}
+	got, databaseURLErr := cfg.DatabaseURL()
+	if databaseURLErr != nil {
+		t.Fatalf("database url: %v", databaseURLErr)
+	}
+	if want := "postgres://file-user:file-pass@127.0.0.1:5432/coyote_ci?sslmode=disable"; got != want {
+		t.Fatalf("database URL=%q, want %q", got, want)
+	}
+}
+
+func TestConfig_DatabaseURLFile(t *testing.T) {
+	urlFile := filepath.Join(t.TempDir(), "database-url")
+	if writeErr := os.WriteFile(urlFile, []byte("  postgres://file-user:file-pass@127.0.0.1:5432/coyote_ci?sslmode=disable\n"), 0o600); writeErr != nil {
+		t.Fatalf("write database URL file: %v", writeErr)
+	}
+
+	cfg := Config{DatabaseURLFile: urlFile, DatabaseURLValue: "postgres://environment/ignored"}
+	got, databaseURLErr := cfg.DatabaseURL()
+	if databaseURLErr != nil {
+		t.Fatalf("database url: %v", databaseURLErr)
+	}
+	if want := "postgres://file-user:file-pass@127.0.0.1:5432/coyote_ci?sslmode=disable"; got != want {
+		t.Fatalf("database URL=%q, want %q", got, want)
+	}
+	if gotMode := cfg.DatabaseConfigMode(); gotMode != "DATABASE_URL_FILE" {
+		t.Fatalf("database config mode=%q", gotMode)
+	}
+}
+
+func TestConfig_DatabaseURLFileErrorsDoNotFallBack(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents string
+		wantErr  string
+	}{
+		{name: "missing file", wantErr: "read DATABASE_URL_FILE"},
+		{name: "empty file", contents: " \n\t ", wantErr: "is empty"},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "database-url")
+			if testCase.name != "missing file" {
+				if writeErr := os.WriteFile(path, []byte(testCase.contents), 0o600); writeErr != nil {
+					t.Fatalf("write database URL file: %v", writeErr)
+				}
+			}
+			cfg := Config{DatabaseURLFile: path, DatabaseURLValue: "postgres://environment/must-not-be-used"}
+			got, databaseURLErr := cfg.DatabaseURL()
+			if databaseURLErr == nil || !strings.Contains(databaseURLErr.Error(), testCase.wantErr) {
+				t.Fatalf("database URL error=%v, want containing %q", databaseURLErr, testCase.wantErr)
+			}
+			if got != "" {
+				t.Fatalf("database URL=%q, want empty on error", got)
+			}
+		})
 	}
 }

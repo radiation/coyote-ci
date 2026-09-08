@@ -103,7 +103,10 @@ func main() {
 		log.Printf("public url configured for notification links: %s", cfg.PublicURL)
 	}
 
-	dbURL, dbPoolCfg := dbopen.FromConfig(cfg)
+	dbURL, dbPoolCfg, databaseConfigErr := dbopen.FromConfig(cfg)
+	if databaseConfigErr != nil {
+		log.Fatal(databaseConfigError(databaseConfigErr))
+	}
 	db, err := platformdb.Open(dbURL, dbPoolCfg)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
@@ -428,6 +431,10 @@ func main() {
 		log.Fatalf("server failed: %v", err)
 	}
 	wg.Wait()
+}
+
+func databaseConfigError(err error) string {
+	return fmt.Sprintf("failed to resolve database configuration: %v", err)
 }
 
 func newWorkspaceHelperHandler(cfg config.Config, executionJobs repository.ExecutionJobRepository) (*handler.WorkspaceHelperHandler, error) {

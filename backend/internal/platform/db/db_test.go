@@ -1,11 +1,20 @@
 package db
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestOpen_ErrorPath(t *testing.T) {
+	originalStartupTimeout := startupTimeout
+	startupTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		startupTimeout = originalStartupTimeout
+	})
+
 	tests := []struct {
 		name string
 		url  string
@@ -23,7 +32,6 @@ func TestOpen_ErrorPath(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			db, err := Open(tc.url, PoolConfig{
 				MaxOpenConns:    10,
 				MaxIdleConns:    5,
@@ -38,4 +46,57 @@ func TestOpen_ErrorPath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPingWithRetry(t *testing.T) {
+	t.Run("immediate success", func(t *testing.T) {
+		calls := 0
+		retryErr := pingWithRetry(context.Background(), 0, func(context.Context) error {
+			calls++
+			return nil
+		})
+		if retryErr != nil || calls != 1 {
+			t.Fatalf("retry error=%v calls=%d", retryErr, calls)
+		}
+	})
+
+	t.Run("transient failure then success", func(t *testing.T) {
+		calls := 0
+		retryErr := pingWithRetry(context.Background(), 0, func(context.Context) error {
+			calls++
+			if calls == 1 {
+				return errors.New("proxy not ready")
+			}
+			return nil
+		})
+		if retryErr != nil || calls != 2 {
+			t.Fatalf("retry error=%v calls=%d", retryErr, calls)
+		}
+	})
+
+	t.Run("retry exhaustion", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		calls := 0
+		retryErr := pingWithRetry(ctx, 0, func(context.Context) error {
+			calls++
+			cancel()
+			return errors.New("proxy not ready")
+		})
+		if retryErr == nil || calls != 1 || !strings.Contains(retryErr.Error(), "proxy not ready") {
+			t.Fatalf("retry error=%v calls=%d", retryErr, calls)
+		}
+	})
+
+	t.Run("context cancellation before first attempt", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		calls := 0
+		retryErr := pingWithRetry(ctx, 0, func(context.Context) error {
+			calls++
+			return nil
+		})
+		if retryErr == nil || calls != 0 || !strings.Contains(retryErr.Error(), "context canceled") {
+			t.Fatalf("retry error=%v calls=%d", retryErr, calls)
+		}
+	})
 }

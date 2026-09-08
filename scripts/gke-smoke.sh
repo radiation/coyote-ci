@@ -49,6 +49,13 @@ fi
 kubectl -n "$namespace" rollout status deployment/coyote-kubernetes-worker --timeout="${timeout_seconds}s"
 worker_pod=$(kubectl -n "$namespace" get pods -l app.kubernetes.io/name=coyote-kubernetes-worker -o jsonpath='{.items[0].metadata.name}')
 [[ -n "$worker_pod" ]] || { echo "worker Pod was not found" >&2; exit 1; }
+worker_pod_json=$(kubectl -n "$namespace" get pod "$worker_pod" -o json)
+jq -e '.spec.containers[] | select(.name == "worker") | [.env[]? | select(.name == "DATABASE_URL_FILE") | .value] | index("/var/run/secrets/coyote/database-url") != null' <<<"$worker_pod_json" >/dev/null
+jq -e '.spec.containers[] | select(.name == "worker") | [.env[]? | select(.name == "DATABASE_URL")] | length == 0' <<<"$worker_pod_json" >/dev/null
+jq -e '.spec.volumes[] | select(.name == "database-url") | .csi.driver == "secrets-store-gke.csi.k8s.io" and .csi.volumeAttributes.secretProviderClass == "coyote-database-secrets"' <<<"$worker_pod_json" >/dev/null
+jq -e '.spec.containers[] | select(.name == "worker") | .volumeMounts[] | select(.name == "database-url" and .mountPath == "/var/run/secrets/coyote" and .readOnly == true)' <<<"$worker_pod_json" >/dev/null
+jq -e '.spec.containers[] | select(.name == "cloud-sql-proxy") | .ports[] | select(.name == "postgres" and .containerPort == 5432)' <<<"$worker_pod_json" >/dev/null
+jq -e '.status.containerStatuses[] | select(.name == "cloud-sql-proxy") | .ready == true and .state.running != null' <<<"$worker_pod_json" >/dev/null
 curl -fsS "$api_url/api/readyz" >/dev/null
 
 project_result=$(curl -sS -w '\n%{http_code}' -X POST "$api_url/api/projects" -H 'Content-Type: application/json' --data '{"name":"gke autopilot smoke","slug":"gke-autopilot-smoke"}')

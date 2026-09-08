@@ -10,6 +10,8 @@ When workspace helper support is enabled, the server also requires `COYOTE_WORKS
 
 Current Kubernetes workload identity verification assumes the Coyote server can verify identities against the relevant Kubernetes cluster. Multi-cluster identity routing is a future concern and is not part of this slice.
 
+For the temporary VM-hosted server to GKE topology, [the GKE smoke guide](gke-autopilot-smoke.md) documents the dedicated `coyote-workspace-verifier` kubeconfig bridge. That identity can only create TokenReviews and get Pods in `coyote-ci`; it does not change the verifier's existing checks for helper ServiceAccount, requested audience, Pod name and UID, execution-job label, or claim digest. The bridge is removed when the server runs in GKE and uses in-cluster configuration.
+
 ## Prepare Transport
 
 `coyote-worker workspace prepare` exchanges its projected identity for the `prepare` capability, then calls the internal prepare endpoint with only its execution-job ID and Pod UID. The server resolves the workspace input from the durable execution-job plan: it prepares an exact pinned source checkout with server-owned SCM credentials, or opens the authoritative predecessor revision archive. The helper never receives repository URLs, SCM credentials, storage keys, database configuration, or Kubernetes client configuration.

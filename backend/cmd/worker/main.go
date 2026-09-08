@@ -77,7 +77,10 @@ func main() {
 	logEmailNotificationConfig(cfg)
 	logNotificationLinkConfig(cfg.PublicURL)
 
-	dbURL, dbPoolCfg := dbopen.FromConfig(cfg)
+	dbURL, dbPoolCfg, databaseConfigErr := dbopen.FromConfig(cfg)
+	if databaseConfigErr != nil {
+		log.Fatal(databaseConfigError(databaseConfigErr))
+	}
 	db, err := platformdb.Open(dbURL, dbPoolCfg)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
@@ -181,6 +184,10 @@ func main() {
 		log.Fatalf("worker loop failed: %v", err)
 	}
 	log.Printf("worker stopped")
+}
+
+func databaseConfigError(err error) string {
+	return fmt.Sprintf("failed to resolve database configuration: %v", err)
 }
 
 func runWorkspaceHelperCommand(ctx context.Context, args []string) (bool, error) {

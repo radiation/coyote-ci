@@ -3,6 +3,7 @@ set -euo pipefail
 
 namespace="${GKE_NAMESPACE:-coyote-ci}"
 api_url="${COYOTE_INTERNAL_API_URL:-${API_URL:-}}"
+expected_worker_gsa="${GKE_WORKER_GSA_EMAIL:-}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 require_command() {
@@ -21,8 +22,24 @@ if [[ -z "$api_url" || "$api_url" == *"localhost"* || "$api_url" == *"host.docke
   exit 1
 fi
 
-if ! kubectl -n "$namespace" get secret coyote-gke-worker >/dev/null 2>&1; then
-  echo "missing secret coyote-gke-worker in namespace $namespace; create it with DATABASE_URL first" >&2
+if [[ -z "$expected_worker_gsa" ]]; then
+  echo "GKE_WORKER_GSA_EMAIL must name the Google service account bound to coyote-kubernetes-worker" >&2
+  exit 1
+fi
+
+if ! kubectl -n "$namespace" get serviceaccount coyote-kubernetes-worker >/dev/null 2>&1; then
+  echo "missing externally bootstrapped ServiceAccount coyote-kubernetes-worker in namespace $namespace" >&2
+  exit 1
+fi
+
+worker_gsa="$(kubectl -n "$namespace" get serviceaccount coyote-kubernetes-worker -o jsonpath='{.metadata.annotations.iam\.gke\.io/gcp-service-account}')"
+if [[ "$worker_gsa" != "$expected_worker_gsa" ]]; then
+  echo "ServiceAccount coyote-kubernetes-worker must have iam.gke.io/gcp-service-account=$expected_worker_gsa; got ${worker_gsa:-<missing>}" >&2
+  exit 1
+fi
+
+if ! kubectl -n "$namespace" get secretproviderclass coyote-database-secrets >/dev/null 2>&1; then
+  echo "missing externally bootstrapped SecretProviderClass coyote-database-secrets in namespace $namespace" >&2
   exit 1
 fi
 

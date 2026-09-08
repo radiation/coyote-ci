@@ -44,6 +44,11 @@ services:
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       SESSION_COOKIE_SAME_SITE: ${SESSION_COOKIE_SAME_SITE:-lax}
       COYOTE_PUBLIC_URL: ${COYOTE_PUBLIC_URL:-}
+      COYOTE_WORKSPACE_HELPER_ENABLED: ${COYOTE_WORKSPACE_HELPER_ENABLED:-false}
+      COYOTE_WORKSPACE_HELPER_KUBECONFIG: /etc/coyote/gke-verifier-kubeconfig
+      COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT: ${COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT:-coyote-workspace-helper}
+      COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET: ${COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET:-}
+      COYOTE_WORKSPACE_REVISION_STORAGE_ROOT: /var/lib/coyote-workspaces
 
       ARTIFACT_STORAGE_PROVIDER: ${ARTIFACT_STORAGE_PROVIDER}
       ARTIFACT_GCS_BUCKET: ${ARTIFACT_GCS_BUCKET}
@@ -53,35 +58,8 @@ services:
       - "8080:8080"
     volumes:
       - artifact_data:/var/lib/coyote-artifacts
-
-  worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      args:
-        GO_VERSION: ${GO_VERSION}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    environment:
-      ARTIFACT_STORAGE_ROOT: /var/lib/coyote-artifacts
-      DATABASE_URL: ${DATABASE_URL}
-
-      ARTIFACT_STORAGE_PROVIDER: ${ARTIFACT_STORAGE_PROVIDER}
-      ARTIFACT_GCS_BUCKET: ${ARTIFACT_GCS_BUCKET}
-      ARTIFACT_GCS_PREFIX: ${ARTIFACT_GCS_PREFIX}
-      ARTIFACT_GCS_PROJECT: ${ARTIFACT_GCS_PROJECT}
-      COYOTE_PUBLIC_URL: ${COYOTE_PUBLIC_URL:-}
-
-      WORKER_EXECUTION_WORKSPACE_ROOT: /tmp/coyote-builds
-      WORKER_MOUNT_DOCKER_SOCKET: "true"
-    entrypoint: ["/app/worker"]
-    volumes:
-      - artifact_data:/var/lib/coyote-artifacts
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /tmp/coyote-builds:/tmp/coyote-builds
+      - workspace_revision_data:/var/lib/coyote-workspaces
+      - ${COYOTE_WORKSPACE_HELPER_KUBECONFIG_HOST_PATH:-./secrets/gke-verifier-kubeconfig}:/etc/coyote/gke-verifier-kubeconfig:ro
 
   frontend:
     build:
@@ -95,3 +73,4 @@ services:
 
 volumes:
   artifact_data:
+  workspace_revision_data:
