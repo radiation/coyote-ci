@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -25,6 +26,7 @@ const defaultMaxCacheSizeBytes int64 = 10 * 1024 * 1024 * 1024
 type FilesystemStore struct {
 	root         string
 	maxSizeBytes int64
+	saveMu       sync.Mutex
 }
 
 func NewFilesystemStore(root string) *FilesystemStore {
@@ -75,6 +77,9 @@ func (s *FilesystemStore) Restore(_ context.Context, key string, destinationRoot
 }
 
 func (s *FilesystemStore) Save(_ context.Context, key string, sourceRoot string) (SaveResult, error) {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+
 	archivePath, err := s.resolvePathForKey(key)
 	if err != nil {
 		return SaveResult{}, err

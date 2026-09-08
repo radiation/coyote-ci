@@ -95,6 +95,8 @@ spec:
                   key: WORKER_KUBERNETES_INTERNAL_API_URL
             - name: COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT
               value: coyote-workspace-helper
+            - name: COYOTE_KUBERNETES_CACHE_HELPER_ENABLED
+              value: "true"
             - name: WORKER_STEP_LEASE_SECONDS
               value: "45"
             - name: EMAIL_NOTIFICATIONS_ENABLED

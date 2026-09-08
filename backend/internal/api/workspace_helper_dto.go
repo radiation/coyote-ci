@@ -21,3 +21,10 @@ type WorkspaceHelperPublishResponse struct {
 	ContentDigest string `json:"content_digest"`
 	SizeBytes     int64  `json:"size_bytes"`
 }
+
+type WorkspaceHelperCacheRequest struct {
+	ExecutionJobID string `json:"execution_job_id"`
+	PodUID         string `json:"pod_uid"`
+	Preset         string `json:"preset"`
+	CacheKey       string `json:"cache_key"`
+}

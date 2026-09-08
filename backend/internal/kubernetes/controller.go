@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
+	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -30,12 +31,14 @@ const (
 	cancellationCleanupInterval = 30 * time.Second
 	workspaceHelperTokenPath    = "/var/run/secrets/coyote/workspace/token"
 	workspaceKubernetesTokenDir = "/var/run/secrets/kubernetes.io/serviceaccount"
+	cacheHelperRoot             = "/coyote-cache"
 )
 
 type WorkspaceHelperConfig struct {
 	Image              string
 	InternalAPIURL     string
 	ServiceAccountName string
+	CacheEnabled       bool
 }
 
 type Client interface {
@@ -364,12 +367,43 @@ func buildJobWithNodeName(namespace string, step workersvc.WorkerRunnableStep, h
 		podSpec.Volumes = append(podSpec.Volumes, helperCapabilityVolume("workspace-prepare-token", workspaceHelperPrepareAudience), helperCapabilityVolume("workspace-publish-token", workspaceHelperPublishAudience), kubernetesAPIIdentityVolume())
 		podSpec.InitContainers = []corev1.Container{workspacePrepareContainer(helper, step)}
 		podSpec.Containers = append(podSpec.Containers, workspacePublishContainer(helper, step))
+		if step.Cache != nil && helper.CacheEnabled {
+			preset, presetErr := cachepkg.ResolvePreset(step.Cache.Preset, step.WorkingDir)
+			if presetErr != nil {
+				panic(fmt.Sprintf("validated Kubernetes cache preset: %v", presetErr))
+			}
+			podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{Name: "cache", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}, helperCapabilityVolume("cache-restore-token", workspaceHelperCacheRestoreAudience), helperCapabilityVolume("cache-save-token", workspaceHelperCacheSaveAudience))
+			podSpec.InitContainers = append(podSpec.InitContainers, cacheRestoreContainer(helper, step, preset))
+			podSpec.Containers[0].VolumeMounts = append(podSpec.Containers[0].VolumeMounts, cacheBuildMounts(preset)...)
+			podSpec.Containers = append(podSpec.Containers, cacheSaveContainer(helper, step, preset))
+		}
 	}
 	job.Spec.Template = corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: executionLabels(step), Annotations: executionAnnotations(step)},
 		Spec:       podSpec,
 	}
 	return job
+}
+
+func cacheBuildMounts(preset cachepkg.Preset) []corev1.VolumeMount {
+	mounts := make([]corev1.VolumeMount, 0, len(preset.CachePaths))
+	for index, target := range preset.CachePaths {
+		mounts = append(mounts, corev1.VolumeMount{Name: "cache", MountPath: target, SubPath: fmt.Sprintf("paths/%03d", index)})
+	}
+	return mounts
+}
+
+func cacheHelperEnvironment(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep, preset cachepkg.Preset, role domain.WorkspaceHelperRole) []corev1.EnvVar {
+	env := append(workspaceHelperEnvironment(config, step), corev1.EnvVar{Name: "COYOTE_WORKSPACE_PATH", Value: workspace.DefaultContainerRoot}, corev1.EnvVar{Name: "COYOTE_CACHE_ROOT", Value: cacheHelperRoot}, corev1.EnvVar{Name: "COYOTE_CACHE_PRESET", Value: preset.Name}, corev1.EnvVar{Name: "COYOTE_CACHE_POLICY", Value: string(domain.NormalizeCachePolicy(step.Cache.Policy))}, corev1.EnvVar{Name: "COYOTE_CACHE_WORKING_DIR", Value: step.WorkingDir})
+	return append(env, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_ROLE", Value: string(role)})
+}
+
+func cacheRestoreContainer(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep, preset cachepkg.Preset) corev1.Container {
+	return corev1.Container{Name: "cache-restore", Image: config.Image, Command: []string{"/app/worker", "cache", "restore"}, Env: cacheHelperEnvironment(config, step, preset, domain.WorkspaceHelperRoleCacheRestore), VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "cache", MountPath: cacheHelperRoot}, {Name: "cache-restore-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}}}
+}
+
+func cacheSaveContainer(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep, preset cachepkg.Preset) corev1.Container {
+	return corev1.Container{Name: "cache-save", Image: config.Image, Command: []string{"/app/worker", "cache", "save-after-build"}, Env: cacheHelperEnvironment(config, step, preset, domain.WorkspaceHelperRoleCacheSave), VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "cache", MountPath: cacheHelperRoot}, {Name: "cache-save-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}, {Name: "workspace-kubernetes-api", MountPath: workspaceKubernetesTokenDir, ReadOnly: true}}}
 }
 
 func (c *Controller) testStepNodeName(stepIndex int) string {
@@ -473,8 +507,18 @@ func podResult(pod corev1.Pod, now time.Time) runner.RunStepResult {
 			result.Stderr = "workspace revision prepare: " + strings.TrimSpace(strings.Join([]string{status.State.Terminated.Reason, status.State.Terminated.Message}, ": "))
 			return result
 		}
+		if status.Name == "cache-restore" && status.State.Terminated != nil && status.State.Terminated.ExitCode != 0 {
+			result.ExitCode = int(status.State.Terminated.ExitCode)
+			result.Stderr = "cache restore: " + strings.TrimSpace(strings.Join([]string{status.State.Terminated.Reason, status.State.Terminated.Message}, ": "))
+			return result
+		}
 	}
 	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == "cache-save" && status.State.Terminated != nil && status.State.Terminated.ExitCode != 0 {
+			result.ExitCode = int(status.State.Terminated.ExitCode)
+			result.Stderr = "cache save: " + strings.TrimSpace(strings.Join([]string{status.State.Terminated.Reason, status.State.Terminated.Message}, ": "))
+			return result
+		}
 		if status.Name == "workspace-publish" && status.State.Terminated != nil && status.State.Terminated.ExitCode != 0 {
 			result.ExitCode = int(status.State.Terminated.ExitCode)
 			result.Stderr = "workspace revision publish: " + strings.TrimSpace(strings.Join([]string{status.State.Terminated.Reason, status.State.Terminated.Message}, ": "))

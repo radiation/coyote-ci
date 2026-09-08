@@ -43,6 +43,7 @@ type Config struct {
 	WorkspaceHelperMaxUncompressedSizeMB int
 	WorkspaceHelperMaxArchiveEntries     int
 	WorkspaceRevisionStorageRoot         string
+	KubernetesCacheHelperEnabled         bool
 	WorkerCacheStorageProvider           string
 	WorkerCacheStorageRoot               string
 	WorkerCacheMaxSizeMB                 int
@@ -122,6 +123,7 @@ func Load() Config {
 		WorkspaceHelperMaxUncompressedSizeMB: getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", 1024),
 		WorkspaceHelperMaxArchiveEntries:     getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES", 10000),
 		WorkspaceRevisionStorageRoot:         getEnv("COYOTE_WORKSPACE_REVISION_STORAGE_ROOT", ""),
+		KubernetesCacheHelperEnabled:         getEnvBool("COYOTE_KUBERNETES_CACHE_HELPER_ENABLED", false),
 		WorkerCacheStorageProvider:           getEnv("WORKER_CACHE_STORAGE_PROVIDER", ""),
 		WorkerCacheStorageRoot:               getEnv("WORKER_CACHE_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-cache")),
 		WorkerCacheMaxSizeMB:                 getEnvInt("CACHE_MAX_SIZE_MB", 10240),

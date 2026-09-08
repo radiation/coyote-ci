@@ -31,10 +31,16 @@ type workspacePublisher interface {
 	Publish(context.Context, string, string, string, io.Reader) (domain.WorkspaceRevision, error)
 }
 
+type workspaceCacheHelper interface {
+	Restore(context.Context, string, string, string, string, string) (service.WorkspaceHelperCachePayload, bool, error)
+	Save(context.Context, string, string, string, string, string, io.Reader, domain.WorkspaceRevisionPublication) error
+}
+
 type WorkspaceHelperHandler struct {
 	capabilities workspaceHelperCapabilityExchanger
 	prepare      workspacePrepareOpener
 	publish      workspacePublisher
+	cache        workspaceCacheHelper
 }
 
 func NewWorkspaceHelperHandler(capabilities workspaceHelperCapabilityExchanger) *WorkspaceHelperHandler {
@@ -50,6 +56,12 @@ func (h *WorkspaceHelperHandler) SetPrepareService(prepare workspacePrepareOpene
 func (h *WorkspaceHelperHandler) SetPublishService(publish workspacePublisher) {
 	if h != nil {
 		h.publish = publish
+	}
+}
+
+func (h *WorkspaceHelperHandler) SetCacheService(cache workspaceCacheHelper) {
+	if h != nil {
+		h.cache = cache
 	}
 }
 
@@ -190,6 +202,71 @@ func (h *WorkspaceHelperHandler) PublishWorkspace(w http.ResponseWriter, r *http
 		return
 	}
 	writeDataJSON(w, http.StatusOK, api.WorkspaceHelperPublishResponse{RevisionID: published.ID, ContentDigest: *published.ContentDigest, SizeBytes: *published.SizeBytes})
+}
+
+func (h *WorkspaceHelperHandler) RestoreCache(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.cache == nil {
+		writeErrorJSON(w, http.StatusServiceUnavailable, "unavailable", "workspace cache is not configured")
+		return
+	}
+	capability, ok := bearerToken(r)
+	if !ok || capability == "" {
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "workspace helper capability is required")
+		return
+	}
+	var request api.WorkspaceHelperCacheRequest
+	if decodeErr := json.NewDecoder(r.Body).Decode(&request); decodeErr != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+	payload, found, restoreErr := h.cache.Restore(r.Context(), capability, strings.TrimSpace(request.ExecutionJobID), strings.TrimSpace(request.PodUID), strings.TrimSpace(request.Preset), strings.TrimSpace(request.CacheKey))
+	if restoreErr != nil {
+		handleWorkspaceCacheError(w, restoreErr)
+		return
+	}
+	if !found {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	defer func() { _ = payload.Archive.Close() }()
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Digest", payload.Publication.ContentDigest)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", *payload.Publication.SizeBytes))
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, payload.Archive)
+}
+
+func (h *WorkspaceHelperHandler) SaveCache(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.cache == nil {
+		writeErrorJSON(w, http.StatusServiceUnavailable, "unavailable", "workspace cache is not configured")
+		return
+	}
+	capability, ok := bearerToken(r)
+	if !ok || capability == "" {
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "workspace helper capability is required")
+		return
+	}
+	size := r.ContentLength
+	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: strings.TrimSpace(r.Header.Get("Content-Digest")), SizeBytes: &size}
+	saveErr := h.cache.Save(r.Context(), capability, strings.TrimSpace(r.Header.Get("Coyote-Execution-Job-ID")), strings.TrimSpace(r.Header.Get("Coyote-Pod-UID")), strings.TrimSpace(r.Header.Get("Coyote-Cache-Preset")), strings.TrimSpace(r.Header.Get("Coyote-Cache-Key")), r.Body, publication)
+	if saveErr != nil {
+		handleWorkspaceCacheError(w, saveErr)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleWorkspaceCacheError(w http.ResponseWriter, err error) {
+	if errors.Is(err, service.ErrWorkspaceHelperUnauthorized) {
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "workspace helper authorization failed")
+		return
+	}
+	if errors.Is(err, service.ErrWorkspaceHelperCacheInvalidInput) {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid cache request")
+		return
+	}
+	log.Printf("ERROR workspace cache operation failed: %v", err)
+	writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "workspace cache operation failed")
 }
 
 func bearerToken(r *http.Request) (string, bool) {

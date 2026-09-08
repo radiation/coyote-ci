@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -71,7 +72,12 @@ func (w *ExecutionWorkerService) ValidateKubernetesRunnableStep(ctx context.Cont
 	}
 	for _, buildStep := range steps {
 		if buildStep.Cache != nil {
-			return &KubernetesExecutionCapabilityError{Feature: "cache restore or save"}
+			if !w.kubernetesCacheLifecycleEnabled {
+				return &KubernetesExecutionCapabilityError{Feature: "cache restore or save without trusted cache helpers"}
+			}
+			if _, presetErr := cachepkg.ResolvePreset(buildStep.Cache.Preset, buildStep.WorkingDir); presetErr != nil {
+				return &KubernetesExecutionCapabilityError{Feature: "an unsupported cache preset"}
+			}
 		}
 		if len(buildStep.ArtifactPaths) > 0 {
 			return &KubernetesExecutionCapabilityError{Feature: "artifact collection"}
@@ -99,6 +105,10 @@ func (w *ExecutionWorkerService) ValidateKubernetesRunnableStep(ctx context.Cont
 
 func (w *ExecutionWorkerService) SetKubernetesWorkspaceLifecycleEnabled(enabled bool) {
 	w.kubernetesWorkspaceLifecycleEnabled = enabled
+}
+
+func (w *ExecutionWorkerService) SetKubernetesCacheLifecycleEnabled(enabled bool) {
+	w.kubernetesCacheLifecycleEnabled = enabled
 }
 
 func (w *ExecutionWorkerService) RenewRunnableStepLease(ctx context.Context, step WorkerRunnableStep) (bool, error) {
