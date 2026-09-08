@@ -55,7 +55,10 @@ Set the externally reachable server URL. It must not be `localhost`, `host.docke
 ```sh
 export COYOTE_INTERNAL_API_URL=https://coyote.example.com
 export API_URL="$COYOTE_INTERNAL_API_URL"
+export GKE_WORKER_GSA_EMAIL=coyote-gke-worker@your-project.iam.gserviceaccount.com
 ```
+
+`GKE_WORKER_GSA_EMAIL` is required by `gke-deploy` to verify the externally provisioned Workload Identity annotation. It intentionally has no repository default because the bound Google service account is deployment-specific.
 
 ## Deploy And Verify
 

@@ -105,7 +105,7 @@ func main() {
 
 	dbURL, dbPoolCfg, databaseConfigErr := dbopen.FromConfig(cfg)
 	if databaseConfigErr != nil {
-		log.Fatalf("failed to resolve database configuration: %v", databaseConfigErr)
+		log.Fatal(databaseConfigError(databaseConfigErr))
 	}
 	db, err := platformdb.Open(dbURL, dbPoolCfg)
 	if err != nil {
@@ -431,6 +431,10 @@ func main() {
 		log.Fatalf("server failed: %v", err)
 	}
 	wg.Wait()
+}
+
+func databaseConfigError(err error) string {
+	return fmt.Sprintf("failed to resolve database configuration: %v", err)
 }
 
 func newWorkspaceHelperHandler(cfg config.Config, executionJobs repository.ExecutionJobRepository) (*handler.WorkspaceHelperHandler, error) {

@@ -553,6 +553,26 @@ func TestConfig_UsesDatabaseURL(t *testing.T) {
 	}
 }
 
+func TestConfig_DatabaseConfigMode(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{name: "file", cfg: Config{DatabaseURLFile: "/var/run/secrets/coyote/database-url"}, want: "DATABASE_URL_FILE"},
+		{name: "environment", cfg: Config{DatabaseURLValue: "postgres://example/coyote"}, want: "DATABASE_URL"},
+		{name: "split fields", cfg: Config{}, want: "discrete DB_* settings"},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := testCase.cfg.DatabaseConfigMode(); got != testCase.want {
+				t.Fatalf("database config mode=%q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestLoad_DatabaseURLPrecedenceOverSplitFields(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://external-user:external-pass@external-host:5432/external-db?sslmode=require")
 	t.Setenv("DB_HOST", "local-host")

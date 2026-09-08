@@ -59,7 +59,7 @@ services:
     volumes:
       - artifact_data:/var/lib/coyote-artifacts
       - workspace_revision_data:/var/lib/coyote-workspaces
-      - ${COYOTE_WORKSPACE_HELPER_KUBECONFIG_HOST_PATH:-/opt/coyote-ci/gke-verifier-kubeconfig}:/etc/coyote/gke-verifier-kubeconfig:ro
+      - ${COYOTE_WORKSPACE_HELPER_KUBECONFIG_HOST_PATH:-./secrets/gke-verifier-kubeconfig}:/etc/coyote/gke-verifier-kubeconfig:ro
 
   frontend:
     build:

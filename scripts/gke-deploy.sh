@@ -3,7 +3,7 @@ set -euo pipefail
 
 namespace="${GKE_NAMESPACE:-coyote-ci}"
 api_url="${COYOTE_INTERNAL_API_URL:-${API_URL:-}}"
-expected_worker_gsa="${GKE_WORKER_GSA_EMAIL:-coyote-gke-worker@bryanchoate.iam.gserviceaccount.com}"
+expected_worker_gsa="${GKE_WORKER_GSA_EMAIL:-}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 require_command() {
@@ -19,6 +19,11 @@ fi
 
 if [[ -z "$api_url" || "$api_url" == *"localhost"* || "$api_url" == *"host.docker.internal"* ]]; then
   echo "COYOTE_INTERNAL_API_URL must be a GKE-reachable Coyote server URL" >&2
+  exit 1
+fi
+
+if [[ -z "$expected_worker_gsa" ]]; then
+  echo "GKE_WORKER_GSA_EMAIL must name the Google service account bound to coyote-kubernetes-worker" >&2
   exit 1
 fi
 

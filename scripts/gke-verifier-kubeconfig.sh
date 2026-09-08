@@ -10,6 +10,14 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || { echo "$1 is required" >&2; exit 1; }
 }
 
+decode_base64() {
+  if base64 --decode </dev/null >/dev/null 2>&1; then
+    base64 --decode
+    return
+  fi
+  base64 -D
+}
+
 require_command base64
 require_command kubectl
 
@@ -30,7 +38,7 @@ if [[ -z "$server" || -z "$certificate_authority_data" || -z "$token_data" ]]; t
   exit 1
 fi
 
-token="$(printf '%s' "$token_data" | base64 -D)"
+token="$(printf '%s' "$token_data" | decode_base64)"
 if [[ -z "$token" ]]; then
   echo "verifier token Secret contains an empty token" >&2
   exit 1

@@ -79,7 +79,7 @@ func main() {
 
 	dbURL, dbPoolCfg, databaseConfigErr := dbopen.FromConfig(cfg)
 	if databaseConfigErr != nil {
-		log.Fatalf("failed to resolve database configuration: %v", databaseConfigErr)
+		log.Fatal(databaseConfigError(databaseConfigErr))
 	}
 	db, err := platformdb.Open(dbURL, dbPoolCfg)
 	if err != nil {
@@ -184,6 +184,10 @@ func main() {
 		log.Fatalf("worker loop failed: %v", err)
 	}
 	log.Printf("worker stopped")
+}
+
+func databaseConfigError(err error) string {
+	return fmt.Sprintf("failed to resolve database configuration: %v", err)
 }
 
 func runWorkspaceHelperCommand(ctx context.Context, args []string) (bool, error) {

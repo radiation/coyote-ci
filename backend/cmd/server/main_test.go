@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,26 @@ import (
 
 type stubProjectRepository struct {
 	project domain.Project
+}
+
+func TestDatabaseConfigError(t *testing.T) {
+	if got, want := databaseConfigError(errors.New("mounted URL is empty")), "failed to resolve database configuration: mounted URL is empty"; got != want {
+		t.Fatalf("database configuration error=%q, want %q", got, want)
+	}
+}
+
+func TestMainFailsForInvalidDatabaseURLFile(t *testing.T) {
+	if os.Getenv("COYOTE_TEST_INVALID_DATABASE_CONFIG") == "1" {
+		main()
+		return
+	}
+
+	command := exec.Command(os.Args[0], "-test.run=^TestMainFailsForInvalidDatabaseURLFile$")
+	command.Env = append(os.Environ(), "COYOTE_TEST_INVALID_DATABASE_CONFIG=1", "DATABASE_URL_FILE=/does/not/exist")
+	output, commandErr := command.CombinedOutput()
+	if commandErr == nil || !strings.Contains(string(output), "failed to resolve database configuration: resolve database URL: read DATABASE_URL_FILE") {
+		t.Fatalf("server startup error=%v output=%q", commandErr, output)
+	}
 }
 
 func TestNewWorkspaceHelperHandlerIsControlledByHelperConfiguration(t *testing.T) {
