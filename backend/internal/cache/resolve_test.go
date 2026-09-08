@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"cloud.google.com/go/storage"
+	"google.golang.org/api/option"
 )
 
 func TestResolveStore_FilesystemDefaults(t *testing.T) {
@@ -42,6 +45,27 @@ func TestResolveStore_GCSMissingBucketFallbackAndStrictError(t *testing.T) {
 	}
 	if !strings.Contains(strictErr.Error(), "WORKER_CACHE_GCS_BUCKET") {
 		t.Fatalf("expected bucket error, got %v", strictErr)
+	}
+}
+
+func TestResolveStore_GCSUsesStandardADCClientConstruction(t *testing.T) {
+	originalNewGCSClient := newGCSClient
+	t.Cleanup(func() { newGCSClient = originalNewGCSClient })
+	called := false
+	newGCSClient = func(_ context.Context, options ...option.ClientOption) (*storage.Client, error) {
+		called = true
+		if len(options) != 0 {
+			t.Fatalf("GCS client options = %d, want 0", len(options))
+		}
+		return nil, errors.New("ADC unavailable")
+	}
+
+	_, resolveErr := ResolveStore(StoreConfig{Provider: "gcs", GCSBucket: "cache-bucket", GCSProject: "quota-project", Strict: true})
+	if !called {
+		t.Fatal("expected standard GCS client construction")
+	}
+	if resolveErr == nil || !strings.Contains(resolveErr.Error(), "ADC unavailable") {
+		t.Fatalf("resolve error = %v", resolveErr)
 	}
 }
 

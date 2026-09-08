@@ -139,6 +139,8 @@ func TestLimitRequestBodyExemptsWorkspaceHelperPublish(t *testing.T) {
 	}{
 		{name: "generic post limited", path: "/api/builds", want: http.StatusRequestEntityTooLarge},
 		{name: "workspace publish exempt", path: "/api/internal/workspace-helper/publish", want: http.StatusOK},
+		{name: "cache restore exempt", path: "/api/internal/workspace-helper/cache/restore", want: http.StatusOK},
+		{name: "cache save exempt", path: "/api/internal/workspace-helper/cache/save", want: http.StatusOK},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, testCase.path, bytes.NewBufferString("archive"))

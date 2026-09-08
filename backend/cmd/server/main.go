@@ -17,6 +17,7 @@ import (
 	docs "github.com/radiation/coyote-ci/backend/docs"
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/auth"
+	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	apphttp "github.com/radiation/coyote-ci/backend/internal/http"
 	"github.com/radiation/coyote-ci/backend/internal/http/handler"
@@ -143,6 +144,7 @@ func main() {
 	slackWorkspaceIntegrationRepo := repositorypostgres.NewSlackWorkspaceIntegrationRepository(db)
 	userSlackIdentityRepo := repositorypostgres.NewUserSlackIdentityRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
+	cacheEntryRepo := repositorypostgres.NewCacheEntryRepository(db)
 	workerRepo := repositorypostgres.NewWorkerRepository(db)
 	notificationMetrics := observability.NewExpvarNotificationDeliveryMetrics()
 	buildNotificationService, buildNotificationErr := buildsvc.NewBuildNotificationService(buildsvc.BuildNotificationConfig{
@@ -260,7 +262,7 @@ func main() {
 	if workspaceHelperErr != nil {
 		log.Fatalf("failed to configure workspace helper capability exchange: %v", workspaceHelperErr)
 	}
-	if workspaceHelperErr := configureWorkspaceHelperServices(cfg, workspaceHelperHandler, executionJobRepo, buildRepo, workspaceRevisionRepo, checkoutResolver); workspaceHelperErr != nil {
+	if workspaceHelperErr := configureWorkspaceHelperServices(cfg, workspaceHelperHandler, executionJobRepo, buildRepo, workspaceRevisionRepo, checkoutResolver, cacheEntryRepo); workspaceHelperErr != nil {
 		log.Fatalf("failed to configure workspace helper services: %v", workspaceHelperErr)
 	}
 	buildHandler.SetVersionTagService(versionTagService)
@@ -450,8 +452,11 @@ func workspaceRevisionStoreFromConfig(cfg config.Config) workspacepkg.WorkspaceR
 	return workspacepkg.NewFilesystemWorkspaceRevisionStore(cfg.WorkspaceRevisionStorageRoot)
 }
 
-func configureWorkspaceHelperServices(cfg config.Config, workspaceHelperHandler *handler.WorkspaceHelperHandler, executionJobs repository.ExecutionJobRepository, builds repository.BuildRepository, revisions repository.WorkspaceRevisionRepository, checkoutResolver *buildsvc.RepositoryAwareCheckoutResolver) error {
+func configureWorkspaceHelperServices(cfg config.Config, workspaceHelperHandler *handler.WorkspaceHelperHandler, executionJobs repository.ExecutionJobRepository, builds repository.BuildRepository, revisions repository.WorkspaceRevisionRepository, checkoutResolver *buildsvc.RepositoryAwareCheckoutResolver, cacheEntries ...repository.CacheEntryRepository) error {
 	if workspaceHelperHandler == nil {
+		if cfg.KubernetesCacheHelperEnabled {
+			return errors.New("kubernetes cache helper requires workspace helper capabilities")
+		}
 		return nil
 	}
 	workspaceRevisionStore := workspaceRevisionStoreFromConfig(cfg)
@@ -488,6 +493,21 @@ func configureWorkspaceHelperServices(cfg config.Config, workspaceHelperHandler 
 		return publishErr
 	}
 	workspaceHelperHandler.SetPublishService(publishService)
+	if cfg.KubernetesCacheHelperEnabled {
+		if len(cacheEntries) != 1 || cacheEntries[0] == nil {
+			return errors.New("kubernetes cache helper requires cache entry repository")
+		}
+		cacheStore, cacheErr := cachepkg.ResolveStore(cachepkg.StoreConfig{Provider: cfg.WorkerCacheStorageProvider, StorageRoot: cfg.WorkerCacheStorageRoot, MaxSizeMB: cfg.WorkerCacheMaxSizeMB, GCSBucket: cfg.WorkerCacheGCSBucket, GCSPrefix: cfg.WorkerCacheGCSPrefix, GCSProject: cfg.WorkerCacheGCSProject, Strict: cfg.WorkerCacheStorageStrict})
+		if cacheErr != nil {
+			return cacheErr
+		}
+		cacheService, cacheServiceErr := service.NewWorkspaceHelperCacheService(service.WorkspaceHelperCacheServiceConfig{CapabilityAuthorizer: workspaceHelperHandler.PrepareCapabilityAuthorizer(), ExecutionJobs: executionJobs, Builds: builds, Entries: cacheEntries[0], Store: cacheStore, MaxUncompressedBytes: int64(cfg.WorkspaceHelperMaxUncompressedSizeMB) * 1024 * 1024, MaxArchiveEntries: cfg.WorkspaceHelperMaxArchiveEntries})
+		if cacheServiceErr != nil {
+			return cacheServiceErr
+		}
+		workspaceHelperHandler.SetCacheService(cacheService)
+		workspaceHelperHandler.SetCacheMaxUploadBytes(int64(cfg.WorkspaceHelperCacheMaxUploadSizeMB) * 1024 * 1024)
+	}
 	return nil
 }
 

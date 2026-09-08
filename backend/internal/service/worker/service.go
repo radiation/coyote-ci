@@ -48,6 +48,7 @@ type WorkerRunnableStep struct {
 	Env            map[string]string
 	WorkingDir     string
 	TimeoutSeconds int
+	Cache          *domain.StepCacheConfig
 }
 
 type WorkerStepExecutionReport struct {
@@ -72,6 +73,7 @@ type ExecutionWorkerService struct {
 	workerID                            string
 	leaseDuration                       time.Duration
 	kubernetesWorkspaceLifecycleEnabled bool
+	kubernetesCacheLifecycleEnabled     bool
 	heartbeatWriteInterval              time.Duration
 	clock                               func() time.Time
 	lastHeartbeatWriteAt                int64

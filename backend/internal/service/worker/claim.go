@@ -84,6 +84,7 @@ func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerR
 			Env:            workerDefaultEnv(claimedStep.Env),
 			WorkingDir:     workerDefaultString(claimedStep.WorkingDir, "."),
 			TimeoutSeconds: workerMaxInt(claimedStep.TimeoutSeconds, 0),
+			Cache:          claimedStep.Cache.Clone(),
 		}
 
 		return w.bindRunnableStepFromJob(ctx, runnableStep, claim), true, nil
@@ -133,6 +134,7 @@ func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerR
 			Env:            workerDefaultEnv(reclaimedStep.Env),
 			WorkingDir:     workerDefaultString(reclaimedStep.WorkingDir, "."),
 			TimeoutSeconds: workerMaxInt(reclaimedStep.TimeoutSeconds, 0),
+			Cache:          reclaimedStep.Cache.Clone(),
 		}
 
 		return w.bindRunnableStepFromJob(ctx, runnableStep, claim), true, nil

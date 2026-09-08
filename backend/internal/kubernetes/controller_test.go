@@ -97,6 +97,33 @@ func TestControllerCreatesWorkspaceHelperLifecycle(t *testing.T) {
 	}
 }
 
+func TestBuildJobWithCacheHelpersUsesOrderedLifecycleAndIsolatedCredentials(t *testing.T) {
+	step := testStep()
+	step.Cache = &domain.StepCacheConfig{Preset: "go", Policy: domain.CachePolicyPullPush}
+	helper := WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper", CacheEnabled: true}
+	pod := buildJob("ci", step, helper).Spec.Template.Spec
+
+	if len(pod.InitContainers) != 2 || pod.InitContainers[0].Name != "workspace-prepare" || pod.InitContainers[1].Name != "cache-restore" {
+		t.Fatalf("init lifecycle=%#v", pod.InitContainers)
+	}
+	if len(pod.Containers) != 3 || pod.Containers[0].Name != "build" || pod.Containers[1].Name != "workspace-publish" || pod.Containers[2].Name != "cache-save" {
+		t.Fatalf("container lifecycle=%#v", pod.Containers)
+	}
+	build := pod.Containers[0]
+	if hasMount(build, "cache-restore-token") || hasMount(build, "cache-save-token") || hasMount(build, "cache-helper-state") || hasMount(build, "workspace-kubernetes-api") {
+		t.Fatalf("build must not receive helper or Kubernetes credentials: %#v", build.VolumeMounts)
+	}
+	if len(build.VolumeMounts) != 3 || build.VolumeMounts[1].MountPath != "/go/pkg/mod" || build.VolumeMounts[1].SubPath != "paths/000" || build.VolumeMounts[2].MountPath != "/root/.cache/go-build" || build.VolumeMounts[2].SubPath != "paths/001" {
+		t.Fatalf("go cache mounts=%#v", build.VolumeMounts)
+	}
+	if !hasMount(pod.InitContainers[1], "cache-restore-token") || !hasMount(pod.InitContainers[1], "cache-helper-state") || hasMount(pod.InitContainers[1], "cache-save-token") || hasMount(pod.InitContainers[1], "workspace-kubernetes-api") {
+		t.Fatalf("restore mounts=%#v", pod.InitContainers[1].VolumeMounts)
+	}
+	if !hasMount(pod.Containers[2], "cache-save-token") || !hasMount(pod.Containers[2], "cache-helper-state") || !hasMount(pod.Containers[2], "workspace-kubernetes-api") || hasMount(pod.Containers[2], "cache-restore-token") {
+		t.Fatalf("save mounts=%#v", pod.Containers[2].VolumeMounts)
+	}
+}
+
 func TestBuildJobWithoutWorkspaceHelpersHasOnlyBuildContainer(t *testing.T) {
 	job := buildJob("ci", testStep())
 	pod := job.Spec.Template.Spec
@@ -371,6 +398,18 @@ func TestPodResultClassifiesWorkspaceHelperFailures(t *testing.T) {
 				t.Fatalf("result=%#v", result)
 			}
 		})
+	}
+}
+
+func TestPodResultKeepsSuccessfulBuildWhenCacheSaveFails(t *testing.T) {
+	pod := corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{
+		{Name: "cache-save", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}},
+		{Name: "build", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}}},
+	}}}
+
+	result := podResult(pod, time.Now().UTC())
+	if result.Status != runner.RunStepStatusSuccess || result.ExitCode != 0 {
+		t.Fatalf("result=%#v", result)
 	}
 }
 

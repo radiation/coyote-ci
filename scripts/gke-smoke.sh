@@ -52,6 +52,7 @@ worker_pod=$(kubectl -n "$namespace" get pods -l app.kubernetes.io/name=coyote-k
 worker_pod_json=$(kubectl -n "$namespace" get pod "$worker_pod" -o json)
 jq -e '.spec.containers[] | select(.name == "worker") | [.env[]? | select(.name == "DATABASE_URL_FILE") | .value] | index("/var/run/secrets/coyote/database-url") != null' <<<"$worker_pod_json" >/dev/null
 jq -e '.spec.containers[] | select(.name == "worker") | [.env[]? | select(.name == "DATABASE_URL")] | length == 0' <<<"$worker_pod_json" >/dev/null
+jq -e '.spec.containers[] | select(.name == "worker") | [.env[]? | select(.name == "COYOTE_KUBERNETES_CACHE_HELPER_ENABLED" and .value == "true")] | length == 1' <<<"$worker_pod_json" >/dev/null
 jq -e '.spec.volumes[] | select(.name == "database-url") | .csi.driver == "secrets-store-gke.csi.k8s.io" and .csi.volumeAttributes.secretProviderClass == "coyote-database-secrets"' <<<"$worker_pod_json" >/dev/null
 jq -e '.spec.containers[] | select(.name == "worker") | .volumeMounts[] | select(.name == "database-url" and .mountPath == "/var/run/secrets/coyote" and .readOnly == true)' <<<"$worker_pod_json" >/dev/null
 jq -e '.spec.containers[] | select(.name == "cloud-sql-proxy") | .ports[] | select(.name == "postgres" and .containerPort == 5432)' <<<"$worker_pod_json" >/dev/null
@@ -74,6 +75,9 @@ pipeline:
 steps:
   - name: gke-autopilot-smoke
     run: test ! -e /var/run/secrets/kubernetes.io/serviceaccount/token && echo GKE_AUTOPILOT_SMOKE_OK
+    cache:
+      preset: go
+      policy: pull-push
 YAML
 )
 build_response=$(jq -n --arg project_id gke-autopilot-smoke --arg pipeline_yaml "$pipeline_yaml" '{project_id: $project_id, pipeline_yaml: $pipeline_yaml}' | curl -sS -X POST "$api_url/api/builds/pipeline" -H 'Content-Type: application/json' --data @-)
@@ -98,6 +102,10 @@ node_name=$(jq -r '.spec.nodeName // empty' <<<"$pod_json")
 jq -e '.spec.containers[] | select(.name == "build") | [.volumeMounts[].name] | index("workspace") != null and index("workspace-prepare-token") == null and index("workspace-publish-token") == null and index("workspace-kubernetes-api") == null' <<<"$pod_json" >/dev/null
 jq -e '.spec.initContainers[] | select(.name == "workspace-prepare") | .volumeMounts[] | select(.name == "workspace-prepare-token")' <<<"$pod_json" >/dev/null
 jq -e '.spec.containers[] | select(.name == "workspace-publish") | .volumeMounts[] | select(.name == "workspace-publish-token")' <<<"$pod_json" >/dev/null
+jq -e '.spec.volumes[] | select(.name == "cache" and .emptyDir != null)' <<<"$pod_json" >/dev/null
+jq -e '.spec.initContainers[] | select(.name == "cache-restore") | [.volumeMounts[].name] | index("cache") != null and index("cache-restore-token") != null and index("cache-save-token") == null and index("workspace-kubernetes-api") == null' <<<"$pod_json" >/dev/null
+jq -e '.spec.containers[] | select(.name == "cache-save") | [.volumeMounts[].name] | index("cache") != null and index("cache-save-token") != null and index("cache-restore-token") == null and index("workspace-kubernetes-api") != null' <<<"$pod_json" >/dev/null
+jq -e '.spec.containers[] | select(.name == "build") | [.volumeMounts[].name] | index("cache") != null and index("cache-restore-token") == null and index("cache-save-token") == null and index("workspace-kubernetes-api") == null' <<<"$pod_json" >/dev/null
 
 deadline=$(( $(date +%s) + timeout_seconds ))
 while (( $(date +%s) < deadline )); do

@@ -96,6 +96,31 @@ func TestWorkloadIdentityVerifierUsesPublishAudienceAndRejectsInvalidInputs(t *t
 	}
 }
 
+func TestWorkloadIdentityVerifierUsesCacheHelperAudiences(t *testing.T) {
+	for _, testCase := range []struct {
+		role     domain.WorkspaceHelperRole
+		audience string
+	}{
+		{role: domain.WorkspaceHelperRoleCacheRestore, audience: workspaceHelperCacheRestoreAudience},
+		{role: domain.WorkspaceHelperRoleCacheSave, audience: workspaceHelperCacheSaveAudience},
+	} {
+		t.Run(string(testCase.role), func(t *testing.T) {
+			client := &fakeWorkloadIdentityClient{review: validTokenReview(), pod: validHelperPod()}
+			client.review.Status.Audiences = []string{testCase.audience}
+			verifier, err := NewWorkloadIdentityVerifierWithClient(client, "coyote-workspace-helper")
+			if err != nil {
+				t.Fatalf("new verifier: %v", err)
+			}
+			if _, err := verifier.VerifyWorkspaceHelper(context.Background(), "projected-token", "job-1", "pod-1", testCase.role); err != nil {
+				t.Fatalf("verify cache helper identity: %v", err)
+			}
+			if client.review.Spec.Audiences[0] != testCase.audience {
+				t.Fatalf("audience=%v", client.review.Spec.Audiences)
+			}
+		})
+	}
+}
+
 func TestWorkloadIdentityClientsetDelegatesToKubernetesClient(t *testing.T) {
 	client := kubernetesfake.NewClientset(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "helper-pod", Namespace: "ci"}})
 	adapter := &workloadIdentityClientset{client: client}

@@ -126,17 +126,20 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to resolve artifact stores: %v", err)
 	}
-	cacheStore, err := cachepkg.ResolveStore(cachepkg.StoreConfig{
-		Provider:    cfg.WorkerCacheStorageProvider,
-		StorageRoot: cfg.WorkerCacheStorageRoot,
-		MaxSizeMB:   cfg.WorkerCacheMaxSizeMB,
-		GCSBucket:   cfg.WorkerCacheGCSBucket,
-		GCSPrefix:   cfg.WorkerCacheGCSPrefix,
-		GCSProject:  cfg.WorkerCacheGCSProject,
-		Strict:      cfg.WorkerCacheStorageStrict,
-	})
-	if err != nil {
-		log.Fatalf("failed to resolve cache store: %v", err)
+	var cacheStore cachepkg.Store
+	if strings.ToLower(strings.TrimSpace(cfg.ExecutionBackend)) != "kubernetes" {
+		cacheStore, err = cachepkg.ResolveStore(cachepkg.StoreConfig{
+			Provider:    cfg.WorkerCacheStorageProvider,
+			StorageRoot: cfg.WorkerCacheStorageRoot,
+			MaxSizeMB:   cfg.WorkerCacheMaxSizeMB,
+			GCSBucket:   cfg.WorkerCacheGCSBucket,
+			GCSPrefix:   cfg.WorkerCacheGCSPrefix,
+			GCSProject:  cfg.WorkerCacheGCSProject,
+			Strict:      cfg.WorkerCacheStorageStrict,
+		})
+		if err != nil {
+			log.Fatalf("failed to resolve cache store: %v", err)
+		}
 	}
 	workspaceRevisionStore := workspaceRevisionStoreFromConfig(cfg)
 	stepRunner := resolveStepRunnerWithWorkspaceRevisions(cfg, workspaceRevisionRepo, workspaceRevisionStore)
@@ -191,16 +194,20 @@ func databaseConfigError(err error) string {
 }
 
 func runWorkspaceHelperCommand(ctx context.Context, args []string) (bool, error) {
-	if len(args) != 2 || args[0] != "workspace" {
+	if len(args) != 2 {
 		return false, nil
 	}
-	switch args[1] {
-	case "prepare":
+	switch args[0] + " " + args[1] {
+	case "workspace prepare":
 		return true, runWorkspacePrepare(ctx)
-	case "publish":
+	case "workspace publish":
 		return true, runWorkspacePublish(ctx)
-	case "publish-after-build":
+	case "workspace publish-after-build":
 		return true, runWorkspacePublishAfterBuild(ctx)
+	case "cache restore":
+		return true, runCacheRestore(ctx)
+	case "cache save-after-build":
+		return true, runCacheSaveAfterBuild(ctx)
 	default:
 		return false, nil
 	}
@@ -223,7 +230,9 @@ func resolveExecutionController(cfg config.Config, workerService *workersvc.Exec
 	controller := kubernetesexec.NewController(client, workerService, logSink, cfg.WorkerKubernetesNamespace)
 	controller.WithTestStepNodeNames(kubernetesTestStepNodes(cfg.WorkerKubernetesTestStepNodes))
 	workerService.SetKubernetesWorkspaceLifecycleEnabled(helpersEnabled)
+	workerService.SetKubernetesCacheLifecycleEnabled(helpersEnabled && cfg.KubernetesCacheHelperEnabled)
 	if helpersEnabled {
+		helperConfig.CacheEnabled = cfg.KubernetesCacheHelperEnabled
 		controller.WithWorkspaceHelper(helperConfig)
 	}
 	return controller, nil
