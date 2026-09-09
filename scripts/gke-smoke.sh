@@ -156,6 +156,32 @@ done
 logs=$(coyote_api_curl "$api_url/api/builds/$build_id/steps/0/logs")
 jq -e --arg marker "$marker" '[.data.chunks[].chunk_text] | join("") | contains($marker)' <<<"$logs" >/dev/null
 
+terminal_failure_pipeline_yaml=$(cat <<'YAML'
+version: 1
+pipeline:
+  name: gke-terminal-failure-smoke
+  image: alpine:3.21
+steps:
+  - name: intentional-failure
+    run: echo GKE_TERMINAL_FAILURE_OK >&2; exit 23
+YAML
+)
+terminal_failure_response=$(jq -n --arg project_id gke-autopilot-smoke --arg pipeline_yaml "$terminal_failure_pipeline_yaml" '{project_id: $project_id, pipeline_yaml: $pipeline_yaml}' | coyote_api_curl -X POST "$api_url/api/builds/pipeline" -H 'Content-Type: application/json' --data @-)
+terminal_failure_build_id=$(jq -r '.data.id // empty' <<<"$terminal_failure_response")
+[[ -n "$terminal_failure_build_id" ]] || { echo "$terminal_failure_response" | jq . >&2; exit 1; }
+
+deadline=$(( $(date +%s) + timeout_seconds ))
+while (( $(date +%s) < deadline )); do
+  terminal_failure_build_response=$(coyote_api_curl "$api_url/api/builds/$terminal_failure_build_id")
+  terminal_failure_steps_response=$(coyote_api_curl "$api_url/api/builds/$terminal_failure_build_id/steps")
+  if [[ "$(jq -r '.data.status // empty' <<<"$terminal_failure_build_response")" == "failed" ]] && [[ "$(jq -r '.data.steps[0].status // empty' <<<"$terminal_failure_steps_response")" == "failed" ]]; then
+    break
+  fi
+  sleep 3
+done
+[[ "$(jq -r '.data.status // empty' <<<"$terminal_failure_build_response")" == "failed" ]]
+[[ "$(jq -r '.data.steps[0].status // empty' <<<"$terminal_failure_steps_response")" == "failed" ]]
+
 fan_in_pipeline_yaml=$(cat <<'YAML'
 version: 1
 pipeline:
