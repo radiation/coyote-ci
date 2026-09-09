@@ -82,13 +82,13 @@ func TestWorkspacePublishServiceRejectsOversizedArchiveWithoutStoreOrTemporaryFi
 
 func TestWorkspacePublishServiceRejectsCompressedArchiveThatExceedsWorkspaceLimit(t *testing.T) {
 	harness := newWorkspacePublishServiceHarness(t)
-	service, serviceErr := NewWorkspacePublishService(WorkspacePublishServiceConfig{CapabilityAuthorizer: harness.capabilities, ExecutionJobs: harness.jobs, WorkspaceRevisions: harness.revisions, RevisionStore: harness.store, MaxUncompressedBytes: 1024})
-	if serviceErr != nil {
-		t.Fatalf("new bounded service: %v", serviceErr)
-	}
 	archive := workspacePublishArchiveForTest(t, strings.Repeat("x", 64*1024))
 	if int64(len(archive)) >= 1024 {
 		t.Fatalf("expected compressed archive below extraction limit, got %d bytes", len(archive))
+	}
+	service, serviceErr := NewWorkspacePublishService(WorkspacePublishServiceConfig{CapabilityAuthorizer: harness.capabilities, ExecutionJobs: harness.jobs, WorkspaceRevisions: harness.revisions, RevisionStore: harness.store, MaxUploadBytes: int64(len(archive)), MaxUncompressedBytes: 1024})
+	if serviceErr != nil {
+		t.Fatalf("new bounded service: %v", serviceErr)
 	}
 	if _, publishErr := service.Publish(context.Background(), "publish-capability", harness.job.ID, "pod-1", bytes.NewReader(archive)); !errors.Is(publishErr, ErrWorkspacePublishArchiveTooLarge) {
 		t.Fatalf("publish: %v", publishErr)
@@ -116,8 +116,19 @@ func TestWorkspacePublishServicePublishesArchiveWithinConfiguredLimit(t *testing
 func TestNewWorkspacePublishServiceUsesDefaultUploadLimit(t *testing.T) {
 	harness := newWorkspacePublishServiceHarness(t)
 	service, serviceErr := NewWorkspacePublishService(WorkspacePublishServiceConfig{CapabilityAuthorizer: harness.capabilities, ExecutionJobs: harness.jobs, WorkspaceRevisions: harness.revisions, RevisionStore: harness.store})
-	if serviceErr != nil || service.maxUploadBytes != defaultWorkspacePublishMaxUploadBytes {
+	if serviceErr != nil || service.maxUploadBytes != defaultWorkspacePublishMaxUploadBytes || service.maxUncompressedBytes != defaultWorkspacePublishMaxUncompressedBytes || service.maxArchiveEntries != defaultWorkspacePublishMaxArchiveEntries {
 		t.Fatalf("service=%#v err=%v", service, serviceErr)
+	}
+}
+
+func TestWorkspacePublishServiceKeepsUploadAndExtractionLimitsIndependent(t *testing.T) {
+	harness := newWorkspacePublishServiceHarness(t)
+	service, serviceErr := NewWorkspacePublishService(WorkspacePublishServiceConfig{CapabilityAuthorizer: harness.capabilities, ExecutionJobs: harness.jobs, WorkspaceRevisions: harness.revisions, RevisionStore: harness.store, MaxUploadBytes: 2 * 1024, MaxUncompressedBytes: 1024, MaxArchiveEntries: 7})
+	if serviceErr != nil {
+		t.Fatalf("new bounded service: %v", serviceErr)
+	}
+	if service.maxUploadBytes != 2*1024 || service.maxUncompressedBytes != 1024 || service.maxArchiveEntries != 7 {
+		t.Fatalf("limits upload=%d expanded=%d entries=%d", service.maxUploadBytes, service.maxUncompressedBytes, service.maxArchiveEntries)
 	}
 }
 

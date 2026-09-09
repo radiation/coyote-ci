@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,8 +22,8 @@ import (
 var ErrWorkspacePublishInvalidArchive = errors.New("invalid workspace publish archive")
 var ErrWorkspacePublishArchiveTooLarge = errors.New("workspace publish archive exceeds maximum size")
 
-const defaultWorkspacePublishMaxUploadBytes int64 = 1024 * 1024 * 1024
-const defaultWorkspacePublishMaxUncompressedBytes int64 = 1024 * 1024 * 1024
+const defaultWorkspacePublishMaxUploadBytes int64 = 2 * 1024 * 1024 * 1024
+const defaultWorkspacePublishMaxUncompressedBytes int64 = 4 * 1024 * 1024 * 1024
 const defaultWorkspacePublishMaxArchiveEntries = 10000
 
 var workspacePublishCreateTemp = os.CreateTemp
@@ -91,8 +92,11 @@ func (s *WorkspacePublishService) Publish(ctx context.Context, capabilityToken s
 	if createErr != nil {
 		return domain.WorkspaceRevision{}, fmt.Errorf("creating workspace revision: %w", createErr)
 	}
-	archivePath, digest, size, spoolErr := spoolWorkspacePublishArchive(ctx, archive, s.maxUploadBytes)
+	archivePath, digest, observedBytes, spoolErr := spoolWorkspacePublishArchive(ctx, archive, s.maxUploadBytes)
 	if spoolErr != nil {
+		if errors.Is(spoolErr, ErrWorkspacePublishArchiveTooLarge) {
+			log.Printf("WARN workspace publish rejected for size execution_job_id=%s observed_upload_bytes=%d max_upload_bytes=%d", job.ID, observedBytes, s.maxUploadBytes)
+		}
 		return domain.WorkspaceRevision{}, spoolErr
 	}
 	defer func() { _ = os.Remove(archivePath) }()
@@ -106,7 +110,7 @@ func (s *WorkspacePublishService) Publish(ctx context.Context, capabilityToken s
 	if openErr != nil {
 		return domain.WorkspaceRevision{}, openErr
 	}
-	publication := domain.WorkspaceRevisionPublication{ContentDigest: digest, StorageKey: "workspace-revisions/upload.tar.gz", SizeBytes: &size}
+	publication := domain.WorkspaceRevisionPublication{ContentDigest: digest, StorageKey: "workspace-revisions/upload.tar.gz", SizeBytes: &observedBytes}
 	restoreErr := workspace.RestoreArchiveWithLimits(ctx, archiveFile, publication, restoredRoot, workspace.WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: s.maxUncompressedBytes, MaxEntries: s.maxArchiveEntries})
 	closeErr := archiveFile.Close()
 	if restoreErr != nil {
@@ -148,7 +152,7 @@ func spoolWorkspacePublishArchive(ctx context.Context, archive io.Reader, maxByt
 	if copyErr != nil || closeErr != nil {
 		_ = os.Remove(path)
 		if copyErr != nil {
-			return "", "", 0, copyErr
+			return "", "", size, copyErr
 		}
 		return "", "", 0, closeErr
 	}
@@ -165,7 +169,7 @@ func copyWorkspacePublishArchive(ctx context.Context, destination io.Writer, sou
 		read, readErr := source.Read(buffer)
 		if read > 0 {
 			if copied+int64(read) > maxBytes {
-				return copied, ErrWorkspacePublishArchiveTooLarge
+				return copied + int64(read), ErrWorkspacePublishArchiveTooLarge
 			}
 			written, writeErr := destination.Write(buffer[:read])
 			copied += int64(written)
