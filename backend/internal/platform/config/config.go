@@ -42,6 +42,7 @@ type Config struct {
 	WorkspaceHelperMaxUploadSizeMB         int
 	WorkspaceRevisionMaxUploadSizeMB       int
 	WorkspaceRevisionMaxUncompressedSizeMB int
+	WorkspaceRevisionMaxArchiveEntries     int
 	WorkspaceHelperCacheMaxUploadSizeMB    int
 	WorkspaceHelperMaxUncompressedSizeMB   int
 	WorkspaceHelperMaxArchiveEntries       int
@@ -126,6 +127,7 @@ func Load() Config {
 		WorkspaceHelperMaxUploadSizeMB:         getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_UPLOAD_SIZE_MB", 1024),
 		WorkspaceRevisionMaxUploadSizeMB:       getEnvInt("COYOTE_WORKSPACE_REVISION_MAX_UPLOAD_SIZE_MB", 2048),
 		WorkspaceRevisionMaxUncompressedSizeMB: getEnvInt("COYOTE_WORKSPACE_REVISION_MAX_UNCOMPRESSED_SIZE_MB", 4096),
+		WorkspaceRevisionMaxArchiveEntries:     getEnvInt("COYOTE_WORKSPACE_REVISION_MAX_ARCHIVE_ENTRIES", 100000),
 		WorkspaceHelperCacheMaxUploadSizeMB:    getEnvInt("COYOTE_WORKSPACE_HELPER_CACHE_MAX_UPLOAD_SIZE_MB", 10240),
 		WorkspaceHelperMaxUncompressedSizeMB:   getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", 1024),
 		WorkspaceHelperMaxArchiveEntries:       getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES", 10000),

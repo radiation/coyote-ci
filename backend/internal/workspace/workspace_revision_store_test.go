@@ -132,7 +132,9 @@ func TestRestoreArchiveWithLimitsRejectsCompressedExpansionAndExcessEntries(t *t
 	if readErr != nil || closeErr != nil || int64(len(archiveBytes)) >= 1024 {
 		t.Fatalf("archive bytes=%d read=%v close=%v", len(archiveBytes), readErr, closeErr)
 	}
-	if restoreErr := RestoreArchiveWithLimits(context.Background(), bytes.NewReader(archiveBytes), publication, filepath.Join(t.TempDir(), "restore"), WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: 1024, MaxEntries: 10}); !errors.Is(restoreErr, ErrWorkspaceRevisionTooLarge) {
+	restoreErr := RestoreArchiveWithLimits(context.Background(), bytes.NewReader(archiveBytes), publication, filepath.Join(t.TempDir(), "restore"), WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: 1024, MaxEntries: 10})
+	var sizeLimitErr *WorkspaceRevisionSizeLimitError
+	if !errors.Is(restoreErr, ErrWorkspaceRevisionTooLarge) || !errors.As(restoreErr, &sizeLimitErr) || sizeLimitErr.ObservedBytes != 64*1024 || sizeLimitErr.MaxBytes != 1024 {
 		t.Fatalf("compressed expansion restore: %v", restoreErr)
 	}
 
@@ -148,7 +150,9 @@ func TestRestoreArchiveWithLimitsRejectsCompressedExpansionAndExcessEntries(t *t
 	if readErr != nil || closeErr != nil {
 		t.Fatalf("read archive=%v close=%v", readErr, closeErr)
 	}
-	if restoreErr := RestoreArchiveWithLimits(context.Background(), bytes.NewReader(archiveBytes), publication, filepath.Join(t.TempDir(), "restore"), WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: 128 * 1024, MaxEntries: 1}); !errors.Is(restoreErr, ErrWorkspaceRevisionTooManyEntries) {
+	restoreErr = RestoreArchiveWithLimits(context.Background(), bytes.NewReader(archiveBytes), publication, filepath.Join(t.TempDir(), "restore"), WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: 128 * 1024, MaxEntries: 1})
+	var entryLimitErr *WorkspaceRevisionEntryLimitError
+	if !errors.Is(restoreErr, ErrWorkspaceRevisionTooManyEntries) || !errors.As(restoreErr, &entryLimitErr) || entryLimitErr.ObservedEntries != 2 || entryLimitErr.MaxEntries != 1 {
 		t.Fatalf("entry limit restore: %v", restoreErr)
 	}
 }

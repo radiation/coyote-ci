@@ -21,10 +21,12 @@ import (
 
 var ErrWorkspacePublishInvalidArchive = errors.New("invalid workspace publish archive")
 var ErrWorkspacePublishArchiveTooLarge = errors.New("workspace publish archive exceeds maximum size")
+var ErrWorkspacePublishExpandedSizeLimit = fmt.Errorf("workspace publish archive exceeds expanded size limit: %w", ErrWorkspacePublishArchiveTooLarge)
+var ErrWorkspacePublishEntryLimit = fmt.Errorf("workspace publish archive exceeds entry limit: %w", ErrWorkspacePublishArchiveTooLarge)
 
 const defaultWorkspacePublishMaxUploadBytes int64 = 2 * 1024 * 1024 * 1024
 const defaultWorkspacePublishMaxUncompressedBytes int64 = 4 * 1024 * 1024 * 1024
-const defaultWorkspacePublishMaxArchiveEntries = 10000
+const defaultWorkspacePublishMaxArchiveEntries = 100000
 
 var workspacePublishCreateTemp = os.CreateTemp
 
@@ -114,8 +116,23 @@ func (s *WorkspacePublishService) Publish(ctx context.Context, capabilityToken s
 	restoreErr := workspace.RestoreArchiveWithLimits(ctx, archiveFile, publication, restoredRoot, workspace.WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: s.maxUncompressedBytes, MaxEntries: s.maxArchiveEntries})
 	closeErr := archiveFile.Close()
 	if restoreErr != nil {
-		if errors.Is(restoreErr, workspace.ErrWorkspaceRevisionTooLarge) || errors.Is(restoreErr, workspace.ErrWorkspaceRevisionTooManyEntries) {
-			return domain.WorkspaceRevision{}, ErrWorkspacePublishArchiveTooLarge
+		var sizeLimitErr *workspace.WorkspaceRevisionSizeLimitError
+		if errors.As(restoreErr, &sizeLimitErr) {
+			log.Printf("WARN workspace publish rejected for restore execution_job_id=%s rejection=expanded_size_limit observed_uncompressed_bytes=%d max_uncompressed_bytes=%d", job.ID, sizeLimitErr.ObservedBytes, sizeLimitErr.MaxBytes)
+			return domain.WorkspaceRevision{}, ErrWorkspacePublishExpandedSizeLimit
+		}
+		var entryLimitErr *workspace.WorkspaceRevisionEntryLimitError
+		if errors.As(restoreErr, &entryLimitErr) {
+			log.Printf("WARN workspace publish rejected for restore execution_job_id=%s rejection=entry_limit observed_entries=%d max_archive_entries=%d", job.ID, entryLimitErr.ObservedEntries, entryLimitErr.MaxEntries)
+			return domain.WorkspaceRevision{}, ErrWorkspacePublishEntryLimit
+		}
+		if errors.Is(restoreErr, workspace.ErrWorkspaceRevisionTooLarge) {
+			log.Printf("WARN workspace publish rejected for restore execution_job_id=%s rejection=expanded_size_limit max_uncompressed_bytes=%d", job.ID, s.maxUncompressedBytes)
+			return domain.WorkspaceRevision{}, ErrWorkspacePublishExpandedSizeLimit
+		}
+		if errors.Is(restoreErr, workspace.ErrWorkspaceRevisionTooManyEntries) {
+			log.Printf("WARN workspace publish rejected for restore execution_job_id=%s rejection=entry_limit max_archive_entries=%d", job.ID, s.maxArchiveEntries)
+			return domain.WorkspaceRevision{}, ErrWorkspacePublishEntryLimit
 		}
 		return domain.WorkspaceRevision{}, fmt.Errorf("%w: %v", ErrWorkspacePublishInvalidArchive, restoreErr)
 	}

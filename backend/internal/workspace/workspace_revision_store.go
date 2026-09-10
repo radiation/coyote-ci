@@ -87,6 +87,32 @@ type WorkspaceRevisionRestoreLimits struct {
 	MaxEntries           int
 }
 
+type WorkspaceRevisionSizeLimitError struct {
+	ObservedBytes int64
+	MaxBytes      int64
+}
+
+func (e *WorkspaceRevisionSizeLimitError) Error() string {
+	return ErrWorkspaceRevisionTooLarge.Error()
+}
+
+func (e *WorkspaceRevisionSizeLimitError) Unwrap() error {
+	return ErrWorkspaceRevisionTooLarge
+}
+
+type WorkspaceRevisionEntryLimitError struct {
+	ObservedEntries int
+	MaxEntries      int
+}
+
+func (e *WorkspaceRevisionEntryLimitError) Error() string {
+	return ErrWorkspaceRevisionTooManyEntries.Error()
+}
+
+func (e *WorkspaceRevisionEntryLimitError) Unwrap() error {
+	return ErrWorkspaceRevisionTooManyEntries
+}
+
 // RestoreArchiveWithLimits verifies and safely extracts an archive with bounded output.
 func RestoreArchiveWithLimits(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, destinationRoot string, limits WorkspaceRevisionRestoreLimits) error {
 	if archive == nil || publication.Validate() != nil {
@@ -457,7 +483,7 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 		}
 		entries++
 		if limits.MaxEntries > 0 && entries > limits.MaxEntries {
-			return ErrWorkspaceRevisionTooManyEntries
+			return &WorkspaceRevisionEntryLimitError{ObservedEntries: entries, MaxEntries: limits.MaxEntries}
 		}
 		mode := os.FileMode(header.Mode) & 0o777
 		if header.Name == "." || header.Name == "./" {
@@ -489,7 +515,7 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 			directoryModes[target] = mode
 		case tar.TypeReg:
 			if limits.MaxUncompressedBytes > 0 && (header.Size > limits.MaxUncompressedBytes || uncompressedBytes > limits.MaxUncompressedBytes-header.Size) {
-				return ErrWorkspaceRevisionTooLarge
+				return &WorkspaceRevisionSizeLimitError{ObservedBytes: uncompressedBytes + header.Size, MaxBytes: limits.MaxUncompressedBytes}
 			}
 			uncompressedBytes += header.Size
 			if err := ensureWorkspaceRevisionDirectory(destinationRoot, filepath.Dir(target)); err != nil {
