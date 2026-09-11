@@ -3,7 +3,7 @@ module github.com/radiation/coyote-ci/backend
 go 1.27.1
 
 require (
-	cloud.google.com/go/storage v1.66.0
+	cloud.google.com/go/storage v1.67.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/arch-go/arch-go/v2 v2.1.2
 	github.com/coreos/go-oidc/v3 v3.20.0
