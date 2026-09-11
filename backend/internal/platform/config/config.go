@@ -44,8 +44,8 @@ type Config struct {
 	WorkspaceRevisionMaxUncompressedSizeMB int
 	WorkspaceRevisionMaxArchiveEntries     int
 	WorkspaceHelperCacheMaxUploadSizeMB    int
-	WorkspaceHelperMaxUncompressedSizeMB   int
-	WorkspaceHelperMaxArchiveEntries       int
+	CacheArchiveMaxUncompressedSizeMB      int
+	CacheArchiveMaxEntries                 int
 	WorkspaceRevisionStorageRoot           string
 	KubernetesCacheHelperEnabled           bool
 	KubernetesArtifactHelperEnabled        bool
@@ -129,8 +129,8 @@ func Load() Config {
 		WorkspaceRevisionMaxUncompressedSizeMB: getEnvInt("COYOTE_WORKSPACE_REVISION_MAX_UNCOMPRESSED_SIZE_MB", 4096),
 		WorkspaceRevisionMaxArchiveEntries:     getEnvInt("COYOTE_WORKSPACE_REVISION_MAX_ARCHIVE_ENTRIES", 100000),
 		WorkspaceHelperCacheMaxUploadSizeMB:    getEnvInt("COYOTE_WORKSPACE_HELPER_CACHE_MAX_UPLOAD_SIZE_MB", 10240),
-		WorkspaceHelperMaxUncompressedSizeMB:   getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", 1024),
-		WorkspaceHelperMaxArchiveEntries:       getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES", 10000),
+		CacheArchiveMaxUncompressedSizeMB:      getEnvIntFallback("COYOTE_WORKSPACE_HELPER_CACHE_MAX_UNCOMPRESSED_SIZE_MB", "COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", 4096),
+		CacheArchiveMaxEntries:                 getEnvIntFallback("COYOTE_WORKSPACE_HELPER_CACHE_MAX_ARCHIVE_ENTRIES", "COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES", 100000),
 		WorkspaceRevisionStorageRoot:           getEnv("COYOTE_WORKSPACE_REVISION_STORAGE_ROOT", ""),
 		KubernetesCacheHelperEnabled:           getEnvBool("COYOTE_KUBERNETES_CACHE_HELPER_ENABLED", false),
 		KubernetesArtifactHelperEnabled:        getEnvBool("COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED", false),
@@ -240,6 +240,13 @@ func getEnvInt(key string, fallback int) int {
 	}
 
 	return parsed
+}
+
+func getEnvIntFallback(key string, legacyKey string, fallback int) int {
+	if value := os.Getenv(key); value != "" {
+		return getEnvInt(key, fallback)
+	}
+	return getEnvInt(legacyKey, fallback)
 }
 
 func getEnvBool(key string, fallback bool) bool {

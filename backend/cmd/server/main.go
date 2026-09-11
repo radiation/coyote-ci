@@ -525,7 +525,7 @@ func configureWorkspaceHelperServices(cfg config.Config, workspaceHelperHandler 
 		if cacheErr != nil {
 			return cacheErr
 		}
-		cacheService, cacheServiceErr := service.NewWorkspaceHelperCacheService(service.WorkspaceHelperCacheServiceConfig{CapabilityAuthorizer: workspaceHelperHandler.PrepareCapabilityAuthorizer(), ExecutionJobs: executionJobs, Builds: builds, Entries: cacheEntries[0], Store: cacheStore, MaxUncompressedBytes: int64(cfg.WorkspaceHelperMaxUncompressedSizeMB) * 1024 * 1024, MaxArchiveEntries: cfg.WorkspaceHelperMaxArchiveEntries})
+		cacheService, cacheServiceErr := service.NewWorkspaceHelperCacheService(service.WorkspaceHelperCacheServiceConfig{CapabilityAuthorizer: workspaceHelperHandler.PrepareCapabilityAuthorizer(), ExecutionJobs: executionJobs, Builds: builds, Entries: cacheEntries[0], Store: cacheStore, MaxUncompressedBytes: int64(cfg.CacheArchiveMaxUncompressedSizeMB) * 1024 * 1024, MaxArchiveEntries: cfg.CacheArchiveMaxEntries})
 		if cacheServiceErr != nil {
 			return cacheServiceErr
 		}

@@ -86,8 +86,8 @@ func TestLoad(t *testing.T) {
 				WorkspaceRevisionMaxUncompressedSizeMB: 4096,
 				WorkspaceRevisionMaxArchiveEntries:     100000,
 				WorkspaceHelperCacheMaxUploadSizeMB:    10240,
-				WorkspaceHelperMaxUncompressedSizeMB:   1024,
-				WorkspaceHelperMaxArchiveEntries:       10000,
+				CacheArchiveMaxUncompressedSizeMB:      4096,
+				CacheArchiveMaxEntries:                 100000,
 				WorkerCacheStorageRoot:                 defaultCacheRoot,
 				WorkerCacheMaxSizeMB:                   10240,
 				ArtifactStorageRoot:                    defaultArtifactRoot,
@@ -286,8 +286,8 @@ func TestLoad(t *testing.T) {
 				WorkspaceRevisionMaxUncompressedSizeMB: 4096,
 				WorkspaceRevisionMaxArchiveEntries:     100000,
 				WorkspaceHelperCacheMaxUploadSizeMB:    10240,
-				WorkspaceHelperMaxUncompressedSizeMB:   1024,
-				WorkspaceHelperMaxArchiveEntries:       10000,
+				CacheArchiveMaxUncompressedSizeMB:      4096,
+				CacheArchiveMaxEntries:                 100000,
 				WorkerCacheStorageRoot:                 defaultCacheRoot,
 				WorkerCacheMaxSizeMB:                   10240,
 				ArtifactStorageRoot:                    defaultArtifactRoot,
@@ -402,6 +402,8 @@ func TestLoad(t *testing.T) {
 		"COYOTE_WORKSPACE_HELPER_CACHE_MAX_UPLOAD_SIZE_MB",
 		"COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB",
 		"COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES",
+		"COYOTE_WORKSPACE_HELPER_CACHE_MAX_UNCOMPRESSED_SIZE_MB",
+		"COYOTE_WORKSPACE_HELPER_CACHE_MAX_ARCHIVE_ENTRIES",
 		"COYOTE_WORKSPACE_REVISION_STORAGE_ROOT",
 		"OIDC_ISSUER_URL",
 		"OIDC_CLIENT_ID",
@@ -441,8 +443,8 @@ func TestLoad(t *testing.T) {
 			got := Load()
 			expected := tc.expected
 			expected.WorkspaceHelperServiceAccount = "coyote-workspace-helper"
-			expected.WorkspaceHelperMaxUncompressedSizeMB = 1024
-			expected.WorkspaceHelperMaxArchiveEntries = 10000
+			expected.CacheArchiveMaxUncompressedSizeMB = 4096
+			expected.CacheArchiveMaxEntries = 100000
 			if got != expected {
 				t.Fatalf("expected %+v, got %+v", expected, got)
 			}
@@ -455,8 +457,8 @@ func TestLoadWorkspaceHelperCapabilityConfig(t *testing.T) {
 	t.Setenv("COYOTE_WORKSPACE_HELPER_KUBECONFIG", "/server/kubeconfig")
 	t.Setenv("COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT", "workspace-helper")
 	t.Setenv("COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET", "workspace-helper-signing-secret")
-	t.Setenv("COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", "2048")
-	t.Setenv("COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES", "20000")
+	t.Setenv("COYOTE_WORKSPACE_HELPER_CACHE_MAX_UNCOMPRESSED_SIZE_MB", "2048")
+	t.Setenv("COYOTE_WORKSPACE_HELPER_CACHE_MAX_ARCHIVE_ENTRIES", "20000")
 
 	cfg := Load()
 	if !cfg.WorkspaceHelperCapabilityEnabled {
@@ -471,8 +473,8 @@ func TestLoadWorkspaceHelperCapabilityConfig(t *testing.T) {
 	if cfg.WorkspaceHelperCapabilitySecret != "workspace-helper-signing-secret" {
 		t.Fatalf("capability secret was not loaded")
 	}
-	if cfg.WorkspaceHelperMaxUncompressedSizeMB != 2048 || cfg.WorkspaceHelperMaxArchiveEntries != 20000 {
-		t.Fatalf("workspace limits=%d MiB/%d entries", cfg.WorkspaceHelperMaxUncompressedSizeMB, cfg.WorkspaceHelperMaxArchiveEntries)
+	if cfg.CacheArchiveMaxUncompressedSizeMB != 2048 || cfg.CacheArchiveMaxEntries != 20000 {
+		t.Fatalf("cache limits=%d MiB/%d entries", cfg.CacheArchiveMaxUncompressedSizeMB, cfg.CacheArchiveMaxEntries)
 	}
 }
 
