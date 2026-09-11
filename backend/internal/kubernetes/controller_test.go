@@ -19,6 +19,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 )
 
@@ -153,6 +154,140 @@ func TestBuildJobWithCacheHelpersUsesOrderedLifecycleAndIsolatedCredentials(t *t
 	if !hasMount(pod.Containers[2], "cache-save-token") || !hasMount(pod.Containers[2], "cache-helper-state") || !hasMount(pod.Containers[2], "workspace-kubernetes-api") || hasMount(pod.Containers[2], "cache-restore-token") {
 		t.Fatalf("save mounts=%#v", pod.Containers[2].VolumeMounts)
 	}
+	for _, container := range []corev1.Container{pod.InitContainers[1], pod.Containers[2]} {
+		if fieldPath := downwardAPIFieldPath(container.Env, "COYOTE_WORKSPACE_HELPER_POD_NAME"); fieldPath != "metadata.name" {
+			t.Fatalf("%s pod name field=%q", container.Name, fieldPath)
+		}
+		if fieldPath := downwardAPIFieldPath(container.Env, "COYOTE_WORKSPACE_HELPER_NAMESPACE"); fieldPath != "metadata.namespace" {
+			t.Fatalf("%s namespace field=%q", container.Name, fieldPath)
+		}
+		if fieldPath := downwardAPIFieldPath(container.Env, "COYOTE_WORKSPACE_HELPER_POD_UID"); fieldPath != "metadata.uid" {
+			t.Fatalf("%s pod UID field=%q", container.Name, fieldPath)
+		}
+	}
+}
+
+func downwardAPIFieldPath(environment []corev1.EnvVar, name string) string {
+	for _, value := range environment {
+		if value.Name == name && value.ValueFrom != nil && value.ValueFrom.FieldRef != nil {
+			return value.ValueFrom.FieldRef.FieldPath
+		}
+	}
+	return ""
+}
+
+func TestControllerCreatesCacheHelpersForDurableClaimedStep(t *testing.T) {
+	now := time.Now().UTC()
+	step := domain.BuildStep{
+		ID: "step-1", BuildID: "build-1", StepIndex: 3, Name: "Backend Vet", Status: domain.BuildStepStatusPending,
+		Image: "golang:1.27.1", Command: "sh", Args: []string{"-c", "go vet ./..."}, WorkingDir: "backend",
+		Cache: &domain.StepCacheConfig{Preset: "go", Policy: domain.CachePolicyPullPush},
+	}
+	job := domain.ExecutionJob{
+		ID: "job-1", BuildID: "build-1", StepID: step.ID, NodeID: "node-003", Name: step.Name, StepIndex: step.StepIndex,
+		AttemptNumber: 1, Status: domain.ExecutionJobStatusQueued, Image: step.Image, Command: append([]string{step.Command}, step.Args...), WorkingDir: step.WorkingDir,
+		ResolvedSpecJSON: `{"workspace_input":{"mode":"source"}}`, CreatedAt: now,
+	}
+	boundary := &durableCacheClaimBoundary{build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning}, step: step, job: job}
+	worker := workersvc.NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	worker.SetKubernetesWorkspaceLifecycleEnabled(true)
+	worker.SetKubernetesCacheLifecycleEnabled(true)
+	client := newFakeClient()
+	controller := NewController(client, worker, nil, "ci").WithWorkspaceHelper(WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper", CacheEnabled: true})
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("reconcile: %v", reconcileErr)
+	}
+	pod := client.jobs[jobName(job.ID)].Spec.Template.Spec
+	if len(pod.InitContainers) != 2 || pod.InitContainers[1].Name != "cache-restore" || len(pod.Containers) != 3 || pod.Containers[2].Name != "cache-save" {
+		t.Fatalf("cache lifecycle missing: init=%#v containers=%#v volumes=%#v", pod.InitContainers, pod.Containers, pod.Volumes)
+	}
+	build := pod.Containers[0]
+	if len(build.VolumeMounts) != 3 || build.VolumeMounts[1].MountPath != "/go/pkg/mod" || build.VolumeMounts[2].MountPath != "/root/.cache/go-build" {
+		t.Fatalf("go cache mounts missing: %#v", build.VolumeMounts)
+	}
+}
+
+type durableCacheClaimBoundary struct {
+	build domain.Build
+	step  domain.BuildStep
+	job   domain.ExecutionJob
+}
+
+func (b *durableCacheClaimBoundary) ClaimNextRunnableJob(_ context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
+	b.job.Status = domain.ExecutionJobStatusRunning
+	b.job.ClaimedBy = &claim.WorkerID
+	b.job.ClaimToken = &claim.ClaimToken
+	b.job.ClaimExpiresAt = &claim.LeaseExpiresAt
+	return b.job, true, nil
+}
+
+func (b *durableCacheClaimBoundary) PrepareBuildExecution(context.Context, string) (domain.Build, error) {
+	return b.build, nil
+}
+func (b *durableCacheClaimBoundary) GetBuild(_ context.Context, id string) (domain.Build, error) {
+	if id != b.build.ID {
+		return domain.Build{}, buildsvc.ErrBuildNotFound
+	}
+	return b.build, nil
+}
+func (b *durableCacheClaimBoundary) ListBuilds(context.Context) ([]domain.Build, error) {
+	return []domain.Build{b.build}, nil
+}
+func (b *durableCacheClaimBoundary) GetBuildSteps(_ context.Context, id string) ([]domain.BuildStep, error) {
+	if id != b.build.ID {
+		return nil, buildsvc.ErrBuildNotFound
+	}
+	return []domain.BuildStep{b.step}, nil
+}
+func (b *durableCacheClaimBoundary) GetJobByStepID(context.Context, string) (domain.ExecutionJob, error) {
+	return b.job, nil
+}
+func (b *durableCacheClaimBoundary) GetJobByID(_ context.Context, id string) (domain.ExecutionJob, error) {
+	if id != b.job.ID {
+		return domain.ExecutionJob{}, repository.ErrExecutionJobNotFound
+	}
+	return b.job, nil
+}
+func (b *durableCacheClaimBoundary) ClaimJobByStepID(context.Context, string, repository.StepClaim) (domain.ExecutionJob, bool, error) {
+	return domain.ExecutionJob{}, false, nil
+}
+func (b *durableCacheClaimBoundary) RenewJobLease(context.Context, string, string, time.Time) (domain.ExecutionJob, bool, error) {
+	return b.job, true, nil
+}
+func (b *durableCacheClaimBoundary) ClaimPendingStep(_ context.Context, buildID string, stepIndex int, claim repository.StepClaim) (domain.BuildStep, bool, error) {
+	if buildID != b.step.BuildID || stepIndex != b.step.StepIndex || b.step.Status != domain.BuildStepStatusPending {
+		return domain.BuildStep{}, false, nil
+	}
+	b.step.Status = domain.BuildStepStatusRunning
+	b.step.WorkerID = &claim.WorkerID
+	b.step.ClaimToken = &claim.ClaimToken
+	b.step.LeaseExpiresAt = &claim.LeaseExpiresAt
+	return b.step, true, nil
+}
+func (b *durableCacheClaimBoundary) ReclaimExpiredStep(context.Context, string, int, time.Time, repository.StepClaim) (domain.BuildStep, bool, error) {
+	return domain.BuildStep{}, false, nil
+}
+func (b *durableCacheClaimBoundary) RenewStepLease(context.Context, string, int, string, time.Time) (domain.BuildStep, bool, error) {
+	return b.step, true, nil
+}
+func (b *durableCacheClaimBoundary) QueueBuild(context.Context, string) (domain.Build, error) {
+	return b.build, nil
+}
+func (b *durableCacheClaimBoundary) StartBuild(context.Context, string) (domain.Build, error) {
+	return b.build, nil
+}
+func (b *durableCacheClaimBoundary) CompleteBuild(context.Context, string) (domain.Build, error) {
+	return b.build, nil
+}
+func (b *durableCacheClaimBoundary) FailBuild(context.Context, string) (domain.Build, error) {
+	return b.build, nil
+}
+func (b *durableCacheClaimBoundary) RunStep(context.Context, runner.RunStepRequest) (runner.RunStepResult, buildsvc.StepCompletionReport, error) {
+	return runner.RunStepResult{}, buildsvc.StepCompletionReport{}, nil
+}
+func (b *durableCacheClaimBoundary) HandleStepResult(context.Context, runner.RunStepRequest, runner.RunStepResult) (buildsvc.StepCompletionReport, error) {
+	return buildsvc.StepCompletionReport{}, nil
 }
 
 func TestBuildJobAlwaysPullsTrustedHelperImages(t *testing.T) {

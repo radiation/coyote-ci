@@ -428,7 +428,7 @@ func cacheBuildMounts(preset cachepkg.Preset) []corev1.VolumeMount {
 }
 
 func cacheHelperEnvironment(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep, preset cachepkg.Preset, role domain.WorkspaceHelperRole) []corev1.EnvVar {
-	env := append(workspaceHelperEnvironment(config, step), corev1.EnvVar{Name: "COYOTE_WORKSPACE_PATH", Value: workspace.DefaultContainerRoot}, corev1.EnvVar{Name: "COYOTE_CACHE_ROOT", Value: cacheHelperRoot}, corev1.EnvVar{Name: "COYOTE_CACHE_STATE_ROOT", Value: cacheHelperStateRoot}, corev1.EnvVar{Name: "COYOTE_CACHE_PRESET", Value: preset.Name}, corev1.EnvVar{Name: "COYOTE_CACHE_POLICY", Value: string(domain.NormalizeCachePolicy(step.Cache.Policy))}, corev1.EnvVar{Name: "COYOTE_CACHE_WORKING_DIR", Value: step.WorkingDir})
+	env := append(workspaceHelperEnvironment(config, step), corev1.EnvVar{Name: "COYOTE_WORKSPACE_PATH", Value: workspace.DefaultContainerRoot}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}}, corev1.EnvVar{Name: "COYOTE_CACHE_ROOT", Value: cacheHelperRoot}, corev1.EnvVar{Name: "COYOTE_CACHE_STATE_ROOT", Value: cacheHelperStateRoot}, corev1.EnvVar{Name: "COYOTE_CACHE_PRESET", Value: preset.Name}, corev1.EnvVar{Name: "COYOTE_CACHE_POLICY", Value: string(domain.NormalizeCachePolicy(step.Cache.Policy))}, corev1.EnvVar{Name: "COYOTE_CACHE_WORKING_DIR", Value: step.WorkingDir})
 	return append(env, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_ROLE", Value: string(role)})
 }
 

@@ -43,8 +43,9 @@ func TestExecutionWorkerService_MirrorJobClaimToStepIgnoresJobsWithoutStepID(t *
 	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
 	claim := worker.newStepClaim()
 
-	if err := worker.mirrorJobClaimToStep(context.Background(), domain.ExecutionJob{ID: "job-1", BuildID: "build-1"}, claim); err != nil {
-		t.Fatalf("expected missing step id to be ignored, got %v", err)
+	claimedStep, claimErr := worker.mirrorJobClaimToStep(context.Background(), domain.ExecutionJob{ID: "job-1", BuildID: "build-1"}, claim)
+	if claimErr != nil || claimedStep.ID != "" {
+		t.Fatalf("expected missing step id to be ignored, got step=%#v err=%v", claimedStep, claimErr)
 	}
 	if boundary.claimCalls != 0 || boundary.reclaimCalls != 0 {
 		t.Fatalf("expected no step claim attempts, got claim=%d reclaim=%d", boundary.claimCalls, boundary.reclaimCalls)

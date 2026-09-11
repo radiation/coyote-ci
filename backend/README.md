@@ -176,7 +176,7 @@ version: 1
 pipeline:
   image: golang:1.27.1
   cache:
-    preset: golang
+    preset: go
     scope: job
 steps:
   - name: test

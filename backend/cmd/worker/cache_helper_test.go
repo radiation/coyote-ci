@@ -15,6 +15,8 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	workspacepkg "github.com/radiation/coyote-ci/backend/internal/workspace"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestEnsureCacheMountPathsCreatesAllPresetPaths(t *testing.T) {
@@ -75,6 +77,9 @@ func TestRunCacheSaveAfterBuildSavesAfterSuccessfulBuild(t *testing.T) {
 	if mkdirErr := os.MkdirAll(filepath.Join(root, "paths", "000"), 0o755); mkdirErr != nil {
 		t.Fatalf("create cache path: %v", mkdirErr)
 	}
+	if preparedErr := savePreparedCacheKey(os.Getenv(cacheHelperStateRoot), "go:prepared"); preparedErr != nil {
+		t.Fatalf("prepare cache key: %v", preparedErr)
+	}
 	t.Setenv(workspaceHelperPodName, "pod")
 	t.Setenv(workspaceHelperNamespace, "ci")
 	originalClient := newWorkspacePublishPodClient
@@ -85,6 +90,81 @@ func TestRunCacheSaveAfterBuildSavesAfterSuccessfulBuild(t *testing.T) {
 	if saveErr := runCacheSaveAfterBuild(context.Background()); saveErr != nil {
 		t.Fatalf("save after successful build: %v", saveErr)
 	}
+}
+
+func TestRunCacheSaveAfterBuildWaitsForBuildTermination(t *testing.T) {
+	var saveRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/internal/workspace-helper/capabilities":
+			_, _ = w.Write([]byte(`{"data":{"capability":"save-capability"}}`))
+		case "/api/internal/workspace-helper/cache/save":
+			saveRequests++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	root := configureCacheHelperForTest(t, server.URL, domain.CachePolicyPush)
+	if mkdirErr := os.MkdirAll(filepath.Join(root, "paths", "000"), 0o755); mkdirErr != nil {
+		t.Fatalf("create cache path: %v", mkdirErr)
+	}
+	if preparedErr := savePreparedCacheKey(os.Getenv(cacheHelperStateRoot), "go:prepared"); preparedErr != nil {
+		t.Fatalf("prepare cache key: %v", preparedErr)
+	}
+	t.Setenv(workspaceHelperPodName, "pod")
+	t.Setenv(workspaceHelperNamespace, "ci")
+	originalClient := newWorkspacePublishPodClient
+	t.Cleanup(func() { newWorkspacePublishPodClient = originalClient })
+	client := &sequencedWorkspacePublishPodClient{pods: []*corev1.Pod{pendingWorkspacePublishTestPod(), workspacePublishTestPod(0)}}
+	newWorkspacePublishPodClient = func() (workspacePublishPodClient, error) { return client, nil }
+
+	if saveErr := runCacheSaveAfterBuild(context.Background()); saveErr != nil {
+		t.Fatalf("save after build termination: %v", saveErr)
+	}
+	if client.calls != 2 || saveRequests != 1 {
+		t.Fatalf("pod checks=%d save requests=%d, want 2 and 1", client.calls, saveRequests)
+	}
+}
+
+func TestRunCacheSaveAfterBuildSkipsFailedBuild(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("cache save request after failed build: %s", r.URL.Path)
+	}))
+	defer server.Close()
+	configureCacheHelperForTest(t, server.URL, domain.CachePolicyPush)
+	t.Setenv(workspaceHelperPodName, "pod")
+	t.Setenv(workspaceHelperNamespace, "ci")
+	originalClient := newWorkspacePublishPodClient
+	t.Cleanup(func() { newWorkspacePublishPodClient = originalClient })
+	newWorkspacePublishPodClient = func() (workspacePublishPodClient, error) {
+		return fakeWorkspacePublishPodClient{pod: workspacePublishTestPod(1)}, nil
+	}
+
+	if saveErr := runCacheSaveAfterBuild(context.Background()); saveErr != nil {
+		t.Fatalf("failed build must skip cache save: %v", saveErr)
+	}
+}
+
+type sequencedWorkspacePublishPodClient struct {
+	pods  []*corev1.Pod
+	calls int
+}
+
+func (c *sequencedWorkspacePublishPodClient) Get(context.Context, string, metav1.GetOptions) (*corev1.Pod, error) {
+	index := c.calls
+	c.calls++
+	if index >= len(c.pods) {
+		index = len(c.pods) - 1
+	}
+	return c.pods[index], nil
+}
+
+func pendingWorkspacePublishTestPod() *corev1.Pod {
+	pod := workspacePublishTestPod(0)
+	pod.Status.ContainerStatuses = nil
+	return pod
 }
 
 func TestRunCacheRestoreExchangesCapabilityAndRestoresCache(t *testing.T) {

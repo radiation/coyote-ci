@@ -158,7 +158,8 @@ func (w *ExecutionWorkerService) claimRunnableStepFromJobs(ctx context.Context) 
 		return WorkerRunnableStep{}, false, nil
 	}
 
-	if stepErr := w.mirrorJobClaimToStep(ctx, job, claim); stepErr != nil {
+	claimedStep, stepErr := w.mirrorJobClaimToStep(ctx, job, claim)
+	if stepErr != nil {
 		return WorkerRunnableStep{}, false, stepErr
 	}
 
@@ -181,6 +182,7 @@ func (w *ExecutionWorkerService) claimRunnableStepFromJobs(ctx context.Context) 
 		Env:            workerEnvFromJob(job),
 		WorkingDir:     workerDefaultString(job.WorkingDir, "."),
 		TimeoutSeconds: workerTimeoutFromJob(job),
+		Cache:          claimedStep.Cache.Clone(),
 	}
 
 	return runnable, true, nil
@@ -256,26 +258,26 @@ func (w *ExecutionWorkerService) prepareQueuedBuilds(ctx context.Context) ([]dom
 	return builds, nil
 }
 
-func (w *ExecutionWorkerService) mirrorJobClaimToStep(ctx context.Context, job domain.ExecutionJob, claim repository.StepClaim) error {
+func (w *ExecutionWorkerService) mirrorJobClaimToStep(ctx context.Context, job domain.ExecutionJob, claim repository.StepClaim) (domain.BuildStep, error) {
 	if job.StepID == "" {
-		return nil
+		return domain.BuildStep{}, nil
 	}
 
-	if _, claimed, err := w.builds.ClaimPendingStep(ctx, job.BuildID, job.StepIndex, claim); err != nil {
-		return err
+	if claimedStep, claimed, err := w.builds.ClaimPendingStep(ctx, job.BuildID, job.StepIndex, claim); err != nil {
+		return domain.BuildStep{}, err
 	} else if claimed {
-		return nil
+		return claimedStep, nil
 	}
 
-	if _, reclaimed, err := w.builds.ReclaimExpiredStep(ctx, job.BuildID, job.StepIndex, claim.ClaimedAt, claim); err != nil {
-		return err
+	if reclaimedStep, reclaimed, err := w.builds.ReclaimExpiredStep(ctx, job.BuildID, job.StepIndex, claim.ClaimedAt, claim); err != nil {
+		return domain.BuildStep{}, err
 	} else if reclaimed {
 		reclaimCount := atomic.AddInt64(&w.reclaimsWon, 1)
 		log.Printf("step reclaim mirrored from job claim: build_id=%s step_index=%d reclaim_count=%d", job.BuildID, job.StepIndex, reclaimCount)
-		return nil
+		return reclaimedStep, nil
 	}
 
-	return buildsvc.ErrInvalidBuildStepTransition
+	return domain.BuildStep{}, buildsvc.ErrInvalidBuildStepTransition
 }
 
 func (w *ExecutionWorkerService) bindRunnableStepFromJob(ctx context.Context, step WorkerRunnableStep, claim repository.StepClaim) WorkerRunnableStep {
