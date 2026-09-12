@@ -218,8 +218,9 @@ func resolveStepDef(sd StepDef, pipelineEnv map[string]string, pipelineCache *do
 		stepCache = resolveCache(sd.Cache)
 	}
 
-	return ResolvedStep{
+	step := ResolvedStep{
 		Name:           sd.Name,
+		ExecutionKind:  domain.ExecutionKindShell,
 		Image:          strings.TrimSpace(sd.Image),
 		Run:            sd.Run,
 		WorkingDir:     sd.WorkingDir,
@@ -229,6 +230,13 @@ func resolveStepDef(sd StepDef, pipelineEnv map[string]string, pipelineCache *do
 		ArtifactDecls:  append([]domain.ArtifactDeclaration(nil), sd.Artifacts.Declarations...),
 		Cache:          stepCache.Clone(),
 	}
+	if sd.ImageBuild != nil {
+		step.ExecutionKind = domain.ExecutionKindImageBuild
+		step.RemoteImageBuild = &domain.RemoteImageBuildSpec{ContextPath: strings.TrimSpace(sd.ImageBuild.Context), DockerfilePath: strings.TrimSpace(sd.ImageBuild.Dockerfile), BuildArgs: copyEnv(sd.ImageBuild.BuildArgs), TargetImageReference: strings.TrimSpace(sd.ImageBuild.Image)}
+		step.Image = ""
+		step.Run = ""
+	}
+	return step
 }
 
 func buildNodeID(index int) string {

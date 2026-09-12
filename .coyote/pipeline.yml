@@ -2,11 +2,6 @@ version: 1
 pipeline:
   name: coyote-ci
   image: golang:1.27.1
-artifacts:
-  - path: artifacts/images/*.tar
-    version:
-      template: "0.1.{build_number}"
-      channel: "latest"
 steps:
   - name: Backend Format Check
     depends_on: []
@@ -105,27 +100,19 @@ steps:
       - Backend Format Check
       - Backend Build Server
       - Backend Build Worker
-    run: |
-      mkdir -p artifacts/images
-      docker build --build-arg GO_VERSION=1.27.1 -t coyote-ci/backend:latest -f backend/Dockerfile backend
-      docker save coyote-ci/backend:latest -o artifacts/images/backend-image.tar
-    image: docker@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
+    image_build:
+      context: backend
+      dockerfile: backend/Dockerfile
+      build_args:
+        GO_VERSION: "1.27.1"
+      image: coyote-ci/backend
     timeout_seconds: 600
-    artifacts:
-      - path: artifacts/images/backend-image.tar
-        name: coyote-ci/backend
-        type: docker_image
 
   - name: Frontend Image
     depends_on:
       - Frontend Build
-    run: |
-      mkdir -p artifacts/images
-      docker build -t coyote-ci/frontend:latest -f frontend/Dockerfile frontend
-      docker save coyote-ci/frontend:latest -o artifacts/images/frontend-image.tar
-    image: docker@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
+    image_build:
+      context: frontend
+      dockerfile: frontend/Dockerfile
+      image: coyote-ci/frontend
     timeout_seconds: 600
-    artifacts:
-      - path: artifacts/images/frontend-image.tar
-        name: coyote-ci/frontend
-        type: docker_image

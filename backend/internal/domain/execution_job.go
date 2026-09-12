@@ -72,16 +72,18 @@ type WorkspaceInputPlan struct {
 
 // ExecutionJobSpec captures the immutable worker-facing runtime contract.
 type ExecutionJobSpec struct {
-	Version          int                `json:"version"`
-	Image            string             `json:"image"`
-	WorkingDir       string             `json:"working_dir"`
-	Command          []string           `json:"command"`
-	Environment      map[string]string  `json:"environment"`
-	TimeoutSeconds   int                `json:"timeout_seconds"`
-	PipelineFilePath string             `json:"pipeline_file_path,omitempty"`
-	ContextDir       string             `json:"context_dir,omitempty"`
-	Source           SourceSnapshotRef  `json:"source"`
-	WorkspaceInput   WorkspaceInputPlan `json:"workspace_input"`
+	Version          int                   `json:"version"`
+	ExecutionKind    ExecutionKind         `json:"execution_kind"`
+	Image            string                `json:"image"`
+	WorkingDir       string                `json:"working_dir"`
+	Command          []string              `json:"command"`
+	Environment      map[string]string     `json:"environment"`
+	TimeoutSeconds   int                   `json:"timeout_seconds"`
+	PipelineFilePath string                `json:"pipeline_file_path,omitempty"`
+	ContextDir       string                `json:"context_dir,omitempty"`
+	Source           SourceSnapshotRef     `json:"source"`
+	WorkspaceInput   WorkspaceInputPlan    `json:"workspace_input"`
+	RemoteImageBuild *RemoteImageBuildSpec `json:"remote_image_build,omitempty"`
 }
 
 func (s ExecutionJobSpec) ToJSON() (string, error) {

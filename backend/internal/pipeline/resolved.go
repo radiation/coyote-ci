@@ -21,6 +21,8 @@ type ResolvedStep struct {
 	GroupName        string
 	DependsOnNodeIDs []string
 	Name             string
+	ExecutionKind    domain.ExecutionKind
+	RemoteImageBuild *domain.RemoteImageBuildSpec
 	Image            string
 	Run              string
 	WorkingDir       string

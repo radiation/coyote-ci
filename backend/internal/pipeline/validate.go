@@ -258,7 +258,30 @@ func validateStepDef(step StepDef, prefix string, seen map[string]bool) Validati
 	}
 
 	if strings.TrimSpace(step.Run) == "" {
-		errs = append(errs, ValidationError{Field: prefix + ".run", Message: "run command is required"})
+		if step.ImageBuild == nil {
+			errs = append(errs, ValidationError{Field: prefix + ".run", Message: "run command is required"})
+		}
+	} else if step.ImageBuild != nil {
+		errs = append(errs, ValidationError{Field: prefix, Message: "step must specify exactly one execution kind"})
+	}
+	if step.ImageBuild != nil {
+		if strings.TrimSpace(step.Image) != "" {
+			errs = append(errs, ValidationError{Field: prefix + ".image", Message: "image_build step must not set container image"})
+		}
+		if strings.TrimSpace(step.ImageBuild.Context) == "" {
+			errs = append(errs, ValidationError{Field: prefix + ".image_build.context", Message: "is required"})
+		}
+		if strings.TrimSpace(step.ImageBuild.Dockerfile) == "" {
+			errs = append(errs, ValidationError{Field: prefix + ".image_build.dockerfile", Message: "is required"})
+		}
+		if strings.TrimSpace(step.ImageBuild.Image) == "" {
+			errs = append(errs, ValidationError{Field: prefix + ".image_build.image", Message: "is required"})
+		}
+		for key, value := range step.ImageBuild.BuildArgs {
+			if !validEnvKey.MatchString(key) || strings.TrimSpace(value) == "" {
+				errs = append(errs, ValidationError{Field: prefix + ".image_build.build_args", Message: fmt.Sprintf("invalid build argument %q", key)})
+			}
+		}
 	}
 
 	if step.TimeoutSeconds != nil && *step.TimeoutSeconds <= 0 {

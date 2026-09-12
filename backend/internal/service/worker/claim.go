@@ -2,9 +2,11 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"sort"
+	"strings"
 	"sync/atomic"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -166,26 +168,49 @@ func (w *ExecutionWorkerService) claimRunnableStepFromJobs(ctx context.Context) 
 	claimCount := atomic.AddInt64(&w.claimsWon, 1)
 	log.Printf("job claim succeeded: job_id=%s build_id=%s step_index=%d worker_id=%s claim_count=%d", job.ID, job.BuildID, job.StepIndex, claim.WorkerID, claimCount)
 
+	var spec domain.ExecutionJobSpec
+	if strings.TrimSpace(job.ResolvedSpecJSON) != "" {
+		if unmarshalErr := json.Unmarshal([]byte(job.ResolvedSpecJSON), &spec); unmarshalErr != nil {
+			return WorkerRunnableStep{}, false, unmarshalErr
+		}
+	}
+	executionKind := spec.ExecutionKind
+	if executionKind == "" {
+		executionKind = domain.ExecutionKindShell
+	}
 	runnable := WorkerRunnableStep{
-		BuildID:        job.BuildID,
-		JobID:          job.ID,
-		StepID:         job.StepID,
-		StepIndex:      job.StepIndex,
-		StepName:       job.Name,
-		WorkerID:       claim.WorkerID,
-		ClaimToken:     claim.ClaimToken,
-		NodeID:         job.NodeID,
-		AttemptNumber:  job.AttemptNumber,
-		Image:          job.Image,
-		Command:        workerCommandFromJob(job),
-		Args:           workerArgsFromJob(job),
-		Env:            workerEnvFromJob(job),
-		WorkingDir:     workerDefaultString(job.WorkingDir, "."),
-		TimeoutSeconds: workerTimeoutFromJob(job),
-		Cache:          claimedStep.Cache.Clone(),
+		BuildID:          job.BuildID,
+		JobID:            job.ID,
+		StepID:           job.StepID,
+		StepIndex:        job.StepIndex,
+		StepName:         job.Name,
+		ExecutionKind:    executionKind,
+		RemoteImageBuild: cloneRemoteImageBuildSpec(spec.RemoteImageBuild),
+		WorkerID:         claim.WorkerID,
+		ClaimToken:       claim.ClaimToken,
+		NodeID:           job.NodeID,
+		AttemptNumber:    job.AttemptNumber,
+		Image:            job.Image,
+		Command:          workerCommandFromJob(job),
+		Args:             workerArgsFromJob(job),
+		Env:              workerEnvFromJob(job),
+		WorkingDir:       workerDefaultString(job.WorkingDir, "."),
+		TimeoutSeconds:   workerTimeoutFromJob(job),
+		Cache:            claimedStep.Cache.Clone(),
 	}
 
 	return runnable, true, nil
+}
+
+func cloneRemoteImageBuildSpec(spec *domain.RemoteImageBuildSpec) *domain.RemoteImageBuildSpec {
+	if spec == nil {
+		return nil
+	}
+	buildArgs := make(map[string]string, len(spec.BuildArgs))
+	for key, value := range spec.BuildArgs {
+		buildArgs[key] = value
+	}
+	return &domain.RemoteImageBuildSpec{ContextPath: spec.ContextPath, DockerfilePath: spec.DockerfilePath, BuildArgs: buildArgs, TargetImageReference: spec.TargetImageReference}
 }
 
 func (w *ExecutionWorkerService) prepareQueuedBuilds(ctx context.Context) ([]domain.Build, error) {
