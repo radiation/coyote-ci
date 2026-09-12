@@ -147,6 +147,81 @@ steps:
 	assertWorkspaceInput(t, jobs[2], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModePredecessor, ProducerNodeID: steps[1].NodeID})
 }
 
+func TestBuildExecutionPlanner_PlanWorkspaceInputs_UsesExplicitPipelineDependencies(t *testing.T) {
+	resolved, err := pipeline.LoadAndResolve([]byte(`
+version: 1
+steps:
+  - name: setup
+    depends_on: []
+    run: true
+  - group:
+      name: checks
+      steps:
+        - name: backend
+          depends_on: [setup]
+          run: true
+        - name: frontend
+          depends_on: [setup]
+          run: true
+  - name: package
+    depends_on: [backend, frontend]
+    run: true
+`))
+	if err != nil {
+		t.Fatalf("load pipeline: %v", err)
+	}
+
+	steps := pipelineStepsToDomain("build-1", resolved.Steps)
+	jobs, planErr := NewBuildExecutionPlanner().Plan(domain.Build{ID: "build-1"}, steps, "golang:1.24")
+	if planErr != nil {
+		t.Fatalf("plan: %v", planErr)
+	}
+	if got := jobs[1].DependsOnNodeIDs; len(got) != 1 || got[0] != jobs[0].NodeID {
+		t.Fatalf("backend job dependencies=%#v, want setup node %q", got, jobs[0].NodeID)
+	}
+	assertWorkspaceInput(t, jobs[1], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModePredecessor, ProducerNodeID: jobs[0].NodeID, IsolatedWritableDescendant: true})
+	if got := jobs[3].DependsOnNodeIDs; len(got) != 2 || got[0] != jobs[1].NodeID || got[1] != jobs[2].NodeID {
+		t.Fatalf("package job dependencies=%#v, want backend and frontend nodes", got)
+	}
+	assertWorkspaceInput(t, jobs[3], domain.WorkspaceInputPlan{Mode: domain.WorkspaceInputModeFanIn, CommonAncestorNodeID: jobs[0].NodeID})
+
+	executionJobs := memoryrepo.NewExecutionJobRepository()
+	if _, createErr := executionJobs.CreateJobsForBuild(context.Background(), jobs); createErr != nil {
+		t.Fatalf("create planned jobs: %v", createErr)
+	}
+	now := time.Now().UTC()
+	claim := func(workerID string, token string) domain.ExecutionJob {
+		job, found, claimErr := executionJobs.ClaimNextRunnableJob(context.Background(), repository.StepClaim{WorkerID: workerID, ClaimToken: token, ClaimedAt: now, LeaseExpiresAt: now.Add(time.Minute)})
+		if claimErr != nil || !found {
+			t.Fatalf("claim %s: found=%t err=%v", workerID, found, claimErr)
+		}
+		return job
+	}
+	complete := func(job domain.ExecutionJob, token string) {
+		_, outcome, completeErr := executionJobs.CompleteJobSuccess(context.Background(), job.ID, token, now.Add(time.Minute), 0, nil)
+		if completeErr != nil || outcome != repository.StepCompletionCompleted {
+			t.Fatalf("complete %s: outcome=%q err=%v", job.NodeID, outcome, completeErr)
+		}
+	}
+
+	setup := claim("worker-setup", "setup-token")
+	if setup.NodeID != jobs[0].NodeID {
+		t.Fatalf("first claim node=%q, want explicit root %q", setup.NodeID, jobs[0].NodeID)
+	}
+	complete(setup, "setup-token")
+	backend := claim("worker-backend", "backend-token")
+	frontend := claim("worker-frontend", "frontend-token")
+	complete(backend, "backend-token")
+	if _, found, claimErr := executionJobs.ClaimNextRunnableJob(context.Background(), repository.StepClaim{WorkerID: "worker-package", ClaimToken: "package-token", ClaimedAt: now, LeaseExpiresAt: now.Add(time.Minute)}); claimErr != nil || found {
+		t.Fatalf("package claimed before both explicit dependencies completed: found=%t err=%v", found, claimErr)
+	}
+	complete(frontend, "frontend-token")
+	packageJob := claim("worker-package", "package-token")
+	if packageJob.NodeID != jobs[3].NodeID {
+		t.Fatalf("package claim node=%q, want %q", packageJob.NodeID, jobs[3].NodeID)
+	}
+}
+
 func TestBuildExecutionPlanner_PlanWorkspaceInputs_SequentialWhenNodeIDsMissing(t *testing.T) {
 	steps := []domain.BuildStep{
 		{ID: "step-0", StepIndex: 0, Name: "step-0", Command: "sh", Args: []string{"-c", "true"}, Env: map[string]string{}, WorkingDir: "."},

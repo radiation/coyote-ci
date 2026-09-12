@@ -88,6 +88,43 @@ func TestValidate_DuplicateStepNames(t *testing.T) {
 	assertContains(t, err.Error(), "duplicate")
 }
 
+func TestValidate_RejectsInvalidExplicitDependencies(t *testing.T) {
+	cases := []struct {
+		name  string
+		steps []StepDef
+		want  string
+	}{
+		{name: "unknown", steps: []StepDef{{Name: "A", Run: "true", DependsOn: dependencyNames("missing")}}, want: "unknown dependency"},
+		{name: "self", steps: []StepDef{{Name: "A", Run: "true", DependsOn: dependencyNames("a")}}, want: "cannot depend on itself"},
+		{name: "duplicate", steps: []StepDef{{Name: "A", Run: "true"}, {Name: "B", Run: "true", DependsOn: dependencyNames("A", "a")}}, want: "duplicate dependency"},
+		{name: "direct cycle", steps: []StepDef{{Name: "A", Run: "true", DependsOn: dependencyNames("B")}, {Name: "B", Run: "true", DependsOn: dependencyNames("A")}}, want: "must not contain a cycle"},
+		{name: "transitive cycle", steps: []StepDef{{Name: "A", Run: "true", DependsOn: dependencyNames("B")}, {Name: "B", Run: "true", DependsOn: dependencyNames("C")}, {Name: "C", Run: "true", DependsOn: dependencyNames("A")}}, want: "must not contain a cycle"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := Validate(&PipelineFile{Version: 1, Steps: testCase.steps})
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			assertContains(t, err.Error(), testCase.want)
+		})
+	}
+}
+
+func TestValidate_AllowsCrossGroupForwardDependency(t *testing.T) {
+	pf := &PipelineFile{Version: 1, Steps: []StepDef{
+		{Group: &StepGroupDef{Name: "first", Steps: []StepDef{{Name: "Consumer", Run: "true", DependsOn: dependencyNames("Producer")}}}},
+		{Group: &StepGroupDef{Name: "second", Steps: []StepDef{{Name: "Producer", Run: "true", DependsOn: dependencyNames()}}}},
+	}}
+	if err := Validate(pf); err != nil {
+		t.Fatalf("validate cross-group forward dependency: %v", err)
+	}
+}
+
+func dependencyNames(values ...string) *[]string {
+	return &values
+}
+
 func TestValidate_NegativeTimeout(t *testing.T) {
 	neg := -5
 	pf := &PipelineFile{

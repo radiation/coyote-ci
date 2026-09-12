@@ -2,93 +2,130 @@ version: 1
 pipeline:
   name: coyote-ci
   image: golang:1.27.1
-  cache:
-    preset: go
-    policy: pull-push
 artifacts:
   - path: artifacts/images/*.tar
     version:
       template: "0.1.{build_number}"
       channel: "latest"
 steps:
-  - group:
-      name: Bootstrap
-      steps:
-        - name: Backend Format Check
-          run: test -z "$(gofmt -l .)"
-          working_dir: backend
-          timeout_seconds: 300
-        - name: Frontend Install
-          run: npm ci
-          working_dir: frontend
-          image: node@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f
-          timeout_seconds: 600
-        - name: Backend Dependencies
-          run: go mod download
-          working_dir: backend
-          timeout_seconds: 600
-  - group:
-      name: Verify
-      steps:
-        - name: Backend Vet
-          run: go vet ./...
-          working_dir: backend
-          timeout_seconds: 300
-        - name: Backend Test
-          run: go test ./...
-          working_dir: backend
-          timeout_seconds: 600
-        - name: Frontend Test
-          run: npm test
-          working_dir: frontend
-          image: node@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f
-          timeout_seconds: 600
-  - group:
-      name: Build
-      steps:
-        - name: Backend Build Server
-          run: go build -o dist/coyote-server ./cmd/server
-          working_dir: backend
-          timeout_seconds: 300
-        - name: Backend Build Worker
-          run: go build -o dist/coyote-worker ./cmd/worker
-          working_dir: backend
-          timeout_seconds: 300
-        - name: Frontend Build
-          run: npm run build
-          working_dir: frontend
-          image: node@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f
-          timeout_seconds: 600
-  - group:
-      name: Images
-      steps:
-        - name: Backend Image
-          run: |
-            mkdir -p artifacts/images
-            docker build --build-arg GO_VERSION=1.27.1 -t coyote-ci/backend:latest -f backend/Dockerfile backend
-            docker save coyote-ci/backend:latest -o artifacts/images/backend-image.tar
-          image: docker@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
-          timeout_seconds: 600
-          artifacts:
-            - path: artifacts/images/backend-image.tar
-              name: coyote-ci/backend
-              type: docker_image
-        - name: Frontend Image
-          run: |
-            mkdir -p artifacts/images
-            docker build -t coyote-ci/frontend:latest -f frontend/Dockerfile frontend
-            docker save coyote-ci/frontend:latest -o artifacts/images/frontend-image.tar
-          image: docker@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
-          timeout_seconds: 600
-          artifacts:
-            - path: artifacts/images/frontend-image.tar
-              name: coyote-ci/frontend
-              type: docker_image
-  - group:
-      name: Artifact Debug
-      steps:
-        - name: List Image Artifacts
-          run: |
-            pwd
-            find artifacts -maxdepth 3 -type f -ls || true
-            ls -lah artifacts/images || true
+  - name: Backend Format Check
+    depends_on: []
+    run: test -z "$(gofmt -l .)"
+    working_dir: backend
+    timeout_seconds: 300
+    cache:
+      preset: go
+      policy: pull-push
+
+  - name: Backend Dependencies
+    depends_on: []
+    run: go mod download
+    working_dir: backend
+    timeout_seconds: 600
+    cache:
+      preset: go
+      policy: pull-push
+
+  - name: Frontend Install
+    depends_on: []
+    run: npm ci
+    working_dir: frontend
+    image: node@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f
+    timeout_seconds: 600
+    cache:
+      preset: node
+      policy: pull-push
+
+  - name: Backend Vet
+    depends_on:
+      - Backend Dependencies
+    run: go vet ./...
+    working_dir: backend
+    timeout_seconds: 300
+    cache:
+      preset: go
+      policy: pull-push
+
+  - name: Backend Test
+    depends_on:
+      - Backend Dependencies
+    run: go test ./...
+    working_dir: backend
+    timeout_seconds: 600
+    cache:
+      preset: go
+      policy: pull-push
+
+  - name: Frontend Test
+    depends_on:
+      - Frontend Install
+    run: npm test
+    working_dir: frontend
+    image: node@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f
+    timeout_seconds: 600
+    cache:
+      preset: node
+      policy: pull-push
+
+  - name: Backend Build Server
+    depends_on:
+      - Backend Vet
+      - Backend Test
+    run: go build -o dist/coyote-server ./cmd/server
+    working_dir: backend
+    timeout_seconds: 300
+    cache:
+      preset: go
+      policy: pull-push
+
+  - name: Backend Build Worker
+    depends_on:
+      - Backend Vet
+      - Backend Test
+    run: go build -o dist/coyote-worker ./cmd/worker
+    working_dir: backend
+    timeout_seconds: 300
+    cache:
+      preset: go
+      policy: pull-push
+
+  - name: Frontend Build
+    depends_on:
+      - Frontend Test
+    run: npm run build
+    working_dir: frontend
+    image: node@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f
+    timeout_seconds: 600
+    cache:
+      preset: node
+      policy: pull-push
+
+  - name: Backend Image
+    depends_on:
+      - Backend Format Check
+      - Backend Build Server
+      - Backend Build Worker
+    run: |
+      mkdir -p artifacts/images
+      docker build --build-arg GO_VERSION=1.27.1 -t coyote-ci/backend:latest -f backend/Dockerfile backend
+      docker save coyote-ci/backend:latest -o artifacts/images/backend-image.tar
+    image: docker@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
+    timeout_seconds: 600
+    artifacts:
+      - path: artifacts/images/backend-image.tar
+        name: coyote-ci/backend
+        type: docker_image
+
+  - name: Frontend Image
+    depends_on:
+      - Frontend Build
+    run: |
+      mkdir -p artifacts/images
+      docker build -t coyote-ci/frontend:latest -f frontend/Dockerfile frontend
+      docker save coyote-ci/frontend:latest -o artifacts/images/frontend-image.tar
+    image: docker@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
+    timeout_seconds: 600
+    artifacts:
+      - path: artifacts/images/frontend-image.tar
+        name: coyote-ci/frontend
+        type: docker_image

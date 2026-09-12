@@ -28,6 +28,7 @@ type PipelineMeta struct {
 type StepDef struct {
 	Group          *StepGroupDef     `yaml:"group,omitempty"`
 	Name           string            `yaml:"name"`
+	DependsOn      *[]string         `yaml:"depends_on,omitempty"`
 	Image          string            `yaml:"image,omitempty"`
 	Run            string            `yaml:"run"`
 	Command        string            `yaml:"command,omitempty"`

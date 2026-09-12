@@ -18,6 +18,7 @@ var validEnvKey = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 // Returns nil on success or a ValidationErrors with all problems found.
 func Validate(pf *PipelineFile) error {
 	var errs ValidationErrors
+	var dependencyRefs []stepDependencyRef
 
 	// version
 	if pf.Version != 1 {
@@ -76,10 +77,13 @@ func Validate(pf *PipelineFile) error {
 	// step-level validation
 	seen := make(map[string]bool, len(pf.Steps))
 	executableStepCount := 0
+	frontier := make([]string, 0, 1)
 	for i, step := range pf.Steps {
 		prefix := fmt.Sprintf("steps[%d]", i)
 		if step.Group == nil {
 			errs = append(errs, validateStepDef(step, prefix, seen)...)
+			dependencyRefs = append(dependencyRefs, stepDependencyRef{name: step.Name, dependsOn: step.DependsOn, implicitDependencies: append([]string(nil), frontier...), field: prefix + ".depends_on"})
+			frontier = []string{step.Name}
 			executableStepCount++
 			continue
 		}
@@ -95,19 +99,25 @@ func Validate(pf *PipelineFile) error {
 			continue
 		}
 
+		groupDependencies := append([]string(nil), frontier...)
+		groupFrontier := make([]string, 0, len(step.Group.Steps))
 		for j, groupStep := range step.Group.Steps {
 			if groupStep.Group != nil {
 				errs = append(errs, ValidationError{Field: fmt.Sprintf("%s.group.steps[%d].group", prefix, j), Message: "nested groups are not allowed"})
 				continue
 			}
 			errs = append(errs, validateStepDef(groupStep, fmt.Sprintf("%s.group.steps[%d]", prefix, j), seen)...)
+			dependencyRefs = append(dependencyRefs, stepDependencyRef{name: groupStep.Name, dependsOn: groupStep.DependsOn, implicitDependencies: groupDependencies, field: fmt.Sprintf("%s.group.steps[%d].depends_on", prefix, j)})
+			groupFrontier = append(groupFrontier, groupStep.Name)
 			executableStepCount++
 		}
+		frontier = groupFrontier
 	}
 
 	if executableStepCount == 0 {
 		errs = append(errs, ValidationError{Field: "steps", Message: "at least one step is required"})
 	}
+	errs = append(errs, validateStepDependencies(dependencyRefs)...)
 
 	if len(errs) > 0 {
 		return errs
@@ -115,11 +125,95 @@ func Validate(pf *PipelineFile) error {
 	return nil
 }
 
+type stepDependencyRef struct {
+	name                 string
+	dependsOn            *[]string
+	implicitDependencies []string
+	field                string
+}
+
+func validateStepDependencies(refs []stepDependencyRef) ValidationErrors {
+	var errs ValidationErrors
+	nodeIDsByName := make(map[string]string, len(refs))
+	for _, ref := range refs {
+		name := strings.TrimSpace(ref.name)
+		if name != "" {
+			nodeIDsByName[strings.ToLower(name)] = name
+		}
+	}
+
+	dependenciesByName := make(map[string][]string, len(refs))
+	for _, ref := range refs {
+		name := strings.TrimSpace(ref.name)
+		if name == "" {
+			continue
+		}
+		dependencies := ref.implicitDependencies
+		if ref.dependsOn != nil {
+			dependencies = *ref.dependsOn
+		}
+		seenDependencies := make(map[string]struct{}, len(dependencies))
+		for index, dependency := range dependencies {
+			trimmed := strings.TrimSpace(dependency)
+			key := strings.ToLower(trimmed)
+			field := fmt.Sprintf("%s[%d]", ref.field, index)
+			if trimmed == "" || nodeIDsByName[key] == "" {
+				errs = append(errs, ValidationError{Field: field, Message: fmt.Sprintf("unknown dependency %q", dependency)})
+				continue
+			}
+			if key == strings.ToLower(name) {
+				errs = append(errs, ValidationError{Field: field, Message: "step cannot depend on itself"})
+				continue
+			}
+			if _, duplicate := seenDependencies[key]; duplicate {
+				errs = append(errs, ValidationError{Field: field, Message: fmt.Sprintf("duplicate dependency %q", dependency)})
+				continue
+			}
+			seenDependencies[key] = struct{}{}
+			dependenciesByName[strings.ToLower(name)] = append(dependenciesByName[strings.ToLower(name)], key)
+		}
+	}
+	if hasDependencyCycle(dependenciesByName) {
+		errs = append(errs, ValidationError{Field: "steps", Message: "step dependencies must not contain a cycle"})
+	}
+	return errs
+}
+
+func hasDependencyCycle(dependenciesByName map[string][]string) bool {
+	states := make(map[string]uint8, len(dependenciesByName))
+	var visit func(string) bool
+	visit = func(node string) bool {
+		switch states[node] {
+		case 1:
+			return true
+		case 2:
+			return false
+		}
+		states[node] = 1
+		for _, dependency := range dependenciesByName[node] {
+			if visit(dependency) {
+				return true
+			}
+		}
+		states[node] = 2
+		return false
+	}
+	for node := range dependenciesByName {
+		if visit(node) {
+			return true
+		}
+	}
+	return false
+}
+
 func validateGroupWrapperStep(step StepDef, prefix string) ValidationErrors {
 	var errs ValidationErrors
 
 	if strings.TrimSpace(step.Name) != "" {
 		errs = append(errs, ValidationError{Field: prefix + ".name", Message: "group wrapper must not set name"})
+	}
+	if step.DependsOn != nil {
+		errs = append(errs, ValidationError{Field: prefix + ".depends_on", Message: "group wrapper must not set depends_on"})
 	}
 	if strings.TrimSpace(step.Image) != "" {
 		errs = append(errs, ValidationError{Field: prefix + ".image", Message: "group wrapper must not set image"})

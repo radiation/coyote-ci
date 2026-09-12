@@ -259,3 +259,25 @@ steps:
           run: docker build -t coyote-ci/frontend:latest -f frontend/Dockerfile frontend
           image: docker:27
 ```
+
+## Explicit Step Dependencies
+
+Steps can override normal declaration/group sequencing with named `depends_on`
+dependencies. Names match case-insensitively and may reference a step in another
+group or one declared later in the file.
+
+```yaml
+steps:
+  - name: Frontend Install
+    depends_on: []
+    run: npm ci
+
+  - name: Frontend Test
+    depends_on:
+      - Frontend Install
+    run: npm test
+```
+
+- Omitted `depends_on` retains normal declaration/group sequencing.
+- `depends_on: []` explicitly creates a graph root.
+- A non-empty `depends_on` list replaces implicit frontier dependencies for that step.
