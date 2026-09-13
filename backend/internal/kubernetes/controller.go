@@ -80,7 +80,7 @@ type Controller struct {
 	testStepNodeNames           []string
 	maxInFlightJobs             int
 	active                      map[string]*workersvc.WorkerRunnableStep
-	activeImageBuild            *workersvc.WorkerRunnableStep
+	activeImageBuilds           map[string]*workersvc.WorkerRunnableStep
 	imageBuildController        imageBuildController
 	terminalLogsPersisted       map[string]bool
 	lastCancellationCleanupAt   time.Time
@@ -93,7 +93,7 @@ func (c *Controller) WithImageBuildController(controller imageBuildController) *
 }
 
 func NewController(client Client, service executionService, logSink logs.LogSink, namespace string) *Controller {
-	return &Controller{client: client, service: service, logSink: logSink, namespace: defaultNamespace(namespace), maxInFlightJobs: 1, active: map[string]*workersvc.WorkerRunnableStep{}, terminalLogsPersisted: map[string]bool{}, now: func() time.Time { return time.Now().UTC() }}
+	return &Controller{client: client, service: service, logSink: logSink, namespace: defaultNamespace(namespace), maxInFlightJobs: 1, active: map[string]*workersvc.WorkerRunnableStep{}, activeImageBuilds: map[string]*workersvc.WorkerRunnableStep{}, terminalLogsPersisted: map[string]bool{}, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func (c *Controller) WithMaxInFlightJobs(maxInFlightJobs int) *Controller {
@@ -129,22 +129,23 @@ func (c *Controller) WithTestStepNodeNames(names []string) *Controller {
 }
 
 func (c *Controller) Reconcile(ctx context.Context) error {
-	if c.activeImageBuild != nil {
-		stillActive, err := c.imageBuildController.ReconcileClaimed(ctx, *c.activeImageBuild)
-		if !stillActive {
-			c.activeImageBuild = nil
-		}
-		return err
-	}
-
 	var reconcileErrors []error
 	for _, step := range c.activeSteps() {
 		if err := c.reconcileActive(ctx, step); err != nil {
 			reconcileErrors = append(reconcileErrors, err)
 		}
 	}
+	for _, step := range c.activeImageBuildSteps() {
+		stillActive, err := c.imageBuildController.ReconcileClaimed(ctx, step)
+		if !stillActive {
+			delete(c.activeImageBuilds, step.JobID)
+		}
+		if err != nil {
+			reconcileErrors = append(reconcileErrors, err)
+		}
+	}
 
-	for len(c.active) < c.maxInFlightJobs {
+	for c.inFlightCount() < c.maxInFlightJobs {
 		step, found, err := c.service.ClaimRunnableStep(ctx)
 		if err != nil {
 			reconcileErrors = append(reconcileErrors, err)
@@ -155,9 +156,6 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 		}
 		if err := c.reconcileClaimed(ctx, step); err != nil {
 			reconcileErrors = append(reconcileErrors, err)
-			break
-		}
-		if c.activeImageBuild != nil {
 			break
 		}
 	}
@@ -172,10 +170,10 @@ func (c *Controller) reconcileClaimed(ctx context.Context, step workersvc.Worker
 		if c.imageBuildController == nil {
 			return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "image build execution controller is not configured", StartedAt: c.now(), FinishedAt: c.now()})
 		}
-		c.activeImageBuild = &step
+		c.activeImageBuilds[step.JobID] = &step
 		stillActive, imageBuildErr := c.imageBuildController.ReconcileClaimed(ctx, step)
 		if !stillActive {
-			c.activeImageBuild = nil
+			delete(c.activeImageBuilds, step.JobID)
 		}
 		return imageBuildErr
 	}
@@ -192,9 +190,22 @@ func (c *Controller) reconcileClaimed(ctx context.Context, step workersvc.Worker
 	return c.reconcileActive(ctx, step)
 }
 
+func (c *Controller) inFlightCount() int {
+	return len(c.active) + len(c.activeImageBuilds)
+}
+
 func (c *Controller) activeSteps() []workersvc.WorkerRunnableStep {
 	steps := make([]workersvc.WorkerRunnableStep, 0, len(c.active))
 	for _, step := range c.active {
+		steps = append(steps, *step)
+	}
+	sort.Slice(steps, func(i, j int) bool { return steps[i].JobID < steps[j].JobID })
+	return steps
+}
+
+func (c *Controller) activeImageBuildSteps() []workersvc.WorkerRunnableStep {
+	steps := make([]workersvc.WorkerRunnableStep, 0, len(c.activeImageBuilds))
+	for _, step := range c.activeImageBuilds {
 		steps = append(steps, *step)
 	}
 	sort.Slice(steps, func(i, j int) bool { return steps[i].JobID < steps[j].JobID })

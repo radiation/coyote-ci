@@ -1018,7 +1018,7 @@ func TestControllerRefillsCapacityAndCleansUpAfterActivePeerError(t *testing.T) 
 	}
 }
 
-func TestControllerImageBuildRemainsExclusiveWhenCapacityExceedsOne(t *testing.T) {
+func TestControllerImageBuildAndKubernetesJobShareConfiguredCapacity(t *testing.T) {
 	imageBuild := testStep()
 	imageBuild.ExecutionKind = domain.ExecutionKindImageBuild
 	regular := testStep()
@@ -1031,11 +1031,36 @@ func TestControllerImageBuildRemainsExclusiveWhenCapacityExceedsOne(t *testing.T
 	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
 		t.Fatalf("reconcile: %v", reconcileErr)
 	}
-	if imageController.calls != 1 || controller.activeImageBuild == nil || service.claimCalls != 1 {
-		t.Fatalf("image calls=%d active=%#v claims=%d", imageController.calls, controller.activeImageBuild, service.claimCalls)
+	if imageController.calls != 1 || len(controller.activeImageBuilds) != 1 || service.claimCalls != 2 {
+		t.Fatalf("image calls=%d active=%#v claims=%d", imageController.calls, controller.activeImageBuilds, service.claimCalls)
 	}
-	if len(client.jobs) != 0 {
-		t.Fatalf("regular Kubernetes work must not be claimed alongside the singular image build: jobs=%#v", client.jobs)
+	if client.jobs[jobName(regular.JobID)] == nil || len(controller.active) != 1 || controller.inFlightCount() != 2 {
+		t.Fatalf("regular Kubernetes work must coexist with image build: jobs=%#v active=%#v", client.jobs, controller.active)
+	}
+}
+
+func TestControllerRetainsMultipleImageBuildsByExecutionJobID(t *testing.T) {
+	first := testStep()
+	first.ExecutionKind = domain.ExecutionKindImageBuild
+	second := testStep()
+	second.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	second.ExecutionKind = domain.ExecutionKindImageBuild
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{first, second}}
+	client := newFakeClient()
+	imageController := &fakeImageBuildController{}
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2).WithImageBuildController(imageController)
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("initial reconcile: %v", reconcileErr)
+	}
+	if len(controller.activeImageBuilds) != 2 || controller.inFlightCount() != 2 || len(imageController.steps) != 2 {
+		t.Fatalf("active=%#v in_flight=%d image calls=%#v", controller.activeImageBuilds, controller.inFlightCount(), imageController.steps)
+	}
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("follow-up reconcile: %v", reconcileErr)
+	}
+	if len(imageController.steps) != 4 || imageController.steps[2].JobID != first.JobID || imageController.steps[3].JobID != second.JobID {
+		t.Fatalf("expected independent deterministic re-supervision, calls=%#v", imageController.steps)
 	}
 }
 
@@ -1144,11 +1169,13 @@ type fakeExecutionService struct {
 type fakeImageBuildController struct {
 	calls int
 	step  workersvc.WorkerRunnableStep
+	steps []workersvc.WorkerRunnableStep
 }
 
 func (c *fakeImageBuildController) ReconcileClaimed(_ context.Context, step workersvc.WorkerRunnableStep) (bool, error) {
 	c.calls++
 	c.step = step
+	c.steps = append(c.steps, step)
 	return true, nil
 }
 
