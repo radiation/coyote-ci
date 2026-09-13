@@ -545,6 +545,9 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 			if err := ensureWorkspaceRevisionResolvedDestination(destinationRoot, target); err != nil {
 				return err
 			}
+			if err := ensureWorkspaceRevisionSymlinkTargetWithinRoot(destinationRoot, target, safeTarget); err != nil {
+				return err
+			}
 			if err := createWorkspaceRevisionSymlink(safeTarget, target); err != nil {
 				return err
 			}
@@ -617,6 +620,25 @@ func parseWorkspaceRevisionSymlinkTarget(archivePath, target string) (workspaceR
 		return "", ErrUnsafeWorkspaceRevisionPath
 	}
 	return workspaceRevisionSymlinkTarget(cleanTarget), nil
+}
+
+func ensureWorkspaceRevisionSymlinkTargetWithinRoot(destinationRoot, linkDestination string, linkTarget workspaceRevisionSymlinkTarget) error {
+	linkDir := filepath.Dir(linkDestination)
+	resolvedLinkDir, err := filepath.EvalSymlinks(linkDir)
+	if err != nil {
+		return err
+	}
+
+	candidate := filepath.Clean(filepath.Join(resolvedLinkDir, filepath.FromSlash(string(linkTarget))))
+	rel, err := filepath.Rel(destinationRoot, candidate)
+	if err != nil {
+		return err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return ErrUnsafeWorkspaceRevisionPath
+	}
+
+	return nil
 }
 
 func createWorkspaceRevisionSymlink(linkTarget workspaceRevisionSymlinkTarget, destination string) error {
