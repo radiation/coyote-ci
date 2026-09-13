@@ -540,6 +540,9 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 			if err := ensureWorkspaceRevisionDirectory(destinationRoot, filepath.Dir(target)); err != nil {
 				return err
 			}
+			if err := ensureWorkspaceRevisionResolvedDestination(destinationRoot, target); err != nil {
+				return err
+			}
 			if err := os.Symlink(header.Linkname, target); err != nil {
 				return err
 			}
@@ -575,6 +578,24 @@ func ensureWorkspaceRevisionDirectory(root, directory string) error {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return ErrUnsafeWorkspaceRevisionPath
 		}
+	}
+	return nil
+}
+
+// ensureWorkspaceRevisionResolvedDestination prevents a prior archive entry
+// from redirecting a later link outside the extraction root.
+func ensureWorkspaceRevisionResolvedDestination(root, destination string) error {
+	resolvedRoot, rootErr := filepath.EvalSymlinks(root)
+	if rootErr != nil {
+		return rootErr
+	}
+	resolvedParent, parentErr := filepath.EvalSymlinks(filepath.Dir(destination))
+	if parentErr != nil {
+		return parentErr
+	}
+	relativePath, relErr := filepath.Rel(resolvedRoot, resolvedParent)
+	if relErr != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return ErrUnsafeWorkspaceRevisionPath
 	}
 	return nil
 }

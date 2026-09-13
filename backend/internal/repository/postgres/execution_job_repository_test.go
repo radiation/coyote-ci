@@ -722,7 +722,7 @@ func atomicCompletionJobRows(now time.Time, claimExpiresAt time.Time, status str
 }
 
 func atomicCompletionStepRows(now time.Time, status string, exitCode *int) *sqlmock.Rows {
-	return sqlmock.NewRows(stepMockColumns).AddRow("step-1", "build-1", 0, nil, nil, "[]", "test", "", "sh", `["-c","go test ./..."]`, `{}`, ".", 0, status, nil, nil, nil, nil, now, now, exitCode, nil, nil, nil, "[]", nil, nil, nil, "external", nil, nil)
+	return sqlmock.NewRows(stepMockColumns).AddRow("step-1", "build-1", 0, nil, nil, "[]", "test", "shell", nil, "", "", `["-c","go test ./..."]`, `{}`, ".", 0, status, nil, nil, nil, nil, now, now, exitCode, nil, nil, nil, "[]", nil, nil, nil, "external", nil, nil)
 }
 
 func stringPtr(value string) *string {

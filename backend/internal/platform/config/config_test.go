@@ -92,6 +92,7 @@ func TestLoad(t *testing.T) {
 				WorkerCacheMaxSizeMB:                   10240,
 				ArtifactStorageRoot:                    defaultArtifactRoot,
 				ArtifactStorageProvider:                "filesystem",
+				CloudBuildSourcePrefix:                 "coyote-sources",
 				PushEventSecret:                        "",
 				GitHubWebhookSecret:                    "",
 				GitHubStatusToken:                      "",
@@ -445,6 +446,9 @@ func TestLoad(t *testing.T) {
 			expected.WorkspaceHelperServiceAccount = "coyote-workspace-helper"
 			expected.CacheArchiveMaxUncompressedSizeMB = 4096
 			expected.CacheArchiveMaxEntries = 100000
+			if expected.CloudBuildSourcePrefix == "" {
+				expected.CloudBuildSourcePrefix = "coyote-sources"
+			}
 			if got != expected {
 				t.Fatalf("expected %+v, got %+v", expected, got)
 			}
@@ -475,6 +479,20 @@ func TestLoadWorkspaceHelperCapabilityConfig(t *testing.T) {
 	}
 	if cfg.CacheArchiveMaxUncompressedSizeMB != 2048 || cfg.CacheArchiveMaxEntries != 20000 {
 		t.Fatalf("cache limits=%d MiB/%d entries", cfg.CacheArchiveMaxUncompressedSizeMB, cfg.CacheArchiveMaxEntries)
+	}
+}
+
+func TestLoadWorkspaceRevisionLimitsFallBackToLegacySettings(t *testing.T) {
+	t.Setenv("COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", "2048")
+	t.Setenv("COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES", "20000")
+	if cfg := Load(); cfg.WorkspaceRevisionMaxUncompressedSizeMB != 2048 || cfg.WorkspaceRevisionMaxArchiveEntries != 20000 {
+		t.Fatalf("revision limits=%d MiB/%d entries", cfg.WorkspaceRevisionMaxUncompressedSizeMB, cfg.WorkspaceRevisionMaxArchiveEntries)
+	}
+
+	t.Setenv("COYOTE_WORKSPACE_REVISION_MAX_UNCOMPRESSED_SIZE_MB", "3072")
+	t.Setenv("COYOTE_WORKSPACE_REVISION_MAX_ARCHIVE_ENTRIES", "30000")
+	if cfg := Load(); cfg.WorkspaceRevisionMaxUncompressedSizeMB != 3072 || cfg.WorkspaceRevisionMaxArchiveEntries != 30000 {
+		t.Fatalf("revision limits=%d MiB/%d entries", cfg.WorkspaceRevisionMaxUncompressedSizeMB, cfg.WorkspaceRevisionMaxArchiveEntries)
 	}
 }
 

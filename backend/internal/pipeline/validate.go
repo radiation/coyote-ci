@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 // validEnvKey matches POSIX-style environment variable names: letters, digits, underscore, starting with letter or underscore.
 var validEnvKey = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+var validLogicalImageName = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
 
 // Validate checks a parsed PipelineFile for semantic correctness.
 // Returns nil on success or a ValidationErrors with all problems found.
@@ -218,6 +220,9 @@ func validateGroupWrapperStep(step StepDef, prefix string) ValidationErrors {
 	if strings.TrimSpace(step.Image) != "" {
 		errs = append(errs, ValidationError{Field: prefix + ".image", Message: "group wrapper must not set image"})
 	}
+	if step.ImageBuild != nil {
+		errs = append(errs, ValidationError{Field: prefix + ".image_build", Message: "group wrapper must not set image_build"})
+	}
 	if strings.TrimSpace(step.Run) != "" {
 		errs = append(errs, ValidationError{Field: prefix + ".run", Message: "group wrapper must not set run"})
 	}
@@ -268,14 +273,18 @@ func validateStepDef(step StepDef, prefix string, seen map[string]bool) Validati
 		if strings.TrimSpace(step.Image) != "" {
 			errs = append(errs, ValidationError{Field: prefix + ".image", Message: "image_build step must not set container image"})
 		}
-		if strings.TrimSpace(step.ImageBuild.Context) == "" {
-			errs = append(errs, ValidationError{Field: prefix + ".image_build.context", Message: "is required"})
+		if !validImageBuildRepositoryPath(step.ImageBuild.Context, true) {
+			errs = append(errs, ValidationError{Field: prefix + ".image_build.context", Message: "must be a normalized repository-relative path"})
 		}
-		if strings.TrimSpace(step.ImageBuild.Dockerfile) == "" {
-			errs = append(errs, ValidationError{Field: prefix + ".image_build.dockerfile", Message: "is required"})
+		if !validImageBuildRepositoryPath(step.ImageBuild.Dockerfile, false) {
+			errs = append(errs, ValidationError{Field: prefix + ".image_build.dockerfile", Message: "must be a normalized repository-relative path"})
+		} else if dockerfileRelativePath, relativeErr := filepath.Rel(step.ImageBuild.Context, step.ImageBuild.Dockerfile); relativeErr != nil || dockerfileRelativePath == ".." || strings.HasPrefix(dockerfileRelativePath, ".."+string(filepath.Separator)) {
+			errs = append(errs, ValidationError{Field: prefix + ".image_build.dockerfile", Message: "must resolve within image_build.context"})
 		}
 		if strings.TrimSpace(step.ImageBuild.Image) == "" {
 			errs = append(errs, ValidationError{Field: prefix + ".image_build.image", Message: "is required"})
+		} else if !validLogicalImageName.MatchString(step.ImageBuild.Image) || path.Clean(step.ImageBuild.Image) != step.ImageBuild.Image || strings.HasPrefix(step.ImageBuild.Image, "/") {
+			errs = append(errs, ValidationError{Field: prefix + ".image_build.image", Message: "must be a relative logical image name"})
 		}
 		for key, value := range step.ImageBuild.BuildArgs {
 			if !validEnvKey.MatchString(key) || strings.TrimSpace(value) == "" {
@@ -325,6 +334,14 @@ func validateStepDef(step StepDef, prefix string, seen map[string]bool) Validati
 
 	errs = append(errs, validateCacheDef(prefix+".cache", step.Cache)...)
 	return errs
+}
+
+func validImageBuildRepositoryPath(value string, allowCurrentDirectory bool) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || value != trimmed || strings.Contains(trimmed, "\\") || path.IsAbs(trimmed) || path.Clean(trimmed) != trimmed {
+		return false
+	}
+	return allowCurrentDirectory || trimmed != "."
 }
 
 func declarationsForValidation(def ArtifactDef) []domain.ArtifactDeclaration {

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -14,32 +16,39 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
 
+var validLogicalImageName = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
+
 type Config struct {
-	ProjectID             string
-	Location              string
-	RuntimeServiceAccount string
+	ProjectID                  string
+	Location                   string
+	RuntimeServiceAccount      string
+	ArtifactRegistryRepository string
 }
 
 type Client struct {
-	projectID             string
-	location              string
-	runtimeServiceAccount string
-	builds                *googlecloudbuild.ProjectsLocationsBuildsService
+	projectID                  string
+	location                   string
+	runtimeServiceAccount      string
+	artifactRegistryRepository string
+	builds                     *googlecloudbuild.ProjectsLocationsBuildsService
 }
 
 func New(ctx context.Context, config Config, options ...option.ClientOption) (*Client, error) {
-	if strings.TrimSpace(config.ProjectID) == "" || strings.TrimSpace(config.Location) == "" || strings.TrimSpace(config.RuntimeServiceAccount) == "" {
-		return nil, errors.New("cloud build project, location, and runtime service account are required")
+	if strings.TrimSpace(config.ProjectID) == "" || strings.TrimSpace(config.Location) == "" || strings.TrimSpace(config.RuntimeServiceAccount) == "" || strings.TrimSpace(config.ArtifactRegistryRepository) == "" {
+		return nil, errors.New("cloud build project, location, runtime service account, and artifact registry repository are required")
 	}
 	service, err := googlecloudbuild.NewService(ctx, options...)
 	if err != nil {
 		return nil, err
 	}
-	return &Client{projectID: strings.TrimSpace(config.ProjectID), location: strings.TrimSpace(config.Location), runtimeServiceAccount: strings.TrimSpace(config.RuntimeServiceAccount), builds: googlecloudbuild.NewProjectsLocationsBuildsService(service)}, nil
+	return &Client{projectID: strings.TrimSpace(config.ProjectID), location: strings.TrimSpace(config.Location), runtimeServiceAccount: strings.TrimSpace(config.RuntimeServiceAccount), artifactRegistryRepository: strings.TrimSuffix(strings.TrimSpace(config.ArtifactRegistryRepository), "/"), builds: googlecloudbuild.NewProjectsLocationsBuildsService(service)}, nil
 }
 
 func (c *Client) Submit(ctx context.Context, request domain.ImageBuildRequest) (domain.ImageBuildHandle, error) {
-	build := c.buildRequest(request)
+	build, buildErr := c.buildRequest(request)
+	if buildErr != nil {
+		return domain.ImageBuildHandle{}, buildErr
+	}
 	operation, err := c.builds.Create(c.parent(), build).Context(ctx).Do()
 	if err != nil {
 		return domain.ImageBuildHandle{}, err
@@ -76,9 +85,13 @@ func (c *Client) FindByExecutionJobID(ctx context.Context, executionJobID string
 	return domain.ImageBuildHandle{ID: build.Id, ResourceName: build.Name}, true, nil
 }
 
-func (c *Client) buildRequest(request domain.ImageBuildRequest) *googlecloudbuild.Build {
+func (c *Client) buildRequest(request domain.ImageBuildRequest) (*googlecloudbuild.Build, error) {
 	generation, _ := strconv.ParseInt(request.Source.Generation, 10, 64)
-	args := []string{"build", "--file=" + request.Spec.DockerfilePath, "--tag=" + request.Spec.TargetImageReference}
+	targetImage, targetErr := c.targetImageReference(request.Spec.TargetImageReference)
+	if targetErr != nil {
+		return nil, targetErr
+	}
+	args := []string{"build", "--file=" + request.Spec.DockerfilePath, "--tag=" + targetImage}
 	for key, value := range request.Spec.BuildArgs {
 		args = append(args, "--build-arg="+key+"="+value)
 	}
@@ -86,11 +99,19 @@ func (c *Client) buildRequest(request domain.ImageBuildRequest) *googlecloudbuil
 	return &googlecloudbuild.Build{
 		Source:         &googlecloudbuild.Source{StorageSource: &googlecloudbuild.StorageSource{Bucket: request.Source.Bucket, Object: request.Source.Object, Generation: generation}},
 		Steps:          []*googlecloudbuild.BuildStep{{Name: "gcr.io/cloud-builders/docker", Args: args}},
-		Images:         []string{request.Spec.TargetImageReference},
+		Images:         []string{targetImage},
 		Timeout:        request.Timeout.String(),
 		ServiceAccount: c.runtimeServiceAccount,
 		Tags:           []string{"coyote-execution-" + request.ExecutionJobID},
+	}, nil
+}
+
+func (c *Client) targetImageReference(logicalName string) (string, error) {
+	trimmed := strings.TrimSpace(logicalName)
+	if !validLogicalImageName.MatchString(trimmed) || path.Clean(trimmed) != trimmed || strings.HasPrefix(trimmed, "/") {
+		return "", fmt.Errorf("invalid logical image name %q", logicalName)
 	}
+	return c.artifactRegistryRepository + "/" + trimmed, nil
 }
 
 func (c *Client) parent() string {

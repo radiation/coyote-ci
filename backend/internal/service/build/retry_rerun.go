@@ -317,6 +317,8 @@ func cloneStepForAttempt(buildID string, sourceStep domain.BuildStep, newStepInd
 		GroupName:             cloneStringPtr(sourceStep.GroupName),
 		DependsOnNodes:        append([]string(nil), sourceStep.DependsOnNodes...),
 		Name:                  sourceStep.Name,
+		ExecutionKind:         sourceStep.ExecutionKind,
+		RemoteImageBuild:      cloneRemoteImageBuildSpec(sourceStep.RemoteImageBuild),
 		Image:                 sourceStep.Image,
 		Command:               sourceStep.Command,
 		Args:                  append([]string(nil), sourceStep.Args...),

@@ -66,6 +66,10 @@ type executionService interface {
 	CompleteKubernetesRunnableStep(context.Context, workersvc.WorkerRunnableStep, runner.RunStepResult) (repository.StepCompletionOutcome, error)
 }
 
+type imageBuildController interface {
+	ReconcileClaimed(context.Context, workersvc.WorkerRunnableStep) (bool, error)
+}
+
 type Controller struct {
 	client                      Client
 	service                     executionService
@@ -75,9 +79,16 @@ type Controller struct {
 	workspaceHelper             WorkspaceHelperConfig
 	testStepNodeNames           []string
 	active                      *workersvc.WorkerRunnableStep
+	activeImageBuild            *workersvc.WorkerRunnableStep
+	imageBuildController        imageBuildController
 	terminalLogsPersisted       map[string]bool
 	lastCancellationCleanupAt   time.Time
 	now                         func() time.Time
+}
+
+func (c *Controller) WithImageBuildController(controller imageBuildController) *Controller {
+	c.imageBuildController = controller
+	return c
 }
 
 func NewController(client Client, service executionService, logSink logs.LogSink, namespace string) *Controller {
@@ -109,6 +120,13 @@ func (c *Controller) WithTestStepNodeNames(names []string) *Controller {
 }
 
 func (c *Controller) Reconcile(ctx context.Context) error {
+	if c.activeImageBuild != nil {
+		stillActive, err := c.imageBuildController.ReconcileClaimed(ctx, *c.activeImageBuild)
+		if !stillActive {
+			c.activeImageBuild = nil
+		}
+		return err
+	}
 	if c.active != nil {
 		if cleanupErr := c.cleanupCanceledJobsIfDue(ctx); cleanupErr != nil {
 			return cleanupErr
@@ -121,6 +139,17 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 	}
 	if !found {
 		return c.cleanupCanceledJobsIfDue(ctx)
+	}
+	if step.ExecutionKind == domain.ExecutionKindImageBuild {
+		if c.imageBuildController == nil {
+			return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "image build execution controller is not configured", StartedAt: c.now(), FinishedAt: c.now()})
+		}
+		c.activeImageBuild = &step
+		stillActive, imageBuildErr := c.imageBuildController.ReconcileClaimed(ctx, step)
+		if !stillActive {
+			c.activeImageBuild = nil
+		}
+		return imageBuildErr
 	}
 	if c.workspacePublicationEnabled && (strings.TrimSpace(c.workspaceHelper.Image) == "" || strings.TrimSpace(c.workspaceHelper.InternalAPIURL) == "" || strings.TrimSpace(c.workspaceHelper.ServiceAccountName) == "") {
 		return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "kubernetes workspace helper configuration is incomplete", StartedAt: c.now(), FinishedAt: c.now()})

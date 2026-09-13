@@ -63,6 +63,12 @@ type Config struct {
 	ArtifactGCSBucket                      string
 	ArtifactGCSPrefix                      string
 	ArtifactGCSProject                     string
+	CloudBuildProject                      string
+	CloudBuildLocation                     string
+	CloudBuildRuntimeServiceAccount        string
+	CloudBuildArtifactRegistryRepository   string
+	CloudBuildSourceBucket                 string
+	CloudBuildSourcePrefix                 string
 	PushEventSecret                        string
 	GitHubWebhookSecret                    string
 	GitHubStatusToken                      string
@@ -126,8 +132,8 @@ func Load() Config {
 		WorkspaceHelperCapabilitySecret:        getEnv("COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET", ""),
 		WorkspaceHelperMaxUploadSizeMB:         getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_UPLOAD_SIZE_MB", 1024),
 		WorkspaceRevisionMaxUploadSizeMB:       getEnvInt("COYOTE_WORKSPACE_REVISION_MAX_UPLOAD_SIZE_MB", 2048),
-		WorkspaceRevisionMaxUncompressedSizeMB: getEnvInt("COYOTE_WORKSPACE_REVISION_MAX_UNCOMPRESSED_SIZE_MB", 4096),
-		WorkspaceRevisionMaxArchiveEntries:     getEnvInt("COYOTE_WORKSPACE_REVISION_MAX_ARCHIVE_ENTRIES", 100000),
+		WorkspaceRevisionMaxUncompressedSizeMB: getEnvIntFallback("COYOTE_WORKSPACE_REVISION_MAX_UNCOMPRESSED_SIZE_MB", "COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", 4096),
+		WorkspaceRevisionMaxArchiveEntries:     getEnvIntFallback("COYOTE_WORKSPACE_REVISION_MAX_ARCHIVE_ENTRIES", "COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES", 100000),
 		WorkspaceHelperCacheMaxUploadSizeMB:    getEnvInt("COYOTE_WORKSPACE_HELPER_CACHE_MAX_UPLOAD_SIZE_MB", 10240),
 		CacheArchiveMaxUncompressedSizeMB:      getEnvIntFallback("COYOTE_WORKSPACE_HELPER_CACHE_MAX_UNCOMPRESSED_SIZE_MB", "COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", 4096),
 		CacheArchiveMaxEntries:                 getEnvIntFallback("COYOTE_WORKSPACE_HELPER_CACHE_MAX_ARCHIVE_ENTRIES", "COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES", 100000),
@@ -148,6 +154,12 @@ func Load() Config {
 		ArtifactGCSBucket:                      getEnv("ARTIFACT_GCS_BUCKET", ""),
 		ArtifactGCSPrefix:                      getEnv("ARTIFACT_GCS_PREFIX", ""),
 		ArtifactGCSProject:                     getEnv("ARTIFACT_GCS_PROJECT", ""),
+		CloudBuildProject:                      getEnv("CLOUD_BUILD_PROJECT", ""),
+		CloudBuildLocation:                     getEnv("CLOUD_BUILD_LOCATION", ""),
+		CloudBuildRuntimeServiceAccount:        getEnv("CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT", ""),
+		CloudBuildArtifactRegistryRepository:   getEnv("CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY", ""),
+		CloudBuildSourceBucket:                 getEnv("CLOUD_BUILD_SOURCE_BUCKET", ""),
+		CloudBuildSourcePrefix:                 getEnv("CLOUD_BUILD_SOURCE_PREFIX", "coyote-sources"),
 		PushEventSecret:                        getEnv("PUSH_EVENT_SECRET", ""),
 		GitHubWebhookSecret:                    getEnv("GITHUB_WEBHOOK_SECRET", getEnv("PUSH_EVENT_SECRET", "")),
 		GitHubStatusToken:                      getEnv("GITHUB_STATUS_TOKEN", ""),

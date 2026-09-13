@@ -140,6 +140,39 @@ func TestValidate_NegativeTimeout(t *testing.T) {
 	assertContains(t, err.Error(), "timeout_seconds")
 }
 
+func TestValidate_ImageBuildPathsMustStayWithinRepositoryContext(t *testing.T) {
+	validImageBuild := func(contextPath, dockerfilePath string) *ImageBuildDef {
+		return &ImageBuildDef{Context: contextPath, Dockerfile: dockerfilePath, Image: "coyote-ci/backend"}
+	}
+	for _, testCase := range []struct {
+		name       string
+		context    string
+		dockerfile string
+		want       string
+	}{
+		{name: "absolute context", context: "/", dockerfile: "Dockerfile", want: "context"},
+		{name: "traversal context", context: "../../..", dockerfile: "Dockerfile", want: "context"},
+		{name: "absolute dockerfile", context: "backend", dockerfile: "/Dockerfile", want: "dockerfile"},
+		{name: "traversal dockerfile", context: "backend", dockerfile: "../Dockerfile", want: "dockerfile"},
+		{name: "dockerfile outside context", context: "backend", dockerfile: "frontend/Dockerfile", want: "within image_build.context"},
+		{name: "valid nested dockerfile", context: "backend", dockerfile: "backend/docker/Dockerfile"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := Validate(&PipelineFile{Version: 1, Steps: []StepDef{{Name: "Image", ImageBuild: validImageBuild(testCase.context, testCase.dockerfile)}}})
+			if testCase.want == "" {
+				if err != nil {
+					t.Fatalf("validate: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			assertContains(t, err.Error(), testCase.want)
+		})
+	}
+}
+
 func TestValidate_ZeroTimeout(t *testing.T) {
 	zero := 0
 	pf := &PipelineFile{
@@ -571,6 +604,13 @@ func TestValidate_GroupWrapperRejectsExecutableFields(t *testing.T) {
 				step.Image = "alpine:3"
 			},
 			fieldRef: "steps[0].image",
+		},
+		{
+			name: "image_build",
+			mutate: func(step *StepDef) {
+				step.ImageBuild = &ImageBuildDef{Context: "backend", Dockerfile: "backend/Dockerfile", Image: "coyote-ci/backend"}
+			},
+			fieldRef: "steps[0].image_build",
 		},
 		{
 			name: "command",

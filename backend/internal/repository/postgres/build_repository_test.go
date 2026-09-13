@@ -740,10 +740,10 @@ func TestBuildRepository_GetStepsByBuildID_Ordered(t *testing.T) {
 	repo := NewBuildRepository(db)
 	now := time.Now().UTC()
 
-	mock.ExpectQuery("SELECT id, build_id, step_index, node_id, group_name, depends_on_node_ids, name, image, command").WillReturnRows(
+	mock.ExpectQuery("SELECT id, build_id, step_index, node_id, group_name, depends_on_node_ids, name, execution_kind, remote_image_build, image, command").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-1", "build-1", 0, nil, nil, "[]", "lint", "", "go", "[\"test\"]", "{}", "/workspace", 60, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil, nil, nil, "external", nil, nil).
-			AddRow("step-2", "build-1", 1, nil, nil, "[]", "test", "", "go", "[\"test\",\"./...\"]", "{}", "/workspace", 60, "pending", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "[]", nil, nil, nil, "external", nil, nil),
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "lint", "shell", nil, "", "go", "[\"test\"]", "{}", "/workspace", 60, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil, nil, nil, "external", nil, nil).
+			AddRow("step-2", "build-1", 1, nil, nil, "[]", "test", "shell", nil, "", "go", "[\"test\",\"./...\"]", "{}", "/workspace", 60, "pending", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "[]", nil, nil, nil, "external", nil, nil),
 	)
 
 	steps, err := repo.GetStepsByBuildID(context.Background(), "build-1")
@@ -783,7 +783,7 @@ func TestBuildRepository_UpdateStepByIndex(t *testing.T) {
 
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
-			AddRow("step-1", "build-1", 0, nil, nil, "[]", "lint", "", "go", "[\"test\",\"./...\"]", "{}", "/workspace", 60, "failed", "worker-1", nil, nil, nil, now, now, exitCode, stdout, stderr, errMsg, "[]", nil, nil, nil, "external", nil, nil),
+			AddRow("step-1", "build-1", 0, nil, nil, "[]", "lint", "shell", nil, "", "go", "[\"test\",\"./...\"]", "{}", "/workspace", 60, "failed", "worker-1", nil, nil, nil, now, now, exitCode, stdout, stderr, errMsg, "[]", nil, nil, nil, "external", nil, nil),
 	)
 
 	workerID := "worker-1"

@@ -61,6 +61,25 @@ func TestControllerCreatesDeterministicSecureJob(t *testing.T) {
 	assertEphemeralStorage(t, container, buildEphemeralStorageRequest, buildEphemeralStorageLimit)
 }
 
+func TestControllerDispatchesImageBuildWithoutCreatingKubernetesJob(t *testing.T) {
+	step := testStep()
+	step.ExecutionKind = domain.ExecutionKindImageBuild
+	service := &fakeExecutionService{step: step, found: true}
+	client := newFakeClient()
+	imageController := &fakeImageBuildController{}
+	controller := NewController(client, service, nil, "ci").WithImageBuildController(imageController)
+
+	if err := controller.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if imageController.calls != 1 || imageController.step.JobID != step.JobID {
+		t.Fatalf("image controller calls=%d step=%+v", imageController.calls, imageController.step)
+	}
+	if len(client.jobs) != 0 {
+		t.Fatalf("image build must not create a Kubernetes Job: %+v", client.jobs)
+	}
+}
+
 func TestControllerCreatesWorkspaceHelperLifecycle(t *testing.T) {
 	step := testStep()
 	helper := WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper"}
@@ -944,6 +963,17 @@ type fakeExecutionService struct {
 	statusAfterRenew domain.ExecutionJobStatus
 	completeErr      error
 	completeOutcome  repository.StepCompletionOutcome
+}
+
+type fakeImageBuildController struct {
+	calls int
+	step  workersvc.WorkerRunnableStep
+}
+
+func (c *fakeImageBuildController) ReconcileClaimed(_ context.Context, step workersvc.WorkerRunnableStep) (bool, error) {
+	c.calls++
+	c.step = step
+	return true, nil
 }
 
 func (s *fakeExecutionService) ClaimRunnableStep(context.Context) (workersvc.WorkerRunnableStep, bool, error) {

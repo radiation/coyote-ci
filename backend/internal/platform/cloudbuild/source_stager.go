@@ -28,11 +28,13 @@ func (s *SourceStager) Stage(ctx context.Context, executionJobID string, archive
 		return domain.ImageBuildSource{}, fmt.Errorf("execution job id and archive are required")
 	}
 	object := strings.Trim(s.prefix+"/"+executionJobID+".tar.gz", "/")
-	writer := s.bucket.Object(object).If(storage.Conditions{DoesNotExist: true}).NewWriter(ctx)
+	writerContext, cancelWriter := context.WithCancel(ctx)
+	defer cancelWriter()
+	writer := s.bucket.Object(object).If(storage.Conditions{DoesNotExist: true}).NewWriter(writerContext)
 	writer.ContentType = "application/gzip"
-	if _, err := io.Copy(writer, archive); err != nil {
-		_ = writer.Close()
-		return domain.ImageBuildSource{}, err
+	if _, copyErr := io.Copy(writer, archive); copyErr != nil {
+		cancelWriter()
+		return domain.ImageBuildSource{}, copyErr
 	}
 	if err := writer.Close(); err != nil {
 		return domain.ImageBuildSource{}, err

@@ -506,6 +506,12 @@ func TestWorkspaceRevisionArchiveRejectsUnsafeSymlinkTargetsAndTraversal(t *test
 	if restoreErr := RestoreArchive(context.Background(), bytes.NewReader(archive), publication, destinationRoot); !errors.Is(restoreErr, ErrUnsafeWorkspaceRevisionPath) {
 		t.Fatalf("restore through symlink parent: %v", restoreErr)
 	}
+	archive = gzipBytes(t, []byte(tarBytes(t, []tar.Header{{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "target"}, {Name: "link/child", Typeflag: tar.TypeSymlink, Linkname: "target"}})))
+	digest = sha256.Sum256(archive)
+	publication = publicationForWorkspaceRevision("transport/source.tar.gz", "sha256:"+hex.EncodeToString(digest[:]), int64(len(archive)))
+	if restoreErr := RestoreArchive(context.Background(), bytes.NewReader(archive), publication, filepath.Join(t.TempDir(), "restore")); !errors.Is(restoreErr, ErrUnsafeWorkspaceRevisionPath) {
+		t.Fatalf("restore symlink through symlink parent: %v", restoreErr)
+	}
 	for _, linkTarget := range []string{"/outside", "../../outside"} {
 		archive = gzipBytes(t, []byte(tarBytes(t, []tar.Header{{Name: "nested/link", Typeflag: tar.TypeSymlink, Linkname: linkTarget}})))
 		digest = sha256.Sum256(archive)

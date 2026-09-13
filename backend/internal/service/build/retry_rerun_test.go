@@ -12,6 +12,30 @@ import (
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 )
 
+func TestCloneStepForAttemptPreservesRemoteImageBuild(t *testing.T) {
+	source := domain.BuildStep{
+		ID:            "step-1",
+		BuildID:       "build-1",
+		StepIndex:     4,
+		ExecutionKind: domain.ExecutionKindImageBuild,
+		RemoteImageBuild: &domain.RemoteImageBuildSpec{
+			ContextPath:          "backend",
+			DockerfilePath:       "backend/Dockerfile",
+			BuildArgs:            map[string]string{"GO_VERSION": "1.27.1"},
+			TargetImageReference: "coyote-ci/backend",
+		},
+	}
+
+	cloned := cloneStepForAttempt("build-2", source, 0)
+	if cloned.ExecutionKind != domain.ExecutionKindImageBuild || cloned.RemoteImageBuild == nil || cloned.RemoteImageBuild.TargetImageReference != "coyote-ci/backend" {
+		t.Fatalf("clone did not preserve image build: %#v", cloned)
+	}
+	cloned.RemoteImageBuild.BuildArgs["GO_VERSION"] = "other"
+	if source.RemoteImageBuild.BuildArgs["GO_VERSION"] != "1.27.1" {
+		t.Fatal("clone shares remote image build arguments with source step")
+	}
+}
+
 func TestBuildService_RetryJob_CreatesNewAttemptAndPreservesHistory(t *testing.T) {
 	buildRepo := memoryrepo.NewBuildRepository()
 	execRepo := memoryrepo.NewExecutionJobRepository()

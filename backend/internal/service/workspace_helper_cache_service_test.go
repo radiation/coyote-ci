@@ -100,22 +100,23 @@ func TestWorkspaceHelperCacheServiceSaveRejectsArchiveExceedingRestoreLimits(t *
 	}
 }
 
-func TestWorkspaceHelperCacheServiceSaveAcceptsArchiveAboveLegacyEntryLimit(t *testing.T) {
+func TestWorkspaceHelperCacheServiceSaveAcceptsArchiveAtConfiguredEntryLimit(t *testing.T) {
 	harness := newWorkspaceHelperCacheServiceTestHarness(t)
 	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
-	archive := cacheArchiveWithFiles(t, 10001)
+	harness.service.maxArchiveEntries = 5
+	archive := cacheArchiveWithFiles(t, 3)
 	defer func() { _ = archive.archive.Close() }()
 
 	if err := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archive.archive, archive.publication); err != nil {
-		t.Fatalf("save archive above legacy entry limit: %v", err)
+		t.Fatalf("save archive at configured entry limit: %v", err)
 	}
 }
 
-func TestWorkspaceHelperCacheServiceSaveRejectsArchiveAboveNewEntryLimit(t *testing.T) {
+func TestWorkspaceHelperCacheServiceSaveRejectsArchiveAboveConfiguredEntryLimit(t *testing.T) {
 	harness := newWorkspaceHelperCacheServiceTestHarness(t)
 	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
-	harness.service.maxArchiveEntries = 100000
-	archive := cacheArchiveWithFiles(t, 100001)
+	harness.service.maxArchiveEntries = 5
+	archive := cacheArchiveWithFiles(t, 4)
 	defer func() { _ = archive.archive.Close() }()
 
 	err := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archive.archive, archive.publication)
@@ -123,7 +124,7 @@ func TestWorkspaceHelperCacheServiceSaveRejectsArchiveAboveNewEntryLimit(t *test
 		t.Fatalf("save error=%v, want invalid cache input", err)
 	}
 	var entryLimitErr *workspace.WorkspaceRevisionEntryLimitError
-	if !errors.As(err, &entryLimitErr) || entryLimitErr.MaxEntries != 100000 {
+	if !errors.As(err, &entryLimitErr) || entryLimitErr.MaxEntries != 5 {
 		t.Fatalf("save error=%v, want entry limit error", err)
 	}
 }
