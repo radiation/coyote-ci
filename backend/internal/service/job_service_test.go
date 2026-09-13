@@ -1898,6 +1898,35 @@ func TestJobService_UpdateJobManagedImageNullDeletesConfigWithoutValidation(t *t
 	}
 }
 
+func TestJobService_UpdateJobManagedImageNullWithoutConfigSucceeds(t *testing.T) {
+	jobRepo := memory.NewJobRepository()
+	buildRepo := memory.NewBuildRepository()
+	configRepo := memory.NewJobManagedImageConfigRepository()
+	jobService := NewJobService(jobRepo, buildsvc.NewBuildService(buildRepo, nil, nil)).WithManagedImageConfigRepository(configRepo, memory.NewSourceCredentialRepository())
+
+	job, err := jobService.CreateJob(context.Background(), CreateJobInput{
+		ProjectID:     "project-1",
+		Name:          "backend-ci",
+		RepositoryURL: "https://github.com/example/backend.git",
+		DefaultRef:    "main",
+		PipelineYAML:  "version: 1\nsteps:\n  - name: test\n    run: go test ./...\n",
+	})
+	if err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+
+	updated, updateErr := jobService.UpdateJob(context.Background(), job.ID, UpdateJobInput{
+		ManagedImageSet: true,
+		ManagedImage:    nil,
+	})
+	if updateErr != nil {
+		t.Fatalf("null managed image update failed: %v", updateErr)
+	}
+	if updated.ManagedImageConfig != nil {
+		t.Fatalf("expected no managed image config, got %+v", updated.ManagedImageConfig)
+	}
+}
+
 func TestJobService_CreateRejectsInvalidPipelineYAML(t *testing.T) {
 	jobService := NewJobService(memory.NewJobRepository(), buildsvc.NewBuildService(memory.NewBuildRepository(), nil, nil))
 

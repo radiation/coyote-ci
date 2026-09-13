@@ -63,13 +63,13 @@ func (s *JobService) patchManagedImageConfig(ctx context.Context, job domain.Job
 		return nil, ErrJobManagedImageConfigNotConfigured
 	}
 	if patch == nil {
-		if err := s.managedImageConfigs.DeleteByJobID(ctx, job.ID); err != nil {
+		if err := s.managedImageConfigs.DeleteByJobID(ctx, job.ID); err != nil && !errors.Is(err, repository.ErrJobManagedImageConfigNotFound) {
 			return nil, err
 		}
 		return nil, nil
 	}
 	if patch.Enabled != nil && !*patch.Enabled {
-		if err := s.managedImageConfigs.DeleteByJobID(ctx, job.ID); err != nil {
+		if err := s.managedImageConfigs.DeleteByJobID(ctx, job.ID); err != nil && !errors.Is(err, repository.ErrJobManagedImageConfigNotFound) {
 			return nil, err
 		}
 		return nil, nil
