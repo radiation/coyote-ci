@@ -32,16 +32,20 @@ func (s *SourceStager) Stage(ctx context.Context, executionJobID string, archive
 	defer cancelWriter()
 	writer := s.bucket.Object(object).If(storage.Conditions{DoesNotExist: true}).NewWriter(writerContext)
 	writer.ContentType = "application/gzip"
-	if _, copyErr := io.Copy(writer, archive); copyErr != nil {
+	if copyErr := copySourceArchive(writer, archive); copyErr != nil {
 		cancelWriter()
 		return domain.ImageBuildSource{}, copyErr
-	}
-	if err := writer.Close(); err != nil {
-		return domain.ImageBuildSource{}, err
 	}
 	attrs, err := s.bucket.Object(object).Attrs(ctx)
 	if err != nil {
 		return domain.ImageBuildSource{}, err
 	}
 	return domain.ImageBuildSource{Bucket: s.bucket.BucketName(), Object: object, Generation: fmt.Sprintf("%d", attrs.Generation)}, nil
+}
+
+func copySourceArchive(writer io.WriteCloser, archive io.Reader) error {
+	if _, err := io.Copy(writer, archive); err != nil {
+		return err
+	}
+	return writer.Close()
 }

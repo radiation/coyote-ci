@@ -397,6 +397,13 @@ func TestFilesystemWorkspaceRevisionStoreRestoreRejectsUnsafeAndCorruptArchives(
 	}
 }
 
+func TestSafeWorkspaceRevisionSymlinkTargetNormalizesSafeTarget(t *testing.T) {
+	target, err := safeWorkspaceRevisionSymlinkTarget("links/tool", "./bin/../bin/tool")
+	if err != nil || target != "bin/tool" {
+		t.Fatalf("target=%q err=%v", target, err)
+	}
+}
+
 func TestFilesystemWorkspaceRevisionStorePublishesAndRestoresSafeSymlinks(t *testing.T) {
 	store := NewFilesystemWorkspaceRevisionStore(t.TempDir())
 	sourceRoot := t.TempDir()

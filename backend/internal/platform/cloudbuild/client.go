@@ -86,7 +86,10 @@ func (c *Client) FindByExecutionJobID(ctx context.Context, executionJobID string
 }
 
 func (c *Client) buildRequest(request domain.ImageBuildRequest) (*googlecloudbuild.Build, error) {
-	generation, _ := strconv.ParseInt(request.Source.Generation, 10, 64)
+	generation, generationErr := strconv.ParseInt(request.Source.Generation, 10, 64)
+	if generationErr != nil || generation <= 0 {
+		return nil, fmt.Errorf("invalid source generation %q", request.Source.Generation)
+	}
 	targetImage, targetErr := c.targetImageReference(request.Spec.TargetImageReference)
 	if targetErr != nil {
 		return nil, targetErr

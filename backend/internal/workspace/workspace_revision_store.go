@@ -422,11 +422,12 @@ func writeWorkspaceRevisionArchive(ctx context.Context, destination *os.File, so
 			if readLinkErr != nil {
 				return readLinkErr
 			}
-			if targetErr := safeWorkspaceRevisionSymlinkTarget(archiveName, linkTarget); targetErr != nil {
+			safeTarget, targetErr := safeWorkspaceRevisionSymlinkTarget(archiveName, linkTarget)
+			if targetErr != nil {
 				return targetErr
 			}
 			header.Typeflag = tar.TypeSymlink
-			header.Linkname = linkTarget
+			header.Linkname = safeTarget
 		} else if info.IsDir() {
 			header.Typeflag = tar.TypeDir
 			header.Name += "/"
@@ -534,8 +535,9 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 				return closeErr
 			}
 		case tar.TypeSymlink:
-			if err := safeWorkspaceRevisionSymlinkTarget(filepath.ToSlash(archiveEntryPath), header.Linkname); err != nil {
-				return err
+			safeTarget, targetErr := safeWorkspaceRevisionSymlinkTarget(filepath.ToSlash(archiveEntryPath), header.Linkname)
+			if targetErr != nil {
+				return targetErr
 			}
 			if err := ensureWorkspaceRevisionDirectory(destinationRoot, filepath.Dir(target)); err != nil {
 				return err
@@ -543,7 +545,7 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 			if err := ensureWorkspaceRevisionResolvedDestination(destinationRoot, target); err != nil {
 				return err
 			}
-			if err := os.Symlink(header.Linkname, target); err != nil {
+			if err := os.Symlink(safeTarget, target); err != nil {
 				return err
 			}
 		default:
@@ -600,15 +602,19 @@ func ensureWorkspaceRevisionResolvedDestination(root, destination string) error 
 	return nil
 }
 
-func safeWorkspaceRevisionSymlinkTarget(archivePath, target string) error {
-	if strings.TrimSpace(target) == "" || strings.Contains(target, "\\") || looksLikeWindowsDrivePath(target) || path.IsAbs(target) {
-		return ErrUnsafeWorkspaceRevisionPath
+func safeWorkspaceRevisionSymlinkTarget(archivePath, target string) (string, error) {
+	if strings.TrimSpace(target) == "" {
+		return "", ErrUnsafeWorkspaceRevisionPath
 	}
-	resolved := path.Clean(path.Join(path.Dir(archivePath), target))
+	cleanTarget := path.Clean(target)
+	if strings.Contains(cleanTarget, "\\") || looksLikeWindowsDrivePath(cleanTarget) || path.IsAbs(cleanTarget) {
+		return "", ErrUnsafeWorkspaceRevisionPath
+	}
+	resolved := path.Clean(path.Join(path.Dir(archivePath), cleanTarget))
 	if resolved == ".." || strings.HasPrefix(resolved, "../") || path.IsAbs(resolved) {
-		return ErrUnsafeWorkspaceRevisionPath
+		return "", ErrUnsafeWorkspaceRevisionPath
 	}
-	return nil
+	return cleanTarget, nil
 }
 
 func applyWorkspaceRevisionDirectoryModes(directoryModes map[string]os.FileMode) error {
