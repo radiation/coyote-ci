@@ -54,6 +54,7 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 	pipelineCache := resolveCache(pf.Pipeline.Cache)
 
 	nodes := make([]ExecutionNode, 0, len(pf.Steps))
+	explicitDependencies := make(map[string]*[]string)
 	frontier := make([]string, 0, 1)
 	nextNodeIndex := 0
 	for _, sd := range pf.Steps {
@@ -63,6 +64,7 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 			nextNodeIndex++
 			step.NodeID = nodeID
 			step.DependsOnNodeIDs = append([]string(nil), frontier...)
+			explicitDependencies[nodeID] = sd.DependsOn
 			nodes = append(nodes, ExecutionNode{
 				NodeID:           nodeID,
 				DependsOnNodeIDs: append([]string(nil), frontier...),
@@ -82,6 +84,7 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 			step.NodeID = nodeID
 			step.GroupName = groupName
 			step.DependsOnNodeIDs = append([]string(nil), groupDeps...)
+			explicitDependencies[nodeID] = groupStepDef.DependsOn
 			nodes = append(nodes, ExecutionNode{
 				NodeID:           nodeID,
 				GroupName:        groupName,
@@ -91,6 +94,19 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 			groupNodeIDs = append(groupNodeIDs, nodeID)
 		}
 		frontier = groupNodeIDs
+	}
+	nameToNodeID := make(map[string]string, len(nodes))
+	for _, node := range nodes {
+		nameToNodeID[strings.ToLower(strings.TrimSpace(node.Step.Name))] = node.NodeID
+	}
+	for index := range nodes {
+		explicit, found := explicitDependencies[nodes[index].NodeID]
+		if !found || explicit == nil {
+			continue
+		}
+		dependencies := resolveDependencyNames(*explicit, nameToNodeID)
+		nodes[index].DependsOnNodeIDs = dependencies
+		nodes[index].Step.DependsOnNodeIDs = append([]string(nil), dependencies...)
 	}
 
 	steps := make([]ResolvedStep, 0, len(nodes))
@@ -107,6 +123,16 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 		Artifacts: ResolvedArtifacts{Paths: append([]string{}, pf.Artifacts.Paths...), Declarations: append([]domain.ArtifactDeclaration(nil), pf.Artifacts.Declarations...)},
 		Cache:     pipelineCache.Clone(),
 	}
+}
+
+func resolveDependencyNames(names []string, nameToNodeID map[string]string) []string {
+	dependencies := make([]string, 0, len(names))
+	for _, name := range names {
+		if nodeID, found := nameToNodeID[strings.ToLower(strings.TrimSpace(name))]; found {
+			dependencies = append(dependencies, nodeID)
+		}
+	}
+	return dependencies
 }
 
 // LoadAndResolve is a convenience that parses, validates, and resolves YAML bytes.
@@ -192,8 +218,9 @@ func resolveStepDef(sd StepDef, pipelineEnv map[string]string, pipelineCache *do
 		stepCache = resolveCache(sd.Cache)
 	}
 
-	return ResolvedStep{
+	step := ResolvedStep{
 		Name:           sd.Name,
+		ExecutionKind:  domain.ExecutionKindShell,
 		Image:          strings.TrimSpace(sd.Image),
 		Run:            sd.Run,
 		WorkingDir:     sd.WorkingDir,
@@ -203,6 +230,13 @@ func resolveStepDef(sd StepDef, pipelineEnv map[string]string, pipelineCache *do
 		ArtifactDecls:  append([]domain.ArtifactDeclaration(nil), sd.Artifacts.Declarations...),
 		Cache:          stepCache.Clone(),
 	}
+	if sd.ImageBuild != nil {
+		step.ExecutionKind = domain.ExecutionKindImageBuild
+		step.RemoteImageBuild = &domain.RemoteImageBuildSpec{ContextPath: strings.TrimSpace(sd.ImageBuild.Context), DockerfilePath: strings.TrimSpace(sd.ImageBuild.Dockerfile), BuildArgs: copyEnv(sd.ImageBuild.BuildArgs), TargetImageReference: strings.TrimSpace(sd.ImageBuild.Image)}
+		step.Image = ""
+		step.Run = ""
+	}
+	return step
 }
 
 func buildNodeID(index int) string {

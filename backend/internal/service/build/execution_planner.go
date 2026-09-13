@@ -37,6 +37,10 @@ func (p *BuildExecutionPlanner) Plan(build domain.Build, steps []domain.BuildSte
 
 	jobs := make([]domain.ExecutionJob, 0, len(steps))
 	for stepIndex, step := range steps {
+		executionKind := step.ExecutionKind
+		if executionKind == "" {
+			executionKind = domain.ExecutionKindShell
+		}
 		// Step-level image overrides pipeline-level/default image.
 		stepImage := strings.TrimSpace(step.Image)
 		if stepImage == "" {
@@ -46,6 +50,7 @@ func (p *BuildExecutionPlanner) Plan(build domain.Build, steps []domain.BuildSte
 		timeout := step.TimeoutSeconds
 		spec := domain.ExecutionJobSpec{
 			Version:          p.specVersion,
+			ExecutionKind:    executionKind,
 			Image:            stepImage,
 			WorkingDir:       defaultValue(step.WorkingDir, "."),
 			Command:          append([]string{defaultValue(step.Command, "sh")}, append([]string(nil), step.Args...)...),
@@ -58,7 +63,8 @@ func (p *BuildExecutionPlanner) Plan(build domain.Build, steps []domain.BuildSte
 				CommitSHA:     plannerSourceCommitSHA(build.Source, build.CommitSHA),
 				RefName:       sourceRef,
 			},
-			WorkspaceInput: workspacePlans[stepIndex],
+			WorkspaceInput:   workspacePlans[stepIndex],
+			RemoteImageBuild: cloneRemoteImageBuildSpec(step.RemoteImageBuild),
 		}
 
 		specJSON, err := spec.ToJSON()

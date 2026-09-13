@@ -290,10 +290,27 @@ func (h *WorkspaceHelperHandler) SaveCache(w http.ResponseWriter, r *http.Reques
 			writeErrorJSON(w, http.StatusRequestEntityTooLarge, "archive_too_large", "cache archive exceeds the configured size limit")
 			return
 		}
+		logWorkspaceCacheArchiveRejection(saveErr, strings.TrimSpace(r.Header.Get("Coyote-Execution-Job-ID")), strings.TrimSpace(r.Header.Get("Coyote-Cache-Preset")), strings.TrimSpace(r.Header.Get("Coyote-Cache-Key")))
 		handleWorkspaceCacheError(w, saveErr)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func logWorkspaceCacheArchiveRejection(err error, executionJobID string, preset string, cacheKey string) {
+	var entryLimitErr *workspace.WorkspaceRevisionEntryLimitError
+	if errors.As(err, &entryLimitErr) {
+		log.Printf("WARN workspace cache archive rejected: execution_job_id=%q preset=%q cache_key=%q reason=entry_limit_exceeded observed_entries=%d configured_max_entries=%d", executionJobID, preset, cacheKey, entryLimitErr.ObservedEntries, entryLimitErr.MaxEntries)
+		return
+	}
+	var sizeLimitErr *workspace.WorkspaceRevisionSizeLimitError
+	if errors.As(err, &sizeLimitErr) {
+		log.Printf("WARN workspace cache archive rejected: execution_job_id=%q preset=%q cache_key=%q reason=expanded_size_limit_exceeded observed_bytes=%d configured_max_bytes=%d", executionJobID, preset, cacheKey, sizeLimitErr.ObservedBytes, sizeLimitErr.MaxBytes)
+		return
+	}
+	if errors.Is(err, service.ErrWorkspaceHelperCacheInvalidInput) {
+		log.Printf("WARN workspace cache archive rejected: execution_job_id=%q preset=%q cache_key=%q reason=malformed_or_unsafe_archive error=%v", executionJobID, preset, cacheKey, err)
+	}
 }
 
 func (h *WorkspaceHelperHandler) PlanArtifacts(w http.ResponseWriter, r *http.Request) {

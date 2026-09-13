@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -131,7 +132,9 @@ func TestRestoreArchiveWithLimitsRejectsCompressedExpansionAndExcessEntries(t *t
 	if readErr != nil || closeErr != nil || int64(len(archiveBytes)) >= 1024 {
 		t.Fatalf("archive bytes=%d read=%v close=%v", len(archiveBytes), readErr, closeErr)
 	}
-	if restoreErr := RestoreArchiveWithLimits(context.Background(), bytes.NewReader(archiveBytes), publication, filepath.Join(t.TempDir(), "restore"), WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: 1024, MaxEntries: 10}); !errors.Is(restoreErr, ErrWorkspaceRevisionTooLarge) {
+	restoreErr := RestoreArchiveWithLimits(context.Background(), bytes.NewReader(archiveBytes), publication, filepath.Join(t.TempDir(), "restore"), WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: 1024, MaxEntries: 10})
+	var sizeLimitErr *WorkspaceRevisionSizeLimitError
+	if !errors.Is(restoreErr, ErrWorkspaceRevisionTooLarge) || !errors.As(restoreErr, &sizeLimitErr) || sizeLimitErr.ObservedBytes != 64*1024 || sizeLimitErr.MaxBytes != 1024 {
 		t.Fatalf("compressed expansion restore: %v", restoreErr)
 	}
 
@@ -147,7 +150,9 @@ func TestRestoreArchiveWithLimitsRejectsCompressedExpansionAndExcessEntries(t *t
 	if readErr != nil || closeErr != nil {
 		t.Fatalf("read archive=%v close=%v", readErr, closeErr)
 	}
-	if restoreErr := RestoreArchiveWithLimits(context.Background(), bytes.NewReader(archiveBytes), publication, filepath.Join(t.TempDir(), "restore"), WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: 128 * 1024, MaxEntries: 1}); !errors.Is(restoreErr, ErrWorkspaceRevisionTooManyEntries) {
+	restoreErr = RestoreArchiveWithLimits(context.Background(), bytes.NewReader(archiveBytes), publication, filepath.Join(t.TempDir(), "restore"), WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: 128 * 1024, MaxEntries: 1})
+	var entryLimitErr *WorkspaceRevisionEntryLimitError
+	if !errors.Is(restoreErr, ErrWorkspaceRevisionTooManyEntries) || !errors.As(restoreErr, &entryLimitErr) || entryLimitErr.ObservedEntries != 2 || entryLimitErr.MaxEntries != 1 {
 		t.Fatalf("entry limit restore: %v", restoreErr)
 	}
 }
@@ -284,8 +289,8 @@ func TestFilesystemWorkspaceRevisionStoreRejectsConflictsAndUnsupportedEntries(t
 	if err := os.Symlink("file.txt", filepath.Join(sourceRoot, "link")); err != nil {
 		t.Fatalf("make symlink: %v", err)
 	}
-	if _, err := store.Publish(context.Background(), "revision-2", sourceRoot); !errors.Is(err, ErrUnsupportedWorkspaceRevisionEntry) {
-		t.Fatalf("symlink publish: %v", err)
+	if _, err := store.Publish(context.Background(), "revision-2", sourceRoot); err != nil {
+		t.Fatalf("safe symlink publish: %v", err)
 	}
 	sourceLink := filepath.Join(t.TempDir(), "source-link")
 	if err := os.Symlink(sourceRoot, sourceLink); err != nil {
@@ -303,6 +308,23 @@ func TestFilesystemWorkspaceRevisionStoreRejectsConflictsAndUnsupportedEntries(t
 		}
 		if _, err := store.Publish(context.Background(), "revision-3", sourceRoot); !errors.Is(err, ErrUnsupportedWorkspaceRevisionEntry) {
 			t.Fatalf("fifo publish: %v", err)
+		}
+		if err := os.Remove(filepath.Join(sourceRoot, "pipe")); err != nil {
+			t.Fatalf("remove fifo: %v", err)
+		}
+		socketRoot, socketRootErr := os.MkdirTemp("", "coyote-ws-")
+		if socketRootErr != nil {
+			t.Fatalf("create socket root: %v", socketRootErr)
+		}
+		defer func() { _ = os.RemoveAll(socketRoot) }()
+		socketPath := filepath.Join(socketRoot, "socket")
+		listener, listenErr := net.Listen("unix", socketPath)
+		if listenErr != nil {
+			t.Fatalf("create unix socket: %v", listenErr)
+		}
+		defer func() { _ = listener.Close() }()
+		if _, err := store.Publish(context.Background(), "revision-4", socketRoot); !errors.Is(err, ErrUnsupportedWorkspaceRevisionEntry) {
+			t.Fatalf("socket publish: %v", err)
 		}
 	}
 }
@@ -352,7 +374,7 @@ func TestFilesystemWorkspaceRevisionStoreRestoreRejectsUnsafeAndCorruptArchives(
 		{name: "absolute", entryName: "/outside", typeflag: tar.TypeReg, content: "bad", want: ErrUnsafeWorkspaceRevisionPath},
 		{name: "traversal", entryName: "../outside", typeflag: tar.TypeReg, content: "bad", want: ErrUnsafeWorkspaceRevisionPath},
 		{name: "windows", entryName: `C:\\outside`, typeflag: tar.TypeReg, content: "bad", want: ErrUnsafeWorkspaceRevisionPath},
-		{name: "symlink", entryName: "link", typeflag: tar.TypeSymlink, want: ErrUnsupportedWorkspaceRevisionEntry},
+		{name: "escaping symlink", entryName: "link", typeflag: tar.TypeSymlink, want: ErrUnsafeWorkspaceRevisionPath},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			publication := writeRevisionFixture(t, storeRoot, testCase.entryName, testCase.typeflag, testCase.content)
@@ -372,6 +394,154 @@ func TestFilesystemWorkspaceRevisionStoreRestoreRejectsUnsafeAndCorruptArchives(
 	}
 	if err := store.Restore(context.Background(), publicationForWorkspaceRevision("workspace-revisions/missing.tar.gz", "sha256:bad", 1), filepath.Join(t.TempDir(), "missing")); !errors.Is(err, ErrWorkspaceRevisionNotFound) {
 		t.Fatalf("missing revision: %v", err)
+	}
+}
+
+func TestParseWorkspaceRevisionSymlinkTargetNormalizesSafeTarget(t *testing.T) {
+	target, err := parseWorkspaceRevisionSymlinkTarget("links/tool", "./bin/../bin/tool")
+	if err != nil || target != workspaceRevisionSymlinkTarget("bin/tool") {
+		t.Fatalf("target=%q err=%v", target, err)
+	}
+}
+
+func TestEnsureWorkspaceRevisionSymlinkTargetWithinRootRejectsExternalAncestor(t *testing.T) {
+	destinationRoot := t.TempDir()
+	externalRoot := t.TempDir()
+	redirect := filepath.Join(destinationRoot, "redirect")
+	if err := os.Symlink(externalRoot, redirect); err != nil {
+		t.Fatalf("create redirect: %v", err)
+	}
+	target, err := parseWorkspaceRevisionSymlinkTarget("link", "redirect/missing")
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+	if err := ensureWorkspaceRevisionSymlinkTargetWithinRoot(destinationRoot, filepath.Join(destinationRoot, "link"), target); !errors.Is(err, ErrUnsafeWorkspaceRevisionPath) {
+		t.Fatalf("external ancestor error: %v", err)
+	}
+}
+
+func TestFilesystemWorkspaceRevisionStorePublishesAndRestoresSafeSymlinks(t *testing.T) {
+	store := NewFilesystemWorkspaceRevisionStore(t.TempDir())
+	sourceRoot := t.TempDir()
+	binDirectory := filepath.Join(sourceRoot, "frontend", "node_modules", ".bin")
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "frontend", "node_modules", "acorn", "bin"), 0o755); err != nil {
+		t.Fatalf("mkdir npm tree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "frontend", "node_modules", "acorn", "bin", "acorn"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write npm target: %v", err)
+	}
+	if err := os.MkdirAll(binDirectory, 0o755); err != nil {
+		t.Fatalf("mkdir npm bin directory: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "links"), 0o755); err != nil {
+		t.Fatalf("mkdir links: %v", err)
+	}
+	if err := os.Symlink("../acorn/bin/acorn", filepath.Join(binDirectory, "acorn")); err != nil {
+		t.Fatalf("create npm-style symlink: %v", err)
+	}
+	if err := os.Symlink("missing/target", filepath.Join(sourceRoot, "links", "dangling")); err != nil {
+		t.Fatalf("create dangling symlink: %v", err)
+	}
+
+	publication, publishErr := store.Publish(context.Background(), "revision-symlinks", sourceRoot)
+	if publishErr != nil {
+		t.Fatalf("publish: %v", publishErr)
+	}
+	archive, openErr := store.Open(context.Background(), publication)
+	if openErr != nil {
+		t.Fatalf("open archive: %v", openErr)
+	}
+	gzipReader, gzipErr := gzip.NewReader(archive)
+	if gzipErr != nil {
+		t.Fatalf("open gzip archive: %v", gzipErr)
+	}
+	foundNpmLink := false
+	tarReader := tar.NewReader(gzipReader)
+	for {
+		header, nextErr := tarReader.Next()
+		if errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			t.Fatalf("read archive header: %v", nextErr)
+		}
+		if header.Name == "frontend/node_modules/.bin/acorn" {
+			foundNpmLink = header.Typeflag == tar.TypeSymlink && header.Linkname == "../acorn/bin/acorn"
+		}
+	}
+	if closeErr := gzipReader.Close(); closeErr != nil {
+		t.Fatalf("close gzip archive: %v", closeErr)
+	}
+	if closeErr := archive.Close(); closeErr != nil {
+		t.Fatalf("close archive: %v", closeErr)
+	}
+	if !foundNpmLink {
+		t.Fatal("archive did not preserve npm-style symlink as a tar symlink entry")
+	}
+	destinationRoot := filepath.Join(t.TempDir(), "restore")
+	if restoreErr := store.Restore(context.Background(), publication, destinationRoot); restoreErr != nil {
+		t.Fatalf("restore: %v", restoreErr)
+	}
+	for path, wantTarget := range map[string]string{
+		filepath.Join(destinationRoot, "frontend", "node_modules", ".bin", "acorn"): "../acorn/bin/acorn",
+		filepath.Join(destinationRoot, "links", "dangling"):                         "missing/target",
+	} {
+		info, statErr := os.Lstat(path)
+		if statErr != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("restored symlink %q = %v, %v", path, info, statErr)
+		}
+		target, readLinkErr := os.Readlink(path)
+		if readLinkErr != nil || target != wantTarget {
+			t.Fatalf("restored link target %q = %q, %v; want %q", path, target, readLinkErr, wantTarget)
+		}
+	}
+}
+
+func TestWorkspaceRevisionArchiveRejectsUnsafeSymlinkTargetsAndTraversal(t *testing.T) {
+	store := NewFilesystemWorkspaceRevisionStore(t.TempDir())
+	for _, testCase := range []struct {
+		name   string
+		path   string
+		target string
+	}{
+		{name: "absolute", path: "link", target: "/outside"},
+		{name: "workspace escape", path: "nested/link", target: "../../outside"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			sourceRoot := t.TempDir()
+			linkPath := filepath.Join(sourceRoot, filepath.FromSlash(testCase.path))
+			if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+				t.Fatalf("mkdir link parent: %v", err)
+			}
+			if err := os.Symlink(testCase.target, linkPath); err != nil {
+				t.Fatalf("create symlink: %v", err)
+			}
+			if _, publishErr := store.Publish(context.Background(), "revision-"+testCase.name, sourceRoot); !errors.Is(publishErr, ErrUnsafeWorkspaceRevisionPath) {
+				t.Fatalf("publish: %v", publishErr)
+			}
+		})
+	}
+
+	archive := gzipBytes(t, []byte(tarBytes(t, []tar.Header{{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "target"}, {Name: "link/child", Typeflag: tar.TypeReg}})))
+	digest := sha256.Sum256(archive)
+	publication := publicationForWorkspaceRevision("transport/source.tar.gz", "sha256:"+hex.EncodeToString(digest[:]), int64(len(archive)))
+	destinationRoot := filepath.Join(t.TempDir(), "restore")
+	if restoreErr := RestoreArchive(context.Background(), bytes.NewReader(archive), publication, destinationRoot); !errors.Is(restoreErr, ErrUnsafeWorkspaceRevisionPath) {
+		t.Fatalf("restore through symlink parent: %v", restoreErr)
+	}
+	archive = gzipBytes(t, []byte(tarBytes(t, []tar.Header{{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "target"}, {Name: "link/child", Typeflag: tar.TypeSymlink, Linkname: "target"}})))
+	digest = sha256.Sum256(archive)
+	publication = publicationForWorkspaceRevision("transport/source.tar.gz", "sha256:"+hex.EncodeToString(digest[:]), int64(len(archive)))
+	if restoreErr := RestoreArchive(context.Background(), bytes.NewReader(archive), publication, filepath.Join(t.TempDir(), "restore")); !errors.Is(restoreErr, ErrUnsafeWorkspaceRevisionPath) {
+		t.Fatalf("restore symlink through symlink parent: %v", restoreErr)
+	}
+	for _, linkTarget := range []string{"/outside", "../../outside"} {
+		archive = gzipBytes(t, []byte(tarBytes(t, []tar.Header{{Name: "nested/link", Typeflag: tar.TypeSymlink, Linkname: linkTarget}})))
+		digest = sha256.Sum256(archive)
+		publication = publicationForWorkspaceRevision("transport/source.tar.gz", "sha256:"+hex.EncodeToString(digest[:]), int64(len(archive)))
+		if restoreErr := RestoreArchive(context.Background(), bytes.NewReader(archive), publication, filepath.Join(t.TempDir(), "restore")); !errors.Is(restoreErr, ErrUnsafeWorkspaceRevisionPath) {
+			t.Fatalf("restore symlink target %q: %v", linkTarget, restoreErr)
+		}
 	}
 }
 

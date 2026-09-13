@@ -20,6 +20,11 @@ import (
 
 var ErrWorkspaceHelperCacheInvalidInput = errors.New("invalid workspace helper cache input")
 
+const (
+	defaultWorkspaceHelperCacheMaxUncompressedBytes int64 = 4 * 1024 * 1024 * 1024
+	defaultWorkspaceHelperCacheMaxArchiveEntries          = 100000
+)
+
 type WorkspaceHelperCachePayload struct {
 	Archive     io.ReadCloser
 	Publication domain.WorkspaceRevisionPublication
@@ -57,11 +62,11 @@ func NewWorkspaceHelperCacheService(config WorkspaceHelperCacheServiceConfig) (*
 	}
 	maxUncompressedBytes := config.MaxUncompressedBytes
 	if maxUncompressedBytes <= 0 {
-		maxUncompressedBytes = defaultWorkspacePublishMaxUncompressedBytes
+		maxUncompressedBytes = defaultWorkspaceHelperCacheMaxUncompressedBytes
 	}
 	maxArchiveEntries := config.MaxArchiveEntries
 	if maxArchiveEntries <= 0 {
-		maxArchiveEntries = defaultWorkspacePublishMaxArchiveEntries
+		maxArchiveEntries = defaultWorkspaceHelperCacheMaxArchiveEntries
 	}
 	return &WorkspaceHelperCacheService{capabilities: config.CapabilityAuthorizer, executionJobs: config.ExecutionJobs, builds: config.Builds, entries: config.Entries, store: config.Store, maxUncompressedBytes: maxUncompressedBytes, maxArchiveEntries: maxArchiveEntries, now: func() time.Time { return time.Now().UTC() }}, nil
 }
@@ -110,7 +115,7 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 	payloadRoot := filepath.Join(directory, "payload")
 	limits := workspace.WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: s.maxUncompressedBytes, MaxEntries: s.maxArchiveEntries}
 	if restoreErr := workspace.RestoreArchiveWithLimits(ctx, archive, publication, payloadRoot, limits); restoreErr != nil {
-		return fmt.Errorf("%w: cache archive: %v", ErrWorkspaceHelperCacheInvalidInput, restoreErr)
+		return fmt.Errorf("%w: cache archive: %w", ErrWorkspaceHelperCacheInvalidInput, restoreErr)
 	}
 	objectKey := cacheObjectKey(cacheJobID(build), preset, cacheKey)
 	saved, saveErr := s.store.Save(ctx, objectKey, payloadRoot)

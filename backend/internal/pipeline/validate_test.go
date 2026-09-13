@@ -88,6 +88,43 @@ func TestValidate_DuplicateStepNames(t *testing.T) {
 	assertContains(t, err.Error(), "duplicate")
 }
 
+func TestValidate_RejectsInvalidExplicitDependencies(t *testing.T) {
+	cases := []struct {
+		name  string
+		steps []StepDef
+		want  string
+	}{
+		{name: "unknown", steps: []StepDef{{Name: "A", Run: "true", DependsOn: dependencyNames("missing")}}, want: "unknown dependency"},
+		{name: "self", steps: []StepDef{{Name: "A", Run: "true", DependsOn: dependencyNames("a")}}, want: "cannot depend on itself"},
+		{name: "duplicate", steps: []StepDef{{Name: "A", Run: "true"}, {Name: "B", Run: "true", DependsOn: dependencyNames("A", "a")}}, want: "duplicate dependency"},
+		{name: "direct cycle", steps: []StepDef{{Name: "A", Run: "true", DependsOn: dependencyNames("B")}, {Name: "B", Run: "true", DependsOn: dependencyNames("A")}}, want: "must not contain a cycle"},
+		{name: "transitive cycle", steps: []StepDef{{Name: "A", Run: "true", DependsOn: dependencyNames("B")}, {Name: "B", Run: "true", DependsOn: dependencyNames("C")}, {Name: "C", Run: "true", DependsOn: dependencyNames("A")}}, want: "must not contain a cycle"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := Validate(&PipelineFile{Version: 1, Steps: testCase.steps})
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			assertContains(t, err.Error(), testCase.want)
+		})
+	}
+}
+
+func TestValidate_AllowsCrossGroupForwardDependency(t *testing.T) {
+	pf := &PipelineFile{Version: 1, Steps: []StepDef{
+		{Group: &StepGroupDef{Name: "first", Steps: []StepDef{{Name: "Consumer", Run: "true", DependsOn: dependencyNames("Producer")}}}},
+		{Group: &StepGroupDef{Name: "second", Steps: []StepDef{{Name: "Producer", Run: "true", DependsOn: dependencyNames()}}}},
+	}}
+	if err := Validate(pf); err != nil {
+		t.Fatalf("validate cross-group forward dependency: %v", err)
+	}
+}
+
+func dependencyNames(values ...string) *[]string {
+	return &values
+}
+
 func TestValidate_NegativeTimeout(t *testing.T) {
 	neg := -5
 	pf := &PipelineFile{
@@ -101,6 +138,39 @@ func TestValidate_NegativeTimeout(t *testing.T) {
 		t.Fatal("expected error for negative timeout")
 	}
 	assertContains(t, err.Error(), "timeout_seconds")
+}
+
+func TestValidate_ImageBuildPathsMustStayWithinRepositoryContext(t *testing.T) {
+	validImageBuild := func(contextPath, dockerfilePath string) *ImageBuildDef {
+		return &ImageBuildDef{Context: contextPath, Dockerfile: dockerfilePath, Image: "coyote-ci/backend"}
+	}
+	for _, testCase := range []struct {
+		name       string
+		context    string
+		dockerfile string
+		want       string
+	}{
+		{name: "absolute context", context: "/", dockerfile: "Dockerfile", want: "context"},
+		{name: "traversal context", context: "../../..", dockerfile: "Dockerfile", want: "context"},
+		{name: "absolute dockerfile", context: "backend", dockerfile: "/Dockerfile", want: "dockerfile"},
+		{name: "traversal dockerfile", context: "backend", dockerfile: "../Dockerfile", want: "dockerfile"},
+		{name: "dockerfile outside context", context: "backend", dockerfile: "frontend/Dockerfile", want: "within image_build.context"},
+		{name: "valid nested dockerfile", context: "backend", dockerfile: "backend/docker/Dockerfile"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := Validate(&PipelineFile{Version: 1, Steps: []StepDef{{Name: "Image", ImageBuild: validImageBuild(testCase.context, testCase.dockerfile)}}})
+			if testCase.want == "" {
+				if err != nil {
+					t.Fatalf("validate: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			assertContains(t, err.Error(), testCase.want)
+		})
+	}
 }
 
 func TestValidate_ZeroTimeout(t *testing.T) {
@@ -534,6 +604,13 @@ func TestValidate_GroupWrapperRejectsExecutableFields(t *testing.T) {
 				step.Image = "alpine:3"
 			},
 			fieldRef: "steps[0].image",
+		},
+		{
+			name: "image_build",
+			mutate: func(step *StepDef) {
+				step.ImageBuild = &ImageBuildDef{Context: "backend", Dockerfile: "backend/Dockerfile", Image: "coyote-ci/backend"}
+			},
+			fieldRef: "steps[0].image_build",
 		},
 		{
 			name: "command",

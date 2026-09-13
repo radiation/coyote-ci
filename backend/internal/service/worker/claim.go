@@ -2,9 +2,11 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"sort"
+	"strings"
 	"sync/atomic"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -158,32 +160,57 @@ func (w *ExecutionWorkerService) claimRunnableStepFromJobs(ctx context.Context) 
 		return WorkerRunnableStep{}, false, nil
 	}
 
-	if stepErr := w.mirrorJobClaimToStep(ctx, job, claim); stepErr != nil {
+	claimedStep, stepErr := w.mirrorJobClaimToStep(ctx, job, claim)
+	if stepErr != nil {
 		return WorkerRunnableStep{}, false, stepErr
 	}
 
 	claimCount := atomic.AddInt64(&w.claimsWon, 1)
 	log.Printf("job claim succeeded: job_id=%s build_id=%s step_index=%d worker_id=%s claim_count=%d", job.ID, job.BuildID, job.StepIndex, claim.WorkerID, claimCount)
 
+	var spec domain.ExecutionJobSpec
+	if strings.TrimSpace(job.ResolvedSpecJSON) != "" {
+		if unmarshalErr := json.Unmarshal([]byte(job.ResolvedSpecJSON), &spec); unmarshalErr != nil {
+			return WorkerRunnableStep{}, false, unmarshalErr
+		}
+	}
+	executionKind := spec.ExecutionKind
+	if executionKind == "" {
+		executionKind = domain.ExecutionKindShell
+	}
 	runnable := WorkerRunnableStep{
-		BuildID:        job.BuildID,
-		JobID:          job.ID,
-		StepID:         job.StepID,
-		StepIndex:      job.StepIndex,
-		StepName:       job.Name,
-		WorkerID:       claim.WorkerID,
-		ClaimToken:     claim.ClaimToken,
-		NodeID:         job.NodeID,
-		AttemptNumber:  job.AttemptNumber,
-		Image:          job.Image,
-		Command:        workerCommandFromJob(job),
-		Args:           workerArgsFromJob(job),
-		Env:            workerEnvFromJob(job),
-		WorkingDir:     workerDefaultString(job.WorkingDir, "."),
-		TimeoutSeconds: workerTimeoutFromJob(job),
+		BuildID:          job.BuildID,
+		JobID:            job.ID,
+		StepID:           job.StepID,
+		StepIndex:        job.StepIndex,
+		StepName:         job.Name,
+		ExecutionKind:    executionKind,
+		RemoteImageBuild: cloneRemoteImageBuildSpec(spec.RemoteImageBuild),
+		WorkerID:         claim.WorkerID,
+		ClaimToken:       claim.ClaimToken,
+		NodeID:           job.NodeID,
+		AttemptNumber:    job.AttemptNumber,
+		Image:            job.Image,
+		Command:          workerCommandFromJob(job),
+		Args:             workerArgsFromJob(job),
+		Env:              workerEnvFromJob(job),
+		WorkingDir:       workerDefaultString(job.WorkingDir, "."),
+		TimeoutSeconds:   workerTimeoutFromJob(job),
+		Cache:            claimedStep.Cache.Clone(),
 	}
 
 	return runnable, true, nil
+}
+
+func cloneRemoteImageBuildSpec(spec *domain.RemoteImageBuildSpec) *domain.RemoteImageBuildSpec {
+	if spec == nil {
+		return nil
+	}
+	buildArgs := make(map[string]string, len(spec.BuildArgs))
+	for key, value := range spec.BuildArgs {
+		buildArgs[key] = value
+	}
+	return &domain.RemoteImageBuildSpec{ContextPath: spec.ContextPath, DockerfilePath: spec.DockerfilePath, BuildArgs: buildArgs, TargetImageReference: spec.TargetImageReference}
 }
 
 func (w *ExecutionWorkerService) prepareQueuedBuilds(ctx context.Context) ([]domain.Build, error) {
@@ -256,26 +283,26 @@ func (w *ExecutionWorkerService) prepareQueuedBuilds(ctx context.Context) ([]dom
 	return builds, nil
 }
 
-func (w *ExecutionWorkerService) mirrorJobClaimToStep(ctx context.Context, job domain.ExecutionJob, claim repository.StepClaim) error {
+func (w *ExecutionWorkerService) mirrorJobClaimToStep(ctx context.Context, job domain.ExecutionJob, claim repository.StepClaim) (domain.BuildStep, error) {
 	if job.StepID == "" {
-		return nil
+		return domain.BuildStep{}, nil
 	}
 
-	if _, claimed, err := w.builds.ClaimPendingStep(ctx, job.BuildID, job.StepIndex, claim); err != nil {
-		return err
+	if claimedStep, claimed, err := w.builds.ClaimPendingStep(ctx, job.BuildID, job.StepIndex, claim); err != nil {
+		return domain.BuildStep{}, err
 	} else if claimed {
-		return nil
+		return claimedStep, nil
 	}
 
-	if _, reclaimed, err := w.builds.ReclaimExpiredStep(ctx, job.BuildID, job.StepIndex, claim.ClaimedAt, claim); err != nil {
-		return err
+	if reclaimedStep, reclaimed, err := w.builds.ReclaimExpiredStep(ctx, job.BuildID, job.StepIndex, claim.ClaimedAt, claim); err != nil {
+		return domain.BuildStep{}, err
 	} else if reclaimed {
 		reclaimCount := atomic.AddInt64(&w.reclaimsWon, 1)
 		log.Printf("step reclaim mirrored from job claim: build_id=%s step_index=%d reclaim_count=%d", job.BuildID, job.StepIndex, reclaimCount)
-		return nil
+		return reclaimedStep, nil
 	}
 
-	return buildsvc.ErrInvalidBuildStepTransition
+	return domain.BuildStep{}, buildsvc.ErrInvalidBuildStepTransition
 }
 
 func (w *ExecutionWorkerService) bindRunnableStepFromJob(ctx context.Context, step WorkerRunnableStep, claim repository.StepClaim) WorkerRunnableStep {

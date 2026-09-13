@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -28,6 +29,20 @@ func TestWorkspacePublishServicePublishesCanonicalArchiveWithServerDerivedIdenti
 	}
 	if harness.store.calls != 1 || published.ContentDigest == nil || published.SizeBytes == nil {
 		t.Fatalf("store calls=%d revision=%#v", harness.store.calls, published)
+	}
+}
+
+func TestWorkspacePublishServicePublishesFanInJoinRevision(t *testing.T) {
+	harness := newWorkspacePublishServiceHarness(t)
+	harness.job.ResolvedSpecJSON = `{"workspace_input":{"mode":"fan_in","common_ancestor_node_id":"root"}}`
+	archive := workspacePublishArchiveForTest(t, "join output")
+
+	published, publishErr := harness.service.Publish(context.Background(), "publish-capability", harness.job.ID, "pod-1", bytes.NewReader(archive))
+	if publishErr != nil {
+		t.Fatalf("publish fan-in join: %v", publishErr)
+	}
+	if published.ID != domain.WorkspaceRevisionIDForExecutionJob(harness.job.ID) || published.NodeID != harness.job.NodeID || harness.store.calls != 1 {
+		t.Fatalf("published join revision=%#v store calls=%d", published, harness.store.calls)
 	}
 }
 
@@ -68,15 +83,15 @@ func TestWorkspacePublishServiceRejectsOversizedArchiveWithoutStoreOrTemporaryFi
 
 func TestWorkspacePublishServiceRejectsCompressedArchiveThatExceedsWorkspaceLimit(t *testing.T) {
 	harness := newWorkspacePublishServiceHarness(t)
-	service, serviceErr := NewWorkspacePublishService(WorkspacePublishServiceConfig{CapabilityAuthorizer: harness.capabilities, ExecutionJobs: harness.jobs, WorkspaceRevisions: harness.revisions, RevisionStore: harness.store, MaxUncompressedBytes: 1024})
-	if serviceErr != nil {
-		t.Fatalf("new bounded service: %v", serviceErr)
-	}
 	archive := workspacePublishArchiveForTest(t, strings.Repeat("x", 64*1024))
 	if int64(len(archive)) >= 1024 {
 		t.Fatalf("expected compressed archive below extraction limit, got %d bytes", len(archive))
 	}
-	if _, publishErr := service.Publish(context.Background(), "publish-capability", harness.job.ID, "pod-1", bytes.NewReader(archive)); !errors.Is(publishErr, ErrWorkspacePublishArchiveTooLarge) {
+	service, serviceErr := NewWorkspacePublishService(WorkspacePublishServiceConfig{CapabilityAuthorizer: harness.capabilities, ExecutionJobs: harness.jobs, WorkspaceRevisions: harness.revisions, RevisionStore: harness.store, MaxUploadBytes: int64(len(archive)), MaxUncompressedBytes: 1024})
+	if serviceErr != nil {
+		t.Fatalf("new bounded service: %v", serviceErr)
+	}
+	if _, publishErr := service.Publish(context.Background(), "publish-capability", harness.job.ID, "pod-1", bytes.NewReader(archive)); !errors.Is(publishErr, ErrWorkspacePublishExpandedSizeLimit) || !errors.Is(publishErr, ErrWorkspacePublishArchiveTooLarge) {
 		t.Fatalf("publish: %v", publishErr)
 	}
 	if harness.store.calls != 0 {
@@ -87,7 +102,7 @@ func TestWorkspacePublishServiceRejectsCompressedArchiveThatExceedsWorkspaceLimi
 func TestWorkspacePublishServicePublishesArchiveWithinConfiguredLimit(t *testing.T) {
 	harness := newWorkspacePublishServiceHarness(t)
 	archive := workspacePublishArchiveForTest(t, "output")
-	service, serviceErr := NewWorkspacePublishService(WorkspacePublishServiceConfig{CapabilityAuthorizer: harness.capabilities, ExecutionJobs: &workspacePublishJobFake{harness: harness}, WorkspaceRevisions: harness.revisions, RevisionStore: harness.store, MaxUploadBytes: int64(len(archive))})
+	service, serviceErr := NewWorkspacePublishService(WorkspacePublishServiceConfig{CapabilityAuthorizer: harness.capabilities, ExecutionJobs: &workspacePublishJobFake{harness: harness}, WorkspaceRevisions: harness.revisions, RevisionStore: harness.store, MaxUploadBytes: int64(len(archive)), MaxArchiveEntries: 2})
 	if serviceErr != nil {
 		t.Fatalf("new bounded service: %v", serviceErr)
 	}
@@ -102,8 +117,34 @@ func TestWorkspacePublishServicePublishesArchiveWithinConfiguredLimit(t *testing
 func TestNewWorkspacePublishServiceUsesDefaultUploadLimit(t *testing.T) {
 	harness := newWorkspacePublishServiceHarness(t)
 	service, serviceErr := NewWorkspacePublishService(WorkspacePublishServiceConfig{CapabilityAuthorizer: harness.capabilities, ExecutionJobs: harness.jobs, WorkspaceRevisions: harness.revisions, RevisionStore: harness.store})
-	if serviceErr != nil || service.maxUploadBytes != defaultWorkspacePublishMaxUploadBytes {
+	if serviceErr != nil || service.maxUploadBytes != defaultWorkspacePublishMaxUploadBytes || service.maxUncompressedBytes != defaultWorkspacePublishMaxUncompressedBytes || service.maxArchiveEntries != defaultWorkspacePublishMaxArchiveEntries {
 		t.Fatalf("service=%#v err=%v", service, serviceErr)
+	}
+}
+
+func TestWorkspacePublishServiceKeepsUploadAndExtractionLimitsIndependent(t *testing.T) {
+	harness := newWorkspacePublishServiceHarness(t)
+	service, serviceErr := NewWorkspacePublishService(WorkspacePublishServiceConfig{CapabilityAuthorizer: harness.capabilities, ExecutionJobs: harness.jobs, WorkspaceRevisions: harness.revisions, RevisionStore: harness.store, MaxUploadBytes: 2 * 1024, MaxUncompressedBytes: 1024, MaxArchiveEntries: 7})
+	if serviceErr != nil {
+		t.Fatalf("new bounded service: %v", serviceErr)
+	}
+	if service.maxUploadBytes != 2*1024 || service.maxUncompressedBytes != 1024 || service.maxArchiveEntries != 7 {
+		t.Fatalf("limits upload=%d expanded=%d entries=%d", service.maxUploadBytes, service.maxUncompressedBytes, service.maxArchiveEntries)
+	}
+}
+
+func TestWorkspacePublishServiceRejectsArchiveWithTooManyEntries(t *testing.T) {
+	harness := newWorkspacePublishServiceHarness(t)
+	archive := workspacePublishArchiveWithFileCountForTest(t, 2)
+	service, serviceErr := NewWorkspacePublishService(WorkspacePublishServiceConfig{CapabilityAuthorizer: harness.capabilities, ExecutionJobs: harness.jobs, WorkspaceRevisions: harness.revisions, RevisionStore: harness.store, MaxUploadBytes: int64(len(archive)), MaxUncompressedBytes: 1024, MaxArchiveEntries: 2})
+	if serviceErr != nil {
+		t.Fatalf("new bounded service: %v", serviceErr)
+	}
+	if _, publishErr := service.Publish(context.Background(), "publish-capability", harness.job.ID, "pod-1", bytes.NewReader(archive)); !errors.Is(publishErr, ErrWorkspacePublishEntryLimit) || !errors.Is(publishErr, ErrWorkspacePublishArchiveTooLarge) {
+		t.Fatalf("publish: %v", publishErr)
+	}
+	if harness.store.calls != 0 {
+		t.Fatalf("store calls=%d, want 0", harness.store.calls)
 	}
 }
 
@@ -226,6 +267,26 @@ func workspacePublishArchiveForTest(t *testing.T, contents string) []byte {
 	root := t.TempDir()
 	if writeErr := os.WriteFile(filepath.Join(root, "output.txt"), []byte(contents), 0o644); writeErr != nil {
 		t.Fatalf("write archive source: %v", writeErr)
+	}
+	archive, _, archiveErr := workspacepkg.ArchiveDirectory(context.Background(), root)
+	if archiveErr != nil {
+		t.Fatalf("archive source: %v", archiveErr)
+	}
+	defer func() { _ = archive.Close() }()
+	payload, readErr := io.ReadAll(archive)
+	if readErr != nil {
+		t.Fatalf("read archive: %v", readErr)
+	}
+	return payload
+}
+
+func workspacePublishArchiveWithFileCountForTest(t *testing.T, count int) []byte {
+	t.Helper()
+	root := t.TempDir()
+	for index := range count {
+		if writeErr := os.WriteFile(filepath.Join(root, fmt.Sprintf("output-%d.txt", index)), []byte("output"), 0o644); writeErr != nil {
+			t.Fatalf("write archive source: %v", writeErr)
+		}
 	}
 	archive, _, archiveErr := workspacepkg.ArchiveDirectory(context.Background(), root)
 	if archiveErr != nil {

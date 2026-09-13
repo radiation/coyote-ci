@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -319,6 +321,23 @@ func TestWorkspaceHelperHandlerSaveCacheRejectsOversizedUpload(t *testing.T) {
 	handler.SaveCache(response, request)
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status=%d, want %d", response.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestLogWorkspaceCacheArchiveRejectionClassifiesLimits(t *testing.T) {
+	oldOutput := log.Writer()
+	var output bytes.Buffer
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(oldOutput) })
+
+	logWorkspaceCacheArchiveRejection(fmt.Errorf("%w: cache archive: %w", service.ErrWorkspaceHelperCacheInvalidInput, &workspace.WorkspaceRevisionEntryLimitError{ObservedEntries: 100001, MaxEntries: 100000}), "job-1", "go", "go:abc")
+	if logged := output.String(); !strings.Contains(logged, "reason=entry_limit_exceeded") || !strings.Contains(logged, "observed_entries=100001") || !strings.Contains(logged, "configured_max_entries=100000") {
+		t.Fatalf("entry limit log=%q", logged)
+	}
+	output.Reset()
+	logWorkspaceCacheArchiveRejection(fmt.Errorf("%w: cache archive: %w", service.ErrWorkspaceHelperCacheInvalidInput, &workspace.WorkspaceRevisionSizeLimitError{ObservedBytes: 5, MaxBytes: 4}), "job-1", "go", "go:abc")
+	if logged := output.String(); !strings.Contains(logged, "reason=expanded_size_limit_exceeded") || !strings.Contains(logged, "observed_bytes=5") || !strings.Contains(logged, "configured_max_bytes=4") {
+		t.Fatalf("size limit log=%q", logged)
 	}
 }
 

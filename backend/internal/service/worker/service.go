@@ -33,22 +33,24 @@ type workerExecutionBoundary interface {
 }
 
 type WorkerRunnableStep struct {
-	BuildID        string
-	JobID          string
-	StepID         string
-	StepIndex      int
-	StepName       string
-	WorkerID       string
-	ClaimToken     string
-	NodeID         string
-	AttemptNumber  int
-	Image          string
-	Command        string
-	Args           []string
-	Env            map[string]string
-	WorkingDir     string
-	TimeoutSeconds int
-	Cache          *domain.StepCacheConfig
+	BuildID          string
+	JobID            string
+	StepID           string
+	StepIndex        int
+	StepName         string
+	ExecutionKind    domain.ExecutionKind
+	RemoteImageBuild *domain.RemoteImageBuildSpec
+	WorkerID         string
+	ClaimToken       string
+	NodeID           string
+	AttemptNumber    int
+	Image            string
+	Command          string
+	Args             []string
+	Env              map[string]string
+	WorkingDir       string
+	TimeoutSeconds   int
+	Cache            *domain.StepCacheConfig
 }
 
 type WorkerStepExecutionReport struct {

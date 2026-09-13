@@ -14,7 +14,6 @@ import (
 
 var (
 	ErrWorkspacePrepareInvalidInput       = errors.New("invalid workspace prepare input")
-	ErrWorkspacePrepareFanInUnsupported   = errors.New("fan-in workspace preparation is not supported")
 	ErrWorkspacePrepareRevisionIncomplete = errors.New("published workspace revision metadata is incomplete")
 )
 
@@ -86,17 +85,24 @@ func (s *WorkspacePrepareService) Open(ctx context.Context, capabilityToken stri
 	switch spec.WorkspaceInput.Mode {
 	case domain.WorkspaceInputModePredecessor:
 		return s.openPredecessor(ctx, job, spec.WorkspaceInput)
-	case domain.WorkspaceInputModeSource:
-		build, buildErr := s.builds.GetByID(ctx, job.BuildID)
-		if buildErr != nil {
-			return WorkspacePreparePayload{}, buildErr
-		}
-		return s.sources.OpenSourceArchive(ctx, build, job, spec)
 	case domain.WorkspaceInputModeFanIn:
-		return WorkspacePreparePayload{}, ErrWorkspacePrepareFanInUnsupported
+		if strings.TrimSpace(spec.WorkspaceInput.CommonAncestorNodeID) != "" {
+			return s.openPredecessor(ctx, job, domain.WorkspaceInputPlan{ProducerNodeID: spec.WorkspaceInput.CommonAncestorNodeID})
+		}
+		return s.openSource(ctx, job, spec)
+	case domain.WorkspaceInputModeSource:
+		return s.openSource(ctx, job, spec)
 	default:
 		return WorkspacePreparePayload{}, fmt.Errorf("%w: workspace input mode", ErrWorkspacePrepareInvalidInput)
 	}
+}
+
+func (s *WorkspacePrepareService) openSource(ctx context.Context, job domain.ExecutionJob, spec domain.ExecutionJobSpec) (WorkspacePreparePayload, error) {
+	build, buildErr := s.builds.GetByID(ctx, job.BuildID)
+	if buildErr != nil {
+		return WorkspacePreparePayload{}, buildErr
+	}
+	return s.sources.OpenSourceArchive(ctx, build, job, spec)
 }
 
 func (s *WorkspacePrepareService) openPredecessor(ctx context.Context, job domain.ExecutionJob, input domain.WorkspaceInputPlan) (WorkspacePreparePayload, error) {

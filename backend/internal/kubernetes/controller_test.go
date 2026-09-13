@@ -19,6 +19,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 )
 
@@ -54,6 +55,29 @@ func TestControllerCreatesDeterministicSecureJob(t *testing.T) {
 	if job.Spec.Template.Spec.Volumes[0].EmptyDir == nil {
 		t.Fatal("expected emptyDir workspace")
 	}
+	if container.ImagePullPolicy != corev1.PullPolicy("") {
+		t.Fatalf("build image pull policy=%q, want unchanged default", container.ImagePullPolicy)
+	}
+	assertEphemeralStorage(t, container, buildEphemeralStorageRequest, buildEphemeralStorageLimit)
+}
+
+func TestControllerDispatchesImageBuildWithoutCreatingKubernetesJob(t *testing.T) {
+	step := testStep()
+	step.ExecutionKind = domain.ExecutionKindImageBuild
+	service := &fakeExecutionService{step: step, found: true}
+	client := newFakeClient()
+	imageController := &fakeImageBuildController{}
+	controller := NewController(client, service, nil, "ci").WithImageBuildController(imageController)
+
+	if err := controller.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if imageController.calls != 1 || imageController.step.JobID != step.JobID {
+		t.Fatalf("image controller calls=%d step=%+v", imageController.calls, imageController.step)
+	}
+	if len(client.jobs) != 0 {
+		t.Fatalf("image build must not create a Kubernetes Job: %+v", client.jobs)
+	}
 }
 
 func TestControllerCreatesWorkspaceHelperLifecycle(t *testing.T) {
@@ -72,6 +96,8 @@ func TestControllerCreatesWorkspaceHelperLifecycle(t *testing.T) {
 		t.Fatalf("publish=%#v", publish)
 	}
 	build := pod.Containers[0]
+	assertEphemeralStorage(t, pod.InitContainers[0], helperEphemeralStorageRequest, helperEphemeralStorageLimit)
+	assertEphemeralStorage(t, publish, helperEphemeralStorageRequest, helperEphemeralStorageLimit)
 	if len(build.VolumeMounts) != 1 || build.VolumeMounts[0].Name != "workspace" {
 		t.Fatalf("build mounts=%#v", build.VolumeMounts)
 	}
@@ -106,6 +132,7 @@ func TestBuildJobWithArtifactHelperUsesIsolatedCredentials(t *testing.T) {
 	}
 	build := pod.Containers[0]
 	helperContainer := pod.Containers[2]
+	assertEphemeralStorage(t, helperContainer, helperEphemeralStorageRequest, helperEphemeralStorageLimit)
 	if hasMount(build, "artifact-collect-token") || hasMount(build, "workspace-kubernetes-api") {
 		t.Fatalf("build must not receive artifact or Kubernetes credentials: %#v", build.VolumeMounts)
 	}
@@ -132,6 +159,8 @@ func TestBuildJobWithCacheHelpersUsesOrderedLifecycleAndIsolatedCredentials(t *t
 		t.Fatalf("container lifecycle=%#v", pod.Containers)
 	}
 	build := pod.Containers[0]
+	assertEphemeralStorage(t, pod.InitContainers[1], helperEphemeralStorageRequest, helperEphemeralStorageLimit)
+	assertEphemeralStorage(t, pod.Containers[2], helperEphemeralStorageRequest, helperEphemeralStorageLimit)
 	if hasMount(build, "cache-restore-token") || hasMount(build, "cache-save-token") || hasMount(build, "cache-helper-state") || hasMount(build, "workspace-kubernetes-api") {
 		t.Fatalf("build must not receive helper or Kubernetes credentials: %#v", build.VolumeMounts)
 	}
@@ -143,6 +172,160 @@ func TestBuildJobWithCacheHelpersUsesOrderedLifecycleAndIsolatedCredentials(t *t
 	}
 	if !hasMount(pod.Containers[2], "cache-save-token") || !hasMount(pod.Containers[2], "cache-helper-state") || !hasMount(pod.Containers[2], "workspace-kubernetes-api") || hasMount(pod.Containers[2], "cache-restore-token") {
 		t.Fatalf("save mounts=%#v", pod.Containers[2].VolumeMounts)
+	}
+	for _, container := range []corev1.Container{pod.InitContainers[1], pod.Containers[2]} {
+		if fieldPath := downwardAPIFieldPath(container.Env, "COYOTE_WORKSPACE_HELPER_POD_NAME"); fieldPath != "metadata.name" {
+			t.Fatalf("%s pod name field=%q", container.Name, fieldPath)
+		}
+		if fieldPath := downwardAPIFieldPath(container.Env, "COYOTE_WORKSPACE_HELPER_NAMESPACE"); fieldPath != "metadata.namespace" {
+			t.Fatalf("%s namespace field=%q", container.Name, fieldPath)
+		}
+		if fieldPath := downwardAPIFieldPath(container.Env, "COYOTE_WORKSPACE_HELPER_POD_UID"); fieldPath != "metadata.uid" {
+			t.Fatalf("%s pod UID field=%q", container.Name, fieldPath)
+		}
+	}
+}
+
+func downwardAPIFieldPath(environment []corev1.EnvVar, name string) string {
+	for _, value := range environment {
+		if value.Name == name && value.ValueFrom != nil && value.ValueFrom.FieldRef != nil {
+			return value.ValueFrom.FieldRef.FieldPath
+		}
+	}
+	return ""
+}
+
+func TestControllerCreatesCacheHelpersForDurableClaimedStep(t *testing.T) {
+	now := time.Now().UTC()
+	step := domain.BuildStep{
+		ID: "step-1", BuildID: "build-1", StepIndex: 3, Name: "Backend Vet", Status: domain.BuildStepStatusPending,
+		Image: "golang:1.27.1", Command: "sh", Args: []string{"-c", "go vet ./..."}, WorkingDir: "backend",
+		Cache: &domain.StepCacheConfig{Preset: "go", Policy: domain.CachePolicyPullPush},
+	}
+	job := domain.ExecutionJob{
+		ID: "job-1", BuildID: "build-1", StepID: step.ID, NodeID: "node-003", Name: step.Name, StepIndex: step.StepIndex,
+		AttemptNumber: 1, Status: domain.ExecutionJobStatusQueued, Image: step.Image, Command: append([]string{step.Command}, step.Args...), WorkingDir: step.WorkingDir,
+		ResolvedSpecJSON: `{"workspace_input":{"mode":"source"}}`, CreatedAt: now,
+	}
+	boundary := &durableCacheClaimBoundary{build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning}, step: step, job: job}
+	worker := workersvc.NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	worker.SetKubernetesWorkspaceLifecycleEnabled(true)
+	worker.SetKubernetesCacheLifecycleEnabled(true)
+	client := newFakeClient()
+	controller := NewController(client, worker, nil, "ci").WithWorkspaceHelper(WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper", CacheEnabled: true})
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("reconcile: %v", reconcileErr)
+	}
+	pod := client.jobs[jobName(job.ID)].Spec.Template.Spec
+	if len(pod.InitContainers) != 2 || pod.InitContainers[1].Name != "cache-restore" || len(pod.Containers) != 3 || pod.Containers[2].Name != "cache-save" {
+		t.Fatalf("cache lifecycle missing: init=%#v containers=%#v volumes=%#v", pod.InitContainers, pod.Containers, pod.Volumes)
+	}
+	build := pod.Containers[0]
+	if len(build.VolumeMounts) != 3 || build.VolumeMounts[1].MountPath != "/go/pkg/mod" || build.VolumeMounts[2].MountPath != "/root/.cache/go-build" {
+		t.Fatalf("go cache mounts missing: %#v", build.VolumeMounts)
+	}
+}
+
+type durableCacheClaimBoundary struct {
+	build domain.Build
+	step  domain.BuildStep
+	job   domain.ExecutionJob
+}
+
+func (b *durableCacheClaimBoundary) ClaimNextRunnableJob(_ context.Context, claim repository.StepClaim) (domain.ExecutionJob, bool, error) {
+	b.job.Status = domain.ExecutionJobStatusRunning
+	b.job.ClaimedBy = &claim.WorkerID
+	b.job.ClaimToken = &claim.ClaimToken
+	b.job.ClaimExpiresAt = &claim.LeaseExpiresAt
+	return b.job, true, nil
+}
+
+func (b *durableCacheClaimBoundary) PrepareBuildExecution(context.Context, string) (domain.Build, error) {
+	return b.build, nil
+}
+func (b *durableCacheClaimBoundary) GetBuild(_ context.Context, id string) (domain.Build, error) {
+	if id != b.build.ID {
+		return domain.Build{}, buildsvc.ErrBuildNotFound
+	}
+	return b.build, nil
+}
+func (b *durableCacheClaimBoundary) ListBuilds(context.Context) ([]domain.Build, error) {
+	return []domain.Build{b.build}, nil
+}
+func (b *durableCacheClaimBoundary) GetBuildSteps(_ context.Context, id string) ([]domain.BuildStep, error) {
+	if id != b.build.ID {
+		return nil, buildsvc.ErrBuildNotFound
+	}
+	return []domain.BuildStep{b.step}, nil
+}
+func (b *durableCacheClaimBoundary) GetJobByStepID(context.Context, string) (domain.ExecutionJob, error) {
+	return b.job, nil
+}
+func (b *durableCacheClaimBoundary) GetJobByID(_ context.Context, id string) (domain.ExecutionJob, error) {
+	if id != b.job.ID {
+		return domain.ExecutionJob{}, repository.ErrExecutionJobNotFound
+	}
+	return b.job, nil
+}
+func (b *durableCacheClaimBoundary) ClaimJobByStepID(context.Context, string, repository.StepClaim) (domain.ExecutionJob, bool, error) {
+	return domain.ExecutionJob{}, false, nil
+}
+func (b *durableCacheClaimBoundary) RenewJobLease(context.Context, string, string, time.Time) (domain.ExecutionJob, bool, error) {
+	return b.job, true, nil
+}
+func (b *durableCacheClaimBoundary) ClaimPendingStep(_ context.Context, buildID string, stepIndex int, claim repository.StepClaim) (domain.BuildStep, bool, error) {
+	if buildID != b.step.BuildID || stepIndex != b.step.StepIndex || b.step.Status != domain.BuildStepStatusPending {
+		return domain.BuildStep{}, false, nil
+	}
+	b.step.Status = domain.BuildStepStatusRunning
+	b.step.WorkerID = &claim.WorkerID
+	b.step.ClaimToken = &claim.ClaimToken
+	b.step.LeaseExpiresAt = &claim.LeaseExpiresAt
+	return b.step, true, nil
+}
+func (b *durableCacheClaimBoundary) ReclaimExpiredStep(context.Context, string, int, time.Time, repository.StepClaim) (domain.BuildStep, bool, error) {
+	return domain.BuildStep{}, false, nil
+}
+func (b *durableCacheClaimBoundary) RenewStepLease(context.Context, string, int, string, time.Time) (domain.BuildStep, bool, error) {
+	return b.step, true, nil
+}
+func (b *durableCacheClaimBoundary) QueueBuild(context.Context, string) (domain.Build, error) {
+	return b.build, nil
+}
+func (b *durableCacheClaimBoundary) StartBuild(context.Context, string) (domain.Build, error) {
+	return b.build, nil
+}
+func (b *durableCacheClaimBoundary) CompleteBuild(context.Context, string) (domain.Build, error) {
+	return b.build, nil
+}
+func (b *durableCacheClaimBoundary) FailBuild(context.Context, string) (domain.Build, error) {
+	return b.build, nil
+}
+func (b *durableCacheClaimBoundary) RunStep(context.Context, runner.RunStepRequest) (runner.RunStepResult, buildsvc.StepCompletionReport, error) {
+	return runner.RunStepResult{}, buildsvc.StepCompletionReport{}, nil
+}
+func (b *durableCacheClaimBoundary) HandleStepResult(context.Context, runner.RunStepRequest, runner.RunStepResult) (buildsvc.StepCompletionReport, error) {
+	return buildsvc.StepCompletionReport{}, nil
+}
+
+func TestBuildJobAlwaysPullsTrustedHelperImages(t *testing.T) {
+	step := testStep()
+	step.Cache = &domain.StepCacheConfig{Preset: "go", Policy: domain.CachePolicyPullPush}
+	helper := WorkspaceHelperConfig{Image: "coyote-worker:gke-smoke", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper", CacheEnabled: true, ArtifactCollectEnabled: true}
+	pod := buildJob("ci", step, helper).Spec.Template.Spec
+
+	if pod.Containers[0].ImagePullPolicy != corev1.PullPolicy("") {
+		t.Fatalf("build image pull policy=%q, want unchanged default", pod.Containers[0].ImagePullPolicy)
+	}
+	policies := make(map[string]corev1.PullPolicy, len(pod.InitContainers)+len(pod.Containers))
+	for _, container := range append(pod.InitContainers, pod.Containers[1:]...) {
+		policies[container.Name] = container.ImagePullPolicy
+	}
+	for _, name := range []string{"workspace-prepare", "workspace-publish", "cache-restore", "cache-save", "artifact-collect"} {
+		if policies[name] != corev1.PullAlways {
+			t.Fatalf("helper %q image pull policy=%q, want %q", name, policies[name], corev1.PullAlways)
+		}
 	}
 }
 
@@ -211,7 +394,7 @@ func TestControllerRestartReclaimsExistingDeterministicJob(t *testing.T) {
 
 func TestControllerDoesNotCompleteAfterStaleClaim(t *testing.T) {
 	step := testStep()
-	service := &fakeExecutionService{step: step, found: true, stale: true}
+	service := &fakeExecutionService{step: step, found: true, completeOutcome: repository.StepCompletionStaleClaim}
 	client := newFakeClient()
 	client.jobs[jobName(step.JobID)] = completedJob(step, 0, "Completed", "")
 	controller := NewController(client, service, nil, "default")
@@ -219,12 +402,12 @@ func TestControllerDoesNotCompleteAfterStaleClaim(t *testing.T) {
 	if err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if service.completeCalls != 0 {
-		t.Fatal("stale controller must not finalize")
+	if service.completeCalls != 1 || controller.active != nil {
+		t.Fatalf("stale completion must release active claim: completions=%d active=%#v", service.completeCalls, controller.active)
 	}
 }
 
-func TestControllerWaitsForTerminalJobPod(t *testing.T) {
+func TestControllerCompletesTerminalJobWithoutPod(t *testing.T) {
 	step := testStep()
 	service := &fakeExecutionService{step: step, found: true}
 	client := newFakeClient()
@@ -234,8 +417,8 @@ func TestControllerWaitsForTerminalJobPod(t *testing.T) {
 	if err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if service.completeCalls != 0 {
-		t.Fatal("controller must wait until it can observe the build Pod")
+	if service.completeCalls != 1 || service.result.Status != runner.RunStepStatusSuccess || service.renewCalls != 0 {
+		t.Fatalf("terminal job must complete without polling: result=%#v completions=%d renewals=%d", service.result, service.completeCalls, service.renewCalls)
 	}
 }
 
@@ -476,7 +659,7 @@ func TestControllerDoesNotDuplicateLogsWhenCompletionRetries(t *testing.T) {
 	}
 }
 
-func TestControllerDefersCompletionWhenTerminalLogPersistenceFails(t *testing.T) {
+func TestControllerCompletesWhenTerminalLogPersistenceFails(t *testing.T) {
 	step := testStep()
 	service := &fakeExecutionService{step: step, found: true}
 	client := newFakeClient()
@@ -486,11 +669,11 @@ func TestControllerDefersCompletionWhenTerminalLogPersistenceFails(t *testing.T)
 	sink := &recordingLogSink{err: errors.New("log store unavailable")}
 	controller := NewController(client, service, sink, "default")
 
-	if err := controller.Reconcile(context.Background()); err == nil {
-		t.Fatal("expected terminal log error")
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("reconcile: %v", reconcileErr)
 	}
-	if service.completeCalls != 0 {
-		t.Fatal("log failure must defer completion")
+	if service.completeCalls != 1 {
+		t.Fatal("terminal log failure must not defer completion")
 	}
 }
 
@@ -640,14 +823,14 @@ func TestControllerReturnsOperationalErrorsWithoutCompletion(t *testing.T) {
 	}
 }
 
-func TestControllerDefersCompletionOnTerminalPodOrLogReadFailure(t *testing.T) {
+func TestControllerCompletesOnTerminalPodOrLogReadFailure(t *testing.T) {
 	tests := []struct {
 		name    string
 		client  *fakeClient
 		wantErr bool
 	}{
 		{name: "pod list", client: &fakeClient{jobs: map[string]*batchv1.Job{}, listPodsErr: errors.New("pod list unavailable")}},
-		{name: "log stream", client: &fakeClient{jobs: map[string]*batchv1.Job{}, pods: []corev1.Pod{terminatedBuildPod(0, "Completed", "")}, getLogsErr: errors.New("log stream unavailable")}, wantErr: true},
+		{name: "log stream", client: &fakeClient{jobs: map[string]*batchv1.Job{}, pods: []corev1.Pod{terminatedBuildPod(0, "Completed", "")}, getLogsErr: errors.New("log stream unavailable")}},
 	}
 
 	for _, testCase := range tests {
@@ -663,8 +846,46 @@ func TestControllerDefersCompletionOnTerminalPodOrLogReadFailure(t *testing.T) {
 			if !testCase.wantErr && err != nil {
 				t.Fatalf("reconcile: %v", err)
 			}
-			if service.completeCalls != 0 {
-				t.Fatal("terminal observation failure must defer completion")
+			if service.completeCalls != 1 {
+				t.Fatal("terminal observation failure must not defer completion")
+			}
+		})
+	}
+}
+
+func TestControllerTerminalJobFailuresFinalizeWithoutPolling(t *testing.T) {
+	tests := []struct {
+		name       string
+		jobReason  string
+		jobMessage string
+		pod        *corev1.Pod
+		wantExit   int
+		wantError  string
+	}{
+		{name: "missing pod", jobReason: "BackoffLimitExceeded", jobMessage: "Pod failed", wantExit: -1, wantError: "kubernetes job failed: BackoffLimitExceeded: Pod failed"},
+		{name: "incomplete build state", jobReason: "BackoffLimitExceeded", jobMessage: "Pod failed", pod: podPointer(corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "build"}}}}), wantExit: -1, wantError: "kubernetes job failed: BackoffLimitExceeded: Pod failed"},
+		{name: "unknown build status exit 137", jobReason: "BackoffLimitExceeded", pod: podPointer(corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "build", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "ContainerStatusUnknown", Message: "container disappeared"}}}}}}), wantExit: 137, wantError: "ContainerStatusUnknown: container disappeared"},
+		{name: "evicted build with killed helpers", jobReason: "BackoffLimitExceeded", pod: podPointer(corev1.Pod{Status: corev1.PodStatus{Reason: "Evicted", Message: "Container build exceeded its local ephemeral storage limit \"1Gi\"", ContainerStatuses: []corev1.ContainerStatus{{Name: "workspace-publish", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "Error", Message: "killed"}}}, {Name: "artifact-collect", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error", Message: "build failed"}}}, {Name: "build", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "ContainerStatusUnknown"}}}}}}), wantExit: 137, wantError: "execution pod evicted: Container build exceeded its local ephemeral storage limit \"1Gi\""},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			step := testStep()
+			service := &fakeExecutionService{step: step, found: true}
+			client := newFakeClient()
+			job := completedJob(step, 1, "Error", "")
+			job.Status.Conditions[0].Reason = testCase.jobReason
+			job.Status.Conditions[0].Message = testCase.jobMessage
+			client.jobs[jobName(step.JobID)] = job
+			if testCase.pod != nil {
+				testCase.pod.Name = "build-pod"
+				client.pods = []corev1.Pod{*testCase.pod}
+			}
+			controller := NewController(client, service, nil, "default")
+			if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+				t.Fatalf("reconcile: %v", reconcileErr)
+			}
+			if service.completeCalls != 1 || service.renewCalls != 0 || service.result.Status != runner.RunStepStatusFailed || service.result.ExitCode != testCase.wantExit || service.result.Stderr != testCase.wantError {
+				t.Fatalf("result=%#v completions=%d renewals=%d", service.result, service.completeCalls, service.renewCalls)
 			}
 		})
 	}
@@ -742,6 +963,17 @@ type fakeExecutionService struct {
 	statusAfterRenew domain.ExecutionJobStatus
 	completeErr      error
 	completeOutcome  repository.StepCompletionOutcome
+}
+
+type fakeImageBuildController struct {
+	calls int
+	step  workersvc.WorkerRunnableStep
+}
+
+func (c *fakeImageBuildController) ReconcileClaimed(_ context.Context, step workersvc.WorkerRunnableStep) (bool, error) {
+	c.calls++
+	c.step = step
+	return true, nil
 }
 
 func (s *fakeExecutionService) ClaimRunnableStep(context.Context) (workersvc.WorkerRunnableStep, bool, error) {
@@ -908,5 +1140,19 @@ func hasMount(container corev1.Container, name string) bool {
 	}
 	return false
 }
+
+func assertEphemeralStorage(t *testing.T, container corev1.Container, request, limit string) {
+	t.Helper()
+	requested := container.Resources.Requests[corev1.ResourceEphemeralStorage]
+	if got := requested.String(); got != request {
+		t.Fatalf("container %q ephemeral storage request=%q, want %q", container.Name, got, request)
+	}
+	limited := container.Resources.Limits[corev1.ResourceEphemeralStorage]
+	if got := limited.String(); got != limit {
+		t.Fatalf("container %q ephemeral storage limit=%q, want %q", container.Name, got, limit)
+	}
+}
+
+func podPointer(pod corev1.Pod) *corev1.Pod { return &pod }
 
 var _ logs.LogSink = (*recordingLogSink)(nil)

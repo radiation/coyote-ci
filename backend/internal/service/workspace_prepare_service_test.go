@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
 func TestWorkspacePrepareServiceOpenPredecessorStreamsPublishedRevision(t *testing.T) {
@@ -69,12 +70,58 @@ func TestWorkspacePrepareServiceOpenSourceUsesSourceArchivePreparer(t *testing.T
 	}
 }
 
+func TestWorkspacePrepareServiceOpenFanInUsesCommonAncestorRevision(t *testing.T) {
+	size := int64(7)
+	harness := newWorkspacePrepareServiceForTest(t, domain.ExecutionJob{ID: "join-job", BuildID: "build-1", DependsOnNodeIDs: []string{"branch-a", "branch-b"}, ResolvedSpecJSON: `{"workspace_input":{"mode":"fan_in","common_ancestor_node_id":"root"}}`})
+	harness.revisions.revision = domain.WorkspaceRevision{Status: domain.WorkspaceRevisionStatusPublished, ContentDigest: workspacePrepareStringPointer("sha256:root"), StorageKey: workspacePrepareStringPointer("workspace-revisions/root.tar.gz"), SizeBytes: &size}
+	harness.archives.contents = []byte("archive")
+
+	prepared, err := harness.service.Open(context.Background(), "capability", "join-job", "pod-1")
+	if err != nil {
+		t.Fatalf("open fan-in: %v", err)
+	}
+	contents, readErr := io.ReadAll(prepared.Archive)
+	closeErr := prepared.Archive.Close()
+	if readErr != nil || closeErr != nil || string(contents) != "archive" {
+		t.Fatalf("stream = %q, %v, %v", contents, readErr, closeErr)
+	}
+	if harness.revisions.buildID != "build-1" || harness.revisions.nodeID != "root" || harness.archives.calls != 1 || harness.sources.calls != 0 {
+		t.Fatalf("fan-in dependencies: revision=%q/%q archive=%d source=%d", harness.revisions.buildID, harness.revisions.nodeID, harness.archives.calls, harness.sources.calls)
+	}
+}
+
+func TestWorkspacePrepareServiceOpenFanInWithoutCommonAncestorUsesSource(t *testing.T) {
+	harness := newWorkspacePrepareServiceForTest(t, domain.ExecutionJob{ID: "join-job", BuildID: "build-1", DependsOnNodeIDs: []string{"branch-a", "branch-b"}, ResolvedSpecJSON: `{"workspace_input":{"mode":"fan_in"}}`})
+	harness.sources.contents = []byte("source")
+
+	prepared, err := harness.service.Open(context.Background(), "capability", "join-job", "pod-1")
+	if err != nil {
+		t.Fatalf("open fan-in source: %v", err)
+	}
+	contents, readErr := io.ReadAll(prepared.Archive)
+	closeErr := prepared.Archive.Close()
+	if readErr != nil || closeErr != nil || string(contents) != "source" {
+		t.Fatalf("stream = %q, %v, %v", contents, readErr, closeErr)
+	}
+	if harness.revisions.buildID != "" || harness.revisions.nodeID != "" || harness.archives.calls != 0 || harness.sources.calls != 1 {
+		t.Fatalf("fan-in source dependencies: revision=%q/%q archive=%d source=%d", harness.revisions.buildID, harness.revisions.nodeID, harness.archives.calls, harness.sources.calls)
+	}
+}
+
+func TestWorkspacePrepareServiceOpenFanInMissingCommonAncestorFails(t *testing.T) {
+	harness := newWorkspacePrepareServiceForTest(t, domain.ExecutionJob{ID: "join-job", BuildID: "build-1", ResolvedSpecJSON: `{"workspace_input":{"mode":"fan_in","common_ancestor_node_id":"root"}}`})
+	harness.revisions.err = repository.ErrWorkspaceRevisionNotFound
+
+	if _, err := harness.service.Open(context.Background(), "capability", "join-job", "pod-1"); !errors.Is(err, repository.ErrWorkspaceRevisionNotFound) || harness.sources.calls != 0 || harness.archives.calls != 0 {
+		t.Fatalf("fan-in missing ancestor must not fall back to source: err=%v archive=%d source=%d", err, harness.archives.calls, harness.sources.calls)
+	}
+}
+
 func TestWorkspacePrepareServiceOpenRejectsUnsupportedOrInvalidPlans(t *testing.T) {
 	for _, testCase := range []struct {
 		name, spec string
 		want       error
 	}{
-		{name: "fan in", spec: `{"workspace_input":{"mode":"fan_in"}}`, want: ErrWorkspacePrepareFanInUnsupported},
 		{name: "missing mode", spec: `{"workspace_input":{}}`, want: ErrWorkspacePrepareInvalidInput},
 		{name: "invalid json", spec: `{`, want: ErrWorkspacePrepareInvalidInput},
 	} {

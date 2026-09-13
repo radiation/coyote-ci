@@ -87,6 +87,32 @@ type WorkspaceRevisionRestoreLimits struct {
 	MaxEntries           int
 }
 
+type WorkspaceRevisionSizeLimitError struct {
+	ObservedBytes int64
+	MaxBytes      int64
+}
+
+func (e *WorkspaceRevisionSizeLimitError) Error() string {
+	return ErrWorkspaceRevisionTooLarge.Error()
+}
+
+func (e *WorkspaceRevisionSizeLimitError) Unwrap() error {
+	return ErrWorkspaceRevisionTooLarge
+}
+
+type WorkspaceRevisionEntryLimitError struct {
+	ObservedEntries int
+	MaxEntries      int
+}
+
+func (e *WorkspaceRevisionEntryLimitError) Error() string {
+	return ErrWorkspaceRevisionTooManyEntries.Error()
+}
+
+func (e *WorkspaceRevisionEntryLimitError) Unwrap() error {
+	return ErrWorkspaceRevisionTooManyEntries
+}
+
 // RestoreArchiveWithLimits verifies and safely extracts an archive with bounded output.
 func RestoreArchiveWithLimits(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, destinationRoot string, limits WorkspaceRevisionRestoreLimits) error {
 	if archive == nil || publication.Validate() != nil {
@@ -375,14 +401,11 @@ func writeWorkspaceRevisionArchive(ctx context.Context, destination *os.File, so
 		if entryPath == sourceRoot {
 			return nil
 		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("%w: symlink %s", ErrUnsupportedWorkspaceRevisionEntry, entryPath)
-		}
-		info, infoErr := entry.Info()
+		info, infoErr := os.Lstat(entryPath)
 		if infoErr != nil {
 			return infoErr
 		}
-		if !info.IsDir() && !info.Mode().IsRegular() {
+		if !info.IsDir() && !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
 			return fmt.Errorf("%w: %s", ErrUnsupportedWorkspaceRevisionEntry, entryPath)
 		}
 		relativePath, relErr := filepath.Rel(sourceRoot, entryPath)
@@ -394,7 +417,18 @@ func writeWorkspaceRevisionArchive(ctx context.Context, destination *os.File, so
 			return pathErr
 		}
 		header := &tar.Header{Name: archiveName, Mode: int64(info.Mode().Perm()), ModTime: unixEpoch}
-		if info.IsDir() {
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, readLinkErr := os.Readlink(entryPath)
+			if readLinkErr != nil {
+				return readLinkErr
+			}
+			safeTarget, targetErr := parseWorkspaceRevisionSymlinkTarget(archiveName, linkTarget)
+			if targetErr != nil {
+				return targetErr
+			}
+			header.Typeflag = tar.TypeSymlink
+			header.Linkname = string(safeTarget)
+		} else if info.IsDir() {
 			header.Typeflag = tar.TypeDir
 			header.Name += "/"
 		} else {
@@ -404,7 +438,7 @@ func writeWorkspaceRevisionArchive(ctx context.Context, destination *os.File, so
 		if headerErr := tarWriter.WriteHeader(header); headerErr != nil {
 			return headerErr
 		}
-		if info.IsDir() {
+		if info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return nil
 		}
 		source, openErr := os.Open(entryPath)
@@ -434,6 +468,7 @@ var unixEpoch = time.Unix(0, 0).UTC()
 
 func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, destinationRoot string, limits WorkspaceRevisionRestoreLimits) error {
 	directoryModes := make(map[string]os.FileMode)
+	seenEntries := make(map[string]struct{})
 	var entries int
 	var uncompressedBytes int64
 	for {
@@ -449,7 +484,7 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 		}
 		entries++
 		if limits.MaxEntries > 0 && entries > limits.MaxEntries {
-			return ErrWorkspaceRevisionTooManyEntries
+			return &WorkspaceRevisionEntryLimitError{ObservedEntries: entries, MaxEntries: limits.MaxEntries}
 		}
 		mode := os.FileMode(header.Mode) & 0o777
 		if header.Name == "." || header.Name == "./" {
@@ -468,18 +503,23 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 		if relErr != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
 			return ErrUnsafeWorkspaceRevisionPath
 		}
+		entryKey := filepath.Clean(archiveEntryPath)
+		if _, found := seenEntries[entryKey]; found {
+			return ErrUnsafeWorkspaceRevisionPath
+		}
+		seenEntries[entryKey] = struct{}{}
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := ensureWorkspaceRevisionDirectory(destinationRoot, target); err != nil {
 				return err
 			}
 			directoryModes[target] = mode
 		case tar.TypeReg:
 			if limits.MaxUncompressedBytes > 0 && (header.Size > limits.MaxUncompressedBytes || uncompressedBytes > limits.MaxUncompressedBytes-header.Size) {
-				return ErrWorkspaceRevisionTooLarge
+				return &WorkspaceRevisionSizeLimitError{ObservedBytes: uncompressedBytes + header.Size, MaxBytes: limits.MaxUncompressedBytes}
 			}
 			uncompressedBytes += header.Size
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			if err := ensureWorkspaceRevisionDirectory(destinationRoot, filepath.Dir(target)); err != nil {
 				return err
 			}
 			file, openErr := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
@@ -494,10 +534,145 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 			if closeErr != nil {
 				return closeErr
 			}
+		case tar.TypeSymlink:
+			safeTarget, targetErr := parseWorkspaceRevisionSymlinkTarget(filepath.ToSlash(archiveEntryPath), header.Linkname)
+			if targetErr != nil {
+				return targetErr
+			}
+			if err := ensureWorkspaceRevisionDirectory(destinationRoot, filepath.Dir(target)); err != nil {
+				return err
+			}
+			if err := ensureWorkspaceRevisionResolvedDestination(destinationRoot, target); err != nil {
+				return err
+			}
+			if err := ensureWorkspaceRevisionSymlinkTargetWithinRoot(destinationRoot, target, safeTarget); err != nil {
+				return err
+			}
+			if err := createWorkspaceRevisionSymlink(safeTarget, target); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("%w: tar type %d", ErrUnsupportedWorkspaceRevisionEntry, header.Typeflag)
 		}
 	}
+}
+
+func ensureWorkspaceRevisionDirectory(root, directory string) error {
+	root = filepath.Clean(root)
+	directory = filepath.Clean(directory)
+	relativePath, err := filepath.Rel(root, directory)
+	if err != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return ErrUnsafeWorkspaceRevisionPath
+	}
+	current := root
+	if relativePath == "." {
+		return nil
+	}
+	for _, component := range strings.Split(relativePath, string(filepath.Separator)) {
+		current = filepath.Join(current, component)
+		info, statErr := os.Lstat(current)
+		if os.IsNotExist(statErr) {
+			if mkdirErr := os.Mkdir(current, 0o755); mkdirErr != nil {
+				return mkdirErr
+			}
+			continue
+		}
+		if statErr != nil {
+			return statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return ErrUnsafeWorkspaceRevisionPath
+		}
+	}
+	return nil
+}
+
+// ensureWorkspaceRevisionResolvedDestination prevents a prior archive entry
+// from redirecting a later link outside the extraction root.
+func ensureWorkspaceRevisionResolvedDestination(root, destination string) error {
+	resolvedRoot, rootErr := filepath.EvalSymlinks(root)
+	if rootErr != nil {
+		return rootErr
+	}
+	resolvedParent, parentErr := filepath.EvalSymlinks(filepath.Dir(destination))
+	if parentErr != nil {
+		return parentErr
+	}
+	relativePath, relErr := filepath.Rel(resolvedRoot, resolvedParent)
+	if relErr != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return ErrUnsafeWorkspaceRevisionPath
+	}
+	return nil
+}
+
+type workspaceRevisionSymlinkTarget string
+
+func parseWorkspaceRevisionSymlinkTarget(archivePath, target string) (workspaceRevisionSymlinkTarget, error) {
+	if strings.TrimSpace(target) == "" {
+		return "", ErrUnsafeWorkspaceRevisionPath
+	}
+	cleanTarget := path.Clean(target)
+	if strings.Contains(cleanTarget, "\\") || looksLikeWindowsDrivePath(cleanTarget) || path.IsAbs(cleanTarget) {
+		return "", ErrUnsafeWorkspaceRevisionPath
+	}
+	resolved := path.Clean(path.Join(path.Dir(archivePath), cleanTarget))
+	if resolved == ".." || strings.HasPrefix(resolved, "../") || path.IsAbs(resolved) {
+		return "", ErrUnsafeWorkspaceRevisionPath
+	}
+	return workspaceRevisionSymlinkTarget(cleanTarget), nil
+}
+
+func ensureWorkspaceRevisionSymlinkTargetWithinRoot(destinationRoot, linkDestination string, linkTarget workspaceRevisionSymlinkTarget) error {
+	resolvedRoot, rootErr := filepath.EvalSymlinks(destinationRoot)
+	if rootErr != nil {
+		return rootErr
+	}
+	candidate := filepath.Join(filepath.Dir(linkDestination), filepath.FromSlash(string(linkTarget)))
+	resolvedCandidate, candidateErr := resolveWorkspaceRevisionSymlinkTarget(candidate)
+	if candidateErr != nil {
+		return candidateErr
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedCandidate)
+	if err != nil {
+		return err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return ErrUnsafeWorkspaceRevisionPath
+	}
+
+	return nil
+}
+
+func resolveWorkspaceRevisionSymlinkTarget(candidate string) (string, error) {
+	resolvedCandidate, candidateErr := filepath.EvalSymlinks(candidate)
+	if candidateErr == nil {
+		return resolvedCandidate, nil
+	}
+	if !os.IsNotExist(candidateErr) {
+		return "", candidateErr
+	}
+
+	for ancestor := filepath.Dir(candidate); ; ancestor = filepath.Dir(ancestor) {
+		resolvedAncestor, ancestorErr := filepath.EvalSymlinks(ancestor)
+		if ancestorErr == nil {
+			relativePath, relErr := filepath.Rel(ancestor, candidate)
+			if relErr != nil {
+				return "", relErr
+			}
+			return filepath.Join(resolvedAncestor, relativePath), nil
+		}
+		if !os.IsNotExist(ancestorErr) {
+			return "", ancestorErr
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return "", ancestorErr
+		}
+	}
+}
+
+func createWorkspaceRevisionSymlink(linkTarget workspaceRevisionSymlinkTarget, destination string) error {
+	return os.Symlink(string(linkTarget), destination)
 }
 
 func applyWorkspaceRevisionDirectoryModes(directoryModes map[string]os.FileMode) error {

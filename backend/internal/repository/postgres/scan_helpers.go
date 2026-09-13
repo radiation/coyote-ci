@@ -584,6 +584,8 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 	var nodeID sql.NullString
 	var groupName sql.NullString
 	var dependsOnRaw []byte
+	var executionKind string
+	var remoteImageBuildRaw []byte
 	var status string
 	var command string
 	var argsRaw []byte
@@ -616,6 +618,8 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 		&groupName,
 		&dependsOnRaw,
 		&step.Name,
+		&executionKind,
+		&remoteImageBuildRaw,
 		&step.Image,
 		&command,
 		&argsRaw,
@@ -660,6 +664,14 @@ func scanStep(scanner rowScanner) (domain.BuildStep, error) {
 	}
 
 	step.Command = command
+	step.ExecutionKind = defaultExecutionKind(domain.ExecutionKind(executionKind))
+	if len(remoteImageBuildRaw) > 0 && strings.TrimSpace(string(remoteImageBuildRaw)) != "null" {
+		var remoteImageBuild domain.RemoteImageBuildSpec
+		if err := json.Unmarshal(remoteImageBuildRaw, &remoteImageBuild); err != nil {
+			return domain.BuildStep{}, err
+		}
+		step.RemoteImageBuild = &remoteImageBuild
+	}
 	if len(argsRaw) > 0 {
 		if err := json.Unmarshal(argsRaw, &step.Args); err != nil {
 			return domain.BuildStep{}, err
