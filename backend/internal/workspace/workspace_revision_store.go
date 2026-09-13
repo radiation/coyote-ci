@@ -623,14 +623,16 @@ func parseWorkspaceRevisionSymlinkTarget(archivePath, target string) (workspaceR
 }
 
 func ensureWorkspaceRevisionSymlinkTargetWithinRoot(destinationRoot, linkDestination string, linkTarget workspaceRevisionSymlinkTarget) error {
-	linkDir := filepath.Dir(linkDestination)
-	resolvedLinkDir, err := filepath.EvalSymlinks(linkDir)
-	if err != nil {
-		return err
+	resolvedRoot, rootErr := filepath.EvalSymlinks(destinationRoot)
+	if rootErr != nil {
+		return rootErr
 	}
-
-	candidate := filepath.Clean(filepath.Join(resolvedLinkDir, filepath.FromSlash(string(linkTarget))))
-	rel, err := filepath.Rel(destinationRoot, candidate)
+	candidate := filepath.Join(filepath.Dir(linkDestination), filepath.FromSlash(string(linkTarget)))
+	resolvedCandidate, candidateErr := resolveWorkspaceRevisionSymlinkTarget(candidate)
+	if candidateErr != nil {
+		return candidateErr
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedCandidate)
 	if err != nil {
 		return err
 	}
@@ -639,6 +641,34 @@ func ensureWorkspaceRevisionSymlinkTargetWithinRoot(destinationRoot, linkDestina
 	}
 
 	return nil
+}
+
+func resolveWorkspaceRevisionSymlinkTarget(candidate string) (string, error) {
+	resolvedCandidate, candidateErr := filepath.EvalSymlinks(candidate)
+	if candidateErr == nil {
+		return resolvedCandidate, nil
+	}
+	if !os.IsNotExist(candidateErr) {
+		return "", candidateErr
+	}
+
+	for ancestor := filepath.Dir(candidate); ; ancestor = filepath.Dir(ancestor) {
+		resolvedAncestor, ancestorErr := filepath.EvalSymlinks(ancestor)
+		if ancestorErr == nil {
+			relativePath, relErr := filepath.Rel(ancestor, candidate)
+			if relErr != nil {
+				return "", relErr
+			}
+			return filepath.Join(resolvedAncestor, relativePath), nil
+		}
+		if !os.IsNotExist(ancestorErr) {
+			return "", ancestorErr
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return "", ancestorErr
+		}
+	}
 }
 
 func createWorkspaceRevisionSymlink(linkTarget workspaceRevisionSymlinkTarget, destination string) error {

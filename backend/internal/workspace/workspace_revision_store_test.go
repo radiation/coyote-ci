@@ -404,6 +404,22 @@ func TestParseWorkspaceRevisionSymlinkTargetNormalizesSafeTarget(t *testing.T) {
 	}
 }
 
+func TestEnsureWorkspaceRevisionSymlinkTargetWithinRootRejectsExternalAncestor(t *testing.T) {
+	destinationRoot := t.TempDir()
+	externalRoot := t.TempDir()
+	redirect := filepath.Join(destinationRoot, "redirect")
+	if err := os.Symlink(externalRoot, redirect); err != nil {
+		t.Fatalf("create redirect: %v", err)
+	}
+	target, err := parseWorkspaceRevisionSymlinkTarget("link", "redirect/missing")
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+	if err := ensureWorkspaceRevisionSymlinkTargetWithinRoot(destinationRoot, filepath.Join(destinationRoot, "link"), target); !errors.Is(err, ErrUnsafeWorkspaceRevisionPath) {
+		t.Fatalf("external ancestor error: %v", err)
+	}
+}
+
 func TestFilesystemWorkspaceRevisionStorePublishesAndRestoresSafeSymlinks(t *testing.T) {
 	store := NewFilesystemWorkspaceRevisionStore(t.TempDir())
 	sourceRoot := t.TempDir()
