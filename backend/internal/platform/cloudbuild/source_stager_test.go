@@ -2,6 +2,7 @@ package cloudbuild
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"testing"
@@ -27,6 +28,16 @@ func TestCopySourceArchive(t *testing.T) {
 				t.Fatalf("err=%v data=%q", err, writer.data.String())
 			}
 		})
+	}
+}
+
+func TestSourceStagerRejectsMissingExecutionIDOrArchive(t *testing.T) {
+	stager := &SourceStager{}
+	if _, err := stager.Stage(context.Background(), "", bytes.NewReader(nil)); err == nil {
+		t.Fatal("expected missing execution job ID error")
+	}
+	if _, err := stager.Stage(context.Background(), "job-1", nil); err == nil {
+		t.Fatal("expected missing archive error")
 	}
 }
 

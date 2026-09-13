@@ -397,9 +397,9 @@ func TestFilesystemWorkspaceRevisionStoreRestoreRejectsUnsafeAndCorruptArchives(
 	}
 }
 
-func TestSafeWorkspaceRevisionSymlinkTargetNormalizesSafeTarget(t *testing.T) {
-	target, err := safeWorkspaceRevisionSymlinkTarget("links/tool", "./bin/../bin/tool")
-	if err != nil || target != "bin/tool" {
+func TestParseWorkspaceRevisionSymlinkTargetNormalizesSafeTarget(t *testing.T) {
+	target, err := parseWorkspaceRevisionSymlinkTarget("links/tool", "./bin/../bin/tool")
+	if err != nil || target != workspaceRevisionSymlinkTarget("bin/tool") {
 		t.Fatalf("target=%q err=%v", target, err)
 	}
 }

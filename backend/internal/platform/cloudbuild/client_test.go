@@ -1,10 +1,15 @@
 package cloudbuild
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	googlecloudbuild "google.golang.org/api/cloudbuild/v1"
+	"google.golang.org/api/option"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
@@ -62,5 +67,49 @@ func TestClientHelpers(t *testing.T) {
 	failed := resultFromBuild(&googlecloudbuild.Build{Status: "FAILURE", StatusDetail: "status detail", FailureInfo: &googlecloudbuild.FailureInfo{Detail: "failure detail"}})
 	if failed.FailureDetail != "failure detail" {
 		t.Fatalf("failure result=%+v", failed)
+	}
+}
+
+func TestClientCallsCloudBuildAPI(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/builds"):
+			_, _ = writer.Write([]byte(`{"metadata":{"build":{"id":"build-1","name":"projects/project/locations/us-central1/builds/build-1"}}}`))
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/builds/build-1"):
+			_, _ = writer.Write([]byte(`{"id":"build-1","status":"SUCCESS","results":{"images":[{"digest":"sha256:abc"}]}}`))
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/builds"):
+			_, _ = writer.Write([]byte(`{"builds":[{"id":"build-1","name":"projects/project/locations/us-central1/builds/build-1"}]}`))
+		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, ":cancel"):
+			_, _ = writer.Write([]byte(`{}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", request.Method, request.URL.String())
+		}
+	}))
+	defer server.Close()
+	client, newErr := New(context.Background(), Config{ProjectID: "project", Location: "us-central1", RuntimeServiceAccount: "build@example.com", ArtifactRegistryRepository: "registry.example/ci"}, option.WithEndpoint(server.URL+"/"), option.WithoutAuthentication())
+	if newErr != nil {
+		t.Fatalf("new client: %v", newErr)
+	}
+	handle, submitErr := client.Submit(context.Background(), domain.ImageBuildRequest{ExecutionJobID: "job-1", Source: domain.ImageBuildSource{Bucket: "sources", Object: "source.tar.gz", Generation: "1"}, Spec: domain.RemoteImageBuildSpec{ContextPath: "backend", DockerfilePath: "backend/Dockerfile", TargetImageReference: "coyote-ci/backend"}, Timeout: time.Minute})
+	if submitErr != nil || handle.ID != "build-1" {
+		t.Fatalf("submit handle=%+v err=%v", handle, submitErr)
+	}
+	result, getErr := client.Get(context.Background(), handle)
+	if getErr != nil || result.ImageDigest != "sha256:abc" {
+		t.Fatalf("get result=%+v err=%v", result, getErr)
+	}
+	adopted, found, findErr := client.FindByExecutionJobID(context.Background(), "job-1")
+	if findErr != nil || !found || adopted.ID != "build-1" {
+		t.Fatalf("find handle=%+v found=%t err=%v", adopted, found, findErr)
+	}
+	if cancelErr := client.Cancel(context.Background(), handle); cancelErr != nil {
+		t.Fatalf("cancel: %v", cancelErr)
+	}
+}
+
+func TestNewRequiresCloudBuildConfiguration(t *testing.T) {
+	if _, err := New(context.Background(), Config{}); err == nil {
+		t.Fatal("expected incomplete configuration error")
 	}
 }

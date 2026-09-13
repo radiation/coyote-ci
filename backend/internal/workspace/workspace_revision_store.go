@@ -422,12 +422,12 @@ func writeWorkspaceRevisionArchive(ctx context.Context, destination *os.File, so
 			if readLinkErr != nil {
 				return readLinkErr
 			}
-			safeTarget, targetErr := safeWorkspaceRevisionSymlinkTarget(archiveName, linkTarget)
+			safeTarget, targetErr := parseWorkspaceRevisionSymlinkTarget(archiveName, linkTarget)
 			if targetErr != nil {
 				return targetErr
 			}
 			header.Typeflag = tar.TypeSymlink
-			header.Linkname = safeTarget
+			header.Linkname = string(safeTarget)
 		} else if info.IsDir() {
 			header.Typeflag = tar.TypeDir
 			header.Name += "/"
@@ -535,7 +535,7 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 				return closeErr
 			}
 		case tar.TypeSymlink:
-			safeTarget, targetErr := safeWorkspaceRevisionSymlinkTarget(filepath.ToSlash(archiveEntryPath), header.Linkname)
+			safeTarget, targetErr := parseWorkspaceRevisionSymlinkTarget(filepath.ToSlash(archiveEntryPath), header.Linkname)
 			if targetErr != nil {
 				return targetErr
 			}
@@ -545,7 +545,7 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 			if err := ensureWorkspaceRevisionResolvedDestination(destinationRoot, target); err != nil {
 				return err
 			}
-			if err := os.Symlink(safeTarget, target); err != nil {
+			if err := createWorkspaceRevisionSymlink(safeTarget, target); err != nil {
 				return err
 			}
 		default:
@@ -602,7 +602,9 @@ func ensureWorkspaceRevisionResolvedDestination(root, destination string) error 
 	return nil
 }
 
-func safeWorkspaceRevisionSymlinkTarget(archivePath, target string) (string, error) {
+type workspaceRevisionSymlinkTarget string
+
+func parseWorkspaceRevisionSymlinkTarget(archivePath, target string) (workspaceRevisionSymlinkTarget, error) {
 	if strings.TrimSpace(target) == "" {
 		return "", ErrUnsafeWorkspaceRevisionPath
 	}
@@ -614,7 +616,11 @@ func safeWorkspaceRevisionSymlinkTarget(archivePath, target string) (string, err
 	if resolved == ".." || strings.HasPrefix(resolved, "../") || path.IsAbs(resolved) {
 		return "", ErrUnsafeWorkspaceRevisionPath
 	}
-	return cleanTarget, nil
+	return workspaceRevisionSymlinkTarget(cleanTarget), nil
+}
+
+func createWorkspaceRevisionSymlink(linkTarget workspaceRevisionSymlinkTarget, destination string) error {
+	return os.Symlink(string(linkTarget), destination)
 }
 
 func applyWorkspaceRevisionDirectoryModes(directoryModes map[string]os.FileMode) error {
