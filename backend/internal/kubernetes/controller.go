@@ -78,7 +78,8 @@ type Controller struct {
 	workspacePublicationEnabled bool
 	workspaceHelper             WorkspaceHelperConfig
 	testStepNodeNames           []string
-	active                      *workersvc.WorkerRunnableStep
+	maxInFlightJobs             int
+	active                      map[string]*workersvc.WorkerRunnableStep
 	activeImageBuild            *workersvc.WorkerRunnableStep
 	imageBuildController        imageBuildController
 	terminalLogsPersisted       map[string]bool
@@ -92,7 +93,15 @@ func (c *Controller) WithImageBuildController(controller imageBuildController) *
 }
 
 func NewController(client Client, service executionService, logSink logs.LogSink, namespace string) *Controller {
-	return &Controller{client: client, service: service, logSink: logSink, namespace: defaultNamespace(namespace), terminalLogsPersisted: map[string]bool{}, now: func() time.Time { return time.Now().UTC() }}
+	return &Controller{client: client, service: service, logSink: logSink, namespace: defaultNamespace(namespace), maxInFlightJobs: 1, active: map[string]*workersvc.WorkerRunnableStep{}, terminalLogsPersisted: map[string]bool{}, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func (c *Controller) WithMaxInFlightJobs(maxInFlightJobs int) *Controller {
+	if maxInFlightJobs < 1 {
+		maxInFlightJobs = 1
+	}
+	c.maxInFlightJobs = maxInFlightJobs
+	return c
 }
 
 // WithWorkspacePublicationEnabled prevents this initial backend from bypassing
@@ -127,19 +136,38 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 		}
 		return err
 	}
-	if c.active != nil {
-		if cleanupErr := c.cleanupCanceledJobsIfDue(ctx); cleanupErr != nil {
-			return cleanupErr
+
+	var reconcileErrors []error
+	for _, step := range c.activeSteps() {
+		if err := c.reconcileActive(ctx, step); err != nil {
+			reconcileErrors = append(reconcileErrors, err)
 		}
-		return c.reconcileActive(ctx, *c.active)
 	}
-	step, found, err := c.service.ClaimRunnableStep(ctx)
-	if err != nil {
-		return err
+
+	for len(c.active) < c.maxInFlightJobs {
+		step, found, err := c.service.ClaimRunnableStep(ctx)
+		if err != nil {
+			reconcileErrors = append(reconcileErrors, err)
+			break
+		}
+		if !found {
+			break
+		}
+		if err := c.reconcileClaimed(ctx, step); err != nil {
+			reconcileErrors = append(reconcileErrors, err)
+			break
+		}
+		if c.activeImageBuild != nil {
+			break
+		}
 	}
-	if !found {
-		return c.cleanupCanceledJobsIfDue(ctx)
+	if cleanupErr := c.cleanupCanceledJobsIfDue(ctx); cleanupErr != nil {
+		reconcileErrors = append(reconcileErrors, cleanupErr)
 	}
+	return errors.Join(reconcileErrors...)
+}
+
+func (c *Controller) reconcileClaimed(ctx context.Context, step workersvc.WorkerRunnableStep) error {
 	if step.ExecutionKind == domain.ExecutionKindImageBuild {
 		if c.imageBuildController == nil {
 			return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "image build execution controller is not configured", StartedAt: c.now(), FinishedAt: c.now()})
@@ -160,11 +188,17 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 		}
 		return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: validationErr.Error(), StartedAt: c.now(), FinishedAt: c.now()})
 	}
-	c.active = &step
-	if cleanupErr := c.cleanupCanceledJobsIfDue(ctx); cleanupErr != nil {
-		return cleanupErr
-	}
+	c.active[step.JobID] = &step
 	return c.reconcileActive(ctx, step)
+}
+
+func (c *Controller) activeSteps() []workersvc.WorkerRunnableStep {
+	steps := make([]workersvc.WorkerRunnableStep, 0, len(c.active))
+	for _, step := range c.active {
+		steps = append(steps, *step)
+	}
+	sort.Slice(steps, func(i, j int) bool { return steps[i].JobID < steps[j].JobID })
+	return steps
 }
 
 func (c *Controller) reconcileActive(ctx context.Context, step workersvc.WorkerRunnableStep) error {
@@ -173,11 +207,11 @@ func (c *Controller) reconcileActive(ctx context.Context, step workersvc.WorkerR
 		return err
 	}
 	if durable.Status == domain.ExecutionJobStatusCanceled {
-		c.active = nil
+		delete(c.active, step.JobID)
 		return c.deleteJob(ctx, jobName(step.JobID))
 	}
 	if domain.IsTerminalExecutionJobStatus(durable.Status) {
-		c.active = nil
+		delete(c.active, step.JobID)
 		return nil
 	}
 	job, ensureErr := c.ensureJob(ctx, step)
@@ -197,7 +231,7 @@ func (c *Controller) reconcileActive(ctx context.Context, step workersvc.WorkerR
 	}
 	if !continued {
 		refreshed, refreshErr := c.service.GetExecutionJob(ctx, step.JobID)
-		c.active = nil
+		delete(c.active, step.JobID)
 		if refreshErr != nil {
 			return refreshErr
 		}
@@ -342,10 +376,10 @@ func (c *Controller) complete(ctx context.Context, step workersvc.WorkerRunnable
 		return err
 	}
 	if outcome == repository.StepCompletionStaleClaim || outcome == repository.StepCompletionDuplicateTerminal {
-		c.active = nil
+		delete(c.active, step.JobID)
 		return nil
 	}
-	c.active = nil
+	delete(c.active, step.JobID)
 	return nil
 }
 
@@ -367,7 +401,7 @@ func (c *Controller) cleanupCanceledJobs(ctx context.Context) error {
 		if executionJobID == "" || job.Name != jobName(executionJobID) {
 			continue
 		}
-		if c.active != nil && executionJobID == c.active.JobID {
+		if _, active := c.active[executionJobID]; active {
 			continue
 		}
 		durable, getErr := c.service.GetExecutionJob(ctx, executionJobID)

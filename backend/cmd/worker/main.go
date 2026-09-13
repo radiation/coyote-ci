@@ -243,6 +243,7 @@ func resolveExecutionControllerWithImageBuild(cfg config.Config, workerService *
 		return nil, err
 	}
 	controller := kubernetesexec.NewController(client, workerService, logSink, cfg.WorkerKubernetesNamespace)
+	controller.WithMaxInFlightJobs(cfg.WorkerKubernetesMaxInFlightJobs)
 	controller.WithTestStepNodeNames(kubernetesTestStepNodes(cfg.WorkerKubernetesTestStepNodes))
 	workerService.SetKubernetesWorkspaceLifecycleEnabled(helpersEnabled)
 	workerService.SetKubernetesCacheLifecycleEnabled(helpersEnabled && cfg.KubernetesCacheHelperEnabled)

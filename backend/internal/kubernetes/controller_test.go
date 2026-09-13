@@ -402,7 +402,7 @@ func TestControllerDoesNotCompleteAfterStaleClaim(t *testing.T) {
 	if err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if service.completeCalls != 1 || controller.active != nil {
+	if service.completeCalls != 1 || len(controller.active) != 0 {
 		t.Fatalf("stale completion must release active claim: completions=%d active=%#v", service.completeCalls, controller.active)
 	}
 }
@@ -810,7 +810,7 @@ func TestControllerReturnsOperationalErrorsWithoutCompletion(t *testing.T) {
 			testCase.service.found = true
 			controller := NewController(testCase.client, testCase.service, nil, "default")
 			if testCase.active {
-				controller.active = &step
+				controller.active[step.JobID] = &step
 			}
 			err := controller.Reconcile(context.Background())
 			if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
@@ -902,7 +902,7 @@ func TestControllerHandlesStaleCompletionAndDeletionFailure(t *testing.T) {
 	if err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatalf("stale completion reconcile: %v", err)
 	}
-	if controller.active != nil {
+	if len(controller.active) != 0 {
 		t.Fatal("stale completion must release active claim")
 	}
 
@@ -911,9 +911,182 @@ func TestControllerHandlesStaleCompletionAndDeletionFailure(t *testing.T) {
 	client.jobs[jobName(step.JobID)] = buildJob("default", step)
 	client.deleteErr = errors.New("delete unavailable")
 	controller = NewController(client, service, nil, "default")
-	controller.active = &step
+	controller.active[step.JobID] = &step
 	if err := controller.Reconcile(context.Background()); err == nil || !strings.Contains(err.Error(), "delete unavailable") {
 		t.Fatalf("delete reconcile error = %v", err)
+	}
+}
+
+func TestControllerSupervisesIndependentJobsUpToConfiguredCapacity(t *testing.T) {
+	first := testStep()
+	second := testStep()
+	second.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	third := testStep()
+	third.JobID = "cc58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{first, second, third}}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2)
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("reconcile: %v", reconcileErr)
+	}
+	if len(controller.active) != 2 || len(client.jobs) != 2 || service.claimCalls != 2 {
+		t.Fatalf("active=%d jobs=%d claims=%d", len(controller.active), len(client.jobs), service.claimCalls)
+	}
+	if _, found := client.jobs[jobName(third.JobID)]; found {
+		t.Fatal("capacity must prevent a third Kubernetes Job from being created")
+	}
+}
+
+func TestControllerRefillsCapacityAfterOneJobCompletes(t *testing.T) {
+	first := testStep()
+	second := testStep()
+	second.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	third := testStep()
+	third.JobID = "cc58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{first, second}}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2)
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("initial reconcile: %v", reconcileErr)
+	}
+	service.steps = append(service.steps, third)
+	client.jobs[jobName(first.JobID)] = completedJob(first, 0, "Completed", "")
+	client.pods = []corev1.Pod{terminatedBuildPod(0, "Completed", "")}
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("refill reconcile: %v", reconcileErr)
+	}
+	if _, found := controller.active[third.JobID]; !found {
+		t.Fatal("expected newly available capacity to claim the third job")
+	}
+	if service.claimCalls != 3 {
+		t.Fatalf("claims=%d, want 3", service.claimCalls)
+	}
+}
+
+func TestControllerRenewsEachActiveJobAndContinuesAfterPeerError(t *testing.T) {
+	first := testStep()
+	second := testStep()
+	second.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{first, second}}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2)
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("initial reconcile: %v", reconcileErr)
+	}
+	service.renewCalls = 0
+	service.getErrs = map[string]error{first.JobID: errors.New("first lookup failed")}
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr == nil || !strings.Contains(reconcileErr.Error(), "first lookup failed") {
+		t.Fatalf("reconcile error=%v", reconcileErr)
+	}
+	if service.renewCalls != 1 {
+		t.Fatalf("renewals=%d, want peer renewal despite first-job error", service.renewCalls)
+	}
+}
+
+func TestControllerRefillsCapacityAndCleansUpAfterActivePeerError(t *testing.T) {
+	failed := testStep()
+	completed := testStep()
+	completed.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	replacement := testStep()
+	replacement.JobID = "cc58bf9a-09db-4b80-a66e-61fbd2209a09"
+	orphan := testStep()
+	orphan.JobID = "dd58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{failed, completed}, durableStatuses: map[string]domain.ExecutionJobStatus{orphan.JobID: domain.ExecutionJobStatusCanceled}}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2)
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("initial reconcile: %v", reconcileErr)
+	}
+	service.steps = append(service.steps, replacement)
+	service.getErrs = map[string]error{failed.JobID: errors.New("active lookup failed")}
+	client.jobs[jobName(completed.JobID)] = completedJob(completed, 0, "Completed", "")
+	client.jobs[jobName(orphan.JobID)] = buildJob("default", orphan)
+	controller.lastCancellationCleanupAt = time.Time{}
+
+	reconcileErr := controller.Reconcile(context.Background())
+	if reconcileErr == nil || !strings.Contains(reconcileErr.Error(), "active lookup failed") {
+		t.Fatalf("reconcile error=%v", reconcileErr)
+	}
+	if _, found := controller.active[replacement.JobID]; !found {
+		t.Fatal("expected free capacity to claim replacement work after peer error")
+	}
+	if client.jobs[jobName(orphan.JobID)] != nil {
+		t.Fatal("expected cancellation cleanup after active peer error")
+	}
+}
+
+func TestControllerImageBuildRemainsExclusiveWhenCapacityExceedsOne(t *testing.T) {
+	imageBuild := testStep()
+	imageBuild.ExecutionKind = domain.ExecutionKindImageBuild
+	regular := testStep()
+	regular.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{imageBuild, regular}}
+	client := newFakeClient()
+	imageController := &fakeImageBuildController{}
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2).WithImageBuildController(imageController)
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("reconcile: %v", reconcileErr)
+	}
+	if imageController.calls != 1 || controller.activeImageBuild == nil || service.claimCalls != 1 {
+		t.Fatalf("image calls=%d active=%#v claims=%d", imageController.calls, controller.activeImageBuild, service.claimCalls)
+	}
+	if len(client.jobs) != 0 {
+		t.Fatalf("regular Kubernetes work must not be claimed alongside the singular image build: jobs=%#v", client.jobs)
+	}
+}
+
+func TestControllerDropsOnlyStaleOwnerAndKeepsPeerActive(t *testing.T) {
+	first := testStep()
+	second := testStep()
+	second.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{first, second}, completeOutcome: repository.StepCompletionStaleClaim}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2)
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("initial reconcile: %v", reconcileErr)
+	}
+	client.jobs[jobName(first.JobID)] = completedJob(first, 0, "Completed", "")
+	client.pods = []corev1.Pod{terminatedBuildPod(0, "Completed", "")}
+	service.renewCalls = 0
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("stale-owner reconcile: %v", reconcileErr)
+	}
+	if _, found := controller.active[first.JobID]; found {
+		t.Fatal("stale former owner must stop supervising its job")
+	}
+	if _, found := controller.active[second.JobID]; !found || service.renewCalls != 1 {
+		t.Fatalf("peer active=%t renewals=%d", found, service.renewCalls)
+	}
+}
+
+func TestControllerCancellationSweepSkipsAllActiveJobs(t *testing.T) {
+	first := testStep()
+	second := testStep()
+	second.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	orphan := testStep()
+	orphan.JobID = "cc58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{first, second}, durableStatuses: map[string]domain.ExecutionJobStatus{orphan.JobID: domain.ExecutionJobStatusCanceled}}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2)
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("initial reconcile: %v", reconcileErr)
+	}
+	client.jobs[jobName(orphan.JobID)] = buildJob("default", orphan)
+	controller.lastCancellationCleanupAt = time.Time{}
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("cancellation sweep: %v", reconcileErr)
+	}
+	if client.jobs[jobName(orphan.JobID)] != nil {
+		t.Fatal("expected canceled orphan job to be deleted")
+	}
+	if client.jobs[jobName(first.JobID)] == nil || client.jobs[jobName(second.JobID)] == nil {
+		t.Fatal("active jobs must not be deleted by cancellation cleanup")
 	}
 }
 
@@ -948,11 +1121,14 @@ func TestClientsetDelegatesKubernetesOperations(t *testing.T) {
 
 type fakeExecutionService struct {
 	step             workersvc.WorkerRunnableStep
+	steps            []workersvc.WorkerRunnableStep
 	found            bool
 	claimUsed        bool
+	claimCalls       int
 	validateErr      error
 	claimErr         error
 	getErr           error
+	getErrs          map[string]error
 	stale            bool
 	renewCalls       int
 	renewErr         error
@@ -977,8 +1153,14 @@ func (c *fakeImageBuildController) ReconcileClaimed(_ context.Context, step work
 }
 
 func (s *fakeExecutionService) ClaimRunnableStep(context.Context) (workersvc.WorkerRunnableStep, bool, error) {
+	s.claimCalls++
 	if s.claimErr != nil {
 		return workersvc.WorkerRunnableStep{}, false, s.claimErr
+	}
+	if len(s.steps) > 0 {
+		step := s.steps[0]
+		s.steps = s.steps[1:]
+		return step, true, nil
 	}
 	if s.claimUsed {
 		return workersvc.WorkerRunnableStep{}, false, nil
@@ -994,6 +1176,9 @@ func (s *fakeExecutionService) RenewRunnableStepLease(context.Context, workersvc
 	return !s.stale, s.renewErr
 }
 func (s *fakeExecutionService) GetExecutionJob(_ context.Context, jobID string) (domain.ExecutionJob, error) {
+	if getErr := s.getErrs[jobID]; getErr != nil {
+		return domain.ExecutionJob{}, getErr
+	}
 	if s.getErr != nil {
 		return domain.ExecutionJob{}, s.getErr
 	}
