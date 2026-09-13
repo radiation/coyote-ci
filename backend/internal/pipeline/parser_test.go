@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -32,6 +34,60 @@ artifacts:
 	}
 	if pf.Steps[0].Run != "golangci-lint run" {
 		t.Errorf("expected run 'golangci-lint run', got %q", pf.Steps[0].Run)
+	}
+}
+
+func TestLoadAndResolve_RepositoryPipeline(t *testing.T) {
+	data, readErr := os.ReadFile(filepath.Join("..", "..", "..", ".coyote", "pipeline.yml"))
+	if readErr != nil {
+		t.Fatalf("read repository pipeline: %v", readErr)
+	}
+	resolved, loadErr := LoadAndResolve(data)
+	if loadErr != nil {
+		t.Fatalf("load repository pipeline: %v", loadErr)
+	}
+	if resolved.Cache != nil {
+		t.Fatalf("pipeline cache=%#v, want nil", resolved.Cache)
+	}
+
+	byName := make(map[string]ResolvedStep, len(resolved.Steps))
+	for _, step := range resolved.Steps {
+		byName[step.Name] = step
+	}
+	wantDependencies := map[string][]string{
+		"Backend Format Check": nil,
+		"Backend Dependencies": nil,
+		"Frontend Install":     nil,
+		"Backend Vet":          {"node-001"},
+		"Backend Test":         {"node-001"},
+		"Frontend Test":        {"node-002"},
+		"Backend Build Server": {"node-003", "node-004"},
+		"Backend Build Worker": {"node-003", "node-004"},
+		"Frontend Build":       {"node-005"},
+		"Backend Image":        {"node-000", "node-006", "node-007"},
+		"Frontend Image":       {"node-008"},
+	}
+	for name, want := range wantDependencies {
+		step, found := byName[name]
+		if !found {
+			t.Fatalf("resolved pipeline missing %q", name)
+		}
+		if strings.Join(step.DependsOnNodeIDs, ",") != strings.Join(want, ",") {
+			t.Fatalf("step %q dependencies=%#v, want %#v", name, step.DependsOnNodeIDs, want)
+		}
+	}
+	for _, name := range []string{"Backend Format Check", "Backend Dependencies", "Backend Vet", "Backend Test", "Backend Build Server", "Backend Build Worker"} {
+		if byName[name].Cache == nil || byName[name].Cache.Preset != "go" {
+			t.Fatalf("step %q cache=%#v, want Go preset", name, byName[name].Cache)
+		}
+	}
+	for _, name := range []string{"Frontend Install", "Frontend Test", "Frontend Build"} {
+		if byName[name].Cache == nil || byName[name].Cache.Preset != "node" {
+			t.Fatalf("step %q cache=%#v, want Node preset", name, byName[name].Cache)
+		}
+	}
+	if _, found := byName["List Image Artifacts"]; found {
+		t.Fatal("repository pipeline retains redundant List Image Artifacts step")
 	}
 }
 
@@ -121,6 +177,95 @@ steps:
 	if pf.Steps[0].Run != "./scripts/run.sh" {
 		t.Fatalf("expected run to be aliased from command, got %q", pf.Steps[0].Run)
 	}
+}
+
+func TestParse_DependsOnPreservesOmittedAndExplicitEmpty(t *testing.T) {
+	pf, err := ParseAndValidate([]byte(`
+version: 1
+steps:
+  - name: omitted
+    run: true
+  - name: explicit root
+    depends_on: []
+    run: true
+`))
+	if err != nil {
+		t.Fatalf("parse and validate: %v", err)
+	}
+	if pf.Steps[0].DependsOn != nil {
+		t.Fatalf("omitted depends_on=%#v, want nil", pf.Steps[0].DependsOn)
+	}
+	if pf.Steps[1].DependsOn == nil || len(*pf.Steps[1].DependsOn) != 0 {
+		t.Fatalf("explicit empty depends_on=%#v, want non-nil empty list", pf.Steps[1].DependsOn)
+	}
+}
+
+func TestResolve_ExplicitDependenciesOverrideFrontier(t *testing.T) {
+	resolved, err := LoadAndResolve([]byte(`
+version: 1
+steps:
+  - name: First
+    depends_on: []
+    run: true
+  - group:
+      name: bootstrap
+      steps:
+        - name: Backend Dependencies
+          depends_on: []
+          run: true
+        - name: Frontend Install
+          depends_on: []
+          run: true
+  - group:
+      name: verify
+      steps:
+        - name: Backend Vet
+          depends_on: [backend dependencies]
+          run: true
+        - name: Frontend Test
+          depends_on: [Frontend Install]
+          run: true
+  - name: Downstream
+    run: true
+`))
+	if err != nil {
+		t.Fatalf("load and resolve: %v", err)
+	}
+	assertResolvedDependencies(t, resolved, "First", nil)
+	assertResolvedDependencies(t, resolved, "Backend Vet", []string{"node-001"})
+	assertResolvedDependencies(t, resolved, "Frontend Test", []string{"node-002"})
+	assertResolvedDependencies(t, resolved, "Downstream", []string{"node-003", "node-004"})
+}
+
+func TestResolve_ExplicitDependenciesAllowForwardReferences(t *testing.T) {
+	resolved, err := LoadAndResolve([]byte(`
+version: 1
+steps:
+  - name: consumer
+    depends_on: [producer]
+    run: true
+  - name: producer
+    depends_on: []
+    run: true
+`))
+	if err != nil {
+		t.Fatalf("load and resolve: %v", err)
+	}
+	assertResolvedDependencies(t, resolved, "consumer", []string{"node-001"})
+	assertResolvedDependencies(t, resolved, "producer", nil)
+}
+
+func assertResolvedDependencies(t *testing.T, resolved *ResolvedPipeline, name string, want []string) {
+	t.Helper()
+	for _, step := range resolved.Steps {
+		if step.Name == name {
+			if strings.Join(step.DependsOnNodeIDs, ",") != strings.Join(want, ",") {
+				t.Fatalf("step %q dependencies=%#v, want %#v", name, step.DependsOnNodeIDs, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("step %q not found", name)
 }
 
 func TestParse_UnknownField(t *testing.T) {

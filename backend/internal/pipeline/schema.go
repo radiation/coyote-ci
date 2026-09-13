@@ -28,7 +28,9 @@ type PipelineMeta struct {
 type StepDef struct {
 	Group          *StepGroupDef     `yaml:"group,omitempty"`
 	Name           string            `yaml:"name"`
+	DependsOn      *[]string         `yaml:"depends_on,omitempty"`
 	Image          string            `yaml:"image,omitempty"`
+	ImageBuild     *ImageBuildDef    `yaml:"image_build,omitempty"`
 	Run            string            `yaml:"run"`
 	Command        string            `yaml:"command,omitempty"`
 	TimeoutSeconds *int              `yaml:"timeout_seconds"`
@@ -36,6 +38,13 @@ type StepDef struct {
 	Env            map[string]string `yaml:"env"`
 	Artifacts      ArtifactDef       `yaml:"artifacts,omitempty"`
 	Cache          *CacheDef         `yaml:"cache,omitempty"`
+}
+
+type ImageBuildDef struct {
+	Context    string            `yaml:"context"`
+	Dockerfile string            `yaml:"dockerfile"`
+	BuildArgs  map[string]string `yaml:"build_args,omitempty"`
+	Image      string            `yaml:"image"`
 }
 
 type StepGroupDef struct {

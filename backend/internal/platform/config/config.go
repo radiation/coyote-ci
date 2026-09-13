@@ -27,67 +27,76 @@ type Config struct {
 	StepLeaseSeconds  int
 	WorkerStatusAddr  string
 
-	ExecutionBackend                     string
-	ExecutionDefaultImage                string
-	ExecutionWorkspaceRoot               string
-	WorkerKubernetesNamespace            string
-	WorkerKubernetesKubeconfig           string
-	WorkerKubernetesHelperImage          string
-	WorkerKubernetesInternalAPIURL       string
-	WorkerKubernetesTestStepNodes        string
-	WorkspaceHelperCapabilityEnabled     bool
-	WorkspaceHelperKubeconfig            string
-	WorkspaceHelperServiceAccount        string
-	WorkspaceHelperCapabilitySecret      string
-	WorkspaceHelperMaxUploadSizeMB       int
-	WorkspaceHelperCacheMaxUploadSizeMB  int
-	WorkspaceHelperMaxUncompressedSizeMB int
-	WorkspaceHelperMaxArchiveEntries     int
-	WorkspaceRevisionStorageRoot         string
-	KubernetesCacheHelperEnabled         bool
-	KubernetesArtifactHelperEnabled      bool
-	WorkerCacheStorageProvider           string
-	WorkerCacheStorageRoot               string
-	WorkerCacheMaxSizeMB                 int
-	WorkerCacheStorageStrict             bool
-	WorkerCacheGCSBucket                 string
-	WorkerCacheGCSPrefix                 string
-	WorkerCacheGCSProject                string
-	MountDockerSocket                    bool
-	ArtifactStorageRoot                  string
-	ArtifactStorageProvider              string
-	ArtifactStorageStrict                bool
-	ArtifactGCSBucket                    string
-	ArtifactGCSPrefix                    string
-	ArtifactGCSProject                   string
-	PushEventSecret                      string
-	GitHubWebhookSecret                  string
-	GitHubStatusToken                    string
-	AuthMode                             string
-	BootstrapAdminEmails                 string
-	OIDCIssuerURL                        string
-	OIDCClientID                         string
-	OIDCClientSecret                     string
-	OIDCRedirectURL                      string
-	OIDCScopes                           string
-	SessionSecret                        string
-	SessionCookieName                    string
-	SessionCookieSecure                  bool
-	SessionCookieSameSite                string
-	AuthPostLoginRedirectURL             string
-	AuthPostLogoutRedirectURL            string
-	EmailNotificationsEnabled            bool
-	EmailNotificationRecipients          string
-	NotificationRecoveryInterval         time.Duration
-	NotificationRecoveryBatchSize        int
-	SCMStatusRecoveryInterval            time.Duration
-	SCMStatusRecoveryBatchSize           int
-	SMTPHost                             string
-	SMTPPort                             string
-	SMTPUsername                         string
-	SMTPPassword                         string
-	SMTPFromAddress                      string
-	PublicURL                            string
+	ExecutionBackend                       string
+	ExecutionDefaultImage                  string
+	ExecutionWorkspaceRoot                 string
+	WorkerKubernetesNamespace              string
+	WorkerKubernetesKubeconfig             string
+	WorkerKubernetesHelperImage            string
+	WorkerKubernetesInternalAPIURL         string
+	WorkerKubernetesTestStepNodes          string
+	WorkspaceHelperCapabilityEnabled       bool
+	WorkspaceHelperKubeconfig              string
+	WorkspaceHelperServiceAccount          string
+	WorkspaceHelperCapabilitySecret        string
+	WorkspaceHelperMaxUploadSizeMB         int
+	WorkspaceRevisionMaxUploadSizeMB       int
+	WorkspaceRevisionMaxUncompressedSizeMB int
+	WorkspaceRevisionMaxArchiveEntries     int
+	WorkspaceHelperCacheMaxUploadSizeMB    int
+	CacheArchiveMaxUncompressedSizeMB      int
+	CacheArchiveMaxEntries                 int
+	WorkspaceRevisionStorageRoot           string
+	KubernetesCacheHelperEnabled           bool
+	KubernetesArtifactHelperEnabled        bool
+	WorkerCacheStorageProvider             string
+	WorkerCacheStorageRoot                 string
+	WorkerCacheMaxSizeMB                   int
+	WorkerCacheStorageStrict               bool
+	WorkerCacheGCSBucket                   string
+	WorkerCacheGCSPrefix                   string
+	WorkerCacheGCSProject                  string
+	MountDockerSocket                      bool
+	ArtifactStorageRoot                    string
+	ArtifactStorageProvider                string
+	ArtifactStorageStrict                  bool
+	ArtifactGCSBucket                      string
+	ArtifactGCSPrefix                      string
+	ArtifactGCSProject                     string
+	CloudBuildProject                      string
+	CloudBuildLocation                     string
+	CloudBuildRuntimeServiceAccount        string
+	CloudBuildArtifactRegistryRepository   string
+	CloudBuildSourceBucket                 string
+	CloudBuildSourcePrefix                 string
+	PushEventSecret                        string
+	GitHubWebhookSecret                    string
+	GitHubStatusToken                      string
+	AuthMode                               string
+	BootstrapAdminEmails                   string
+	OIDCIssuerURL                          string
+	OIDCClientID                           string
+	OIDCClientSecret                       string
+	OIDCRedirectURL                        string
+	OIDCScopes                             string
+	SessionSecret                          string
+	SessionCookieName                      string
+	SessionCookieSecure                    bool
+	SessionCookieSameSite                  string
+	AuthPostLoginRedirectURL               string
+	AuthPostLogoutRedirectURL              string
+	EmailNotificationsEnabled              bool
+	EmailNotificationRecipients            string
+	NotificationRecoveryInterval           time.Duration
+	NotificationRecoveryBatchSize          int
+	SCMStatusRecoveryInterval              time.Duration
+	SCMStatusRecoveryBatchSize             int
+	SMTPHost                               string
+	SMTPPort                               string
+	SMTPUsername                           string
+	SMTPPassword                           string
+	SMTPFromAddress                        string
+	PublicURL                              string
 }
 
 func Load() Config {
@@ -109,67 +118,76 @@ func Load() Config {
 		StepLeaseSeconds:  getEnvInt("WORKER_STEP_LEASE_SECONDS", 45),
 		WorkerStatusAddr:  getEnv("WORKER_STATUS_ADDR", ""),
 
-		ExecutionBackend:                     getEnv("WORKER_EXECUTION_BACKEND", "docker"),
-		ExecutionDefaultImage:                getEnv("WORKER_EXECUTION_DEFAULT_IMAGE", "alpine:3.20"),
-		ExecutionWorkspaceRoot:               getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
-		WorkerKubernetesNamespace:            getEnv("WORKER_KUBERNETES_NAMESPACE", "default"),
-		WorkerKubernetesKubeconfig:           getEnv("WORKER_KUBERNETES_KUBECONFIG", getEnv("KUBECONFIG", "")),
-		WorkerKubernetesHelperImage:          getEnv("WORKER_KUBERNETES_HELPER_IMAGE", ""),
-		WorkerKubernetesInternalAPIURL:       getEnv("WORKER_KUBERNETES_INTERNAL_API_URL", ""),
-		WorkerKubernetesTestStepNodes:        getEnv("WORKER_KUBERNETES_TEST_STEP_NODES", ""),
-		WorkspaceHelperCapabilityEnabled:     getEnvBool("COYOTE_WORKSPACE_HELPER_ENABLED", false),
-		WorkspaceHelperKubeconfig:            getEnv("COYOTE_WORKSPACE_HELPER_KUBECONFIG", ""),
-		WorkspaceHelperServiceAccount:        getEnv("COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT", "coyote-workspace-helper"),
-		WorkspaceHelperCapabilitySecret:      getEnv("COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET", ""),
-		WorkspaceHelperMaxUploadSizeMB:       getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_UPLOAD_SIZE_MB", 1024),
-		WorkspaceHelperCacheMaxUploadSizeMB:  getEnvInt("COYOTE_WORKSPACE_HELPER_CACHE_MAX_UPLOAD_SIZE_MB", 10240),
-		WorkspaceHelperMaxUncompressedSizeMB: getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", 1024),
-		WorkspaceHelperMaxArchiveEntries:     getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES", 10000),
-		WorkspaceRevisionStorageRoot:         getEnv("COYOTE_WORKSPACE_REVISION_STORAGE_ROOT", ""),
-		KubernetesCacheHelperEnabled:         getEnvBool("COYOTE_KUBERNETES_CACHE_HELPER_ENABLED", false),
-		KubernetesArtifactHelperEnabled:      getEnvBool("COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED", false),
-		WorkerCacheStorageProvider:           getEnv("WORKER_CACHE_STORAGE_PROVIDER", ""),
-		WorkerCacheStorageRoot:               getEnv("WORKER_CACHE_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-cache")),
-		WorkerCacheMaxSizeMB:                 getEnvInt("CACHE_MAX_SIZE_MB", 10240),
-		WorkerCacheStorageStrict:             getEnvBool("WORKER_CACHE_STORAGE_STRICT", false),
-		WorkerCacheGCSBucket:                 getEnv("WORKER_CACHE_GCS_BUCKET", ""),
-		WorkerCacheGCSPrefix:                 getEnv("WORKER_CACHE_GCS_PREFIX", ""),
-		WorkerCacheGCSProject:                getEnv("WORKER_CACHE_GCS_PROJECT", ""),
-		MountDockerSocket:                    getEnvBool("WORKER_MOUNT_DOCKER_SOCKET", false),
-		ArtifactStorageRoot:                  getEnv("ARTIFACT_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-artifacts")),
-		ArtifactStorageProvider:              getEnv("ARTIFACT_STORAGE_PROVIDER", "filesystem"),
-		ArtifactStorageStrict:                getEnvBool("ARTIFACT_STORAGE_STRICT", false),
-		ArtifactGCSBucket:                    getEnv("ARTIFACT_GCS_BUCKET", ""),
-		ArtifactGCSPrefix:                    getEnv("ARTIFACT_GCS_PREFIX", ""),
-		ArtifactGCSProject:                   getEnv("ARTIFACT_GCS_PROJECT", ""),
-		PushEventSecret:                      getEnv("PUSH_EVENT_SECRET", ""),
-		GitHubWebhookSecret:                  getEnv("GITHUB_WEBHOOK_SECRET", getEnv("PUSH_EVENT_SECRET", "")),
-		GitHubStatusToken:                    getEnv("GITHUB_STATUS_TOKEN", ""),
-		AuthMode:                             getEnv("AUTH_MODE", "disabled"),
-		BootstrapAdminEmails:                 getEnv("BOOTSTRAP_ADMIN_EMAILS", ""),
-		OIDCIssuerURL:                        getEnv("OIDC_ISSUER_URL", ""),
-		OIDCClientID:                         getEnv("OIDC_CLIENT_ID", ""),
-		OIDCClientSecret:                     getEnv("OIDC_CLIENT_SECRET", ""),
-		OIDCRedirectURL:                      oidcRedirectURL,
-		OIDCScopes:                           getEnv("OIDC_SCOPES", "openid email profile"),
-		SessionSecret:                        getEnv("SESSION_SECRET", ""),
-		SessionCookieName:                    getEnv("SESSION_COOKIE_NAME", "coyote_session"),
-		SessionCookieSecure:                  getEnvBool("SESSION_COOKIE_SECURE", defaultSessionCookieSecure(oidcRedirectURL)),
-		SessionCookieSameSite:                getEnv("SESSION_COOKIE_SAME_SITE", "lax"),
-		AuthPostLoginRedirectURL:             getEnv("AUTH_POST_LOGIN_REDIRECT_URL", ""),
-		AuthPostLogoutRedirectURL:            getEnv("AUTH_POST_LOGOUT_REDIRECT_URL", ""),
-		EmailNotificationsEnabled:            getEnvBool("EMAIL_NOTIFICATIONS_ENABLED", true),
-		EmailNotificationRecipients:          getEnv("EMAIL_NOTIFICATION_RECIPIENTS", "dev@localhost"),
-		NotificationRecoveryInterval:         getEnvDuration("NOTIFICATION_RECOVERY_INTERVAL", 15*time.Second),
-		NotificationRecoveryBatchSize:        getEnvInt("NOTIFICATION_RECOVERY_BATCH_SIZE", 25),
-		SCMStatusRecoveryInterval:            getEnvDuration("SCM_STATUS_RECOVERY_INTERVAL", 15*time.Second),
-		SCMStatusRecoveryBatchSize:           getEnvInt("SCM_STATUS_RECOVERY_BATCH_SIZE", 25),
-		SMTPHost:                             getEnv("SMTP_HOST", "mailpit"),
-		SMTPPort:                             getEnv("SMTP_PORT", "1025"),
-		SMTPUsername:                         getEnv("SMTP_USERNAME", ""),
-		SMTPPassword:                         getEnv("SMTP_PASSWORD", ""),
-		SMTPFromAddress:                      getEnv("SMTP_FROM_ADDRESS", "coyote-ci@localhost"),
-		PublicURL:                            normalizePublicURL(getEnv("COYOTE_PUBLIC_URL", getEnv("APP_BASE_URL", ""))),
+		ExecutionBackend:                       getEnv("WORKER_EXECUTION_BACKEND", "docker"),
+		ExecutionDefaultImage:                  getEnv("WORKER_EXECUTION_DEFAULT_IMAGE", "alpine:3.20"),
+		ExecutionWorkspaceRoot:                 getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
+		WorkerKubernetesNamespace:              getEnv("WORKER_KUBERNETES_NAMESPACE", "default"),
+		WorkerKubernetesKubeconfig:             getEnv("WORKER_KUBERNETES_KUBECONFIG", getEnv("KUBECONFIG", "")),
+		WorkerKubernetesHelperImage:            getEnv("WORKER_KUBERNETES_HELPER_IMAGE", ""),
+		WorkerKubernetesInternalAPIURL:         getEnv("WORKER_KUBERNETES_INTERNAL_API_URL", ""),
+		WorkerKubernetesTestStepNodes:          getEnv("WORKER_KUBERNETES_TEST_STEP_NODES", ""),
+		WorkspaceHelperCapabilityEnabled:       getEnvBool("COYOTE_WORKSPACE_HELPER_ENABLED", false),
+		WorkspaceHelperKubeconfig:              getEnv("COYOTE_WORKSPACE_HELPER_KUBECONFIG", ""),
+		WorkspaceHelperServiceAccount:          getEnv("COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT", "coyote-workspace-helper"),
+		WorkspaceHelperCapabilitySecret:        getEnv("COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET", ""),
+		WorkspaceHelperMaxUploadSizeMB:         getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_UPLOAD_SIZE_MB", 1024),
+		WorkspaceRevisionMaxUploadSizeMB:       getEnvInt("COYOTE_WORKSPACE_REVISION_MAX_UPLOAD_SIZE_MB", 2048),
+		WorkspaceRevisionMaxUncompressedSizeMB: getEnvIntFallback("COYOTE_WORKSPACE_REVISION_MAX_UNCOMPRESSED_SIZE_MB", "COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", 4096),
+		WorkspaceRevisionMaxArchiveEntries:     getEnvIntFallback("COYOTE_WORKSPACE_REVISION_MAX_ARCHIVE_ENTRIES", "COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES", 100000),
+		WorkspaceHelperCacheMaxUploadSizeMB:    getEnvInt("COYOTE_WORKSPACE_HELPER_CACHE_MAX_UPLOAD_SIZE_MB", 10240),
+		CacheArchiveMaxUncompressedSizeMB:      getEnvIntFallback("COYOTE_WORKSPACE_HELPER_CACHE_MAX_UNCOMPRESSED_SIZE_MB", "COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", 4096),
+		CacheArchiveMaxEntries:                 getEnvIntFallback("COYOTE_WORKSPACE_HELPER_CACHE_MAX_ARCHIVE_ENTRIES", "COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES", 100000),
+		WorkspaceRevisionStorageRoot:           getEnv("COYOTE_WORKSPACE_REVISION_STORAGE_ROOT", ""),
+		KubernetesCacheHelperEnabled:           getEnvBool("COYOTE_KUBERNETES_CACHE_HELPER_ENABLED", false),
+		KubernetesArtifactHelperEnabled:        getEnvBool("COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED", false),
+		WorkerCacheStorageProvider:             getEnv("WORKER_CACHE_STORAGE_PROVIDER", ""),
+		WorkerCacheStorageRoot:                 getEnv("WORKER_CACHE_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-cache")),
+		WorkerCacheMaxSizeMB:                   getEnvInt("CACHE_MAX_SIZE_MB", 10240),
+		WorkerCacheStorageStrict:               getEnvBool("WORKER_CACHE_STORAGE_STRICT", false),
+		WorkerCacheGCSBucket:                   getEnv("WORKER_CACHE_GCS_BUCKET", ""),
+		WorkerCacheGCSPrefix:                   getEnv("WORKER_CACHE_GCS_PREFIX", ""),
+		WorkerCacheGCSProject:                  getEnv("WORKER_CACHE_GCS_PROJECT", ""),
+		MountDockerSocket:                      getEnvBool("WORKER_MOUNT_DOCKER_SOCKET", false),
+		ArtifactStorageRoot:                    getEnv("ARTIFACT_STORAGE_ROOT", filepath.Join(os.TempDir(), "coyote-artifacts")),
+		ArtifactStorageProvider:                getEnv("ARTIFACT_STORAGE_PROVIDER", "filesystem"),
+		ArtifactStorageStrict:                  getEnvBool("ARTIFACT_STORAGE_STRICT", false),
+		ArtifactGCSBucket:                      getEnv("ARTIFACT_GCS_BUCKET", ""),
+		ArtifactGCSPrefix:                      getEnv("ARTIFACT_GCS_PREFIX", ""),
+		ArtifactGCSProject:                     getEnv("ARTIFACT_GCS_PROJECT", ""),
+		CloudBuildProject:                      getEnv("CLOUD_BUILD_PROJECT", ""),
+		CloudBuildLocation:                     getEnv("CLOUD_BUILD_LOCATION", ""),
+		CloudBuildRuntimeServiceAccount:        getEnv("CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT", ""),
+		CloudBuildArtifactRegistryRepository:   getEnv("CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY", ""),
+		CloudBuildSourceBucket:                 getEnv("CLOUD_BUILD_SOURCE_BUCKET", ""),
+		CloudBuildSourcePrefix:                 getEnv("CLOUD_BUILD_SOURCE_PREFIX", "coyote-sources"),
+		PushEventSecret:                        getEnv("PUSH_EVENT_SECRET", ""),
+		GitHubWebhookSecret:                    getEnv("GITHUB_WEBHOOK_SECRET", getEnv("PUSH_EVENT_SECRET", "")),
+		GitHubStatusToken:                      getEnv("GITHUB_STATUS_TOKEN", ""),
+		AuthMode:                               getEnv("AUTH_MODE", "disabled"),
+		BootstrapAdminEmails:                   getEnv("BOOTSTRAP_ADMIN_EMAILS", ""),
+		OIDCIssuerURL:                          getEnv("OIDC_ISSUER_URL", ""),
+		OIDCClientID:                           getEnv("OIDC_CLIENT_ID", ""),
+		OIDCClientSecret:                       getEnv("OIDC_CLIENT_SECRET", ""),
+		OIDCRedirectURL:                        oidcRedirectURL,
+		OIDCScopes:                             getEnv("OIDC_SCOPES", "openid email profile"),
+		SessionSecret:                          getEnv("SESSION_SECRET", ""),
+		SessionCookieName:                      getEnv("SESSION_COOKIE_NAME", "coyote_session"),
+		SessionCookieSecure:                    getEnvBool("SESSION_COOKIE_SECURE", defaultSessionCookieSecure(oidcRedirectURL)),
+		SessionCookieSameSite:                  getEnv("SESSION_COOKIE_SAME_SITE", "lax"),
+		AuthPostLoginRedirectURL:               getEnv("AUTH_POST_LOGIN_REDIRECT_URL", ""),
+		AuthPostLogoutRedirectURL:              getEnv("AUTH_POST_LOGOUT_REDIRECT_URL", ""),
+		EmailNotificationsEnabled:              getEnvBool("EMAIL_NOTIFICATIONS_ENABLED", true),
+		EmailNotificationRecipients:            getEnv("EMAIL_NOTIFICATION_RECIPIENTS", "dev@localhost"),
+		NotificationRecoveryInterval:           getEnvDuration("NOTIFICATION_RECOVERY_INTERVAL", 15*time.Second),
+		NotificationRecoveryBatchSize:          getEnvInt("NOTIFICATION_RECOVERY_BATCH_SIZE", 25),
+		SCMStatusRecoveryInterval:              getEnvDuration("SCM_STATUS_RECOVERY_INTERVAL", 15*time.Second),
+		SCMStatusRecoveryBatchSize:             getEnvInt("SCM_STATUS_RECOVERY_BATCH_SIZE", 25),
+		SMTPHost:                               getEnv("SMTP_HOST", "mailpit"),
+		SMTPPort:                               getEnv("SMTP_PORT", "1025"),
+		SMTPUsername:                           getEnv("SMTP_USERNAME", ""),
+		SMTPPassword:                           getEnv("SMTP_PASSWORD", ""),
+		SMTPFromAddress:                        getEnv("SMTP_FROM_ADDRESS", "coyote-ci@localhost"),
+		PublicURL:                              normalizePublicURL(getEnv("COYOTE_PUBLIC_URL", getEnv("APP_BASE_URL", ""))),
 	}
 }
 
@@ -234,6 +252,13 @@ func getEnvInt(key string, fallback int) int {
 	}
 
 	return parsed
+}
+
+func getEnvIntFallback(key string, legacyKey string, fallback int) int {
+	if value := os.Getenv(key); value != "" {
+		return getEnvInt(key, fallback)
+	}
+	return getEnvInt(legacyKey, fallback)
 }
 
 func getEnvBool(key string, fallback bool) bool {

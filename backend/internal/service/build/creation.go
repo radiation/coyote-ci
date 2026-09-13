@@ -35,6 +35,8 @@ func pipelineStepsToDomain(buildID string, steps []pipeline.ResolvedStep) []doma
 			GroupName:         groupName,
 			DependsOnNodes:    append([]string(nil), rs.DependsOnNodeIDs...),
 			Name:              rs.Name,
+			ExecutionKind:     rs.ExecutionKind,
+			RemoteImageBuild:  cloneRemoteImageBuildSpec(rs.RemoteImageBuild),
 			Image:             rs.Image,
 			Command:           "sh",
 			Args:              []string{"-c", rs.Run},
@@ -49,6 +51,17 @@ func pipelineStepsToDomain(buildID string, steps []pipeline.ResolvedStep) []doma
 		})
 	}
 	return out
+}
+
+func cloneRemoteImageBuildSpec(spec *domain.RemoteImageBuildSpec) *domain.RemoteImageBuildSpec {
+	if spec == nil {
+		return nil
+	}
+	buildArgs := make(map[string]string, len(spec.BuildArgs))
+	for key, value := range spec.BuildArgs {
+		buildArgs[key] = value
+	}
+	return &domain.RemoteImageBuildSpec{ContextPath: spec.ContextPath, DockerfilePath: spec.DockerfilePath, BuildArgs: buildArgs, TargetImageReference: spec.TargetImageReference}
 }
 
 func defaultBuildSteps(buildID string) []domain.BuildStep {

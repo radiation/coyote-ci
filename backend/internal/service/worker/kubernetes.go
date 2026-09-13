@@ -62,8 +62,6 @@ func (w *ExecutionWorkerService) ValidateKubernetesRunnableStep(ctx context.Cont
 		if strings.TrimSpace(job.Source.RepositoryURL) != "" {
 			return &KubernetesExecutionCapabilityError{Feature: "repository checkout without trusted workspace helpers"}
 		}
-	} else if spec.WorkspaceInput.Mode == domain.WorkspaceInputModeFanIn {
-		return &KubernetesExecutionCapabilityError{Feature: "fan-in workspaces"}
 	}
 
 	steps, err := w.builds.GetBuildSteps(ctx, step.BuildID)
@@ -126,6 +124,10 @@ func (w *ExecutionWorkerService) GetExecutionJob(ctx context.Context, jobID stri
 		return domain.ExecutionJob{}, errKubernetesExecutionCapabilityUnavailable
 	}
 	return boundary.GetJobByID(ctx, jobID)
+}
+
+func (w *ExecutionWorkerService) GetBuild(ctx context.Context, buildID string) (domain.Build, error) {
+	return w.builds.GetBuild(ctx, buildID)
 }
 
 func (w *ExecutionWorkerService) CompleteKubernetesRunnableStep(ctx context.Context, step WorkerRunnableStep, result runner.RunStepResult) (repository.StepCompletionOutcome, error) {

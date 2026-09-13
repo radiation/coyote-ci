@@ -13,12 +13,16 @@ import (
 	"syscall"
 	"time"
 
+	"cloud.google.com/go/storage"
+
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	imagebuildexec "github.com/radiation/coyote-ci/backend/internal/imagebuild"
 	kubernetesexec "github.com/radiation/coyote-ci/backend/internal/kubernetes"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/observability"
+	platformcloudbuild "github.com/radiation/coyote-ci/backend/internal/platform/cloudbuild"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
@@ -111,6 +115,7 @@ func main() {
 	notificationDeliveryRepo := repositorypostgres.NewNotificationDeliveryRepository(db)
 	notificationSubscriptionRepo := repositorypostgres.NewNotificationSubscriptionRepository(db)
 	notificationPreferenceRepo := repositorypostgres.NewUserNotificationPreferenceRepository(db)
+	externalImageBuildRepo := repositorypostgres.NewExternalImageBuildRepository(db)
 	userSlackIdentityRepo := repositorypostgres.NewUserSlackIdentityRepository(db)
 	slackWorkspaceIntegrationRepo := repositorypostgres.NewSlackWorkspaceIntegrationRepository(db)
 	notificationMetrics := observability.NewExpvarNotificationDeliveryMetrics()
@@ -149,6 +154,10 @@ func main() {
 	if checkoutResolverErr != nil {
 		log.Fatalf("failed to configure repository-aware checkout: %v", checkoutResolverErr)
 	}
+	sourceArchivePreparer, sourceArchiveErr := service.NewServerSourceArchivePreparer(source.NewGitWorkspaceSourceResolver(), checkoutResolver)
+	if sourceArchiveErr != nil {
+		log.Fatalf("failed to configure source archive preparer: %v", sourceArchiveErr)
+	}
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, stepRunner, logSink, newWorkerBuildServiceConfig(cfg, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:    executionJobRepo,
 		ExecutionOutputRepo: executionJobOutputRepo,
@@ -179,7 +188,7 @@ func main() {
 	startWorkerStatusServer(ctx, cfg.WorkerStatusAddr, workerService)
 
 	log.Printf("starting worker loop")
-	controller, controllerErr := resolveExecutionController(cfg, workerService, logSink)
+	controller, controllerErr := resolveExecutionControllerWithImageBuild(cfg, workerService, logSink, externalImageBuildRepo, sourceArchivePreparer)
 	if controllerErr != nil {
 		log.Fatalf("failed to configure execution controller: %v", controllerErr)
 	}
@@ -218,6 +227,10 @@ func runWorkspaceHelperCommand(ctx context.Context, args []string) (bool, error)
 var newKubernetesClient = kubernetesexec.NewClient
 
 func resolveExecutionController(cfg config.Config, workerService *workersvc.ExecutionWorkerService, logSink logs.LogSink) (executionsvc.Controller, error) {
+	return resolveExecutionControllerWithImageBuild(cfg, workerService, logSink, nil, nil)
+}
+
+func resolveExecutionControllerWithImageBuild(cfg config.Config, workerService *workersvc.ExecutionWorkerService, logSink logs.LogSink, externalBuilds repository.ExternalImageBuildRepository, sourceArchives service.WorkspaceSourceArchivePreparer) (executionsvc.Controller, error) {
 	if strings.ToLower(strings.TrimSpace(cfg.ExecutionBackend)) != "kubernetes" {
 		return workersvc.NewSynchronousController(workerService), nil
 	}
@@ -238,6 +251,28 @@ func resolveExecutionController(cfg config.Config, workerService *workersvc.Exec
 		helperConfig.CacheEnabled = cfg.KubernetesCacheHelperEnabled
 		helperConfig.ArtifactCollectEnabled = cfg.KubernetesArtifactHelperEnabled
 		controller.WithWorkspaceHelper(helperConfig)
+	}
+	if strings.TrimSpace(cfg.CloudBuildProject) != "" {
+		if externalBuilds == nil || sourceArchives == nil {
+			return nil, errors.New("cloud build execution requires external image build storage and a trusted source archive preparer")
+		}
+		storageClient, storageErr := storage.NewClient(context.Background())
+		if storageErr != nil {
+			return nil, storageErr
+		}
+		stager, stageErr := platformcloudbuild.NewSourceStager(storageClient, cfg.CloudBuildSourceBucket, cfg.CloudBuildSourcePrefix)
+		if stageErr != nil {
+			return nil, stageErr
+		}
+		builder, builderErr := platformcloudbuild.New(context.Background(), platformcloudbuild.Config{ProjectID: cfg.CloudBuildProject, Location: cfg.CloudBuildLocation, RuntimeServiceAccount: cfg.CloudBuildRuntimeServiceAccount, ArtifactRegistryRepository: cfg.CloudBuildArtifactRegistryRepository})
+		if builderErr != nil {
+			return nil, builderErr
+		}
+		imageController, imageControllerErr := imagebuildexec.NewController(workerService, externalBuilds, builder, stager, sourceArchives)
+		if imageControllerErr != nil {
+			return nil, imageControllerErr
+		}
+		controller.WithImageBuildController(imageController)
 	}
 	return controller, nil
 }

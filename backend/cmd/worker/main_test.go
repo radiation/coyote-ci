@@ -253,6 +253,9 @@ func TestResolveExecutionController(t *testing.T) {
 	if _, ok := kubernetesController.(*kubernetesexec.Controller); !ok {
 		t.Fatalf("expected kubernetes controller, got %T", kubernetesController)
 	}
+	if _, resolveErr := resolveExecutionController(config.Config{ExecutionBackend: "kubernetes", CloudBuildProject: "project"}, service, nil); resolveErr == nil || !strings.Contains(resolveErr.Error(), "external image build storage") {
+		t.Fatalf("expected cloud build dependency error, got %v", resolveErr)
+	}
 
 	wantErr := errors.New("kubeconfig unavailable")
 	newKubernetesClient = func(string) (kubernetesexec.Client, error) { return nil, wantErr }

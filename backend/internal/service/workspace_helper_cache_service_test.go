@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -90,8 +91,51 @@ func TestWorkspaceHelperCacheServiceSaveRejectsArchiveExceedingRestoreLimits(t *
 	if !errors.Is(err, ErrWorkspaceHelperCacheInvalidInput) {
 		t.Fatalf("save error=%v, want invalid cache input", err)
 	}
+	var sizeLimitErr *workspace.WorkspaceRevisionSizeLimitError
+	if !errors.As(err, &sizeLimitErr) || sizeLimitErr.MaxBytes != 1 {
+		t.Fatalf("save error=%v, want size limit error", err)
+	}
 	if _, found, findErr := harness.entries.FindReadyByKey(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey); findErr != nil || found {
 		t.Fatalf("cache entry found=%t err=%v", found, findErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceSaveAcceptsArchiveAtConfiguredEntryLimit(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	harness.service.maxArchiveEntries = 5
+	archive := cacheArchiveWithFiles(t, 3)
+	defer func() { _ = archive.archive.Close() }()
+
+	if err := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archive.archive, archive.publication); err != nil {
+		t.Fatalf("save archive at configured entry limit: %v", err)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceSaveRejectsArchiveAboveConfiguredEntryLimit(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	harness.service.maxArchiveEntries = 5
+	archive := cacheArchiveWithFiles(t, 4)
+	defer func() { _ = archive.archive.Close() }()
+
+	err := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archive.archive, archive.publication)
+	if !errors.Is(err, ErrWorkspaceHelperCacheInvalidInput) {
+		t.Fatalf("save error=%v, want invalid cache input", err)
+	}
+	var entryLimitErr *workspace.WorkspaceRevisionEntryLimitError
+	if !errors.As(err, &entryLimitErr) || entryLimitErr.MaxEntries != 5 {
+		t.Fatalf("save error=%v, want entry limit error", err)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceDefaultsSupportExpandedGoCaches(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	if harness.service.maxUncompressedBytes != 4*1024*1024*1024 || harness.service.maxUncompressedBytes <= 1024*1024*1024 {
+		t.Fatalf("max uncompressed bytes=%d, want 4 GiB", harness.service.maxUncompressedBytes)
+	}
+	if harness.service.maxArchiveEntries != 100000 {
+		t.Fatalf("max archive entries=%d, want 100000", harness.service.maxArchiveEntries)
 	}
 }
 
@@ -280,6 +324,25 @@ func cacheArchive(t *testing.T, name string, contents string) cacheServiceArchiv
 	}
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatalf("write archive payload: %v", err)
+	}
+	archive, publication, err := workspace.ArchiveDirectory(context.Background(), root)
+	if err != nil {
+		t.Fatalf("archive cache payload: %v", err)
+	}
+	return cacheServiceArchive{root: root, archive: archive, publication: publication}
+}
+
+func cacheArchiveWithFiles(t *testing.T, count int) cacheServiceArchive {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "modules"), 0o755); err != nil {
+		t.Fatalf("create archive directory: %v", err)
+	}
+	for index := 0; index < count; index++ {
+		path := filepath.Join(root, "modules", fmt.Sprintf("entry-%06d", index))
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write archive entry %d: %v", index, err)
+		}
 	}
 	archive, publication, err := workspace.ArchiveDirectory(context.Background(), root)
 	if err != nil {

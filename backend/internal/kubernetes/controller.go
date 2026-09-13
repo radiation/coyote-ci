@@ -14,6 +14,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
@@ -27,13 +28,17 @@ import (
 )
 
 const (
-	managedByLabel              = "app.kubernetes.io/managed-by"
-	terminalLogChunkSize        = 32 * 1024
-	cancellationCleanupInterval = 30 * time.Second
-	workspaceHelperTokenPath    = "/var/run/secrets/coyote/workspace/token"
-	workspaceKubernetesTokenDir = "/var/run/secrets/kubernetes.io/serviceaccount"
-	cacheHelperRoot             = "/coyote-cache"
-	cacheHelperStateRoot        = "/coyote-cache-state"
+	managedByLabel                = "app.kubernetes.io/managed-by"
+	terminalLogChunkSize          = 32 * 1024
+	cancellationCleanupInterval   = 30 * time.Second
+	workspaceHelperTokenPath      = "/var/run/secrets/coyote/workspace/token"
+	workspaceKubernetesTokenDir   = "/var/run/secrets/kubernetes.io/serviceaccount"
+	cacheHelperRoot               = "/coyote-cache"
+	cacheHelperStateRoot          = "/coyote-cache-state"
+	buildEphemeralStorageRequest  = "3Gi"
+	buildEphemeralStorageLimit    = "8Gi"
+	helperEphemeralStorageRequest = "1Gi"
+	helperEphemeralStorageLimit   = "4Gi"
 )
 
 type WorkspaceHelperConfig struct {
@@ -61,6 +66,10 @@ type executionService interface {
 	CompleteKubernetesRunnableStep(context.Context, workersvc.WorkerRunnableStep, runner.RunStepResult) (repository.StepCompletionOutcome, error)
 }
 
+type imageBuildController interface {
+	ReconcileClaimed(context.Context, workersvc.WorkerRunnableStep) (bool, error)
+}
+
 type Controller struct {
 	client                      Client
 	service                     executionService
@@ -70,9 +79,16 @@ type Controller struct {
 	workspaceHelper             WorkspaceHelperConfig
 	testStepNodeNames           []string
 	active                      *workersvc.WorkerRunnableStep
+	activeImageBuild            *workersvc.WorkerRunnableStep
+	imageBuildController        imageBuildController
 	terminalLogsPersisted       map[string]bool
 	lastCancellationCleanupAt   time.Time
 	now                         func() time.Time
+}
+
+func (c *Controller) WithImageBuildController(controller imageBuildController) *Controller {
+	c.imageBuildController = controller
+	return c
 }
 
 func NewController(client Client, service executionService, logSink logs.LogSink, namespace string) *Controller {
@@ -104,6 +120,13 @@ func (c *Controller) WithTestStepNodeNames(names []string) *Controller {
 }
 
 func (c *Controller) Reconcile(ctx context.Context) error {
+	if c.activeImageBuild != nil {
+		stillActive, err := c.imageBuildController.ReconcileClaimed(ctx, *c.activeImageBuild)
+		if !stillActive {
+			c.activeImageBuild = nil
+		}
+		return err
+	}
 	if c.active != nil {
 		if cleanupErr := c.cleanupCanceledJobsIfDue(ctx); cleanupErr != nil {
 			return cleanupErr
@@ -116,6 +139,17 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 	}
 	if !found {
 		return c.cleanupCanceledJobsIfDue(ctx)
+	}
+	if step.ExecutionKind == domain.ExecutionKindImageBuild {
+		if c.imageBuildController == nil {
+			return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "image build execution controller is not configured", StartedAt: c.now(), FinishedAt: c.now()})
+		}
+		c.activeImageBuild = &step
+		stillActive, imageBuildErr := c.imageBuildController.ReconcileClaimed(ctx, step)
+		if !stillActive {
+			c.activeImageBuild = nil
+		}
+		return imageBuildErr
 	}
 	if c.workspacePublicationEnabled && (strings.TrimSpace(c.workspaceHelper.Image) == "" || strings.TrimSpace(c.workspaceHelper.InternalAPIURL) == "" || strings.TrimSpace(c.workspaceHelper.ServiceAccountName) == "") {
 		return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "kubernetes workspace helper configuration is incomplete", StartedAt: c.now(), FinishedAt: c.now()})
@@ -146,6 +180,17 @@ func (c *Controller) reconcileActive(ctx context.Context, step workersvc.WorkerR
 		c.active = nil
 		return nil
 	}
+	job, ensureErr := c.ensureJob(ctx, step)
+	if ensureErr != nil {
+		return ensureErr
+	}
+	if terminal, result := c.terminalResult(ctx, job, step); terminal {
+		logErr := c.collectTerminalLogs(ctx, step, job.Name)
+		if logErr != nil {
+			stdlog.Printf("WARN Kubernetes terminal log collection failed job=%s: %v", job.Name, logErr)
+		}
+		return c.complete(ctx, step, result)
+	}
 	continued, renewErr := c.service.RenewRunnableStepLease(ctx, step)
 	if renewErr != nil {
 		return renewErr
@@ -159,20 +204,6 @@ func (c *Controller) reconcileActive(ctx context.Context, step workersvc.WorkerR
 		if refreshed.Status == domain.ExecutionJobStatusCanceled {
 			return c.deleteJob(ctx, jobName(step.JobID))
 		}
-		return nil
-	}
-
-	job, ensureErr := c.ensureJob(ctx, step)
-	if ensureErr != nil {
-		return ensureErr
-	}
-	if terminal, result := c.terminalResult(ctx, job, step); terminal {
-		logErr := c.collectTerminalLogs(ctx, step, job.Name)
-		if logErr != nil {
-			return logErr
-		}
-		completeErr := c.complete(ctx, step, result)
-		return completeErr
 	}
 	return nil
 }
@@ -211,22 +242,46 @@ func (c *Controller) terminalResult(ctx context.Context, job *batchv1.Job, step 
 		if (condition.Type != batchv1.JobComplete && condition.Type != batchv1.JobFailed) || condition.Status != corev1.ConditionTrue {
 			continue
 		}
-		pods, err := c.client.ListPods(ctx, c.namespace, labels.Set{"job-name": job.Name}.String())
-		if err != nil || len(pods) == 0 {
-			return false, runner.RunStepResult{}
+		result := terminalJobResult(condition, c.now())
+		pods, listErr := c.client.ListPods(ctx, c.namespace, labels.Set{"job-name": job.Name}.String())
+		if listErr == nil && len(pods) > 0 {
+			result = podResult(newestPod(pods), c.now())
 		}
-		pod := newestPod(pods)
-		result := podResult(pod, c.now())
 		if condition.Type == batchv1.JobComplete {
 			result.Status = runner.RunStepStatusSuccess
 			result.ExitCode = 0
 		}
-		if condition.Type == batchv1.JobFailed && condition.Reason == "DeadlineExceeded" {
-			result.TimedOut = true
+		if condition.Type == batchv1.JobFailed {
+			result.Status = runner.RunStepStatusFailed
+			if condition.Reason == "DeadlineExceeded" {
+				result.TimedOut = true
+			}
+			if strings.TrimSpace(result.Stderr) == "" {
+				result.Stderr = terminalJobFailureMessage(condition)
+			}
 		}
 		return true, result
 	}
 	return false, runner.RunStepResult{}
+}
+
+func terminalJobResult(condition batchv1.JobCondition, now time.Time) runner.RunStepResult {
+	result := runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, StartedAt: now, FinishedAt: now}
+	if condition.Type == batchv1.JobComplete {
+		result.Status = runner.RunStepStatusSuccess
+		result.ExitCode = 0
+		return result
+	}
+	result.Stderr = terminalJobFailureMessage(condition)
+	return result
+}
+
+func terminalJobFailureMessage(condition batchv1.JobCondition) string {
+	details := strings.TrimSpace(strings.Join([]string{condition.Reason, condition.Message}, ": "))
+	if details == "" {
+		return "kubernetes job failed without a recoverable build container exit status"
+	}
+	return "kubernetes job failed: " + details
 }
 
 func (c *Controller) collectTerminalLogs(ctx context.Context, step workersvc.WorkerRunnableStep, jobName string) error {
@@ -362,6 +417,7 @@ func buildJobWithNodeName(namespace string, step workersvc.WorkerRunnableStep, h
 			Name: "build", Image: step.Image, Command: []string{step.Command}, Args: append([]string(nil), step.Args...),
 			Env: environment(step.Env), WorkingDir: workspace.ResolveVisibleWorkingDir(workspace.DefaultContainerRoot, step.WorkingDir),
 			VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}},
+			Resources:    buildContainerResources(),
 		}},
 	}
 	podSpec.NodeName = strings.TrimSpace(nodeName)
@@ -401,16 +457,16 @@ func cacheBuildMounts(preset cachepkg.Preset) []corev1.VolumeMount {
 }
 
 func cacheHelperEnvironment(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep, preset cachepkg.Preset, role domain.WorkspaceHelperRole) []corev1.EnvVar {
-	env := append(workspaceHelperEnvironment(config, step), corev1.EnvVar{Name: "COYOTE_WORKSPACE_PATH", Value: workspace.DefaultContainerRoot}, corev1.EnvVar{Name: "COYOTE_CACHE_ROOT", Value: cacheHelperRoot}, corev1.EnvVar{Name: "COYOTE_CACHE_STATE_ROOT", Value: cacheHelperStateRoot}, corev1.EnvVar{Name: "COYOTE_CACHE_PRESET", Value: preset.Name}, corev1.EnvVar{Name: "COYOTE_CACHE_POLICY", Value: string(domain.NormalizeCachePolicy(step.Cache.Policy))}, corev1.EnvVar{Name: "COYOTE_CACHE_WORKING_DIR", Value: step.WorkingDir})
+	env := append(workspaceHelperEnvironment(config, step), corev1.EnvVar{Name: "COYOTE_WORKSPACE_PATH", Value: workspace.DefaultContainerRoot}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}}, corev1.EnvVar{Name: "COYOTE_CACHE_ROOT", Value: cacheHelperRoot}, corev1.EnvVar{Name: "COYOTE_CACHE_STATE_ROOT", Value: cacheHelperStateRoot}, corev1.EnvVar{Name: "COYOTE_CACHE_PRESET", Value: preset.Name}, corev1.EnvVar{Name: "COYOTE_CACHE_POLICY", Value: string(domain.NormalizeCachePolicy(step.Cache.Policy))}, corev1.EnvVar{Name: "COYOTE_CACHE_WORKING_DIR", Value: step.WorkingDir})
 	return append(env, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_ROLE", Value: string(role)})
 }
 
 func cacheRestoreContainer(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep, preset cachepkg.Preset) corev1.Container {
-	return corev1.Container{Name: "cache-restore", Image: config.Image, Command: []string{"/app/worker", "cache", "restore"}, Env: cacheHelperEnvironment(config, step, preset, domain.WorkspaceHelperRoleCacheRestore), VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "cache", MountPath: cacheHelperRoot}, {Name: "cache-helper-state", MountPath: cacheHelperStateRoot}, {Name: "cache-restore-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}}}
+	return corev1.Container{Name: "cache-restore", Image: config.Image, ImagePullPolicy: corev1.PullAlways, Command: []string{"/app/worker", "cache", "restore"}, Env: cacheHelperEnvironment(config, step, preset, domain.WorkspaceHelperRoleCacheRestore), VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "cache", MountPath: cacheHelperRoot}, {Name: "cache-helper-state", MountPath: cacheHelperStateRoot}, {Name: "cache-restore-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}}, Resources: helperContainerResources()}
 }
 
 func cacheSaveContainer(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep, preset cachepkg.Preset) corev1.Container {
-	return corev1.Container{Name: "cache-save", Image: config.Image, Command: []string{"/app/worker", "cache", "save-after-build"}, Env: cacheHelperEnvironment(config, step, preset, domain.WorkspaceHelperRoleCacheSave), VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "cache", MountPath: cacheHelperRoot}, {Name: "cache-helper-state", MountPath: cacheHelperStateRoot}, {Name: "cache-save-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}, {Name: "workspace-kubernetes-api", MountPath: workspaceKubernetesTokenDir, ReadOnly: true}}}
+	return corev1.Container{Name: "cache-save", Image: config.Image, ImagePullPolicy: corev1.PullAlways, Command: []string{"/app/worker", "cache", "save-after-build"}, Env: cacheHelperEnvironment(config, step, preset, domain.WorkspaceHelperRoleCacheSave), VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "cache", MountPath: cacheHelperRoot}, {Name: "cache-helper-state", MountPath: cacheHelperStateRoot}, {Name: "cache-save-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}, {Name: "workspace-kubernetes-api", MountPath: workspaceKubernetesTokenDir, ReadOnly: true}}, Resources: helperContainerResources()}
 }
 
 func (c *Controller) testStepNodeName(stepIndex int) string {
@@ -434,17 +490,29 @@ func workspaceHelperEnvironment(config WorkspaceHelperConfig, step workersvc.Wor
 
 func workspacePrepareContainer(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep) corev1.Container {
 	env := append(workspaceHelperEnvironment(config, step), corev1.EnvVar{Name: "COYOTE_WORKSPACE_DESTINATION", Value: workspace.DefaultContainerRoot})
-	return corev1.Container{Name: "workspace-prepare", Image: config.Image, Command: []string{"/app/worker", "workspace", "prepare"}, Env: env, VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "workspace-prepare-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}}}
+	return corev1.Container{Name: "workspace-prepare", Image: config.Image, ImagePullPolicy: corev1.PullAlways, Command: []string{"/app/worker", "workspace", "prepare"}, Env: env, VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "workspace-prepare-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}}, Resources: helperContainerResources()}
 }
 
 func workspacePublishContainer(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep) corev1.Container {
 	env := append(workspaceHelperEnvironment(config, step), corev1.EnvVar{Name: "COYOTE_WORKSPACE_PATH", Value: workspace.DefaultContainerRoot}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}})
-	return corev1.Container{Name: "workspace-publish", Image: config.Image, Command: []string{"/app/worker", "workspace", "publish-after-build"}, Env: env, VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "workspace-publish-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}, {Name: "workspace-kubernetes-api", MountPath: workspaceKubernetesTokenDir, ReadOnly: true}}}
+	return corev1.Container{Name: "workspace-publish", Image: config.Image, ImagePullPolicy: corev1.PullAlways, Command: []string{"/app/worker", "workspace", "publish-after-build"}, Env: env, VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "workspace-publish-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}, {Name: "workspace-kubernetes-api", MountPath: workspaceKubernetesTokenDir, ReadOnly: true}}, Resources: helperContainerResources()}
 }
 
 func artifactCollectContainer(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep) corev1.Container {
 	env := append(workspaceHelperEnvironment(config, step), corev1.EnvVar{Name: "COYOTE_WORKSPACE_PATH", Value: workspace.DefaultContainerRoot}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}})
-	return corev1.Container{Name: "artifact-collect", Image: config.Image, Command: []string{"/app/worker", "artifact", "collect-after-build"}, Env: env, VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "artifact-collect-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}, {Name: "workspace-kubernetes-api", MountPath: workspaceKubernetesTokenDir, ReadOnly: true}}}
+	return corev1.Container{Name: "artifact-collect", Image: config.Image, ImagePullPolicy: corev1.PullAlways, Command: []string{"/app/worker", "artifact", "collect-after-build"}, Env: env, VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "artifact-collect-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}, {Name: "workspace-kubernetes-api", MountPath: workspaceKubernetesTokenDir, ReadOnly: true}}, Resources: helperContainerResources()}
+}
+
+func buildContainerResources() corev1.ResourceRequirements {
+	return ephemeralStorageResources(buildEphemeralStorageRequest, buildEphemeralStorageLimit)
+}
+
+func helperContainerResources() corev1.ResourceRequirements {
+	return ephemeralStorageResources(helperEphemeralStorageRequest, helperEphemeralStorageLimit)
+}
+
+func ephemeralStorageResources(request, limit string) corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceEphemeralStorage: resource.MustParse(request)}, Limits: corev1.ResourceList{corev1.ResourceEphemeralStorage: resource.MustParse(limit)}}
 }
 
 func jobName(executionJobID string) string {
@@ -513,6 +581,19 @@ func podResult(pod corev1.Pod, now time.Time) runner.RunStepResult {
 	result := runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, StartedAt: pod.CreationTimestamp.Time, FinishedAt: now}
 	if result.StartedAt.IsZero() {
 		result.StartedAt = now
+	}
+	if strings.EqualFold(strings.TrimSpace(pod.Status.Reason), "Evicted") {
+		for _, status := range pod.Status.ContainerStatuses {
+			if status.Name == "build" && status.State.Terminated != nil {
+				result.ExitCode = int(status.State.Terminated.ExitCode)
+			}
+		}
+		message := strings.TrimSpace(pod.Status.Message)
+		if message == "" {
+			message = "kubernetes node eviction"
+		}
+		result.Stderr = "execution pod evicted: " + message
+		return result
 	}
 	for _, status := range pod.Status.InitContainerStatuses {
 		if status.Name == "workspace-prepare" && status.State.Terminated != nil && status.State.Terminated.ExitCode != 0 {

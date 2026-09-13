@@ -505,7 +505,7 @@ func TestExecutionWorkerService_ClaimRunnableStep_UsesPersistedJobSpec(t *testin
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
-				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusPending, Command: "sh", Args: []string{"-c", "echo from-step"}, WorkingDir: ".", Env: map[string]string{"A": "step"}},
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusPending, Command: "sh", Args: []string{"-c", "echo from-step"}, WorkingDir: "backend", Env: map[string]string{"A": "step"}, Cache: &domain.StepCacheConfig{Preset: "go", Policy: domain.CachePolicyPullPush}},
 			},
 		},
 		jobsByStepID: map[string]domain.ExecutionJob{
@@ -544,6 +544,51 @@ func TestExecutionWorkerService_ClaimRunnableStep_UsesPersistedJobSpec(t *testin
 	}
 	if runnable.Env["A"] != "job" {
 		t.Fatalf("expected env from job spec, got %#v", runnable.Env)
+	}
+	if runnable.Cache == nil || runnable.Cache.Preset != "go" || runnable.Cache.Policy != domain.CachePolicyPullPush {
+		t.Fatalf("expected cache from persisted build step, got %#v", runnable.Cache)
+	}
+}
+
+func TestExecutionWorkerService_ClaimRunnableStep_FromJobClaimKeepsNilCache(t *testing.T) {
+	now := time.Now().UTC()
+	boundary := &fakeExecutionWorkerBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusRunning}},
+		stepsByBuildID: map[string][]domain.BuildStep{
+			"build-1": {{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusPending}},
+		},
+		jobsQueue: []domain.ExecutionJob{{ID: "job-1", BuildID: "build-1", StepID: "step-1", StepIndex: 0, Name: "step-1", Status: domain.ExecutionJobStatusQueued, CreatedAt: now}},
+	}
+
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	runnable, found, claimErr := worker.ClaimRunnableStep(context.Background())
+	if claimErr != nil || !found {
+		t.Fatalf("claim runnable step=%#v found=%t err=%v", runnable, found, claimErr)
+	}
+	if runnable.Cache != nil {
+		t.Fatalf("cache=%#v, want nil", runnable.Cache)
+	}
+}
+
+func TestExecutionWorkerService_ClaimRunnableStep_FromJobClaimReclaimPreservesCache(t *testing.T) {
+	now := time.Now().UTC()
+	expiredLease := now.Add(-time.Minute)
+	boundary := &fakeExecutionWorkerBoundary{
+		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusRunning}},
+		stepsByBuildID: map[string][]domain.BuildStep{
+			"build-1": {{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, LeaseExpiresAt: &expiredLease, Cache: &domain.StepCacheConfig{Preset: "go", Policy: domain.CachePolicyPull}}},
+		},
+		jobsQueue: []domain.ExecutionJob{{ID: "job-1", BuildID: "build-1", StepID: "step-1", StepIndex: 0, Name: "step-1", Status: domain.ExecutionJobStatusRunning, CreatedAt: now}},
+	}
+
+	worker := NewExecutionWorkerServiceWithLease(boundary, "worker-1", 30*time.Second)
+	worker.clock = func() time.Time { return now }
+	runnable, found, claimErr := worker.ClaimRunnableStep(context.Background())
+	if claimErr != nil || !found {
+		t.Fatalf("reclaim runnable step=%#v found=%t err=%v", runnable, found, claimErr)
+	}
+	if boundary.reclaimCalls != 1 || runnable.Cache == nil || runnable.Cache.Preset != "go" || runnable.Cache.Policy != domain.CachePolicyPull {
+		t.Fatalf("reclaim calls=%d cache=%#v", boundary.reclaimCalls, runnable.Cache)
 	}
 }
 

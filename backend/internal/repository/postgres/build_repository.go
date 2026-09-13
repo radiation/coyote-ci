@@ -703,6 +703,8 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 			group_name,
 			depends_on_node_ids,
 			name,
+			execution_kind,
+			remote_image_build,
 			image,
 			command,
 			args,
@@ -728,7 +730,7 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 			managed_image_id,
 			managed_image_version_id
 		)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25::jsonb, $26::jsonb, $27, $28, $29, $30, $31)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11, $12::jsonb, $13::jsonb, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27::jsonb, $28::jsonb, $29, $30, $31, $32, $33)
 	`
 
 	for _, step := range steps {
@@ -761,6 +763,13 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 		} else {
 			cacheJSON = []byte("null")
 		}
+		remoteImageBuildJSON := []byte("null")
+		if step.RemoteImageBuild != nil {
+			remoteImageBuildJSON, marshalErr = json.Marshal(step.RemoteImageBuild)
+			if marshalErr != nil {
+				return marshalErr
+			}
+		}
 
 		if _, err := tx.ExecContext(
 			ctx,
@@ -772,6 +781,8 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 			step.GroupName,
 			string(dependsOnJSON),
 			step.Name,
+			string(defaultExecutionKind(step.ExecutionKind)),
+			string(remoteImageBuildJSON),
 			step.Image,
 			step.Command,
 			string(argsJSON),
@@ -802,6 +813,13 @@ func insertSteps(ctx context.Context, tx *sql.Tx, buildID string, steps []domain
 	}
 
 	return nil
+}
+
+func defaultExecutionKind(kind domain.ExecutionKind) domain.ExecutionKind {
+	if strings.TrimSpace(string(kind)) == "" {
+		return domain.ExecutionKindShell
+	}
+	return kind
 }
 
 func defaultBuildImageSourceKind(kind domain.ImageSourceKind) domain.ImageSourceKind {

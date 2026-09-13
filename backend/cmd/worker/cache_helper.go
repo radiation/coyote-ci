@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	cachepkg "github.com/radiation/coyote-ci/backend/internal/cache"
@@ -25,6 +26,8 @@ const (
 	cacheHelperWorkingDir = "COYOTE_CACHE_WORKING_DIR"
 	cacheHelperStateRoot  = "COYOTE_CACHE_STATE_ROOT"
 )
+
+const maxCacheHelperErrorResponseBytes = 4 * 1024
 
 func runCacheRestore(ctx context.Context) error {
 	apiURL, tokenPath, executionJobID, podUID, root, preset, stateRoot, policy, err := cacheHelperConfig()
@@ -74,7 +77,7 @@ func runCacheRestore(ctx context.Context) error {
 		return nil
 	}
 	if response.StatusCode != http.StatusOK {
-		return reportCacheSideEffectError("restore", fmt.Errorf("cache restore returned HTTP %d", response.StatusCode))
+		return reportCacheSideEffectError("restore", cacheHelperHTTPError("restore", response))
 	}
 	size := response.ContentLength
 	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: strings.TrimSpace(response.Header.Get("Content-Digest")), SizeBytes: &size}
@@ -82,8 +85,8 @@ func runCacheRestore(ctx context.Context) error {
 }
 
 func restoreCacheArchive(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, root string, preset string, workingDir string) error {
-	if removeErr := os.RemoveAll(root); removeErr != nil {
-		return removeErr
+	if clearErr := clearCacheRoot(root); clearErr != nil {
+		return clearErr
 	}
 	restoreErr := workspacepkg.RestoreArchive(ctx, archive, publication, root)
 	mountErr := ensureCacheMountPaths(root, preset, workingDir)
@@ -91,6 +94,30 @@ func restoreCacheArchive(ctx context.Context, archive io.Reader, publication dom
 		return restoreErr
 	}
 	return mountErr
+}
+
+func clearCacheRoot(root string) error {
+	rootPath := strings.TrimSpace(root)
+	if rootPath == "" {
+		return errors.New("cache root is required")
+	}
+	rootInfo, statErr := os.Lstat(rootPath)
+	if statErr != nil {
+		return statErr
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		return errors.New("cache root must be a directory")
+	}
+	entries, readErr := os.ReadDir(rootPath)
+	if readErr != nil {
+		return readErr
+	}
+	for _, entry := range entries {
+		if removeErr := os.RemoveAll(filepath.Join(rootPath, entry.Name())); removeErr != nil {
+			return removeErr
+		}
+	}
+	return nil
 }
 
 func runCacheSaveAfterBuild(ctx context.Context) error {
@@ -152,9 +179,35 @@ func runCacheSave(ctx context.Context) error {
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusNoContent {
-		return reportCacheSideEffectError("save", fmt.Errorf("cache save returned HTTP %d", response.StatusCode))
+		return reportCacheSideEffectError("save", cacheHelperHTTPError("save", response))
 	}
 	return nil
+}
+
+func cacheHelperHTTPError(operation string, response *http.Response) error {
+	if response == nil {
+		return fmt.Errorf("cache %s received no HTTP response", operation)
+	}
+	message := fmt.Sprintf("cache %s returned HTTP %d", operation, response.StatusCode)
+	contentType := strings.ToLower(response.Header.Get("Content-Type"))
+	if response.Body == nil || (!strings.HasPrefix(contentType, "application/json") && !strings.HasPrefix(contentType, "text/")) {
+		return errors.New(message)
+	}
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxCacheHelperErrorResponseBytes+1))
+	if readErr != nil || !utf8.Valid(body) {
+		return errors.New(message)
+	}
+	truncated := len(body) > maxCacheHelperErrorResponseBytes
+	if truncated {
+		body = body[:maxCacheHelperErrorResponseBytes]
+	}
+	if detail := strings.TrimSpace(string(body)); detail != "" {
+		if truncated {
+			detail += "... (truncated)"
+		}
+		return fmt.Errorf("%s: %s", message, detail)
+	}
+	return errors.New(message)
 }
 
 func reportCacheSideEffectError(operation string, err error) error {

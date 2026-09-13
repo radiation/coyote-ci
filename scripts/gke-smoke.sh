@@ -156,6 +156,71 @@ done
 logs=$(coyote_api_curl "$api_url/api/builds/$build_id/steps/0/logs")
 jq -e --arg marker "$marker" '[.data.chunks[].chunk_text] | join("") | contains($marker)' <<<"$logs" >/dev/null
 
+terminal_failure_pipeline_yaml=$(cat <<'YAML'
+version: 1
+pipeline:
+  name: gke-terminal-failure-smoke
+  image: alpine:3.21
+steps:
+  - name: intentional-failure
+    run: echo GKE_TERMINAL_FAILURE_OK >&2; exit 23
+YAML
+)
+terminal_failure_response=$(jq -n --arg project_id gke-autopilot-smoke --arg pipeline_yaml "$terminal_failure_pipeline_yaml" '{project_id: $project_id, pipeline_yaml: $pipeline_yaml}' | coyote_api_curl -X POST "$api_url/api/builds/pipeline" -H 'Content-Type: application/json' --data @-)
+terminal_failure_build_id=$(jq -r '.data.id // empty' <<<"$terminal_failure_response")
+[[ -n "$terminal_failure_build_id" ]] || { echo "$terminal_failure_response" | jq . >&2; exit 1; }
+
+deadline=$(( $(date +%s) + timeout_seconds ))
+while (( $(date +%s) < deadline )); do
+  terminal_failure_build_response=$(coyote_api_curl "$api_url/api/builds/$terminal_failure_build_id")
+  terminal_failure_steps_response=$(coyote_api_curl "$api_url/api/builds/$terminal_failure_build_id/steps")
+  if [[ "$(jq -r '.data.status // empty' <<<"$terminal_failure_build_response")" == "failed" ]] && [[ "$(jq -r '.data.steps[0].status // empty' <<<"$terminal_failure_steps_response")" == "failed" ]]; then
+    break
+  fi
+  sleep 3
+done
+[[ "$(jq -r '.data.status // empty' <<<"$terminal_failure_build_response")" == "failed" ]]
+[[ "$(jq -r '.data.steps[0].status // empty' <<<"$terminal_failure_steps_response")" == "failed" ]]
+
+fan_in_pipeline_yaml=$(cat <<'YAML'
+version: 1
+pipeline:
+  name: gke-fan-in-workspace-smoke
+  image: alpine:3.21
+steps:
+  - name: root
+    run: printf 'root baseline\n' > root.txt
+  - group:
+      name: branches
+      steps:
+        - name: branch-a
+          run: test -f root.txt && printf 'branch a\n' > branch-a.txt
+        - name: branch-b
+          run: test -f root.txt && printf 'branch b\n' > branch-b.txt
+  - name: join
+    run: test -f root.txt && test ! -e branch-a.txt && test ! -e branch-b.txt && echo GKE_FAN_IN_WORKSPACE_OK
+YAML
+)
+fan_in_build_response=$(jq -n --arg project_id gke-autopilot-smoke --arg pipeline_yaml "$fan_in_pipeline_yaml" '{project_id: $project_id, pipeline_yaml: $pipeline_yaml}' | coyote_api_curl -X POST "$api_url/api/builds/pipeline" -H 'Content-Type: application/json' --data @-)
+fan_in_build_id=$(jq -r '.data.id // empty' <<<"$fan_in_build_response")
+[[ -n "$fan_in_build_id" ]] || { echo "$fan_in_build_response" | jq . >&2; exit 1; }
+
+deadline=$(( $(date +%s) + timeout_seconds ))
+while (( $(date +%s) < deadline )); do
+  fan_in_build_response=$(coyote_api_curl "$api_url/api/builds/$fan_in_build_id")
+  fan_in_steps_response=$(coyote_api_curl "$api_url/api/builds/$fan_in_build_id/steps")
+  if [[ "$(jq -r '.data.status // empty' <<<"$fan_in_build_response")" == "success" ]] && [[ "$(jq -r '[.data.steps[].status] | length == 4 and all(.[]; . == "success")' <<<"$fan_in_steps_response")" == "true" ]]; then
+    break
+  fi
+  sleep 3
+done
+[[ "$(jq -r '.data.status // empty' <<<"$fan_in_build_response")" == "success" ]]
+[[ "$(jq -r '[.data.steps[].status] | length == 4 and all(.[]; . == "success")' <<<"$fan_in_steps_response")" == "true" ]]
+fan_in_job_count=$(kubectl -n "$namespace" get jobs -l "coyote-ci.io/build-id=$fan_in_build_id" -o json | jq '[.items[] | select(.status.succeeded == 1)] | length')
+[[ "$fan_in_job_count" == "4" ]] || { echo "expected four successful fan-in Jobs, got $fan_in_job_count" >&2; exit 1; }
+fan_in_join_logs=$(coyote_api_curl "$api_url/api/builds/$fan_in_build_id/steps/3/logs")
+jq -e '[.data.chunks[].chunk_text] | join("") | contains("GKE_FAN_IN_WORKSPACE_OK")' <<<"$fan_in_join_logs" >/dev/null
+
 for permission in 'get jobs.batch' 'list jobs.batch' 'watch jobs.batch' 'create jobs.batch' 'delete jobs.batch' 'get pods' 'list pods' 'watch pods' 'get pods/log'; do
   verb=${permission%% *}
   resource=${permission#* }

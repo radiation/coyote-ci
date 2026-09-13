@@ -15,6 +15,8 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	workspacepkg "github.com/radiation/coyote-ci/backend/internal/workspace"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestEnsureCacheMountPathsCreatesAllPresetPaths(t *testing.T) {
@@ -75,6 +77,9 @@ func TestRunCacheSaveAfterBuildSavesAfterSuccessfulBuild(t *testing.T) {
 	if mkdirErr := os.MkdirAll(filepath.Join(root, "paths", "000"), 0o755); mkdirErr != nil {
 		t.Fatalf("create cache path: %v", mkdirErr)
 	}
+	if preparedErr := savePreparedCacheKey(os.Getenv(cacheHelperStateRoot), "go:prepared"); preparedErr != nil {
+		t.Fatalf("prepare cache key: %v", preparedErr)
+	}
 	t.Setenv(workspaceHelperPodName, "pod")
 	t.Setenv(workspaceHelperNamespace, "ci")
 	originalClient := newWorkspacePublishPodClient
@@ -85,6 +90,81 @@ func TestRunCacheSaveAfterBuildSavesAfterSuccessfulBuild(t *testing.T) {
 	if saveErr := runCacheSaveAfterBuild(context.Background()); saveErr != nil {
 		t.Fatalf("save after successful build: %v", saveErr)
 	}
+}
+
+func TestRunCacheSaveAfterBuildWaitsForBuildTermination(t *testing.T) {
+	var saveRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/internal/workspace-helper/capabilities":
+			_, _ = w.Write([]byte(`{"data":{"capability":"save-capability"}}`))
+		case "/api/internal/workspace-helper/cache/save":
+			saveRequests++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	root := configureCacheHelperForTest(t, server.URL, domain.CachePolicyPush)
+	if mkdirErr := os.MkdirAll(filepath.Join(root, "paths", "000"), 0o755); mkdirErr != nil {
+		t.Fatalf("create cache path: %v", mkdirErr)
+	}
+	if preparedErr := savePreparedCacheKey(os.Getenv(cacheHelperStateRoot), "go:prepared"); preparedErr != nil {
+		t.Fatalf("prepare cache key: %v", preparedErr)
+	}
+	t.Setenv(workspaceHelperPodName, "pod")
+	t.Setenv(workspaceHelperNamespace, "ci")
+	originalClient := newWorkspacePublishPodClient
+	t.Cleanup(func() { newWorkspacePublishPodClient = originalClient })
+	client := &sequencedWorkspacePublishPodClient{pods: []*corev1.Pod{pendingWorkspacePublishTestPod(), workspacePublishTestPod(0)}}
+	newWorkspacePublishPodClient = func() (workspacePublishPodClient, error) { return client, nil }
+
+	if saveErr := runCacheSaveAfterBuild(context.Background()); saveErr != nil {
+		t.Fatalf("save after build termination: %v", saveErr)
+	}
+	if client.calls != 2 || saveRequests != 1 {
+		t.Fatalf("pod checks=%d save requests=%d, want 2 and 1", client.calls, saveRequests)
+	}
+}
+
+func TestRunCacheSaveAfterBuildSkipsFailedBuild(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("cache save request after failed build: %s", r.URL.Path)
+	}))
+	defer server.Close()
+	configureCacheHelperForTest(t, server.URL, domain.CachePolicyPush)
+	t.Setenv(workspaceHelperPodName, "pod")
+	t.Setenv(workspaceHelperNamespace, "ci")
+	originalClient := newWorkspacePublishPodClient
+	t.Cleanup(func() { newWorkspacePublishPodClient = originalClient })
+	newWorkspacePublishPodClient = func() (workspacePublishPodClient, error) {
+		return fakeWorkspacePublishPodClient{pod: workspacePublishTestPod(1)}, nil
+	}
+
+	if saveErr := runCacheSaveAfterBuild(context.Background()); saveErr != nil {
+		t.Fatalf("failed build must skip cache save: %v", saveErr)
+	}
+}
+
+type sequencedWorkspacePublishPodClient struct {
+	pods  []*corev1.Pod
+	calls int
+}
+
+func (c *sequencedWorkspacePublishPodClient) Get(context.Context, string, metav1.GetOptions) (*corev1.Pod, error) {
+	index := c.calls
+	c.calls++
+	if index >= len(c.pods) {
+		index = len(c.pods) - 1
+	}
+	return c.pods[index], nil
+}
+
+func pendingWorkspacePublishTestPod() *corev1.Pod {
+	pod := workspacePublishTestPod(0)
+	pod.Status.ContainerStatuses = nil
+	return pod
 }
 
 func TestRunCacheRestoreExchangesCapabilityAndRestoresCache(t *testing.T) {
@@ -127,6 +207,118 @@ func TestRunCacheRestoreExchangesCapabilityAndRestoresCache(t *testing.T) {
 	contents, readErr := os.ReadFile(filepath.Join(root, "paths", "000", "module"))
 	if readErr != nil || string(contents) != "cached" {
 		t.Fatalf("restored content=%q err=%v", contents, readErr)
+	}
+	if preparedKey, keyErr := loadPreparedCacheKey(os.Getenv(cacheHelperStateRoot)); keyErr != nil || !strings.HasPrefix(preparedKey, "go:") {
+		t.Fatalf("prepared cache key=%q err=%v", preparedKey, keyErr)
+	}
+}
+
+func TestRestoreCacheArchivePreservesExistingCacheRootAndClearsContents(t *testing.T) {
+	source := t.TempDir()
+	if mkdirErr := os.MkdirAll(filepath.Join(source, "paths", "000"), 0o755); mkdirErr != nil {
+		t.Fatalf("create source cache path: %v", mkdirErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(source, "paths", "000", "module"), []byte("restored"), 0o644); writeErr != nil {
+		t.Fatalf("write source cache: %v", writeErr)
+	}
+	archive, publication, archiveErr := workspacepkg.ArchiveDirectory(context.Background(), source)
+	if archiveErr != nil {
+		t.Fatalf("archive source: %v", archiveErr)
+	}
+	defer func() { _ = archive.Close() }()
+
+	root := t.TempDir()
+	if writeErr := os.WriteFile(filepath.Join(root, "stale-file"), []byte("stale"), 0o644); writeErr != nil {
+		t.Fatalf("write stale file: %v", writeErr)
+	}
+	if mkdirErr := os.MkdirAll(filepath.Join(root, "stale-directory"), 0o755); mkdirErr != nil {
+		t.Fatalf("create stale directory: %v", mkdirErr)
+	}
+	if restoreErr := restoreCacheArchive(context.Background(), archive, publication, root, "go", "."); restoreErr != nil {
+		t.Fatalf("restore cache into existing root: %v", restoreErr)
+	}
+	if rootInfo, statErr := os.Stat(root); statErr != nil || !rootInfo.IsDir() {
+		t.Fatalf("cache root info=%v err=%v", rootInfo, statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "stale-file")); !os.IsNotExist(statErr) {
+		t.Fatalf("stale file error=%v, want not exist", statErr)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(root, "paths", "000", "module"))
+	if readErr != nil || string(contents) != "restored" {
+		t.Fatalf("restored content=%q err=%v", contents, readErr)
+	}
+}
+
+func TestCacheKeyForHelperUsesBackendGoSum(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if mkdirErr := os.MkdirAll(filepath.Join(workspaceRoot, "backend"), 0o755); mkdirErr != nil {
+		t.Fatalf("create backend workspace: %v", mkdirErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(workspaceRoot, "backend", "go.sum"), []byte("example.test/dependency v1.0.0 h1:checksum\n"), 0o644); writeErr != nil {
+		t.Fatalf("write backend go.sum: %v", writeErr)
+	}
+	t.Setenv(workspaceHelperWorkspacePath, workspaceRoot)
+	t.Setenv(cacheHelperWorkingDir, "backend")
+
+	key, keyErr := cacheKeyForHelper(t.TempDir(), "go")
+	if keyErr != nil || !strings.HasPrefix(key, "go:") {
+		t.Fatalf("cache key=%q err=%v", key, keyErr)
+	}
+}
+
+func TestCacheHelperRoundTripRestoresSavedCache(t *testing.T) {
+	var savedArchive []byte
+	var savedDigest string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/internal/workspace-helper/capabilities":
+			_, _ = w.Write([]byte(`{"data":{"capability":"cache-capability"}}`))
+		case "/api/internal/workspace-helper/cache/restore":
+			if len(savedArchive) == 0 {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			w.Header().Set("Content-Digest", savedDigest)
+			w.Header().Set("Content-Length", strconv.Itoa(len(savedArchive)))
+			_, _ = w.Write(savedArchive)
+		case "/api/internal/workspace-helper/cache/save":
+			archive, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Fatalf("read saved archive: %v", readErr)
+			}
+			savedArchive = archive
+			savedDigest = r.Header.Get("Content-Digest")
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	firstRoot := configureCacheHelperForTest(t, server.URL, domain.CachePolicyPullPush)
+	if restoreErr := runCacheRestore(context.Background()); restoreErr != nil {
+		t.Fatalf("first restore miss: %v", restoreErr)
+	}
+	if mkdirErr := os.MkdirAll(filepath.Join(firstRoot, "paths", "000"), 0o755); mkdirErr != nil {
+		t.Fatalf("create first cache path: %v", mkdirErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(firstRoot, "paths", "000", "module"), []byte("cached"), 0o644); writeErr != nil {
+		t.Fatalf("write first cache: %v", writeErr)
+	}
+	if saveErr := runCacheSave(context.Background()); saveErr != nil {
+		t.Fatalf("save first cache: %v", saveErr)
+	}
+	if len(savedArchive) == 0 || savedDigest == "" {
+		t.Fatal("expected cache archive from first execution")
+	}
+
+	secondRoot := configureCacheHelperForTest(t, server.URL, domain.CachePolicyPullPush)
+	if restoreErr := runCacheRestore(context.Background()); restoreErr != nil {
+		t.Fatalf("restore second cache: %v", restoreErr)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(secondRoot, "paths", "000", "module"))
+	if readErr != nil || string(contents) != "cached" {
+		t.Fatalf("restored second cache=%q err=%v", contents, readErr)
 	}
 }
 
@@ -253,6 +445,18 @@ func TestRunCacheSaveTreatsTransportFailuresAsSideEffects(t *testing.T) {
 	}
 	if saveErr := runCacheSave(context.Background()); saveErr != nil {
 		t.Fatalf("cache transport failure must be non-fatal: %v", saveErr)
+	}
+}
+
+func TestCacheHelperHTTPErrorIncludesBoundedSafeResponseBody(t *testing.T) {
+	response := &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"invalid cache request"}}`))}
+	if err := cacheHelperHTTPError("save", response); err == nil || err.Error() != `cache save returned HTTP 400: {"error":{"message":"invalid cache request"}}` {
+		t.Fatalf("error=%v", err)
+	}
+	longBody := strings.Repeat("x", maxCacheHelperErrorResponseBytes+1)
+	response = &http.Response{StatusCode: http.StatusInternalServerError, Header: http.Header{"Content-Type": []string{"text/plain"}}, Body: io.NopCloser(strings.NewReader(longBody))}
+	if err := cacheHelperHTTPError("restore", response); err == nil || !strings.Contains(err.Error(), "... (truncated)") || len(err.Error()) > len("cache restore returned HTTP 500: ")+maxCacheHelperErrorResponseBytes+len("... (truncated)") {
+		t.Fatalf("bounded error=%v", err)
 	}
 }
 
