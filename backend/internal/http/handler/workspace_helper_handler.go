@@ -204,6 +204,9 @@ func (h *WorkspaceHelperHandler) PublishWorkspace(w http.ResponseWriter, r *http
 	published, publishErr := h.publish.Publish(r.Context(), capability, executionJobID, podUID, r.Body)
 	if publishErr != nil {
 		if errors.Is(publishErr, service.ErrWorkspaceHelperUnauthorized) || errors.Is(publishErr, repository.ErrWorkspaceRevisionStaleClaim) {
+			if errors.Is(publishErr, repository.ErrWorkspaceRevisionStaleClaim) {
+				log.Printf("WARN workspace publish rejected for stale claim execution_job_id=%s pod_uid=%s", executionJobID, podUID)
+			}
 			writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "workspace helper authorization failed")
 			return
 		}

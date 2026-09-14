@@ -34,6 +34,10 @@ function commandPreview(command: string): string {
   return `${command.slice(0, COMMAND_PREVIEW_LIMIT - 3)}...`;
 }
 
+function phaseLabel(name: string): string {
+  return name.replace(/_/g, " ");
+}
+
 type StepLogChunk = {
   sequence_no: number;
   stream: "stdout" | "stderr" | "system";
@@ -259,6 +263,23 @@ export function StepList({
                         <span>Worker {step.worker_id ?? "—"}</span>
                         <span>Exit code {step.exit_code ?? "—"}</span>
                       </div>
+
+                      {step.job?.timing?.phases.length ? (
+                        <div
+                          className="step-card-meta-grid subtle-text"
+                          aria-label="Execution phase timing"
+                        >
+                          {step.job.timing.phases.map((phase) => (
+                            <span key={phase.name}>
+                              {phaseLabel(phase.name)}{" "}
+                              {formatDuration(
+                                phase.started_at ?? null,
+                                phase.finished_at ?? null,
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
 
                       {step.error_message ? (
                         <p className="step-card-error error-text">

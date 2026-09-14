@@ -71,6 +71,7 @@ type executionService interface {
 	ValidateKubernetesRunnableStep(context.Context, workersvc.WorkerRunnableStep) error
 	RenewRunnableStepLease(context.Context, workersvc.WorkerRunnableStep) (bool, error)
 	GetExecutionJob(context.Context, string) (domain.ExecutionJob, error)
+	UpdateRunnableStepTiming(context.Context, workersvc.WorkerRunnableStep, domain.ExecutionTiming) (bool, error)
 	CompleteKubernetesRunnableStep(context.Context, workersvc.WorkerRunnableStep, runner.RunStepResult) (repository.StepCompletionOutcome, error)
 }
 
@@ -240,6 +241,7 @@ func (c *Controller) reconcileActive(ctx context.Context, step workersvc.WorkerR
 	if ensureErr != nil {
 		return ensureErr
 	}
+	c.recordTiming(ctx, step, durable, job)
 	if terminal, result := c.terminalResult(ctx, job, step); terminal {
 		logErr := c.collectTerminalLogs(ctx, step, job.Name)
 		if logErr != nil {
@@ -262,6 +264,21 @@ func (c *Controller) reconcileActive(ctx context.Context, step workersvc.WorkerR
 		}
 	}
 	return nil
+}
+
+func (c *Controller) recordTiming(ctx context.Context, step workersvc.WorkerRunnableStep, durable domain.ExecutionJob, job *batchv1.Job) {
+	pods, err := c.client.ListPods(ctx, c.namespace, labels.Set{"job-name": job.Name}.String())
+	if err != nil {
+		return
+	}
+	var pod *corev1.Pod
+	if len(pods) > 0 {
+		selected := newestPod(pods)
+		pod = &selected
+	}
+	if _, err := c.service.UpdateRunnableStepTiming(ctx, step, executionTiming(durable, job, pod)); err != nil {
+		stdlog.Printf("DEBUG Kubernetes execution timing update failed job=%s: %v", step.JobID, err)
+	}
 }
 
 func (c *Controller) ensureJob(ctx context.Context, step workersvc.WorkerRunnableStep) (*batchv1.Job, error) {

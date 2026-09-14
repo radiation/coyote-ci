@@ -32,6 +32,10 @@ type workerExecutionBoundary interface {
 	RunStep(ctx context.Context, request runner.RunStepRequest) (runner.RunStepResult, buildsvc.StepCompletionReport, error)
 }
 
+type executionJobTimingUpdater interface {
+	UpdateJobTiming(ctx context.Context, jobID string, claimToken string, timing domain.ExecutionTiming) (domain.ExecutionJob, bool, error)
+}
+
 type WorkerRunnableStep struct {
 	BuildID          string
 	JobID            string
@@ -112,4 +116,13 @@ func NewExecutionWorkerServiceWithLease(builds workerExecutionBoundary, workerID
 
 func (w *ExecutionWorkerService) SetWorkerRepository(repo repository.WorkerRepository) {
 	w.workerRepo = repo
+}
+
+func (w *ExecutionWorkerService) UpdateRunnableStepTiming(ctx context.Context, step WorkerRunnableStep, timing domain.ExecutionTiming) (bool, error) {
+	updater, ok := w.builds.(executionJobTimingUpdater)
+	if !ok {
+		return false, nil
+	}
+	_, updated, err := updater.UpdateJobTiming(ctx, step.JobID, step.ClaimToken, timing)
+	return updated, err
 }

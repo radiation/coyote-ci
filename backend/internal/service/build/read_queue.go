@@ -57,7 +57,18 @@ func (s *BuildService) GetJobsByBuildID(ctx context.Context, buildID string) ([]
 	if s.executionJobRepo == nil {
 		return []domain.ExecutionJob{}, nil
 	}
-	return s.executionJobRepo.GetJobsByBuildID(ctx, buildID)
+	jobs, err := s.executionJobRepo.GetJobsByBuildID(ctx, buildID)
+	if err != nil {
+		return nil, err
+	}
+	for index := range jobs {
+		timing, timingErr := s.getJobTiming(ctx, jobs[index].ID)
+		if timingErr != nil {
+			return nil, timingErr
+		}
+		jobs[index].Timing = timing
+	}
+	return jobs, nil
 }
 
 func (s *BuildService) GetJobByID(ctx context.Context, jobID string) (domain.ExecutionJob, error) {
@@ -71,7 +82,35 @@ func (s *BuildService) GetJobByID(ctx context.Context, jobID string) (domain.Exe
 		}
 		return domain.ExecutionJob{}, err
 	}
+	timing, timingErr := s.getJobTiming(ctx, job.ID)
+	if timingErr != nil {
+		return domain.ExecutionJob{}, timingErr
+	}
+	job.Timing = timing
 	return job, nil
+}
+
+func (s *BuildService) UpdateJobTiming(ctx context.Context, jobID string, claimToken string, timing domain.ExecutionTiming) (domain.ExecutionJob, bool, error) {
+	timingRepo, ok := s.executionJobRepo.(repository.ExecutionJobTimingRepository)
+	if !ok {
+		return domain.ExecutionJob{}, false, nil
+	}
+	job, outcome, err := timingRepo.UpdateJobTiming(ctx, jobID, claimToken, timing)
+	if err != nil {
+		return domain.ExecutionJob{}, false, err
+	}
+	if outcome == repository.StepCompletionStaleClaim {
+		return job, false, ErrStaleStepClaim
+	}
+	return job, outcome == repository.StepCompletionCompleted, nil
+}
+
+func (s *BuildService) getJobTiming(ctx context.Context, jobID string) (*domain.ExecutionTiming, error) {
+	timingRepo, ok := s.executionJobRepo.(repository.ExecutionJobTimingRepository)
+	if !ok {
+		return nil, nil
+	}
+	return timingRepo.GetJobTiming(ctx, jobID)
 }
 
 func (s *BuildService) GetJobOutputsByBuildID(ctx context.Context, buildID string) ([]domain.ExecutionJobOutput, error) {

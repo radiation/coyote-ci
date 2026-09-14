@@ -1039,8 +1039,26 @@ definitions:
         type: integer
       timeout_seconds:
         type: integer
+      timing:
+        $ref: '#/definitions/api.ExecutionTimingResponse'
       working_dir:
         type: string
+    type: object
+  api.ExecutionPhaseTimingResponse:
+    properties:
+      finished_at:
+        type: string
+      name:
+        type: string
+      started_at:
+        type: string
+    type: object
+  api.ExecutionTimingResponse:
+    properties:
+      phases:
+        items:
+          $ref: '#/definitions/api.ExecutionPhaseTimingResponse'
+        type: array
     type: object
   api.GitHubAppInstallationResponse:
     properties:

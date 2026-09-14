@@ -118,6 +118,21 @@ func TestExecutionJobRepository_RenewAndComplete(t *testing.T) {
 	}
 }
 
+func TestExecutionJobRepository_GetJobTiming(t *testing.T) {
+	db, mock, setupErr := sqlmock.New()
+	if setupErr != nil {
+		t.Fatalf("new sql mock: %v", setupErr)
+	}
+	mock.ExpectQuery(`SELECT timing_json FROM execution_job_timings WHERE execution_job_id = \$1`).WithArgs("job-1").WillReturnRows(sqlmock.NewRows([]string{"timing_json"}).AddRow(`{"phases":[{"name":"pod_scheduled"}]}`))
+	timing, getErr := NewExecutionJobRepository(db).GetJobTiming(context.Background(), "job-1")
+	if getErr != nil || timing == nil || len(timing.Phases) != 1 || timing.Phases[0].Name != "pod_scheduled" {
+		t.Fatalf("timing=%+v err=%v", timing, getErr)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet sql expectations: %v", expectationsErr)
+	}
+}
+
 func TestExecutionJobRepository_CompleteJobFailurePersistsFailureKind(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

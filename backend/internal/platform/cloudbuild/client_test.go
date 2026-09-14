@@ -74,9 +74,12 @@ func TestClientHelpers(t *testing.T) {
 			t.Fatalf("status %q=%q, want %q", input, got, want)
 		}
 	}
-	result := resultFromBuild(&googlecloudbuild.Build{Status: "SUCCESS", LogUrl: "https://logs", Results: &googlecloudbuild.Results{Images: []*googlecloudbuild.BuiltImage{{Name: "registry.example/ci/coyote-ci/backend", Digest: "sha256:abc"}}}})
+	result := resultFromBuild(&googlecloudbuild.Build{Status: "SUCCESS", CreateTime: "2026-09-14T10:00:00Z", StartTime: "2026-09-14T10:01:00Z", FinishTime: "2026-09-14T10:03:00Z", LogUrl: "https://logs", Results: &googlecloudbuild.Results{Images: []*googlecloudbuild.BuiltImage{{Name: "registry.example/ci/coyote-ci/backend", Digest: "sha256:abc"}}}})
 	if result.Status != domain.ImageBuildStatusSuccess || result.ImageDigest != "sha256:abc" || result.ExternalLogURL != "https://logs" {
 		t.Fatalf("result=%+v", result)
+	}
+	if result.Timing == nil || len(result.Timing.Phases) != 4 || result.Timing.Phases[1].Name != "queue" || result.Timing.Phases[1].StartedAt == nil || result.Timing.Phases[1].FinishedAt == nil || result.Timing.Phases[1].FinishedAt.Sub(*result.Timing.Phases[1].StartedAt) != time.Minute {
+		t.Fatalf("timing=%+v", result.Timing)
 	}
 	failed := resultFromBuild(&googlecloudbuild.Build{Status: "FAILURE", StatusDetail: "status detail", FailureInfo: &googlecloudbuild.FailureInfo{Detail: "failure detail"}})
 	if failed.FailureDetail != "failure detail" {

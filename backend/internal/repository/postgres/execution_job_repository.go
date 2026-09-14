@@ -310,6 +310,62 @@ func (r *ExecutionJobRepository) RenewJobLease(ctx context.Context, jobID string
 	return existing, repository.StepCompletionInvalidTransition, nil
 }
 
+func (r *ExecutionJobRepository) UpdateJobTiming(ctx context.Context, jobID string, claimToken string, timing domain.ExecutionTiming) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+	timingJSON, err := json.Marshal(timing)
+	if err != nil {
+		return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, err
+	}
+	const query = `
+		INSERT INTO execution_job_timings (execution_job_id, timing_json, updated_at)
+		SELECT id, $3::jsonb, NOW()
+		FROM build_jobs
+		WHERE id = $1 AND status = 'running' AND claim_token = $2
+		ON CONFLICT (execution_job_id) DO UPDATE
+		SET timing_json = EXCLUDED.timing_json, updated_at = EXCLUDED.updated_at
+		RETURNING execution_job_id
+	`
+	var updatedID string
+	scanErr := r.db.QueryRowContext(ctx, query, jobID, claimToken, string(timingJSON)).Scan(&updatedID)
+	if scanErr == nil {
+		job, getErr := r.GetJobByID(ctx, jobID)
+		if getErr != nil {
+			return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, getErr
+		}
+		job.Timing = &timing
+		return job, repository.StepCompletionCompleted, nil
+	}
+	if !errors.Is(scanErr, sql.ErrNoRows) {
+		return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, scanErr
+	}
+	existing, currentErr := r.GetJobByID(ctx, jobID)
+	if currentErr != nil {
+		return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, currentErr
+	}
+	if domain.IsTerminalExecutionJobStatus(existing.Status) {
+		return existing, repository.StepCompletionDuplicateTerminal, nil
+	}
+	if existing.Status == domain.ExecutionJobStatusRunning {
+		return existing, repository.StepCompletionStaleClaim, nil
+	}
+	return existing, repository.StepCompletionInvalidTransition, nil
+}
+
+func (r *ExecutionJobRepository) GetJobTiming(ctx context.Context, jobID string) (*domain.ExecutionTiming, error) {
+	var raw []byte
+	err := r.db.QueryRowContext(ctx, `SELECT timing_json FROM execution_job_timings WHERE execution_job_id = $1`, jobID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var timing domain.ExecutionTiming
+	if err := json.Unmarshal(raw, &timing); err != nil {
+		return nil, err
+	}
+	return &timing, nil
+}
+
 func (r *ExecutionJobRepository) CompleteJobSuccess(ctx context.Context, jobID string, claimToken string, finishedAt time.Time, exitCode int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
 	return r.completeJob(ctx, jobID, claimToken, domain.ExecutionJobStatusSuccess, nil, nil, &exitCode, finishedAt, outputRefs)
 }

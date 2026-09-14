@@ -129,6 +129,7 @@ type ExecutionJob struct {
 	FailureKind      *ExecutionFailureKind
 	ExitCode         *int
 	OutputRefs       []ArtifactRef
+	Timing           *ExecutionTiming
 }
 
 func BuildSpecDigest(specJSON string) *string {

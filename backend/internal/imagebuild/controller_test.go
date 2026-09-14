@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -50,6 +51,30 @@ func TestControllerStagesSubmitsRenewsAndCompletesImageBuild(t *testing.T) {
 	}
 }
 
+func TestControllerCompletesWhenTimingPersistenceFails(t *testing.T) {
+	execution := newExecutionFake(t)
+	execution.timingErr = errors.New("timing store unavailable")
+	createdAt := time.Date(2026, time.September, 14, 10, 0, 0, 0, time.UTC)
+	startedAt := createdAt.Add(time.Minute)
+	finishedAt := startedAt.Add(time.Minute)
+	builder := &builderFake{result: domain.ImageBuildResult{
+		Status:      domain.ImageBuildStatusSuccess,
+		ImageDigest: "sha256:abc",
+		Timing: &domain.ExecutionTiming{Phases: []domain.ExecutionPhaseTiming{
+			{Name: "queue", StartedAt: &createdAt, FinishedAt: &startedAt},
+			{Name: "command", StartedAt: &startedAt, FinishedAt: &finishedAt},
+		}},
+	}}
+	controller, newErr := NewController(execution, memoryrepo.NewExternalImageBuildRepository(), builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if reconcileErr != nil || active || execution.completions != 1 || execution.result.Status != runner.RunStepStatusSuccess {
+		t.Fatalf("active=%t err=%v completions=%d result=%+v", active, reconcileErr, execution.completions, execution.result)
+	}
+}
 func TestControllerAdoptsExistingProviderBuildAndCancelsCanceledJob(t *testing.T) {
 	execution := newExecutionFake(t)
 	records := memoryrepo.NewExternalImageBuildRepository()
@@ -188,6 +213,8 @@ type executionFake struct {
 	renewErr    error
 	completions int
 	result      runner.RunStepResult
+	timing      domain.ExecutionTiming
+	timingErr   error
 }
 
 func newExecutionFake(t *testing.T) *executionFake {
@@ -211,6 +238,10 @@ func (f *executionFake) RenewRunnableStepLease(context.Context, workersvc.Worker
 		return false, f.renewErr
 	}
 	return !f.renewLost, nil
+}
+func (f *executionFake) UpdateRunnableStepTiming(_ context.Context, _ workersvc.WorkerRunnableStep, timing domain.ExecutionTiming) (bool, error) {
+	f.timing = timing
+	return true, f.timingErr
 }
 func (f *executionFake) CompleteKubernetesRunnableStep(_ context.Context, _ workersvc.WorkerRunnableStep, result runner.RunStepResult) (repository.StepCompletionOutcome, error) {
 	f.completions++

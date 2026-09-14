@@ -10,6 +10,13 @@ import (
 
 var ErrExecutionJobNotFound = errors.New("execution job not found")
 
+// ExecutionJobTimingRepository is an optional capability implemented by durable
+// execution-job stores that retain provider timing observations.
+type ExecutionJobTimingRepository interface {
+	UpdateJobTiming(ctx context.Context, jobID string, claimToken string, timing domain.ExecutionTiming) (domain.ExecutionJob, StepCompletionOutcome, error)
+	GetJobTiming(ctx context.Context, jobID string) (*domain.ExecutionTiming, error)
+}
+
 type ExecutionJobRepository interface {
 	CreateJobsForBuild(ctx context.Context, jobs []domain.ExecutionJob) ([]domain.ExecutionJob, error)
 	GetJobsByBuildID(ctx context.Context, buildID string) ([]domain.ExecutionJob, error)

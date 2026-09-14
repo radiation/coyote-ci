@@ -163,6 +163,7 @@ func (c *Client) resourceName(handle domain.ImageBuildHandle) string {
 
 func resultFromBuild(build *googlecloudbuild.Build) domain.ImageBuildResult {
 	result := domain.ImageBuildResult{Status: mapStatus(build.Status), ExternalLogURL: build.LogUrl, FailureDetail: build.StatusDetail}
+	result.Timing = cloudBuildTiming(build.CreateTime, build.StartTime, build.FinishTime)
 	if build.FailureInfo != nil && build.FailureInfo.Detail != "" {
 		result.FailureDetail = build.FailureInfo.Detail
 	}
@@ -170,6 +171,33 @@ func resultFromBuild(build *googlecloudbuild.Build) domain.ImageBuildResult {
 		result.ImageDigest = build.Results.Images[0].Digest
 	}
 	return result
+}
+
+func cloudBuildTiming(createdAt, startedAt, finishedAt string) *domain.ExecutionTiming {
+	parse := func(value string) *time.Time {
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			return nil
+		}
+		return &parsed
+	}
+	submitted := parse(createdAt)
+	started := parse(startedAt)
+	finished := parse(finishedAt)
+	if submitted == nil && started == nil && finished == nil {
+		return nil
+	}
+	phases := []domain.ExecutionPhaseTiming{{Name: "submission", StartedAt: submitted}}
+	if submitted != nil {
+		phases = append(phases, domain.ExecutionPhaseTiming{Name: "queue", StartedAt: submitted, FinishedAt: started})
+	}
+	if started != nil || finished != nil {
+		phases = append(phases, domain.ExecutionPhaseTiming{Name: "command", StartedAt: started, FinishedAt: finished})
+	}
+	if submitted != nil && finished != nil {
+		phases = append(phases, domain.ExecutionPhaseTiming{Name: "total_execution", StartedAt: submitted, FinishedAt: finished})
+	}
+	return &domain.ExecutionTiming{Phases: phases}
 }
 
 func mapStatus(status string) domain.ImageBuildStatus {
