@@ -90,6 +90,28 @@ func TestBuildJobWithoutTimeoutKeepsOriginalCommand(t *testing.T) {
 	}
 }
 
+func TestControllerRejectsTimedStepWithoutWorkspaceHelper(t *testing.T) {
+	step := testStep()
+	step.TimeoutSeconds = 30
+	service := &fakeExecutionService{step: step, found: true}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default")
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("reconcile: %v", reconcileErr)
+	}
+	if client.createCalls != 0 || service.completeCalls != 1 || !strings.Contains(service.result.Stderr, "command timeout requires a workspace helper image") {
+		t.Fatalf("creates=%d completions=%d result=%#v", client.createCalls, service.completeCalls, service.result)
+	}
+}
+
+func TestControllerWithMaxInFlightJobsNormalizesInvalidCapacity(t *testing.T) {
+	controller := NewController(newFakeClient(), &fakeExecutionService{}, nil, "default")
+	if controller.WithMaxInFlightJobs(0) != controller || controller.maxInFlightJobs != 1 {
+		t.Fatalf("controller=%#v", controller)
+	}
+}
+
 func TestControllerDispatchesImageBuildWithoutCreatingKubernetesJob(t *testing.T) {
 	step := testStep()
 	step.ExecutionKind = domain.ExecutionKindImageBuild
@@ -111,6 +133,7 @@ func TestControllerDispatchesImageBuildWithoutCreatingKubernetesJob(t *testing.T
 
 func TestControllerCreatesWorkspaceHelperLifecycle(t *testing.T) {
 	step := testStep()
+	step.TimeoutSeconds = 30
 	helper := WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper"}
 	job := buildJob("ci", step, helper)
 	pod := job.Spec.Template.Spec
@@ -177,6 +200,7 @@ func TestBuildJobWithArtifactHelperUsesIsolatedCredentials(t *testing.T) {
 
 func TestBuildJobWithCacheHelpersUsesOrderedLifecycleAndIsolatedCredentials(t *testing.T) {
 	step := testStep()
+	step.TimeoutSeconds = 30
 	step.Cache = &domain.StepCacheConfig{Preset: "go", Policy: domain.CachePolicyPullPush}
 	helper := WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper", CacheEnabled: true}
 	pod := buildJob("ci", step, helper).Spec.Template.Spec
@@ -618,12 +642,13 @@ func TestControllerUsesJobDeadlineExceededForTimeout(t *testing.T) {
 
 func TestControllerUsesCommandTimeoutExitCodeForTimeout(t *testing.T) {
 	step := testStep()
+	step.TimeoutSeconds = 30
 	service := &fakeExecutionService{step: step, found: true}
 	client := newFakeClient()
 	job := completedJob(step, commandTimeoutExitCode, "Error", "command failed")
 	client.jobs[jobName(step.JobID)] = job
 	client.pods = []corev1.Pod{terminatedBuildPod(commandTimeoutExitCode, "Error", "command failed")}
-	controller := NewController(client, service, nil, "default")
+	controller := NewController(client, service, nil, "default").WithWorkspaceHelper(WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper"})
 
 	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
 		t.Fatalf("reconcile: %v", reconcileErr)
@@ -1374,7 +1399,7 @@ func (s *recordingLogSink) AppendStepLogChunk(_ context.Context, chunk logs.Step
 }
 
 func testStep() workersvc.WorkerRunnableStep {
-	return workersvc.WorkerRunnableStep{BuildID: "build-1", JobID: "7f1cc887-8a8c-4310-9f13-53ff7c8e04ef", StepID: "step-1", StepIndex: 0, StepName: "test", WorkerID: "worker-1", ClaimToken: "claim-1", NodeID: "build-node", AttemptNumber: 3, Image: "alpine:3.20", Command: "sh", Args: []string{"-c", "echo ok"}, Env: map[string]string{"A": "b"}, WorkingDir: ".", TimeoutSeconds: 30}
+	return workersvc.WorkerRunnableStep{BuildID: "build-1", JobID: "7f1cc887-8a8c-4310-9f13-53ff7c8e04ef", StepID: "step-1", StepIndex: 0, StepName: "test", WorkerID: "worker-1", ClaimToken: "claim-1", NodeID: "build-node", AttemptNumber: 3, Image: "alpine:3.20", Command: "sh", Args: []string{"-c", "echo ok"}, Env: map[string]string{"A": "b"}, WorkingDir: "."}
 }
 func completedJob(step workersvc.WorkerRunnableStep, exitCode int32, reason, message string) *batchv1.Job {
 	job := buildJob("default", step)

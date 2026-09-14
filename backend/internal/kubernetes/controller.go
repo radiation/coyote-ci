@@ -188,6 +188,9 @@ func (c *Controller) reconcileClaimed(ctx context.Context, step workersvc.Worker
 	if c.workspacePublicationEnabled && (strings.TrimSpace(c.workspaceHelper.Image) == "" || strings.TrimSpace(c.workspaceHelper.InternalAPIURL) == "" || strings.TrimSpace(c.workspaceHelper.ServiceAccountName) == "") {
 		return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "kubernetes workspace helper configuration is incomplete", StartedAt: c.now(), FinishedAt: c.now()})
 	}
+	if step.TimeoutSeconds > 0 && strings.TrimSpace(c.workspaceHelper.Image) == "" {
+		return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "kubernetes command timeout requires a workspace helper image", StartedAt: c.now(), FinishedAt: c.now()})
+	}
 	if validationErr := c.service.ValidateKubernetesRunnableStep(ctx, step); validationErr != nil {
 		if !workersvc.IsKubernetesExecutionCapabilityError(validationErr) {
 			return validationErr

@@ -90,6 +90,13 @@ func (c *Controller) ReconcileClaimed(ctx context.Context, step workersvc.Worker
 				if !isRetryableSubmissionError(findErr) {
 					return false, c.complete(ctx, step, false, submissionFailureMessage(findErr))
 				}
+				continued, renewErr := c.service.RenewRunnableStepLease(ctx, step)
+				if renewErr != nil {
+					return true, errors.Join(findErr, renewErr)
+				}
+				if !continued {
+					return false, nil
+				}
 				return true, findErr
 			}
 		}

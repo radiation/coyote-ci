@@ -79,6 +79,10 @@ func main() {
 			if errors.As(commandErr, &timeoutErr) {
 				os.Exit(124)
 			}
+			var exitErr *exec.ExitError
+			if errors.As(commandErr, &exitErr) && exitErr.ExitCode() >= 0 {
+				os.Exit(exitErr.ExitCode())
+			}
 			log.Fatalf("workspace helper command failed: %v", commandErr)
 		}
 		return

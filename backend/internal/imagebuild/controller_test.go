@@ -139,8 +139,38 @@ func TestControllerKeepsRetryableSubmissionErrorActive(t *testing.T) {
 	}
 
 	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
-	if !active || !errors.Is(reconcileErr, builder.submitErr) || execution.completions != 0 {
-		t.Fatalf("active=%t err=%v completions=%d", active, reconcileErr, execution.completions)
+	if !active || !errors.Is(reconcileErr, builder.submitErr) || execution.completions != 0 || execution.renewCalls != 1 {
+		t.Fatalf("active=%t err=%v completions=%d renewals=%d", active, reconcileErr, execution.completions, execution.renewCalls)
+	}
+}
+
+func TestControllerStopsRetryableSubmissionWhenLeaseIsLost(t *testing.T) {
+	execution := newExecutionFake(t)
+	execution.renewLost = true
+	builder := &builderFake{submitErr: retryableBuilderError{err: errors.New("service unavailable"), retryable: true}}
+	controller, newErr := NewController(execution, memoryrepo.NewExternalImageBuildRepository(), builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if active || reconcileErr != nil || execution.completions != 0 || execution.renewCalls != 1 || builder.submitCalls != 1 {
+		t.Fatalf("active=%t err=%v completions=%d renewals=%d submissions=%d", active, reconcileErr, execution.completions, execution.renewCalls, builder.submitCalls)
+	}
+}
+
+func TestControllerReturnsRetryableSubmissionAndLeaseRenewalErrors(t *testing.T) {
+	execution := newExecutionFake(t)
+	execution.renewErr = errors.New("lease renewal unavailable")
+	builder := &builderFake{submitErr: retryableBuilderError{err: errors.New("service unavailable"), retryable: true}}
+	controller, newErr := NewController(execution, memoryrepo.NewExternalImageBuildRepository(), builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if !active || !errors.Is(reconcileErr, builder.submitErr) || !errors.Is(reconcileErr, execution.renewErr) || execution.completions != 0 || execution.renewCalls != 1 {
+		t.Fatalf("active=%t err=%v completions=%d renewals=%d", active, reconcileErr, execution.completions, execution.renewCalls)
 	}
 }
 
@@ -154,6 +184,8 @@ type executionFake struct {
 	job         domain.ExecutionJob
 	step        workersvc.WorkerRunnableStep
 	renewCalls  int
+	renewLost   bool
+	renewErr    error
 	completions int
 	result      runner.RunStepResult
 }
@@ -175,7 +207,10 @@ func (f *executionFake) GetBuild(context.Context, string) (domain.Build, error) 
 }
 func (f *executionFake) RenewRunnableStepLease(context.Context, workersvc.WorkerRunnableStep) (bool, error) {
 	f.renewCalls++
-	return true, nil
+	if f.renewErr != nil {
+		return false, f.renewErr
+	}
+	return !f.renewLost, nil
 }
 func (f *executionFake) CompleteKubernetesRunnableStep(_ context.Context, _ workersvc.WorkerRunnableStep, result runner.RunStepResult) (repository.StepCompletionOutcome, error) {
 	f.completions++

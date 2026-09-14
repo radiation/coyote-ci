@@ -3,8 +3,11 @@ package cloudbuild
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -126,6 +129,36 @@ func TestClientCallsCloudBuildAPI(t *testing.T) {
 	}
 }
 
+func TestClientSubmitClassifiesProviderErrors(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		statusCode int
+		retryable  bool
+	}{
+		{name: "bad request", statusCode: http.StatusBadRequest},
+		{name: "unavailable", statusCode: http.StatusServiceUnavailable, retryable: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(testCase.statusCode)
+				_, _ = writer.Write([]byte(`{"error":{"code":` + strconv.Itoa(testCase.statusCode) + `,"message":"provider failure"}}`))
+			}))
+			defer server.Close()
+
+			client, newErr := New(context.Background(), Config{ProjectID: "project", Location: "us-central1", RuntimeServiceAccount: "build@example.com", ArtifactRegistryRepository: "registry.example/ci"}, option.WithEndpoint(server.URL+"/"), option.WithoutAuthentication())
+			if newErr != nil {
+				t.Fatalf("new client: %v", newErr)
+			}
+			_, submitErr := client.Submit(context.Background(), domain.ImageBuildRequest{ExecutionJobID: "job-1", Source: domain.ImageBuildSource{Bucket: "sources", Object: "source.tar.gz", Generation: "1"}, Spec: domain.RemoteImageBuildSpec{ContextPath: "backend", DockerfilePath: "backend/Dockerfile", TargetImageReference: "coyote-ci/backend"}, Timeout: time.Minute})
+			var classifiedErr *submissionError
+			if !errors.As(submitErr, &classifiedErr) || classifiedErr.Retryable() != testCase.retryable {
+				t.Fatalf("submit error=%v retryable=%t, want %t", submitErr, classifiedErr != nil && classifiedErr.Retryable(), testCase.retryable)
+			}
+		})
+	}
+}
+
 func TestNewRequiresCloudBuildConfiguration(t *testing.T) {
 	if _, err := New(context.Background(), Config{}); err == nil {
 		t.Fatal("expected incomplete configuration error")
@@ -147,5 +180,30 @@ func TestIsRetryableAPIError(t *testing.T) {
 				t.Fatalf("retryable=%t, want %t", got, testCase.want)
 			}
 		})
+	}
+}
+
+func TestIsRetryableAPIErrorForContextAndNetworkErrors(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		err  error
+	}{
+		{name: "context canceled", err: context.Canceled},
+		{name: "context deadline", err: context.DeadlineExceeded},
+		{name: "network timeout", err: &net.DNSError{IsTimeout: true}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if !isRetryableAPIError(testCase.err) {
+				t.Fatalf("error %v must be retryable", testCase.err)
+			}
+		})
+	}
+}
+
+func TestSubmissionErrorPreservesCauseAndRetryability(t *testing.T) {
+	cause := errors.New("cloud build unavailable")
+	err := &submissionError{err: cause, retryable: true}
+	if err.Error() != cause.Error() || !errors.Is(err, cause) || !err.Retryable() {
+		t.Fatalf("submission error=%v retryable=%t", err, err.Retryable())
 	}
 }
