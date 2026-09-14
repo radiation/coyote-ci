@@ -44,7 +44,7 @@ const (
 	helperEphemeralStorageRequest = "1Gi"
 	helperEphemeralStorageLimit   = "4Gi"
 	commandTimeoutExitCode        = 124
-	jobLifecycleAllowanceSeconds  = 5 * 60
+	jobLifecycleAllowanceSeconds  = 15 * 60
 	commandTimeoutToolsVolume     = "command-timeout-tools"
 	commandTimeoutToolsPath       = "/coyote-tools/worker"
 )

@@ -64,14 +64,15 @@ func TestControllerCreatesDeterministicSecureJob(t *testing.T) {
 
 func TestBuildJobUsesCommandTimeoutWithLifecycleAllowance(t *testing.T) {
 	step := testStep()
+	step.TimeoutSeconds = 300
 	helper := WorkspaceHelperConfig{Image: "coyote-worker:test"}
 	job := buildJob("ci", step, helper)
-	if job.Spec.ActiveDeadlineSeconds == nil || *job.Spec.ActiveDeadlineSeconds != int64(step.TimeoutSeconds+jobLifecycleAllowanceSeconds) {
-		t.Fatalf("job deadline=%v", job.Spec.ActiveDeadlineSeconds)
+	if job.Spec.ActiveDeadlineSeconds == nil || *job.Spec.ActiveDeadlineSeconds != 1200 {
+		t.Fatalf("job deadline=%v, want 1200", job.Spec.ActiveDeadlineSeconds)
 	}
 	pod := job.Spec.Template.Spec
 	build := pod.Containers[0]
-	if strings.Join(build.Command, " ") != commandTimeoutToolsPath || strings.Join(build.Args, " ") != "timeout 30 sh -c echo ok" || !hasMount(build, commandTimeoutToolsVolume) {
+	if strings.Join(build.Command, " ") != commandTimeoutToolsPath || strings.Join(build.Args, " ") != "timeout 300 sh -c echo ok" || !hasMount(build, commandTimeoutToolsVolume) {
 		t.Fatalf("timed build=%#v", build)
 	}
 	if len(pod.InitContainers) == 0 || pod.InitContainers[0].Name != "command-timeout-install" || strings.Join(pod.InitContainers[0].Command, " ") != "/app/worker timeout install" {
