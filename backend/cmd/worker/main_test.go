@@ -42,6 +42,36 @@ func TestDatabaseConfigError(t *testing.T) {
 	}
 }
 
+func TestRunWorkspaceHelperCommandRoutesCommandTimeout(t *testing.T) {
+	handled, commandErr := runWorkspaceHelperCommand(context.Background(), []string{"timeout", "1", "sh", "-c", "exit 0"})
+	if commandErr != nil || !handled {
+		t.Fatalf("handled=%t error=%v", handled, commandErr)
+	}
+}
+
+func TestRunCommandTimeoutValidatesAndEnforcesDeadline(t *testing.T) {
+	for _, args := range [][]string{
+		{"not-timeout", "1", "sh"},
+		{"timeout", "0", "sh"},
+		{"timeout", "not-a-number", "sh"},
+	} {
+		if err := runCommandTimeout(context.Background(), args); err == nil {
+			t.Fatalf("args=%q: expected validation error", args)
+		}
+	}
+
+	if err := runCommandTimeout(context.Background(), []string{"timeout", "1", "sh", "-c", "exit 0"}); err != nil {
+		t.Fatalf("successful command: %v", err)
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	err := runCommandTimeout(ctx, []string{"timeout", "1", "sh", "-c", "exit 0"})
+	var timeoutErr commandTimeoutExitError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("timed command error=%v, want commandTimeoutExitError", err)
+	}
+}
+
 func TestMainFailsForInvalidDatabaseURLFile(t *testing.T) {
 	if os.Getenv("COYOTE_TEST_INVALID_DATABASE_CONFIG") == "1" {
 		main()

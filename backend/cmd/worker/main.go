@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	nethttp "net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -72,6 +75,14 @@ func newRepositoryAwareCheckoutResolver(connections checkoutResolverConnectionRe
 func main() {
 	if handled, commandErr := runWorkspaceHelperCommand(context.Background(), os.Args[1:]); handled {
 		if commandErr != nil {
+			var timeoutErr commandTimeoutExitError
+			if errors.As(commandErr, &timeoutErr) {
+				os.Exit(124)
+			}
+			var exitErr *exec.ExitError
+			if errors.As(commandErr, &exitErr) && exitErr.ExitCode() >= 0 {
+				os.Exit(exitErr.ExitCode())
+			}
 			log.Fatalf("workspace helper command failed: %v", commandErr)
 		}
 		return
@@ -203,6 +214,12 @@ func databaseConfigError(err error) string {
 }
 
 func runWorkspaceHelperCommand(ctx context.Context, args []string) (bool, error) {
+	if len(args) == 2 && args[0] == "timeout" && args[1] == "install" {
+		return true, runCommandTimeout(ctx, args)
+	}
+	if len(args) >= 3 && args[0] == "timeout" {
+		return true, runCommandTimeout(ctx, args)
+	}
 	if len(args) != 2 {
 		return false, nil
 	}
@@ -224,6 +241,50 @@ func runWorkspaceHelperCommand(ctx context.Context, args []string) (bool, error)
 	}
 }
 
+func runCommandTimeout(ctx context.Context, args []string) error {
+	if len(args) == 2 && args[1] == "install" {
+		return installCommandTimeout()
+	}
+	if len(args) < 3 || args[0] != "timeout" {
+		return errors.New("timeout command requires seconds and command")
+	}
+	seconds, parseErr := strconv.Atoi(args[1])
+	if parseErr != nil || seconds <= 0 {
+		return fmt.Errorf("timeout seconds must be a positive integer: %q", args[1])
+	}
+	execCtx, cancel := context.WithTimeout(ctx, time.Duration(seconds)*time.Second)
+	defer cancel()
+	command := exec.CommandContext(execCtx, args[2], args[3:]...)
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	runErr := command.Run()
+	if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
+		fmt.Fprintf(os.Stderr, "step execution timed out after %ds\n", seconds)
+		return commandTimeoutExitError{}
+	}
+	return runErr
+}
+
+type commandTimeoutExitError struct{}
+
+func (commandTimeoutExitError) Error() string { return "step execution timed out" }
+
+func installCommandTimeout() error {
+	source, openErr := os.Open("/app/worker")
+	if openErr != nil {
+		return openErr
+	}
+	destination, createErr := os.OpenFile("/coyote-tools/worker", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
+	if createErr != nil {
+		return errors.Join(createErr, source.Close())
+	}
+	_, copyErr := io.Copy(destination, source)
+	sourceCloseErr := source.Close()
+	destinationCloseErr := destination.Close()
+	return errors.Join(copyErr, sourceCloseErr, destinationCloseErr)
+}
+
 var newKubernetesClient = kubernetesexec.NewClient
 
 func resolveExecutionController(cfg config.Config, workerService *workersvc.ExecutionWorkerService, logSink logs.LogSink) (executionsvc.Controller, error) {
@@ -243,6 +304,7 @@ func resolveExecutionControllerWithImageBuild(cfg config.Config, workerService *
 		return nil, err
 	}
 	controller := kubernetesexec.NewController(client, workerService, logSink, cfg.WorkerKubernetesNamespace)
+	controller.WithMaxInFlightJobs(cfg.WorkerKubernetesMaxInFlightJobs)
 	controller.WithTestStepNodeNames(kubernetesTestStepNodes(cfg.WorkerKubernetesTestStepNodes))
 	workerService.SetKubernetesWorkspaceLifecycleEnabled(helpersEnabled)
 	workerService.SetKubernetesCacheLifecycleEnabled(helpersEnabled && cfg.KubernetesCacheHelperEnabled)

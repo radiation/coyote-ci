@@ -86,6 +86,18 @@ spec:
               value: kubernetes
             - name: WORKER_KUBERNETES_NAMESPACE
               value: coyote-ci
+            - name: GOOGLE_CLOUD_PROJECT
+              value: "__GCP_PROJECT__"
+            - name: CLOUD_BUILD_LOCATION
+              value: "__CLOUD_BUILD_LOCATION__"
+            - name: CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT
+              value: "__CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT__"
+            - name: CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY
+              value: "__CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY__"
+            - name: CLOUD_BUILD_SOURCE_BUCKET
+              value: "__CLOUD_BUILD_SOURCE_BUCKET__"
+            - name: WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS
+              value: "__WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS__"
             - name: WORKER_KUBERNETES_HELPER_IMAGE
               value: us-central1-docker.pkg.dev/bryanchoate/coyote-ci/coyote-worker:gke-smoke
             - name: WORKER_KUBERNETES_INTERNAL_API_URL

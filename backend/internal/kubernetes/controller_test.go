@@ -59,6 +59,57 @@ func TestControllerCreatesDeterministicSecureJob(t *testing.T) {
 		t.Fatalf("build image pull policy=%q, want unchanged default", container.ImagePullPolicy)
 	}
 	assertEphemeralStorage(t, container, buildEphemeralStorageRequest, buildEphemeralStorageLimit)
+	assertBuildResources(t, container)
+}
+
+func TestBuildJobUsesCommandTimeoutWithLifecycleAllowance(t *testing.T) {
+	step := testStep()
+	step.TimeoutSeconds = 300
+	helper := WorkspaceHelperConfig{Image: "coyote-worker:test"}
+	job := buildJob("ci", step, helper)
+	if job.Spec.ActiveDeadlineSeconds == nil || *job.Spec.ActiveDeadlineSeconds != 1200 {
+		t.Fatalf("job deadline=%v, want 1200", job.Spec.ActiveDeadlineSeconds)
+	}
+	pod := job.Spec.Template.Spec
+	build := pod.Containers[0]
+	if strings.Join(build.Command, " ") != commandTimeoutToolsPath || strings.Join(build.Args, " ") != "timeout 300 sh -c echo ok" || !hasMount(build, commandTimeoutToolsVolume) {
+		t.Fatalf("timed build=%#v", build)
+	}
+	if len(pod.InitContainers) == 0 || pod.InitContainers[0].Name != "command-timeout-install" || strings.Join(pod.InitContainers[0].Command, " ") != "/app/worker timeout install" {
+		t.Fatalf("timeout installer=%#v", pod.InitContainers)
+	}
+}
+
+func TestBuildJobWithoutTimeoutKeepsOriginalCommand(t *testing.T) {
+	step := testStep()
+	step.TimeoutSeconds = 0
+	job := buildJob("ci", step, WorkspaceHelperConfig{Image: "coyote-worker:test"})
+	build := job.Spec.Template.Spec.Containers[0]
+	if job.Spec.ActiveDeadlineSeconds != nil || strings.Join(build.Command, " ") != "sh" || strings.Join(build.Args, " ") != "-c echo ok" || hasMount(build, commandTimeoutToolsVolume) {
+		t.Fatalf("untimed job=%#v", job)
+	}
+}
+
+func TestControllerRejectsTimedStepWithoutWorkspaceHelper(t *testing.T) {
+	step := testStep()
+	step.TimeoutSeconds = 30
+	service := &fakeExecutionService{step: step, found: true}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default")
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("reconcile: %v", reconcileErr)
+	}
+	if client.createCalls != 0 || service.completeCalls != 1 || !strings.Contains(service.result.Stderr, "command timeout requires a workspace helper image") {
+		t.Fatalf("creates=%d completions=%d result=%#v", client.createCalls, service.completeCalls, service.result)
+	}
+}
+
+func TestControllerWithMaxInFlightJobsNormalizesInvalidCapacity(t *testing.T) {
+	controller := NewController(newFakeClient(), &fakeExecutionService{}, nil, "default")
+	if controller.WithMaxInFlightJobs(0) != controller || controller.maxInFlightJobs != 1 {
+		t.Fatalf("controller=%#v", controller)
+	}
 }
 
 func TestControllerDispatchesImageBuildWithoutCreatingKubernetesJob(t *testing.T) {
@@ -82,27 +133,28 @@ func TestControllerDispatchesImageBuildWithoutCreatingKubernetesJob(t *testing.T
 
 func TestControllerCreatesWorkspaceHelperLifecycle(t *testing.T) {
 	step := testStep()
+	step.TimeoutSeconds = 30
 	helper := WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper"}
 	job := buildJob("ci", step, helper)
 	pod := job.Spec.Template.Spec
-	if pod.ServiceAccountName != helper.ServiceAccountName || len(pod.InitContainers) != 1 || len(pod.Containers) != 2 {
+	if pod.ServiceAccountName != helper.ServiceAccountName || len(pod.InitContainers) != 2 || len(pod.Containers) != 2 {
 		t.Fatalf("pod composition=%#v", pod)
 	}
-	if pod.InitContainers[0].Name != "workspace-prepare" || strings.Join(pod.InitContainers[0].Command, " ") != "/app/worker workspace prepare" {
-		t.Fatalf("prepare=%#v", pod.InitContainers[0])
+	if pod.InitContainers[1].Name != "workspace-prepare" || strings.Join(pod.InitContainers[1].Command, " ") != "/app/worker workspace prepare" {
+		t.Fatalf("prepare=%#v", pod.InitContainers[1])
 	}
 	publish := pod.Containers[1]
 	if publish.Name != "workspace-publish" || strings.Join(publish.Command, " ") != "/app/worker workspace publish-after-build" {
 		t.Fatalf("publish=%#v", publish)
 	}
 	build := pod.Containers[0]
-	assertEphemeralStorage(t, pod.InitContainers[0], helperEphemeralStorageRequest, helperEphemeralStorageLimit)
+	assertEphemeralStorage(t, pod.InitContainers[1], helperEphemeralStorageRequest, helperEphemeralStorageLimit)
 	assertEphemeralStorage(t, publish, helperEphemeralStorageRequest, helperEphemeralStorageLimit)
-	if len(build.VolumeMounts) != 1 || build.VolumeMounts[0].Name != "workspace" {
+	if !hasMount(build, "workspace") || !hasMount(build, commandTimeoutToolsVolume) {
 		t.Fatalf("build mounts=%#v", build.VolumeMounts)
 	}
-	if !hasMount(pod.InitContainers[0], "workspace-prepare-token") || hasMount(pod.InitContainers[0], "workspace-publish-token") || hasMount(pod.InitContainers[0], "workspace-kubernetes-api") {
-		t.Fatalf("prepare mounts=%#v", pod.InitContainers[0].VolumeMounts)
+	if !hasMount(pod.InitContainers[1], "workspace-prepare-token") || hasMount(pod.InitContainers[1], "workspace-publish-token") || hasMount(pod.InitContainers[1], "workspace-kubernetes-api") {
+		t.Fatalf("prepare mounts=%#v", pod.InitContainers[1].VolumeMounts)
 	}
 	if !hasMount(publish, "workspace-publish-token") || !hasMount(publish, "workspace-kubernetes-api") || hasMount(publish, "workspace-prepare-token") {
 		t.Fatalf("publish mounts=%#v", publish.VolumeMounts)
@@ -148,32 +200,33 @@ func TestBuildJobWithArtifactHelperUsesIsolatedCredentials(t *testing.T) {
 
 func TestBuildJobWithCacheHelpersUsesOrderedLifecycleAndIsolatedCredentials(t *testing.T) {
 	step := testStep()
+	step.TimeoutSeconds = 30
 	step.Cache = &domain.StepCacheConfig{Preset: "go", Policy: domain.CachePolicyPullPush}
 	helper := WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper", CacheEnabled: true}
 	pod := buildJob("ci", step, helper).Spec.Template.Spec
 
-	if len(pod.InitContainers) != 2 || pod.InitContainers[0].Name != "workspace-prepare" || pod.InitContainers[1].Name != "cache-restore" {
+	if len(pod.InitContainers) != 3 || pod.InitContainers[0].Name != "command-timeout-install" || pod.InitContainers[1].Name != "workspace-prepare" || pod.InitContainers[2].Name != "cache-restore" {
 		t.Fatalf("init lifecycle=%#v", pod.InitContainers)
 	}
 	if len(pod.Containers) != 3 || pod.Containers[0].Name != "build" || pod.Containers[1].Name != "workspace-publish" || pod.Containers[2].Name != "cache-save" {
 		t.Fatalf("container lifecycle=%#v", pod.Containers)
 	}
 	build := pod.Containers[0]
-	assertEphemeralStorage(t, pod.InitContainers[1], helperEphemeralStorageRequest, helperEphemeralStorageLimit)
+	assertEphemeralStorage(t, pod.InitContainers[2], helperEphemeralStorageRequest, helperEphemeralStorageLimit)
 	assertEphemeralStorage(t, pod.Containers[2], helperEphemeralStorageRequest, helperEphemeralStorageLimit)
 	if hasMount(build, "cache-restore-token") || hasMount(build, "cache-save-token") || hasMount(build, "cache-helper-state") || hasMount(build, "workspace-kubernetes-api") {
 		t.Fatalf("build must not receive helper or Kubernetes credentials: %#v", build.VolumeMounts)
 	}
-	if len(build.VolumeMounts) != 3 || build.VolumeMounts[1].MountPath != "/go/pkg/mod" || build.VolumeMounts[1].SubPath != "paths/000" || build.VolumeMounts[2].MountPath != "/root/.cache/go-build" || build.VolumeMounts[2].SubPath != "paths/001" {
+	if !hasMountPath(build, "/go/pkg/mod", "paths/000") || !hasMountPath(build, "/root/.cache/go-build", "paths/001") {
 		t.Fatalf("go cache mounts=%#v", build.VolumeMounts)
 	}
-	if !hasMount(pod.InitContainers[1], "cache-restore-token") || !hasMount(pod.InitContainers[1], "cache-helper-state") || hasMount(pod.InitContainers[1], "cache-save-token") || hasMount(pod.InitContainers[1], "workspace-kubernetes-api") {
-		t.Fatalf("restore mounts=%#v", pod.InitContainers[1].VolumeMounts)
+	if !hasMount(pod.InitContainers[2], "cache-restore-token") || !hasMount(pod.InitContainers[2], "cache-helper-state") || hasMount(pod.InitContainers[2], "cache-save-token") || hasMount(pod.InitContainers[2], "workspace-kubernetes-api") {
+		t.Fatalf("restore mounts=%#v", pod.InitContainers[2].VolumeMounts)
 	}
 	if !hasMount(pod.Containers[2], "cache-save-token") || !hasMount(pod.Containers[2], "cache-helper-state") || !hasMount(pod.Containers[2], "workspace-kubernetes-api") || hasMount(pod.Containers[2], "cache-restore-token") {
 		t.Fatalf("save mounts=%#v", pod.Containers[2].VolumeMounts)
 	}
-	for _, container := range []corev1.Container{pod.InitContainers[1], pod.Containers[2]} {
+	for _, container := range []corev1.Container{pod.InitContainers[2], pod.Containers[2]} {
 		if fieldPath := downwardAPIFieldPath(container.Env, "COYOTE_WORKSPACE_HELPER_POD_NAME"); fieldPath != "metadata.name" {
 			t.Fatalf("%s pod name field=%q", container.Name, fieldPath)
 		}
@@ -402,7 +455,7 @@ func TestControllerDoesNotCompleteAfterStaleClaim(t *testing.T) {
 	if err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if service.completeCalls != 1 || controller.active != nil {
+	if service.completeCalls != 1 || len(controller.active) != 0 {
 		t.Fatalf("stale completion must release active claim: completions=%d active=%#v", service.completeCalls, controller.active)
 	}
 }
@@ -583,6 +636,24 @@ func TestControllerUsesJobDeadlineExceededForTimeout(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if !service.result.TimedOut || service.result.Status != runner.RunStepStatusFailed {
+		t.Fatalf("result=%#v", service.result)
+	}
+}
+
+func TestControllerUsesCommandTimeoutExitCodeForTimeout(t *testing.T) {
+	step := testStep()
+	step.TimeoutSeconds = 30
+	service := &fakeExecutionService{step: step, found: true}
+	client := newFakeClient()
+	job := completedJob(step, commandTimeoutExitCode, "Error", "command failed")
+	client.jobs[jobName(step.JobID)] = job
+	client.pods = []corev1.Pod{terminatedBuildPod(commandTimeoutExitCode, "Error", "command failed")}
+	controller := NewController(client, service, nil, "default").WithWorkspaceHelper(WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper"})
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("reconcile: %v", reconcileErr)
+	}
+	if !service.result.TimedOut || service.result.Stderr != "step execution timed out after 30s" {
 		t.Fatalf("result=%#v", service.result)
 	}
 }
@@ -810,7 +881,7 @@ func TestControllerReturnsOperationalErrorsWithoutCompletion(t *testing.T) {
 			testCase.service.found = true
 			controller := NewController(testCase.client, testCase.service, nil, "default")
 			if testCase.active {
-				controller.active = &step
+				controller.active[step.JobID] = &step
 			}
 			err := controller.Reconcile(context.Background())
 			if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
@@ -902,7 +973,7 @@ func TestControllerHandlesStaleCompletionAndDeletionFailure(t *testing.T) {
 	if err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatalf("stale completion reconcile: %v", err)
 	}
-	if controller.active != nil {
+	if len(controller.active) != 0 {
 		t.Fatal("stale completion must release active claim")
 	}
 
@@ -911,9 +982,207 @@ func TestControllerHandlesStaleCompletionAndDeletionFailure(t *testing.T) {
 	client.jobs[jobName(step.JobID)] = buildJob("default", step)
 	client.deleteErr = errors.New("delete unavailable")
 	controller = NewController(client, service, nil, "default")
-	controller.active = &step
+	controller.active[step.JobID] = &step
 	if err := controller.Reconcile(context.Background()); err == nil || !strings.Contains(err.Error(), "delete unavailable") {
 		t.Fatalf("delete reconcile error = %v", err)
+	}
+}
+
+func TestControllerSupervisesIndependentJobsUpToConfiguredCapacity(t *testing.T) {
+	first := testStep()
+	second := testStep()
+	second.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	third := testStep()
+	third.JobID = "cc58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{first, second, third}}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2)
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("reconcile: %v", reconcileErr)
+	}
+	if len(controller.active) != 2 || len(client.jobs) != 2 || service.claimCalls != 2 {
+		t.Fatalf("active=%d jobs=%d claims=%d", len(controller.active), len(client.jobs), service.claimCalls)
+	}
+	if _, found := client.jobs[jobName(third.JobID)]; found {
+		t.Fatal("capacity must prevent a third Kubernetes Job from being created")
+	}
+}
+
+func TestControllerRefillsCapacityAfterOneJobCompletes(t *testing.T) {
+	first := testStep()
+	second := testStep()
+	second.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	third := testStep()
+	third.JobID = "cc58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{first, second}}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2)
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("initial reconcile: %v", reconcileErr)
+	}
+	service.steps = append(service.steps, third)
+	client.jobs[jobName(first.JobID)] = completedJob(first, 0, "Completed", "")
+	client.pods = []corev1.Pod{terminatedBuildPod(0, "Completed", "")}
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("refill reconcile: %v", reconcileErr)
+	}
+	if _, found := controller.active[third.JobID]; !found {
+		t.Fatal("expected newly available capacity to claim the third job")
+	}
+	if service.claimCalls != 3 {
+		t.Fatalf("claims=%d, want 3", service.claimCalls)
+	}
+}
+
+func TestControllerRenewsEachActiveJobAndContinuesAfterPeerError(t *testing.T) {
+	first := testStep()
+	second := testStep()
+	second.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{first, second}}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2)
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("initial reconcile: %v", reconcileErr)
+	}
+	service.renewCalls = 0
+	service.getErrs = map[string]error{first.JobID: errors.New("first lookup failed")}
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr == nil || !strings.Contains(reconcileErr.Error(), "first lookup failed") {
+		t.Fatalf("reconcile error=%v", reconcileErr)
+	}
+	if service.renewCalls != 1 {
+		t.Fatalf("renewals=%d, want peer renewal despite first-job error", service.renewCalls)
+	}
+}
+
+func TestControllerRefillsCapacityAndCleansUpAfterActivePeerError(t *testing.T) {
+	failed := testStep()
+	completed := testStep()
+	completed.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	replacement := testStep()
+	replacement.JobID = "cc58bf9a-09db-4b80-a66e-61fbd2209a09"
+	orphan := testStep()
+	orphan.JobID = "dd58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{failed, completed}, durableStatuses: map[string]domain.ExecutionJobStatus{orphan.JobID: domain.ExecutionJobStatusCanceled}}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2)
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("initial reconcile: %v", reconcileErr)
+	}
+	service.steps = append(service.steps, replacement)
+	service.getErrs = map[string]error{failed.JobID: errors.New("active lookup failed")}
+	client.jobs[jobName(completed.JobID)] = completedJob(completed, 0, "Completed", "")
+	client.jobs[jobName(orphan.JobID)] = buildJob("default", orphan)
+	controller.lastCancellationCleanupAt = time.Time{}
+
+	reconcileErr := controller.Reconcile(context.Background())
+	if reconcileErr == nil || !strings.Contains(reconcileErr.Error(), "active lookup failed") {
+		t.Fatalf("reconcile error=%v", reconcileErr)
+	}
+	if _, found := controller.active[replacement.JobID]; !found {
+		t.Fatal("expected free capacity to claim replacement work after peer error")
+	}
+	if client.jobs[jobName(orphan.JobID)] != nil {
+		t.Fatal("expected cancellation cleanup after active peer error")
+	}
+}
+
+func TestControllerImageBuildAndKubernetesJobShareConfiguredCapacity(t *testing.T) {
+	imageBuild := testStep()
+	imageBuild.ExecutionKind = domain.ExecutionKindImageBuild
+	regular := testStep()
+	regular.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{imageBuild, regular}}
+	client := newFakeClient()
+	imageController := &fakeImageBuildController{}
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2).WithImageBuildController(imageController)
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("reconcile: %v", reconcileErr)
+	}
+	if imageController.calls != 1 || len(controller.activeImageBuilds) != 1 || service.claimCalls != 2 || service.completeCalls != 0 {
+		t.Fatalf("image calls=%d active=%#v claims=%d completions=%d", imageController.calls, controller.activeImageBuilds, service.claimCalls, service.completeCalls)
+	}
+	if client.jobs[jobName(regular.JobID)] == nil || len(controller.active) != 1 || controller.inFlightCount() != 2 {
+		t.Fatalf("regular Kubernetes work must coexist with image build: jobs=%#v active=%#v", client.jobs, controller.active)
+	}
+}
+
+func TestControllerRetainsMultipleImageBuildsByExecutionJobID(t *testing.T) {
+	first := testStep()
+	first.ExecutionKind = domain.ExecutionKindImageBuild
+	second := testStep()
+	second.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	second.ExecutionKind = domain.ExecutionKindImageBuild
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{first, second}}
+	client := newFakeClient()
+	imageController := &fakeImageBuildController{}
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2).WithImageBuildController(imageController)
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("initial reconcile: %v", reconcileErr)
+	}
+	if len(controller.activeImageBuilds) != 2 || controller.inFlightCount() != 2 || len(imageController.steps) != 2 {
+		t.Fatalf("active=%#v in_flight=%d image calls=%#v", controller.activeImageBuilds, controller.inFlightCount(), imageController.steps)
+	}
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("follow-up reconcile: %v", reconcileErr)
+	}
+	if len(imageController.steps) != 4 || imageController.steps[2].JobID != first.JobID || imageController.steps[3].JobID != second.JobID {
+		t.Fatalf("expected independent deterministic re-supervision, calls=%#v", imageController.steps)
+	}
+}
+
+func TestControllerDropsOnlyStaleOwnerAndKeepsPeerActive(t *testing.T) {
+	first := testStep()
+	second := testStep()
+	second.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{first, second}, completeOutcome: repository.StepCompletionStaleClaim}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2)
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("initial reconcile: %v", reconcileErr)
+	}
+	client.jobs[jobName(first.JobID)] = completedJob(first, 0, "Completed", "")
+	client.pods = []corev1.Pod{terminatedBuildPod(0, "Completed", "")}
+	service.renewCalls = 0
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("stale-owner reconcile: %v", reconcileErr)
+	}
+	if _, found := controller.active[first.JobID]; found {
+		t.Fatal("stale former owner must stop supervising its job")
+	}
+	if _, found := controller.active[second.JobID]; !found || service.renewCalls != 1 {
+		t.Fatalf("peer active=%t renewals=%d", found, service.renewCalls)
+	}
+}
+
+func TestControllerCancellationSweepSkipsAllActiveJobs(t *testing.T) {
+	first := testStep()
+	second := testStep()
+	second.JobID = "bb58bf9a-09db-4b80-a66e-61fbd2209a09"
+	orphan := testStep()
+	orphan.JobID = "cc58bf9a-09db-4b80-a66e-61fbd2209a09"
+	service := &fakeExecutionService{steps: []workersvc.WorkerRunnableStep{first, second}, durableStatuses: map[string]domain.ExecutionJobStatus{orphan.JobID: domain.ExecutionJobStatusCanceled}}
+	client := newFakeClient()
+	controller := NewController(client, service, nil, "default").WithMaxInFlightJobs(2)
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("initial reconcile: %v", reconcileErr)
+	}
+	client.jobs[jobName(orphan.JobID)] = buildJob("default", orphan)
+	controller.lastCancellationCleanupAt = time.Time{}
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("cancellation sweep: %v", reconcileErr)
+	}
+	if client.jobs[jobName(orphan.JobID)] != nil {
+		t.Fatal("expected canceled orphan job to be deleted")
+	}
+	if client.jobs[jobName(first.JobID)] == nil || client.jobs[jobName(second.JobID)] == nil {
+		t.Fatal("active jobs must not be deleted by cancellation cleanup")
 	}
 }
 
@@ -948,11 +1217,14 @@ func TestClientsetDelegatesKubernetesOperations(t *testing.T) {
 
 type fakeExecutionService struct {
 	step             workersvc.WorkerRunnableStep
+	steps            []workersvc.WorkerRunnableStep
 	found            bool
 	claimUsed        bool
+	claimCalls       int
 	validateErr      error
 	claimErr         error
 	getErr           error
+	getErrs          map[string]error
 	stale            bool
 	renewCalls       int
 	renewErr         error
@@ -968,17 +1240,25 @@ type fakeExecutionService struct {
 type fakeImageBuildController struct {
 	calls int
 	step  workersvc.WorkerRunnableStep
+	steps []workersvc.WorkerRunnableStep
 }
 
 func (c *fakeImageBuildController) ReconcileClaimed(_ context.Context, step workersvc.WorkerRunnableStep) (bool, error) {
 	c.calls++
 	c.step = step
+	c.steps = append(c.steps, step)
 	return true, nil
 }
 
 func (s *fakeExecutionService) ClaimRunnableStep(context.Context) (workersvc.WorkerRunnableStep, bool, error) {
+	s.claimCalls++
 	if s.claimErr != nil {
 		return workersvc.WorkerRunnableStep{}, false, s.claimErr
+	}
+	if len(s.steps) > 0 {
+		step := s.steps[0]
+		s.steps = s.steps[1:]
+		return step, true, nil
 	}
 	if s.claimUsed {
 		return workersvc.WorkerRunnableStep{}, false, nil
@@ -994,6 +1274,9 @@ func (s *fakeExecutionService) RenewRunnableStepLease(context.Context, workersvc
 	return !s.stale, s.renewErr
 }
 func (s *fakeExecutionService) GetExecutionJob(_ context.Context, jobID string) (domain.ExecutionJob, error) {
+	if getErr := s.getErrs[jobID]; getErr != nil {
+		return domain.ExecutionJob{}, getErr
+	}
 	if s.getErr != nil {
 		return domain.ExecutionJob{}, s.getErr
 	}
@@ -1116,7 +1399,7 @@ func (s *recordingLogSink) AppendStepLogChunk(_ context.Context, chunk logs.Step
 }
 
 func testStep() workersvc.WorkerRunnableStep {
-	return workersvc.WorkerRunnableStep{BuildID: "build-1", JobID: "7f1cc887-8a8c-4310-9f13-53ff7c8e04ef", StepID: "step-1", StepIndex: 0, StepName: "test", WorkerID: "worker-1", ClaimToken: "claim-1", NodeID: "build-node", AttemptNumber: 3, Image: "alpine:3.20", Command: "sh", Args: []string{"-c", "echo ok"}, Env: map[string]string{"A": "b"}, WorkingDir: ".", TimeoutSeconds: 30}
+	return workersvc.WorkerRunnableStep{BuildID: "build-1", JobID: "7f1cc887-8a8c-4310-9f13-53ff7c8e04ef", StepID: "step-1", StepIndex: 0, StepName: "test", WorkerID: "worker-1", ClaimToken: "claim-1", NodeID: "build-node", AttemptNumber: 3, Image: "alpine:3.20", Command: "sh", Args: []string{"-c", "echo ok"}, Env: map[string]string{"A": "b"}, WorkingDir: "."}
 }
 func completedJob(step workersvc.WorkerRunnableStep, exitCode int32, reason, message string) *batchv1.Job {
 	job := buildJob("default", step)
@@ -1141,6 +1424,15 @@ func hasMount(container corev1.Container, name string) bool {
 	return false
 }
 
+func hasMountPath(container corev1.Container, path, subPath string) bool {
+	for _, mount := range container.VolumeMounts {
+		if mount.MountPath == path && mount.SubPath == subPath {
+			return true
+		}
+	}
+	return false
+}
+
 func assertEphemeralStorage(t *testing.T, container corev1.Container, request, limit string) {
 	t.Helper()
 	requested := container.Resources.Requests[corev1.ResourceEphemeralStorage]
@@ -1150,6 +1442,22 @@ func assertEphemeralStorage(t *testing.T, container corev1.Container, request, l
 	limited := container.Resources.Limits[corev1.ResourceEphemeralStorage]
 	if got := limited.String(); got != limit {
 		t.Fatalf("container %q ephemeral storage limit=%q, want %q", container.Name, got, limit)
+	}
+}
+
+func assertBuildResources(t *testing.T, container corev1.Container) {
+	t.Helper()
+	if got := container.Resources.Requests.Cpu().String(); got != buildCPURequest {
+		t.Fatalf("build CPU request=%q, want %q", got, buildCPURequest)
+	}
+	if got := container.Resources.Limits.Cpu().String(); got != buildCPULimit {
+		t.Fatalf("build CPU limit=%q, want %q", got, buildCPULimit)
+	}
+	if got := container.Resources.Requests.Memory().String(); got != buildMemoryRequest {
+		t.Fatalf("build memory request=%q, want %q", got, buildMemoryRequest)
+	}
+	if got := container.Resources.Limits.Memory().String(); got != buildMemoryLimit {
+		t.Fatalf("build memory limit=%q, want %q", got, buildMemoryLimit)
 	}
 }
 

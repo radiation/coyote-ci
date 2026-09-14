@@ -22,25 +22,26 @@ func TestLoad(t *testing.T) {
 		{
 			name: "uses defaults when env is unset",
 			env: map[string]string{
-				"APP_PORT":                        "",
-				"DATABASE_URL":                    "",
-				"DB_HOST":                         "",
-				"DB_PORT":                         "",
-				"DB_USER":                         "",
-				"DB_PASSWORD":                     "",
-				"DB_NAME":                         "",
-				"DB_SSLMODE":                      "",
-				"DB_MAX_OPEN_CONNS":               "",
-				"DB_MAX_IDLE_CONNS":               "",
-				"DB_CONN_MAX_LIFETIME":            "",
-				"DB_CONN_MAX_IDLE_TIME":           "",
-				"WORKER_STEP_LEASE_SECONDS":       "",
-				"WORKER_STATUS_ADDR":              "",
-				"WORKER_EXECUTION_BACKEND":        "",
-				"WORKER_EXECUTION_DEFAULT_IMAGE":  "",
-				"WORKER_EXECUTION_WORKSPACE_ROOT": "",
-				"WORKER_KUBERNETES_NAMESPACE":     "",
-				"WORKER_KUBERNETES_KUBECONFIG":    "",
+				"APP_PORT":                             "",
+				"DATABASE_URL":                         "",
+				"DB_HOST":                              "",
+				"DB_PORT":                              "",
+				"DB_USER":                              "",
+				"DB_PASSWORD":                          "",
+				"DB_NAME":                              "",
+				"DB_SSLMODE":                           "",
+				"DB_MAX_OPEN_CONNS":                    "",
+				"DB_MAX_IDLE_CONNS":                    "",
+				"DB_CONN_MAX_LIFETIME":                 "",
+				"DB_CONN_MAX_IDLE_TIME":                "",
+				"WORKER_STEP_LEASE_SECONDS":            "",
+				"WORKER_STATUS_ADDR":                   "",
+				"WORKER_EXECUTION_BACKEND":             "",
+				"WORKER_EXECUTION_DEFAULT_IMAGE":       "",
+				"WORKER_EXECUTION_WORKSPACE_ROOT":      "",
+				"WORKER_KUBERNETES_NAMESPACE":          "",
+				"WORKER_KUBERNETES_KUBECONFIG":         "",
+				"WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS": "",
 				"COYOTE_WORKSPACE_REVISION_MAX_UPLOAD_SIZE_MB":       "",
 				"COYOTE_WORKSPACE_REVISION_MAX_UNCOMPRESSED_SIZE_MB": "",
 				"COYOTE_WORKSPACE_REVISION_MAX_ARCHIVE_ENTRIES":      "",
@@ -81,6 +82,7 @@ func TestLoad(t *testing.T) {
 				ExecutionDefaultImage:                  "alpine:3.20",
 				ExecutionWorkspaceRoot:                 defaultWorkspaceRoot,
 				WorkerKubernetesNamespace:              "default",
+				WorkerKubernetesMaxInFlightJobs:        1,
 				WorkspaceHelperMaxUploadSizeMB:         1024,
 				WorkspaceRevisionMaxUploadSizeMB:       2048,
 				WorkspaceRevisionMaxUncompressedSizeMB: 4096,
@@ -119,25 +121,26 @@ func TestLoad(t *testing.T) {
 		{
 			name: "uses env values when set",
 			env: map[string]string{
-				"APP_PORT":                        "9999",
-				"DATABASE_URL":                    "postgres://external/external?sslmode=require",
-				"DB_HOST":                         "db.internal",
-				"DB_PORT":                         "5433",
-				"DB_USER":                         "user1",
-				"DB_PASSWORD":                     "pass1",
-				"DB_NAME":                         "name1",
-				"DB_SSLMODE":                      "require",
-				"DB_MAX_OPEN_CONNS":               "25",
-				"DB_MAX_IDLE_CONNS":               "12",
-				"DB_CONN_MAX_LIFETIME":            "45m",
-				"DB_CONN_MAX_IDLE_TIME":           "10m",
-				"WORKER_STEP_LEASE_SECONDS":       "60",
-				"WORKER_STATUS_ADDR":              "127.0.0.1:9091",
-				"WORKER_EXECUTION_BACKEND":        "inprocess",
-				"WORKER_EXECUTION_DEFAULT_IMAGE":  "golang:1.23-alpine",
-				"WORKER_EXECUTION_WORKSPACE_ROOT": "/var/tmp/coyote-workspaces",
-				"WORKER_KUBERNETES_NAMESPACE":     "coyote-system",
-				"WORKER_KUBERNETES_KUBECONFIG":    "/tmp/kubeconfig",
+				"APP_PORT":                             "9999",
+				"DATABASE_URL":                         "postgres://external/external?sslmode=require",
+				"DB_HOST":                              "db.internal",
+				"DB_PORT":                              "5433",
+				"DB_USER":                              "user1",
+				"DB_PASSWORD":                          "pass1",
+				"DB_NAME":                              "name1",
+				"DB_SSLMODE":                           "require",
+				"DB_MAX_OPEN_CONNS":                    "25",
+				"DB_MAX_IDLE_CONNS":                    "12",
+				"DB_CONN_MAX_LIFETIME":                 "45m",
+				"DB_CONN_MAX_IDLE_TIME":                "10m",
+				"WORKER_STEP_LEASE_SECONDS":            "60",
+				"WORKER_STATUS_ADDR":                   "127.0.0.1:9091",
+				"WORKER_EXECUTION_BACKEND":             "inprocess",
+				"WORKER_EXECUTION_DEFAULT_IMAGE":       "golang:1.23-alpine",
+				"WORKER_EXECUTION_WORKSPACE_ROOT":      "/var/tmp/coyote-workspaces",
+				"WORKER_KUBERNETES_NAMESPACE":          "coyote-system",
+				"WORKER_KUBERNETES_KUBECONFIG":         "/tmp/kubeconfig",
+				"WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS": "3",
 				"COYOTE_WORKSPACE_REVISION_MAX_UPLOAD_SIZE_MB":       "3072",
 				"COYOTE_WORKSPACE_REVISION_MAX_UNCOMPRESSED_SIZE_MB": "6144",
 				"COYOTE_WORKSPACE_REVISION_MAX_ARCHIVE_ENTRIES":      "120000",
@@ -188,6 +191,7 @@ func TestLoad(t *testing.T) {
 				ExecutionWorkspaceRoot:                 "/var/tmp/coyote-workspaces",
 				WorkerKubernetesNamespace:              "coyote-system",
 				WorkerKubernetesKubeconfig:             "/tmp/kubeconfig",
+				WorkerKubernetesMaxInFlightJobs:        3,
 				WorkspaceHelperMaxUploadSizeMB:         1024,
 				WorkspaceRevisionMaxUploadSizeMB:       3072,
 				WorkspaceRevisionMaxUncompressedSizeMB: 6144,
@@ -390,6 +394,7 @@ func TestLoad(t *testing.T) {
 	managedEnvKeys := []string{
 		"WORKER_KUBERNETES_NAMESPACE",
 		"WORKER_KUBERNETES_KUBECONFIG",
+		"WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS",
 		"WORKER_KUBERNETES_TEST_STEP_NODES",
 		"KUBECONFIG",
 		"COYOTE_WORKSPACE_HELPER_ENABLED",
@@ -429,6 +434,8 @@ func TestLoad(t *testing.T) {
 		"SMTP_USERNAME",
 		"SMTP_PASSWORD",
 		"SMTP_FROM_ADDRESS",
+		"CLOUD_BUILD_PROJECT",
+		"GOOGLE_CLOUD_PROJECT",
 	}
 
 	for _, tc := range tests {
@@ -443,6 +450,9 @@ func TestLoad(t *testing.T) {
 
 			got := Load()
 			expected := tc.expected
+			if expected.WorkerKubernetesMaxInFlightJobs == 0 {
+				expected.WorkerKubernetesMaxInFlightJobs = 1
+			}
 			expected.WorkspaceHelperServiceAccount = "coyote-workspace-helper"
 			expected.CacheArchiveMaxUncompressedSizeMB = 4096
 			expected.CacheArchiveMaxEntries = 100000
@@ -453,6 +463,34 @@ func TestLoad(t *testing.T) {
 				t.Fatalf("expected %+v, got %+v", expected, got)
 			}
 		})
+	}
+}
+
+func TestGetEnvPositiveInt(t *testing.T) {
+	t.Setenv("COYOTE_TEST_POSITIVE_INT", "0")
+	if value := getEnvPositiveInt("COYOTE_TEST_POSITIVE_INT", 1); value != 1 {
+		t.Fatalf("zero value=%d, want 1", value)
+	}
+	t.Setenv("COYOTE_TEST_POSITIVE_INT", "-2")
+	if value := getEnvPositiveInt("COYOTE_TEST_POSITIVE_INT", 1); value != 1 {
+		t.Fatalf("negative value=%d, want 1", value)
+	}
+	t.Setenv("COYOTE_TEST_POSITIVE_INT", "4")
+	if value := getEnvPositiveInt("COYOTE_TEST_POSITIVE_INT", 1); value != 4 {
+		t.Fatalf("positive value=%d, want 4", value)
+	}
+}
+
+func TestLoadCloudBuildProjectFallsBackToGoogleCloudProject(t *testing.T) {
+	t.Setenv("CLOUD_BUILD_PROJECT", "")
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "gke-project")
+	if cfg := Load(); cfg.CloudBuildProject != "gke-project" {
+		t.Fatalf("cloud build project=%q", cfg.CloudBuildProject)
+	}
+
+	t.Setenv("CLOUD_BUILD_PROJECT", "configured-project")
+	if cfg := Load(); cfg.CloudBuildProject != "configured-project" {
+		t.Fatalf("cloud build project=%q", cfg.CloudBuildProject)
 	}
 }
 

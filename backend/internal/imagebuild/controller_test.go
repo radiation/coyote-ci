@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -106,6 +107,73 @@ func TestControllerRejectsInvalidOrUnsafeTerminalStates(t *testing.T) {
 	}
 }
 
+func TestControllerCompletesPermanentSubmissionError(t *testing.T) {
+	execution := newExecutionFake(t)
+	records := memoryrepo.NewExternalImageBuildRepository()
+	builder := &builderFake{submitErr: retryableBuilderError{err: errors.New("invalid timeout format")}}
+	controller, newErr := NewController(execution, records, builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if reconcileErr != nil || active || execution.completions != 1 || execution.result.Status != runner.RunStepStatusFailed || !strings.Contains(execution.result.Stderr, "invalid timeout format") {
+		t.Fatalf("active=%t err=%v completions=%d result=%+v", active, reconcileErr, execution.completions, execution.result)
+	}
+	if builder.submitCalls != 1 {
+		t.Fatalf("submit calls=%d", builder.submitCalls)
+	}
+	execution.job.Status = domain.ExecutionJobStatusFailed
+	active, reconcileErr = controller.ReconcileClaimed(context.Background(), execution.step)
+	if reconcileErr != nil || active || builder.submitCalls != 1 {
+		t.Fatalf("retry active=%t err=%v submit calls=%d", active, reconcileErr, builder.submitCalls)
+	}
+}
+
+func TestControllerKeepsRetryableSubmissionErrorActive(t *testing.T) {
+	execution := newExecutionFake(t)
+	builder := &builderFake{submitErr: retryableBuilderError{err: errors.New("service unavailable"), retryable: true}}
+	controller, newErr := NewController(execution, memoryrepo.NewExternalImageBuildRepository(), builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if !active || !errors.Is(reconcileErr, builder.submitErr) || execution.completions != 0 || execution.renewCalls != 1 {
+		t.Fatalf("active=%t err=%v completions=%d renewals=%d", active, reconcileErr, execution.completions, execution.renewCalls)
+	}
+}
+
+func TestControllerStopsRetryableSubmissionWhenLeaseIsLost(t *testing.T) {
+	execution := newExecutionFake(t)
+	execution.renewLost = true
+	builder := &builderFake{submitErr: retryableBuilderError{err: errors.New("service unavailable"), retryable: true}}
+	controller, newErr := NewController(execution, memoryrepo.NewExternalImageBuildRepository(), builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if active || reconcileErr != nil || execution.completions != 0 || execution.renewCalls != 1 || builder.submitCalls != 1 {
+		t.Fatalf("active=%t err=%v completions=%d renewals=%d submissions=%d", active, reconcileErr, execution.completions, execution.renewCalls, builder.submitCalls)
+	}
+}
+
+func TestControllerReturnsRetryableSubmissionAndLeaseRenewalErrors(t *testing.T) {
+	execution := newExecutionFake(t)
+	execution.renewErr = errors.New("lease renewal unavailable")
+	builder := &builderFake{submitErr: retryableBuilderError{err: errors.New("service unavailable"), retryable: true}}
+	controller, newErr := NewController(execution, memoryrepo.NewExternalImageBuildRepository(), builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if !active || !errors.Is(reconcileErr, builder.submitErr) || !errors.Is(reconcileErr, execution.renewErr) || execution.completions != 0 || execution.renewCalls != 1 {
+		t.Fatalf("active=%t err=%v completions=%d renewals=%d", active, reconcileErr, execution.completions, execution.renewCalls)
+	}
+}
+
 func TestNewControllerRequiresAllDependencies(t *testing.T) {
 	if _, err := NewController(nil, nil, nil, nil, nil); err == nil {
 		t.Fatal("expected missing dependency error")
@@ -116,6 +184,8 @@ type executionFake struct {
 	job         domain.ExecutionJob
 	step        workersvc.WorkerRunnableStep
 	renewCalls  int
+	renewLost   bool
+	renewErr    error
 	completions int
 	result      runner.RunStepResult
 }
@@ -137,7 +207,10 @@ func (f *executionFake) GetBuild(context.Context, string) (domain.Build, error) 
 }
 func (f *executionFake) RenewRunnableStepLease(context.Context, workersvc.WorkerRunnableStep) (bool, error) {
 	f.renewCalls++
-	return true, nil
+	if f.renewErr != nil {
+		return false, f.renewErr
+	}
+	return !f.renewLost, nil
 }
 func (f *executionFake) CompleteKubernetesRunnableStep(_ context.Context, _ workersvc.WorkerRunnableStep, result runner.RunStepResult) (repository.StepCompletionOutcome, error) {
 	f.completions++
@@ -149,11 +222,24 @@ type builderFake struct {
 	found                    bool
 	handle                   domain.ImageBuildHandle
 	result                   domain.ImageBuildResult
+	submitErr                error
 	submitCalls, cancelCalls int
 }
 
+type retryableBuilderError struct {
+	err       error
+	retryable bool
+}
+
+func (e retryableBuilderError) Error() string   { return e.err.Error() }
+func (e retryableBuilderError) Unwrap() error   { return e.err }
+func (e retryableBuilderError) Retryable() bool { return e.retryable }
+
 func (f *builderFake) Submit(_ context.Context, _ domain.ImageBuildRequest) (domain.ImageBuildHandle, error) {
 	f.submitCalls++
+	if f.submitErr != nil {
+		return domain.ImageBuildHandle{}, f.submitErr
+	}
 	if f.handle.ID == "" {
 		f.handle = domain.ImageBuildHandle{ID: "provider-1"}
 	}

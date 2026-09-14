@@ -37,8 +37,16 @@ const (
 	cacheHelperStateRoot          = "/coyote-cache-state"
 	buildEphemeralStorageRequest  = "3Gi"
 	buildEphemeralStorageLimit    = "8Gi"
+	buildCPURequest               = "2"
+	buildCPULimit                 = "2"
+	buildMemoryRequest            = "4Gi"
+	buildMemoryLimit              = "4Gi"
 	helperEphemeralStorageRequest = "1Gi"
 	helperEphemeralStorageLimit   = "4Gi"
+	commandTimeoutExitCode        = 124
+	jobLifecycleAllowanceSeconds  = 15 * 60
+	commandTimeoutToolsVolume     = "command-timeout-tools"
+	commandTimeoutToolsPath       = "/coyote-tools/worker"
 )
 
 type WorkspaceHelperConfig struct {
@@ -78,8 +86,9 @@ type Controller struct {
 	workspacePublicationEnabled bool
 	workspaceHelper             WorkspaceHelperConfig
 	testStepNodeNames           []string
-	active                      *workersvc.WorkerRunnableStep
-	activeImageBuild            *workersvc.WorkerRunnableStep
+	maxInFlightJobs             int
+	active                      map[string]*workersvc.WorkerRunnableStep
+	activeImageBuilds           map[string]*workersvc.WorkerRunnableStep
 	imageBuildController        imageBuildController
 	terminalLogsPersisted       map[string]bool
 	lastCancellationCleanupAt   time.Time
@@ -92,7 +101,15 @@ func (c *Controller) WithImageBuildController(controller imageBuildController) *
 }
 
 func NewController(client Client, service executionService, logSink logs.LogSink, namespace string) *Controller {
-	return &Controller{client: client, service: service, logSink: logSink, namespace: defaultNamespace(namespace), terminalLogsPersisted: map[string]bool{}, now: func() time.Time { return time.Now().UTC() }}
+	return &Controller{client: client, service: service, logSink: logSink, namespace: defaultNamespace(namespace), maxInFlightJobs: 1, active: map[string]*workersvc.WorkerRunnableStep{}, activeImageBuilds: map[string]*workersvc.WorkerRunnableStep{}, terminalLogsPersisted: map[string]bool{}, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func (c *Controller) WithMaxInFlightJobs(maxInFlightJobs int) *Controller {
+	if maxInFlightJobs < 1 {
+		maxInFlightJobs = 1
+	}
+	c.maxInFlightJobs = maxInFlightJobs
+	return c
 }
 
 // WithWorkspacePublicationEnabled prevents this initial backend from bypassing
@@ -120,39 +137,59 @@ func (c *Controller) WithTestStepNodeNames(names []string) *Controller {
 }
 
 func (c *Controller) Reconcile(ctx context.Context) error {
-	if c.activeImageBuild != nil {
-		stillActive, err := c.imageBuildController.ReconcileClaimed(ctx, *c.activeImageBuild)
+	var reconcileErrors []error
+	for _, step := range c.activeSteps() {
+		if err := c.reconcileActive(ctx, step); err != nil {
+			reconcileErrors = append(reconcileErrors, err)
+		}
+	}
+	for _, step := range c.activeImageBuildSteps() {
+		stillActive, err := c.imageBuildController.ReconcileClaimed(ctx, step)
 		if !stillActive {
-			c.activeImageBuild = nil
+			delete(c.activeImageBuilds, step.JobID)
 		}
-		return err
-	}
-	if c.active != nil {
-		if cleanupErr := c.cleanupCanceledJobsIfDue(ctx); cleanupErr != nil {
-			return cleanupErr
+		if err != nil {
+			reconcileErrors = append(reconcileErrors, err)
 		}
-		return c.reconcileActive(ctx, *c.active)
 	}
-	step, found, err := c.service.ClaimRunnableStep(ctx)
-	if err != nil {
-		return err
+
+	for c.inFlightCount() < c.maxInFlightJobs {
+		step, found, err := c.service.ClaimRunnableStep(ctx)
+		if err != nil {
+			reconcileErrors = append(reconcileErrors, err)
+			break
+		}
+		if !found {
+			break
+		}
+		if err := c.reconcileClaimed(ctx, step); err != nil {
+			reconcileErrors = append(reconcileErrors, err)
+			break
+		}
 	}
-	if !found {
-		return c.cleanupCanceledJobsIfDue(ctx)
+	if cleanupErr := c.cleanupCanceledJobsIfDue(ctx); cleanupErr != nil {
+		reconcileErrors = append(reconcileErrors, cleanupErr)
 	}
+	return errors.Join(reconcileErrors...)
+}
+
+func (c *Controller) reconcileClaimed(ctx context.Context, step workersvc.WorkerRunnableStep) error {
 	if step.ExecutionKind == domain.ExecutionKindImageBuild {
 		if c.imageBuildController == nil {
 			return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "image build execution controller is not configured", StartedAt: c.now(), FinishedAt: c.now()})
 		}
-		c.activeImageBuild = &step
+		c.activeImageBuilds[step.JobID] = &step
 		stillActive, imageBuildErr := c.imageBuildController.ReconcileClaimed(ctx, step)
 		if !stillActive {
-			c.activeImageBuild = nil
+			delete(c.activeImageBuilds, step.JobID)
 		}
 		return imageBuildErr
 	}
 	if c.workspacePublicationEnabled && (strings.TrimSpace(c.workspaceHelper.Image) == "" || strings.TrimSpace(c.workspaceHelper.InternalAPIURL) == "" || strings.TrimSpace(c.workspaceHelper.ServiceAccountName) == "") {
 		return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "kubernetes workspace helper configuration is incomplete", StartedAt: c.now(), FinishedAt: c.now()})
+	}
+	if step.TimeoutSeconds > 0 && strings.TrimSpace(c.workspaceHelper.Image) == "" {
+		return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: "kubernetes command timeout requires a workspace helper image", StartedAt: c.now(), FinishedAt: c.now()})
 	}
 	if validationErr := c.service.ValidateKubernetesRunnableStep(ctx, step); validationErr != nil {
 		if !workersvc.IsKubernetesExecutionCapabilityError(validationErr) {
@@ -160,11 +197,30 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 		}
 		return c.complete(ctx, step, runner.RunStepResult{Status: runner.RunStepStatusFailed, ExitCode: -1, Stderr: validationErr.Error(), StartedAt: c.now(), FinishedAt: c.now()})
 	}
-	c.active = &step
-	if cleanupErr := c.cleanupCanceledJobsIfDue(ctx); cleanupErr != nil {
-		return cleanupErr
-	}
+	c.active[step.JobID] = &step
 	return c.reconcileActive(ctx, step)
+}
+
+func (c *Controller) inFlightCount() int {
+	return len(c.active) + len(c.activeImageBuilds)
+}
+
+func (c *Controller) activeSteps() []workersvc.WorkerRunnableStep {
+	steps := make([]workersvc.WorkerRunnableStep, 0, len(c.active))
+	for _, step := range c.active {
+		steps = append(steps, *step)
+	}
+	sort.Slice(steps, func(i, j int) bool { return steps[i].JobID < steps[j].JobID })
+	return steps
+}
+
+func (c *Controller) activeImageBuildSteps() []workersvc.WorkerRunnableStep {
+	steps := make([]workersvc.WorkerRunnableStep, 0, len(c.activeImageBuilds))
+	for _, step := range c.activeImageBuilds {
+		steps = append(steps, *step)
+	}
+	sort.Slice(steps, func(i, j int) bool { return steps[i].JobID < steps[j].JobID })
+	return steps
 }
 
 func (c *Controller) reconcileActive(ctx context.Context, step workersvc.WorkerRunnableStep) error {
@@ -173,11 +229,11 @@ func (c *Controller) reconcileActive(ctx context.Context, step workersvc.WorkerR
 		return err
 	}
 	if durable.Status == domain.ExecutionJobStatusCanceled {
-		c.active = nil
+		delete(c.active, step.JobID)
 		return c.deleteJob(ctx, jobName(step.JobID))
 	}
 	if domain.IsTerminalExecutionJobStatus(durable.Status) {
-		c.active = nil
+		delete(c.active, step.JobID)
 		return nil
 	}
 	job, ensureErr := c.ensureJob(ctx, step)
@@ -197,7 +253,7 @@ func (c *Controller) reconcileActive(ctx context.Context, step workersvc.WorkerR
 	}
 	if !continued {
 		refreshed, refreshErr := c.service.GetExecutionJob(ctx, step.JobID)
-		c.active = nil
+		delete(c.active, step.JobID)
 		if refreshErr != nil {
 			return refreshErr
 		}
@@ -255,6 +311,10 @@ func (c *Controller) terminalResult(ctx context.Context, job *batchv1.Job, step 
 			result.Status = runner.RunStepStatusFailed
 			if condition.Reason == "DeadlineExceeded" {
 				result.TimedOut = true
+			}
+			if result.ExitCode == commandTimeoutExitCode && step.TimeoutSeconds > 0 {
+				result.TimedOut = true
+				result.Stderr = fmt.Sprintf("step execution timed out after %ds", step.TimeoutSeconds)
 			}
 			if strings.TrimSpace(result.Stderr) == "" {
 				result.Stderr = terminalJobFailureMessage(condition)
@@ -342,10 +402,10 @@ func (c *Controller) complete(ctx context.Context, step workersvc.WorkerRunnable
 		return err
 	}
 	if outcome == repository.StepCompletionStaleClaim || outcome == repository.StepCompletionDuplicateTerminal {
-		c.active = nil
+		delete(c.active, step.JobID)
 		return nil
 	}
-	c.active = nil
+	delete(c.active, step.JobID)
 	return nil
 }
 
@@ -367,7 +427,7 @@ func (c *Controller) cleanupCanceledJobs(ctx context.Context) error {
 		if executionJobID == "" || job.Name != jobName(executionJobID) {
 			continue
 		}
-		if c.active != nil && executionJobID == c.active.JobID {
+		if _, active := c.active[executionJobID]; active {
 			continue
 		}
 		durable, getErr := c.service.GetExecutionJob(ctx, executionJobID)
@@ -403,7 +463,7 @@ func buildJobWithNodeName(namespace string, step workersvc.WorkerRunnableStep, h
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName(step.JobID), Namespace: namespace, Labels: executionLabels(step)}}
 	job.Spec.BackoffLimit = &backoffLimit
 	if step.TimeoutSeconds > 0 {
-		deadline := int64(step.TimeoutSeconds)
+		deadline := int64(step.TimeoutSeconds + jobLifecycleAllowanceSeconds)
 		job.Spec.ActiveDeadlineSeconds = &deadline
 	}
 	if len(helpers) > 0 {
@@ -425,6 +485,11 @@ func buildJobWithNodeName(namespace string, step workersvc.WorkerRunnableStep, h
 		podSpec.ServiceAccountName = helper.ServiceAccountName
 		podSpec.Volumes = append(podSpec.Volumes, helperCapabilityVolume("workspace-prepare-token", workspaceHelperPrepareAudience), helperCapabilityVolume("workspace-publish-token", workspaceHelperPublishAudience), kubernetesAPIIdentityVolume())
 		podSpec.InitContainers = []corev1.Container{workspacePrepareContainer(helper, step)}
+		if step.TimeoutSeconds > 0 {
+			podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{Name: commandTimeoutToolsVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
+			podSpec.InitContainers = append([]corev1.Container{commandTimeoutInstallContainer(helper)}, podSpec.InitContainers...)
+			podSpec.Containers[0] = commandTimeoutBuildContainer(podSpec.Containers[0], step.TimeoutSeconds)
+		}
 		podSpec.Containers = append(podSpec.Containers, workspacePublishContainer(helper, step))
 		if helper.ArtifactCollectEnabled {
 			podSpec.Volumes = append(podSpec.Volumes, helperCapabilityVolume("artifact-collect-token", workspaceHelperArtifactCollectAudience))
@@ -493,6 +558,18 @@ func workspacePrepareContainer(config WorkspaceHelperConfig, step workersvc.Work
 	return corev1.Container{Name: "workspace-prepare", Image: config.Image, ImagePullPolicy: corev1.PullAlways, Command: []string{"/app/worker", "workspace", "prepare"}, Env: env, VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "workspace-prepare-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}}, Resources: helperContainerResources()}
 }
 
+func commandTimeoutInstallContainer(config WorkspaceHelperConfig) corev1.Container {
+	return corev1.Container{Name: "command-timeout-install", Image: config.Image, ImagePullPolicy: corev1.PullAlways, Command: []string{"/app/worker", "timeout", "install"}, VolumeMounts: []corev1.VolumeMount{{Name: commandTimeoutToolsVolume, MountPath: "/coyote-tools"}}, Resources: helperContainerResources()}
+}
+
+func commandTimeoutBuildContainer(container corev1.Container, timeoutSeconds int) corev1.Container {
+	command := container.Command[0]
+	container.Command = []string{commandTimeoutToolsPath}
+	container.Args = append([]string{"timeout", fmt.Sprintf("%d", timeoutSeconds), command}, container.Args...)
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: commandTimeoutToolsVolume, MountPath: "/coyote-tools", ReadOnly: true})
+	return container
+}
+
 func workspacePublishContainer(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep) corev1.Container {
 	env := append(workspaceHelperEnvironment(config, step), corev1.EnvVar{Name: "COYOTE_WORKSPACE_PATH", Value: workspace.DefaultContainerRoot}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}})
 	return corev1.Container{Name: "workspace-publish", Image: config.Image, ImagePullPolicy: corev1.PullAlways, Command: []string{"/app/worker", "workspace", "publish-after-build"}, Env: env, VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "workspace-publish-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}, {Name: "workspace-kubernetes-api", MountPath: workspaceKubernetesTokenDir, ReadOnly: true}}, Resources: helperContainerResources()}
@@ -504,7 +581,12 @@ func artifactCollectContainer(config WorkspaceHelperConfig, step workersvc.Worke
 }
 
 func buildContainerResources() corev1.ResourceRequirements {
-	return ephemeralStorageResources(buildEphemeralStorageRequest, buildEphemeralStorageLimit)
+	resources := ephemeralStorageResources(buildEphemeralStorageRequest, buildEphemeralStorageLimit)
+	resources.Requests[corev1.ResourceCPU] = resource.MustParse(buildCPURequest)
+	resources.Limits[corev1.ResourceCPU] = resource.MustParse(buildCPULimit)
+	resources.Requests[corev1.ResourceMemory] = resource.MustParse(buildMemoryRequest)
+	resources.Limits[corev1.ResourceMemory] = resource.MustParse(buildMemoryLimit)
+	return resources
 }
 
 func helperContainerResources() corev1.ResourceRequirements {

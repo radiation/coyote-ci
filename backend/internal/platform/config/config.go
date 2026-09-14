@@ -32,6 +32,7 @@ type Config struct {
 	ExecutionWorkspaceRoot                 string
 	WorkerKubernetesNamespace              string
 	WorkerKubernetesKubeconfig             string
+	WorkerKubernetesMaxInFlightJobs        int
 	WorkerKubernetesHelperImage            string
 	WorkerKubernetesInternalAPIURL         string
 	WorkerKubernetesTestStepNodes          string
@@ -123,6 +124,7 @@ func Load() Config {
 		ExecutionWorkspaceRoot:                 getEnv("WORKER_EXECUTION_WORKSPACE_ROOT", filepath.Join(os.TempDir(), "coyote-builds")),
 		WorkerKubernetesNamespace:              getEnv("WORKER_KUBERNETES_NAMESPACE", "default"),
 		WorkerKubernetesKubeconfig:             getEnv("WORKER_KUBERNETES_KUBECONFIG", getEnv("KUBECONFIG", "")),
+		WorkerKubernetesMaxInFlightJobs:        getEnvPositiveInt("WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS", 1),
 		WorkerKubernetesHelperImage:            getEnv("WORKER_KUBERNETES_HELPER_IMAGE", ""),
 		WorkerKubernetesInternalAPIURL:         getEnv("WORKER_KUBERNETES_INTERNAL_API_URL", ""),
 		WorkerKubernetesTestStepNodes:          getEnv("WORKER_KUBERNETES_TEST_STEP_NODES", ""),
@@ -154,7 +156,7 @@ func Load() Config {
 		ArtifactGCSBucket:                      getEnv("ARTIFACT_GCS_BUCKET", ""),
 		ArtifactGCSPrefix:                      getEnv("ARTIFACT_GCS_PREFIX", ""),
 		ArtifactGCSProject:                     getEnv("ARTIFACT_GCS_PROJECT", ""),
-		CloudBuildProject:                      getEnv("CLOUD_BUILD_PROJECT", ""),
+		CloudBuildProject:                      getEnv("CLOUD_BUILD_PROJECT", getEnv("GOOGLE_CLOUD_PROJECT", "")),
 		CloudBuildLocation:                     getEnv("CLOUD_BUILD_LOCATION", ""),
 		CloudBuildRuntimeServiceAccount:        getEnv("CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT", ""),
 		CloudBuildArtifactRegistryRepository:   getEnv("CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY", ""),
@@ -252,6 +254,14 @@ func getEnvInt(key string, fallback int) int {
 	}
 
 	return parsed
+}
+
+func getEnvPositiveInt(key string, fallback int) int {
+	value := getEnvInt(key, fallback)
+	if value < 1 {
+		return fallback
+	}
+	return value
 }
 
 func getEnvIntFallback(key string, legacyKey string, fallback int) int {

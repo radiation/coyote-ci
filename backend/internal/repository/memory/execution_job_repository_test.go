@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"testing"
 	"time"
@@ -201,6 +202,55 @@ func TestExecutionJobRepository_CompleteFailedStepAndJob(t *testing.T) {
 	}
 	if job.FailureKind == nil || *job.FailureKind != domain.ExecutionFailureKindTimeout {
 		t.Fatalf("expected timeout failure kind, got %v", job.FailureKind)
+	}
+}
+
+func TestExecutionJobRepository_SiblingCompletionsPreserveDerivedBuildStateInEitherOrder(t *testing.T) {
+	for _, completionOrder := range [][]int{{0, 1}, {1, 0}} {
+		t.Run(fmt.Sprintf("completion order %d then %d", completionOrder[0], completionOrder[1]), func(t *testing.T) {
+			now := time.Now().UTC()
+			claimExpiresAt := now.Add(time.Minute)
+			buildRepo := NewBuildRepository()
+			steps := []domain.BuildStep{
+				{ID: "step-success", BuildID: "build-siblings", StepIndex: 0, Name: "success", Status: domain.BuildStepStatusRunning, ClaimToken: stringPtr("claim-success")},
+				{ID: "step-failure", BuildID: "build-siblings", StepIndex: 1, Name: "failure", Status: domain.BuildStepStatusRunning, ClaimToken: stringPtr("claim-failure")},
+			}
+			if _, createBuildErr := buildRepo.CreateQueuedBuild(context.Background(), domain.Build{ID: "build-siblings", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: now}, steps); createBuildErr != nil {
+				t.Fatalf("create build: %v", createBuildErr)
+			}
+			if _, startBuildErr := buildRepo.UpdateStatus(context.Background(), "build-siblings", domain.BuildStatusRunning, nil); startBuildErr != nil {
+				t.Fatalf("start build: %v", startBuildErr)
+			}
+			repo := NewExecutionJobRepository()
+			repo.SetBuildRepository(buildRepo)
+			if _, createJobsErr := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{
+				{ID: "job-success", BuildID: "build-siblings", StepID: "step-success", NodeID: "success", StepIndex: 0, Status: domain.ExecutionJobStatusRunning, ClaimToken: stringPtr("claim-success"), ClaimExpiresAt: &claimExpiresAt, ResolvedSpecJSON: "{}", CreatedAt: now},
+				{ID: "job-failure", BuildID: "build-siblings", StepID: "step-failure", NodeID: "failure", StepIndex: 1, Status: domain.ExecutionJobStatusRunning, ClaimToken: stringPtr("claim-failure"), ClaimExpiresAt: &claimExpiresAt, ResolvedSpecJSON: "{}", CreatedAt: now},
+			}); createJobsErr != nil {
+				t.Fatalf("create jobs: %v", createJobsErr)
+			}
+
+			for _, stepIndex := range completionOrder {
+				if stepIndex == 0 {
+					exitCode := 0
+					_, _, outcome, completeErr := repo.CompleteSuccessfulStepAndJob(context.Background(), repository.CompleteSuccessfulStepAndJobRequest{JobID: "job-success", ClaimToken: "claim-success", FinishedAt: now, ExitCode: exitCode, StepRequest: repository.CompleteStepRequest{BuildID: "build-siblings", StepIndex: 0, ClaimToken: "claim-success", RequireClaim: true, Update: repository.StepUpdate{Status: domain.BuildStepStatusSuccess, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now}}})
+					if completeErr != nil || outcome != repository.StepCompletionCompleted {
+						t.Fatalf("complete success outcome=%q err=%v", outcome, completeErr)
+					}
+					continue
+				}
+				exitCode := 1
+				_, _, outcome, completeErr := repo.CompleteFailedStepAndJob(context.Background(), repository.CompleteFailedStepAndJobRequest{JobID: "job-failure", ClaimToken: "claim-failure", FinishedAt: now, ErrorMessage: "failed", FailureKind: domain.ExecutionFailureKindExecution, ExitCode: &exitCode, StepRequest: repository.CompleteStepRequest{BuildID: "build-siblings", StepIndex: 1, ClaimToken: "claim-failure", RequireClaim: true, Update: repository.StepUpdate{Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &now}}})
+				if completeErr != nil || outcome != repository.StepCompletionCompleted {
+					t.Fatalf("complete failure outcome=%q err=%v", outcome, completeErr)
+				}
+			}
+
+			build, getBuildErr := buildRepo.GetByID(context.Background(), "build-siblings")
+			if getBuildErr != nil || build.Status != domain.BuildStatusFailed {
+				t.Fatalf("build=%#v err=%v", build, getBuildErr)
+			}
+		})
 	}
 }
 
