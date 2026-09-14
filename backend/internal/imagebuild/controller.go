@@ -3,6 +3,7 @@ package imagebuild
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -86,6 +87,9 @@ func (c *Controller) ReconcileClaimed(ctx context.Context, step workersvc.Worker
 		if !found {
 			handle, findErr = c.builder.Submit(ctx, domain.ImageBuildRequest{ExecutionJobID: job.ID, Source: record.Source, Spec: *spec.RemoteImageBuild, Timeout: time.Duration(spec.TimeoutSeconds) * time.Second})
 			if findErr != nil {
+				if !isRetryableSubmissionError(findErr) {
+					return false, c.complete(ctx, step, false, submissionFailureMessage(findErr))
+				}
 				return true, findErr
 			}
 		}
@@ -133,6 +137,19 @@ func (c *Controller) complete(ctx context.Context, step workersvc.WorkerRunnable
 	}
 	_, err := c.service.CompleteKubernetesRunnableStep(ctx, step, runner.RunStepResult{Status: status, ExitCode: exitCode, Stderr: message, StartedAt: c.now(), FinishedAt: c.now()})
 	return err
+}
+
+type retryableSubmissionError interface {
+	Retryable() bool
+}
+
+func isRetryableSubmissionError(err error) bool {
+	var retryableErr retryableSubmissionError
+	return errors.As(err, &retryableErr) && retryableErr.Retryable()
+}
+
+func submissionFailureMessage(err error) string {
+	return "remote image build submission failed: " + err.Error()
 }
 
 func timePointer(value time.Time) *time.Time { return &value }

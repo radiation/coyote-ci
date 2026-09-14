@@ -37,8 +37,16 @@ const (
 	cacheHelperStateRoot          = "/coyote-cache-state"
 	buildEphemeralStorageRequest  = "3Gi"
 	buildEphemeralStorageLimit    = "8Gi"
+	buildCPURequest               = "2"
+	buildCPULimit                 = "2"
+	buildMemoryRequest            = "4Gi"
+	buildMemoryLimit              = "4Gi"
 	helperEphemeralStorageRequest = "1Gi"
 	helperEphemeralStorageLimit   = "4Gi"
+	commandTimeoutExitCode        = 124
+	jobLifecycleAllowanceSeconds  = 5 * 60
+	commandTimeoutToolsVolume     = "command-timeout-tools"
+	commandTimeoutToolsPath       = "/coyote-tools/worker"
 )
 
 type WorkspaceHelperConfig struct {
@@ -301,6 +309,10 @@ func (c *Controller) terminalResult(ctx context.Context, job *batchv1.Job, step 
 			if condition.Reason == "DeadlineExceeded" {
 				result.TimedOut = true
 			}
+			if result.ExitCode == commandTimeoutExitCode && step.TimeoutSeconds > 0 {
+				result.TimedOut = true
+				result.Stderr = fmt.Sprintf("step execution timed out after %ds", step.TimeoutSeconds)
+			}
 			if strings.TrimSpace(result.Stderr) == "" {
 				result.Stderr = terminalJobFailureMessage(condition)
 			}
@@ -448,7 +460,7 @@ func buildJobWithNodeName(namespace string, step workersvc.WorkerRunnableStep, h
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName(step.JobID), Namespace: namespace, Labels: executionLabels(step)}}
 	job.Spec.BackoffLimit = &backoffLimit
 	if step.TimeoutSeconds > 0 {
-		deadline := int64(step.TimeoutSeconds)
+		deadline := int64(step.TimeoutSeconds + jobLifecycleAllowanceSeconds)
 		job.Spec.ActiveDeadlineSeconds = &deadline
 	}
 	if len(helpers) > 0 {
@@ -470,6 +482,11 @@ func buildJobWithNodeName(namespace string, step workersvc.WorkerRunnableStep, h
 		podSpec.ServiceAccountName = helper.ServiceAccountName
 		podSpec.Volumes = append(podSpec.Volumes, helperCapabilityVolume("workspace-prepare-token", workspaceHelperPrepareAudience), helperCapabilityVolume("workspace-publish-token", workspaceHelperPublishAudience), kubernetesAPIIdentityVolume())
 		podSpec.InitContainers = []corev1.Container{workspacePrepareContainer(helper, step)}
+		if step.TimeoutSeconds > 0 {
+			podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{Name: commandTimeoutToolsVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
+			podSpec.InitContainers = append([]corev1.Container{commandTimeoutInstallContainer(helper)}, podSpec.InitContainers...)
+			podSpec.Containers[0] = commandTimeoutBuildContainer(podSpec.Containers[0], step.TimeoutSeconds)
+		}
 		podSpec.Containers = append(podSpec.Containers, workspacePublishContainer(helper, step))
 		if helper.ArtifactCollectEnabled {
 			podSpec.Volumes = append(podSpec.Volumes, helperCapabilityVolume("artifact-collect-token", workspaceHelperArtifactCollectAudience))
@@ -538,6 +555,18 @@ func workspacePrepareContainer(config WorkspaceHelperConfig, step workersvc.Work
 	return corev1.Container{Name: "workspace-prepare", Image: config.Image, ImagePullPolicy: corev1.PullAlways, Command: []string{"/app/worker", "workspace", "prepare"}, Env: env, VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "workspace-prepare-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}}, Resources: helperContainerResources()}
 }
 
+func commandTimeoutInstallContainer(config WorkspaceHelperConfig) corev1.Container {
+	return corev1.Container{Name: "command-timeout-install", Image: config.Image, ImagePullPolicy: corev1.PullAlways, Command: []string{"/app/worker", "timeout", "install"}, VolumeMounts: []corev1.VolumeMount{{Name: commandTimeoutToolsVolume, MountPath: "/coyote-tools"}}, Resources: helperContainerResources()}
+}
+
+func commandTimeoutBuildContainer(container corev1.Container, timeoutSeconds int) corev1.Container {
+	command := container.Command[0]
+	container.Command = []string{commandTimeoutToolsPath}
+	container.Args = append([]string{"timeout", fmt.Sprintf("%d", timeoutSeconds), command}, container.Args...)
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: commandTimeoutToolsVolume, MountPath: "/coyote-tools", ReadOnly: true})
+	return container
+}
+
 func workspacePublishContainer(config WorkspaceHelperConfig, step workersvc.WorkerRunnableStep) corev1.Container {
 	env := append(workspaceHelperEnvironment(config, step), corev1.EnvVar{Name: "COYOTE_WORKSPACE_PATH", Value: workspace.DefaultContainerRoot}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}}, corev1.EnvVar{Name: "COYOTE_WORKSPACE_HELPER_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}})
 	return corev1.Container{Name: "workspace-publish", Image: config.Image, ImagePullPolicy: corev1.PullAlways, Command: []string{"/app/worker", "workspace", "publish-after-build"}, Env: env, VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: workspace.DefaultContainerRoot}, {Name: "workspace-publish-token", MountPath: "/var/run/secrets/coyote/workspace", ReadOnly: true}, {Name: "workspace-kubernetes-api", MountPath: workspaceKubernetesTokenDir, ReadOnly: true}}, Resources: helperContainerResources()}
@@ -549,7 +578,12 @@ func artifactCollectContainer(config WorkspaceHelperConfig, step workersvc.Worke
 }
 
 func buildContainerResources() corev1.ResourceRequirements {
-	return ephemeralStorageResources(buildEphemeralStorageRequest, buildEphemeralStorageLimit)
+	resources := ephemeralStorageResources(buildEphemeralStorageRequest, buildEphemeralStorageLimit)
+	resources.Requests[corev1.ResourceCPU] = resource.MustParse(buildCPURequest)
+	resources.Limits[corev1.ResourceCPU] = resource.MustParse(buildCPULimit)
+	resources.Requests[corev1.ResourceMemory] = resource.MustParse(buildMemoryRequest)
+	resources.Limits[corev1.ResourceMemory] = resource.MustParse(buildMemoryLimit)
+	return resources
 }
 
 func helperContainerResources() corev1.ResourceRequirements {

@@ -434,6 +434,8 @@ func TestLoad(t *testing.T) {
 		"SMTP_USERNAME",
 		"SMTP_PASSWORD",
 		"SMTP_FROM_ADDRESS",
+		"CLOUD_BUILD_PROJECT",
+		"GOOGLE_CLOUD_PROJECT",
 	}
 
 	for _, tc := range tests {
@@ -476,6 +478,19 @@ func TestGetEnvPositiveInt(t *testing.T) {
 	t.Setenv("COYOTE_TEST_POSITIVE_INT", "4")
 	if value := getEnvPositiveInt("COYOTE_TEST_POSITIVE_INT", 1); value != 4 {
 		t.Fatalf("positive value=%d, want 4", value)
+	}
+}
+
+func TestLoadCloudBuildProjectFallsBackToGoogleCloudProject(t *testing.T) {
+	t.Setenv("CLOUD_BUILD_PROJECT", "")
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "gke-project")
+	if cfg := Load(); cfg.CloudBuildProject != "gke-project" {
+		t.Fatalf("cloud build project=%q", cfg.CloudBuildProject)
+	}
+
+	t.Setenv("CLOUD_BUILD_PROJECT", "configured-project")
+	if cfg := Load(); cfg.CloudBuildProject != "configured-project" {
+		t.Fatalf("cloud build project=%q", cfg.CloudBuildProject)
 	}
 }
 

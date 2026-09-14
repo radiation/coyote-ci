@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	googlecloudbuild "google.golang.org/api/cloudbuild/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -51,7 +55,7 @@ func (c *Client) Submit(ctx context.Context, request domain.ImageBuildRequest) (
 	}
 	operation, err := c.builds.Create(c.parent(), build).Context(ctx).Do()
 	if err != nil {
-		return domain.ImageBuildHandle{}, err
+		return domain.ImageBuildHandle{}, &submissionError{err: err, retryable: isRetryableAPIError(err)}
 	}
 	var metadata googlecloudbuild.BuildOperationMetadata
 	if err := json.Unmarshal(operation.Metadata, &metadata); err != nil || metadata.Build == nil || strings.TrimSpace(metadata.Build.Id) == "" {
@@ -103,10 +107,36 @@ func (c *Client) buildRequest(request domain.ImageBuildRequest) (*googlecloudbui
 		Source:         &googlecloudbuild.Source{StorageSource: &googlecloudbuild.StorageSource{Bucket: request.Source.Bucket, Object: request.Source.Object, Generation: generation}},
 		Steps:          []*googlecloudbuild.BuildStep{{Name: "gcr.io/cloud-builders/docker", Args: args}},
 		Images:         []string{targetImage},
-		Timeout:        request.Timeout.String(),
-		ServiceAccount: c.runtimeServiceAccount,
+		Options:        &googlecloudbuild.BuildOptions{Logging: "CLOUD_LOGGING_ONLY"},
+		Timeout:        protobufDurationSeconds(request.Timeout),
+		ServiceAccount: c.serviceAccountResourceName(),
 		Tags:           []string{"coyote-execution-" + request.ExecutionJobID},
 	}, nil
+}
+
+func protobufDurationSeconds(timeout time.Duration) string {
+	return strconv.FormatInt(int64(timeout/time.Second), 10) + "s"
+}
+
+type submissionError struct {
+	err       error
+	retryable bool
+}
+
+func (e *submissionError) Error() string   { return e.err.Error() }
+func (e *submissionError) Unwrap() error   { return e.err }
+func (e *submissionError) Retryable() bool { return e.retryable }
+
+func isRetryableAPIError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var apiErr *googleapi.Error
+	if errors.As(err, &apiErr) {
+		return apiErr.Code == http.StatusRequestTimeout || apiErr.Code == http.StatusTooManyRequests || apiErr.Code >= http.StatusInternalServerError
+	}
+	var networkErr net.Error
+	return errors.As(err, &networkErr) && networkErr.Timeout()
 }
 
 func (c *Client) targetImageReference(logicalName string) (string, error) {
@@ -115,6 +145,10 @@ func (c *Client) targetImageReference(logicalName string) (string, error) {
 		return "", fmt.Errorf("invalid logical image name %q", logicalName)
 	}
 	return c.artifactRegistryRepository + "/" + trimmed, nil
+}
+
+func (c *Client) serviceAccountResourceName() string {
+	return fmt.Sprintf("projects/%s/serviceAccounts/%s", c.projectID, c.runtimeServiceAccount)
 }
 
 func (c *Client) parent() string {

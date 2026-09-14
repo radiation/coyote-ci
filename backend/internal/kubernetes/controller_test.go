@@ -59,6 +59,34 @@ func TestControllerCreatesDeterministicSecureJob(t *testing.T) {
 		t.Fatalf("build image pull policy=%q, want unchanged default", container.ImagePullPolicy)
 	}
 	assertEphemeralStorage(t, container, buildEphemeralStorageRequest, buildEphemeralStorageLimit)
+	assertBuildResources(t, container)
+}
+
+func TestBuildJobUsesCommandTimeoutWithLifecycleAllowance(t *testing.T) {
+	step := testStep()
+	helper := WorkspaceHelperConfig{Image: "coyote-worker:test"}
+	job := buildJob("ci", step, helper)
+	if job.Spec.ActiveDeadlineSeconds == nil || *job.Spec.ActiveDeadlineSeconds != int64(step.TimeoutSeconds+jobLifecycleAllowanceSeconds) {
+		t.Fatalf("job deadline=%v", job.Spec.ActiveDeadlineSeconds)
+	}
+	pod := job.Spec.Template.Spec
+	build := pod.Containers[0]
+	if strings.Join(build.Command, " ") != commandTimeoutToolsPath || strings.Join(build.Args, " ") != "timeout 30 sh -c echo ok" || !hasMount(build, commandTimeoutToolsVolume) {
+		t.Fatalf("timed build=%#v", build)
+	}
+	if len(pod.InitContainers) == 0 || pod.InitContainers[0].Name != "command-timeout-install" || strings.Join(pod.InitContainers[0].Command, " ") != "/app/worker timeout install" {
+		t.Fatalf("timeout installer=%#v", pod.InitContainers)
+	}
+}
+
+func TestBuildJobWithoutTimeoutKeepsOriginalCommand(t *testing.T) {
+	step := testStep()
+	step.TimeoutSeconds = 0
+	job := buildJob("ci", step, WorkspaceHelperConfig{Image: "coyote-worker:test"})
+	build := job.Spec.Template.Spec.Containers[0]
+	if job.Spec.ActiveDeadlineSeconds != nil || strings.Join(build.Command, " ") != "sh" || strings.Join(build.Args, " ") != "-c echo ok" || hasMount(build, commandTimeoutToolsVolume) {
+		t.Fatalf("untimed job=%#v", job)
+	}
 }
 
 func TestControllerDispatchesImageBuildWithoutCreatingKubernetesJob(t *testing.T) {
@@ -85,24 +113,24 @@ func TestControllerCreatesWorkspaceHelperLifecycle(t *testing.T) {
 	helper := WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper"}
 	job := buildJob("ci", step, helper)
 	pod := job.Spec.Template.Spec
-	if pod.ServiceAccountName != helper.ServiceAccountName || len(pod.InitContainers) != 1 || len(pod.Containers) != 2 {
+	if pod.ServiceAccountName != helper.ServiceAccountName || len(pod.InitContainers) != 2 || len(pod.Containers) != 2 {
 		t.Fatalf("pod composition=%#v", pod)
 	}
-	if pod.InitContainers[0].Name != "workspace-prepare" || strings.Join(pod.InitContainers[0].Command, " ") != "/app/worker workspace prepare" {
-		t.Fatalf("prepare=%#v", pod.InitContainers[0])
+	if pod.InitContainers[1].Name != "workspace-prepare" || strings.Join(pod.InitContainers[1].Command, " ") != "/app/worker workspace prepare" {
+		t.Fatalf("prepare=%#v", pod.InitContainers[1])
 	}
 	publish := pod.Containers[1]
 	if publish.Name != "workspace-publish" || strings.Join(publish.Command, " ") != "/app/worker workspace publish-after-build" {
 		t.Fatalf("publish=%#v", publish)
 	}
 	build := pod.Containers[0]
-	assertEphemeralStorage(t, pod.InitContainers[0], helperEphemeralStorageRequest, helperEphemeralStorageLimit)
+	assertEphemeralStorage(t, pod.InitContainers[1], helperEphemeralStorageRequest, helperEphemeralStorageLimit)
 	assertEphemeralStorage(t, publish, helperEphemeralStorageRequest, helperEphemeralStorageLimit)
-	if len(build.VolumeMounts) != 1 || build.VolumeMounts[0].Name != "workspace" {
+	if !hasMount(build, "workspace") || !hasMount(build, commandTimeoutToolsVolume) {
 		t.Fatalf("build mounts=%#v", build.VolumeMounts)
 	}
-	if !hasMount(pod.InitContainers[0], "workspace-prepare-token") || hasMount(pod.InitContainers[0], "workspace-publish-token") || hasMount(pod.InitContainers[0], "workspace-kubernetes-api") {
-		t.Fatalf("prepare mounts=%#v", pod.InitContainers[0].VolumeMounts)
+	if !hasMount(pod.InitContainers[1], "workspace-prepare-token") || hasMount(pod.InitContainers[1], "workspace-publish-token") || hasMount(pod.InitContainers[1], "workspace-kubernetes-api") {
+		t.Fatalf("prepare mounts=%#v", pod.InitContainers[1].VolumeMounts)
 	}
 	if !hasMount(publish, "workspace-publish-token") || !hasMount(publish, "workspace-kubernetes-api") || hasMount(publish, "workspace-prepare-token") {
 		t.Fatalf("publish mounts=%#v", publish.VolumeMounts)
@@ -152,28 +180,28 @@ func TestBuildJobWithCacheHelpersUsesOrderedLifecycleAndIsolatedCredentials(t *t
 	helper := WorkspaceHelperConfig{Image: "coyote-worker:test", InternalAPIURL: "http://coyote.internal", ServiceAccountName: "coyote-workspace-helper", CacheEnabled: true}
 	pod := buildJob("ci", step, helper).Spec.Template.Spec
 
-	if len(pod.InitContainers) != 2 || pod.InitContainers[0].Name != "workspace-prepare" || pod.InitContainers[1].Name != "cache-restore" {
+	if len(pod.InitContainers) != 3 || pod.InitContainers[0].Name != "command-timeout-install" || pod.InitContainers[1].Name != "workspace-prepare" || pod.InitContainers[2].Name != "cache-restore" {
 		t.Fatalf("init lifecycle=%#v", pod.InitContainers)
 	}
 	if len(pod.Containers) != 3 || pod.Containers[0].Name != "build" || pod.Containers[1].Name != "workspace-publish" || pod.Containers[2].Name != "cache-save" {
 		t.Fatalf("container lifecycle=%#v", pod.Containers)
 	}
 	build := pod.Containers[0]
-	assertEphemeralStorage(t, pod.InitContainers[1], helperEphemeralStorageRequest, helperEphemeralStorageLimit)
+	assertEphemeralStorage(t, pod.InitContainers[2], helperEphemeralStorageRequest, helperEphemeralStorageLimit)
 	assertEphemeralStorage(t, pod.Containers[2], helperEphemeralStorageRequest, helperEphemeralStorageLimit)
 	if hasMount(build, "cache-restore-token") || hasMount(build, "cache-save-token") || hasMount(build, "cache-helper-state") || hasMount(build, "workspace-kubernetes-api") {
 		t.Fatalf("build must not receive helper or Kubernetes credentials: %#v", build.VolumeMounts)
 	}
-	if len(build.VolumeMounts) != 3 || build.VolumeMounts[1].MountPath != "/go/pkg/mod" || build.VolumeMounts[1].SubPath != "paths/000" || build.VolumeMounts[2].MountPath != "/root/.cache/go-build" || build.VolumeMounts[2].SubPath != "paths/001" {
+	if !hasMountPath(build, "/go/pkg/mod", "paths/000") || !hasMountPath(build, "/root/.cache/go-build", "paths/001") {
 		t.Fatalf("go cache mounts=%#v", build.VolumeMounts)
 	}
-	if !hasMount(pod.InitContainers[1], "cache-restore-token") || !hasMount(pod.InitContainers[1], "cache-helper-state") || hasMount(pod.InitContainers[1], "cache-save-token") || hasMount(pod.InitContainers[1], "workspace-kubernetes-api") {
-		t.Fatalf("restore mounts=%#v", pod.InitContainers[1].VolumeMounts)
+	if !hasMount(pod.InitContainers[2], "cache-restore-token") || !hasMount(pod.InitContainers[2], "cache-helper-state") || hasMount(pod.InitContainers[2], "cache-save-token") || hasMount(pod.InitContainers[2], "workspace-kubernetes-api") {
+		t.Fatalf("restore mounts=%#v", pod.InitContainers[2].VolumeMounts)
 	}
 	if !hasMount(pod.Containers[2], "cache-save-token") || !hasMount(pod.Containers[2], "cache-helper-state") || !hasMount(pod.Containers[2], "workspace-kubernetes-api") || hasMount(pod.Containers[2], "cache-restore-token") {
 		t.Fatalf("save mounts=%#v", pod.Containers[2].VolumeMounts)
 	}
-	for _, container := range []corev1.Container{pod.InitContainers[1], pod.Containers[2]} {
+	for _, container := range []corev1.Container{pod.InitContainers[2], pod.Containers[2]} {
 		if fieldPath := downwardAPIFieldPath(container.Env, "COYOTE_WORKSPACE_HELPER_POD_NAME"); fieldPath != "metadata.name" {
 			t.Fatalf("%s pod name field=%q", container.Name, fieldPath)
 		}
@@ -583,6 +611,23 @@ func TestControllerUsesJobDeadlineExceededForTimeout(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if !service.result.TimedOut || service.result.Status != runner.RunStepStatusFailed {
+		t.Fatalf("result=%#v", service.result)
+	}
+}
+
+func TestControllerUsesCommandTimeoutExitCodeForTimeout(t *testing.T) {
+	step := testStep()
+	service := &fakeExecutionService{step: step, found: true}
+	client := newFakeClient()
+	job := completedJob(step, commandTimeoutExitCode, "Error", "command failed")
+	client.jobs[jobName(step.JobID)] = job
+	client.pods = []corev1.Pod{terminatedBuildPod(commandTimeoutExitCode, "Error", "command failed")}
+	controller := NewController(client, service, nil, "default")
+
+	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
+		t.Fatalf("reconcile: %v", reconcileErr)
+	}
+	if !service.result.TimedOut || service.result.Stderr != "step execution timed out after 30s" {
 		t.Fatalf("result=%#v", service.result)
 	}
 }
@@ -1031,8 +1076,8 @@ func TestControllerImageBuildAndKubernetesJobShareConfiguredCapacity(t *testing.
 	if reconcileErr := controller.Reconcile(context.Background()); reconcileErr != nil {
 		t.Fatalf("reconcile: %v", reconcileErr)
 	}
-	if imageController.calls != 1 || len(controller.activeImageBuilds) != 1 || service.claimCalls != 2 {
-		t.Fatalf("image calls=%d active=%#v claims=%d", imageController.calls, controller.activeImageBuilds, service.claimCalls)
+	if imageController.calls != 1 || len(controller.activeImageBuilds) != 1 || service.claimCalls != 2 || service.completeCalls != 0 {
+		t.Fatalf("image calls=%d active=%#v claims=%d completions=%d", imageController.calls, controller.activeImageBuilds, service.claimCalls, service.completeCalls)
 	}
 	if client.jobs[jobName(regular.JobID)] == nil || len(controller.active) != 1 || controller.inFlightCount() != 2 {
 		t.Fatalf("regular Kubernetes work must coexist with image build: jobs=%#v active=%#v", client.jobs, controller.active)
@@ -1353,6 +1398,15 @@ func hasMount(container corev1.Container, name string) bool {
 	return false
 }
 
+func hasMountPath(container corev1.Container, path, subPath string) bool {
+	for _, mount := range container.VolumeMounts {
+		if mount.MountPath == path && mount.SubPath == subPath {
+			return true
+		}
+	}
+	return false
+}
+
 func assertEphemeralStorage(t *testing.T, container corev1.Container, request, limit string) {
 	t.Helper()
 	requested := container.Resources.Requests[corev1.ResourceEphemeralStorage]
@@ -1362,6 +1416,22 @@ func assertEphemeralStorage(t *testing.T, container corev1.Container, request, l
 	limited := container.Resources.Limits[corev1.ResourceEphemeralStorage]
 	if got := limited.String(); got != limit {
 		t.Fatalf("container %q ephemeral storage limit=%q, want %q", container.Name, got, limit)
+	}
+}
+
+func assertBuildResources(t *testing.T, container corev1.Container) {
+	t.Helper()
+	if got := container.Resources.Requests.Cpu().String(); got != buildCPURequest {
+		t.Fatalf("build CPU request=%q, want %q", got, buildCPURequest)
+	}
+	if got := container.Resources.Limits.Cpu().String(); got != buildCPULimit {
+		t.Fatalf("build CPU limit=%q, want %q", got, buildCPULimit)
+	}
+	if got := container.Resources.Requests.Memory().String(); got != buildMemoryRequest {
+		t.Fatalf("build memory request=%q, want %q", got, buildMemoryRequest)
+	}
+	if got := container.Resources.Limits.Memory().String(); got != buildMemoryLimit {
+		t.Fatalf("build memory limit=%q, want %q", got, buildMemoryLimit)
 	}
 }
 

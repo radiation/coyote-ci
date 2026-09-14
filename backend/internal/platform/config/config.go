@@ -156,7 +156,7 @@ func Load() Config {
 		ArtifactGCSBucket:                      getEnv("ARTIFACT_GCS_BUCKET", ""),
 		ArtifactGCSPrefix:                      getEnv("ARTIFACT_GCS_PREFIX", ""),
 		ArtifactGCSProject:                     getEnv("ARTIFACT_GCS_PROJECT", ""),
-		CloudBuildProject:                      getEnv("CLOUD_BUILD_PROJECT", ""),
+		CloudBuildProject:                      getEnv("CLOUD_BUILD_PROJECT", getEnv("GOOGLE_CLOUD_PROJECT", "")),
 		CloudBuildLocation:                     getEnv("CLOUD_BUILD_LOCATION", ""),
 		CloudBuildRuntimeServiceAccount:        getEnv("CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT", ""),
 		CloudBuildArtifactRegistryRepository:   getEnv("CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY", ""),

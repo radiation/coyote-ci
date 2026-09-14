@@ -42,6 +42,13 @@ func TestDatabaseConfigError(t *testing.T) {
 	}
 }
 
+func TestRunWorkspaceHelperCommandRoutesCommandTimeout(t *testing.T) {
+	handled, commandErr := runWorkspaceHelperCommand(context.Background(), []string{"timeout", "1", "sh", "-c", "exit 0"})
+	if commandErr != nil || !handled {
+		t.Fatalf("handled=%t error=%v", handled, commandErr)
+	}
+}
+
 func TestMainFailsForInvalidDatabaseURLFile(t *testing.T) {
 	if os.Getenv("COYOTE_TEST_INVALID_DATABASE_CONFIG") == "1" {
 		main()

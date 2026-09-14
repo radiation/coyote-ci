@@ -2,6 +2,7 @@ package cloudbuild
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,13 +10,14 @@ import (
 	"time"
 
 	googlecloudbuild "google.golang.org/api/cloudbuild/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
 
 func TestBuildRequestDerivesConfiguredArtifactRegistryDestination(t *testing.T) {
-	client := &Client{artifactRegistryRepository: "us-central1-docker.pkg.dev/coyote-prod/ci-images", runtimeServiceAccount: "cloud-build@coyote-prod.iam.gserviceaccount.com"}
+	client := &Client{projectID: "coyote-prod", artifactRegistryRepository: "us-central1-docker.pkg.dev/coyote-prod/ci-images", runtimeServiceAccount: "cloud-build@coyote-prod.iam.gserviceaccount.com"}
 	build, err := client.buildRequest(domain.ImageBuildRequest{
 		ExecutionJobID: "job-1",
 		Source:         domain.ImageBuildSource{Bucket: "sources", Object: "job-1.tar.gz", Generation: "42"},
@@ -28,6 +30,15 @@ func TestBuildRequestDerivesConfiguredArtifactRegistryDestination(t *testing.T) 
 	want := "us-central1-docker.pkg.dev/coyote-prod/ci-images/coyote-ci/backend"
 	if len(build.Images) != 1 || build.Images[0] != want || build.Steps[0].Args[2] != "--tag="+want {
 		t.Fatalf("image destination=%#v args=%#v, want %q", build.Images, build.Steps[0].Args, want)
+	}
+	if build.Timeout != "600s" {
+		t.Fatalf("timeout=%q, want protobuf duration seconds", build.Timeout)
+	}
+	if build.Options == nil || build.Options.Logging != "CLOUD_LOGGING_ONLY" {
+		t.Fatalf("logging options=%+v, want CLOUD_LOGGING_ONLY", build.Options)
+	}
+	if build.ServiceAccount != "projects/coyote-prod/serviceAccounts/cloud-build@coyote-prod.iam.gserviceaccount.com" {
+		t.Fatalf("service account=%q", build.ServiceAccount)
 	}
 }
 
@@ -75,6 +86,13 @@ func TestClientCallsCloudBuildAPI(t *testing.T) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch {
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/builds"):
+			var build googlecloudbuild.Build
+			if decodeErr := json.NewDecoder(request.Body).Decode(&build); decodeErr != nil {
+				t.Fatalf("decode submitted build: %v", decodeErr)
+			}
+			if build.Timeout != "60s" {
+				t.Fatalf("submitted timeout=%q, want %q", build.Timeout, "60s")
+			}
 			_, _ = writer.Write([]byte(`{"metadata":{"build":{"id":"build-1","name":"projects/project/locations/us-central1/builds/build-1"}}}`))
 		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/builds/build-1"):
 			_, _ = writer.Write([]byte(`{"id":"build-1","status":"SUCCESS","results":{"images":[{"digest":"sha256:abc"}]}}`))
@@ -111,5 +129,23 @@ func TestClientCallsCloudBuildAPI(t *testing.T) {
 func TestNewRequiresCloudBuildConfiguration(t *testing.T) {
 	if _, err := New(context.Background(), Config{}); err == nil {
 		t.Fatal("expected incomplete configuration error")
+	}
+}
+
+func TestIsRetryableAPIError(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "bad request", err: &googleapi.Error{Code: http.StatusBadRequest}, want: false},
+		{name: "rate limited", err: &googleapi.Error{Code: http.StatusTooManyRequests}, want: true},
+		{name: "unavailable", err: &googleapi.Error{Code: http.StatusServiceUnavailable}, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := isRetryableAPIError(testCase.err); got != testCase.want {
+				t.Fatalf("retryable=%t, want %t", got, testCase.want)
+			}
+		})
 	}
 }
