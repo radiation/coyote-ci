@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +37,9 @@ func TestWorkspaceHelperCacheServiceRestoreHitMarksAccessed(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("restore found=%t err=%v", found, err)
 	}
+	if harness.store.restoreCalls != 1 || harness.store.openCalls != 0 {
+		t.Fatalf("legacy restore calls=%d open calls=%d, want 1 and 0", harness.store.restoreCalls, harness.store.openCalls)
+	}
 	defer func() { _ = payload.Archive.Close() }()
 	destination := t.TempDir()
 	if archiveRestoreErr := workspace.RestoreArchive(context.Background(), payload.Archive, payload.Publication, destination); archiveRestoreErr != nil {
@@ -48,6 +52,41 @@ func TestWorkspaceHelperCacheServiceRestoreHitMarksAccessed(t *testing.T) {
 	entry, found, findErr := harness.entries.FindReadyByKey(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey)
 	if findErr != nil || !found || entry.LastAccessedAt == nil || !entry.LastAccessedAt.Equal(accessedAt) {
 		t.Fatalf("accessed entry=%#v found=%t err=%v", entry, found, findErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceRestoreStreamsCompatibleArchive(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	source := cacheArchive(t, "cached.txt", "cache hit")
+	defer func() { _ = source.archive.Close() }()
+	objectKey := cacheObjectKey(cacheJobID(harness.build), "go", harness.cacheKey, source.publication.ContentDigest)
+	saved, saveErr := harness.store.SaveArchive(context.Background(), objectKey, source.archive)
+	if saveErr != nil {
+		t.Fatalf("seed direct cache object: %v", saveErr)
+	}
+	entry := cacheEntryInput(harness, objectKey)
+	entry.SizeBytes = saved.SizeBytes
+	entry.Checksum = saved.Checksum
+	entry.ContentDigest = source.publication.ContentDigest
+	if _, upsertErr := harness.entries.Upsert(context.Background(), entry); upsertErr != nil {
+		t.Fatalf("seed cache metadata: %v", upsertErr)
+	}
+
+	payload, found, restoreErr := harness.service.Restore(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if restoreErr != nil || !found {
+		t.Fatalf("restore found=%t err=%v", found, restoreErr)
+	}
+	defer func() { _ = payload.Archive.Close() }()
+	if harness.store.restoreCalls != 0 || harness.store.openCalls != 1 {
+		t.Fatalf("directory restore calls=%d open calls=%d, want 0 and 1", harness.store.restoreCalls, harness.store.openCalls)
+	}
+	destination := t.TempDir()
+	if archiveRestoreErr := workspace.RestoreArchive(context.Background(), payload.Archive, payload.Publication, destination); archiveRestoreErr != nil {
+		t.Fatalf("restore direct archive: %v", archiveRestoreErr)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(destination, "cached.txt"))
+	if readErr != nil || string(contents) != "cache hit" {
+		t.Fatalf("restored content=%q err=%v", contents, readErr)
 	}
 }
 
@@ -68,6 +107,12 @@ func TestWorkspaceHelperCacheServiceSaveUpsertsReadyEntry(t *testing.T) {
 	if err := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archive.archive, archive.publication); err != nil {
 		t.Fatalf("save: %v", err)
 	}
+	if harness.store.saveCalls != 0 || harness.store.archiveSaveCalls != 1 {
+		t.Fatalf("directory saves=%d archive saves=%d, want 0 and 1", harness.store.saveCalls, harness.store.archiveSaveCalls)
+	}
+	if harness.store.archivePromoteCalls != 1 {
+		t.Fatalf("archive promotions=%d, want 1", harness.store.archivePromoteCalls)
+	}
 	objectKey := cacheObjectKey(cacheJobID(harness.build), "go", harness.cacheKey, archive.publication.ContentDigest)
 	entry, found, findErr := harness.entries.FindReadyByKey(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey)
 	if findErr != nil || !found || entry.ObjectKey != objectKey || entry.CreatedByBuildID != harness.build.ID || entry.CreatedByStepID != harness.step.ID {
@@ -77,6 +122,49 @@ func TestWorkspaceHelperCacheServiceSaveUpsertsReadyEntry(t *testing.T) {
 	result, restoreErr := harness.store.Restore(context.Background(), objectKey, restored)
 	if restoreErr != nil || !result.Hit {
 		t.Fatalf("stored payload result=%#v err=%v", result, restoreErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceSaveRejectsCorruptArchiveWithoutReadyEntry(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	archive := cacheArchive(t, "paths/000/module", "module data")
+	defer func() { _ = archive.archive.Close() }()
+	archive.publication.ContentDigest = "sha256:" + strings.Repeat("0", 64)
+
+	saveErr := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archive.archive, archive.publication)
+	if !errors.Is(saveErr, ErrWorkspaceHelperCacheInvalidInput) || !errors.Is(saveErr, workspace.ErrWorkspaceRevisionDigestMismatch) {
+		t.Fatalf("save corrupt archive: %v", saveErr)
+	}
+	if _, found, findErr := harness.entries.FindReadyByKey(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey); findErr != nil || found {
+		t.Fatalf("ready cache found=%t err=%v", found, findErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceSaveLateValidationFailureDoesNotPublishFinalArchive(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	archive := cacheArchiveWithRandomContent(t, 128*1024)
+	defer func() { _ = archive.archive.Close() }()
+	archive.publication.ContentDigest = "sha256:" + strings.Repeat("0", 64)
+	objectKey := cacheObjectKey(cacheJobID(harness.build), "go", harness.cacheKey, archive.publication.ContentDigest)
+
+	saveErr := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archive.archive, archive.publication)
+	if !errors.Is(saveErr, ErrWorkspaceHelperCacheInvalidInput) || !errors.Is(saveErr, workspace.ErrWorkspaceRevisionDigestMismatch) {
+		t.Fatalf("save late-invalid archive: %v", saveErr)
+	}
+	if harness.store.archiveBytes < 64*1024 {
+		t.Fatalf("archive bytes streamed=%d, want at least 65536", harness.store.archiveBytes)
+	}
+	if harness.store.archivePromoteCalls != 0 {
+		t.Fatalf("archive promotions=%d, want 0", harness.store.archivePromoteCalls)
+	}
+	if harness.store.archiveDeleteCalls != 1 {
+		t.Fatalf("archive cleanup calls=%d, want 1", harness.store.archiveDeleteCalls)
+	}
+	stored, result, openErr := harness.store.inner.Open(context.Background(), objectKey)
+	if openErr != nil || result.Hit || stored != nil {
+		t.Fatalf("final archive hit=%t reader=%v err=%v", result.Hit, stored, openErr)
 	}
 }
 
@@ -91,8 +179,8 @@ func TestWorkspaceHelperCacheServiceSaveSkipsUnchangedContent(t *testing.T) {
 	if saveErr := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archive.archive, archive.publication); saveErr != nil {
 		t.Fatalf("save unchanged: %v", saveErr)
 	}
-	if harness.store.saveCalls != 0 {
-		t.Fatalf("store saves=%d, want 0", harness.store.saveCalls)
+	if harness.store.saveCalls != 0 || harness.store.archiveSaveCalls != 0 {
+		t.Fatalf("store saves=%d archive saves=%d, want 0", harness.store.saveCalls, harness.store.archiveSaveCalls)
 	}
 }
 
@@ -252,8 +340,8 @@ func TestWorkspaceHelperCacheServiceConcurrentReplacementLeavesOneReadyEntry(t *
 			t.Fatalf("concurrent save: %v", err)
 		}
 	}
-	if harness.store.saveCalls != 1 {
-		t.Fatalf("store saves=%d, want 1", harness.store.saveCalls)
+	if harness.store.saveCalls != 0 || harness.store.archiveSaveCalls != 1 {
+		t.Fatalf("store saves=%d archive saves=%d, want 0 and 1", harness.store.saveCalls, harness.store.archiveSaveCalls)
 	}
 	entry, found, err := harness.entries.FindReadyByKey(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey)
 	if err != nil || !found || entry.ObjectKey != cacheObjectKey(cacheJobID(harness.build), "go", harness.cacheKey, entry.ContentDigest) {
@@ -373,13 +461,23 @@ func (f *workspaceHelperCacheBuildFake) GetStepsByBuildID(context.Context, strin
 }
 
 type workspaceHelperCacheStoreFake struct {
-	inner     cachepkg.Store
-	saveErr   error
-	saveCalls int
+	inner interface {
+		cachepkg.Store
+		cachepkg.ArchiveStore
+	}
+	saveErr             error
+	saveCalls           int
+	archiveSaveCalls    int
+	archivePromoteCalls int
+	archiveDeleteCalls  int
+	archiveBytes        int64
+	restoreCalls        int
+	openCalls           int
 }
 
 func (f *workspaceHelperCacheStoreFake) Provider() domain.StorageProvider { return f.inner.Provider() }
 func (f *workspaceHelperCacheStoreFake) Restore(ctx context.Context, key string, destination string) (cachepkg.RestoreResult, error) {
+	f.restoreCalls++
 	return f.inner.Restore(ctx, key, destination)
 }
 func (f *workspaceHelperCacheStoreFake) Save(ctx context.Context, key string, source string) (cachepkg.SaveResult, error) {
@@ -388,6 +486,36 @@ func (f *workspaceHelperCacheStoreFake) Save(ctx context.Context, key string, so
 		return cachepkg.SaveResult{}, f.saveErr
 	}
 	return f.inner.Save(ctx, key, source)
+}
+func (f *workspaceHelperCacheStoreFake) Open(ctx context.Context, key string) (io.ReadCloser, cachepkg.RestoreResult, error) {
+	f.openCalls++
+	return f.inner.Open(ctx, key)
+}
+func (f *workspaceHelperCacheStoreFake) SaveArchive(ctx context.Context, key string, archive io.Reader) (cachepkg.SaveResult, error) {
+	f.archiveSaveCalls++
+	if f.saveErr != nil {
+		return cachepkg.SaveResult{}, f.saveErr
+	}
+	return f.inner.SaveArchive(ctx, key, &countingCacheArchiveReader{reader: archive, count: &f.archiveBytes})
+}
+func (f *workspaceHelperCacheStoreFake) PromoteArchive(ctx context.Context, sourceKey string, destinationKey string) error {
+	f.archivePromoteCalls++
+	return f.inner.PromoteArchive(ctx, sourceKey, destinationKey)
+}
+func (f *workspaceHelperCacheStoreFake) DeleteArchive(ctx context.Context, key string) error {
+	f.archiveDeleteCalls++
+	return f.inner.DeleteArchive(ctx, key)
+}
+
+type countingCacheArchiveReader struct {
+	reader io.Reader
+	count  *int64
+}
+
+func (r *countingCacheArchiveReader) Read(data []byte) (int, error) {
+	read, err := r.reader.Read(data)
+	*r.count += int64(read)
+	return read, err
 }
 
 type cacheServiceArchive struct {
@@ -409,6 +537,23 @@ func cacheArchive(t *testing.T, name string, contents string) cacheServiceArchiv
 	archive, publication, err := workspace.ArchiveDirectory(context.Background(), root)
 	if err != nil {
 		t.Fatalf("archive cache payload: %v", err)
+	}
+	return cacheServiceArchive{root: root, archive: archive, publication: publication}
+}
+
+func cacheArchiveWithRandomContent(t *testing.T, size int) cacheServiceArchive {
+	t.Helper()
+	contents := make([]byte, size)
+	if _, randomErr := rand.Read(contents); randomErr != nil {
+		t.Fatalf("generate random cache content: %v", randomErr)
+	}
+	root := t.TempDir()
+	if writeErr := os.WriteFile(filepath.Join(root, "cache.bin"), contents, 0o644); writeErr != nil {
+		t.Fatalf("write random cache content: %v", writeErr)
+	}
+	archive, publication, archiveErr := workspace.ArchiveDirectory(context.Background(), root)
+	if archiveErr != nil {
+		t.Fatalf("archive random cache content: %v", archiveErr)
 	}
 	return cacheServiceArchive{root: root, archive: archive, publication: publication}
 }

@@ -2,6 +2,8 @@ package cache
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -77,6 +79,17 @@ func (s *GCSStore) Restore(ctx context.Context, key string, destinationRoot stri
 	return RestoreResult{Hit: true, SizeBytes: info.Size(), Compression: "tar.gz"}, nil
 }
 
+func (s *GCSStore) Open(ctx context.Context, key string) (io.ReadCloser, RestoreResult, error) {
+	reader, err := s.client.Bucket(s.bucket).Object(s.objectKey(key)).NewReader(ctx)
+	if err != nil {
+		if errors.Is(err, storage.ErrObjectNotExist) {
+			return nil, RestoreResult{Hit: false, Compression: "tar.gz"}, nil
+		}
+		return nil, RestoreResult{}, err
+	}
+	return reader, RestoreResult{Hit: true, SizeBytes: reader.Attrs.Size, Compression: "tar.gz"}, nil
+}
+
 func (s *GCSStore) Save(ctx context.Context, key string, sourceRoot string) (SaveResult, error) {
 	tmp, err := os.CreateTemp("", "coyote-cache-upload-*.tar.gz")
 	if err != nil {
@@ -112,6 +125,41 @@ func (s *GCSStore) Save(ctx context.Context, key string, sourceRoot string) (Sav
 	}
 
 	return SaveResult{SizeBytes: size, Checksum: checksum, Compression: "tar.gz"}, nil
+}
+
+func (s *GCSStore) SaveArchive(ctx context.Context, key string, archive io.Reader) (SaveResult, error) {
+	if archive == nil {
+		return SaveResult{}, errors.New("cache archive is required")
+	}
+	hasher := sha256.New()
+	uploadCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	writer := s.client.Bucket(s.bucket).Object(s.objectKey(key)).NewWriter(uploadCtx)
+	writer.ContentType = "application/gzip"
+	size, copyErr := io.Copy(writer, io.TeeReader(archive, hasher))
+	if copyErr != nil {
+		cancel()
+		_ = writer.Close()
+		return SaveResult{}, copyErr
+	}
+	if closeErr := writer.Close(); closeErr != nil {
+		return SaveResult{}, closeErr
+	}
+	return SaveResult{SizeBytes: size, Checksum: hex.EncodeToString(hasher.Sum(nil)), Compression: "tar.gz"}, nil
+}
+
+func (s *GCSStore) PromoteArchive(ctx context.Context, sourceKey string, destinationKey string) error {
+	bucket := s.client.Bucket(s.bucket)
+	_, err := bucket.Object(s.objectKey(destinationKey)).CopierFrom(bucket.Object(s.objectKey(sourceKey))).Run(ctx)
+	return err
+}
+
+func (s *GCSStore) DeleteArchive(ctx context.Context, key string) error {
+	err := s.client.Bucket(s.bucket).Object(s.objectKey(key)).Delete(ctx)
+	if errors.Is(err, storage.ErrObjectNotExist) {
+		return nil
+	}
+	return err
 }
 
 func (s *GCSStore) objectKey(key string) string {

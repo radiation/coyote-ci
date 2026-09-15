@@ -133,9 +133,10 @@ func TestRestoreArchiveWithLimitsRejectsCompressedExpansionAndExcessEntries(t *t
 		t.Fatalf("archive bytes=%d read=%v close=%v", len(archiveBytes), readErr, closeErr)
 	}
 	restoreErr := RestoreArchiveWithLimits(context.Background(), bytes.NewReader(archiveBytes), publication, filepath.Join(t.TempDir(), "restore"), WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: 1024, MaxEntries: 10})
+	validateErr := ValidateArchiveWithLimits(context.Background(), bytes.NewReader(archiveBytes), publication, WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: 1024, MaxEntries: 10})
 	var sizeLimitErr *WorkspaceRevisionSizeLimitError
-	if !errors.Is(restoreErr, ErrWorkspaceRevisionTooLarge) || !errors.As(restoreErr, &sizeLimitErr) || sizeLimitErr.ObservedBytes != 64*1024 || sizeLimitErr.MaxBytes != 1024 {
-		t.Fatalf("compressed expansion restore: %v", restoreErr)
+	if !errors.Is(restoreErr, ErrWorkspaceRevisionTooLarge) || !errors.Is(validateErr, ErrWorkspaceRevisionTooLarge) || !errors.As(validateErr, &sizeLimitErr) || sizeLimitErr.ObservedBytes != 64*1024 || sizeLimitErr.MaxBytes != 1024 {
+		t.Fatalf("compressed expansion restore=%v validate=%v", restoreErr, validateErr)
 	}
 
 	if writeErr := os.WriteFile(filepath.Join(sourceRoot, "second.txt"), []byte("second"), 0o644); writeErr != nil {
@@ -151,9 +152,10 @@ func TestRestoreArchiveWithLimitsRejectsCompressedExpansionAndExcessEntries(t *t
 		t.Fatalf("read archive=%v close=%v", readErr, closeErr)
 	}
 	restoreErr = RestoreArchiveWithLimits(context.Background(), bytes.NewReader(archiveBytes), publication, filepath.Join(t.TempDir(), "restore"), WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: 128 * 1024, MaxEntries: 1})
+	validateErr = ValidateArchiveWithLimits(context.Background(), bytes.NewReader(archiveBytes), publication, WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: 128 * 1024, MaxEntries: 1})
 	var entryLimitErr *WorkspaceRevisionEntryLimitError
-	if !errors.Is(restoreErr, ErrWorkspaceRevisionTooManyEntries) || !errors.As(restoreErr, &entryLimitErr) || entryLimitErr.ObservedEntries != 2 || entryLimitErr.MaxEntries != 1 {
-		t.Fatalf("entry limit restore: %v", restoreErr)
+	if !errors.Is(restoreErr, ErrWorkspaceRevisionTooManyEntries) || !errors.Is(validateErr, ErrWorkspaceRevisionTooManyEntries) || !errors.As(validateErr, &entryLimitErr) || entryLimitErr.ObservedEntries != 2 || entryLimitErr.MaxEntries != 1 {
+		t.Fatalf("entry limit restore=%v validate=%v", restoreErr, validateErr)
 	}
 }
 
@@ -378,6 +380,15 @@ func TestFilesystemWorkspaceRevisionStoreRestoreRejectsUnsafeAndCorruptArchives(
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			publication := writeRevisionFixture(t, storeRoot, testCase.entryName, testCase.typeflag, testCase.content)
+			archive, openErr := store.Open(context.Background(), publication)
+			if openErr != nil {
+				t.Fatalf("open: %v", openErr)
+			}
+			validateErr := ValidateArchiveWithLimits(context.Background(), archive, publication, WorkspaceRevisionRestoreLimits{})
+			_ = archive.Close()
+			if !errors.Is(validateErr, testCase.want) {
+				t.Fatalf("validate: %v", validateErr)
+			}
 			destination := filepath.Join(t.TempDir(), "restore")
 			if err := store.Restore(context.Background(), publication, destination); !errors.Is(err, testCase.want) {
 				t.Fatalf("restore: %v", err)
