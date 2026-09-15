@@ -465,6 +465,9 @@ func resolveStepRunnerWithWorkspaceRevisions(cfg config.Config, workspaceRevisio
 		})
 	case "inprocess", "local":
 		return inprocess.NewWithWorkspaceRoot(cfg.ExecutionWorkspaceRoot)
+	case "kubernetes":
+		log.Printf("kubernetes execution uses the Kubernetes controller; configuring inprocess runner for local service dependencies")
+		return inprocess.NewWithWorkspaceRoot(cfg.ExecutionWorkspaceRoot)
 	default:
 		log.Printf("unknown execution backend %q; falling back to inprocess", cfg.ExecutionBackend)
 		return inprocess.NewWithWorkspaceRoot(cfg.ExecutionWorkspaceRoot)

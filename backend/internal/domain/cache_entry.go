@@ -20,6 +20,7 @@ type CacheEntry struct {
 	ObjectKey        string
 	SizeBytes        int64
 	Checksum         string
+	ContentDigest    string
 	Compression      string
 	Status           CacheEntryStatus
 	CreatedByBuildID string
@@ -27,4 +28,15 @@ type CacheEntry struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	LastAccessedAt   *time.Time
+}
+
+type CachePublishClaim struct {
+	JobID      string
+	Preset     string
+	CacheKey   string
+	ClaimToken string
+	ClaimedBy  string
+	ClaimedAt  time.Time
+	ExpiresAt  time.Time
+	Reclaimed  bool
 }

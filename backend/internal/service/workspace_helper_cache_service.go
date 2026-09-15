@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,7 @@ var ErrWorkspaceHelperCacheInvalidInput = errors.New("invalid workspace helper c
 const (
 	defaultWorkspaceHelperCacheMaxUncompressedBytes int64 = 4 * 1024 * 1024 * 1024
 	defaultWorkspaceHelperCacheMaxArchiveEntries          = 100000
+	defaultWorkspaceHelperCachePublishLease               = 10 * time.Minute
 )
 
 type WorkspaceHelperCachePayload struct {
@@ -107,6 +109,33 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 	if archive == nil || publication.Validate() != nil {
 		return ErrWorkspaceHelperCacheInvalidInput
 	}
+	jobID := cacheJobID(build)
+	if s.cacheContentIsReady(ctx, jobID, preset, cacheKey, publication.ContentDigest) {
+		log.Printf("INFO cache publish skipped unchanged job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+		return nil
+	}
+	claim, acquired, claimErr := s.entries.TryAcquirePublishClaim(ctx, jobID, preset, cacheKey, executionJobID, s.now(), defaultWorkspaceHelperCachePublishLease)
+	if claimErr != nil {
+		return claimErr
+	}
+	if !acquired {
+		log.Printf("INFO cache publish skipped writer_busy job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+		return nil
+	}
+	if claim.Reclaimed {
+		log.Printf("INFO cache publish claim reclaimed job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+	} else {
+		log.Printf("INFO cache publish claim acquired job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+	}
+	defer func() {
+		if releaseErr := s.entries.ReleasePublishClaim(ctx, claim); releaseErr != nil {
+			log.Printf("WARN cache publish claim release failed job_id=%s preset=%s key=%s err=%v", jobID, preset, cacheKey, releaseErr)
+		}
+	}()
+	if s.cacheContentIsReady(ctx, jobID, preset, cacheKey, publication.ContentDigest) {
+		log.Printf("INFO cache publish skipped unchanged_after_claim job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+		return nil
+	}
 	directory, directoryErr := os.MkdirTemp("", "coyote-cache-save-*")
 	if directoryErr != nil {
 		return directoryErr
@@ -117,13 +146,26 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 	if restoreErr := workspace.RestoreArchiveWithLimits(ctx, archive, publication, payloadRoot, limits); restoreErr != nil {
 		return fmt.Errorf("%w: cache archive: %w", ErrWorkspaceHelperCacheInvalidInput, restoreErr)
 	}
-	objectKey := cacheObjectKey(cacheJobID(build), preset, cacheKey)
+	objectKey := cacheObjectKey(jobID, preset, cacheKey, publication.ContentDigest)
 	saved, saveErr := s.store.Save(ctx, objectKey, payloadRoot)
 	if saveErr != nil {
+		log.Printf("WARN cache publish failed job_id=%s preset=%s key=%s err=%v", jobID, preset, cacheKey, saveErr)
 		return saveErr
 	}
-	_, upsertErr := s.entries.Upsert(ctx, repository.CacheEntryUpsertInput{JobID: cacheJobID(build), Preset: preset, CacheKey: cacheKey, StorageProvider: s.store.Provider(), ObjectKey: objectKey, SizeBytes: saved.SizeBytes, Checksum: saved.Checksum, Compression: saved.Compression, Status: domain.CacheEntryStatusReady, CreatedByBuildID: build.ID, CreatedByStepID: step.ID})
+	_, upsertErr := s.entries.CompletePublishClaim(ctx, claim, repository.CacheEntryUpsertInput{JobID: jobID, Preset: preset, CacheKey: cacheKey, StorageProvider: s.store.Provider(), ObjectKey: objectKey, SizeBytes: saved.SizeBytes, Checksum: saved.Checksum, ContentDigest: publication.ContentDigest, Compression: saved.Compression, Status: domain.CacheEntryStatusReady, CreatedByBuildID: build.ID, CreatedByStepID: step.ID}, s.now())
+	if errors.Is(upsertErr, repository.ErrCachePublishClaimStale) {
+		log.Printf("INFO cache publish skipped stale_claim job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+		return nil
+	}
+	if upsertErr == nil {
+		log.Printf("INFO cache publish succeeded job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+	}
 	return upsertErr
+}
+
+func (s *WorkspaceHelperCacheService) cacheContentIsReady(ctx context.Context, jobID, preset, cacheKey, contentDigest string) bool {
+	entry, found, err := s.entries.FindReadyByKey(ctx, jobID, preset, cacheKey)
+	return err == nil && found && strings.TrimSpace(entry.ContentDigest) == strings.TrimSpace(contentDigest)
 }
 
 func (s *WorkspaceHelperCacheService) authorizeAndValidate(ctx context.Context, token string, executionJobID string, podUID string, preset string, cacheKey string, role domain.WorkspaceHelperRole) (domain.Build, domain.BuildStep, error) {
@@ -185,9 +227,9 @@ func cacheJobID(build domain.Build) string {
 	return "build:" + strings.TrimSpace(build.ID)
 }
 
-func cacheObjectKey(jobID string, preset string, cacheKey string) string {
+func cacheObjectKey(jobID string, preset string, cacheKey string, contentDigest string) string {
 	hash := sha256.Sum256([]byte(strings.TrimSpace(cacheKey)))
-	return fmt.Sprintf("v1/jobs/%s/%s/%s", sanitizeCacheKeyPart(jobID), sanitizeCacheKeyPart(preset), hex.EncodeToString(hash[:]))
+	return fmt.Sprintf("v1/jobs/%s/%s/%s/%s", sanitizeCacheKeyPart(jobID), sanitizeCacheKeyPart(preset), hex.EncodeToString(hash[:]), strings.TrimSpace(contentDigest))
 }
 
 func sanitizeCacheKeyPart(value string) string {

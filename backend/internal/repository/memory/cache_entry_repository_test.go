@@ -119,3 +119,23 @@ func TestCacheEntryRepository_MarkAccessed(t *testing.T) {
 		t.Fatal("expected last_accessed_at to be set")
 	}
 }
+
+func TestCacheEntryRepository_PublishClaimsAreExclusiveAndRecoverAfterExpiry(t *testing.T) {
+	repo := NewCacheEntryRepository()
+	now := time.Date(2026, time.September, 15, 12, 0, 0, 0, time.UTC)
+	first, acquired, firstErr := repo.TryAcquirePublishClaim(context.Background(), "job-1", "go-module", "key", "execution-1", now, time.Minute)
+	if firstErr != nil || !acquired {
+		t.Fatalf("first claim acquired=%t err=%v", acquired, firstErr)
+	}
+	_, acquired, busyErr := repo.TryAcquirePublishClaim(context.Background(), "job-1", "go-module", "key", "execution-2", now.Add(30*time.Second), time.Minute)
+	if busyErr != nil || acquired {
+		t.Fatalf("second claim acquired=%t err=%v", acquired, busyErr)
+	}
+	if releaseErr := repo.ReleasePublishClaim(context.Background(), domain.CachePublishClaim{JobID: first.JobID, Preset: first.Preset, CacheKey: first.CacheKey, ClaimToken: "wrong"}); releaseErr != nil {
+		t.Fatalf("wrong owner release: %v", releaseErr)
+	}
+	second, acquired, reclaimErr := repo.TryAcquirePublishClaim(context.Background(), "job-1", "go-module", "key", "execution-2", now.Add(2*time.Minute), time.Minute)
+	if reclaimErr != nil || !acquired || !second.Reclaimed {
+		t.Fatalf("reclaimed claim=%+v acquired=%t err=%v", second, acquired, reclaimErr)
+	}
+}

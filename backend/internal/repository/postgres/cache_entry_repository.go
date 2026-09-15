@@ -21,7 +21,7 @@ func NewCacheEntryRepository(db *sql.DB) *CacheEntryRepository {
 	return &CacheEntryRepository{db: db}
 }
 
-const cacheEntryColumns = `id, job_id, preset, cache_key, storage_provider, object_key, size_bytes, checksum, compression, status, created_by_build_id, created_by_step_id, created_at, updated_at, last_accessed_at`
+const cacheEntryColumns = `id, job_id, preset, cache_key, storage_provider, object_key, size_bytes, checksum, content_digest, compression, status, created_by_build_id, created_by_step_id, created_at, updated_at, last_accessed_at`
 
 func (r *CacheEntryRepository) FindReadyByKey(ctx context.Context, jobID string, preset string, cacheKey string) (domain.CacheEntry, bool, error) {
 	const query = `
@@ -50,6 +50,14 @@ func (r *CacheEntryRepository) FindReadyByKey(ctx context.Context, jobID string,
 }
 
 func (r *CacheEntryRepository) Upsert(ctx context.Context, input repository.CacheEntryUpsertInput) (domain.CacheEntry, error) {
+	return upsertCacheEntry(ctx, r.db, input)
+}
+
+type cacheEntryQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func upsertCacheEntry(ctx context.Context, queryer cacheEntryQueryer, input repository.CacheEntryUpsertInput) (domain.CacheEntry, error) {
 	const query = `
 		INSERT INTO cache_entries (
 			id,
@@ -60,6 +68,7 @@ func (r *CacheEntryRepository) Upsert(ctx context.Context, input repository.Cach
 			object_key,
 			size_bytes,
 			checksum,
+			content_digest,
 			compression,
 			status,
 			created_by_build_id,
@@ -68,13 +77,14 @@ func (r *CacheEntryRepository) Upsert(ctx context.Context, input repository.Cach
 			updated_at,
 			last_accessed_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW(), NULL)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW(), NULL)
 		ON CONFLICT (job_id, preset, cache_key)
 		DO UPDATE SET
 			storage_provider = EXCLUDED.storage_provider,
 			object_key = EXCLUDED.object_key,
 			size_bytes = EXCLUDED.size_bytes,
 			checksum = EXCLUDED.checksum,
+			content_digest = EXCLUDED.content_digest,
 			compression = EXCLUDED.compression,
 			status = EXCLUDED.status,
 			created_by_build_id = EXCLUDED.created_by_build_id,
@@ -83,7 +93,7 @@ func (r *CacheEntryRepository) Upsert(ctx context.Context, input repository.Cach
 		RETURNING ` + cacheEntryColumns
 
 	id := uuid.NewString()
-	return scanCacheEntry(r.db.QueryRowContext(
+	return scanCacheEntry(queryer.QueryRowContext(
 		ctx,
 		query,
 		id,
@@ -94,6 +104,7 @@ func (r *CacheEntryRepository) Upsert(ctx context.Context, input repository.Cach
 		strings.TrimSpace(input.ObjectKey),
 		input.SizeBytes,
 		strings.TrimSpace(input.Checksum),
+		strings.TrimSpace(input.ContentDigest),
 		strings.TrimSpace(input.Compression),
 		string(input.Status),
 		strings.TrimSpace(input.CreatedByBuildID),
@@ -122,6 +133,60 @@ func (r *CacheEntryRepository) MarkAccessed(ctx context.Context, id string, acce
 	return nil
 }
 
+func (r *CacheEntryRepository) TryAcquirePublishClaim(ctx context.Context, jobID, preset, cacheKey, claimant string, now time.Time, lease time.Duration) (domain.CachePublishClaim, bool, error) {
+	claim := domain.CachePublishClaim{JobID: strings.TrimSpace(jobID), Preset: strings.TrimSpace(strings.ToLower(preset)), CacheKey: strings.TrimSpace(cacheKey), ClaimToken: uuid.NewString(), ClaimedBy: strings.TrimSpace(claimant), ClaimedAt: now.UTC(), ExpiresAt: now.UTC().Add(lease)}
+	const query = `
+		INSERT INTO cache_publish_claims (job_id, preset, cache_key, claim_token, claimed_by, claimed_at, claim_expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (job_id, preset, cache_key) DO UPDATE SET
+			claim_token = EXCLUDED.claim_token, claimed_by = EXCLUDED.claimed_by, claimed_at = EXCLUDED.claimed_at,
+			claim_expires_at = EXCLUDED.claim_expires_at, updated_at = NOW()
+		WHERE cache_publish_claims.claim_expires_at <= $6
+		RETURNING claim_token, (xmax <> 0) AS reclaimed`
+	var token string
+	var reclaimed bool
+	err := r.db.QueryRowContext(ctx, query, claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken, claim.ClaimedBy, claim.ClaimedAt, claim.ExpiresAt).Scan(&token, &reclaimed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return claim, false, nil
+	}
+	if err != nil {
+		return domain.CachePublishClaim{}, false, err
+	}
+	claim.Reclaimed = reclaimed
+	return claim, true, nil
+}
+
+func (r *CacheEntryRepository) ReleasePublishClaim(ctx context.Context, claim domain.CachePublishClaim) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM cache_publish_claims WHERE job_id = $1 AND preset = $2 AND cache_key = $3 AND claim_token = $4`, claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken)
+	return err
+}
+
+func (r *CacheEntryRepository) CompletePublishClaim(ctx context.Context, claim domain.CachePublishClaim, input repository.CacheEntryUpsertInput, _ time.Time) (domain.CacheEntry, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.CacheEntry{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	err = tx.QueryRowContext(ctx, `SELECT claim_expires_at FROM cache_publish_claims WHERE job_id = $1 AND preset = $2 AND cache_key = $3 AND claim_token = $4 AND claim_expires_at > NOW() FOR UPDATE`, claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken).Scan(new(time.Time))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.CacheEntry{}, repository.ErrCachePublishClaimStale
+	}
+	if err != nil {
+		return domain.CacheEntry{}, err
+	}
+	entry, err := upsertCacheEntry(ctx, tx, input)
+	if err != nil {
+		return domain.CacheEntry{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM cache_publish_claims WHERE job_id = $1 AND preset = $2 AND cache_key = $3 AND claim_token = $4`, claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken); err != nil {
+		return domain.CacheEntry{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return domain.CacheEntry{}, err
+	}
+	return entry, nil
+}
+
 func scanCacheEntry(scanner rowScanner) (domain.CacheEntry, error) {
 	var entry domain.CacheEntry
 	var status string
@@ -136,6 +201,7 @@ func scanCacheEntry(scanner rowScanner) (domain.CacheEntry, error) {
 		&entry.ObjectKey,
 		&entry.SizeBytes,
 		&entry.Checksum,
+		&entry.ContentDigest,
 		&entry.Compression,
 		&status,
 		&entry.CreatedByBuildID,

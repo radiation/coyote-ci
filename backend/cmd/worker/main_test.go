@@ -246,6 +246,10 @@ func TestResolveStepRunner(t *testing.T) {
 	if _, ok := dockerRunner.(*dockerrunner.Runner); !ok {
 		t.Fatalf("expected docker runner, got %T", dockerRunner)
 	}
+	kubernetesRunner := resolveStepRunner(config.Config{ExecutionBackend: "kubernetes", ExecutionWorkspaceRoot: "/tmp/coyote-work"})
+	if _, ok := kubernetesRunner.(*inprocess.Runner); !ok {
+		t.Fatalf("expected Kubernetes local dependency runner, got %T", kubernetesRunner)
+	}
 
 	inprocessRunner := resolveStepRunner(config.Config{ExecutionBackend: "local", ExecutionWorkspaceRoot: "/tmp/coyote-work"})
 	if _, ok := inprocessRunner.(*inprocess.Runner); !ok {
