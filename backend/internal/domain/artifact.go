@@ -24,6 +24,7 @@ type BuildArtifact struct {
 	SizeBytes       int64
 	ContentType     *string
 	ChecksumSHA256  *string
+	TargetPlatform  string
 	VersionTags     []VersionTag
 	CreatedAt       time.Time
 }
@@ -40,8 +41,9 @@ type ArtifactVersionDeclaration struct {
 
 // ArtifactDeclaration describes one artifact path declaration from pipeline config.
 type ArtifactDeclaration struct {
-	Name    string
-	Path    string
-	Type    ArtifactType
-	Version *ArtifactVersionDeclaration
+	Name     string
+	Path     string
+	Type     ArtifactType
+	Platform string
+	Version  *ArtifactVersionDeclaration
 }

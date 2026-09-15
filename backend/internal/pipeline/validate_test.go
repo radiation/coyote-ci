@@ -173,6 +173,21 @@ func TestValidate_ImageBuildPathsMustStayWithinRepositoryContext(t *testing.T) {
 	}
 }
 
+func TestValidate_ImageBuildArtifacts(t *testing.T) {
+	valid := &PipelineFile{Version: 1, Steps: []StepDef{{Name: "image", ImageBuild: &ImageBuildDef{Context: "backend", Dockerfile: "backend/Dockerfile", Image: "coyote-ci/backend", Artifacts: []ImageBuildArtifactInputDef{{Name: "server", Destination: "dist/coyote-server", Platform: "linux/amd64"}}}}}}
+	if err := Validate(valid); err != nil {
+		t.Fatalf("validate valid artifact input: %v", err)
+	}
+	invalid := &PipelineFile{Version: 1, Steps: []StepDef{{Name: "image", ImageBuild: &ImageBuildDef{Context: "backend", Dockerfile: "backend/Dockerfile", Image: "coyote-ci/backend", Artifacts: []ImageBuildArtifactInputDef{{Name: "", Destination: "../server"}, {Name: "one", Destination: "server", Platform: "linux"}, {Name: "one", Destination: "worker"}}}}}}
+	err := Validate(invalid)
+	if err == nil {
+		t.Fatal("expected invalid artifact inputs")
+	}
+	assertContains(t, err.Error(), "destination")
+	assertContains(t, err.Error(), "duplicate artifact")
+	assertContains(t, err.Error(), "platform")
+}
+
 func TestValidate_ZeroTimeout(t *testing.T) {
 	zero := 0
 	pf := &PipelineFile{
