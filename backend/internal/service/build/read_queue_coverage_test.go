@@ -13,21 +13,30 @@ import (
 
 type readQueueExecutionJobRepo struct {
 	fakeExecutionJobCancelRepository
-	jobsByBuild    []domain.ExecutionJob
-	jobsByBuildErr error
-	jobByID        domain.ExecutionJob
-	jobByIDErr     error
-	jobByStep      domain.ExecutionJob
-	jobByStepErr   error
-	claimNextJob   domain.ExecutionJob
-	claimNextOK    bool
-	claimNextErr   error
-	claimByStepJob domain.ExecutionJob
-	claimByStepOK  bool
-	claimByStepErr error
-	renewJob       domain.ExecutionJob
-	renewOutcome   repository.StepCompletionOutcome
-	renewErr       error
+	jobsByBuild     []domain.ExecutionJob
+	jobsByBuildErr  error
+	jobByID         domain.ExecutionJob
+	jobByIDErr      error
+	jobByStep       domain.ExecutionJob
+	jobByStepErr    error
+	claimNextJob    domain.ExecutionJob
+	claimNextOK     bool
+	claimNextErr    error
+	claimByStepJob  domain.ExecutionJob
+	claimByStepOK   bool
+	claimByStepErr  error
+	renewJob        domain.ExecutionJob
+	renewOutcome    repository.StepCompletionOutcome
+	renewErr        error
+	timing          *domain.ExecutionTiming
+	timingErr       error
+	timings         map[string]*domain.ExecutionTiming
+	timingsErr      error
+	timingListCalls int
+	timingJobIDs    []string
+	timingJob       domain.ExecutionJob
+	timingOutcome   repository.StepCompletionOutcome
+	timingUpdateErr error
 }
 
 func (r *readQueueExecutionJobRepo) GetJobsByBuildID(_ context.Context, _ string) ([]domain.ExecutionJob, error) {
@@ -61,6 +70,20 @@ func (r *readQueueExecutionJobRepo) ClaimJobByStepID(_ context.Context, _ string
 
 func (r *readQueueExecutionJobRepo) RenewJobLease(_ context.Context, _ string, _ string, _ time.Time) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
 	return r.renewJob, r.renewOutcome, r.renewErr
+}
+
+func (r *readQueueExecutionJobRepo) UpdateJobTiming(_ context.Context, _ string, _ string, _ domain.ExecutionTiming) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+	return r.timingJob, r.timingOutcome, r.timingUpdateErr
+}
+
+func (r *readQueueExecutionJobRepo) GetJobTiming(_ context.Context, _ string) (*domain.ExecutionTiming, error) {
+	return r.timing, r.timingErr
+}
+
+func (r *readQueueExecutionJobRepo) GetJobTimings(_ context.Context, jobIDs []string) (map[string]*domain.ExecutionTiming, error) {
+	r.timingListCalls++
+	r.timingJobIDs = append([]string(nil), jobIDs...)
+	return r.timings, r.timingsErr
 }
 
 type readQueueExecutionOutputRepo struct {
@@ -241,6 +264,40 @@ func TestBuildService_ReadQueue_ExecutionJobWrappers(t *testing.T) {
 	if storedJobErr != nil || storedJob.ID != job.ID {
 		t.Fatalf("unexpected GetJobByID result: job=%+v err=%v", storedJob, storedJobErr)
 	}
+	timing := &domain.ExecutionTiming{Phases: []domain.ExecutionPhaseTiming{{Name: "scheduling", StartedAt: &now}}}
+	jobRepo.timings = map[string]*domain.ExecutionTiming{job.ID: timing}
+	jobs, jobsErr = svc.GetJobsByBuildID(ctx, "build-1")
+	if jobsErr != nil || jobRepo.timingListCalls != 2 || jobs[0].Timing == nil || jobs[0].Timing.Phases[0].Name != "scheduling" {
+		t.Fatalf("expected hydrated job timing, jobs=%+v err=%v", jobs, jobsErr)
+	}
+	jobRepo.timingJob = job
+	jobRepo.timingOutcome = repository.StepCompletionCompleted
+	updatedJob, updated, updateTimingErr := svc.UpdateJobTiming(ctx, "job-1", "claim", *timing)
+	if updateTimingErr != nil || !updated || updatedJob.ID != job.ID {
+		t.Fatalf("unexpected timing update result: job=%+v updated=%t err=%v", updatedJob, updated, updateTimingErr)
+	}
+	jobRepo.timingOutcome = repository.StepCompletionStaleClaim
+	_, staleUpdated, staleTimingErr := svc.UpdateJobTiming(ctx, "job-1", "claim", *timing)
+	if staleUpdated || !errors.Is(staleTimingErr, ErrStaleStepClaim) {
+		t.Fatalf("expected stale timing claim, updated=%t err=%v", staleUpdated, staleTimingErr)
+	}
+	jobRepo.timingOutcome = repository.StepCompletionInvalidTransition
+	_, invalidUpdated, invalidTimingErr := svc.UpdateJobTiming(ctx, "job-1", "claim", *timing)
+	if invalidTimingErr != nil || invalidUpdated {
+		t.Fatalf("expected ignored invalid timing update, updated=%t err=%v", invalidUpdated, invalidTimingErr)
+	}
+	jobRepo.timingsErr = errors.New("timing read failed")
+	_, timingReadErr := svc.GetJobsByBuildID(ctx, "build-1")
+	if timingReadErr == nil || timingReadErr.Error() != "timing read failed" {
+		t.Fatalf("expected timing read failure, got %v", timingReadErr)
+	}
+	jobRepo.timingsErr = nil
+	jobRepo.timingErr = errors.New("individual timing read failed")
+	jobWithUnavailableTiming, unavailableTimingErr := svc.GetJobByID(ctx, "job-1")
+	if unavailableTimingErr != nil || jobWithUnavailableTiming.ID != job.ID || jobWithUnavailableTiming.Timing != nil {
+		t.Fatalf("expected job without optional timing, job=%+v err=%v", jobWithUnavailableTiming, unavailableTimingErr)
+	}
+	jobRepo.timingErr = nil
 	jobRepo.jobByIDErr = repository.ErrExecutionJobNotFound
 	_, missingJobErr := svc.GetJobByID(ctx, "missing")
 	if !errors.Is(missingJobErr, ErrExecutionJobNotFound) {
@@ -281,6 +338,29 @@ func TestBuildService_ReadQueue_ExecutionJobWrappers(t *testing.T) {
 	_, invalidRenewed, invalidRenewErr := svc.RenewJobLease(ctx, "job-1", "claim", now.Add(3*time.Minute))
 	if invalidRenewErr != nil || invalidRenewed {
 		t.Fatalf("expected non-renewed invalid transition without error, got renewed=%v err=%v", invalidRenewed, invalidRenewErr)
+	}
+}
+
+func TestBuildService_GetJobsByBuildIDBatchLoadsTimings(t *testing.T) {
+	now := time.Date(2026, time.September, 15, 12, 0, 0, 0, time.UTC)
+	firstTiming := &domain.ExecutionTiming{Phases: []domain.ExecutionPhaseTiming{{Name: "scheduling", StartedAt: &now}}}
+	repo := &readQueueExecutionJobRepo{
+		jobsByBuild: []domain.ExecutionJob{
+			{ID: "job-1", BuildID: "build-1"},
+			{ID: "job-2", BuildID: "build-1"},
+			{ID: "job-3", BuildID: "build-1"},
+		},
+		timings: map[string]*domain.ExecutionTiming{"job-1": firstTiming, "job-3": firstTiming},
+	}
+	svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
+	svc.SetExecutionJobRepository(repo)
+
+	jobs, getErr := svc.GetJobsByBuildID(context.Background(), "build-1")
+	if getErr != nil || repo.timingListCalls != 1 || len(repo.timingJobIDs) != 3 {
+		t.Fatalf("jobs=%+v calls=%d ids=%v err=%v", jobs, repo.timingListCalls, repo.timingJobIDs, getErr)
+	}
+	if jobs[0].Timing == nil || jobs[1].Timing != nil || jobs[2].Timing == nil {
+		t.Fatalf("expected timings for the first and third jobs only, jobs=%+v", jobs)
 	}
 }
 

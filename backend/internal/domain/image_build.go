@@ -67,6 +67,7 @@ type ImageBuildResult struct {
 	ImageDigest    string
 	ExternalLogURL string
 	FailureDetail  string
+	Timing         *ExecutionTiming
 }
 
 type ExternalImageBuild struct {

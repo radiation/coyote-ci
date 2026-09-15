@@ -122,6 +122,17 @@ export interface BuildStep {
   stdout: string | null;
   stderr: string | null;
   error_message: string | null;
+  job?: ExecutionJob | null;
+}
+
+export interface ExecutionTimingPhase {
+  name: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface ExecutionJob {
+  timing?: { phases: ExecutionTimingPhase[] } | null;
 }
 
 export type BuildStepStatus =

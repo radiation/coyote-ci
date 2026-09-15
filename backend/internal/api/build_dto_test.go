@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -110,6 +111,25 @@ func TestBuildStepsEnvelope_JSONOptionalAndEmptyCollections(t *testing.T) {
 			t.Fatalf("expected %s field to be present: %v", field, first)
 		}
 	}
+}
+
+func TestBuildStepsEnvelope_JSONTimingIsOptional(t *testing.T) {
+	startedAt := "2026-09-14T10:00:00Z"
+	payload := BuildStepsEnvelope{Data: BuildStepsResponse{BuildID: "build-1", Steps: []BuildStepResponse{
+		{ID: "without", BuildID: "build-1", Name: "without", Job: &ExecutionJobResponse{}},
+		{ID: "with", BuildID: "build-1", Name: "with", Job: &ExecutionJobResponse{Timing: &ExecutionTimingResponse{Phases: []ExecutionPhaseTimingResponse{{Name: "pod_scheduled", StartedAt: &startedAt}}}}},
+	}}}
+	raw, marshalErr := json.Marshal(payload)
+	if marshalErr != nil {
+		t.Fatalf("marshal: %v", marshalErr)
+	}
+	if string(raw) == "" || !json.Valid(raw) || !containsJSONField(raw, "pod_scheduled") {
+		t.Fatalf("timing payload=%s", raw)
+	}
+}
+
+func containsJSONField(raw []byte, value string) bool {
+	return json.Valid(raw) && strings.Contains(string(raw), value)
 }
 
 func TestBuildLogsEnvelope_EmptyLogsMarshalAsArray(t *testing.T) {

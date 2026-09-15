@@ -5941,8 +5941,36 @@ const docTemplate = `{
                 "timeout_seconds": {
                     "type": "integer"
                 },
+                "timing": {
+                    "$ref": "#/definitions/api.ExecutionTimingResponse"
+                },
                 "working_dir": {
                     "type": "string"
+                }
+            }
+        },
+        "api.ExecutionPhaseTimingResponse": {
+            "type": "object",
+            "properties": {
+                "finished_at": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.ExecutionTimingResponse": {
+            "type": "object",
+            "properties": {
+                "phases": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.ExecutionPhaseTimingResponse"
+                    }
                 }
             }
         },

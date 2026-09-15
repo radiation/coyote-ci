@@ -57,7 +57,26 @@ func (s *BuildService) GetJobsByBuildID(ctx context.Context, buildID string) ([]
 	if s.executionJobRepo == nil {
 		return []domain.ExecutionJob{}, nil
 	}
-	return s.executionJobRepo.GetJobsByBuildID(ctx, buildID)
+	jobs, err := s.executionJobRepo.GetJobsByBuildID(ctx, buildID)
+	if err != nil {
+		return nil, err
+	}
+	timingRepo, ok := s.executionJobRepo.(repository.ExecutionJobTimingListRepository)
+	if !ok || len(jobs) == 0 {
+		return jobs, nil
+	}
+	jobIDs := make([]string, 0, len(jobs))
+	for _, job := range jobs {
+		jobIDs = append(jobIDs, job.ID)
+	}
+	timings, timingErr := timingRepo.GetJobTimings(ctx, jobIDs)
+	if timingErr != nil {
+		return nil, timingErr
+	}
+	for index := range jobs {
+		jobs[index].Timing = timings[jobs[index].ID]
+	}
+	return jobs, nil
 }
 
 func (s *BuildService) GetJobByID(ctx context.Context, jobID string) (domain.ExecutionJob, error) {
@@ -71,7 +90,34 @@ func (s *BuildService) GetJobByID(ctx context.Context, jobID string) (domain.Exe
 		}
 		return domain.ExecutionJob{}, err
 	}
+	timing, timingErr := s.getJobTiming(ctx, job.ID)
+	if timingErr == nil {
+		job.Timing = timing
+	}
 	return job, nil
+}
+
+func (s *BuildService) UpdateJobTiming(ctx context.Context, jobID string, claimToken string, timing domain.ExecutionTiming) (domain.ExecutionJob, bool, error) {
+	timingRepo, ok := s.executionJobRepo.(repository.ExecutionJobTimingRepository)
+	if !ok {
+		return domain.ExecutionJob{}, false, nil
+	}
+	job, outcome, err := timingRepo.UpdateJobTiming(ctx, jobID, claimToken, timing)
+	if err != nil {
+		return domain.ExecutionJob{}, false, err
+	}
+	if outcome == repository.StepCompletionStaleClaim {
+		return job, false, ErrStaleStepClaim
+	}
+	return job, outcome == repository.StepCompletionCompleted, nil
+}
+
+func (s *BuildService) getJobTiming(ctx context.Context, jobID string) (*domain.ExecutionTiming, error) {
+	timingRepo, ok := s.executionJobRepo.(repository.ExecutionJobTimingRepository)
+	if !ok {
+		return nil, nil
+	}
+	return timingRepo.GetJobTiming(ctx, jobID)
 }
 
 func (s *BuildService) GetJobOutputsByBuildID(ctx context.Context, buildID string) ([]domain.ExecutionJobOutput, error) {

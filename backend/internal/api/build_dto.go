@@ -289,7 +289,18 @@ type ExecutionJobResponse struct {
 	StartedAt        *string                      `json:"started_at"`
 	FinishedAt       *string                      `json:"finished_at"`
 	ErrorMessage     *string                      `json:"error_message,omitempty"`
+	Timing           *ExecutionTimingResponse     `json:"timing,omitempty"`
 	Outputs          []ExecutionJobOutputResponse `json:"outputs"`
+}
+
+type ExecutionTimingResponse struct {
+	Phases []ExecutionPhaseTimingResponse `json:"phases"`
+}
+
+type ExecutionPhaseTimingResponse struct {
+	Name       string  `json:"name"`
+	StartedAt  *string `json:"started_at,omitempty"`
+	FinishedAt *string `json:"finished_at,omitempty"`
 }
 
 type ExecutionJobOutputResponse struct {

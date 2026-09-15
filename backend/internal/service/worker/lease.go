@@ -97,7 +97,9 @@ func (w *ExecutionWorkerService) renewStepLease(ctx context.Context, step Worker
 	}
 
 	renewCount := atomic.AddInt64(&w.renewalsWon, 1)
-	log.Printf("lease renewal succeeded: build_id=%s step=%s renewal_count=%d", step.BuildID, step.StepName, renewCount)
+	if renewCount%100 == 0 {
+		log.Printf("DEBUG lease renewals succeeded worker_id=%s renewal_count=%d", w.workerID, renewCount)
+	}
 
 	return true, nil
 }

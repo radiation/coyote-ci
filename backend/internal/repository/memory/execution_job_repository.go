@@ -321,6 +321,55 @@ func (r *ExecutionJobRepository) RenewJobLease(_ context.Context, jobID string, 
 	return cloneExecutionJob(job), repository.StepCompletionCompleted, nil
 }
 
+func (r *ExecutionJobRepository) UpdateJobTiming(_ context.Context, jobID string, claimToken string, timing domain.ExecutionTiming) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	job, ok := r.jobsByID[jobID]
+	if !ok {
+		return domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, repository.ErrExecutionJobNotFound
+	}
+	if domain.IsTerminalExecutionJobStatus(job.Status) {
+		return cloneExecutionJob(job), repository.StepCompletionDuplicateTerminal, nil
+	}
+	if job.Status != domain.ExecutionJobStatusRunning {
+		return cloneExecutionJob(job), repository.StepCompletionInvalidTransition, nil
+	}
+	if job.ClaimToken == nil || *job.ClaimToken != claimToken {
+		return cloneExecutionJob(job), repository.StepCompletionStaleClaim, nil
+	}
+
+	job.Timing = cloneExecutionTiming(&timing)
+	r.jobsByID[jobID] = job
+	return cloneExecutionJob(job), repository.StepCompletionCompleted, nil
+}
+
+func (r *ExecutionJobRepository) GetJobTiming(_ context.Context, jobID string) (*domain.ExecutionTiming, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	job, ok := r.jobsByID[jobID]
+	if !ok {
+		return nil, repository.ErrExecutionJobNotFound
+	}
+	return cloneExecutionTiming(job.Timing), nil
+}
+
+func (r *ExecutionJobRepository) GetJobTimings(_ context.Context, jobIDs []string) (map[string]*domain.ExecutionTiming, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	timings := make(map[string]*domain.ExecutionTiming, len(jobIDs))
+	for _, jobID := range jobIDs {
+		job, ok := r.jobsByID[jobID]
+		if !ok || job.Timing == nil {
+			continue
+		}
+		timings[jobID] = cloneExecutionTiming(job.Timing)
+	}
+	return timings, nil
+}
+
 func (r *ExecutionJobRepository) CompleteJobSuccess(_ context.Context, jobID string, claimToken string, finishedAt time.Time, exitCode int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -480,7 +529,27 @@ func cloneExecutionJob(job domain.ExecutionJob) domain.ExecutionJob {
 		job.FailureKind = &value
 	}
 	job.OutputRefs = cloneArtifactRefs(job.OutputRefs)
+	job.Timing = cloneExecutionTiming(job.Timing)
 	return job
+}
+
+func cloneExecutionTiming(timing *domain.ExecutionTiming) *domain.ExecutionTiming {
+	if timing == nil {
+		return nil
+	}
+	clone := &domain.ExecutionTiming{Phases: make([]domain.ExecutionPhaseTiming, len(timing.Phases))}
+	for index, phase := range timing.Phases {
+		clone.Phases[index] = phase
+		if phase.StartedAt != nil {
+			startedAt := *phase.StartedAt
+			clone.Phases[index].StartedAt = &startedAt
+		}
+		if phase.FinishedAt != nil {
+			finishedAt := *phase.FinishedAt
+			clone.Phases[index].FinishedAt = &finishedAt
+		}
+	}
+	return clone
 }
 
 func latestJobsByNodeID(jobIDs []string, jobsByID map[string]domain.ExecutionJob) map[string]domain.ExecutionJob {

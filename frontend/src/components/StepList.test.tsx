@@ -63,6 +63,36 @@ describe("StepList", () => {
     expect(command.textContent).toBe("echo hello");
   });
 
+  it("renders available execution phase timings", () => {
+    render(
+      <StepList
+        buildID="build-1"
+        openStepIndex={null}
+        onOpenStepChange={() => {}}
+        steps={[
+          makeStep({
+            job: {
+              timing: {
+                phases: [
+                  {
+                    name: "scheduling",
+                    started_at: "2026-04-01T00:00:00Z",
+                    finished_at: "2026-04-01T00:05:00Z",
+                  },
+                  { name: "workspace_prepare" },
+                ],
+              },
+            },
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByLabelText("Execution phase timing")).toBeTruthy();
+    expect(screen.getByText("scheduling 5m 0s")).toBeTruthy();
+    expect(screen.getByText("workspace prepare —")).toBeTruthy();
+  });
+
   it("truncates long command and preserves full command in title", () => {
     const longCommand =
       "echo one && echo two && echo three && echo four && echo five && echo six && echo seven && echo eight";

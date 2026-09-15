@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ type executionService interface {
 	GetExecutionJob(context.Context, string) (domain.ExecutionJob, error)
 	GetBuild(context.Context, string) (domain.Build, error)
 	RenewRunnableStepLease(context.Context, workersvc.WorkerRunnableStep) (bool, error)
+	UpdateRunnableStepTiming(context.Context, workersvc.WorkerRunnableStep, domain.ExecutionTiming) (bool, error)
 	CompleteKubernetesRunnableStep(context.Context, workersvc.WorkerRunnableStep, runner.RunStepResult) (repository.StepCompletionOutcome, error)
 }
 
@@ -110,6 +112,11 @@ func (c *Controller) ReconcileClaimed(ctx context.Context, step workersvc.Worker
 	result, getErr := c.builder.Get(ctx, domain.ImageBuildHandle{ID: record.ExternalBuildID, ResourceName: record.ExternalResourceName})
 	if getErr != nil {
 		return true, getErr
+	}
+	if result.Timing != nil {
+		if _, timingErr := c.service.UpdateRunnableStepTiming(ctx, step, *result.Timing); timingErr != nil {
+			log.Printf("DEBUG remote image build timing update failed execution_job_id=%s: %v", step.JobID, timingErr)
+		}
 	}
 	record.LastProviderStatus, record.ExternalLogURL, record.FailureDetail = string(result.Status), result.ExternalLogURL, result.FailureDetail
 	if !result.Status.Terminal() {

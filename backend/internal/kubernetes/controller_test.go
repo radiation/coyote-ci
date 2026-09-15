@@ -1235,6 +1235,7 @@ type fakeExecutionService struct {
 	statusAfterRenew domain.ExecutionJobStatus
 	completeErr      error
 	completeOutcome  repository.StepCompletionOutcome
+	timing           domain.ExecutionTiming
 }
 
 type fakeImageBuildController struct {
@@ -1291,6 +1292,10 @@ func (s *fakeExecutionService) GetExecutionJob(_ context.Context, jobID string) 
 		status = domain.ExecutionJobStatusRunning
 	}
 	return domain.ExecutionJob{Status: status}, nil
+}
+func (s *fakeExecutionService) UpdateRunnableStepTiming(_ context.Context, _ workersvc.WorkerRunnableStep, timing domain.ExecutionTiming) (bool, error) {
+	s.timing = timing
+	return true, nil
 }
 func (s *fakeExecutionService) CompleteKubernetesRunnableStep(_ context.Context, _ workersvc.WorkerRunnableStep, result runner.RunStepResult) (repository.StepCompletionOutcome, error) {
 	s.completeCalls++

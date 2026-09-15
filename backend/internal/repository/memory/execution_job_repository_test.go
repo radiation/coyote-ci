@@ -143,6 +143,94 @@ func TestExecutionJobRepository_CompleteJobFailureRejectsStaleClaim(t *testing.T
 	}
 }
 
+func TestExecutionJobRepository_PersistsTimingForActiveClaim(t *testing.T) {
+	repo := NewExecutionJobRepository()
+	now := time.Now().UTC()
+	claim := repository.StepClaim{WorkerID: "worker-1", ClaimToken: "claim-1", ClaimedAt: now, LeaseExpiresAt: now.Add(time.Minute)}
+	if _, createErr := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{{ID: "job-timing", BuildID: "build-1", StepID: "step-1", Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now}}); createErr != nil {
+		t.Fatalf("create job: %v", createErr)
+	}
+	if _, claimed, claimErr := repo.ClaimJobByStepID(context.Background(), "step-1", claim); claimErr != nil || !claimed {
+		t.Fatalf("claim job: claimed=%t err=%v", claimed, claimErr)
+	}
+	timing := domain.ExecutionTiming{Phases: []domain.ExecutionPhaseTiming{{Name: "pod_scheduled", StartedAt: &now}}}
+	if _, outcome, updateErr := repo.UpdateJobTiming(context.Background(), "job-timing", claim.ClaimToken, timing); updateErr != nil || outcome != repository.StepCompletionCompleted {
+		t.Fatalf("update timing: outcome=%q err=%v", outcome, updateErr)
+	}
+	persisted, getErr := repo.GetJobTiming(context.Background(), "job-timing")
+	if getErr != nil || persisted == nil || len(persisted.Phases) != 1 || persisted.Phases[0].Name != "pod_scheduled" {
+		t.Fatalf("persisted timing=%+v err=%v", persisted, getErr)
+	}
+	if _, outcome, staleErr := repo.UpdateJobTiming(context.Background(), "job-timing", "stale", timing); staleErr != nil || outcome != repository.StepCompletionStaleClaim {
+		t.Fatalf("stale update: outcome=%q err=%v", outcome, staleErr)
+	}
+}
+
+func TestExecutionJobRepository_GetJobTimingsReturnsIndependentObservedTimings(t *testing.T) {
+	repo := NewExecutionJobRepository()
+	now := time.Now().UTC()
+	claim := repository.StepClaim{WorkerID: "worker-1", ClaimToken: "claim-1", ClaimedAt: now, LeaseExpiresAt: now.Add(time.Minute)}
+	jobs := []domain.ExecutionJob{
+		{ID: "job-timed", BuildID: "build-1", StepID: "step-1", Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now},
+		{ID: "job-untimed", BuildID: "build-1", StepID: "step-2", Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now},
+	}
+	if _, createErr := repo.CreateJobsForBuild(context.Background(), jobs); createErr != nil {
+		t.Fatalf("create jobs: %v", createErr)
+	}
+	if _, claimed, claimErr := repo.ClaimJobByStepID(context.Background(), "step-1", claim); claimErr != nil || !claimed {
+		t.Fatalf("claim job: claimed=%t err=%v", claimed, claimErr)
+	}
+	timing := domain.ExecutionTiming{Phases: []domain.ExecutionPhaseTiming{{Name: "scheduling", StartedAt: &now}}}
+	if _, outcome, updateErr := repo.UpdateJobTiming(context.Background(), "job-timed", claim.ClaimToken, timing); updateErr != nil || outcome != repository.StepCompletionCompleted {
+		t.Fatalf("update timing: outcome=%q err=%v", outcome, updateErr)
+	}
+	timings, getErr := repo.GetJobTimings(context.Background(), []string{"job-timed", "job-untimed", "missing"})
+	if getErr != nil || len(timings) != 1 || timings["job-timed"] == nil {
+		t.Fatalf("timings=%+v err=%v", timings, getErr)
+	}
+	timings["job-timed"].Phases[0].Name = "mutated"
+	persisted, persistedErr := repo.GetJobTiming(context.Background(), "job-timed")
+	if persistedErr != nil || persisted.Phases[0].Name != "scheduling" {
+		t.Fatalf("persisted=%+v err=%v", persisted, persistedErr)
+	}
+}
+
+func TestExecutionJobRepository_UpdateJobTimingRejectsUnavailableClaims(t *testing.T) {
+	now := time.Now().UTC()
+	timing := domain.ExecutionTiming{Phases: []domain.ExecutionPhaseTiming{{Name: "scheduling", StartedAt: &now}}}
+	for _, testCase := range []struct {
+		name    string
+		job     domain.ExecutionJob
+		outcome repository.StepCompletionOutcome
+	}{
+		{name: "missing job", outcome: repository.StepCompletionInvalidTransition},
+		{name: "queued job", job: domain.ExecutionJob{ID: "job-queued", BuildID: "build-1", StepID: "step-1", Status: domain.ExecutionJobStatusQueued, ResolvedSpecJSON: "{}", CreatedAt: now}, outcome: repository.StepCompletionInvalidTransition},
+		{name: "terminal job", job: domain.ExecutionJob{ID: "job-terminal", BuildID: "build-1", StepID: "step-1", Status: domain.ExecutionJobStatusSuccess, ResolvedSpecJSON: "{}", CreatedAt: now}, outcome: repository.StepCompletionDuplicateTerminal},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			repo := NewExecutionJobRepository()
+			jobID := "missing"
+			if testCase.job.ID != "" {
+				jobID = testCase.job.ID
+				if _, createErr := repo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{testCase.job}); createErr != nil {
+					t.Fatalf("create job: %v", createErr)
+				}
+			}
+			_, outcome, updateErr := repo.UpdateJobTiming(context.Background(), jobID, "claim-1", timing)
+			if testCase.name == "missing job" {
+				if !errors.Is(updateErr, repository.ErrExecutionJobNotFound) {
+					t.Fatalf("expected missing job error, got %v", updateErr)
+				}
+			} else if updateErr != nil {
+				t.Fatalf("update timing: %v", updateErr)
+			}
+			if outcome != testCase.outcome {
+				t.Fatalf("outcome=%q want %q", outcome, testCase.outcome)
+			}
+		})
+	}
+}
+
 func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_ValidAndStaleClaims(t *testing.T) {
 	now := time.Now().UTC()
 	buildRepo := NewBuildRepository()

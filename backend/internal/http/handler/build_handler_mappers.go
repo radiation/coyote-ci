@@ -268,6 +268,7 @@ func toExecutionJobResponse(job *domain.ExecutionJob, outputs []domain.Execution
 		SpecDigest:       job.SpecDigest,
 		CreatedAt:        job.CreatedAt.Format(time.RFC3339),
 		ErrorMessage:     job.ErrorMessage,
+		Timing:           toExecutionTimingResponse(job.Timing),
 		Outputs:          make([]api.ExecutionJobOutputResponse, 0, len(outputs)),
 	}
 	for key, value := range job.Environment {
@@ -298,6 +299,17 @@ func toExecutionJobResponse(job *domain.ExecutionJob, outputs []domain.Execution
 		})
 	}
 	return resp
+}
+
+func toExecutionTimingResponse(timing *domain.ExecutionTiming) *api.ExecutionTimingResponse {
+	if timing == nil {
+		return nil
+	}
+	response := &api.ExecutionTimingResponse{Phases: make([]api.ExecutionPhaseTimingResponse, 0, len(timing.Phases))}
+	for _, phase := range timing.Phases {
+		response.Phases = append(response.Phases, api.ExecutionPhaseTimingResponse{Name: phase.Name, StartedAt: formatOptionalTime(phase.StartedAt), FinishedAt: formatOptionalTime(phase.FinishedAt)})
+	}
+	return response
 }
 
 func toImageExecutionResponse(requestedRef *string, resolvedRef *string, sourceKind domain.ImageSourceKind, managedImageID *string, managedImageVersionID *string) api.ImageExecutionResponse {
