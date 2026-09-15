@@ -75,6 +75,21 @@ func TestControllerCompletesWhenTimingPersistenceFails(t *testing.T) {
 		t.Fatalf("active=%t err=%v completions=%d result=%+v", active, reconcileErr, execution.completions, execution.result)
 	}
 }
+
+func TestControllerCompletesWithAuthoritativeRemoteCommandTiming(t *testing.T) {
+	execution := newExecutionFake(t)
+	startedAt := time.Date(2026, time.September, 16, 10, 0, 0, 0, time.UTC)
+	finishedAt := startedAt.Add(7*time.Minute + 29*time.Second)
+	builder := &builderFake{result: domain.ImageBuildResult{Status: domain.ImageBuildStatusSuccess, ImageDigest: "sha256:abc", Timing: &domain.ExecutionTiming{Phases: []domain.ExecutionPhaseTiming{{Name: "command", StartedAt: &startedAt, FinishedAt: &finishedAt}}}}}
+	controller, newErr := NewController(execution, memoryrepo.NewExternalImageBuildRepository(), builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if reconcileErr != nil || active || !execution.result.StartedAt.Equal(startedAt) || !execution.result.FinishedAt.Equal(finishedAt) || execution.result.FinishedAt.Sub(execution.result.StartedAt) != 7*time.Minute+29*time.Second {
+		t.Fatalf("active=%t err=%v result=%+v", active, reconcileErr, execution.result)
+	}
+}
 func TestControllerAdoptsExistingProviderBuildAndCancelsCanceledJob(t *testing.T) {
 	execution := newExecutionFake(t)
 	records := memoryrepo.NewExternalImageBuildRepository()
@@ -232,6 +247,9 @@ func (f *executionFake) GetExecutionJob(context.Context, string) (domain.Executi
 func (f *executionFake) GetBuild(context.Context, string) (domain.Build, error) {
 	return domain.Build{ID: "build-1"}, nil
 }
+func (f *executionFake) GetBuildSteps(context.Context, string) ([]domain.BuildStep, error) {
+	return nil, nil
+}
 func (f *executionFake) RenewRunnableStepLease(context.Context, workersvc.WorkerRunnableStep) (bool, error) {
 	f.renewCalls++
 	if f.renewErr != nil {
@@ -293,7 +311,7 @@ type stagerFake struct {
 	err    error
 }
 
-func (f *stagerFake) Stage(context.Context, string, io.Reader) (domain.ImageBuildSource, error) {
+func (f *stagerFake) Stage(context.Context, string, io.Reader, string, []service.ImageBuildContextArtifact) (domain.ImageBuildSource, error) {
 	f.calls++
 	if f.err != nil {
 		return domain.ImageBuildSource{}, f.err

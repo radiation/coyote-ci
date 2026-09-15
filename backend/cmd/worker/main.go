@@ -199,7 +199,7 @@ func main() {
 	startWorkerStatusServer(ctx, cfg.WorkerStatusAddr, workerService)
 
 	log.Printf("starting worker loop")
-	controller, controllerErr := resolveExecutionControllerWithImageBuild(cfg, workerService, logSink, externalImageBuildRepo, sourceArchivePreparer)
+	controller, controllerErr := resolveExecutionControllerWithImageBuild(cfg, workerService, logSink, externalImageBuildRepo, sourceArchivePreparer, artifactRepo, artifactResolver.Default())
 	if controllerErr != nil {
 		log.Fatalf("failed to configure execution controller: %v", controllerErr)
 	}
@@ -288,10 +288,10 @@ func installCommandTimeout() error {
 var newKubernetesClient = kubernetesexec.NewClient
 
 func resolveExecutionController(cfg config.Config, workerService *workersvc.ExecutionWorkerService, logSink logs.LogSink) (executionsvc.Controller, error) {
-	return resolveExecutionControllerWithImageBuild(cfg, workerService, logSink, nil, nil)
+	return resolveExecutionControllerWithImageBuild(cfg, workerService, logSink, nil, nil, nil, nil)
 }
 
-func resolveExecutionControllerWithImageBuild(cfg config.Config, workerService *workersvc.ExecutionWorkerService, logSink logs.LogSink, externalBuilds repository.ExternalImageBuildRepository, sourceArchives service.WorkspaceSourceArchivePreparer) (executionsvc.Controller, error) {
+func resolveExecutionControllerWithImageBuild(cfg config.Config, workerService *workersvc.ExecutionWorkerService, logSink logs.LogSink, externalBuilds repository.ExternalImageBuildRepository, sourceArchives service.WorkspaceSourceArchivePreparer, artifacts repository.ArtifactRepository, artifactStore artifact.Store) (executionsvc.Controller, error) {
 	if strings.ToLower(strings.TrimSpace(cfg.ExecutionBackend)) != "kubernetes" {
 		return workersvc.NewSynchronousController(workerService), nil
 	}
@@ -334,6 +334,7 @@ func resolveExecutionControllerWithImageBuild(cfg config.Config, workerService *
 		if imageControllerErr != nil {
 			return nil, imageControllerErr
 		}
+		imageController.WithArtifactInputs(artifacts, artifactStore)
 		controller.WithImageBuildController(imageController)
 	}
 	return controller, nil

@@ -45,6 +45,32 @@ func TestBuildRequestDerivesConfiguredArtifactRegistryDestination(t *testing.T) 
 	}
 }
 
+func TestBuildRequestSelectsArtifactRuntimeTargetWhenArtifactsAreStaged(t *testing.T) {
+	client := &Client{artifactRegistryRepository: "registry.example/ci"}
+	request := domain.ImageBuildRequest{ExecutionJobID: "job-1", Source: domain.ImageBuildSource{Generation: "1"}, Spec: domain.RemoteImageBuildSpec{ContextPath: "backend", DockerfilePath: "backend/Dockerfile", TargetImageReference: "coyote-ci/backend"}, Artifacts: []domain.ImageBuildArtifact{{Name: "coyote-server"}}}
+	build, err := client.buildRequest(request)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if strings.Join(build.Steps[0].Args, " ") == "" || !contains(build.Steps[0].Args, "--target=artifact-runtime") {
+		t.Fatalf("build args=%#v, want artifact runtime target", build.Steps[0].Args)
+	}
+	request.Artifacts = nil
+	build, err = client.buildRequest(request)
+	if err != nil || contains(build.Steps[0].Args, "--target=artifact-runtime") {
+		t.Fatalf("source build args=%#v err=%v", build.Steps[0].Args, err)
+	}
+}
+
+func contains(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
 func TestBuildRequestRejectsNonLogicalImageName(t *testing.T) {
 	client := &Client{artifactRegistryRepository: "us-central1-docker.pkg.dev/coyote-prod/ci-images"}
 	_, err := client.buildRequest(domain.ImageBuildRequest{Spec: domain.RemoteImageBuildSpec{TargetImageReference: "../production/api"}})

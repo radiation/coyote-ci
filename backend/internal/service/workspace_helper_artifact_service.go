@@ -97,11 +97,37 @@ func (s *WorkspaceHelperArtifactService) Upload(ctx context.Context, capabilityT
 		value := strings.TrimSpace(stepID)
 		persistedStepID = &value
 	}
-	_, createErr := s.artifacts.Create(ctx, domain.BuildArtifact{ID: collected.GeneratedID, BuildID: job.BuildID, StepID: persistedStepID, LogicalPath: collected.LogicalPath, ArtifactType: domain.InferArtifactType(collected.LogicalPath, collected.ContentType), StorageKey: collected.StorageKey, StorageProvider: s.provider, SizeBytes: collected.SizeBytes, ContentType: collected.ContentType, ChecksumSHA256: collected.ChecksumSHA256, CreatedAt: time.Now().UTC()})
+	declaration := artifactDeclarationForJob(build, job, collected.LogicalPath)
+	artifactType := declaration.Type
+	if artifactType == "" {
+		artifactType = domain.InferArtifactType(collected.LogicalPath, collected.ContentType)
+	}
+	_, createErr := s.artifacts.Create(ctx, domain.BuildArtifact{ID: collected.GeneratedID, BuildID: job.BuildID, StepID: persistedStepID, Name: declaration.Name, LogicalPath: collected.LogicalPath, ArtifactType: artifactType, StorageKey: collected.StorageKey, StorageProvider: s.provider, SizeBytes: collected.SizeBytes, ContentType: collected.ContentType, ChecksumSHA256: collected.ChecksumSHA256, TargetPlatform: declaration.Platform, CreatedAt: time.Now().UTC()})
 	if errors.Is(createErr, repository.ErrArtifactConflict) {
 		return nil
 	}
 	return createErr
+}
+
+func artifactDeclarationForJob(build domain.Build, job domain.ExecutionJob, logicalPath string) domain.ArtifactDeclaration {
+	if build.PipelineConfigYAML == nil || strings.TrimSpace(*build.PipelineConfigYAML) == "" {
+		return domain.ArtifactDeclaration{}
+	}
+	resolved, err := pipeline.LoadAndResolve([]byte(*build.PipelineConfigYAML))
+	if err != nil {
+		return domain.ArtifactDeclaration{}
+	}
+	for _, step := range resolved.Steps {
+		if step.NodeID != job.NodeID {
+			continue
+		}
+		for _, declaration := range step.ArtifactDecls {
+			if declaration.Path == logicalPath {
+				return declaration
+			}
+		}
+	}
+	return domain.ArtifactDeclaration{}
 }
 
 func (s *WorkspaceHelperArtifactService) authorizeAndResolve(ctx context.Context, token, executionJobID, podUID string, buildSucceeded bool) (domain.Build, domain.ExecutionJob, bool, error) {

@@ -16,5 +16,12 @@ type ImageBuilder interface {
 }
 
 type ImageBuildSourceStager interface {
-	Stage(ctx context.Context, executionJobID string, archive io.Reader) (domain.ImageBuildSource, error)
+	Stage(ctx context.Context, executionJobID string, archive io.Reader, contextPath string, artifacts []ImageBuildContextArtifact) (domain.ImageBuildSource, error)
+}
+
+// ImageBuildContextArtifact is a verified artifact stream to materialize in a
+// provider's staged Docker context.
+type ImageBuildContextArtifact struct {
+	Artifact domain.ImageBuildArtifact
+	Source   io.ReadCloser
 }

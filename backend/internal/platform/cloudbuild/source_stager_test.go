@@ -33,10 +33,10 @@ func TestCopySourceArchive(t *testing.T) {
 
 func TestSourceStagerRejectsMissingExecutionIDOrArchive(t *testing.T) {
 	stager := &SourceStager{}
-	if _, err := stager.Stage(context.Background(), "", bytes.NewReader(nil)); err == nil {
+	if _, err := stager.Stage(context.Background(), "", bytes.NewReader(nil), "", nil); err == nil {
 		t.Fatal("expected missing execution job ID error")
 	}
-	if _, err := stager.Stage(context.Background(), "job-1", nil); err == nil {
+	if _, err := stager.Stage(context.Background(), "job-1", nil, "", nil); err == nil {
 		t.Fatal("expected missing archive error")
 	}
 }

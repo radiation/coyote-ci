@@ -54,6 +54,7 @@ func (r *ExternalImageBuildRepository) Update(_ context.Context, build domain.Ex
 }
 
 func cloneExternalImageBuild(build domain.ExternalImageBuild) domain.ExternalImageBuild {
+	build.ConsumedArtifacts = append([]domain.ImageBuildArtifact(nil), build.ConsumedArtifacts...)
 	if build.SubmittedAt != nil {
 		value := *build.SubmittedAt
 		build.SubmittedAt = &value
