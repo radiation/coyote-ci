@@ -150,6 +150,15 @@ func (s *WorkspaceHelperCacheService) authorizeAndValidate(ctx context.Context, 
 		if resolveErr == nil && resolved.Name == strings.TrimSpace(preset) && validCacheKey(resolved.Name, cacheKey) {
 			return build, step, nil
 		}
+		components, resolveErr := cachepkg.ResolvePresetComponents(step.Cache.Preset, step.WorkingDir)
+		if resolveErr != nil {
+			continue
+		}
+		for _, component := range components {
+			if component.Name == strings.TrimSpace(preset) && validCacheKey(component.Name, cacheKey) {
+				return build, step, nil
+			}
+		}
 	}
 	return domain.Build{}, domain.BuildStep{}, ErrWorkspaceHelperCacheInvalidInput
 }

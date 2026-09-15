@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +27,8 @@ const (
 	cacheHelperPolicy     = "COYOTE_CACHE_POLICY"
 	cacheHelperWorkingDir = "COYOTE_CACHE_WORKING_DIR"
 	cacheHelperStateRoot  = "COYOTE_CACHE_STATE_ROOT"
+	cacheHelperComponents = "COYOTE_CACHE_COMPONENTS"
+	cacheHelperBuildImage = "COYOTE_CACHE_BUILD_IMAGE"
 )
 
 const maxCacheHelperErrorResponseBytes = 4 * 1024
@@ -40,11 +44,15 @@ func runCacheRestore(ctx context.Context) error {
 	if policy == domain.CachePolicyOff {
 		return nil
 	}
-	key, keyErr := cacheKeyForHelper(root, preset)
+	components, componentErr := cacheComponentsForHelper(preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
+	if componentErr != nil {
+		return reportCacheSideEffectError("restore", componentErr)
+	}
+	keys, keyErr := cacheKeysForHelper(components)
 	if keyErr != nil {
 		return reportCacheSideEffectError("restore", keyErr)
 	}
-	if saveErr := savePreparedCacheKey(stateRoot, key); saveErr != nil {
+	if saveErr := savePreparedCacheKeys(stateRoot, keys); saveErr != nil {
 		return saveErr
 	}
 	if policy == domain.CachePolicyPush {
@@ -58,30 +66,47 @@ func runCacheRestore(ctx context.Context) error {
 	if exchangeErr != nil {
 		return reportCacheSideEffectError("restore", exchangeErr)
 	}
-	body, marshalErr := json.Marshal(api.WorkspaceHelperCacheRequest{ExecutionJobID: executionJobID, PodUID: podUID, Preset: preset, CacheKey: key})
+	split := splitCacheComponentsEnabled()
+	for index, component := range components {
+		destination := root
+		if split {
+			destination = filepath.Join(root, "paths", fmt.Sprintf("%03d", index))
+		}
+		if restoreErr := restoreCacheComponent(ctx, apiURL, capability, executionJobID, podUID, destination, component, keys[component.Name]); restoreErr != nil {
+			return reportCacheSideEffectError("restore", restoreErr)
+		}
+	}
+	return nil
+}
+
+func restoreCacheComponent(ctx context.Context, apiURL, capability, executionJobID, podUID, destination string, component cachepkg.Component, key string) error {
+	body, marshalErr := json.Marshal(api.WorkspaceHelperCacheRequest{ExecutionJobID: executionJobID, PodUID: podUID, Preset: component.Name, CacheKey: key})
 	if marshalErr != nil {
-		return reportCacheSideEffectError("restore", marshalErr)
+		return marshalErr
 	}
 	request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/internal/workspace-helper/cache/restore", bytes.NewReader(body))
 	if requestErr != nil {
-		return reportCacheSideEffectError("restore", requestErr)
+		return requestErr
 	}
 	request.Header.Set("Authorization", "Bearer "+capability)
 	request.Header.Set("Content-Type", "application/json")
 	response, doErr := http.DefaultClient.Do(request)
 	if doErr != nil {
-		return reportCacheSideEffectError("restore", doErr)
+		return doErr
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == http.StatusNoContent {
 		return nil
 	}
 	if response.StatusCode != http.StatusOK {
-		return reportCacheSideEffectError("restore", cacheHelperHTTPError("restore", response))
+		return cacheHelperHTTPError("restore", response)
 	}
 	size := response.ContentLength
 	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: strings.TrimSpace(response.Header.Get("Content-Digest")), SizeBytes: &size}
-	return reportCacheSideEffectError("restore", restoreCacheArchive(ctx, response.Body, publication, root, preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir))))
+	if !splitCacheComponentsEnabled() {
+		return restoreCacheArchive(ctx, response.Body, publication, destination, component.Name, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
+	}
+	return workspacepkg.RestoreArchive(ctx, response.Body, publication, destination)
 }
 
 func restoreCacheArchive(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, root string, preset string, workingDir string) error {
@@ -143,7 +168,7 @@ func runCacheSave(ctx context.Context) error {
 	if err != nil || policy == domain.CachePolicyOff || policy == domain.CachePolicyPull {
 		return err
 	}
-	key, keyErr := loadPreparedCacheKey(stateRoot)
+	keys, keyErr := loadPreparedCacheKeys(stateRoot)
 	if keyErr != nil {
 		return reportCacheSideEffectError("save", keyErr)
 	}
@@ -155,14 +180,32 @@ func runCacheSave(ctx context.Context) error {
 	if exchangeErr != nil {
 		return reportCacheSideEffectError("save", exchangeErr)
 	}
-	archive, publication, archiveErr := workspacepkg.ArchiveDirectory(ctx, root)
+	components, componentErr := cacheComponentsForHelper(preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
+	if componentErr != nil {
+		return reportCacheSideEffectError("save", componentErr)
+	}
+	split := splitCacheComponentsEnabled()
+	for index, component := range components {
+		source := root
+		if split {
+			source = filepath.Join(root, "paths", fmt.Sprintf("%03d", index))
+		}
+		if saveErr := saveCacheComponent(ctx, apiURL, capability, executionJobID, podUID, source, component.Name, keys[component.Name]); saveErr != nil {
+			return reportCacheSideEffectError("save", saveErr)
+		}
+	}
+	return nil
+}
+
+func saveCacheComponent(ctx context.Context, apiURL, capability, executionJobID, podUID, source, preset, key string) error {
+	archive, publication, archiveErr := workspacepkg.ArchiveDirectory(ctx, source)
 	if archiveErr != nil {
-		return reportCacheSideEffectError("save", archiveErr)
+		return archiveErr
 	}
 	defer func() { _ = archive.Close() }()
 	request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/internal/workspace-helper/cache/save", archive)
 	if requestErr != nil {
-		return reportCacheSideEffectError("save", requestErr)
+		return requestErr
 	}
 	request.ContentLength = *publication.SizeBytes
 	request.Header.Set("Authorization", "Bearer "+capability)
@@ -175,11 +218,11 @@ func runCacheSave(ctx context.Context) error {
 	request.Header.Set("Coyote-Cache-Key", key)
 	response, doErr := http.DefaultClient.Do(request)
 	if doErr != nil {
-		return reportCacheSideEffectError("save", doErr)
+		return doErr
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusNoContent {
-		return reportCacheSideEffectError("save", cacheHelperHTTPError("save", response))
+		return cacheHelperHTTPError("save", response)
 	}
 	return nil
 }
@@ -233,25 +276,57 @@ func cacheHelperConfig() (string, string, string, string, string, string, string
 }
 
 func savePreparedCacheKey(stateRoot string, key string) error {
+	return savePreparedCacheKeys(stateRoot, map[string]string{"legacy": key})
+}
+
+func savePreparedCacheKeys(stateRoot string, keys map[string]string) error {
 	if mkdirErr := os.MkdirAll(stateRoot, 0o755); mkdirErr != nil {
 		return fmt.Errorf("create cache helper state directory: %w", mkdirErr)
 	}
-	if writeErr := os.WriteFile(filepath.Join(stateRoot, "prepared-key"), []byte(key), 0o600); writeErr != nil {
+	payload, marshalErr := json.Marshal(keys)
+	if marshalErr != nil {
+		return marshalErr
+	}
+	if writeErr := os.WriteFile(filepath.Join(stateRoot, "prepared-keys"), payload, 0o600); writeErr != nil {
 		return fmt.Errorf("write prepared cache key: %w", writeErr)
 	}
 	return nil
 }
 
 func loadPreparedCacheKey(stateRoot string) (string, error) {
-	contents, readErr := os.ReadFile(filepath.Join(stateRoot, "prepared-key"))
+	keys, err := loadPreparedCacheKeys(stateRoot)
+	if err != nil {
+		return "", err
+	}
+	if key := keys["legacy"]; key != "" {
+		return key, nil
+	}
+	if key := keys["go"]; key != "" {
+		return key, nil
+	}
+	return "", errors.New("prepared cache key is empty")
+}
+
+func loadPreparedCacheKeys(stateRoot string) (map[string]string, error) {
+	contents, readErr := os.ReadFile(filepath.Join(stateRoot, "prepared-keys"))
 	if readErr != nil {
-		return "", fmt.Errorf("read prepared cache key: %w", readErr)
+		if !os.IsNotExist(readErr) {
+			return nil, fmt.Errorf("read prepared cache key: %w", readErr)
+		}
+		legacy, legacyErr := os.ReadFile(filepath.Join(stateRoot, "prepared-key"))
+		if legacyErr != nil {
+			return nil, fmt.Errorf("read prepared cache key: %w", readErr)
+		}
+		return map[string]string{"go": strings.TrimSpace(string(legacy))}, nil
 	}
-	key := strings.TrimSpace(string(contents))
-	if key == "" {
-		return "", errors.New("prepared cache key is empty")
+	keys := map[string]string{}
+	if unmarshalErr := json.Unmarshal(contents, &keys); unmarshalErr != nil {
+		return nil, unmarshalErr
 	}
-	return key, nil
+	if len(keys) == 0 {
+		return nil, errors.New("prepared cache keys are empty")
+	}
+	return keys, nil
 }
 
 func cacheKeyForHelper(root string, preset string) (string, error) {
@@ -269,6 +344,51 @@ func cacheKeyForHelper(root string, preset string) (string, error) {
 		return "", fingerprintErr
 	}
 	return resolved.Name + ":" + fingerprint, nil
+}
+
+func cacheKeysForHelper(components []cachepkg.Component) (map[string]string, error) {
+	if !splitCacheComponentsEnabled() {
+		key, err := cacheKeyForHelper("", components[0].Name)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{components[0].Name: key}, nil
+	}
+	workspaceRoot := strings.TrimSpace(os.Getenv(workspaceHelperWorkspacePath))
+	keys := make(map[string]string, len(components))
+	for _, component := range components {
+		fingerprint, _, err := cachepkg.ComputeFingerprint(workspaceRoot, component.FingerprintFiles)
+		if err != nil {
+			return nil, err
+		}
+		dimensions := append([]string(nil), component.KeyDimensions...)
+		if component.Name == "go-build" {
+			buildImage := strings.TrimSpace(os.Getenv(cacheHelperBuildImage))
+			if buildImage == "" {
+				return nil, errors.New("cache helper requires build image identity for go-build cache")
+			}
+			dimensions = append(dimensions, buildImage)
+		}
+		identity := fingerprint + "\n" + strings.Join(dimensions, "\n")
+		digest := sha256.Sum256([]byte(identity))
+		keys[component.Name] = component.Name + ":" + hex.EncodeToString(digest[:])
+	}
+	return keys, nil
+}
+
+func cacheComponentsForHelper(preset string, workingDir string) ([]cachepkg.Component, error) {
+	if splitCacheComponentsEnabled() {
+		return cachepkg.ResolvePresetComponents(preset, workingDir)
+	}
+	resolved, err := cachepkg.ResolvePreset(preset, workingDir)
+	if err != nil {
+		return nil, err
+	}
+	return []cachepkg.Component{{Name: resolved.Name, CachePath: resolved.CachePaths[0], FingerprintFiles: resolved.FingerprintFiles}}, nil
+}
+
+func splitCacheComponentsEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(cacheHelperComponents)), "split")
 }
 
 func ensureCacheMountPaths(root string, preset string, workingDir string) error {

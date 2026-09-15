@@ -186,6 +186,16 @@ func TestWorkspaceHelperCacheServiceRejectsPresetAndKeyMismatch(t *testing.T) {
 	}
 }
 
+func TestWorkspaceHelperCacheServiceAcceptsGoCacheComponents(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	for _, preset := range []string{"go-module", "go-build"} {
+		key := preset + ":" + strings.Repeat("a", 64)
+		if _, _, err := harness.service.Restore(context.Background(), "token", harness.job.ID, "pod-uid", preset, key); err != nil {
+			t.Fatalf("restore component %q: %v", preset, err)
+		}
+	}
+}
+
 func TestWorkspaceHelperCacheServiceFailedSavePreservesReadyEntry(t *testing.T) {
 	harness := newWorkspaceHelperCacheServiceTestHarness(t)
 	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
