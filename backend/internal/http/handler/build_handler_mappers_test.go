@@ -34,3 +34,31 @@ func TestToBuildResponse_MapsOptionalPullRequestSnapshot(t *testing.T) {
 		t.Fatalf("expected no pull-request snapshot for non-PR build, got %+v", response.PullRequest)
 	}
 }
+
+func TestToExecutionJobResponse_MapsOptionalTiming(t *testing.T) {
+	startedAt := time.Date(2026, time.September, 14, 10, 0, 0, 0, time.UTC)
+	finishedAt := startedAt.Add(5 * time.Minute)
+	response := toExecutionJobResponse(&domain.ExecutionJob{
+		ID:        "job-1",
+		BuildID:   "build-1",
+		StepID:    "step-1",
+		CreatedAt: startedAt,
+		Timing: &domain.ExecutionTiming{Phases: []domain.ExecutionPhaseTiming{
+			{Name: "scheduling", StartedAt: &startedAt, FinishedAt: &finishedAt},
+			{Name: "workspace_prepare"},
+		}},
+	}, nil)
+	if response == nil || response.Timing == nil || len(response.Timing.Phases) != 2 {
+		t.Fatalf("response=%+v", response)
+	}
+	phase := response.Timing.Phases[0]
+	if phase.Name != "scheduling" || phase.StartedAt == nil || phase.FinishedAt == nil || *phase.StartedAt != startedAt.Format(time.RFC3339) || *phase.FinishedAt != finishedAt.Format(time.RFC3339) {
+		t.Fatalf("phase=%+v", phase)
+	}
+	if response.Timing.Phases[1].StartedAt != nil || response.Timing.Phases[1].FinishedAt != nil {
+		t.Fatalf("expected missing timestamps to remain omitted, phase=%+v", response.Timing.Phases[1])
+	}
+	if toExecutionJobResponse(nil, nil) != nil || toExecutionTimingResponse(nil) != nil {
+		t.Fatal("expected nil job and timing responses")
+	}
+}

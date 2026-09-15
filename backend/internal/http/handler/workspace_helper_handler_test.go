@@ -212,6 +212,7 @@ func TestWorkspaceHelperHandlerPublishMapsOutcomes(t *testing.T) {
 		{name: "unauthorized", publisher: &workspacePublisherStub{err: service.ErrWorkspaceHelperUnauthorized}, token: "capability", want: http.StatusUnauthorized},
 		{name: "invalid archive", publisher: &workspacePublisherStub{err: service.ErrWorkspacePublishInvalidArchive}, token: "capability", want: http.StatusBadRequest},
 		{name: "conflict", publisher: &workspacePublisherStub{err: repository.ErrWorkspaceRevisionConflict}, token: "capability", want: http.StatusConflict},
+		{name: "stale claim", publisher: &workspacePublisherStub{err: repository.ErrWorkspaceRevisionStaleClaim}, token: "capability", want: http.StatusUnauthorized},
 		{name: "workspace object conflict", publisher: &workspacePublisherStub{err: workspace.ErrWorkspaceRevisionConflict}, token: "capability", want: http.StatusConflict},
 		{name: "internal failure", publisher: &workspacePublisherStub{err: errors.New("publish failed")}, token: "capability", want: http.StatusInternalServerError},
 		{name: "invalid publication", publisher: &workspacePublisherStub{}, token: "capability", want: http.StatusInternalServerError},

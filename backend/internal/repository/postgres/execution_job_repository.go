@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -360,10 +361,51 @@ func (r *ExecutionJobRepository) GetJobTiming(ctx context.Context, jobID string)
 		return nil, err
 	}
 	var timing domain.ExecutionTiming
-	if err := json.Unmarshal(raw, &timing); err != nil {
-		return nil, err
+	if unmarshalErr := json.Unmarshal(raw, &timing); unmarshalErr != nil {
+		return nil, unmarshalErr
 	}
 	return &timing, nil
+}
+
+func (r *ExecutionJobRepository) GetJobTimings(ctx context.Context, jobIDs []string) (timings map[string]*domain.ExecutionTiming, err error) {
+	timings = make(map[string]*domain.ExecutionTiming, len(jobIDs))
+	if len(jobIDs) == 0 {
+		return timings, nil
+	}
+
+	placeholders := make([]string, len(jobIDs))
+	args := make([]any, len(jobIDs))
+	for index, jobID := range jobIDs {
+		placeholders[index] = fmt.Sprintf("$%d", index+1)
+		args[index] = jobID
+	}
+	query := `SELECT execution_job_id, timing_json FROM execution_job_timings WHERE execution_job_id IN (` + strings.Join(placeholders, ", ") + `)`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	for rows.Next() {
+		var jobID string
+		var raw []byte
+		if scanErr := rows.Scan(&jobID, &raw); scanErr != nil {
+			return nil, scanErr
+		}
+		var timing domain.ExecutionTiming
+		if unmarshalErr := json.Unmarshal(raw, &timing); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		timings[jobID] = &timing
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return timings, nil
 }
 
 func (r *ExecutionJobRepository) CompleteJobSuccess(ctx context.Context, jobID string, claimToken string, finishedAt time.Time, exitCode int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, repository.StepCompletionOutcome, error) {

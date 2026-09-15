@@ -51,6 +51,11 @@ type fakeExecutionWorkerBoundary struct {
 	runStepResp runner.RunStepResult
 	runOutcome  repository.StepCompletionOutcome
 	runSideErr  error
+	timingJob   domain.ExecutionJob
+	timingOK    bool
+	timingErr   error
+	timingStep  WorkerRunnableStep
+	timing      domain.ExecutionTiming
 
 	lastBuildID string
 	lastRequest runner.RunStepRequest
@@ -392,6 +397,37 @@ func (f *fakeExecutionWorkerBoundary) RenewStepLease(_ context.Context, buildID 
 	}
 
 	return domain.BuildStep{}, false, nil
+}
+
+func (f *fakeExecutionWorkerBoundary) UpdateJobTiming(_ context.Context, _ string, _ string, timing domain.ExecutionTiming) (domain.ExecutionJob, bool, error) {
+	f.timing = timing
+	return f.timingJob, f.timingOK, f.timingErr
+}
+
+type workerWithoutTimingUpdater struct {
+	workerExecutionBoundary
+}
+
+func TestExecutionWorkerService_UpdateRunnableStepTiming(t *testing.T) {
+	timing := domain.ExecutionTiming{Phases: []domain.ExecutionPhaseTiming{{Name: "scheduling"}}}
+	step := WorkerRunnableStep{JobID: "job-1", ClaimToken: "claim-1"}
+	unsupported := NewExecutionWorkerService(workerWithoutTimingUpdater{&fakeExecutionWorkerBoundary{}})
+	updated, unsupportedErr := unsupported.UpdateRunnableStepTiming(context.Background(), step, timing)
+	if unsupportedErr != nil || updated {
+		t.Fatalf("unsupported timing update: updated=%t err=%v", updated, unsupportedErr)
+	}
+
+	boundary := &fakeExecutionWorkerBoundary{timingJob: domain.ExecutionJob{ID: "job-1"}, timingOK: true}
+	worker := NewExecutionWorkerService(boundary)
+	updated, updateErr := worker.UpdateRunnableStepTiming(context.Background(), step, timing)
+	if updateErr != nil || !updated || len(boundary.timing.Phases) != 1 {
+		t.Fatalf("timing update: updated=%t err=%v timing=%+v", updated, updateErr, boundary.timing)
+	}
+	boundary.timingErr = errors.New("timing write failed")
+	_, timingErr := worker.UpdateRunnableStepTiming(context.Background(), step, timing)
+	if timingErr == nil || timingErr.Error() != "timing write failed" {
+		t.Fatalf("expected timing write failure, got %v", timingErr)
+	}
 }
 
 func TestExecutionWorkerService_ExecuteRunnableStep_Success(t *testing.T) {

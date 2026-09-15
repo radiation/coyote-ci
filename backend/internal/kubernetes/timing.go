@@ -19,7 +19,7 @@ func executionTiming(job domain.ExecutionJob, kubernetesJob *batchv1.Job, pod *c
 			phases = append(phases, domain.ExecutionPhaseTiming{Name: "claim", StartedAt: job.StartedAt, FinishedAt: jobCreatedAt})
 		}
 		for _, condition := range kubernetesJob.Status.Conditions {
-			if condition.Type == batchv1.JobComplete || condition.Type == batchv1.JobFailed {
+			if (condition.Type == batchv1.JobComplete || condition.Type == batchv1.JobFailed) && condition.Status == corev1.ConditionTrue {
 				jobCompletedAt = optionalTime(condition.LastTransitionTime.Time)
 				break
 			}

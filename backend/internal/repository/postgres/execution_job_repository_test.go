@@ -133,6 +133,106 @@ func TestExecutionJobRepository_GetJobTiming(t *testing.T) {
 	}
 }
 
+func TestExecutionJobRepository_GetJobTimingHandlesAbsentAndMalformedData(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		configure  func(sqlmock.Sqlmock)
+		wantAbsent bool
+	}{
+		{name: "absent", wantAbsent: true, configure: func(mock sqlmock.Sqlmock) {
+			mock.ExpectQuery(`SELECT timing_json FROM execution_job_timings WHERE execution_job_id = \$1`).WithArgs("job-1").WillReturnError(sql.ErrNoRows)
+		}},
+		{name: "malformed", configure: func(mock sqlmock.Sqlmock) {
+			mock.ExpectQuery(`SELECT timing_json FROM execution_job_timings WHERE execution_job_id = \$1`).WithArgs("job-1").WillReturnRows(sqlmock.NewRows([]string{"timing_json"}).AddRow("{"))
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, mock, setupErr := sqlmock.New()
+			if setupErr != nil {
+				t.Fatalf("new sql mock: %v", setupErr)
+			}
+			testCase.configure(mock)
+			timing, getErr := NewExecutionJobRepository(db).GetJobTiming(context.Background(), "job-1")
+			if testCase.wantAbsent {
+				if getErr != nil || timing != nil {
+					t.Fatalf("timing=%+v err=%v", timing, getErr)
+				}
+			} else if getErr == nil || timing != nil {
+				t.Fatalf("expected malformed timing error, timing=%+v err=%v", timing, getErr)
+			}
+			if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+				t.Fatalf("unmet sql expectations: %v", expectationsErr)
+			}
+		})
+	}
+}
+
+func TestExecutionJobRepository_GetJobTimings(t *testing.T) {
+	db, mock, setupErr := sqlmock.New()
+	if setupErr != nil {
+		t.Fatalf("new sql mock: %v", setupErr)
+	}
+	mock.ExpectQuery(`SELECT execution_job_id, timing_json FROM execution_job_timings WHERE execution_job_id IN \(\$1, \$2\)`).WithArgs("job-1", "job-2").WillReturnRows(sqlmock.NewRows([]string{"execution_job_id", "timing_json"}).AddRow("job-1", `{"phases":[{"name":"scheduling"}]}`))
+	timings, getErr := NewExecutionJobRepository(db).GetJobTimings(context.Background(), []string{"job-1", "job-2"})
+	if getErr != nil || len(timings) != 1 || timings["job-1"] == nil || timings["job-1"].Phases[0].Name != "scheduling" {
+		t.Fatalf("timings=%+v err=%v", timings, getErr)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("unmet sql expectations: %v", expectationsErr)
+	}
+}
+
+func TestExecutionJobRepository_UpdateJobTiming(t *testing.T) {
+	now := time.Now().UTC()
+	claimExpiresAt := now.Add(time.Minute)
+	timing := domain.ExecutionTiming{Phases: []domain.ExecutionPhaseTiming{{Name: "scheduling", StartedAt: &now}}}
+	const updateTimingQueryPattern = `INSERT INTO execution_job_timings[\s\S]*WHERE id = \$1 AND status = 'running' AND claim_token = \$2[\s\S]*ON CONFLICT \(execution_job_id\) DO UPDATE`
+
+	t.Run("updates active claim", func(t *testing.T) {
+		db, mock, setupErr := sqlmock.New()
+		if setupErr != nil {
+			t.Fatalf("new sql mock: %v", setupErr)
+		}
+		mock.ExpectQuery(updateTimingQueryPattern).WithArgs("job-1", "claim-1", sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"execution_job_id"}).AddRow("job-1"))
+		mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, claimExpiresAt, "running", "claim-1"))
+
+		job, outcome, updateErr := NewExecutionJobRepository(db).UpdateJobTiming(context.Background(), "job-1", "claim-1", timing)
+		if updateErr != nil || outcome != repository.StepCompletionCompleted || job.Timing == nil || len(job.Timing.Phases) != 1 {
+			t.Fatalf("job=%+v outcome=%q err=%v", job, outcome, updateErr)
+		}
+		if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+			t.Fatalf("unmet sql expectations: %v", expectationsErr)
+		}
+	})
+
+	for _, testCase := range []struct {
+		name    string
+		status  string
+		outcome repository.StepCompletionOutcome
+	}{
+		{name: "terminal job", status: "success", outcome: repository.StepCompletionDuplicateTerminal},
+		{name: "stale claim", status: "running", outcome: repository.StepCompletionStaleClaim},
+		{name: "queued job", status: "queued", outcome: repository.StepCompletionInvalidTransition},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, mock, setupErr := sqlmock.New()
+			if setupErr != nil {
+				t.Fatalf("new sql mock: %v", setupErr)
+			}
+			mock.ExpectQuery(updateTimingQueryPattern).WithArgs("job-1", "claim-1", sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
+			mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, claimExpiresAt, testCase.status, "other-claim"))
+
+			_, outcome, updateErr := NewExecutionJobRepository(db).UpdateJobTiming(context.Background(), "job-1", "claim-1", timing)
+			if updateErr != nil || outcome != testCase.outcome {
+				t.Fatalf("outcome=%q want %q err=%v", outcome, testCase.outcome, updateErr)
+			}
+			if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+				t.Fatalf("unmet sql expectations: %v", expectationsErr)
+			}
+		})
+	}
+}
+
 func TestExecutionJobRepository_CompleteJobFailurePersistsFailureKind(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

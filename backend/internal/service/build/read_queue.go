@@ -61,12 +61,20 @@ func (s *BuildService) GetJobsByBuildID(ctx context.Context, buildID string) ([]
 	if err != nil {
 		return nil, err
 	}
+	timingRepo, ok := s.executionJobRepo.(repository.ExecutionJobTimingListRepository)
+	if !ok || len(jobs) == 0 {
+		return jobs, nil
+	}
+	jobIDs := make([]string, 0, len(jobs))
+	for _, job := range jobs {
+		jobIDs = append(jobIDs, job.ID)
+	}
+	timings, timingErr := timingRepo.GetJobTimings(ctx, jobIDs)
+	if timingErr != nil {
+		return nil, timingErr
+	}
 	for index := range jobs {
-		timing, timingErr := s.getJobTiming(ctx, jobs[index].ID)
-		if timingErr != nil {
-			return nil, timingErr
-		}
-		jobs[index].Timing = timing
+		jobs[index].Timing = timings[jobs[index].ID]
 	}
 	return jobs, nil
 }
@@ -83,10 +91,9 @@ func (s *BuildService) GetJobByID(ctx context.Context, jobID string) (domain.Exe
 		return domain.ExecutionJob{}, err
 	}
 	timing, timingErr := s.getJobTiming(ctx, job.ID)
-	if timingErr != nil {
-		return domain.ExecutionJob{}, timingErr
+	if timingErr == nil {
+		job.Timing = timing
 	}
-	job.Timing = timing
 	return job, nil
 }
 

@@ -17,6 +17,12 @@ type ExecutionJobTimingRepository interface {
 	GetJobTiming(ctx context.Context, jobID string) (*domain.ExecutionTiming, error)
 }
 
+// ExecutionJobTimingListRepository is an optional capability for listing
+// execution timing observations without one query per execution job.
+type ExecutionJobTimingListRepository interface {
+	GetJobTimings(ctx context.Context, jobIDs []string) (map[string]*domain.ExecutionTiming, error)
+}
+
 type ExecutionJobRepository interface {
 	CreateJobsForBuild(ctx context.Context, jobs []domain.ExecutionJob) ([]domain.ExecutionJob, error)
 	GetJobsByBuildID(ctx context.Context, buildID string) ([]domain.ExecutionJob, error)

@@ -276,8 +276,8 @@ func (c *Controller) recordTiming(ctx context.Context, step workersvc.WorkerRunn
 		selected := newestPod(pods)
 		pod = &selected
 	}
-	if _, err := c.service.UpdateRunnableStepTiming(ctx, step, executionTiming(durable, job, pod)); err != nil {
-		stdlog.Printf("DEBUG Kubernetes execution timing update failed job=%s: %v", step.JobID, err)
+	if _, updateErr := c.service.UpdateRunnableStepTiming(ctx, step, executionTiming(durable, job, pod)); updateErr != nil {
+		stdlog.Printf("DEBUG Kubernetes execution timing update failed job=%s: %v", step.JobID, updateErr)
 	}
 }
 
