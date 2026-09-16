@@ -54,11 +54,11 @@ func NewWorkspaceHelperArtifactService(config WorkspaceHelperArtifactServiceConf
 }
 
 func (s *WorkspaceHelperArtifactService) Plan(ctx context.Context, capabilityToken, executionJobID, podUID string, buildSucceeded bool) (WorkspaceHelperArtifactPlan, error) {
-	build, _, due, err := s.authorizeAndResolve(ctx, capabilityToken, executionJobID, podUID, buildSucceeded)
+	build, job, due, err := s.authorizeAndResolve(ctx, capabilityToken, executionJobID, podUID, buildSucceeded)
 	if err != nil || !due {
 		return WorkspaceHelperArtifactPlan{Collect: false}, err
 	}
-	return artifactPlanForBuild(build, s.builds, ctx)
+	return artifactPlanForJob(build, job, s.builds, ctx, buildSucceeded)
 }
 
 func (s *WorkspaceHelperArtifactService) Upload(ctx context.Context, capabilityToken, executionJobID, podUID, stepID, logicalPath string, buildSucceeded bool, source io.Reader) error {
@@ -69,7 +69,7 @@ func (s *WorkspaceHelperArtifactService) Upload(ctx context.Context, capabilityT
 	if !due || source == nil {
 		return ErrWorkspaceHelperArtifactInvalidInput
 	}
-	scopes, planErr := artifactScopesForBuild(build, s.builds, ctx)
+	scopes, planErr := artifactScopesForJob(build, job, s.builds, ctx, buildSucceeded)
 	if planErr != nil {
 		return planErr
 	}
@@ -146,23 +146,61 @@ func (s *WorkspaceHelperArtifactService) authorizeAndResolve(ctx context.Context
 	if err != nil {
 		return domain.Build{}, domain.ExecutionJob{}, false, err
 	}
+	if buildSucceeded {
+		return build, job, true, nil
+	}
 	for _, step := range steps {
 		if step.ID == job.StepID || domain.IsTerminalStepStatus(step.Status) {
 			continue
 		}
-		if buildSucceeded || step.StepIndex < job.StepIndex {
+		if step.StepIndex < job.StepIndex {
 			return build, job, false, nil
 		}
 	}
 	return build, job, true, nil
 }
 
-func artifactPlanForBuild(build domain.Build, builds workspaceHelperCacheBuildRepository, ctx context.Context) (WorkspaceHelperArtifactPlan, error) {
-	scopes, err := artifactScopesForBuild(build, builds, ctx)
+func artifactPlanForJob(build domain.Build, job domain.ExecutionJob, builds workspaceHelperCacheBuildRepository, ctx context.Context, buildSucceeded bool) (WorkspaceHelperArtifactPlan, error) {
+	scopes, err := artifactScopesForJob(build, job, builds, ctx, buildSucceeded)
 	if err != nil {
 		return WorkspaceHelperArtifactPlan{}, err
 	}
 	return WorkspaceHelperArtifactPlan{Collect: len(scopes) > 0, Scopes: scopes}, nil
+}
+
+func artifactScopesForJob(build domain.Build, job domain.ExecutionJob, builds workspaceHelperCacheBuildRepository, ctx context.Context, buildSucceeded bool) ([]WorkspaceHelperArtifactScope, error) {
+	scopes, err := artifactScopesForBuild(build, builds, ctx)
+	if err != nil {
+		return nil, err
+	}
+	if buildSucceeded {
+		return scopesForSuccessfulJob(scopes, job, build, builds, ctx)
+	}
+	return scopes, nil
+}
+
+func scopesForSuccessfulJob(scopes []WorkspaceHelperArtifactScope, job domain.ExecutionJob, build domain.Build, builds workspaceHelperCacheBuildRepository, ctx context.Context) ([]WorkspaceHelperArtifactScope, error) {
+	filtered := make([]WorkspaceHelperArtifactScope, 0, len(scopes))
+	for _, scope := range scopes {
+		if scope.StepID == job.StepID {
+			filtered = append(filtered, scope)
+		}
+	}
+	steps, err := builds.GetStepsByBuildID(ctx, build.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, step := range steps {
+		if step.ID != job.StepID && (step.StepIndex > job.StepIndex || !domain.IsTerminalStepStatus(step.Status)) {
+			return filtered, nil
+		}
+	}
+	for _, scope := range scopes {
+		if scope.StepID == "" {
+			filtered = append(filtered, scope)
+		}
+	}
+	return filtered, nil
 }
 
 func artifactScopesForBuild(build domain.Build, builds workspaceHelperCacheBuildRepository, ctx context.Context) ([]WorkspaceHelperArtifactScope, error) {

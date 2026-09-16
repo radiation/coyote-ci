@@ -3,6 +3,8 @@ package imagebuild
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	artifactpkg "github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
@@ -220,6 +223,116 @@ func TestNewControllerRequiresAllDependencies(t *testing.T) {
 	}
 }
 
+func TestControllerResolveArtifactInputsUsesKubernetesProducerStepIDs(t *testing.T) {
+	context := context.Background()
+	execution := newExecutionFake(t)
+	execution.job.DependsOnNodeIDs = []string{"node-server", "node-worker"}
+	execution.steps = []domain.BuildStep{
+		{ID: "build-step-server", BuildID: execution.job.BuildID, NodeID: "node-server"},
+		{ID: "build-step-worker", BuildID: execution.job.BuildID, NodeID: "node-worker"},
+		{ID: "build-step-other", BuildID: execution.job.BuildID, NodeID: "node-other"},
+	}
+	store := artifactpkg.NewFilesystemStore(t.TempDir())
+	artifacts := &imageBuildArtifactRepositoryFake{}
+	serverStepID := "build-step-server"
+	workerStepID := "build-step-worker"
+	serverContent := []byte("server executable")
+	workerContent := []byte("worker executable")
+	createImageBuildArtifact(t, context, artifacts, store, domain.BuildArtifact{ID: "artifact-server", BuildID: execution.job.BuildID, StepID: &serverStepID, Name: "coyote-server", LogicalPath: "dist/coyote-server", StorageKey: "artifacts/server", SizeBytes: int64(len(serverContent)), ChecksumSHA256: checksumPointer(serverContent)}, serverContent)
+	createImageBuildArtifact(t, context, artifacts, store, domain.BuildArtifact{ID: "artifact-worker", BuildID: execution.job.BuildID, StepID: &workerStepID, Name: "coyote-worker", LogicalPath: "dist/coyote-worker", StorageKey: "artifacts/worker", SizeBytes: int64(len(workerContent)), ChecksumSHA256: checksumPointer(workerContent)}, workerContent)
+	controller, newErr := NewController(execution, memoryrepo.NewExternalImageBuildRepository(), &builderFake{}, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+	controller.WithArtifactInputs(artifacts, store)
+	inputs, resolveErr := controller.resolveArtifactInputs(context, execution.job, domain.RemoteImageBuildSpec{ArtifactInputs: []domain.ImageBuildArtifactInput{{Name: "coyote-server", Destination: "dist/coyote-server"}, {Name: "coyote-worker", Destination: "dist/coyote-worker"}}})
+	if resolveErr != nil || len(inputs) != 2 {
+		t.Fatalf("inputs=%#v err=%v", inputs, resolveErr)
+	}
+	for index, wantContent := range [][]byte{serverContent, workerContent} {
+		actualContent, readErr := io.ReadAll(inputs[index].Source)
+		closeErr := inputs[index].Source.Close()
+		if readErr != nil || closeErr != nil || !bytes.Equal(actualContent, wantContent) {
+			t.Fatalf("input=%d content=%q readErr=%v closeErr=%v", index, actualContent, readErr, closeErr)
+		}
+	}
+
+	nonUpstreamArtifacts := &imageBuildArtifactRepositoryFake{}
+	otherStepID := "build-step-other"
+	createImageBuildArtifact(t, context, nonUpstreamArtifacts, store, domain.BuildArtifact{ID: "artifact-other", BuildID: execution.job.BuildID, StepID: &otherStepID, Name: "coyote-server", LogicalPath: "dist/coyote-server", StorageKey: "artifacts/other", SizeBytes: int64(len(serverContent)), ChecksumSHA256: checksumPointer(serverContent)}, serverContent)
+	controller.WithArtifactInputs(nonUpstreamArtifacts, store)
+	_, resolveErr = controller.resolveArtifactInputs(context, execution.job, domain.RemoteImageBuildSpec{ArtifactInputs: []domain.ImageBuildArtifactInput{{Name: "coyote-server", Destination: "dist/coyote-server"}}})
+	if resolveErr == nil || resolveErr.Error() != "image build artifact \"coyote-server\" is not available from an upstream dependency" {
+		t.Fatalf("resolve non-upstream artifact error=%v", resolveErr)
+	}
+}
+
+func createImageBuildArtifact(t *testing.T, context context.Context, artifacts *imageBuildArtifactRepositoryFake, store artifactpkg.Store, item domain.BuildArtifact, content []byte) {
+	t.Helper()
+	if _, saveErr := store.Save(context, item.StorageKey, bytes.NewReader(content)); saveErr != nil {
+		t.Fatalf("save artifact %q: %v", item.Name, saveErr)
+	}
+	if _, createErr := artifacts.Create(context, item); createErr != nil {
+		t.Fatalf("create artifact %q: %v", item.Name, createErr)
+	}
+}
+
+func checksumPointer(content []byte) *string {
+	sum := sha256.Sum256(content)
+	checksum := hex.EncodeToString(sum[:])
+	return &checksum
+}
+
+type imageBuildArtifactRepositoryFake struct {
+	items []domain.BuildArtifact
+}
+
+func (r *imageBuildArtifactRepositoryFake) Create(_ context.Context, item domain.BuildArtifact) (domain.BuildArtifact, error) {
+	r.items = append(r.items, item)
+	return item, nil
+}
+
+func (r *imageBuildArtifactRepositoryFake) ListByBuildID(_ context.Context, buildID string) ([]domain.BuildArtifact, error) {
+	items := make([]domain.BuildArtifact, 0, len(r.items))
+	for _, item := range r.items {
+		if item.BuildID == buildID {
+			items = append(items, item)
+		}
+	}
+	return items, nil
+}
+
+func (r *imageBuildArtifactRepositoryFake) Browse(context.Context, repository.BrowseArtifactsParams) ([]domain.ArtifactRecord, error) {
+	return nil, nil
+}
+
+func (r *imageBuildArtifactRepositoryFake) ListCatalog(context.Context, repository.ArtifactCatalogParams) ([]domain.ArtifactRecord, error) {
+	return nil, nil
+}
+
+func (r *imageBuildArtifactRepositoryFake) GetCatalogByID(context.Context, string) (domain.ArtifactRecord, error) {
+	return domain.ArtifactRecord{}, repository.ErrArtifactNotFound
+}
+
+func (r *imageBuildArtifactRepositoryFake) GetByID(_ context.Context, buildID, artifactID string) (domain.BuildArtifact, error) {
+	for _, item := range r.items {
+		if item.BuildID == buildID && item.ID == artifactID {
+			return item, nil
+		}
+	}
+	return domain.BuildArtifact{}, repository.ErrArtifactNotFound
+}
+
+func (r *imageBuildArtifactRepositoryFake) ListByStepID(_ context.Context, stepID string) ([]domain.BuildArtifact, error) {
+	items := make([]domain.BuildArtifact, 0, len(r.items))
+	for _, item := range r.items {
+		if item.StepID != nil && *item.StepID == stepID {
+			items = append(items, item)
+		}
+	}
+	return items, nil
+}
+
 type executionFake struct {
 	job         domain.ExecutionJob
 	step        workersvc.WorkerRunnableStep
@@ -230,6 +343,7 @@ type executionFake struct {
 	result      runner.RunStepResult
 	timing      domain.ExecutionTiming
 	timingErr   error
+	steps       []domain.BuildStep
 }
 
 func newExecutionFake(t *testing.T) *executionFake {
@@ -248,7 +362,7 @@ func (f *executionFake) GetBuild(context.Context, string) (domain.Build, error) 
 	return domain.Build{ID: "build-1"}, nil
 }
 func (f *executionFake) GetBuildSteps(context.Context, string) ([]domain.BuildStep, error) {
-	return nil, nil
+	return f.steps, nil
 }
 func (f *executionFake) RenewRunnableStepLease(context.Context, workersvc.WorkerRunnableStep) (bool, error) {
 	f.renewCalls++
